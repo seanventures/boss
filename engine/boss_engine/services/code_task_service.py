@@ -817,8 +817,11 @@ def start_code_task(
         spec["repair_retries"] = repair_retries
     if isinstance(remediate, dict) and str(remediate.get("input") or "").strip():
         # A REMEDIATION (input_fidelity): its input, output, answer files and validator.
+        # `content` / `original_path` / `start_from`: the run STARTED FROM A FILE
+        # (start_from_file) — the original, fixed in place at the target.
         spec["remediate"] = {k: remediate[k] for k in ("input", "output", "answer_files",
-                                                       "validator") if remediate.get(k)}
+                                                       "validator", "content", "original_path",
+                                                       "start_from") if remediate.get(k)}
     bench =(finalize_ctx or {}).get("qa_benchmark") if isinstance((finalize_ctx or {}).get("qa_benchmark"), dict) else {}
     if bench.get("app_root"):
         spec["app_root"] = bench["app_root"]

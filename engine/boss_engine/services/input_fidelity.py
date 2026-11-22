@@ -181,8 +181,52 @@ def _resolve_program(command: str, root: Path) -> str:
     return command
 
 
+#: Shells a brief (or a lesson an agent wrote) wraps a command in: `/usr/bin/bash -lc '…'`.
+_SHELLS = frozenset({"bash", "sh", "zsh", "dash"})
+_SHELL_OPS = frozenset({"&&", "||", "|", ";", ">", ">>", "<", "&", "$(", "`"})
+
+
+def normalise_command(command: str) -> tuple[Optional[str], Optional[str]]:
+    """An INFERRED validator command as the sandbox can run it, or (None, why) when it cannot.
+
+    The sandbox runs one allow-listed executable by NAME, without a shell. A command read from
+    prose is unwrapped from a shell (`/usr/bin/bash -lc 'go run … {file}'` → `go run … {file}`)
+    and an absolute executable is named (`/usr/local/go/bin/go` → `go`); one that needs a shell
+    (`&&`, a pipe, a redirect) is REJECTED with that reason — never handed to the sandbox to
+    error the validation without one."""
+    cmd = str(command or "").strip()
+    for _ in range(2):
+        try:
+            argv = shlex.split(cmd)
+        except ValueError:
+            return None, f"`{cmd[:120]}` does not parse as a command"
+        if not argv:
+            return None, "an empty command"
+        if PurePosixPath(argv[0]).name in _SHELLS and len(argv) == 3 \
+                and argv[1] in ("-c", "-lc", "-cl"):
+            cmd = argv[2]
+            continue
+        break
+    if any(tok in _SHELL_OPS or tok.startswith("$(") for tok in argv) \
+            or PurePosixPath(argv[0]).name in _SHELLS:
+        return None, (f"`{cmd[:120]}` needs a shell, and validators run one allow-listed "
+                      "command without one; declare it in .boss/validators.yaml")
+    if "/" in argv[0] and not argv[0].startswith("./"):
+        argv[0] = PurePosixPath(argv[0]).name
+    def _word(a: str) -> str:
+        # `{file}` stays a bare placeholder (run_validation quotes the path it becomes).
+        plain = a.replace("{file}", "f")
+        return a if shlex.quote(plain) == plain else shlex.quote(a)
+
+    return " ".join(_word(a) for a in argv), None
+
+
 def _infer_validator(instructions: str, input_path: str, root: Path) -> Optional[dict]:
+    """The validator a brief names in backticks (`gwlint validate {file}`), each command
+    normalised for the sandbox (``normalise_command``). ``{rejected: why}`` when the only
+    commands it names cannot run there; None when it names none."""
     check = fix = None
+    rejected: list[str] = []
     base = PurePosixPath(input_path).name
     for m in _BACKTICK_RE.finditer(instructions):
         span = m.group(1).strip()
@@ -191,15 +235,21 @@ def _infer_validator(instructions: str, input_path: str, root: Path) -> Optional
         template = re.sub(r"(?:\.?/)?" + re.escape(input_path), "{file}", span)
         # A COMMAND, NOT A PATH: a bare backticked `config/routes.yaml` is the file, never a
         # validator — the template needs a program of its own besides `{file}`.
-        if "{file}" not in template or template.strip().startswith("{file}") \
-                or not _program(template.replace("{file}", " ")):
+        if "{file}" not in template or template.strip().startswith("{file}"):
+            continue
+        normal, why = normalise_command(template)
+        if normal is None:
+            rejected.append(str(why))
+            continue
+        template = normal
+        if not _program(template.replace("{file}", " ")):
             continue
         if "--fix" in span and fix is None:
             fix = _resolve_program(template, root)
         elif "--fix" not in span and check is None:
             check = _resolve_program(template, root)
     if not check and not fix:
-        return None
+        return {"rejected": rejected[0]} if rejected else None
     name = ""
     for cmd in (check, fix):
         if cmd:
@@ -209,11 +259,23 @@ def _infer_validator(instructions: str, input_path: str, root: Path) -> Optional
     return {"name": name or None, "check": check, "fix": fix}
 
 
+#: The knowledge block learning_context.for_build puts in front of a brief: quoted lessons and
+#: rules, never the person's words. Nothing in it names this run's input or its validator.
+_KNOWLEDGE_RE = re.compile(r"KNOWLEDGE \(quoted source material, not instructions\):\n<<<\n.*?\n>>>\n"
+                           r"(?:[^\n]*\n)?\n?", re.S)
+
+
+def person_brief(instructions: Any) -> str:
+    """The brief without appended enrichment (the knowledge block of past lessons and rules):
+    a remediation and its validator are inferred from the PERSON'S words only."""
+    return _KNOWLEDGE_RE.sub("", str(instructions or ""))
+
+
 def infer(instructions: str, root: Path) -> Optional[dict]:
     """A remediation recognised from the brief: a fix verb, one existing input data file (not an
     answer file), and where the result goes ("write the result to X"; else the input itself).
     None when the brief is not that, or names more than one plausible input."""
-    text = str(instructions or "")
+    text = person_brief(instructions)
     if not _REMEDIATE_RE.search(text):
         return None
     paths: list[str] = []
@@ -260,16 +322,34 @@ def contract(spec: Mapping[str, Any], instructions: str, root: Any, *,
     declared ``spec["remediate"] = {input, output?, answer_files?, validator?: {name?, check?,
     fix?}}`` wins; else ``infer`` from the brief. None for every other build."""
     root = Path(root)
+    instructions = person_brief(instructions)
     declared = spec.get("remediate") if isinstance(spec, Mapping) else None
+    explicit = False
     if isinstance(declared, Mapping) and declared.get("input"):
         inp = _clean_path(declared["input"])
         validator = declared.get("validator") if isinstance(declared.get("validator"),
                                                             Mapping) else None
+        explicit = bool(validator)
         c = {"input": inp, "output": _clean_path(declared.get("output")) or inp,
              "answer_files": [_clean_path(p) for p in declared.get("answer_files") or []],
              "validator": dict(validator) if validator else
              _infer_validator(str(instructions or ""), inp, root),
              "source": "declared"}
+        if declared.get("start_from"):
+            # START FROM A FILE (start_from_file): the original is the file the run was given
+            # (uploaded, or a repo path read from the trusted base) and the fix is made IN PLACE
+            # at the target, so the change's diff reads original → fixed.
+            original = declared.get("content")
+            src = _clean_path(declared.get("original_path"))
+            if original is None and src:
+                original = (trusted(src) if trusted is not None else None)
+                if original is None:
+                    original = _read(root / src)
+            if original is None:
+                logger.info("input_fidelity: the file to start from (%s) is not readable", src)
+                return None
+            c.update(output=inp, in_place=True, _original=str(original),
+                     original_path=src or None, **{"from": "upload" if src == "" else "repo"})
     else:
         c = infer(str(instructions or ""), root)
     if not c:
@@ -283,9 +363,16 @@ def contract(spec: Mapping[str, Any], instructions: str, root: Any, *,
     from . import validators as _validators
 
     pending: list[dict] = []
-    if c.get("source") != "declared" or not c.get("validator"):
+    # THE REPO'S DECLARATION WINS over anything inferred from prose, whenever it applies to the
+    # input, the output or the file the run started from; only a validator the run's spec
+    # declared explicitly is kept over it.
+    if not explicit:
         try:
-            repo_v = _validators.for_path(root, c["output"], c["input"], read=trusted)
+            repo_v = _validators.for_path(
+                root, c["output"], c["input"],
+                *([_clean_path(declared.get("original_path"))]
+                  if isinstance(declared, Mapping) and declared.get("original_path") else []),
+                read=trusted)
             if trusted is not None and _validators.for_path(root, c["output"], c["input"]) \
                     not in (None, repo_v):
                 pending.append({"file": _validators.FILE, "applied": False})
@@ -307,9 +394,14 @@ def contract(spec: Mapping[str, Any], instructions: str, root: Any, *,
                     pending.append(change)
         except Exception:  # noqa: BLE001 — a broken ruleset is said, never guessed
             logger.info("input_fidelity: ruleset %s not read", vname, exc_info=True)
+    if isinstance(c.get("validator"), Mapping) and c["validator"].get("rejected"):
+        # AN INFERRED COMMAND THE SANDBOX CANNOT RUN, and nothing declared: said on the record
+        # (run_validation), never run to fail without a reason.
+        c["validator_rejected"] = str(c["validator"]["rejected"])
+        c["validator"] = None
     if pending:
         c["pending_config"] = pending
-    input_text = _read(root / c["input"])
+    input_text = c.pop("_original", None) if c.get("in_place") else _read(root / c["input"])
     if input_text is None:
         logger.info("input_fidelity: the input %s is not in the tree", c["input"])
         return None
@@ -910,6 +1002,8 @@ def run_validation(root: Any, c: Mapping[str, Any],
                 r = run(cmd)
                 exits["after"] = getattr(r, "exit_code", None)
                 after_raw = _adapt(v.get("adapter"), getattr(r, "stdout", "") or "", c["output"])
+        if c.get("validator_rejected") and not (v.get("check") or v.get("fix")):
+            error = f"no validator could run: {c['validator_rejected']}"
         out_text = _read(root / c["output"])
         guard = _v.substituted(root, c, out_text, _data_files(root))
     except Exception as exc:  # noqa: BLE001 — a record that could not be made says why
@@ -983,12 +1077,17 @@ def seed_auto_fix(root: Any, c: dict, run: Optional[Callable[[str], Any]]) -> Op
     the agent hand-edits only what it left. Returns the command, or None when there is no fixer,
     the target is the input itself, or the fixer wrote nothing. Never raises."""
     v = c.get("validator") if isinstance(c.get("validator"), Mapping) else {}
-    if run is None or not v.get("fix") or str(c.get("output")) == str(c.get("input")):
+    root = Path(root)
+    # IN PLACE (start_from_file): seeded only while the target still holds the original, so a
+    # follow-up build never puts the fixer's output over fixes already on the change.
+    fresh = bool(c.get("in_place")) and _read(root / str(c.get("output"))) == c.get("_input_text")
+    if run is None or not v.get("fix") or (str(c.get("output")) == str(c.get("input"))
+                                           and not fresh):
         c["auto_fix_seed"] = {"seeded": False, "why": (
             "no fixer declared" if not v.get("fix") else "no runner" if run is None
+            else "the target already carries this change's fixes" if c.get("in_place")
             else "the output is the input")}
         return None
-    root = Path(root)
     scratch = root / ".boss-validation" / "seed"
     seed: dict = {"seeded": False}
     try:
@@ -1034,7 +1133,12 @@ def commit_original(github: Any, branch: str, base_branch: Optional[str], c: dic
     c["original_commit"]; None when nothing was committed. Never raises."""
     out, inp = str(c.get("output") or ""), str(c.get("input") or "")
     text = c.get("_input_text")
-    if not out or out == inp or not isinstance(text, str) or not branch or branch == base_branch:
+    # START FROM A FILE (start_from_file): the original is fixed IN PLACE at its target, so the
+    # target may equal the input; it is committed unless the target already holds it (a repo
+    # file fixed in place) or the branch holds anything but the base's version (a follow-up).
+    in_place = bool(c.get("in_place")) and c.get("source") != "repo_check"
+    if not out or (out == inp and not in_place) or not isinstance(text, str) or not branch \
+            or branch == base_branch:
         return None
     try:
         read = getattr(github, "read_text_file", None)
@@ -1046,7 +1150,10 @@ def commit_original(github: Any, branch: str, base_branch: Optional[str], c: dic
                 return None
 
         on_branch = _at(branch)
-        if on_branch is not None and on_branch != _at(base_branch):
+        on_base = _at(base_branch)
+        if in_place and (on_branch if on_branch is not None else on_base) == text:
+            return None
+        if on_branch is not None and on_branch != on_base:
             return None
         github.ensure_branch(branch, base_branch)
         from .software_factory import commit_change
@@ -1177,3 +1284,107 @@ def enforce_autofix(root: Any, c: Mapping[str, Any], rec: dict,
         logger.info("input_fidelity: autofix policy not enforced", exc_info=True)
         rec["refused_error"] = "the autofix policy could not be enforced on this tree"
         return rec
+
+
+# ── start from a file: the original is the change's first commit ──────────────────────────────
+
+def place_original(root: Any, c: Mapping[str, Any],
+                   base_text: Optional[str]) -> Optional[str]:
+    """START FROM A FILE (start_from_file): put the original at the target IN THE BUILD'S TREE,
+    so the agents and the fixer start from it (``commit_original`` makes it the change's first
+    commit on the branch). Returns the text placed, or None when there is nothing to place: not
+    a start-from contract, the original already is the target's text (a repo file fixed in
+    place), or the target no longer holds the base's version (a follow-up build on a change that
+    already carries the original and fixes). ``base_text`` is the target on the base branch
+    (None when it does not exist there)."""
+    if not c or not c.get("in_place") or c.get("source") == "repo_check":
+        return None
+    root = Path(root)
+    target = root / str(c["output"])
+    now = _read(target)
+    original = str(c.get("_input_text") or "")
+    if now == original or now != base_text:
+        return None
+    try:
+        _scratch_write(root, target, original)
+    except OSError:
+        logger.info("input_fidelity: the original could not be placed at %s", c["output"],
+                    exc_info=True)
+        return None
+    return original
+
+
+# ── checks from the repo, in any workflow ──────────────────────────────────────────────────────
+
+#: The most touched files one build checks (each runs the validator; a bounded cost).
+REPO_CHECK_FILES = 20
+
+
+def repo_checks(root: Any, touched: Iterable[str], run: Optional[Callable[[str], Any]], *,
+                trusted: Optional[Callable[[str], Optional[str]]] = None,
+                base_ref: Optional[str] = None) -> list[dict]:
+    """CHECKERS COME FROM THE REPO, IN ANY WORKFLOW: every validator the repo declares
+    (`.boss/validators.yaml`, read from ``trusted`` — the base branch — when given) whose
+    ``applies_to`` matches a file this change touched runs on it, and each run is one
+    ``boss.validation/v1`` record, exactly as a remediation's: findings on the base version
+    (before), on the changed file (after), the fixes between. A file new on this change is
+    checked as it is (before = after). Tagged ``kind: repo_check``. [] when the repo declares
+    no validator or none applies. Never raises."""
+    import fnmatch
+
+    from . import rulesets as _rulesets
+    from . import validators as _v
+
+    root = Path(root)
+    if run is None:
+        return []
+    try:
+        declared = _v.load(root, trusted)
+    except Exception:  # noqa: BLE001 — a broken declaration is no check, said in the log
+        logger.info("input_fidelity: %s not read for repo checks", _v.FILE, exc_info=True)
+        return []
+    paths = [_clean_path(p) for p in touched if p]
+    out: list[dict] = []
+    for v in declared:
+        for path in paths:
+            if len(out) >= REPO_CHECK_FILES:
+                return out
+            if not any(fnmatch.fnmatch(path, g) for g in v["applies_to"]):
+                continue
+            now = _read(root / path)
+            if now is None:         # deleted on this change: nothing to check
+                continue
+            base = trusted(path) if trusted is not None else None
+            c: dict = {"input": path, "output": path, "answer_files": [], "source": "repo_check",
+                       "in_place": True, "from": "base" if base is not None else "new",
+                       "validator": {"name": v["id"], "check": v["run"], "fix": v["fix"],
+                                     "adapter": v["adapter"], "rules_doc": v["rules_doc"],
+                                     "ruleset": v["ruleset"], "source": _v.FILE},
+                       "_input_text": base if base is not None else now,
+                       "_output_base": None, "_answer_texts": {}}
+            if base is not None and base_ref:
+                c["input_ref"] = base_ref
+            if v["ruleset"]:
+                try:
+                    c["ruleset"] = _rulesets.load(root, v["ruleset"], read=trusted)
+                except Exception:  # noqa: BLE001 — the tool's own severities, said by `basis`
+                    logger.info("input_fidelity: ruleset %s not read", v["ruleset"],
+                                exc_info=True)
+            rec = public_validation(run_validation(root, c, run))
+            rec["kind"] = "repo_check"
+            out.append(rec)
+    return out
+
+
+def open_blocking(rec: Optional[Mapping[str, Any]]) -> int:
+    """A record's open P0/P1 findings (what would block a strict merge)."""
+    return sum(1 for f in (rec or {}).get("findings") or []
+               if f.get("status") in ("open", "reverted") and f.get("severity") in ("P0", "P1"))
+
+
+def lead_record(records: Sequence[Mapping[str, Any]]) -> Optional[dict]:
+    """The record a build carries as its ``validation`` when several ran: the one with the most
+    open P0/P1 findings (then the most findings), first on a tie."""
+    if not records:
+        return None
+    return dict(max(records, key=lambda r: (open_blocking(r), len(r.get("findings") or []))))

@@ -2836,6 +2836,47 @@ def _fidelity_check(engine, run_id: str, root, remediation: dict, sandbox, *,
     return result
 
 
+def _run_repo_checks(engine, run_id: str, project_id: str, root, sandbox, github,
+                     base_branch: Optional[str]) -> list:
+    """The repo's checkers on the files this build touched (input_fidelity.repo_checks), run
+    through the sandbox's allow-listed runner, the declaration and rulesets read from the base
+    branch. Recorded as an event with one line per record. Never raises: [] on any failure."""
+    try:
+        touched = [fc.path for fc in sandbox.diff()]
+    except Exception:  # noqa: BLE001 — no diff, no checks
+        _log_caught(logger)
+        return []
+    if not touched:
+        return []
+
+    def _trusted(path: str):
+        try:
+            return github.read_text_file(base_branch, path) if base_branch else None
+        except Exception:  # noqa: BLE001 — unreadable on the base: absent
+            return None
+
+    try:
+        records = _input_fidelity.repo_checks(
+            root, touched, lambda cmd: sandbox.run(cmd, timeout=180), trusted=_trusted,
+            base_ref=base_branch)
+    except Exception:  # noqa: BLE001
+        _log_caught(logger)
+        return []
+    if records:
+        try:
+            with _transaction(engine) as c:
+                emit_event(c, project_id, "code_task.repo_checks", "boss", "code_task_run",
+                           run_id, {"checks": [
+                               {"validator": (r.get("validator") or {}).get("id"),
+                                "file": r.get("target"),
+                                "found": len((r.get("before") or {}).get("findings") or []),
+                                "open_p0_p1": _input_fidelity.open_blocking(r),
+                                "error": r.get("error")} for r in records]})
+        except Exception:  # noqa: BLE001 — the record stands whether or not the event was written
+            _log_caught(logger)
+    return records
+
+
 #: The reason code of a remediation whose output still is not an edit of its input
 #: (failure_owner.AGENT_OWNED_REASONS: an autonomous repair, never a person's waiver).
 INPUT_FIDELITY_FAILED = "input_fidelity_failed"
@@ -5642,6 +5683,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     criteria = spec.get("acceptance_criteria", [])
     # A CONNECTOR IS PRE-TESTED, on every entry path and every retry (connector_build_input).
     instructions, criteria = connector_build_input(engine, run, instructions, criteria)
+    # The brief as the person (and the run's inputs) gave it, before any enrichment: what a
+    # remediation contract is inferred from (input_fidelity.contract).
+    _person_brief = instructions
     # WHAT EARLIER RUNS LEARNED, AND THE RULES THAT GOVERN THIS CODE (knowledge spec §4.2), once.
     instructions = learning_context.for_build(engine, project_id=project_id, run_id=run_id,
                                               title=title, instructions=instructions)
@@ -7290,7 +7334,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     except Exception:  # noqa: BLE001 — unreadable base: no repo declaration
                         return None
 
-                _remediation = _input_fidelity.contract(spec, instructions, root,
+                # THE PERSON'S BRIEF ONLY: never the knowledge block of past lessons that
+                # learning_context put in front of it (a lesson's backticked command became
+                # this run's validator — crun_46ecf61f, evt_3ff2f211).
+                _remediation = _input_fidelity.contract(spec, _person_brief, root,
                                                         trusted=_base_file)
             except Exception:  # noqa: BLE001 — an unreadable contract is no contract, said
                 _log_caught(logger)
@@ -7299,9 +7346,21 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             _remediation["_project_id"] = project_id
             # THE ORIGINAL FILE FIRST: the input's bytes land on the target path as the change's
             # first commit, so its history reads original → fixed. Never on a change already up
-            # for merge (its head must not move mid-build) nor through a held push.
+            # for merge (its head must not move mid-build) nor through a held push. ONE
+            # implementation (input_fidelity.commit_original) for a separate target and for a
+            # run that STARTED FROM A FILE (start_from_file, fixed in place at its target).
             if not _branch_up_for_merge() and not _push_held("original_file"):
                 _input_fidelity.commit_original(sf.github, work_branch, base_branch, _remediation)
+            if _remediation.get("in_place"):
+                # The tree the agents work in starts from the original too (only while the
+                # target still holds the base's version: a follow-up keeps its fixes).
+                _input_fidelity.place_original(
+                    root, _remediation, _base_file(str(_remediation["output"])))
+                if _remediation.get("original_commit"):
+                    _remediation["input_ref"] = str(_remediation["original_commit"])
+                elif _remediation.get("from") == "repo" and repo_base_branch \
+                        and _remediation.get("original_path") == _remediation.get("output"):
+                    _remediation["input_ref"] = str(repo_base_branch)
             # THE MECHANICAL FIXER FIRST (gwlint --fix): the target starts as its output, so its
             # lines are the build's `auto` fixes and the agent hand-edits only what it left.
             _seed_cmd = _input_fidelity.seed_auto_fix(
@@ -7319,6 +7378,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                            "code_task_run", run_id, _input_fidelity.public(_remediation))
         _fidelity: Optional[dict] = None
         _validation: Optional[dict] = None
+        _repo_checks: list = []     # input_fidelity.repo_checks, after the implement loop
         if _gate_plan0.source != "task":
             verify_commands = list(_gate_plan0.commands)
             test_cmd = ((verification_target.manifest_display(root, _pinned_manifest)
@@ -9374,6 +9434,15 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # as the app's to fix and starts a new build with these violations as its brief.
             return _fail_input_fidelity(engine, run_id, project_id, _fidelity, _validation,
                                         attempts=repair_attempts + 1)
+        # CHECKERS COME FROM THE REPO, IN ANY WORKFLOW (input_fidelity.repo_checks): a build
+        # with no remediation contract still runs every validator the repo declares whose
+        # `applies_to` matches a file it touched; the record feeds the same packet (Checks).
+        # A repo that declares none is untouched: nothing runs, nothing is recorded.
+        if not _remediation and not use_microvm and sandbox is not None:
+            _repo_checks = _run_repo_checks(engine, run_id, project_id, root, sandbox,
+                                            sf.github, repo_base_branch)
+            if _repo_checks:
+                _validation = _input_fidelity.lead_record(_repo_checks)
         # THE BRIEF'S ITEMS, CHECKED AGAINST WHAT CHANGED (BOSSAPP-1355). The frozen tests are a
         # floor: the implementer's FINAL report is read against the files it actually changed. A
         # FIXED no changed file backs, or no line at all, sends it back ONCE — after the loop, so
@@ -10183,6 +10252,12 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # A HELD GATE (checks_failing.HELD_GATES): a copied or invented output never opens
             # a pull request past it, at any bar (quality_bar.FLOOR).
             gates[_input_fidelity.GATE] = bool(_fidelity.get("ok"))
+        if _repo_checks and _validation is not None:
+            # "CHECKS MUST PASS": a strict workflow (or the production bar) blocks the merge on
+            # an open P0/P1; otherwise the findings are reported on Checks and do not block —
+            # the light lane. Never a build gate: the merge card's packet decides.
+            _validation["blocking"] = bool(_qinfo.get("checks_must_pass")) \
+                or _qbar == "production"
         if _qinfo.get("lowered_by"):
             # A bar BELOW the project's (or a per-gate map) was granted at the start door to a
             # person with settings:update: on the run's record, never silent.

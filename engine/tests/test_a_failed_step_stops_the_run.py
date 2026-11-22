@@ -76,6 +76,8 @@ INTERNAL = {
     "review": "_observed_from_the_build",
     "test": "_observed_from_the_build",
     "monitor": "_observed_from_the_build",
+    # Merge (R5): waits on the build's merge; a merge that cannot be read fails the step.
+    "merge": "_merge_step",
     # REWRITTEN (2026-10-02): notify was listed below as commissioning nothing — a `recorded`
     # no-op that went green having told nobody, at the end of three catalogue templates and as
     # Deprecation / Sunset's whole announcement. The runner now sends it, so a send that cannot
@@ -187,8 +189,13 @@ def _promotion_binding_is_its_own_test(monkeypatch):
                         lambda connection, context, inputs, spec=None: inputs)
 
 
+#: Inputs a step is given here beyond its required ones: a contract test without `cases` reads
+#: the project's own from its repository (R5), which is not the tool this file drives.
+_GIVEN = {"contract_test": {"cases": "x"}}
+
+
 def _required(key: str) -> dict:
-    return {name: "x" for name in CAPABILITIES[key].required_inputs}
+    return {**{name: "x" for name in CAPABILITIES[key].required_inputs}, **_GIVEN.get(key, {})}
 
 
 def _two_step(c, project_id: str, key: str, inputs: dict | None = None):

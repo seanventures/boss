@@ -10389,6 +10389,218 @@
         "output_schema": {},
         "step_agent_rules": 2
       }
+    },
+    {
+      "workflow_key": "onboard_config_file",
+      "name": "Onboard a config file",
+      "description": "A file arrives — a partner's config, say. BOSS checks it with the repository's own checkers, fixes what it may, leaves you what it may not, and ships it to staging once merged.",
+      "spec": {
+        "entry_step": "build",
+        "steps": [
+          {
+            "id": "build",
+            "kind": "capability",
+            "binding": {
+              "capability": "build",
+              "inputs": {
+                "title": {
+                  "from_input": "title"
+                },
+                "instructions": {
+                  "from_input": "directive"
+                },
+                "repository": {
+                  "from_input": "repository"
+                },
+                "acceptance_criteria": {
+                  "from_input": "acceptance_criteria"
+                },
+                "reference_links": {
+                  "from_input": "reference_links"
+                },
+                "start_from": {
+                  "from_input": "start_from"
+                },
+                "start_from_content": {
+                  "from_input": "start_from_content"
+                },
+                "target_path": {
+                  "from_input": "target_path"
+                }
+              }
+            },
+            "next": [
+              "review"
+            ],
+            "captain": "engineering_captain",
+            "default_captain": "engineering_captain",
+            "title": "Fix the file",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "review",
+            "kind": "capability",
+            "binding": {
+              "capability": "review",
+              "inputs": {}
+            },
+            "next": [
+              "merge"
+            ],
+            "captain": "adversarial_reviewer",
+            "default_captain": "adversarial_reviewer",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "merge",
+            "kind": "capability",
+            "binding": {
+              "capability": "merge",
+              "inputs": {}
+            },
+            "next": [
+              "staging"
+            ],
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 0,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "staging",
+            "kind": "capability",
+            "binding": {
+              "capability": "config_deploy",
+              "inputs": {
+                "source_file": {
+                  "from_input": "target_path"
+                },
+                "environment": "staging"
+              }
+            },
+            "next": [
+              "contract_tests"
+            ],
+            "title": "Staging",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "risk_tier": 2,
+              "forced_manual": true
+            }
+          },
+          {
+            "id": "contract_tests",
+            "kind": "capability",
+            "binding": {
+              "capability": "contract_test",
+              "inputs": {
+                "base_url": {
+                  "from_step": "staging",
+                  "field": "deployed_url"
+                }
+              }
+            },
+            "next": [],
+            "title": "Contract tests",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 0,
+              "forced_manual": false
+            }
+          }
+        ],
+        "objective": "Take the file the run was given, check it with the repository's declared checkers, and make it pass with a minimal edit. Findings the repository's rules reserve for a person stay open for that person. Once merged, the file ships to staging and the project's contract tests run against it.",
+        "workflow_name": "Onboard a config file",
+        "input_schema": {
+          "type": "object",
+          "required": [
+            "title",
+            "directive",
+            "start_from",
+            "target_path"
+          ],
+          "properties": {
+            "title": {
+              "type": "string",
+              "title": "Name",
+              "description": "A short name for this piece of work. It names the run, the app it builds and the written record.",
+              "examples": [
+                "Shift swap board"
+              ]
+            },
+            "directive": {
+              "type": "string",
+              "format": "textarea",
+              "title": "What should the fix do?",
+              "description": "The checker, its rules and guides come from the repository; say anything else the fix should know.",
+              "examples": [
+                "Fix the file this run started from so the repository's own checkers pass. Keep it a minimal edit of that file: change only what a finding asks for, add nothing it does not, and leave a finding the repository's rules say a person must decide for that person."
+              ]
+            },
+            "repository": {
+              "type": "string",
+              "title": "Repository (optional)",
+              "description": "owner/name of the GitHub repository to build in. Leave blank for this project's primary repository."
+            },
+            "acceptance_criteria": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "title": "How you will know it works (optional)",
+              "description": "Each line becomes a check the build is held to. Leave blank and the panel proposes them."
+            },
+            "reference_links": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "uri"
+              },
+              "title": "Links to read first (optional)",
+              "description": "Docs, designs or tickets the builder should read."
+            },
+            "start_from": {
+              "type": "string",
+              "title": "Start from a file",
+              "description": "The file to start from: its path in the repository, or the name of the file you upload."
+            },
+            "start_from_content": {
+              "type": "string",
+              "format": "textarea",
+              "title": "Uploaded file (optional)",
+              "description": "The file's text, when it is not in the repository. It becomes the change's first commit."
+            },
+            "target_path": {
+              "type": "string",
+              "title": "Where the fixed file goes",
+              "description": "Its path in the repository, e.g. config/tenants/name.yaml."
+            }
+          }
+        },
+        "more_tests": false,
+        "checks_must_pass": true,
+        "output_schema": {},
+        "step_agent_rules": 2
+      }
     }
   ],
   "branched": {

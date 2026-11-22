@@ -217,7 +217,9 @@ def substituted(root: Any, c: Mapping[str, Any], out_text: Optional[str],
         now = (root / inp).read_text(errors="replace")
     except OSError:
         now = None
-    if received is not None and now is not None and now != received:
+    # IN PLACE (a file the run started from, a repo check of a touched file): the target IS the
+    # input's path and is meant to change; the bytes received are the snapshot, not the tree.
+    if received is not None and now is not None and now != received and not c.get("in_place"):
         return {"code": "input_substituted", "source": inp, "why": "input_changed"}
     if out_text is None or outp == inp:
         return None
@@ -650,7 +652,10 @@ def record(*, c: Mapping[str, Any], validator: Mapping[str, Any], version: Optio
                      "sha": ruleset.get("sha"), "rules": ruleset.get("rules") or {},
                      "custom": ruleset.get("custom") or []} if ruleset else None),
         "input": {"file": inp, "sha256": sha256(c.get("_input_text")),
-                  "from": str(c.get("from") or "partner")},
+                  "from": str(c.get("from") or "partner"),
+                  # Where the original can be read again (a commit or the base branch) when it
+                  # sits at the target's own path: a re-run checks out the change, not the input.
+                  **({"ref": str(c["input_ref"])} if c.get("input_ref") else {})},
         "target": target,
         "before": {"command": commands.get("before"), "exit": exits.get("before"),
                    "findings": [f["id"] for f in findings

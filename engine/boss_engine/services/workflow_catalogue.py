@@ -1695,6 +1695,53 @@ CATALOGUE: list[dict[str, Any]] = [
 # (`requires`: the banking-dq pack and the DQ sample's connectors).
 CATALOGUE.extend(dq_catalogue.entries(_step, _in))
 
+#: What the build of "Onboard a config file" is told. Generic on purpose: the checker, its rules
+#: and the guides the fixing agent reads come from the REPOSITORY (`.boss/validators.yaml`,
+#: `.boss/rulesets/`), and the remediation contract (input_fidelity) holds the build to them.
+ONBOARD_FILE_BRIEF = (
+    "Fix the file this run started from so the repository's own checkers pass. Keep it a "
+    "minimal edit of that file: change only what a finding asks for, add nothing it does not, "
+    "and leave a finding the repository's rules say a person must decide for that person.")
+
+# ONBOARD A CONFIG FILE (requirement R5, design PR #287): built only from standard steps —
+# the run starts from a file ("Start from a file", start_from_file), the build fixes it in place
+# with the repository's checkers, the review reports, the merge waits on the change's merge card,
+# staging ships the fixed file, and the project's own contract tests run against staging.
+# Checks must pass: an open P0/P1 blocks the merge.
+CATALOGUE.append({
+    "key": "onboard_config_file",
+    "name": "Onboard a config file",
+    "description": "A file arrives — a partner's config, say. BOSS checks it with the "
+                   "repository's own checkers, fixes what it may, leaves you what it may not, "
+                   "and ships it to staging once merged.",
+    "objective": (
+        "Take the file the run was given, check it with the repository's declared checkers, "
+        "and make it pass with a minimal edit. Findings the repository's rules reserve for a "
+        "person stay open for that person. Once merged, the file ships to staging and the "
+        "project's contract tests run against it."
+    ),
+    "work_class": "any",
+    # NO PASS 2: a config file is checked by its checkers and contract tests, not a test suite.
+    "more_tests": False,
+    "checks_must_pass": True,
+    "steps": _chain([
+        {**_step("build", "build", {
+            **_build_inputs(),
+            "start_from": _in("start_from"),
+            "start_from_content": _in("start_from_content"),
+            "target_path": _in("target_path"),
+        }), "title": "Fix the file"},
+        _step("review", "review"),
+        _step("merge", "merge"),
+        {**_step("staging", "config_deploy", {"source_file": _in("target_path"),
+                                              "environment": "staging"}),
+         "title": "Staging"},
+        {**_step("contract_tests", "contract_test",
+                 {"base_url": _from("staging", "deployed_url")}),
+         "title": "Contract tests"},
+    ]),
+})
+
 
 def _staff_builds_by_app_kind() -> None:
     """Apply BUILD_AGENT_BY_ENTRY to the catalogue's build steps, once, at import."""
@@ -1780,6 +1827,15 @@ _FIELD_TEXT: dict[str, dict[str, Any]] = {
               "description": "A short name for this piece of work. It names the run, the app "
                              "it builds and the written record.",
               "examples": ["Shift swap board"]},
+    "start_from": {"type": "string", "title": "Start from a file",
+                   "description": "The file to start from: its path in the repository, or the "
+                                  "name of the file you upload."},
+    "start_from_content": {"type": "string", "format": "textarea",
+                           "title": "Uploaded file (optional)",
+                           "description": "The file's text, when it is not in the repository. "
+                                          "It becomes the change's first commit."},
+    "target_path": {"type": "string", "title": "Where the fixed file goes",
+                    "description": "Its path in the repository, e.g. config/tenants/name.yaml."},
     "repository": {"type": "string", "title": "Repository (optional)",
                    "description": "owner/name of the GitHub repository to build in. Leave blank "
                                   "for this project's primary repository."},
@@ -1915,6 +1971,16 @@ BRIEFS: dict[str, dict[str, Any]] = {
                     "directive": "Let staff offer a recurring shift (every Tuesday for six "
                                  "weeks) in one action, with the manager approving the series "
                                  "or individual dates."},
+    },
+    "onboard_config_file": {
+        "directive": ("What should the fix do?",
+                      "The checker, its rules and guides come from the repository; say "
+                      "anything else the fix should know."),
+        "required": ("start_from", "target_path"),
+        "example": {"title": "Lumen Pay tenant onboarding",
+                    "start_from": "lumen-pay.yaml",
+                    "target_path": "config/tenants/lumen-pay.yaml",
+                    "directive": ONBOARD_FILE_BRIEF},
     },
     "fast_fix": {
         "directive": ("What is broken?",
@@ -2143,6 +2209,10 @@ def entry_spec(entry: dict[str, Any]) -> dict[str, Any]:
     # `monitoring_gate`: block (the default) or warn (monitoring_pack.gate_mode).
     if entry.get("monitoring_gate"):
         spec["monitoring_gate"] = entry["monitoring_gate"]
+    # "CHECKS MUST PASS" (quality_bar.checks_must_pass): the repo's checkers' open P0/P1 block
+    # the merge. Absent means off (the light lane), so no other entry's spec changes.
+    if entry.get("checks_must_pass"):
+        spec["checks_must_pass"] = True
     # THE PIPELINE'S SHAPE BEYOND ITS STEPS (the DQ pipeline): the loop back, the side
     # workflows and paths, and the shared services, so the Pipeline view can draw them.
     if entry.get("pipeline"):

@@ -67,6 +67,9 @@ OPTED_OUT = {
     # and work MVP"): the build's own tests and its P1 must-haves are the bar; the rest are
     # follow-ups, so a second pass and a second deploy would only make it slower.
     "easy_mode_mvp",
+    # Onboard a config file: a config file is judged by the repository's checkers and the
+    # project's contract tests against staging, not a test suite (workflow_catalogue).
+    "onboard_config_file",
 }
 
 
@@ -75,7 +78,7 @@ def test_the_catalogue_workflows_that_build_are_the_ones_expected():
         "standard_product_delivery", "minor_feature", "major_feature", "fast_fix",
         "backend_service_setup", "ux_certification", "security_hardening", "data_migration",
         "compliance_release", "third_party_integration", "deprecation_sunset",
-        "incremental_build", "incident_response", "easy_mode_mvp"}
+        "incremental_build", "incident_response", "easy_mode_mvp", "onboard_config_file"}
 
 
 def _the_rule_holds(spec, key):

@@ -157,11 +157,23 @@ def _fakes(c, project_id: str) -> dict[str, FakeTool]:
                   {"i": run_id, "t": target_id})
         return {"status": "planned", "deployment_run_id": run_id}
 
+    def deploy_config(pid, args):
+        # A config deployment (Onboard a config file's Staging): planned, then applied.
+        run_id = new("drn")
+        _insert_awaited(c, pid, "deployment_runs", run_id, "succeeded")
+        return {"status": "planned", "deployment_run_id": run_id}
+
+    def contract_test(pid, args):
+        cases = list(args.get("cases") or [])
+        return {"ok": True, "total": len(cases), "passed": len(cases), "failed": 0,
+                "cases": [], "results_table": "| Case |", "failed_cases": []}
+
     return {name: FakeTool(name, handler) for name, handler in (
         ("create_discovery", research), ("request_meeting", meeting),
         ("create_code_task", code_task), ("extend_code_task", extend),
         ("start_preview", preview), ("deploy_app", deploy),
-        ("run_security_scan", security_scan))}
+        ("run_security_scan", security_scan), ("deploy_config", deploy_config),
+        ("contract_test", contract_test))}
 
 
 def _incident(c, project_id: str, monkeypatch) -> str:
@@ -255,8 +267,15 @@ def test_every_catalogue_template_runs_to_its_last_step(eng, project, monkeypatc
             "scan_id": f"rscan_{uuid.uuid4().hex[:10]}", "files_read": 3, "rules_proposed": 0,
             "spend_usd": 0.0, "stopped_by": "scope_exhausted", "report": {},
             "review_link": {}})
+        # CONTRACT TESTS AFTER STAGING read the project's own from its repository; the harness
+        # has none, so the repo's file is stood in for.
+        monkeypatch.setattr(runner, "_repo_contract_cases", lambda *_a, **_k: {
+            **_a[-1], "cases": [{"name": "healthz", "path": "/healthz"}]})
         # ONLY WHAT START WOULD REQUIRE — the form's required fields and nothing else.
-        brief = {"title": TITLE, "directive": wc.example_for(key)["directive"],
+        example = wc.example_for(key) or {}
+        brief = {"title": TITLE, "directive": example["directive"],
+                 "start_from": example.get("start_from"),
+                 "target_path": example.get("target_path"),
                  "notify_channel": "mattermost:announcements", "app_key": "swap-board",
                  "scope": ["pkg:owner/swap-board:core:com.example.swaps"]}
         if "incident_id" in spec["input_schema"]["required"]:

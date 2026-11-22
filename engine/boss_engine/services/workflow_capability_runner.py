@@ -41,6 +41,7 @@ from .deploy_policy import promises_a_person
 from .decisions import SYSTEM_ACTOR as DECISION_SYSTEM_ACTOR
 from .run_decisions import open_step_decision
 from . import release_scope, security_review_steps, workflow_capabilities, workflow_outcomes
+from . import start_from_file
 from .workflow_capabilities import CAPABILITY_KEYS, get as get_capability
 
 log = logging.getLogger(__name__)
@@ -3030,6 +3031,10 @@ def _execute_step(
     inputs = _fill_optional_from_run_input(capability, inputs, context)
     amendment = None
     if key == "contract_test":
+        if not inputs.get("cases"):
+            # CONTRACT TESTS AFTER STAGING: no cases on the step, so the project's own, from
+            # its repository at the build this run shipped (contract_tests.REPO_FILE).
+            inputs = _repo_contract_cases(connection, ctx, project_id, step, context, inputs)
         inputs, amendment = _amended_inputs(connection, context, step, inputs)
 
     # EVERY CAPABILITY'S RESULT IS JUDGED BY ITS OWN VERDICT (services/workflow_outcomes.py).
@@ -3047,6 +3052,39 @@ def _execute_step(
         result = {**result, "dropped_cases": list(amendment.get("drop") or []),
                   "recovery_amendment": amendment}
     return workflow_outcomes.apply(key, result, inputs)
+
+
+def _repo_contract_cases(connection: Connection, ctx: Any, project_id: str, step: Any,
+                         context: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    """A contract_test step's inputs with the PROJECT'S contract tests: the cases (and shared
+    headers) its repository declares in `.boss/contract_tests.yaml`, read at the commit of the
+    build this run shipped (the nearest build step before this one). A step that gave its own
+    headers keeps them. Settled when there is no build or the file is missing or malformed."""
+    from . import config_deploy, contract_tests
+
+    built = _nearest_build_run_id(connection, context, step if isinstance(step, dict) else None)
+    if not built:
+        raise SettledCapabilityError(
+            "This contract test has no cases and no build before it to read the project's "
+            f"contract tests ({contract_tests.REPO_FILE}) from.")
+    settings = getattr(ctx, "settings", None) or get_settings()
+    try:
+        with connection.begin_nested():
+            source = config_deploy.build_source(connection, settings, project_id, built)
+            text_ = (config_deploy.files_from_build(
+                connection, settings, project_id, source,
+                {"contract_tests.yaml": contract_tests.REPO_FILE})
+                .get("contract_tests.yaml") or {}).get("text")
+    except Exception:  # noqa: BLE001 — unreadable is the same as absent, said below
+        text_ = None
+    try:
+        declared = contract_tests.from_repo(text_)
+    except contract_tests.CaseError as error:
+        raise SettledCapabilityError(str(error)) from error
+    out = {**inputs, "cases": declared["cases"]}
+    if declared.get("headers") and not inputs.get("headers"):
+        out["headers"] = declared["headers"]
+    return out
 
 
 def _amended_inputs(connection: Connection, context: Optional[dict[str, Any]], step: Any,
@@ -3688,6 +3726,8 @@ def _perform_toolless(
         if started.get("status") == "not_applicable":
             return started
         return _settle_started_work(capability, key, started)
+    if key == "merge":
+        return _merge_step(connection, project_id, step, context, inputs)
     if key == "more_tests":
         return _more_tests_started(ctx, connection, project_id=project_id, actor=actor,
                                    context=context, step=step, capability=capability,
@@ -4421,12 +4461,25 @@ def _perform_capability(
     # resume is started EXACTLY like this step's build: as `step_actor`, under the run's
     # recorded authority, through the same tool checks (_retried_build).
     retry_note = ""
+    if key == "build" and any(k in inputs for k in start_from_file.INPUTS):
+        # START FROM A FILE (start_from_file): the file the run was given becomes the build's
+        # remediation contract; the original is committed first, the fix made in place.
+        try:
+            inputs = start_from_file.apply(inputs)
+        except start_from_file.StartFromFileError as error:
+            raise SettledCapabilityError(str(error)) from error
     if key == "build":
         resumed, inputs, retry_note = _retried_build(
             connection, ctx, project_id, step, context, inputs,
             ran_as=ran_as, tool_name=capability.tool)
         if resumed is not None:
             return _settle_started_work(capability, key, resumed)
+    if key == "config_deploy" and "source_file" in inputs:
+        # ONE FILE, UNDER ITS OWN NAME: `config/tenants/lumen-pay.yaml` lands as `lumen-pay.yaml`
+        # in the target directory. Opt-in: a step that names `source_paths` is read as before.
+        one = str(inputs.pop("source_file") or "").strip()
+        if one and not inputs.get("source_paths"):
+            inputs = {**inputs, "source_paths": {one.rsplit("/", 1)[-1]: one}}
     if key == "config_deploy" and inputs.get("source_paths") and not inputs.get("code_task_run_id") \
             and not inputs.get("files") and not inputs.get("produced_artifacts"):
         # A CONFIG DEPLOY AFTER A BUILD SHIPS THAT BUILD'S FILES (BOSSAPP-1377): with no explicit
@@ -6984,6 +7037,29 @@ def _closed_words(connection: Connection, build_run_id: str, number: Any) -> str
                              {"i": build_run_id}).scalar() if connection is not None else None
     return (f"{change_ref(url, number)} was closed without merging, so there is nothing to "
             "deploy. Reopen and merge it, then Try again.")
+
+
+def _merge_step(connection: Connection, project_id: str, step: Any, context: dict[str, Any],
+                inputs: dict[str, Any]) -> dict[str, Any]:
+    """MERGE, as a step: wait on the build's merge exactly as a deploy does (`_merge_wait`, then
+    BOSS's own record), and succeed once it is merged. The merge card holds the checks and the
+    approval; this step only makes the wait visible in the run and holds what follows it."""
+    built = str(inputs.get("run_id") or "") or _nearest_build_run_id(
+        connection, context, step if isinstance(step, dict) else None) or ""
+    if not built:
+        return {"capability": "merge", "tool": None, "status": "not_applicable",
+                "note": "No build before this step, so there is no change to merge."}
+    waiting = (_merge_wait(connection, project_id, built)
+               or _merge_wait_on_record(connection, project_id, built))
+    if waiting:
+        return {**waiting, "capability": "merge"}
+    has_pr = connection.execute(
+        text("SELECT pull_request_url FROM code_task_runs WHERE id = :i"), {"i": built}).scalar()
+    if not has_pr:
+        return {"capability": "merge", "tool": None, "status": "not_applicable",
+                "note": "The build opened no change, so there is nothing to merge."}
+    return {"capability": "merge", "tool": None, "status": "succeeded",
+            "merged_build_run_id": built, "note": "Merged."}
 
 
 def _merge_wait(connection: Connection, project_id: str,
