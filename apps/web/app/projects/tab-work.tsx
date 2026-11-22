@@ -491,12 +491,13 @@ export function RowLinks({ links, id }: { links: WorkLink[]; id: string }) {
   );
 }
 
-const LATEST_DOT: Record<WorkState, string | undefined> = { ...DOT, planned: undefined };
+// Never amber here: the Work tab's count badge is the one Needs-you signal on this screen.
+const LATEST_DOT: Record<WorkState, string | undefined> = { ...DOT, needs_you: undefined, planned: undefined };
 
 /** LATEST, at the top of Work: the project's newest Run, Build, Change and Preview, each a link
  *  with its work's status dot and how long ago it moved. One row; it wraps on a phone. When no
  *  piece of work carries a preview link, the project's own app preview (Overview's Your app) is
- *  the Preview. Dots: green, teal, red or neutral; amber only for what waits on the person. */
+ *  the Preview. Dots: green, teal, red or neutral; never amber (the tab badge carries Needs you). */
 export function LatestStrip({ items, now, app = null }: { items: WorkItem[]; now?: number; app?: YourApp | null }) {
   const latest: LatestLink[] = useMemo(() => {
     const out = latestLinks(items, now);

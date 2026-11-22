@@ -100,7 +100,7 @@ describe("the Latest strip", () => {
     expect(run.textContent).toContain("10m ago");
     expect(run.textContent).not.toMatch(/Run Run/);
     expect(run.getAttribute("href")).toContain("wfr=wfr_merge5");
-    expect(run.querySelector(".px-dot")!.getAttribute("data-s")).toBe("you");
+    expect(run.querySelector(".px-dot")!.getAttribute("data-s")).toBeNull();   // never amber: the tab badge is the one Needs-you signal
     expect($('[data-testid="px-work-latest-build"]')!.getAttribute("href")).toContain("crun_ad50ce9f01e14534b230");
     expect($('[data-testid="px-work-latest-change"]')!.textContent).toContain("PR #5");
     // Only the older work has a preview: Latest still finds it, with its own (done) dot.
