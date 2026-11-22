@@ -248,6 +248,17 @@ describe("#13 one override per press", () => {
     expect(posts(calls)).toHaveLength(1);
   });
 
+  it("Needs you: the agent's refused change is shown as a proposal, and Accept sends accept", async () => {
+    const needs = { id: "V-77", source: { kind: "validator", name: "gwlint", rule_id: "no-sensitive-paths-exposed" }, severity: "P0", status: "open",
+      fix_kind: "human", hunk_id: "", location: { file: "config/tenants/lumen-pay.yaml", line: 21, partner_line: 21 }, original: "  - path: /v1/admin/accounts", fixed: null,
+      held: { autofix: "human", by: "ruleset" }, proposed: { before: "  - path: /v1/admin/accounts", after: null, applicable: true, pieces: [] } };
+    const calls = engine(undefined, { ...VALIDATION_OPEN, findings: [...(VALIDATION_OPEN as { findings: unknown[] }).findings, needs] });
+    await mount(<ValidationTab projectId="northgate-gateway" change={9} />);
+    expect(fix("V-77").querySelector('[data-testid="vr-proposed-lines"]')!.textContent).toContain("- path: /v1/admin/accounts");
+    await press(fix("V-77").querySelector('[data-testid="vr-accept"]'));
+    expect(posts(calls)[0]).toMatchObject({ path: "/v1/changes/northgate-gateway/9/findings/V-77/override", body: { action: "accept" } });
+  });
+
   it("an accepted fix shows 'accepted', not a second Accept", async () => {
     engine(undefined, { ...VALIDATION_OPEN, overrides: [{ ref: "O-1", action: "accept", finding_id: "V-03", actor: "Owner" }] });
     await mount(<ValidationTab projectId="northgate-gateway" change={9} />);

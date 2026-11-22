@@ -41,6 +41,11 @@ export type Finding = {
   /** A reviewer finding that is NEVER a follow-up (a security HIGH on a P0 rule's lines): it
    *  blocks the merge like the P0 it sits on (engine `blocks`, verdict `security_review:R-n`). */
   blocks: boolean;
+  /** "Needs you": the agent's change BOSS refused for a `human` / `never` rule (engine
+   *  `proposed`). Accept commits it (masked lines; `applicable` false → write it with Edit). */
+  proposed: { before: string | null; after: string | null; applicable: boolean } | null;
+  /** The agent's lines are on the branch for a `human` / `never` rule: fixed only once a person accepts. */
+  held: boolean;
 };
 /** One changed line of input → target (engine validators.record): `before` null = an added
  *  line, `after` null = a removed one; `finding` empty = a change no finding explains. */
@@ -137,6 +142,11 @@ export function parseFinding(v: unknown): Finding {
       : x.deferred_to && typeof x.deferred_to === "object" ? { change: nn(o(x.deferred_to).number), href: s(o(x.deferred_to).href), build: "" }
       : x.deferred_to ? { change: null, href: "", build: /^[a-z]+_[0-9a-z]+$/i.test(s(x.deferred_to)) ? s(x.deferred_to) : "" } : null,
     title: s(x.title), introduced: x.introduced === true, blocks: x.blocks === true,
+    proposed: x.proposed && typeof x.proposed === "object"
+      ? { before: o(x.proposed).before == null ? null : s(o(x.proposed).before),
+          after: o(x.proposed).after == null ? null : s(o(x.proposed).after),
+          applicable: o(x.proposed).applicable === true } : null,
+    held: !!x.held,
   };
 }
 function parseRun(v: unknown): RunResult {

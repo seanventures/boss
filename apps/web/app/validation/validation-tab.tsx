@@ -245,7 +245,9 @@ function FixCard({ f, fixes, hunk, record, send, disabled, disabledWhy, guideVer
   };
   const fix = fixes[0];
   const accepted = record?.action === "accept";
-  const proposed = Boolean(fix || f.fixed != null) && f.status === "open";
+  // The agent's refused change for a `human` / `never` rule: Accept commits it (engine).
+  const refused = f.status === "open" ? f.proposed : null;
+  const proposed = (Boolean(fix || f.fixed != null) || !!refused?.applicable) && f.status === "open";
   const waitingApproval = f.status === "open" && record?.action === "waive" && !record.approved_at;
   const settled = f.status === "overridden" || f.status === "waived" || f.status === "reverted";
   const off = disabled || busy;
@@ -266,6 +268,15 @@ function FixCard({ f, fixes, hunk, record, send, disabled, disabledWhy, guideVer
       </div>
       {f.title ? <div className="vr-guide">{f.title}</div> : null}
       <DiffLines fixes={fixes} f={f} />
+      {refused ? (
+        <div data-testid="vr-proposed">
+          <span className="vr-muted vr-small">Needs you · the agent proposed (not applied){refused.applicable ? "" : " · write it with Edit"}</span>
+          <pre data-testid="vr-proposed-lines">
+            {(refused.before ?? "").split("\n").filter(Boolean).map((l, i) => <span key={`d${i}`} className="d">- {l}</span>)}
+            {(refused.after ?? "").split("\n").filter(Boolean).map((l, i) => <span key={`a${i}`} className="a">+ {l}</span>)}
+          </pre>
+        </div>
+      ) : null}
       {f.guide && f.status === "open" ? <div className="vr-guide">guide {guideVersion}: {f.guide}</div> : null}
       {record ? <OverrideRecord r={record} /> : null}
       {mode === "edit" ? (
