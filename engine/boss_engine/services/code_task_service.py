@@ -821,7 +821,8 @@ def start_code_task(
         # (start_from_file) — the original, fixed in place at the target.
         spec["remediate"] = {k: remediate[k] for k in ("input", "output", "answer_files",
                                                        "validator", "content", "original_path",
-                                                       "start_from") if remediate.get(k)}
+                                                       "start_from", "content_sha256")
+                             if remediate.get(k)}
     bench =(finalize_ctx or {}).get("qa_benchmark") if isinstance((finalize_ctx or {}).get("qa_benchmark"), dict) else {}
     if bench.get("app_root"):
         spec["app_root"] = bench["app_root"]

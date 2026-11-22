@@ -209,26 +209,48 @@ def _merge_decision(c: Any, ch: Change) -> Optional[dict]:
     return {"id": row["id"], "recommendation": _j(row["recommendation"], {})} if row else None
 
 
+def _lineage_records(c: Any, ch: Change) -> list[dict]:
+    """The change's builds' boss.validation/v1 records, root (the first build) first."""
+    if not ch.run_id:
+        return []
+    out = []
+    for r in rp._lineage(c, ch.run_id):
+        v = (r["state"] or {}).get("validation")
+        if isinstance(v, Mapping) and v.get("schema") == "boss.validation/v1":
+            out.append(dict(v))
+    return out
+
+
+def original_of(c: Any, ch: Change) -> Optional[dict]:
+    """THE CHANGE'S ORIGINAL CHECK: the first build's record, whose input is the file as given
+    (the change's first commit). Its ``before`` is the story's "before", for good."""
+    recs = _lineage_records(c, ch)
+    return recs[0] if recs else None
+
+
 def validation_of(c: Any, ch: Change) -> Optional[dict]:
-    """The newest boss.validation/v1 for the change: the last finished re-run's, else the
-    lineage's."""
-    rr = c.execute(text(
+    """THE CHANGE'S VALIDATION STORY, one record: the newest boss.validation/v1 (the last
+    finished re-run's, else the newest build's) THAT WAS CHECKED AGAINST THE ORIGINAL — so
+    ``before`` is always the original's findings, ``fixes`` everything every build and person
+    did since (original → head) and ``after`` the head. A record computed against any other
+    input (a partly fixed file a later build mistook for its input) never replaces it."""
+    orig = original_of(c, ch)
+    rows = c.execute(text(
         "SELECT validation, head_sha FROM validation_reruns WHERE project_id = :p "
-        "AND change_number = :n AND state = 'done' ORDER BY finished_at DESC NULLS LAST LIMIT 1"),
-        {"p": ch.project_id, "n": ch.number}).first()
-    if rr is not None and _j(rr[0], None):
+        "AND change_number = :n AND state = 'done' ORDER BY finished_at DESC NULLS LAST LIMIT 5"),
+        {"p": ch.project_id, "n": ch.number}).fetchall()
+    for rr in rows:
         rec = _j(rr[0], None)
+        if not isinstance(rec, dict) or not rp.same_input(rec, orig):
+            continue
         # The head the re-run checked (records before it stamped one: the head it was queued at).
         if isinstance(rec.get("after"), dict) and not rec["after"].get("head_sha") and rr[1]:
             rec["after"]["head_sha"] = rr[1]
         return rec
-    if not ch.run_id:
-        return None
-    for r in reversed(rp._lineage(c, ch.run_id)):
-        v = (r["state"] or {}).get("validation")
-        if isinstance(v, Mapping) and v.get("schema") == "boss.validation/v1":
-            return dict(v)
-    return None
+    for v in reversed(_lineage_records(c, ch)):
+        if rp.same_input(v, orig):
+            return v
+    return orig
 
 
 # ── applying overrides to the packet ───────────────────────────────────────────────────────────
@@ -325,6 +347,21 @@ def _iso(value: Any) -> Any:
     return value.isoformat() if hasattr(value, "isoformat") else value
 
 
+def original_text(ch: Change, validation: Mapping[str, Any]) -> Optional[str]:
+    """The file as given, as the change carries it: a separate input is read at the branch; an
+    input fixed IN PLACE (its path is the target) at the record's ``input.ref`` (the change's
+    first commit, or the base branch) — never the head, which holds the fixes."""
+    inp = (validation.get("input") or {}).get("file")
+    ref = (validation.get("input") or {}).get("ref")
+    if not inp:
+        return None
+    if inp == validation.get("target") and ref:
+        got = ch.repo.read_text_file(str(ref), inp)
+        if got is not None:
+            return got
+    return ch.repo.read_text_file(ch.branch, inp)
+
+
 def _override_lines(o: Mapping[str, Any]) -> tuple[list[str], list[str]]:
     """The lines an override's commit added and removed (its masked before → after text)."""
     import difflib
@@ -410,13 +447,13 @@ def state(c: Any, settings: Any, project_id: str, number: int) -> dict:
     if validation and (validation.get("input") or {}).get("file"):
         # THE PARTNER'S FILE, masked, for the line gutter: its bytes as the check received them
         # (the input at the branch head when it still hashes to the record's sha256).
-        from .validators import mask, sha256
+        from .validators import is_original, mask
 
         try:
-            body = ch.repo.read_text_file(ch.branch, validation["input"]["file"])
+            body = original_text(ch, validation)
         except Exception:  # noqa: BLE001 — the gutter falls back to the quoted lines
             body = None
-        if body is not None and sha256(body) == validation["input"].get("sha256"):
+        if is_original(body, validation["input"]):
             validation["input"] = {**validation["input"], "text": mask(body)}
     return {"validation": validation, "overrides": ovrs,
             "rerun": ({k: (v.isoformat() if hasattr(v, "isoformat") else v)
@@ -585,7 +622,8 @@ def override(c: Any, settings: Any, project_id: str, number: int, *, action: str
                             "with Edit.")
     if action in COMMITS or proposal:
         inp, target = (validation.get("input") or {}).get("file"), validation.get("target")
-        input_text = ch.repo.read_text_file(ch.branch, inp)
+        # THE ORIGINAL, never the head: in place, the input's path IS the target.
+        input_text = original_text(ch, validation)
         target_text = ch.repo.read_text_file(ch.branch, target)
         if input_text is None or target_text is None:
             raise OverrideError(409, "file_gone", f"`{inp}` or `{target}` is not on the branch.")
@@ -593,9 +631,9 @@ def override(c: Any, settings: Any, project_id: str, number: int, *, action: str
                      if h.get("id") == (finding or {}).get("hunk_id")), None)
         anchor = int(hunk["line"]) if hunk else None
         if action == "revert_all":
-            from .validators import sha256 as _sha
+            from .validators import is_original as _is_original
 
-            if _sha(input_text) != (validation.get("input") or {}).get("sha256"):
+            if not _is_original(input_text, validation.get("input")):
                 raise OverrideError(409, "input_changed",
                                     f"`{inp}` on the branch is not the file the check received.")
             new_text = input_text
@@ -879,6 +917,23 @@ def _original_at(tree: Path, ref: str, path: str) -> Optional[str]:
     return None
 
 
+def _original_commit(tree: Path, path: str) -> Optional[str]:
+    """The change's first commit of ``path`` ("Original file as given", input_fidelity
+    .ORIGINAL_COMMIT_PREFIX) in the re-run's checkout, for a record that kept no ref."""
+    import subprocess
+
+    from .input_fidelity import ORIGINAL_COMMIT_PREFIX
+
+    try:
+        out = subprocess.run(["git", "-C", str(tree), "log", "--format=%H", "--fixed-strings",
+                              f"--grep={ORIGINAL_COMMIT_PREFIX}", "--", path],
+                             capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    shas = out.stdout.split() if out.returncode == 0 else []
+    return shas[-1] if shas else None
+
+
 def _sandbox_run(workdir: Path, env: Mapping[str, str]) -> Callable[[str], Any]:
     from types import SimpleNamespace
 
@@ -974,7 +1029,9 @@ def execute_rerun(engine: Any, settings: Any, rerun_id: str, *,
     try:
         with engine.begin() as c:
             ch = change(c, settings, row["project_id"], int(row["change_number"]))
-            before = validation_of(c, ch) or {}
+            # THE ORIGINAL CHECK decides the input, its ref and the trusted validator: a re-run
+            # is always original → head, never the newest build's (maybe partial) input.
+            before = original_of(c, ch) or validation_of(c, ch) or {}
         inp = _safe_rel((before.get("input") or {}).get("file"))
         target = _safe_rel(before.get("target"))
         v, ruleset = trusted_validator(before)
@@ -991,12 +1048,17 @@ def execute_rerun(engine: Any, settings: Any, rerun_id: str, *,
                     # from (the first commit, or the base branch), never the edited tree.
                     in_place = inp == target
                     ref = (before.get("input") or {}).get("ref") if in_place else None
+                    if in_place and not ref:
+                        ref = _original_commit(tree, inp)
                     input_text = (_original_at(tree, ref, inp) if ref else None)
                     if input_text is None:
                         input_text = (tree / inp).read_text(errors="replace")
                     contract = {"input": inp, "output": target, "answer_files": [],
                                 "validator": v, "source": "rerun", "_input_text": input_text,
                                 "_output_base": None, "_answer_texts": {}, "ruleset": ruleset,
+                                **({"input_sha256": (before.get("input") or {})["sha256"]}
+                                   if (before.get("input") or {}).get("sha256")
+                                   and (before.get("input") or {}).get("masked_sha256") else {}),
                                 **({"in_place": True} if in_place else {}),
                                 **({"input_ref": ref} if ref else {}),
                                 "from": (before.get("input") or {}).get("from") or "partner"}

@@ -139,6 +139,15 @@ def sha256(text: Optional[str]) -> Optional[str]:
     return hashlib.sha256(str(text).encode()).hexdigest() if text is not None else None
 
 
+def is_original(text: Optional[str], input_record: Optional[Mapping[str, Any]]) -> bool:
+    """``text`` is the original the record checked: its true bytes, or the masked original the
+    change carries (an upload's secrets are never committed)."""
+    if text is None or not isinstance(input_record, Mapping):
+        return False
+    got = sha256(text)
+    return got in {input_record.get("sha256"), input_record.get("masked_sha256")} - {None}
+
+
 # ── the diff, as hunks tied to findings ────────────────────────────────────────────────────────
 
 def hunks(input_text: str, output_text: str) -> list[dict]:
@@ -651,7 +660,13 @@ def record(*, c: Mapping[str, Any], validator: Mapping[str, Any], version: Optio
         "ruleset": ({"id": ruleset.get("ruleset"), "version": ruleset.get("version"),
                      "sha": ruleset.get("sha"), "rules": ruleset.get("rules") or {},
                      "custom": ruleset.get("custom") or []} if ruleset else None),
-        "input": {"file": inp, "sha256": sha256(c.get("_input_text")),
+        # THE BYTES THE RUN RECEIVED (``sha256``: an upload's TRUE bytes, before its secrets
+        # were masked); ``masked_sha256`` is the masked original the change carries, when the
+        # two differ. A check of the branch's original accepts either.
+        "input": {"file": inp, "sha256": c.get("input_sha256") or sha256(c.get("_input_text")),
+                  **({"masked_sha256": sha256(c.get("_input_text"))}
+                     if c.get("input_sha256")
+                     and c.get("input_sha256") != sha256(c.get("_input_text")) else {}),
                   "from": str(c.get("from") or "partner"),
                   # Where the original can be read again (a commit or the base branch) when it
                   # sits at the target's own path: a re-run checks out the change, not the input.

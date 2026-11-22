@@ -7334,6 +7334,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # the output as it stood, the answer files) are taken here, before any agent runs; every
         # stage is told which files are answers it must not read; the implement loop checks.
         _remediation = None
+        _inherited: Optional[dict] = None
         if not use_microvm:
             try:
                 def _base_file(path: str, _gh=sf.github, _ref=repo_base_branch):
@@ -7347,8 +7348,29 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 # THE PERSON'S BRIEF ONLY: never the knowledge block of past lessons that
                 # learning_context put in front of it (a lesson's backticked command became
                 # this run's validator — crun_46ecf61f, evt_3ff2f211).
-                _remediation = _input_fidelity.contract(spec, _person_brief, root,
+                # EVERY BUILD ON A CHANGE WITH A VALIDATION CONTRACT is held to it: a repair, a
+                # follow-up, a review-fix run or a retry that declares none inherits the first
+                # build's (input_fidelity.lineage_contract) — never a contract inferred from its
+                # brief, whose "input" would be the partly fixed file on the branch.
+                _spec_c = spec
+                if not (isinstance(spec, dict) and isinstance(spec.get("remediate"), dict)):
+                    try:
+                        with engine.connect() as c:
+                            _inherited = _input_fidelity.lineage_contract(
+                                c, project_id, run_id, root_run, work_branch)
+                    except Exception:  # noqa: BLE001 — unknown lineage: the build's own spec
+                        _log_caught(logger)
+                        _inherited = None
+                    if _inherited:
+                        _spec_c = {**spec, "remediate": _inherited["remediate"]}
+                _remediation = _input_fidelity.contract(_spec_c, _person_brief, root,
                                                         trusted=_base_file)
+                if _remediation and _inherited:
+                    _remediation["inherited_from"] = _inherited["run_id"]
+                    _first = _inherited.get("state") or {}
+                    _ref = _first.get("original_commit") or _first.get("input_ref")
+                    if _ref and _remediation.get("in_place"):
+                        _remediation["input_ref"] = str(_ref)
             except Exception:  # noqa: BLE001 — an unreadable contract is no contract, said
                 _log_caught(logger)
         if _remediation:
@@ -7368,6 +7390,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     root, _remediation, _base_file(str(_remediation["output"])))
                 if _remediation.get("original_commit"):
                     _remediation["input_ref"] = str(_remediation["original_commit"])
+                elif _remediation.get("input_ref"):
+                    pass  # inherited: the change's first commit, read by every later build
                 elif _remediation.get("from") == "repo" and repo_base_branch \
                         and _remediation.get("original_path") == _remediation.get("output"):
                     _remediation["input_ref"] = str(repo_base_branch)
@@ -7378,6 +7402,11 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 (lambda cmd: sandbox.run(cmd, timeout=180)) if sandbox is not None else None)
             if _seed_cmd:
                 _remediation["_auto_seeded_cmd"] = _seed_cmd
+            # WHAT THE AGENT STARTS FROM (enforce_autofix judges only its own changes since).
+            try:
+                _remediation["_start_text"] = (root / str(_remediation["output"])).read_text()
+            except OSError:
+                _remediation["_start_text"] = None
             instructions = f"{instructions}{_input_fidelity.brief(_remediation)}"
             with _transaction(engine) as c:
                 c.execute(sql(
@@ -8610,9 +8639,32 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                {"step": "write_tests", "reason": "repair_augment_added_no_files",
                                 "existing_tests": len(_app_tests),
                                 "note": "the existing suite stands as the oracle; not re-authoring"})
-            if not test_files:
+            if test_files and _remediation:
+                # A CONFIG-ONLY CHANGE ADDS NO CONTENT-PINNING TEST (remediation_guards): a new
+                # test that reads the file being fixed freezes one answer into the suite (dry
+                # run 3: lumenpay_remediated_test.go). It is removed; the validator and the
+                # contract tests are this change's checks.
+                from . import remediation_guards as _rguards
+
+                _pinning = _rguards.pinning_tests(root, test_files, _remediation,
+                                                  preexisting=preexisting_tests)
+                for _pt in _pinning:
+                    try:
+                        (root / _pt).unlink()
+                    except OSError:
+                        _log_caught(logger)
+                if _pinning:
+                    test_files = [p for p in test_files if p not in _pinning]
+                    with _transaction(engine) as c:
+                        emit_event(c, project_id, "code_task.pinning_tests_removed", "boss",
+                                   "code_task_run", run_id,
+                                   {"step": "write_tests", "removed": _pinning[:20],
+                                    "why": "a config-only change needs no test that pins the "
+                                           "file's contents"})
+            if not test_files and not _remediation:
                 # SELF-HEAL once, on a stronger lane when one is configured. The same
                 # engine and model is not a frontier retry (BOSSAPP-1032).
+                # (A config-only change: writing no new test file is the expected outcome.)
                 r1, test_files, test_changes = _attempt_write_tests(escalate=True)
                 if _tests_escalation["stronger"]:
                     with _transaction(engine) as c:
@@ -10286,16 +10338,23 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             if _ok and isinstance(rec, dict) and not _acceptance_gate.passed(rec):
                 rec["bar"] = {"bar": gates.bar, "nonblocking": True}
 
+        #: The broken-tests check's state when it is unknown ({state, why}); on the evidence.
+        _old_tests: dict = {}
+
         def _set_nothing_broke(ok_) -> None:
             # BROKEN EXISTING TESTS at this bar (quality_bar.broken_tests_block): standard blocks
             # when a failing test is on a P0/P1 path or touches the changed area; prototype only
             # for P0 (startup, auth, health); production always. The rest is a follow-up.
             if ok_:
                 gates["nothing_broke"] = True
+                _old_tests.clear()
                 return
             _names = failing_tests(official_verify_output or last_verify_output or "", limit=40)
             _blocks, _why = _quality_bar.broken_tests_block(gates.bar, _names)
             gates.set_bar_aware("nothing_broke", not _blocks, [_why] if not _blocks else [])
+            # NO TEST NAMED: the check is UNKNOWN, with why (never "old tests broke").
+            _old_tests.clear()
+            _old_tests.update(_quality_bar.old_tests_state(_why) or {})
 
         def _set_review(ok_, deferred_) -> None:
             # The review at this bar: a refutation that named no issue, or a review that never
@@ -10689,6 +10748,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # point — writing to it above was a latent crash that would have fired precisely
             # when a run DID weaken an existing test, i.e. when the gate matters most.
             **({"weakened_existing_tests": _weakened[:20]} if _weakened else {}),
+            # The broken-tests check, when no failing test could be named: UNKNOWN with why
+            # (the same dict, so a later re-judgement updates it).
+            "old_tests": _old_tests,
             # What BOSS started, and whether it answered — the receipt for the app_serves gate.
             "app_serves": app_serves_record,
             # F2: the applied template's gates' receipt (which template, its tests, the scan).
@@ -11058,6 +11120,17 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                                      round_i),
                             root, model=m_st)
                         cost += int(r_st.get("cost_usd_micros") or 0)
+                    if _remediation:
+                        # A REVIEW-FIX ROUND WRITES THE TARGET TOO: the ruleset's autofix policy
+                        # is enforced again (a `human` / `never` rule's lines put back, the
+                        # finding left "Needs you" with `proposed`), and the record refreshed.
+                        _fidelity = _fidelity_check(engine, run_id, root, _remediation, sandbox,
+                                                    summary=r2.get("summary"), test_cmd=test_cmd)
+                        _validation = _fidelity.pop("_validation", None)
+                        gates[_input_fidelity.GATE] = bool(_fidelity.get("ok"))
+                        evidence[_input_fidelity.STATE_KEY] = _fidelity
+                        if _validation is not None:
+                            evidence[_input_fidelity.VALIDATION_KEY] = _validation
                     # Re-verify against the oracle. `nothing_broke` is the same full-suite run
                     # (regressions_ok = panel["full"]), so one execution refreshes both gates.
                     _post = _run_verify()
@@ -11787,6 +11860,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         _install_fail[0])[:700]
                 if "app_serves" in failing:
                     _details["app_serves"] = _app_serves_sentence(app_serves_record)[:700]
+                if "existing_tests_intact" in failing and _weakened:
+                    # "Old tests broke" NAMES the tests: a file deleted, or fewer tests in it.
+                    _details["existing_tests_intact"] = "; ".join(_weakened[:5])
                 if _blockers:
                     for _g in _blockers:
                         _details.setdefault(_g, "a BLOCKER-level finding is still open after "

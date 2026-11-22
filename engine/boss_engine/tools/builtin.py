@@ -1465,6 +1465,8 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                         "start_from": {"type": "boolean"},
                         "content": {"type": "string"},
                         "original_path": {"type": "string"},
+                        # The TRUE upload's sha256 (its secrets are masked in `content`).
+                        "content_sha256": {"type": "string"},
                     },
                     "required": ["input"],
                 },

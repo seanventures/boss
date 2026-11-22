@@ -413,18 +413,34 @@ def _words(text: Any) -> set[str]:
     return {w for w in re.split(r"[^a-z0-9]+", str(text or "").lower()) if len(w) >= 5}
 
 
+#: The reason line of a broken-tests check whose state is unknown (no failing test named).
+UNKNOWN_PREFIX = "unknown: "
+
+
+def old_tests_state(why: str) -> Optional[dict]:
+    """``{state: "unknown", why}`` for a broken-tests reason that is unknown; else None."""
+    w = str(why or "")
+    return {"state": "unknown", "why": w[len(UNKNOWN_PREFIX):]} if w.startswith(UNKNOWN_PREFIX) \
+        else None
+
+
 def broken_tests_block(bar: str, failing: Iterable[str]) -> tuple[bool, str]:
     """(does a broken EXISTING test block at `bar`, why it did not when it does not).
 
     production: always. prototype and standard (the light lane): only a P0 test (its name or
-    file marks startup, health, auth or sign-in) holds; the rest is a follow-up. Failing tests
-    that cannot be named block at production and are a follow-up below it."""
+    file marks startup, health, auth or sign-in) holds; the rest is a follow-up.
+
+    FAILING TESTS THAT CANNOT BE NAMED never block and never show as "old tests broke", at any
+    bar: the check's state is UNKNOWN, said with its reason (``UNKNOWN_PREFIX``), and the suite's
+    own failure stays on "New tests pass" (the same run). A merge card that said "Ready" and
+    "Old tests broke" over a test nobody could name contradicted itself (dry run 3)."""
     bar = normalize(bar) or DEFAULT
-    if bar == PRODUCTION:
-        return True, ""
     names = [str(n) for n in failing or () if str(n).strip()]
     if not names:
-        return False, f"failing existing tests could not be named; not a P0 at the {bar} bar"
+        return False, (f"{UNKNOWN_PREFIX}the suite failed but no failing existing test could be "
+                       "named, so BOSS cannot say an old test broke")
+    if bar == PRODUCTION:
+        return True, ""
     p0 = any(w in n.lower() for n in names for w in P0_TEST_WORDS)
     return p0, (f"{len(names)} existing test(s) failing, none on a P0 path "
                 f"(startup, auth, health): {'; '.join(names[:5])}")

@@ -16,7 +16,40 @@ from pathlib import PurePosixPath
 from typing import Any, Mapping, Optional
 
 #: The build inputs this input type reads (popped before the build tool is called).
-INPUTS = ("start_from", "start_from_content", "target_path")
+INPUTS = ("start_from", "start_from_content", "target_path", "start_from_content_sha256")
+#: The run input that carries the TRUE upload's sha256 once its text was masked at the start.
+CONTENT_SHA_KEY = "start_from_content_sha256"
+
+
+def _sha(text: str) -> str:
+    from .validators import sha256
+
+    return str(sha256(text))
+
+
+def masked(text: str) -> str:
+    """The upload with its secret values replaced by the masker's placeholder; every other byte
+    (indentation, the final newline) kept exactly."""
+    from .validators import mask
+
+    return str(mask(text) if text else text)
+
+
+def mask_run_input(input_data: Any) -> Any:
+    """A workflow run's input as it is STORED: an uploaded file's secrets masked, the true
+    bytes' sha256 kept beside it. Returns the input unchanged when it carries no upload."""
+    if not isinstance(input_data, Mapping):
+        return input_data
+    content = input_data.get("start_from_content")
+    if not isinstance(content, str) or not content:
+        return input_data
+    safe = masked(content)
+    if safe == content:
+        return input_data
+    out = dict(input_data)
+    out["start_from_content"] = safe
+    out.setdefault(CONTENT_SHA_KEY, _sha(content))
+    return out
 
 
 class StartFromFileError(ValueError):
@@ -49,7 +82,14 @@ def remediate(inputs: Mapping[str, Any]) -> Optional[dict]:
     if content not in (None, ""):
         name = _rel(value or target, "The uploaded file's name")
         dest = _rel(target, "The target") if target else name
-        return {"input": dest, "output": dest, "content": str(content), "start_from": True}
+        # NEVER STORED, NEVER COMMITTED: the upload's credential-shaped values are masked to a
+        # placeholder by the one masker (validators.mask) and the masked bytes are the change's
+        # original; the TRUE bytes' sha256 is kept (``content_sha256``) for the record and the
+        # substitution guard. Every other byte is kept exactly, the final newline included.
+        raw = str(content)
+        given_sha = inputs.get(CONTENT_SHA_KEY) if isinstance(inputs, Mapping) else None
+        return {"input": dest, "output": dest, "content": masked(raw), "start_from": True,
+                "content_sha256": str(given_sha or _sha(raw))}
     src = _rel(value, "The file to start from")
     dest = _rel(target, "The target") if target else src
     return {"input": dest, "output": dest, "original_path": src, "start_from": True}

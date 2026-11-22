@@ -149,14 +149,17 @@ export function typedInputs(
 }
 
 /** Only the values actually filled in — a blank box is not an answer, and sending "" would
- *  read further down as a deliberate choice of empty. */
+ *  read further down as a deliberate choice of empty. A multi-line field (an uploaded file's
+ *  text) is sent BYTE FOR BYTE: its final newline is part of the file, and the change's first
+ *  commit must equal what the partner sent (dry run 3: the trimmed upload lost its newline). */
 export function suppliedInputs(
   fields: WorkflowInputField[], values: Record<string, string>,
 ): Record<string, string> {
   const out: Record<string, string> = {};
   for (const field of fields) {
-    const value = (values[field.name] ?? "").trim();
-    if (value) out[field.name] = value;
+    const raw = values[field.name] ?? "";
+    if (!raw.trim()) continue;
+    out[field.name] = field.kind === "multiline" ? raw : raw.trim();
   }
   return out;
 }

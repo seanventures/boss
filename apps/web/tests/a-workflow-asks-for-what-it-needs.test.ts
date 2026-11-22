@@ -91,6 +91,16 @@ describe("a workflow asks for what it needs", () => {
     expect(sent).toEqual({ video_url: "https://x" });   // a blank box is not an answer
   });
 
+  it("sends an uploaded file's text byte for byte, final newline included", () => {
+    const fields = workflowInputFields({ properties: {
+      start_from_content: { type: "string", format: "textarea" }, target_path: { type: "string" } } });
+    const file = "tenant: lumen-pay\nroutes: []\n";
+    const sent = suppliedInputs(fields, { start_from_content: file, target_path: " config/t.yaml " });
+    expect(sent.start_from_content).toBe(file);
+    expect(sent.target_path).toBe("config/t.yaml");
+    expect(suppliedInputs(fields, { start_from_content: "\n  \n" })).toEqual({});
+  });
+
   it("names what is still missing, by label rather than field name", () => {
     const fields = workflowInputFields(JSON_SCHEMA);
     expect(missingRequired(fields, {})).toEqual(["Video to publish"]);

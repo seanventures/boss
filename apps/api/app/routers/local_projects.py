@@ -41,6 +41,7 @@ from sqlalchemy import text
 from boss_engine.config import get_settings
 from boss_engine.db import begin, get_engine
 from boss_engine.identity import P, Scope, permit
+from boss_engine.services.redaction import mask_content
 
 router = APIRouter(tags=["projects"])
 _settings = get_settings()
@@ -253,8 +254,8 @@ def local_change(project_id: str, number: int) -> Any:
         _require(connection, project_id)
         try:
             # Published to GitHub: the same page reads its pull request (BOSSAPP-954).
-            return change_review.summary_of(change_review.source_for(
-                connection, _settings, project_id, number, engine=_engine))
+            return mask_content(change_review.summary_of(change_review.source_for(
+                connection, _settings, project_id, number, engine=_engine)))
         except change_review.ChangeReviewError as error:
             if error.status == 404:
                 raise HTTPException(status_code=404, detail=error.body()) from None
@@ -351,7 +352,7 @@ def local_change_tree(project_id: str, number: int, ref: Optional[str] = "head")
     with begin(_engine) as connection:
         _require(connection, project_id)
         try:
-            return local_review.tree(connection, _settings, project_id, number, ref)
+            return mask_content(local_review.tree(connection, _settings, project_id, number, ref))
         except local_review.ReviewError as error:
             return _review_refused(error)
 
@@ -364,7 +365,8 @@ def local_change_file(project_id: str, number: int, path: str, ref: Optional[str
     with begin(_engine) as connection:
         _require(connection, project_id)
         try:
-            return local_review.read_file(connection, _settings, project_id, number, path, ref)
+            return mask_content(local_review.read_file(connection, _settings, project_id, number,
+                                                       path, ref))
         except local_review.ReviewError as error:
             return _review_refused(error)
 

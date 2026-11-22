@@ -480,6 +480,31 @@ def _lineage(connection: Any, run_id: str) -> list[dict]:
             for r in rows]
 
 
+def same_input(rec: Mapping[str, Any], orig: Optional[Mapping[str, Any]]) -> bool:
+    """``rec`` was checked against the ORIGINAL's bytes (the change's first build's input),
+    never a partly fixed branch file a later build mistook for its input."""
+    if not orig:
+        return True
+    a, b = rec.get("input") or {}, orig.get("input") or {}
+    if a.get("file") != b.get("file"):
+        return False
+    shas = {b.get("sha256"), b.get("masked_sha256")} - {None}
+    return not shas or bool({a.get("sha256"), a.get("masked_sha256")} & shas)
+
+
+def story_record(records: Sequence[Mapping[str, Any]]) -> Optional[dict]:
+    """THE CHANGE'S VALIDATION STORY from its builds' records (root first): the newest one
+    checked against the original, so ``before`` stays the original's findings and only
+    ``fixes`` / ``after`` move. None when there is none."""
+    if not records:
+        return None
+    orig = records[0]
+    for rec in reversed(records):
+        if same_input(rec, orig):
+            return dict(rec)
+    return dict(orig)
+
+
 def work_title(title: Any) -> str:
     """The root build's own name: no "Follow-up: … —" leads, no retry tails."""
     from .pr_follow_up import work_name
@@ -657,9 +682,10 @@ def for_run(connection: Any, run_id: str, *, head_sha: Optional[str],
     # THE WORK'S OWN RUN (its number as the Work panel shows it) and title, not the step's.
     top = _root_workflow_run(connection, step_wfr)
     wfr = (top or {}).get("id") or step_wfr
-    validation = validation or next((r["state"].get("validation") for r in reversed(lineage)
-                       if isinstance(r["state"].get("validation"), Mapping)
-                       and r["state"]["validation"].get("schema") == "boss.validation/v1"), None)
+    validation = validation or story_record(
+        [r["state"]["validation"] for r in lineage
+         if isinstance(r["state"].get("validation"), Mapping)
+         and r["state"]["validation"].get("schema") == "boss.validation/v1"])
     # THE BUILD THAT PRODUCED THE CHANGE (never a failed first attempt); later ones follow it.
     build = _producing_build(lineage, me)
     at = next(i for i, r in enumerate(lineage) if r["id"] == build["id"])

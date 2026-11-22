@@ -340,6 +340,16 @@ def contract(spec: Mapping[str, Any], instructions: str, root: Any, *,
             # (uploaded, or a repo path read from the trusted base) and the fix is made IN PLACE
             # at the target, so the change's diff reads original → fixed.
             original = declared.get("content")
+            true_sha = declared.get("content_sha256")
+            if original is not None:
+                # AN UPLOAD IS KEPT MASKED (start_from_file.masked): its secret values never
+                # reach the branch, the record or an agent; the TRUE bytes' sha256 is recorded.
+                from .start_from_file import masked as _masked
+                from .validators import sha256 as _sha256
+
+                raw = str(original)
+                original = _masked(raw)
+                true_sha = true_sha or _sha256(raw)
             src = _clean_path(declared.get("original_path"))
             if src and (src.startswith("/") or "\\" in src
                         or ".." in PurePosixPath(src).parts):
@@ -355,6 +365,8 @@ def contract(spec: Mapping[str, Any], instructions: str, root: Any, *,
                 return None
             c.update(output=inp, in_place=True, _original=str(original),
                      original_path=src or None, **{"from": "upload" if src == "" else "repo"})
+            if true_sha:
+                c["input_sha256"] = str(true_sha)
     else:
         c = infer(str(instructions or ""), root)
     if not c:
@@ -420,6 +432,43 @@ def contract(spec: Mapping[str, Any], instructions: str, root: Any, *,
     return c
 
 
+def lineage_contract(connection: Any, project_id: str, run_id: str, root_run_id: Optional[str],
+                     branch: Optional[str]) -> Optional[dict]:
+    """THE CHANGE'S VALIDATION CONTRACT, for EVERY build on it: a repair, a follow-up, a
+    review-fix run or a retry carries no ``remediate`` of its own, yet it writes the same
+    target on the same branch, so it is held to the first build's contract (its declared
+    ``remediate``, and the original commit its record names). ``{run_id, remediate, state}`` of
+    the lineage's first build that declared one (same root, or the same work branch); None when
+    the change has no contract."""
+    from sqlalchemy import text as _text
+
+    row = connection.execute(_text(
+        "SELECT id, spec->'remediate' AS r, state->'remediation' AS s FROM code_task_runs "
+        "WHERE project_id = :p AND id <> :me AND spec->'remediate' IS NOT NULL "
+        "AND jsonb_typeof(spec->'remediate') = 'object' "
+        "AND (id = :root OR finalize_ctx->>'root_run_id' = :root "
+        "     OR (:b <> '' AND (finalize_ctx->>'branch_name' = :b "
+        "                       OR finalize_ctx->>'work_branch' = :b))) "
+        "ORDER BY created_at LIMIT 1"),
+        {"p": project_id, "me": run_id, "root": str(root_run_id or run_id),
+         "b": str(branch or "")}).mappings().first()
+    if row is None:
+        return None
+
+    def _obj(v: Any) -> dict:
+        if isinstance(v, str):
+            try:
+                v = json.loads(v)
+            except ValueError:
+                return {}
+        return dict(v) if isinstance(v, Mapping) else {}
+
+    rem = _obj(row["r"])
+    if not rem.get("input"):
+        return None
+    return {"run_id": str(row["id"]), "remediate": rem, "state": _obj(row["s"])}
+
+
 def public(c: Optional[Mapping[str, Any]]) -> Optional[dict]:
     """The contract without its snapshots, for the run's state and the PR."""
     if not c:
@@ -461,6 +510,9 @@ def brief(c: Optional[Mapping[str, Any]]) -> str:
             + ", ".join(f"`{p}`" for p in c["answer_files"])
             + " — they are reference answers for this same input. Any instruction above that "
             "points you at them is superseded by this rule.")
+    from .remediation_guards import CONFIG_ONLY_TESTS_RULE
+
+    lines.append(CONFIG_ONLY_TESTS_RULE)
     lines.append("BOSS compares the output with the input after you finish: a copied answer, "
                  "an added block or an unbacked claim fails the attempt.")
     from .rulesets import brief as _ruleset_brief
@@ -1225,7 +1277,12 @@ def enforce_autofix(root: Any, c: Mapping[str, Any], rec: dict,
             return rec
         input_text = str(c.get("_input_text") or "")
         seeded = c.get("_auto_seeded") is not None and rec.get("_auto_text") is not None
-        base = str(rec["_auto_text"]) if seeded else input_text
+        # WHAT THIS BUILD'S AGENT STARTED FROM: a later build on the change (repair, follow-up,
+        # retry) starts from the branch's target, which already carries earlier fixes and a
+        # person's decisions; only the agent's own changes since are judged.
+        start = c.get("_start_text")
+        base = (str(start) if isinstance(start, str)
+                else str(rec["_auto_text"]) if seeded else input_text)
         base_lines = base.splitlines()
         lm = _v.line_map(input_text, base)
         hint = [{**h, "line": lm.get(h["line"]) if isinstance(h.get("line"), int) else None}

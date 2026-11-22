@@ -98,6 +98,21 @@ def redact_secrets(text: str) -> str:
     return _apply(text, _SECRET_PATTERNS)[0] if text else text
 
 
+def mask_content(value):
+    """EVERY READ VIEW OF FILE CONTENT OR A DIFF (a change's files, compare, commits, a blob, the
+    project history): each string in the payload with its credential-shaped values masked by
+    the one masker (``redact_secrets``), so a partner's key committed or diffed is never shown
+    (validation-review SPEC: "never in stored data or artifacts"). Dicts and lists are walked;
+    anything else is returned as is."""
+    if isinstance(value, str):
+        return redact_secrets(value)
+    if isinstance(value, dict):
+        return {k: mask_content(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [mask_content(v) for v in value]
+    return value
+
+
 def has_pii(text: str) -> bool:
     return bool(redact(text)[1])
 
