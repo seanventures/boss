@@ -74,8 +74,12 @@ describe("the Validation tab", () => {
     const posts = () => calls.filter((c) => c.method === "POST");
     await press(fix("V-03").querySelector('[data-testid="vr-accept"]'));
     expect(posts()[0]).toMatchObject({ path: "/v1/changes/northgate-gateway/9/findings/V-03/override", body: { action: "accept", head_sha: "eaff448" } });
+    // Reject asks why first, on that row.
     await press(fix("V-06").querySelector('[data-testid="vr-reject"]'));
-    expect(posts()[1].body).toMatchObject({ action: "reject" });
+    expect(posts().length).toBe(1);
+    await type(fix("V-06").querySelector('[data-testid="vr-reject-reason"]'), "Partner named one origin");
+    await press(fix("V-06").querySelector('[data-testid="vr-reject-send"]'));
+    expect(posts()[1].body).toMatchObject({ action: "reject", reason: "Partner named one origin" });
     await press(fix("V-06").querySelector('[data-testid="vr-edit"]'));
     await type(fix("V-06").querySelector('[data-testid="vr-edit-text"]'), '      allow_origins: ["https://dashboard.lumenpay.example"]');
     await type(fix("V-06").querySelector('[data-testid="vr-edit-reason"]'), "Dashboard needs cookies");
@@ -112,7 +116,9 @@ describe("the Validation tab", () => {
     engine(404);
     await mount(<ValidationTab projectId="northgate-gateway" change={9} />);
     await press(fix("V-03").querySelector('[data-testid="vr-accept"]'));
-    expect($('[data-testid="vr-said"]')!.textContent).toContain("not on this BOSS yet");
+    // Said next to the row that was pressed, never as a line at the top of the tab.
+    expect(fix("V-03").querySelector('[data-testid="vr-row-said"]')!.textContent).toContain("not on this BOSS yet");
+    expect($('[data-testid="vr-said"]')).toBeNull();
     const accept = fix("V-01").querySelector('[data-testid="vr-accept"]') as HTMLButtonElement;
     expect(accept.disabled).toBe(true);
     expect(accept.getAttribute("title")).toContain("not deployed");

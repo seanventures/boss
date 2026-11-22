@@ -89,6 +89,7 @@ button.vr-ref { line-height: 1.5; }
 .vr-verdict[data-state="invalid"]::before { background: var(--v2-red); }
 .vr-verdict[data-state="invalid"] b { color: var(--v2-red); }
 .vr-sevbar { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.vr-sevbar[data-review] { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .vr-sevcell { border: 1px solid var(--v2-border); border-radius: var(--v2-radius-sm); padding: 8px 10px; background: var(--v2-surface); min-width: 0; }
 .vr-sevcell[data-hot] { border-color: color-mix(in srgb, var(--vr-p0) 55%, transparent); }
 .vr-sevcell .num { font-family: var(--v2-font-mono); font-weight: 700; font-size: 1.05263rem; display: block; margin-top: 4px; }
@@ -139,6 +140,10 @@ button.vr-ref { line-height: 1.5; }
 .vr-form textarea, .vr-form input, .vr-input { font-family: var(--v2-font-mono); font-size: 0.63158rem; background: var(--v2-canvas); color: var(--v2-ink);
   border: 1px solid var(--v2-border-strong); border-radius: 4px; padding: 6px 8px; width: 100%; }
 .vr-form textarea { font-family: var(--v2-font-display); min-height: 2.6rem; resize: vertical; }
+.vr-form textarea.vr-code { font-family: var(--v2-font-mono); white-space: pre; overflow-x: auto; line-height: 1.6; }
+.vr-ref-lines { margin: 0; padding: 6px 10px; font-family: var(--v2-font-mono); font-size: 0.63158rem; line-height: 1.6; white-space: pre; overflow-x: auto;
+  background: color-mix(in srgb, var(--v2-red) 6%, var(--v2-canvas)); border: 1px solid var(--v2-border); border-radius: var(--v2-radius-sm); color: var(--v2-muted); }
+.vr-row-said { margin: 0; padding: 6px 10px 8px; border-top: 1px solid var(--v2-border); font-size: 0.68421rem; }
 .vr-form :is(textarea, input):focus, .vr-input:focus { border-color: var(--v2-mint); outline: none; }
 .vr-result { padding: 14px; border-radius: var(--v2-radius-sm); background: color-mix(in srgb, var(--v2-green) 7%, transparent); border: 1px solid color-mix(in srgb, var(--v2-green) 35%, transparent); }
 .vr-result[data-open] { background: color-mix(in srgb, var(--v2-red) 6%, transparent); border-color: color-mix(in srgb, var(--v2-red) 35%, transparent); }
@@ -177,7 +182,7 @@ button.vr-ref { line-height: 1.5; }
 }
 @media (max-width: 760px) {
   .vr-flow, .vr-two { grid-template-columns: minmax(0, 1fr); }
-  .vr-sevbar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .vr-sevbar, .vr-sevbar[data-review] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .vr-hide-sm { display: none; }
   .vr-card { padding: 14px; }
 }
@@ -214,5 +219,14 @@ button.vr-ref { line-height: 1.5; }
   .vr-ftable td.vr-c-ba { grid-area: ba; }
   .vr-ftable td.vr-c-st { grid-area: st; }
 }
-@container (max-width: 30rem) { .vr-sevbar { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@container (max-width: 30rem) { .vr-sevbar, .vr-sevbar[data-review] { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .dq-packet-extra { padding: 0 1.15rem; display: grid; gap: 8px; }
+
+/* ── Settings › Validators: create the first ruleset / validator ─────────────────────────── */
+.vr-create { margin-top: 10px; }
+.vr-create-form { border: 1px solid var(--v2-border); border-radius: var(--v2-radius-sm); margin-top: 8px; }
+.vr-create-form label { display: grid; gap: 4px; }
+.vr-create-form select { font-family: var(--v2-font-mono); font-size: 0.63158rem; background: var(--v2-canvas); color: var(--v2-ink);
+  border: 1px solid var(--v2-border); border-radius: var(--v2-radius-sm); padding: 5px 6px; }
+.vr-create-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+@media (max-width: 760px) { .vr-create-grid { grid-template-columns: minmax(0, 1fr); } }
