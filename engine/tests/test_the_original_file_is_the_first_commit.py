@@ -71,6 +71,17 @@ def test_a_branch_that_already_carries_its_own_target_is_left_alone(host: Host):
     assert host.read_text_file("boss/code/crun_1", "config/tenants/lumen-pay.yaml") == FIXED
 
 
+def test_a_repair_cloned_from_its_own_branch_never_puts_the_original_back_over_the_fix(host: Host):
+    # A repair/retry clones the work branch: the tree's target (so _output_base) IS the earlier
+    # fix, and the branch holds that same fix. The original must not be committed over it.
+    local_repo.ensure_branch(host.git_dir, "boss/code/crun_1", "main")
+    host.commit_files("boss/code/crun_1", {"config/tenants/lumen-pay.yaml": FIXED}, "earlier attempt")
+    c = contract(_output_base=FIXED)
+    assert input_fidelity.commit_original(host, "boss/code/crun_1", "boss/code/crun_1", c) is None
+    assert input_fidelity.commit_original(host, "boss/code/crun_1", "main", c) is None
+    assert host.read_text_file("boss/code/crun_1", "config/tenants/lumen-pay.yaml") == FIXED
+
+
 def test_an_in_place_fix_or_a_missing_input_commits_nothing(host: Host):
     same = contract(output="examples/lumen-pay.bad.yaml")
     assert input_fidelity.commit_original(host, "boss/code/crun_2", "main", same) is None

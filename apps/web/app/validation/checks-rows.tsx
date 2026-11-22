@@ -14,10 +14,10 @@ import React from "react";
 import type { ChangeSet } from "../../lib/repo-links";
 import { checkerCount, checkersOf, checkerWords, isOpen, noteWords, type Checker } from "../../lib/line-notes";
 import {
-  isReviewFinding, OVERRIDE_VERBS, parsePacket, refTarget, type ContractCase, type Finding, type Override, type ReviewPacket, type Validation,
+  isReviewFinding, OVERRIDE_VERBS, parsePacket, refTarget, shortSha, type ContractCase, type Finding, type Override, type ReviewPacket, type Validation,
 } from "../../lib/validation-review";
 import { ActorName, RefChip } from "./kit";
-import { FindingsTable, SevBar } from "./review-packet";
+import { ChangedVsPartner, FindingsTable, SevBar } from "./review-packet";
 
 type Tone = "ok" | "you" | "bad" | "wait";
 const ICON: Record<Tone, string> = { ok: "✓", you: "!", bad: "✗", wait: "…" };
@@ -55,6 +55,16 @@ function OverrideRows({ rows }: { rows: Override[] }) {
       ))}</ul>
     </div>
   );
+}
+
+/** The runs behind the count (wireframe B): "$ gwlint validate … · exit 1 · E-1", the re-run at head. */
+function RunLines({ v }: { v: Validation }) {
+  const line = (r: Validation["before"], label: string, testid: string) => (r.command ? (
+    <div className="vr-mono vr-dim vr-tiny" data-testid={testid}>{label} $ {r.command}
+      {[r.exit != null ? `exit ${r.exit}` : "", r.head_sha ? `at head ${shortSha(r.head_sha)}` : "",
+        label === "Re-run" && v.ruleset.version != null ? `ruleset v${v.ruleset.version}` : "", r.seconds != null ? `${r.seconds} s` : ""]
+        .filter(Boolean).map((x) => ` · ${x}`).join("")} {r.evidence ? <RefChip id={r.evidence} /> : null}</div>) : null);
+  return <div className="ck-runs">{line(v.before, "Run", "ck-run-before")}{v.after ? line(v.after, "Re-run", "vr-rerun-result") : null}</div>;
 }
 
 function ContractRow({ cases, target }: { cases: ContractCase[]; target: string }) {
@@ -118,8 +128,10 @@ function CheckerRow({ c, v, packet, target, onJump, rechecking, rulesHref }: {
           <span className="cs-spacer" />
           {validator && rulesHref ? <a href={rulesHref} className="ck-rules" data-testid="ck-rules">Rules</a> : null}
         </div>
+        {mine ? <RunLines v={mine} /> : null}
         <SevBar p={sub} />
         <FindingsTable findings={c.findings} onJump={jump} testid={`ck-table-${c.key}`} />
+        {validator && packet ? <ChangedVsPartner p={packet} /> : null}
         <OverrideRows rows={overrides} />
         {validator && packet?.risks.length ? (
           <div data-testid="vr-risks">
@@ -150,7 +162,7 @@ export function CheckRows({ cs, v, packet, onJump, projectId = "" }: {
   return (
     <div className="vr ck-rows" data-testid="ck-rows">
       {c?.run_status != null ? (
-        <Plain tone={/fail|error|cancel/i.test(c.run_status ?? "") ? "bad" : /complete|succeed|done|merged/i.test(c.run_status ?? "") ? "ok" : "wait"}
+        <Plain tone={/fail|error|cancel/i.test(c.run_status ?? "") ? "bad" : /complete|succeed|done|merged/i.test(c.run_status ?? "") ? "ok" : /blocked/i.test(c.run_status ?? "") ? "you" : "wait"}
                name="Build" words={(c.run_status ?? "—").replace(/_/g, " ")} />
       ) : null}
       {suites.length ? suites.map((t) => (

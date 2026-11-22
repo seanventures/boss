@@ -1027,20 +1027,26 @@ def commit_original(github: Any, branch: str, base_branch: Optional[str], c: dic
     as given, written to the target path on the work branch BEFORE any fix. The change's own
     history then reads original → fixed, and "Revert to original" is a plain file revert.
 
-    Only when the target is another path than the input and the branch does not yet carry
-    its own version of the target (a retry or a repair keeps what is there). Returns the
-    commit sha, recorded as c["original_commit"]; None when nothing was committed. Never raises."""
+    Only when the target is another path than the input, the build does not continue on the
+    branch itself (a repair or retry clones ``branch``: its tree's target is the earlier fix),
+    and the branch does not yet carry its own version of the target — judged against the BASE
+    branch's target, never the cloned tree's. Returns the commit sha, recorded as
+    c["original_commit"]; None when nothing was committed. Never raises."""
     out, inp = str(c.get("output") or ""), str(c.get("input") or "")
     text = c.get("_input_text")
-    if not out or out == inp or not isinstance(text, str):
+    if not out or out == inp or not isinstance(text, str) or not branch or branch == base_branch:
         return None
     try:
         read = getattr(github, "read_text_file", None)
-        try:
-            on_branch = read(branch, out) if callable(read) else None
-        except Exception:  # noqa: BLE001 — no branch yet: nothing there
-            on_branch = None
-        if on_branch is not None and on_branch != c.get("_output_base"):
+
+        def _at(ref: Optional[str]) -> Optional[str]:
+            try:
+                return read(ref, out) if callable(read) and ref else None
+            except Exception:  # noqa: BLE001 — no branch / no file: nothing there
+                return None
+
+        on_branch = _at(branch)
+        if on_branch is not None and on_branch != _at(base_branch):
             return None
         github.ensure_branch(branch, base_branch)
         from .software_factory import commit_change

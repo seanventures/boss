@@ -90,6 +90,8 @@ describe("Checks: one row per checker", () => {
     // The summary: funnel + exit, severity bar, P0/P1 table (original → now), overrides, risks, Rules.
     expect(gw.querySelector('[data-testid="ck-funnel"]')!.textContent).toBe("9 found → 4 tool · 4 agent · 1 you → 5 open · exit 1Rules");
     expect(gw.querySelector('[data-testid="vr-sev-P0"]')!.textContent).toContain("3 open");
+    // The run behind the count (wireframe B): the validator's command and exit.
+    expect(gw.querySelector('[data-testid="ck-run-before"]')!.textContent).toContain("$ ");
     const rows = [...gw.querySelectorAll('[data-testid^="ck-table"] [data-testid="vr-packet-row"]')].map((e) => e.getAttribute("data-finding"));
     expect(rows.slice(0, 3)).toEqual(["V-03", "V-06", "V-07"]);                     // P0 first, open before fixed
     expect(gw.querySelector('[data-finding="V-09"] [data-testid="vr-packet-now"]')!.textContent).toContain("https://lumen-pay-core");
@@ -413,6 +415,8 @@ describe("the merge card: one verdict line and a link to Checks", () => {
     expect($('[data-testid="vr-p01"]')).toBeNull();
     expect($('[data-testid="vr-sev-P0"]')!.textContent).toContain("3 open");
     expect($$('[data-testid="vr-ref"]')).toHaveLength(0);
+    // Wireframe C's provenance line stays on the card.
+    expect($('[data-testid="vr-provenance"]')).not.toBeNull();
     unmount();
     await mount(<ReviewPacketView packet={parsePacket(PACKET_INVALID)!} projectId="northgate-gateway" compact />);
     expect($('[data-testid="vr-verdict"]')!.textContent).toContain("Packet invalid");

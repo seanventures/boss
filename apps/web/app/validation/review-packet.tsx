@@ -197,7 +197,7 @@ export function InvalidProblems({ p }: { p: ReviewPacket }) {
   );
 }
 
-function ChangedVsPartner({ p }: { p: ReviewPacket }) {
+export function ChangedVsPartner({ p }: { p: ReviewPacket }) {
   const v = p.vs_input;
   if (!v.file && !v.hunks) return null;
   return (
@@ -279,6 +279,20 @@ export function Overrides({ p }: { p: ReviewPacket }) {
   );
 }
 
+/** Where the packet came from: run, build, change, ruleset, facts (wireframe C's last line). */
+function Provenance({ p, links }: { p: ReviewPacket; links: ReturnType<typeof packetLinks> }) {
+  return (
+    <div className="vr-prov" data-testid="vr-provenance">
+      {links.run ? <a href={links.run} data-testid="vr-prov-run"><ArrowSquareOut size={11} aria-hidden /> Run{p.work.run_no != null ? ` #${p.work.run_no}` : ""}</a> : null}
+      {links.build ? <a href={links.build} data-testid="vr-prov-build"><ArrowSquareOut size={11} aria-hidden /> Build {shortId(p.work.build)}</a> : null}
+      {links.change ? <a href={links.change} data-testid="vr-prov-change"><ArrowSquareOut size={11} aria-hidden /> Change #{p.work.change}</a> : null}
+      {p.ruleset.id ? <span>ruleset {p.ruleset.id}{p.ruleset.version != null ? ` v${p.ruleset.version}` : ""}{p.ruleset.sha ? ` · ${shortSha(p.ruleset.sha)}` : ""}</span> : null}
+      {p.ruleset.stale ? <span className="vr-unexplained">ruleset changed since check · re-run</span> : null}
+      {p.facts ? <span className="vr-pill" data-testid="vr-facts" title="Knowledge facts this decision used">{p.facts} facts</span> : null}
+    </div>
+  );
+}
+
 export function ReviewPacketView({ packet: p, projectId, fallbackTitle = "", eyebrow = "Control plane proposes · merge", actions, testid = "review-packet", compact = false }: {
   packet: ReviewPacket; projectId: string; fallbackTitle?: string; eyebrow?: string; actions?: React.ReactNode; testid?: string;
   /** THE MERGE CARD (workflow-library DESIGN decision 4): one verdict line and a link to the
@@ -295,6 +309,7 @@ export function ReviewPacketView({ packet: p, projectId, fallbackTitle = "", eye
         <h2 data-testid={`${testid}-title`}>{packetTitle(p, fallbackTitle)}</h2>
         <Verdict p={p} link={checks} />
         {p.verdict.state === "invalid" ? <InvalidProblems p={p} /> : <SevBar p={p} />}
+        <Provenance p={p} links={links} />
         {actions}
       </section>
     );
@@ -337,14 +352,7 @@ export function ReviewPacketView({ packet: p, projectId, fallbackTitle = "", eye
           ) : null}
         </>
       )}
-      <div className="vr-prov" data-testid="vr-provenance">
-        {links.run ? <a href={links.run} data-testid="vr-prov-run"><ArrowSquareOut size={11} aria-hidden /> Run{p.work.run_no != null ? ` #${p.work.run_no}` : ""}</a> : null}
-        {links.build ? <a href={links.build} data-testid="vr-prov-build"><ArrowSquareOut size={11} aria-hidden /> Build {shortId(p.work.build)}</a> : null}
-        {links.change ? <a href={links.change} data-testid="vr-prov-change"><ArrowSquareOut size={11} aria-hidden /> Change #{p.work.change}</a> : null}
-        {p.ruleset.id ? <span>ruleset {p.ruleset.id}{p.ruleset.version != null ? ` v${p.ruleset.version}` : ""}{p.ruleset.sha ? ` · ${shortSha(p.ruleset.sha)}` : ""}</span> : null}
-        {p.ruleset.stale ? <span className="vr-unexplained">ruleset changed since check · re-run</span> : null}
-        {p.facts ? <span className="vr-pill" data-testid="vr-facts" title="Knowledge facts this decision used">{p.facts} facts</span> : null}
-      </div>
+      <Provenance p={p} links={links} />
       {actions}
     </section>
   );
