@@ -1460,6 +1460,11 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                         "validator": {"type": "object", "properties": {
                             "name": {"type": "string"}, "check": {"type": "string"},
                             "fix": {"type": "string"}}},
+                        # START FROM A FILE (start_from_file): the original (uploaded text,
+                        # or a repo path) fixed in place at `input`; committed first.
+                        "start_from": {"type": "boolean"},
+                        "content": {"type": "string"},
+                        "original_path": {"type": "string"},
                     },
                     "required": ["input"],
                 },

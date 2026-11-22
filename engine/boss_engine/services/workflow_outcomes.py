@@ -341,6 +341,8 @@ VERDICTS: dict[str, Callable[[Mapping[str, Any], Mapping[str, Any]], Verdict]] =
     "github_comment": github_comment,
     "fix_pr": fix_pr,
     "wait_for_ci": awaited_work,
+    # Merge: waits on the build's merge (the runner's merge await), then succeeds.
+    "merge": awaited_work,
     "teardown_preview": finished_tool,
     "cost_check": finished_tool,
     "security_scan": awaited_work,

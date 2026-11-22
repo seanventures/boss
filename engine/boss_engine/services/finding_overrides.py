@@ -861,6 +861,24 @@ def _checkout(ch: Change, workdir: Path) -> None:
         raise OverrideError(409, "checkout_failed", (proc.stderr or "git clone failed")[-300:])
 
 
+def _original_at(tree: Path, ref: str, path: str) -> Optional[str]:
+    """``path`` as it was at ``ref`` (a commit, or a branch — local or its origin copy) in the
+    re-run's checkout; None when git cannot show it."""
+    import subprocess
+
+    if not ref or str(ref).startswith("-"):
+        return None
+    for name in (ref, f"origin/{ref}"):
+        try:
+            out = subprocess.run(["git", "-C", str(tree), "show", f"{name}:{path}"],
+                                 capture_output=True, text=True, timeout=20)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if out.returncode == 0:
+            return out.stdout
+    return None
+
+
 def _sandbox_run(workdir: Path, env: Mapping[str, str]) -> Callable[[str], Any]:
     from types import SimpleNamespace
 
@@ -968,10 +986,20 @@ def execute_rerun(engine: Any, settings: Any, rerun_id: str, *,
                 try:
                     tree = base / "src"
                     (do_checkout or _checkout)(ch, tree)
-                    input_text = (tree / inp).read_text(errors="replace")
+                    # IN PLACE (a file the run started from, a repo check): the original sits
+                    # at the target's own path, so it is read where the record says it came
+                    # from (the first commit, or the base branch), never the edited tree.
+                    in_place = inp == target
+                    ref = (before.get("input") or {}).get("ref") if in_place else None
+                    input_text = (_original_at(tree, ref, inp) if ref else None)
+                    if input_text is None:
+                        input_text = (tree / inp).read_text(errors="replace")
                     contract = {"input": inp, "output": target, "answer_files": [],
                                 "validator": v, "source": "rerun", "_input_text": input_text,
-                                "_output_base": None, "_answer_texts": {}, "ruleset": ruleset}
+                                "_output_base": None, "_answer_texts": {}, "ruleset": ruleset,
+                                **({"in_place": True} if in_place else {}),
+                                **({"input_ref": ref} if ref else {}),
+                                "from": (before.get("input") or {}).get("from") or "partner"}
                     if make_run is not None:
                         run = make_run(tree)
                     else:
@@ -980,6 +1008,10 @@ def execute_rerun(engine: Any, settings: Any, rerun_id: str, *,
                         run = _sandbox_run(tree, tool_env(ident.home if ident else base))
                     rec = input_fidelity.public_validation(
                         input_fidelity.run_validation(tree, contract, run, ruleset=ruleset))
+                    # A repo check stays one, blocking or advisory as the build decided.
+                    for key in ("kind", "blocking"):
+                        if key in before:
+                            rec[key] = before[key]
                     # THE HEAD THIS EVIDENCE RAN ON (the packet claims no other).
                     if isinstance(rec.get("after"), dict):
                         rec["after"]["head_sha"] = _tree_head(tree) or row.get("head_sha")

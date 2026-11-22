@@ -119,12 +119,14 @@ def verdict(packet: Mapping[str, Any]) -> dict:
         # REJECTED fix puts the finding back (status `reverted`): it blocks like an open one.
         kind = (f.get("source") or {}).get("kind")
         if f.get("status") in ("open", "reverted") and f.get("severity") in ("P0", "P1") \
-                and kind in CHECKED and not f.get("deferred_to"):
+                and kind in CHECKED and not f.get("deferred_to") and not f.get("advisory"):
             reasons.append(f"open_{str(f['severity']).lower()}:{f['id']}")
         elif kind == "reviewer" and f.get("blocks") and f.get("status") in ("open", "reverted"):
             # A SECURITY REVIEWER'S HIGH ON A P0 RULE'S LINES is never a follow-up.
             reasons.append(f"security_review:{f['id']}")
     for v in packet.get("validators") or []:
+        if v.get("advisory"):
+            continue
         if v.get("guard"):
             reasons.append(f"input_substituted:{v['guard'].get('source')}")
         elif v.get("error"):
@@ -137,16 +139,20 @@ def verdict(packet: Mapping[str, Any]) -> dict:
             reasons.append(f"contract_failed:{c['id']}")
     for h in (packet.get("vs_input") or {}).get("unexplained_hunks") or []:
         reasons.append(f"unexplained_hunk:{h}")
-    for cl in packet.get("comment_claims") or []:
+    advisory = bool(packet.get("validators")) and all(
+        v.get("advisory") for v in packet.get("validators") or [])
+    for cl in ([] if advisory else packet.get("comment_claims") or []):
         # A COMMENT IN THE TARGET THAT CLAIMS A FIX FOR AN OPEN FINDING is a claim without
         # evidence (SPEC §1.3/§1.4): it blocks until the comment or the finding is fixed.
         reasons.append(f"unbacked_comment:{cl['finding']}")
-    if packet.get("stale"):
+    # Advisory checks never hold a merge, stale or re-checking alike.
+    rerun = {} if advisory else (packet.get("rerun") or {})
+    if packet.get("stale") and not advisory:
         # THE EVIDENCE RAN ON AN OLDER HEAD: "stale → re-checking" until a re-run at the head.
         reasons.append("stale_evidence")
-    if (packet.get("rerun") or {}).get("state") in ("pending", "running"):
+    if rerun.get("state") in ("pending", "running"):
         reasons.append("rerun_pending")
-    elif (packet.get("rerun") or {}).get("state") == "failed":
+    elif rerun.get("state") == "failed":
         reasons.append("rerun_failed")
     return {"state": "blocked" if reasons else "ready", "reasons": reasons}
 
@@ -252,8 +258,13 @@ def _ns(prefix: str, value: str) -> str:
 def from_validation(rec: Mapping[str, Any], prefix: str = "") -> tuple[list[dict], dict, dict]:
     """(findings, validators row, vs_input) from one ``boss.validation/v1`` record."""
     findings: list[dict] = []
+    # A REPO CHECK THAT DOES NOT BLOCK (input_fidelity.repo_checks, "Checks must pass" off):
+    # its findings are listed, open, and ADVISORY — never a packet block (the light lane).
+    advisory = rec.get("blocking") is False
     for f in rec.get("findings") or []:
         g = json.loads(json.dumps(f))
+        if advisory:
+            g["advisory"] = True
         g["id"] = _ns(prefix, str(f["id"]))
         g["evidence"] = [{**e, "id": _ns(prefix, str(e.get("id")))} if isinstance(e, Mapping)
                          else e for e in f.get("evidence") or []]
@@ -267,7 +278,9 @@ def from_validation(rec: Mapping[str, Any], prefix: str = "") -> tuple[list[dict
            "exit": after.get("exit") if after else None,
            "evidence": _ns(prefix, "E-3") if after else None,
            "evidence_ids": [_ns(prefix, str(e["id"])) for e in rec.get("evidence") or []],
-           "guard": rec.get("guard"), "error": rec.get("error")}
+           "guard": rec.get("guard"), "error": rec.get("error"),
+           **({"kind": rec["kind"]} if rec.get("kind") else {}),
+           **({"advisory": True} if advisory else {})}
     by_hunk: dict[str, list[str]] = {}
     for x in rec.get("fixes") or []:
         ids = by_hunk.setdefault(str(x.get("hunk_id")), [])
@@ -278,7 +291,10 @@ def from_validation(rec: Mapping[str, Any], prefix: str = "") -> tuple[list[dict
           "added": sum(int(h.get("added") or 0) for h in hunks),
           "removed": sum(int(h.get("removed") or 0) for h in hunks),
           "hunks_by_finding": {h: ids for h, ids in by_hunk.items() if ids},
-          "unexplained_hunks": [str(h["id"]) for h in hunks if not by_hunk.get(str(h["id"]))]}
+          # A repo check of a touched file judges the file, not where each line came from: a
+          # change's own edits are not "unexplained" (that rule is a remediation's).
+          "unexplained_hunks": ([] if rec.get("kind") == "repo_check" else
+                                [str(h["id"]) for h in hunks if not by_hunk.get(str(h["id"]))])}
     return findings, row, vs
 
 
@@ -713,13 +729,19 @@ def blocks_merge(rec: Mapping[str, Any], *, force: bool,
     started = _when(rr.get("created_at"))
     stuck = rr.get("state") == "failed" or (
         started is not None and datetime.now(timezone.utc) - started > RERUN_STALE_AFTER)
-    if current_head and packet.get("validators") and packet.get("head_sha") \
+    advisory = all(x.get("advisory") for x in packet.get("validators") or [{}])
+    if current_head and packet.get("validators") and packet.get("head_sha") and not advisory \
             and str(packet["head_sha"]) != str(current_head) and not (force and stuck):
         # The change moved after its evidence ran (a push, a follow-up build's commit): the card
         # is not about this head. A re-run starts on the push (finding_overrides.on_head_moved).
         return ("packet_stale", f"Stale: the checks ran on {str(packet['head_sha'])[:8]}, the "
                                 f"change is at {str(current_head)[:8]}. Re-checking; merge when "
                                 "the re-run is done.")
+    if advisory and packet.get("validators") and v.get("state") == "invalid":
+        # ADVISORY CHECKS ONLY ("Checks must pass" off): a rule their records break never
+        # refuses the merge; the rest of the packet (its tests) is judged as always.
+        v = verdict(packet)
+        reasons = [str(r) for r in v.get("reasons") or []]
     if v.get("state") == "invalid":
         return ("packet_invalid", f"Packet invalid: {len(reasons)} rule(s) failed. Rebuild the "
                                   "packet before merging.")

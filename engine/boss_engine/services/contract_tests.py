@@ -588,3 +588,37 @@ def project_origins(db: Any, project_id: str) -> frozenset[tuple[str, str, int]]
 
 
 __all__ = ["CaseError", "HeaderSecretRefused", "http_auth_problem", "resolve_header_secrets", "HostRefused", "check_host", "origin_of", "project_deployment_hosts", "project_origins", "MAX_CASES", "METHODS", "json_path", "results_table", "run_cases"]
+
+
+# ── the project's own contract tests, from its repository ─────────────────────────────────────
+
+#: Where a repository declares its contract tests ("Contract tests after staging" reads it).
+REPO_FILE = ".boss/contract_tests.yaml"
+
+
+def from_repo(text: Optional[str]) -> dict[str, Any]:
+    """The cases a repository declares in ``REPO_FILE``: ``{cases, headers?}`` (``base_url`` is
+    the staging target's, never the file's). Raises CaseError when the file is not a
+    ``cases:`` list, said without its content (a header may hold a token)."""
+    import yaml
+
+    if not text:
+        raise CaseError(f"The repository declares no contract tests ({REPO_FILE}).")
+    try:
+        data = yaml.safe_load(text) or {}
+    except yaml.YAMLError:
+        raise CaseError(f"{REPO_FILE} does not parse as YAML.") from None
+    cases = data.get("cases") if isinstance(data, Mapping) else None
+    if not isinstance(cases, list) or not cases:
+        raise CaseError(f"{REPO_FILE} needs a non-empty `cases:` list.")
+    for i, case in enumerate(cases):
+        # THE STAGING TARGET ONLY: a repository's case names a `path` on the step's base_url
+        # (the staging deploy), never a `url` of its own — a file in a change must not point
+        # the project's header secrets at another host.
+        if isinstance(case, Mapping) and str(case.get("url") or "").strip():
+            raise CaseError(f"{REPO_FILE} case {i + 1}: give a `path` on the staging target, "
+                            "not a `url`.")
+    out: dict[str, Any] = {"cases": cases[:MAX_CASES]}
+    if isinstance(data.get("headers"), Mapping):
+        out["headers"] = dict(data["headers"])
+    return out

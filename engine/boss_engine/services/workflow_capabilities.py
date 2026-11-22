@@ -237,7 +237,11 @@ CAPABILITIES: dict[str, Capability] = {
                              "reference_links", "spec_markdown", "extend", "increment",
                              # `remediate`: {input, output, answer_files, validator} — the
                              # build fixes ONE input file and is held to it (input_fidelity).
-                             "remediate"),
+                             "remediate",
+                             # START FROM A FILE (start_from_file): the file the run was given
+                             # (a repo path, or an upload's name + text) and where the fixed file
+                             # goes; the runner turns them into `remediate`.
+                             "start_from", "start_from_content", "target_path"),
             produces=("code_task_run_id", "pull_request_url"),
             requires_project=("repository",),
             skills=("github.create_pr_real", "software_factory.sandbox_validation"),
@@ -695,13 +699,30 @@ CAPABILITIES: dict[str, Capability] = {
             label="Contract test",
             summary="Run a list of HTTP cases against the deployed API — method, headers, JSON "
                     "body, the status each must answer and JSON-path assertions — and report a "
-                    "table. One failed case fails the step.",
+                    "table. One failed case fails the step. With no cases given, the project's "
+                    "own contract tests (.boss/contract_tests.yaml in its repository).",
             tool="contract_test",
             risk_tier=0,
-            required_inputs=("cases",),
-            optional_inputs=("base_url", "headers", "timeout_s"),
+            # `cases` OPTIONAL: a step without them runs the PROJECT'S contract tests, read from
+            # the repository (contract_tests.from_repo) — "Contract tests after staging".
+            optional_inputs=("cases", "base_url", "headers", "timeout_s"),
             produces=("passed", "failed", "total", "results_table", "failed_cases"),
             typical_minutes=2,
+        ),
+        _cap(
+            key="merge",
+            # whether the change is in: the merge card's checks and a person's (or a policy's) yes
+            captain="release_manager",
+            label="Merge",
+            summary="Wait for the build's change to be merged — its merge card holds the checks "
+                    "and the approval. The run goes on once it is merged; a change closed "
+                    "unmerged fails the step.",
+            tool=None,
+            risk_tier=0,
+            optional_inputs=("run_id",),
+            produces=("merged_build_run_id",),
+            requires_project=("repository",),
+            typical_minutes=5,
         ),
         _cap(
             key="github_comment",
@@ -786,8 +807,10 @@ CAPABILITIES: dict[str, Capability] = {
             # WHAT ships: `files` (path → content or artifact id) or the previous CLI step's
             # `produced_artifacts` (wired with from_step). WHERE: a config_dir target, by id or by
             # app_name + environment (staging unless said otherwise).
+            # `source_file`: ONE repo file the build fixed, deployed under its own name (the
+            # runner maps it to source_paths {name: path}) — "Onboard a config file".
             optional_inputs=("files", "produced_artifacts", "target_id", "app_name",
-                             "environment", "code_task_run_id", "source_paths"),
+                             "environment", "code_task_run_id", "source_paths", "source_file"),
             produces=("deployment_id", "deployed_url", "bundle_sha256"),
             requires_project=("deployment_target",),
             typical_minutes=3,

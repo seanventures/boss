@@ -389,7 +389,9 @@ def test_a_case_keeps_its_own_host_header(gateway):
 def test_the_capability_is_catalogued_and_judged():
     cap = caps.get("contract_test")
     assert cap.tool == "contract_test" and cap.risk_tier == 0 and not cap.is_async
-    assert cap.required_inputs == ("cases",)
+    # `cases` optional: without them the step runs the repository's own contract tests
+    # (.boss/contract_tests.yaml — "Contract tests after staging").
+    assert cap.required_inputs == () and "cases" in cap.optional_inputs
     assert set(cap.produces) >= {"passed", "failed", "total", "results_table"}
     assert caps.approval_mode_for("contract_test", "auto") == "auto"
     assert outcomes.VERDICTS["contract_test"] is outcomes.contract_test

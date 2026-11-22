@@ -250,8 +250,20 @@ def resolve_for_run(connection: Any, settings: Any, project_id: Optional[str], *
                            workflow_spec=workflow_spec, run_input=run_input,
                            project_value=project_value)
     info = {"source": found["source"], "lowered_by": found["lowered_by"],
-            "review_severity": _configured_review_severity(settings)}
+            "review_severity": _configured_review_severity(settings),
+            # THE WORKFLOW'S "CHECKS MUST PASS" (spec `checks_must_pass`): the repo's checkers'
+            # open P0/P1 findings block the merge (input_fidelity.repo_checks); else reported.
+            "checks_must_pass": checks_must_pass(spec, workflow_spec)}
     return found["bar"], found["overrides"], info
+
+
+def checks_must_pass(run_spec: Any = None, workflow_spec: Any = None) -> bool:
+    """The workflow setting "Checks must pass" (`checks_must_pass: true` on the workflow's spec,
+    or on the build's own spec). Off by default: the light lane."""
+    for spec in (run_spec, workflow_spec):
+        if isinstance(spec, Mapping) and spec.get("checks_must_pass") is not None:
+            return bool(spec.get("checks_must_pass"))
+    return False
 
 
 def gate_blocks(gate: str, bar: str, overrides: Optional[Mapping[str, str]] = None) -> bool:
