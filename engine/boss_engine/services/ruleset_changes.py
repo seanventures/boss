@@ -153,6 +153,28 @@ def _entry_lines(rid: str, rule: Mapping[str, Any], *, indent: str, flow: bool, 
     return [f"{indent}{rid}:"] + [f"{child}{k}: {_scalar(v)}" for k, v in pairs]
 
 
+_VALUE = r'"(?:[^"\\\n]|\\.)*"|\'(?:[^\'\n]|\'\')*\'|[^\s,{}#"\'][^,{}#\n]*?(?=\s*(?:[,}]|#|$))'
+
+
+def _in_place(span: Sequence[str], was: Mapping[str, Any], now: Mapping[str, Any]
+              ) -> Optional[list[str]]:
+    """One rule's lines with only the changed field VALUES replaced (each key written once in
+    the span), or None when a field was added or dropped (the caller rewrites the entry)."""
+    text_ = "\n".join(span)
+    for key in set(was) | set(now):
+        if was.get(key) == now.get(key):
+            continue
+        if key not in was or key not in now:
+            return None
+        found = list(re.finditer(rf"(?<![\w-]){re.escape(key)}\s*:\s*(?P<v>{_VALUE})", text_,
+                                 re.MULTILINE))
+        if len(found) != 1:
+            return None
+        v = found[0].span("v")
+        text_ = text_[:v[0]] + _scalar(now[key]) + text_[v[1]:]
+    return text_.split("\n")
+
+
 def minimal_edit(text_: str, base: Mapping[str, Any], new: Mapping[str, Any],
                  version: int) -> Optional[str]:
     """The ruleset file with ONLY what changed rewritten: the `version:` value, each edited
@@ -211,6 +233,11 @@ def minimal_edit(text_: str, base: Mapping[str, Any], new: Mapping[str, Any],
             continue
         if new_rules[rid] == base_rules.get(rid):
             continue
+        # The edited VALUES only, in place: a `{…}` entry wrapped over lines keeps its wrap.
+        inplace = _in_place(lines[i:k], base_rules.get(rid) or {}, new_rules[rid])
+        if inplace is not None:
+            edits.append((i, k, inplace))
+            continue
         rest = em.group("rest")
         flow = rest.strip().startswith("{")
         pad = rest[:len(rest) - len(rest.lstrip())] or " "
@@ -236,6 +263,20 @@ def minimal_edit(text_: str, base: Mapping[str, Any], new: Mapping[str, Any],
             or got.get("custom") != (new.get("custom") or []):
         return None
     return out
+
+
+def _fresh_branch(adapter: Any, work: str, base_branch: str) -> None:
+    """The proposal's branch, cut from the base's head. A branch left by a closed (rejected)
+    proposal is reset first, so the new change never carries the rejected commit."""
+    from . import local_repo
+
+    if adapter.branch_exists(work):
+        git_dir = adapter._require()
+        head = local_repo.branch_sha(git_dir, base_branch)
+        if head:
+            local_repo.git(["update-ref", f"refs/heads/{work}", head], git_dir=git_dir)
+            return
+    adapter.ensure_branch(work, base_branch)
 
 
 def propose(c: Any, settings: Any, project_id: str, ruleset_id: str, *,
@@ -273,6 +314,14 @@ def propose(c: Any, settings: Any, project_id: str, ruleset_id: str, *,
         raise RulesetChangeError(409, "stale_base", "The ruleset changed since you opened it.",
                                  ruleset=_view(base, path))
     version = int(base.get("version") or 0) + 1
+    work = f"boss/ruleset/{ruleset_id}-v{version}"
+    # ONE OPEN PROPOSAL PER VERSION (dry run 3, gap 9: #20 "v2" opened beside #15 "v2"): an
+    # open change for this version is named, with its link, never duplicated.
+    already = adapter.open_pull_request_for(work)
+    if already is not None:
+        raise RulesetChangeError(
+            409, "already_open", f"v{version} is already open as change #{already['number']}.",
+            change=already["number"], url=already["url"], version=version)
     try:
         body, new = render(base, version, rules)
     except _rulesets.RulesetError as exc:
@@ -284,8 +333,7 @@ def propose(c: Any, settings: Any, project_id: str, ruleset_id: str, *,
             body, new = small, _rulesets.parse(small, path="proposal")
     weaker = p0_downgrades(base, new["rules"])
     title = f"Ruleset {ruleset_id} v{version}"
-    work = f"boss/ruleset/{ruleset_id}-v{version}"
-    adapter.ensure_branch(work, branch)
+    _fresh_branch(adapter, work, branch)
     head = adapter.commit_files(work, {path: body}, f"{title}\n\nOn-behalf-of: {actor}")
     pr = adapter.create_pull_request(
         work, title, (f"Adds `{path}` (v{version})." if created else

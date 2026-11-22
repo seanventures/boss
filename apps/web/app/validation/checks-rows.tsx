@@ -14,7 +14,7 @@ import React from "react";
 import type { ChangeSet } from "../../lib/repo-links";
 import { checkerCount, checkersOf, checkerWords, isOpen, noteWords, type Checker } from "../../lib/line-notes";
 import {
-  isReviewFinding, OVERRIDE_VERBS, parsePacket, refTarget, shortSha, type ContractCase, type Finding, type Override, type ReviewPacket, type Validation,
+  checkSource, isReviewFinding, OVERRIDE_VERBS, packetTally, parsePacket, refTarget, shortSha, SEVS, type ContractCase, type Finding, type Override, type ReviewPacket, type Validation,
 } from "../../lib/validation-review";
 import { ActorName, RefChip } from "./kit";
 import { ChangedVsPartner, FindingsTable, SevBar } from "./review-packet";
@@ -96,6 +96,30 @@ function CheckerRow({ c, v, packet, target, onJump, rechecking, rulesHref }: {
   const words = c.kind === "reviewer" ? `${n.found} found → ${n.open} open` : checkerWords(n);
   const validator = c.kind === "validator";
   const mine = validator && v && (!v.validator.id || v.validator.id === c.name) ? v : null;
+  // A PACKET THAT CARRIES COUNTS ONLY (no finding rows): the row says the packet's own numbers,
+  // with its severity bar, never "0 found" beside a packet with open findings.
+  const pv = validator ? packet?.validators.find((x) => x.id === c.name) ?? null : null;
+  const tally = packet && !packet.findings.length ? packetTally(packet) : null;
+  const tallyFound = tally ? SEVS.reduce((m, s) => m + tally[s].found, 0) : 0;
+  const tallyOpen = tally ? SEVS.reduce((m, s) => m + tally[s].open, 0) : 0;
+  if (!c.findings.length && packet && (pv?.before || tallyFound)) {
+    const found = Math.max(pv?.before ?? 0, tallyFound);
+    const open = pv ? Math.max(pv.after_open, tallyOpen) : tallyOpen;
+    const t: Tone = rechecking ? "wait" : open ? "bad" : "ok";
+    return (
+      <details className="ck" data-tone={t} data-testid="ck-checker" data-checker={c.name} open={open > 0 || undefined}>
+        <summary className="ck-sum"><Icon tone={t} /><b>{c.name}</b>
+          <span className="ck-words" data-testid="ck-words">{found} found → {open} open</span>
+          {rechecking ? <span className="vr-st" data-st="pending">re-checking…</span> : null}</summary>
+        <div className="ck-body">
+          {mine ? <RunLines v={mine} /> : null}
+          <SevBar p={packet} />
+          {validator ? <ChangedVsPartner p={packet} /> : null}
+          <span className="cs-spacer" />{rulesHref ? <a href={rulesHref} className="ck-rules" data-testid="ck-rules">Rules</a> : null}
+        </div>
+      </details>
+    );
+  }
   if (!c.findings.length) {
     return (
       <div className="ck" data-tone="ok" data-testid="ck-checker" data-checker={c.name}>
@@ -145,12 +169,15 @@ function CheckerRow({ c, v, packet, target, onJump, rechecking, rulesHref }: {
 }
 
 /** Every checker of the change, in one list: build, tests, CI runs, validators, scans, reviewer. */
-export function CheckRows({ cs, v, packet, onJump, projectId = "" }: {
+export function CheckRows({ cs, v, packet: decisionPacket, onJump, projectId = "" }: {
   cs: ChangeSet; v: Validation | null; packet: ReviewPacket | null; onJump: JumpTo; projectId?: string;
 }) {
   const c = cs.checks;
   const tests = c?.tests_passed;
-  const findings = packet?.findings.length ? packet.findings : v?.findings ?? [];
+  // ONE SOURCE (checkSource): the packet the merge card shows, else the record's findings.
+  const src = checkSource(v, decisionPacket);
+  const packet = src.packet;
+  const findings = src.findings;
   const ids = [v?.validator.id ?? "", ...(packet?.validators.map((x) => x.id) ?? [])];
   const checkers = checkersOf(findings, ids);
   const rechecking = v?.rerun.state === "pending";

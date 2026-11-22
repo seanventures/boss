@@ -36,8 +36,9 @@ import { GatedButton, useGate } from "../../components/gated";
 import { post } from "../workflows/delivery-api";
 import { ReadinessPanel, unaccepted, type Readiness } from "../workflow-readiness-ui";
 import { startBody, type StartView } from "../../lib/start-project";
+import { startFormHref } from "../../lib/workflow-inputs";
 import {
-  dollarsAbout, isMissingStatus, usePxRead, writePxUrl, type Agent, type PlanNode, type WorkKind,
+  dollarsAbout, isMissingStatus, navigateTo, usePxRead, writePxUrl, type Agent, type PlanNode, type WorkKind,
 } from "../../lib/project-experience";
 import { FX_WORK_PLAN } from "../../lib/project-experience-fixtures";
 import {
@@ -614,7 +615,11 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
           const od = p.optionDetail[o.key];
           return (
             <button key={o.key} type="button" role="option" aria-selected={p.workflow?.key === o.key} className="px-nw-wf" data-testid={`px-compose-wf-${o.key}`} title={o.detail || undefined}
-                    onClick={() => { setPicked({ v: o.key, by: "you" }); setPop(null); }}>
+                    onClick={() => {
+                      // A workflow a brief cannot start (it starts from a file) opens its own Start form.
+                      if (o.starts_from_file) { onClose(); navigateTo(startFormHref(pid, o.key)); return; }
+                      setPicked({ v: o.key, by: "you" }); setPop(null);
+                    }}>
               <span className="px-row" style={{ gap: 6 }}>
                 {p.workflow?.key === o.key ? <Check size={11} weight="bold" aria-hidden /> : <span style={{ width: 11 }} aria-hidden />}
                 <b>{o.name}</b>{o.fits ? <span className="px-tag" data-tone="green">fits a {planKind === "bug" ? "bug" : "feature"}</span> : null}

@@ -235,3 +235,43 @@ def test_removing_a_validator_needs_a_second_approver_and_a_moved_base_is_409(
         tier = db.execute(text("SELECT risk_tier FROM decisions WHERE id = :i"),
                           {"i": got.json()["decision_id"]}).scalar()
     assert tier == 3
+
+
+def test_a_second_proposal_of_the_same_version_names_the_open_one(client, world, engine, repo_root):  # noqa: F811
+    """Dry run 3, gap 9: #20 "v2" opened beside #15 "v2". An open proposal is named, never
+    duplicated; once it is closed, the next one starts from main without the rejected commit."""
+    pid, bare = _project(engine, world)
+    sha = rulesets.parse(RULESET)["sha"]
+    send = lambda sev: client.post(f"/v1/projects/{pid}/rulesets/northgate/propose", json={  # noqa: E731
+        "rules": _rules(pii_fields_declared={"severity": sev}), "base_version": 3, "base_sha": sha})
+    with _owner(world):
+        first = send("P1")
+        assert first.status_code == 200, first.text
+        again = send("P0")
+    assert again.status_code == 409, again.text
+    body = again.json()
+    n = first.json()["change"]
+    assert body["error"] == "already_open" and body["change"] == n and body["version"] == 4
+    assert body["message"] == f"v4 is already open as change #{n}."
+    assert body["url"]
+    with engine.begin() as db:
+        db.execute(text("UPDATE local_change_sets SET state = 'closed' WHERE number = :n "
+                        "AND head_sha = :h"),
+                   {"n": n, "h": local_repo.branch_sha(bare, "boss/ruleset/northgate-v4")})
+    with _owner(world):
+        third = send("P0")
+    assert third.status_code == 200, third.text
+    assert third.json()["change"] != n
+    count = local_repo.git(["rev-list", "--count", "main..boss/ruleset/northgate-v4"], git_dir=bare)
+    assert count == "1"
+
+
+def test_a_proposal_changes_only_the_edited_line():
+    """The proposal's diff is the version line and the edited entry; nothing else moves."""
+    from boss_engine.services import ruleset_changes as rc
+
+    base = rulesets.parse(RULESET)
+    _full, new = rc.render(base, 4, _rules(pii_fields_declared={"severity": "P1"}))
+    out = rc.minimal_edit(RULESET, base, new, 4)
+    assert out == RULESET.replace("version: 3", "version: 4").replace(
+        "pii-fields-declared: {severity: P2,", "pii-fields-declared: {severity: P1,")

@@ -45,7 +45,7 @@ import {
 } from "./review-panes";
 import { DockPane, ReviewLayoutProvider, useReviewLayout } from "./review-dock";
 import { TicketSyncBadge } from "../../../projects/linked-ticket";
-import { blockingOpen, blockingRows, packetOf, packetTally, type ReviewPacket } from "../../../../lib/validation-review";
+import { blockingOpen, blockingRows, checkSource, packetOf, packetTally, type ReviewPacket } from "../../../../lib/validation-review";
 import { originalCommit } from "../../../../lib/line-notes";
 import { ReviewPacketView, packetHold } from "../../../validation/review-packet";
 import { useValidation, useValidationPins } from "../../../validation/line-notes";
@@ -184,6 +184,8 @@ function ChangeSetPage({ projectId, number, repo, startTab, startCommit, startLo
   // VALIDATION IS A CHECKER: read once for the Checks rows and the notes on Files changed.
   const validation = useValidation(projectId, cs ? cs.number || number : null);
   const v = validation.state === "ready" ? validation.data : null;
+  // ONE COUNT SOURCE for the Checks badge, the packet card and the Checks rows (checkSource).
+  const shown = checkSource(v, packet).packet;
   // "FIX A GIVEN FILE": the original file is the change's first commit, so Files changed opens
   // on original → fixed (that commit … head); the whole change stays one click away.
   const original = useMemo(() => (v?.target ? originalCommit(commits) : null), [v?.target, commits]);
@@ -327,7 +329,7 @@ function ChangeSetPage({ projectId, number, repo, startTab, startCommit, startLo
             <TabLink tab="files" on={tab} set={setTab} icon={<FileCode size={13} aria-hidden />} label="Files changed" n={files.length} />
             <TabLink tab="code" on={tab} set={setTab} icon={<Code size={13} aria-hidden />} label="Code" />
             <TabLink tab="checks" on={tab} set={setTab} icon={<ListChecks size={13} aria-hidden />} label="Checks"
-                     n={(packet ? blockingOpen(packetTally(packet)) : 0) || checkCount || undefined} />
+                     n={(shown ? blockingOpen(packetTally(shown)) : 0) || checkCount || undefined} />
           </nav>
           <div className="gr-body">
             <div className="gr-tab" data-tab={tab}>
@@ -345,7 +347,7 @@ function ChangeSetPage({ projectId, number, repo, startTab, startCommit, startLo
                             review={lineReview} inline={inline} onCompare={(r) => { setRange(r); setTab("files"); }} onViewFile={openCode} />
               ) : tab === "overview" ? (
                 <>
-                {packet ? <div style={{ marginBottom: 16 }}><ReviewPacketView packet={packet} projectId={projectId} fallbackTitle={cs.title}
+                {shown ? <div style={{ marginBottom: 16 }}><ReviewPacketView packet={shown} projectId={projectId} fallbackTitle={cs.title}
                                                                     eyebrow="Review packet" testid="change-packet" compact /></div> : null}
                 <OverviewTab cs={cs} at={at} files={wholeFiles} commitHref={(sha) => changeUrl(asked, "commits", sha)} onChanged={reread}
                              onJump={onJump} onJumpLoc={onJumpLoc} onFiles={() => { setRange(WHOLE_CHANGE); setTab("files"); }} />

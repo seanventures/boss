@@ -50,7 +50,7 @@ import { AppContext } from "./app-context";
 import { createLinkAction } from "../factory/links-actions";
 import { TalksTo, linkRequests, talksToProblem, type TalksToRow } from "./talks-to";
 import { defaultInputs, invalidInputs, missingRequired, startsFromABrief, suppliedInputs,
-         typedInputs, workflowInputFields } from "../../lib/workflow-inputs";
+         typedInputs, workflowInputFields, startsFromAFile, fileFormFields, fileStartExtras } from "../../lib/workflow-inputs";
 import { ReadinessPanel, WIZARD_COLLECTS, unaccepted, useWorkflowReadiness, type Readiness }
   from "../workflow-readiness-ui";
 import { get, post } from "./delivery-api";
@@ -247,6 +247,22 @@ export function startInput(o: {
     ...where,
     ...typed,
   };
+}
+
+/** "Original file": an upload. Reads the file as text, byte for byte (its final newline kept),
+ *  and hands back its name and text; the run commits it as the change's first commit. */
+export function FileUpload({ id, name, onFile }: { id: string; name: string; onFile: (name: string, text: string) => void }) {
+  return (
+    <span className="np-upload" data-testid={`${id}-upload`}>
+      <input id={id} data-testid={id} type="file" aria-required
+             onChange={(e) => {
+               const f = e.target.files?.[0];
+               if (!f) return;
+               void f.text().then((text) => onFile(f.name, text));
+             }} />
+      {name ? <span className="np-dim" data-testid={`${id}-name`}>{name}</span> : null}
+    </span>
+  );
 }
 
 /** The cost history of every workflow, for the footer's "Builds like this cost". */
@@ -745,7 +761,9 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
     .filter((c) => !kind || c.kind === kind)
     .map((c) => projectRepos?.find((r) => r.binding_id === c.binding_id)?.full_name ?? "")
     .filter(Boolean))];
-  const declaredInputs = composerFields(schema, brief, needsRepository);
+  // A FILE WORKFLOW draws only its own three: Original file (upload), Target path, Title (gap #5).
+  const fromFile = !adding && !!draft.workflowKey && startsFromAFile(schema);
+  const declaredInputs = fromFile ? fileFormFields(schema) : composerFields(schema, brief, needsRepository);
   const inputsToSend = suppliedInputs(declaredInputs, inputsNow);
   const stillBlank = missingRequired(declaredInputs, inputsToSend);
   const malformed = invalidInputs(declaredInputs, inputsToSend);
@@ -849,6 +867,7 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
     const input = startInput({ brief, draft: brief ? { ...draft, directive: directiveOut } : draft,
                                fields: declaredInputs, supplied: inputsToSend,
                                needsRepository });
+    if (fromFile) Object.assign(input, fileStartExtras(schema, draft.inputs));
     // A NEW APP'S LINKS travel with its start: the app exists only once it is built, so the start
     // checks them (app_link:manage, the apps, the aliases) and the first build makes them.
     if (brief && talks.length) input.app_links = linkRequests(talks);
@@ -1137,7 +1156,10 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
                   {field.help ? <> <HelpTip label={field.label} text={field.help} /></> : null}
                 </span>
                 {/* A paragraph gets a box big enough to read back. */}
-                {field.kind === "multiline" ? (
+                {fromFile && field.name === "start_from" ? (
+                  <FileUpload id={id} name={value} onFile={(name, text) => setDraft((d) => ({
+                    ...d, inputs: { ...d.inputs, start_from: name, start_from_content: text } }))} />
+                ) : field.kind === "multiline" ? (
                   <textarea {...common} className="dw-new-input" rows={4} value={value}
                             placeholder={field.example}
                             onChange={(e) => setInput(field.name, e.target.value)} />

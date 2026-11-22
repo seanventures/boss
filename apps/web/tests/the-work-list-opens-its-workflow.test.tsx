@@ -148,7 +148,8 @@ describe("the run screen's header line", () => {
 
   it("Change #N · Preview · Staging · Prod · Your move: one primary button", async () => {
     const { RunWorkLineView } = await import("../app/workflows/run-work-line");
-    const w = await item({ links: { ...RAW.links, preview: "/api/previews/prev_3/open" } });
+    // Deployed (its own deploy on record): the environments speak for this change.
+    const w = await item({ links: { ...RAW.links, preview: "/api/previews/prev_3/open", deploy: "?project_id=ng&area=infra&view=deploys&deploy=dep_1" } });
     await mount(<RunWorkLineView w={w} deployments={DEPLOYS as never} />);
     expect($('[data-testid="rwl-change"]')!.textContent).toBe("Change #12");
     expect($('[data-testid="rwl-preview"]')!.getAttribute("href")).toContain("prev_3");

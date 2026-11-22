@@ -23,7 +23,7 @@ import { StepIcon, hasStepIcon } from "./step-icons";
 import { isLoopbackPreviewUrl, operatorPreviewOpenHref } from "../lib/code-tasks";
 import { previewRecordFromStepOutput } from "../lib/previews";
 import { openDockAbout, type DockSubject } from "../lib/dock-subject";
-import { missingRequired, suppliedInputs, workflowInputFields } from "../lib/workflow-inputs";
+import { missingRequired, startParam, suppliedInputs, workflowInputFields } from "../lib/workflow-inputs";
 import { HostAdviceBanner, useHostAdvice } from "./host-advice";
 import { StartRefusal, asReadiness, type PendingRefusal } from "./workflow-readiness-ui";
 import { RunReportPanel, OpenRunReportButton, runHasReport } from "./run-report-ui";
@@ -837,6 +837,18 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
     setStartWith(key);
     setStartExample(example ?? null);
   }, []);
+  // `start=<key>` (New work's link to a workflow a brief cannot start): open its Start form, once.
+  useEffect(() => {
+    const read = () => {
+      const key = startParam(window.location.search);
+      if (!key) return;
+      openComposerOn(key);
+      setAreaUrl({ start: null }, "replace");
+    };
+    read();
+    window.addEventListener("popstate", read);
+    return () => window.removeEventListener("popstate", read);
+  }, [openComposerOn]);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   // TEST RUNS ARE LEFT OUT OF THE LIST unless asked for (#512): a test is not production work.
   const [showTests, setShowTests] = useState(false);
@@ -1793,10 +1805,7 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
         <header className="dw-full-head">
           {back}
           <span className="dw-badge" data-tone={tone(fullRun.status)}>{fullRun.status}</span>
-          <h2 className="dw-full-title" data-testid="run-full-title">
-            {runSubject(fullRun) ?? fullRun.workflow_name}
-            {fullRun.workflow_name} v{fullRun.version}
-          </h2>
+          <RunFullTitle subject={runSubject(fullRun)} workflow={fullRun.workflow_name} version={fullRun.version} />
           <span className="dw-run-progress">
             {fullRun.steps_done} of {fullRun.step_count}
             <i className="dw-bar" aria-hidden>
@@ -1811,6 +1820,8 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
               waiting on {/^[a-z0-9_]+$/.test(fullRun.waiting_on) ? roleLabel(fullRun.waiting_on) : fullRun.waiting_on}
             </span>
           ) : null}
+          {/* THE HEADER LINE: Change #N · Preview · Staging · Prod · "Your move: <button>". */}
+          <div className="dw-full-work"><RunWorkLine projectId={projectId} runId={fullRun.id} actor={actor} /></div>
           <button type="button" className="wf-btn wf-btn-ghost dw-full-exit" data-testid="exit-full-page"
                   title="Back to the list, with this run open"
                   onClick={() => onFullPage?.(null)}>
@@ -2277,7 +2288,8 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
 
   return (
     <div className="dw-path" data-testid="dw-path" data-full-page={fullPage ? "true" : undefined}>
-      <RunWorkLine projectId={projectId} runId={run.id} actor={actor} />
+      {/* On the full page the line sits in the run's header (RunFullPage). */}
+      {fullPage ? null : <RunWorkLine projectId={projectId} runId={run.id} actor={actor} />}
       <div className="wf-run-bar">
         {/* A FINISHED RUN IS READ FOR WHAT WAS DONE: its report, every section open, is the
             first thing on its bar, not a collapsed panel below the lane. */}
@@ -4061,5 +4073,20 @@ function ChangeRecord({ documentId }: { documentId: string }) {
         </>
       ) : null}
     </details>
+  );
+}
+
+/** THE FULL-PAGE RUN TITLE: "Lumen Pay tenant onboarding · Onboard a config file v1" — the
+ *  run's subject, a separator, then its workflow; the workflow alone when there is no subject. */
+export function RunFullTitle({ subject, workflow, version }: { subject: string | null | undefined; workflow: string; version: number | string }) {
+  return (
+    <h2 className="dw-full-title" data-testid="run-full-title">
+      {subject ? (
+        <>
+          <span className="dw-full-subject">{subject}</span>
+          <em className="dw-run-wf" data-testid="run-full-workflow"><span className="dw-sep" aria-hidden> · </span>{workflow} v{version}</em>
+        </>
+      ) : <span className="dw-full-subject">{workflow} v{version}</span>}
+    </h2>
   );
 }

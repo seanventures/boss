@@ -1605,6 +1605,17 @@ async def lifespan(_: FastAPI):
             print(f"[lifespan] delivery catalogue: {result['count']} workflows for {project}")
     except Exception as exc:  # noqa: BLE001 — never block boot on a seed
         print(f"[lifespan] delivery catalogue seed skipped: {exc}")
+    # A STANDARD ADDED LATER REACHES EVERY PROJECT (dry run 3, gap #5): the seed above is the
+    # default project only, so "Onboard a config file" was missing from every older project.
+    try:
+        from boss_engine.services.workflow_catalogue import seed_missing_everywhere
+
+        with begin(engine) as connection:
+            added = seed_missing_everywhere(connection, actor="boss")
+        if added:
+            print(f"[lifespan] standard workflows added to older projects: {added}")
+    except Exception as exc:  # noqa: BLE001 — never block boot on a seed
+        print(f"[lifespan] standard workflows for older projects skipped: {exc}")
     # SIGNED WORK FOR WHAT RAN BEFORE THE LEDGER. Without this, every Passport, Lineage and
     # Credits screen is empty for existing work until somebody knows to call /v1/acts/backfill.
     # In a thread, one short transaction per run, panel or build with try-locks, so it never

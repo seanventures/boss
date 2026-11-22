@@ -317,3 +317,29 @@ def test_the_list_the_console_reads_includes_declared_inputs(eng, project):
             for row in workflows.list_definitions(c, project, namespace="product")
         }
     assert listed["needs_a_video"]["input_schema"] == schema
+
+
+# ── A standard added later reaches every project (dry run 3, gap #5) ───────────────────────
+
+def test_a_standard_added_later_reaches_an_older_project(eng, project):
+    """An older project lacked "Onboard a config file": the boot seed was the default project's
+    only. seed_missing_everywhere installs just what a project never had."""
+    with eng.begin() as c:
+        catalogue.seed(c, project)
+        c.execute(text("DELETE FROM workflow_definitions WHERE project_id=:p AND workflow_key="
+                       "'onboard_config_file'"), {"p": project})
+        assert "onboard_config_file" in catalogue.missing_keys(c, project)
+        added = catalogue.seed_missing_everywhere(c, project_ids=[project])
+        assert added == {project: ["onboard_config_file"]}
+        assert catalogue.missing_keys(c, project) == frozenset()
+        assert catalogue.seed_missing_everywhere(c, project_ids=[project]) == {}
+
+
+def test_new_work_options_say_which_workflow_starts_from_a_file(eng, project):
+    from boss_engine.services.project_experience import new_work
+
+    with eng.begin() as c:
+        catalogue.seed(c, project)
+        opts = {o["key"]: o for o in new_work.options(c, project, "feature")}
+    assert opts["onboard_config_file"]["starts_from_file"] is True
+    assert opts["minor_feature"]["starts_from_file"] is False

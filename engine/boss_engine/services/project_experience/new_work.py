@@ -453,6 +453,13 @@ _APPROVES = {"meeting": "the PRD", "spec_review": "the spec", "ux_review": "how 
              "merge": "merge PR"}
 
 
+def starts_from_file(spec: Mapping[str, Any]) -> bool:
+    """The workflow's start form asks for a file (input type "Start from a file")."""
+    schema = (spec or {}).get("input_schema") or {}
+    props = schema.get("properties") if isinstance(schema, dict) else None
+    return isinstance(props, dict) and "start_from" in props
+
+
 def options(connection: Connection, project_id: str, kind: str,
             with_steps: bool = False) -> list[dict[str, Any]]:
     """Every active product workflow this project can start, the kind's own first. With
@@ -475,11 +482,14 @@ def options(connection: Connection, project_id: str, kind: str,
         work_class = classes.get(str(r["workflow_key"]))
         if work_class == "project.new":
             continue  # a new app is not work on this one
+        spec = as_json(r["spec"], {}) or {}
         one = {"key": r["workflow_key"], "name": r["name"],
                "detail": r["description"] or "", "work_class": work_class,
-               "fits": work_class in fits}
+               "fits": work_class in fits,
+               # STARTS FROM A FILE ("Onboard a config file"): a brief cannot start it; New work
+               # opens its own Start form (Original file · Target path · Title) instead.
+               "starts_from_file": starts_from_file(spec)}
         if with_steps:
-            spec = as_json(r["spec"], {}) or {}
             listed = steps(connection, project_id, spec, roster)
             est = estimate(connection, project_id, str(r["workflow_key"]), spec)
             one.update({"steps": len(listed),
@@ -771,5 +781,5 @@ def app_anchor(connection: Connection, project_id: str, app: Optional[str]
 
 
 __all__ = ["CHOOSABLE_PROFILES", "KINDS", "WAS_SIZE", "AnchorClosed", "app_anchor", "chosen_profile", "choose", "create_issue", "defaults", "estimate",
-           "issue_of", "options", "plan", "round_minutes", "steps", "strip", "targets", "tell",
+           "issue_of", "options", "plan", "round_minutes", "starts_from_file", "steps", "strip", "targets", "tell",
            "ticket_link", "ticket_title", "tracker"]

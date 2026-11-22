@@ -159,8 +159,13 @@ export function SevBar({ p }: { p: ReviewPacket }) {
   );
 }
 
-function Verdict({ p, link = null }: { p: ReviewPacket; link?: React.ReactNode }) {
+function Verdict({ p, link = null, failing = "" }: { p: ReviewPacket; link?: React.ReactNode; failing?: string }) {
   const chips = !link;
+  // ONE VERDICT: a card whose pull request opened with checks failing never also says Ready.
+  if (failing && p.verdict.state === "ready") {
+    return <div className="vr-verdict" data-state="blocked" data-testid="vr-verdict"><b>Checks failing</b>
+      <span className="vr-muted">{failing} · merges only with your reason</span>{link}</div>;
+  }
   if (p.verdict.state === "invalid") {
     const n = p.verdict.reasons.length;
     return <div className="vr-verdict" data-state="invalid" data-testid="vr-verdict"><b>Packet invalid</b><span className="vr-muted">{n} problem{n === 1 ? "" : "s"} · merge disabled</span>{link}</div>;
@@ -293,8 +298,11 @@ function Provenance({ p, links }: { p: ReviewPacket; links: ReturnType<typeof pa
   );
 }
 
-export function ReviewPacketView({ packet: p, projectId, fallbackTitle = "", eyebrow = "Control plane proposes · merge", actions, testid = "review-packet", compact = false }: {
+export function ReviewPacketView({ packet: p, projectId, fallbackTitle = "", eyebrow = "Control plane proposes · merge", actions, testid = "review-packet", compact = false, failing = "" }: {
   packet: ReviewPacket; projectId: string; fallbackTitle?: string; eyebrow?: string; actions?: React.ReactNode; testid?: string;
+  /** The failing gates of the card's pull request, in words (failingGateLabels): the verdict
+   *  then reads "Checks failing", never "Ready" beside a Checks failing block. */
+  failing?: string;
   /** THE MERGE CARD (workflow-library DESIGN decision 4): one verdict line and a link to the
    *  change's Checks, where every checker and its findings are. Invalid still lists its problems. */
   compact?: boolean;
@@ -307,7 +315,7 @@ export function ReviewPacketView({ packet: p, projectId, fallbackTitle = "", eye
         <div className="vr-row"><span className="vr-mono vr-dim vr-small">{eyebrow}</span><span className="vr-grow" />
           {p.head_sha ? <span className="vr-mono vr-dim vr-small">head {shortSha(p.head_sha)}</span> : null}</div>
         <h2 data-testid={`${testid}-title`}>{packetTitle(p, fallbackTitle)}</h2>
-        <Verdict p={p} link={checks} />
+        <Verdict p={p} link={checks} failing={failing} />
         {p.verdict.state === "invalid" ? <InvalidProblems p={p} /> : <SevBar p={p} />}
         <Provenance p={p} links={links} />
         {actions}
@@ -323,7 +331,7 @@ export function ReviewPacketView({ packet: p, projectId, fallbackTitle = "", eye
       <div className="vr-row"><span className="vr-mono vr-dim vr-small">{eyebrow}</span><span className="vr-grow" />
         <span className="vr-mono vr-dim vr-small">{[p.packet_version != null ? `packet v${p.packet_version}` : "", p.head_sha ? `head ${shortSha(p.head_sha)}` : ""].filter(Boolean).join(" · ")}</span></div>
       <h2 data-testid={`${testid}-title`}>{packetTitle(p, fallbackTitle)}</h2>
-      <Verdict p={p} />
+      <Verdict p={p} failing={failing} />
       {invalid ? <InvalidProblems p={p} /> : (
         <>
           <SevBar p={p} />

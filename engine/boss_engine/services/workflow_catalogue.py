@@ -2336,6 +2336,37 @@ def seed_unlocked_by_pack(connection: Connection, project_id: str, pack_id: str,
     return seed_now_unlocked(connection, project_id, actor=actor)
 
 
+def missing_keys(connection: Connection, project_id: str) -> frozenset[str]:
+    """The ungated catalogue entries this project has no definition of at all (never installed).
+    A retired one has its row, so it is not missing (a catalogue workflow cannot be deleted)."""
+    have = set(str(k) for k in connection.execute(
+        text("SELECT workflow_key FROM workflow_definitions WHERE project_id = :p"),
+        {"p": project_id}).scalars().all())
+    return frozenset(e["key"] for e in CATALOGUE if not _gated(e) and e["key"] not in have)
+
+
+def seed_missing_everywhere(connection: Connection, actor: str = "boss",
+                            project_ids: Optional[list[str]] = None) -> dict[str, list[str]]:
+    """EVERY PROJECT GETS A NEW STANDARD WORKFLOW, NOT ONLY THE DEFAULT ONE (dry run 3, gap #5).
+
+    The full catalogue is seeded when a project is created and, at boot, into the default
+    project only. A standard added to the catalogue later ("Onboard a config file") therefore
+    never reached a project created before it: not in New work, not in its Workflows, only in
+    Library › "Install 8". Called at boot: installs, per project, just the ungated entries it
+    has no definition of. Idempotent; a project already complete costs one SELECT."""
+    out: dict[str, list[str]] = {}
+    projects = list(project_ids) if project_ids is not None else [str(p) for p in connection.execute(
+        text("SELECT id FROM projects ORDER BY id")).scalars().all()]
+    for project_id in projects:
+        keys = missing_keys(connection, project_id)
+        if not keys:
+            continue
+        with connection.begin_nested():
+            seed(connection, project_id, actor=actor, only=keys)
+        out[project_id] = sorted(keys)
+    return out
+
+
 def seed(connection: Connection, project_id: str, actor: str = "boss",
          only: Optional[frozenset[str]] = None) -> dict[str, Any]:
     """Install the catalogue into a project (or only the `only` entries). Idempotent.

@@ -49,6 +49,39 @@ export function checksFailingOf(recommendation: Record<string, unknown> | null |
            draft: r.draft === true, followup_run_id: str(r.followup_run_id) || undefined };
 }
 
+/**
+ * OLD TESTS THAT CANNOT BE NAMED (engine quality_bar.broken_tests_block: "failing existing tests
+ * could not be named"). A card must never say "Checks failing · Old tests broke" when no failing
+ * test can be named: it reads "Old tests: unknown (why)" instead, and the rest of the record (any
+ * other failing gate) still says Checks failing. `real` is null when nothing else failed.
+ */
+export const OLD_TESTS_GATE = "existing_tests_intact";
+export type ChecksFailingSplit = { real: ChecksFailingRecord | null; oldTestsUnknown: string | null };
+export function splitChecksFailing(record: ChecksFailingRecord | null): ChecksFailingSplit {
+  if (!record) return { real: null, oldTestsUnknown: null };
+  const old = record.gates.find((g) => g.gate === OLD_TESTS_GATE);
+  const named = (g: ChecksFailingGate) => record.findings.some((f) => f.gate === g.gate)
+    || (!!g.detail && !/could not be named|cannot be named|no failing test|unknown/i.test(g.detail));
+  if (!old || named(old)) return { real: record, oldTestsUnknown: null };
+  const why = old.detail ? plainSentence(old.detail).replace(/\.$/, "")
+    : "no failing test could be named";
+  const gates = record.gates.filter((g) => g.gate !== OLD_TESTS_GATE);
+  const findings = record.findings.filter((f) => f.gate !== OLD_TESTS_GATE);
+  return {
+    real: gates.length ? { ...record, gates, findings, security: gates.some((g) => g.security) || findings.some((f) => f.security) } : null,
+    oldTestsUnknown: why,
+  };
+}
+
+/** "Old tests: unknown (why)": said once, plainly, never as a failing check. */
+export function OldTestsUnknown({ why }: { why: string }) {
+  return (
+    <p className="dq-guidance" data-testid="decision-old-tests-unknown">
+      <b>Old tests: unknown</b> ({why}).
+    </p>
+  );
+}
+
 export function ChecksFailing({ record }: { record: ChecksFailingRecord }) {
   return (
     <div className="dq-guidance dq-checks-failing" role="alert" data-testid="decision-checks-failing"
@@ -98,15 +131,9 @@ export function ChecksFailing({ record }: { record: ChecksFailingRecord }) {
 
 /** The failing gates a merge card carries (checks_failing, or its PR lineage's), labelled. */
 export function failingGateLabels(r: Record<string, unknown>): string {
-  const cf = r.checks_failing as Record<string, unknown> | undefined;
-  const gates = cf && Array.isArray(cf.gates) ? cf.gates : [];
-  return gates
-    .map((g) => (g && typeof g === "object"
-      ? ((g as Record<string, unknown>).gate ? gateFailedWords(String((g as Record<string, unknown>).gate))
-        : String((g as Record<string, unknown>).label || ""))
-      : ""))
-    .filter(Boolean)
-    .join(", ");
+  // Old tests that cannot be named are "unknown", never a failing gate (splitChecksFailing).
+  const real = splitChecksFailing(checksFailingOf(r)).real;
+  return (real?.gates ?? []).map((g) => gateFailedWords(g.gate) || g.label).filter(Boolean).join(", ");
 }
 
 /**
@@ -228,7 +255,7 @@ export type FollowUpsRecord = { count: number; p1: number; queued: boolean; bar:
 
 export function followUpsOf(recommendation: Record<string, unknown> | null | undefined
 ): FollowUpsRecord | null {
-  if (checksFailingOf(recommendation)) return null;   // a failing card says that instead
+  if (splitChecksFailing(checksFailingOf(recommendation)).real) return null;   // a failing card says that instead
   const raw = recommendation?.followups;
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
