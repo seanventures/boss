@@ -20,6 +20,7 @@ import {
   SEV_WORDS, sendOverride, shortSha, sortFindings, validationPath,
   type Finding, type Fix, type Override, type OverrideAction, type Validation,
 } from "../../lib/validation-review";
+import { actorWords } from "../../lib/actor-words";
 import { KindBadge, RefChip, SevChip, Status, jumpToRef } from "./kit";
 
 type ReadState = "loading" | "ready" | "missing" | "error";
@@ -181,12 +182,13 @@ function OverrideRecord({ r }: { r: Override }) {
   const at = r.at ? new Date(r.at) : null;
   return (
     <div className="vr-ovrec" id={refTarget(r.id)} data-testid="vr-override-record">
-      <div><b>{r.id} · {r.actor || "someone"}</b> {verb[r.action]}{at && !Number.isNaN(at.getTime()) ? ` · ${at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""}</div>
+      <div><b>{r.id} · {actorWords(r.actor)}</b> {verb[r.action]}{at && !Number.isNaN(at.getTime()) ? ` · ${at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""}</div>
       {r.reason || r.commit_sha || r.rerun_id ? (
         <div style={{ marginTop: 3 }}>{r.reason ? `Why: “${r.reason}”` : null} {r.commit_sha ? <span className="vr-ref">commit {shortSha(r.commit_sha)}</span> : null}{" "}
-          {r.rerun_id ? <RefChip id={r.rerun_id} label={`re-run ${r.rerun_id}`} /> : null}</div>
+          {r.rerun_id ? (/^[A-Z]-\d+$/.test(r.rerun_id) ? <RefChip id={r.rerun_id} label={`re-run ${r.rerun_id}`} />
+            : <span className="vr-muted vr-small">re-checked</span>) : null}</div>
       ) : null}
-      {r.approver && !r.approved_at ? <div style={{ marginTop: 3 }} className="vr-unexplained">Waiting on {r.approver} to approve the P0 waive</div> : null}
+      {r.approver && !r.approved_at ? <div style={{ marginTop: 3 }} className="vr-unexplained">Waiting on {actorWords(r.approver)} to approve the P0 waive</div> : null}
     </div>
   );
 }
@@ -234,7 +236,8 @@ function FixCard({ f, fixes, record, send, disabled, disabledWhy, guideVersion }
           <input aria-label={`Why edit ${f.id}`} placeholder="Why (recorded on the change)" value={reason} onChange={(e) => setReason(e.target.value)} data-testid="vr-edit-reason" />
           <div className="vr-row"><span className="vr-grow" />
             <button type="button" className="vr-btn" data-kind="ghost" onClick={() => setMode("")}>Cancel</button>
-            <button type="submit" className="vr-btn" data-kind="mint" disabled={off || !text.trim() || !reason.trim()} title={tip} data-testid="vr-edit-save">Save line</button></div>
+            <button type="submit" className="vr-btn" data-kind="mint" disabled={off || !text.trim() || !reason.trim()}
+                    title={tip ?? (!text.trim() || !reason.trim() ? "Write the line and why first" : undefined)} data-testid="vr-edit-save">Save line</button></div>
         </form>
       ) : mode === "waive" ? (
         <form className="vr-form" onSubmit={(e) => { e.preventDefault(); if (reason.trim() && (!p0 || approver.trim())) void run("waive", { reason, ...(p0 ? { approver_id: approver } : {}), ...(expires ? { expires_at: expires } : {}) }); }} data-testid="vr-waive-form">
@@ -250,7 +253,8 @@ function FixCard({ f, fixes, record, send, disabled, disabledWhy, guideVersion }
           <input id={`vr-exp-${f.id}`} type="date" value={expires} onChange={(e) => setExpires(e.target.value)} data-testid="vr-waive-expires" />
           <div className="vr-row"><span className="vr-dim vr-tiny">{p0 ? "P0: stays open until the approver says yes" : f.severity === "P1" ? "P1: project owner, with a reason" : "P2: no approver needed"}</span><span className="vr-grow" />
             <button type="button" className="vr-btn" data-kind="ghost" onClick={() => setMode("")}>Cancel</button>
-            <button type="submit" className="vr-btn" disabled={off || !reason.trim() || (p0 && !approver.trim())} title={tip} data-testid="vr-waive-send">{p0 ? `Ask ${approver.trim() || "approver"}` : `Waive ${f.id}`}</button></div>
+            <button type="submit" className="vr-btn" disabled={off || !reason.trim() || (p0 && !approver.trim())}
+                    title={tip ?? (!reason.trim() ? "Say why first" : p0 && !approver.trim() ? "Name the approver first" : undefined)} data-testid="vr-waive-send">{p0 ? `Ask ${approver.trim() || "approver"}` : `Waive ${f.id}`}</button></div>
         </form>
       ) : f.status === "suppressed" ? null : (
         <div className="vr-ov" data-testid="vr-controls">
@@ -371,7 +375,7 @@ export function ValidationFlow({ v, projectId, change, onChanged, testid = "vr-v
           <form className="vr-row" onSubmit={(e) => { e.preventDefault(); if (revertWhy.trim()) void send(null, "revert_all", { reason: revertWhy }).then((ok) => { if (ok) setReverting(false); }); }}>
             <input className="vr-input" aria-label="Why revert the whole file" placeholder="Why revert the whole file?" value={revertWhy} onChange={(e) => setRevertWhy(e.target.value)} data-testid="vr-revert-all-reason" />
             <button type="button" className="vr-btn" data-kind="ghost" onClick={() => setReverting(false)}>Cancel</button>
-            <button type="submit" className="vr-btn" data-kind="danger" disabled={!revertWhy.trim() || !!disabledWhy} title={disabledWhy || undefined} data-testid="vr-revert-all-send">Revert all</button>
+            <button type="submit" className="vr-btn" data-kind="danger" disabled={!revertWhy.trim() || !!disabledWhy} title={disabledWhy || (!revertWhy.trim() ? "Say why first" : undefined)} data-testid="vr-revert-all-send">Revert all</button>
           </form>
         ) : (
           <button type="button" className="vr-btn" data-kind="danger" disabled={!!disabledWhy} title={disabledWhy || "Put the partner's exact bytes back, as one commit"}

@@ -20,6 +20,7 @@ import {
   type Autofix, type Ruleset, type RulesetRule, type Sev,
 } from "../../lib/validation-review";
 import { RULESET_NORTHGATE } from "../../lib/validation-review-fixtures";
+import { actorWords } from "../../lib/actor-words";
 import { Ico } from "../projects/kit";
 import "./validation-review.css";
 
@@ -85,7 +86,7 @@ export function RulesetEditor({ rs, projectId, testid = "vr-ruleset" }: { rs: Ru
       <div className="vr-row" style={{ marginBottom: 12 }}>
         <h3 style={{ margin: 0, fontSize: "0.84211rem", fontWeight: 600 }}>Ruleset {rs.id}</h3>
         <span className="vr-pill" data-testid={`${testid}-version`}>{[rs.version != null ? `v${rs.version}` : "", rs.sha ? shortSha(rs.sha) : "",
-          merged && !Number.isNaN(merged.getTime()) ? `merged ${merged.toLocaleDateString([], { month: "short", day: "numeric" })}${rs.merged_by ? ` by ${rs.merged_by}` : ""}` : ""].filter(Boolean).join(" · ")}</span>
+          merged && !Number.isNaN(merged.getTime()) ? `merged ${merged.toLocaleDateString([], { month: "short", day: "numeric" })}${rs.merged_by ? ` by ${actorWords(rs.merged_by)}` : ""}` : ""].filter(Boolean).join(" · ")}</span>
         {rs.validator ? <span className="vr-pill">validator <b>{rs.validator}</b></span> : null}
         <span className="vr-grow" />
         <span className="vr-mono vr-muted vr-small vr-hide-sm">{rs.path}</span>

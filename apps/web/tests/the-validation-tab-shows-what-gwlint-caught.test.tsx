@@ -190,7 +190,8 @@ describe("the engine's contract (PRs #276–#278)", () => {
                 { finding: "V-09", rule: "upstream-https-required", file: "t.yaml", line: 36, before: null, after: "url: https://x", kind: "agent", hunk_id: "h-1" },
                 { finding: null, rule: null, file: "t.yaml", line: 40, before: null, after: "extra: 1", kind: "agent", hunk_id: "h-2" }],
         guard: { code: "input_substituted", source: "examples/lumen-pay.good.yaml", why: "same bytes" } },
-      overrides: [{ ref: "O-1", id: "ovr_abc", action: "waive", finding_id: "V-07", actor: "Paramaguru", approver: "security-lead" }],
+      overrides: [{ ref: "O-1", id: "ovr_abc", action: "waive", finding_id: "V-07", actor: "usr_owner01abc", approver: "usr_reviewer9xyz" }],
+      // (ids as the engine stores them: the record names people in words, never the id)
       rerun: { id: "vrr_1", state: "running" }, head_sha: "9f2c1d0", packet: { verdict: { state: "blocked", reasons: ["open_p0:V-07", "rerun_pending"] } },
     })!;
     expect(v.overrides[0].id).toBe("O-1");
@@ -206,6 +207,8 @@ describe("the engine's contract (PRs #276–#278)", () => {
     expect(fix("V-09").querySelector('[data-testid="vr-diff-lines"]')!.textContent).toBe("- url: http://x+ url: https://x");
     // A P0 waive still waiting on its approver stays open, "waive pending approval".
     expect(fix("V-07").textContent).toContain("waive pending approval");
+    expect(fix("V-07").textContent).toContain("Waiting on a person to approve the P0 waive");
+    expect(fix("V-07").textContent).not.toMatch(/usr_/);
     // Re-checking: every control waits.
     expect((fix("V-01").querySelector('[data-testid="vr-accept"]') as HTMLButtonElement).disabled).toBe(true);
   });
