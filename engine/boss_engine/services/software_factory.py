@@ -2542,17 +2542,37 @@ class SoftwareFactoryService:
 
         _followups = (None if card_checks else
                       _quality_bar.merge_followups(evidence if isinstance(evidence, dict) else {}))
+        # THE REVIEW PACKET (review_packet.py, boss.review_packet/v2): typed findings, counts and
+        # a computed verdict from the step outputs, never prose. The card's title is the ROOT
+        # build's own name — never "Follow-up: … — Follow-up: … —" from the newest follow-up.
+        from . import review_packet as _review_packet
+
+        _packet = None
+        if run_id:
+            try:
+                with connection.begin_nested():
+                    _packet = _review_packet.for_run(
+                        connection, str(run_id), head_sha=branch_head_sha, change=pr.number,
+                        followups=_followups or (_quality_bar.merge_followups(
+                            evidence if isinstance(evidence, dict) else {})))
+            except Exception:  # noqa: BLE001 — the card stands without it (and says so: no packet)
+                import logging
+
+                logging.getLogger(__name__).warning("review packet not built for %s", run_id,
+                                                    exc_info=True)
+        _work_title = ((_packet or {}).get("work") or {}).get("title") \
+            or _review_packet.work_title(title)
         decision_id = None if set_member else self.decisions.create_blocking(
             connection,
             project_id,
             task_id,
-            (f"Checks failing — decide the merge: {title} ({_ref})"
+            (f"Checks failing — decide the merge: {_work_title} ({_ref})"
              if card_checks else
              f"Approve follow-up fix after #{follow_up['after']}: "
              f"{pr_follow_up.work_name(title)} ({_ref})" if follow_up else
-             f"{_quality_bar.ready_words(pr_follow_up.work_name(title) or title, _followups)}"
+             f"{_quality_bar.ready_words(_work_title, _followups)}"
              f" ({_ref})" if _followups else
-             f"Approve code change: {title} ({_ref})"),
+             f"Approve code change: {_work_title} ({_ref})"),
             {
                 # FIRST, so nothing it carries can replace the action below. Its keys are the
                 # sealed evidence keys (ui/ux/capability_evidence) and collide with none here;
@@ -2597,7 +2617,7 @@ class SoftwareFactoryService:
                 # The branch the PR merges INTO (None: the host's default). An approval delegate
                 # merges only into the project's bound release branch (approval_delegations).
                 "pr_base": pr_base,
-                "title": title,
+                "title": _work_title,
                 "validation_status": validation_status,
                 "validation_summary": validation_summary,
                 "validation_sources": validation_sources,
@@ -2644,6 +2664,8 @@ class SoftwareFactoryService:
                 # THE FOLLOW-UPS (quality_bar.merge_followups): what the card lists under its
                 # normal Merge, P1 first, and whether BOSS's follow-up build is fixing them.
                 **({_quality_bar.CARD_KEY: _followups} if _followups else {}),
+                # THE PACKET the card and the change page render (SPEC §1.4, §1.5).
+                **({_review_packet.KEY: _packet} if _packet else {}),
                 # A follow-up after the merge of #N (pr_follow_up): named, with its reason.
                 **({"follow_up_of": follow_up["after"],
                     "follow_up_reason": follow_up.get("reason")} if follow_up else {}),

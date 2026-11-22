@@ -1247,6 +1247,13 @@ def refuse_approval(connection: Any, row: Mapping[str, Any], actor: str, *,
     if action not in DEPLOY_ACTIONS | MERGE_ACTIONS:
         return
     if action in MERGE_ACTIONS:
+        # THE REVIEW PACKET (review_packet.blocks_merge, SPEC §1.4 rule 6, §3): an invalid packet
+        # or a re-run in progress refuses every merge; a blocked verdict needs a person's force.
+        from .review_packet import blocks_merge
+
+        refused = blocks_merge(rec, force=force and not system_policy)
+        if refused is not None:
+            raise CiGateRefused(refused[0], refused[1])
         # PEOPLE'S COMMENTS HOLD A LOCAL MERGE (BOSSAPP-948, local_review.merge_hold): while a
         # thread a person started on the change is not resolved, nobody merges it — not a force,
         # not a policy, not a delegate. The person resolves it, or requests changes.
