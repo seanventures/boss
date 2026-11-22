@@ -155,94 +155,24 @@ describe("who did what (flowNodes)", () => {
   });
 });
 
-describe("the panel", () => {
-  it("draws the header, the flow, Asked/Discussed/Built, the comments and the rail", async () => {
-    const { WorkPanel } = await import("../app/projects/work-panel");
-    const { w, story, deployments } = await load();
-    await mount(<WorkPanel ctx={ctx as never} w={w} story={story} deployments={deployments} testid="wp" />);
-    // ONE primary action: while BOSS fixes the change, Watch the fix leads and Merge is not amber.
-    expect($('[data-testid="wp-wait"]')!.textContent).toContain("Watch the fix");
-    expect($('[data-testid="wp-merge"]')!.textContent).toContain("Merge change #3");
-    expect($('[data-testid="wp-merge"]')!.getAttribute("data-kind")).toBeNull();
-    expect($$('[data-kind="primary"]').length).toBe(0);
-    expect($('[data-testid="wp-sentence"]')!.textContent).not.toContain("Ready to merge");
-    expect($('[data-testid="wp-kpis"]')!.textContent).toContain("1 h 6 m");
-    expect($('[data-testid="wp-kpis"]')!.textContent).toContain("≈ $10.68");
-    expect($('[data-testid="wp-node-review"]')!.getAttribute("data-s")).toBe("live");
-    expect($('[data-testid="wp-note-review"]')!.textContent).toContain("BOSS is fixing");
-    expect($('[data-testid="wp-note-merge"]')!.textContent).toContain("Your move");
-    expect($('[data-testid="wp-log"]')!.getAttribute("href")).toContain("logs=build");
-    // Asked: the must-haves with verdicts; Built: the one sentence.
-    expect($('[data-testid="wp-must-count"]')!.textContent).toBe("0 met · 4 partly");
-    expect($$('[data-testid="wp-musts"] li').length).toBe(4);
-    // Built: typed counts, never the coder's free-text summary (validation-review SPEC §1.4 rule 5).
-    expect($('[data-testid="wp-summary"]')).toBeNull();
-    expect($('[data-testid="wp-built"]')!.textContent).not.toContain("first line of the bubble");
-    expect($('[data-testid="wp-built"]')!.textContent).toContain("31/31 pass");
-    expect($('[data-testid="wp-review-counts"]')!.textContent).toMatch(/P1\s*1/);
-    // Run · Build · Change under the title, without opening ⋯ (SPEC §5.1); the build is the one
-    // that opened the change, not the follow-up still fixing it.
-    expect($('[data-testid="wp-link-run"]')!.textContent).toContain("Workflow run #2");
-    expect($('[data-testid="wp-link-build"]')!.getAttribute("href")).toContain("build=crun_31e1");
-    expect($('[data-testid="wp-link-change"]')!.textContent).toContain("Change #3");
-    expect($('[data-testid="wp-left"]')!.textContent).toContain("provenance");
-    // Comments: once each, 3 shown and the rest behind "1 more"; BOSS is already on them.
-    expect($('[data-testid="wp-comments"]')!.textContent).toContain("4 · deduped from 10");
-    expect($$('[data-testid="wp-comments"] > .wp-cmts > li').length).toBe(3);
-    expect($('[data-testid="wp-watch-fix"]')).not.toBeNull();
-    expect($('[data-testid="wp-let-fix"]')).toBeNull();
-    // Rail: where it runs says staging runs an older change; attempts collapsed; cost.
-    expect($('[data-testid="wp-env-staging"]')!.textContent).toContain("runs change #1");
-    expect($('[data-testid="wp-env-production"]')!.textContent).toContain("Pick host");
-    expect($('[data-testid="wp-attempts"] details')!.hasAttribute("open")).toBe(false);
-    expect($('[data-testid="wp-cost"]')!.textContent).toContain("included in plan");
-    expect($$('[data-testid="wp-helm-chip"]').map((c) => c.textContent)).toContain("Is it safe to merge now?");
-  });
-
-  it("with nothing fixing it, the comments can be handed to BOSS", async () => {
-    const { WorkPanel } = await import("../app/projects/work-panel");
-    const { w, story, deployments } = await load({ links: { ...RAW.links, merge_pr: { ...RAW.links.merge_pr, fixing: null } } });
-    await mount(<WorkPanel ctx={ctx as never} w={w} story={story} deployments={deployments} testid="wp" />);
-    expect($('[data-testid="wp-let-fix"]')!.textContent).toContain("Let BOSS fix these");
-    expect($$('[data-testid="wp-comments"] input[type="checkbox"]').length).toBe(4); // every comment, picked by default
-    // Merge is THE amber action again, but the sentence still says what is partial.
-    expect($('[data-testid="wp-merge"]')!.getAttribute("data-kind")).toBe("primary");
-    expect($('[data-testid="wp-sentence"]')!.textContent).toContain("0 of 4 must-haves met, 4 partly");
-  });
-
-  it("the drawer's short preview stacks the flow and opens the whole page", async () => {
-    const { WorkPanelShort } = await import("../app/projects/work-panel");
-    const { w, story, deployments } = await load();
-    let opened = false;
-    await mount(<WorkPanelShort ctx={ctx as never} w={w} story={story} deployments={deployments} onOpen={() => { opened = true; }} testid="wp" />);
-    expect($('[data-testid="wp-flow"]')!.hasAttribute("data-vertical")).toBe(true);
-    expect($('[data-testid="wp-comments"]')).toBeNull();
-    ($('[data-testid="wp-open"]') as HTMLButtonElement).click();
-    expect(opened).toBe(true);
-  });
-});
 
 describe("the row", () => {
-  it("is the title, one line of state, a compact flow and ONE action", async () => {
+  it("is the plain list row: title, status chip, kicked off, finished, Workflow #N · Build · Change #N; no action, never amber", async () => {
     const { WorkRow } = await import("../app/projects/tab-work");
     const { w } = await load();
     await mount(<WorkRow w={w} ctx={{ ...ctx, overview: { ...ctx.overview, project: { repos: [] } } } as never} />);
     const row = $('[data-testid="px-work-wfr_e56d"]')!;
     expect($('[data-testid="px-work-open-wfr_e56d"]')!.textContent).toBe("Bench Name Label on Map Bubble");
-    expect($('[data-testid="px-work-line-wfr_e56d"]')!.textContent).toContain("Merge now, or wait.");
-    expect($$('[data-testid="px-work-flow-wfr_e56d"] i').map((i) => i.getAttribute("data-s"))).toEqual(["done", "done", "live", "wait", "todo"]);
-    // ONE action (+ the preview), never amber; the row's own Run · Build · Change as muted chips
-    // (operator 2026-11-21), going where the panel's header goes, the ids only on hover.
-    const act = $('[data-testid="px-work-act-wfr_e56d"]')!;
-    expect(act.textContent).toBe("Merge change #3");
-    expect(act.getAttribute("data-kind")).toBeNull();
-    expect(row.querySelectorAll("button.px-btn, a.px-btn").length).toBeLessThanOrEqual(2);
-    expect($('[data-testid="px-work-run-wfr_e56d"]')!.textContent).toBe("Run #2");
+    // The status names the person's move in a chip; amber stays the tab's badge.
+    expect($('[data-testid="px-work-status-wfr_e56d"]')!.textContent).toBe("Merge change #3");
+    expect(row.querySelectorAll('[data-tone="amber"], [data-kind="amber"]').length).toBe(0);
+    expect($('[data-testid="px-work-act-wfr_e56d"]')).toBeNull();
+    expect($('[data-testid="px-work-finished-wfr_e56d"]')!.textContent).toBe("—");
+    expect($('[data-testid="px-work-run-wfr_e56d"]')!.textContent).toBe("Workflow #2");
     expect($('[data-testid="px-work-build-wfr_e56d"]')!.textContent).toBe("Build");
     expect($('[data-testid="px-work-build-wfr_e56d"]')!.getAttribute("href")).toContain("build=crun_31e1");
     expect($('[data-testid="px-work-build-wfr_e56d"]')!.getAttribute("title")).toContain("crun_31e1");
     expect($('[data-testid="px-work-change-wfr_e56d"]')!.textContent).toBe("Change #3");
     expect($('[data-testid="px-work-links-wfr_e56d"]')!.textContent).not.toContain("crun_");
-    expect($('[data-testid="px-work-attempts-wfr_e56d"]')).toBeNull();
   });
 });

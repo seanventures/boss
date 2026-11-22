@@ -69,6 +69,8 @@ import { useOnScreen } from "../lib/area-shown";
 import { forEachProgress } from "../lib/workflow-for-each";
 import { LearnedStrip } from "./knowledge/learned-strip";
 import { FULL_PAGE, PAGE_PARAM, readFullPage } from "./workflows/full-page";
+import { RunWorkLine } from "./workflows/run-work-line";
+import { projectHref } from "../lib/project-experience";
 
 // Moved to app/workflows/ (Workflow Studio, phase 0); re-exported so existing imports hold.
 export { CaptainCanRunIt, DefineStepForm };
@@ -335,6 +337,12 @@ export function stoppedAnswers(actions: { retry?: RunAction; skip?: RunAction })
   if (retry) return " Try it again.";
   if (skip) return " Skip it and carry on.";
   return "";
+}
+
+/** The agent's brief this run was started with (its directive), trimmed; "" when none. */
+export function runBrief(run: { input?: Record<string, unknown> | null }): string {
+  const d = (run.input ?? {})["directive"];
+  return typeof d === "string" ? d.trim() : "";
 }
 
 /** The project this run is delivering. Five runs of "Standard Product Delivery" are five
@@ -1069,7 +1077,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
       setOpenRun(runId);
       setAreaUrl({ ...EDITOR_PARAMS, tab: "runs", wfr: runId, [PAGE_PARAM]: FULL_PAGE });
     } else {
-      setAreaUrl({ [PAGE_PARAM]: null, step: null });
+      setAreaUrl({ [PAGE_PARAM]: null, step: null, from: null });
     }
   }, []);
 
@@ -1756,7 +1764,14 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
   // same notice and path the row has, the lane left to right at the page's width.
   const fullRun = fullPageRun ? runs.find((r) => r.id === fullPageRun) : undefined;
   if (fullPageRun) {
-    const back = (
+    // OPENED FROM A WORK ROW (`from=work`, design #287): the way back is to Work.
+    const fromWork = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("from") === "work";
+    const back = fromWork ? (
+      <a className="wf-btn wf-btn-ghost wf-back" data-testid="run-full-back-work"
+         href={projectHref(projectId, { tab: "work" })}>
+        <ArrowLeft size={14} weight="bold" aria-hidden />Work
+      </a>
+    ) : (
       <button type="button" className="wf-btn wf-btn-ghost wf-back" data-testid="run-full-back"
               onClick={() => onFullPage?.(null)}>
         <ArrowLeft size={14} weight="bold" aria-hidden />Back to runs
@@ -2163,6 +2178,10 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
     return () => window.removeEventListener("popstate", onPop);
   }, [steps, run.id]);
   const current = steps.find((s) => s.step_id === picked) ?? initial;
+  // The brief the build agent worked from (the run's directive), and the step that built.
+  const brief = runBrief(run);
+  const briefStep = steps.find((s) => typeof (s.output ?? {}).code_task_run_id === "string")?.step_id
+    ?? steps.find((s) => /build/i.test(`${s.capability ?? ""} ${s.step_id}`))?.step_id ?? null;
   // A LINK TO ONE STEP LANDS ON THAT STEP (`?wfr=<this run>&step=<id>`, the Log's Step , a
   // step panel's link). It opened on the run's own choice above, so every such link showed
   // the first step that wanted attention instead. Read after mount (the URL is the client's).
@@ -2258,6 +2277,7 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
 
   return (
     <div className="dw-path" data-testid="dw-path" data-full-page={fullPage ? "true" : undefined}>
+      <RunWorkLine projectId={projectId} runId={run.id} actor={actor} />
       <div className="wf-run-bar">
         {/* A FINISHED RUN IS READ FOR WHAT WAS DONE: its report, every section open, is the
             first thing on its bar, not a collapsed panel below the lane. */}
@@ -2353,6 +2373,14 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
             return Array.isArray(spec?.next) ? spec.next.map(String) : [];
           })}
         />
+        {/* THE AGENT'S BRIEF, BEHIND ONE TOGGLE (design #287): the run's directive on its build
+            step, never a wall of text above the work. */}
+        {brief && current.step_id === briefStep ? (
+          <details className="dw-brief" data-testid="dw-full-brief">
+            <summary>Full brief</summary>
+            <p>{brief}</p>
+          </details>
+        ) : null}
         {pinnedOutput(current.output) ? (
           <p className="detail" data-testid="dw-step-pinned">
             Pinned: this step did not run; it returned the output it was given.

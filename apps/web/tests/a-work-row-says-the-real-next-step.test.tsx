@@ -96,28 +96,16 @@ describe("one next step for the row and the drawer", () => {
     expect(workNextStep(await item({ state: "running" }))).toBeNull();
   });
 
-  it("the row's button says the drawer's words, with the change's preview beside it", async () => {
+  it("the row's status chip says the next step's words; what happens after rides in its title", async () => {
     const { WorkRow } = await import("../app/projects/tab-work");
     const ctx = { projectId: "park", actor: "ceo", refreshWork: () => {}, open: () => {} } as unknown as Parameters<typeof WorkRow>[0]["ctx"];
     await mount(<WorkRow w={await item()} ctx={ctx} />);
-    const act = $('[data-testid="px-work-act-wfr_bubble"]')!;
-    expect(act.textContent).toContain("Merge change #3");
-    expect(act.textContent).not.toContain("Approve deploy");
-    // One action on the row: what happens after the merge rides in its title (the panel says it).
-    expect(act.getAttribute("title")).toContain("deploys to staging after");
-    expect($('[data-testid="px-work-preview-wfr_bubble"]')?.textContent).toContain("Open preview");
-  });
-
-  it("a stopped preview on the row is Recreate preview, started through the one write path", async () => {
-    const { WorkRow } = await import("../app/projects/tab-work");
-    const ctx = { projectId: "park", actor: "ceo", refreshWork: () => {}, open: () => {} } as unknown as Parameters<typeof WorkRow>[0]["ctx"];
-    stubFetch({});
-    await mount(<WorkRow w={await item({ preview_app: { ...RAW.preview_app, state: "stopped", recreate: true, href: null } })} ctx={ctx} />);
-    const btn = $('[data-testid="px-work-preview-wfr_bubble"]')!;
-    expect(btn.textContent).toContain("Recreate preview");
-    await click(btn);
-    await settle();
-    expect(started).toEqual([expect.objectContaining({ run_id: "crun_20e2" })]);
+    const chip = $('[data-testid="px-work-status-wfr_bubble"]')!;
+    expect(chip.textContent).toContain("Merge change #3");
+    expect(chip.textContent).not.toContain("Approve deploy");
+    expect(chip.getAttribute("title")).toContain("deploys to staging after");
+    // The button and the preview are the run screen's (its header line), not the row's.
+    expect($('[data-testid="px-work-act-wfr_bubble"]')).toBeNull();
   });
 });
 

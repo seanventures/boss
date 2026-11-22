@@ -201,20 +201,6 @@ describe("#10 one count, review follow-ups on their own line", () => {
     expect($('[data-testid="wp-review"]')!.textContent).toContain("5 follow-ups");
   });
 
-  it("the Work panel's run and build come from the packet, not a later wrapper run", async () => {
-    const { workLinksOf } = await import("../app/projects/work-panel");
-    const val = parseValidation({ ...VALIDATION_OPEN, packet: DRY_PACKET })!;
-    const w = { links: { workflow_run: "/?area=delivery_workflows&wfr=wfr_wrapper18", build: "/?area=code_tasks&build=crun_ba5eeb2405ef" }, run_number: 18,
-                attempts: [], kind: "feature" } as unknown as Parameters<typeof workLinksOf>[0];
-    const l = workLinksOf(w, { number: 18 } as Parameters<typeof workLinksOf>[1], val, "northgate-gateway");
-    expect(l.runNo).toBe(13);
-    expect(l.run).toContain("wfr_d80b276788ac4e06845f");
-    expect(l.build!.id).toBe("crun_05b0b342cbc8456cbea8");
-    // Without a packet, the work's own story.
-    const own = workLinksOf(w, { number: 18 } as Parameters<typeof workLinksOf>[1], null, "northgate-gateway");
-    expect(own.runNo).toBe(18);
-    expect(own.build!.id).toBe("crun_ba5eeb2405ef");
-  });
 });
 
 describe("#11 a removed line shows the partner's line", () => {

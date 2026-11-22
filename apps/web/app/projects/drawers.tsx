@@ -2,26 +2,25 @@
 
 /**
  * SIDE DRAWERS (screen 5b, contract §10): `&drawer=<kind>:<id>`, deep-linkable, Back closes.
- *   work:<id>     how the work went, step by step, its one action and every link (5b)
+ *   work:<id>     (also run:, build:) an old Work-panel link: it opens the work's Workflow run
  *   needs:<id>    what waits on you and why, with its action
  *   stage:<key>   a journey stage (and stage:how — how the journey reads)
  *   env:<key>     an environment's full picture;  deploy:<id>  one deploy
  * Prose lives here, never on the page.
  */
 import { FailedActions } from "./build-failed";
-import { DiagnosisFlow, WhyLine } from "../../components/stuck-work";
 import React, { useEffect, useState } from "react";
 import {
-  ArrowsIn, ArrowsOut, ChatCircleDots, FlowArrow, GitMerge, GitPullRequest, Globe, Graph, ListChecks, PaperPlaneRight, Path, PauseCircle, Question,
+  ChatCircleDots, GitMerge, Globe, Graph, ListChecks, PaperPlaneRight, Path, Question,
   RocketLaunch, Warning, Wrench,
 } from "@phosphor-icons/react";
 
-import { PX_PATHS, findWork, nodeWords, parseDeployments, pxHref, toTab, usePxRead, writePxUrl, type Deployments, type WorkItem } from "../../lib/project-experience";
+import { PX_PATHS, findWork, navigateTo, nodeWords, parseDeployments, pxHref, toTab, usePxRead, writePxUrl, type Deployments, type WorkItem } from "../../lib/project-experience";
 import { FX_DEPLOYMENTS } from "../../lib/project-experience-fixtures";
 import { Drawer, Empty, Face, Flow, HEALTH_WORD, Ico, PxLink, STATE_WORD, Spark, Tag } from "./kit";
 import { ActionButton } from "./tab-overview";
 import { CaptainDrawer } from "./captain-drawer";
-import { DecisionActs, NeedsBody, StageBody, stageIcon, useWorkStory } from "./drawers-more";
+import { DecisionActs, NeedsBody, StageBody, stageIcon } from "./drawers-more";
 
 /** Each Needs-you item's icon, by what it asks (as on Overview). */
 const NEED_ICON: Record<string, typeof GitMerge> = { merge: GitMerge, deploy: RocketLaunch, plan: ListChecks, setup: Wrench, question: Question };
@@ -31,8 +30,7 @@ import { RecDrawer } from "./tab-roadmap";
 import { LOCAL, whenLocal } from "../../lib/local-time";
 import type { PxCtx } from "./project-page";
 import { LearnedStrip } from "../knowledge/learned-strip";
-import { LinkedTicket } from "./linked-ticket";
-import { WorkMenu, WorkPanel, WorkPanelShort } from "./work-panel";
+import { workOpenHref } from "../../lib/work-links";
 
 /** Drawer links that name a PLACE on this page rather than a drawer (the engine's hrefs, §10):
  *  `section:<key>` is Settings at that section; `dossier` and `doc:<path>` are Repo & knowledge;
@@ -71,7 +69,7 @@ export function DrawerHost({ ctx, drawer, onClose }: { ctx: PxCtx; drawer: { kin
   if (drawer.kind === "work" || drawer.kind === "run" || drawer.kind === "build") {
     // An attempt of a grouped piece of work (a follow-up, a retry) opens as itself.
     const w = findWork(ctx.work?.items ?? [], drawer.id) ?? findWork(ctx.overview.recent_work, drawer.id);
-    return w ? <WorkDrawer ctx={ctx} w={w} onClose={onClose} /> : <Missing what="This work item" onClose={onClose} loading={!ctx.work} />;
+    return w ? <WorkRedirect w={w} onClose={onClose} /> : <Missing what="This work item" onClose={onClose} loading={!ctx.work} />;
   }
   if (drawer.kind === "needs") {
     const n = ctx.overview.needs_you.find((x) => x.id === drawer.id);
@@ -157,73 +155,19 @@ function AskBox({ ctx, about, placeholder }: { ctx: PxCtx; about: string; placeh
   );
 }
 
-/** Is the work panel open as the whole page (`&wp=full`), or as the drawer's short preview? */
-function useWholePage(): [boolean, (on: boolean) => void] {
-  const read = () => { try { return new URLSearchParams(window.location.search).get("wp") === "full"; } catch { return false; } };
-  const [full, setFull] = useState(read);
+/** AN OLD WORK-PANEL LINK (`drawer=work:<id>`, `run:`, `build:`, `&wp=full`) OPENS THE WORKFLOW
+ *  RUN (design #287): the Work panel is gone; its details live on the run screen. The drawer is
+ *  dropped from history first, so Back from the run lands on Work, not on this redirect again.
+ *  Work with no workflow opens its Build page. */
+function WorkRedirect({ w, onClose }: { w: WorkItem; onClose: () => void }) {
+  const href = workOpenHref(w);
   useEffect(() => {
-    const on = () => setFull(read());
-    window.addEventListener("popstate", on);
-    return () => window.removeEventListener("popstate", on);
-  }, []);
-  return [full, (v: boolean) => writePxUrl({ wp: v ? "full" : null }, "replace")];
-}
-
-/** THE WORK PANEL (approved wireframe 2026-11-19, work-panel.tsx): the drawer is a short preview
- *  of the page — header, who did what, the one primary action — and "Open" (or ⤢) lays the whole
- *  page over the screen. A row opens the whole page directly. What only some work carries (a
- *  failed build's answers, a stall, the Shepherd's diagnosis, a linked ticket) sits under the
- *  header in both. */
-function WorkDrawer({ ctx, w, onClose }: { ctx: PxCtx; w: WorkItem; onClose: () => void }) {
-  const l = w.links;
-  const story = useWorkStory(ctx, w.id).data;
-  const deployments = usePxRead<Deployments>(PX_PATHS.deployments(ctx.projectId), parseDeployments, { everyMs: 30_000, demo: () => parseDeployments(FX_DEPLOYMENTS) }).data;
-  const [full, setFull] = useWholePage();
-  const failure = ctx.overview.project.build_failed ?? null;
-  const close = () => { if (full) writePxUrl({ wp: null }, "replace"); onClose(); };
-  const extra = (
-    <>
-      {w.state === "stalled" ? (
-        <div className="px-ny" data-testid="px-drawer-work-stalled">
-          <span className="px-ny-ico" aria-hidden>‖</span>
-          <span style={{ flex: 1 }}><b>Stalled{w.stalled_since ? ` since ${whenLocal(w.stalled_since)}` : ""}</b>
-            <small className="px-faint" style={{ display: "block" }}>{w.why?.words || "Nothing is working on it. Open the build to retry or stop it."}</small></span>
-          {l.build ? <PxLink href={l.build} className="px-btn" testid="px-drawer-work-stalled-open">Open build</PxLink> : null}
-        </div>
-      ) : null}
-      {w.why && w.state !== "stalled" && !(w.state === "needs_you" && w.why.who === "you") ? (
-        <div data-testid="px-drawer-work-why"><WhyLine why={w.why} testId="px-drawer-why" /></div>
-      ) : null}
-      {/* THE PROJECT'S FAILURE IS THIS WORK: the same answers as its Needs-you card. */}
-      {failure && failure.id === w.id ? (
-        <div className="px-ny px-ny-failed" data-tone="red" data-testid="px-drawer-work-failed">
-          <span className="px-ny-ico" data-tone="red" aria-hidden>!</span>
-          <div className="px-ny-b"><b>{failure.word}</b>
-            <small className="px-faint" style={{ display: "block" }}>{failure.reason}</small>
-            {failure.fix?.detail ? <small className="px-faint" style={{ display: "block" }}>{failure.fix.detail}</small> : null}</div>
-          <FailedActions retry={failure.retry} fix={failure.fix} retryReason={failure.retry_reason} seeHref={failure.see_href}
-                         projectId={ctx.projectId} actor={ctx.actor} testid="px-drawer-work-failed"
-                         onDone={() => { ctx.refreshWork(); ctx.refreshOverview?.(); }} />
-        </div>
-      ) : null}
-      {w.replaced_by ? <p className="px-faint" style={{ margin: 0 }} data-testid="px-drawer-work-replaced">Replaced by a later build: {w.replaced_by.label}</p> : null}
-      <DiagnosisFlow d={w.diagnosis} testId="px-drawer-diagnosis" />
-      {full && w.source === "workflow_run" && !ctx.demo ? <LinkedTicket projectId={ctx.projectId} runId={w.id} /> : null}
-    </>
-  );
-  return (
-    <Drawer title={full ? <span className="px-faint" style={{ fontWeight: 500 }}>{ctx.overview.project.name} / Work / <span style={{ color: "var(--v2-ink)" }}>{w.label}</span></span> : w.label}
-            icon={<Ico icon={w.state === "needs_you" ? GitPullRequest : w.state === "stalled" ? PauseCircle : FlowArrow} c={w.state === "needs_you" || w.state === "stalled" ? "amber" : "teal"} />}
-            onClose={close} testid="px-drawer-work" full={full} bodyClass={full ? "wp-body" : undefined}
-            actions={<>
-              <WorkMenu ctx={ctx} w={w} testid="px-drawer-work" />
-              <button type="button" className="px-icon-btn" onClick={() => setFull(!full)} aria-pressed={full}
-                      title={full ? "Back to the side panel" : "Open the whole page"} aria-label={full ? "Back to the side panel" : "Open the whole page"}
-                      data-testid="px-drawer-work-expand">{full ? <ArrowsIn size={15} /> : <ArrowsOut size={15} />}</button></>}>
-      {full ? <WorkPanel ctx={ctx} w={w} story={story} deployments={deployments} extra={extra} testid="px-drawer-work" />
-        : <WorkPanelShort ctx={ctx} w={w} story={story} deployments={deployments} extra={extra} onOpen={() => setFull(true)} testid="px-drawer-work" />}
-    </Drawer>
-  );
+    if (!href) return;
+    writePxUrl({ drawer: null, wp: null }, "replace");
+    navigateTo(pxHref(href));
+  }, [href]);
+  if (href) return null;
+  return <Missing what="This work's workflow" onClose={onClose} />;
 }
 
 /** App and probe only. Any other source, including none, stays off the drawer. */
