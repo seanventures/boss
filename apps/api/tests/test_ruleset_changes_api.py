@@ -115,3 +115,21 @@ def test_a_proposal_against_a_moved_base_is_409(client, world, engine, repo_root
             "rules": _rules(), "base_version": 2, "base_sha": "0000000"})
     assert got.status_code == 409 and got.json()["error"] == "stale_base"
     assert got.json()["ruleset"]["version"] == 3
+
+
+def test_a_ruleset_id_that_is_a_path_is_refused_before_anything_is_read(monkeypatch):
+    """The id becomes `.boss/rulesets/<id>.yaml`: a `/` or `..` is a 404 before the repository (or
+    the database) is touched."""
+    import pytest
+
+    from boss_engine.services import ruleset_changes
+
+    def never(*_a, **_k):
+        raise AssertionError("read before the id was checked")
+
+    monkeypatch.setattr(ruleset_changes, "_repo", never)
+    for bad in ("../secrets", "a/b", "..", ""):
+        with pytest.raises(ruleset_changes.RulesetChangeError) as refused:
+            ruleset_changes.propose(None, None, "p", bad, rules=[], base_version=None,
+                                    base_sha=None, actor="ceo")
+        assert refused.value.status == 404 and refused.value.code == "no_ruleset"
