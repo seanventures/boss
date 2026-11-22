@@ -20,7 +20,7 @@ import fnmatch
 import hashlib
 import re
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Optional, Sequence
+from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 
 SCHEMA = "boss.validation/v1"
 FINDING_SCHEMA = "boss.finding/v1"
@@ -46,7 +46,7 @@ def parse(text: str) -> list[dict]:
     try:
         data = yaml.safe_load(text) or {}
     except yaml.YAMLError as exc:
-        raise ValidatorsError(f"{FILE} does not parse: {str(exc)[:200]}") from exc
+        raise ValidatorsError(f"{FILE} does not parse{yaml_where(exc)}") from None
     items = data.get("validators") if isinstance(data, Mapping) else None
     if not isinstance(items, list):
         raise ValidatorsError(f"{FILE} needs a `validators:` list")
@@ -73,20 +73,40 @@ def parse(text: str) -> list[dict]:
     return out
 
 
-def load(root: Any) -> list[dict]:
-    """The repo's validators; [] when it declares none."""
-    path = Path(root) / FILE
+def yaml_where(exc: Exception) -> str:
+    """Where a YAML file failed — line and column only, never its content (a config file may
+    hold a secret, and the error is shown and stored)."""
+    mark = getattr(exc, "problem_mark", None)
+    return f" (line {mark.line + 1}, column {mark.column + 1})" if mark is not None else ""
+
+
+def read_in_repo(root: Any, rel: str) -> Optional[str]:
+    """A repo file's text; None when it is missing or a symlink that leaves the repository."""
+    base = Path(root).resolve()
+    path = Path(root) / rel
     try:
-        text = path.read_text()
+        real = path.resolve()
+        if real != base and base not in real.parents:
+            return None
+        return real.read_text()
     except OSError:
-        return []
-    return parse(text)
+        return None
 
 
-def for_path(root: Any, *paths: str) -> Optional[dict]:
+Reader = Callable[[str], Optional[str]]
+
+
+def load(root: Any, read: Optional[Reader] = None) -> list[dict]:
+    """The repo's validators; [] when it declares none. ``read(path)`` reads from a TRUSTED ref
+    (the base branch) instead of the working tree."""
+    text = read(FILE) if read is not None else read_in_repo(root, FILE)
+    return parse(text) if text else []
+
+
+def for_path(root: Any, *paths: str, read: Optional[Reader] = None) -> Optional[dict]:
     """The first declared validator whose ``applies_to`` matches one of ``paths``, as the
     contract's validator: ``{name, check, fix, adapter, rules_doc, ruleset, source}``."""
-    for v in load(root):
+    for v in load(root, read):
         if any(fnmatch.fnmatch(p, g) for p in paths if p for g in v["applies_to"]):
             return {"name": v["id"], "check": v["run"], "fix": v["fix"], "adapter": v["adapter"],
                     "rules_doc": v["rules_doc"], "ruleset": v["ruleset"], "source": FILE}
@@ -337,16 +357,29 @@ def record(*, c: Mapping[str, Any], validator: Mapping[str, Any], version: Optio
                 "hunk_id": None, "fix_kind": "none", "status": "open",
                 "evidence": [dict(ev["E-3"])], "override": None, "introduced": True})
             after_ids.append(f"V-{n:02d}")
+    findings += after_extra
+    # THE RULESET'S POLICY (§4): a disabled rule's findings are `suppressed` (still counted); an
+    # open finding whose rule a person must fix is `human` ("Needs you").
+    rules = (ruleset or {}).get("rules") or {}
     for f in findings:
         f.pop("_fix", None)
         f.pop("fixable", None)
-    findings += after_extra
+        rule = rules.get(f["source"]["rule_id"]) or {}
+        if rule.get("enabled") is False:
+            f["status"] = "suppressed"
+        elif f["status"] == "open" and rule.get("autofix") == "human":
+            f["fix_kind"] = "human"
     return {
         "schema": SCHEMA,
+        # The commands and the ruleset are kept as they were TRUSTED for this check (declared,
+        # or read from the base branch): a re-run uses these, never the change branch's.
         "validator": {"id": validator.get("name"), "version": version,
-                      "adapter": validator.get("adapter") or "json"},
+                      "adapter": validator.get("adapter") or "json",
+                      "run": validator.get("check"), "fix": validator.get("fix"),
+                      "rules_doc": validator.get("rules_doc")},
         "ruleset": ({"id": ruleset.get("ruleset"), "version": ruleset.get("version"),
-                     "sha": ruleset.get("sha")} if ruleset else None),
+                     "sha": ruleset.get("sha"), "rules": ruleset.get("rules") or {},
+                     "custom": ruleset.get("custom") or []} if ruleset else None),
         "input": {"file": inp, "sha256": sha256(c.get("_input_text")),
                   "from": str(c.get("from") or "partner")},
         "target": target,

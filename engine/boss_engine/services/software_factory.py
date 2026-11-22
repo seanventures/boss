@@ -2553,6 +2553,7 @@ class SoftwareFactoryService:
                 with connection.begin_nested():
                     _packet = _review_packet.for_run(
                         connection, str(run_id), head_sha=branch_head_sha, change=pr.number,
+                        project_id=project_id,
                         followups=_followups or (_quality_bar.merge_followups(
                             evidence if isinstance(evidence, dict) else {})))
             except Exception:  # noqa: BLE001 — the card stands without it (and says so: no packet)

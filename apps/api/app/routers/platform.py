@@ -339,6 +339,10 @@ def mount_platform_routers(app: FastAPI) -> None:
     from .portability import router as portability_router
 
     app.include_router(portability_router)
+    # Validation and review (SPEC docs/design/validation-review §3): overrides + re-runs
+    from .validation_review import router as validation_review_router
+
+    app.include_router(validation_review_router)
 
     # Agent-wide OSS key management (KMS)
     try:

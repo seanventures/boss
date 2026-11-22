@@ -1202,6 +1202,17 @@ class DecisionService:
             except MultiRepoError as refused:
                 raise InvalidDecisionTransitionError(refused.message) from refused
             return
+        if action == "waive_finding":
+            # A P0 WAIVE (finding_overrides, SPEC §3): only the person it names approves it; the
+            # finding stays open until then, and the merge card's packet is rebuilt now.
+            from . import finding_overrides
+
+            try:
+                finding_overrides.on_waive_approved(connection, self.settings, recommendation,
+                                                    actor)
+            except finding_overrides.OverrideError as refused:
+                raise InvalidDecisionTransitionError(refused.message) from refused
+            return
         if action == "execution_stage":
             # A REVIEW / APPROVAL STAGE PASSED (execution_policy, BOSSAPP-831): the next stage is
             # raised, or the work item is done and what it blocked wakes.

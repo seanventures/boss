@@ -83,6 +83,8 @@ CARRIED_OUT_ON_APPROVAL = frozenset({
     "retry_when_secret_set",
     # Fix these (change_recheck): the follow-up for a re-check's findings starts.
     "start_recheck_followup",
+    # A P0 waive (finding_overrides): the named approver's approval waives the finding.
+    "waive_finding",
     "resume_agent_run",
     "resume_code_task",
     "review_plan_draft",

@@ -20,8 +20,8 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime, timezone
-from typing import Any, Iterable, Mapping, Optional, Sequence
+from datetime import datetime, timedelta, timezone
+from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 
 SCHEMA = "boss.review_packet/v2"
 KEY = "packet"
@@ -84,8 +84,9 @@ def verdict(packet: Mapping[str, Any]) -> dict:
     reasons: list[str] = []
     for f in packet.get("findings") or []:
         # Only a validator, test or contract finding blocks; a review follow-up the quality bar
-        # let through is listed, open, with where it went (deferred_to) — the light lane.
-        if f.get("status") == "open" and f.get("severity") in ("P0", "P1") \
+        # let through is listed, open, with where it went (deferred_to) — the light lane. A
+        # REJECTED fix puts the finding back (status `reverted`): it blocks like an open one.
+        if f.get("status") in ("open", "reverted") and f.get("severity") in ("P0", "P1") \
                 and (f.get("source") or {}).get("kind") in ("validator", "test", "contract") \
                 and not f.get("deferred_to"):
             reasons.append(f"open_{str(f['severity']).lower()}:{f['id']}")
@@ -102,8 +103,10 @@ def verdict(packet: Mapping[str, Any]) -> dict:
             reasons.append(f"contract_failed:{c['id']}")
     for h in (packet.get("vs_input") or {}).get("unexplained_hunks") or []:
         reasons.append(f"unexplained_hunk:{h}")
-    if (packet.get("rerun") or {}).get("state") == "pending":
+    if (packet.get("rerun") or {}).get("state") in ("pending", "running"):
         reasons.append("rerun_pending")
+    elif (packet.get("rerun") or {}).get("state") == "failed":
+        reasons.append("rerun_failed")
     return {"state": "blocked" if reasons else "ready", "reasons": reasons}
 
 
@@ -306,7 +309,8 @@ def build_packet(*, work: Mapping[str, Any], head_sha: Optional[str],
                  overrides: Sequence[Mapping[str, Any]] = (),
                  risks: Sequence[Mapping[str, Any]] = (),
                  packet_version: int = 1, rerun: Optional[Mapping[str, Any]] = None,
-                 built_at: Optional[str] = None) -> dict:
+                 built_at: Optional[str] = None,
+                 apply_overrides: Optional[Callable[[list], list]] = None) -> dict:
     """The packet from step outputs (records only). ``validations`` are boss.validation/v1
     records; ``tests`` the build's test runs; ``reviews`` boss.finding/v1 reviewer findings."""
     findings: list[dict] = []
@@ -322,6 +326,12 @@ def build_packet(*, work: Mapping[str, Any], head_sha: Optional[str],
         if vs_input["file"] is None:
             vs_input = vs
     findings += [dict(r) for r in reviews]
+    if apply_overrides is not None:          # finding_overrides.apply: the people's overrides
+        findings = apply_overrides(findings)
+        for v in validators:
+            mine = [f for f in findings if (f.get("source") or {}).get("kind") == "validator"]
+            v["after_open"] = sum(1 for f in mine if f.get("status") in ("open", "reverted"))
+            v["after_waived"] = sum(1 for f in mine if f.get("status") == "waived")
     test_rows = from_tests(tests, head_sha)
     packet = {"schema": SCHEMA, "packet_version": int(packet_version), "head_sha": head_sha,
               "built_at": built_at or _now(), "work": dict(work),
@@ -381,7 +391,10 @@ def _run_no(connection: Any, workflow_run_id: Optional[str]) -> Optional[int]:
 def for_run(connection: Any, run_id: str, *, head_sha: Optional[str],
             change: Optional[int] = None, followups: Optional[Mapping[str, Any]] = None,
             overrides: Sequence[Mapping[str, Any]] = (), packet_version: int = 1,
-            rerun: Optional[Mapping[str, Any]] = None) -> Optional[dict]:
+            rerun: Optional[Mapping[str, Any]] = None,
+            validation: Optional[Mapping[str, Any]] = None,
+            apply_overrides: Optional[Callable[[list], list]] = None,
+            project_id: Optional[str] = None) -> Optional[dict]:
     """The packet for a build's merge card: the work is the lineage's ROOT build (its title
     without follow-up prefixes), the validation is the newest one in the lineage, the tests are
     this build's. None when the run is unknown."""
@@ -392,7 +405,7 @@ def for_run(connection: Any, run_id: str, *, head_sha: Optional[str],
     me = next((r for r in lineage if r["id"] == run_id), lineage[-1])
     wfr = (me["finalize_ctx"] or {}).get("workflow_run_id") or \
         (root["finalize_ctx"] or {}).get("workflow_run_id")
-    validation = next((r["state"].get("validation") for r in reversed(lineage)
+    validation = validation or next((r["state"].get("validation") for r in reversed(lineage)
                        if isinstance(r["state"].get("validation"), Mapping)
                        and r["state"]["validation"].get("schema") == "boss.validation/v1"), None)
     work = {"title": work_title(root["title"]), "workflow_run": wfr,
@@ -405,12 +418,35 @@ def for_run(connection: Any, run_id: str, *, head_sha: Optional[str],
     # validator, test or contract finding blocks the packet; a review that blocks at the bar
     # (production) is the checks-failing card's, not this one's.
     fu = followups or {}
+    by = fu.get("handled_by") or ("queued" if fu.get("queued") else "later")
+    # Where it went: a follow-up build on THIS change's branch (queued, the next pass, the build
+    # already on it) lands on the same change; "later" has no change yet.
+    on_change = by != "later" and change is not None
     for r in reviews:
-        r["deferred_to"] = fu.get("handled_by") or ("queued" if fu.get("queued") else "later")
+        r["deferred_to"] = {"by": by, "number": change if on_change else None,
+                            "href": (f"/changes/{project_id}/{change}" if on_change and project_id
+                                     else None)}
     return build_packet(work=work, head_sha=head_sha,
                         validations=[validation] if validation else [],
                         tests=me["state"].get("tests") or [], reviews=reviews,
-                        overrides=overrides, packet_version=packet_version, rerun=rerun)
+                        overrides=overrides, packet_version=packet_version, rerun=rerun,
+                        apply_overrides=apply_overrides)
+
+
+#: A re-run with no result after this is overdue: a person's forced merge gets past it
+#: (finding_overrides fails it with the reason when it next reads it).
+RERUN_STALE_AFTER = timedelta(minutes=15)
+
+
+def _when(value: Any) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        d = value if isinstance(value, datetime) else datetime.fromisoformat(
+            str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
 
 
 def blocks_merge(rec: Mapping[str, Any], *, force: bool) -> Optional[tuple[str, str]]:
@@ -426,7 +462,12 @@ def blocks_merge(rec: Mapping[str, Any], *, force: bool) -> Optional[tuple[str, 
         return ("packet_invalid", f"Packet invalid: {len(reasons)} rule(s) failed. Rebuild the "
                                   "packet before merging.")
     if "rerun_pending" in reasons:
-        return ("rerun_pending", "Re-checking after an override; merge when the re-run is done.")
+        started = _when((packet.get("rerun") or {}).get("created_at"))
+        stale = started is not None and datetime.now(timezone.utc) - started > RERUN_STALE_AFTER
+        if not (stale and force):
+            return ("rerun_pending", "Re-checking after an override; merge when the re-run is "
+                                     "done." + (" It is overdue: a person may merge anyway with "
+                                                "a stated reason." if stale else ""))
     if v.get("state") == "blocked" and not force:
         return ("packet_blocked", "Blocked: " + ", ".join(reasons[:6])
                 + ". A person may merge anyway with a stated reason.")

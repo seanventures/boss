@@ -297,6 +297,18 @@ def test_a_non_prod_build_with_a_p1_follow_up_listed_for_later_merges_as_before(
     fu = {**FOLLOWUPS, "queued": False, "handled_by": None}
     p = rp.for_run(_Conn(lineage), "crun_root", head_sha="abc", change=3, followups=fu)
     r1 = next(x for x in p["findings"] if x["id"] == "R-1")
-    assert r1["severity"] == "P1" and r1["status"] == "open" and r1["deferred_to"] == "later"
+    assert r1["severity"] == "P1" and r1["status"] == "open"
+    assert r1["deferred_to"] == {"by": "later", "number": None, "href": None}
     assert p["verdict"] == {"state": "ready", "reasons": []}
     assert rp.blocks_merge({"packet": p}, force=False) is None
+
+
+def test_a_queued_follow_up_says_which_change_it_lands_on():
+    lineage = [{"id": "crun_root", "title": "Recipe box", "created_at": 1,
+                "finalize_ctx": {}, "state": {"tests": TESTS}}]
+    fu = {**FOLLOWUPS, "queued": True, "handled_by": "queued"}
+    p = rp.for_run(_Conn(lineage), "crun_root", head_sha="abc", change=9, followups=fu,
+                   project_id="northgate-gateway")
+    r1 = next(x for x in p["findings"] if x["id"] == "R-1")
+    assert r1["deferred_to"] == {"by": "queued", "number": 9,
+                                 "href": "/changes/northgate-gateway/9"}

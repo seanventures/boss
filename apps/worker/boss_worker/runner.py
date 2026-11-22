@@ -387,6 +387,7 @@ def capabilities() -> list[str]:
         "docs.update",
         # A security scan (F4): the API runs the scanners in the build sandbox under this lease.
         "security.scan",
+        "validation.rerun",
         # Setup's write check for a model login (engine_policy): the API runs one writer session
         # in a build's sandbox under this lease. Declared here or Setup shows "Checking…" forever.
         "engine.check",
@@ -934,6 +935,11 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
         # The scanners and the sandbox helper are in the api image: the API runs the scan. A
         # scan whose tools failed is a recorded result (status failed, with why), not a retry.
         return client.run_security_scan({"scan_id": job.payload["scan_id"]})
+    if job.kind == "validation.rerun":
+        # A person overrode a validation finding (finding_overrides): the validator runs again
+        # on the change's target in the API's sandbox. A re-run that could not run is recorded
+        # failed on the packet, not retried.
+        return client.run_validation_rerun({"rerun_id": job.payload["rerun_id"]})
     if job.kind == "engine.check":
         # The CLIs and the sandbox helper are in the api image: the API runs the check under a
         # build's sandbox uid. A check that could not run is a recorded result, not a retry.

@@ -1736,6 +1736,8 @@ SURFACES: dict[str, Surface] = {s.key: s for s in (
 #: failures still have an owner. The invariant guard fails on a table in neither place.
 EXEMPT: dict[str, str] = {
     "receipts": "a receipt records one attempt of an effect; its job (Jobs) is the item",
+    "validation_reruns": "a validator re-run after an override; its change's merge card shows "
+                         "it failed with why, and the person who overrode re-runs or forces",
     "model_gateway_invocations": "one model call; the build, step or job that made it owns it",
     "changesets": "a deployment's change set; its deployment (Deployments) is the item",
     "changeset_operations": "one step of a deployment's change set; its deployment owns it",

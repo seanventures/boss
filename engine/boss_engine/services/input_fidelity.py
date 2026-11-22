@@ -230,7 +230,8 @@ def sibling_answers(root: Path, input_path: str, output_path: str) -> list[str]:
                   and _subject(p) == subject)
 
 
-def contract(spec: Mapping[str, Any], instructions: str, root: Any) -> Optional[dict]:
+def contract(spec: Mapping[str, Any], instructions: str, root: Any, *,
+             trusted: Optional[Callable[[str], Optional[str]]] = None) -> Optional[dict]:
     """The remediation this build is held to, with the BASE snapshot (input text, the output as
     it stood before the build, the answer files' text) taken now, before any agent runs. A
     declared ``spec["remediate"] = {input, output?, answer_files?, validator?: {name?, check?,
@@ -251,17 +252,40 @@ def contract(spec: Mapping[str, Any], instructions: str, root: Any) -> Optional[
     if not c:
         return None
     # THE REPO'S OWN DECLARATION (.boss/validators.yaml, SPEC §2) names the validator for the
-    # target (or the input) unless the spec declared one: its command, adapter and ruleset.
+    # target (or the input) unless the spec declared one: its command, adapter and ruleset. Both
+    # it and the ruleset are read from ``trusted`` (the base branch) when given: the branch the
+    # agent edits never picks its own validator or lowers its own P0s. A change of either on
+    # the branch is recorded as a PENDING config change, not applied (``pending_config``).
+    from . import rulesets as _rulesets
+    from . import validators as _validators
+
+    pending: list[dict] = []
     if c.get("source") != "declared" or not c.get("validator"):
         try:
-            from . import validators as _validators
-
-            repo_v = _validators.for_path(root, c["output"], c["input"])
+            repo_v = _validators.for_path(root, c["output"], c["input"], read=trusted)
+            if trusted is not None and _validators.for_path(root, c["output"], c["input"]) \
+                    not in (None, repo_v):
+                pending.append({"file": _validators.FILE, "applied": False})
         except Exception:  # noqa: BLE001 — a broken file is said on the record, not raised
-            logger.info("input_fidelity: %s not read", ".boss/validators.yaml", exc_info=True)
+            logger.info("input_fidelity: %s not read", _validators.FILE, exc_info=True)
             repo_v = None
         if repo_v:
             c["validator"] = repo_v
+    # THE RULESET (.boss/rulesets/*.yaml, SPEC §4): P-levels, autofix policy and the guides the
+    # fixing agent receives verbatim (``brief``).
+    vname = (c.get("validator") or {}).get("ruleset") if isinstance(c.get("validator"),
+                                                                     Mapping) else None
+    if vname:
+        try:
+            c["ruleset"] = _rulesets.load(root, vname, read=trusted)
+            if trusted is not None:
+                change = _rulesets.unapplied(root, vname, c["ruleset"])
+                if change:
+                    pending.append(change)
+        except Exception:  # noqa: BLE001 — a broken ruleset is said, never guessed
+            logger.info("input_fidelity: ruleset %s not read", vname, exc_info=True)
+    if pending:
+        c["pending_config"] = pending
     input_text = _read(root / c["input"])
     if input_text is None:
         logger.info("input_fidelity: the input %s is not in the tree", c["input"])
@@ -305,7 +329,9 @@ def brief(c: Optional[Mapping[str, Any]]) -> str:
             "points you at them is superseded by this rule.")
     lines.append("BOSS compares the output with the input after you finish: a copied answer, "
                  "an added block or an unbacked claim fails the attempt.")
-    return "\n\n" + "\n".join(lines)
+    from .rulesets import brief as _ruleset_brief
+
+    return "\n\n" + "\n".join(lines) + _ruleset_brief(c.get("ruleset"))
 
 
 # ── structural diff ────────────────────────────────────────────────────────────────────────────
@@ -813,6 +839,7 @@ def run_validation(root: Any, c: Mapping[str, Any],
 
     root = Path(root)
     v = c.get("validator") if isinstance(c.get("validator"), Mapping) else {}
+    ruleset = ruleset or c.get("ruleset")
     commands: dict[str, Optional[str]] = {"before": None, "fix": None, "after": None}
     exits: dict[str, Any] = {}
     before_raw = after_raw = None
