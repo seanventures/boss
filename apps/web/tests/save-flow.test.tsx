@@ -2,6 +2,9 @@
 /**
  * Save, Save as my copy and Start — the half of the editor that writes.
  *
+ * A STANDARD IS EDITED IN PLACE: Save publishes its next version (it stays a standard, now
+ * Modified); Save as my copy is the secondary act that makes the operator's own.
+ *
  * THE INCIDENT THIS GUARDS. Saving a standard used to be "Fork to edit" (one write) then Save
  * (another): a failed or repeated save left orphans and "(copy)" definitions — 54 of them on one
  * install. Now Save runs `/check`, then ONE `publish`. These tests count the calls:
@@ -22,7 +25,7 @@ vi.mock("../lib/workflow-editor-types", async (orig) => {
   const real = await orig<typeof import("../lib/workflow-editor-types")>();
   return {
     ...real,
-    checkSpec: vi.fn(), publishSpec: vi.fn(),
+    checkSpec: vi.fn(), publishSpec: vi.fn(), fetchSpec: vi.fn(),
   };
 });
 
@@ -36,6 +39,7 @@ const { TOAST_EVENT } = await import("../lib/api-write");
 
 const checkSpec = vi.mocked(types.checkSpec);
 const publishSpec = vi.mocked(types.publishSpec);
+const fetchSpec = vi.mocked(types.fetchSpec);
 
 const SPEC: Spec = {
   entry_step: "build",
@@ -75,6 +79,7 @@ function Harness({ initial, usedFor }: { initial: EditorState; usedFor?: string[
       <button type="button" ref={flow.saveRef} data-testid="save" disabled={!flow.canSave} title={flow.saveTip}
               onClick={() => void flow.save()}>{flow.label}</button>
       <button type="button" ref={flow.startRef} data-testid="start" onClick={flow.start}>Start</button>
+      <button type="button" data-testid="save-copy" onClick={() => void flow.saveAsCopy()}>Save as your copy</button>
       <button type="button" data-testid="check" onClick={() => void flow.check()}>Check</button>
       <button type="button" data-testid="back" onClick={() => flow.guardLeave(() => navigated.push("library"))}>Back</button>
       <span data-testid="name-error">{flow.nameError}</span>
@@ -105,7 +110,7 @@ const published = (): PublishRequest[] => publishSpec.mock.calls.map((c) => c[1]
 
 beforeEach(() => {
   navigated.length = 0; started.length = 0; toasts.length = 0;
-  checkSpec.mockReset(); publishSpec.mockReset();
+  checkSpec.mockReset(); publishSpec.mockReset(); fetchSpec.mockReset();
   checkSpec.mockResolvedValue(OK);
   window.addEventListener(TOAST_EVENT, onToast);
 });
@@ -121,13 +126,38 @@ const created = (id: string, key: string, name: string, version = 1): PublishRes
   ({ definition: { id, workflow_key: key, name }, version, created: true });
 
 describe("saving a standard", () => {
-  it("with no copy: asks the name, then ONE publish that creates the copy and moves the editor onto it", async () => {
-    publishSpec.mockResolvedValue(created("def_copy", "standard_delivery_mine", "Standard Delivery (mine)"));
+  it("Save edits the standard in place: ONE publish of its next version, still a standard, now Modified", async () => {
+    publishSpec.mockResolvedValue({ definition: { id: "def_std", workflow_key: "standard_delivery",
+                                                  name: "Standard Delivery" }, version: 5, created: false });
+    const MODIFIED = { modified: true, baseline_version: 4, new_standard: null,
+                       changes: [{ change: "changed" as const, step_id: "build", text: "~ Build: agent changed" }] };
+    fetchSpec.mockResolvedValue({ spec: SPEC, versions: [], meta: { ...STANDARD, standard: MODIFIED } as EditorMeta });
     const el = await mount(SPEC, STANDARD);
-    expect(q<HTMLButtonElement>(el, "save")!.textContent).toBe("Save as my copy");
-    // Unchanged, and still savable: a copy of a standard IS the change.
-    expect(q<HTMLButtonElement>(el, "save")!.disabled).toBe(false);
-    await press("save");
+    expect(q<HTMLButtonElement>(el, "save")!.textContent).toBe("Save");
+    // Unchanged: nothing to save (Save as my copy is its own act).
+    expect(q<HTMLButtonElement>(el, "save")!.disabled).toBe(true);
+    await edit();
+    expect(q<HTMLButtonElement>(el, "save")!.title).toBe(
+      "Publish as the next version of this standard. Reset to standard brings back what BOSS shipped.");
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('[data-testid="save"]')!.click();
+      document.querySelector<HTMLButtonElement>('[data-testid="save"]')!.click();
+    });
+    await settle();
+    expect(document.querySelector('[data-testid="wf-copy-name"]')).toBeNull();
+    expect(published()).toEqual([{ definition_id: "def_std", name: "Standard Delivery", description: "",
+                                   spec: box.state!.loaded }]);
+    expect(navigated).toEqual([]);
+    expect(toasts).toContain("Saved, v5");
+    expect(box.state!.meta).toMatchObject({ definition_id: "def_std", workflow_key: "standard_delivery",
+                                            is_catalogue: true, version: 5, standard: MODIFIED });
+    expect(types.isDirty(box.state!)).toBe(false);
+  });
+
+  it("Save as my copy, with no copy: asks the name, then ONE publish that creates the copy and moves the editor onto it", async () => {
+    publishSpec.mockResolvedValue(created("def_copy", "standard_delivery_mine", "Standard Delivery (mine)"));
+    await mount(SPEC, STANDARD);
+    await press("save-copy");
     expect(checkSpec).toHaveBeenCalledTimes(1);
     expect(publishSpec).not.toHaveBeenCalled();
     const name = document.querySelector<HTMLInputElement>('[data-testid="wf-copy-name"]')!;
@@ -140,7 +170,7 @@ describe("saving a standard", () => {
     await settle();
     expect(published()).toEqual([{
       definition_id: null, name: "Standard Delivery (mine)", description: "", spec: SPEC,
-      from_workflow_key: "standard_delivery", update_copy_id: null,
+      from_workflow_key: "standard_delivery", update_copy_id: null, as_copy: true,
     }]);
     expect(navigated).toEqual(["standard_delivery_mine"]);
     expect(toasts).toContain("Saved as your copy, v1");
@@ -150,32 +180,31 @@ describe("saving a standard", () => {
     // The NEXT save is a new version of the copy, never a second copy.
     publishSpec.mockResolvedValue(created("def_copy", "standard_delivery_mine", "Standard Delivery (mine)", 2));
     await edit();
-    expect(q<HTMLButtonElement>(el, "save")!.textContent).toBe("Save");
     await press("save");
     expect(published()[1]).toMatchObject({ definition_id: "def_copy", from_workflow_key: "standard_delivery" });
     expect(published()[1].update_copy_id).toBeUndefined();
     expect(toasts).toContain("Saved, v2");
   });
 
-  it("with a copy: the default updates it — no new definition", async () => {
+  it("Save as my copy, with a copy: the default updates it — no new definition", async () => {
     publishSpec.mockResolvedValue(created("def_copy", "standard_delivery_mine", "Mine", 3));
     await mount(SPEC, { ...STANDARD, copy: { definition_id: "def_copy", workflow_key: "standard_delivery_mine", name: "Mine" } });
-    await press("save");
+    await press("save-copy");
     expect(document.querySelector<HTMLInputElement>('[data-testid="wf-copy-update"]')!.checked).toBe(true);
     expect(document.querySelector('[data-testid="wf-copy-save"]')!.closest("[data-testid=wf-save-copy]")!.textContent)
       .toContain("Update “Mine”");
     await press("wf-copy-save");
     expect(published()).toHaveLength(1);
     expect(published()[0]).toMatchObject({ definition_id: null, update_copy_id: "def_copy", name: "Mine",
-                                           from_workflow_key: "standard_delivery" });
+                                           from_workflow_key: "standard_delivery", as_copy: true });
     expect(navigated).toEqual(["standard_delivery_mine"]);
   });
 
   it("a refused publish writes nothing more and lands on the bad step", async () => {
     publishSpec.mockRejectedValue(new types.ProblemsError([{ step_id: "gate", field: "question", message: "Question too long" }]));
     await mount(SPEC, STANDARD);
+    await edit();
     await press("save");
-    await press("wf-copy-save");
     expect(publishSpec).toHaveBeenCalledTimes(1);
     expect(navigated).toEqual([]);
     expect(box.state!.problems).toEqual([{ step_id: "gate", field: "question", message: "Question too long" }]);
@@ -187,7 +216,7 @@ describe("saving a standard", () => {
     publishSpec.mockResolvedValue(created("def_copy", "standard_delivery", "Mine"));
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({ ok: true })));
     await mount(SPEC, STANDARD, {}, ["project.new"]);
-    await press("save");
+    await press("save-copy");
     await press("wf-copy-save");
     const chip = document.querySelector('[data-testid="wf-use-for"]')!;
     expect(chip.textContent).toBe("Use for new projects instead of the standard");

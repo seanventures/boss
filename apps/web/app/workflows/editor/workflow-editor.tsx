@@ -20,8 +20,9 @@ import type { CustomStepDef, FlowLink, PaletteItem, Spec, StepView } from "../..
 import { TOAST_EVENT } from "../../../lib/api-write";
 import {
   checkSpec, deleteWorkflow, designAction, draftFromDescription, fetchDesigns, fetchLibrary,
-  fetchRunContext, fetchSpec, type DesignAction, type RunContext,
+  fetchRunContext, fetchSpec, standardAct, type DesignAction, type RunContext,
 } from "../../../lib/workflow-api";
+import type { StandardAct } from "../../../lib/workflow-editor-types";
 import { buildPipeline, type DesignsInfo } from "../../../lib/pipeline-model";
 import { checkRewire } from "../../../lib/workflow-rewire";
 import { newMeta, useWorkflowEditor } from "../../../lib/workflow-editor-store";
@@ -45,6 +46,7 @@ import { useSaveFlow } from "./save/use-save-flow";
 import { StartsWith } from "./starts-with";
 import { SummaryChips } from "./summary-chips";
 import { NO_DELETE_TIP, TopBar } from "./top-bar";
+import { StandardStrip } from "./standard-strip";
 import { TestRunPanel } from "./test-run-panel";
 import { useCan } from "../../../components/identity/identity-provider";
 import { useAreaKeydown } from "../../../lib/area-keys";
@@ -357,7 +359,7 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
   const rewire = useCallback(async (link: FlowLink, target: string | null) => {
     if (readOnly) return;
     const before = spec;
-    const definitionId = meta.is_catalogue ? (meta.copy?.definition_id ?? null) : meta.definition_id;
+    const definitionId = meta.definition_id;
     // A refusal names steps as the canvas does, by title, not by the engine's ids.
     const titles = (id: string) => {
       const step = before.steps.find((s) => s.id === id);
@@ -464,6 +466,28 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
     dispatch({ type: "LOAD", spec: copy.spec, meta: newMeta({ name: copy.name, from_workflow_key: copy.from }) });
   }, [loading, key, meta.workflow_key, dispatch, copied]);
 
+  /* ── A standard edited in place: Reset to standard, or answer "New standard available".
+     The server publishes; the editor then reloads the version that now runs. ── */
+  const [standardBusy, setStandardBusy] = useState<StandardAct | null>(null);
+  const [offerOpen, setOfferOpen] = useState(false);
+  const actOnStandard = useCallback(async (act: StandardAct) => {
+    if (!meta.definition_id || !meta.workflow_key || standardBusy) return;
+    setStandardBusy(act);
+    try {
+      const out = await standardAct(projectId, meta.definition_id, act);
+      const got = await fetchSpec(projectId, meta.workflow_key);
+      dispatch({ type: "LOAD", spec: got.spec, meta: got.meta });
+      setOfferOpen(false);
+      toast("success", act === "reset" ? `Reset to standard, v${out.version ?? got.meta.version}`
+        : act === "dismiss" ? "Kept as it is. A newer standard will be offered again."
+        : `New standard taken, v${out.version ?? got.meta.version}`);
+    } catch (e) {
+      toast("error", e instanceof Error ? e.message : String(e));
+    } finally {
+      setStandardBusy(null);
+    }
+  }, [projectId, meta.definition_id, meta.workflow_key, standardBusy, dispatch]);
+
   const deleteThis = useCallback(async () => {
     if (!meta.definition_id) return;
     try {
@@ -562,6 +586,9 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
               onUseFor={openSettings} onChanges={showChanges}
               onDiscard={() => dispatch({ type: "LOAD", spec: state.loaded ?? { steps: [] }, meta: state.loadedMeta })}
               onDelete={() => void deleteThis()}
+              onSaveAsCopy={() => void saveFlow.saveAsCopy()}
+              saveAsCopyBlocked={!publishGate.allowed ? publishGate.reason : noSteps ? "Add a step first" : null}
+              onNewStandard={() => setOfferOpen(true)}
               fullPage={fullPage} onFullPage={onFullPage}
               deleteBlocked={!deleteGate.allowed ? deleteGate.reason : meta.is_catalogue ? NO_DELETE_TIP : !meta.definition_id ? "Not saved yet" : null} />
       {saveFlow.popover}
@@ -599,6 +626,14 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
           <button type="button" className="wf-link" onClick={() => void refreshPalette()}>Retry</button>
         </div>
       ) : null}
+
+      <StandardStrip meta={meta} busy={standardBusy} offerOpen={offerOpen} onOfferOpen={setOfferOpen}
+                     onAct={(act) => void actOnStandard(act)} onSaveAsCopy={() => void saveFlow.saveAsCopy()}
+                     blocked={!publishGate.allowed ? publishGate.reason
+                       : readOnly ? `Viewing v${meta.readOnlyVersion}`
+                       : dirty ? "Save or discard your changes first" : null}
+                     copyBlocked={!publishGate.allowed ? publishGate.reason
+                       : readOnly ? `Viewing v${meta.readOnlyVersion}` : noSteps ? "Add a step first" : null} />
 
       <SummaryChips state={state} views={views} typicalMinutes={typicalMinutes}
                     onSettings={openSettings} onIssues={selectFirstProblem} />

@@ -306,3 +306,32 @@
 .wf-notice[data-tone="red"] { border-color: color-mix(in srgb, var(--red) 50%, var(--border));
                                background: color-mix(in srgb, var(--red) 8%, var(--surface)); }
 .wf-notice-sep { color: var(--faint); }
+
+/* A standard edited in place (standard-strip.tsx): what changed from the shipped one, Reset to
+   standard confirmed on the page, and a newer standard offered beside the operator's edit. */
+.wf-std {
+  display: grid; gap: 8px; padding: 8px 12px; border: 1px solid var(--border);
+  border-radius: var(--r-xl); background: var(--surface); font-family: var(--sans);
+  font-size: var(--fs-body); line-height: 1.4;
+}
+.wf-std[data-modified] { border-color: color-mix(in srgb, var(--amber) 45%, var(--border)); }
+.wf-std-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.wf-std-sp { flex: 1 1 auto; }
+.wf-std-hint { color: var(--muted); font-size: var(--fs-meta); margin: 0; min-width: 0; }
+.wf-std-changes > summary { cursor: pointer; color: var(--muted); font-size: var(--fs-meta); font-weight: 600; }
+.wf-std-diff { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 4px; }
+.wf-std-diff li { padding: 4px 9px; border-radius: 6px; overflow-wrap: anywhere; }
+.wf-std-diff li[data-change="a"] { background: color-mix(in srgb, var(--green) 14%, var(--surface)); }
+.wf-std-diff li[data-change="r"] { background: color-mix(in srgb, var(--red) 12%, var(--surface)); }
+.wf-std-diff li[data-change="c"] { background: color-mix(in srgb, var(--amber) 14%, var(--surface)); }
+.wf-std-confirm {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 10px;
+  border: 1px solid var(--red); border-radius: var(--r-xl);
+  background: color-mix(in srgb, var(--red) 8%, var(--surface));
+}
+.wf-std-confirm > span { flex: 1 1 220px; }
+.wf-std-offer {
+  display: grid; gap: 8px; padding: 8px 10px; border-radius: var(--r-xl);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+}

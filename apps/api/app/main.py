@@ -701,6 +701,7 @@ from .request_bodies import (
     WorkflowCreateBody,
     WorkflowDraftBody,
     WorkflowPublishBody,
+    WorkflowStandardActBody,
     WorkflowRenameBody,
     WorkflowWireBody,
     WorkflowCustomStepBody,
@@ -911,6 +912,7 @@ from .services.toolchain_registry import (
     ToolchainRegistryService,
 )
 from .services import workflows as workflow_runtime
+from boss_engine.services import workflow_standards
 from .services.skill_registry import (
     disable_skill,
     enable_skill,
@@ -27063,7 +27065,10 @@ def get_delivery_workflow_spec(workflow_key: str, project_id: str,
         # would refuse to open the very thing the "New workflow" button had just made.
         row = connection.execute(
             text(
-                "SELECT d.id, d.name, d.description, d.is_catalogue, d.forked_from_version_id, "
+                "SELECT d.id, d.project_id, d.name, d.description, d.is_catalogue, "
+                "       d.forked_from_version_id, d.active_version_id, d.standard_version_id, "
+                "       d.standard_content_hash, d.standard_available_version_id, "
+                "       d.standard_dismissed_version_id, "
                 "       v.id AS version_id, v.version, v.spec "
                 "FROM workflow_definitions d "
                 "LEFT JOIN workflow_versions v ON v.workflow_definition_id = d.id "
@@ -27148,6 +27153,11 @@ def get_delivery_workflow_spec(workflow_key: str, project_id: str,
                           if v["published_at"] else None,
                           "is_active": bool(v["is_active"])} for v in versions],
             "copy": copy,
+            # A STANDARD'S STATE (workflow_standards.state): `modified`, `baseline_version`,
+            # `changes` (one line per step added/removed/changed from the shipped spec) and
+            # `new_standard` when BOSS shipped a newer one beside the operator's edit.
+            # None for the operator's own workflows.
+            "standard": workflow_standards.state(connection, dict(row)),
         }
 
 
@@ -27266,11 +27276,16 @@ def save_delivery_workflow(payload: WorkflowSaveBody) -> dict:
             definition = workflow_runtime.require_namespace(
                 connection, project_id, definition_id, workflow_runtime.PRODUCT_NAMESPACE
             )
-            workflow_runtime.require_editable(definition)
+            # A STANDARD IS EDITED IN PLACE (workflow_standards): this publishes its next
+            # version; the shipped spec stays its baseline for Modified and Reset.
             version = workflow_runtime.publish_version(
                 connection, project_id=project_id, definition_id=definition_id,
                 spec=spec, actor=actor,
             )
+            if definition.get("is_catalogue"):
+                from boss_engine.services.workflow_catalogue import repoint_defaults_for
+
+                repoint_defaults_for(connection, project_id, str(definition["workflow_key"]))
         except workflow_runtime.WorkflowNamespaceError as error:
             raise HTTPException(status_code=403, detail=str(error)) from error
         except workflow_runtime.WorkflowNotFoundError as error:
@@ -27287,6 +27302,50 @@ def save_delivery_workflow(payload: WorkflowSaveBody) -> dict:
         except workflow_runtime.WorkflowConflictError:
             return {"unchanged": True, "note": "This is identical to the current version."}
         return {"version": version}
+
+
+@app.post("/v1/delivery-workflows/standard")
+@permit(P.WORKFLOW_PUBLISH, scope=Scope.project(body="project_id"))
+def act_on_standard_workflow(payload: WorkflowStandardActBody) -> dict:
+    """Reset a standard to what BOSS shipped, or answer "New standard available".
+
+    `act`: `reset` (the shipped spec becomes the version new runs use; the edits stay in
+    the version list), `take_new` (the newer shipped standard only), `take_new_keep` (the newer
+    standard with the operator's changes applied on it — refused with the clashes named when
+    it does not apply cleanly) or `dismiss` ("Not now"). Runs already going keep the version
+    they started on. Same permission as Save.
+    """
+    payload = payload.payload()
+    project_id = str(payload.get("project_id") or "").strip()
+    definition_id = str(payload.get("definition_id") or "").strip()
+    action = str(payload.get("act") or "").strip()
+    actor = _delivery_workflow_actor(payload)
+    if not project_id or not definition_id or action not in {
+            "reset", "take_new", "take_new_keep", "dismiss"}:
+        raise HTTPException(status_code=400, detail=(
+            "project_id, definition_id and act (reset, take_new, take_new_keep or "
+            "dismiss) are required"))
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "workflow_manage")
+        try:
+            if action == "reset":
+                return workflow_standards.reset_to_standard(
+                    connection, project_id, definition_id, actor)
+            if action == "dismiss":
+                return workflow_standards.dismiss_new_standard(
+                    connection, project_id, definition_id, actor)
+            return workflow_standards.take_new_standard(
+                connection, project_id, definition_id, actor,
+                keep_changes=action == "take_new_keep")
+        except workflow_runtime.WorkflowNamespaceError as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
+        except workflow_runtime.WorkflowNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except workflow_runtime.WorkflowConflictError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except (workflow_runtime.WorkflowValidationError,
+                workflow_runtime.WorkflowBindingBlockedError) as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 # ── The workflow editor (Workflow Studio) ─────────────────────────────────────────────────────
@@ -27403,6 +27462,7 @@ def publish_delivery_workflow(payload: WorkflowPublishBody):
                     description=None if description is None else str(description),
                     from_workflow_key=payload.get("from_workflow_key"),
                     update_copy_id=str(payload.get("update_copy_id") or "").strip() or None,
+                    as_copy=bool(payload.get("as_copy")),
                 )
             except workflow_runtime.WorkflowNameInUseError as error:
                 raise _EditorRefusal(JSONResponse(status_code=409, content={
@@ -28691,11 +28751,8 @@ def publish_workflow_version(
             if definition and not _is_worker_principal():
                 workflow_runtime.refuse_operator_edit_of_boss_workflow(
                     dict(definition), settings.specpack_root / "workflows")
-            # A STANDARD IS NOT EDITED IN PLACE, whichever door is used. The delivery-workflow
-            # endpoints refused it; this generic one published straight over it, so the copy
-            # rule held only for callers that happened to use the other route.
-            if definition:
-                workflow_runtime.require_editable(dict(definition))
+            # A standard is edited in place through any door, and its shipped spec stays its
+            # baseline (workflow_standards), so publishing here is an edit like the editor's.
             return WorkflowVersionSummary(
                 **workflow_runtime.publish_version(
                     connection,

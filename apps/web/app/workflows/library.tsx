@@ -639,10 +639,17 @@ function LibraryCard(p: CardProps) {
           <h4 className="wf-card-name" title={w.name} data-user-text>{w.name}</h4>
         )}
         <span className="wf-card-chips">
-          {mine ? <span className="wf-tag" data-kind="yours">Yours</span> : (
+          {mine ? <span className="wf-tag" data-kind="yours">Yours</span> : w.modified ? (
+            <span className="wf-tag" data-kind="modified" data-testid={`wf-card-modified-${w.workflow_key}`}
+                  title="You changed this standard. Open it to see the changes or reset it.">Modified</span>
+          ) : (
             <span className="wf-tag" data-kind="standard"
-                  title="Shipped with BOSS. Saving makes your own copy.">Standard</span>
+                  title="Shipped with BOSS. Open it to edit it in place.">Standard</span>
           )}
+          {!mine && w.new_standard_available ? (
+            <span className="wf-tag" data-kind="new-standard" data-testid={`wf-card-new-standard-${w.workflow_key}`}
+                  title="BOSS shipped a newer version of this standard. Open it to review.">New standard</span>
+          ) : null}
           {w.version ? (
             <span className="wf-tag" title="Each save is a new version. Running work keeps its version.">
               v{w.version}

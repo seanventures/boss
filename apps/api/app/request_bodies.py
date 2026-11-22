@@ -1154,6 +1154,17 @@ class WorkflowPublishBody(ProjectBody):
     spec: dict[str, Any] | None = None
     from_workflow_key: str | None = None
     update_copy_id: str | None = None
+    # With a standard's definition_id: make the operator's own copy instead of editing the
+    # standard in place.
+    as_copy: bool | None = None
+
+
+class WorkflowStandardActBody(ProjectBody):
+    model_config = ConfigDict(json_schema_extra={"required": ["project_id", "definition_id", "act"]})
+
+    definition_id: str | None = None
+    #: reset | take_new | take_new_keep | dismiss
+    act: str | None = None
 
 
 class WorkflowRenameBody(ProjectBody):

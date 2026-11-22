@@ -35,6 +35,9 @@ def eng():
             "ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS namespace TEXT NOT NULL DEFAULT 'system'",
             "ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS is_catalogue BOOLEAN NOT NULL DEFAULT false",
             "ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS forked_from_version_id TEXT",
+            *(f"ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS {column} TEXT"
+              for column in ("standard_version_id", "standard_content_hash",
+                             "standard_available_version_id", "standard_dismissed_version_id")),
         ):
             c.exec_driver_sql(ddl)
     return engine
@@ -150,7 +153,7 @@ def test_a_grace_period_is_a_real_step_not_a_promise():
 
 # ── Installing it ──────────────────────────────────────────────────────────────
 
-def test_seeding_installs_every_workflow_as_read_only_product(eng, project):
+def test_seeding_installs_every_workflow_as_a_product_standard(eng, project):
     with eng.begin() as c:
         result = catalogue.seed(c, project)
         rows = workflows.list_definitions(c, project, namespace="product")
@@ -163,7 +166,7 @@ def test_seeding_installs_every_workflow_as_read_only_product(eng, project):
                if i["key"] not in {e["key"] for e in installable})
     for row in rows:
         assert row["namespace"] == "product"
-        assert row["is_catalogue"] is True, f"{row['workflow_key']} is editable in place"
+        assert row["is_catalogue"] is True, f"{row['workflow_key']} is not a standard"
     # A project with no pack gets no role agent: none of them has anything to work on there.
     with eng.begin() as c:
         roles = c.execute(text("SELECT role_key FROM roles WHERE project_id=:p"),
@@ -224,13 +227,19 @@ def test_seeding_twice_does_not_create_a_second_copy(eng, project):
     assert versions == n, f"re-seeding published {versions - n} redundant versions"
 
 
-def test_a_seeded_workflow_cannot_be_edited_in_place(eng, project):
+def test_a_seeded_workflow_is_edited_in_place_but_not_deleted(eng, project):
+    """REWRITTEN (standards are editable in place, test_a_standard_is_edited_in_place): a
+    seeded standard records its shipped version as its baseline, and stays undeletable."""
     with eng.begin() as c:
         catalogue.seed(c, project)
         row = next(r for r in workflows.list_definitions(c, project, namespace="product")
                    if r["workflow_key"] == "standard_product_delivery")
+        assert row["modified"] is False
+        baseline = c.execute(text("SELECT standard_version_id FROM workflow_definitions "
+                                  "WHERE id = :i"), {"i": row["id"]}).scalar()
+        assert baseline == row["active_version_id"]
         with pytest.raises(workflows.WorkflowNamespaceError):
-            workflows.require_editable(row)
+            workflows.require_own(row, "deleted")
 
 
 def test_seeding_does_not_touch_the_system_namespace(eng, project):

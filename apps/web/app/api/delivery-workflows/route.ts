@@ -235,6 +235,9 @@ const ACTIONS: Record<string, string> = {
   // nothing. A refusal keeps its `problems` and `suggested_name` (lib/start-refusal.ts).
   check: "/v1/delivery-workflows/check",
   publish: "/v1/delivery-workflows/publish",
+  // A standard edited in place: Reset to standard, or answer "New standard available"
+  // (`act`: reset | take_new | take_new_keep | dismiss).
+  standard: "/v1/delivery-workflows/standard",
   draft: "/v1/delivery-workflows/draft",
   wire: "/v1/delivery-workflows/wire",
 };

@@ -1682,7 +1682,7 @@ def delete_definition(
     which is what stops it appearing in the picker.
     """
     definition = require_namespace(connection, project_id, definition_id, PRODUCT_NAMESPACE)
-    require_editable(definition)
+    require_own(definition, "deleted")
 
     live = connection.execute(
         text(
@@ -1747,17 +1747,19 @@ def delete_definition(
             "workflow_key": definition["workflow_key"], "name": definition["name"]}
 
 
-def require_editable(definition: dict[str, Any]) -> None:
-    """Refuse to edit a catalogue workflow in place.
+def require_own(definition: dict[str, Any], act: str) -> None:
+    """Refuse to delete or rename a standard (a catalogue workflow BOSS ships).
 
-    The twelve BOSS ships are read-only on purpose: forking is what keeps "reset to the
-    standard" meaningful and keeps the customer's diff against it visible. Editing in place
-    would quietly make every fleet's "Standard Product Delivery" a different thing.
+    A standard's STEPS are the operator's to edit in place — an edit publishes its next version
+    and the shipped spec stays its baseline, so "Reset to standard" always has something to go
+    back to (workflow_standards). What stays BOSS's is that it exists and what it is called:
+    deleting one would leave nothing to reset to, and its name follows the catalogue.
     """
     if definition.get("is_catalogue"):
         raise WorkflowNamespaceError(
-            f"'{definition['workflow_key']}' is a standard workflow BOSS ships and cannot be "
-            "edited in place. Save it as your copy to change it."
+            f"'{definition['name']}' is a standard workflow BOSS ships and cannot be {act}. "
+            "Edit its steps in place (Reset to standard brings the shipped ones back), or "
+            "Save as your copy to make your own."
         )
 
 
@@ -1872,6 +1874,12 @@ def list_definitions(
                      WHERE v.id = d.active_version_id) AS step_specs,
                    (SELECT v.version FROM workflow_versions v
                      WHERE v.id = d.active_version_id) AS active_version,
+                   -- A STANDARD THE OPERATOR EDITED (workflow_standards): its active version
+                   -- is not the shipped baseline. The library chips it Modified.
+                   (d.is_catalogue AND d.standard_content_hash IS NOT NULL
+                    AND (SELECT v.content_hash FROM workflow_versions v
+                          WHERE v.id = d.active_version_id)
+                        IS DISTINCT FROM d.standard_content_hash) AS standard_modified,
                    -- WHAT STARTING IT WILL ASK FOR. The console's start form renders FROM
                    -- this; without it a workflow whose steps read `from_input` is startable
                    -- only by a caller that already knows the field names.
@@ -1957,6 +1965,12 @@ def list_definitions(
                             "at": _iso(row["last_run_at"])}
                             if row["last_run_status"] else None)
         item["used_for"] = list(row["used_for"] or [])
+        if item["is_catalogue"]:
+            item["modified"] = bool(row.get("standard_modified"))
+            waiting = row.get("standard_available_version_id")
+            item["new_standard_available"] = bool(
+                waiting and waiting != row.get("standard_dismissed_version_id")
+                and waiting != row.get("standard_version_id"))
         items.append(item)
     return items
 
@@ -2314,7 +2328,9 @@ def publish_version(
                 {"id": existing["id"]})
             result["status"] = "published"
             result["republished"] = True
-        if str(definition.get("active_version_id") or "") != str(existing["id"]):
+        # NOT WHEN ASKED NOT TO ACTIVATE: a new standard for a Modified standard is published
+        # beside the operator's edit (workflow_standards), and a match must not take over.
+        if activate and str(definition.get("active_version_id") or "") != str(existing["id"]):
             connection.execute(
                 text(
                     """
@@ -2523,7 +2539,7 @@ def rename_definition(
     other edit, and a name the operator already uses.
     """
     definition = require_namespace(connection, project_id, definition_id, PRODUCT_NAMESPACE)
-    require_editable(definition)
+    require_own(definition, "renamed")
     changes: dict[str, Any] = {}
     if name is not None:
         cleaned = _clean_text(name, "name")
@@ -2562,13 +2578,18 @@ def publish_from_editor(
     description: Optional[str] = None,
     from_workflow_key: Optional[str] = None,
     update_copy_id: Optional[str] = None,
+    as_copy: bool = False,
 ) -> dict[str, Any]:
     """Save what the editor holds, as one act: the operator's own workflow, a new one, or a copy.
 
       * `update_copy_id` — publish onto that existing copy (the "Update my copy" choice).
       * `definition_id` of the operator's own workflow — publish its next version.
-      * no `definition_id`, or a standard's — create the operator's workflow and publish v1.
-        `from_workflow_key` (or the standard's own key) is recorded as what it was copied from.
+      * `definition_id` of a standard, under its own name — publish ITS next version, in place
+        (the shipped spec stays its baseline: workflow_standards).
+      * `as_copy` (or another name) with a standard's `definition_id`, or no `definition_id` —
+        create the
+        operator's workflow and publish v1. `from_workflow_key` (or the standard's own key) is
+        recorded as what it was copied from.
 
     Name and description travel with the save. A name is checked only when it changes, and a
     name the library already lists is refused (409, with a free one) — a standard's included.
@@ -2587,15 +2608,18 @@ def publish_from_editor(
     standard: Optional[dict[str, Any]] = None
     if definition_id:
         loaded = require_namespace(connection, project_id, definition_id, PRODUCT_NAMESPACE)
-        if loaded.get("is_catalogue"):
-            # A STANDARD IS NEVER EDITED IN PLACE. Saving one makes the operator's copy of it.
+        if loaded.get("is_catalogue") and (as_copy or update_copy_id
+                                           or cleaned_name != loaded["name"]):
+            # SAVE AS YOUR COPY: the standard stays as it is and the operator gets their own.
+            # A standard keeps its name, so a save under another name is a copy too (what
+            # every save of a standard was before standards became editable in place).
             standard = loaded
             source_key = source_key or str(loaded["workflow_key"])
         elif not update_copy_id:
             target = loaded
     if update_copy_id:
         target = require_namespace(connection, project_id, update_copy_id, PRODUCT_NAMESPACE)
-        require_editable(target)
+        require_own(target, "used as your copy")
         # The editor titles a standard with the standard's name. Sent back on "Update my
         # copy", that is not a rename: renaming the copy to it would list the copy and the
         # standard under one name. A different name is a rename, checked like any other.
@@ -2630,13 +2654,18 @@ def publish_from_editor(
             forked_from_version_id=str(source["version_id"]) if source else None,
         )
         created = True
-    else:
+    elif not target.get("is_catalogue"):
         renamed = bool(rename_definition(
             connection, project_id, str(target["id"]), actor=actor, name=cleaned_name,
             description=description)["changed"])
 
     version = publish_version(connection, project_id=project_id,
                               definition_id=str(target["id"]), spec=spec, actor=actor)
+    if target.get("is_catalogue"):
+        # New work follows the edit: BOSS's own default mapping moves to the active version.
+        from .workflow_catalogue import repoint_defaults_for
+
+        repoint_defaults_for(connection, project_id, str(target["workflow_key"]))
     if (not created and not renamed and version.get("duplicate")
             and not version.get("reactivated")):
         return {"unchanged": True}

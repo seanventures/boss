@@ -781,7 +781,7 @@ def test_a_standard_workflow_cannot_be_deleted(eng, project):
         )
         with pytest.raises(Exception) as error:
             delete_definition(c, project, d["id"], "test")
-    assert "cannot be edited in place" in str(error.value)
+    assert "cannot be deleted" in str(error.value)
 
 
 def test_a_workflow_with_a_live_run_refuses_to_go(eng, project):

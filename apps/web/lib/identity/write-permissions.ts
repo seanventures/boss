@@ -109,6 +109,7 @@ export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permiss
 
   // lib/workflow-api.ts — the Workflow Studio editor (through /api/delivery-workflows)
   "lib/workflow-api.ts#publishSpec": "workflow:publish",          // POST /v1/delivery-workflows/publish
+  "lib/workflow-api.ts#standardAct": "workflow:publish",          // POST /v1/delivery-workflows/standard (reset / take new)
   "lib/workflow-api.ts#renameWorkflow": "workflow:create",        // PATCH /v1/delivery-workflows/{id}
   "lib/workflow-api.ts#deleteWorkflow": "workflow:delete",        // DELETE /v1/delivery-workflows/{id}
   "lib/workflow-api.ts#draftFromDescription": "workflow:create",  // POST /v1/delivery-workflows/draft
