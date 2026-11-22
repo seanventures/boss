@@ -26,7 +26,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from .. import checks_failing, merge_failures
-from . import work_outcome
+from . import work_outcome, work_stages
 from .new_work import issue_of
 from .titles import prd_title, short_title
 from .common import (LIVE_RUN, age, agents, as_json, aware, face, href, is_local_project, iso,
@@ -912,6 +912,14 @@ def _states(members: list[dict[str, Any]], now: datetime, horizon: float) -> Non
         m["_state"], m["_since"] = attempt_state(m, now, horizon)
 
 
+def _input_file(run_input: Mapping[str, Any]) -> Optional[str]:
+    """The name of the file a run started from (`start_from`), never its content."""
+    name = run_input.get("start_from")
+    if not isinstance(name, str) or not name.strip():
+        return None
+    return name.strip().rsplit("/", 1)[-1][:120] or None
+
+
 def _run_items(connection: Connection, project_id: str, limit: int,
                roster: Mapping[str, Mapping[str, Any]], now: datetime,
                standalone: dict[str, dict[str, Any]], horizon: float) -> list[dict[str, Any]]:
@@ -924,7 +932,7 @@ def _run_items(connection: Connection, project_id: str, limit: int,
         "r.input->>'short_title' AS short_title, "
         "r.input->>'work_kind' AS work_kind, r.input->>'source_ref' AS source_ref, "
         "r.input->>'source_url' AS source_url, r.input->>'repository' AS repository, "
-        "r.error, r.blocked_reason, d.name AS workflow, r.input AS run_input, "
+        "r.error, r.blocked_reason, d.name AS workflow, r.input AS run_input, r.rerun_of, "
         "d.workflow_key, (SELECT count(*) FROM workflow_runs n WHERE n.project_id = r.project_id "
         "AND n.created_at <= r.created_at) AS run_number "
         "FROM workflow_runs r JOIN workflow_definitions d ON "
@@ -1044,6 +1052,13 @@ def _run_items(connection: Connection, project_id: str, limit: int,
             # code | investigation | job, its workflow's own steps (code work: none — its
             # stations), and what it found or produced (work_outcome.outcome).
             "shape": shape, "flow": flow, "outcome": told,
+            # THE WORKFLOW'S OWN STEPS, EACH WITH ITS STAGE (Plan · Build · Ship · Live): the Work
+            # panel groups these, so a stage the workflow lacks reads "Not in this workflow".
+            "steps": work_stages.step_list(spec, run_steps, project_id=project_id),
+            # The file the run started from (an onboarded config): Plan's "taken in".
+            "input_file": _input_file(as_json(r["run_input"], {}) or {}),
+            # The run this one re-ran (a retry from a step): the same task, an earlier attempt.
+            "rerun_of": str(r["rerun_of"]) if r.get("rerun_of") else None,
             "age": age(r["created_at"], now), "created_at": iso(r["created_at"]),
             "updated_at": iso(r["updated_at"]),
             "last_attempt_at": iso((latest or {}).get("created_at")) or iso(r["created_at"]),

@@ -68,14 +68,12 @@ describe("the iterations toggle", () => {
       } finally { f.stop(); }
     });
   }
-  it("the row's title still opens the workflow", async () => {
+  it("the row's title still opens the task (its Work panel)", async () => {
     const { WorkRow } = await import("../app/projects/tab-work");
-    await mount(<WorkRow w={await item()} ctx={ctx as never} />);
-    const f = follow();
-    try {
-      await act(async () => { $('[data-testid="px-work-open-wfr_lp"]')!.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
-      expect(f.hrefs.length).toBe(1);
-    } finally { f.stop(); }
+    const opened: string[][] = [];
+    await mount(<WorkRow w={await item()} ctx={{ ...ctx, open: (k: string, id: string) => { opened.push([k, id]); } } as never} />);
+    await act(async () => { $('[data-testid="px-work-open-wfr_lp"]')!.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
+    expect(opened).toEqual([["work", "wfr_lp"]]);
   });
 });
 

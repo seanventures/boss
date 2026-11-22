@@ -29,6 +29,7 @@ import {
   PX_PATHS, TAB_WORDS, isMissingStatus, navigateTo, needsYouCards, overviewFromStart, parseOnboarding, parseOverview, parseWork, projectHref, pxHref, readPxUrl, usePxRead,
   workFromStartRow, writePxUrl, type Overview, type Onboarding, type PxUrl, type Tab, type WorkList, a, o,
 } from "../../lib/project-experience";
+import { groupTasks, needsYouCount } from "../../lib/work-tasks";
 import { FX_ONBOARDING, FX_ONBOARDING_PROJECT, FX_OVERVIEW, FX_WORK } from "../../lib/project-experience-fixtures";
 import { DemoBanner, Face, HEALTH_TONE, HEALTH_WORD, Loading, Failed, Empty, STAGE_ICON, closeDrawer, openDrawer, usePxUrl } from "./kit";
 export { usePxUrl };
@@ -221,8 +222,10 @@ export function ProjectPage({ projectId, actor, orgId, homeId }: { projectId: st
   const obView = url.view === "onboarding" || (url.tab === "overview" && onboardingStage);
   // The tab's badge is the Work list's "All" count (wireframe: Work 9 = All 9), never a second number.
   // What waits on a person: ONE count (lib needsYouCards, the Work tab's own Needs-you list).
-  const needsCount = needsYouCards(overview.needs_you, onboardingNow ? ob : null, ctx.work?.items ?? []).length;
-  const openCount = ctx.work ? ctx.work.items.length
+  const needsCards = needsYouCards(overview.needs_you, onboardingNow ? ob : null, ctx.work?.items ?? []);
+  const needsCount = needsYouCount(needsCards, ctx.work?.items);
+  // One row per task (lib work-tasks): the badge counts tasks, never each attempt.
+  const openCount = ctx.work ? groupTasks(ctx.work.items.filter((w) => w.origin !== "ticket_import")).length
     : Object.values(overview.tiles.open_work?.by_state ?? {}).reduce((x, y) => x + y, 0) || undefined;
 
   return (

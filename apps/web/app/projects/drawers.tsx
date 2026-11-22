@@ -2,21 +2,24 @@
 
 /**
  * SIDE DRAWERS (screen 5b, contract §10): `&drawer=<kind>:<id>`, deep-linkable, Back closes.
- *   work:<id>     (also run:, build:) an old Work-panel link: it opens the work's Workflow run
+ *   work:<id>     (also run:, build:) the Work panel: one task's stages, what next and its links
+ *                 (`&wp=full` lays it over the whole screen)
  *   needs:<id>    what waits on you and why, with its action
  *   stage:<key>   a journey stage (and stage:how — how the journey reads)
  *   env:<key>     an environment's full picture;  deploy:<id>  one deploy
  * Prose lives here, never on the page.
  */
 import { FailedActions } from "./build-failed";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   ChatCircleDots, GitMerge, Globe, Graph, ListChecks, PaperPlaneRight, Path, Question,
   RocketLaunch, Warning, Wrench,
 } from "@phosphor-icons/react";
 
-import { PX_PATHS, findWork, navigateTo, nodeWords, parseDeployments, pxHref, toTab, usePxRead, writePxUrl, type Deployments, type WorkItem } from "../../lib/project-experience";
+import { PX_PATHS, findWork, nodeWords, parseDeployments, pxHref, toTab, usePxRead, writePxUrl, type Deployments, type WorkItem } from "../../lib/project-experience";
 import { FX_DEPLOYMENTS } from "../../lib/project-experience-fixtures";
+import { groupTasks, taskOf } from "../../lib/work-tasks";
+import { FullToggle, WorkPanel } from "./work-panel";
 import { Drawer, Empty, Face, Flow, HEALTH_WORD, Ico, PxLink, STATE_WORD, Spark, Tag } from "./kit";
 import { ActionButton } from "./tab-overview";
 import { CaptainDrawer } from "./captain-drawer";
@@ -30,7 +33,6 @@ import { RecDrawer } from "./tab-roadmap";
 import { LOCAL, whenLocal } from "../../lib/local-time";
 import type { PxCtx } from "./project-page";
 import { LearnedStrip } from "../knowledge/learned-strip";
-import { workOpenHref } from "../../lib/work-links";
 
 /** Drawer links that name a PLACE on this page rather than a drawer (the engine's hrefs, §10):
  *  `section:<key>` is Settings at that section; `dossier` and `doc:<path>` are Repo & knowledge;
@@ -69,7 +71,7 @@ export function DrawerHost({ ctx, drawer, onClose }: { ctx: PxCtx; drawer: { kin
   if (drawer.kind === "work" || drawer.kind === "run" || drawer.kind === "build") {
     // An attempt of a grouped piece of work (a follow-up, a retry) opens as itself.
     const w = findWork(ctx.work?.items ?? [], drawer.id) ?? findWork(ctx.overview.recent_work, drawer.id);
-    return w ? <WorkRedirect w={w} onClose={onClose} /> : <Missing what="This work item" onClose={onClose} loading={!ctx.work} />;
+    return w ? <WorkDrawer ctx={ctx} w={w} onClose={onClose} /> : <Missing what="This work item" onClose={onClose} loading={!ctx.work} />;
   }
   if (drawer.kind === "needs") {
     const n = ctx.overview.needs_you.find((x) => x.id === drawer.id);
@@ -155,19 +157,31 @@ function AskBox({ ctx, about, placeholder }: { ctx: PxCtx; about: string; placeh
   );
 }
 
-/** AN OLD WORK-PANEL LINK (`drawer=work:<id>`, `run:`, `build:`, `&wp=full`) OPENS THE WORKFLOW
- *  RUN (design #287): the Work panel is gone; its details live on the run screen. The drawer is
- *  dropped from history first, so Back from the run lands on Work, not on this redirect again.
- *  Work with no workflow opens its Build page. */
-function WorkRedirect({ w, onClose }: { w: WorkItem; onClose: () => void }) {
-  const href = workOpenHref(w);
+/** Is the panel laid over the whole screen (`&wp=full`, the rc10.32 panel's own links)? */
+function useWholePage(): [boolean, (on: boolean) => void] {
+  const read = () => { try { return new URLSearchParams(window.location.search).get("wp") === "full"; } catch { return false; } };
+  const [full, setFull] = useState(read);
   useEffect(() => {
-    if (!href) return;
-    writePxUrl({ drawer: null, wp: null }, "replace");
-    navigateTo(pxHref(href));
-  }, [href]);
-  if (href) return null;
-  return <Missing what="This work's workflow" onClose={onClose} />;
+    const on = () => setFull(read());
+    window.addEventListener("popstate", on);
+    return () => window.removeEventListener("popstate", on);
+  }, []);
+  return [full, (v: boolean) => { writePxUrl({ wp: v ? "full" : null }, "replace"); setFull(v); }];
+}
+
+/** THE WORK PANEL (v2, work-panel.tsx) in the drawer: a Work row's click, `drawer=work:<id>`,
+ *  `run:` and `build:` links, and ⤢ (`wp=full`) for the whole screen. */
+function WorkDrawer({ ctx, w, onClose }: { ctx: PxCtx; w: WorkItem; onClose: () => void }) {
+  const [full, setFull] = useWholePage();
+  const task = useMemo(() => taskOf(groupTasks((ctx.work?.items ?? []).filter((x) => x.origin !== "ticket_import")), w.id), [ctx.work, w.id]);
+  const close = () => { if (full) writePxUrl({ wp: null }, "replace"); onClose(); };
+  return (
+    <Drawer title={full ? <span className="px-faint" style={{ fontWeight: 500 }}>{ctx.overview.project.name} / Work / <span style={{ color: "var(--ink)" }}>{w.label}</span></span> : "Work"}
+            onClose={close} testid="px-drawer-work" wide full={full} bodyClass="wp2-body"
+            actions={<FullToggle full={full} onToggle={() => setFull(!full)} testid="px-drawer-work-full" />}>
+      <WorkPanel ctx={ctx} w={w} task={task} />
+    </Drawer>
+  );
 }
 
 /** App and probe only. Any other source, including none, stays off the drawer. */

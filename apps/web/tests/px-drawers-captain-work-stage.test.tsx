@@ -150,27 +150,14 @@ describe("Ask the captain (screen 09)", () => {
   });
 });
 
-describe("an old work-drawer link (the Work panel is gone, design #287)", () => {
-  it("opens the work's latest Workflow run, full page with Work as the way back, and drops the drawer from history", async () => {
+describe("an rc10.32 work-panel link (Work panel v2)", () => {
+  it("opens the Work panel again, over the whole screen, and the Workflow link is the run's own", async () => {
     engine();
-    const followed: string[] = [];
-    const spy = (e: Event) => {
-      const a = (e.target as HTMLElement).closest?.("a");
-      if (a && a.style.display === "none") { followed.push(a.getAttribute("href") ?? ""); e.preventDefault(); }
-    };
-    document.addEventListener("click", spy, true);
-    try {
-      await open("&tab=work&drawer=work:wi_visual&wp=full");
-      expect(tid("px-drawer-work")).toBeNull();
-      expect(followed.length).toBe(1);
-      const q = new URLSearchParams(followed[0].split("?")[1]);
-      expect(q.get("area")).toBe("delivery_workflows");
-      expect(q.get("wfr")).toBeTruthy();
-      expect(q.get("page")).toBe("full");
-      expect(q.get("from")).toBe("work");
-      expect(params().get("drawer")).toBeNull();
-      expect(params().get("wp")).toBeNull();
-    } finally { document.removeEventListener("click", spy, true); }
+    await open("&tab=work&drawer=work:wi_visual&wp=full");
+    expect(tid("px-drawer-work")!.getAttribute("data-chat-full")).toBe("1");
+    expect(params().get("drawer")).toBe("work:wi_visual");
+    const run = new URLSearchParams(tid("wp-link-run")!.getAttribute("href")!.split("?")[1]);
+    expect([run.get("area"), run.get("wfr")]).toEqual(["delivery_workflows", "wfr_43"]);
   });
 });
 

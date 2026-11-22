@@ -105,10 +105,12 @@ function engine(over: (c: Call) => { status?: number; body: unknown } | undefine
   });
 }
 
-async function openWork(role: "owner" | "viewer" = "owner") {
+async function openWork(role: "owner" | "viewer" = "owner", tab = "") {
   at(`project_id=${P}&area=project&tab=work`);
   await mountAs(<ProjectPage projectId={P} actor="ceo" orgId="org_1" />, role);
   await settle(10);
+  // The Work list's tabs (Work panel v2): Needs you · BOSS working · Done · Stopped · Planned.
+  if (tab) await press(tid(`px-work-f-${tab}`));
 }
 /** The Work tab's bar opens the New work modal (it replaced the one-line composer). */
 async function openNewWork() {
@@ -190,7 +192,7 @@ describe("New work (05-01..07, 05-31)", () => {
 describe("Planned, in Marshal's rank (05-18..23, 05-33)", () => {
   it("shows Next up with the planner's face, the #12 issue chip, CI with its file, and From Roadmap", async () => {
     engine();
-    await openWork();
+    await openWork("owner", "planned");
     expect(planned()).toEqual(["wi_email", "wi_sla", "wi_tests", "wi_index"]);
     // One status chip says what each is (the plain list, design #287); the file is its title.
     expect(tid("px-work-status-wi_email")!.textContent).toBe("Next up");
@@ -208,7 +210,7 @@ describe("Planned, in Marshal's rank (05-18..23, 05-33)", () => {
 
   it("Start now sends the item's own body, with its issue link", async () => {
     const calls = engine();
-    await openWork();
+    await openWork("owner", "planned");
     await press(tid("px-work-start-wi_sla"));
     expect(calls.find((c) => c.method === "POST" && c.path === `/v1/projects/${P}/work`)?.body).toEqual({
       kind: "bug", text: "SLA timer ignores weekends. SLA timers keep counting through the weekend.", title: "SLA timer ignores weekends",
@@ -217,7 +219,7 @@ describe("Planned, in Marshal's rank (05-18..23, 05-33)", () => {
 
   it("a drag re-ranks at once and saves through the plan route", async () => {
     const calls = engine();
-    await openWork();
+    await openWork("owner", "planned");
     const from = tid("px-rank-wi_tests")!;
     const to = tid("px-rank-wi_email")!;
     const data = new Map<string, string>();
@@ -239,7 +241,7 @@ describe("Planned, in Marshal's rank (05-18..23, 05-33)", () => {
 
   it("the board's Planned column re-ranks by drag too", async () => {
     const calls = engine();
-    await openWork();
+    await openWork("owner", "planned");
     await press(tid("px-work-board"));
     const data = new Map<string, string>();
     const dt = { setData: (k: string, v: string) => data.set(k, v), getData: (k: string) => data.get(k) ?? "", effectAllowed: "" };
@@ -259,7 +261,7 @@ describe("Planned, in Marshal's rank (05-18..23, 05-33)", () => {
 
   it("the keyboard does the same: ↓ and Alt+↑ move a row, across into Later and back", async () => {
     const calls = engine();
-    await openWork();
+    await openWork("owner", "planned");
     expect((tid("px-rank-up-wi_email") as HTMLButtonElement).disabled).toBe(true);
     await press(tid("px-rank-down-wi_tests"));
     expect(calls.filter((c) => c.method === "POST").at(-1)).toMatchObject({ path: `/v1/projects/${P}/plan/wi_tests`, body: { lane: "later" } });
@@ -277,7 +279,7 @@ describe("Planned, in Marshal's rank (05-18..23, 05-33)", () => {
 
   it("a refused move puts the order back and says why", async () => {
     engine((c) => (c.method === "POST" && c.path.startsWith(`/v1/projects/${P}/plan/`) ? { status: 404, body: { detail: { error: "not_found", message: "Only an accepted roadmap item can move between Next and Later." } } } : undefined));
-    await openWork();
+    await openWork("owner", "planned");
     await press(tid("px-rank-up-wi_sla"));
     await settle(4);
     expect(planned()).toEqual(["wi_email", "wi_sla", "wi_tests", "wi_index"]);
@@ -286,7 +288,7 @@ describe("Planned, in Marshal's rank (05-18..23, 05-33)", () => {
 
   it("a viewer sees the rank but cannot change it", async () => {
     engine();
-    await openWork("viewer");
+    await openWork("viewer", "planned");
     expect(planned()).toEqual(["wi_email", "wi_sla", "wi_tests", "wi_index"]);
     expect(tid("px-rank-up-wi_sla")).toBeNull();
     expect(tid("px-rank-wi_sla")!.getAttribute("draggable")).toBe("false");
@@ -306,7 +308,7 @@ describe("Planned, in Marshal's rank (05-18..23, 05-33)", () => {
 describe("Onboarding is a row (05-27)", () => {
   it("is a plain row, and it opens the onboarding page", async () => {
     engine();
-    await openWork();
+    await openWork("owner", "done");
     const row = tid("px-work-onb_36")!;
     // A clean row; the cost and the faces are on the onboarding page it opens.
     expect(row.textContent).not.toContain("$1.20");
@@ -320,8 +322,10 @@ describe("Needs you is one list (the Work tab's count = its group)", () => {
     engine();
     await openWork();
     expect(tid("px-needs-bar")).toBeNull();
+    // One source: the project's Work-tab badge is the Needs you tab's count (the merge and Pick
+    // a prod host; the build stalled since Nov 4 waited more than 7 days and is under Stopped).
     expect(tid("px-tab-work-needs")!.textContent).toBe("2");
-    expect(tid("px-work-f-needs_you")!.textContent).toContain("2");
+    expect(tid("px-work-n-needs_you")!.textContent).toBe("2");
     expect(tid("px-work-wi_visual")).not.toBeNull();
     expect(tid("px-work-needs-dec_prodhost")!.textContent).toContain("Pick a prod host");
     expect(tid("px-work-needs-dec_merge3")).toBeNull();

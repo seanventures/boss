@@ -280,6 +280,20 @@ export type WorkItem = {
   shape?: WorkShape;
   /** What an investigation found or a job produced, from the run's step outputs. */
   outcome?: WorkOutcome | null;
+  /** THE WORKFLOW'S OWN STEPS, each with its stage (engine work_stages.step_list): the Work
+   *  panel's Plan · Build · Ship · Live. Absent on a build with no workflow and on an older engine. */
+  steps?: WorkStep[];
+  /** The file the run started from (an onboarded config): Plan's "taken in". */
+  input_file?: string | null;
+  /** The run this one re-ran: the same task, an earlier attempt. */
+  rerun_of?: string | null;
+};
+export type StageKey = "plan" | "build" | "ship" | "live";
+export type WorkStep = {
+  id: string; name: string; kind: string; capability: string | null; stage: StageKey; state: StepState;
+  started_at: string; completed_at: string; sub: string;
+  /** The screens the step's own record opens: its panel meeting, its build, its deploy. */
+  refs: { meeting?: string; build?: string; deploy?: string };
 };
 export type WorkShape = "code" | "investigation" | "job";
 /** One node of a workflow's own steps (several steps merge into one when there are many). */
@@ -696,6 +710,19 @@ export const parseWorkItem = (v: unknown): WorkItem => {
     ...(s(x.title) ? { title: s(x.title) } : {}),
     ...(s(x.workflow) ? { workflow: s(x.workflow) } : {}),
     preview_app: parseYourApp(x.preview_app ? { ...o(x.preview_app), name: s(x.label) } : null),
+    ...(Array.isArray(x.steps) ? { steps: a(x.steps).map(parseWorkStep).filter((z) => z.id) } : {}),
+    ...(s(x.input_file) ? { input_file: s(x.input_file) } : {}),
+    ...(s(x.rerun_of) ? { rerun_of: s(x.rerun_of) } : {}),
+  };
+};
+const STAGE_KEYS = ["plan", "build", "ship", "live"] as const;
+const parseWorkStep = (v: unknown): WorkStep => {
+  const x = o(v); const r = o(x.refs);
+  return {
+    id: s(x.id), name: s(x.name, s(x.id)), kind: s(x.kind, "capability"), capability: s(x.capability) || null,
+    stage: oneOf(x.stage, STAGE_KEYS, "build"), state: oneOf(x.state, STEP_STATES, "todo"),
+    started_at: s(x.started_at), completed_at: s(x.completed_at), sub: s(x.sub),
+    refs: { ...(s(r.meeting) ? { meeting: s(r.meeting) } : {}), ...(s(r.build) ? { build: s(r.build) } : {}), ...(s(r.deploy) ? { deploy: s(r.deploy) } : {}) },
   };
 };
 const parseFlowNode = (v: unknown): WorkFlowNode => {
