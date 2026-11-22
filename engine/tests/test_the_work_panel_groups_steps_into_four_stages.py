@@ -25,7 +25,8 @@ def test_the_operator_named_kinds_land_where_the_wireframe_says():
     want = {"meeting": "plan", "spec_review": "plan", "research": "plan",
             "build": "build", "fix_pr": "build", "test": "build", "review": "build", "merge": "build",
             "preview": "ship", "deploy": "ship", "contract_test": "ship", "smoke_test": "ship",
-            "config_deploy": "ship", "monitor": "live", "monitoring_pack": "live"}
+            "config_deploy": "ship", "monitor": "live", "monitoring_pack": "live",
+            "investigate_incident": "plan", "verify_recovery": "live"}
     for cap, stage in want.items():
         assert work_stages.stage_of({"kind": "capability", "capability": cap}) == stage, cap
 

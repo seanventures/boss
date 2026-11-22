@@ -39,6 +39,8 @@ STAGE_OF_CAPABILITY: dict[str, Optional[str]] = {
     "dq_monitor_intake": "plan", "dq_monitoring": "plan", "dq_context_enrichment": "plan",
     "dq_historical_pattern": "plan", "dq_rca": "plan", "dq_orchestration": "plan",
     "dq_lane": "plan",
+    # an incident workflow investigates first: finding the cause is its plan
+    "investigate_incident": "plan",
     # build — make the change, check it, review it, merge it
     "build": "build", "retry_build": "build", "fix_pr": "build", "test": "build",
     "more_tests": "build", "review": "build", "security_scan": "build",
@@ -54,7 +56,7 @@ STAGE_OF_CAPABILITY: dict[str, Optional[str]] = {
     "smoke_test": "ship", "contract_test": "ship", "teardown_preview": "ship",
     "social_publish": "ship",
     # live — production and its health
-    "monitoring_pack": "live", "monitor": "live", "investigate_incident": "live",
+    "monitoring_pack": "live", "monitor": "live",
     "verify_recovery": "live", "incident_report": "live", "compliance_closure": "live",
     "dq_incident_closure": "live", "dq_escalation": "live",
     # says something about its neighbours

@@ -66,6 +66,8 @@
 .wp2 a.px-btn { text-decoration: none; }
 .wp2 a.px-btn[data-kind="amber"] { color: #1b1300; }
 
+.wp2-also { font-size: var(--fs-meta); color: var(--muted); }
+
 /* iterations, asked and produced */
 .wp2-more summary { cursor: pointer; color: var(--muted); font-size: var(--fs-meta); display: inline-flex; gap: 6px; align-items: center; list-style: none; }
 .wp2-more summary::-webkit-details-marker { display: none; }

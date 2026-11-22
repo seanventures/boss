@@ -33,6 +33,9 @@ import "./work-panel.css";
 const DT: Intl.DateTimeFormatOptions = { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false };
 const dt = (iso: string | null | undefined) => (iso ? localWith(iso, DT) : "");
 const hhmm = (iso: string) => localWith(iso, { hour: "2-digit", minute: "2-digit", hour12: false });
+const STATE_WORD: Record<Stage["state"], string> = {
+  done: "done", live: "BOSS is on it", you: "your move", fail: "failed", todo: "not started", absent: "not in this workflow",
+};
 const ICON: Record<Stage["state"], (i: number) => string> = {
   done: () => "✓", you: () => "!", fail: () => "!", live: (i) => String(i + 1), todo: (i) => String(i + 1), absent: () => "–",
 };
@@ -95,7 +98,7 @@ export function WorkPanel({ ctx, w, task, testid = "wp" }: { ctx: PxCtx; w: Work
         {stages.map((s, i) => (
           <li key={s.key} className="wp2-stg" data-s={s.state} data-testid={`${testid}-stage-${s.key}`}
               title={s.steps.length ? s.steps.map((x) => x.name).join(" · ") : undefined}>
-            <div className="wp2-hd"><span className="wp2-ic" aria-hidden>{ICON[s.state](i)}</span>{s.name}</div>
+            <div className="wp2-hd"><span className="wp2-ic" aria-hidden>{ICON[s.state](i)}</span>{s.name}<span className="px-sr"> — {STATE_WORD[s.state]}</span></div>
             {s.steps.length ? (
               <div className="wp2-steps">{s.steps.map((x, j) => (
                 <React.Fragment key={`${x.name}-${j}`}>{j ? " · " : ""}<span data-s={x.state} data-you={x.you || undefined}>{x.name}{x.state === "done" && s.state !== "done" ? " ✓" : ""}</span></React.Fragment>
@@ -114,6 +117,13 @@ export function WorkPanel({ ctx, w, task, testid = "wp" }: { ctx: PxCtx; w: Work
         <div className="wp2-say"><b data-testid={`${testid}-say`}>{next.say}</b>{next.sub ? <span>{tidyIds(next.sub)}</span> : null}</div>
         {next.buttons.map((b) => <NextBtn key={b.testid} b={b} testid={`${testid}-next-${b.testid}`} />)}
       </div>
+
+      {/* AN EARLIER ATTEMPT STILL WAITS ON YOU (a merge on its own change): said once, linked. */}
+      {task ? [task.latest, ...task.earlier].filter((e) => e.id !== w.id && e.state === "needs_you").map((e) => (
+        <div className="wp2-also" key={e.id} data-testid={`${testid}-also-${e.id}`}>
+          Also waiting on you: <a href={pxHref(e.links.decision || e.links.workflow_run)}>{e.run_number ? `Workflow #${e.run_number}` : e.label}{e.action_label ? ` · ${e.action_label}` : ""}</a>
+        </div>
+      )) : null}
 
       {history.length > 1 ? (
         <details className="wp2-more" data-testid={`${testid}-iterations`}>

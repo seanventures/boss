@@ -34,7 +34,7 @@ import { FailedActions } from "./build-failed";
 import { workNextStep } from "../../lib/work-next-step";
 import type { YourApp } from "../../lib/your-app";
 import { finishedAt, iterationLinks, latestLinks, tidyIds, workLinks, type LatestLink, type WorkLink } from "../../lib/work-links";
-import { TAB_WORDS, WORK_TABS, bucketTasks, groupTasks, needsYouTab, type WorkTab as TaskTab, type WorkTask } from "../../lib/work-tasks";
+import { TAB_WORDS, WORK_TABS, groupTasks, needsYouTab, type WorkTab as TaskTab, type WorkTask } from "../../lib/work-tasks";
 import "./work.css";
 
 const STATION_NAME: Record<string, string> = { plan: "Plan", design: "Decide", build: "Build", review: "Review", pr: "PR", ship: "Staging" };
@@ -81,11 +81,16 @@ export function WorkTab({ ctx }: { ctx: PxCtx }) {
   const needs = useNeeds(ctx, items);
   // ONE ROW PER TASK, ON TABS BY WHO ACTS (lib work-tasks): the counts are these same lists.
   const tasks = useMemo(() => groupTasks(items), [items]);
-  const tabs = useMemo(() => bucketTasks(tasks), [tasks]);
+  // The tabs and the Needs-you count are ONE read (lib needsYouTab).
+  const tabs = needs.buckets;
   const tabCount = (k: TaskTab) => (k === "needs_you" ? needs.count : tabs[k].length);
   const tab: TaskTab = picked ?? (WORK_TABS.find((k) => tabCount(k)) ?? "needs_you");
   const latestItems = useMemo(() => tasks.map((t) => t.latest), [tasks]);
-  const counts = Object.fromEntries(WORK_ORDER.map((k) => [k, latestItems.filter((w) => w.state === k).length])) as Record<WorkState, number>;
+  // THE BOARD reads the same tasks: Needs you is the Needs you tab's; the rest by state.
+  const needsIds = useMemo(() => new Set(needs.tasks.map((t) => t.id)), [needs.tasks]);
+  const boardItem = (k: WorkState) => (k === "needs_you" ? needs.tasks.map((t) => t.latest)
+    : latestItems.filter((w) => w.state === k && !needsIds.has(w.id)));
+  const counts = Object.fromEntries(WORK_ORDER.map((k) => [k, boardItem(k).length])) as Record<WorkState, number>;
   const planned = items.filter((w) => w.state === "planned");
   const rankGate = useGate("work_item:manage", ctx.projectId);
   const rankable = rankGate.allowed && !ctx.demo && planned.some((w) => w.move);
@@ -104,7 +109,7 @@ export function WorkTab({ ctx }: { ctx: PxCtx }) {
   // (an item never disappears because the board has no column for it).
   const boardCols = (["needs_you", "stalled", "running", "planned", "done", "failed"] as WorkState[])
     .filter((k) => (k !== "stalled" && k !== "failed") || counts[k]);
-  const groupOf = (k: WorkState) => latestItems.filter((w) => w.state === k);
+  const groupOf = boardItem;
   const boardDrag = useRankDrag(planned, rankable, (id, to) => void rank(id, to));
   // TICKETS (BOSSAPP-1047 T5/T8/T9): the project's ticket systems, the Import page, row chips.
   const tickets = useTicketConnections(ctx.projectId, ctx.demo);
@@ -120,7 +125,7 @@ export function WorkTab({ ctx }: { ctx: PxCtx }) {
       <div className="px-row px-wrap">
         <div className="px-filters wl-tabs" role="tablist" aria-label="Work, by who acts">
           {WORK_TABS.filter((k) => k !== "planned" || tabCount(k)).map((k) => (
-            <button key={k} type="button" role="tab" className="px-filter" aria-selected={tab === k} aria-pressed={tab === k} data-tab={k}
+            <button key={k} type="button" role="tab" className="px-filter" aria-selected={tab === k} data-tab={k}
                     onClick={() => setPicked(k)} data-testid={`px-work-f-${k}`} title={TAB_TITLE[k]}>
               {TAB_WORDS[k]} <span className="px-mono" data-testid={`px-work-n-${k}`}>{tabCount(k)}</span></button>
           ))}

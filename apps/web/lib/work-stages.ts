@@ -83,6 +83,12 @@ export function stepsOf(w: WorkItem): WorkStep[] {
   return w.steps && w.steps.length ? w.steps : legacySteps(w);
 }
 
+/** A PERSON'S MOVE: the work waits on them, or a running run holds at a gate only a person
+ *  opens (a deploy approval) — never "BOSS working · nothing needed from you". */
+export function waitsOnPerson(w: WorkItem): boolean {
+  return w.state === "needs_you" || (w.state === "running" && stepsOf(w).some((s) => s.state === "waiting"));
+}
+
 const isMergeOrGate = (s: WorkStep) => s.capability === "merge" || s.kind === "decision" || s.state === "waiting";
 
 /** What the engine's station strip says of a stage (its builds, its change, its deploy): the
@@ -118,7 +124,7 @@ export function panelStages(w: WorkItem, ctx: Ctx = {}): Stage[] {
   // open gate, else the step that is on.
   const mergeMove = w.state === "needs_you" && next?.kind === "merge";
   const gateStep = all.find((s) => s.state === "waiting") ?? all.find((s) => s.state === "now");
-  const youKey: StageKey | null = w.state !== "needs_you" ? null : mergeMove ? "build" : gateStep?.stage ?? null;
+  const youKey: StageKey | null = !waitsOnPerson(w) ? null : mergeMove ? "build" : gateStep?.stage ?? null;
   const youStep = mergeMove ? all.find((s) => s.capability === "merge") : youKey ? gateStep : undefined;
   const out: Stage[] = [];
   for (const key of STAGE_KEYS) {
@@ -203,7 +209,7 @@ export function panelStages(w: WorkItem, ctx: Ctx = {}): Stage[] {
 /** WATCH LIVE: the screen of the stage BOSS is on now (a failing stage it is still retrying
  *  counts). Null when nothing is running. */
 export function watchLive(w: WorkItem, stages: Stage[]): StageLink | null {
-  if (w.state !== "running") return null;
+  if (w.state !== "running" || waitsOnPerson(w)) return null;
   const on = stages.find((s) => s.state === "live") ?? stages.find((s) => s.state === "fail");
   return on?.link ?? SCREENS.workflow(w);
 }
@@ -211,7 +217,7 @@ export function watchLive(w: WorkItem, stages: Stage[]): StageLink | null {
 export type Chip = { word: string; tone: "amber" | "blue" | "red" | "green" | "idle" };
 /** The panel's one status chip. */
 export function panelChip(w: WorkItem, stages: Stage[]): Chip {
-  if (w.state === "needs_you") return { word: "Needs you", tone: "amber" };
+  if (waitsOnPerson(w)) return { word: "Needs you", tone: "amber" };
   if (w.state === "running") {
     const bad = stages.find((s) => s.state === "fail");
     return bad ? { word: `${bad.name} failing`, tone: "red" } : { word: "BOSS working", tone: "blue" };
@@ -269,6 +275,17 @@ export function nextLine(w: WorkItem, stages: Stage[], opts: { nowMs?: number; h
     if (href) buttons.push(btn(next.kind === "merge" && w.links.decision ? "Approve and merge" : next.label, href, "amber", "move"));
     const say = next.kind === "merge" && said.lead === "Ready to merge." ? "Ready to merge, your call" : said.lead.replace(/\.$/, "");
     return { say, sub: said.rest, tone: "you", buttons };
+  }
+  if (w.state === "running" && waitsOnPerson(w)) {
+    const gate = stepsOf(w).find((s) => s.state === "waiting");
+    const href = w.links.decision || (stages.find((s) => s.state === "you")?.link?.href ?? "") || (SCREENS.workflow(w)?.href ?? "");
+    return { say: `${gate?.name ?? "A step"} waits on you`, sub: clip(gate?.sub || w.why?.words || "Only a person can let it go on.", 140), tone: "you",
+             buttons: href ? [btn(w.links.decision ? "Decide" : "Open", href, "amber", "move")] : [] };
+  }
+  if (w.state === "needs_you") {
+    const open = SCREENS.workflow(w);
+    return { say: "Needs you", sub: clip(w.why?.words || w.detail, 140), tone: "you",
+             buttons: w.links.decision ? [btn(w.action_label || "Decide", w.links.decision, "amber", "move")] : open ? [btn("Open workflow", open.href, "amber", "move")] : [] };
   }
   if (w.state === "running") {
     const watch = watchLive(w, stages);

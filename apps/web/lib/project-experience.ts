@@ -1284,6 +1284,8 @@ export function pxHref(href: string, search = isHydrated() ? window.location.sea
   // shell's link handler restores the org on any in-console link that lacks it.
   if (!href) return "";
   if (/^(https?:)?\/\//.test(href) || href.startsWith("/v1/")) return href;
+  // A console page of its own (`/changes/p/24?tab=checks`): its path is the place, never dropped.
+  if (href.startsWith("/") && !href.startsWith("/?")) return href;
   const q = href.slice(href.indexOf("?") + 1);
   if (!href.includes("?") && !href.includes("=")) return href;
   const cur = new URLSearchParams(search);

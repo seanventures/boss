@@ -231,12 +231,13 @@ describe("the Work list: one row per task, on tabs by who acts", () => {
     expect(tasks.length).toBe(6);
   });
 
-  it("tabs: Needs you (incl. given up) · BOSS working (incl. still retrying) · Done · Stopped (cancelled, older than 7 days)", async () => {
+  it("tabs: Needs you (incl. given up) · BOSS working · Done · Stopped (cancelled, older than 7 days)", async () => {
     const { bucketTasks, groupTasks } = await import("../lib/work-tasks");
     const b = bucketTasks(groupTasks(await list()), NOW);
     const ids = (k: keyof typeof b) => b[k].map((t) => t.id);
-    expect(ids("needs_you")).toEqual(["wfr_c6d43bb861484e81aa3a", "wfr_gave"]);
-    expect(ids("working")).toEqual(["wfr_run", "wfr_retry"]);
+    // A failed run is BOSS giving up (Needs you); a failure BOSS still retries is a running item.
+    expect(ids("needs_you")).toEqual(["wfr_c6d43bb861484e81aa3a", "wfr_retry", "wfr_gave"]);
+    expect(ids("working")).toEqual(["wfr_run"]);
     expect(ids("done")).toEqual(["wfr_child"]);
     expect(ids("stopped")).toEqual(["wfr_old"]);
   });
@@ -258,9 +259,52 @@ describe("the Work list: one row per task, on tabs by who acts", () => {
       { id: "dec_prodhost", kind: "setup", label: "Pick a prod host", detail: "", mini: [], action: null },
     ] as never;
     const n = needsYouTab(items, cards, NOW);
-    expect(n.tasks.map((t) => t.id)).toEqual(["wfr_c6d43bb861484e81aa3a"]);
+    expect(n.tasks.map((t) => t.id)).toEqual(["wfr_c6d43bb861484e81aa3a", "wfr_retry"]);
     expect(n.loose.map((c) => c.id)).toEqual(["failed:wfr_gave", "dec_prodhost"]);
-    expect(n.count).toBe(3);
+    expect(n.count).toBe(4);
+    // The tabs come from the same read: Needs you is exactly these rows.
+    expect(n.buckets.needs_you.map((t) => t.id)).toEqual(n.tasks.map((t) => t.id));
+  });
+});
+
+describe("review findings (independent reviewer, 2026-11-22)", () => {
+  it("See Checks keeps the change page's path: /changes/<project>/<n>?tab=checks, never the console root", async () => {
+    const { pxHref } = await import("../lib/project-experience");
+    const { checksHrefOf } = await import("../lib/work-stages");
+    const h = checksHrefOf(await item());
+    expect(h).toBe("/changes/northgate-gateway/24?tab=checks");
+    expect(pxHref(h, "?org=org_boss&project_id=northgate-gateway")).toBe(h);
+  });
+
+  it("a running run held at a person's gate (a deploy approval) is the person's move, never BOSS working", async () => {
+    const { panelStages, panelChip, nextLine, watchLive } = await import("../lib/work-stages");
+    const { tabOf } = await import("../lib/work-tasks");
+    const w = await item({ state: "running", action_label: "", links: { ...LUMEN.links, merge_pr: null, decision: `?project_id=${P}&area=decisions&decision=dec_dep` },
+                           steps: [step("build", "build", "build", "done", { completed_at: "2026-11-22T17:00:00Z" }), step("deploy", "deploy", "ship", "waiting")] });
+    const s = panelStages(w);
+    expect(s[2].state).toBe("you");
+    expect(panelChip(w, s).tone).toBe("amber");
+    expect(watchLive(w, s)).toBeNull();
+    expect(nextLine(w, s).buttons.map((b) => [b.label, b.kind])).toEqual([["Decide", "amber"]]);
+    expect(tabOf({ id: w.id, latest: w, earlier: [] }, Date.parse("2026-11-22T19:00:00Z"))).toBe("needs_you");
+  });
+
+  it("an earlier attempt still waiting on a merge keeps its task on Needs you; a failed build is never 'working'", async () => {
+    const { tabOf } = await import("../lib/work-tasks");
+    const NOW2 = Date.parse("2026-11-22T19:00:00Z");
+    const running = await item({ state: "running", steps: [step("build", "build", "build", "now")] });
+    const older = await item({ id: "wfr_26", steps: [step("build", "build", "build", "done", { completed_at: "2026-11-22T11:00:00Z" }), step("merge", "merge", "build", "waiting")] });
+    expect(tabOf({ id: running.id, latest: running, earlier: [older] }, NOW2)).toBe("needs_you");
+    const failed = await item({ state: "failed", updated_at: "2026-11-22T18:00:00Z", steps: [], why: { code: "failed", who: "boss", words: "Failed", detail: "", since: null, etaMinutes: null } });
+    expect(tabOf({ id: failed.id, latest: failed, earlier: [] }, NOW2)).toBe("needs_you");
+  });
+
+  it("an incident's investigation is its Plan, so its stages read in order", async () => {
+    // engine STAGE_OF_CAPABILITY maps investigate_incident to plan (engine test covers the map)
+    const { panelStages } = await import("../lib/work-stages");
+    const s = panelStages(await item({ state: "running", input_file: null, links: { ...LUMEN.links, merge_pr: null, decision: "" },
+      steps: [step("investigate", "investigate_incident", "plan", "done"), step("build", "build", "build", "now"), step("verify", "verify_recovery", "live", "todo")] }));
+    expect(s.map((x) => x.state)).toEqual(["done", "live", "absent", "todo"]);
   });
 });
 
