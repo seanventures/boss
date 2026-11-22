@@ -115,8 +115,8 @@ export function tidyIds(text: string): string {
 }
 
 /** WHERE A WORK ROW OPENS (design #287, decision 1): its latest Workflow run, full page, with
- *  "← Work" back (`from=work`). Work with no workflow (a build on its own) opens its Build page;
- *  nothing to open → "". The Work panel this replaces is gone; old drawer links come here too. */
+ *  "← Work" back (`from=work`). Work with no workflow (a build on its own) opens its Build page,
+ *  a lone decision opens the decision; nothing to open → "". The Work panel this replaces is gone; old drawer links come here too. */
 export function workOpenHref(w: Pick<WorkItem, "links" | "action_label">): string {
   const run = w.links.workflow_run;
   const id = run ? runIdOf(run) : "";
@@ -126,7 +126,8 @@ export function workOpenHref(w: Pick<WorkItem, "links" | "action_label">): strin
     q.set("area", "delivery_workflows"); q.set("wfr", id); q.set("tab", "runs"); q.set("page", "full"); q.set("from", "work");
     return `?${q}`;
   }
-  return rootBuildOf(w)?.href || w.links.build || "";
+  // A decision with no run or build (a merge or deploy approval on its own) opens that decision.
+  return rootBuildOf(w)?.href || w.links.build || w.links.decision || "";
 }
 
 /** One iteration's links (a re-run, a repair build, a follow-up): its Build and its Change. */

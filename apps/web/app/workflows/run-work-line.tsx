@@ -21,6 +21,7 @@ import { workNextStep, type NextStep } from "../../lib/work-next-step";
 import { workChangeOf, workForRun } from "../../lib/work-links";
 import { changeHref, changeRef, linkTarget } from "../../lib/repo-links";
 import { parseValidation, validationPath, type Validation } from "../../lib/validation-review";
+import { WorkPreviewButton } from "../projects/work-preview";
 import "./run-work-line.css";
 
 const HEALTH: Record<string, { word: string; s: string }> = {
@@ -50,18 +51,22 @@ export function checkerWords(v: Validation | null): string[] {
   return p.validators.map((x) => `${x.id} ${x.before} → ${x.after_open} open`);
 }
 
-export function RunWorkLine({ projectId, runId }: { projectId: string; runId: string }) {
+export function RunWorkLine({ projectId, runId, actor }: { projectId: string; runId: string; actor?: string }) {
   const work = usePxRead<WorkList>(projectId ? PX_PATHS.work(projectId) : null, parseWork, { everyMs: 30_000 }).data;
   const w = work ? workForRun(work.items, runId) : null;
   const deps = usePxRead<Deployments>(w ? PX_PATHS.deployments(projectId) : null, parseDeployments, { everyMs: 30_000 }).data;
   const ch = w ? workChangeOf(w) : null;
   const val = usePxRead<Validation | null>(ch?.number ? validationPath(projectId, ch.number) : null, parseValidation, { everyMs: 60_000 }).data ?? null;
   if (!w) return null;
-  return <RunWorkLineView w={w} deployments={deps} validation={val} />;
+  return <RunWorkLineView w={w} deployments={deps} validation={val} projectId={projectId} actor={actor} />;
 }
 
 /** The line itself, from the facts (tested on its own). */
-export function RunWorkLineView({ w, deployments, validation = null }: { w: WorkItem; deployments: Deployments | null; validation?: Validation | null }) {
+export function RunWorkLineView({ w, deployments, validation = null, projectId = "", actor }: {
+  w: WorkItem; deployments: Deployments | null; validation?: Validation | null;
+  /** Given → a change's preview is its Start / Recreate / Open button (the Work panel's), not only a link. */
+  projectId?: string; actor?: string;
+}) {
   const ch = workChangeOf(w);
   const chHref = ch ? changeHref(ch.external_url) : "";
   const preview = w.links.preview || w.preview_app?.href || "";
@@ -77,7 +82,9 @@ export function RunWorkLineView({ w, deployments, validation = null }: { w: Work
         {ch && chHref ? (
           <a className="rwl-link" href={chHref} {...linkTarget(ch.external_url)} data-testid="rwl-change">{changeRef(ch.external_url, ch.number)}</a>
         ) : null}
-        {preview ? (
+        {projectId && w.preview_app ? (
+          <WorkPreviewButton app={w.preview_app} projectId={projectId} actor={actor} testid="rwl-preview-btn" className="wf-btn wf-btn-ghost rwl-btn" />
+        ) : preview ? (
           <a className="rwl-link" href={pxHref(preview)} target="_blank" rel="noreferrer noopener" data-testid="rwl-preview">
             Preview <ArrowSquareOut size={11} aria-hidden /></a>
         ) : null}

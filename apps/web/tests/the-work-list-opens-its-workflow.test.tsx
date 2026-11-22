@@ -135,6 +135,8 @@ describe("where a row opens (lib/work-links)", () => {
     const lone = await item({ links: { ...BASE.links, build: "?project_id=ng&area=code_tasks&build=crun_x" } });
     expect(workOpenHref(lone)).toBe("?project_id=ng&area=code_tasks&build=crun_x");
     expect(workOpenHref(await item({ links: BASE.links }))).toBe("");
+    // A decision on its own (no run, no build) opens that decision, never a dead row.
+    expect(workOpenHref(await item({ links: { ...BASE.links, decision: "?project_id=ng&area=decisions&decision=dec_9" } }))).toContain("dec_9");
     const other = await item({ id: "wi_9" });
     expect(workForRun([other], "wfr_lumen")?.id).toBe("wi_9");
     expect(workForRun([other], "wfr_none")).toBeNull();
@@ -159,6 +161,15 @@ describe("the run screen's header line", () => {
     expect(new URLSearchParams(btn.getAttribute("href")!.split("?")[1]).get("decision")).toBe("dec_7");
     expect($$('[data-testid="run-work-line"] .wf-btn-primary').length).toBe(1);
     expect($('[data-testid="rwl-checks"]')).toBeNull();
+  });
+
+  it("a change's preview keeps its Start / Recreate button (the Work panel's), not only a link", async () => {
+    const { RunWorkLineView } = await import("../app/workflows/run-work-line");
+    const app = { run_id: "wfr_lumen", name: "", title: "", version: "change", version_label: "", version_words: "", pr_number: 12, pr_url: "",
+                  preview_id: "prev_3", state: "stopped", words: "", href: "", error: "", recreate: true, live_url: "" };
+    const w = await item({ preview_app: app });
+    await mount(<RunWorkLineView w={{ ...w, preview_app: app as never }} deployments={null} projectId="ng" actor="ceo" />);
+    expect($('[data-testid="rwl-preview-btn"]')!.textContent).toContain("Recreate preview");
   });
 
   it("no move when nobody must act; Prod — with no host", async () => {

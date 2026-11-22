@@ -2277,7 +2277,7 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
 
   return (
     <div className="dw-path" data-testid="dw-path" data-full-page={fullPage ? "true" : undefined}>
-      <RunWorkLine projectId={projectId} runId={run.id} />
+      <RunWorkLine projectId={projectId} runId={run.id} actor={actor} />
       <div className="wf-run-bar">
         {/* A FINISHED RUN IS READ FOR WHAT WAS DONE: its report, every section open, is the
             first thing on its bar, not a collapsed panel below the lane. */}
