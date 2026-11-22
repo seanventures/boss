@@ -5,15 +5,15 @@
  * health, cost), the captain card, recent work, what's next, try it, this week. Every tile, row
  * and node is a link: in place (a drawer) or to the tab that holds it.
  */
-import React, { useEffect, useRef, useState } from "react";
+import React, { useState } from "react";
 import {
   ArrowRight, CaretRight, ChatCircleDots, ClockCounterClockwise, Coins, Globe, HandWaving, Heartbeat, Key, Kanban, Lightbulb,
-  Lightning, MapTrifold, Path, SteeringWheel, Info, Cloud, GearSix, GitMerge, RocketLaunch, ListChecks, Wrench, Question, Lock, Bug, Ticket, Sparkle, Warning,
+  Lightning, MapTrifold, Path, SteeringWheel, Info, GearSix, Bug, Ticket, Sparkle, Warning,
   type Icon,
 } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
-import { KIND_WORDS, WORK_ORDER, WORK_WORDS, navigateTo, pxHref, runAccept, startOnboarding, workWhen, writePxUrl, type NextItem, type WorkItem } from "../../lib/project-experience";
+import { KIND_WORDS, WORK_ORDER, WORK_WORDS, navigateTo, needsYouCards, pxHref, waitingSinceWords, runAccept, startOnboarding, workWhen, writePxUrl, type NextItem, type WorkItem } from "../../lib/project-experience";
 import { Empty, Face, Flow, HEALTH_WORD, Ico, Journey, PxLink, REC_KIND_WORDS, Ring, Said, Spark, Stations, Tag, Timeline, Cost, CardFailed } from "./kit";
 import { notifyChanged } from "../changed";
 import { DemoLoginRow } from "./tab-settings";
@@ -25,12 +25,10 @@ import { ChangeLink } from "../change-link";
 import { GitHubWait } from "../../components/github-wait";
 import { ExtensionSlots } from "../extension-frame";
 import { addFeaturePatch } from "../../lib/compose-links";
-import { FailedActions } from "./build-failed";
 import { YourAppCard } from "./your-app";
 import { AboutCard } from "./about-app";
 
 /** Each Needs-you card's icon, by what it asks. */
-const NEED_ICON: Record<string, Icon> = { merge: GitMerge, deploy: RocketLaunch, plan: ListChecks, setup: Wrench, question: Question };
 /** Where a What's-next item came from, in words and an icon. */
 const SOURCE_WORDS: Record<string, { word: string; icon: Icon }> = {
   roadmap: { word: "Roadmap", icon: MapTrifold }, ticket: { word: "Open issue", icon: Ticket }, bug: { word: "Bug", icon: Bug },
@@ -42,27 +40,6 @@ const NEXT_KIND_WORDS: Record<string, string> = {
   security: "Security", dependency: "Dependency", performance: "Performance", docs: "Docs",
 };
 
-/** A FAILED BUILD in Needs you (engine work.failed_card): red, the reason in words, Retry (the
- *  build's resume) and See what happened (the build's page). The title opens its Work row. */
-function FailedNeed({ it, ctx, fresh }: { it: PxCtx["overview"]["needs_you"][number]; ctx: PxCtx; fresh: boolean }) {
-  const open = () => (it.work_id ? ctx.open("work", it.work_id) : ctx.tab("work"));
-  // A BOSS bug, fixed since, stopped it: said plainly (amber), never a red failure.
-  const tone = it.tone === "info" ? "amber" : "red";
-  return (
-    <div className="px-ny px-ny-failed" data-tone={tone} data-testid={`px-ov-ny-${it.id}`} data-new={fresh ? "1" : undefined}
-         role="button" tabIndex={-1} onClick={(e) => { if ((e.target as HTMLElement).closest("button,a")) return; open(); }}>
-      <span className="px-ny-ico" data-tone={tone} aria-hidden><Warning size={12} weight="bold" /></span>
-      <div className="px-ny-b">
-        <button type="button" className="px-wk-t" onClick={open}>{it.label}</button>
-        <small className="px-faint" style={{ display: "block" }} data-testid={`px-ov-ny-why-${it.id}`}>{it.detail}</small>
-        {it.fix?.detail ? <small className="px-faint" style={{ display: "block" }} data-testid={`px-ov-ny-fixwhy-${it.id}`}>{it.fix.detail}</small> : null}
-      </div>
-      <FailedActions retry={it.retry} fix={it.fix} retryReason={it.retry_reason} seeHref={it.see_href} projectId={ctx.projectId} actor={ctx.actor}
-                     testid={`px-ov-ny-${it.id}`} onDone={() => { ctx.refreshWork(); ctx.refreshOverview?.(); }} />
-    </div>
-  );
-}
-
 /** What each crew member does, in one word (screen 04's crew row). */
 const CREW_VERB: Record<string, string> = {
   product_manager: "Plans", planner: "Plans", engineer: "Builds", software_engineer: "Builds", builder: "Builds", qa: "Tests", qa_engineer: "Tests",
@@ -70,7 +47,7 @@ const CREW_VERB: Record<string, string> = {
   security_reviewer: "Secures", adversarial_reviewer: "Reviews", reviewer: "Reviews", designer: "Designs", engineering_captain: "Captains",
 };
 
-const WORK_TONE: Record<string, string> = { running: "var(--teal)", stalled: "color-mix(in srgb, var(--amber) 55%, var(--surface-3))", needs_you: "var(--amber)", planned: "var(--quiet)", done: "var(--green)", failed: "var(--red)" };
+const WORK_TONE: Record<string, string> = { running: "var(--teal)", stalled: "color-mix(in srgb, var(--ink) 45%, var(--surface-3))", needs_you: "var(--ink)", planned: "var(--quiet)", done: "var(--green)", failed: "var(--red)" };
 
 /** Visible staging health reason. A blank reason is nothing. */
 export function stagingHealthReasonSentence(reason: string | null | undefined): string | null {
@@ -119,28 +96,12 @@ function goHref(ctx: PxCtx, href: string, fallback: () => void) {
   fallback();
 }
 
-/** A Needs-you item that arrived after the page first drew glows once (aa-glow), then stays still. */
-function useFresh(ids: string[]): (id: string) => boolean {
-  const seen = useRef<Set<string> | null>(null);
-  const [fresh, setFresh] = useState<Set<string>>(new Set());
-  useEffect(() => {
-    if (seen.current === null) { seen.current = new Set(ids); return; }
-    const arrived = ids.filter((i) => !seen.current!.has(i));
-    arrived.forEach((i) => seen.current!.add(i));
-    if (arrived.length) {
-      setFresh(new Set(arrived));
-      const t = window.setTimeout(() => setFresh(new Set()), 2400);
-      return () => window.clearTimeout(t);
-    }
-    return undefined;
-  }, [ids.join("|")]); // eslint-disable-line react-hooks/exhaustive-deps
-  return (id) => fresh.has(id);
-}
 
 export function OverviewTab({ ctx }: { ctx: PxCtx }) {
   const ov = ctx.overview;
   const t = ov.tiles;
-  const fresh = useFresh(ov.needs_you.map((n) => n.id));
+  // ONE count with the Work tab's badge and its Needs-you group (lib needsYouCards).
+  const needCount = needsYouCards(ov.needs_you, ov.project.stage === "onboarding" ? ctx.onboarding ?? null : null, ctx.work?.items ?? []).length;
   // EACH CARD LOADS OR FAILS ON ITS OWN (04 states): a card BOSS couldn't read this time says
   // "Couldn't load · Retry" inside itself; every other card still shows.
   const failed = (card: string) => (ov.errors?.[card]
@@ -238,24 +199,21 @@ export function OverviewTab({ ctx }: { ctx: PxCtx }) {
       <div className="px-split">
         <div className="px-stack">
           <section className="px-card" aria-labelledby="px-ov-ny" data-testid="px-ov-needs">
-            <div className="px-card-h"><Ico icon={HandWaving} c="amber" /><h2 id="px-ov-ny">Needs you</h2><span className="px-nbadge" data-tone={ov.needs_you.length ? "amber" : undefined}>{ov.needs_you.length}</span></div>
-            {failed("needs_you") ?? (ov.needs_you.length ? ov.needs_you.map((it) => {
-              const KindIcon = (it.icon === "cloud" ? Cloud : NEED_ICON[it.kind]) ?? Question;
-              if (it.kind === "failed") return <FailedNeed key={it.id} it={it} ctx={ctx} fresh={fresh(it.id)} />;
-              return (
-                <div key={it.id} className="px-ny" data-testid={`px-ov-ny-${it.id}`} data-new={fresh(it.id) ? "1" : undefined}
-                     role="button" tabIndex={-1} onClick={(e) => { if ((e.target as HTMLElement).closest("button,a")) return; ctx.open("needs", it.id); }}>
-                  <span className="px-ny-ico" aria-hidden><KindIcon size={12} weight="bold" /></span>
-                  <div className="px-ny-b">
-                    <button type="button" className="px-wk-t" onClick={() => ctx.open("needs", it.id)}>{it.label}</button>
-                    {it.mini.length ? <Flow nodes={it.mini.map((m) => ({ ...m, icon: m.state === "waiting" ? <Lock size={10} weight="fill" aria-hidden /> : undefined }))} testid={`px-ov-ny-flow-${it.id}`} />
-                      : it.question || it.detail ? <small className="px-faint" style={{ display: "block" }}>{it.question || it.detail}</small> : null}
-                    {it.mini.length && it.kind === "setup" && it.detail ? <small className="px-faint">{it.detail}</small> : null}
-                  </div>
-                  {it.action ? <ActionButton ctx={ctx} label={it.action.label} href={it.action.href} amber testid={`px-ov-ny-act-${it.id}`} /> : null}
-                </div>
-              );
-                        }) : <Empty icon={HandWaving} tone="green" title="All clear" line="Nothing is waiting on you. Helm asks here when it needs a person." />)}
+            {/* NEEDS YOU ONCE PER SCREEN (operator 2026-11-21): the list lives in Work's Needs-you
+                group; the Overview says how many and links there — it never repeats the items. */}
+            <div className="px-card-h"><Ico icon={HandWaving} /><h2 id="px-ov-ny">Needs you</h2><span className="px-nbadge">{needCount}</span></div>
+            {failed("needs_you") ?? (needCount ? (
+              <a className="px-ov-needs-link" href={pxHref(`?project_id=${encodeURIComponent(ctx.projectId)}&area=project&tab=work`)} data-testid="px-ov-needs-open"
+                 onClick={(e) => { if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return; e.preventDefault(); openNeedsGroup(ctx); }}>
+                {needCount === 1 ? "1 item waits" : `${needCount} items wait`} on you <span className="px-faint">· open them in Work</span> <ArrowRight size={11} aria-hidden /></a>
+            ) : <Empty icon={HandWaving} tone="green" title="All clear" line="Nothing is waiting on you. Helm asks here when it needs a person." />)}
+            {/* EXPIRED BUT STILL ANSWERABLE: never counted, never hidden — one quiet link to
+                Approvals' Expired view (the old bar above the tabs carried it on every screen). */}
+            {ov.still_answerable ? (
+              <a className="px-faint" href={pxHref(ov.still_answerable.href)} data-testid="px-ov-needs-older" style={{ display: "block", marginTop: "0.25rem", fontSize: "var(--fs-meta)" }}
+                 title="Their deadline passed with nothing applied; you can still answer them in Approvals">
+                {ov.still_answerable.count} older · {waitingSinceWords(ov.still_answerable.since)}</a>
+            ) : null}
             {/* WAITING FOR GITHUB (BOSSAPP-922): an FYI, not a card — BOSS pushes it on its own,
                 so it is never counted in the badge and has no button. */}
             {(ov.github_waits ?? []).map((g) => (
@@ -472,4 +430,15 @@ function NextCard({ ctx }: { ctx: PxCtx }) {
       <Said text={said} />
     </section>
   );
+}
+
+/** Open Work on its Needs-you group (the one home of what waits on a person). */
+export function openNeedsGroup(ctx: PxCtx) {
+  ctx.tab("work");
+  const go = (n: number) => {
+    const el = document.getElementById("px-work-needs");
+    if (el) el.scrollIntoView?.({ block: "start", behavior: "smooth" });
+    else if (n > 0) setTimeout(() => go(n - 1), 80);
+  };
+  setTimeout(() => go(20), 0);
 }

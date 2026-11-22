@@ -1,7 +1,9 @@
+// @vitest-environment happy-dom
 /**
  * The project header says why health is what it is, beside the health chip,
- * not only on the chip title. A blank reason says nothing. More than six
- * words is a paragraph. Six or fewer is a span.
+ * not only on the chip title: a small "Why?" toggle that opens the reason below
+ * the chips (operator 2026-11-21: never a paragraph of engine prose in the
+ * header). A blank reason says nothing.
  *
  * Breaks if the reason stays padded, a blank reason still renders, a long
  * reason is a span, or the header stops calling healthReasonSentence(healthWhy).
@@ -60,26 +62,14 @@ describe("healthReasonSentence", () => {
 });
 
 describe("the project header says why health is what it is", () => {
-  it("shows more than six words as a paragraph and six or fewer as a span", async () => {
-    const long = why(await show(LONG));
-    expect(long?.tagName).toBe("P");
-    expect(long?.textContent).toBe(LONG);
-    expect(long?.hasAttribute("data-user-text")).toBe(true);
-
-    const seven = why(await show(SEVEN));
-    expect(seven?.tagName).toBe("P");
-    expect(seven?.textContent).toBe(SEVEN);
-    expect(seven?.hasAttribute("data-user-text")).toBe(true);
-
-    const six = why(await show(SIX));
-    expect(six?.tagName).toBe("SPAN");
-    expect(six?.textContent).toBe(SIX);
-    expect(six?.hasAttribute("data-user-text")).toBe(true);
-
-    const short = why(await show(SHORT));
-    expect(short?.tagName).toBe("SPAN");
-    expect(short?.textContent).toBe(SHORT);
-    expect(short?.hasAttribute("data-user-text")).toBe(true);
+  it("is a small Why? toggle for any reason, long or short — never the reason inline", async () => {
+    for (const text of [LONG, SEVEN, SIX, SHORT]) {
+      const el = why(await show(text));
+      expect(el?.tagName).toBe("BUTTON");
+      expect(el?.textContent).toBe("Why?");
+      expect(el?.getAttribute("aria-expanded")).toBe("false");
+      expect(el?.getAttribute("aria-controls")).toBe("px-head-why-block");
+    }
   });
 
   it("says nothing when there is no sentence", async () => {
@@ -91,6 +81,6 @@ describe("the project header says why health is what it is", () => {
   it("calls healthReasonSentence with healthWhy", () => {
     const src = codeOnly(join(__dirname, "../app/projects/project-page.tsx"));
     expect(src).toContain("healthReasonSentence(healthWhy)");
-    expect(src).toContain("<HealthWhy sentence={healthReasonSentence(healthWhy)}");
+    expect(src).toContain("<HealthWhy sentence={healthReasonSentence(healthWhy)} open={why === \"health\"}");
   });
 });

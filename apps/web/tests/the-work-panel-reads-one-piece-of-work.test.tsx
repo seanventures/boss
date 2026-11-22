@@ -231,12 +231,18 @@ describe("the row", () => {
     expect($('[data-testid="px-work-open-wfr_e56d"]')!.textContent).toBe("Bench Name Label on Map Bubble");
     expect($('[data-testid="px-work-line-wfr_e56d"]')!.textContent).toContain("Merge now, or wait.");
     expect($$('[data-testid="px-work-flow-wfr_e56d"] i').map((i) => i.getAttribute("data-s"))).toEqual(["done", "done", "live", "wait", "todo"]);
-    // ONE action (+ the preview): never two amber buttons, never the run/build/change chips.
+    // ONE action (+ the preview), never amber; the row's own Run · Build · Change as muted chips
+    // (operator 2026-11-21), going where the panel's header goes, the ids only on hover.
     const act = $('[data-testid="px-work-act-wfr_e56d"]')!;
     expect(act.textContent).toBe("Merge change #3");
     expect(act.getAttribute("data-kind")).toBeNull();
     expect(row.querySelectorAll("button.px-btn, a.px-btn").length).toBeLessThanOrEqual(2);
-    expect($('[data-testid="px-work-run-wfr_e56d"]')).toBeNull();
+    expect($('[data-testid="px-work-run-wfr_e56d"]')!.textContent).toBe("Run #2");
+    expect($('[data-testid="px-work-build-wfr_e56d"]')!.textContent).toBe("Build");
+    expect($('[data-testid="px-work-build-wfr_e56d"]')!.getAttribute("href")).toContain("build=crun_31e1");
+    expect($('[data-testid="px-work-build-wfr_e56d"]')!.getAttribute("title")).toContain("crun_31e1");
+    expect($('[data-testid="px-work-change-wfr_e56d"]')!.textContent).toBe("Change #3");
+    expect($('[data-testid="px-work-links-wfr_e56d"]')!.textContent).not.toContain("crun_");
     expect($('[data-testid="px-work-attempts-wfr_e56d"]')).toBeNull();
   });
 });

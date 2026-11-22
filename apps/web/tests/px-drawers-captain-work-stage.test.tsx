@@ -233,12 +233,15 @@ describe("closing a drawer never adds a history entry (PX-33)", () => {
     engine();
     await open("");
     const before = window.history.length;
-    await press(tid("px-needs-dec_merge3"));
-    expect(params().get("drawer")).toBe("needs:dec_merge3");
+    await press(tid("px-tab-work"));
+    const mid = window.history.length;
+    await press(tid("px-work-needs-act-dec_prodhost"));
+    expect(params().get("drawer")).toBe("needs:dec_prodhost");
     await act(async () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
     await settle(12);
     expect(params().get("drawer")).toBeNull();
-    expect(window.history.length).toBe(before + 1); // the drawer's own entry, stepped back over — no new one
+    expect(window.history.length).toBe(mid + 1); // the drawer's own entry, stepped back over — no new one
+    expect(mid).toBeGreaterThanOrEqual(before);
   });
   it("Esc on a drawer that came in on a link replaces it away", async () => {
     engine();

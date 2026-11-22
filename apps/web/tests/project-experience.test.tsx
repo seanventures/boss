@@ -348,11 +348,16 @@ describe("the Project page header, Needs you and tabs (screen 4)", () => {
     expect(document.activeElement?.getAttribute("data-testid")).toBe("px-compose-text");
   });
 
-  it("Needs you is on every tab and each item opens its drawer; Esc and Back close it", async () => {
+  it("Needs you is ONE amber count on the Work tab, on every tab; its items open their drawer; Esc and Back close it", async () => {
     engine();
     await openProject("&tab=deployments");
-    expect(tid("px-needs-bar")!.textContent).toContain("2 need you");
-    await press(tid("px-needs-dec_merge3"));
+    // No bar above the tabs (operator 2026-11-21: "Needs you in lots of places … all yellow").
+    expect(tid("px-needs-bar")).toBeNull();
+    expect(tid("px-tab-work-needs")!.textContent).toBe("2");
+    expect(tid("px-tab-work-needs")!.getAttribute("data-tone")).toBe("amber");
+    window.history.replaceState(null, "", `/?org=org_1&project_id=${P}&area=project&tab=deployments&drawer=needs:dec_merge3`);
+    await act(async () => { window.dispatchEvent(new PopStateEvent("popstate")); });
+    await settle();
     expect(params().get("drawer")).toBe("needs:dec_merge3");
     expect(tid("px-drawer-needs")).not.toBeNull();
     // It acts in place (PX-05): the primary is named for the action; the PR is a link beside it.
@@ -363,7 +368,8 @@ describe("the Project page header, Needs you and tabs (screen 4)", () => {
     await settle();
     expect(params().get("drawer")).toBeNull();
     expect(tid("px-drawer-needs")).toBeNull();
-    await press(tid("px-needs-dec_prodhost"));
+    await press(tid("px-tab-work"));
+    await press(tid("px-work-needs-act-dec_prodhost"));
     expect(tid("px-drawer-needs")).not.toBeNull();
     await act(async () => { window.history.back(); });
     await settle(10);
@@ -406,7 +412,9 @@ describe("Overview (screen 4)", () => {
     window.history.replaceState(null, "", `/?org=org_1&project_id=${P}&area=project`);
     await act(async () => { window.dispatchEvent(new PopStateEvent("popstate")); });
     await settle();
-    expect(tid("px-ov-ny-act-dec_merge3")!.getAttribute("href")).toContain("/pull/3");
+    // Needs you: the count and ONE link to Work's group, never the list again.
+    expect(tid("px-ov-needs-open")!.textContent).toContain("2 items wait on you");
+    expect(tid("px-ov-ny-act-dec_merge3")).toBeNull();
     await press(tid("px-ov-work-wi_visual"));
     expect(params().get("drawer")).toBe("work:wi_visual");
     await press(tid("px-ov-accept-rec_weekend"));
@@ -430,7 +438,7 @@ describe("Overview (screen 4)", () => {
     expect(tid("px-project-note")).not.toBeNull();
     expect($("h1")!.textContent).toBe("Order service");
     expect(tid("px-head-repo")!.textContent).toContain("acme/orders");
-    expect(tid("px-needs-bar")!.textContent).toContain("1 needs you");
+    expect(tid("px-tab-work-needs")!.textContent).toBe("1");
   });
 
   it("a failed read says so and retries", async () => {
@@ -458,11 +466,13 @@ describe("Work (screens 5, 5b)", () => {
     await press(tid("px-compose-start"));
     expect(calls.find((c) => c.method === "POST" && c.path === `/v1/projects/${P}/work`)?.body).toEqual({ kind: "bug", text: "SLA ignores weekends" });
     expect(tid("px-said")!.textContent).toMatch(/Started/);
-    // A CLEAN ROW (operator 2026-11-19): title, one line of state, a compact flow, ONE action —
-    // the run / build / change chips are the Work panel's now.
+    // THE ROW KEEPS ITS OWN LINKS (operator 2026-11-21): a compact flow, ONE action, and the
+    // run / change as short chips going where the Work panel's header goes.
     expect(tid("px-work-flow-wi_visual")!.querySelectorAll("i").length).toBe(5);
-    expect(tid("px-work-pr-wi_visual")).toBeNull();
-    expect(tid("px-work-run-wi_visual")).toBeNull();
+    const rowRun = tid("px-work-run-wi_visual")!.getAttribute("href");
+    const rowChange = tid("px-work-change-wi_visual")!;
+    expect(rowChange.textContent).toBe("PR #3");
+    expect(rowChange.getAttribute("href")).toBe("/changes/github/paramg/helpdesk-ai-demo/3");
     await press(tid("px-work-act-wi_visual"));
     // The row lands on the Work panel's whole page.
     expect(tid("px-drawer-work")).not.toBeNull();
@@ -472,6 +482,7 @@ describe("Work (screens 5, 5b)", () => {
     // BOSSAPP-954: a GitHub PR opens BOSS's change page for it (the panel's "see the change").
     expect(tid("px-drawer-work-see-change")!.getAttribute("href")).toBe("/changes/github/paramg/helpdesk-ai-demo/3");
     expect(tid("px-drawer-work-link-run")!.getAttribute("href")).toContain("area=delivery_workflows");
+    expect(tid("px-drawer-work-link-run")!.getAttribute("href")).toBe(rowRun);
     expect(tid("px-drawer-work-link-build")!.getAttribute("href")).toContain("area=code_tasks");
     await press(tid("px-work-board"));
     expect(tid("px-work-columns")).not.toBeNull();
@@ -960,8 +971,8 @@ describe("the engine's own answers (what the API serves, not the sample)", () =>
   it("an onboarding item waiting on you is listed once in Needs you, never twice", async () => {
     realEngine((c) => (c.method === "GET" && c.path === `/v1/projects/${P}/onboarding`
       ? { body: { ...FX_ONBOARDING, state: "needs_you" } } : undefined));
-    await openProject("", "owner");
-    expect($$("[data-testid='px-needs-bar'] .px-needs-item").filter((x) => /App secret/.test(x.textContent ?? ""))).toHaveLength(1);
+    await openProject("&tab=work", "owner");
+    expect($$("[data-testid='px-work-rows'] .px-wk").filter((x) => /App secret/.test(x.textContent ?? ""))).toHaveLength(1);
   });
 
   it("an onboarding that never started offers Start onboarding, which posts §8's start", async () => {
