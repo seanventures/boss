@@ -194,6 +194,35 @@ tr.iter[hidden] { display: none; }
 .addbar { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
 select.btn { appearance: auto; }
 
+/* Change page: Checks rows and line notes (reviewer-comment pattern). */
+.cpane[hidden] { display: none; }
+.chk { border: 1px solid var(--border); border-radius: var(--r); margin-bottom: 8px; background: var(--surface); }
+.chk summary { display: flex; align-items: center; gap: 10px; padding: 10px 12px; cursor: pointer; list-style: none; }
+.chk summary::-webkit-details-marker { display: none; }
+.chk summary b { font-weight: 700; }
+.chk[open] summary { border-bottom: 1px solid var(--border); }
+.chk .ft { margin: 0 4px 4px; width: calc(100% - 8px); }
+.pad { padding: 8px 12px; margin: 0; }
+.ic { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; font-weight: 800; font-size: 12px; }
+.ic.ok { color: var(--green); background: var(--green-soft); }
+.ic.you { color: var(--amber); background: var(--amber-soft); }
+.ic.bad { color: var(--red); background: var(--red-soft); }
+.by.you { color: var(--amber); font-weight: 700; }
+.fhead { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 12px; border: 1px solid var(--border); border-bottom: 0; border-radius: var(--r) var(--r) 0 0; background: var(--surface-2); }
+.diff { border: 1px solid var(--border); border-radius: 0 0 var(--r) var(--r); overflow-x: auto; background: var(--bg); }
+.dl { display: grid; grid-template-columns: 36px 36px 1fr; font: 12px/1.7 var(--mono); }
+.dl i { font-style: normal; color: var(--faint); text-align: right; padding-right: 8px; user-select: none; }
+.dl code { white-space: pre; padding-right: 12px; font: inherit; }
+.dl.add { background: var(--green-soft); } .dl.add code { color: var(--green); }
+.dl.del { background: var(--red-soft); } .dl.del code { color: var(--red); }
+.dl.gap { color: var(--faint); background: var(--surface-2); }
+.note { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 4px 12px 8px 84px; padding: 8px 10px; border: 1px solid var(--border-strong); border-left: 3px solid var(--accent); border-radius: var(--r); background: var(--surface); font-size: 12px; }
+.note.you { border-left-color: var(--amber); }
+.note.done { border-left-color: var(--green); opacity: .75; }
+.note .prop { flex-basis: 100%; border: 1px dashed var(--border-strong); border-radius: 6px; padding: 2px 0; }
+.nacts { display: inline-flex; gap: 6px 12px; flex-wrap: wrap; font-weight: 600; }
+@media (max-width: 600px) { .note { margin-left: 12px; } }
+
 @media (max-width: 860px) {
   .lib { grid-template-columns: 1fr; }
   .wl .col-fin, .wl th.col-fin { display: none; }
@@ -222,7 +251,7 @@ select.btn { appearance: auto; }
     <b>Wireframe</b>
     <div class="tabs" role="tablist" aria-label="Screens">
       <button class="tab" role="tab" data-go="s1" aria-selected="true">1 · Work tab</button>
-      <button class="tab" role="tab" data-go="s2" aria-selected="false">2 · Workflow, Validate</button>
+      <button class="tab" role="tab" data-go="s2" aria-selected="false">2 · Change, Checks</button>
       <button class="tab" role="tab" data-go="s3" aria-selected="false">3 · Workflow, Build</button>
       <button class="tab" role="tab" data-go="s4" aria-selected="false">4 · Library</button>
     </div>
@@ -287,65 +316,57 @@ select.btn { appearance: auto; }
     </div>
   </section>
 
-  <!-- 2 · WORKFLOW RUN, VALIDATE SELECTED (Northgate) -->
+  <!-- 2 · CHANGE #12: CHECKS, THEN FILES CHANGED (Northgate) -->
   <section class="screen" id="s2">
     <div class="page">
       <div class="page-head">
-        <span class="crumb">Northgate gateway / Workflows / <b>Workflow #9</b></span>
+        <span class="crumb">Northgate gateway / Changes / <b>Change #12</b></span>
         <span class="spacer"></span>
-        <div class="tabs"><span class="tab" aria-selected="true">Workflows <em>(9)</em></span><span class="tab">Library</span></div>
+        <span class="chip" data-tone="you" data-verdict>Merge waits · 1 P0 · 1 P1</span>
       </div>
       <div class="runhead">
         <h1>Lumen Pay tenant onboarding</h1>
-        <span class="t">API onboarding v4 · 21 Nov 08:30 → —</span>
-        <span class="links"><a href="#">Change #12</a><a href="#">Preview</a></span>
-        <span class="t">Staging — · Prod —</span>
-        <span class="yourmove">Your move: 2 findings <button class="btn small" data-step-go="validate">Open</button></span>
+        <span class="t">fix/lumen-pay-onboarding · 21 Nov 08:36</span>
+        <span class="links"><a href="#">Workflow #9</a><a href="#">Build</a><a href="#">Preview</a></span>
       </div>
-      <div class="page-body" data-run>
-        <div class="lane"><div class="nodes">
-          <button class="node" data-s="ok" data-step="intake"><span class="nt"><span class="ni">1</span>Intake</span><span class="ns">✓ 08:31</span></button><i class="wire done"></i>
-          <button class="node" data-s="you" data-step="validate" aria-pressed="true"><span class="nt"><span class="ni">2</span>Validate</span><span class="ns">2 need you</span></button><i class="wire"></i>
-          <button class="node" data-s="todo" data-step="build"><span class="nt"><span class="ni">3</span>Build</span><span class="ns">—</span></button><i class="wire"></i>
-          <button class="node" data-s="todo" data-step="review"><span class="nt"><span class="ni">4</span>Review &amp; tests</span><span class="ns">—</span></button><i class="wire"></i>
-          <button class="node" data-s="todo" data-step="merge"><span class="nt"><span class="ni">5</span>Merge</span><span class="ns">—</span></button><i class="wire"></i>
-          <button class="node" data-s="todo" data-step="staging"><span class="nt"><span class="ni">6</span>Staging</span><span class="ns">—</span></button><i class="wire"></i>
-          <button class="node" data-s="todo" data-step="prod"><span class="nt"><span class="ni">7</span>Production</span><span class="ns">—</span></button>
-        </div></div>
-
-        <div class="detail" data-phase="you">
-          <div class="pane" data-pane="validate">
-            <div class="dh"><h4>Validate</h4><span class="chip" data-tone="you">2 need you</span><span class="t">gwlint · northgate v3 · lumen-pay.yaml · 08:31 → 08:36</span><span class="spacer"></span><a href="#">Original</a><a href="#">Fixed file</a></div>
-            <div class="counts">
-              <span class="count"><b>9</b> found</span><span class="arrow">→</span>
-              <span class="count"><b>4</b> tool</span>
-              <span class="count"><b>3</b> agent</span>
-              <span class="count you"><b>2</b> you</span>
-              <span class="arrow">→</span><span class="count"><b>0</b> left after re-check</span>
-            </div>
+      <nav class="ptabs" data-ctabs><span class="ptab">Overview</span><span class="ptab">Conversation</span><a href="#" class="ptab" data-ctab="files">Files changed <span class="t">1</span></a><a href="#" class="ptab on" data-ctab="checks">Checks <span class="t">3</span></a></nav>
+      <div class="page-body">
+        <div class="cpane" data-cpane="checks">
+          <details class="chk"><summary><span class="ic ok">✓</span><b>Tests</b><span class="t">214 passed · 2 min</span></summary>
+            <p class="t pad">0 failed · 3 skipped</p></details>
+          <details class="chk" open data-gw><summary><span class="ic you" data-gw-ic>!</span><b>gwlint</b><span class="t"><span data-gw-sum>9 found → 1 open</span> · 4 tool · 3 agent · 2 you</span></summary>
             <table class="ft">
-              <tr><td><span class="sev p0">P0</span></td><td class="mono">GW-AUTH-001</td><td>Route <span class="mono">/payouts</span> has no auth policy</td><td class="t">L42</td><td><button class="btn small primary">Fix it</button> <button class="btn small">Override…</button></td></tr>
-              <tr><td><span class="sev p1">P1</span></td><td class="mono">GW-RATE-003</td><td>No rate limit on <span class="mono">/refunds</span></td><td class="t">L77</td><td><button class="btn small primary">Fix it</button> <button class="btn small">Override…</button></td></tr>
-            </table>
-            <details class="fold"><summary>7 fixed (4 tool, 3 agent)</summary>
-              <table class="ft">
-                <tr><td><span class="sev p2">P2</span></td><td class="mono">GW-PATH-002</td><td>Path not kebab-case</td><td class="t">L12</td><td class="by">tool</td></tr>
-                <tr><td><span class="sev p2">P2</span></td><td class="mono">GW-HDR-005</td><td>Missing request-id header</td><td class="t">L18</td><td class="by">tool</td></tr>
-                <tr><td><span class="sev p2">P2</span></td><td class="mono">GW-VER-001</td><td>Version not in path</td><td class="t">L9</td><td class="by">tool</td></tr>
-                <tr><td><span class="sev p2">P2</span></td><td class="mono">GW-LOG-002</td><td>Access log off</td><td class="t">L60</td><td class="by">tool</td></tr>
-                <tr><td><span class="sev p1">P1</span></td><td class="mono">GW-TLS-001</td><td>Upstream not TLS</td><td class="t">L31</td><td class="by">agent</td></tr>
-                <tr><td><span class="sev p1">P1</span></td><td class="mono">GW-TIMEOUT-002</td><td>Timeout above 30 s</td><td class="t">L55</td><td class="by">agent</td></tr>
-                <tr><td><span class="sev p1">P1</span></td><td class="mono">GW-CORS-004</td><td>Wildcard CORS origin</td><td class="t">L88</td><td class="by">agent</td></tr>
-              </table>
-            </details>
-            <div class="row-actions"><button class="btn">Re-check</button><span class="t">Merge waits on open P0/P1.</span></div>
+              <tr data-gw-open><td><span class="sev p0">P0</span></td><td class="mono">route-needs-auth</td><td><span class="mono">/payouts/admin</span> has no auth</td><td class="by you">Needs you</td><td><a href="#" data-ctab="files">L42</a></td></tr>
+              <tr><td><span class="sev p1">P1</span></td><td class="mono">no-inlined-secrets</td><td>API key in config</td><td class="by">agent</td><td><a href="#" data-ctab="files">L31</a></td></tr>
+              <tr><td><span class="sev p1">P1</span></td><td class="mono">rate-limit-required</td><td>No rate limit on <span class="mono">/refunds</span></td><td class="by">you</td><td><a href="#" data-ctab="files">L77</a></td></tr>
+              <tr><td><span class="sev p1">P1</span></td><td class="mono">upstream-tls</td><td>Upstream not TLS</td><td class="by">agent</td><td><a href="#" data-ctab="files">L28</a></td></tr>
+              <tr><td><span class="sev p1">P1</span></td><td class="mono">no-wildcard-cors</td><td>Wildcard CORS origin</td><td class="by">agent</td><td><a href="#" data-ctab="files">L88</a></td></tr>
+              <tr><td><span class="sev p2">P2</span></td><td class="mono">path-kebab-case</td><td>Path not kebab-case</td><td class="by">tool</td><td><a href="#" data-ctab="files">L12</a></td></tr>
+              <tr><td colspan="5" class="t">+ 3 more P2 · tool</td></tr>
+            </table></details>
+          <details class="chk"><summary><span class="ic bad">✗</span><b>Security scan</b><span class="t">1 P1 open</span></summary>
+            <table class="ft"><tr><td><span class="sev p1">P1</span></td><td class="mono">vuln-dependency</td><td>yaml 1.10.0 has a known issue</td><td class="by you">Needs you</td><td><a href="#">lockfile</a></td></tr></table></details>
+          <p class="hint">Any checker lands here the same way: tests, reviewer, linters, validators.</p>
+        </div>
+
+        <div class="cpane" data-cpane="files" hidden>
+          <div class="fhead"><span class="mono">gateway/tenants/lumen-pay.yaml</span><span class="t">2 commits: original as given → fixes</span><span class="spacer"></span><button class="btn small">Revert to original</button></div>
+          <div class="diff">
+            <div class="dl"><i>11</i><i>11</i><code>  routes:</code></div>
+            <div class="dl del"><i>12</i><i></i><code>-   - path: /Payouts_Admin</code></div>
+            <div class="dl add"><i></i><i>12</i><code>+   - path: /payouts-admin</code></div>
+            <div class="note"><span class="sev p2">P2</span><b class="mono">path-kebab-case</b><span class="by">fixed by tool</span><span class="spacer"></span><span class="nacts"><a href="#">Accept</a><a href="#">Revert line</a><a href="#">Edit</a><a href="#">Waive</a></span></div>
+            <div class="dl gap"><i>⋯</i><i>⋯</i><code></code></div>
+            <div class="dl del"><i>31</i><i></i><code>-     api_key: lp_live_••••••••</code></div>
+            <div class="dl add"><i></i><i>31</i><code>+     api_key: ${secret:lumen-pay/api-key}</code></div>
+            <div class="note"><span class="sev p1">P1</span><b class="mono">no-inlined-secrets</b><span class="by">fixed by agent</span><span class="spacer"></span><span class="nacts"><a href="#">Accept</a><a href="#">Revert line</a><a href="#">Edit</a><a href="#">Waive</a></span></div>
+            <div class="dl gap"><i>⋯</i><i>⋯</i><code></code></div>
+            <div class="dl"><i>42</i><i>42</i><code>    - path: /payouts/admin</code></div>
+            <div class="dl"><i>43</i><i>43</i><code>      methods: [POST, DELETE]</code></div>
+            <div class="note you" data-gw-note><span class="sev p0">P0</span><b class="mono">route-needs-auth</b><span class="by you">Needs you · Remove route</span>
+              <div class="prop"><div class="dl del"><i></i><i>42</i><code>-   - path: /payouts/admin</code></div><div class="dl del"><i></i><i>43</i><code>-     methods: [POST, DELETE]</code></div></div>
+              <span class="nacts"><button class="btn small primary" data-accept>Accept</button><button class="btn small">Edit</button></span></div>
           </div>
-          <div class="pane" data-pane="intake" hidden><div class="dh"><h4>Intake</h4><span class="chip" data-tone="ok">Done</span><span class="t">08:30 → 08:31</span></div><p class="t">Input file: lumen-pay.yaml · 1 tenant · 14 routes</p></div>
-          <div class="pane" data-pane="build" hidden><div class="dh"><h4>Build</h4><span class="chip plain">Not started</span></div><p class="t">Starts after Validate has 0 open P0/P1.</p></div>
-          <div class="pane" data-pane="review" hidden><div class="dh"><h4>Review &amp; tests</h4><span class="chip plain">Not started</span></div></div>
-          <div class="pane" data-pane="merge" hidden><div class="dh"><h4>Merge</h4><span class="chip plain">Not started</span></div></div>
-          <div class="pane" data-pane="staging" hidden><div class="dh"><h4>Staging</h4><span class="chip plain">Not started</span></div></div>
-          <div class="pane" data-pane="prod" hidden><div class="dh"><h4>Production</h4><span class="chip plain">Not started</span></div></div>
         </div>
       </div>
     </div>
@@ -395,8 +416,7 @@ select.btn { appearance: auto; }
             <details class="brief"><summary>Full brief</summary><p>Upgrade react-router and react-router-dom to 6.28.1. Keep route definitions as they are; update only the imports the new version renames. Run type-check and the unit suite; open one change. No other dependency moves.</p></details>
           </div>
           <div class="pane" data-pane="triage" hidden><div class="dh"><h4>Triage</h4><span class="chip" data-tone="ok">Done</span><span class="t">10:05 → 10:06</span></div><p class="t">Scope: 2 packages · risk low</p></div>
-          <div class="pane" data-pane="validate" hidden><div class="dh"><h4>Validate</h4><span class="chip" data-tone="ok">0 found</span><span class="t">npm audit + eslint · 10:14 → 10:15</span></div>
-            <div class="counts"><span class="count"><b>0</b> found</span></div><p class="t">Same Validate step as every workflow; this project uses npm audit and eslint.</p></div>
+          <div class="pane" data-pane="validate" hidden><div class="dh"><h4>Validate</h4><span class="chip" data-tone="ok">✓ npm audit + eslint · 0 found</span><span class="t">10:14 → 10:15</span><span class="spacer"></span><a href="#">Change #3 › Checks</a></div></div>
           <div class="pane" data-pane="review" hidden><div class="dh"><h4>Review &amp; tests</h4><span class="chip" data-tone="ok">Done</span><span class="t">10:15 → 10:17 · 0 P0 · 0 P1 · 46 passed</span></div></div>
           <div class="pane" data-pane="merge" hidden><div class="dh"><h4>Merge</h4><span class="chip" data-tone="ok">Merged</span><span class="t">10:17 · <a href="#">Change #3</a></span></div></div>
           <div class="pane" data-pane="staging" hidden><div class="dh"><h4>Staging</h4><span class="chip" data-tone="ok">Healthy</span><span class="t">10:19 · 3/3 checks</span></div></div>
@@ -465,6 +485,12 @@ select.btn { appearance: auto; }
     window.scrollTo(0, 0);
   }
   document.addEventListener('click', function (e) {
+    var ct = e.target.closest('[data-ctab]');
+    if (ct) { e.preventDefault(); var sc = ct.closest('.screen'); sc.querySelectorAll('[data-ctabs] .ptab').forEach(function (t) { t.classList.toggle('on', t.dataset.ctab === ct.dataset.ctab); }); sc.querySelectorAll('.cpane').forEach(function (p) { p.hidden = p.dataset.cpane !== ct.dataset.ctab; }); return; }
+    var ac = e.target.closest('[data-accept]');
+    if (ac) { var sc2 = ac.closest('.screen'); var n2 = sc2.querySelector('[data-gw-note]'); n2.classList.add('done'); n2.querySelector('.by').textContent = 'Removed by you'; ac.parentNode.innerHTML = '<a href="#">Undo</a>';
+      sc2.querySelector('[data-gw-sum]').textContent = '9 found → 0 open'; var ic = sc2.querySelector('[data-gw-ic]'); ic.className = 'ic ok'; ic.textContent = '✓';
+      sc2.querySelector('[data-gw-open] .by').textContent = 'you'; sc2.querySelector('[data-gw-open] .by').className = 'by'; sc2.querySelector('[data-verdict]').textContent = 'Merge waits · 1 P1'; return; }
     var g = e.target.closest('[data-go]');
     if (g) { e.preventDefault(); e.stopPropagation(); go(g.dataset.go); return; }
     var c = e.target.closest('[data-toggle]');
