@@ -125,12 +125,6 @@
    while the tab scrolls (the window is the scroll container; --px-top is the top bar's measured
    height, set by ProjectPage). Under the top bar (30), under every drawer and sheet. */
 .px-sticky[data-sticky] { position: sticky; top: var(--px-top, 62px); z-index: 25; }
-.px-needs-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 12px; border-radius: 10px; font-size: var(--fs-ui);
-  background: color-mix(in srgb, var(--amber) 9%, var(--surface)); border: 1px solid color-mix(in srgb, var(--amber) 40%, transparent); animation: px-glow 1.8s ease-in-out 1; }
-.px-needs-bar[data-calm] { background: var(--surface); border-color: var(--border); animation: none; }
-.px-needs-item { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; background: var(--amber); color: #1b1300;
-  font-weight: 600; font-size: var(--fs-meta); border: 0; cursor: pointer; font-family: inherit; }
-.px-needs-item:hover { filter: brightness(1.08); }
 .px-ny-ico { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; background: var(--amber); color: #1b1300; font-weight: 800; font-size: var(--fs-meta); flex: none; }
 .px-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: none; }
 .px-tab { padding: 9px 12px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); white-space: nowrap;
@@ -421,9 +415,8 @@ textarea.px-input { resize: vertical; min-height: 64px; }
   .bx-content:is([data-active="project"], [data-active="projects"]) { padding-left: 16px; padding-right: 16px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .px *, .px *::before, .px *::after, .px-drawer, .px-sheet, .px-needs-bar { animation: none !important; transition: none !important; }
+  .px *, .px *::before, .px *::after, .px-drawer, .px-sheet { animation: none !important; transition: none !important; }
 }
-.px a.px-needs-item, .px a.px-needs-item:hover { color: #1b1300; text-decoration: none; }
 .px .px-card > a:not(.px-btn):not(.px-chip):not(.px-li), .px .px-row > a:not(.px-btn):not(.px-chip):not(.px-hchip) { font-size: var(--fs-meta); }
 .px a.px-li { color: var(--accent-text); text-decoration: none; }
 .px-icon-btn[data-copied] { color: var(--green); border-color: var(--green); }
@@ -901,7 +894,6 @@ button.px-h-num:focus-visible { outline: 2px solid var(--accent-text); outline-o
 .px a.px-tag[data-failed] { text-decoration: none; cursor: pointer; }
 .px a.px-tag[data-failed]:hover { filter: brightness(1.08); }
 /* Dark text on the red (≈6:1, WCAG AA), never white on it (≈3:1, review #218 L3). */
-.px-needs-item[data-tone="red"] { background: var(--red); color: var(--bg); }
 .px-ny[data-tone="red"] { background: color-mix(in srgb, var(--red) 7%, var(--surface)); border-color: color-mix(in srgb, var(--red) 30%, transparent); }
 .px-ny-ico[data-tone="red"] { background: var(--red); color: var(--bg); }
 /* Stopped by a BOSS bug fixed since (build_restart_recovery): plain amber, never red. */
@@ -912,3 +904,29 @@ button.px-h-num:focus-visible { outline: 2px solid var(--accent-text); outline-o
 .px-ny-failed > .px-row { grid-column: 2; min-width: 0; max-width: 100%; }
 .px-ny-failed > .px-row > * { min-width: 0; max-width: 100%; overflow-wrap: anywhere; white-space: normal; }
 .px-wk-failed { color: var(--red); font-weight: 650; }
+
+/* The header's "Why?" toggles and the one reason they open: small, muted, below the chips. */
+.px-why-t { background: none; border: 0; padding: 0 2px; font: inherit; font-size: var(--fs-tag); color: var(--accent-text); cursor: pointer;
+  text-decoration: underline; text-underline-offset: 2px; }
+.px-why-t[aria-expanded="true"] { color: var(--ink); }
+.px-head-hint { font-size: var(--fs-meta); color: var(--muted); }
+.px-why-block { margin-top: 6px; max-width: 72ch; padding: 6px 10px; border-radius: 8px; background: var(--surface-2); border: 1px solid var(--border);
+  font-size: var(--fs-meta); line-height: 1.45; color: var(--muted); overflow-wrap: anywhere; }
+
+/* Overview › Needs you: the count and ONE link to Work's Needs-you group (never the list again). */
+.px-ov-needs-link { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-body); color: var(--ink); text-decoration: none; }
+.px a.px-ov-needs-link, .px a.px-ov-needs-link:hover { color: var(--ink); text-decoration: none; }
+.px a.px-ov-needs-link:hover .px-faint { color: var(--accent-text); }
+
+/* NEEDS YOU ONCE PER SCREEN (operator 2026-11-21: "Top view, Overview, Work… all showing yellow"):
+   the Work tab's count is the one amber on the Overview; the journey, the open-work bar and the
+   recent-work rows say "waiting on you" in neutral ink. */
+[data-testid="px-panel-overview"] .px-wk[data-s="needs_you"] { background: transparent; box-shadow: none; }
+[data-testid="px-panel-overview"] .px-jr-node[data-s="waiting"] .px-jr-shape { background: var(--surface-3); border-color: var(--border-strong); color: var(--ink); }
+[data-testid="px-panel-overview"] .px-jr-node[data-s="waiting"] .px-jr-meta { color: var(--muted); }
+[data-testid="px-panel-overview"] .px-st-n[data-s="waiting"] { background: var(--surface-3); border-color: var(--ink); color: var(--ink); }
+[data-testid="px-panel-overview"] .px-fl-n[data-t="waiting"] { background: var(--surface-3); border-color: var(--ink); color: var(--ink); }
+/* Work's Needs-you rows: a card's few steps, compact; its "you" step outlined, never a yellow block. */
+[data-testid="px-work-rows"] .px-wk-card .px-fl { padding: 2px 0 0; }
+[data-testid="px-work-rows"] .px-wk-card .px-fl-n { font-size: var(--fs-tag); padding: 1px 7px; border-width: 1px; }
+[data-testid="px-work-rows"] .px-fl-n[data-t="waiting"] { background: var(--surface-3); border-color: var(--ink); color: var(--ink); }

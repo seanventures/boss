@@ -28,6 +28,7 @@ import { parseValidation, shortId, validationPath, workRefsOf, type Validation }
 import { packetLinks } from "../validation/review-packet";
 import { ValidationBuilt } from "../validation/built-summary";
 import { mergeWaitOf, workNextStep, type NextStep } from "../../lib/work-next-step";
+import { rootBuildOf } from "../../lib/work-links";
 import {
   attemptsLine, connectorState, costPoints, durationWords, flowNodes, helmSuggestions, isCodeWork, secondsBetween, stateSentence, type FlowNode,
 } from "../../lib/work-panel";
@@ -88,15 +89,8 @@ export function PrimaryAction({ ctx, w, next, testid }: { ctx: PxCtx; w: WorkIte
 
 // ── 1 header ───────────────────────────────────────────────────────────────────────────────
 
-/** The build that OPENED the change (SPEC §5.2): the merge's own build, never the newest
- *  follow-up that pushed to it. Its console link keeps the row's link and swaps the id. */
-export function rootBuildOf(w: WorkItem): { id: string; href: string } | null {
-  const fromHref = new URLSearchParams(w.links.build.split("?")[1] ?? "").get("build") ?? "";
-  const id = mergeWaitOf(w)?.build_id || fromHref;
-  if (!id) return null;
-  const href = w.links.build ? (fromHref ? w.links.build.replace(`build=${fromHref}`, `build=${id}`) : w.links.build) : "";
-  return { id, href };
-}
+/** The build that OPENED the change: one source with the Work rows (lib/work-links). */
+export { rootBuildOf };
 
 /** The change this work made: the open merge, else the PR it recorded. */
 const changeOf = (w: WorkItem) => mergeWaitOf(w) ?? w.links.pr ?? null;

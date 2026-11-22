@@ -40,3 +40,37 @@
 
 /* A Needs-you card that is no piece of work's (Pick a prod host): a row in the same group. */
 .px-wk-card .px-wk-sub .px-ell { max-width: 46ch; }
+
+/* ── ONE AMBER THING PER VIEW (operator 2026-11-21): the Work tab's count and the "Needs you"
+   group's dot; its rows are neutral, their action the normal primary button, no rail. */
+[data-testid="px-work-rows"] .px-wk[data-s="needs_you"], [data-testid="px-work-rows"] .px-wk[data-s="stalled"] { background: transparent; box-shadow: none; }
+[data-testid="px-work-rows"] .px-wk[data-s="needs_you"]:hover { background: color-mix(in srgb, var(--accent) 5%, transparent); }
+/* The why line inside a row: one line, muted words, only its dot says who. */
+.wr-line .sw-why { flex-wrap: nowrap; min-width: 0; overflow: hidden; }
+.wr-line .sw-why-words { color: var(--muted) !important; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+
+/* ── the row's own links: Run #N · Build · PR/Change #N · Preview, short and muted ── */
+.px-wk.wr.wr { grid-template-columns: 1.47368rem minmax(0, 1fr) auto auto auto; }
+.wr-links { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; align-items: center; min-width: 0; }
+.wr-chip { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-tag); line-height: 1.5; color: var(--muted); padding: 0 7px; border-radius: 6px;
+  border: 1px solid var(--border); background: transparent; white-space: nowrap; text-decoration: none; font-family: inherit; }
+.px a.wr-chip, .px a.wr-chip:visited { color: var(--muted); text-decoration: none; }
+.px a.wr-chip:hover, .px a.wr-chip:focus-visible { color: var(--accent-text); border-color: var(--accent-line); text-decoration: none; }
+@media (max-width: 640px) {
+  .px-wk.wr.wr { grid-template-columns: 1.47368rem minmax(0, 1fr); }
+  .wr-links { grid-column: 2; justify-content: flex-start; }
+  .wr-links:empty { display: none; }
+}
+
+/* ── LATEST: the project's newest Run · Build · Change · Preview, one row that wraps ── */
+.wl-latest { display: flex; align-items: center; gap: 6px 8px; flex-wrap: wrap; padding: 8px 12px; border-radius: 10px; background: var(--surface);
+  border: 1px solid var(--border); font-size: var(--fs-meta); }
+.wl-k { font-family: var(--mono); font-size: var(--fs-label); letter-spacing: .1em; text-transform: uppercase; color: var(--faint); margin-right: 2px; }
+.wl-item { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 8px; background: var(--surface-3); border: 1px solid var(--border);
+  color: var(--ink); text-decoration: none; min-width: 0; max-width: 100%; }
+.px a.wl-item, .px a.wl-item:hover { color: var(--ink); text-decoration: none; }
+.px a.wl-item:hover, .px a.wl-item:focus-visible { border-color: var(--accent-line); }
+.wl-what { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 24ch; }
+.wl-item b { font-weight: 600; white-space: nowrap; }
+.wl-ago { color: var(--faint); white-space: nowrap; }
+@media (max-width: 640px) { .wl-what { max-width: 14ch; } }

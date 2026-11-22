@@ -13,7 +13,7 @@ import { changeWords, projectIsLocal } from "../../lib/repo-links";
 import React, { useEffect, useMemo, useState } from "react";
 import {
   ArrowDown, ArrowUp, Bug, Check, Compass, Database, DotsSixVertical, EnvelopeSimple, FlowArrow, GitMerge,
-  GithubLogo, HandWaving, Kanban, Lightning, ListBullets, PauseCircle, Play,
+  GithubLogo, HandWaving, Kanban, Lightning, ListBullets, Lock, PauseCircle, Play,
   Ticket, Tray, TreeStructure, XCircle,
 } from "@phosphor-icons/react";
 import { WorkTreeView } from "./work-tree";
@@ -22,20 +22,22 @@ import { InboxView } from "./work-inbox";
 import { GatedButton, useGate } from "../../components/gated";
 import {
   KIND_WORDS, WORK_ORDER, WORK_WORDS, attemptsPill, movePlanItem, needsYouCards,
-  pxHref, reRank, runAccept, startWork, workWhen, writePxUrl,
+  pxHref, reRank, runAccept, startWork, waitingSinceWords, workWhen, writePxUrl,
   type NeedsYou, type WorkItem, type WorkState,
 } from "../../lib/project-experience";
 import { stampLocal, whenLocal } from "../../lib/local-time";
-import { Empty, Face, Loading, Failed, EngineNotReady, PxLink, Said } from "./kit";
+import { Empty, Face, Flow, Loading, Failed, EngineNotReady, PxLink, Said } from "./kit";
 import { NewWorkBar } from "./new-work";
 import { RowChipsProvider, RowTicket, TicketWorkBand, useRowChips, useTicketConnections, useTicketsParam } from "./ticket-work";
 import { TicketImportPage } from "./ticket-import";
 import type { Connection } from "../../lib/tickets";
 import type { PxCtx } from "./project-page";
 import { WhyLine } from "../../components/stuck-work";
+import { FailedActions } from "./build-failed";
 import { workNextStep } from "../../lib/work-next-step";
 import { stateSentence } from "../../lib/work-panel";
 import { WorkPreviewButton } from "./work-preview";
+import { latestLinks, tidyIds, workLinks, type LatestLink, type WorkLink } from "../../lib/work-links";
 import "./work.css";
 import "./work-panel.css";
 
@@ -43,11 +45,11 @@ import "./work-panel.css";
 function RowTile({ w }: { w: WorkItem }) {
   const setup = w.kind === "setup";
   const t: [React.ElementType, string | undefined, "bold" | "fill" | "regular"] =
-    setup ? (w.state === "needs_you" ? [HandWaving, "amber", "regular"] : w.state === "running" ? [Compass, "teal", "fill"]
+    setup ? (w.state === "needs_you" ? [HandWaving, undefined, "regular"] : w.state === "running" ? [Compass, "teal", "fill"]
       : w.state === "failed" ? [XCircle, "red", "regular"] : [Check, "green", "bold"])
-    : w.state === "needs_you" ? [GitMerge, "amber", "bold"]
+    : w.state === "needs_you" ? [GitMerge, undefined, "bold"]
     : w.state === "running" ? [Lightning, "teal", "fill"]
-    : w.state === "stalled" ? [PauseCircle, "amber", "fill"]
+    : w.state === "stalled" ? [PauseCircle, undefined, "fill"]
     : w.state === "done" ? [Check, "green", "bold"]
     : w.state === "failed" ? [XCircle, "red", "regular"]
     : w.origin === "ci" || /^ci$/i.test(w.source) ? [XCircle, "red", "regular"]
@@ -148,13 +150,15 @@ export function WorkTab({ ctx }: { ctx: PxCtx }) {
     <div className="px-stack" data-testid="px-work">
       <NewWorkBar ctx={ctx} said={ctx.workSaid} />
       <TicketWorkBand ctx={ctx} conns={tickets.read} />
+      <LatestStrip items={raw} />
       <div className="px-row px-wrap">
         <div className="px-filters" role="group" aria-label="Filter work">
           <button type="button" className="px-filter" aria-pressed={filter === "all"} onClick={() => setFilter("all")} data-testid="px-work-f-all">All <span className="px-mono">{items.length}</span></button>
           {WORK_ORDER.filter((k) => counts[k]).map((k) => (
             <button key={k} type="button" className="px-filter" aria-pressed={filter === k} onClick={() => setFilter(k)} data-testid={`px-work-f-${k}`}
                     title={k === "needs_you" ? "The same list as the Needs you bar at the top" : undefined}>
-              <span className="px-dot" data-s={DOT[k]} aria-hidden />
+              {/* The filters' dots are state colours; amber stays the tab's count and the group's dot. */}
+              <span className="px-dot" data-s={k === "needs_you" ? undefined : DOT[k]} aria-hidden />
               {WORK_WORDS[k]} <span className="px-mono">{counts[k]}</span></button>
           ))}
         </div>
@@ -186,8 +190,8 @@ export function WorkTab({ ctx }: { ctx: PxCtx }) {
         <div className="px-list" data-testid="px-work-rows">
           {WORK_ORDER.filter((k) => groupOf(k).length || (k === "needs_you" && showLoose && needs.loose.length)).map((k) => (
             <React.Fragment key={k}>
-              <div className="px-list-g"><span className="px-dot" data-s={DOT[k]} aria-hidden />
-                {WORK_WORDS[k]}{k === "planned" ? <span className="px-faint" style={{ fontWeight: 400 }}> · ranked by Marshal{rankable ? <span className="px-hide-phone"> · drag to re-rank</span> : null}</span>
+              <div className="px-list-g" data-g={k} data-testid={`px-work-g-${k}`} id={k === "needs_you" ? "px-work-needs" : undefined}><span className="px-dot" data-s={DOT[k]} aria-hidden />
+                {WORK_WORDS[k]}{k === "needs_you" ? <NeedsHeadNote ctx={ctx} /> : k === "planned" ? <span className="px-faint" style={{ fontWeight: 400 }}> · ranked by Marshal{rankable ? <span className="px-hide-phone"> · drag to re-rank</span> : null}</span>
                   : k === "stalled" ? <span className="px-faint" style={{ fontWeight: 400 }}> · nothing has moved; open one to retry or stop it</span> : null}
                 {k === "planned" ? <Said text={rankSaid.text} tone={rankSaid.tone} /> : null}</div>
               {k === "planned" ? (
@@ -219,7 +223,7 @@ export function WorkTab({ ctx }: { ctx: PxCtx }) {
               {k === "needs_you" ? needs.loose.map((c) => (
                 <button key={c.id} type="button" className="px-card" data-link onClick={() => ctx.open("needs", c.id)} data-testid={`px-board-needs-${c.id}`}
                         style={{ width: "100%", textAlign: "left", font: "inherit", color: "inherit", marginBottom: 8, display: "flex", gap: 6, padding: 10, alignItems: "center" }}>
-                  <HandWaving size={12} aria-hidden style={{ color: "var(--amber)" }} /><b style={{ fontSize: ".66rem" }}>{c.label}</b>
+                  <HandWaving size={12} aria-hidden style={{ color: "var(--muted)" }} /><b style={{ fontSize: ".66rem" }}>{c.label}</b>
                 </button>
               )) : null}
             </section>
@@ -243,21 +247,36 @@ function openItem(ctx: PxCtx, w: WorkItem) {
 /** A Needs-you card that is no piece of work's (Pick a prod host, a setup gap): its own row, the
  *  bar's same item, opening the same drawer. */
 function NeedsCardRow({ card, ctx }: { card: NeedsYou; ctx: PxCtx }) {
+  // A FAILED BUILD (engine work.failed_card): red, its reason in words, and every answer it offers
+  // in place — the fix first, Retry (the build's resume), See what happened. The title opens the
+  // build's own row. (It used to be the Overview's card; the Overview now links here.)
+  const failed = card.kind === "failed";
+  const openIt = () => (failed && card.work_id ? ctx.open("work", card.work_id) : ctx.open("needs", card.id));
+  const tid = `px-work-needs-${card.id}`;
   return (
-    <div className="px-wk px-wk-card" data-s="needs_you" data-testid={`px-work-needs-${card.id}`}
-         onClick={(e) => { if (!(e.target as HTMLElement).closest("a,button")) ctx.open("needs", card.id); }}>
-      <span className="px-ico px-wk-ico" data-c="amber" aria-hidden><HandWaving size={12} /></span>
+    <div className="px-wk px-wk-card" data-s="needs_you" data-failed={failed || undefined} data-testid={tid}
+         onClick={(e) => { if (!(e.target as HTMLElement).closest("a,button")) openIt(); }}>
+      <span className="px-ico px-wk-ico" data-c={failed ? "red" : undefined} data-plain={failed ? undefined : ""} aria-hidden>
+        {failed ? <XCircle size={12} /> : <HandWaving size={12} />}</span>
       <span style={{ minWidth: 0 }}>
-        <button type="button" className="px-wk-t px-ell" style={{ display: "block", minWidth: 0 }} onClick={() => ctx.open("needs", card.id)}>{card.label}</button>
-        <span className="px-wk-sub"><span className="px-tag" data-tone="amber">Only you</span>{card.detail ? <span className="px-ell">{card.detail}</span> : null}</span>
+        <button type="button" className="px-wk-t px-ell" style={{ display: "block", minWidth: 0 }} onClick={openIt}>{card.label}</button>
+        {/* Its few steps (a deploy: PR merged → Staging · you → Smoke test), what the Overview drew. */}
+        {!failed && card.mini.length ? <Flow nodes={card.mini.map((m) => ({ ...m, icon: m.state === "waiting" ? <Lock size={10} weight="fill" aria-hidden /> : undefined }))} testid={`${tid}-flow`} />
+          : <span className="px-wk-sub">{card.detail ? <span className="px-ell" data-testid={failed ? `${tid}-why` : undefined} title={card.detail}>{tidyIds(card.detail)}</span> : null}</span>}
+        {failed && card.fix?.detail ? <span className="px-wk-sub" data-testid={`${tid}-fixwhy`}>{card.fix.detail}</span> : null}
       </span>
       <span className="px-hide-phone" />
       <span className="px-faces" />
       <span className="px-wk-links" />
-      <span className="px-row">
-        <button type="button" className="px-btn" data-kind="amber" data-size="s" data-testid={`px-work-needs-act-${card.id}`} onClick={() => ctx.open("needs", card.id)}>
-          {card.action?.label || "Open"}</button>
-      </span>
+      {failed ? (
+        <FailedActions retry={card.retry} fix={card.fix} retryReason={card.retry_reason} seeHref={card.see_href} projectId={ctx.projectId} actor={ctx.actor}
+                       testid={tid} onDone={() => { ctx.refreshWork(); ctx.refreshOverview?.(); }} />
+      ) : (
+        <span className="px-row">
+          <button type="button" className="px-btn" data-kind="primary" data-size="s" data-testid={`px-work-needs-act-${card.id}`} onClick={openIt}>
+            {card.action?.label || "Open"}</button>
+        </span>
+      )}
     </div>
   );
 }
@@ -317,11 +336,11 @@ function useRankDrag(all: WorkItem[], rankable: boolean, onRank: (id: string, to
   return { index, can, props };
 }
 
-/** "Stalled · since Tue 14:05": amber, in the viewer's own time. */
+/** "Stalled · since Tue 14:05": a neutral tag, in the viewer's own time. */
 export function StalledTag({ w }: { w: Pick<WorkItem, "stalled_since" | "id"> }) {
   const since = whenLocal(w.stalled_since);
   return (
-    <span className="px-tag" data-tone="amber" data-testid={`px-work-stalled-${w.id}`}
+    <span className="px-tag" data-testid={`px-work-stalled-${w.id}`}
           title={w.stalled_since ? `No progress since ${stampLocal(w.stalled_since)}` : "No progress"}>
       Stalled{since ? ` · since ${since}` : ""}</span>
   );
@@ -360,10 +379,10 @@ function RowDots({ w, local = false, testid = `px-work-flow-${w.id}` }: { w: Wor
   );
 }
 
-/** A WORK ROW (operator 2026-11-19: "the current one does not look good" — run/build/change chips,
- *  a letter-dot pipeline, truncated titles, two buttons). Now: the title (short), one line of
- *  state, a compact flow, and ONE action (+ the change's preview). Everything else — links,
- *  attempts, cost, faces — is in the Work panel the row opens. */
+/** A WORK ROW: the title (short), one line of state, its own Run · Build · Change · Preview as
+ *  compact muted chips (operator 2026-11-21: "at least before I could see the run, build etc."
+ *  — #246 had moved them into the panel only), a compact flow, and ONE action on the right.
+ *  Attempts, cost and faces are in the Work panel the row opens. */
 export function WorkRow({ w, ctx, fresh = false, rank = null }: { w: WorkItem; ctx: PxCtx; fresh?: boolean; rank?: Rank | null }) {
   const [said, setSaid] = useState("");
   const setup = w.kind === "setup" && w.source === "onboarding";
@@ -380,6 +399,10 @@ export function WorkRow({ w, ctx, fresh = false, rank = null }: { w: WorkItem; c
   };
   const said1 = setup ? null : stateSentence(w, next);
   const tag = rowTag(w);
+  // The change's own preview stays the button beside the action (it starts one through the one
+  // write path); its chip would say the same thing twice.
+  const previewBtn = w.state === "needs_you" && !!w.preview_app;
+  const links = useMemo(() => workLinks(w).filter((l) => !(previewBtn && l.key === "preview")), [w, previewBtn]);
   return (
     <div className="px-wk wr" data-s={w.state} data-fresh={fresh || undefined} data-testid={`px-work-${w.id}`}
          tabIndex={rank ? 0 : undefined} aria-label={rank ? `${w.label}, ${rank.position} of ${rank.total} in the rank. Alt+Up or Alt+Down moves it.` : undefined}
@@ -398,7 +421,7 @@ export function WorkRow({ w, ctx, fresh = false, rank = null }: { w: WorkItem; c
         </span>
         <span className="wr-line" data-testid={`px-work-line-${w.id}`}>
           {/* WAITING FOR WHAT, from the server (stuck_work.wait_reason), when the build is not working. */}
-          {w.why && w.state !== "needs_you" ? <WhyLine why={w.why} testId={`px-work-why-${w.id}`} compact />
+          {w.why && w.state !== "needs_you" ? <WhyLine why={{ ...w.why, words: tidyIds(w.why.words) }} testId={`px-work-why-${w.id}`} compact />
             : w.state === "stalled" ? <StalledTag w={w} />
             : setup ? <span><span className="px-tag" data-testid={`px-work-tag-${w.id}`} style={{ marginRight: 6 }}>{tag.label}</span>
                 {w.state === "needs_you" && w.waiting.length ? `Waiting: ${w.waiting[0].label}` : w.detail}</span>
@@ -407,19 +430,21 @@ export function WorkRow({ w, ctx, fresh = false, rank = null }: { w: WorkItem; c
                 {w.next_up ? <><span data-testid={`px-work-next-${w.id}`}>Next up</span>
                   {w.agents[0] ? <span className="px-faces" title={`${w.agents[0].name} plans it`}><Face agent={w.agents[0]} size={18} /></span> : null}</>
                   : w.where ? <span className="px-mono" data-testid={`px-work-where-${w.id}`}>{w.where}</span> : null}</span>
-            : said1 ? <span><b data-tone={said1.tone}>{said1.lead}</b>{" "}
+            : said1 ? <span>{/* The group heading already says "Needs you": a row never repeats it. */}
+                {said1.lead === "Needs you." ? null : <><b data-tone={said1.tone === "amber" ? undefined : said1.tone}>{said1.lead}</b>{" "}</>}
                 {w.state === "running" ? whereNow(w, local) : w.state === "done" || w.state === "failed" ? [said1.rest, doneDay(w)].filter(Boolean).join(" · ") : said1.rest}</span> : null}
         </span>
       </span>
+      <RowLinks links={links} id={w.id} />
       <RowDots w={w} local={local} />
       <span className="wr-act">
-        {w.state === "needs_you" && w.preview_app ? (
+        {previewBtn && w.preview_app ? (
           <WorkPreviewButton app={w.preview_app} projectId={ctx.projectId} actor={ctx.actor} testid={`px-work-preview-${w.id}`} />
         ) : null}
         {w.state === "needs_you" ? (
           // ONE NEXT STEP (workNextStep): the same words the panel's header says; while BOSS still
-          // fixes the change, Merge is offered but not as the amber call.
-          <button type="button" className="px-btn" data-kind={next?.secondary ? undefined : "amber"} data-size="s" data-testid={`px-work-act-${w.id}`} onClick={() => openItem(ctx, w)}
+          // fixes the change, Merge is offered but not as the primary call.
+          <button type="button" className="px-btn" data-kind={next?.secondary ? undefined : "primary"} data-size="s" data-testid={`px-work-act-${w.id}`} onClick={() => openItem(ctx, w)}
                   title={next?.secondary ? next.words : next?.hint ? `${next.label} · ${next.hint}` : undefined}>
             {setup ? (w.action_label || "Decide") : next?.label ?? "Decide"}</button>
         ) : w.state === "planned" ? (
@@ -446,5 +471,55 @@ export function WorkRow({ w, ctx, fresh = false, rank = null }: { w: WorkItem; c
         <Said text={said} />
       </span>
     </div>
+  );
+}
+
+/** The row's own links (lib workLinks, the Work panel header's targets): short muted chips,
+ *  the ids on hover. Only the links that exist. */
+export function RowLinks({ links, id }: { links: WorkLink[]; id: string }) {
+  if (!links.length) return <span className="wr-links" aria-hidden />;
+  return (
+    <span className="wr-links" data-testid={`px-work-links-${id}`}>
+      {links.map((l) => (
+        <a key={l.key} className="wr-chip" href={pxHref(l.href)} title={l.title} data-k={l.key} data-testid={`px-work-${l.key}-${id}`}
+           {...(l.external ? { target: "_blank", rel: "noreferrer noopener" } : {})}
+           onClick={(e) => e.stopPropagation()}>{l.label}</a>
+      ))}
+    </span>
+  );
+}
+
+const LATEST_DOT: Record<WorkState, string | undefined> = { ...DOT, planned: undefined };
+
+/** LATEST, at the top of Work: the project's newest Run, Build, Change and Preview, each a link
+ *  with its work's status dot and how long ago it moved. One row; it wraps on a phone. */
+export function LatestStrip({ items, now }: { items: WorkItem[]; now?: number }) {
+  const latest: LatestLink[] = useMemo(() => latestLinks(items, now), [items, now]);
+  if (!latest.length) return null;
+  return (
+    <div className="wl-latest" role="group" aria-label="Latest" data-testid="px-work-latest">
+      <span className="wl-k">Latest</span>
+      {latest.map((l) => (
+        <a key={l.key} className="wl-item" href={pxHref(l.href)} title={`${l.title} — ${l.work_label} · ${WORK_WORDS[l.state]}`}
+           data-testid={`px-work-latest-${l.key}`} {...(l.external ? { target: "_blank", rel: "noreferrer noopener" } : {})}>
+          <span className="px-dot" data-round data-s={LATEST_DOT[l.state]} aria-label={WORK_WORDS[l.state]} />
+          <b>{l.label}</b>
+          {l.key === "build" || l.key === "preview" ? <span className="wl-what">{l.work_label}</span> : null}
+          {l.ago ? <span className="wl-ago">· {l.ago}</span> : null}
+        </a>
+      ))}
+    </div>
+  );
+}
+
+/** The Needs-you group's heading note: only you can do these (said ONCE, not on every row), and
+ *  the expired-but-answerable ones as one quiet link (what the old bar above the tabs carried). */
+function NeedsHeadNote({ ctx }: { ctx: PxCtx }) {
+  const older = ctx.overview.still_answerable;
+  return (
+    <span className="px-faint" style={{ fontWeight: 400 }}> · only you can do these
+      {older ? <> · <a href={pxHref(older.href)} data-testid="px-work-needs-older"
+                       title="Their deadline passed with nothing applied; you can still answer them in Approvals">
+        {older.count} older · {waitingSinceWords(older.since)}</a></> : null}</span>
   );
 }

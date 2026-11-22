@@ -5,8 +5,8 @@
  *
  *   Projects / HelpDesk AI Demo / Work                                       (breadcrumb)
  *   [HD] HelpDesk AI Demo  repo ↗ · staging ↗ · ● Healthy · Working   [Helm · Ask]  [+ New work]
- *   ! 2 need you  [Merge PR #3] [Pick prod host]                             (always visible)
- *   Overview · Work · Roadmap · Repo & knowledge · Deployments · Health · Settings
+ *   Overview · Work 9 (2) · Roadmap · Repo & knowledge · Deployments · Health · Settings
+ *     (the amber (2) is what needs you — ONE count; the list lives in Work's Needs-you group)
  *   <tab>                                                   drawers: &drawer=<kind>:<id>
  *
  * Everything about ONE project is here, at most two clicks away; shared things (servers, the
@@ -14,18 +14,19 @@
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowSquareOut, ChatCircleDots, CircleNotch, WarningCircle, Check, ClipboardText, Compass, GearSix, GitBranch, Globe, HandWaving, Heartbeat, House, Kanban, MapTrifold,
-  Plus, RocketLaunch, TreeStructure, GitCommit, GitMerge, CloudCheck, ListChecks, GithubLogo, HardDrives, type Icon,
+  ArrowSquareOut, ChatCircleDots, CircleNotch, WarningCircle, Compass, GearSix, GitBranch, Globe, Heartbeat, House, Kanban, MapTrifold,
+  Plus, RocketLaunch, TreeStructure, GitCommit, GithubLogo, HardDrives, type Icon,
 } from "@phosphor-icons/react";
 
 import { GatedButton, useGate } from "../../components/gated";
 import { useAreaKeydown } from "../../lib/area-keys";
 import { isLocalRepo } from "../../lib/repo-links";
+import { tidyIds } from "../../lib/work-links";
 import { notifyChanged } from "../changed";
 import { LocalPublishChip } from "./publish-sheet";
 import { openDockAbout } from "../../lib/dock-subject";
 import {
-  PX_PATHS, TAB_WORDS, isMissingStatus, navigateTo, needsYouCards, waitingSinceWords, overviewFromStart, parseOnboarding, parseOverview, parseWork, projectHref, pxHref, readPxUrl, usePxRead,
+  PX_PATHS, TAB_WORDS, isMissingStatus, navigateTo, needsYouCards, overviewFromStart, parseOnboarding, parseOverview, parseWork, projectHref, pxHref, readPxUrl, usePxRead,
   workFromStartRow, writePxUrl, type Overview, type Onboarding, type PxUrl, type Tab, type WorkList, a, o,
 } from "../../lib/project-experience";
 import { FX_ONBOARDING, FX_ONBOARDING_PROJECT, FX_OVERVIEW, FX_WORK } from "../../lib/project-experience-fixtures";
@@ -219,6 +220,8 @@ export function ProjectPage({ projectId, actor, orgId, homeId }: { projectId: st
   // (or has not started: its Start onboarding button).
   const obView = url.view === "onboarding" || (url.tab === "overview" && onboardingStage);
   // The tab's badge is the Work list's "All" count (wireframe: Work 9 = All 9), never a second number.
+  // What waits on a person: ONE count (lib needsYouCards, the Work tab's own Needs-you list).
+  const needsCount = needsYouCards(overview.needs_you, onboardingNow ? ob : null, ctx.work?.items ?? []).length;
   const openCount = ctx.work ? ctx.work.items.length
     : Object.values(overview.tiles.open_work?.by_state ?? {}).reduce((x, y) => x + y, 0) || undefined;
 
@@ -229,8 +232,9 @@ export function ProjectPage({ projectId, actor, orgId, homeId }: { projectId: st
       <div className="px-sticky" data-sticky="" data-testid="px-sticky" ref={stickyRef}>
         {/* The top bar carries the breadcrumb (Projects / <project> / <tab>); the page draws none (04). */}
         <Header ctx={ctx} onboarding={onboardingNow || (obView && ob?.state === "running")} />
-        {/* Screen 10 draws no Needs-you bar or tabs: its "Only you can" card is that list. */}
-        {!obView ? <NeedsBar ctx={ctx} onboarding={onboardingNow ? ob : null} /> : null}
+        {/* NEEDS YOU ONCE PER SCREEN (operator 2026-11-21: "Needs you in lots of places … all
+            showing yellow"): no bar above the tabs — the Work tab carries the one amber count
+            and its Needs-you group holds the list. Screen 10 draws no tabs. */}
         {!obView ? <div className="px-tabs" role="tablist" aria-label="Project" data-testid="px-tabs"
              onKeyDown={(e) => {
                if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
@@ -242,12 +246,15 @@ export function ProjectPage({ projectId, actor, orgId, homeId }: { projectId: st
           {(Object.keys(TAB_WORDS) as Tab[]).map((t) => {
             const I = TAB_ICONS[t];
             const count = t === "work" ? openCount : t === "roadmap" ? (ctx.overview.roadmap_count ?? undefined) : undefined;
+            const needs = t === "work" ? needsCount : 0;
             return (
               <button key={t} type="button" role="tab" className="px-tab" aria-selected={url.tab === t} tabIndex={url.tab === t ? 0 : -1}
                       ref={url.tab === t ? (el) => { el?.scrollIntoView?.({ block: "nearest", inline: "nearest" }); } : undefined}
                       aria-controls="px-tabpanel" data-testid={`px-tab-${t}`} onClick={() => tab(t)}>
                 <I size={14} weight={url.tab === t ? "fill" : "regular"} aria-hidden />{TAB_WORDS[t]}
                 {count ? <span className="px-nbadge">{count}</span> : null}
+                {needs ? <span className="px-nbadge" data-tone="amber" data-testid="px-tab-work-needs" title={`${needs} need${needs === 1 ? "s" : ""} you — the Needs-you group in Work`}
+                               aria-label={`${needs} need${needs === 1 ? "s" : ""} you`}>{needs}</span> : null}
               </button>
             );
           })}
@@ -293,13 +300,12 @@ export function healthReasonSentence(reason: string | null | undefined): string 
   return trimmed ? trimmed : null;
 }
 
-/** Beside the health chip. More than six words is a paragraph. */
-export function HealthWhy({ sentence }: { sentence: string | null }) {
-  if (!sentence) return null;
-  const long = sentence.split(/\s+/).filter(Boolean).length > 6;
-  return long
-    ? <p data-testid="px-head-health-why" data-user-text>{sentence}</p>
-    : <span data-testid="px-head-health-why" data-user-text>{sentence}</span>;
+/** WHY, ONE PRESS AWAY (operator 2026-11-21: the deploy reason filled the header as a huge
+ *  paragraph of engine prose with raw build ids). Beside a status chip: a small "Why?" toggle;
+ *  the reason itself opens below the chips as a small block (HeaderWhyBlock), never at display
+ *  size and never inline in the status line. */
+export function HealthWhy({ sentence, open = false, onToggle }: { sentence: string | null; open?: boolean; onToggle?: () => void }) {
+  return <WhyToggle sentence={sentence} open={open} onToggle={onToggle} testid="px-head-health-why" />;
 }
 
 /** The deploy chip's reason. A trimmed reason, or nothing when blank. */
@@ -308,16 +314,42 @@ export function deployChipReasonSentence(reason: string | null | undefined): str
   return trimmed ? trimmed : null;
 }
 
-/** Beside the deploy chip. More than six words is a paragraph. */
-export function DeployChipWhy({ sentence }: { sentence: string | null }) {
-  if (!sentence) return null;
-  const long = sentence.split(/\s+/).filter(Boolean).length > 6;
-  return long
-    ? <p data-testid="px-head-deploy-why" data-user-text>{sentence}</p>
-    : <span data-testid="px-head-deploy-why" data-user-text>{sentence}</span>;
+/** The deploy chip's Why? toggle (the reason opens in HeaderWhyBlock). */
+export function DeployChipWhy({ sentence, open = false, onToggle }: { sentence: string | null; open?: boolean; onToggle?: () => void }) {
+  return <WhyToggle sentence={sentence} open={open} onToggle={onToggle} testid="px-head-deploy-why" />;
 }
 
-function Header({ ctx, onboarding }: { ctx: PxCtx; onboarding: boolean }) {
+function WhyToggle({ sentence, open, onToggle, testid }: { sentence: string | null; open: boolean; onToggle?: () => void; testid: string }) {
+  if (!sentence) return null;
+  return (
+    <button type="button" className="px-why-t" aria-expanded={open} aria-controls="px-head-why-block" data-testid={testid}
+            onClick={(e) => { e.stopPropagation(); onToggle?.(); }}>Why?</button>
+  );
+}
+
+/** The opened reason: small, muted, ids shortened ("build ad50ce9f", never `crun_…` in full). */
+export function HeaderWhyBlock({ sentence }: { sentence: string | null }) {
+  if (!sentence) return null;
+  return <div className="px-why-block" id="px-head-why-block" role="note" data-testid="px-head-why-block" data-user-text>{tidyIds(sentence)}</div>;
+}
+
+/** The header's failure chip: the engine's word, except "Needs you" — that is the Work tab's
+ *  one count, never a second chip up here (operator 2026-11-21). */
+export function failedWord(word: string | null | undefined): string {
+  const w = String(word ?? "").trim();
+  if (!w || /^needs you$/i.test(w)) return "Build failed";
+  return /^needs your ok$/i.test(w) ? "Waiting for your OK" : w;
+}
+
+/** A failure's short next step (its fix's own label), at most six words, ids shortened. */
+export function statusHint(label: string | null | undefined): string {
+  const words = tidyIds(String(label ?? "").trim()).split(/\s+/).filter(Boolean);
+  if (!words.length) return "";
+  const cut = words.slice(0, 6).join(" ");
+  return words.length > 6 ? `${cut}…` : cut;
+}
+
+export function Header({ ctx, onboarding }: { ctx: PxCtx; onboarding: boolean }) {
   const p = ctx.overview.project;
   const repo = p.repos[0];
   const staging = ctx.overview.tiles.staging;
@@ -329,12 +361,19 @@ function Header({ ctx, onboarding }: { ctx: PxCtx; onboarding: boolean }) {
   const healthWhy = p.health_reason || staging?.health_reason || "";
   const captain = ctx.overview.captain;
   const url = usePxUrl();
+  // Which status's reason is open below the chips (one at a time).
+  const [why, setWhy] = useState<"deploy" | "health" | "failed" | null>(null);
+  const flip = (k: "deploy" | "health" | "failed") => () => setWhy((cur) => (cur === k ? null : k));
+  const deployWhy = p.deploy && ["deploying", "waiting", "fixing", "failed"].includes(p.deploy.state) ? deployChipReasonSentence(p.deploy.reason) : null;
+  const failedWhy = !onboarding && p.build_failed ? healthReasonSentence(p.build_failed.reason) : null;
+  const hint = !onboarding && p.build_failed ? statusHint(p.build_failed.fix?.label) : "";
+  const openWhy = why === "deploy" ? deployWhy : why === "health" ? healthReasonSentence(healthWhy) : why === "failed" ? failedWhy : null;
   return (
     <div className="px-head" data-testid="px-head">
       <span className="px-mark" aria-hidden title={p.name}>{p.initials}</span>
       <div className="px-title">
         <h1>{p.name}</h1>
-        <div className="px-row">
+        <div className="px-row" data-testid="px-head-statusline">
           {repo ? (
             <a className="px-hchip" href={pxHref(`?project_id=${encodeURIComponent(ctx.projectId)}&area=project&tab=knowledge`)} data-testid="px-head-repo"
                title="Repository — opens Repo & knowledge"
@@ -374,7 +413,7 @@ function Header({ ctx, onboarding }: { ctx: PxCtx; onboarding: boolean }) {
                   // BOSS acting on a failed deploy, or the fix waiting on approval: the engine's words.
                   : p.deploy.state === "fixing" ? (p.deploy.word || "BOSS is fixing the deploy")
                   : p.deploy.state === "waiting" ? (p.deploy.word.startsWith("Fixed") ? p.deploy.word : "Deploy waiting for approval") : "Last deploy failed"}</a>
-              <DeployChipWhy sentence={deployChipReasonSentence(p.deploy.reason)} />
+              <DeployChipWhy sentence={deployWhy} open={why === "deploy"} onToggle={flip("deploy")} />
             </>
           ) : null}
           {/* THE HEALTH CHIP, ON EVERY TAB (12-24): a link to this project's Health tab — the
@@ -388,7 +427,7 @@ function Header({ ctx, onboarding }: { ctx: PxCtx; onboarding: boolean }) {
                      staging?.uptime_pct != null ? `${staging.label || "Staging"} ${staging.uptime_pct}% up` : "",
                      p95Words(staging?.p95_ms, staging?.window)].filter(Boolean).join(" · ") + " — opens Health"}>
             <span className="px-dot" data-s={health} data-round aria-hidden />{healthChipText(p.live_url || health !== "unknown" ? HEALTH_WORD[health] : "No health yet", p95Words(staging?.p95_ms, staging?.window))}</a>
-          <HealthWhy sentence={healthReasonSentence(healthWhy)} />
+          <HealthWhy sentence={healthReasonSentence(healthWhy)} open={why === "health"} onToggle={flip("health")} />
           {/* A FAILED LATEST BUILD (engine build_failure): red "Build failed" / "Deploy failed", its
               reason on hover, a link to the build's row — never "Working" over a build that
               failed. ON A LIVE PROJECT it sits BESIDE the stage chip ("On staging" stays). */}
@@ -397,14 +436,19 @@ function Header({ ctx, onboarding }: { ctx: PxCtx; onboarding: boolean }) {
                href={pxHref(p.build_failed.work_href || `?project_id=${encodeURIComponent(ctx.projectId)}&area=project&tab=work`)}
                title={`${p.build_failed.label}: ${p.build_failed.reason} — opens the build`}
                onClick={(e) => { if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return; e.preventDefault(); ctx.open("work", p.build_failed!.id); }}>
-              <WarningCircle size={11} aria-hidden /> {p.build_failed.word || "Build failed"}</a>
+              <WarningCircle size={11} aria-hidden /> {failedWord(p.build_failed.word)}</a>
           ) : null}
+          {hint ? (p.build_failed?.fix?.href
+            ? <a className="px-head-hint" href={pxHref(p.build_failed.fix.href)} data-testid="px-head-hint">{hint}</a>
+            : <span className="px-head-hint" data-testid="px-head-hint">{hint}</span>) : null}
+          {!onboarding && p.build_failed ? <WhyToggle sentence={failedWhy} open={why === "failed"} onToggle={flip("failed")} testid="px-head-failed-why" /> : null}
           {!onboarding && p.build_failed && !p.build_failed.beside ? null : (
           <span className="px-tag" data-tone={onboarding ? "blue" : "green"} data-testid="px-head-status" title="Project stage on the journey">{onboarding ? <><Compass size={11} aria-hidden /> Onboarding</>
             : <>{(() => { const I = STAGE_ICON[p.stage] ?? Compass; return <I size={11} aria-hidden />; })()} {p.status_label || "Ready"}</>}</span>
           )}
           {onboarding && elapsed ? <span className="px-mono px-faint" style={{ fontSize: "var(--fs-meta)" }} data-testid="px-head-elapsed">{clockWords(elapsed)}</span> : null}
         </div>
+        <HeaderWhyBlock sentence={openWhy} />
       </div>
       <span className="px-spacer" />
       {captain ? (
@@ -430,57 +474,6 @@ function Header({ ctx, onboarding }: { ctx: PxCtx; onboarding: boolean }) {
         <ProjectMoreMenu projectId={ctx.projectId} name={p.name} home={!!ctx.homeId && ctx.homeId === ctx.projectId}
                          onSettings={() => ctx.tab("settings")} />
       ) : null}
-    </div>
-  );
-}
-
-/** NEEDS YOU, on every tab: what waits on a person, each one press from its action. */
-function NeedsBar({ ctx, onboarding }: { ctx: PxCtx; onboarding: Onboarding | null }) {
-  // The overview already carries the onboarding agent's "only you" items (§14: `onb:<key>`);
-  // the live onboarding record replaces them while the project onboards, never doubles them.
-  // ONE SOURCE (lib needsYouCards): the Work tab's Needs-you count is this same list's length.
-  const all = needsYouCards(ctx.overview.needs_you, onboarding, ctx.work?.items ?? []);
-  const yours = onboarding?.only_you ?? [];
-  // The live onboarding record's items keep their own links below; every other card is a button.
-  const items = yours.length ? all.filter((it) => !it.id.startsWith("onb:")) : all;
-  const n = all.length;
-  // EXPIRED BUT STILL ANSWERABLE (engine needs.still_answerable): never counted as waiting,
-  // never hidden — one quiet link to Approvals' Expired view, where each still has its buttons.
-  const older = ctx.overview.still_answerable;
-  const olderLink = older ? (
-    <a className="px-needs-item px-faint" href={pxHref(older.href)} data-testid="px-needs-older"
-       title="Their deadline passed with nothing applied; you can still answer them in Approvals">
-      {older.count} older · {waitingSinceWords(older.since)}</a>
-  ) : null;
-  if (!n) {
-    return (
-      <div className="px-needs-bar" data-calm data-testid="px-needs-bar" role="status">
-        <Check size={14} weight="bold" style={{ color: "var(--green)" }} aria-hidden /> <span>Nothing needs you</span>
-        {olderLink}
-      </div>
-    );
-  }
-  return (
-    <div className="px-needs-bar" data-testid="px-needs-bar" role="region" aria-label={`${n} need you`}>
-      <span className="px-ny-ico" aria-hidden>!</span>
-      <b>{n} need{n === 1 ? "s" : ""} you</b>
-      {items.map((it) => (
-        <button key={it.id} type="button" className="px-needs-item" data-testid={`px-needs-${it.id}`} data-tone={it.kind === "failed" ? "red" : undefined}
-                title={it.kind === "failed" ? it.detail : undefined}
-                onClick={() => (it.kind === "failed" && it.work_id ? ctx.open("work", it.work_id) : ctx.open("needs", it.id))}>
-          {it.kind === "failed" ? <WarningCircle size={12} aria-hidden /> : it.kind === "merge" ? <GitMerge size={12} aria-hidden /> : it.kind === "deploy" ? <RocketLaunch size={12} aria-hidden />
-            : it.icon === "cloud" ? <CloudCheck size={12} aria-hidden /> : it.kind === "plan" ? <ListChecks size={12} aria-hidden /> : <HandWaving size={12} aria-hidden />}{it.label}
-        </button>
-      ))}
-      {yours.map((it) => (
-        <a key={it.key} className="px-needs-item" href={it.action ? pxHref(it.action.href) : "#"} data-testid={`px-needs-ob-${it.key}`}
-           onClick={it.action ? undefined : (e) => { e.preventDefault(); ctx.tab("overview"); }}>
-          <ClipboardText size={12} aria-hidden />{it.label}</a>
-      ))}
-      {olderLink}
-      <span className="px-spacer" />
-      {/* About a minute of the person's time per item (X-39 "≈ 2 min"); hidden on a phone. */}
-      <span className="px-faint px-hide-phone" title="About how long these take you" data-testid="px-needs-time">≈ {n} min</span>
     </div>
   );
 }

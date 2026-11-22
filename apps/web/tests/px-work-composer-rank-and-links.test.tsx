@@ -321,11 +321,12 @@ describe("Onboarding is a row (05-27)", () => {
   });
 });
 
-describe("Needs you is one list (header bar = Work tab)", () => {
-  it("the Work tab's Needs-you count is the bar's, and Pick a prod host is in both", async () => {
+describe("Needs you is one list (the Work tab's count = its group)", () => {
+  it("the Work tab's amber count is its Needs-you filter's, there is no bar above the tabs, and Pick a prod host is in the group", async () => {
     engine();
     await openWork();
-    expect(tid("px-needs-bar")!.textContent).toContain("2 need you");
+    expect(tid("px-needs-bar")).toBeNull();
+    expect(tid("px-tab-work-needs")!.textContent).toBe("2");
     expect(tid("px-work-f-needs_you")!.textContent).toContain("2");
     expect(tid("px-work-wi_visual")).not.toBeNull();
     expect(tid("px-work-needs-dec_prodhost")!.textContent).toContain("Pick a prod host");

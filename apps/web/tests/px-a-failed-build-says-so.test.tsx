@@ -74,8 +74,8 @@ function engine(overview: unknown = OVERVIEW) {
   });
 }
 
-async function openProject() {
-  window.history.replaceState(null, "", `/?org=org_1&project_id=${P}&area=project`);
+async function openProject(tab = "") {
+  window.history.replaceState(null, "", `/?org=org_1&project_id=${P}&area=project${tab ? `&tab=${tab}` : ""}`);
   await mountAs(<ProjectPage projectId={P} actor="ceo" orgId="org_1" />, "owner");
   await settle(10);
 }
@@ -115,29 +115,29 @@ describe("the project page says a build failed", () => {
     expect(tid(`px-ov-failed-${RUN}`)!.textContent).toBe("Failed");
   });
 
-  it("Needs you leads with it: the reason, Retry (the build's resume) and See what happened", async () => {
+  it("Work's Needs-you group carries it: the reason, Retry (the build's resume) and See what happened", async () => {
     engine();
+    // The Overview counts it and links to the group (operator 2026-11-21: Needs you once per screen).
     await openProject();
-    const card = tid(`px-ov-ny-failed:${RUN}`)!;
-    expect(card.classList.contains("px-ny-failed")).toBe(true);
-    expect(card.querySelector(":scope > .px-ny-b")).not.toBeNull();
-    expect(tid(`px-ov-ny-failed:${RUN}-actions`)!.parentElement).toBe(card);
+    expect(tid("px-ov-needs-open")!.textContent).toContain("2 items wait on you");
+    expect(tid("px-needs-bar")).toBeNull();
+    expect(tid("px-tab-work-needs")!.textContent).toBe("2");
+    await press(tid("px-ov-needs-open")!);
+    expect(params().get("tab")).toBe("work");
+    const card = tid(`px-work-needs-failed:${RUN}`)!;
+    expect(card.hasAttribute("data-failed")).toBe(true);
+    expect(tid(`px-work-needs-failed:${RUN}-actions`)!.parentElement).toBe(card);
     expect(card.textContent).toContain("Build failed: Recipe box");
-    expect(tid(`px-ov-ny-why-failed:${RUN}`)!.textContent).toBe(REASON);
+    expect(tid(`px-work-needs-failed:${RUN}-why`)!.textContent).toBe(REASON);
     expect(card.textContent).not.toMatch(/substrate|fatal:/);
-    // First in the card and first on the bar, in red.
-    expect(tid("px-ov-needs")!.querySelector(".px-ny")!.getAttribute("data-testid")).toBe(`px-ov-ny-failed:${RUN}`);
-    const pill = tid(`px-needs-failed:${RUN}`)!;
-    expect(pill.getAttribute("data-tone")).toBe("red");
-    expect(tid("px-needs-bar")!.textContent).toContain("2 need you");
-    const see = tid(`px-ov-ny-failed:${RUN}-see`)!;
+    const see = tid(`px-work-needs-failed:${RUN}-see`)!;
     expect(see.getAttribute("href")).toContain(`area=code_tasks&build=${RUN}`);
-    await press(tid(`px-ov-ny-failed:${RUN}-retry`));
+    await press(tid(`px-work-needs-failed:${RUN}-retry`));
     expect(retry).toHaveBeenCalledTimes(1);
     expect(retry.mock.calls[0][0].get("run_id")).toBe(RUN);
-    expect(tid(`px-ov-ny-failed:${RUN}-retry-said`)!.textContent).toBe("Attempt 2 started");
-    // The bar's pill opens the build's row, not an empty needs drawer.
-    await press(pill);
+    expect(tid(`px-work-needs-failed:${RUN}-retry-said`)!.textContent).toBe("Attempt 2 started");
+    // Its title opens the build's row, not an empty needs drawer.
+    await press(card.querySelector("button.px-wk-t")!);
     expect(params().get("drawer")).toBe(`work:${RUN}`);
   });
 });
@@ -154,17 +154,17 @@ const NEEDS_HUMAN = {
 describe("a failure only a person can fix", () => {
   it("names the fix first with its link, and keeps Retry beside it, secondary, for after", async () => {
     engine(NEEDS_HUMAN);
-    await openProject();
-    const fix = tid(`px-ov-ny-failed:${RUN}-fix`)!;
+    await openProject("work");
+    const fix = tid(`px-work-needs-failed:${RUN}-fix`)!;
     expect(fix.textContent).toBe("Sign in again in Setup › Models");
     expect(fix.getAttribute("href")).toContain("area=setup");
     expect(fix.getAttribute("data-kind")).toBe("primary");
-    const again = tid(`px-ov-ny-failed:${RUN}-retry`)!;
+    const again = tid(`px-work-needs-failed:${RUN}-retry`)!;
     expect(again.getAttribute("data-kind")).toBeNull();
     // The fix comes first in the card's answers.
-    const answers = tid(`px-ov-ny-failed:${RUN}-actions`)!;
+    const answers = tid(`px-work-needs-failed:${RUN}-actions`)!;
     expect(answers.firstElementChild).toBe(fix);
-    expect(tid(`px-ov-ny-fixwhy-failed:${RUN}`)!.textContent).toContain("Reconnect");
+    expect(tid(`px-work-needs-failed:${RUN}-fixwhy`)!.textContent).toContain("Reconnect");
   });
 
   it("the needs drawer draws the same answers, never a link to the API's retry URL", async () => {
@@ -224,8 +224,8 @@ function lineageEngine() {
 describe("a completed build with a failed follow-up (the laptop's lineage)", () => {
   it("the card's Retry resumes the FAILED follow-up, never the completed build", async () => {
     lineageEngine();
-    await openProject();
-    const r = tid(`px-ov-ny-failed:${ROOT}-retry`)!;
+    await openProject("work");
+    const r = tid(`px-work-needs-failed:${ROOT}-retry`)!;
     expect(r.getAttribute("data-run-id")).toBe(FOLLOW);
     await press(r);
     expect(retry).toHaveBeenCalledTimes(1);
@@ -234,8 +234,8 @@ describe("a completed build with a failed follow-up (the laptop's lineage)", () 
 
   it("the work drawer behind the pill offers Retry and See what happened, not just words", async () => {
     lineageEngine();
-    await openProject();
-    await press(tid(`px-needs-failed:${ROOT}`));
+    await openProject("work");
+    await press(tid(`px-work-needs-failed:${ROOT}`)!.querySelector("button.px-wk-t")!);
     expect(params().get("drawer")).toBe(`work:${ROOT}`);
     const box = tid("px-drawer-work-failed")!;
     expect(box.textContent).toContain("Follow-up failed");
