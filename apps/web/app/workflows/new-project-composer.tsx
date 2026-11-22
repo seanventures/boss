@@ -50,7 +50,7 @@ import { AppContext } from "./app-context";
 import { createLinkAction } from "../factory/links-actions";
 import { TalksTo, linkRequests, talksToProblem, type TalksToRow } from "./talks-to";
 import { defaultInputs, invalidInputs, missingRequired, startsFromABrief, suppliedInputs,
-         typedInputs, workflowInputFields, startsFromAFile, fileFormFields, fileStartExtras } from "../../lib/workflow-inputs";
+         typedInputs, workflowInputFields, startsFromAFile, fileFormFields, fileStartExtras, suggestedTarget } from "../../lib/workflow-inputs";
 import { ReadinessPanel, WIZARD_COLLECTS, unaccepted, useWorkflowReadiness, type Readiness }
   from "../workflow-readiness-ui";
 import { get, post } from "./delivery-api";
@@ -1158,7 +1158,9 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
                 {/* A paragraph gets a box big enough to read back. */}
                 {fromFile && field.name === "start_from" ? (
                   <FileUpload id={id} name={value} onFile={(name, text) => setDraft((d) => ({
-                    ...d, inputs: { ...d.inputs, start_from: name, start_from_content: text } }))} />
+                    ...d, inputs: { ...d.inputs, start_from: name, start_from_content: text,
+                                    target_path: suggestedTarget(name, declaredInputs.find((f) => f.name === "target_path"),
+                                                                 d.inputs.target_path ?? "") } }))} />
                 ) : field.kind === "multiline" ? (
                   <textarea {...common} className="dw-new-input" rows={4} value={value}
                             placeholder={field.example}

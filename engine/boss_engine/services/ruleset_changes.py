@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+import secrets
 from typing import Any, Mapping, Optional, Sequence
 
 from . import rulesets as _rulesets
@@ -314,10 +315,17 @@ def propose(c: Any, settings: Any, project_id: str, ruleset_id: str, *,
         raise RulesetChangeError(409, "stale_base", "The ruleset changed since you opened it.",
                                  ruleset=_view(base, path))
     version = int(base.get("version") or 0) + 1
-    work = f"boss/ruleset/{ruleset_id}-v{version}"
+    # EACH PROPOSAL ON ITS OWN BRANCH (dry run 4: #20 and #22 shared boss/ruleset/northgate-v2,
+    # so closing one closed the other): the version plus a short id.
+    stem = f"boss/ruleset/{ruleset_id}-v{version}"
+    work = f"{stem}-{secrets.token_hex(3)}"
     # ONE OPEN PROPOSAL PER VERSION (dry run 3, gap 9: #20 "v2" opened beside #15 "v2"): an
     # open change for this version is named, with its link, never duplicated.
-    already = adapter.open_pull_request_for(work)
+    already = adapter.open_pull_request_for(stem)
+    _prefixed = getattr(adapter, "open_pull_request_with_prefix", None)
+    if already is None and callable(_prefixed):
+        # Only this version's own ids: ruleset "northgate-v2" v1 is never "northgate" v2.
+        already = _prefixed(f"{stem}-", r"[0-9a-f]{6}")
     if already is not None:
         raise RulesetChangeError(
             409, "already_open", f"v{version} is already open as change #{already['number']}.",
@@ -356,7 +364,7 @@ def propose(c: Any, settings: Any, project_id: str, ruleset_id: str, *,
                 "p0_downgrades": weaker, "created": created})
     return {"change": pr.number, "url": url, "decision_id": decision, "version": version,
             "second_approver": bool(weaker), "p0_downgrades": weaker, "created": created,
-            "path": path}
+            "path": path, "branch": work}
 
 
 # ── .boss/validators.yaml, proposed the same way ───────────────────────────────────────────────

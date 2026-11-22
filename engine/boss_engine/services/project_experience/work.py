@@ -85,7 +85,7 @@ def run_state(status: str, gate_open: bool) -> str:
         return "planned"
     if status in LIVE_RUN:
         return "running"
-    if status == "completed":
+    if status in ("completed", "merged"):
         return "done"
     if status == "cancelled":
         return "done"
@@ -611,6 +611,10 @@ def _attempt_item(project_id: str, r: Mapping[str, Any], costs: Mapping[str, int
     # An older attempt left `repairing` handed its work to the next one: history, not stuck.
     if state == "stalled" and str(r["id"]) != latest_id:
         state = "handed_on"
+    # A FINISHED BUILD IS DONE (dry run 4: a completed follow-up read "Waiting"): the merge its
+    # change waits on is the work's next step, said on the work's own row.
+    if state == "needs_you" and str(r.get("status") or "") == "completed":
+        state = "done"
     return {
         "id": str(r["id"]), "label": r.get("attempt_label") or "Build",
         "kind": r.get("attempt_kind") or "build", "title": r.get("title") or "",
@@ -978,6 +982,10 @@ def _run_items(connection: Connection, project_id: str, limit: int,
              if s["output"].get("pull_request_url")), None) or next(
             (b["pull_request_url"] for b in reversed(members) if b["pull_request_url"]), None)
         status = str(r["status"])
+        # A MERGED CHANGE IS DONE (dry run 4: change #18 merged, its wrapper run was cancelled
+        # and the row read "Cancelled"): the work's status is the change's.
+        if status == "cancelled" and merge_links["merged_pr"] and merge is None:
+            status = "merged"
         state = run_state(status, gate is not None or merge is not None)
         since = None
         if latest is not None and latest["_state"] == "stalled" and state == "running":

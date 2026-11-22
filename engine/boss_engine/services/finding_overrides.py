@@ -517,6 +517,15 @@ def finding_target_line(target_text: str, finding: Mapping[str, Any]) -> Optiona
     if isinstance(at, int) and 0 < at <= len(b) and mask(b[at - 1]) == first:
         return at
     hits = [n for n, x in enumerate(b, start=1) if mask(x) == first]
+    if hits:
+        return hits[0] if len(hits) == 1 else None
+    # THE FIXER REWORDED IT (dry run 4: `- path: "/v1/admin/accounts"`, quoted): the same line
+    # but for quoting and spacing.
+    from .input_fidelity import _loose
+
+    if isinstance(at, int) and 0 < at <= len(b) and _loose(mask(b[at - 1])) == _loose(first):
+        return at
+    hits = [n for n, x in enumerate(b, start=1) if _loose(mask(x)) == _loose(first)]
     return hits[0] if len(hits) == 1 else None
 
 

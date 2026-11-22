@@ -592,6 +592,16 @@ def record(*, c: Mapping[str, Any], validator: Mapping[str, Any], version: Optio
             f["fixed_if_released"] = True
         if f["status"] == "open":
             f["fix_kind"] = "human"
+    # A FINDING THAT WENT WITH A BLOCK ONLY A PERSON MAY REMOVE (dry run 4, V-08: a size cap on
+    # the admin route a `human` rule holds) is the person's, never "fixed by agent".
+    human_blocks = [block(in_lines, int(f["location"]["partner_line"]) - 1) for f in findings
+                    if (rules.get(f["source"]["rule_id"]) or {}).get("autofix") in HUMAN_AUTOFIX
+                    and isinstance((f.get("location") or {}).get("partner_line"), int)]
+    for f in findings:
+        p = (f.get("location") or {}).get("partner_line")
+        if f.get("fixed_by") == "removed_with_block" and isinstance(p, int) and any(
+                lo <= p - 1 < hi for lo, hi in human_blocks if (lo, hi) != (0, len(in_lines))):
+            f["fix_kind"] = "human"
 
     # A FIX MAY NOT MAKE THE CONFIG LESS SAFE: unexplained / host-moving changes on security
     # keys are P0 guard findings, and a P0 sharing their hunk (or one whose hunk introduced a new

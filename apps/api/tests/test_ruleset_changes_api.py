@@ -79,7 +79,8 @@ def test_a_proposal_opens_ruleset_v4_as_a_change(client, world, engine, repo_roo
     assert got.status_code == 200, got.text
     body = got.json()
     assert isinstance(body["change"], int) and body["second_approver"] is False
-    new = yaml.safe_load(local_repo.read_file(bare, "boss/ruleset/northgate-v4",
+    assert body["branch"].startswith("boss/ruleset/northgate-v4-")
+    new = yaml.safe_load(local_repo.read_file(bare, body["branch"],
                                               ".boss/rulesets/northgate.yaml"))
     assert new["version"] == 4 and new["rules"]["pii-fields-declared"]["severity"] == "P1"
     assert new["rules"]["pii-fields-declared"]["guide"] == "Declare it."
@@ -161,7 +162,7 @@ def test_a_proposal_creates_a_ruleset_when_the_project_has_none(client, world, e
     body = got.json()
     assert body["created"] is True and body["version"] == 1
     assert body["path"] == ".boss/rulesets/northgate.yaml"
-    new = yaml.safe_load(local_repo.read_file(bare, "boss/ruleset/northgate-v1",
+    new = yaml.safe_load(local_repo.read_file(bare, body["branch"],
                                               ".boss/rulesets/northgate.yaml"))
     assert new["ruleset"] == "northgate" and new["version"] == 1 and new["validator"] == "gwlint"
     assert new["rules"]["no-inlined-secrets"] == {
@@ -257,12 +258,15 @@ def test_a_second_proposal_of_the_same_version_names_the_open_one(client, world,
     with engine.begin() as db:
         db.execute(text("UPDATE local_change_sets SET state = 'closed' WHERE number = :n "
                         "AND head_sha = :h"),
-                   {"n": n, "h": local_repo.branch_sha(bare, "boss/ruleset/northgate-v4")})
+                   {"n": n, "h": local_repo.branch_sha(bare, first.json()["branch"])})
     with _owner(world):
         third = send("P0")
     assert third.status_code == 200, third.text
     assert third.json()["change"] != n
-    count = local_repo.git(["rev-list", "--count", "main..boss/ruleset/northgate-v4"], git_dir=bare)
+    # Dry run 4: each proposal has its own branch, so closing one never closes the other.
+    assert third.json()["branch"] != first.json()["branch"]
+    count = local_repo.git(["rev-list", "--count", f"main..{third.json()['branch']}"],
+                           git_dir=bare)
     assert count == "1"
 
 

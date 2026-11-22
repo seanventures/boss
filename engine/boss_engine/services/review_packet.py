@@ -366,6 +366,38 @@ def from_followups(items: Iterable[Mapping[str, Any]], bar: Optional[str]) -> li
     return out
 
 
+#: "<named test> (still) fails / is failing / is red": the test is SAID to fail. Never "fails to
+#: cover", "would fail if", or a test merely named near the word (a real coverage finding).
+_FAILS_CLAIM = re.compile(
+    r"(?:\bTest[A-Z_]\w*|\btest_\w+|\w+\.test\.\w+)`?\s+(?:still\s+|now\s+|also\s+)?"
+    r"(?:fails|failed|is\s+failing|is\s+failed|is\s+red|goes\s+red|is\s+broken|broke|breaks)"
+    r"\b(?!\s+to\b)", re.I)
+
+
+def judge_review_claims(findings: list[dict], test_rows: Sequence[Mapping[str, Any]]) -> list[dict]:
+    """A REVIEW NOTE IS HELD TO THE TEST RUN (dry run 4, Checks contradicted itself):
+    - BOSS's own "no failing test could be named" note is the tests check's state, never an
+      open review finding: it is dropped;
+    - a note that says a named test fails, while every test run on the packet passed, is
+      ``suppressed`` with ``refuted_by`` the runs — never an open finding beside "Tests ✓"."""
+    from .quality_bar import UNKNOWN_PREFIX
+
+    passed = bool(test_rows) and all(t.get("ok") for t in test_rows)
+    out = []
+    for f in findings:
+        if (f.get("source") or {}).get("kind") != "reviewer":
+            out.append(f)
+            continue
+        title = str(f.get("title") or "")
+        if title.startswith(UNKNOWN_PREFIX) and "could be named" in title:
+            continue
+        if passed and f.get("status") in ("open", "reverted") and _FAILS_CLAIM.search(title):
+            f = {**f, "status": "suppressed", "refuted_by": [t.get("id") for t in test_rows],
+                 "why": "the test run passed"}
+        out.append(f)
+    return out
+
+
 def from_tests(runs: Iterable[Mapping[str, Any]], head_sha: Optional[str]) -> list[dict]:
     out = []
     for n, t in enumerate(runs, start=1):
@@ -440,8 +472,9 @@ def build_packet(*, work: Mapping[str, Any], head_sha: Optional[str],
         for v in validators:
             v.update(open_counts(findings))
     explain_by_overrides(vs_input, explained_hunks)
-    claims_in_comments = (comment_claims(validations[0], findings) if validations else [])
     test_rows = from_tests(tests, head_sha)
+    findings = judge_review_claims(findings, test_rows)
+    claims_in_comments = (comment_claims(validations[0], findings) if validations else [])
     stale = bool(validations and evidence_head and head_sha and evidence_head != head_sha)
     packet = {"schema": SCHEMA, "packet_version": int(packet_version),
               "head_sha": evidence_head if validations and evidence_head else head_sha,

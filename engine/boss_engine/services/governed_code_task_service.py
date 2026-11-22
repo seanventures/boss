@@ -2783,6 +2783,61 @@ def _impl_prompt(title, instructions, test_files, test_cmd, *, criteria=(), iac=
     )
 
 
+def software_factory_commit_guard() -> Optional[dict]:
+    """This build's commit-guard holder (software_factory.commit_guard_scope), or None."""
+    from .software_factory import _COMMIT_GUARD
+
+    return _COMMIT_GUARD.get()
+
+
+def _autofix_commit_guard(engine, run_id: str, project_id: str, root, sandbox,
+                          work_branch: str, remediation: dict):
+    """The guard ``commit_change`` runs on this build's commits: the contract's target with
+    every change to a `human` / `never` finding's lines put back (input_fidelity.
+    guard_commit_text), the build's tree set to what the branch gets, and the run's validation
+    record re-made from it with the agent's change kept as ``proposed`` — so the record is what
+    the branch holds. Any other branch or path passes through."""
+    def _runner(cmd):
+        return sandbox.run(cmd, timeout=180) if sandbox is not None else None
+
+    def guard(branch, path, content):
+        c = remediation
+        if branch != work_branch or str(path) != str(c.get("output")) \
+                or not isinstance(content, str) or content == c.get("_start_text"):
+            return content
+        run = _runner if sandbox is not None else None
+        if "_held" not in c:
+            # No check has run yet (an exit mid-build): learn which findings a person holds.
+            _input_fidelity.enforce_autofix(root, c, _input_fidelity.run_validation(root, c, run),
+                                            run)
+        text, mine = _input_fidelity.guard_commit_text(c, content)
+        if not mine:
+            return content
+        try:
+            (Path(root) / str(c["output"])).write_text(text)
+        except OSError:
+            _log_caught(logger)
+        try:
+            rules = (c.get("ruleset") or {}).get("rules") or {}
+            rec = _input_fidelity.record_refusals(
+                _input_fidelity.run_validation(root, c, run), c["_agent_base"], c["_held"],
+                mine, rules)
+            public = _input_fidelity.public_validation(rec)
+            with _transaction(engine) as cx:
+                cx.execute(sql(
+                    "UPDATE code_task_runs SET state=jsonb_set(COALESCE(state,'{}'::jsonb), "
+                    "CAST(:k AS text[]), CAST(:v AS JSONB)), updated_at=now() WHERE id=:id"),
+                    {"k": "{" + _input_fidelity.VALIDATION_KEY + "}",
+                     "v": json.dumps(public, default=str), "id": run_id})
+                emit_event(cx, project_id, "code_task.autofix_refused", "boss", "code_task_run",
+                           run_id, {"refused": (rec.get("refused") or [])[:20], "at": "commit"})
+        except Exception:  # noqa: BLE001 — the branch is right whether or not the record is
+            _log_caught(logger)
+        return text
+
+    return guard
+
+
 def _fidelity_check(engine, run_id: str, root, remediation: dict, sandbox, *,
                     summary: Any = None, test_cmd: Any = None) -> dict:
     """One attempt's input-fidelity verdict (input_fidelity.check), with the validator's record
@@ -5497,6 +5552,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         from ..app_links.run_env import for_run as _link_env
         from ..templates.run_ref import for_run as _template_files
         from .harness_failures import run_scope as _harness_scope
+        from .software_factory import commit_guard_scope as _commit_guard_scope
 
         # AND ITS ENGINE IS WATCHED AS ONE (harness_failures): a session that finds the engine
         # cannot run stops the whole build with that verdict, not just its own stage.
@@ -5505,7 +5561,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 _harness_scope(run_id), \
                 _sandbox_bind(run_id, project_id=(run or {}).get("project_id")) as _sbx, \
                 _link_env(engine, run_id, (run or {}).get("project_id")), \
-                _template_files(engine, run, _sbx):
+                _template_files(engine, run, _sbx), \
+                _commit_guard_scope():
             if mcp is not None and _sbx is not None:
                 mcp.move_into(_sbx)
             result = _run_governed_code_task(engine, settings, jobs, run_id,
@@ -7415,6 +7472,14 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     {"r": json.dumps(_input_fidelity.public(_remediation)), "id": run_id})
                 emit_event(c, project_id, "code_task.remediation_contract", "boss",
                            "code_task_run", run_id, _input_fidelity.public(_remediation))
+            # EVERY COMMIT THIS BUILD MAKES (stage commits, checkpoints, the partial or final PR,
+            # a follow-up's or a repair's) is held to the ruleset's autofix policy: a `human` /
+            # `never` rule's lines never reach the branch changed (dry run 4: the final commit
+            # deleted the admin route a person must remove).
+            _guard_holder = software_factory_commit_guard()
+            if _guard_holder is not None:
+                _guard_holder["guard"] = _autofix_commit_guard(
+                    engine, run_id, project_id, root, sandbox, work_branch, _remediation)
         _fidelity: Optional[dict] = None
         _validation: Optional[dict] = None
         _repo_checks: list = []     # input_fidelity.repo_checks, after the implement loop
