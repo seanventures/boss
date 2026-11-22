@@ -337,6 +337,7 @@
    2.25rem rail, 0 on a phone); the code takes the rest. Never a cap on the page. */
 .gr-layout { --gr-tree-col: 264px; --gr-agent-col: 340px; min-width: 0; }
 .gr-body { display: grid; grid-template-columns: minmax(0, 1fr) var(--gr-agent-col); gap: 12px; align-items: start; min-width: 0; }
+.gr-body[data-full] { grid-template-columns: minmax(0, 1fr); }
 .gr-tab { min-width: 0; }
 .gr-files, .lr-code { display: grid; grid-template-columns: var(--gr-tree-col) minmax(0, 1fr); gap: 12px; align-items: start; min-width: 0; padding: 0; }
 .gr-dock { position: sticky; top: 8px; min-width: 0; align-self: start; }

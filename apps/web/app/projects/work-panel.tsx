@@ -19,17 +19,19 @@
  */
 import React, { useMemo, useState } from "react";
 import {
-  ArrowRight, ArrowsOut, Bug, ChatCircleDots, ChatsCircle, Code, CurrencyDollar, DotsThree, FlowArrow, GitMerge, Graph, Hammer,
+  ArrowRight, ArrowSquareOut, ArrowsOut, Bug, ChatCircleDots, ChatsCircle, Copy, CurrencyDollar, DotsThree, GitMerge, Graph, Hammer,
   Gear, Lightbulb, LinkSimple, MagnifyingGlass, Monitor, PaperPlaneRight, Stack, Terminal, Ticket, Wrench,
 } from "@phosphor-icons/react";
 
-import { changeRef, linkTarget } from "../../lib/repo-links";
+import { changeHref, changeRef, linkTarget } from "../../lib/repo-links";
+import { parseValidation, shortId, validationPath, type Validation } from "../../lib/validation-review";
+import { ValidationBuilt } from "../validation/built-summary";
 import { mergeWaitOf, workNextStep, type NextStep } from "../../lib/work-next-step";
 import {
   attemptsLine, connectorState, costPoints, durationWords, flowNodes, helmSuggestions, isCodeWork, secondsBetween, stateSentence, type FlowNode,
 } from "../../lib/work-panel";
 import {
-  KIND_WORDS, ATTEMPT_WORDS, pxHref, pxWrite, writePxUrl, type Agent, type Deployments, type OutcomeEntry, type WorkItem, type WorkOutcome, type WorkStory,
+  KIND_WORDS, ATTEMPT_WORDS, pxHref, pxWrite, usePxRead, writePxUrl, type Agent, type Deployments, type OutcomeEntry, type WorkItem, type WorkOutcome, type WorkStory,
 } from "../../lib/project-experience";
 import { localWith } from "../../lib/local-time";
 import { GatedButton } from "../../components/gated";
@@ -85,7 +87,47 @@ export function PrimaryAction({ ctx, w, next, testid }: { ctx: PxCtx; w: WorkIte
 
 // ── 1 header ───────────────────────────────────────────────────────────────────────────────
 
-function Header({ ctx, w, story, next, short, testid }: { ctx: PxCtx; w: WorkItem; story: WorkStory | null; next: NextStep | null; short?: boolean; testid: string }) {
+/** The build that OPENED the change (SPEC §5.2): the merge's own build, never the newest
+ *  follow-up that pushed to it. Its console link keeps the row's link and swaps the id. */
+export function rootBuildOf(w: WorkItem): { id: string; href: string } | null {
+  const fromHref = new URLSearchParams(w.links.build.split("?")[1] ?? "").get("build") ?? "";
+  const id = mergeWaitOf(w)?.build_id || fromHref;
+  if (!id) return null;
+  const href = w.links.build ? (fromHref ? w.links.build.replace(`build=${fromHref}`, `build=${id}`) : w.links.build) : "";
+  return { id, href };
+}
+
+/** The change this work made: the open merge, else the PR it recorded. */
+const changeOf = (w: WorkItem) => mergeWaitOf(w) ?? w.links.pr ?? null;
+
+/** RUN · BUILD · CHANGE, visible under the title (SPEC §5.1) — they used to hide in the ⋯ menu. */
+function HeaderLinks({ w, story, validation, testid }: { w: WorkItem; story: WorkStory | null; validation: Validation | null; testid: string }) {
+  const run = w.links.workflow_run;
+  const build = rootBuildOf(w);
+  const ch = changeOf(w);
+  const runNo = story?.number || w.run_number;
+  if (!run && !build && !ch) return null;
+  return (
+    <div className="wp-links" data-testid={`${testid}-links`}>
+      {run ? <a href={pxHref(run)} data-testid={`${testid}-link-run`}><ArrowSquareOut size={12} aria-hidden /> Workflow run{runNo ? ` #${runNo}` : ""}</a> : null}
+      {build?.href ? <a href={pxHref(build.href)} data-testid={`${testid}-link-build`}><ArrowSquareOut size={12} aria-hidden /> Build {shortId(build.id)}</a> : null}
+      {ch ? <ChangeLink url={ch.external_url} number={ch.number} className="" icon={false} testid={`${testid}-link-change`} /> : null}
+      {validation?.ruleset.id ? <span className="wp-mono wp-muted wp-links-rs">ruleset {validation.ruleset.id}{validation.ruleset.version != null ? ` v${validation.ruleset.version}` : ""}</span> : null}
+    </div>
+  );
+}
+
+/** The change's validation (boss.validation/v1): on the story when the engine sends it, else
+ *  read from the change (GET /v1/changes/{p}/{n}/validation). An engine without it: null. */
+export function useWorkValidation(projectId: string, w: WorkItem, story: WorkStory | null): Validation | null {
+  const own = story?.validation ?? null;
+  const ch = changeOf(w);
+  const url = !own && ch?.number && isCodeWork(w) ? validationPath(projectId, ch.number) : null;
+  const read = usePxRead<Validation | null>(url, parseValidation, { everyMs: 60_000 });
+  return own ?? read.data ?? null;
+}
+
+function Header({ ctx, w, story, next, short, validation = null, testid }: { ctx: PxCtx; w: WorkItem; story: WorkStory | null; next: NextStep | null; short?: boolean; validation?: Validation | null; testid: string }) {
   const st = WORK_WORD[w.state] ?? WORK_WORD.planned;
   const said = stateSentence(w, next);
   const Icon = KIND_ICON[w.kind] ?? Lightbulb;
@@ -114,6 +156,7 @@ function Header({ ctx, w, story, next, short, testid }: { ctx: PxCtx; w: WorkIte
                 </span>
               ) : null}
             </div>
+            <HeaderLinks w={w} story={story} validation={validation} testid={testid} />
           </div>
         </div>
         <p className="wp-state" data-testid={`${testid}-sentence`}><b data-tone={said.tone}>{said.lead}</b>{said.rest ? ` ${said.rest}` : ""}</p>
@@ -189,7 +232,14 @@ export function WhoDidWhat({ nodes, logHref, logLabel = "Full timeline & live lo
 
 const MUST_MARK: Record<string, string> = { met: "✓", partial: "½", not_met: "✕", unchecked: "·" };
 
-function Story({ w, story, testid }: { w: WorkItem; story: WorkStory | null; testid: string }) {
+/** "go test ./... pass", "31/31 pass", "failing" — or null when nothing ran. */
+function testsLabel(built: NonNullable<NonNullable<WorkStory["explained"]>["built"]>): { passed: boolean | null; count: number | null; label: string } | null {
+  const t = built.tests;
+  if (t.passed === null && !t.files) return null;
+  return { passed: t.passed, count: t.count, label: t.passed === true ? (t.count ? `${t.count}/${t.count} pass` : "pass") : t.passed === false ? "failing" : `${t.files} test file${t.files === 1 ? "" : "s"}` };
+}
+
+function Story({ w, story, validation = null, projectId = "", testid }: { w: WorkItem; story: WorkStory | null; validation?: Validation | null; projectId?: string; testid: string }) {
   const built = story?.explained?.built ?? null;
   const said = story?.explained?.discussed ?? null;
   const prd = story?.prd ?? null;
@@ -201,6 +251,12 @@ function Story({ w, story, testid }: { w: WorkItem; story: WorkStory | null; tes
   const files = built?.groups.flatMap((g) => g.files) ?? [];
   const testFiles = built?.groups.find((g) => g.purpose === "Tests")?.files ?? [];
   const tests = built?.tests;
+  const root = rootBuildOf(w);
+  const ch = changeOf(w);
+  // Follow-ups are later lines under the work's own build, never the build the column reads.
+  const laterLines = (story?.explained?.later ?? []).map((l) => ({ key: l.buildId, line: <span>{l.line || l.title}</span> }));
+  const order = ["gate", "P0", "P1", "P2", "P3"];
+  const findingCounts = order.map((sev) => [sev, (story?.review_comments?.items ?? []).filter((c) => c.severity === sev).length] as const).filter(([, n]) => n > 0);
   return (
     <section className="wp-card wp-story" aria-label="What was asked, discussed and built" data-testid={`${testid}-story`}>
       <div data-testid={`${testid}-asked`}>
@@ -244,10 +300,16 @@ function Story({ w, story, testid }: { w: WorkItem; story: WorkStory | null; tes
         ) : <p className="wp-p wp-dim">No panel for this work — it went straight to the build.</p>}
       </div>
       <div data-testid={`${testid}-built`}>
-        <h3 className="wp-k"><span className="wp-n">3</span>Built</h3>
-        {built ? (
+        <h3 className="wp-k"><span className="wp-n">3</span>Built{root ? <span className="wp-dim wp-k-sub"> · {shortId(root.id)}{ch ? ` · opened #${ch.number}` : ""}</span> : null}</h3>
+        {validation ? (
+          // VALIDATION WORK (SPEC §5.3): the validator's funnel, never the coder's prose.
+          <ValidationBuilt v={validation} tests={built ? testsLabel(built) : null} testid={testid}
+                           later={laterLines}
+                           fixesHref={ch ? `${changeHref(ch.external_url) ?? `/changes/${encodeURIComponent(projectId)}/${ch.number}`}?tab=validation` : ""} />
+        ) : built ? (
+          // OTHER WORK: typed counts — files, tests, review findings by level. The build's
+          // free-text summary is not rendered (SPEC §1.4 rule 5); it stays in the build's log.
           <>
-            {built.summary ? <p className="wp-p" data-testid={`${testid}-summary`}>{built.summary}</p> : null}
             {built.groups.length ? (
               <div className="wp-files">{built.groups.map((g) => <span key={g.purpose} className="wp-fchip" title={g.files.join("\n")}>{g.purpose} <b>{g.count}</b></span>)}</div>
             ) : null}
@@ -256,8 +318,12 @@ function Story({ w, story, testid }: { w: WorkItem; story: WorkStory | null; tes
                 <li><span><b>Tests:</b> {[testFiles.map((f) => f.split("/").pop()?.replace(/\.(test|spec)\.[a-z]+$/, "")).join(", "),
                   tests.passed === true ? (tests.count ? `${tests.count}/${tests.count} pass` : "pass") : tests.passed === false ? "failing" : ""].filter(Boolean).join(" · ")}</span></li>
               ) : null}
-              {built.review.rounds ? <li><span><b>Review:</b> {built.review.rounds} round{built.review.rounds === 1 ? "" : "s"}{built.review.raised ? `, ${built.review.raised} finding${built.review.raised === 1 ? "" : "s"}` : ""}</span></li> : null}
+              {built.review.rounds || findingCounts.length ? (
+                <li data-testid={`${testid}-review-counts`}><span><b>Review:</b> {built.review.rounds ? `${built.review.rounds} round${built.review.rounds === 1 ? "" : "s"}` : ""}
+                  {findingCounts.map(([sev, n]) => <span key={sev} className="wp-sev-count"><span className="wp-sev" data-s={sev}>{sev}</span>{n}</span>)}</span></li>
+              ) : null}
               {built.followUps.length ? <li><span><b>Follow-ups:</b> {built.followUps.length}{mergeWaitOf(w)?.fixing ? " → BOSS is on them" : ""}</span></li> : null}
+              {laterLines.length ? <li data-testid={`${testid}-later`}><span><b>Later builds:</b> {laterLines.map((l, i) => <React.Fragment key={l.key}>{i ? " · " : ""}{l.line}</React.Fragment>)}</span></li> : null}
             </ul>
             {files.length ? (
               <details>
@@ -384,7 +450,9 @@ function OutputsCard({ oc, w, testid }: { oc: WorkOutcome; w: WorkItem; testid: 
 
 function Comments({ ctx, w, story, testid }: { ctx: PxCtx; w: WorkItem; story: WorkStory | null; testid: string }) {
   const rc = story?.review_comments;
-  const items = rc?.items ?? [];
+  // P0/P1 first, each with its rail (SPEC §5.4); the engine's order within a level.
+  const RANK: Record<string, number> = { P0: 0, gate: 1, P1: 2, P2: 3, P3: 4 };
+  const items = [...(rc?.items ?? [])].sort((x, y) => (RANK[x.severity] ?? 9) - (RANK[y.severity] ?? 9));
   const [off, setOff] = useState<Record<string, boolean>>({});
   const [said, setSaid] = useState("");
   const [busy, setBusy] = useState(false);
@@ -393,12 +461,14 @@ function Comments({ ctx, w, story, testid }: { ctx: PxCtx; w: WorkItem; story: W
   const target = mergeWaitOf(w)?.build_id || story?.explained?.built?.buildId || "";
   const picked = items.filter((c) => !off[c.key]);
   const row = (c: (typeof items)[number]) => (
-    <li key={c.key} className="wp-cmt" data-testid={`${testid}-comment`}>
+    <li key={c.key} className="wp-cmt" data-s={c.severity} data-testid={`${testid}-comment`}>
       {fix ? null : <input type="checkbox" checked={!off[c.key]} onChange={() => setOff((o) => ({ ...o, [c.key]: !o[c.key] }))} aria-label={`Include: ${c.text}`} />}
       <span className="wp-sev" data-s={c.severity}>{c.severity}</span>
       <div className="wp-cmt-body">{c.text}
         <div className="wp-cmt-src">{[c.severity === "gate" ? `gate ${c.source}` : c.source, c.path ? `${c.path}${c.line ? `:${c.line}` : ""}` : "",
-          c.merged > 1 ? `${c.merged} findings merged` : ""].filter(Boolean).join(" · ")}</div>
+          c.merged > 1 ? `${c.merged} findings merged` : ""].filter(Boolean).join(" · ")}
+          {c.deferred ? <> · <span className="wp-deferred" data-testid={`${testid}-deferred`}>Deferred → {c.deferred.href
+            ? <a href={pxHref(c.deferred.href)}>follow-up{c.deferred.number ? ` #${c.deferred.number}` : ""}</a> : `follow-up${c.deferred.number ? ` #${c.deferred.number}` : ""}`}</span></> : null}</div>
       </div>
     </li>
   );
@@ -580,18 +650,20 @@ function HelmDock({ ctx, w, noProdHost, testid }: { ctx: PxCtx; w: WorkItem; noP
   );
 }
 
-/** The ⋯ menu: the run, the build page, what it learned (moved off the panel's face). */
+/** The ⋯ menu: only "What it learned" and "Copy ids" (SPEC §5.1) — the run, the build and the
+ *  change are plain links under the title now. */
 export function WorkMenu({ ctx, w, testid }: { ctx: PxCtx; w: WorkItem; testid: string }) {
-  const l = w.links;
+  const [copied, setCopied] = useState(false);
+  const ids = [w.id, rootBuildOf(w)?.id ?? "", changeOf(w) ? `change #${changeOf(w)!.number}` : ""].filter(Boolean).join("\n");
+  const copy = async () => {
+    try { await navigator.clipboard?.writeText(ids); setCopied(true); window.setTimeout(() => setCopied(false), 1500); } catch { /* nothing to copy into */ }
+  };
   return (
     <details className="wp-menu" data-testid={`${testid}-menu`}>
-      <summary className="px-icon-btn" aria-label="More links" title="More"><DotsThree size={16} weight="bold" /></summary>
+      <summary className="px-icon-btn" aria-label="More" title="More"><DotsThree size={16} weight="bold" /></summary>
       <div className="wp-menu-list">
-        {l.workflow_run ? <a href={pxHref(l.workflow_run)} data-testid={`${testid}-link-run`}><FlowArrow size={13} aria-hidden /> Workflow run</a> : null}
-        {l.build ? <a href={pxHref(l.build)} data-testid={`${testid}-link-build`}><Code size={13} aria-hidden /> Build in Code Tasks</a> : null}
-        {l.pr ? <ChangeLink url={l.pr.external_url} number={l.pr.number} className="" testid={`${testid}-link-pr`} /> : null}
-        {l.log ? <a href={pxHref(l.log)} data-testid={`${testid}-link-log`}><Terminal size={13} aria-hidden /> Live log</a> : null}
         <button type="button" onClick={() => ctx.open("learned", w.id)} data-testid={`${testid}-link-learned`}><Graph size={13} aria-hidden /> What it learned</button>
+        <button type="button" onClick={() => void copy()} data-testid={`${testid}-copy-ids`}><Copy size={13} aria-hidden /> {copied ? "Copied" : "Copy ids"}</button>
       </div>
     </details>
   );
@@ -615,6 +687,7 @@ export function WorkPanel({ ctx, w, story, deployments, extra, testid = "px-wp" 
 }) {
   const { next, nodes } = useFlow(ctx, w, story, deployments);
   const code = isCodeWork(w);
+  const validation = useWorkValidation(ctx.projectId, w, story);
   const noProdHost = code && !(deployments?.environments ?? []).some((e) => e.key === "production");
   if (!code) {
     // WORK THAT CHANGES NO APP (an investigation, a job): its workflow's own steps, then what it
@@ -641,12 +714,12 @@ export function WorkPanel({ ctx, w, story, deployments, extra, testid = "px-wp" 
   }
   return (
     <div className="wp wp-page" data-testid={testid}>
-      <Header ctx={ctx} w={w} story={story} next={next} testid={testid} />
+      <Header ctx={ctx} w={w} story={story} next={next} validation={validation} testid={testid} />
       {extra}
       <WhoDidWhat nodes={nodes} logHref={w.links.log || w.links.build} testid={testid} />
       <div className="wp-grid">
         <div className="wp-col">
-          <Story w={w} story={story} testid={testid} />
+          <Story w={w} story={story} validation={validation} projectId={ctx.projectId} testid={testid} />
           <Comments ctx={ctx} w={w} story={story} testid={testid} />
         </div>
         <aside className="wp-col" aria-label="Evidence">

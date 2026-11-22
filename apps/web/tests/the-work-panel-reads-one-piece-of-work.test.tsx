@@ -15,7 +15,7 @@
  *   - stack the flow at phone width / in the drawer, and keep the row to ONE action.
  */
 import React from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { $, $$, mount, unmount } from "./_helpers/live-render";
 
@@ -26,6 +26,8 @@ vi.mock("next/navigation", () => ({
 }));
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 afterEach(() => { unmount(); vi.unstubAllGlobals(); });
+// An engine without the change's validation route (the panel then reads the build's typed counts).
+beforeEach(() => { vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 404 }))); });
 
 const LOCAL = "http://boss-local/local_park-bench-map-e86c6d9e/park-bench-map/pull/3";
 const LOG = "?project_id=park&area=code_tasks&build=crun_3b52&logs=build";
@@ -173,7 +175,16 @@ describe("the panel", () => {
     // Asked: the must-haves with verdicts; Built: the one sentence.
     expect($('[data-testid="wp-must-count"]')!.textContent).toBe("0 met · 4 partly");
     expect($$('[data-testid="wp-musts"] li').length).toBe(4);
-    expect($('[data-testid="wp-summary"]')!.textContent).toContain("first line of the bubble");
+    // Built: typed counts, never the coder's free-text summary (validation-review SPEC §1.4 rule 5).
+    expect($('[data-testid="wp-summary"]')).toBeNull();
+    expect($('[data-testid="wp-built"]')!.textContent).not.toContain("first line of the bubble");
+    expect($('[data-testid="wp-built"]')!.textContent).toContain("31/31 pass");
+    expect($('[data-testid="wp-review-counts"]')!.textContent).toMatch(/P1\s*1/);
+    // Run · Build · Change under the title, without opening ⋯ (SPEC §5.1); the build is the one
+    // that opened the change, not the follow-up still fixing it.
+    expect($('[data-testid="wp-link-run"]')!.textContent).toContain("Workflow run #2");
+    expect($('[data-testid="wp-link-build"]')!.getAttribute("href")).toContain("build=crun_31e1");
+    expect($('[data-testid="wp-link-change"]')!.textContent).toContain("Change #3");
     expect($('[data-testid="wp-left"]')!.textContent).toContain("provenance");
     // Comments: once each, 3 shown and the rest behind "1 more"; BOSS is already on them.
     expect($('[data-testid="wp-comments"]')!.textContent).toContain("4 · deduped from 10");
