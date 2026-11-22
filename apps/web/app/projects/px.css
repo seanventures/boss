@@ -914,11 +914,11 @@ button.px-h-num:focus-visible { outline: 2px solid var(--accent-text); outline-o
 .px-why-t[aria-expanded="true"] { color: var(--ink); }
 .px-head-hint { font-size: var(--fs-meta); color: var(--muted); }
 .px-why-next { color: var(--ink); }
-.px-why-block { margin-top: 0.375rem; max-width: 72ch; padding: 0.375rem 0.625rem; border-radius: 8px; background: var(--surface-2); border: 1px solid var(--border);
+.px-why-block { margin-top: 0.375rem; max-width: 72ch; padding: 0.375rem 0.625rem; border-radius: 0.5rem; background: var(--surface-2); border: 1px solid var(--border);
   font-size: var(--fs-meta); line-height: 1.45; color: var(--muted); overflow-wrap: anywhere; }
 
 /* Overview › Needs you: the count and ONE link to Work's Needs-you group (never the list again). */
-.px-ov-needs-link { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-body); color: var(--ink); text-decoration: none; }
+.px-ov-needs-link { display: inline-flex; align-items: center; gap: 0.375rem; font-size: var(--fs-body); color: var(--ink); text-decoration: none; }
 .px a.px-ov-needs-link, .px a.px-ov-needs-link:hover { color: var(--ink); text-decoration: none; }
 .px a.px-ov-needs-link:hover .px-faint { color: var(--accent-text); }
 
@@ -932,5 +932,5 @@ button.px-h-num:focus-visible { outline: 2px solid var(--accent-text); outline-o
 [data-testid="px-panel-overview"] .px-fl-n[data-t="waiting"] { background: var(--surface-3); border-color: var(--ink); color: var(--ink); }
 /* Work's Needs-you rows: a card's few steps, compact; its "you" step outlined, never a yellow block. */
 [data-testid="px-work-rows"] .px-wk-card .px-fl { padding: 2px 0 0; }
-[data-testid="px-work-rows"] .px-wk-card .px-fl-n { font-size: var(--fs-tag); padding: 1px 7px; border-width: 1px; }
+[data-testid="px-work-rows"] .px-wk-card .px-fl-n { font-size: var(--fs-tag); padding: 1px 0.4375rem; border-width: 1px; }
 [data-testid="px-work-rows"] .px-fl-n[data-t="waiting"] { background: var(--surface-3); border-color: var(--ink); color: var(--ink); }

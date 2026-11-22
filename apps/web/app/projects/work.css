@@ -51,8 +51,8 @@
 
 /* ── the row's own links: Run #N · Build · PR/Change #N · Preview, short and muted ── */
 .px-wk.wr.wr { grid-template-columns: 1.47368rem minmax(0, 1fr) auto auto auto; }
-.wr-links { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; align-items: center; min-width: 0; }
-.wr-chip { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-tag); line-height: 1.5; color: var(--muted); padding: 0 7px; border-radius: 6px;
+.wr-links { display: flex; gap: 0.25rem; flex-wrap: wrap; justify-content: flex-end; align-items: center; min-width: 0; }
+.wr-chip { display: inline-flex; align-items: center; gap: 0.25rem; font-size: var(--fs-tag); line-height: 1.5; color: var(--muted); padding: 0 0.4375rem; border-radius: 0.375rem;
   border: 1px solid var(--border); background: transparent; white-space: nowrap; text-decoration: none; font-family: inherit; }
 .px a.wr-chip, .px a.wr-chip:visited { color: var(--muted); text-decoration: none; }
 .px a.wr-chip:hover, .px a.wr-chip:focus-visible { color: var(--accent-text); border-color: var(--accent-line); text-decoration: none; }
@@ -63,10 +63,10 @@
 }
 
 /* ── LATEST: the project's newest Run · Build · Change · Preview, one row that wraps ── */
-.wl-latest { display: flex; align-items: center; gap: 6px 8px; flex-wrap: wrap; padding: 8px 12px; border-radius: 10px; background: var(--surface);
+.wl-latest { display: flex; align-items: center; gap: 0.375rem 0.5rem; flex-wrap: wrap; padding: 0.5rem 0.75rem; border-radius: 0.625rem; background: var(--surface);
   border: 1px solid var(--border); font-size: var(--fs-meta); }
 .wl-k { font-family: var(--mono); font-size: var(--fs-label); letter-spacing: .1em; text-transform: uppercase; color: var(--faint); margin-right: 2px; }
-.wl-item { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 8px; background: var(--surface-3); border: 1px solid var(--border);
+.wl-item { display: inline-flex; align-items: center; gap: 0.375rem; padding: 0.1875rem 0.625rem; border-radius: 0.5rem; background: var(--surface-3); border: 1px solid var(--border);
   color: var(--ink); text-decoration: none; min-width: 0; max-width: 100%; }
 .px a.wl-item, .px a.wl-item:hover { color: var(--ink); text-decoration: none; }
 .px a.wl-item:hover, .px a.wl-item:focus-visible { border-color: var(--accent-line); }

@@ -210,7 +210,7 @@ export function OverviewTab({ ctx }: { ctx: PxCtx }) {
             {/* EXPIRED BUT STILL ANSWERABLE: never counted, never hidden — one quiet link to
                 Approvals' Expired view (the old bar above the tabs carried it on every screen). */}
             {ov.still_answerable ? (
-              <a className="px-faint" href={pxHref(ov.still_answerable.href)} data-testid="px-ov-needs-older" style={{ fontSize: "var(--fs-meta)" }}
+              <a className="px-faint" href={pxHref(ov.still_answerable.href)} data-testid="px-ov-needs-older" style={{ display: "block", marginTop: "0.25rem", fontSize: "var(--fs-meta)" }}
                  title="Their deadline passed with nothing applied; you can still answer them in Approvals">
                 {ov.still_answerable.count} older · {waitingSinceWords(ov.still_answerable.since)}</a>
             ) : null}
