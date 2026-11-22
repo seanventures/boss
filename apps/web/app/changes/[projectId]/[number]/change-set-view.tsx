@@ -43,7 +43,7 @@ import {
 } from "./review-panes";
 import { DockPane, ReviewLayoutProvider, useReviewLayout } from "./review-dock";
 import { TicketSyncBadge } from "../../../projects/linked-ticket";
-import { packetOf, type ReviewPacket } from "../../../../lib/validation-review";
+import { blockingOpen, blockingRows, packetOf, packetTally, type ReviewPacket } from "../../../../lib/validation-review";
 import { ReviewPacketView, packetHold } from "../../../validation/review-packet";
 import { ValidationTab } from "../../../validation/validation-tab";
 import "./change-set.css";
@@ -139,7 +139,8 @@ function ChangeSetPage({ projectId, number, repo, startTab, startCommit, startLo
       .catch(() => { if (alive) setPacket(null); });
     return () => { alive = false; };
   }, [decisionId, projectId, headSha]);
-  const hold = packetHold(packet);
+  // A packet whose checks ran on an older commit than the head holds Merge too (stale).
+  const hold = packetHold(packet, false, cs?.head_sha ?? null);
   const csHeld: ChangeSet | null = cs && hold && cs.merge ? { ...cs, merge: { ...cs.merge, held: hold } } : cs;
 
   // EVERY TAB SWITCHES THE MAIN VIEW, AND THE URL KEEPS IT (?tab=…&commit=…): links and Back work.
@@ -279,7 +280,7 @@ function ChangeSetPage({ projectId, number, repo, startTab, startCommit, startLo
                   <button type="button" className="lr-btn gr-sheet-btn" data-kind="ghost" aria-expanded={dock.layout.agent === "overlay"}
                           onClick={() => dock.dispatch(dock.layout.agent === "overlay" ? { type: "close", pane: "agent" } : { type: "open", pane: "agent" })}
                           data-testid="gr-agent-toggle"><Robot size={14} aria-hidden />Agent</button>) : null}
-                <Decide cs={csHeld ?? cs} projectId={projectId} number={String(cs.number)} at={at} reread={read} compact />
+                <Decide cs={csHeld ?? cs} projectId={projectId} number={String(cs.number)} at={at} reread={read} packet={packet} compact />
               </span>
             </div>
             <SourceLine cs={cs} />
@@ -290,7 +291,7 @@ function ChangeSetPage({ projectId, number, repo, startTab, startCommit, startLo
           <nav className="cs-tabs gr-tabs" aria-label="Sections" role="tablist">
             <TabLink tab="overview" on={tab} set={setTab} icon={<Info size={13} aria-hidden />} label="Overview" n={activeCount || undefined} />
             <TabLink tab="validation" on={tab} set={setTab} icon={<ListChecks size={13} aria-hidden />} label="Validation"
-                     n={packet ? packet.counts.P0.open + packet.counts.P1.open || undefined : undefined} />
+                     n={packet ? blockingOpen(packetTally(packet)) || undefined : undefined} />
             <TabLink tab="conversation" on={tab} set={setTab} icon={<ChatCircleText size={13} aria-hidden />} label="Conversation" n={commentCount} />
             <TabLink tab="commits" on={tab} set={setTab} icon={<GitCommit size={13} aria-hidden />} label="Commits" n={commits.length || cs.commits.length} />
             <TabLink tab="files" on={tab} set={setTab} icon={<FileCode size={13} aria-hidden />} label="Files changed" n={files.length} />
@@ -394,8 +395,10 @@ function MergeHeldWhy({ sentence }: { sentence: string | null }) {
 
 /** Merge and Request changes. `compact`: the header's buttons; the Checks tab shows the
  *  decision's card (DecisionCard). */
-export function Decide({ cs, projectId, number, reread, at, compact = false }: {
-  cs: ChangeSet; projectId: string; number: string; reread: () => Promise<ChangeSet>; at?: ChangeAt; compact?: boolean;
+export function Decide({ cs, projectId, number, reread, at, packet = null, compact = false }: {
+  cs: ChangeSet; projectId: string; number: string; reread: () => Promise<ChangeSet>; at?: ChangeAt;
+  /** The merge decision's review packet: a BLOCKED one makes Merge the reasoned "Merge anyway". */
+  packet?: ReviewPacket | null; compact?: boolean;
 }) {
   const where: ChangeAt = at ?? { projectId, number };
   const guarded = useGuardedCall();
@@ -416,12 +419,20 @@ export function Decide({ cs, projectId, number, reread, at, compact = false }: {
       if (alive.current) setBusy(null);
     }
   };
-  const merge = async () => {
+  // A BLOCKED PACKET (open P0/P1): Merge opens the reasoned "Merge anyway" form, the same as the
+  // merge card; the engine refuses a plain merge of it. Invalid / re-checking stay disabled (held).
+  const blocked = packet?.verdict.state === "blocked" && !cs.merge?.held;
+  const rows = blocked ? blockingRows(packet) : [];
+  const [anyway, setAnyway] = useState(false);
+  const [why, setWhy] = useState("");
+  const merge = async (reason?: string) => {
     if (busy) return;
+    if (blocked && !reason?.trim()) { setAnyway(true); return; }
     setBusy("merge"); setSaid(null);
     try {
       await guarded(`Merge ${cs.source === "github" ? "PR" : "change"} #${cs.number || number} into ${cs.base_branch}.`, () =>
-        idPost(`${changeBase(where)}/merge`, {}));
+        idPost(`${changeBase(where)}/merge`, reason?.trim() ? { note: reason.trim(), force: true } : {}));
+      setAnyway(false); setWhy("");
       setBusy("merging");
       // BOSS runs the governed merge on its own (a worker job): the page reads back while the
       // decision is approved and the change still open (the effect below), however long it takes.
@@ -446,15 +457,30 @@ export function Decide({ cs, projectId, number, reread, at, compact = false }: {
   ) : merging ? (
     <span className="cs-merging" role="status" data-testid="change-set-merging"><CircleNotch size={14} className="cs-spin" aria-hidden /> BOSS is merging…</span>
   ) : cs.state === "open" && cs.merge ? (
-    <>
+    <span className="gr-anchor">
       <button type="button" className="cs-primary" data-testid="change-set-merge" disabled={!!busy || !!cs.merge.held} aria-busy={!!busy || undefined}
-              title={cs.merge.held?.reason || "A person merges · BOSS runs the governed merge"} data-held={cs.merge.held?.state || undefined}
-              onClick={() => void merge()}>
+              aria-expanded={blocked ? anyway : undefined} data-blocked={blocked || undefined}
+              title={cs.merge.held?.reason || (blocked ? `Blocked: ${rows.length || "open"} P0/P1 open · merging needs your reason` : "A person merges · BOSS runs the governed merge")}
+              data-held={cs.merge.held?.state || undefined}
+              onClick={() => (blocked ? setAnyway((v) => !v) : void merge())}>
         {busy ? <CircleNotch size={15} className="cs-spin" aria-hidden /> : <GitMerge size={15} weight="bold" aria-hidden />}
-        {cs.merge.held ? cs.merge.held.label : "Merge"}
+        {cs.merge.held ? cs.merge.held.label : blocked ? "Merge anyway…" : "Merge"}
       </button>
       <MergeHeldWhy sentence={mergeHeldSentence(cs.merge.held?.reason)} />
-    </>
+      {blocked && anyway ? (
+        <BoxPop className="lr-composer gr-pop" fit={false} onEscape={() => setAnyway(false)} data-testid="change-set-merge-anyway">
+          <p className="cs-small"><b>Blocked</b> · merging goes past these, and your reason is recorded with the merge.</p>
+          {rows.length ? <ul className="cs-small cs-blocked-rows" data-testid="change-set-blocked-rows">{rows.map((r) => <li key={r}><code>{r}</code></li>)}</ul> : null}
+          <textarea className="lr-input" rows={3} value={why} onChange={(e) => setWhy(e.target.value)} aria-label="Why merge with these open"
+                    placeholder="Why merge with these open? Recorded with the merge." data-testid="change-set-merge-reason" />
+          <div className="lr-composer-f"><span className="cs-spacer" />
+            <button type="button" className="lr-btn" data-kind="ghost" onClick={() => setAnyway(false)}>Cancel</button>
+            <button type="button" className="lr-btn" data-kind="danger" disabled={!!busy || !why.trim()} title={!why.trim() ? "Write why first" : undefined}
+                    onClick={() => void merge(why)} data-testid="change-set-merge-anyway-send">
+              {busy ? <CircleNotch size={13} className="cs-spin" aria-hidden /> : null}Merge anyway</button></div>
+          {said ? <p className="cs-error" role="alert">{said}</p> : null}
+        </BoxPop>) : null}
+    </span>
   ) : null;
   const local = cs.source === "local";
   const closeBtn = local && cs.state === "open" && !merging ? (

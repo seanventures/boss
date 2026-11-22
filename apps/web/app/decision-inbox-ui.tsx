@@ -52,7 +52,7 @@ import { GrantAccessCard, grantOf } from "./skills/grant-card";
 import { SecretProposalCard, secretProposalOf } from "./secret-proposal-card";
 import { MonitoringPackCard, monitoringPackOf } from "./workflows/monitoring-pack";
 import { plainSentence, plainTitle } from "../lib/plain-words";
-import { lineWords, packetOf, rootTitle, type ReviewPacket } from "../lib/validation-review";
+import { blockingRows, lineWords, packetOf, rootTitle, type ReviewPacket } from "../lib/validation-review";
 import { RebuildPacket, ReviewPacketView, packetHold } from "./validation/review-packet";
 
 /**
@@ -145,8 +145,9 @@ export function recommendationLines(decision: DecisionFeedItem): string[] {
  */
 export function blockedPacketDecision(decision: DecisionFeedItem, packet: ReviewPacket): DecisionFeedItem {
   if (packet.verdict.state !== "blocked") return decision;
-  const open = packet.findings.filter((f) => f.status === "open" && !f.followup && (f.severity === "P0" || f.severity === "P1"));
-  const rows = open.map((f) => `${f.severity} ${f.id} ${f.source.rule_id || f.source.name || ""}${lineWords(f) ? ` · ${lineWords(f)}` : ""}`.trim());
+  // The same rows the change page's "Merge anyway" lists (one helper: lib/validation-review).
+  const rows = blockingRows(packet);
+  const open = rows;
   const offers = offeredActions(decision).map((o) => (o.action === "approve"
     ? { ...o, needs: "note" as const, label: "Merge anyway", tone: "reject" as const,
         effect: `Merges with ${open.length || "its"} open P0/P1 finding${open.length === 1 ? "" : "s"}; your reason is recorded with the merge.` }

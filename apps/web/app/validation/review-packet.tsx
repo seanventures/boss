@@ -10,7 +10,7 @@ import React, { useState } from "react";
 import { ArrowClockwise, ArrowSquareOut, GitDiff, Warning } from "@phosphor-icons/react";
 
 import {
-  NOT_DEPLOYED, rerunPath, rerunPending, sendOverride, countsOf, lineWords, reasonRows, refTarget, rootTitle, shortId, shortSha, SEVS, sortFindings,
+  NOT_DEPLOYED, packetStale, rerunPath, rerunPending, sendOverride, lineTitle, lineWords, packetTally, workRefsOf, reasonRows, refTarget, rootTitle, shortId, shortSha, SEVS, sortFindings,
   type Finding, type ReviewPacket, type Sev,
 } from "../../lib/validation-review";
 import { actorWords } from "../../lib/actor-words";
@@ -22,9 +22,10 @@ export type PacketLinks = { run: string; build: string; change: string };
  *  crun_ id — never one passed where the other belongs (SPEC §0 #8). */
 export function packetLinks(projectId: string, p: ReviewPacket): PacketLinks {
   const q = (extra: Record<string, string>) => `/?${new URLSearchParams({ project_id: projectId, ...extra })}`;
+  const refs = workRefsOf(p);
   return {
-    run: p.work.workflow_run.startsWith("wfr_") ? q({ area: "delivery_workflows", wfr: p.work.workflow_run }) : "",
-    build: p.work.build.startsWith("crun_") ? q({ area: "code_tasks", build: p.work.build }) : "",
+    run: refs.run ? q({ area: "delivery_workflows", wfr: refs.run }) : "",
+    build: refs.build ? q({ area: "code_tasks", build: refs.build }) : "",
     change: p.work.change != null ? `/changes/${encodeURIComponent(projectId)}/${p.work.change}` : "",
   };
 }
@@ -35,13 +36,16 @@ export function packetTitle(p: ReviewPacket, fallback = ""): string {
 }
 
 /** Merge is disabled while the packet is invalid or a re-run after an override is pending. */
-export function packetHold(p: ReviewPacket | null, pending = false): { state: string; label: string; reason: string } | null {
+export function packetHold(p: ReviewPacket | null, pending = false, currentHead: string | null = null): { state: string; label: string; reason: string } | null {
   if (!p) return null;
   if (p.verdict.state === "invalid") {
     const n = p.verdict.reasons.length;
     return { state: "packet_invalid", label: "Approve and merge", reason: `Packet invalid: ${n} problem${n === 1 ? "" : "s"} · rebuild the packet first` };
   }
   if (pending || rerunPending(p)) return { state: "rerun_pending", label: "Re-checking…", reason: "Re-checking after your change" };
+  if (packetStale(p, currentHead)) {
+    return { state: "packet_stale", label: "Re-checking…", reason: `Stale: the checks ran on ${shortSha(p.head_sha) || "an older commit"}${currentHead ? `, the change is at ${shortSha(currentHead)}` : ""} · merge after the re-run` };
+  }
   return null;
 }
 
@@ -53,6 +57,10 @@ function ruleParts(f: Finding): { rule: string; where: string } {
 }
 
 function StatusCell({ f }: { f: Finding }) {
+  if ((f.status === "open" || f.status === "reverted") && f.blocks) {
+    // A security finding on a P0 rule's lines: never a follow-up, it blocks like the P0.
+    return <Status st="open" label="open · blocks merge" />;
+  }
   if (f.status === "open" && f.followup) {
     // Open but not blocking: BOSS moved it to a follow-up.
     const fu = f.followup;
@@ -67,7 +75,7 @@ function StatusCell({ f }: { f: Finding }) {
 }
 
 function FindingRow({ f }: { f: Finding }) {
-  const kind = f.followup ? "none" : f.override && (f.override.action === "edit" || f.override.action === "reject") ? "human" : f.fix_kind;
+  const kind = f.followup && !f.blocks ? "none" : f.override && (f.override.action === "edit" || f.override.action === "reject") ? "human" : f.fix_kind;
   const { rule, where } = ruleParts(f);
   const reviewer = Boolean(f.source.kind && f.source.kind !== "validator");
   const was = f.original ?? "(none)";
@@ -76,7 +84,7 @@ function FindingRow({ f }: { f: Finding }) {
   return (
     <tr data-sev={f.severity} id={refTarget(f.id)} data-testid="vr-packet-row" data-finding={f.id}>
       <td className="vr-mono vr-id vr-c-id">{f.id}</td>
-      <td className="vr-mono vr-c-rule" title={[rule, where].filter(Boolean).join(" · ")}>
+      <td className="vr-mono vr-c-rule" title={[rule, where, f.location.line == null ? lineTitle(f) : ""].filter(Boolean).join(" · ")}>
         <span className="vr-clip">{rule}</span>
         {where || f.unmapped ? <span className="vr-where">{where}{f.unmapped ? <> <span className="vr-kind" title="No rule or standard named: counted as P2">unmapped</span></> : null}</span> : null}
       </td>
@@ -85,20 +93,20 @@ function FindingRow({ f }: { f: Finding }) {
           ? <span className="vr-muted vr-clip2">{f.title || f.original}</span>
           : <><span className="b vr-clip">{was}</span><span className="x vr-clip">→ {now}</span></>}
       </td>
-      <td className="vr-c-fix">{f.followup ? <span className="vr-kind">follow-up</span> : <KindBadge kind={kind} label={kind === "human" ? "you" : undefined} />}</td>
+      <td className="vr-c-fix">{f.followup && !f.blocks ? <span className="vr-kind">follow-up</span> : <KindBadge kind={kind} label={kind === "human" ? "you" : undefined} />}</td>
       <td className="vr-c-st"><StatusCell f={f} /></td>
     </tr>
   );
 }
 
 function SevBar({ p }: { p: ReviewPacket }) {
-  const derived = countsOf(p.findings);
+  // One count for every surface (packetTally): review follow-ups are their own cell, never P1.
+  const t = packetTally(p);
   return (
-    <div className="vr-sevbar" data-testid="vr-sevbar">
+    <div className="vr-sevbar" data-testid="vr-sevbar" data-review={t.review.found ? "" : undefined}>
       {SEVS.map((sev) => {
-        const c = p.counts[sev];
-        const d = derived[sev];
-        const sub = c.found ? [`${c.found} found`, d.fixed ? `${d.fixed} fixed` : "", d.overridden ? `${d.overridden} overridden` : "", c.waived ? `${c.waived} waived` : ""]
+        const c = t[sev];
+        const sub = c.found ? [`${c.found} found`, c.fixed ? `${c.fixed} fixed` : "", c.overridden ? `${c.overridden} overridden` : "", c.waived ? `${c.waived} waived` : ""]
           .filter(Boolean).join(" · ") : "—";
         return (
           <div key={sev} className="vr-sevcell" data-hot={(sev === "P0" || sev === "P1") && c.open ? "" : undefined} data-testid={`vr-sev-${sev}`}>
@@ -108,6 +116,14 @@ function SevBar({ p }: { p: ReviewPacket }) {
           </div>
         );
       })}
+      {t.review.found ? (
+        <div className="vr-sevcell" data-testid="vr-sev-review" data-hot={t.review.blocking ? "" : undefined} title="Review seats' findings: counted apart from P0–P3; a follow-up does not block, a security finding on a P0 line does">
+          <span className="vr-kind">review</span>
+          <span className="num">{t.review.open}<span className="sub"> open</span></span>
+          <span className="sub">{[`${t.review.found} found`, t.review.deferred ? `${t.review.deferred} follow-up${t.review.deferred === 1 ? "" : "s"}` : "",
+            t.review.blocking ? `${t.review.blocking} blocking` : "not blocking"].filter(Boolean).join(" · ")}</span>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -118,11 +134,15 @@ function Verdict({ p }: { p: ReviewPacket }) {
     return <div className="vr-verdict" data-state="invalid" data-testid="vr-verdict"><b>Packet invalid</b><span className="vr-muted">{n} problem{n === 1 ? "" : "s"} · merge disabled</span></div>;
   }
   if (p.verdict.state === "blocked") {
-    const open = (["P0", "P1"] as Sev[]).map((s) => (p.counts[s].open ? `${p.counts[s].open} ${s}` : "")).filter(Boolean).join(" · ");
+    const t = packetTally(p);
+    const open = [...(["P0", "P1"] as Sev[]).map((s) => (t[s].open ? `${t[s].open} ${s}` : "")),
+                  t.review.blocking ? `${t.review.blocking} security review` : ""].filter(Boolean).join(" · ");
     return (
       <div className="vr-verdict" data-state="blocked" data-testid="vr-verdict"><b>{open ? "Blocked" : rerunPending(p) ? "Re-checking…" : "Blocked"}</b>
         <span className="vr-muted">{open ? `${open} open · merge waits on them` : rerunPending(p) ? "after your change · merge waits for the re-run"
-          : p.verdict.reasons.includes("rerun_failed") ? "the re-run failed · rebuild the packet" : "not ready"}</span>
+          : p.verdict.reasons.includes("rerun_failed") ? "the re-run failed · rebuild the packet"
+          : p.verdict.reasons.includes("stale_evidence") ? "the checks ran on an older commit · re-checking at the head"
+          : p.verdict.reasons.some((r) => r.startsWith("unexplained_hunk")) ? "an unexplained change in the partner's file" : "not ready"}</span>
         {p.verdict.reasons.map((r) => { const id = r.split(":").pop() ?? r; return /^[A-Z]-\d+$/.test(id) ? <RefChip key={r} id={id} />
           : r === "rerun_pending" ? <span key={r} className="vr-st" data-st="pending">re-checking…</span> : null; })}
       </div>

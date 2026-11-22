@@ -38,6 +38,14 @@ export type Finding = {
   title: string;
   /** Reported on the target only: the fix introduced it. */
   introduced: boolean;
+  /** A reviewer finding that is NEVER a follow-up (a security HIGH on a P0 rule's lines): it
+   *  blocks the merge like the P0 it sits on (engine `blocks`, verdict `security_review:R-n`). */
+  blocks: boolean;
+  /** "Needs you": the agent's change BOSS refused for a `human` / `never` rule (engine
+   *  `proposed`). Accept commits it (masked lines; `applicable` false → write it with Edit). */
+  proposed: { before: string | null; after: string | null; applicable: boolean } | null;
+  /** The agent's lines are on the branch for a `human` / `never` rule: fixed only once a person accepts. */
+  held: boolean;
 };
 /** One changed line of input → target (engine validators.record): `before` null = an added
  *  line, `after` null = a removed one; `finding` empty = a change no finding explains. */
@@ -64,11 +72,13 @@ export type Validation = {
   contract_target: string;
 };
 export type PacketCount = { found: number; open: number; waived: number };
+/** Reviewer findings BOSS moved to a follow-up: their own "review" line, never in P0–P3 found. */
+export type ReviewCount = { found: number; open: number; deferred: number; blocking: number };
 export type ReviewPacket = {
   packet_version: number | null; head_sha: string; built_at: string;
   work: { title: string; workflow_run: string; run_no: number | null; build: string; later_builds: string[]; change: number | null };
   verdict: { state: "ready" | "blocked" | "invalid"; reasons: string[] };
-  counts: Record<Sev, PacketCount> & { unmapped: number };
+  counts: Record<Sev, PacketCount> & { unmapped: number; review: ReviewCount | null };
   findings: Finding[];
   vs_input: { file: string; hunks: number; added: number; removed: number; hunks_by_finding: Record<string, string[]>; unexplained_hunks: string[] };
   validators: { id: string; ruleset: string; before: number; after_open: number; after_waived: number; exit: number | null; evidence: string }[];
@@ -127,9 +137,16 @@ export function parseFinding(v: unknown): Finding {
     evidence: a(x.evidence).map(parseEvidence), override: x.override ? parseOverride(x.override) : null,
     why: s(x.why), guide: s(x.guide),
     followup: x.followup ? { change: nn(fu.change), href: s(fu.href), build: "" }
-      // The engine's deferred_to is the follow-up build's id, or a word ("queued", "later"): only an id is shown.
+      // The engine's deferred_to: {by, number, href} (where it went), or older, the follow-up
+      // build's id or a word ("queued", "later"): only an id is shown.
+      : x.deferred_to && typeof x.deferred_to === "object" ? { change: nn(o(x.deferred_to).number), href: s(o(x.deferred_to).href), build: "" }
       : x.deferred_to ? { change: null, href: "", build: /^[a-z]+_[0-9a-z]+$/i.test(s(x.deferred_to)) ? s(x.deferred_to) : "" } : null,
-    title: s(x.title), introduced: x.introduced === true,
+    title: s(x.title), introduced: x.introduced === true, blocks: x.blocks === true,
+    proposed: x.proposed && typeof x.proposed === "object"
+      ? { before: o(x.proposed).before == null ? null : s(o(x.proposed).before),
+          after: o(x.proposed).after == null ? null : s(o(x.proposed).after),
+          applicable: o(x.proposed).applicable === true } : null,
+    held: !!x.held,
   };
 }
 function parseRun(v: unknown): RunResult {
@@ -195,7 +212,10 @@ export function parsePacket(v: unknown): ReviewPacket | null {
     packet_version: nn(x.packet_version), head_sha: s(x.head_sha), built_at: s(x.built_at),
     work: { title: s(w.title), workflow_run: s(w.workflow_run), run_no: nn(w.run_no), build: s(w.build), later_builds: strs(w.later_builds), change: nn(w.change) },
     verdict: { state: one(vd.state, ["ready", "blocked", "invalid"] as const, "invalid"), reasons: strs(vd.reasons) },
-    counts: { P0: count("P0"), P1: count("P1"), P2: count("P2"), P3: count("P3"), unmapped: n(c.unmapped) },
+    counts: { P0: count("P0"), P1: count("P1"), P2: count("P2"), P3: count("P3"), unmapped: n(c.unmapped),
+              // The engine's own review line, when it sends one (counts.review).
+              review: c.review && typeof c.review === "object"
+                ? { found: n(o(c.review).found), open: n(o(c.review).open), deferred: n(o(c.review).deferred), blocking: n(o(c.review).blocking) } : null },
     findings,
     vs_input: { file: s(vi.file), hunks: n(vi.hunks), added: n(vi.added), removed: n(vi.removed), hunks_by_finding: hbf, unexplained_hunks: strs(vi.unexplained_hunks) },
     validators: a(x.validators).map((y) => { const z = o(y); return { id: s(z.id), ruleset: s(z.ruleset), before: n(z.before), after_open: n(z.after_open), after_waived: n(z.after_waived), exit: nn(z.exit), evidence: s(z.evidence) }; }),
@@ -221,9 +241,11 @@ const STATUS_RANK: Record<FindingStatus, number> = { open: 0, overridden: 2, rev
 const SEV_RANK: Record<Sev, number> = { P0: 0, P1: 1, P2: 2, P3: 3 };
 /** §1.4: open P0, open P1, then overridden, waived, fixed; severity, then id within each. */
 export function sortFindings(list: Finding[]): Finding[] {
+  // An open finding moved to a follow-up (not blocking) sits after the open ones that block.
+  const rank = (f: Finding) => (f.status === "open" ? SEV_RANK[f.severity] + (f.followup && !f.blocks ? 5 : 0) : 10 + STATUS_RANK[f.status]);
   return [...list].sort((x, y) => {
-    const ox = x.status === "open" ? SEV_RANK[x.severity] : 10 + STATUS_RANK[x.status];
-    const oy = y.status === "open" ? SEV_RANK[y.severity] : 10 + STATUS_RANK[y.status];
+    const ox = rank(x);
+    const oy = rank(y);
     return ox - oy || SEV_RANK[x.severity] - SEV_RANK[y.severity] || x.id.localeCompare(y.id, undefined, { numeric: true });
   });
 }
@@ -231,7 +253,7 @@ export function sortFindings(list: Finding[]): Finding[] {
 export function groupBySeverity(list: Finding[]): { sev: Sev; items: Finding[] }[] {
   return SEVS.map((sev) => ({
     sev,
-    items: list.filter((f) => f.severity === sev).sort((x, y) => (x.location.line ?? 0) - (y.location.line ?? 0) || x.source.rule_id.localeCompare(y.source.rule_id)),
+    items: list.filter((f) => f.severity === sev).sort((x, y) => (x.location.line ?? x.location.partner_line ?? 0) - (y.location.line ?? y.location.partner_line ?? 0) || x.source.rule_id.localeCompare(y.source.rule_id)),
   })).filter((g) => g.items.length);
 }
 
@@ -243,6 +265,56 @@ export function countsOf(list: Finding[]): Record<Sev, PacketCount & { fixed: nu
                  fixed: of.filter((f) => f.status === "fixed").length, overridden: of.filter((f) => f.status === "overridden" || f.status === "reverted").length };
   }
   return out;
+}
+
+/** A review seat's finding: counted on its own "review" line, never in P0–P3 "found" (the engine's
+ *  counts.review; P-levels count what validators, tests, contract cases and guards found). */
+export function isReviewFinding(f: Finding): boolean {
+  return f.source.kind === "reviewer" || f.source.kind === "review";
+}
+
+export type Tally = Record<Sev, PacketCount & { fixed: number; overridden: number }> & { review: ReviewCount; unmapped: number };
+
+/**
+ * THE ONE COUNT every validation surface shows (the Validation tab badge, the merge card's
+ * severity cells and verdict, the change page, the Work panel). P0–P3 count the findings that
+ * are not review follow-ups; review follow-ups are their own line. With findings, it is
+ * recomputed from them (the engine's rule 3 says the two agree); a thin packet with counts only
+ * uses the engine's counts.
+ */
+export function packetTally(p: ReviewPacket): Tally {
+  if (!p.findings.length) {
+    const out = {} as Tally;
+    for (const sev of SEVS) out[sev] = { ...p.counts[sev], fixed: 0, overridden: 0 };
+    return { ...out, review: p.counts.review ?? { found: 0, open: 0, deferred: 0, blocking: 0 }, unmapped: p.counts.unmapped };
+  }
+  const review = p.findings.filter(isReviewFinding);
+  const open = review.filter((f) => f.status === "open" || f.status === "reverted");
+  return {
+    ...countsOf(p.findings.filter((f) => !isReviewFinding(f))),
+    review: { found: review.length, open: open.length, deferred: open.filter((f) => f.followup && !f.blocks).length, blocking: open.filter((f) => f.blocks).length },
+    unmapped: p.findings.filter((f) => f.unmapped).length || p.counts.unmapped,
+  };
+}
+
+/** What blocks a merge: open P0 + P1, and a review finding that blocks. The Validation tab's badge. */
+export const blockingOpen = (t: Tally): number => t.P0.open + t.P1.open + t.review.blocking;
+
+/** The open rows a blocked packet's merge goes past (the merge card's and the change page's
+ *  "Merge anyway" list): open P0/P1 that are not follow-ups, and blocking review findings. */
+export function blockingRows(p: ReviewPacket | null): string[] {
+  if (!p || p.verdict.state !== "blocked") return [];
+  return p.findings.filter((f) => (f.status === "open" || f.status === "reverted")
+      && (f.blocks || (!f.followup && !isReviewFinding(f) && (f.severity === "P0" || f.severity === "P1"))))
+    .map((f) => `${f.severity} ${f.id} ${f.source.rule_id || f.source.name || ""}${lineWords(f) ? ` · ${lineWords(f)}` : ""}`.replace(/\s+/g, " ").trim());
+}
+
+/** The work's run and build, from the packet (what was validated) — one source for the merge
+ *  card, the change page and the Work panel. Empty when there is no packet. */
+export function workRefsOf(p: ReviewPacket | null): { run: string; run_no: number | null; build: string } {
+  if (!p) return { run: "", run_no: null, build: "" };
+  return { run: p.work.workflow_run.startsWith("wfr_") ? p.work.workflow_run : "", run_no: p.work.run_no,
+           build: p.work.build.startsWith("crun_") ? p.work.build : "" };
 }
 
 /** The Built column's funnel (§5.3): found → auto · agent · you · waived → open. */
@@ -268,11 +340,18 @@ export const STATUS_WORDS: Record<FindingStatus, string> = {
   open: "open", fixed: "fixed", overridden: "overridden", reverted: "reverted", waived: "waived", suppressed: "suppressed",
 };
 
-/** "L17", "L19–20", or "" — never "Lnull". */
+/** "L17", "L19–20", or "" — never "Lnull". A finding whose line the fix removed (location.line
+ *  null) shows the partner's line instead, so a P0 row never reads "—". */
 export function lineWords(f: Pick<Finding, "location">): string {
-  const { line, end_line } = f.location;
-  if (line == null) return "";
+  const { line, end_line, partner_line } = f.location;
+  if (line == null) return partner_line != null ? `L${partner_line}` : "";
   return end_line && end_line !== line ? `L${line}–${end_line}` : `L${line}`;
+}
+/** The tooltip that says which file a line number is in. */
+export function lineTitle(f: Pick<Finding, "location">): string {
+  const { line, partner_line } = f.location;
+  if (line == null && partner_line != null) return `Line ${partner_line} of the partner's file (removed on the branch)`;
+  return line != null ? `Line ${line} on the branch` : "";
 }
 
 /** The title of the WORK, not of the newest follow-up: every "Follow-up: … — " prefix a follow-up
@@ -327,6 +406,11 @@ export const isMissingRoute = (status: number, body?: unknown) =>
 /** Merge waits while the packet re-runs after an override. */
 export const rerunPending = (p: ReviewPacket | null): boolean =>
   !!p && (p.rerun?.state === "pending" || p.rerun?.state === "running" || p.verdict.reasons.includes("rerun_pending"));
+/** The checks ran on an older commit than the change's head (a push after them): the engine
+ *  refuses the merge until a re-run at the head (verdict `stale_evidence`, or the heads differ). */
+export const packetStale = (p: ReviewPacket | null, currentHead?: string | null): boolean =>
+  !!p && (p.verdict.reasons.includes("stale_evidence")
+    || (!!currentHead && !!p.head_sha && p.validators.length > 0 && !currentHead.startsWith(p.head_sha) && !p.head_sha.startsWith(currentHead)));
 
 export async function sendOverride(path: string, body: R): Promise<OverrideResult> {
   try {
@@ -339,10 +423,16 @@ export async function sendOverride(path: string, body: R): Promise<OverrideResul
     const missing = isMissingRoute(status, b);
     const stale = status === 409 && code === "stale_head";
     return { ok: false, status, missing, stale, code, body: b,
-             error: missing ? NOT_DEPLOYED : stale ? STALE : s(b.message) || refusalSentence(e) };
+             error: missing ? NOT_DEPLOYED : stale ? STALE : CODE_WORDS[code] ?? (s(b.message) || refusalSentence(e)) };
   }
 }
 export const STALE = "This change moved on; review the new version.";
+/** The engine's short refusals, said in full next to the row they belong to. */
+const CODE_WORDS: Record<string, string> = {
+  reason_required: "Write why first. The reason is recorded on the change.",
+  text_required: "Write the replacement lines first.",
+  rerun_pending: "BOSS is re-checking the last change. Try again when it finishes.",
+};
 export const NOT_DEPLOYED = "Overrides are not on this BOSS yet (the engine route is not deployed).";
 
 // ── §4 rulesets ──────────────────────────────────────────────────────────────────────────────
@@ -377,6 +467,68 @@ export function parseRulesets(v: unknown): Ruleset[] {
   return list.map(parseRuleset).filter((r): r is Ruleset => r !== null);
 }
 export const rulesetsPath = (projectId: string) => `/v1/projects/${enc(projectId)}/rulesets`;
+/** GET /v1/projects/{p}/validators: the base branch's `.boss/validators.yaml` (`exists: false`
+ *  when there is none yet). Null from an engine without the route. */
+export type ValidatorsFile = { exists: boolean; sha: string | null; path: string; ids: string[] };
+export function parseValidatorsFile(v: unknown): ValidatorsFile | null {
+  const x = o(v);
+  if (typeof x.exists !== "boolean") return null;
+  return { exists: x.exists, sha: s(x.sha) || null, path: s(x.path) || ".boss/validators.yaml",
+           ids: a(x.validators).map((y) => s(o(y).id)).filter(Boolean) };
+}
+export const validatorsPath = (projectId: string) => `/v1/projects/${enc(projectId)}/validators`;
+export const proposeValidatorsPath = (projectId: string) => `${validatorsPath(projectId)}/propose`;
+
+// ── creating validation for a repo that has none (Settings › Validators) ────────────────────
+
+export type ValidatorDecl = { id: string; applies_to: string[]; run: string; fix: string; adapter: string; rules_doc: string; ruleset: string };
+export const ADAPTERS = ["gwlint-json", "sarif", "eslint-json", "ruff-json", "junit"];
+/** `.boss/validators.yaml`'s one entry, pre-filled for a gateway config linter (SPEC §2). */
+export function validatorTemplate(ruleset: string): ValidatorDecl {
+  return { id: "gwlint", applies_to: ["config/tenants/*.yaml"], run: "go run ./cmd/gwlint validate {file} --json",
+           fix: "go run ./cmd/gwlint --fix {file}", adapter: "gwlint-json", rules_doc: "rules/api-guidelines.yaml", ruleset };
+}
+/** A first ruleset (SPEC §4's P-levels): secrets, CORS with credentials, admin paths and plaintext
+ *  upstreams are P0; missing limits P1; PII declaration P2. Edited later in the ruleset editor. */
+export function rulesetTemplate(): RulesetRule[] {
+  const r = (id: string, severity: Sev, autofix: Autofix, guide = ""): RulesetRule => ({ id, enabled: true, severity, autofix, guide, custom: false, check: "" });
+  return [
+    r("no-inlined-secrets", "P0", "never", "Delete the key if the route already authenticates another way; otherwise use a secret reference. Never write a value you computed."),
+    r("cors-no-wildcard-with-credentials", "P0", "agent", "Default to allow_credentials: false. Keep credentials only if the brief names exact origins."),
+    r("no-sensitive-paths-exposed", "P0", "human", "Removing a route is a product decision: propose it, a person accepts."),
+    r("upstream-https-required", "P0", "mechanical"),
+    r("tenant-rate-limit-required", "P1", "agent", "rps 50, burst 50 unless the brief names a quota."),
+    r("rate-limit-required", "P1", "mechanical"),
+    r("request-size-capped", "P1", "mechanical"),
+    r("tenant-id-matches-filename", "P1", "never"),
+    r("pii-fields-declared", "P2", "agent", "List the query params that carry personal data; ask the partner if unknown."),
+  ];
+}
+/** A ruleset id from a project id: lower-case words and dashes. */
+export const rulesetIdFor = (projectId: string) => (projectId.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "default");
+/** Create a ruleset: the propose route with no base (nothing to be stale against) and the
+ *  validator it layers on; the engine opens a change ADDING `.boss/rulesets/<id>.yaml` (v1). */
+export function rulesetCreateBody(rules: RulesetRule[], validator: string): Record<string, unknown> {
+  return {
+    rules: rules.map(({ id, enabled, severity, autofix, guide }) => ({ id, enabled, severity, autofix, guide })),
+    base_version: null, base_sha: null, ...(validator ? { validator } : {}),
+  };
+}
+/** Add a validator: POST …/validators/propose with the whole list (here, the one new entry) and
+ *  the file's sha as the base (null: there is no file yet). */
+export function validatorsBody(v: ValidatorDecl, baseSha: string | null): Record<string, unknown> {
+  return {
+    validators: [{ id: v.id, applies_to: v.applies_to, run: v.run, ...(v.fix ? { fix: v.fix } : {}), output: { adapter: v.adapter },
+                   ...(v.rules_doc ? { rules_doc: v.rules_doc } : {}), ...(v.ruleset ? { ruleset: v.ruleset } : {}) }],
+    base_sha: baseSha,
+  };
+}
+/** An engine that cannot create the files yet: the ruleset route answers 404 (no ruleset) or
+ *  refuses the `validator` field it does not know (422 extra field); the validators route is
+ *  not there (404). */
+export const needsNewerEngine = (status: number, error: string | null) =>
+  status === 404 || status === 405 || status === 501 || (status === 422 && /extra|not permitted|validator/i.test(error ?? ""));
+export const NEEDS_LATEST = "Needs the latest BOSS: this engine cannot create a ruleset or validators.yaml yet.";
 export const proposeRulesetPath = (projectId: string, id: string) => `${rulesetsPath(projectId)}/${enc(id)}/propose`;
 
 /** §4: lowering a P0, or turning on an auto-fix for one, needs a second approver. */

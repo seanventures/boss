@@ -24,7 +24,8 @@ import {
 } from "@phosphor-icons/react";
 
 import { changeHref, changeRef, linkTarget } from "../../lib/repo-links";
-import { parseValidation, shortId, validationPath, type Validation } from "../../lib/validation-review";
+import { parseValidation, shortId, validationPath, workRefsOf, type Validation } from "../../lib/validation-review";
+import { packetLinks } from "../validation/review-packet";
 import { ValidationBuilt } from "../validation/built-summary";
 import { mergeWaitOf, workNextStep, type NextStep } from "../../lib/work-next-step";
 import {
@@ -100,12 +101,26 @@ export function rootBuildOf(w: WorkItem): { id: string; href: string } | null {
 /** The change this work made: the open merge, else the PR it recorded. */
 const changeOf = (w: WorkItem) => mergeWaitOf(w) ?? w.links.pr ?? null;
 
+/** The run and build this work names, ONE SOURCE with the merge card and the change page: the
+ *  review packet's (the run and build that were validated) when the change has one, else the
+ *  work's own story. */
+export function workLinksOf(w: WorkItem, story: WorkStory | null, validation: Validation | null, projectId: string):
+  { run: string; runNo: number | null; build: { id: string; href: string } | null } {
+  const p = validation?.packet ?? null;
+  const refs = workRefsOf(p);
+  const links = p && projectId ? packetLinks(projectId, p) : null;
+  const own = rootBuildOf(w);
+  return {
+    run: refs.run && links?.run ? links.run : w.links.workflow_run,
+    runNo: refs.run ? refs.run_no : story?.number || w.run_number || null,
+    build: refs.build && links?.build ? { id: refs.build, href: links.build } : own,
+  };
+}
+
 /** RUN · BUILD · CHANGE, visible under the title (SPEC §5.1) — they used to hide in the ⋯ menu. */
-function HeaderLinks({ w, story, validation, testid }: { w: WorkItem; story: WorkStory | null; validation: Validation | null; testid: string }) {
-  const run = w.links.workflow_run;
-  const build = rootBuildOf(w);
+function HeaderLinks({ w, story, validation, projectId, testid }: { w: WorkItem; story: WorkStory | null; validation: Validation | null; projectId: string; testid: string }) {
+  const { run, runNo, build } = workLinksOf(w, story, validation, projectId);
   const ch = changeOf(w);
-  const runNo = story?.number || w.run_number;
   if (!run && !build && !ch) return null;
   return (
     <div className="wp-links" data-testid={`${testid}-links`}>
@@ -132,6 +147,7 @@ function Header({ ctx, w, story, next, short, validation = null, testid }: { ctx
   const said = stateSentence(w, next);
   const Icon = KIND_ICON[w.kind] ?? Lightbulb;
   const mp = mergeWaitOf(w);
+  const runNoShown = workLinksOf(w, story, validation, ctx.projectId).runNo;
   const mergeAt = w.attempts.find((t) => t.id === mp?.build_id);
   const waiting = w.state === "needs_you" ? durationWords(secondsBetween(mergeAt?.updated_at || w.updated_at || w.created_at)) : "";
   const elapsed = story?.minutes ? durationWords(story.minutes * 60) : durationWords(secondsBetween(w.created_at, w.state === "running" ? null : w.updated_at));
@@ -147,7 +163,7 @@ function Header({ ctx, w, story, next, short, validation = null, testid }: { ctx
             <div className="wp-meta">
               <span className="wp-pill">{KIND_WORDS[w.kind] ?? w.kind}</span>
               {w.workflow || story?.number || w.run_number ? (
-                <span className="wp-pill" data-testid={`${testid}-number`}>{[w.workflow, story?.number || w.run_number ? `run #${story?.number || w.run_number}` : ""].filter(Boolean).join(" · ")}</span>
+                <span className="wp-pill" data-testid={`${testid}-number`}>{[w.workflow, runNoShown ? `run #${runNoShown}` : ""].filter(Boolean).join(" · ")}</span>
               ) : null}
               <span className="wp-pill" data-tone={st.tone} data-testid={`${testid}-state`}><span className="wp-dot" data-s={st.s} aria-hidden />{st.word}</span>
               {w.agents.length ? (
@@ -156,7 +172,7 @@ function Header({ ctx, w, story, next, short, validation = null, testid }: { ctx
                 </span>
               ) : null}
             </div>
-            <HeaderLinks w={w} story={story} validation={validation} testid={testid} />
+            <HeaderLinks w={w} story={story} validation={validation} projectId={ctx.projectId} testid={testid} />
           </div>
         </div>
         <p className="wp-state" data-testid={`${testid}-sentence`}><b data-tone={said.tone}>{said.lead}</b>{said.rest ? ` ${said.rest}` : ""}</p>
@@ -251,7 +267,7 @@ function Story({ w, story, validation = null, projectId = "", testid }: { w: Wor
   const files = built?.groups.flatMap((g) => g.files) ?? [];
   const testFiles = built?.groups.find((g) => g.purpose === "Tests")?.files ?? [];
   const tests = built?.tests;
-  const root = rootBuildOf(w);
+  const root = workLinksOf(w, story, validation, projectId).build;
   const ch = changeOf(w);
   // Follow-ups are later lines under the work's own build, never the build the column reads.
   const laterLines = (story?.explained?.later ?? []).map((l) => ({ key: l.buildId, line: <span>{l.line || l.title}</span> }));

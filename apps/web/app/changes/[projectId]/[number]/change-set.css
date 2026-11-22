@@ -170,6 +170,9 @@
 .lr-btn[data-kind="primary"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 .lr-btn[data-kind="primary"]:hover { background: var(--accent-press); }
 .lr-btn[data-kind="ghost"] { background: transparent; }
+.lr-btn[data-kind="danger"] { color: var(--red); background: var(--red-soft); border-color: transparent; }
+.lr-btn[data-kind="danger"]:disabled { opacity: .55; cursor: not-allowed; }
+.cs-blocked-rows { margin: 0; padding-left: 1.1rem; display: grid; gap: 2px; color: var(--red); }
 .lr-btn[data-kind="amber"] { width: 100%; color: var(--amber); background: var(--amber-soft); border-color: transparent; }
 .lr-btn:disabled, .lr-btn[aria-disabled="true"] { opacity: .55; cursor: not-allowed; }
 .lr-btn kbd { font-family: var(--mono); font-size: var(--fs-tag); opacity: .75; }

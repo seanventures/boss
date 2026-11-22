@@ -8,7 +8,7 @@
 import React from "react";
 import { ArrowRight } from "@phosphor-icons/react";
 
-import { countsOf, funnelOf, type Sev, type Validation } from "../../lib/validation-review";
+import { countsOf, funnelOf, packetTally, type Sev, type Validation } from "../../lib/validation-review";
 import { SevChip } from "./kit";
 
 export function ValidationBuilt({ v, tests, later, fixesHref, testid }: {
@@ -18,7 +18,9 @@ export function ValidationBuilt({ v, tests, later, fixesHref, testid }: {
   fixesHref: string; testid: string;
 }) {
   const f = funnelOf(v);
-  const c = countsOf(v.findings);
+  // The same count the merge card and the change page show (packetTally), when the packet is here.
+  const t = v.packet ? packetTally(v.packet) : null;
+  const c = t ?? countsOf(v.findings);
   const pass = v.contract.filter((k) => k.got != null && String(k.got) === String(k.expect)).length;
   return (
     <div className="vr" data-testid={`${testid}-validation`}>
@@ -37,6 +39,8 @@ export function ValidationBuilt({ v, tests, later, fixesHref, testid }: {
             ? [c[s].waived ? `${c[s].waived} waived` : "", c[s].open ? `${c[s].open} open` : "", !c[s].waived && !c[s].open ? `${c[s].found} found` : ""].filter(Boolean).join(" · ")
             : `${c[s].found} found · ${c[s].open} open`}</span></span>
         ))}
+        {t?.review.found ? <span className="vr-chip-pair" data-testid={`${testid}-review`}><span className="vr-kind">review</span><span className="vr-mono vr-small">{[`${t.review.found} found`, t.review.deferred ? `${t.review.deferred} follow-up${t.review.deferred === 1 ? "" : "s"}` : "",
+          t.review.blocking ? `${t.review.blocking} blocking` : "not blocking"].filter(Boolean).join(" · ")}</span></span> : null}
       </div>
       <table className="vr-facts"><tbody>
         {v.contract.length ? <tr><td>Contract</td><td className="vr-mono" style={{ color: pass === v.contract.length ? "var(--v2-green)" : "var(--v2-red)" }}>{pass} / {v.contract.length} pass</td></tr> : null}
