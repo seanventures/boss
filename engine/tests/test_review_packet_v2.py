@@ -67,7 +67,9 @@ def test_a_packet_built_from_the_step_outputs_is_valid_and_computed(packet):
     assert packet["counts"]["P1"] == {"found": 9, "open": 5, "waived": 0}
     assert packet["counts"]["P2"] == {"found": 2, "open": 2, "waived": 0}
     assert packet["verdict"]["state"] == "blocked"
-    assert "open_p1:R-1" in packet["verdict"]["reasons"]
+    # Only the validator's open findings block; the review's P1 is a follow-up (light lane).
+    assert "open_p1:R-1" not in packet["verdict"]["reasons"]
+    assert all(r.startswith("open_p1:V-") for r in packet["verdict"]["reasons"])
     assert packet["validators"][0]["before"] == 9 and packet["validators"][0]["after_open"] == 5
     assert packet["vs_input"]["hunks"] == 3 and packet["vs_input"]["unexplained_hunks"] == []
     assert packet["tests"][0]["id"] == "T-1" and packet["tests"][0]["ok"] is True
@@ -285,3 +287,16 @@ def test_the_merge_card_carries_the_packet_and_the_root_title():
     assert "**({_review_packet.KEY: _packet} if _packet else {})" in src
     assert '"title": _work_title,' in src
     assert 'f"Approve code change: {_work_title} ({_ref})"' in src
+
+
+def test_a_non_prod_build_with_a_p1_follow_up_listed_for_later_merges_as_before():
+    """Review fix #277: a P1 follow-up the bar let through ("listed for later", handled_by None)
+    is deferred — the packet is ready and the merge (policy, delegate or person) is not held."""
+    lineage = [{"id": "crun_root", "title": "Recipe box", "created_at": 1,
+                "finalize_ctx": {}, "state": {"tests": TESTS}}]
+    fu = {**FOLLOWUPS, "queued": False, "handled_by": None}
+    p = rp.for_run(_Conn(lineage), "crun_root", head_sha="abc", change=3, followups=fu)
+    r1 = next(x for x in p["findings"] if x["id"] == "R-1")
+    assert r1["severity"] == "P1" and r1["status"] == "open" and r1["deferred_to"] == "later"
+    assert p["verdict"] == {"state": "ready", "reasons": []}
+    assert rp.blocks_merge({"packet": p}, force=False) is None

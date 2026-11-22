@@ -83,9 +83,10 @@ def verdict(packet: Mapping[str, Any]) -> dict:
     still pending."""
     reasons: list[str] = []
     for f in packet.get("findings") or []:
-        # A review follow-up BOSS's next build is already fixing (quality bar) is listed, open,
-        # with where it went — it does not hold this merge (operator, 2026-11-18).
+        # Only a validator, test or contract finding blocks; a review follow-up the quality bar
+        # let through is listed, open, with where it went (deferred_to) — the light lane.
         if f.get("status") == "open" and f.get("severity") in ("P0", "P1") \
+                and (f.get("source") or {}).get("kind") in ("validator", "test", "contract") \
                 and not f.get("deferred_to"):
             reasons.append(f"open_{str(f['severity']).lower()}:{f['id']}")
     for v in packet.get("validators") or []:
@@ -398,9 +399,14 @@ def for_run(connection: Any, run_id: str, *, head_sha: Optional[str],
             "run_no": _run_no(connection, wfr), "build": root["id"],
             "later_builds": [r["id"] for r in lineage[1:]], "change": change}
     reviews = from_followups((followups or {}).get("items") or [], (followups or {}).get("bar"))
-    if (followups or {}).get("queued") or (followups or {}).get("handled_by"):
-        for r in reviews:
-            r["deferred_to"] = (followups or {}).get("handled_by") or "queued"
+    # THE QUALITY BAR DECIDES WHAT A REVIEW FINDING BLOCKS (operator 2026-11-18, light lane):
+    # what reaches the card as a follow-up already passed the bar — queued, for the next pass, or
+    # listed for later — so it is listed, open, and DEFERRED, never a packet block. Only a
+    # validator, test or contract finding blocks the packet; a review that blocks at the bar
+    # (production) is the checks-failing card's, not this one's.
+    fu = followups or {}
+    for r in reviews:
+        r["deferred_to"] = fu.get("handled_by") or ("queued" if fu.get("queued") else "later")
     return build_packet(work=work, head_sha=head_sha,
                         validations=[validation] if validation else [],
                         tests=me["state"].get("tests") or [], reviews=reviews,
