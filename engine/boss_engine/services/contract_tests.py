@@ -611,6 +611,13 @@ def from_repo(text: Optional[str]) -> dict[str, Any]:
     cases = data.get("cases") if isinstance(data, Mapping) else None
     if not isinstance(cases, list) or not cases:
         raise CaseError(f"{REPO_FILE} needs a non-empty `cases:` list.")
+    for i, case in enumerate(cases):
+        # THE STAGING TARGET ONLY: a repository's case names a `path` on the step's base_url
+        # (the staging deploy), never a `url` of its own — a file in a change must not point
+        # the project's header secrets at another host.
+        if isinstance(case, Mapping) and str(case.get("url") or "").strip():
+            raise CaseError(f"{REPO_FILE} case {i + 1}: give a `path` on the staging target, "
+                            "not a `url`.")
     out: dict[str, Any] = {"cases": cases[:MAX_CASES]}
     if isinstance(data.get("headers"), Mapping):
         out["headers"] = dict(data["headers"])

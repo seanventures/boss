@@ -171,3 +171,50 @@ def test_a_remediation_record_still_blocks_as_before(tmp_path):
     rec = _checks(_repo(tmp_path), [TOUCHED], [])[0]
     rec.pop("kind")
     assert _packet(rec)["verdict"]["state"] == "blocked"
+
+
+# ── no cost without a declaration; a bounded cost with one ────────────────────────────────────
+
+def test_a_repo_with_no_declaration_never_diffs_the_tree(tmp_path):
+    class _NoDiff(_Sandbox):
+        def diff(self):
+            raise AssertionError("diffed a tree whose repo declares no checkers")
+
+    ran: list = []
+    out = g._run_repo_checks(_Engine(), "crun_x", "proj", _repo(tmp_path),
+                             _NoDiff([TOUCHED], ran), _github({}), "main")
+    assert out == [] and ran == []
+
+
+def test_the_repo_checks_stop_at_their_time_budget(tmp_path):
+    root = _repo(tmp_path)
+    timeouts: list = []
+
+    def run(cmd, timeout):
+        timeouts.append(timeout)
+        return SimpleNamespace(stdout=(FIX / "gwlint.before.json").read_text(), exit_code=1)
+
+    text = (FIX / "validators.yaml").read_text()
+    assert f.repo_checks(root, [TOUCHED], run, trusted=lambda p: text if p == v.FILE else None,
+                         budget_s=0) == []
+    assert timeouts == []
+    recs = f.repo_checks(root, [TOUCHED], run, trusted=lambda p: text if p == v.FILE else None)
+    assert recs and timeouts and max(timeouts) <= f.REPO_CHECK_COMMAND_S
+
+
+def test_a_repo_contract_test_never_names_its_own_host():
+    import pytest
+
+    from boss_engine.services import contract_tests as ct
+
+    with pytest.raises(ct.CaseError):
+        ct.from_repo("cases:\n  - name: x\n    url: https://elsewhere.example/\n")
+    assert ct.from_repo("cases:\n  - name: x\n    path: /healthz\n")["cases"][0]["path"] == "/healthz"
+
+
+def test_a_start_from_path_outside_the_repo_is_never_read(tmp_path):
+    root = _repo(tmp_path)
+    (tmp_path / "secret.txt").write_text("host file\n")
+    spec = {"remediate": {"input": TOUCHED, "output": TOUCHED, "start_from": True,
+                          "original_path": "../secret.txt"}}
+    assert f.contract(spec, "fix it", root) is None

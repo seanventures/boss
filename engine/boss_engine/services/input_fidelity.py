@@ -341,6 +341,11 @@ def contract(spec: Mapping[str, Any], instructions: str, root: Any, *,
             # at the target, so the change's diff reads original → fixed.
             original = declared.get("content")
             src = _clean_path(declared.get("original_path"))
+            if src and (src.startswith("/") or "\\" in src
+                        or ".." in PurePosixPath(src).parts):
+                # A path INSIDE the repository only: never a host file read into the change.
+                logger.info("input_fidelity: the file to start from (%s) is outside the repo", src)
+                return None
             if original is None and src:
                 original = (trusted(src) if trusted is not None else None)
                 if original is None:
@@ -1318,19 +1323,27 @@ def place_original(root: Any, c: Mapping[str, Any],
 
 #: The most touched files one build checks (each runs the validator; a bounded cost).
 REPO_CHECK_FILES = 20
+#: The wall-clock budget for ALL of one build's repo checks, and one command's ceiling within it:
+#: a slow or hanging checker in a misconfigured validators.yaml never holds a build for long.
+REPO_CHECK_BUDGET_S = 300
+REPO_CHECK_COMMAND_S = 120
 
 
 def repo_checks(root: Any, touched: Iterable[str], run: Optional[Callable[[str], Any]], *,
                 trusted: Optional[Callable[[str], Optional[str]]] = None,
-                base_ref: Optional[str] = None) -> list[dict]:
+                base_ref: Optional[str] = None,
+                budget_s: float = REPO_CHECK_BUDGET_S) -> list[dict]:
     """CHECKERS COME FROM THE REPO, IN ANY WORKFLOW: every validator the repo declares
     (`.boss/validators.yaml`, read from ``trusted`` — the base branch — when given) whose
     ``applies_to`` matches a file this change touched runs on it, and each run is one
     ``boss.validation/v1`` record, exactly as a remediation's: findings on the base version
     (before), on the changed file (after), the fixes between. A file new on this change is
     checked as it is (before = after). Tagged ``kind: repo_check``. [] when the repo declares
-    no validator or none applies. Never raises."""
+    no validator or none applies. ``run(command, timeout)`` gets each command's ceiling; the
+    checks stop at ``budget_s`` in all (a file not checked by then is said as an error record's
+    reason in the log, never a failure). Never raises."""
     import fnmatch
+    import time
 
     from . import rulesets as _rulesets
     from . import validators as _v
@@ -1345,9 +1358,20 @@ def repo_checks(root: Any, touched: Iterable[str], run: Optional[Callable[[str],
         return []
     paths = [_clean_path(p) for p in touched if p]
     out: list[dict] = []
+    deadline = time.monotonic() + max(0.0, float(budget_s))
+
+    def _bounded(cmd: str) -> Any:
+        left = deadline - time.monotonic()
+        if left <= 1:
+            raise TimeoutError("the repo checks' time budget is spent")
+        return run(cmd, int(min(REPO_CHECK_COMMAND_S, left)))
+
     for v in declared:
         for path in paths:
             if len(out) >= REPO_CHECK_FILES:
+                return out
+            if time.monotonic() >= deadline:
+                logger.info("input_fidelity: repo checks stopped at the %ss budget", budget_s)
                 return out
             if not any(fnmatch.fnmatch(path, g) for g in v["applies_to"]):
                 continue
@@ -1370,7 +1394,7 @@ def repo_checks(root: Any, touched: Iterable[str], run: Optional[Callable[[str],
                 except Exception:  # noqa: BLE001 — the tool's own severities, said by `basis`
                     logger.info("input_fidelity: ruleset %s not read", v["ruleset"],
                                 exc_info=True)
-            rec = public_validation(run_validation(root, c, run))
+            rec = public_validation(run_validation(root, c, _bounded))
             rec["kind"] = "repo_check"
             out.append(rec)
     return out

@@ -2840,7 +2840,20 @@ def _run_repo_checks(engine, run_id: str, project_id: str, root, sandbox, github
                      base_branch: Optional[str]) -> list:
     """The repo's checkers on the files this build touched (input_fidelity.repo_checks), run
     through the sandbox's allow-listed runner, the declaration and rulesets read from the base
-    branch. Recorded as an event with one line per record. Never raises: [] on any failure."""
+    branch. Recorded as an event with one line per record. Never raises: [] on any failure.
+    A repo that declares no checkers costs one read of the declaration and nothing else."""
+    from . import validators as _validators_mod
+
+    def _trusted(path: str):
+        try:
+            return github.read_text_file(base_branch, path) if base_branch else None
+        except Exception:  # noqa: BLE001 — unreadable on the base: absent
+            return None
+
+    # THE DECLARATION FIRST: no `.boss/validators.yaml` on the base, no diff and no runs.
+    declaration = _trusted(_validators_mod.FILE)
+    if not declaration:
+        return []
     try:
         touched = [fc.path for fc in sandbox.diff()]
     except Exception:  # noqa: BLE001 — no diff, no checks
@@ -2849,16 +2862,13 @@ def _run_repo_checks(engine, run_id: str, project_id: str, root, sandbox, github
     if not touched:
         return []
 
-    def _trusted(path: str):
-        try:
-            return github.read_text_file(base_branch, path) if base_branch else None
-        except Exception:  # noqa: BLE001 — unreadable on the base: absent
-            return None
+    def _read(path: str):
+        return declaration if path == _validators_mod.FILE else _trusted(path)
 
     try:
         records = _input_fidelity.repo_checks(
-            root, touched, lambda cmd: sandbox.run(cmd, timeout=180), trusted=_trusted,
-            base_ref=base_branch)
+            root, touched, lambda cmd, limit=None: sandbox.run(cmd, timeout=limit or 120),
+            trusted=_read, base_ref=base_branch)
     except Exception:  # noqa: BLE001
         _log_caught(logger)
         return []
