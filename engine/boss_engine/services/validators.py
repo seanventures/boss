@@ -673,7 +673,7 @@ def record(*, c: Mapping[str, Any], validator: Mapping[str, Any], version: Optio
         "error": error or (guard or {}).get("code"),
         # Comments in the target that SAY a finding was fixed (review_packet judges them
         # against the findings' status: a claim for an open finding is a claim without evidence).
-        "comment_claims": comment_claims(out_lines, findings),
+        "comment_claims": comment_claims(out_lines, findings, in_lines=in_lines),
     }
 
 
@@ -734,8 +734,8 @@ _NOT_DONE = re.compile(r"\b(?:(?:not|never|nothing)\s+(?:yet\s+|been\s+)?(?:remo
                        r"for\s+a\s+(?:person|human))\b", re.I)
 
 
-def comment_claims(out_lines: Sequence[str], findings: Sequence[Mapping[str, Any]]
-                   ) -> list[dict]:
+def comment_claims(out_lines: Sequence[str], findings: Sequence[Mapping[str, Any]],
+                   in_lines: Optional[Sequence[str]] = None) -> list[dict]:
     """The target's comment lines that claim a finding's fix: a ``#`` comment naming a rule id
     (or a finding id) with a done-word ("removed", "fixed", …) and no not-done word.
     ``[{line, text, rule, finding}]`` (text masked). Whether the claim is TRUE is judged
@@ -746,7 +746,11 @@ def comment_claims(out_lines: Sequence[str], findings: Sequence[Mapping[str, Any
                    key=len, reverse=True)
     ids = {str(f.get("id")) for f in findings}
     out: list[dict] = []
+    # Only comments the CHANGE wrote: a comment the partner sent is theirs, never a claim.
+    sent = {x.strip() for x in in_lines or ()}
     for n, raw in enumerate(out_lines, start=1):
+        if raw.strip() in sent:
+            continue
         at = raw.find("#")
         if at < 0 or (raw[:at].strip() and raw[at - 1] not in " \t"):
             continue

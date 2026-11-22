@@ -449,6 +449,7 @@ def code_agent_result(result: dict):
     (dry run 2, gap 1: a deletion crosses back and is deleted on the branch), its tests."""
     from ..schemas import FileChange
     from .code_agent import CodeAgentResult
+    from .governed_code_task_service import workspace_keepable
     from .sandbox import CommandResult, DiffSummary
 
     diff = [FileChange(path=f["path"], content=f["content"]) for f in result.get("diff", [])]
@@ -472,7 +473,9 @@ def code_agent_result(result: dict):
         transcript=result.get("summary", ""), turns=int(result.get("turns", 0)),
         engine=result.get("engine", "openai"),
         # A DELETION CROSSES BACK TOO (dry run 2, gap 1): the guest's removed paths.
-        deleted=[str(p) for p in result.get("deleted") or [] if isinstance(p, str) and p],
+        # Dependencies and build output are never the work, deleted or not (as sandbox.py).
+        deleted=[str(p) for p in result.get("deleted") or []
+                 if isinstance(p, str) and p and workspace_keepable(p)],
     )
 
 

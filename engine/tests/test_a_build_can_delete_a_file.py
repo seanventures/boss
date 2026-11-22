@@ -231,3 +231,37 @@ def test_a_saved_workspace_keeps_the_deletion_and_the_retry_starts_without_the_f
     governed.seed_workspace(tmp_path, saved)
     assert not (tmp_path / GONE).exists()
     assert (tmp_path / "README.md").read_text() == "# new\n"
+
+
+# ── review fixes: no false refusals, a deleted workflow is a CI change, deps stay ───────────────
+
+def test_the_read_back_never_refuses_a_written_file_the_host_cannot_show():
+    class Host:
+        def read_text_file(self, branch, path):
+            if path == "big.lock":
+                return ""                       # GitHub: no body over 1 MB
+            if path == "link":
+                raise RuntimeError("symlink")
+            return {"gone.txt": None}.get(path, "x\n")
+
+    assert branch_mismatches(Host(), "b", [("big.lock", "{...}\n"), ("link", "t\n"),
+                                           ("gone.txt", None), ("a.txt", "x\n")]) == []
+
+    class Broken:
+        def read_text_file(self, branch, path):
+            raise RuntimeError("down")
+
+    # A deletion is never assumed: unreadable is a mismatch.
+    assert branch_mismatches(Broken(), "b", [("gone.txt", None)])[0]["path"] == "gone.txt"
+
+
+def test_deleting_a_workflow_is_a_ci_change_that_needs_a_person():
+    from boss_engine.services import ci_gate
+
+    ev = ci_gate.ci_changed_evidence({"src/a.py": "x\n", ".github/workflows/ci.yml": None})
+    assert ev["requires_person_approval"] and ev["ci_changed_files"] == [".github/workflows/ci.yml"]
+
+
+def test_a_guest_deleting_build_output_or_dependencies_is_not_the_work():
+    got = code_agent_result({"deleted": [GONE, "node_modules/x/index.js", "dist/app.js"]})
+    assert got.deleted == [GONE]

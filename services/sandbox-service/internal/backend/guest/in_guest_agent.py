@@ -355,7 +355,8 @@ def _diff():
     rc, numstat, _e = _git(["diff", "--cached", "--numstat"], WORK)
     files, adds, dels, paths = [], 0, 0, []
     # A DELETED FILE IS PART OF THE DIFF: the control plane deletes it on the branch.
-    _rc, gone, _e = _git(["diff", "--cached", "--name-only", "--diff-filter=D"], WORK)
+    _rc, gone, _e = _git(["-c", "core.quotePath=false", "diff", "--cached", "--name-only",
+                          "--diff-filter=D"], WORK)
     deleted = [p for p in (gone or "").splitlines() if p.strip()]
     for line in (numstat or "").strip().splitlines():
         parts = line.split("\t")

@@ -120,12 +120,19 @@ def branch_mismatches(github: Any, branch: str, files: list[tuple[str, Any]], *,
     for path, content in checked:
         try:
             got = read(branch, path)
-        except Exception as exc:  # noqa: BLE001 — unreadable is a mismatch, said
-            out.append({"path": path, "why": f"unreadable: {type(exc).__name__}"})
+        except Exception as exc:  # noqa: BLE001
+            # A deletion must be PROVEN gone; a written file the host cannot show (a symlink,
+            # a directory, a transient error) is not evidence of a difference.
+            if content is None:
+                out.append({"path": path, "why": f"unreadable: {type(exc).__name__}"})
             continue
         if content is None and got is not None:
             out.append({"path": path, "why": "deleted in the build, still on the branch"})
         elif content is not None and isinstance(content, str) and got != content:
+            if got == "" and content != "":
+                # GitHub's contents API returns NO body for a file over 1 MB (encoding
+                # "none"): a big lockfile reads back empty. Not a difference it can see.
+                continue
             out.append({"path": path, "why": ("missing on the branch" if got is None
                                               else "the branch holds other content")})
     return out
@@ -2342,7 +2349,9 @@ class SoftwareFactoryService:
         # PERSON's approval before merge or deploy (ci_gate.refuse_approval).
         from . import ci_gate
 
-        ci_changed = ci_gate.ci_changed_evidence(files)
+        # A DELETED workflow file is a CI change too: it needs the same person's approval.
+        ci_changed = ci_gate.ci_changed_evidence(
+            {**{f.path: f.content for f in files}, **{str(p): None for p in deleted_paths or []}})
         if ci_changed:
             ci_changed["head_sha"] = branch_head_sha
             self._flag_ci_changed(connection, project_id, pr.number, pr.url, ci_changed,

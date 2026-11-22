@@ -682,13 +682,18 @@ def apply_proposal(target_text: str, proposal: Mapping[str, Any]) -> str:
     # piece across the whole file made the real run's V-07 proposal "gone" (dry run 2, gap 2):
     # its second piece's anchor appears once per route.
     cursor = 0
-    for piece in proposal.get("pieces") or []:
+    for n, piece in enumerate(proposal.get("pieces") or []):
+        first = n == 0
         masked = [mask(x) for x in b]
         rem = [str(x) for x in piece.get("remove") or []]
         new = [str(x) for x in piece.get("after") or []]
         if rem:
             at = [k for k in range(cursor, len(b) - len(rem) + 1)
                   if masked[k:k + len(rem)] == rem]
+            if first and len(at) > 1:
+                # The FIRST piece has nothing before it to place it: it must be unique, or
+                # Accept would change whichever route happens to come first.
+                at = []
             if not at:
                 raise OverrideError(409, "proposal_gone", "The lines this proposal changes are "
                                     "no longer on the branch; use Edit.")
@@ -698,6 +703,8 @@ def apply_proposal(target_text: str, proposal: Mapping[str, Any]) -> str:
             anchor = piece.get("anchor")
             at = ([k + 1 for k in range(cursor, len(b)) if masked[k] == anchor]
                   if anchor is not None else [0])
+            if first and len(at) > 1:
+                at = []
             if not at:
                 raise OverrideError(409, "proposal_gone", "The line this proposal follows is not "
                                     "on the branch; use Edit.")

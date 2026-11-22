@@ -242,6 +242,14 @@ def test_a_comment_that_says_a_finding_is_left_for_a_person_is_not_a_claim():
     assert v.comment_claims(lines, [DRY["V-05"], DRY["V-07"]]) == []
 
 
+def test_a_comment_the_partner_sent_is_never_the_agents_claim():
+    """Only comments the CHANGE wrote are claims: the partner's own comment naming a rule with a
+    done-word ("dropped by request-size-capped") would otherwise block every change to the file."""
+    lines = DRY["target"].splitlines()
+    claims = v.comment_claims(lines, [DRY["V-05"], DRY["V-07"]], in_lines=lines)
+    assert claims == []
+
+
 # ── #11 one line basis ─────────────────────────────────────────────────────────────────────────
 
 def test_line_is_the_partners_line_and_target_line_the_targets(tmp_path):
@@ -318,3 +326,16 @@ def test_a_ruleset_edit_of_a_block_style_file_stays_block_style():
     out = rc.minimal_edit(text, base, new, 2)
     assert out == text.replace("version: 1", "version: 2").replace(
         "    autofix: never", "    autofix: human")
+
+
+def test_a_proposal_whose_first_piece_is_on_the_branch_twice_is_gone_never_guessed():
+    text_ = "routes:\n  - path: /a\n    upstream: core\n  - path: /b\n    upstream: core\n"
+    with pytest.raises(fo.OverrideError) as exc:
+        fo.apply_proposal(text_, {"pieces": [{"remove": ["    upstream: core"],
+                                              "after": ["    upstream: edge"]}]})
+    assert exc.value.code == "proposal_gone"
+    # Placed by a unique first piece, a repeated line after it is the one in the same route.
+    got = fo.apply_proposal(text_, {"pieces": [
+        {"remove": ["  - path: /b"], "after": ["  - path: /b"]},
+        {"remove": ["    upstream: core"], "after": ["    upstream: edge"]}]})
+    assert got.splitlines()[2] == "    upstream: core" and got.splitlines()[4] == "    upstream: edge"

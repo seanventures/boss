@@ -6327,9 +6327,14 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         for fc in files or []:
             accumulated[fc.path] = fc.content
             deleted_acc.discard(fc.path)
+        written = {fc.path for fc in files or []}
         for p in deleted or []:
-            if p not in accumulated:
-                deleted_acc.add(str(p))
+            if str(p) in written:
+                continue
+            # A path an EARLIER stage wrote and this one deleted is gone: the PR re-commits
+            # `accumulated`, so leaving it there would put the file back on the branch.
+            accumulated.pop(str(p), None)
+            deleted_acc.add(str(p))
         guest_base = work_branch
         _record_work_branch("stage_commit")
 
@@ -6883,11 +6888,11 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             from . import workspace_snapshots as _ws_snapshots
 
             _ws_snapshots.capture_best_effort(_ws_snapshot[0], sandbox, label)
-        if _push_held(f"checkpoint:{label}"):
-            return 0
         if _validation_build[0] and _branch_up_for_merge():
-            # A CHANGE UP FOR MERGE GETS NO MID-BUILD COMMITS: a checkpoint would move its head
-            # (and its packet) to a half-built tree. The build's one commit lands at the end.
+            # A CHANGE UP FOR MERGE GETS NO MID-BUILD COMMITS (its head and packet would move
+            # to a half-built tree). The build's one commit lands at the end.
+            return 0
+        if _push_held(f"checkpoint:{label}"):
             return 0
         try:
             files = sandbox.diff()
@@ -6899,9 +6904,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         if not files and not gone:
             return 0
         try:
-            sf.github.ensure_branch(work_branch, base_branch)
-            # One commit per stage where the host can (software_factory.commit_change); a
-            # deleted file is deleted on the branch (with_deletions).
+            sf.github.ensure_branch(work_branch, base_branch)  # deletions too (with_deletions)
             commit_change(sf.github, work_branch, with_deletions(files, gone),
                           f"governed: checkpoint after {label} — {title[:50]}")
             for fc in files:
@@ -9631,7 +9634,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # deterministic workflow checks are added to the review's findings.
         try:
             _ci_files = ci_gate.workflow_changes(
-                accumulated if use_microvm else {fc.path: fc.content for fc in sandbox.diff()})
+                {**(accumulated if use_microvm else {fc.path: fc.content for fc in sandbox.diff()}),
+                 # A DELETED workflow is a CI change too (content ""), reviewed like an edit.
+                 **{p: None for p in _deleted_now()}})
         except Exception:  # noqa: BLE001 — an unreadable diff is reviewed as tiered
             _log_caught(logger)
             _ci_files = {}
