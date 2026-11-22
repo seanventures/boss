@@ -11,7 +11,7 @@
  *   #11 The partner's line is the number everywhere (Validation tab, fix cards, merge card); the
  *       branch's line is the tooltip.
  *   #12 The Work panel's funnel and the merge card's checks row print the same counts, guard
- *       findings included, with "2 need you"; a ruleset propose says which change it opened.
+ *       findings included, with "3 need you"; a ruleset propose says which change it opened.
  */
 import React, { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -247,20 +247,20 @@ describe("#11 the partner's line is the number; the branch's is the tooltip", ()
 });
 
 describe("#12 one count on the Work panel and the merge card", () => {
-  it("both read 9 found + 1 guard → 6 open · 2 need you", async () => {
+  it("both read 9 found + 1 guard → 6 open · 3 need you (the guard U-01 waits on a person, as engine needs_person)", async () => {
     const v = dry2();
     const c = funnelOf(v);
-    expect(c).toMatchObject({ found: 9, guard: 1, open: 6, needYou: 2 });
-    expect(countsWords(c)).toBe("9 found + 1 guard → 6 open · 2 need you");
+    expect(c).toMatchObject({ found: 9, guard: 1, open: 6, needYou: 3 });
+    expect(countsWords(c)).toBe("9 found + 1 guard → 6 open · 3 need you");
     engine();
     await mount(<ValidationBuilt v={v} tests={null} later={[]} fixesHref="" testid="wp" />);
     expect($('[data-testid="wp-open"]')!.textContent).toBe("6");
     expect($('[data-testid="wp-guard"]')!.textContent).toBe("+ 1 guard");
-    expect($('[data-testid="wp-you"]')!.textContent).toBe("2 need you");
+    expect($('[data-testid="wp-you"]')!.textContent).toBe("3 need you");
     unmount();
     engine();
     await mount(<ReviewPacketView packet={v.packet!} projectId="northgate-gateway" />);
-    expect($('[data-testid="vr-check-validator"]')!.textContent).toContain("9 found + 1 guard → 6 open · 2 need you");
+    expect($('[data-testid="vr-check-validator"]')!.textContent).toContain("9 found + 1 guard → 6 open · 3 need you");
     // The engine's own after_open (5) left the guard out: never shown when the findings are here.
     expect($('[data-testid="vr-check-validator"]')!.textContent).not.toContain("9 → 5 open");
   });
@@ -281,5 +281,31 @@ describe("#12 one count on the Work panel and the merge card", () => {
     const btn = $('[data-testid="vr-ruleset-propose"]') as HTMLButtonElement;
     expect(btn.textContent).toBe("Opened as change #15");
     expect(btn.disabled).toBe(true);
+  });
+});
+
+describe("the console reads engine #285's contract (target_line, change, needs you)", () => {
+  const base = { id: "V-06", source: { kind: "validator", rule_id: "cors-no-wildcard-with-credentials" }, severity: "P1",
+    original: "allow_credentials: true", hunk_id: "h-04", fix_kind: "agent", status: "fixed" };
+  it("an engine `line` beside `target_line` is the partner's; the branch line is target_line", () => {
+    const v = parseValidation({ findings: [{ ...base, fixed: null, change: "elsewhere",
+      location: { file: "t.yaml", line: 17, partner_line: null, target_line: 21 } }] });
+    const f = v!.findings[0];
+    expect(f.location.partner_line).toBe(17);
+    expect(f.location.line).toBe(21);
+    expect(lineWords(f)).toBe("L17");
+    expect(lineTitle(f)).toContain("line 21 on the branch");
+  });
+  it("`elsewhere` with fixed null is never \"(removed)\"", () => {
+    const v = parseValidation({ findings: [{ ...base, fixed: null, change: "elsewhere",
+      location: { file: "t.yaml", line: 17, target_line: 21 } }] });
+    const pn = partnerNow(v!.findings[0]);
+    expect(pn.after).toBe("unchanged · fixed in h-04");
+    expect(pn.kind).toBe("unchanged");
+  });
+  it("an open guard finding needs a person, as the engine counts `you`", () => {
+    const v = parseValidation({ findings: [{ ...base, id: "U-01", source: { kind: "guard", rule_id: "unexplained" },
+      status: "open", fixed: null, location: { file: "t.yaml", line: null, target_line: 9 } }] });
+    expect(validationCounts(v!.findings).needYou).toBe(1);
   });
 });

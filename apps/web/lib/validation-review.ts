@@ -30,6 +30,9 @@ export type Finding = {
   severity: Sev; basis: string; unmapped: boolean; native_severity: string;
   location: { file: string; line: number | null; end_line: number | null; partner_line: number | null };
   original: string | null; fixed: string | null; hunk_id: string; fix_kind: FixKind; status: FindingStatus;
+  /** The engine's word for what happened to the finding's own line (validators.change_of):
+   *  none · edited · added · removed · elsewhere; "" from an engine that does not send it. */
+  change: string;
   evidence: Evidence[]; override: Override | null;
   /** The rulebook's why and the ruleset's guide for the fixing agent, when the engine sends them. */
   why: string; guide: string;
@@ -133,7 +136,12 @@ export function parseFinding(v: unknown): Finding {
   return {
     id: s(x.id), source: { kind: s(src.kind), name: s(src.name), rule_id: s(src.rule_id), rule_doc: s(src.rule_doc) },
     severity: isSev(sev) ? sev : "P2", basis: s(x.basis), unmapped, native_severity: s(x.native_severity),
-    location: { file: s(loc.file), line: nn(loc.line), end_line: nn(loc.end_line), partner_line: nn(loc.partner_line) },
+    // ONE LINE BASIS (engine #285, gap 11): an engine that sends `target_line` sends the
+    // PARTNER's line as `line`. Here `line` stays the branch's and `partner_line` the partner's.
+    location: "target_line" in loc
+      ? { file: s(loc.file), line: nn(loc.target_line), end_line: nn(loc.end_line), partner_line: nn(loc.partner_line) ?? nn(loc.line) }
+      : { file: s(loc.file), line: nn(loc.line), end_line: nn(loc.end_line), partner_line: nn(loc.partner_line) },
+    change: s(x.change),
     original: x.original == null ? null : s(x.original), fixed: x.fixed == null ? null : s(x.fixed),
     hunk_id: s(x.hunk_id), fix_kind: one(x.fix_kind, ["auto", "agent", "human", "none"] as const, "none"),
     status: one(x.status, ["open", "fixed", "overridden", "reverted", "waived", "suppressed"] as const, "open"),
@@ -348,7 +356,8 @@ export function validationCounts(findings: Finding[], validatorFound = 0): Valid
     found: validator || validatorFound, guard: f.filter(isGuardFinding).length,
     auto: fixedBy("auto"), agent: fixedBy("agent"), human: fixedBy("human"),
     waived: f.filter((x) => x.status === "waived").length,
-    open: open.length, needYou: open.filter((x) => x.fix_kind === "human").length,
+    // The engine's needs_person: a "Needs you" rule, or a BOSS guard waiting on a person.
+    open: open.length, needYou: open.filter((x) => x.fix_kind === "human" || isGuardFinding(x)).length,
   };
 }
 
@@ -399,9 +408,13 @@ export function lineTitle(f: Pick<Finding, "location">): string {
  * is closed and whose line is gone; a line still on the branch is "unchanged"; a line the fix left
  * as it was says so and names the hunk that did fix it.
  */
-export function partnerNow(f: Pick<Finding, "original" | "fixed" | "status" | "hunk_id">): { before: string; after: string; kind: "changed" | "removed" | "unchanged" | "added" } {
+export function partnerNow(f: Pick<Finding, "original" | "fixed" | "status" | "hunk_id"> & { change?: string }): { before: string; after: string; kind: "changed" | "removed" | "unchanged" | "added" } {
   const was = f.original && f.original !== "(none)" ? f.original : "";
   const closed = f.status === "fixed" || f.status === "overridden";
+  // The engine's own word wins: it nulls `fixed` for `none` and `elsewhere` (never "removed").
+  if (f.change === "none" || f.change === "elsewhere") {
+    return { before: was || "(none)", after: closed && f.hunk_id ? `unchanged · fixed in ${f.hunk_id}` : "unchanged", kind: "unchanged" };
+  }
   if (f.fixed == null) {
     return closed ? { before: was || "(none)", after: "(removed)", kind: "removed" }
       : { before: was || "(none)", after: "unchanged", kind: "unchanged" };
