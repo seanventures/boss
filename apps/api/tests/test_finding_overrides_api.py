@@ -425,3 +425,23 @@ def test_a_waive_expiry_is_compared_as_a_time():
     fo.apply([f2], [{"ref": "O-1", "action": "waive", "finding_id": "V-02",
                      "expires_at": now + timedelta(days=1)}], now=now)
     assert f2["status"] == "waived"
+
+
+# ── console asks: Rebuild packet, the partner's file ───────────────────────────────────────────
+
+def test_rebuild_packet_starts_a_rerun_and_holds_the_merge(engine, client, change):
+    got = client.post(f"/v1/changes/{PID}/{change.number}/validation/rerun",
+                      json={"reason": "rebuild packet"})
+    assert got.status_code == 200, got.text
+    assert got.json()["rerun"]["state"] == "pending"
+    assert "rerun_pending" in got.json()["packet"]["verdict"]["reasons"]
+    again = client.post(f"/v1/changes/{PID}/{change.number}/validation/rerun", json={})
+    assert again.status_code == 409 and again.json()["error"] == "rerun_pending"
+    assert _finish_rerun(engine, change, got.json()["rerun"]["id"])["state"] == "done"
+
+
+def test_the_validation_read_carries_the_partners_file_masked(client, change):
+    inp = _get(client, change)["validation"]["input"]
+    assert inp["text"].splitlines()[0] == "tenant: lumen-pay"
+    assert len(inp["text"].splitlines()) == len(change.branch.files[INPUT].splitlines())
+    assert "sk_live_" not in inp["text"] and '[SECRET]' in inp["text"]

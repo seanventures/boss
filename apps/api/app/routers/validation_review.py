@@ -5,6 +5,9 @@ GET  /v1/changes/{project_id}/{number}/validation                       boss.val
      overrides + re-run state + the current boss.review_packet/v2
 POST /v1/changes/{project_id}/{number}/findings/{finding_id}/override   accept|reject|edit|waive|reopen
 POST /v1/changes/{project_id}/{number}/validation/revert-all            the target back to the partner's bytes
+POST /v1/changes/{project_id}/{number}/validation/rerun                 "Rebuild packet": re-run now
+GET  /v1/projects/{project_id}/rulesets                                 the base branch's rulesets
+POST /v1/projects/{project_id}/rulesets/{ruleset_id}/propose            a ruleset edit, as a change
 POST /v1/validation-reruns/{rerun_id}/run                               worker-invoked: one re-run
 """
 from __future__ import annotations
@@ -90,6 +93,66 @@ def revert_all(project_id: str, number: int, request: Request, payload: RevertAl
     """The target file back to the partner's exact bytes (one commit), then a re-run."""
     return _override(project_id, number, request, action="revert_all", finding_id=None,
                      head_sha=payload.head_sha, reason=payload.reason)
+
+
+class RerunBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reason: Optional[str] = Field(default=None, max_length=1000)
+
+
+@router.post(BASE + "/validation/rerun")
+@permit(P.GITHUB_MERGE, scope=Scope.project(path="project_id"))
+def rebuild_packet(project_id: str, number: int, request: Request, payload: RerunBody) -> Any:
+    """"Rebuild packet": the recorded validator again at the branch head; the merge waits."""
+    from boss_engine.services import finding_overrides as fo
+
+    _people_only(request, "Rebuilding the review packet")
+    try:
+        with begin(_engine) as c:
+            _require(c, project_id)
+            return fo.rebuild(c, _settings, project_id, number, actor=_actor(request),
+                              reason=payload.reason)
+    except fo.OverrideError as error:
+        return _refused(error)
+
+
+@router.get("/v1/projects/{project_id}/rulesets")
+@permit(P.CODE_TASK_READ, scope=Scope.project(path="project_id"))
+def project_rulesets(project_id: str) -> Any:
+    """The rulesets on the project's base branch (`.boss/rulesets/*.yaml`), version and sha."""
+    from boss_engine.services import ruleset_changes as rc
+
+    with begin(_engine) as c:
+        _require(c, project_id)
+        try:
+            return rc.list_for_project(c, _settings, project_id)
+        except rc.RulesetChangeError as error:
+            return _refused(error)
+
+
+class ProposeBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    rules: list[dict[str, Any]] = Field(max_length=500)
+    base_version: Optional[int] = None
+    base_sha: Optional[str] = Field(default=None, max_length=80)
+
+
+@router.post("/v1/projects/{project_id}/rulesets/{ruleset_id}/propose")
+@permit(P.POLICY_MANAGE, scope=Scope.project(path="project_id"))
+def propose_ruleset(project_id: str, ruleset_id: str, request: Request,
+                    payload: ProposeBody) -> Any:
+    """Open "Ruleset <id> v<n+1>" as a change. A P0 downgrade needs a second approver."""
+    from boss_engine.services import ruleset_changes as rc
+
+    _people_only(request, "Changing a ruleset")
+    try:
+        with begin(_engine) as c:
+            _require(c, project_id)
+            return rc.propose(c, _settings, project_id, ruleset_id, rules=payload.rules,
+                              base_version=payload.base_version, base_sha=payload.base_sha,
+                              actor=_actor(request))
+    except rc.RulesetChangeError as error:
+        return _refused(error)
 
 
 @router.post("/v1/validation-reruns/{rerun_id}/run")

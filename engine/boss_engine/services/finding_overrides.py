@@ -244,6 +244,7 @@ def packet(c: Any, ch: Change, *, head_sha: Optional[str] = None) -> Optional[di
         return None
     followups = ((decision or {}).get("recommendation") or {}).get("followups")
     p = rp.for_run(c, str(run_id), head_sha=head_sha or ch.head(), change=ch.number,
+                   project_id=ch.project_id,
                    followups=followups, validation=validation_of(c, ch),
                    packet_version=1 + len(ovrs),
                    rerun=({"id": rr["id"], "state": rr["state"],
@@ -281,7 +282,19 @@ def state(c: Any, settings: Any, project_id: str, number: int) -> dict:
     """GET …/validation: boss.validation/v1 + overrides + re-run state (+ the current packet)."""
     ch = change(c, settings, project_id, number)
     rr = latest_rerun(c, project_id, number)
-    return {"validation": validation_of(c, ch), "overrides": overrides(c, project_id, number),
+    validation = validation_of(c, ch)
+    if validation and (validation.get("input") or {}).get("file"):
+        # THE PARTNER'S FILE, masked, for the line gutter: its bytes as the check received them
+        # (the input at the branch head when it still hashes to the record's sha256).
+        from .validators import mask, sha256
+
+        try:
+            body = ch.repo.read_text_file(ch.branch, validation["input"]["file"])
+        except Exception:  # noqa: BLE001 — the gutter falls back to the quoted lines
+            body = None
+        if body is not None and sha256(body) == validation["input"].get("sha256"):
+            validation["input"] = {**validation["input"], "text": mask(body)}
+    return {"validation": validation, "overrides": overrides(c, project_id, number),
             "rerun": ({k: (v.isoformat() if hasattr(v, "isoformat") else v)
                        for k, v in rr.items() if k != "validation"} if rr else None),
             "head_sha": ch.head(), "packet": packet(c, ch)}
@@ -465,6 +478,30 @@ def approver_may_merge(c: Any, project_id: str, approver_id: str) -> bool:
     except Exception:  # noqa: BLE001 — an approver BOSS cannot check is not an approver
         log.info("approver %s not checked", approver_id, exc_info=True)
         return False
+
+
+def rebuild(c: Any, settings: Any, project_id: str, number: int, *, actor: str,
+            reason: Optional[str] = None) -> dict:
+    """"Rebuild packet": a re-run of the recorded validator at the branch head (after a failed
+    or overdue re-run, or an invalid packet). Same rules as an override: local changes only,
+    one at a time."""
+    ch = change(c, settings, project_id, number)
+    if ch.kind != "local":
+        raise OverrideError(422, "github_unsupported", GITHUB_UNSUPPORTED)
+    c.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"),
+              {"k": f"finding_overrides:{project_id}:{int(number)}"})
+    rr = latest_rerun(c, project_id, number)
+    if rr and rr["state"] in ("pending", "running"):
+        raise OverrideError(409, "rerun_pending", "BOSS is re-checking already; wait for it.")
+    if not validation_of(c, ch):
+        raise OverrideError(409, "no_validation", f"Change #{number} has no validation to re-run.")
+    head = ch.head()
+    rid = start_rerun(c, ch, head=head, finding_id=None)
+    p = packet(c, ch, head_sha=head)
+    refresh_decision(c, ch, p)
+    emit_event(c, project_id, "validation.rebuild", actor, "validation_rerun", rid,
+               {"change": int(number), "reason": (reason or "")[:300]})
+    return {"rerun": {"id": rid, "state": "pending"}, "packet": p}
 
 
 def start_rerun(c: Any, ch: Change, *, head: str, finding_id: Optional[str]) -> str:

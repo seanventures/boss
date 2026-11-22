@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 2430 operations.
+# 2433 operations.
 "GET /.well-known/agent-card.json": ["public:jwks", "OAPVU"]
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /.well-known/boss-mcp-client.json": ["public:jwks", "OAPVU"]
@@ -463,6 +463,7 @@
 "POST /v1/change-sets/{cs_id}/stop": ["permit code_task:steer @ project(body=project_id)", "OAP"]
 "POST /v1/changes/{project_id}/{number}/findings/{finding_id}/override": ["permit github:merge @ project(path=project_id)", "OAP"]
 "GET /v1/changes/{project_id}/{number}/validation": ["permit code_task:read @ project(path=project_id)", "OAPVU"]
+"POST /v1/changes/{project_id}/{number}/validation/rerun": ["permit github:merge @ project(path=project_id)", "OAP"]
 "POST /v1/changes/{project_id}/{number}/validation/revert-all": ["permit github:merge @ project(path=project_id)", "OAP"]
 "GET /v1/changesets": ["permit infra:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/changesets": ["permit infra:provision @ project(body=project_id)", "OA"]
@@ -1802,6 +1803,8 @@
 "GET /v1/projects/{project_id}/residency-pins/{app_key}": ["permit project:read @ project(path=project_id)", "OAPVU"]
 "PUT /v1/projects/{project_id}/residency-pins/{app_key}": ["permit project:update @ project(path=project_id)", "OA"]
 "POST /v1/projects/{project_id}/residency-pins/{app_key}/admit": ["permit project:read @ project(path=project_id)", "OAPVU"]
+"GET /v1/projects/{project_id}/rulesets": ["permit code_task:read @ project(path=project_id)", "OAPVU"]
+"POST /v1/projects/{project_id}/rulesets/{ruleset_id}/propose": ["permit policy:manage @ project(path=project_id)", "OA"]
 "POST /v1/projects/{project_id}/servers/read": ["permit assistant:chat @ project(path=project_id)", "OAP"]
 "GET /v1/projects/{project_id}/settings": ["permit project:read @ project(path=project_id)", "OAPVU"]
 "PUT /v1/projects/{project_id}/settings/builds_at_once": ["permit project:update @ org", "OA"]

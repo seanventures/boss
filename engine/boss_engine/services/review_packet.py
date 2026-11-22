@@ -393,7 +393,8 @@ def for_run(connection: Any, run_id: str, *, head_sha: Optional[str],
             overrides: Sequence[Mapping[str, Any]] = (), packet_version: int = 1,
             rerun: Optional[Mapping[str, Any]] = None,
             validation: Optional[Mapping[str, Any]] = None,
-            apply_overrides: Optional[Callable[[list], list]] = None) -> Optional[dict]:
+            apply_overrides: Optional[Callable[[list], list]] = None,
+            project_id: Optional[str] = None) -> Optional[dict]:
     """The packet for a build's merge card: the work is the lineage's ROOT build (its title
     without follow-up prefixes), the validation is the newest one in the lineage, the tests are
     this build's. None when the run is unknown."""
@@ -417,8 +418,14 @@ def for_run(connection: Any, run_id: str, *, head_sha: Optional[str],
     # validator, test or contract finding blocks the packet; a review that blocks at the bar
     # (production) is the checks-failing card's, not this one's.
     fu = followups or {}
+    by = fu.get("handled_by") or ("queued" if fu.get("queued") else "later")
+    # Where it went: a follow-up build on THIS change's branch (queued, the next pass, the build
+    # already on it) lands on the same change; "later" has no change yet.
+    on_change = by != "later" and change is not None
     for r in reviews:
-        r["deferred_to"] = fu.get("handled_by") or ("queued" if fu.get("queued") else "later")
+        r["deferred_to"] = {"by": by, "number": change if on_change else None,
+                            "href": (f"/changes/{project_id}/{change}" if on_change and project_id
+                                     else None)}
     return build_packet(work=work, head_sha=head_sha,
                         validations=[validation] if validation else [],
                         tests=me["state"].get("tests") or [], reviews=reviews,
