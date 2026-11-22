@@ -484,6 +484,36 @@ def _producing_build(lineage: Sequence[Mapping[str, Any]], me: Mapping[str, Any]
 
 #: The security reviewer's word for a finding that is never deferred on a P0 rule's lines.
 _HIGH = ("high", "critical", "blocker", "severe")
+_HIGH_WORD = re.compile(r"\b(?:HIGH|CRITICAL|BLOCKER|SEVERE)\b")
+_FILE_LINE = re.compile(r"([\w./-]+\.\w+):(\d+)")
+
+
+def _same_file(name: Any, target: Optional[str]) -> bool:
+    n = str(name or "")
+    return not target or not n or n == target or str(target).endswith("/" + n.lstrip("./"))
+
+
+def security_high_line(r: Mapping[str, Any], target: Optional[str]) -> Optional[int]:
+    """The target line a SECURITY review finding of HIGH (or worse) is on, else None.
+
+    Read the way the real producers write it, not only as a seat-tagged item: the security
+    check's findings reach the follow-ups as ``{severity: "security", text: "(security_check)
+    HIGH — config/…yaml:29 — …"}`` with no seat and no leading path (checks_failing), and a
+    seat's own as ``{seat, severity: high, text: "path:line — …"}``."""
+    src = r.get("source") or {}
+    title = str(r.get("title") or "")
+    sev = str(r.get("native_severity") or "").lower()
+    security = ("security" in str(src.get("name") or "").lower() or sev == "security"
+                or title.lstrip().lower().startswith("(security"))
+    if not security or not (sev in _HIGH or _HIGH_WORD.search(title)):
+        return None
+    loc = r.get("location") or {}
+    if isinstance(loc.get("line"), int) and _same_file(loc.get("file"), target):
+        return int(loc["line"])
+    for m in _FILE_LINE.finditer(title):
+        if _same_file(m.group(1), target):
+            return int(m.group(2))
+    return None
 
 
 def _p0_lines(validation: Optional[Mapping[str, Any]]) -> set:
@@ -570,13 +600,9 @@ def for_run(connection: Any, run_id: str, *, head_sha: Optional[str],
     p0_lines = _p0_lines(validation)
     target = (validation or {}).get("target")
     for r in reviews:
-        loc = r.get("location") or {}
         # A SECURITY REVIEWER'S HIGH (or worse) ON A P0 RULE'S LINES IS NEVER DEFERRED: it is
         # listed open and blocks the packet like the P0 it sits on.
-        if "security" in str((r.get("source") or {}).get("name") or "").lower() \
-                and str(r.get("native_severity") or "").lower() in _HIGH \
-                and loc.get("line") in p0_lines \
-                and (not target or not loc.get("file") or loc.get("file") == target):
+        if p0_lines and security_high_line(r, target) in p0_lines:
             r["blocks"] = True
             continue
         r["deferred_to"] = {"by": by, "number": change if on_change else None,

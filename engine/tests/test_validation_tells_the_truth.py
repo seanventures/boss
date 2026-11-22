@@ -382,6 +382,25 @@ def test_a_security_reviewers_high_on_a_p0_line_is_never_deferred():
     assert p["counts"]["review"]["blocking"] == 1
 
 
+def test_the_security_checks_own_high_as_the_dry_run_carried_it_blocks_too():
+    # The real producer (checks_failing.followup_findings): no seat, severity "security", the
+    # level and the path:line inside the text. The dry run showed it "deferred → follow-up".
+    rec = _record(DRYRUN)
+    line = next(x for x in rec["findings"] if x["id"] == "U-01")["location"]["line"]
+    items = [{"text": f"(security_check) HIGH — {TARGET}:{line} — The route trusts the staging "
+                      "mock's JWKS.", "tier": "P1", "severity": "security"},
+             {"text": "(security_check) LOW — README.md:3 — wording.", "tier": "P2",
+              "severity": "security"}]
+    lineage = [{"id": "crun_a", "title": "x", "created_at": 1, "status": "completed",
+                "pull_request_url": "u", "finalize_ctx": {}, "state": {"validation": rec}}]
+    p = rp.for_run(_Conn(lineage), "crun_a", head_sha="h", change=11,
+                   followups={"items": items, "bar": "standard", "queued": True,
+                              "handled_by": "queued"})
+    r1, r2 = (next(x for x in p["findings"] if x["id"] == i) for i in ("R-1", "R-2"))
+    assert r1.get("blocks") is True and "security_review:R-1" in p["verdict"]["reasons"]
+    assert not r2.get("blocks") and r2["deferred_to"]["by"] == "queued"
+
+
 # ── #3 absent from the after-run → fixed, attributed; "exit 0 · 2 open" cannot happen ─────────
 
 def test_a_finding_the_after_run_no_longer_reports_is_never_left_open():
