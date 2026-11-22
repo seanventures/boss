@@ -593,7 +593,7 @@ export function LatestStrip({ items, now, app = null }: { items: WorkItem[]; now
 function NeedsHeadNote({ ctx }: { ctx: PxCtx }) {
   const older = ctx.overview.still_answerable;
   return (
-    <span className="px-faint" style={{ fontWeight: 400 }}> · only you can do these
+    <span className="px-faint" style={{ fontWeight: 400 }}>only you can do these
       {older ? <> · <a href={pxHref(older.href)} data-testid="px-work-needs-older"
                        title="Their deadline passed with nothing applied; you can still answer them in Approvals">
         {older.count} older · {waitingSinceWords(older.since)}</a></> : null}</span>
