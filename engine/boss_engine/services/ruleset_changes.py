@@ -116,10 +116,13 @@ def propose(c: Any, settings: Any, project_id: str, ruleset_id: str, *,
     from .core import create_blocking_decision, emit_event
     from .local_repo_host import change_set_url
 
+    # The id becomes a path: refuse a traversal before anything is read with it.
+    if not ruleset_id or "/" in ruleset_id or ".." in ruleset_id:
+        raise RulesetChangeError(404, "no_ruleset", f"There is no ruleset {ruleset_id}.")
     adapter, branch = _repo(c, settings, project_id)
     path = next((p for p in (f"{_rulesets.DIR}/{ruleset_id}.yaml", f"{_rulesets.DIR}/{ruleset_id}.yml")
                  if adapter.read_text_file(branch, p) is not None), None)
-    if path is None or "/" in ruleset_id or ".." in ruleset_id:
+    if path is None:
         raise RulesetChangeError(404, "no_ruleset", f"There is no ruleset {ruleset_id}.")
     base = _rulesets.parse(adapter.read_text_file(branch, path) or "", path=path)
     if base_sha != base.get("sha") or (base_version is not None and base_version != base.get("version")):

@@ -258,6 +258,76 @@ def test_c_with_an_approver_it_creates_a_decision_and_stays_open_until_approved(
     assert f2["override"]["approver"] == "usr_security_lead"
 
 
+def test_c_the_named_approvers_one_approval_completes_the_waive_and_anyone_else_is_refused(
+        engine, client, change, monkeypatch):
+    """SPEC §3: a P0 waive needs ONE named second person. The decision must not be a two-person
+    tier (the named approver approving first would leave a final approval nobody may give), and
+    must need no seat beyond the approver's merge right."""
+    from boss_engine.config import get_settings
+    from boss_engine.identity import approvals
+    from boss_engine.services.decisions import DecisionService, InvalidDecisionTransitionError
+
+    tag = uuid.uuid4().hex[:8]
+    lead, other = f"usr_lead_{tag}", f"usr_other_{tag}"
+    with engine.begin() as c:
+        org = c.execute(text("SELECT w.org_id FROM projects p JOIN workspaces w ON w.id = "
+                             "p.workspace_id WHERE p.id = :p"), {"p": PID}).scalar()
+        for person in (lead, other):   # both may resolve decisions; only one is named
+            c.execute(text(
+                "INSERT INTO org_members (id, org_id, member_id, display_name, member_type, "
+                "role_keys, permissions, status, created_by) VALUES (:i, :o, :m, :m, 'human', "
+                "'[\"ceo\", \"owner\"]'::jsonb, '[\"decision_resolve\"]'::jsonb, 'active', "
+                "'test')"), {"i": f"om_{uuid.uuid4().hex[:8]}", "o": org, "m": person})
+    monkeypatch.setattr(fo, "approver_may_merge", lambda c, p, a: a == lead)
+    fid = _id(_get(client, change), "cors-no-wildcard-with-credentials")
+    got = _override(client, change, fid, action="waive", reason="dashboard needs cookies",
+                    approver_id=lead)
+    assert got.status_code == 200, got.text
+    did = got.json()["override"]["approval_decision"]
+    with engine.begin() as c:
+        row = c.execute(text("SELECT risk_tier, recommendation FROM decisions WHERE id = :i"),
+                        {"i": did}).mappings().one()
+    tier = int(row["risk_tier"])
+    assert tier not in approvals.TWO_PERSON_TIERS and not approvals.seats_for_tier(tier)
+
+    rec = row["recommendation"]
+    assert rec["asked_by"] and rec["asked_by"] != lead
+    with engine.begin() as c:   # the requester may resolve decisions too, just not this one
+        c.execute(text(
+            "INSERT INTO org_members (id, org_id, member_id, display_name, member_type, role_keys, "
+            "permissions, status, created_by) SELECT :i, :o, :m, :m, 'human', "
+            "'[\"ceo\", \"owner\"]'::jsonb, '[\"decision_resolve\"]'::jsonb, 'active', 'test' "
+            "WHERE NOT EXISTS (SELECT 1 FROM org_members WHERE org_id = :o AND member_id = :m)"),
+            {"i": f"om_{uuid.uuid4().hex[:8]}", "o": org, "m": rec["asked_by"]})
+    with engine.begin() as c, pytest.raises(fo.OverrideError) as refused:
+        fo.on_waive_approved(c, None, rec, rec["asked_by"])
+    assert refused.value.code == "requester_cannot_approve"
+    with engine.begin() as c, pytest.raises(fo.OverrideError) as refused:
+        fo.on_waive_approved(c, None, {**rec, "approver": ""}, lead)
+    assert refused.value.code == "not_the_approver"
+
+    # The approve path itself: decisions.transition → the waive follow-on.
+    svc = DecisionService(get_settings())
+    for someone in (other, rec["asked_by"]):
+        # the refusal rolls the approval back, as the route does
+        with pytest.raises(InvalidDecisionTransitionError), engine.begin() as c:
+            svc.transition(c, did, action="approve", actor=someone, note="ok")
+        with engine.begin() as c:
+            assert c.execute(text("SELECT status FROM decisions WHERE id = :i"),
+                             {"i": did}).scalar() == "pending"
+    assert next(x for x in _get(client, change)["packet"]["findings"]
+                if x["id"] == fid)["status"] == "open"
+
+    with engine.begin() as c:
+        svc.transition(c, did, action="approve", actor=lead,
+                       note="partner confirmed")
+    with engine.begin() as c:
+        assert c.execute(text("SELECT status FROM decisions WHERE id = :i"),
+                         {"i": did}).scalar() == "approved"
+    f2 = next(x for x in _get(client, change)["packet"]["findings"] if x["id"] == fid)
+    assert f2["status"] == "waived" and f2["override"]["approver"] == lead
+
+
 # ── (d) the re-run: queued at once, merge refused until it is done, packet v(n+1) ──────────────
 
 def test_d_an_override_queues_the_rerun_and_the_merge_waits_for_it(engine, client, change):

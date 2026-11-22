@@ -32,6 +32,11 @@ log = logging.getLogger(__name__)
 ACTIONS = ("accept", "reject", "edit", "waive", "reopen")
 COMMITS = frozenset({"reject", "edit", "revert_all"})
 WAIVE_ACTION = "waive_finding"
+#: A P0 waive needs ONE named second person (SPEC §3), so its decision uses a single-approval tier
+#: with no seat: tier 3 would ask for two people, and tier 2 for the CEO seat, while the waive names
+#: exactly one approver (a person with `github:merge`). Tier 1 is still above nothing: it carries no
+#: cost, so Full auto never approves it, and `on_waive_approved` refuses anyone but the named person.
+WAIVE_RISK_TIER = 1
 JOB_KIND = "validation.rerun"
 REASON_MAX = 1000
 #: A re-run still pending/running after this is failed with its reason (a dead worker, a lost
@@ -447,7 +452,7 @@ def override(c: Any, settings: Any, project_id: str, number: int, *, action: str
             {"action": WAIVE_ACTION, "override_id": oid, "finding_id": finding_id,
              "change_number": int(number), "approver": approver_id, "asked_by": actor,
              "reason": reason, "expires_at": expires_at, "head_sha": head},
-            {}, "p0_waive_needs_approval", risk_tier=3, default_action="hold")
+            {}, "p0_waive_needs_approval", risk_tier=WAIVE_RISK_TIER, default_action="hold")
     rerun_id = start_rerun(c, ch, head=commit_sha or head, finding_id=finding_id)
     p = packet(c, ch, head_sha=commit_sha or head)
     card = refresh_decision(c, ch, p)
@@ -524,7 +529,10 @@ def start_rerun(c: Any, ch: Change, *, head: str, finding_id: Optional[str]) -> 
 def on_waive_approved(c: Any, settings: Any, recommendation: Mapping[str, Any], actor: str) -> None:
     """The named approver approved a P0 waive: the override is approved, the packet rebuilt."""
     approver = str(recommendation.get("approver") or "")
-    if approver and actor != approver:
+    if actor and actor == str(recommendation.get("asked_by") or ""):
+        raise OverrideError(403, "requester_cannot_approve",
+                            "The person who asked for this waive cannot approve it.")
+    if not approver or actor != approver:
         raise OverrideError(403, "not_the_approver",
                             "Only the person named on this waive can approve it.")
     row = c.execute(text("SELECT project_id, change_number FROM finding_overrides WHERE id = :i"),
