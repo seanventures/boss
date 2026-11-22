@@ -179,3 +179,17 @@ def test_a_finished_follow_up_is_done_and_a_merged_change_is_not_cancelled():
                                  "pull_request_url": None}, {}, "crun_b")
     assert item["state"] == "done"
     assert w.run_state("merged", False) == "done"
+
+
+def test_a_real_test_finding_is_never_taken_for_a_failure_claim():
+    from boss_engine.services import review_packet as rp
+
+    notes = rp.from_followups([
+        {"text": "`TestGwlint_Admin` fails to cover the admin route", "tier": "P1",
+         "severity": "major"},
+        {"text": "test_admin_route does not exercise the failing path", "tier": "P1",
+         "severity": "major"},
+        {"text": "TestGwlint_Admin would fail if the route came back; add a red-flag check",
+         "tier": "P1", "severity": "major"}], "standard")
+    got = rp.judge_review_claims(list(notes), [{"id": "T-1", "ok": True}])
+    assert [x["status"] for x in got] == ["open", "open", "open"]

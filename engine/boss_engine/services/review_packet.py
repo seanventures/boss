@@ -366,8 +366,12 @@ def from_followups(items: Iterable[Mapping[str, Any]], bar: Optional[str]) -> li
     return out
 
 
-_FAILS = re.compile(r"\b(fail|fails|failing|failed|broke|breaks|red)\b", re.I)
-_TEST_NAME = re.compile(r"\bTest[A-Z_]\w*|\btest_\w+|\w+\.test\.\w+")
+#: "<named test> (still) fails / is failing / is red": the test is SAID to fail. Never "fails to
+#: cover", "would fail if", or a test merely named near the word (a real coverage finding).
+_FAILS_CLAIM = re.compile(
+    r"(?:\bTest[A-Z_]\w*|\btest_\w+|\w+\.test\.\w+)`?\s+(?:still\s+|now\s+|also\s+)?"
+    r"(?:fails|failed|is\s+failing|is\s+failed|is\s+red|goes\s+red|is\s+broken|broke|breaks)"
+    r"\b(?!\s+to\b)", re.I)
 
 
 def judge_review_claims(findings: list[dict], test_rows: Sequence[Mapping[str, Any]]) -> list[dict]:
@@ -387,8 +391,7 @@ def judge_review_claims(findings: list[dict], test_rows: Sequence[Mapping[str, A
         title = str(f.get("title") or "")
         if title.startswith(UNKNOWN_PREFIX) and "could be named" in title:
             continue
-        if passed and f.get("status") in ("open", "reverted") and _TEST_NAME.search(title) \
-                and _FAILS.search(title):
+        if passed and f.get("status") in ("open", "reverted") and _FAILS_CLAIM.search(title):
             f = {**f, "status": "suppressed", "refuted_by": [t.get("id") for t in test_rows],
                  "why": "the test run passed"}
         out.append(f)

@@ -324,7 +324,8 @@ def propose(c: Any, settings: Any, project_id: str, ruleset_id: str, *,
     already = adapter.open_pull_request_for(stem)
     _prefixed = getattr(adapter, "open_pull_request_with_prefix", None)
     if already is None and callable(_prefixed):
-        already = _prefixed(f"{stem}-")
+        # Only this version's own ids: ruleset "northgate-v2" v1 is never "northgate" v2.
+        already = _prefixed(f"{stem}-", r"[0-9a-f]{6}")
     if already is not None:
         raise RulesetChangeError(
             409, "already_open", f"v{version} is already open as change #{already['number']}.",

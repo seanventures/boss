@@ -407,14 +407,20 @@ class LocalGitAdapter:
                 "url": change_set_url(self.repository_full_name, row["number"]),
                 "title": str(row["title"] or "")}
 
-    def open_pull_request_with_prefix(self, prefix: str) -> Optional[dict]:
-        """The newest open change set whose head branch starts with ``prefix``, or None."""
+    def open_pull_request_with_prefix(self, prefix: str,
+                                      rest: Optional[str] = None) -> Optional[dict]:
+        """The newest open change set whose head branch starts with ``prefix`` (and, given
+        ``rest``, whose remainder fully matches that regex), or None."""
+        import re as _re
+
         like = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
         with self._tx("open_pull_request_with_prefix", read=True) as c:
-            row = c.execute(text(
-                "SELECT number, title FROM local_change_sets WHERE repository = :r "
-                "AND branch LIKE :b AND state = 'open' ORDER BY number DESC LIMIT 1"),
-                {"r": self.repository_full_name, "b": like}).mappings().first()
+            rows = c.execute(text(
+                "SELECT number, title, branch FROM local_change_sets WHERE repository = :r "
+                "AND branch LIKE :b AND state = 'open' ORDER BY number DESC"),
+                {"r": self.repository_full_name, "b": like}).mappings().all()
+        row = next((r for r in rows if rest is None
+                    or _re.fullmatch(rest, str(r["branch"])[len(prefix):])), None)
         if row is None:
             return None
         return {"number": int(row["number"]),
