@@ -2948,7 +2948,7 @@ export function ReviewAndDecide({ step, projectId = "", actor = "" }: { step: Ru
     const orgId = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("org") ?? undefined : undefined;
     return (
       <div className="dw-step-decision" data-testid="dw-step-decision">
-        <DecisionCard decision={decision} projectId={projectId} actorId={actor} orgId={orgId} />
+        <DecisionCard decision={decision} projectId={projectId} actorId={actor} orgId={orgId} hideRunLink />
       </div>
     );
   }

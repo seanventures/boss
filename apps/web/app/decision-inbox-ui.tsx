@@ -1031,7 +1031,7 @@ export function DecisionInboxEmpty({
  * The same card sits on the Workflow run screen at the step that waits (ReviewAndDecide).
  * ============================================================================================== */
 
-export type CardVariant = "merge_ready" | "merge_blocked" | "merge_invalid" | "deploy" | "spec" | "plan"
+export type CardVariant = "merge_ready" | "merge_waiting" | "merge_blocked" | "merge_invalid" | "deploy" | "spec" | "plan"
   | "architecture" | "workflow_gate" | "refusal" | "self_fix" | "general";
 export type CardLink = { label: string; href: string; testid: string };
 export type CardLines = {
@@ -1054,9 +1054,31 @@ const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n =
  *  is titled by what comes before the first colon, when that is a short name. */
 export function splitQuestion(q: string): { title: string; rest: string } {
   const text = String(q ?? "").trim();
-  const at = text.indexOf(": ");
-  if (at >= 8 && at <= 140) return { title: shortPhrase(text.slice(0, at), 100), rest: text.slice(at + 2).trim() };
+  // The first ": " that ends a name: never inside quotes or brackets ("on “Hot file: x.go”"),
+  // and followed by a sentence, not the rest of the name ("gwlint: automate tenant onboarding").
+  let depth = 0;
+  let quoted = false;
+  for (let i = 0; i < text.length - 2 && i <= 140; i += 1) {
+    const ch = text[i];
+    if ("“([{".includes(ch)) depth += 1;
+    else if ("”)]}".includes(ch)) depth = Math.max(0, depth - 1);
+    else if (ch === '"') quoted = !quoted;
+    if (depth === 0 && !quoted && ch === ":" && text[i + 1] === " " && i >= 8 && /^[A-Z0-9“"'‘]/.test(text.slice(i + 2))) {
+      return { title: shortPhrase(text.slice(0, i), 100), rest: text.slice(i + 2).trim() };
+    }
+  }
   return { title: shortPhrase(text, 110), rest: "" };
+}
+
+/** CI that passed, in any of the words the engine uses for it. */
+export const ciPassed = (status: string): boolean => /^(passed|success|succeeded|green|ok)$/i.test(status.trim());
+
+/** A CI hold in words: "CI could not be read (403)", never the HTTP client's error and its URL. */
+export function heldWords(reason: string): string {
+  const r = String(reason ?? "").trim();
+  const head = r.split(/:\s/)[0].replace(/[.\s]+$/, "");
+  const code = /\b([45]\d\d)\b/.exec(r.slice(head.length))?.[1];
+  return shortPhrase(code && head !== r ? `${head} (${code})` : head || r, 80);
 }
 
 /** A reason the card can say: words, or a code it knows; an unknown code says nothing. */
@@ -1129,8 +1151,11 @@ function packetPhrases(p: ReviewPacket, rec: Record<string, unknown>): { tone: C
   // A review finding BOSS moved to a follow-up is said as a follow-up, not as an issue found.
   const found = SEVS.reduce((n, s) => n + t[s].found, 0) + t.review.found - t.review.deferred;
   const open = SEVS.reduce((n, s) => n + t[s].open, 0) + t.review.open - t.review.deferred;
-  const waived = SEVS.reduce((n, s) => n + t[s].waived + t[s].overridden, 0);
-  const followups = t.review.deferred || followUpsOf(rec)?.count || 0;
+  // A review finding suppressed or waived is said with the waived ones, never as fixed.
+  const waived = SEVS.reduce((n, s) => n + t[s].waived + t[s].overridden, 0)
+    + p.findings.filter((f) => isReviewFinding(f) && (f.status === "suppressed" || f.status === "waived")).length;
+  // ONE count for follow-ups: the engine's (the number its own question says), else the packet's.
+  const followups = followUpsOf(rec)?.count ?? t.review.deferred;
   return {
     tone: "ok",
     phrases: [
@@ -1162,7 +1187,7 @@ function mergePhrases(rec: Record<string, unknown>): { tone: CardLines["tone"]; 
     : unmet ? `${unmet} of ${mh.items.length} must-haves not met` : "";
   const ci = recText(rec, "validation_status").replaceAll("_", " ");
   // "✓ Ready" only when nothing says otherwise: CI that timed out or failed is said instead.
-  const ciOk = !ci || /^(passed|success|succeeded|green|ok)$/i.test(ci);
+  const ciOk = !ci || ciPassed(ci);
   const fu = followUpsOf(rec);
   const ready = !mustHaves && ciOk;
   return {
@@ -1216,7 +1241,7 @@ export function decisionCardLines(decision: DecisionFeedItem, projectId: string,
   } else if (isSelfFixDecision(decision) && cardOf(rec)) {
     variant = "self_fix";
     const c = cardOf(rec)!;
-    cardTitle = `Install a BOSS self-fix${c.title ? ` · ${c.title}` : ""}`;
+    cardTitle = `Install a BOSS self-fix${c.title ? ` · ${shortPhrase(c.title, 70)}` : ""}`;
     tone = c.tests?.red_on_base && c.tests?.green_with_fix ? "ok" : "plain";
     phrases = [
       c.tests?.red_on_base && c.tests?.green_with_fix ? "✓ Failing test now passes" : "",
@@ -1244,18 +1269,19 @@ export function decisionCardLines(decision: DecisionFeedItem, projectId: string,
   } else if (action === "review_pull_request" || action === "github.community.merge_authorization") {
     const n = prUrl ? prNumberOf(prUrl) : "";
     const m = mergePhrases(rec);
-    variant = m.tone === "bad" ? "merge_blocked" : "merge_ready";
+    variant = m.tone === "bad" ? "merge_blocked" : m.tone === "ok" ? "merge_ready" : "merge_waiting";
     cardTitle = `Merge ${changeRef(prUrl, n, true)}${title ? ` · ${title}` : ""}`;
     tone = m.tone; phrases = m.phrases;
     const page = prUrl ? changeHref(prUrl) : null;
-    more = page && isLocalChangeUrl(prUrl) ? { label: "Checks", href: `${page}?tab=checks` } : { label: "Checks", href: null };
+    // A GitHub PR has no BOSS Checks page: line 2 opens this card's Details, and says so.
+    more = page && isLocalChangeUrl(prUrl) ? { label: "Checks", href: `${page}?tab=checks` } : { label: "Details", href: null };
   } else if (isDeployDecision(rec)) {
     variant = "deploy";
     const host = recText(rec, "host");
     const what = app || title || "this change";
     cardTitle = `Deploy ${what}${env ? ` to ${env}` : host ? ` to ${host}` : ""}`;
     const ci = recText(rec, "validation_status");
-    tone = /^(passed|success|green)$/.test(ci) ? "ok" : "plain";
+    tone = ciPassed(ci) ? "ok" : "plain";
     phrases = [
       tone === "ok" ? "✓ Tests passed" : "",
       host && env ? host : "",
@@ -1269,8 +1295,10 @@ export function decisionCardLines(decision: DecisionFeedItem, projectId: string,
     const m = prd?.meeting;
     const skipped = specGateSkipped(rec);
     phrases = [
-      m ? (m.dissent.length ? `Panel agreed, ${m.dissent.length} dissent` : "Panel agreed") : "",
-      m && m.positions.length ? plural(m.positions.length, "agent") : "",
+      m ? (m.dissent.length
+        ? `Panel: ${Math.max(0, m.positions.length - m.dissent.length)} for, ${m.dissent.length} dissented`
+        : "Panel agreed") : "",
+      m && m.positions.length && !m.dissent.length ? plural(m.positions.length, "agent") : "",
       skipped ? shortPhrase(skipped, 90)
         : rec.start_code_task === true || rec.tool === "publish_document" || recText(rec, "capability") === "spec_review"
           ? "build starts when you approve" : "",
@@ -1279,13 +1307,14 @@ export function decisionCardLines(decision: DecisionFeedItem, projectId: string,
     if (m?.href) addLink({ label: "Meeting", href: m.href, testid: "decision-link-meeting" });
   } else if (action === "review_plan_draft" || action === "resume_code_task") {
     variant = "plan";
-    cardTitle = action === "resume_code_task" ? `Resume the work${title ? ` · ${title}` : ""}` : `Review the plan${title ? ` · ${title}` : ""}`;
+    const subject = title || shortPhrase(asked.rest, 70);
+    cardTitle = action === "resume_code_task" ? `Resume the work${subject ? ` · ${subject}` : ""}` : `Review the plan${subject ? ` · ${subject}` : ""}`;
     phrases = [action === "resume_code_task" ? "paused, resumes when you approve" : "code starts when you approve"];
     more = { label: action === "resume_code_task" ? "Details" : "Read plan", href: null };
   } else if (action === "review_architecture" || (!action && recText(rec, "capability") === "architecture")) {
     variant = "architecture";
     cardTitle = `Approve the architecture${app ? ` · ${app}` : title ? ` · ${title}` : ""}`;
-    phrases = ["builds after it receive it"];
+    phrases = ["every build after it gets the document"];
     more = { label: "Read it", href: null };
   } else if (action === "resume_workflow") {
     variant = "workflow_gate";
@@ -1333,9 +1362,11 @@ export function decisionCardLines(decision: DecisionFeedItem, projectId: string,
   if (typeof estimated === "number" && estimated > 0 && variant !== "self_fix") phrases.push(`est. ${formatMicros(estimated)}`);
   if (decision.held?.reason) {
     // HELD BY CI: never "✓ Ready" beside "Checks not read"; the hold is what the line says.
-    phrases = phrases.filter((p) => p !== "✓ Ready");
+    // Nor "CI passed" beside "CI could not be read": the hold is the one word on CI.
+    phrases = phrases.filter((p) => p !== "✓ Ready" && !/^CI /.test(p));
     if (tone === "ok") tone = "plain";
-    phrases.push(shortPhrase(decision.held.reason, 80));
+    if (variant === "merge_ready") variant = "merge_waiting";
+    phrases.push(heldWords(decision.held.reason));
   }
   const occurrences = typeof rec.occurrences === "number" ? rec.occurrences : 0;
   if (occurrences > 1) phrases.push(`same cause re-raised ${occurrences}×`);
@@ -1375,6 +1406,8 @@ export type DecisionCardProps = {
   orgId?: string;
   /** Sent here by a workflow gate that named this decision. */
   highlighted?: boolean;
+  /** Drawn on the run it belongs to: no "Workflow #N" link back to the same page. */
+  hideRunLink?: boolean;
 };
 
 /** One decision, as three lines: the Approvals list and the Workflow run screen draw this. */
@@ -1386,6 +1419,7 @@ export function DecisionCard({
   actorId,
   orgId,
   highlighted = false,
+  hideRunLink = false,
 }: DecisionCardProps) {
   const [open, setOpen] = useState(false);
   const rec = decision.recommendation;
@@ -1414,7 +1448,8 @@ export function DecisionCard({
     );
   }
 
-  const lines = decisionCardLines(decision, projectId, orgId);
+  const drawn = decisionCardLines(decision, projectId, orgId);
+  const lines = hideRunLink ? { ...drawn, links: drawn.links.filter((l) => l.testid !== "decision-link-run") } : drawn;
   const packet = packetOf(rec);
   const detailsId = `decision-details-${decision.id}`;
   const toggle = () => setOpen((v) => !v);
@@ -1515,7 +1550,8 @@ export function DecisionCard({
       </p>
       <div className="dq-card-act">
         {packet && packet.verdict.state === "invalid" ? <RebuildPacket projectId={projectId} change={packet.work.change} /> : null}
-        <DecisionActions decision={answerable} projectId={projectId} actorId={actorId} compact />
+        <DecisionActions decision={answerable} projectId={projectId} actorId={actorId} compact
+                         reviseFirst={["spec", "plan", "architecture"].includes(lines.variant)} />
         <CardLinks links={lines.links} detailsToggle={detailsInLinks} />
       </div>
       <div id={detailsId} className="dq-details" hidden={!open} data-testid="decision-details">{body}</div>
@@ -1778,11 +1814,13 @@ function DecisionCardDetails({
  * anything else, so this draws exactly `allowedActions`, the primary ones as buttons, the
  * ones that need a note or a name behind "More".
  */
-export function DecisionActions({ decision, projectId, actorId, compact = false }: {
+export function DecisionActions({ decision, projectId, actorId, compact = false, reviseFirst = false }: {
   decision: DecisionFeedItem; projectId: string; actorId: string;
   /** THE CARD'S LINE 3 (approvals wireframe B): a primary and one secondary answer drawn; the
    *  rest behind "…", each with the same reason prompt and the same form fields as before. */
   compact?: boolean;
+  /** A spec, plan or architecture: "Request changes…" is the secondary answer (wireframe B). */
+  reviseFirst?: boolean;
 }) {
   const offers = offeredActions(decision).filter((a) => a.action !== "execute");
   // Two settles share the action name. Each button carries its own settle_at, or they
@@ -1989,10 +2027,12 @@ export function DecisionActions({ decision, projectId, actorId, compact = false 
     // PRIMARY + ONE SECONDARY. A reasoned merge ("Merge anyway…") is the secondary beside the
     // first plain answer ("Keep blocked"), and opens its reason box in place; the settles of a
     // legacy-exposure card are its answers and always show.
-    const room = Math.max(0, 2 - settles.length - (reasoned ? 1 : 0));
+    const reviseShown = Boolean(reviseFirst && revise && !reasoned);
+    const room = Math.max(0, 2 - settles.length - (reasoned || reviseShown ? 1 : 0));
     const shown = direct.slice(0, room);
     const folded = direct.slice(room);
-    const overflow = folded.length > 0 || whyNo || revise || delegate;
+    const foldedRevise = revise && !reviseShown;
+    const overflow = folded.length > 0 || whyNo || foldedRevise || delegate;
     return (
       <>
       {offer ? <AlwaysAllowOption decisionId={decision.id} offer={offer} projectId={projectId} actorId={actorId} /> : null}
@@ -2008,18 +2048,24 @@ export function DecisionActions({ decision, projectId, actorId, compact = false 
             <div className="dq-more-body dq-pop">{reasonedBody}</div>
           </details>
         ) : null}
-        {heldNote}
+        {reviseShown ? (
+          <details className="dq-reasoned dq-reasoned-fold" data-testid="decision-revise-fold">
+            <summary className="dq-btn neutral" title={revise!.effect || undefined}>{revise!.label}…</summary>
+            <div className="dq-more-body dq-pop">{reviseBody}</div>
+          </details>
+        ) : null}
+        {/* A CI hold's words are on line 2 and in the held button's title: not a third time. */}
         {overflow ? (
           <details className="dq-more dq-overflow" data-testid="decision-more-actions">
             <summary aria-label="More answers" title="More answers">…</summary>
             <div className="dq-more-body dq-pop">
               {folded.map(directButton)}
               {whyNo}
-              {revise || delegate ? (
+              {foldedRevise || delegate ? (
                 <details className="dq-more" data-testid="decision-revise-delegate">
-                  <summary>{[revise ? "Request changes" : "", delegate ? "hand to someone else" : ""]
+                  <summary>{[foldedRevise ? "Request changes" : "", delegate ? "hand to someone else" : ""]
                     .filter(Boolean).join(", ").replace(/^h/, "H")}</summary>
-                  <div className="dq-more-body">{reviseBody}{delegateBody}</div>
+                  <div className="dq-more-body">{foldedRevise ? reviseBody : null}{delegateBody}</div>
                 </details>
               ) : null}
             </div>

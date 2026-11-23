@@ -71,7 +71,7 @@ vi.mock("../lib/project-experience", async (orig) => {
 });
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-const { DecisionInbox, DecisionCard, decisionCardLines } = await import("../app/decision-inbox-ui");
+const { DecisionInbox, DecisionCard, decisionCardLines, splitQuestion, heldWords } = await import("../app/decision-inbox-ui");
 const { PACKET_READY } = await import("../lib/validation-review-fixtures");
 const { client } = await import("../lib/client");
 const { resolveDecisionAction } = await import("../app/actions");
@@ -307,8 +307,11 @@ describe("a card is three lines", () => {
     click(q(row, '[data-testid="decision-status-more"]'));
     expect(q(row, '[data-testid="decision-details"]')!.hidden).toBe(false);
     expect(q(row, '[data-testid="decision-prd"]')).not.toBeNull();
+    // A spec's secondary answer is Request changes (wireframe B); Reject is behind "…".
     const top = [...row.querySelectorAll(".dq-card-act form > button")].map((b) => b.textContent);
-    expect(top).toEqual(["Approve and build", "Reject"]);
+    expect(top).toEqual(["Approve and build"]);
+    expect(text(row, '[data-testid="decision-revise-fold"] > summary')).toBe("Request changes…");
+    expect(q(row, '[data-testid="decision-more-actions"] [data-testid="decision-reject"]')).not.toBeNull();
   });
 
   it("a deadline takes the time's place on line 1", () => {
@@ -349,6 +352,44 @@ describe("a card is three lines", () => {
     expect(refusal.tone).toBe("bad");
     expect(refusal.links[0]).toMatchObject({ label: "Open Setup", testid: "decision-link-fix" });
     expect(of({ action: "grant_tool_access" }, { question: "Let the builder use the browser?" }).title).toBe("Let the builder use the browser?");
+  });
+});
+
+describe("the words on real cards (review of PR #298)", () => {
+  it("a question is titled at the colon that ends a name, never inside quotes or a name", () => {
+    expect(splitQuestion("Background job · Docs update: No GitHub credentials for /: the App has none"))
+      .toEqual({ title: "Background job · Docs update", rest: "No GitHub credentials for /: the App has none" });
+    expect(splitQuestion("Workflow run · KAN-9 Northgate gateway + gwlint: automate tenant onboarding: BOSS couldn't save this").title)
+      .toBe("Workflow run · KAN-9 Northgate gateway + gwlint: automate tenant onboarding");
+    expect(splitQuestion("CI squad used its $1.50 on “Hot file without tests: internal/lint/rules.go” — give it $1 more?").rest).toBe("");
+    expect(splitQuestion("Approve the plan: KAN-9 Northgate gateway")).toEqual({ title: "Approve the plan", rest: "KAN-9 Northgate gateway" });
+  });
+
+  it("a CI hold says it once, in words, and never beside CI passed or ✓ Ready", () => {
+    const reason = "CI could not be read: HTTPStatusError: Client error '403 Forbidden' for url 'https://api.github.com/repos/x/y/commits/abc/status'";
+    expect(heldWords(reason)).toBe("CI could not be read (403)");
+    const held = { ...BASE, id: "dec_held", status: "pending", question: "Merge PR #246?",
+      recommendation: { action: "review_pull_request", pull_request_url: "https://github.com/sample-org/orders/pull/246", validation_status: "passed" },
+      held: { state: "ci_unreadable", label: "Checks not read", reason },
+      allowedActions: MERGE_OFFERS.slice(0, 2) } as unknown as DecisionFeedItem;
+    const lines = decisionCardLines(held, PID);
+    expect(lines.phrases).toEqual(["CI could not be read (403)"]);
+    expect(lines.variant).toBe("merge_waiting");
+    const row = one(held);
+    expect(q(row, '[data-testid="decision-held"]')).toBeNull();
+    expect((q(row, '[data-testid="decision-approve"]') as HTMLButtonElement).title).toBe(reason);
+    // A GitHub PR has no BOSS Checks page: line 2 opens Details and says so.
+    expect(text(row, '[data-testid="decision-status-more"]')).toBe("Details ›");
+  });
+
+  it("follow-ups are the engine's count, and a panel with dissent never says agreed", () => {
+    const fu = decisionCardLines({ ...READY, recommendation: { ...READY.recommendation,
+      followups: { count: 2, p1: 0, queued: false, bar: "standard", items: [] } } } as DecisionFeedItem, PID);
+    expect(fu.phrases).toContain("2 follow-ups for later");
+    const prd = (SPEC as unknown as { prd: { meeting: Record<string, unknown> } }).prd;
+    const dissent = decisionCardLines({ ...SPEC, prd: { ...prd, meeting: { ...prd.meeting,
+      dissent: [{ role: "eng", position: "Not yet", reason: "scope" }] } } } as unknown as DecisionFeedItem, PID);
+    expect(dissent.phrases[0]).toBe("Panel: 2 for, 1 dissented");
   });
 });
 

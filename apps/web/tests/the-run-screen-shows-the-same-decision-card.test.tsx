@@ -78,7 +78,9 @@ describe("the waiting step draws the Approvals card", () => {
     const buttons = [...card.querySelectorAll(".dq-card-act form > button")].map((b) => b.textContent);
     expect(buttons).toEqual(["Approve and merge", "Keep blocked"]);
     expect((card.querySelector('input[name="actor"]') as HTMLInputElement).value).toBe("ceo");
-    expect(card.querySelector('[data-testid="decision-link-run"]')!.textContent).toBe("Workflow #7");
+    // On its own run, no link back to the same page; the change is still linked.
+    expect(card.querySelector('[data-testid="decision-link-run"]')).toBeNull();
+    expect(card.querySelector('[data-testid="decision-link-change"]')!.textContent).toBe("Change #4");
     expect(host.querySelector('[data-testid="dw-step-review"]')).toBeNull();
   });
 
