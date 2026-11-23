@@ -698,31 +698,34 @@ export function WaitingElsewhere({ waiting }: { waiting: ElsewhereWaiting }) {
  * "To set up: Pick a prod host ›" — what only a person can set up, counted in Needs you (X-14),
  * as ONE quiet line in the "Also waiting" line's scale, never a box. Each item it knows is a link
  * to where it is set; the poll lists only the first five things, so the rest (the count says
- * they exist, the list was full of decisions) is one link to Setup, never an orphan "+1 more".
+ * they exist, the list was full of decisions) is one link to the project page, whose Needs you
+ * lists every one of them, never an orphan "+1 more".
  */
-export function SetupLine({ items, count }: {
+export function SetupLine({ items, count, projectId }: {
   items: { id: string; title: string; href?: string; kind?: string; roleKey: string | null; decideInline: boolean }[];
   count: number;
+  projectId: string;
 }) {
   const rest = Math.max(0, count - items.length);
   if (!items.length && !rest) return null;
   return (
     <p className="dq-also" data-testid="decision-inbox-setup"
        title="Only you can set these up. They wait here and on the bell until they are set.">
-      <span>To set up:</span>
+      <span>To set up<span className="sr-only">, only you can do these</span>:</span>
       {items.map((i) => (
         <React.Fragment key={i.id}>
           {" "}
           <button type="button" className="linklike" data-testid={`decision-setup-${i.id}`}
-                  onClick={() => navigate(reviewPatch(i))}>{i.title} ›</button>
+                  onClick={() => navigate(reviewPatch(i))}>{i.title} <span aria-hidden>›</span></button>
         </React.Fragment>
       ))}
       {rest ? (
         <>
           {" "}
           <button type="button" className="linklike" data-testid="decision-setup-more"
-                  onClick={() => navigate({ area: "setup", view: null, focus: null, decision: null })}>
-            {items.length ? `+${rest} more` : `${rest} in Setup`} ›
+                  onClick={() => navigate({ area: "project", project_id: projectId, tab: null, view: null,
+                                            focus: null, decision: null })}>
+            {items.length ? `+${rest} more` : `${rest} on the project page`} <span aria-hidden>›</span>
           </button>
         </>
       ) : null}
@@ -903,7 +906,7 @@ export function DecisionInbox({
       ) : null}
       {feed.apiReachable ? <WaitingElsewhere waiting={elsewhere} /> : null}
       {feed.apiReachable && tab === "needs_action" && setupCount > 0 ? (
-        <SetupLine items={setupItems} count={setupCount} />
+        <SetupLine items={setupItems} count={setupCount} projectId={projectId} />
       ) : null}
       {!feed.apiReachable ? null : visible.length === 0 ? (
         tab === "needs_action" && setupCount > 0 ? null : <DecisionInboxEmpty filter={tab} orgId={orgId} />

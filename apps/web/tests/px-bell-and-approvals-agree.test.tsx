@@ -60,22 +60,24 @@ describe("the bell and Approvals agree (X-14)", () => {
     const line = document.querySelector<HTMLElement>("[data-testid='decision-inbox-setup']")!;
     expect(line.tagName).toBe("P");
     expect(line.className).toBe("dq-also");
-    expect(line.textContent).toBe("To set up: Pick a prod host ›");
+    expect(line.textContent).toBe("To set up, only you can do these: Pick a prod host ›");
     // No card, no eyebrow, no second count beside Needs you.
     expect(line.querySelector("article, .eyebrow, .decision-card")).toBeNull();
     act(() => { line.querySelector<HTMLButtonElement>("[data-testid='decision-setup-setup:prod-host']")!.click(); });
     expect(new URLSearchParams(window.location.search).get("area")).toBe("infra");
   });
 
-  it("a setup item the poll did not list (five decisions filled it) is a link to Setup, not an orphan '+1 more'", async () => {
+  it("a setup item the poll did not list (five decisions filled it) links to the project page that lists it, not an orphan '+1 more'", async () => {
     ATTENTION = { count: 7, decisions: 6, setup: 1, items: [] };
     await renderInbox();
     expect(document.querySelector("[data-testid='decision-filter-needs-action'] .dq-filter-count")!.textContent).toBe("1");
     const line = document.querySelector<HTMLElement>("[data-testid='decision-inbox-setup']")!;
-    expect(line.textContent).toBe("To set up: 1 in Setup ›");
+    expect(line.textContent).toBe("To set up, only you can do these: 1 on the project page ›");
     expect(document.body.textContent).not.toContain("more in the project's Needs you");
     act(() => { line.querySelector<HTMLButtonElement>("[data-testid='decision-setup-more']")!.click(); });
-    expect(new URLSearchParams(window.location.search).get("area")).toBe("setup");
+    const q = new URLSearchParams(window.location.search);
+    // The project's Needs you lists every setup item (the Setup area is the console-wide board).
+    expect([q.get("area"), q.get("project_id")]).toEqual(["project", "helpdesk"]);
   });
 
   it("the setup line is in the page's type scale and quiet: tokens only, no amber", async () => {
