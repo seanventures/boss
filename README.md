@@ -43,7 +43,7 @@ Use a new directory named `boss-rc10.33`. The command stops if the clone fails, 
 
 `boss upgrade` writes a backup (database, keys, artifacts, and the local repositories volume that holds unpublished local projects' code), then moves to a later release. `boss upgrade --to REF` picks the release. `boss uninstall` stops BOSS and keeps the data. Ports, flags, and recovery are in the [installer guide](scripts/install/README.md).
 
-Upgrade note: BOSS acts on its own approval cards in development and asks you in production. The installer writes `BOSS_INSTALL_TIER` (`dev` on a laptop, `prod` for a `remote.sh` host or a public `--console-origin`); set it with `--install-tier dev|prod`. When unset, only an install opened at a localhost URL counts as development.
+Upgrade note: BOSS acts on its own approval cards in development and asks you in production. The installer writes `BOSS_INSTALL_TIER` (`dev` on a Mac with no public `--console-origin`, `prod` on a server or a `remote.sh` host); a Linux laptop or a dev VM passes `--install-tier dev`.
 
 The copy at [boss.sean.network/install.sh](https://boss.sean.network/install.sh) is published separately. This page does not treat it as v1.0-rc10.33. The manual in this repository is the source. The [hosted docs](https://boss.sean.network/docs/) are published separately too.
 

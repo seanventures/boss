@@ -751,7 +751,7 @@
 "GET /v1/deployment-targets": ["permit deployment:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/deployment-targets": ["permit deployment_target:manage @ project(body=project_id) +production(environment=body.environment)", "OA"]
 "DELETE /v1/deployment-targets/{target_id}": ["permit deployment_target:manage @ deployment_target(path=target_id)", "OA"]
-"PATCH /v1/deployment-targets/{target_id}": ["permit deployment_target:manage @ deployment_target(path=target_id) +production(target=path.target_id,environment=body.environment)", "OA"]
+"PATCH /v1/deployment-targets/{target_id}": ["permit deployment_target:manage @ deployment_target(path=target_id) +production:resolved(target=path.target_id,environment=body.environment)", "OA"]
 "POST /v1/deployment-targets/{target_id}/auto-deploy": ["permit deployment_target:manage @ deployment_target(path=target_id)", "OA"]
 "POST /v1/deployment-targets/{target_id}/bootstrap": ["permit deployment_target:manage @ deployment_target(path=target_id)", "OA"]
 "POST /v1/deployment-targets/{target_id}/purge": ["permit deployment_target:manage @ deployment_target(path=target_id)", "OA"]

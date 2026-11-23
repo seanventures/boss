@@ -104,4 +104,25 @@ def test_a_first_remote_install_hands_the_installer_prod(tmp_path):
 
 def test_the_readme_says_it_in_one_line():
     readme = (ROOT / "README.md").read_text()
-    assert "BOSS_INSTALL_TIER" in readme and "--install-tier dev|prod" in readme
+    assert "BOSS_INSTALL_TIER" in readme and "--install-tier dev" in readme
+
+
+def _default_tier(origin: str, uname: str) -> str:
+    """Run install.sh's own default_install_tier, as written in the file."""
+    start = INSTALL.index("default_install_tier() {")
+    end = INSTALL.index("\n}\n", start) + 3
+    out = subprocess.run(["bash", "-c", INSTALL[start:end] + 'default_install_tier "$1" "$2"',
+                          "_", origin, uname], capture_output=True, text=True, check=True)
+    return out.stdout.strip()
+
+
+@pytest.mark.parametrize("origin, uname, tier", [
+    ("", "Darwin", "dev"), ("http://localhost:3000", "Darwin", "dev"),
+    ("http://127.0.0.1:3000", "Darwin", "dev"), ("http://[::1]:3000", "Darwin", "dev"),
+    # A server reached through an SSH tunnel has a loopback origin too: prod off a Mac.
+    ("", "Linux", "prod"), ("http://localhost:3000", "Linux", "prod"),
+    ("https://boss.example.com", "Darwin", "prod"),
+    ("http://localhost.example.com", "Darwin", "prod"),
+])
+def test_the_installer_never_writes_a_blank_tier(origin, uname, tier):
+    assert _default_tier(origin, uname) == tier

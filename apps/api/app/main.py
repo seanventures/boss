@@ -9285,9 +9285,12 @@ def register_deployment_target(payload: dict):
 
 @app.patch("/v1/deployment-targets/{target_id}")
 # F2: the environment label feeds every production gate, so moving a target to or from
-# production (or changing a production target at all) needs deployment:production.
+# production (or changing a production target at all) needs deployment:production. The target
+# counts by the resolver (resolved=True): renaming an unlabelled remote server "dev" is what
+# would let dev autonomy ship to it unasked (#307 review).
 @permit(P.DEPLOYMENT_TARGET_MANAGE, scope=Scope.of("deployment_target", path="target_id"),
-        production=Production(target="path:target_id", environment="body:environment"))
+        production=Production(target="path:target_id", environment="body:environment",
+                              resolved=True))
 def update_deployment_target_endpoint(target_id: str, payload: DeploymentTargetUpdateBody):
     """Change a target in place — port, domain, health check, status, auto-deploy."""
     payload = payload.payload()

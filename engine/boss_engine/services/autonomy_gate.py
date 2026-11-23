@@ -539,7 +539,9 @@ def route(connection: Any, decision: Mapping[str, Any], *, policy: Any = None) -
 
 
 def _two_person_tier(decision: Mapping[str, Any], rec: Mapping[str, Any]) -> Optional[int]:
-    """The card's risk tier when it is one the two-person rule covers, else None."""
+    """The card's risk tier when it is one the two-person rule covers, else None. A tier that
+    needs only a seat (tier 2: the ceo seat) is development work dev autonomy answers, by the
+    operator's rule; the seat still binds every PERSON's answer and approve_by_policy."""
     from ..identity.approvals import TWO_PERSON_TIERS
 
     tiers = []

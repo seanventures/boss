@@ -436,7 +436,7 @@ ensure_install_tier() {
        grep -v '^BOSS_INSTALL_TIER=' \"\$f\" > \"\$tmp\" || true
        if [ -s \"\$tmp\" ] && [ -n \"\$(tail -c 1 \"\$tmp\")\" ]; then printf '\n' >> \"\$tmp\"; fi
        printf 'BOSS_INSTALL_TIER=$INSTALL_TIER\n' >> \"\$tmp\"
-       chmod 600 \"\$tmp\" && mv \"\$tmp\" \"\$f\" && echo wrote")" \
+       cat \"\$tmp\" > \"\$f\" && rm -f \"\$tmp\" && echo wrote")" \
     || { warn "could not write BOSS_INSTALL_TIER=$INSTALL_TIER to $DIR/.env; BOSS reads its public URL instead (remote = production)"; return 0; }
   [[ "$out" == *wrote* ]] && say "BOSS on $HOST is a ${INSTALL_TIER} install (BOSS_INSTALL_TIER=$INSTALL_TIER in .env)"
   return 0
