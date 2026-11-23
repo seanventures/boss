@@ -708,20 +708,27 @@ def _change_state(connection: Connection, run: Mapping[str, Any]) -> Optional[st
 
 
 def app_choices(connection: Connection, project_id: str) -> list[dict[str, str]]:
-    from ..factory_view import app_name
+    """The project's apps with a finished build, grouped the way every app view groups runs
+    (factory_view.group_into_apps over the non-internal window), newest first: {run_id, app},
+    run_id being the app's newest completed build."""
+    from ..code_task_service import is_internal_run, list_code_task_runs
+    from ..factory_view import FLOOR_RUNS, app_name, group_into_apps
 
-    rows = connection.execute(text(
-        "SELECT DISTINCT ON (COALESCE(finalize_ctx->>'app_id', "
-        "finalize_ctx->>'root_run_id', id)) id, title, spec, finalize_ctx, state "
-        "FROM code_task_runs WHERE project_id = :p "
-        "AND status IN ('completed', 'succeeded') "
-        "ORDER BY COALESCE(finalize_ctx->>'app_id', finalize_ctx->>'root_run_id', id), "
-        "created_at DESC, id DESC"), {"p": project_id}).mappings().all()
-    return [{"run_id": str(row["id"]), "app": app_name(dict(row))} for row in rows]
+    runs = [r for r in list_code_task_runs(connection, project_id, FLOOR_RUNS,
+                                           exclude_internal=True) if not is_internal_run(r)]
+    out: list[dict[str, str]] = []
+    for group in group_into_apps(runs):
+        built = [r for r in group if str(r.get("status") or "") in ("completed", "succeeded")]
+        if built:
+            out.append({"run_id": str(built[0]["id"]), "app": app_name(built[0])})
+    return out
 
 
 def work_anchor(connection: Connection, project_id: str, app: Optional[str],
                 *, new_app: bool = False) -> Optional[dict[str, Any]]:
+    """The app New work builds onto when the person did not pick one at a door: the named app
+    (app_anchor), none for an explicit new app, the project's only app, else a ValueError
+    asking which (never a silent fresh build beside the app it was meant to change)."""
     if new_app:
         if (app or "").strip():
             raise ValueError("Choose an existing app or create a new app, not both.")
@@ -730,7 +737,11 @@ def work_anchor(connection: Connection, project_id: str, app: Optional[str],
     if not handle:
         choices = app_choices(connection, project_id)
         if len(choices) > 1:
-            raise ValueError("Choose which existing app to change, or explicitly create a new app.")
+            names = ", ".join(choice.get("app") or choice["run_id"] for choice in choices[:3])
+            more = f" and {len(choices) - 3} more" if len(choices) > 3 else ""
+            raise ValueError(
+                f"This project has {len(choices)} apps ({names}{more}). Pick one under "
+                "Application in New work, or pick Create a new app.")
         if not choices:
             return None
         handle = choices[0]["run_id"]
