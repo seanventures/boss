@@ -65,10 +65,19 @@ SCENARIOS: dict[str, dict[str, Any]] = {
               "stages": ["write_tests", "implement", "review_code", "security_check",
                          "consistency_check", "check_tests", "acceptance_check"]},
     # The acceptance check (acceptance_gate.py) finds a must-have missing once: a fact, so the
-    # warm fix round delivers it and the whole-branch check re-runs and passes.
+    # warm fix round delivers it and the whole-branch check re-runs and passes. AT THE PRODUCTION
+    # BAR: there a missing P1 must-have blocks (quality_bar.acceptance_verdict); at standard, the
+    # light lane, it is a follow-up instead (the next scenario).
     "acceptance_missing": {"faults": "acceptance_missing", "final": "completed", "pr": True,
-                           "fix_round": True,
+                           "fix_round": True, "bar": "production",
                            "stages": ["write_tests", "implement", "acceptance_check"]},
+    # THE LIGHT LANE (standard, the default bar; operator rule 2026-11-18): the same missing
+    # must-have opens the PR with the gap as a queued follow-up, never a silent pass and never a
+    # fix round. The follow-up must name the must-have.
+    "acceptance_missing_light": {"faults": "acceptance_missing", "final": "completed", "pr": True,
+                                 "fix_round": False, "bar": "standard",
+                                 "followup": "Must-have 1",
+                                 "stages": ["write_tests", "implement", "acceptance_check"]},
     "failing_test": {"faults": "failing_test", "final": "completed", "pr": True,
                      "fix_round": True,
                      "stages": ["write_tests", "implement", "review_code"]},
@@ -190,7 +199,8 @@ class World:
 
 # ── One build ────────────────────────────────────────────────────────────────────────────────
 
-def run_build(world: World, *, faults: str, caps: str, tag: str) -> dict[str, Any]:
+def run_build(world: World, *, faults: str, caps: str, tag: str,
+              bar: str = "standard") -> dict[str, Any]:
     """Start a build as the API does and run it as the worker does, on the scripted engine."""
     from boss_engine.config import get_settings
     from boss_engine.services import code_task_service, scripted_engine
@@ -211,6 +221,8 @@ def run_build(world: World, *, faults: str, caps: str, tag: str) -> dict[str, An
         "github_token": "gate-local-token",
         "code_agent_engine": "scripted", "code_review_engine": "scripted",
         "target_github_owner": OWNER, "target_github_repo": repo,
+        # The quality bar (quality_bar.py): the project's value when it has none of its own.
+        "quality_bar": bar,
     })
     jobs = JobLeaseService(settings)
     with world.engine.begin() as c:
@@ -276,19 +288,48 @@ FIX_EVENTS = ("code_task.inrun_convergence_round", "code_task.repair_attempt",
               "code_task.implement_continued", "code_task.install_fixed")
 
 
+def stages_run(b: dict[str, Any]) -> list[str]:
+    """The pipeline stages that ran, in order. Most are an engine session of their own (the
+    scripted engine's log), but two are not, by design, and each is read from its own record:
+
+      * THE MERGED REVIEW PANEL (review_panel.py, BOSSAPP-1000): one `review_panel` session sits
+        the review_code, security_check and consistency_check seats. A seat counts as run only
+        when the session answered its section (`code_task.review_panel_merged`: seats asked,
+        minus `fallback`, the seats it left unanswered, which then run as sessions of their own
+        and are logged by name); a hollow merged answer counts for no seat.
+      * THE MUTATION PROBE (check_tests, BOSSAPP-1004): the plant is code, not a model. It ran
+        when the run's state holds its verdict (`mutation_caught` true or false; None means it
+        did not run: no deterministic mutation site, or the build's tests failed first)."""
+    stages: list[str] = []
+
+    def add(stage: str) -> None:
+        if stage and stage not in stages:
+            stages.append(stage)
+
+    for row in b["script"]:
+        add(row["stage"])
+        if row["stage"] == "review_panel":
+            for e in b["events"]:
+                d = e.get("data") or {}
+                if e["event_type"] == "code_task.review_panel_merged" and not d.get("hollow"):
+                    for seat in d.get("seats") or []:
+                        if seat not in (d.get("fallback") or []):
+                            add(seat)
+    state = b["run"].get("state") or {}
+    if isinstance(state, dict) and state.get("mutation_caught") is not None:
+        add("check_tests")
+    return stages
+
+
 def observed(b: dict[str, Any]) -> dict[str, Any]:
     """The engine-independent shape of one build: what the expectations compare."""
     run = b["run"]
     gates = b.get("gates") or {}
-    stages = []
-    for row in b["script"]:
-        if row["stage"] not in stages:
-            stages.append(row["stage"])
     kinds = [e["event_type"] for e in b["events"]]
     return {
         "status": run.get("status"),
         "pr": bool(run.get("pull_request_url")),
-        "stages": stages,
+        "stages": stages_run(b),
         "fix_round": any(k in kinds for k in FIX_EVENTS) or sum(
             1 for r in b["script"] if r["stage"] in ("implement", "repair", "solo", "quality")
             and not r["read_only"]) > 1,
@@ -297,6 +338,9 @@ def observed(b: dict[str, Any]) -> dict[str, Any]:
         "gates": gates,
         "events": kinds,
         "failure": str(run.get("error") or run.get("failure_reason") or ""),
+        "followups": [json.dumps((e.get("data") or {}).get("findings") or [], default=str)
+                      for e in b["events"]
+                      if e["event_type"] == "code_task.deferred_findings_task"],
         "profile_keys": sorted((b.get("profile") or {}).get("totals") or {}),
         "tool_names": sorted({t["tool_name"] for t in b["turns"] if t.get("tool_name")}),
     }
@@ -314,6 +358,10 @@ def meets(name: str, obs: dict[str, Any]) -> list[str]:
         bad.append(f"stages never ran: {missing} (ran: {obs['stages']})")
     if exp["fix_round"] and not obs["fix_round"]:
         bad.append("no fix round ran")
+    if exp.get("followup") and obs["fix_round"]:
+        bad.append("a fix round ran where the bar makes the gap a follow-up")
+    if exp.get("followup") and not any(exp["followup"] in f for f in obs["followups"]):
+        bad.append(f"no follow-up names {exp['followup']!r} (follow-ups: {obs['followups']})")
     if exp.get("serves") and not obs["serves"]:
         bad.append("the start-up proof never saw the app serve")
     if exp.get("words") and exp["words"] not in obs["failure"].lower():
@@ -358,7 +406,8 @@ def main() -> int:
                 @check(f"{name} on the {profile} engine")
                 def one(name=name, profile=profile, caps=caps, holder=holder) -> str:
                     b = run_build(world, faults=SCENARIOS[name]["faults"], caps=caps,
-                                  tag=f"{name}-{profile}".replace("_", "-"))
+                                  tag=f"{name}-{profile}".replace("_", "-"),
+                                  bar=SCENARIOS[name].get("bar", "standard"))
                     obs = observed(b)
                     holder["obs"] = obs
                     Path(work / f"{name}-{profile}.json").write_text(
