@@ -175,6 +175,9 @@ describe("the Workflow Marketplace", () => {
     expect($("wf-pack-installed-sre-helpdesk")!.textContent).toContain("Installed");
     expect($("wf-pack-update-sre-helpdesk")!.textContent).toBe("Update v1.1");
     expect($("wf-pack-published-wpk_1")).not.toBeNull();
+    await press("wf-pack-unpublish-wpk_1");
+    expect(writes).toEqual([]);                       // asked first, on the page
+    expect($("wf-pack-unpublish-go-wpk_1")).not.toBeNull();
     await press("wf-market-filter-org");
     expect($("wf-pack-banking-dq")).toBeNull();
     expect($("wf-pack-wpk_1")).not.toBeNull();

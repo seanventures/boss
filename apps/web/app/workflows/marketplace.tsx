@@ -13,7 +13,7 @@
  * person: an update waiting for a workflow you changed, or something a pack needs not set up.
  */
 // React by name: the suite renders with renderToStaticMarkup (classic runtime).
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Check, Storefront } from "@phosphor-icons/react";
 
 import { useCan } from "../../components/identity/identity-provider";
@@ -117,6 +117,7 @@ export function Marketplace({ projectId, onBack, onOpen }: {
 
       {confirming ? (
         <InstallConfirm pack={confirming} busy={busy === confirming.id}
+                        error={said?.pack === confirming.id && said.tone === "error" ? said.text : null}
                         blocked={installGate.allowed ? null : installGate.reason}
                         onInstall={() => void install(confirming)} onCancel={() => setConfirm(null)} />
       ) : null}
@@ -126,7 +127,8 @@ export function Marketplace({ projectId, onBack, onOpen }: {
       ) : shown.length ? (
         <div className="wf-market-grid" data-testid="wf-market-grid">
           {shown.map((p) => (
-            <PackCard key={p.id} pack={p} busy={busy === p.id} said={said?.pack === p.id ? said : null}
+            <PackCard key={p.id} pack={p} busy={busy === p.id}
+                      said={said?.pack === p.id && p.id !== confirm ? said : null}
                       installBlocked={installGate.allowed ? null : installGate.reason}
                       publishBlocked={publishGate.allowed ? null : publishGate.reason}
                       onInstall={() => { setSaid(null); setConfirm(p.id); }}
@@ -147,6 +149,7 @@ function PackCard({ pack: p, busy, said, installBlocked, publishBlocked, onInsta
   installBlocked: string | null; publishBlocked: string | null;
   onInstall: () => void; onUnpublish: () => void; onOpen?: (key: string) => void;
 }) {
+  const [asking, setAsking] = useState(false);
   const one = p.workflows.length === 1 ? p.workflows[0] : null;
   return (
     <article className="wf-pack" data-testid={`wf-pack-${p.id}`} data-installed={p.installed || undefined}>
@@ -164,9 +167,20 @@ function PackCard({ pack: p, busy, said, installBlocked, publishBlocked, onInsta
         {p.published_here ? (
           <>
             <span className="wf-pack-ok" data-testid={`wf-pack-published-${p.id}`}>Yours · published</span>
-            <button type="button" className="wf-link" data-testid={`wf-pack-unpublish-${p.id}`}
-                    disabled={busy || Boolean(publishBlocked)} title={publishBlocked ?? "Installed copies stay"}
-                    onClick={onUnpublish}>{busy ? "Unpublishing…" : "Unpublish"}</button>
+            {asking ? (
+              <span className="wf-pack-ask" role="alertdialog" aria-label="Unpublish?">
+                Unpublish?
+                <button type="button" className="wf-btn wf-btn-danger wf-btn-sm" autoFocus
+                        data-testid={`wf-pack-unpublish-go-${p.id}`} disabled={busy}
+                        title="Installed copies stay" onClick={() => { setAsking(false); onUnpublish(); }}>
+                  Unpublish</button>
+                <button type="button" className="wf-link" onClick={() => setAsking(false)}>Cancel</button>
+              </span>
+            ) : (
+              <button type="button" className="wf-link" data-testid={`wf-pack-unpublish-${p.id}`}
+                      disabled={busy || Boolean(publishBlocked)} title={publishBlocked ?? "Installed copies stay"}
+                      onClick={() => setAsking(true)}>{busy ? "Unpublishing…" : "Unpublish"}</button>
+            )}
           </>
         ) : p.installed ? (
           <>
@@ -201,11 +215,15 @@ function PackCard({ pack: p, busy, said, installBlocked, publishBlocked, onInsta
 }
 
 /** Install, confirmed on the page: what it adds to Yours, what it needs here, which agents. */
-function InstallConfirm({ pack: p, busy, blocked, onInstall, onCancel }: {
-  pack: MarketPack; busy: boolean; blocked: string | null; onInstall: () => void; onCancel: () => void;
+function InstallConfirm({ pack: p, busy, blocked, error, onInstall, onCancel }: {
+  pack: MarketPack; busy: boolean; blocked: string | null; error: string | null;
+  onInstall: () => void; onCancel: () => void;
 }) {
+  // Pressed on a card further down (a phone's one column): bring the confirm into view.
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => { ref.current?.scrollIntoView?.({ block: "nearest" }); }, [p.id]);
   return (
-    <div className="wf-market-confirm" role="dialog" aria-label={`Install ${p.name}`}
+    <div className="wf-market-confirm" role="dialog" aria-label={`Install ${p.name}`} ref={ref}
          data-testid="wf-market-confirm"
          onKeyDown={(e) => { if (e.key === "Escape") onCancel(); }}>
       <strong>Install {p.name} v{p.version}?</strong>
@@ -238,6 +256,7 @@ function InstallConfirm({ pack: p, busy, blocked, onInstall, onCancel }: {
           </>
         ) : null}
       </dl>
+      {error ? <p className="wf-publish-error" role="alert" data-testid="wf-market-error-said">{error}</p> : null}
       <div className="wf-market-actions">
         <button type="button" className="wf-btn wf-btn-primary" autoFocus data-testid="wf-market-install"
                 disabled={busy || Boolean(blocked)} title={blocked ?? undefined} onClick={onInstall}>

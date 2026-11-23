@@ -1625,8 +1625,15 @@ async def lifespan(_: FastAPI):
     # INSTALLED MARKETPLACE PACKS FOLLOW THE PACK BOSS SHIPS (workflow_marketplace.sync_shipped):
     # an unmodified copy takes a newer version by itself; a modified one is offered it.
     try:
+        # One short transaction per project: a project's publish lock is never held across
+        # every other project's sync.
         with begin(engine) as connection:
-            synced = workflow_marketplace.sync_shipped(connection, actor="boss")
+            synced_projects = workflow_marketplace.projects_with_shipped_installs(connection)
+        synced: dict = {}
+        for synced_project in synced_projects:
+            with begin(engine) as connection:
+                synced.update(workflow_marketplace.sync_shipped(
+                    connection, actor="boss", project_ids=[synced_project]))
         if synced:
             print(f"[lifespan] marketplace installs brought to the shipped packs: {synced}")
     except Exception as exc:  # noqa: BLE001 — never block boot on a sync

@@ -79,7 +79,8 @@ PACK_OF_KEY: dict[str, str] = {key: pack.pack_id for pack in SHIPPED_PACKS.value
                                for key in pack.workflow_keys}
 
 _VERSION = re.compile(r"^\d{1,4}(\.\d{1,4}){0,2}$")
-_LIVE = ("running", "waiting", "queued", "validating")
+#: A run that has not ended (anything but these) keeps its workflow from being uninstalled.
+_ENDED = ("completed", "failed", "deadlettered", "cancelled", "compensated")
 
 
 class MarketplaceError(workflows.WorkflowConflictError):
@@ -93,8 +94,9 @@ class MarketplaceNotFound(workflows.WorkflowNotFoundError):
 # ── versions ─────────────────────────────────────────────────────────────────────────────────
 
 def version_key(version: Any) -> tuple[int, ...]:
-    parts = tuple(int(p) for p in re.findall(r"\d+", str(version or "")))
-    return parts or (0,)
+    """Comparable: 1.0 == 1.0.0 < 1.0.1 < 1.1 < 1.10."""
+    parts = [int(p) for p in re.findall(r"\d+", str(version or ""))][:3]
+    return tuple(parts + [0] * (3 - len(parts)))
 
 
 def next_version(version: Optional[str]) -> str:
@@ -372,27 +374,64 @@ def list_packs(connection: Connection, project_id: str) -> list[dict[str, Any]]:
 
 # ── installing ───────────────────────────────────────────────────────────────────────────────
 
+def _offer(connection: Connection, project_id: str, definition_id: str, spec: dict[str, Any],
+           actor: str) -> dict[str, Any]:
+    """Publish a newer pack version beside the copy WITHOUT making it run: offered ("Review
+    update"), whether or not the copy was changed here. For an org pack republished from another
+    project: that project's publisher does not decide what runs here."""
+    definition = connection.execute(
+        text("SELECT * FROM workflow_definitions WHERE id = :id FOR UPDATE"),
+        {"id": definition_id}).mappings().one()
+    version = workflows.publish_version(connection, project_id=project_id,
+                                        definition_id=definition_id, spec=spec, actor=actor,
+                                        activate=False)
+    if version["content_hash"] == definition.get("standard_content_hash"):
+        return {**version, "offered": False}
+    if definition.get("standard_available_version_id") != version["id"]:
+        connection.execute(
+            text("UPDATE workflow_definitions SET standard_available_version_id = :v, "
+                 "updated_at = now() WHERE id = :id"), {"v": version["id"], "id": definition_id})
+        emit_event(connection, project_id, "workflow.pack_update_available", actor,
+                   "workflow_definition", definition_id,
+                   {"workflow_key": definition["workflow_key"], "version": version["version"],
+                    "pack_id": definition.get("marketplace_pack_id")})
+    return {**version, "offered": True, "duplicate": False}
+
+
 def _ship(connection: Connection, project_id: str, definition_id: str, spec: dict[str, Any],
-          version: str, actor: str, *, wait_when_blocked: bool) -> dict[str, Any]:
+          version: str, actor: str, *, wait_when_blocked: bool,
+          offer_only: bool = False) -> dict[str, Any]:
     """Publish a pack version onto an installed copy through the standard baseline door
-    (workflow_standards.record_shipped): unmodified takes it, modified is offered it."""
+    (workflow_standards.record_shipped): unmodified takes it, modified is offered it.
+    `offer_only`: offered either way (an org pack republished from another project)."""
     from .workflow_standards import record_shipped
 
     try:
         with connection.begin_nested():
-            published = record_shipped(connection, definition_id, spec, actor)
+            published = (_offer(connection, project_id, definition_id, spec, actor) if offer_only
+                         else record_shipped(connection, definition_id, spec, actor))
     except (workflows.WorkflowBindingBlockedError, workflows.WorkflowValidationError) as blocked:
         if not wait_when_blocked:
             raise
+        runnable = connection.execute(
+            text("SELECT active_version_id FROM workflow_definitions WHERE id = :id"),
+            {"id": definition_id}).scalar()
+        if runnable:
+            # A NEWER SPEC THAT CANNOT PUBLISH HERE never marks a runnable workflow as waiting:
+            # the version it has keeps running; the next sync tries again.
+            return {"version_id": None, "waiting": None, "offered": False, "changed": False}
         # NOT RUNNABLE HERE YET, AND SAID SO: published when the project gains what it lacks.
         connection.execute(
             text("UPDATE workflow_definitions SET marketplace_waiting = :w, updated_at = now() "
                  "WHERE id = :id"), {"w": str(blocked)[:1000], "id": definition_id})
         return {"version_id": None, "waiting": str(blocked)[:1000], "offered": False}
     offered = bool(published.get("offered"))
+    # Written only when it changes: a boot sync of an unchanged pack touches nothing.
     connection.execute(
         text("UPDATE workflow_definitions SET marketplace_waiting = NULL, updated_at = now()"
-             + ("" if offered else ", marketplace_version = :v") + " WHERE id = :id"),
+             + ("" if offered else ", marketplace_version = :v") + " WHERE id = :id "
+             "AND (marketplace_waiting IS NOT NULL"
+             + ("" if offered else " OR marketplace_version IS DISTINCT FROM :v") + ")"),
         {"id": definition_id, **({} if offered else {"v": version})})
     return {"version_id": published["id"], "version": published["version"],
             "offered": offered, "waiting": None,
@@ -494,9 +533,9 @@ def uninstall(connection: Connection, project_id: str, pack_id: str,
     live = connection.execute(
         text("SELECT d.name, count(*) AS n FROM workflow_runs r "
              "JOIN workflow_definitions d ON d.id = r.workflow_definition_id "
-             "WHERE r.workflow_definition_id = ANY(:ids) AND r.status = ANY(:live) "
+             "WHERE r.workflow_definition_id = ANY(:ids) AND NOT (r.status = ANY(:ended)) "
              "GROUP BY d.name ORDER BY d.name"),
-        {"ids": [r["id"] for r in rows], "live": list(_LIVE)}).mappings().all()
+        {"ids": [r["id"] for r in rows], "ended": list(_ENDED)}).mappings().all()
     if live:
         said = ", ".join(f"{r['name']} ({int(r['n'])})" for r in live)
         raise MarketplaceError(f"Runs are still going: {said}. Uninstall when they finish, or "
@@ -544,24 +583,35 @@ def answer_update(connection: Connection, project_id: str, definition_id: str, a
 
 # ── keeping installed copies current ─────────────────────────────────────────────────────────
 
-def _resync(connection: Connection, row: dict[str, Any], actor: str) -> Optional[dict]:
+def _resync(connection: Connection, row: dict[str, Any], actor: str,
+            offer_only: bool = False) -> Optional[dict]:
     contents = _pack_contents(connection, str(row["project_id"]), str(row["marketplace_pack_id"]),
                               for_install=False)
     wf = next((w for w in contents["workflows"] if w["key"] == row["workflow_key"]), None)
     if wf is None:
         return None
     return _ship(connection, str(row["project_id"]), str(row["id"]), wf["spec"],
-                 contents["version"], actor, wait_when_blocked=contents["source"] == "boss")
+                 contents["version"], actor, wait_when_blocked=contents["source"] == "boss",
+                 offer_only=offer_only)
 
 
-def sync_shipped(connection: Connection, actor: str = "boss") -> dict[str, list[str]]:
+def projects_with_shipped_installs(connection: Connection) -> list[str]:
+    return [str(p) for p in connection.execute(
+        text("SELECT DISTINCT project_id FROM workflow_definitions WHERE marketplace_pack_id = "
+             "ANY(:p) AND status <> 'retired' ORDER BY project_id"),
+        {"p": list(SHIPPED_PACKS)}).scalars()]
+
+
+def sync_shipped(connection: Connection, actor: str = "boss",
+                 project_ids: Optional[list[str]] = None) -> dict[str, list[str]]:
     """BOSS's packs, as this code ships them, onto every installed copy (called at boot):
     unmodified copies take a newer version by themselves, modified ones are offered it.
     Idempotent: an unchanged pack publishes nothing."""
     rows = connection.execute(
         text("SELECT * FROM workflow_definitions WHERE marketplace_pack_id = ANY(:p) "
-             "AND status <> 'retired' ORDER BY project_id, workflow_key"),
-        {"p": list(SHIPPED_PACKS)}).mappings().all()
+             "AND status <> 'retired' AND (CAST(:only AS TEXT[]) IS NULL "
+             "OR project_id = ANY(CAST(:only AS TEXT[]))) ORDER BY project_id, workflow_key"),
+        {"p": list(SHIPPED_PACKS), "only": project_ids}).mappings().all()
     out: dict[str, list[str]] = {}
     for row in rows:
         try:
@@ -610,8 +660,8 @@ def publish(connection: Connection, project_id: str, definition_id: str, actor: 
             name: Optional[str] = None, summary: Optional[str] = None,
             version: Optional[str] = None, publisher: Optional[str] = None) -> dict[str, Any]:
     """Publish one of this project's own workflows as a pack every project in the org can
-    install. Republishing bumps the version (it must be later than the last) and brings every
-    unmodified installed copy to it; modified copies are offered it."""
+    install. Republishing bumps the version (it must be later than the last) and offers it to
+    every installed copy (each project takes it when it chooses)."""
     from .workflow_standards import _clean
 
     definition = workflows.require_namespace(connection, project_id, definition_id,
@@ -670,14 +720,15 @@ def publish(connection: Connection, project_id: str, definition_id: str, actor: 
     emit_event(connection, project_id, "workflow.pack_published", actor, "workflow_pack",
                pack_id, {"pack_id": pack_id, "version": wanted,
                          "workflow_key": definition["workflow_key"]})
-    # EVERY INSTALLED COPY IN THE ORG follows: unmodified takes it, modified is offered it.
+    # EVERY INSTALLED COPY IN THE ORG IS OFFERED IT ("Review update"): what runs in another
+    # project is that project's call, never this publisher's (review of #301).
     updated = []
     for row in connection.execute(
             text("SELECT * FROM workflow_definitions WHERE marketplace_pack_id = :p "
                  "AND status <> 'retired'"), {"p": pack_id}).mappings().all():
         try:
             with connection.begin_nested():
-                result = _resync(connection, dict(row), actor)
+                result = _resync(connection, dict(row), actor, offer_only=True)
         except workflows.WorkflowError:
             continue
         if result:

@@ -747,14 +747,18 @@ function LibraryCard(p: CardProps) {
         ) : null}
       </footer>
 
-      <div className="wf-card-actions" onClick={stop} ref={pop.ref} data-open={pop.open ?? undefined}>
-        {installed?.update ? (
+      {installed?.update ? (
+        // ALWAYS VISIBLE, not behind hover: the one thing on this card that needs a person.
+        <div className="wf-card-update-row" onClick={stop}>
           <button type="button" className="wf-btn wf-btn-sm wf-btn-amber" data-testid={`wf-card-update-${w.workflow_key}`}
-                  title="You changed it, so the update waits for you" aria-expanded={pop.open === "update"}
-                  onClick={() => pop.setOpen(pop.open === "update" ? null : "update")}>
+                  title="A newer version waits for you" aria-expanded={pop.open === "update"}
+                  onClick={() => pop.setOpen("update")}>
             Review update v{installed.update.version ?? "?"}
           </button>
-        ) : null}
+        </div>
+      ) : null}
+
+      <div className="wf-card-actions" onClick={stop} ref={pop.ref} data-open={pop.open ?? undefined}>
         <button type="button" className="wf-btn wf-btn-sm" data-testid={`wf-card-start-${w.workflow_key}`}
                 disabled={!w.version} title={w.version ? "Start a run" : "Save a version first"}
                 onClick={() => p.onStart(w.workflow_key)}>

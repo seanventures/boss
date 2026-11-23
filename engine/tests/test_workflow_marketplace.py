@@ -187,6 +187,7 @@ def test_the_packs_are_versioned():
     assert market.next_version(None) == "1.0"
     assert market.next_version("0.3") == "0.4" and market.next_version("1.9") == "1.10"
     assert market.version_key("1.10") > market.version_key("1.9")
+    assert market.version_key("1.0.0") == market.version_key("1.0")
 
 
 # ── install into Yours ───────────────────────────────────────────────────────────────────────
@@ -333,6 +334,30 @@ def test_uninstall_is_refused_while_a_run_is_going_and_keeps_history(eng, projec
         assert back["id"] == row["id"] and back["status"] == "active"
 
 
+@pytest.mark.parametrize("status", ["paused", "blocked", "waiting", "compensating"])
+def test_uninstall_is_refused_for_any_run_that_has_not_ended(eng, project, status):
+    with eng.begin() as c:
+        market.install(c, project, SRE, "test")
+        run = _running_run(c, project, _row(c, project))
+        c.execute(text("UPDATE workflow_runs SET status=:s WHERE id=:r"), {"s": status, "r": run})
+        with pytest.raises(market.MarketplaceError, match="Runs are still going"):
+            market.uninstall(c, project, SRE, "test")
+
+
+def test_a_runnable_install_is_never_marked_waiting(eng, project, monkeypatch):
+    """A newer pack spec that cannot publish here leaves the running version alone."""
+    with eng.begin() as c:
+        market.install(c, project, SRE, "test")
+        before = _row(c, project)
+        def blocked(*a, **k):
+            raise workflows.WorkflowBindingBlockedError("needs the dq-monitor connector")
+        monkeypatch.setattr("boss_engine.services.workflow_standards.record_shipped", blocked)
+        market.sync_shipped(c)
+        after = _row(c, project)
+        assert after["marketplace_waiting"] is None
+        assert after["active_version_id"] == before["active_version_id"]
+
+
 def test_uninstall_deletes_a_copy_that_never_ran(eng, project):
     with eng.begin() as c:
         market.install(c, project, SRE, "test")
@@ -394,8 +419,15 @@ def test_publish_install_republish_and_unpublish_within_the_org(eng, monkeypatch
             spec["steps"][0]["title"] = "Read the partner's config"
             workflows.publish_version(c, project_id=source, definition_id=mine["id"], spec=spec,
                                       actor="test")
+            before = _row(c, other, mine["workflow_key"])
             again = market.publish(c, source, mine["id"], "test")
             assert again["pack"]["version"] == "0.4"
+            # OFFERED, NEVER ACTIVATED from another project: what runs there is its own call.
+            offered = _row(c, other, mine["workflow_key"])
+            assert offered["active_version_id"] == before["active_version_id"]
+            assert offered["marketplace_version"] == "0.3"
+            assert _listed(c, other, mine["workflow_key"])["marketplace"]["update"] == {"version": "0.4"}
+            market.answer_update(c, other, offered["id"], "test", "take")
             followed = _row(c, other, mine["workflow_key"])
             assert followed["marketplace_version"] == "0.4"
             assert _active_spec(c, followed)["steps"][0]["title"] == "Read the partner's config"

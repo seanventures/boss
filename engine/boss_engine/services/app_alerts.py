@@ -2495,7 +2495,12 @@ def respond_link(connection, project_id: str, rule_name: str,
 
     # SWITCHING IT ON IS ASKING FOR INCIDENT RESPONSE: the SRE / Helpdesk pack is installed into
     # the project's own workflows when it is not here (it is no longer seeded by default).
-    ensure_installed(connection, project_id, "sre-helpdesk", actor)
+    from .workflow_marketplace import MarketplaceError
+
+    try:
+        ensure_installed(connection, project_id, "sre-helpdesk", actor)
+    except MarketplaceError as refused:
+        raise RuleRefused(str(refused)) from refused
     spec = connection.execute(sql(
         "SELECT v.spec FROM workflow_definitions d JOIN workflow_versions v "
         "ON v.id = d.active_version_id WHERE d.project_id = :p AND d.workflow_key = :k"),
