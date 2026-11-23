@@ -6,3 +6,7 @@
 # Format: <test id or test file> | <ticket> | <owner> | <since YYYY-MM-DD> | <why it fails today>
 # Seeded 2026-11-23 from the P0 tier and the listed tests at b73f45b56.
 engine/tests/test_every_template_says_what_it_needs.py::test_every_door_that_starts_a_run_checks_readiness_first | BOSSAPP-1442 | engine | 2026-10-15 | workflow_schedules.run_due starts a run without asking readiness first (product call)
+engine/tests/test_every_template_says_what_it_needs.py::test_every_template_asks_for_its_own_brief | BOSSAPP-1442 | engine | 2026-11-23 | the banking/DQ templates' briefs no longer name their own inputs
+engine/tests/test_every_template_says_what_it_needs.py::test_every_template_has_an_example_that_fits_it | BOSSAPP-1442 | engine | 2026-11-23 | the DQ templates' examples no longer fit their inputs
+engine/tests/test_every_template_says_what_it_needs.py::test_every_need_is_checked_and_comes_with_a_fix | BOSSAPP-1442 | engine | 2026-11-23 | the DQ templates declare needs with no check or fix
+engine/tests/test_every_template_says_what_it_needs.py::test_every_unattended_door_says_why_it_did_not_start | BOSSAPP-1442 | engine | 2026-11-23 | an unattended start door does not record why it did not start

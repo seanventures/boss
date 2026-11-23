@@ -281,3 +281,6 @@ security:
   - apps/api/tests/test_identity_f3_authn_security.py
   - apps/api/tests/test_identity_authz_matrix.py
   - apps/api/tests/test_identity_f2_api_confinement.py
+  # The console asks for step-up exactly where the API does, and mirrors its permissions
+  - apps/web/tests/step-up-only-on-a-press.test.tsx
+  - apps/web/tests/identity-mirroring.test.ts
