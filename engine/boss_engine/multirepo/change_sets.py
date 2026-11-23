@@ -562,7 +562,8 @@ def lane_checks_failing(db: Any, run_id: Optional[str], pr_url: Optional[str] = 
         with db.begin_nested():
             row = db.execute(sql("SELECT finalize_ctx, state, pull_request_url FROM code_task_runs WHERE id = :r"),
                              {"r": run_id}).mappings().first()
-    except Exception:  # noqa: BLE001
+    except Exception as error:  # noqa: BLE001
+        log.warning("change set lane %s: checks not read: %s", run_id, type(error).__name__)
         row = None
     if row is None:
         return None
@@ -716,12 +717,38 @@ def advance(db: Any, settings: Any, jobs: Any, cs_id: str, *, actor: str = "boss
             done.append("pushed")
         cs = _row(db, cs_id)
         touched = [lane for lane in _lanes(db, cs_id) if lane["lane_state"] != "unchanged"]
+        if cs["state"] == "in_review" and cs.get("decision_id") and _asked_green_now_red(db, cs, touched):
+            # A CARD ASKED GREEN WHOSE LANE IS RED NOW (on_decision refuses its approval): re-ask
+            # with the failing checks on the card.
+            _withdraw_decision(db, cs, "checks are failing on a pull request of the set now")
+            _set_state(db, cs_id, "building")
+            cs = _row(db, cs_id)
+            done.append("checks_failing")
         if cs["state"] in ("building", "blocked"):
             last = latest_check(db, cs_id)
             if last and last["head_shas"] == _heads(touched) and last["verdict"] != "pass" and not moved:
                 return done                       # checked these exact commits already: waits for a push
             done.extend(_review_set(db, settings, cs, touched))
     return done
+
+
+def _asked_green_now_red(db: Any, cs: dict[str, Any], touched: list[dict[str, Any]]) -> bool:
+    from ..services import checks_failing as cf
+    from ..services.decision_actions import OPEN_STATUSES
+
+    row = db.execute(sql("SELECT status, recommendation FROM decisions WHERE id = :d"),
+                     {"d": cs["decision_id"]}).mappings().first()
+    if row is None or row["status"] not in OPEN_STATUSES or cf.of_decision(dict(row)) is not None:
+        return False
+    failing = set_checks_failing(db, touched)
+    if not failing:
+        return False
+    red = {x["repository"] for x in failing.get("lanes") or []}
+    for lane in touched:
+        if lane["full_name"] in red and lane.get("ci_state") != "fail":
+            db.execute(sql("UPDATE change_set_prs SET ci_state = 'fail', review_state = 'fail', updated_at = now() "
+                           "WHERE id = :i"), {"i": lane["id"]})
+    return True
 
 
 def _set_body(cs: dict[str, Any], lane: dict[str, Any], touched: list[dict[str, Any]], original: str) -> str:
@@ -901,6 +928,14 @@ def on_decision(db: Any, decision_row: dict[str, Any], *, status: str, actor: st
         heads = _heads(lanes)
         if heads != (rec.get("head_shas") or {}):
             raise MultiRepoError(409, "stale_heads", "New commits arrived after this was asked. BOSS asks again.")
+        from ..services import checks_failing as cf
+
+        if cf.of_decision(decision_row) is None and set_checks_failing(db, lanes):
+            # THE CARD WAS ASKED GREEN, A LANE IS RED NOW: its approval (a person's plain Approve,
+            # or dev autonomy's) is not of what would merge. BOSS asks again (advance) with the
+            # failing checks on the card, where only a person's stated reason merges it.
+            raise MultiRepoError(409, "checks_failing_now", "Checks are failing on a pull request of this "
+                                                            "change now. BOSS asks again with them on the card.")
         db.execute(sql("UPDATE repo_change_sets SET state = 'approved', approved_shas = CAST(:h AS JSONB), "
                        "approved_by = :a, approved_at = now(), updated_at = now() WHERE id = :i"),
                    {"h": jdump(heads), "a": actor, "i": cs_id})

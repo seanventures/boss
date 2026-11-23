@@ -26,6 +26,7 @@ import {
   CHANGE_SET_PLACES, isBlocking, isFixed, isOpenIssue, multirepo, shortName, type ChangeSetView, type DeployPlan,
 } from "../../lib/multirepo";
 import { areaHref } from "../factory/cockpit-util";
+import { checksFailingOf } from "../checks-failing";
 import { actorWords } from "../../lib/actor-words";
 
 type PullRequest = { repository: string; pr_number?: number | null; pr_url?: string | null; head_sha?: string | null;
@@ -63,6 +64,10 @@ export function ChangeSetApproval({ decision, projectId, actorId, pending }: {
   const [plan, setPlan] = useState<DeployPlan | null>(null);
   const [sendingBack, setSendingBack] = useState(false);
   const [note, setNote] = useState("");
+  // CHECKS FAILING ON A PR OF THE SET (engine change_sets.set_checks_failing): the merge is a
+  // person's stated decision, so the approval asks for the reason and is sent forced.
+  const failing = checksFailingOf(rec);
+  const [reason, setReason] = useState("");
 
   useEffect(() => {
     if (!csId) return;
@@ -97,6 +102,13 @@ export function ChangeSetApproval({ decision, projectId, actorId, pending }: {
           <p className="mr-ui-sub" style={{ margin: 0 }} data-testid="mr-approval-lead">
             One decision for all {n} pull {n === 1 ? "request" : "requests"}. They merge together and deploy together, or not at all.
           </p>
+          {failing ? (
+            <p className="mr-ui-sub" data-tone="bad" style={{ margin: "4px 0 0" }} data-testid="mr-approval-checks-failing">
+              <Warning size={12} weight="bold" aria-hidden />{" "}
+              <b>Checks failing{failing.security ? " · security finding open" : ""}:</b>{" "}
+              <span data-user-text>{failing.gates.map((g) => `${g.label}${g.detail ? ` (${g.detail})` : ""}`).join(", ")}</span>
+            </p>
+          ) : null}
         </div>
         <span className="mr-ui-pill" data-tone="warn" title="When BOSS asked">
           <Clock size={11} aria-hidden /> asked <ClientRelativeTime iso={decision.createdAt} empty="" as="span" />
@@ -171,7 +183,20 @@ export function ChangeSetApproval({ decision, projectId, actorId, pending }: {
           <input type="hidden" name="project_id" value={projectId} />
           <input type="hidden" name="actor" value={actorId} />
           {contentHash ? <input type="hidden" name="content_hash" value={contentHash} /> : null}
-          {approve ? (
+          {approve && approve.needs === "note" && sendingBack ? null : approve && approve.needs === "note" ? (
+            <div className="mr-appr-note" data-testid="mr-approval-reason-box">
+              <input type="hidden" name="force" value="true" />
+              <textarea name="note" value={reason} onChange={(e) => setReason(e.target.value)} rows={3} required
+                        aria-label="Why merge with checks failing" data-testid="mr-approval-reason"
+                        placeholder="Why merge with checks failing? Your reason is recorded with the merge." />
+              <div className="mr-ui-row">
+                <SubmitButton permission="decision:approve" className="dq-btn reject" name="action" value="approve"
+                              disabled={!reason.trim()} title={approve.effect || undefined} data-testid="mr-approval-approve">
+                  {approve.label}
+                </SubmitButton>
+              </div>
+            </div>
+          ) : approve ? (
             <SubmitButton permission="decision:approve" className="dq-btn approve" name="action" value="approve"
                           title={approve.effect || undefined} data-testid="mr-approval-approve">
               <Check size={13} weight="bold" aria-hidden /> {approve.label || `Approve and ship all ${n}`}

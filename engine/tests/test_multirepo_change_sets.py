@@ -390,6 +390,72 @@ def test_a_lane_with_checks_failing_is_red_and_autonomy_never_merges_the_set(eng
     assert gh.repos["acme/api"]["pulls"][1]["draft"] is False
 
 
+def test_a_red_set_through_the_decision_service_needs_a_persons_reason(eng, gh, model, builds):
+    """The real paths: dev autonomy's decide() and a person's transition(); never on_decision alone."""
+    from boss_engine.services import autonomy_gate, checks_failing
+    from boss_engine.services.decisions import DecisionService, InvalidDecisionTransitionError
+
+    jobs = Jobs()
+    cs_id, _v = _ready_set_with_red(eng, gh, builds, jobs, {"acme/web"})
+    row = _set_card(eng, cs_id)
+    with eng.begin() as db:
+        org = db.execute(text("SELECT w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+                              "WHERE p.id = :p"), {"p": row["project_id"]}).scalar()
+        for table, scope, key in (("project_members", "project_id", row["project_id"]), ("org_members", "org_id", org)):
+            db.execute(text(f"INSERT INTO {table} (id, {scope}, member_id, display_name, member_type, role_keys, "
+                            "permissions) VALUES (:i, :s, 'ceo', 'ceo', 'human', '[\"ceo\"]'::jsonb, "
+                            "'[\"decision_resolve\"]'::jsonb) ON CONFLICT DO NOTHING"),
+                       {"i": f"m_{key}_ceo", "s": key})
+        out = autonomy_gate.decide(db, get_settings(), row["id"])
+    assert out["decided"] is False and "checks are failing" in out["why"]
+    service = DecisionService(get_settings())
+    with eng.begin() as db, pytest.raises(InvalidDecisionTransitionError):
+        service.transition(db, row["id"], action="approve", actor="ceo", note="looks fine")
+    with eng.begin() as db:
+        service.transition(db, row["id"], action="approve", actor="ceo", force=True,
+                           note="Ship today; the follow-up fixes the finding.")
+        status = db.execute(text("SELECT status FROM decisions WHERE id = :d"), {"d": row["id"]}).scalar()
+        said = db.execute(text("SELECT data FROM events WHERE entity_id = :d AND event_type = :t"),
+                          {"d": row["id"], "t": checks_failing.MERGE_EVENT}).scalar()
+        state = change_sets._row(db, cs_id)["state"]
+    assert status in ("approved", "executed") and state == "approved"
+    said = json.loads(said) if isinstance(said, str) else said
+    assert said["reason"].startswith("Ship today") and said["failing_gates"] == ["security_clean", "tests_pass"]
+
+
+def test_a_set_asked_green_whose_lane_turns_red_is_asked_again(eng, gh, model, builds):
+    from boss_engine.services import checks_failing
+
+    jobs = Jobs()
+    cs_id, _v = _ready_set(eng, gh, builds, jobs)
+    green = _set_card(eng, cs_id)
+    with eng.begin() as db:
+        rid = next(x["code_task_run_id"] for x in change_sets._lanes(db, cs_id) if x["full_name"] == "acme/api")
+        db.execute(text("UPDATE code_task_runs SET finalize_ctx = finalize_ctx || jsonb_build_object('checks_failing', "
+                        "CAST(:r AS JSONB)) WHERE id = :i"),
+                   {"r": json.dumps(checks_failing.collect(["tests_pass"])), "i": rid})
+    with eng.begin() as db, pytest.raises(MultiRepoError) as refused:
+        change_sets.on_decision(db, green, status="approved", actor="ceo", jobs=jobs)
+    assert refused.value.code == "checks_failing_now"
+    _advance(eng, cs_id, jobs)
+    with eng.begin() as db:
+        old = db.execute(text("SELECT status FROM decisions WHERE id = :d"), {"d": green["id"]}).scalar()
+    again = _set_card(eng, cs_id)
+    assert old == "withdrawn" and again["id"] != green["id"]
+    assert [g["gate"] for g in again["recommendation"]["checks_failing"]["gates"]] == ["tests_pass"]
+
+
+def test_a_draft_github_will_not_make_ready_merges_nothing(eng, gh, model, builds, monkeypatch):
+    jobs = Jobs()
+    cs_id, _v = _ready_set_with_red(eng, gh, builds, jobs, {"acme/web"})
+    _approve(eng, cs_id, jobs)
+    monkeypatch.setattr(github.Repo, "mark_ready", lambda self, pull: False)
+    with eng.begin() as db:
+        out = merge.merge_set(db, get_settings(), cs_id)
+    assert out["status"] == "failed" and out["failed"] == "acme/web"
+    assert not [p for m, p in gh.calls if m == "PUT" and p.endswith("/merge")]     # never half-merged
+
+
 def test_a_green_set_card_carries_no_checks_failing_and_autonomy_acts(eng, gh, model, builds):
     from boss_engine.services import autonomy_gate
 
