@@ -16687,3 +16687,55 @@ DO $$ BEGIN
 END $$;
 CREATE INDEX IF NOT EXISTS idx_validation_reruns_change
   ON validation_reruns (project_id, change_number, created_at);
+
+-- DEV AUTONOMY (BOSSAPP-1441): one answer to "is this production?" (services/production.py) and
+-- one policy for when agents act without asking (services/autonomy_policy.py).
+--
+-- A deployment target's tier, set by a person in Infra › Deploys: dev | staging | prod. NULL means
+-- nobody said; the resolver then reads the environment's name, then whether the target runs on
+-- this machine, and treats anything else (an unlabelled remote server) as production.
+ALTER TABLE deployment_targets ADD COLUMN IF NOT EXISTS tier TEXT;
+DO $$ BEGIN
+  ALTER TABLE deployment_targets DROP CONSTRAINT IF EXISTS deployment_targets_tier_check;
+  ALTER TABLE deployment_targets ADD CONSTRAINT deployment_targets_tier_check
+    CHECK (tier IS NULL OR tier IN ('dev', 'staging', 'prod'));
+END $$;
+-- Backfilled ONCE from the names BOSS already read as production (identity's rule) and the
+-- incident squad's non-production list; a name neither knows stays NULL (the resolver decides).
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM schema_once WHERE key = 'deployment_targets_tier_backfill') THEN
+    UPDATE deployment_targets SET tier = CASE
+        WHEN lower(environment) IN ('production', 'prod', 'prd', 'live')
+          OR lower(environment) LIKE 'production%' OR lower(environment) LIKE 'prod-%'
+          OR lower(environment) LIKE 'prod\_%' OR lower(environment) LIKE 'live-%' THEN 'prod'
+        WHEN lower(environment) IN ('staging', 'stage', 'stg', 'preview', 'qa', 'test', 'testing')
+          THEN 'staging'
+        WHEN lower(environment) IN ('dev', 'development', 'local', 'localhost', 'sandbox', 'ci')
+          THEN 'dev'
+        ELSE NULL END
+      WHERE tier IS NULL;
+    INSERT INTO schema_once (key) VALUES ('deployment_targets_tier_backfill')
+      ON CONFLICT (key) DO NOTHING;
+  END IF;
+END $$;
+
+-- Where a repository's DEFAULT branch ships: a deployment target id, 'none' (it ships nowhere),
+-- or NULL (nobody said — a merge into it is treated as a production release and asks).
+ALTER TABLE github_repository_bindings ADD COLUMN IF NOT EXISTS default_branch_ships_to TEXT;
+
+-- The autonomy policy: one org default (scope_kind 'org') and an optional per-project row that may
+-- only be stricter. {dev: act|act_capped|ask, prod: ask, unknown_remote: prod,
+-- dev_topup_usd: {per_item, per_day}, explicit_stops: honour}. No row: the built-in default
+-- (dev: act, prod: ask), the operator's standing word.
+CREATE TABLE IF NOT EXISTS autonomy_policies (
+  scope_kind TEXT NOT NULL CHECK (scope_kind IN ('org', 'project')),
+  scope_id TEXT NOT NULL,
+  policy JSONB NOT NULL,
+  set_by TEXT NOT NULL,
+  set_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (scope_kind, scope_id)
+);
+-- Dev autonomy decides only cards written from here on (or stamped by the sink): a card pending
+-- before this install had none of the markers a person's stop is written with.
+INSERT INTO schema_once (key) VALUES ('dev_autonomy_started') ON CONFLICT (key) DO NOTHING;

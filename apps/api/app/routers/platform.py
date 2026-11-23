@@ -490,6 +490,11 @@ def mount_platform_routers(app: FastAPI) -> None:
 
     app.include_router(decide_list_router)
 
+    # Dev autonomy (BOSSAPP-1441): the policy, the production resolver, "decided for you".
+    from .autonomy import router as autonomy_router
+
+    app.include_router(autonomy_router)
+
     try:
         from .factory_flow import router as factory_flow_router
 

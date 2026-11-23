@@ -251,6 +251,13 @@ def refuse_policy_approval(row: Mapping[str, Any], *, system_policy: bool, actor
             rec = {}
     if (rec or {}).get("action") not in PERSON_ACTIONS:
         return
+    from .autonomy_gate import permits
+
+    if permits(row, actor):
+        # DEV AUTONOMY (BOSSAPP-1441): on a DEVELOPMENT install (production.resolve_install) a
+        # self-fix installs with automatic rollback on a failed health check; a production
+        # install still asks a person (the route says ask there, so this never passes).
+        return
     if system_policy or actor in (sf.SYSTEM_ACTOR, "system", sf.ACTOR_AGENT) \
             or str(actor).startswith(("agt_", "sys_")):
         raise InstallRefused("A person approves every BOSS self-fix install and removal; no "

@@ -9,6 +9,8 @@ onboarding agent's "only you can do this" items.
 """
 from __future__ import annotations
 
+from ..production import is_production_environment
+
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping, Optional
 
@@ -27,7 +29,6 @@ from .common import (LIVE_RUN, web_url, STAGE_LABELS, STAGES, STATUS_LABELS, age
 from .health import environments as health_environments
 from .health import worst
 
-PRODUCTION = ("production", "prod")
 
 
 # ── the journey ─────────────────────────────────────────────────────────────────────────────
@@ -124,7 +125,7 @@ def journey_subs(connection: Connection, project: Mapping[str, Any], items: list
     people = [n for n in waiting if n.get("work_id") and not str(n.get("id", "")).startswith("onb:")]
 
     def newest(prod: bool) -> Optional[datetime]:
-        at = [e.get("deployed_at") for e in envs if (str(e["key"]).lower() in PRODUCTION) == prod
+        at = [e.get("deployed_at") for e in envs if (is_production_environment(e["key"])) == prod
               and e.get("deployed_at")]
         if not at:
             return None
@@ -318,7 +319,7 @@ def tiles(project_id: str, items: list[dict[str, Any]], envs: list[dict[str, Any
                    "polishing": polishing(w),
                    "agent": (w.get("agents") or [None])[0], "href": w["href"]}
     staging = next((e for e in envs if str(e["key"]).lower() in ("staging", "stage")), None) or \
-        next((e for e in envs if str(e["key"]).lower() not in PRODUCTION), None)
+        next((e for e in envs if not is_production_environment(e["key"])), None)
     return {
         "open_work": {"count": open_count, "by_state": by_state,
                       "href": project_href(project_id, tab="work")},
@@ -485,9 +486,9 @@ def week(connection: Connection, project_id: str, now: datetime, limit: int = 6
 
 def _facts(connection: Connection, project_id: str, items: list[dict[str, Any]],
            envs: list[dict[str, Any]], onboarding: Mapping[str, Any]) -> dict[str, Any]:
-    healthy_non_prod = any(str(e["key"]).lower() not in PRODUCTION and e.get("deployed_at")
+    healthy_non_prod = any(not is_production_environment(e["key"]) and e.get("deployed_at")
                            for e in envs)
-    healthy_prod = any(str(e["key"]).lower() in PRODUCTION and e.get("deployed_at") for e in envs)
+    healthy_prod = any(is_production_environment(e["key"]) and e.get("deployed_at") for e in envs)
     has_recs = bool(connection.execute(text(
         "SELECT 1 FROM ambient_recommendations WHERE project_id = :p LIMIT 1"),
         {"p": project_id}).first())
@@ -817,9 +818,9 @@ def summary(connection: Connection, project_ids: Iterable[str], *,
         # Working pill and its "N building" line read the same pieces of work.
         live = int((moving_now.get(pid) or {}).get("count") or 0)
         worked = int(run.get("total") or 0) + int(build.get("total") or 0) > 0
-        non_prod = any(t["deployed"] and str(t["environment"]).lower() not in PRODUCTION
+        non_prod = any(t["deployed"] and not is_production_environment(t["environment"])
                        for t in tgs)
-        prod = any(t["deployed"] and str(t["environment"]).lower() in PRODUCTION for t in tgs)
+        prod = any(t["deployed"] and is_production_environment(t["environment"]) for t in tgs)
         got = reached(onboarded=onb.get("state") in ("ready", "needs_you") or worked,
                       backlog=bool(onb.get("backlog")) or pid in recs or worked, worked=worked,
                       staging=non_prod, production=prod,
@@ -834,7 +835,7 @@ def summary(connection: Connection, project_ids: Iterable[str], *,
                                        for t in tgs if t["deployed"] and str(t["id"]) in states])
         ordered = sorted(tgs, key=lambda t: (str(t["environment"]).lower() not in ("staging",
                                                                                   "stage"),
-                                             str(t["environment"]).lower() in PRODUCTION))
+                                             is_production_environment(t["environment"])))
         url = web_url(next((t["open_url"] or t["public_url"] or ((t["domains"] or [None])[0]
                                                                  if isinstance(t["domains"], list)
                                                                  else None)

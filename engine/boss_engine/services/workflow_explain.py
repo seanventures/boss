@@ -216,7 +216,8 @@ def explain_version(
             from .deploy_policy import step_answer
 
             deploy = step_answer(connection, project_id, step)
-        by_policy = bool(deploy and deploy["who"] == "policy")
+        # Dev autonomy's agent answers a deploy to a development target (BOSSAPP-1441).
+        by_policy = bool(deploy and deploy["who"] in ("policy", "agent"))
         if (effective == "manual" or spec_of.get("is_gate")) and not by_panel and not by_policy:
             gates += 1
 

@@ -15,7 +15,8 @@ def test_known_writer_block_stops_before_launch(monkeypatch):
     })
     with pytest.raises(harness_failures.HarnessFailure, match="engine_write_unavailable") as refused:
         agent._codex_argv(read_only=False, model=None, resume=None, final_path="/tmp/result")
-    assert "Re-check on Codex in Setup › Models" in refused.value.verdict.fix
+    # BOSS re-checks the engine itself before refusing (dev autonomy, BOSSAPP-1441).
+    assert "BOSS re-checked Codex itself" in refused.value.verdict.fix
     with pytest.raises(harness_failures.HarnessFailure):
         agent._codex_argv(read_only=True, by_copy=True, model=None,
                           resume="session", final_path="/tmp/result")

@@ -702,7 +702,7 @@ def is_production(environment: Any) -> bool:
     """Is this environment a production one: the same answer the identity layer gives
     (object_rules.is_production_environment). Callers pass the TARGET's own environment, not the
     name a step or a caller typed."""
-    from ..identity.object_rules import is_production_environment
+    from .production import is_production_environment
 
     return is_production_environment(environment)
 

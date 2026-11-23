@@ -43,6 +43,8 @@ Use a new directory named `boss-rc10.33`. The command stops if the clone fails, 
 
 `boss upgrade` writes a backup (database, keys, artifacts, and the local repositories volume that holds unpublished local projects' code), then moves to a later release. `boss upgrade --to REF` picks the release. `boss uninstall` stops BOSS and keeps the data. Ports, flags, and recovery are in the [installer guide](scripts/install/README.md).
 
+Upgrade note: BOSS acts on its own approval cards in development and asks you in production. The installer writes `BOSS_INSTALL_TIER` (`dev` on a Mac with no public `--console-origin`, `prod` on a server or a `remote.sh` host); a Linux laptop or a dev VM passes `--install-tier dev`.
+
 The copy at [boss.sean.network/install.sh](https://boss.sean.network/install.sh) is published separately. This page does not treat it as v1.0-rc10.33. The manual in this repository is the source. The [hosted docs](https://boss.sean.network/docs/) are published separately too.
 
 The installer targets Ubuntu 22.04/24.04 and Debian 12/13, and it can set up Docker. Before this tag was published it was installed from these instructions, word for word, on an Ubuntu 24.04 x86_64 host, claimed, and walked through Setup, a sample project and the model screen; a template build ran from Easy Mode to its pull request on a second install with a model connected. Read the [release notes](docs/community/RELEASE_NOTES_v1.0-rc10.33.md) and the [RC9 validation record](docs/community/RC9_VALIDATION.md) before you rely on a path.

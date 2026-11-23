@@ -86,6 +86,8 @@ def person_reject_note(note: Optional[str]) -> Optional[str]:
 #: The actor recorded when a policy, not a person, resolves a gate. Deliberately not a member
 #: of any org: it must be impossible to sign in as, and obvious in an audit trail.
 SYSTEM_ACTOR = "auto_approval"
+#: The policy actors a `system_policy` approval may name besides SYSTEM_ACTOR.
+POLICY_ACTOR_PREFIXES = ("autonomy:",)
 
 
 class DecisionService:
@@ -603,7 +605,10 @@ class DecisionService:
             if separated:
                 raise InvalidDecisionTransitionError(separated)
         identity_ctx = None if system_policy else _identity_decides(connection, row)
-        if system_policy and action == "approve" and actor == SYSTEM_ACTOR:
+        if system_policy and action == "approve" and (
+                actor == SYSTEM_ACTOR or str(actor).startswith(POLICY_ACTOR_PREFIXES)):
+            # A setting answering, named for what it is: SYSTEM_ACTOR, the Full auto policy
+            # (`autonomy:full_auto`), or dev autonomy (`autonomy:dev:<agent>`, BOSSAPP-1441).
             pass
         elif identity_ctx is not None:
             # IDENTITY §6.13: the route's/tool's declaration already checked the permission; the
@@ -822,7 +827,10 @@ class DecisionService:
                 from .change_recheck import fix_refusal, may_start_fix
                 from .run_decisions import _withdraw_with_note
 
-                if not may_start_fix(connection, str(row["project_id"]), actor):
+                from .autonomy_gate import permits as _autonomy_permits
+
+                if not may_start_fix(connection, str(row["project_id"]), actor) \
+                        and not _autonomy_permits(row, actor):
                     raise InvalidDecisionTransitionError(
                         "Starting the fix is a person's call: it needs a person with the Steer "
                         "builds permission (code_task:steer) on this project, never an agent or "
@@ -1375,9 +1383,11 @@ class DecisionService:
         elif action == "start_recheck_followup":
             # FIX THESE (change_recheck, #168 review R1): a re-check never starts a build on its
             # own; a person with the steer permission starts the follow-up here.
+            from .autonomy_gate import permits as _autonomy_permits
             from .change_recheck import fix_refusal, may_start_fix, start_fix
 
-            if not may_start_fix(connection, str(row["project_id"]), actor):
+            if not may_start_fix(connection, str(row["project_id"]), actor) \
+                    and not _autonomy_permits(row, actor):
                 raise InvalidDecisionTransitionError(
                     "Starting the fix is a person's call: it needs a person with the Steer "
                     "builds permission (code_task:steer) on this project, never an agent or a "
@@ -3162,11 +3172,12 @@ def approve_by_policy(connection: Connection, decision_id: str, *, project_id: s
         {"id": decision_id, "p": project_id}).mappings().first()
     if row is None or row["status"] != "pending":
         return False
-    if row.get("action") in ("review_architecture", "self_fix.install", "self_fix.remove",
-                             "activate_authored_skill", "apply_agent_prompt_diff"):
-        # An architecture, a BOSS self-fix, and an agent-drafted skill are approved by a person,
-        # never by a setting. Policy approval would mark the card approved and skip the
-        # follow-on, so the skill would stay unusable and nobody could approve it again.
+    from . import autonomy_gate
+
+    if row.get("action") in autonomy_gate.SETTING_NEVER_APPROVES:
+        # An architecture, a BOSS self-fix, an agent-drafted skill, an agent's prompt and a new
+        # hire are approved by a person, never by a setting: ONE list (autonomy_gate), which dev
+        # autonomy's own person-only actions are part of, so the two cannot diverge.
         return False
     tier = int(row["risk_tier"] or 0)
     if _approvals.seats_for_tier(tier) or tier in _approvals.TWO_PERSON_TIERS:
@@ -3180,11 +3191,26 @@ def approve_by_policy(connection: Connection, decision_id: str, *, project_id: s
         ci_gate.refuse_approval(connection, dict(full), actor, system_policy=True)
     except ci_gate.CiGateRefused:
         return False
-    done = connection.execute(text(
-        "UPDATE decisions SET status = 'approved', approved_by = :actor, approved_at = now(), "
-        "resolution_note = :note WHERE id = :id AND project_id = :p AND status = 'pending' "
-        "RETURNING id"), {"id": decision_id, "p": project_id, "actor": actor, "note": note}).first()
-    return done is not None
+    # NEVER PRODUCTION, A CREDENTIAL OR SPEND PAST THE BUDGET (BOSSAPP-1441): the same route dev
+    # autonomy takes decides whether a setting may answer this card at all.
+    if not autonomy_gate.route(connection, dict(full)).acts:
+        return False
+    # THE SAME FOLLOW-ON A PERSON'S APPROVAL RUNS (BOSSAPP-1441). This used to UPDATE the
+    # status and stop, so an auto-approved card was marked approved and nothing was carried out.
+    if not str(actor).startswith(POLICY_ACTOR_PREFIXES):
+        actor = f"autonomy:{actor}"
+    from ..config import get_settings
+
+    point = connection.begin_nested()
+    try:
+        DecisionService(get_settings()).transition(
+            connection, decision_id, action="approve", actor=actor, note=note,
+            system_policy=True)
+    except Exception:  # noqa: BLE001 — a refused or failed follow-on leaves the card pending
+        point.rollback()
+        return False
+    point.commit()
+    return True
 
 
 def _delegate_words(delegated: Any) -> dict:

@@ -496,6 +496,9 @@ services:
       # be able to check it. The public origin binds cookies, passkeys and every emailed link.
       BOSS_CONSOLE_PASSWORD: ${BOSS_CONSOLE_PASSWORD:-}
       BOSS_PUBLIC_URL: ${BOSS_PUBLIC_URL:-${BOSS_CONSOLE_PUBLIC_ORIGIN:-}}
+      # DEV AUTONOMY (BOSSAPP-1441): dev | prod, written by the installer. Unset, BOSS reads its
+      # public URL: only one on this machine is development (services/production.py).
+      BOSS_INSTALL_TIER: ${BOSS_INSTALL_TIER:-}
       BOSS_MONITORING_PROMETHEUS_URL: ${BOSS_MONITORING_PROMETHEUS_URL:-}
       BOSS_MONITORING_GRAFANA_URL: ${BOSS_MONITORING_GRAFANA_URL:-}
       BOSS_MONITORING_GRAFANA_PUBLIC_URL: ${BOSS_MONITORING_GRAFANA_PUBLIC_URL:-}
@@ -942,6 +945,9 @@ services:
       BOSS_MASTER_KEY_FILE: ${BOSS_MASTER_KEY_FILE:-/var/lib/boss/identity/master.key}
       BOSS_IDENTITY_SERVER_KEY: ${BOSS_IDENTITY_SERVER_KEY:-}
       BOSS_PUBLIC_URL: ${BOSS_PUBLIC_URL:-${BOSS_CONSOLE_PUBLIC_ORIGIN:-}}
+      # DEV AUTONOMY (BOSSAPP-1441): dev | prod, written by the installer. Unset, BOSS reads its
+      # public URL: only one on this machine is development (services/production.py).
+      BOSS_INSTALL_TIER: ${BOSS_INSTALL_TIER:-}
       BOSS_MONITORING_PROMETHEUS_URL: ${BOSS_MONITORING_PROMETHEUS_URL:-}
       BOSS_MONITORING_GRAFANA_URL: ${BOSS_MONITORING_GRAFANA_URL:-}
       BOSS_MONITORING_GRAFANA_PUBLIC_URL: ${BOSS_MONITORING_GRAFANA_PUBLIC_URL:-}

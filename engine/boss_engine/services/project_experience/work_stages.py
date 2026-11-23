@@ -86,7 +86,9 @@ def _to_production(spec_step: Mapping[str, Any], got: Optional[Mapping[str, Any]
         env = str(((got.get("stack_deploy") or {}) if isinstance(got.get("stack_deploy"), dict)
                    else {}).get("environment") or "").lower()
     if env:
-        return env in ("production", "prod", "live")
+        from ..production import is_production_environment
+
+        return is_production_environment(env)
     sid = str(spec_step.get("id") or "").lower()
     return any(w in sid.replace("-", "_").split("_") for w in _PROD_WORDS)
 

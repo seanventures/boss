@@ -12,6 +12,7 @@ import httpx
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from . import production as _production
 from ..config import Settings
 from .budget import BudgetGovernor, budget_period
 from .core import (
@@ -2706,7 +2707,7 @@ class ResourcePlaneService:
                 **(operation.get("desired_state") or {}),
                 "surface_ownership": ownership_guard,
             }
-            risk_tier = 3 if target["environment"] == "production" else 2
+            risk_tier = _production.risk_tier_for(target=target)
             changeset = self.create_changeset(
                 connection,
                 project_id=project_id,
@@ -2722,7 +2723,7 @@ class ResourcePlaneService:
                 rollback_plan=rollback_plan,
                 risk_tier=risk_tier,
                 approval_required=(
-                    target["environment"] in {"staging", "production"}
+                    _production.environment_tier(target["environment"]) in ("staging", "prod")
                     or bool(
                         rollout_policy
                         and rollout_policy.get("requires_approval", True)
@@ -2883,7 +2884,7 @@ class ResourcePlaneService:
                     "health_check_results": results,
                 },
                 "deployment_health_failed",
-                risk_tier=3 if deployment_run["environment"] == "production" else 2,
+                risk_tier=_production.risk_tier_for(target=target),
             )
 
         connection.execute(
@@ -4321,7 +4322,7 @@ class ResourcePlaneService:
         for row in resources:
             resource = self._serialize_external_resource(row)
             operation = self._cleanup_operation_for_resource(resource)
-            if resource["environment"] == "production":
+            if _production.resolve_environment(resource["environment"]).prod:
                 skipped.append(
                     {
                         "external_resource_id": resource["id"],
@@ -5208,7 +5209,7 @@ class ResourcePlaneService:
             "requires_change_set": True,
             "requires_budget_reservation": True,
             "requires_approval": True,
-            "requires_health_check": environment == "production",
+            "requires_health_check": _production.is_production_environment(environment),
             "requires_rollback_plan": True,
             "rollout_notes": None,
             "status": "missing",
@@ -5231,14 +5232,14 @@ class ResourcePlaneService:
             return "missing_active_environment_policy"
         if mode in {"disabled", "metadata_only"}:
             return f"environment_{environment}_not_enabled_for_provider_rollout"
-        if environment == "production" and mode != "production_allowed":
+        if _production.is_production_environment(environment) and mode != "production_allowed":
             return "production_rollout_requires_production_allowed_policy"
         if environment == "staging" and mode not in {
             "staging_allowed",
             "production_allowed",
         }:
             return "staging_rollout_requires_staging_allowed_policy"
-        if environment not in {"staging", "production"} and mode not in {
+        if _production.environment_tier(environment) not in ("staging", "prod") and mode not in {
             "preview_allowed",
             "staging_allowed",
             "production_allowed",
@@ -5282,7 +5283,7 @@ class ResourcePlaneService:
             recommendation,
             evidence,
             reason_code,
-            risk_tier=3 if target["environment"] == "production" else 2,
+            risk_tier=_production.risk_tier_for(target=target),
         )
         emit_event(
             connection,
@@ -5415,9 +5416,9 @@ class ResourcePlaneService:
             "action": skill_id,
             "resource_type": resource_type,
             "resource_ref": target["target_ref"],
-            "risk_tier": 3 if target["environment"] == "production" else 2,
+            "risk_tier": _production.risk_tier_for(target=target),
             "destructive": False,
-            "production_affecting": target["environment"] == "production",
+            "production_affecting": _production.production_affecting(target=target),
             "desired_state": {
                 "deployment_target_id": target["id"],
                 "target_kind": target["target_kind"],
