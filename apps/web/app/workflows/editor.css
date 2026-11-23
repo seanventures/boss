@@ -55,10 +55,10 @@
 
 /* ── Top bar ── */
 /* Two groups: who this is (Library, name, chips, the unsaved dot) and what you can do (undo
-   through ⋯). ONE ROW: the name gives way first (cut with an ellipsis, the whole name is its
-   tooltip), then the copy chip; the actions never move. Only a bar under 1100px (measured on the
-   bar, a container query, not the window) wraps, and then by group: the actions go to their own
-   line, aligned right, as one block. On a phone the actions split once more, Check · Start ·
+   through ⋯). ONE ROW while the whole name fits; when it does not, the bar wraps by group: the
+   actions go to their own line, aligned right, as one block (never under the identity). Only a
+   line too narrow for the identity itself cuts the name (ellipsis, the whole name is its tooltip)
+   and wraps its chips under it. On a phone the actions split once more, Check · Start ·
    Save · ⋯ staying together, so ⋯ is never left alone on a line. */
 .wf-topbar {
   position: sticky; top: 0; z-index: 10;
