@@ -206,7 +206,7 @@ export function decisionInboxHref(options: {
   return `/?${params.toString()}`;
 }
 
-function mapDecision(payload: ApiDecisionCard): DecisionFeedItem {
+export function mapDecision(payload: ApiDecisionCard): DecisionFeedItem {
   return {
     id: payload.id,
     taskId: payload.task_id,

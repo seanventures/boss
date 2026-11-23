@@ -285,9 +285,10 @@ export function Overrides({ p }: { p: ReviewPacket }) {
 }
 
 /** Where the packet came from: run, build, change, ruleset, facts (wireframe C's last line). */
-function Provenance({ p, links }: { p: ReviewPacket; links: ReturnType<typeof packetLinks> }) {
+function Provenance({ p, links, head = "" }: { p: ReviewPacket; links: ReturnType<typeof packetLinks>; head?: string }) {
   return (
     <div className="vr-prov" data-testid="vr-provenance">
+      {head ? <span className="vr-mono" data-testid="vr-prov-head">head {shortSha(head)}</span> : null}
       {links.run ? <a href={links.run} data-testid="vr-prov-run"><ArrowSquareOut size={11} aria-hidden /> Run{p.work.run_no != null ? ` #${p.work.run_no}` : ""}</a> : null}
       {links.build ? <a href={links.build} data-testid="vr-prov-build"><ArrowSquareOut size={11} aria-hidden /> Build {shortId(p.work.build)}</a> : null}
       {links.change ? <a href={links.change} data-testid="vr-prov-change"><ArrowSquareOut size={11} aria-hidden /> Change #{p.work.change}</a> : null}
@@ -298,8 +299,11 @@ function Provenance({ p, links }: { p: ReviewPacket; links: ReturnType<typeof pa
   );
 }
 
-export function ReviewPacketView({ packet: p, projectId, fallbackTitle = "", eyebrow = "Control plane proposes · merge", actions, testid = "review-packet", compact = false, failing = "" }: {
+export function ReviewPacketView({ packet: p, projectId, fallbackTitle = "", eyebrow = "Control plane proposes · merge", actions, testid = "review-packet", compact = false, failing = "", bare = false }: {
   packet: ReviewPacket; projectId: string; fallbackTitle?: string; eyebrow?: string; actions?: React.ReactNode; testid?: string;
+  /** INSIDE A DECISION CARD'S DETAILS (approvals wireframe B): the card's own line 1 is the title,
+   *  so no eyebrow and no second title; the head commit joins the provenance line. */
+  bare?: boolean;
   /** The failing gates of the card's pull request, in words (failingGateLabels): the verdict
    *  then reads "Checks failing", never "Ready" beside a Checks failing block. */
   failing?: string;
@@ -311,13 +315,17 @@ export function ReviewPacketView({ packet: p, projectId, fallbackTitle = "", eye
   if (compact) {
     const checks = links.change ? <a className="vr-checks-link" href={`${links.change}?tab=checks`} data-testid="vr-checks-link">Checks ›</a> : null;
     return (
-      <section className="vr vr-card vr-packet" data-compact="" data-testid={testid} data-verdict={p.verdict.state} aria-label="Review packet">
-        <div className="vr-row"><span className="vr-mono vr-dim vr-small">{eyebrow}</span><span className="vr-grow" />
-          {p.head_sha ? <span className="vr-mono vr-dim vr-small">head {shortSha(p.head_sha)}</span> : null}</div>
-        <h2 data-testid={`${testid}-title`}>{packetTitle(p, fallbackTitle)}</h2>
+      <section className="vr vr-card vr-packet" data-compact="" data-bare={bare || undefined} data-testid={testid} data-verdict={p.verdict.state} aria-label="Review packet">
+        {bare ? null : (
+          <>
+            <div className="vr-row"><span className="vr-mono vr-dim vr-small">{eyebrow}</span><span className="vr-grow" />
+              {p.head_sha ? <span className="vr-mono vr-dim vr-small">head {shortSha(p.head_sha)}</span> : null}</div>
+            <h2 data-testid={`${testid}-title`}>{packetTitle(p, fallbackTitle)}</h2>
+          </>
+        )}
         <Verdict p={p} link={checks} failing={failing} />
         {p.verdict.state === "invalid" ? <InvalidProblems p={p} /> : <SevBar p={p} />}
-        <Provenance p={p} links={links} />
+        <Provenance p={p} links={links} head={bare ? p.head_sha : ""} />
         {actions}
       </section>
     );

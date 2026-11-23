@@ -193,8 +193,10 @@ describe("BOSS mission-control design system", () => {
     const inbox = readFileSync(resolve(__dirname, "../app/decision-inbox-ui.tsx"), "utf8");
     const forms = readFileSync(resolve(__dirname, "../app/client-forms.tsx"), "utf8");
     expect(page).toContain("<DecisionInbox");
-    expect(inbox).toContain('className="dq-row"');
-    expect(inbox).toContain('className="dq-who"');
+    // Three plain lines per card (approvals wireframe B): the proposer and impact moved behind
+    // Details ("proposed by …" beside the impact word); the card itself is still a .dq-row.
+    expect(inbox).toContain('className={`dq-row dq-card');
+    expect(inbox).toContain('proposed by {who}');
     expect(inbox).toContain('className={`dq-impact ${impact.tone}`}');
     expect(inbox).toContain('className="dq-evidence"');
     expect(inbox).toContain("DecisionResolveForm");

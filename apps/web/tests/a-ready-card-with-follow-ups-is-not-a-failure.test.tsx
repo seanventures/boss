@@ -83,8 +83,15 @@ function mount(item: DecisionFeedItem) {
 describe("a merge card whose only open items are follow-ups", () => {
   it("is a normal ready card: no failing banner, no reason box, one-press merge", () => {
     const row = mount(card());
-    expect(row.querySelector(".dq-title")!.textContent)
-      .toBe("Recipe box is ready — 2 follow-ups queued, BOSS is fixing them (change #1)");
+    // Line 1 says the action; line 2 is green and names the follow-ups (approvals wireframe B).
+    expect(row.querySelector(".dq-title")!.textContent).toBe("Merge change #1");
+    const status = row.querySelector('[data-testid="decision-status"]')!;
+    expect(status.className).toContain("ok");
+    expect(status.textContent).toContain("✓ Ready");
+    expect(status.textContent).toContain("2 follow-ups for later");
+    // The engine's question is kept word for word, behind Details.
+    expect(row.querySelector('[data-testid="decision-question"]')!.textContent)
+      .toBe("Asked: Recipe box is ready — 2 follow-ups queued, BOSS is fixing them (change #1)");
     expect(row.querySelector('[data-testid="decision-checks-failing"]')).toBeNull();
     expect(row.querySelector('[data-testid="decision-reasoned-approve"]')).toBeNull();
     expect(row.querySelector('input[name="force"]')).toBeNull();

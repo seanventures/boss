@@ -61,7 +61,7 @@ describe("one set for the page, the rail and the bell", () => {
     expect(approvalCountsOf(3, null, "x")).toEqual({ here: 3, elsewhere: 0, total: 3 });
   });
 
-  it("the Approvals tabs show the rail's +8 beside their own 0", () => {
+  it("the Approvals page shows its own 0 and the rail's 8 as one Also-waiting line", () => {
     const markup = renderToStaticMarkup(
       <DecisionInbox feed={{ projectId: "boss-dogfood", apiReachable: true, items: [] }}
                      tasks={[]} roles={[]} projectId="boss-dogfood" actorId="ceo" orgId="org_1" />,
@@ -70,13 +70,11 @@ describe("one set for the page, the rail and the bell", () => {
       const m = markup.match(new RegExp(`data-testid="decision-filter-${name}"[^>]*>(.*?)</button>`));
       return m ? m[1] : "";
     };
-    for (const name of ["needs-action", "all"]) {
-      expect(tab(name)).toContain('<span class="dq-filter-count">0</span>');
-      expect(tab(name)).toContain('data-testid="decision-filter-elsewhere"');
-      expect(tab(name)).toContain(">+8</span>");
-      expect(tab(name)).toContain('title="8 in other projects"');
-    }
-    expect(markup).toContain("8 waiting in other projects");
+    expect(tab("needs-action")).toContain('<span class="dq-filter-count">0</span>');
+    expect(tab("needs-action")).not.toContain("+8");
+    expect(markup).toContain('data-testid="decision-inbox-elsewhere"');
+    expect(markup).toContain("Also waiting:");
+    expect(markup).toMatch(/>8 in \d+ other projects? ›</);
   });
 
   it("the shell feeds the bell, the badge and the title from the shared counts", () => {

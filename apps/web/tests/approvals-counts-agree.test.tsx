@@ -53,25 +53,28 @@ describe("waiting in other projects", () => {
     expect(waitingElsewhere(SUMMARY, "hello-world").total).toBe(2);
     expect(waitingElsewhere(null, "x").total).toBe(0);
 
+    // One line under the tabs (approvals wireframe B); the list by name opens from it.
     const markup = renderToStaticMarkup(<WaitingElsewhere waiting={w} />);
-    expect(markup).toContain("4 waiting in other projects:");
-    expect(markup).toContain("Hello World (2)");
-    expect(markup).toContain("A tiny to-do (2)");
+    expect(markup).toContain("Also waiting:");
+    expect(markup).toContain("4 in 2 other projects");
+    expect(markup).not.toContain("Hello World");
     expect(renderToStaticMarkup(<WaitingElsewhere waiting={{ total: 0, projects: [] }} />)).toBe("");
   });
 
-  it("the page shows the pointer, and All never counts fewer than Needs action", () => {
+  it("the page shows the pointer as one line, and Needs you counts what waits here", () => {
     const markup = renderToStaticMarkup(
       <DecisionInbox feed={{ projectId: "boss-dogfood", apiReachable: true, items: [] }}
                      tasks={[]} roles={[]} projectId="boss-dogfood" actorId="ceo" orgId="org_1" />,
     );
     expect(markup).toContain('data-testid="decision-inbox-elsewhere"');
-    expect(markup).toContain("4 waiting in other projects");
+    expect(markup).toContain("4 in 2 other projects");
     const count = (tab: string) => {
       const m = markup.match(new RegExp(`data-testid="decision-filter-${tab}"[^>]*>[^<]*<span class="dq-filter-count">(\\d+)</span>`));
       return m ? Number(m[1]) : NaN;
     };
     expect(count("needs-action")).toBe(2);
-    expect(count("all")).toBe(2);
+    // No All tab (it mixed the three), and no "+N" inside a tab: it is the line below.
+    expect(markup).not.toContain('data-testid="decision-filter-all"');
+    expect(markup).not.toContain('data-testid="decision-filter-elsewhere"');
   });
 });
