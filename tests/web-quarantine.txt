@@ -13,14 +13,11 @@ tests/connection-section.test.tsx | BOSSAPP-944 | a stored secret is not shown a
 tests/datetime-hydration.test.ts | BOSSAPP-944 | a client island formats dates without the UTC helpers or a pinned locale
 tests/every-button-class-is-styled.test.ts | BOSSAPP-944 | a <button className> names a class no stylesheet defines
 tests/every-call-action-button-is-pre-greyed.test.ts | BOSSAPP-944 | a pressed call's permission is not gated in the same file
-tests/every-client-fetch-has-a-route.test.ts | BOSSAPP-944 | a client /api/* call has no handler under app/api
 tests/every-control-mirrors-the-permission-the-api-checks.test.ts | BOSSAPP-944 | an action posting a literal /v1 path declares a permission that route does not check
-tests/every-idea-has-a-drawing.test.ts | BOSSAPP-944 | catalogue ideas are left with the plain cover / without a labelled 320x180 drawing
 tests/every-write-is-pre-greyed.test.ts | BOSSAPP-944 | a browser file that writes is not accounted for, or does not gate its permission
 tests/identity-contract.test.ts | BOSSAPP-944 | the generated permission union is no longer the reviewed 200-entry catalogue
 tests/identity-readers-subscribe.test.ts | BOSSAPP-944 | a component calls an identity reader at render without a subscribing hook
 tests/settings-knobs.test.ts | BOSSAPP-944 | the starter strip and the per-job model picker no longer match their expectations
-tests/sign-in-shared-password.test.tsx | BOSSAPP-944 | the shared console password is not offered / shown as the test expects after the claim
 tests/start-doors-forward-the-checklist.test.ts | BOSSAPP-944 | app/knowledge/kg-aml-sample.tsx does not draw the readiness checklist with Start anyway
 tests/the-step-up-is-the-top-layer.test.tsx | BOSSAPP-944 | a file picks its own overlay z-index instead of a --z token
 tests/the-tree-names-no-design-reference.test.ts | BOSSAPP-944 | a tracked file names the design reference
