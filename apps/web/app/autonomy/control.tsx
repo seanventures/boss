@@ -51,7 +51,7 @@ export function AutonomyControl({ projectId, view, error, onSaved }: {
   useEffect(() => {
     if (!base) return;
     setDev(base.dev); setItem(money(base.topup.per_item)); setDay(money(base.topup.per_day));
-  }, [base?.dev, base?.topup.per_item, base?.topup.per_day, scope]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [projectId, base?.dev, base?.topup.per_item, base?.topup.per_day, scope]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!view) {
     return (

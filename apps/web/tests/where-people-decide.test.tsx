@@ -121,7 +121,9 @@ describe("Where people decide", () => {
     expect(cards.map((c) => c.dataset.kind)).toEqual(KINDS.map((k) => k[0]));
     expect(cards.map((c) => c.querySelector("b")?.textContent)).toEqual(
       ["Production deploy", "Merge", "Spend", "Secrets", "Public", "Prod infra", "Access"]);
-    expect(cards[0].textContent).toContain("Prod targets only");
+    // A tuned card (a quiet window) keeps its live line; an untouched one says what still waits.
+    expect(cards[0].textContent).toContain("quiet Fri 15:00 → Mon 08:00");
+    expect(cards[1].textContent).toContain("Into a prod-releasing branch only");
     expect(cards[0].title).toContain("2 in 24h");
     expect(cards[0].title).toContain("Owner seat");
     expect(cards[3].title).toContain("passkey");

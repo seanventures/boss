@@ -48,6 +48,11 @@ export function DecidedForYou({ projectId }: { projectId: string }) {
   const live = useConsoleLive();
   const read = usePolledRead({ key: `au-decided:${projectId}`, read: (e, sig) => readDecided(projectId, e, sig), pollMs: 30_000, paused: !live, enabled: !!projectId });
   const items = read.data ?? [];
+  if (read.error && read.error !== "missing" && !read.data) {
+    return <section className="px-card au-lane" data-testid="au-decided" aria-label="Decided for you">
+      <span className="px-lbl">Decided for you</span>
+      <span className="au-said" data-tone="red" role="alert" data-testid="au-decided-error">Could not read: {read.error}</span></section>;
+  }
   if (!items.length) return null;
   return (
     <section className="px-card au-lane" data-testid="au-decided" aria-label="Decided for you">
@@ -73,7 +78,8 @@ function Row({ d, projectId, onChanged }: { d: Decided; projectId: string; onCha
     setBusy("undo"); setErr(null);
     const r = await undoDecided(projectId, d.id);
     setBusy(null);
-    if (!r.ok) { setErr(r.error || "Could not undo."); return; }
+    // Refused (409) or not, re-read: the row then shows what the engine now holds (undone, no undo).
+    if (!r.ok) setErr(r.error || "Could not undo.");
     onChanged();
   };
   const looksGood = async () => {
@@ -95,7 +101,7 @@ function Row({ d, projectId, onChanged }: { d: Decided; projectId: string; onCha
           {d.why ? <span className="au-tag" title={d.why}>{d.why}</span> : null}
           {d.at ? <time dateTime={d.at}>{localWith(d.at, DT)}</time> : null}
           <a className="au-link" href={run.external ? run.href : pxHref(run.href)} data-testid={`au-decided-${d.id}-run`}
-             {...(run.external ? { target: "_blank", rel: "noreferrer noopener" } : {})}>Run <ArrowSquareOut size={12} aria-hidden /></a>
+             {...(run.external ? { target: "_blank", rel: "noreferrer noopener" } : {})}>Run {run.external ? <ArrowSquareOut size={12} aria-hidden /> : "›"}</a>
         </div>
       </div>
       <div className="au-act">
@@ -108,8 +114,8 @@ function Row({ d, projectId, onChanged }: { d: Decided; projectId: string; onCha
         ) : (
           <span className="au-btn" data-off title={d.noUndo ?? undefined} data-testid={`au-decided-${d.id}-noundo`}>Can&apos;t undo</span>
         )}
-        <GatedButton permission="decision:approve" projectId={projectId} className="au-tick" aria-pressed={done} disabled={done || busy !== null}
-                     onClick={() => void looksGood()} aria-label="Looks good" title={done ? "Reviewed" : "Looks good"} data-testid={`au-decided-${d.id}-ok`}>
+        <GatedButton permission="decision:approve" projectId={projectId} className="au-tick" aria-pressed={done} disabled={done || d.undone || busy !== null}
+                     onClick={() => void looksGood()} aria-label="Looks good" title={done ? "Reviewed" : d.undone ? "Undone" : "Looks good"} data-testid={`au-decided-${d.id}-ok`}>
           <Check size={14} weight="bold" aria-hidden /></GatedButton>
       </div>
       {err ? <div className="au-err" role="alert" data-testid={`au-decided-${d.id}-err`}>{err}</div> : null}

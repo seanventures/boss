@@ -117,6 +117,16 @@ describe("Govern › Autonomy control", () => {
     expect(sent(m.calls, "/v1/autonomy/org-policy")).toHaveLength(0);
   });
 
+  it("switching scope resets the inputs to that scope's values", async () => {
+    const org = pol({ dev: "act", dev_topup_usd: { per_item: 2, per_day: 20 } });
+    await mount({ policy: pol({ dev: "ask", source: "project", dev_topup_usd: { per_item: 1, per_day: 5 } }), org_default: org, install: { production: false } });
+    expect((tid("au-topup-day") as HTMLInputElement).value).toBe("5");
+    await type(tid("au-topup-day"), "4");
+    await click(tid("au-scope-org"));
+    expect((tid("au-topup-day") as HTMLInputElement).value).toBe("20");
+    expect(tid("au-dev-act")?.getAttribute("aria-checked")).toBe("true");
+  });
+
   it("says the API's own sentence when it refuses a looser project row (422)", async () => {
     const m = await mount(VIEW, (c) => (c.path === "/v1/autonomy/policy" && c.method === "PUT"
       ? { status: 422, body: { detail: { error: "stricter_only", message: "the org default is dev: ask; a project may only be stricter" } } } : undefined));
@@ -173,6 +183,17 @@ describe("Work › Decided for you", () => {
     await click(tid("au-decided-dec_3-ok"));
     expect(sent(calls, "/v1/autonomy/decided/dec_3/reviewed")).toHaveLength(1);
     expect(tid("au-decided-dec_3-ok")?.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("an undone row offers neither Undo nor Looks good, and a failed read says so", async () => {
+    const undone = { items: [{ ...DECIDED.items[0], undone: true }], count: 1, unreviewed: 1 };
+    await mount((c) => (c.path === "/v1/autonomy/decided" ? { body: undone } : undefined));
+    expect(tid("au-decided-dec_3-undo")).toBeNull();
+    expect(tid("au-decided-dec_3-undone")?.textContent).toBe("Undone");
+    expect((tid("au-decided-dec_3-ok") as HTMLButtonElement).disabled).toBe(true);
+    unmount();
+    await mount((c) => (c.path === "/v1/autonomy/decided" ? { status: 500, body: { detail: "boom" } } : undefined));
+    expect(tid("au-decided-error")?.textContent).toContain("boom");
   });
 
   it("draws nothing when nothing was decided for you", async () => {

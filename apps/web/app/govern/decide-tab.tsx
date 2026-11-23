@@ -17,7 +17,7 @@
  */
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowSquareOut, CaretDown, CheckCircle, CurrencyDollar, FlowArrow, GitMerge, HandPalm, IdentificationCard, Key,
+  ArrowSquareOut, CheckCircle, CurrencyDollar, FlowArrow, GitMerge, HandPalm, IdentificationCard, Key,
   LockSimple, Megaphone, PencilSimple, Plus, RocketLaunch, Scales, ShieldCheck, StopCircle, Trash, WarningCircle, X,
   type Icon,
 } from "@phosphor-icons/react";
@@ -74,7 +74,8 @@ function ListCard({ card, open, onOpen, dev }: { card: Card; open: boolean; onOp
   }
   // THE COMPACT CARD (dev autonomy wireframe): icon, short title, what still waits. Who decides,
   // the 24 h tally and why live in its tooltip and its popover.
-  const c = compactCard(card.key, card.title, card.line, dev);
+  // A card a person tuned (a quiet window) keeps the list's own live line.
+  const c = compactCard(card.key, card.title, card.line, card.rule?.quiet?.length ? null : dev);
   const step = STEP_WORDS[card.step_up];
   const tip = [card.title, `${card.decider.label}${step ? ` · ${step}` : ""}`, `${card.count_24h} in 24h`, card.why].filter(Boolean).join(" · ");
   return (
@@ -442,7 +443,7 @@ export function WherePeopleDecide({ projectId }: { projectId: string }) {
           <FlowArrow size={13} />What agents did ›</a>
       </div>
 
-      <AutonomyControl projectId={projectId} view={autonomy.data} error={autonomy.error} onSaved={autonomy.reload} />
+      <AutonomyControl key={projectId} projectId={projectId} view={autonomy.data} error={autonomy.error} onSaved={autonomy.reload} />
 
       <div className="wd-cap">The list
         {fixed.map((c) => <ListCard key={c.key} card={c} dev={dev} open={open === c.key} onOpen={() => setOpen(open === c.key ? null : c.key)} />)}
