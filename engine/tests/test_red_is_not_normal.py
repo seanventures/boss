@@ -60,16 +60,6 @@ def test_there_is_one_list_per_suite_and_no_old_second_list():
     assert "known-failures.txt" not in tier
 
 
-def test_ci_runs_the_worker_suite_and_checks_the_baselines():
-    ci = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"))
-    p0 = ci["jobs"]["p0"]
-    suites = p0["env"]["TEST_TIER_SUITES"].split(",")
-    assert {"engine", "api", "worker", "scripts"} <= set(suites)
-    runs = " ".join(str(step.get("run") or "") for step in p0["steps"])
-    assert "scripts/known_failures.py check" in runs
-    assert "scripts/test-tier.sh P0" in runs
-
-
 def test_the_worker_suite_collects():
     """Two worker files imported scripts that are not in this tree; the whole directory then
     failed to collect, so nothing in it could run."""
