@@ -159,9 +159,9 @@ def test_the_profile_moves_toward_what_builds_really_peak_at(pg):
 
 
 def test_nothing_running_means_one_build_may_run():
-    """A small machine may probe one build when CPU and memory pressure have eased."""
+    """A small or busy machine runs one build at a time, never none forever (review)."""
     small = Capacity(total_mb=4000, available_mb=2100, cores=2, disk_free_gb=12.0,
-                     load_per_core=0.5)
+                     load_per_core=1.6)
     assert admission.decide(small, CODE, in_flight=0, slots=1).admitted
     assert not admission.decide(small, CODE, in_flight=0, slots=1, level=admission.L3).admitted
     assert not admission.decide(small, CODE, in_flight=1, slots=2).admitted

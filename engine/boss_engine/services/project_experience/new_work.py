@@ -725,15 +725,19 @@ def app_choices(connection: Connection, project_id: str) -> list[dict[str, str]]
 
 
 def work_anchor(connection: Connection, project_id: str, app: Optional[str],
-                *, new_app: bool = False) -> Optional[dict[str, Any]]:
-    """The app New work builds onto when the person did not pick one at a door: the named app
-    (app_anchor), none for an explicit new app, the project's only app, else a ValueError
-    asking which (never a silent fresh build beside the app it was meant to change)."""
+                *, new_app: bool = False, infer: bool = True) -> Optional[dict[str, Any]]:
+    """The app New work builds onto: the named app (app_anchor), none for an explicit new app,
+    and with nothing named, when `infer` (the New work modal, its plan): the project's only
+    app, else a ValueError asking which — never a silent fresh build beside the app it was
+    meant to change. Without `infer` nothing named stays a fresh build, as every other caller
+    of POST …/work (chat cards, roadmap, onboarding, agents) has always had it."""
     if new_app:
         if (app or "").strip():
             raise ValueError("Choose an existing app or create a new app, not both.")
         return None
     handle = (app or "").strip()
+    if not handle and not infer:
+        return None
     if not handle:
         choices = app_choices(connection, project_id)
         if len(choices) > 1:

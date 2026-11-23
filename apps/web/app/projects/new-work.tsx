@@ -381,7 +381,7 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
   const fields = (anyway: string[]) => ({
     brief: status === "ready" ? brief : null, priority: priority.v, notify: notify.v, issue: issueChoice,
     ...(wfKey ? { workflow_key: wfKey } : {}), ...(anyway.length ? { start_anyway: anyway } : {}),
-    ...(newApp ? { new_app: true } : anchorApp || p?.anchor?.runId ? { app: anchorApp || p?.anchor?.runId } : {}),
+    ...(newApp ? { new_app: true } : anchorApp || p?.anchor?.runId ? { app: anchorApp || p?.anchor?.runId } : { infer_app: true }),
     ...(runProfile ? { profile: runProfile } : {}),
   });
   const locked = Boolean(refusal) && unaccepted(refusal, startAnyway).length > 0;

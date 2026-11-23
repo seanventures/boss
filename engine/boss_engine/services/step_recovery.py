@@ -995,7 +995,8 @@ def no_model_ask(failure: Mapping[str, Any], triage: Mapping[str, Any], *, refus
                    or "the step failed").strip().rstrip(".")
     who = (provider or "its provider").strip() or "its provider"
     out_of_credit = credit_exhausted(error)
-    if refused:
+    if refused and not (triage.get("action") == ASK_PERSON and triage.get("question")):
+        # (BOSS's own reading that already is a question is asked as it stands, below.)
         # THE MODEL ANSWERED, BADLY: not a missing connection, so never "Connect a model". Say
         # what happened, that nothing was changed, and the two things a person can do.
         hint = (f" BOSS's own reading: {str(triage.get('cause') or headline)[:200]}."

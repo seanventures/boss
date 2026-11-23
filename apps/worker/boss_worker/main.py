@@ -749,6 +749,8 @@ def _prune_activity_log(client: ControlPlaneClient) -> None:
 #: Never more lease threads than this, whatever admission measures: the control plane runs
 #: every build in its own process and is the thing being protected.
 MAX_WORKER_SLOTS = 4
+#: How often an extra lease slot re-reads the saved job slots (Setup › Agent capacity).
+SLOTS_RECHECK_SECONDS = 60.0
 
 
 def worker_slots(client, settings) -> int:
@@ -776,9 +778,12 @@ def _extra_lease_loop(settings, index: int) -> None:
     slot_settings = settings.model_copy(update={"worker_id": f"{settings.worker_id}-s{index}"})
     client = ControlPlaneClient(slot_settings.control_plane_url, api_key=slot_settings.api_key)
     try:
+        checked_at, desired_slots = 0.0, 1
         while not _STOPPING:
-            desired_slots = worker_slots(client, settings)
-            _SLOTS["total"] = desired_slots
+            # The saved slots, read at most once a minute: each read samples the host.
+            if time.monotonic() - checked_at >= SLOTS_RECHECK_SECONDS:
+                desired_slots, checked_at = worker_slots(client, settings), time.monotonic()
+                _SLOTS["total"] = desired_slots
             if index >= desired_slots:
                 time.sleep(10)
                 continue

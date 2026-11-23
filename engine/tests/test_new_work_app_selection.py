@@ -64,3 +64,9 @@ def test_choices_group_runs_into_apps_as_every_app_view_does():
     choices = new_work.app_choices(_Runs(runs), "p")
     assert [c["run_id"] for c in choices] == ["crun_b2", "crun_a1"]
     assert [c["app"] for c in choices] == ["Lead Inbox", "Order Board"]
+
+
+def test_nothing_named_without_infer_stays_a_fresh_build(selection):
+    selection.extend([{"run_id": "crun_one"}, {"run_id": "crun_two"}])
+    assert new_work.work_anchor(None, "project", None, infer=False) is None
+    assert new_work.work_anchor(None, "project", "crun_two", infer=False) == {"run_id": "crun_two"}

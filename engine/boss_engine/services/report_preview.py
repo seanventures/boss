@@ -22,7 +22,14 @@ def serve(value: str, prepare: str = "") -> None:
     root = Path.cwd()
     report_path(root, value)
     if prepare:
-        subprocess.run(prepare, shell=True, check=True, timeout=120)
+        try:
+            subprocess.run(prepare, shell=True, check=True, timeout=120)
+        except subprocess.CalledProcessError as error:
+            raise SystemExit(f"boss.preview.report: prepare failed (exit {error.returncode}); "
+                             "fix its command so it writes the report in a fresh clone") from None
+        except subprocess.TimeoutExpired:
+            raise SystemExit("boss.preview.report: prepare ran past 120 s; make it generate "
+                             "the report from small checked-in demo inputs") from None
     target = report_path(root, value)
     if not target.is_file():
         raise ValueError("Report artifact is missing; configure boss.preview.report prepare to generate it")

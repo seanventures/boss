@@ -14,5 +14,8 @@ describe("New work application selection", () => {
     expect(workBody("feature", "Build another app", {
       brief: null, priority: "normal", notify: "", issue: { mode: "none" }, new_app: true,
     })).toHaveProperty("new_app", true);
+    expect(workBody("feature", "Fix the export", {
+      brief: null, priority: "normal", notify: "", issue: { mode: "none" }, infer_app: true,
+    })).toHaveProperty("infer_app", true);
   });
 });

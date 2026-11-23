@@ -217,9 +217,10 @@ def decide(cap: Capacity, profile: Profile, *, in_flight: int, slots: int,
     # chose "one at a time" / "build anyway" on the card (force_one); sustained critical (L3)
     # holds even that. A DISK BELOW THE FLOOR ALWAYS HOLDS: memory pressure slows a build, a
     # full disk breaks the database every build stands on (BOSSAPP-1150).
-    pressure_allows_probe = (cap.psi_full_avg60 < MAX_PSI_FULL_AVG60
-                             and cap.load_per_core < MAX_LOAD_PER_CORE)
-    if problems and not disk_low and in_flight == 0 and (pressure_allows_probe or force_one) and (
+    # (Review of PR #300: holding the idle probe on CPU load or memory pressure alone left
+    # queued builds waiting for a person on any busy host. Sustained pressure is the system
+    # doctor's L2, which still holds it, as on main.)
+    if problems and not disk_low and in_flight == 0 and (
             level < L2 or (force_one and level < L3)):
         problems = []
     backpressure = {"admit_new_work": not problems, "reason": "; ".join(problems)}
@@ -339,8 +340,11 @@ def snapshot(connection: Any, *, cap: Optional[Capacity] = None) -> dict[str, An
     label = f"Builds at once: {bao['value']} ({'auto' if bao['auto'] else 'pinned'})"
     waiting = f" · {queued} queued, waiting for {probe.shortfall}" if queued and probe.shortfall \
         else (f" · {queued} queued" if queued else "")
-    configured_workers = _state(connection, "agent_capacity").get("worker_slots", 3)
-    workers = max(1, min(4, configured_workers)) if type(configured_workers) is int else 3
+    # JOB SLOTS: what the operator saved in Setup › Agent capacity; until then the old rule,
+    # one job slot per build at once, so an upgrade never raises concurrency by itself.
+    configured_workers = _state(connection, "agent_capacity").get("worker_slots")
+    workers = (max(1, min(4, configured_workers)) if type(configured_workers) is int
+               else max(1, min(4, int(bao["value"] or 1))))
     return {"worker_slots": workers, "builds_at_once": bao, "running": in_flight, "queued_for_capacity": queued,
             "next_build": probe.as_dict(), "label": label + waiting,
             "level": current_level(connection, cap)}

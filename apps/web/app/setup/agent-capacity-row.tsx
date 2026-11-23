@@ -79,7 +79,7 @@ export function AgentCapacityRow() {
         </select></label></Tip>
         <Tip tip={BUILDS_TIP}><label>Heavy builds <select value={builds} onChange={event => setBuilds(event.target.value)} disabled={busy || !state}>
           <option value="auto">Auto</option>
-          {[1, 2, 3, 4].map(value => <option key={value} value={value}>{value}</option>)}
+          {[1, 2, 3, 4, 5, 6, 7, 8].map(value => <option key={value} value={value}>{value}</option>)}
         </select></label></Tip>
         <GatedButton permission="project:update" className="su-btn su-btn-sm" disabled={busy || !state} onClick={() => void save()}>Save</GatedButton>
       </div>

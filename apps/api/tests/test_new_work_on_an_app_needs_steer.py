@@ -41,7 +41,8 @@ def test_a_start_only_person_cannot_build_onto_an_app(world, client, engine, pro
         refused = client.post(f"/v1/projects/{project}/work",
                               json={"kind": "feature", "app": APP_RUN, "text": "Add a route."})
         inferred = client.post(f"/v1/projects/{project}/work",
-                               json={"kind": "feature", "text": "Add a route."})
+                               json={"kind": "feature", "text": "Add a route.",
+                                     "infer_app": True})
     assert refused.status_code == 403, refused.text
     assert "code_task:steer" in refused.text
     assert inferred.status_code == 403, inferred.text

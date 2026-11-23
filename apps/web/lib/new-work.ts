@@ -239,6 +239,8 @@ export type StartFields = {
   /** The app it builds onto (AR-20): the door's `app`, sent as is; the engine resolves it. */
   app?: string;
   new_app?: boolean;
+  /** Nothing named: the engine builds onto the only app, or asks which (never a fresh build). */
+  infer_app?: boolean;
   /** The profile it runs on (BOSSAPP-1334): lean | balanced | strict. */
   profile?: string;
 };
@@ -255,6 +257,7 @@ export function workBody(kind: WorkKind, text: string, f: StartFields): R {
     ...(f.start_anyway?.length ? { start_anyway: f.start_anyway } : {}),
     ...(f.app ? { app: f.app } : {}),
     ...(f.new_app ? { new_app: true } : {}),
+    ...(f.infer_app ? { infer_app: true } : {}),
     ...(f.profile ? { profile: f.profile } : {}),
   };
 }

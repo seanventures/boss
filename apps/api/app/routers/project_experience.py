@@ -254,7 +254,11 @@ class NewWorkBody(BaseModel):
     #: the app's key). Start then continues that app's lineage — its branch, its open PR — as
     #: the start door's `extends_run_id`; a name that is no app of this project is refused.
     app: Optional[str] = None
+    #: "Create a new app": never built onto an existing one.
     new_app: bool = False
+    #: Nothing named: build onto the project's only app, or ask which (the New work modal
+    #: sends it). Unset, nothing named stays a fresh build, as it always was for every caller.
+    infer_app: bool = False
     #: THE PROFILE THE PERSON PICKED (BOSSAPP-1334): lean | balanced | strict, the build runs on
     #: it (run input `profile`, bound to the build step). Empty: the project's default.
     profile: Optional[str] = None
@@ -382,7 +386,7 @@ def project_new_work(project_id: str, payload: NewWorkBody, request: Request) ->
         # the default branch under a modal that said it was adding to the app.
         try:
             anchor = new_work.work_anchor(connection, project_id, payload.app,
-                                          new_app=payload.new_app)
+                                          new_app=payload.new_app, infer=payload.infer_app)
         except ValueError as error:
             raise HTTPException(status_code=422, detail={
                 "error": "app_selection_required", "message": str(error)}) from None

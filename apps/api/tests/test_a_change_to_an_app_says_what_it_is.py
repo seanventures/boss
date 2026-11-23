@@ -117,7 +117,7 @@ def test_a_repair_from_a_preview_alone_builds_onto_that_previews_app(client, eng
 
     foreign = _start(client, {"title": "x", "directive": "x", "preview_id": "prev_elsewhere"})
     assert foreign.status_code == 404
-    assert "start the repair from its build" in foreign.json()["detail"]
+    assert "not in this project" in foreign.json()["detail"]
 
     based = _start(client, {"title": "x", "directive": "x", "preview_id": "prev_repairme",
                             "base_branch": "release"})

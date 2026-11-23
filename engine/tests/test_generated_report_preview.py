@@ -95,3 +95,17 @@ def test_a_bad_report_declaration_says_how_to_write_it(tmp_path, body, said):
     with pytest.raises(ValueError, match=said) as refused:
         preview_service.find_run_declaration(tmp_path, ["boss.preview.report"])
     assert '{"path": "report.html", "prepare":' in str(refused.value)
+
+
+def test_a_bad_report_declaration_fails_the_serve_proof_with_its_sentence(tmp_path):
+    """Review of PR #300: the proof records the fix, it does not raise out of the build step."""
+    (tmp_path / "boss.preview.report").write_text("{not json")
+    record = preview_service.prove_app_serves(tmp_path, ["boss.preview.report"], timeout=5)
+    assert record["ok"] is False
+    assert "boss.preview.report is not valid JSON" in record["error"]
+
+
+def test_a_failing_prepare_says_what_to_fix(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit, match=r"prepare failed \(exit 3\); fix its command"):
+        serve("report.html", "exit 3")

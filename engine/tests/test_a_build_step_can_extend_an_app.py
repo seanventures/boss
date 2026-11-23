@@ -101,6 +101,16 @@ def test_preview_without_a_project_build_does_not_start_fresh(started, monkeypat
     assert not started
 
 
+def test_a_preview_with_no_build_starts_as_before(started, monkeypatch):
+    """Review of PR #300: a preview started from a branch has no lineage; not refused."""
+    monkeypatch.setattr(builtin, "_preview_in_project", lambda *_: {"id": "prev_branch", "run_id": None})
+    seen = []
+    monkeypatch.setattr(builtin, "_multirepo_change",
+                        lambda _ctx, _pid, _actor, _args, extends, _fctx: seen.append(extends) or {"ok": True})
+    out = _call({"title": "Repair preview", "instructions": "Repair preview", "preview_id": "prev_branch"})
+    assert out == {"ok": True} and seen == [""]
+
+
 def test_preview_repair_does_not_override_an_explicit_base(started, monkeypatch):
     monkeypatch.setattr(builtin, "_preview_in_project", lambda *_: {"run_id": "crun_app"})
     out = _call({"preview_id": "prev_app", "instructions": "Repair preview", "base_branch": "release"})

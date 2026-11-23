@@ -54,3 +54,12 @@ def test_new_failure_ends_the_person_retry_grace_period():
     item.failed_at = approved - timedelta(minutes=1)
     assert failure_owner._person_retry_pending(row, item, now)
     assert not failure_owner._person_retry_pending(row, item, now + timedelta(hours=1))
+
+
+def test_a_refused_answer_still_asks_boss_own_question_when_it_has_one():
+    triage = {"action": step_recovery.ASK_PERSON, "question": "Which port should the app use?",
+              "cause": "port clash"}
+    decision = step_recovery.no_model_ask({"headline": "Port 3000 is taken"}, triage,
+                                          refused="not the JSON object asked for")
+    assert decision["question"] == "Which port should the app use?"
+    assert "answer was refused" in decision["reasoning"]

@@ -2945,12 +2945,16 @@ def prove_app_serves(workdir: Path, changed: Optional[list[str]], *,
         # an undeclared build is never launched — and never failed for what the repository
         # holds — on the strength of a guess. how_app_runs asks find_run_declaration the same
         # question with the same files first, so a declaration here is the command run below.
-        if not known_service and find_run_declaration(tree, files or None) is None:
-            return _not_a_service(
-                "the build wrote no boss.preview.command, so its tests are its proof")
-
         try:
+            # A MALFORMED boss.preview.report fails the proof with its own sentence (how to
+            # write it), never as an exception out of the build step.
+            if not known_service and find_run_declaration(tree, files or None) is None:
+                return _not_a_service(
+                    "the build wrote no boss.preview.command, so its tests are its proof")
             plan = how_app_runs(tree, files or None)
+        except ValueError as exc:
+            record.update(ok=False, source="declared", error=str(exc))
+            return record
         except AmbiguousAppError as exc:
             record.update(ok=False, source="ambiguous", error=(
                 f"this build serves HTTP but did not declare how to run it, and the "

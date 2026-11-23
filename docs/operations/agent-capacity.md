@@ -1,11 +1,12 @@
 # Agent capacity on shared machines
 
 Setup's Advanced settings includes **Agent capacity**. This is install-wide because
-projects share workers and the same host. Total job slots (1–4, default 3) are
-independent of the heavy-build limit (Auto or a ceiling). A 4-core / 8 GiB laptop
+projects share workers and the same host. Total job slots (1–4) are independent
+of the heavy-build limit (Auto or a ceiling). Until you save a value, job slots
+follow the heavy-build limit, as before, so an upgrade does not raise concurrency. A 4-core / 8 GiB laptop
 should start with three job slots and one heavy build.
 
-Auto worker mode follows saved settings without a restart. An explicit
+Auto worker mode follows saved settings within a minute, without a restart. An explicit
 `BOSS_WORKER_SLOTS` environment value remains an operator override. Reducing the
 limit lets active jobs finish; extra slots stop leasing new work. This does not
 kill agents, discard changes, or grant additional permissions.

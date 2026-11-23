@@ -1573,7 +1573,10 @@ def stack_plan(app_dir: Path | str, services: Optional[list[Service]] = None) ->
         path = plan.dir_of(plan.backend)
         from .preview_service import _declared_command_in, preview_health_path
 
-        declared = _declared_command_in(path)
+        try:
+            declared = _declared_command_in(path)
+        except ValueError as error:      # a malformed boss.preview.report: say how to fix it
+            declared, plan.error = None, str(error)
         plan.backend_command = (["sh", "-lc", declared] if declared
                                 else LANGUAGES[plan.backend.language].start(plan.backend, path))
         plan.backend_health = preview_health_path(path)
