@@ -88,11 +88,14 @@ def test_the_names_the_gate_reads_are_the_pipelines():
     assert review_panel.STAGE == "review_panel"
     assert set(review_panel.SEATS) == {"review_code", "security_check", "consistency_check"}
     src = GOVERNED.read_text()
-    assert '"code_task.review_panel_merged"' in src
+    # The merged record's keys, read where it is built (just before its event is emitted).
+    at = src.index('emit_event(c, project_id, "code_task.review_panel_merged"')
+    near = src[max(0, at - 600):at]
     for key in ('"seats"', '"fallback"', '"hollow"'):
-        assert key in src
+        assert key in near, f"the gate reads review_panel_merged[{key}]"
     assert '"mutation_caught": mutation_caught' in src
-    assert '"code_task.deferred_findings_task"' in src
+    at = src.index('emit_event(c, project_id, "code_task.deferred_findings_task"')
+    assert '"followup_run_id"' in src[at:at + 300] and '"findings"' in src[at:at + 300]
 
 
 def test_each_acceptance_scenario_runs_at_the_bar_its_expectation_needs():
@@ -112,11 +115,37 @@ def test_each_acceptance_scenario_runs_at_the_bar_its_expectation_needs():
     assert any(light["followup"] in line for line in soft)
 
 
+def test_a_follow_up_counts_only_when_one_was_queued():
+    eng = _engines()
+    finding = [{"text": "Must-have 1 (P1) missing: slug lowercases"}]
+    b = {**_build([("implement", False)],
+                  [("code_task.deferred_findings_task", {"followup_run_id": None,
+                                                         "findings": finding})]),
+         "turns": [], "profile": None, "gates": {}}
+    b["run"].update(status="completed", pull_request_url="x")
+    assert eng.observed(b)["followups"] == []
+    b["events"][0]["data"]["followup_run_id"] = "crun_next"
+    assert len(eng.observed(b)["followups"]) == 1
+
+
+def test_a_clean_build_must_pass_its_review_gates():
+    eng = _engines()
+    obs = {"status": "completed", "pr": True, "fix_round": False, "serves": False,
+           "stages": eng.SCENARIOS["clean"]["stages"], "failure": "", "tool_names": [],
+           "followups": [], "gates": {"code_review_passed": True, "security_clean": False,
+                                      "consistent": True, "acceptance_met": True}}
+    assert any("security_clean" in m for m in eng.meets("clean", obs))
+    obs["gates"]["security_clean"] = True
+    assert eng.meets("clean", obs) == []
+
+
 def test_the_light_lane_expectation_fails_without_its_follow_up():
     eng = _engines()
     obs = {"status": "completed", "pr": True, "fix_round": False, "serves": False,
            "stages": ["write_tests", "implement", "acceptance_check"], "failure": "",
-           "tool_names": [], "followups": []}
+           "tool_names": [], "followups": [], "gates": {}}
+    assert any("no follow-up names" in m for m in eng.meets("acceptance_missing_light", obs))
+    obs["followups"] = ['[{"text": "Must-have 10 (P1) missing: another item"}]']
     assert any("no follow-up names" in m for m in eng.meets("acceptance_missing_light", obs))
     obs["followups"] = ['[{"text": "Must-have 1 (P1) missing: slug lowercases"}]']
     assert eng.meets("acceptance_missing_light", obs) == []

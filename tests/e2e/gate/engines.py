@@ -61,7 +61,10 @@ PROFILES = {
 #: What every engine must show, per scenario (the claude_code path's expectations, written once).
 #: `gates_fail` are gates allowed to fail on the FIRST verdict; `final` is the run's end status.
 SCENARIOS: dict[str, dict[str, Any]] = {
+    # The clean build's seats must PASS, not only answer.
     "clean": {"faults": "", "final": "completed", "pr": True, "fix_round": False,
+              "gates_pass": ["code_review_passed", "security_clean", "consistent",
+                             "acceptance_met"],
               "stages": ["write_tests", "implement", "review_code", "security_check",
                          "consistency_check", "check_tests", "acceptance_check"]},
     # The acceptance check (acceptance_gate.py) finds a must-have missing once: a fact, so the
@@ -76,7 +79,7 @@ SCENARIOS: dict[str, dict[str, Any]] = {
     # fix round. The follow-up must name the must-have.
     "acceptance_missing_light": {"faults": "acceptance_missing", "final": "completed", "pr": True,
                                  "fix_round": False, "bar": "standard",
-                                 "followup": "Must-have 1",
+                                 "followup": "Must-have 1 ",
                                  "stages": ["write_tests", "implement", "acceptance_check"]},
     "failing_test": {"faults": "failing_test", "final": "completed", "pr": True,
                      "fix_round": True,
@@ -338,9 +341,12 @@ def observed(b: dict[str, Any]) -> dict[str, Any]:
         "gates": gates,
         "events": kinds,
         "failure": str(run.get("error") or run.get("failure_reason") or ""),
+        # A follow-up counts only when a follow-up build was actually queued (followup_run_id):
+        # the event is also written when nothing new started.
         "followups": [json.dumps((e.get("data") or {}).get("findings") or [], default=str)
                       for e in b["events"]
-                      if e["event_type"] == "code_task.deferred_findings_task"],
+                      if e["event_type"] == "code_task.deferred_findings_task"
+                      and (e.get("data") or {}).get("followup_run_id")],
         "profile_keys": sorted((b.get("profile") or {}).get("totals") or {}),
         "tool_names": sorted({t["tool_name"] for t in b["turns"] if t.get("tool_name")}),
     }
@@ -362,6 +368,9 @@ def meets(name: str, obs: dict[str, Any]) -> list[str]:
         bad.append("a fix round ran where the bar makes the gap a follow-up")
     if exp.get("followup") and not any(exp["followup"] in f for f in obs["followups"]):
         bad.append(f"no follow-up names {exp['followup']!r} (follow-ups: {obs['followups']})")
+    not_passed = [g for g in exp.get("gates_pass", ()) if obs["gates"].get(g) is not True]
+    if not_passed:
+        bad.append(f"gates did not pass: {not_passed} (gates: {obs['gates']})")
     if exp.get("serves") and not obs["serves"]:
         bad.append("the start-up proof never saw the app serve")
     if exp.get("words") and exp["words"] not in obs["failure"].lower():
