@@ -13,6 +13,7 @@
  * an agent and fails on any literal actor.
  */
 import { apiWrite } from "./api-write";
+import { NO_REASON_NEXT } from "./action-result";
 import type { Persona } from "./agent-world-types";
 
 /** Where a new agent came from, recorded on its passport (Agent World spec §5.4). */
@@ -57,11 +58,11 @@ export function errorSentence(body: unknown, status: number): string {
     }).filter(Boolean);
     if (parts.length) return parts.join("; ");
   }
-  if (status === 403) return "You are not allowed to change agents on this project — ask a "
-    + "member with role_review and workflow_manage to do it.";
+  if (status === 403) return "You are not allowed to change agents on this project. Ask an Admin, "
+    + "or someone who can review roles and manage workflows here, to do it.";
   if (status === 503) return "The control plane cannot reach its database right now; try again "
     + "in a minute.";
-  return `The control plane answered ${status} without saying why.`;
+  return `The control plane answered HTTP ${status} without saying why. ${NO_REASON_NEXT}`;
 }
 
 async function send<T>(path: string, method: "POST" | "PATCH" | "DELETE",

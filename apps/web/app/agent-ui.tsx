@@ -32,6 +32,7 @@ import { TicketBrief } from "./tickets/ticket-brief";
 import { Paperclip } from "@phosphor-icons/react";
 import { ChatFullscreenButton, useChatFullscreen } from "../components/chat-fullscreen";
 import { splitDetails } from "../lib/answer-details";
+import { NO_REASON } from "../lib/action-result";
 /** An action as RECORDED, which is not one shape. The router writes `{kind, args, result}`;
  *  `AgentService` writes `{id, tool, ok}`. Typing it as only the first is what let a `.kind`
  *  that is sometimes absent reach the render. */
@@ -1016,7 +1017,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
         // collapsed Details below the message.
         const technical = typeof r.data?.technical === "string" ? r.data.technical : undefined;
         setMessages((m) => [...m, { role: "assistant",
-          content: "Warning" + (r.error ?? "request failed"), technical }]);
+          content: "Warning" + (r.error ?? NO_REASON), technical }]);
       }
     });
   }, [projectId, actor, threadId, sel, roleRef, roleName, refreshThreads, dockAgent, aboutAct, speakChunk]);
@@ -1182,7 +1183,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
         // cannot copy is an error you cannot act on: it does not appear in the schema, the
         // code, or any search.
         : ` ${action.label} failed:\n\n\`\`\`\n${
-            payload?.error ?? r.error ?? "unknown error"
+            payload?.error ?? r.error ?? NO_REASON
           }${body ? `\n\n${body}` : ""}\n\`\`\``;
       setRanAction(action.id);
       // Report the outcome in the log. A button that changes nothing visible is a button the
@@ -1206,7 +1207,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
       // back closes the loop, and a loop that carries the error converges where a script
       // cannot.
       if (!ok) {
-        const reason = String(payload?.error ?? r.error ?? "unknown error");
+        const reason = String(payload?.error ?? r.error ?? NO_REASON);
         setRepairs((n) => n + 1);
         // BOUNDED. Two attempts, then it stops and says so. An unbounded repair loop burns
         // budget on an error the agent cannot fix and looks, from outside, exactly like the

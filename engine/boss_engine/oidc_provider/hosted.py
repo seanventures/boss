@@ -49,7 +49,12 @@ WORDS = {
 
 
 def _words(code: str) -> str:
-    return WORDS.get(code, "That did not work. Try again.")
+    """The person's words for a refusal; an unlisted one still names its cause and the way out."""
+    if code in WORDS:
+        return WORDS[code]
+    named = " ".join(str(code or "").replace("_", " ").split()) or "no reason given"
+    return (f"This step could not finish ({named}). Go back and try it again; if it keeps "
+            "happening, tell the app's administrator what it said.")
 
 
 def _reply(status: int, page: tuple[str, dict[str, str]], cookies: Optional[list[str]] = None) -> Any:

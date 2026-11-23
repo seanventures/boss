@@ -254,7 +254,8 @@ def failure_sentence(error: BaseException) -> tuple[str, str]:
         said = explain_turn_failure(error)
         return str(said.get("sentence") or ""), str(said.get("detail") or "")
     except Exception:  # noqa: BLE001 — the reason in plain words still beats silence
-        return "BOSS couldn't finish this turn. Try again.", type(error).__name__
+        return (f"BOSS couldn't finish this turn ({type(error).__name__}). Try again; if it "
+                "repeats, Details shows the error."), type(error).__name__
 
 
 def mark_failed(engine: Any, turn_id: str, error: BaseException | str) -> None:

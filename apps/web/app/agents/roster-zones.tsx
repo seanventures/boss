@@ -36,7 +36,7 @@ export function presenceFromStatus(a: V2Agent): LivePresence {
   // STUCK covers two things on this wire (console_v2_workforce._status_of): a step that FAILED
   // (action, an em dash, then "failed") and one running with no progress. Only the second is stuck.
   if (a.status === "STUCK" && FAILED_TASK.test(a.task || "")) {
-    return { state: "failed", line: (a.task || "").replace(FAILED_TASK, "") || "Failed" };
+    return { state: "failed", line: (a.task || "").replace(FAILED_TASK, "") || "Its last step failed" };
   }
   if (a.status === "STUCK") return { state: "stuck", line: a.task || "Stuck" };
   if (a.status === "WORKING") return { state: "working", line: a.task || "" };

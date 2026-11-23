@@ -17,6 +17,7 @@ import { goConsole } from "./deploy-actions";
 import type { InfraTabProps } from "./infra-home";
 import { afterWrite, restartPreview, stopPreview } from "./infra-actions";
 import { ago, inWords, localTime, useNow } from "./infra-util";
+import { couldNot } from "../../lib/action-result";
 import { Empty, Skeleton, StateWord, ZoneHead } from "./kit";
 import { PreviewLogDrawer } from "./preview-log";
 import "./deploys.css";
@@ -76,7 +77,7 @@ function PreviewRowView({ row, projectId, actor, now, onLog, onChanged, live }: 
     setBusy(key); setError(null);
     const r = key === "stop" ? await stopPreview(row.id, actor) : await restartPreview(projectId, row.id, actor);
     setBusy(null);
-    if (!r.ok) { setError(r.error); return; }
+    if (!r.ok) { setError(couldNot(`${key} the preview`, r.error ? inWords(r.error) : "")); return; }
     showToast("success", key === "stop" ? "Preview stopped" : "Preview restarting");
     afterWrite(onChanged);
   };
@@ -122,7 +123,7 @@ function PreviewRowView({ row, projectId, actor, now, onLog, onChanged, live }: 
              onClick={(e) => { if (!(e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0)) { e.preventDefault(); goConsole(buildHref(row.runId as string)); } }}>
             Build ↗</a>
         ) : null}
-        {error ? <span className="inf-error inf-trunc" role="alert" title={inWords(error)} data-copy="data">Couldn&apos;t do that</span> : null}
+        {error ? <span className="inf-error inf-trunc" role="alert" title={error} data-copy="data" data-user-text>{error}</span> : null}
       </span>
     </li>
   );

@@ -331,6 +331,113 @@ def technical_summary(error: object) -> str:
     return (f"{name}: {text}" if name and text else name or text)[:300]
 
 
+def cause_line(error: object, n: int = 140) -> str:
+    """The failure's own one-line cause, safe to show a person: technical_summary, secrets
+    redacted, cut, in backticks (it is the error's words, not BOSS's)."""
+    from .failure_words import short
+
+    line = short(technical_summary(error), n).replace("`", "'")
+    return f"`{line}`" if line else ""
+
+
+# ── BOSS's own database, by cause ────────────────────────────────────────────────────────────
+# "BOSS couldn't save this to its database. Try again." was said for a full disk, a lost
+# connection, a duplicate and a deadlock alike (enterprise RCA, BOSSAPP-1428): the person could
+# not tell a wait from a fix. Each cause now has its own sentence and its own next step. The kind
+# stays "storage" for every caller; `storage_cause` says which.
+_DISK_FULL = re.compile(r"\bDiskFull\b|no space left on device|could not extend file|disk is full|"
+                        r"disk full", re.I)
+_CONNECTION_LOST = re.compile(
+    r"server closed the connection|connection refused|terminating connection|could not connect|"
+    r"connection (?:is |was )?closed|connection timed? ?out|connection reset|"
+    r"\b(?:AdminShutdown|CannotConnectNow|ConnectionFailure|ConnectionTimeout)\b|"
+    r"the database system is (?:starting up|shutting down|in recovery mode)", re.I)
+_DUPLICATE = re.compile(r"\bUniqueViolation\b|duplicate key value violates unique constraint", re.I)
+_BUSY = re.compile(r"\b(?:DeadlockDetected|SerializationFailure|LockNotAvailable|"
+                   r"InFailedSqlTransaction)\b|deadlock detected|could not serialize access|"
+                   r"current transaction is aborted|lock timeout|could not obtain lock", re.I)
+_CONSTRAINT = (
+    (re.compile(r"update or delete on table \S+ violates foreign key", re.I),
+     "other saved records still refer to it"),
+    (re.compile(r"\bForeignKeyViolation\b|violates foreign key constraint", re.I),
+     "it refers to something that is no longer there (it may have just been deleted)"),
+    (re.compile(r"\bNotNullViolation\b|violates not-null constraint", re.I),
+     "a value it needs was missing"),
+    (re.compile(r"\bCheckViolation\b|violates check constraint", re.I),
+     "a value was outside what BOSS allows there"),
+    (re.compile(r"\bExclusionViolation\b|violates exclusion constraint", re.I),
+     "it overlaps something already saved"),
+)
+
+
+def _chain_text(error: object) -> str:
+    """The failure's words and every exception class in its chain, for classifying it — never
+    the statement (a table or value named like a cause is not that cause)."""
+    def words(value: object) -> str:
+        text = str(value or "")
+        return text[:text.find("[SQL:")] if "[SQL:" in text else text
+
+    parts, current, seen = [words(error)], error, 0
+    while isinstance(current, BaseException) and seen < 5:
+        parts.append(type(current).__name__)
+        parts.append(words(getattr(current, "orig", "") or ""))
+        current = current.__cause__ or getattr(current, "orig", None)
+        seen += 1
+    return " ".join(parts)
+
+
+def storage_said(error: object) -> dict:
+    """{storage_cause, headline, action, turn_action, retry} for a failure of BOSS's database."""
+    said_text = _chain_text(error)
+    if _DISK_FULL.search(said_text):
+        return {"storage_cause": "disk_full", "retry": True,
+                "headline": "BOSS's database is out of disk space, so this was not saved.",
+                "action": ("Infra Agent frees space and the work resumes by itself. To help, "
+                           "free disk on the host (Govern › Infrastructure) or run `boss "
+                           "doctor` on it."),
+                "turn_action": ("Its database is out of disk space. Infra Agent frees space; "
+                                "to help, free disk in Govern › Infrastructure or run `boss "
+                                "doctor`.")}
+    if _CONNECTION_LOST.search(said_text):
+        return {"storage_cause": "connection_lost", "retry": True,
+                "headline": "BOSS lost its connection to its database, so this was not saved.",
+                "action": ("BOSS reconnects by itself: retry in a minute. If it keeps "
+                           "happening, run `boss doctor` on the host; the error is in the "
+                           "Activity Log."),
+                "turn_action": ("Try again in a minute: BOSS lost its database connection and "
+                                "reconnects by itself. If it persists, run `boss doctor`.")}
+    if _DUPLICATE.search(said_text):
+        return {"storage_cause": "duplicate", "retry": True,
+                "headline": "This was already saved, so BOSS did not save it twice.",
+                "action": "Reload this page to see it.",
+                "turn_action": ("Try again: another save landed at the same moment. If it "
+                                "repeats, Details shows the error.")}
+    if _BUSY.search(said_text):
+        return {"storage_cause": "busy", "retry": True,
+                "headline": ("BOSS's database was busy with a change that conflicted with this "
+                             "one, so this was not saved."),
+                "action": ("Retry it: this clears by itself. If it repeats, the error is in "
+                           "the Activity Log."),
+                "turn_action": ("Try again: the database was busy with a conflicting change. "
+                                "If it repeats, Details shows the error.")}
+    for pattern, words in _CONSTRAINT:
+        if pattern.search(said_text):
+            return {"storage_cause": "constraint", "retry": False,
+                    "headline": f"BOSS did not save this: {words}. Nothing was changed.",
+                    "action": ("Reload this page to see what is there now, then make the "
+                               "change again. If it repeats, the error is in the Activity "
+                               "Log."),
+                    "turn_action": (f"Try again; it conflicted ({words}). If it repeats, "
+                                    "Details shows the error.")}
+    cause = cause_line(error)
+    return {"storage_cause": "other", "retry": True,
+            "headline": (f"BOSS couldn't save this to its database: {cause}." if cause else
+                         "BOSS couldn't save this to its database."),
+            "action": ("Retry it. If it keeps happening, run `boss doctor` on the host; the "
+                       "full error is in the Activity Log."),
+            "turn_action": "Try again; if it repeats, Details shows the error."}
+
+
 def explain_turn_failure(error: object, *, source_id: Optional[str] = None) -> dict:
     """THE ONE SENTENCE for an agent turn that failed — the dock, AgentChat, a room, a step.
 
@@ -338,34 +445,54 @@ def explain_turn_failure(error: object, *, source_id: Optional[str] = None) -> d
     (psycopg.errors.UniqueViolation) duplicate key value … [SQL: INSERT INTO agent_threads …"
     — a database's diagnostics in a chat bubble. The visible message is `headline` + `action`
     (`sentence`); `detail` is technical_summary, for a collapsed Details and the server log.
+    A turn that failed for no better-named reason says its one-line cause (never the SQL).
     """
     said = dict(explain(error, source_id=source_id))
     if said["kind"] == "storage":
         said["headline"] = "BOSS couldn't save this conversation."
+        said["action"] = said.get("turn_action") or said["action"]
     elif said["kind"] == "failed":
-        said.update(kind="turn_failed", headline="BOSS couldn't finish this turn.",
-                    action="Try again. If it repeats, open Details for what broke.")
-    said["detail"] = technical_summary(error)
+        cause = cause_line(error)
+        said.update(kind="turn_failed",
+                    headline=(f"BOSS couldn't finish this turn: {cause}." if cause
+                              else "BOSS couldn't finish this turn."),
+                    action="Try again; if it repeats, Details shows the error.")
+    said.pop("turn_action", None)
+    said["detail"] = _scrubbed(technical_summary(error))
     said["sentence"] = f"{said['headline']} {said['action']}".strip()
     return said
 
 
 def explain(error: object, *, source_id: Optional[str] = None) -> dict:
-    """{kind, headline, action, href, retry} for a failure. Never repeats a credential."""
+    """{kind, headline, action, href, retry} for a failure. Never repeats a credential: every
+    word of it (a headline that quotes the error, the `detail` for Details) is redacted here,
+    once, whichever branch said it."""
+    said = _explain(error, source_id=source_id)
+    from .redaction import redact_secrets
+
+    for key, value in list(said.items()):
+        if isinstance(value, str) and value:
+            try:
+                said[key] = redact_secrets(value)
+            except Exception:  # noqa: BLE001 — never show what could not be redacted
+                said[key] = "" if key == "detail" else value
+    return said
+
+
+def _explain(error: object, *, source_id: Optional[str] = None) -> dict:
     text = str(error or "")
     lowered = text.lower()
     # BOSS'S OWN DATABASE, before every text check below: a statement naming a table such as
     # `reconciliations` or `budget_caps` would otherwise read as that kind of failure.
     if is_storage_failure(error):
-        headline = "BOSS couldn't save this to its database."
+        said = storage_said(error)
         # THE LOG HOLDS IT BECAUSE IT IS WRITTEN HERE: the sentence below points at the
         # Activity Log, so the failure is logged (type, message, stack; redacted) before it is.
-        log_failure(error, where="storage failure", said=headline)
+        log_failure(error, where="storage failure", said=said["headline"])
         return {
-            "kind": "storage",
-            "headline": headline,
-            "action": "Try again. If it keeps happening, what broke is in BOSS's Activity Log.",
-            "href": None, "retry": True,
+            "kind": "storage", **said,
+            "href": "/?area=budget&tab=infrastructure" if said["storage_cause"] == "disk_full"
+            else None,
             "detail": technical_summary(error),
         }
     # THE ROUTER REFUSED, IN WORDS (model_router: Local means local, no metered spend while the
@@ -563,8 +690,8 @@ def explain(error: object, *, source_id: Optional[str] = None) -> dict:
         return {
             "kind": "refused_by_api",
             "headline": "BOSS's API refused the worker that runs this work (409).",
-            "action": "This is a BOSS defect, not something you configured: update BOSS, then "
-                      "retry from the run.",
+            "action": "This is a BOSS defect, not something you configured: run `boss "
+                      "upgrade` on the BOSS host, then press Retry on the run.",
             "href": None, "retry": False,
         }
     if "reconcil" in lowered:
@@ -575,9 +702,10 @@ def explain(error: object, *, source_id: Optional[str] = None) -> dict:
                       "for twice.",
             "href": "/?area=decisions", "retry": False,
         }
+    cause = cause_line(error, 120)
     return {
         "kind": "failed",
-        "headline": "The model call failed.",
+        "headline": f"The model call failed: {cause}." if cause else "The model call failed.",
         "action": "Open the run's activity for the full error, then retry.",
         "href": None, "retry": True,
         "detail": text[:300],

@@ -19,6 +19,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from . import setup_checks, setup_view
+from .failure_words import github_refusal
 from .setup_checks import Http, iso, now_utc, parse_time
 
 
@@ -224,7 +225,7 @@ def repository_from_app(connection: Connection, settings: Any, project_id: str, 
             raise SetupActionError(409, "app_not_connected", "Connect the App",
                                    "Connect a GitHub App in GitHub access first.") from None
         raise SetupActionError(502, "unreachable", "GitHub unreachable",
-                               "GitHub did not list the App's repositories. Try again.") from None
+                               github_refusal("the App's repositories", error)) from None
     service = _service(settings)
     ref_kind, _, ref_key = APP_CREDENTIAL_REF.partition(":")
     have_ref = connection.execute(
@@ -267,7 +268,7 @@ def _signin_refusal(error: Exception) -> SetupActionError:
     if code in ("not_signed_in", "signin_expired"):
         return SetupActionError(409, code, "Sign in with GitHub", "Sign in with GitHub first.")
     return SetupActionError(502, "unreachable", "GitHub unreachable",
-                            "GitHub did not list your repositories. Try again.")
+                            github_refusal("your repositories", error))
 
 
 def repository_from_signin(connection: Connection, settings: Any, project_id: str, *, person_id: str,
@@ -388,10 +389,10 @@ def _app_repos(connection: Connection) -> list[dict[str, Any]]:
             raise SetupActionError(409, "app_not_connected", "Connect the App",
                                    "Connect a GitHub App in GitHub access first.") from None
         raise SetupActionError(502, "unreachable", "GitHub unreachable",
-                               "GitHub did not list the App's repositories. Try again.") from None
-    except Exception:  # noqa: BLE001 — a GitHub refusal of any shape is this account's, not the list's
+                               github_refusal("the App's repositories", error)) from None
+    except Exception as error:  # noqa: BLE001 — a GitHub refusal of any shape is this account's, not the list's
         raise SetupActionError(502, "unreachable", "GitHub unreachable",
-                               "GitHub did not list the App's repositories. Try again.") from None
+                               github_refusal("the App's repositories", error)) from None
 
 
 def available_repositories(connection: Connection, settings: Any, project_id: str, *,

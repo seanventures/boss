@@ -19,8 +19,8 @@ import re
 from typing import Any, Mapping
 
 #: Phrases that tell a person nothing they can act on. A card carrying one fails the guard.
-GENERIC = ("check the boss host is healthy", "do what its page says", "check what it names",
-           "only a person can do what it needs", "something went wrong")
+#: THE ONE LIST (failure_words.VAGUE_PHRASES): every failure sentence is checked against it.
+from .failure_words import VAGUE_PHRASES as GENERIC
 
 RETRY = "Press Done — retry on this card."
 AFTER = ("BOSS runs it again as you and owns it until it works; if it fails the same way, this "

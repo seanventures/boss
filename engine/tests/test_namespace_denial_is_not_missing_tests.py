@@ -31,5 +31,13 @@ def test_source_search_is_not_a_namespace_failure():
 def test_missing_test_files_does_not_invent_a_cause(stronger_lane):
     message = write_tests_exhausted_message(stronger_lane=stronger_lane)
     assert "likely" not in message
-    assert "cause is not established" in message
+    # It states what was observed (BOSSAPP-1428), never a deflection to "inspect the output".
+    assert "cause is not established" not in message and "inspect the" not in message
+    assert "It changed no files." in message and "ended without a summary" in message
     assert "No application test result" in message
+    observed = write_tests_exhausted_message(
+        stronger_lane=stronger_lane, last_words="I could not find where tests live.",
+        changed=["app/main.py"])
+    assert "It ended by saying: 'I could not find where tests live.'" in observed
+    assert "It changed app/main.py (none of them tests)." in observed
+    assert "likely" not in observed and "because" not in observed

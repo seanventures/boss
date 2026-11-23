@@ -69,6 +69,28 @@ BATCH_STAGE = "self_fix_review_batch"
 TEST_TIMEOUT = 900
 
 
+def time_cap_words(sfx: dict, minutes: int, cap_minutes: int) -> str:
+    """Why the time cap stopped a self-fix, telling a queue wait from run time (BOSSAPP-1428:
+    "311 minutes (the most is 60)" did not say whether the fix ran 311 minutes or waited for a
+    slot), and the way out."""
+    way_out = ("Raise Self-fix › Time in Govern, or free a job slot (Setup › Advanced › Agent "
+               "capacity) so it starts sooner.")
+    started, created = sfx.get("started_at"), sfx.get("created_at")
+    if started:
+        waited = ""
+        if created:
+            try:
+                queued = (datetime.fromisoformat(str(started))
+                          - datetime.fromisoformat(str(created))).total_seconds() // 60
+                if queued >= 1:
+                    waited = f" after waiting {int(queued)} min in the queue"
+            except (TypeError, ValueError):
+                waited = ""
+        return (f"it ran {minutes} min{waited}, past its {cap_minutes} min limit. {way_out}")
+    return (f"{minutes} min have passed since it was queued, past its {cap_minutes} min limit. "
+            f"{way_out}")
+
+
 class Stop(Exception):
     """A build that ends here: refused with a class and a detail, or cancelled."""
 
@@ -843,7 +865,7 @@ class Build:
             age = (sf.now_utc() - datetime.fromisoformat(str(started))).total_seconds()
             if age > cap_minutes * 60:
                 if spends:
-                    raise Stop("time", f"{int(age // 60)} minutes (the most is {cap_minutes})")
+                    raise Stop("time", time_cap_words(sfx, int(age // 60), cap_minutes))
                 over["time"] = {"minutes": int(age // 60), "cap_minutes": cap_minutes}
         if over:
             said = []

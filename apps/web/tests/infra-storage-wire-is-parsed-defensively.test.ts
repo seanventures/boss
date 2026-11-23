@@ -66,7 +66,7 @@ describe("the storage incident wire", () => {
     expect(stripHeadline(i)).toBe("Storage critical on laptop-boss · Infra Agent is cleaning");
     expect(stripSubline(i)).toMatch(/^\d+ % free · 14 runs paused at a checkpoint · nothing is lost$/);
     expect(stripHeadline(openIncident(demoIncident("asking"))!)).toContain("needs one answer");
-    expect(stripSubline({ ...i, helper: { lastSeenAt: null, reachable: false } })).toContain("host helper unreachable");
+    expect(stripSubline({ ...i, helper: { lastSeenAt: null, reachable: false } })).toContain("The host helper isn't answering, so BOSS can't free space. On the host run `boss steward status`, then `boss steward install`.");
   });
 
   it("measures progress to the target and the Command Center status", () => {

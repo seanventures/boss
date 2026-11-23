@@ -40,6 +40,7 @@ import type { CustomStep } from "../delivery-workflows-ui";
 import { useAreaKeydown } from "../../lib/area-keys";
 import { useCan } from "../../components/identity/identity-provider";
 import { uninstallPack } from "../../lib/workflow-api";
+import { couldNot, reasonOf } from "../../lib/action-result";
 import { WorkflowWizard } from "./wizard/workflow-wizard";
 import { Marketplace } from "./marketplace";
 import { PublishForm } from "./publish-form";
@@ -341,7 +342,7 @@ export function Library(props: LibraryProps) {
       setItems(await fetchLibrary(projectId));
       setFailed("");
     } catch (e) {
-      setFailed(String((e as Error)?.message ?? e));
+      setFailed(couldNot("load your workflows", reasonOf(e)));
     }
   }, [projectId]);
   useEffect(() => { void load(); }, [load]);
@@ -397,7 +398,7 @@ export function Library(props: LibraryProps) {
       return true;
     } catch (e) {
       if (isLiveRunsRefusal(e)) setLiveRuns((cur) => new Set(cur).add(w.definition_id));
-      else setFailed(String((e as Error)?.message ?? e));
+      else setFailed(couldNot(`delete ${w.name || "the workflow"}`, reasonOf(e)));
       return false;
     }
   };
@@ -472,7 +473,7 @@ export function Library(props: LibraryProps) {
 
       {failed ? (
         <p className="wf-lib-error" role="alert" data-testid="wf-lib-error">
-          <Warning size={14} aria-hidden /> <span title={failed}>Could not load</span>
+          <Warning size={14} aria-hidden /> <span data-user-text>{failed}</span>
           <button type="button" className="wf-link" onClick={() => void load()}>Retry</button>
         </p>
       ) : null}

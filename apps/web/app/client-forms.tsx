@@ -4,7 +4,7 @@ import React, { useEffect, useRef, useState, useTransition, ReactNode } from 're
 import { useConsoleRefresh } from "./use-console-refresh";
 import { useFormStatus } from 'react-dom';
 
-import { describeActionError, isActionResult, type ActionResult } from '../lib/action-result';
+import { NO_REASON, describeActionError, isActionResult, type ActionResult } from '../lib/action-result';
 
 import { pasteConnectSuccessCopy } from '../lib/paste-connect';
 import { notifyChanged } from './changed';
@@ -213,7 +213,7 @@ export function ActionForm({
       // router (tests, the org gate), where useRouter throws.
       notifyChanged('action-form');
     } else {
-      showToast('error', outcome.error ?? 'That did not work, and the server gave no reason.');
+      showToast('error', outcome.error ?? NO_REASON);
     }
   };
 

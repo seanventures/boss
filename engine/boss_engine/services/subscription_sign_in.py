@@ -827,9 +827,16 @@ def start(provider: str, *, project_id: str, actor: str, settings: Any = None,
                     (binary, *command[1:]), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT, env=_login_env(login), start_new_session=True,
                     close_fds=True)
-        except OSError:
+        except OSError as error:
+            # Name the step and the operating system's cause (BOSSAPP-1428): a host cause
+            # (no free terminals, a missing binary, permissions) is fixed on the host.
+            import errno as _errno
+
+            cause = (_errno.errorcode.get(error.errno or 0) or type(error).__name__)
             session.state = "failed"
-            session.reason = f"{login.label}'s login could not start inside BOSS. Try again."
+            session.reason = (f"{login.label}'s login could not start inside BOSS: starting its "
+                              f"CLI failed ({error.strerror or 'no reason given'}, {cause}). "
+                              "Run `boss doctor` on the BOSS host, then press Sign in again.")
             session.finished = now
             _SESSIONS[session.sign_in_id] = session
             return view(session)

@@ -450,8 +450,8 @@ def _delegate() -> dict[str, Any]:
     )
 
 
-_RETRY = ("Then retry the work: Retry on the failed step in Workflow, or on the build in "
-          "Factory. Approving this card would not retry anything.")
+_RETRY = ("Then retry the work: Retry on the failed step in Workflows, or on the build in "
+          "Code Tasks. Approving this card would not retry anything.")
 
 _REFUSAL_GUIDANCE: dict[str, dict[str, str]] = {
     "confluence": {

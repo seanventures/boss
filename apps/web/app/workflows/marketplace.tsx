@@ -19,6 +19,7 @@ import { ArrowLeft, Check, Storefront } from "@phosphor-icons/react";
 import { useCan } from "../../components/identity/identity-provider";
 import { notifyChanged } from "../changed";
 import { fetchMarketplace, installPack, unpublishPack } from "../../lib/workflow-api";
+import { couldNot, reasonOf } from "../../lib/action-result";
 import type { MarketPack } from "../../lib/workflow-editor-types";
 
 type Filter = "all" | "boss" | "org";
@@ -53,7 +54,7 @@ export function Marketplace({ projectId, onBack, onOpen }: {
       setPacks(await fetchMarketplace(projectId));
       setFailed("");
     } catch (e) {
-      setFailed(String((e as Error)?.message ?? e));
+      setFailed(couldNot("load the marketplace", reasonOf(e)));
     }
   }, [projectId]);
   useEffect(() => { void load(); }, [load]);
@@ -110,7 +111,7 @@ export function Marketplace({ projectId, onBack, onOpen }: {
 
       {failed ? (
         <p className="wf-lib-error" role="alert" data-testid="wf-market-error">
-          <span title={failed}>Could not load</span>
+          <span data-user-text>{failed}</span>
           <button type="button" className="wf-link" onClick={() => void load()}>Retry</button>
         </p>
       ) : null}

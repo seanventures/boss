@@ -72,10 +72,57 @@ export function codeWords(text: string): string {
   return CODE_WORDS[t] ?? (t.includes("_") ? `The API refused it (${t.replace(/_/g, " ")}).` : t);
 }
 
+/** What to do when BOSS refused or failed and said nothing: a step and the place to look. The
+ *  Activity log is the console area "Activity log" (area id `activity`). */
+export const NO_REASON_NEXT =
+  "Reload the page and try once more; if it repeats, the Activity log has the error.";
+
+/** The no-reason sentence when we don't know which action it was. */
+export const NO_REASON = `It didn't go through and BOSS gave no reason. ${NO_REASON_NEXT}`;
+
+/**
+ * EVERY FAILURE SAYS WHAT HAPPENED AND WHAT TO DO (BOSSAPP-1428).
+ *
+ * A customer kept reading "Couldn't do that", "Could not change it", "Save failed." — a symptom
+ * with the cause in a tooltip or nowhere. Every console failure line is built here:
+ *
+ *   couldNot("retry step 2", "the step is still running")
+ *     → "Couldn't retry step 2: the step is still running."
+ *   couldNot("save Build speed", "", "Nothing changed.")
+ *     → "Couldn't save Build speed: BOSS gave no reason. Nothing changed."
+ *   couldNot("save Build speed")
+ *     → "Couldn't save Build speed: BOSS gave no reason. Reload the page and try once more; …"
+ *
+ * `what` is what the button does, in its own words. The reason is the server's sentence (a bare
+ * API code is said in words). `next` is the next step; with no reason and no `next`, the
+ * generic one names where the error is (the Activity log). tests/every-failure-says-what-to-do
+ * fails on a vague literal anywhere in the console.
+ */
+export function couldNot(what: string, reason?: string | null, next?: string): string {
+  const doing = String(what ?? "").trim().replace(/[.\s]+$/, "") || "do that";
+  const said = codeWords(String(reason ?? "").trim()).replace(/[.\s]+$/, "");
+  const after = (next ?? "").trim();
+  if (!said) return `Couldn't ${doing}: BOSS gave no reason. ${after || NO_REASON_NEXT}`;
+  // The server already began with "Couldn't …"/"Could not …": don't say it twice.
+  const head = /^(couldn'?t|could not|can'?t|cannot)\b/i.test(said) ? said : `Couldn't ${doing}: ${said}`;
+  const ended = /[!?]$/.test(head) ? head : `${head}.`;
+  return after ? `${ended} ${after}` : ended;
+}
+
+/** A caught value's words ("" when it has none), for couldNot's reason. */
+export function reasonOf(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  if (error && typeof error === "object" && typeof (error as { message?: unknown }).message === "string") {
+    return (error as { message: string }).message;
+  }
+  return "";
+}
+
 export function failureSentence(what: string, status?: number): string {
   const said = codeWords(String(what ?? "").trim());
   const next = typeof status === "number" && status > 0 ? whatToDo(status) : "";
-  if (!said) return next || "The action failed and the server gave no reason. Try again.";
+  if (!said) return next || NO_REASON;
   if (!next) return said;
   return `${said.replace(/[.\s]+$/, "")}. ${next}`;
 }
@@ -98,7 +145,7 @@ export function describeActionError(error: unknown): string {
     }
   }
   if (typeof error === "string" && error.trim()) return codeWords(error.trim());
-  return "The action failed and the server gave no reason. Try again.";
+  return NO_REASON;
 }
 
 /** True for the result shape, so a caller can tell a result from a legacy void return. */

@@ -449,7 +449,7 @@ class AgentService:
             + "\n\nThis is done. Do not offer it again — say what changed and what is next."
             if ok else
             f"⚠ The operator pressed **{label or tool}**, and `{tool}` FAILED.\n\n"
-            f"```\n{error or 'unknown error'}\n```\n\n"
+            f"```\n{error or 'it returned no error text'}\n```\n\n"
             "Read that error literally, fix the arguments, and offer a CORRECTED action. Do "
             "not re-offer the same call unchanged."
         )

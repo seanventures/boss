@@ -43,6 +43,7 @@ _TIMEOUT = re.compile(r"time[d ]?out|deadline exceeded|ReadTimeout|ConnectTimeou
 _RATE = re.compile(r"\b429\b|rate[- ]?limit|too many requests", re.I)
 _UNREACHABLE = re.compile(r"connection refused|name or service not known|could not resolve|"
                           r"nodename nor servname|unreachable|ConnectError", re.I)
+_URL_HOST = re.compile(r"https?://(?:[^@/\s]*@)?([A-Za-z0-9.-]+\.[A-Za-z]{2,}|localhost)", re.I)
 _BUDGET = re.compile(r"budget|spend(ing)? cap|over (its|the) cap|out of credit", re.I)
 
 
@@ -66,7 +67,16 @@ def plain_cause(error: Optional[str]) -> Optional[str]:
     raw = str(error)
     service = _service_in(raw)
     if _REJECTED.search(raw):
-        return f"the {service} token was rejected" if service else "a credential was rejected"
+        if service:
+            return f"the {service} token was rejected"
+        # NAME WHO REJECTED IT (BOSSAPP-1428): "a credential was rejected" left the person to
+        # guess which of a dozen connections to fix. The URL's host, and the HTTP status.
+        host = _URL_HOST.search(raw)
+        status = re.search(r"\b(401|403)\b", raw)
+        code = f" (HTTP {status.group(1)})" if status else ""
+        if host:
+            return f"{host.group(1)} rejected BOSS's credential{code}"
+        return f"a service rejected BOSS's credential{code}; its error names no service"
     if _RATE.search(raw):
         return f"{service} rate-limited it" if service else "it was rate-limited"
     if _TIMEOUT.search(raw):

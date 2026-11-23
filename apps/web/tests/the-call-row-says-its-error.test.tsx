@@ -126,7 +126,7 @@ describe("the call row says its error", () => {
     const row = src.slice(start, end);
     expect(row).toContain("callErrorSentence(c.ok, c.error)");
     expect(row).toContain("<CallErrorLine");
-    expect(row).toContain('title={c.ok ? "OK" : c.error ?? "Failed"}');
+    expect(row).toContain('title={c.ok ? "OK" : c.error ?? "The call failed and BOSS recorded no error"}');
     expect(row).toContain('{c.ok ? "ok" : "✗"}');
   });
 });

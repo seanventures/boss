@@ -944,7 +944,7 @@ def coded_decision(kind: str, evidence: Mapping[str, Any], *, signature: str,
         choice = {"action": ASK_PERSON,
                   "cause": "egress refused the clone with a rules 403",
                   "reasoning": "A rules 403 is not a 5xx or a timeout, so it is not retried.",
-                  "question": "Egress refused this clone (403, repo_not_allowed). A rules 403 "
+                  "question": "Egress refused this clone (403, `repo_not_allowed`). A rules 403 "
                               "is not a 5xx or a timeout, and BOSS will not retry it. Allow the "
                               "repository, or point the build at one egress will clone?",
                   "after": "BOSS stops. It will not start this build again for the same refusal."}
@@ -985,6 +985,23 @@ def recovery_threshold(connection: Connection, settings: Any, project_id: str) -
     return decision_threshold(connection, settings, project_id)
 
 
+#: An error that says no model is connected at all (routing found nothing, no candidates).
+_NONE_CONNECTED = re.compile(r"no (?:connected |eligible )?models?\b|not connected|no_eligible|"
+                             r"no candidates|nothing (?:is )?connected|"
+                             r"openai_api_key is not configured", re.I)
+
+
+def _none_connected(error: str) -> bool:
+    from .model_failures import explain
+
+    if _NONE_CONNECTED.search(str(error or "")):
+        return True
+    try:
+        return explain(error)["kind"] in ("no_model", "provider_requirement")
+    except Exception:  # noqa: BLE001 — unclassified: treat it as a model that errored
+        return False
+
+
 def no_model_ask(failure: Mapping[str, Any], triage: Mapping[str, Any], *, refused: str = "",
                  error: str = "", provider: str = "") -> dict[str, Any]:
     """No model decided (none connected, it failed, or its answer was refused twice): ONE
@@ -1009,10 +1026,18 @@ def no_model_ask(failure: Mapping[str, Any], triage: Mapping[str, Any], *, refus
                              "Setup › Models.")[:600],
                 "after": "Press Retry on this step once the cause is fixed; recovery starts again.",
                 "evidence": [headline[:300], str(refused)[:300]]}
+    from .failure_words import short
+
+    # A MODEL IS CONNECTED BUT ITS CALL ERRORED (enterprise RCA, BOSSAPP-1428): the person was
+    # told "Connect a model in Setup" about a model that was connected. Only an error that says
+    # nothing is connected (or no error at all) is a missing connection.
+    said_error = short(error, 160)
+    errored = bool(error) and not refused and not out_of_credit and not _none_connected(error)
     why = (f"the model's answer was refused ({refused})" if refused else
            f"credit balance too low on {who}" if out_of_credit else
+           f"the recovery model did not answer ({said_error})" if errored else
            "BOSS needs a connected model to decide how to recover this step, and none answered"
-           + (f" ({error[:160]})" if error else ""))
+           + (f" ({said_error})" if error else ""))
     suggests = str(triage.get("action") or "")
     if suggests == ASK_PERSON and triage.get("question"):
         # BOSS's own reading already is a question for a person: asking it does nothing to the
@@ -1021,10 +1046,19 @@ def no_model_ask(failure: Mapping[str, Any], triage: Mapping[str, Any], *, refus
                 "reasoning": f"{why}; {triage.get('reasoning') or ''}".strip("; ")[:600]}
     hint = (f" BOSS's own triage reads it as: {str(triage.get('cause') or headline)[:200]} → "
             f"{_DOING.get(suggests, suggests)}." if suggests and suggests != ASK_PERSON else "")
+    if errored:
+        return {"action": ASK_PERSON, "cause": str(triage.get("cause") or headline)[:300],
+                "reasoning": why[:600],
+                "question": (f"{headline}. The recovery model did not answer ({said_error}), so "
+                             f"BOSS changed nothing.{hint} Press Retry on this step to run "
+                             "recovery again, or pick a different model in Setup › Models.")[:600],
+                "after": "Press Retry on this step; the recovery starts again with the model "
+                         "Setup › Models routes to.",
+                "evidence": [headline[:300], said_error[:300]]}
     # Out of credit is not a missing connection: say the provider's cause, and where to add credit.
-    tail = ("Add credit there (or connect a different model in Setup) so BOSS's "
+    tail = ("Add credit there (or connect a different model in Setup › Models) so BOSS's "
             "agent can decide this itself." if out_of_credit else
-            "Connect a model in Setup so BOSS's agent can decide this itself.")
+            "Connect a model in Setup › Models so BOSS's agent can decide this itself.")
     lead = f" {why}." if out_of_credit else ""
     return {"action": ASK_PERSON, "cause": str(triage.get("cause") or headline)[:300],
             "reasoning": why,

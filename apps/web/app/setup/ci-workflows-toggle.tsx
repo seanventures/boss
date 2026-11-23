@@ -9,6 +9,7 @@
 import React, { useEffect, useState } from "react";
 
 import { GatedButton } from "../../components/gated";
+import { couldNot, reasonOf } from "../../lib/action-result";
 import { fetchCiWorkflows, setupWrite, type CiWorkflows } from "../../lib/setup-client";
 import { toast, useBoard } from "./parts";
 import { Dot, Out, Tip } from "./pill";
@@ -74,7 +75,7 @@ export function CiWorkflowsToggle({ bindingId }: { bindingId: string }) {
         { label: state.enabled ? "Turn off CI changes" : "Allow CI changes" }));
       sayVerified("ci");
     } catch (error) {
-      toast(error instanceof Error ? error.message : "Could not change it", "error");
+      toast(couldNot(state.enabled ? "turn off CI changes" : "allow CI changes", reasonOf(error), "Nothing changed."), "error");
     } finally {
       setBusy(false);
     }
