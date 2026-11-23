@@ -13,8 +13,9 @@
 import { apiWrite } from "./api-write";
 import { designsFrom, type DesignsInfo } from "./pipeline-model";
 import type {
-  BlockDef, Capability, ControlDef, CheckResult, CustomStepDef, EditorMeta, Palette, Problem,
-  PublishRequest, PublishResult, RosterAgent, Spec, StandardAct, StandardChange, StandardState, WorkflowSummary,
+  BlockDef, Capability, ControlDef, CheckResult, CustomStepDef, EditorMeta, InstalledAct, InstalledFrom,
+  MarketPack, Palette, Problem, PublishedPack, PublishRequest, PublishResult, RosterAgent, Spec, StandardAct,
+  StandardChange, StandardState, WorkflowSummary,
 } from "./workflow-editor-types";
 
 /** `publishSpec` (and `checkSpec`) on a 422: the problems, each pinned to a step and field. */
@@ -286,6 +287,8 @@ function toSummary(raw: unknown): WorkflowSummary {
     active_version_id: str(w.active_version_id) || null,
     ...(w.is_catalogue ? { modified: w.modified === true,
                            new_standard_available: w.new_standard_available === true } : {}),
+    ...(w.marketplace ? { marketplace: toInstalled(w.marketplace) } : {}),
+    ...(w.published ? { published: toPublished(w.published) } : {}),
     last_run: str(lastRun.status)
       ? { ...(str(lastRun.id) ? { id: str(lastRun.id) } : {}), status: str(lastRun.status), at: str(lastRun.at) }
       : null,
@@ -355,8 +358,109 @@ export async function fetchSpec(projectId: string, key: string, version?: number
       // A version other than the one that runs opens read-only ("Viewing v2 · Restore").
       readOnlyVersion: version !== undefined && version !== active ? version : null,
       standard: isCatalogue ? toStandard(body.standard) : null,
+      marketplace: toInstalled(body.marketplace),
+      published: toPublished(body.published),
     },
   };
+}
+
+/* ── The Workflow Marketplace ────────────────────────────────────────────────────── */
+
+/** Where an installed copy came from, as the API sends it (`marketplace`), or null. */
+export function toInstalled(value: unknown): InstalledFrom | null {
+  if (!value || typeof value !== "object") return null;
+  const m = asObj(value);
+  const u = m.update && typeof m.update === "object" ? asObj(m.update) : null;
+  return {
+    pack_id: str(m.pack_id), pack_name: str(m.pack_name) || str(m.pack_id),
+    source: m.source === "org" ? "org" : "boss",
+    version: str(m.version) || null, modified: m.modified === true, waiting: str(m.waiting) || null,
+    update: u ? {
+      version: str(u.version) || null,
+      ...("changes" in u ? { changes: toChanges(u.changes) } : {}),
+      ...("applies_cleanly" in u ? { applies_cleanly: u.applies_cleanly === true } : {}),
+      ...("conflicts" in u ? { conflicts: strings(u.conflicts) } : {}),
+    } : null,
+  };
+}
+
+function toPublished(value: unknown): PublishedPack | null {
+  if (!value || typeof value !== "object") return null;
+  const p = asObj(value);
+  if (!str(p.pack_id) && !str(p.id)) return null;
+  return { pack_id: str(p.pack_id) || str(p.id), name: str(p.name), summary: str(p.summary),
+           version: str(p.version), status: p.status === "unpublished" ? "unpublished" : "published" };
+}
+
+function toPack(raw: unknown): MarketPack {
+  const p = asObj(raw);
+  return {
+    id: str(p.id), source: p.source === "org" ? "org" : "boss", name: str(p.name) || str(p.id),
+    summary: str(p.summary), publisher: str(p.publisher), version: str(p.version),
+    updated_at: str(p.updated_at) || null,
+    workflows: list(p.workflows).map((w) => {
+      const row = asObj(w);
+      return { key: str(row.key), name: str(row.name) || str(row.key), description: str(row.description),
+               steps: strings(row.steps) };
+    }),
+    installed: p.installed === true, installed_version: str(p.installed_version) || null,
+    update_available: str(p.update_available) || null, waiting: strings(p.waiting),
+    published_here: p.published_here === true,
+    needs: list(p.needs).map((n) => {
+      const row = asObj(n);
+      return { key: str(row.key), label: str(row.label), ok: row.ok === true, note: str(row.note) || null };
+    }),
+    agents: list(p.agents).map((a) => {
+      const row = asObj(a);
+      return { key: str(row.key), name: str(row.name) || str(row.key), present: row.present === true };
+    }),
+  };
+}
+
+/** Every pack this project can install: BOSS's, then its org's, newest first. */
+export async function fetchMarketplace(projectId: string): Promise<MarketPack[]> {
+  const body = await getView("marketplace", { project_id: projectId });
+  return list(body.items).map(toPack).filter((p) => p.id);
+}
+
+/** Install a pack: its workflows land in Yours, each with the pack and version it came from. */
+export async function installPack(projectId: string, packId: string): Promise<{ version: string; keys: string[] }> {
+  const body = await send("POST", { action: "market_install", project_id: projectId, pack_id: packId });
+  return { version: str(body.version), keys: list(body.installed).map((i) => str(asObj(i).key)).filter(Boolean) };
+}
+
+/** Remove a pack's workflows. Refused (409, the API's sentence) while one of them is running. */
+export async function uninstallPack(projectId: string, packId: string): Promise<void> {
+  await send("POST", { action: "market_uninstall", project_id: projectId, pack_id: packId });
+}
+
+/** "Review update" on a copy you changed: take it with your changes, take it only, or not now. */
+export async function updateInstalled(projectId: string, definitionId: string, act: InstalledAct):
+    Promise<InstalledFrom | null> {
+  const body = await send("POST", { action: "market_update", project_id: projectId,
+                                    definition_id: definitionId, act });
+  return toInstalled(body.marketplace);
+}
+
+/** Publish one of your workflows to the org's Marketplace (again: the next version). */
+export async function publishPack(projectId: string, definitionId: string,
+                                  form: { name: string; summary: string; version: string }): Promise<PublishedPack | null> {
+  const body = await send("POST", { action: "market_publish", project_id: projectId, definition_id: definitionId,
+                                    name: form.name, summary: form.summary, version: form.version });
+  const pack = asObj(body.pack);
+  return toPublished({ ...pack, pack_id: pack.id });
+}
+
+/** Take your pack out of the org's Marketplace. Installed copies stay where they are. */
+export async function unpublishPack(projectId: string, packId: string): Promise<void> {
+  await send("POST", { action: "market_unpublish", project_id: projectId, pack_id: packId });
+}
+
+/** The version after `v` (1.0 → 1.1), as the API bumps a republish. */
+export function nextVersion(v: string | null | undefined): string {
+  const parts = (v ?? "").match(/\d+/g)?.map(Number) ?? [];
+  if (!parts.length) return "1.0";
+  return `${parts[0]}.${(parts[1] ?? 0) + 1}`;
 }
 
 const toChanges = (value: unknown): StandardChange[] => list(value).map((raw) => {

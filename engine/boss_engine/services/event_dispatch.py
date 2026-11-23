@@ -215,8 +215,15 @@ def start_workflow_on_grant(
         # Said once, with the door, rather than raised: one misconfigured door must not stop
         # the others.
         logger.warning("event_dispatch.workflow_missing", extra=extra)
+        from .workflow_marketplace import PACK_OF_KEY, SHIPPED_PACKS
+
+        pack = SHIPPED_PACKS.get(PACK_OF_KEY.get(str(workflow_key), ""))
         return {"run_id": None, "entry": None, "lost_reason": None,
-                "word": f"There is no published {workflow_key} workflow here"}
+                # IN A MARKETPLACE PACK NOT INSTALLED HERE: say where it is (never auto-installed
+                # by an agent: installing is a person's choice).
+                "word": (f"{workflow_key} is in the {pack.name} pack: install it from "
+                         "Workflows › Marketplace" if pack
+                         else f"There is no published {workflow_key} workflow here")}
     from .workflow_readiness import (
         WorkflowNotReadyError, record_refused, record_started_anyway, refuse_unless_ready,
     )

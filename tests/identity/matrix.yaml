@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 2436 operations.
+# 2442 operations.
 "GET /.well-known/agent-card.json": ["public:jwks", "OAPVU"]
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /.well-known/boss-mcp-client.json": ["public:jwks", "OAPVU"]
@@ -657,6 +657,12 @@
 "PATCH /v1/delivery-workflows/custom-steps/{step_key}": ["permit workflow:create @ project(body=project_id)", "OAP"]
 "POST /v1/delivery-workflows/draft": ["permit workflow:create @ project(body=project_id)", "OAP"]
 "POST /v1/delivery-workflows/fork": ["permit workflow:publish @ project(body=project_id)", "OAP"]
+"GET /v1/delivery-workflows/marketplace": ["permit workflow:read @ project(query=project_id)", "OAPVU"]
+"POST /v1/delivery-workflows/marketplace/install": ["permit workflow:install @ project(body=project_id)", "OAP"]
+"POST /v1/delivery-workflows/marketplace/publish": ["permit workflow:publish @ project(body=project_id)", "OAP"]
+"POST /v1/delivery-workflows/marketplace/uninstall": ["permit workflow:install @ project(body=project_id)", "OAP"]
+"POST /v1/delivery-workflows/marketplace/unpublish": ["permit workflow:publish @ project(body=project_id)", "OAP"]
+"POST /v1/delivery-workflows/marketplace/update": ["permit workflow:install @ project(body=project_id)", "OAP"]
 "POST /v1/delivery-workflows/publish": ["permit workflow:publish @ project(body=project_id)", "OAP"]
 "POST /v1/delivery-workflows/run-capabilities": ["permit worker:lease @ org", "-"]
 "GET /v1/delivery-workflows/runs": ["permit workflow:read @ project(query=project_id)", "OAPVU"]

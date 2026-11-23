@@ -702,6 +702,9 @@ from .request_bodies import (
     WorkflowDraftBody,
     WorkflowPublishBody,
     WorkflowStandardActBody,
+    WorkflowPackBody,
+    WorkflowPackPublishBody,
+    WorkflowPackUpdateBody,
     WorkflowRenameBody,
     WorkflowWireBody,
     WorkflowCustomStepBody,
@@ -913,6 +916,7 @@ from .services.toolchain_registry import (
 )
 from .services import workflows as workflow_runtime
 from boss_engine.services import workflow_standards
+from boss_engine.services import workflow_marketplace
 from .services.skill_registry import (
     disable_skill,
     enable_skill,
@@ -1618,6 +1622,22 @@ async def lifespan(_: FastAPI):
             print(f"[lifespan] standard workflows added to older projects: {added}")
     except Exception as exc:  # noqa: BLE001 — never block boot on a seed
         print(f"[lifespan] standard workflows for older projects skipped: {exc}")
+    # INSTALLED MARKETPLACE PACKS FOLLOW THE PACK BOSS SHIPS (workflow_marketplace.sync_shipped):
+    # an unmodified copy takes a newer version by itself; a modified one is offered it.
+    try:
+        # One short transaction per project: a project's publish lock is never held across
+        # every other project's sync.
+        with begin(engine) as connection:
+            synced_projects = workflow_marketplace.projects_with_shipped_installs(connection)
+        synced: dict = {}
+        for synced_project in synced_projects:
+            with begin(engine) as connection:
+                synced.update(workflow_marketplace.sync_shipped(
+                    connection, actor="boss", project_ids=[synced_project]))
+        if synced:
+            print(f"[lifespan] marketplace installs brought to the shipped packs: {synced}")
+    except Exception as exc:  # noqa: BLE001 — never block boot on a sync
+        print(f"[lifespan] marketplace pack sync skipped: {exc}")
     # SIGNED WORK FOR WHAT RAN BEFORE THE LEDGER. Without this, every Passport, Lineage and
     # Credits screen is empty for existing work until somebody knows to call /v1/acts/backfill.
     # In a thread, one short transaction per run, panel or build with try-locks, so it never
@@ -26476,6 +26496,150 @@ def install_delivery_catalogue(payload: ProjectBody) -> dict:
         return seed(connection, project_id, actor=actor)
 
 
+# ── The Workflow Marketplace (workflow_marketplace) ───────────────────────────────────────────
+#
+# Packs of workflows a project installs into its OWN workflows ("Yours"), and an org's own
+# workflows published for its other projects. Under /v1/delivery-workflows, not /v1/marketplace:
+# that prefix is the paid surface (route_ownership), and workflow packs are community.
+
+
+def _marketplace_refusal(error: Exception) -> HTTPException:
+    if isinstance(error, workflow_runtime.WorkflowNotFoundError):
+        return HTTPException(status_code=404, detail=str(error))
+    if isinstance(error, workflow_runtime.WorkflowNamespaceError):
+        return HTTPException(status_code=403, detail=str(error))
+    if isinstance(error, (workflow_runtime.WorkflowValidationError,
+                          workflow_runtime.WorkflowBindingBlockedError)):
+        return HTTPException(status_code=422, detail=str(error))
+    return HTTPException(status_code=409, detail=str(error))
+
+
+@app.get("/v1/delivery-workflows/marketplace")
+@permit(P.WORKFLOW_READ, scope=Scope.project(query="project_id"))
+def list_workflow_marketplace(project_id: str) -> dict:
+    """Every pack this project can install — BOSS's, then its org's, newest first — each with
+    its publisher, version, workflows, what it needs here, and Installed / Update available."""
+    with begin(engine) as connection:
+        try:
+            return {"project_id": project_id,
+                    "items": workflow_marketplace.list_packs(connection, project_id)}
+        except workflow_runtime.WorkflowError as error:
+            raise _marketplace_refusal(error) from error
+
+
+@app.post("/v1/delivery-workflows/marketplace/install")
+@permit(P.WORKFLOW_INSTALL, scope=Scope.project(body="project_id"))
+def install_workflow_pack(payload: WorkflowPackBody) -> dict:
+    """Install a pack: its workflows are copied into the project's own, each recording the pack
+    and version it came from. Installed already: brought to the pack's version."""
+    payload = payload.payload()
+    project_id = str(payload.get("project_id") or "").strip()
+    pack_id = str(payload.get("pack_id") or "").strip()
+    if not project_id or not pack_id:
+        raise HTTPException(status_code=400, detail="project_id and pack_id are required")
+    actor = _delivery_workflow_actor(payload)
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "workflow_manage")
+        try:
+            return workflow_marketplace.install(connection, project_id, pack_id, actor)
+        except workflow_runtime.WorkflowError as error:
+            raise _marketplace_refusal(error) from error
+
+
+@app.post("/v1/delivery-workflows/marketplace/uninstall")
+@permit(P.WORKFLOW_INSTALL, scope=Scope.project(body="project_id"))
+def uninstall_workflow_pack(payload: WorkflowPackBody) -> dict:
+    """Remove a pack's workflows (retired when they have runs). Refused while one is running."""
+    payload = payload.payload()
+    project_id = str(payload.get("project_id") or "").strip()
+    pack_id = str(payload.get("pack_id") or "").strip()
+    if not project_id or not pack_id:
+        raise HTTPException(status_code=400, detail="project_id and pack_id are required")
+    actor = _delivery_workflow_actor(payload)
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "workflow_manage")
+        try:
+            return workflow_marketplace.uninstall(connection, project_id, pack_id, actor)
+        except workflow_runtime.WorkflowError as error:
+            raise _marketplace_refusal(error) from error
+
+
+@app.post("/v1/delivery-workflows/marketplace/update")
+@permit(P.WORKFLOW_INSTALL, scope=Scope.project(body="project_id"))
+def update_installed_workflow(payload: WorkflowPackUpdateBody) -> dict:
+    """"Review update" on a modified installed copy: `take`, `take_keep` (my changes applied on
+    the new version; refused with the clashes named when it does not apply cleanly) or
+    `dismiss`. Unmodified copies update by themselves. Runs in flight keep their version."""
+    payload = payload.payload()
+    project_id = str(payload.get("project_id") or "").strip()
+    definition_id = str(payload.get("definition_id") or "").strip()
+    action = str(payload.get("act") or "").strip()
+    if not project_id or not definition_id or action not in {"take", "take_keep", "dismiss"}:
+        raise HTTPException(status_code=400, detail=(
+            "project_id, definition_id and act (take, take_keep or dismiss) are required"))
+    actor = _delivery_workflow_actor(payload)
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "workflow_manage")
+        try:
+            return workflow_marketplace.answer_update(connection, project_id, definition_id,
+                                                      actor, action)
+        except workflow_runtime.WorkflowError as error:
+            raise _marketplace_refusal(error) from error
+
+
+@app.post("/v1/delivery-workflows/marketplace/publish")
+@permit(P.WORKFLOW_PUBLISH, scope=Scope.project(body="project_id"))
+def publish_workflow_pack(payload: WorkflowPackPublishBody) -> dict:
+    """Publish one of this project's own workflows to its org's Marketplace, as a versioned
+    pack every project in the org can install. Again: the next version (it must be later)."""
+    payload = payload.payload()
+    project_id = str(payload.get("project_id") or "").strip()
+    definition_id = str(payload.get("definition_id") or "").strip()
+    if not project_id or not definition_id:
+        raise HTTPException(status_code=400, detail="project_id and definition_id are required")
+    actor = _delivery_workflow_actor(payload)
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "workflow_manage")
+        try:
+            return workflow_marketplace.publish(
+                connection, project_id, definition_id, actor,
+                name=payload.get("name"), summary=payload.get("summary"),
+                version=payload.get("version"), publisher=_member_display_name(
+                    connection, project_id, actor))
+        except workflow_runtime.WorkflowError as error:
+            raise _marketplace_refusal(error) from error
+
+
+@app.post("/v1/delivery-workflows/marketplace/unpublish")
+@permit(P.WORKFLOW_PUBLISH, scope=Scope.project(body="project_id"))
+def unpublish_workflow_pack(payload: WorkflowPackBody) -> dict:
+    """Take this project's pack out of the org's Marketplace; installed copies stay."""
+    payload = payload.payload()
+    project_id = str(payload.get("project_id") or "").strip()
+    pack_id = str(payload.get("pack_id") or "").strip()
+    if not project_id or not pack_id:
+        raise HTTPException(status_code=400, detail="project_id and pack_id are required")
+    actor = _delivery_workflow_actor(payload)
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "workflow_manage")
+        try:
+            return workflow_marketplace.unpublish(connection, project_id, pack_id, actor)
+        except workflow_runtime.WorkflowError as error:
+            raise _marketplace_refusal(error) from error
+
+
+def _member_display_name(connection, project_id: str, actor: str) -> str:
+    """The publisher a pack shows: the person's display name here, else their actor id."""
+    try:
+        with connection.begin_nested():
+            name = connection.execute(
+                text("SELECT display_name FROM project_members WHERE project_id = :p "
+                     "AND member_id = :m"), {"p": project_id, "m": actor}).scalar()
+    except Exception:  # noqa: BLE001 — a name is words
+        name = None
+    return str(name or actor)
+
+
 @app.post("/v1/delivery-workflows/apply")
 @permit(P.WORKFLOW_PUBLISH, scope=Scope.project(body="project_id"))
 def apply_delivery_workflow(payload: WorkflowApplyBody) -> dict:
@@ -27068,7 +27232,8 @@ def get_delivery_workflow_spec(workflow_key: str, project_id: str,
                 "SELECT d.id, d.project_id, d.name, d.description, d.is_catalogue, "
                 "       d.forked_from_version_id, d.active_version_id, d.standard_version_id, "
                 "       d.standard_content_hash, d.standard_available_version_id, "
-                "       d.standard_dismissed_version_id, "
+                "       d.standard_dismissed_version_id, d.marketplace_pack_id, "
+                "       d.marketplace_version, d.marketplace_waiting, "
                 "       v.id AS version_id, v.version, v.spec "
                 "FROM workflow_definitions d "
                 "LEFT JOIN workflow_versions v ON v.workflow_definition_id = d.id "
@@ -27158,6 +27323,12 @@ def get_delivery_workflow_spec(workflow_key: str, project_id: str,
             # `new_standard` when BOSS shipped a newer one beside the operator's edit.
             # None for the operator's own workflows.
             "standard": workflow_standards.state(connection, dict(row)),
+            # FROM THE MARKETPLACE (workflow_marketplace.install_state): the pack, its version,
+            # Modified, and a newer version waiting with its changes. None otherwise.
+            "marketplace": workflow_marketplace.install_state(connection, dict(row), detail=True),
+            # PUBLISHED from here to the org's Marketplace: the pack, its version and status.
+            "published": workflow_marketplace.published_from(connection, project_id,
+                                                              str(row["id"])),
         }
 
 
@@ -28271,9 +28442,19 @@ def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = Non
             )
             version_id = running["version_id"] if running else None
             if not version_id:
+                # IN A MARKETPLACE PACK THIS PROJECT HAS NOT INSTALLED: say where it is.
+                pack = workflow_marketplace.SHIPPED_PACKS.get(
+                    workflow_marketplace.PACK_OF_KEY.get(workflow_key, ""))
+                waiting = connection.execute(
+                    text("SELECT marketplace_waiting FROM workflow_definitions "
+                         "WHERE project_id = :p AND workflow_key = :k AND status <> 'retired'"),
+                    {"p": project_id, "k": workflow_key}).scalar()
                 raise HTTPException(
-                    status_code=404, detail=f"no delivery workflow '{workflow_key}'"
-                )
+                    status_code=409 if waiting else 404,
+                    detail=(f"'{workflow_key}' is installed but waiting: {waiting}" if waiting
+                            else f"'{workflow_key}' is in the {pack.name} pack. Install it "
+                            "from Workflows › Marketplace." if pack
+                            else f"no delivery workflow '{workflow_key}'"))
         # RUNNING IT AGAIN REPEATS THE OPERATOR'S CHOICE. A run they started without a
         # deployment host was refused on its re-run, with no way to start anyway; Stop and run
         # again was worse — it stopped the original first, then the start was refused, and

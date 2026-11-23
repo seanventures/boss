@@ -76,6 +76,12 @@ export function TopBar(p: {
   /** Opens the standard's "New standard available" offer. */
   onNewStandard?(): void;
   deleteBlocked?: string | null;
+  /** Publish this workflow (Yours, saved) to the org's Marketplace: the form is drawn by the host. */
+  publishForm?: (close: () => void) => React.ReactNode;
+  publishBlocked?: string | null;
+  /** Installed from the Marketplace: Uninstall its pack instead of Delete. */
+  onUninstall?(): Promise<string | null>;
+  uninstallBlocked?: string | null;
   readOnly: boolean;
   /** Whether the editor has the whole window (`page=full`), and the press that switches it.
    *  Absent: the host offers no full page, and no button is drawn. */
@@ -85,7 +91,9 @@ export function TopBar(p: {
   const meta = state.meta;
   const jsonLine = state.jsonError ? `Fix the JSON first (line ${state.jsonError.line})` : null;
 
-  const [pop, setPop] = useState<null | "versions" | "menu" | "describe" | "discard" | "delete">(null);
+  const [pop, setPop] = useState<null | "versions" | "menu" | "describe" | "discard" | "delete" | "publish" | "uninstall">(null);
+  const [uninstallSaid, setUninstallSaid] = useState("");
+  const [uninstalling, setUninstalling] = useState(false);
   const versionsRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLButtonElement>(null);
   const describeRef = useRef<HTMLButtonElement>(null);
@@ -274,10 +282,28 @@ export function TopBar(p: {
         </div>
       </Popover>
 
-      <Popover anchor={menuRef} open={pop === "menu" || pop === "discard" || pop === "delete"}
-               onClose={close} label="More" role={pop === "menu" ? "menu" : "dialog"} width={220}
-               testId="wf-menu">
-        {pop === "discard" ? (
+      <Popover anchor={menuRef} open={pop === "menu" || pop === "discard" || pop === "delete"
+                                      || pop === "publish" || pop === "uninstall"}
+               onClose={close} label="More" role={pop === "menu" ? "menu" : "dialog"}
+               width={pop === "publish" ? 340 : 220} testId="wf-menu">
+        {pop === "publish" && p.publishForm ? (
+          p.publishForm(close)
+        ) : pop === "uninstall" && meta.marketplace ? (
+          <div className="wf-pop-form" data-testid="wf-uninstall">
+            <div className="wf-pop-title">Uninstall <span data-user-text>{meta.marketplace.pack_name}</span>?</div>
+            {uninstallSaid ? <p className="wf-publish-error" role="alert" data-testid="wf-uninstall-said">{uninstallSaid}</p> : null}
+            <div className="wf-pop-actions">
+              <button type="button" className="wf-btn wf-btn-danger" autoFocus data-testid="wf-uninstall-confirm"
+                      disabled={uninstalling || Boolean(p.uninstallBlocked)} title={p.uninstallBlocked ?? "Its workflows leave Yours. Ones that ran keep their history."}
+                      onClick={async () => {
+                        setUninstalling(true);
+                        const said = await p.onUninstall?.() ?? null;
+                        setUninstalling(false);
+                        if (said) setUninstallSaid(said); else close();
+                      }}>{uninstalling ? "Uninstalling…" : "Uninstall"}</button>
+            </div>
+          </div>
+        ) : pop === "discard" ? (
           <div className="wf-pop-form">
             <div className="wf-pop-title">Discard changes?</div>
             <div className="wf-pop-actions">
@@ -308,8 +334,19 @@ export function TopBar(p: {
                                  onClick={() => { close(); p.onChanges(); }} testId="wf-menu-changes">Changes</Btn></li>
             <li role="none"><Btn role="menuitem" className="wf-menu-item" blocked={!dirty && "No changes"}
                                  onClick={() => setPop("discard")} testId="wf-menu-discard">Discard changes</Btn></li>
-            <li role="none"><Btn role="menuitem" className="wf-menu-item wf-menu-danger" blocked={p.deleteBlocked}
-                                 onClick={() => setPop("delete")} testId="wf-menu-delete">Delete</Btn></li>
+            {p.publishForm ? (
+              <li role="none"><Btn role="menuitem" className="wf-menu-item" blocked={p.publishBlocked}
+                                   onClick={() => setPop("publish")} testId="wf-menu-publish">
+                {meta.published?.status === "published" ? "Publish again…" : "Publish to Marketplace…"}</Btn></li>
+            ) : null}
+            {meta.marketplace && p.onUninstall ? (
+              <li role="none"><Btn role="menuitem" className="wf-menu-item wf-menu-danger" blocked={p.uninstallBlocked}
+                                   onClick={() => { setUninstallSaid(""); setPop("uninstall"); }}
+                                   testId="wf-menu-uninstall">Uninstall…</Btn></li>
+            ) : (
+              <li role="none"><Btn role="menuitem" className="wf-menu-item wf-menu-danger" blocked={p.deleteBlocked}
+                                   onClick={() => setPop("delete")} testId="wf-menu-delete">Delete</Btn></li>
+            )}
           </ul>
         )}
       </Popover>
