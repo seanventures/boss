@@ -49,6 +49,7 @@ import { ConfluenceRow } from "./confluence-row";
 import { SetupSection } from "./setup-section";
 import { accountsOf } from "./setup-blocks";
 import { EventsRow } from "../events/events-row";
+import { AutonomySetupRow } from "../autonomy/setup-row";
 import { SharingAsk } from "../improve/sharing-ask";
 import { CiWorkflowsToggle } from "./ci-workflows-toggle";
 import { GitHubSigninRow, useSignin } from "./github-signin-row";
@@ -469,6 +470,8 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
         <div ref={ref("documents")}><ConfluenceRow projectId={projectId} /></div>
         {/* EVENTS (P9a-7): what wakes the agents; the way into Setup › Events. */}
         <div><EventsRow projectId={projectId} /></div>
+        {/* AUTONOMY (BOSSAPP-1441): one line; it is set in Govern › Where people decide. */}
+        <div><AutonomySetupRow projectId={projectId} /></div>
         {/* NO TRY IT HERE (operator, 2026-11-04: "Why trying out sample project is in Repos and
             Models"): Setup is connections only. The sample and the one-sentence PR live on the
             Welcome (step 3); `focus=try` opens it. */}

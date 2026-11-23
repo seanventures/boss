@@ -14,7 +14,7 @@ import React, { act } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { setConsoleLive } from "../lib/console-live";
-import { $$, click, mountAs, settle, stubFetch, tid, type, unmount, type Call } from "./_helpers/multirepo-fixtures";
+import { $, $$, click, mountAs, settle, stubFetch, tid, type, unmount, type Call } from "./_helpers/multirepo-fixtures";
 
 const { WherePeopleDecide } = await import("../app/govern/decide-tab");
 const { AgentLanes } = await import("../app/agent-ops/agent-lanes");
@@ -59,6 +59,9 @@ const SETTINGS = {
   mode: { mode: "route", source: "console", pinned: false, by: null, at: null },
   review_builds: { install: false, project: null, classes: {}, effective: false, source: "install" },
 };
+const AUTONOMY_POLICY = { dev: "act", prod: "ask", unknown_remote: "prod", dev_topup_usd: { per_item: 1, per_day: 10 }, explicit_stops: "honour",
+  source: "org", set_by: null, set_at: null, line: "Development: agents act · Production: you decide" };
+const AUTONOMY = { policy: AUTONOMY_POLICY, org_default: AUTONOMY_POLICY, install: {} };
 const UNDERSTOOD = {
   status: "understood",
   edits: [{ kind: "prod_deploy", field: "quiet", scope: "install", title: "Production deploy",
@@ -77,6 +80,7 @@ function api(over?: (c: Call) => { status?: number; body: unknown } | undefined)
     const o = over?.(c);
     if (o) return o;
     if (c.path === "/v1/decide" && c.method === "GET") return { body: BOARD };
+    if (c.path === "/v1/autonomy/policy" && c.method === "GET") return { body: AUTONOMY };
     if (c.path === "/v1/ambient/settings") return { body: SETTINGS };
     if (c.path === "/v1/decide/understand") return { body: UNDERSTOOD };
     if (c.path === "/v1/decide/apply") return { body: { applied: [] } };
@@ -112,17 +116,21 @@ describe("Where people decide", () => {
     expect(tid("wd-sum-waiting")?.textContent).toBe("1");
     expect(tid("wd-sum-oldest")?.getAttribute("href")).toContain("decision=dec_9");
     expect(tid("wd-what-agents-did")?.getAttribute("href")).toContain("area=agent_ops");
-    const cards = $$('[data-testid="wd-card"]');
-    expect(cards.map((c) => c.dataset.kind)).toEqual([...KINDS.map((k) => k[0]), "change_list"]);
-    expect(cards[0].textContent).toContain("2 · 24h");
-    expect(cards[0].textContent).toContain("Owner seat");
-    expect(cards[3].textContent).toContain("passkey");
-    expect(cards[7].textContent).toContain("fixed");
+    // The 7 compact cards (dev autonomy wireframe); the fixed 8th is a locked chip on the caption.
+    const cards = $$('[data-testid="wd-bounds"] [data-testid="wd-card"]');
+    expect(cards.map((c) => c.dataset.kind)).toEqual(KINDS.map((k) => k[0]));
+    expect(cards.map((c) => c.querySelector("b")?.textContent)).toEqual(
+      ["Production deploy", "Merge", "Spend", "Secrets", "Public", "Prod infra", "Access"]);
+    expect(cards[0].textContent).toContain("Prod targets only");
+    expect(cards[0].title).toContain("2 in 24h");
+    expect(cards[0].title).toContain("Owner seat");
+    expect(cards[3].title).toContain("passkey");
+    expect(document.querySelector('.wd-cap [data-testid="wd-card"]')?.getAttribute("data-kind")).toBe("change_list");
   });
 
   it("opens a card's popover with who decides, backup, scope, window, delegate, Full auto and the trail, and saves with the passkey", async () => {
     const calls = await open();
-    await click($$('[data-testid="wd-card"]')[0]);
+    await click($('[data-testid="wd-card"][data-kind="prod_deploy"]'));
     const pop = tid("wd-pop")!;
     for (const words of ["Who decides", "Scope", "Quiet window", "Agents may", "On my behalf", "Full auto", "Never: irreversible"]) {
       expect(pop.textContent).toContain(words);
@@ -148,7 +156,7 @@ describe("Where people decide", () => {
     setConsoleLive(true);
     await mountAs(<WherePeopleDecide projectId="p1" />, "owner");
     await settle();
-    await click($$('[data-testid="wd-card"]')[2]);
+    await click($('[data-testid="wd-card"][data-kind="spend"]'));
     await click(tid("wd-save"));
     expect(tid("wd-refusal")?.textContent).toContain("never raised above");
   });

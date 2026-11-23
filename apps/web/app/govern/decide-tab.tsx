@@ -31,7 +31,9 @@ import {
 } from "../../lib/decide";
 import { logHref } from "../../lib/log-url";
 import { usePolledRead } from "../../lib/log-stream";
+import { compactCard, readPolicy, type DevMode } from "../../lib/autonomy";
 import { AgentAvatar } from "../agent-avatar";
+import { AutonomyControl } from "../autonomy/control";
 import { KillSwitch } from "../agent-ops/autonomy-panel";
 import { showToast } from "../client-forms";
 import "./decide.css";
@@ -58,57 +60,28 @@ function Face({ who, size = 18 }: { who: { name?: string } | null; size?: number
   return <AgentAvatar variant={who ? "person" : "you"} size={size} tip={who?.name || "You"} />;
 }
 
-function Mini({ bars }: { bars: number[] }) {
-  const max = Math.max(1, ...bars);
-  return (
-    <span className="wd-mini" aria-hidden>
-      {bars.map((b, i) => <i key={i} style={{ height: `${Math.max(2, Math.round((b / max) * 16))}px` }} data-zero={b === 0 || undefined} />)}
-    </span>
-  );
-}
-
 // ── one card ────────────────────────────────────────────────────────────────────────────────
 
-function ListCard({ card, open, onOpen }: { card: Card; open: boolean; onOpen: () => void }) {
+function ListCard({ card, open, onOpen, dev }: { card: Card; open: boolean; onOpen: () => void; dev: DevMode | null }) {
   const I = ICONS[card.icon] ?? HandPalm;
   if (card.fixed) {
+    // The fixed entry (changing this list) sits on the list's caption as one locked chip.
     return (
-      <button type="button" className="wd-b" data-lock data-open={open || undefined} onClick={onOpen} data-testid="wd-card"
-              data-kind={card.key} aria-expanded={open} title="Fixed: changing the list is always a person, with a passkey">
-        <span className="wd-b-h"><span className="wd-bi"><I size={16} weight="bold" /></span><b>{card.title}</b><LockSimple size={13} className="wd-caret" /></span>
-        <span className="wd-def">{card.line}</span>
-        <span className="wd-meta"><span className="wd-meta-l"><span className="wd-tag">fixed</span></span>
-          <span className="wd-meta-r">{card.last_change ? `last change ${ago(card.last_change.at)}` : "never changed"}</span></span>
-        <span className="wd-why">{card.why}</span>
-      </button>
+      <button type="button" className="au-chip" data-on={open || undefined} onClick={onOpen} data-testid="wd-card" data-kind={card.key}
+              aria-expanded={open} title={`${card.title}: ${card.line}. ${card.why}`}>
+        <LockSimple size={12} aria-hidden />{card.title}</button>
     );
   }
-  const rule = card.rule;
-  const windows = rule?.quiet ?? [];
+  // THE COMPACT CARD (dev autonomy wireframe): icon, short title, what still waits. Who decides,
+  // the 24 h tally and why live in its tooltip and its popover.
+  const c = compactCard(card.key, card.title, card.line, dev);
   const step = STEP_WORDS[card.step_up];
+  const tip = [card.title, `${card.decider.label}${step ? ` · ${step}` : ""}`, `${card.count_24h} in 24h`, card.why].filter(Boolean).join(" · ");
   return (
-    <button type="button" className="wd-b" data-open={open || undefined} onClick={onOpen} data-testid="wd-card" data-kind={card.key}
-            aria-expanded={open} title={`${card.title} · click to change`}>
-      <span className="wd-b-h"><span className="wd-bi"><I size={16} weight="bold" /></span><b>{card.title}</b><CaretDown size={12} className="wd-caret" /></span>
-      <span className="wd-def" data-testid="wd-card-line">{card.line}</span>
-      <span className="wd-meta">
-        <span className="wd-meta-l">
-          <span className="wd-scope" title="Where this rule is set">
-            <span aria-selected="true">Install</span>
-            {card.scope.per_project ? <span>{card.scope.projects.length ? `${card.scope.projects.length} project${card.scope.projects.length > 1 ? "s" : ""}` : "project"}</span> : null}
-          </span>
-          <span className="wd-who-row">
-            <Face who={card.decider.kind === "person" ? { name: card.decider.label } : card.decider.people[0] ?? null} />
-            <span className="wd-who" data-testid="wd-card-who">{card.decider.label}{step ? ` · ${step}` : ""}</span>
-          </span>
-        </span>
-        <span className="wd-meta-r" title="Decisions of this kind in the last 24 hours">
-          <Mini bars={card.bars} />
-          <span className="wd-count" data-testid="wd-card-count">{card.count_24h} · 24h</span>
-        </span>
-      </span>
-      {windows.length ? <span className="wd-quiet-chip">quiet {windowWords(windows[0])}{windows.length > 1 ? ` +${windows.length - 1}` : ""}</span> : null}
-      <span className="wd-why">{card.why}</span>
+    <button type="button" className="au-c" data-open={open || undefined} onClick={onOpen} data-testid="wd-card" data-kind={card.key}
+            aria-expanded={open} title={tip}>
+      <b><I size={16} aria-hidden />{c.title}</b>
+      <span data-testid="wd-card-line">{c.line}</span>
     </button>
   );
 }
@@ -431,6 +404,9 @@ export function WherePeopleDecide({ projectId }: { projectId: string }) {
   const off = st?.mode.mode === "off";
   const reload = () => { board.reload(); settings.reload(); };
   const kinds = data ? data.cards.filter((c) => !c.fixed).length : 7;
+  const autonomy = usePolledRead({ key: `au-policy:${projectId}`, read: (e, sig) => readPolicy(projectId, e, sig), pollMs: 60_000, paused: !live, enabled: !!projectId });
+  const dev = autonomy.data?.policy.dev ?? null;
+  const fixed = data ? data.cards.filter((c) => c.fixed) : [];
 
   return (
     <section className="wd" data-testid="wd" aria-label="Where people decide">
@@ -466,11 +442,15 @@ export function WherePeopleDecide({ projectId }: { projectId: string }) {
           <FlowArrow size={13} />What agents did ›</a>
       </div>
 
-      <div className="wd-cap">The list <span className="wd-faint wd-cap-sub">· click a card to change who decides, scope or a quiet window</span></div>
+      <AutonomyControl projectId={projectId} view={autonomy.data} error={autonomy.error} onSaved={autonomy.reload} />
+
+      <div className="wd-cap">The list
+        {fixed.map((c) => <ListCard key={c.key} card={c} dev={dev} open={open === c.key} onOpen={() => setOpen(open === c.key ? null : c.key)} />)}
+      </div>
       {board.error && !data ? <div className="wd-refusal" role="alert">The list could not be read: {board.error} <button type="button" className="wd-link" onClick={board.reload}>Retry</button></div> : null}
-      <div className="wd-bounds" data-testid="wd-bounds">
-        {data ? data.cards.map((c) => <ListCard key={c.key} card={c} open={open === c.key} onOpen={() => setOpen(open === c.key ? null : c.key)} />)
-          : Array.from({ length: 8 }, (_, i) => <span key={i} className="wd-b wd-b-skel" aria-hidden />)}
+      <div className="au-cards" data-testid="wd-bounds">
+        {data ? data.cards.filter((c) => !c.fixed).map((c) => <ListCard key={c.key} card={c} dev={dev} open={open === c.key} onOpen={() => setOpen(open === c.key ? null : c.key)} />)
+          : Array.from({ length: 7 }, (_, i) => <span key={i} className="au-c wd-b-skel" aria-hidden />)}
       </div>
       {card && data ? <Popover card={card} board={data} projectId={projectId} onClose={() => setOpen(null)} onSaved={reload} /> : null}
 

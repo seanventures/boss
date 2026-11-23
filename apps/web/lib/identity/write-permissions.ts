@@ -154,6 +154,11 @@ export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permiss
   "lib/documents.ts#replyTo": "work_item:manage",                 // POST …/threads/{t}/replies
   "lib/documents.ts#resolveThread": "work_item:manage",           // POST …/threads/{t}/resolve
   // lib/inbox.ts — the signed-in person's own read state and snoozes (BOSSAPP-875)
+  // lib/autonomy.ts — dev autonomy (BOSSAPP-1441): the org default (org:update, step-up), this
+  // project's stricter row (autonomy:manage), and Undo / Looks good on what agents decided.
+  "lib/autonomy.ts#savePolicy": ["org:update", "autonomy:manage"],  // PUT /v1/autonomy/org-policy | /v1/autonomy/policy
+  "lib/autonomy.ts#undoDecided": "decision:approve",               // POST /v1/autonomy/decided/{id}/undo
+  "lib/autonomy.ts#reviewDecided": "decision:approve",             // POST /v1/autonomy/decided/{id}/reviewed
   "lib/inbox.ts#markRead": "work_item:read",                      // POST /v1/inbox/read
   "lib/inbox.ts#snoozeEntry": "work_item:read",                   // POST /v1/inbox/snooze
   "lib/inbox.ts#archiveEntry": "work_item:read",                  // POST /v1/inbox/snooze archive
@@ -349,6 +354,10 @@ export const WRITE_OPS: Readonly<Record<string, Readonly<Record<string, WriteGat
     // A typed question's Send answer / Decline (app/typed-form-ui.tsx, BOSSAPP-832); "Approve +
     // always allow" on a tool-call Ask card (app/always-allow-ui.tsx, BOSSAPP-817).
     "/v1/decisions/": "decision:approve",
+    // Dev autonomy (lib/autonomy.ts, BOSSAPP-1441).
+    "/v1/autonomy/org-policy": "org:update",
+    "/v1/autonomy/policy": "autonomy:manage",
+    "/v1/autonomy/decided/": "decision:approve",
     // The Infra Agent's storage incident (lib/infra-storage.ts, BOSSAPP-1156).
     "/v1/infra/storage/incidents/": "system:operate",
     "/v1/infra/storage/clean": "autonomy:manage",
