@@ -226,6 +226,13 @@ class ProviderTerms:
             "may_train": row.get("may_train") or UNKNOWN,
         }
 
+    def project_of(self, disclosure_id: str) -> Optional[str]:
+        """The project a disclosure was shown in (None: no such disclosure). The central
+        confinement (identity.object_kinds) asks this before a handler reads the row."""
+        with self._lock:
+            row = self._disclosures.get(str(disclosure_id or "").strip())
+            return row["project_id"] if row else None
+
     def _owned(self, project: str, disclosure_id: str) -> dict[str, Any]:
         row = self._disclosures.get(str(disclosure_id or "").strip())
         if row is None or row["project_id"] != project:

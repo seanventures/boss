@@ -30,7 +30,7 @@ from sqlalchemy import text
 from apps.api.app.main import app
 from apps.api.tests import identity_matrix
 from apps.api.tests.identity_fixtures import IdentityWorld
-from boss_engine.identity import object_kinds
+from boss_engine.identity import object_kinds, object_rules
 from boss_engine.identity import scope as scope_module
 from boss_engine.identity.declarations import Permit, access_of
 
@@ -138,19 +138,34 @@ def admin(world):
     return person
 
 
+def _org_shared(name: str) -> bool:
+    """Every kind this id can name belongs to the ORGANISATION (object_rules.ORG_SHARED_KINDS: a
+    deployment host any project of the org may use, a registry repository, a workspace …): its
+    tenant boundary is the org, so its counter-example is another org's object."""
+    kinds = object_kinds.kinds_for_id(name)
+    return bool(kinds) and all(k in object_rules.ORG_SHARED_KINDS for k in kinds)
+
+
 @pytest.fixture
 def placed(monkeypatch, world):
     """b_* objects live in project B, x_* in ANOTHER org, everything else in project A (this org);
-    project ids are themselves (a project is its own project)."""
-    def load(db, oid):
-        oid = str(oid)
-        if oid in (world.project_a, world.project_b):
-            return (world.org, oid)
-        if oid.startswith("x_"):
-            return ("org_somebody_else", "p_somebody_else")
-        return (world.org, world.project_b if oid.startswith("b_") else world.project_a)
+    project ids are themselves (a project is its own project). An org-shared kind has no project
+    B object (b_* is not one of its rows): a name that can be either a project's row or an org's
+    (gateway_id, rule_id) is still checked against project B through its project kinds."""
+    def loader(shared):
+        def load(db, oid):
+            oid = str(oid)
+            if oid in (world.project_a, world.project_b):
+                return (world.org, oid)
+            if oid.startswith("x_"):
+                return ("org_somebody_else", "p_somebody_else")
+            if oid.startswith("b_"):
+                return None if shared else (world.org, world.project_b)
+            return (world.org, world.project_a)
+        return load
     for kind in scope_module.registered_object_kinds():
-        monkeypatch.setitem(scope_module._OBJECT_LOADERS, kind, load)  # noqa: SLF001
+        monkeypatch.setitem(scope_module._OBJECT_LOADERS, kind,  # noqa: SLF001
+                            loader(kind in object_rules.ORG_SHARED_KINDS))
 
 
 def _request(method, path, access, where, name, world, object_id):
@@ -179,10 +194,10 @@ def test_another_projects_object_named_anywhere_is_not_found(mirror, world, admi
     with world.acting_as(world.ctx(admin)):
         for method, path, access, where, name in NAMED:
             project_like = name in ("project_id", "project_ids", "scope_id")
-            org_level = access.scope.source.value == "org"
+            org_level = access.scope.source.value == "org" or _org_shared(name)
             # an org-level check confines to the org (another project of the same org is fine
-            # there): its counter-example is another org's object; a project check's is another
-            # project's.
+            # there), and an org-shared object is any project's of its org: the counter-example
+            # is another org's object; a project check's is another project's.
             other = "x_obj" if org_level else (world.project_b if project_like else "b_obj")
             own = world.project_a if project_like else "a_obj"
             allowed = mirror.request(**_request(method, path, access, where, name, world, own))

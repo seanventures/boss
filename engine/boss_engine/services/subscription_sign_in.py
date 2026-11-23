@@ -864,6 +864,14 @@ def _get(sign_in_id: str) -> _Session:
     return session
 
 
+def project_of(sign_in_id: str) -> Optional[str]:
+    """The project a live sign-in was started for (None: no such sign-in). status / submit_code /
+    cancel take only the id, so the central confinement (identity.object_kinds) asks this first."""
+    with _LOCK:
+        session = _SESSIONS.get(str(sign_in_id or ""))
+    return session.project_id if session else None
+
+
 def status(sign_in_id: str) -> dict[str, Any]:
     session = _get(sign_in_id)
     with session.lock:

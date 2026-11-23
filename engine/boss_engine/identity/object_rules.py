@@ -201,7 +201,19 @@ def check_named(values: RequestValues, *, org_id: str, project_id: Optional[str]
 #: deployment host is usable by every project in its org (deployment_fleet.usable_hosts_sql), so
 #: confining its id to the project that added it refused the host's own page in every other
 #: project ("Can't read this machine", helpdesk-ai on boss-dogfood's host, 2026-11-05).
-ORG_SHARED_KINDS = frozenset({"deployment_host"})
+#: The org-owned kinds (object_kinds.OrgKind with no project: a fleet host, a registry
+#: repository, a remote-agent profile, a workspace, the org-wide row of a mixed table) belong
+#: here too: any project of the org may name them, another org's is not found.
+ORG_SHARED_KINDS = frozenset({
+    "deployment_host",
+    "agent_host", "agent_host_join_token", "director_node", "factory_launch_attachment",
+    "github_repo", "org_llm_gateway", "org_skill_policy_rule", "remote_agent_profile",
+    "workspace",
+    # A provider sign-in is the install's CLI login: one live session per provider, and a start
+    # from any project is handed the live one (subscription_sign_in.start), so the org's
+    # projects all poll it.
+    "subscription_sign_in",
+})
 
 
 def _confine_one(rule: Confine, object_id: str, *, org_id: str, project_id: Optional[str],

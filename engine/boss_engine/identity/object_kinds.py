@@ -108,6 +108,70 @@ class SecurityScanRunKind(ObjectKind):
         return (str(row[0]), str(row[1])) if row else None
 
 
+class OrgKind(ObjectKind):
+    """An object the ORGANISATION owns (a fleet host, a registry repository, an org-wide row of a
+    table that also holds project rows): the loader answers (org_id, project_id or None). `org`
+    and `project` are columns of the table or SQL expressions over alias `t`; `where` narrows the
+    rows this kind covers (the org-wide rows of a mixed table, say)."""
+
+    def __init__(self, kind: str, table: str, *, id_column: str = "id", org: str = "t.org_id",
+                 project: str = "NULL", where: str = "") -> None:
+        object.__setattr__(self, "kind", kind)
+        object.__setattr__(self, "table", table)
+        object.__setattr__(self, "id_column", id_column)
+        object.__setattr__(self, "project", project)
+        object.__setattr__(self, "_org", org)
+        object.__setattr__(self, "_where", where)
+
+    def sql(self) -> str:
+        narrow = f" AND ({self._where})" if self._where else ""
+        return (f"SELECT {self._org}, {self.project} FROM {self.table} t "
+                f"WHERE t.{self.id_column}::text = :id{narrow} LIMIT 1")
+
+    def load(self, db: Any, object_id: str) -> Optional[tuple[str, Optional[str]]]:
+        with connection(db) as conn:
+            row = conn.execute(text(self.sql()), {"id": str(object_id)}).first()
+        if not row or not row[0]:
+            return None
+        return (str(row[0]), str(row[1]) if row[1] else None)
+
+
+class InProcessKind(ObjectKind):
+    """An object held in this process, not a table (a live sign-in, a shown disclosure):
+    `project_of(id)` answers its project, or None when there is no such object."""
+
+    def __init__(self, kind: str, project_of: Any) -> None:
+        object.__setattr__(self, "kind", kind)
+        object.__setattr__(self, "table", "")
+        object.__setattr__(self, "id_column", "")
+        object.__setattr__(self, "project", "")
+        object.__setattr__(self, "_project_of", project_of)
+
+    def sql(self) -> str:
+        return ("SELECT w.org_id, p.id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+                "WHERE p.id = :id")
+
+    def load(self, db: Any, object_id: str) -> Optional[tuple[str, str]]:
+        project_id = self._project_of(str(object_id))
+        if not project_id:
+            return None
+        with connection(db) as conn:
+            row = conn.execute(text(self.sql()), {"id": str(project_id)}).first()
+        return (str(row[0]), str(row[1])) if row else None
+
+
+def _sign_in_project(sign_in_id: str) -> Optional[str]:
+    from ..services import subscription_sign_in
+
+    return subscription_sign_in.project_of(sign_in_id)
+
+
+def _disclosure_project(disclosure_id: str) -> Optional[str]:
+    from ..services import provider_terms
+
+    return provider_terms.get_terms().project_of(disclosure_id)
+
+
 #: Every object kind a route declares with Scope.of(...). Filled from the retrofit review: each
 #: entry was checked against the route's handler and db/schema.sql.
 KINDS: tuple[ObjectKind, ...] = (
@@ -277,6 +341,84 @@ KINDS: tuple[ObjectKind, ...] = (
     ObjectKind("self_fix", "self_fixes"),
     # A gap in BOSS filed for a self-fix (brec_…): one project's recommendation (request_self_fix).
     ObjectKind("boss_recommendation", "boss_recommendations"),
+    # F2 coverage, 2026-11-23: the ids routes had added since the retrofit, each checked against
+    # its handler and db/schema.sql (or the service module that owns the table).
+    ObjectKind("agent_feedback", "agent_feedback"),
+    ObjectKind("agent_trigger", "agent_triggers"),
+    ObjectKind("app_alert", "app_alerts"),
+    ObjectKind("app_alert_rule", "app_alert_rules"),
+    ObjectKind("app_alert_silence", "app_alert_silences"),
+    ObjectKind("architecture_review", "architecture_reviews"),
+    ObjectKind("ci_wait", "ci_waits"),
+    ObjectKind("connection_credential", "connection_credentials"),
+    ObjectKind("contact_point", "contact_points"),
+    ObjectKind("dataset", "datasets"),
+    ObjectKind("dataset_example", "dataset_examples"),
+    ObjectKind("decision_example", "decision_examples"),
+    ObjectKind("deliverable_review", "deliverable_reviews"),
+    ObjectKind("document", "documents"),
+    ObjectKind("document_revision", "document_revisions"),
+    #: a project's environment; an org-wide one (project_id NULL) is found by no loader here and
+    #: its handler (_own_row) decides
+    ObjectKind("execution_environment", "execution_environments"),
+    ObjectKind("goal", "goals"),
+    #: knowledge.document_upload's table (db.SERVICE_SCHEMAS applies it at boot)
+    ObjectKind("kg_document_upload", "kg_document_uploads"),
+    #: a project's LLM gateway; the org-wide ones are org_llm_gateway below
+    ObjectKind("llm_gateway", "llm_gateways"),
+    ObjectKind("maintenance_window", "maintenance_windows"),
+    ObjectKind("mcp_gateway", "mcp_gateways"),
+    ObjectKind("mcp_gateway_token", "mcp_gateway_tokens"),
+    ObjectKind("memory_backend", "memory_backends"),
+    ObjectKind("memory_export", "memory_exports"),
+    ObjectKind("monitored_service", "monitored_services"),
+    ObjectKind("notification_policy", "notification_policies"),
+    ObjectKind("preview_share", "preview_shares"),
+    ObjectKind("private_tcp_connector", "private_tcp_connectors"),
+    ObjectKind("project_prompt", "project_prompts"),
+    ObjectKind("repo_change_set", "repo_change_sets"),
+    ObjectKind("run_hold", "run_holds"),
+    ObjectKind("silence", "silences"),
+    #: a project's skill policy rule; the org-wide ones are org_skill_policy_rule below
+    ObjectKind("skill_policy_rule", "skill_policy_rules"),
+    ObjectKind("status_card", "status_cards"),
+    ObjectKind("task_copy", "task_copies"),
+    ObjectKind("task_copy_board", "task_copy_boards"),
+    ObjectKind("toolchain_image", "toolchain_images"),
+    ObjectKind("trace_span", "trace_spans", id_column="span_id"),
+    ObjectKind("validation_rerun", "validation_reruns"),
+    ObjectKind("work_item_watchdog", "work_item_watchdogs"),
+    ObjectKind("workflow_webhook_trigger", "workflow_webhook_triggers"),
+    ObjectKind("agent_checkpoint", "agent_checkpoints", id_column="checkpoint_id",
+               project="(SELECT r.project_id FROM agent_runs r WHERE r.id = t.run_id)"),
+    ObjectKind("chat_identity_link", "chat_identity_links",
+               project="(SELECT e.project_id FROM chat_endpoints e WHERE e.id = t.endpoint_id)"),
+    ObjectKind("self_fix_ticket", "self_fix_tickets",
+               project="(SELECT f.project_id FROM self_fixes f WHERE f.id = t.self_fix_id)"),
+    # task_voice: a transcript id is the caller's key, unique per org; the handler returns the
+    # row stored under it (task_voice._by_transcript_id), so it must be this project's
+    UniqueProjectKind("task_voice_transcript", "SELECT project_id FROM task_voice_transcripts "
+                                               "WHERE transcript_id = :id"),
+    # Objects the ORGANISATION owns (OrgKind; object_rules.ORG_SHARED_KINDS for the ones a
+    # project-level route may name)
+    OrgKind("agent_host", "agent_hosts"),
+    OrgKind("agent_host_join_token", "agent_host_join_tokens"),
+    OrgKind("agent_replica", "agent_replicas", project="t.project_id"),
+    OrgKind("director_node", "director_nodes"),
+    OrgKind("factory_launch_attachment", "factory_launch_attachments"),
+    OrgKind("github_repo", "github_repos"),
+    OrgKind("org_llm_gateway", "llm_gateways", where="t.project_id IS NULL"),
+    OrgKind("org_skill_policy_rule", "skill_policy_rules", where="t.project_id IS NULL"),
+    OrgKind("remote_agent_profile", "remote_agent_profiles"),
+    OrgKind("workspace", "workspaces"),
+    #: an export bundle's import: a project's (scope project) or the org's (scope org)
+    OrgKind("portability_import", "portability_imports",
+            org="CASE WHEN t.scope = 'org' THEN t.target_id ELSE (SELECT w.org_id FROM projects p "
+                "JOIN workspaces w ON w.id = p.workspace_id WHERE p.id = t.target_id) END",
+            project="CASE WHEN t.scope = 'project' THEN t.target_id END"),
+    # held in this process (the service answers the project)
+    InProcessKind("subscription_sign_in", _sign_in_project),
+    InProcessKind("provider_terms_disclosure", _disclosure_project),
 )
 
 _BY_KIND: dict[str, ObjectKind] = {}
@@ -428,6 +570,74 @@ ID_PARAM_KINDS: dict[str, tuple[str, ...]] = {
     "wakeup_id": ("agent_wakeup",),
     "agent_id": ("focused_agent",), "batch_id": ("bakeoff_batch",), "sandbox_id": ("sandbox",),
     "tracker_binding_id": ("work_tracker_binding",), "feedback_thread_id": ("feedback_thread",),
+    # F2 coverage, 2026-11-23 (each read against its handler; the kinds are above)
+    "agent_host_id": ("agent_host",), "director_id": ("director_node",),
+    "replica_id": ("agent_replica",),
+    "agent_studio_run_id": ("agent_studio_run",),
+    "alert_id": ("app_alert",), "alert_ids": ("app_alert",),
+    "attachment_ids": ("factory_launch_attachment",),
+    "backend_id": ("memory_backend",), "export_ids": ("memory_export",),
+    "document_id": ("document",),
+    "base_revision_id": ("document_revision",), "revision_id": ("document_revision",),
+    "board_id": ("task_copy_board",), "copy_id": ("task_copy",),
+    #: the build a private-TCP dial is made for (recorded on the dial)
+    "build_id": ("code_task",),
+    #: the build a template change extends (tools/object_args: extends_run_id -> code_task)
+    "extends_run_id": ("code_task",),
+    "card_id": ("status_card",),
+    "checkpoint_id": ("agent_checkpoint",),
+    #: a rulebook clause: a knowledge-graph node (knowledge.documents)
+    "clause_id": ("kg_node",),
+    "connector_id": ("private_tcp_connector",),
+    "contact_point_ids": ("contact_point",), "cp_id": ("contact_point",),
+    #: the project the add-project sheet was opened from (its org is the new project's)
+    "context_project_id": ("project",),
+    "credential_id": ("connection_credential",),
+    "cs_id": ("repo_change_set",),
+    "dataset_id": ("dataset",),
+    "example_id": ("dataset_example", "decision_example"),
+    "disclosure_id": ("provider_terms_disclosure",),
+    "environment_id": ("execution_environment",),
+    "feedback_id": ("agent_feedback",),
+    "gateway_id": ("llm_gateway", "org_llm_gateway", "mcp_gateway"),
+    "goal_id": ("goal",),
+    "parent_id": ("work_item", "goal", "notification_policy"),
+    "other_id": ("work_item",),
+    "hold_id": ("run_hold",),
+    "image_id": ("toolchain_image",),
+    "import_id": ("portability_import",),
+    "last_event_id": ("event",),
+    "link_id": ("app_link", "chat_identity_link"),
+    "profile_id": ("remote_agent_profile",),
+    "prompt_id": ("project_prompt",),
+    "recommendation_id": ("boss_recommendation",),
+    "repo_id": ("github_repo",), "repo_ids": ("github_repo",),
+    "rerun_id": ("validation_rerun",),
+    "review_id": ("architecture_review", "deliverable_review"),
+    "rule_id": ("app_alert_rule", "skill_policy_rule", "org_skill_policy_rule", "kg_node"),
+    #: a security scan; the knowledge rules list's scan_id is a rule-scan label (attrs->>scan_id)
+    #: that names no row and passes
+    "scan_id": ("security_scan",),
+    "self_fix_id": ("self_fix",),
+    "service_id": ("monitored_service",),
+    "share_id": ("preview_share",),
+    "sign_in_id": ("subscription_sign_in",),
+    "silence_id": ("silence", "app_alert_silence"),
+    "source_preview_id": ("app_preview", "preview_sandbox"),
+    "span_id": ("trace_span",),
+    "ticket_id": ("self_fix_ticket",),
+    "token_id": ("agent_host_join_token", "mcp_gateway_token"),
+    "transcript_id": ("task_voice_transcript",),
+    "trigger_id": ("agent_trigger", "workflow_webhook_trigger"),
+    "upload_id": ("kg_document_upload",),
+    "wait_id": ("ci_wait",),
+    "watchdog_id": ("work_item_watchdog",),
+    "window_id": ("maintenance_window",),
+    #: the work drawer's id: a workflow run, a build, or one attempt of either
+    "work_id": ("workflow_run", "code_task"),
+    #: a workflow key, name, definition id or version id (a key or a name names no row)
+    "workflow_id": ("workflow_definition", "workflow_version"),
+    "workspace_id": ("workspace",),
 }
 
 _IDENTITY = ("an identity-module object (principal, group, key, grant, provider, invitation): the "
@@ -439,6 +649,10 @@ _POLYMORPHIC = ("a typed reference whose kind travels beside it (entity_type, ow
                 "the handler resolves it inside the request's project")
 _CHILD = "a child key inside the scope's own object (a step of the run, a comment of the task)"
 _PLANNING = "a planning key inside the project's own document, not a row of another project"
+_IDEMPOTENCY = ("a key the caller chooses for its own retry; the handler looks it up only inside "
+                "the request's project (and actor), never across projects")
+_INSTALL = ("an install-wide component (an extension, an infra plugin): one per install, owned "
+            "by no project or org row")
 
 #: Id names that name no project-owned row, each with its reason (explicitly declared non-objects).
 NON_OBJECT_IDS: dict[str, str] = {
@@ -466,6 +680,24 @@ NON_OBJECT_IDS: dict[str, str] = {
     # name; it is not a row in a project.
     "person_id": "a name typed to approve a builder plan, not a project-owned row",
     **{n: _PLANNING for n in ("cycle_id", "initiative_id")},
+    # F2 coverage, 2026-11-23
+    **{n: _IDENTITY for n in ("approver_id", "consent_id", "delegation_id", "identity_provider_id",
+                              "service_account_id", "sponsor_principal_id")},
+    **{n: _EXTERNAL for n in ("account_id", "drive_source_id", "external_user_id")},
+    **{n: _INSTALL for n in ("extension_id", "plugin_id")},
+    "ruleset_id": ("a ruleset file in the project's own repository (.boss/rulesets/<id>.yaml), "
+                   "read from the project the path names; not a row"),
+    **{n: _IDEMPOTENCY for n in ("submission_id",)},
+    #: hold.root_kind travels beside it (workflow_run, code_task, work_item ...)
+    "root_id": _POLYMORPHIC,
+    #: a step of the delivery workflow named in the path (workflow_stage_designs is keyed by it)
+    "stage_id": _CHILD,
+    #: a piece of the proof named beside it (element_select keeps them in the proof)
+    "element_id": _CHILD,
+    "banner_id": ("one of the caller's own console banners (identity.banner_policy, self-only): "
+                  "a banner key, not a project row"),
+    "publish_id": ("a label echoed onto a tenant handoff paper (tenant_handoff, no project): "
+                   "nothing is read by it"),
 }
 
 
