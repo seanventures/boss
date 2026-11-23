@@ -694,6 +694,42 @@ export function WaitingElsewhere({ waiting }: { waiting: ElsewhereWaiting }) {
   );
 }
 
+/**
+ * "To set up: Pick a prod host ›" — what only a person can set up, counted in Needs you (X-14),
+ * as ONE quiet line in the "Also waiting" line's scale, never a box. Each item it knows is a link
+ * to where it is set; the poll lists only the first five things, so the rest (the count says
+ * they exist, the list was full of decisions) is one link to Setup, never an orphan "+1 more".
+ */
+export function SetupLine({ items, count }: {
+  items: { id: string; title: string; href?: string; kind?: string; roleKey: string | null; decideInline: boolean }[];
+  count: number;
+}) {
+  const rest = Math.max(0, count - items.length);
+  if (!items.length && !rest) return null;
+  return (
+    <p className="dq-also" data-testid="decision-inbox-setup"
+       title="Only you can set these up. They wait here and on the bell until they are set.">
+      <span>To set up:</span>
+      {items.map((i) => (
+        <React.Fragment key={i.id}>
+          {" "}
+          <button type="button" className="linklike" data-testid={`decision-setup-${i.id}`}
+                  onClick={() => navigate(reviewPatch(i))}>{i.title} ›</button>
+        </React.Fragment>
+      ))}
+      {rest ? (
+        <>
+          {" "}
+          <button type="button" className="linklike" data-testid="decision-setup-more"
+                  onClick={() => navigate({ area: "setup", view: null, focus: null, decision: null })}>
+            {items.length ? `+${rest} more` : `${rest} in Setup`} ›
+          </button>
+        </>
+      ) : null}
+    </p>
+  );
+}
+
 export type DecisionInboxProps = {
   feed: DecisionFeed;
   tasks: TaskFeedItem[];
@@ -867,17 +903,7 @@ export function DecisionInbox({
       ) : null}
       {feed.apiReachable ? <WaitingElsewhere waiting={elsewhere} /> : null}
       {feed.apiReachable && tab === "needs_action" && setupCount > 0 ? (
-        <div className="dq dq-setup" data-testid="decision-inbox-setup" aria-label="Only you can set these up">
-          <span className="eyebrow">Only you can set these up</span>
-          {setupItems.map((i) => (
-            <article key={i.id} className="decision-card" data-testid={`decision-setup-${i.id}`}>
-              <h3 style={{ margin: 0 }}>{i.title}</h3>
-              <p className="detail">BOSS can&apos;t do this one for you. It waits here and on the bell until it&apos;s set.</p>
-              <button type="button" className="button secondary" onClick={() => navigate(reviewPatch(i))}>Set it up ›</button>
-            </article>
-          ))}
-          {setupCount > setupItems.length ? <p className="detail">+{setupCount - setupItems.length} more in the project&apos;s Needs you.</p> : null}
-        </div>
+        <SetupLine items={setupItems} count={setupCount} />
       ) : null}
       {!feed.apiReachable ? null : visible.length === 0 ? (
         tab === "needs_action" && setupCount > 0 ? null : <DecisionInboxEmpty filter={tab} orgId={orgId} />

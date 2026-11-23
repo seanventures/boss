@@ -124,28 +124,31 @@ export function TopBar(p: {
             {p.nameError ? <span className="wf-name-error" role="alert">{p.nameError}</span> : null}
           </label>
 
-          {viewing !== null ? (
-            <span className="wf-chip" data-tone="amber" data-testid="wf-viewing">
-              Viewing v{viewing}
-              <button type="button" className="wf-link" onClick={p.onRestoreVersion} data-testid="wf-restore"
-                      data-tip="Make this the draft. Save publishes it as the next version.">Restore</button>
-              <button type="button" className="wf-link" onClick={p.onLeaveVersion} aria-label="Back to the current version"
-                      data-tip="Back to the current version" data-testid="wf-leave-version">×</button>
-            </span>
-          ) : meta.version !== null ? (
-            <button type="button" ref={versionsRef} className="wf-chip wf-chip-btn" data-tip={VERSION_TIP}
-                    aria-haspopup="dialog" onClick={() => void openVersions()} data-testid="wf-version">
-              v{meta.version}
-            </button>
-          ) : null}
+          {/* The version and what it is (v1 · Standard) wrap as one, never apart. */}
+          <span className="wf-bar-kind">
+            {viewing !== null ? (
+              <span className="wf-chip" data-tone="amber" data-testid="wf-viewing">
+                Viewing v{viewing}
+                <button type="button" className="wf-link" onClick={p.onRestoreVersion} data-testid="wf-restore"
+                        data-tip="Make this the draft. Save publishes it as the next version.">Restore</button>
+                <button type="button" className="wf-link" onClick={p.onLeaveVersion} aria-label="Back to the current version"
+                        data-tip="Back to the current version" data-testid="wf-leave-version">×</button>
+              </span>
+            ) : meta.version !== null ? (
+              <button type="button" ref={versionsRef} className="wf-chip wf-chip-btn" data-tip={VERSION_TIP}
+                      aria-haspopup="dialog" onClick={() => void openVersions()} data-testid="wf-version">
+                v{meta.version}
+              </button>
+            ) : null}
 
-          {meta.is_catalogue && meta.standard?.modified ? (
-            <span className="wf-chip" data-tone="amber" data-tip={MODIFIED_TIP} data-testid="wf-kind">Modified</span>
-          ) : meta.is_catalogue ? (
-            <span className="wf-chip" data-tone="accent" data-tip={STANDARD_TIP} data-testid="wf-kind">Standard</span>
-          ) : meta.definition_id ? (
-            <span className="wf-chip" data-testid="wf-kind">Yours</span>
-          ) : null}
+            {meta.is_catalogue && meta.standard?.modified ? (
+              <span className="wf-chip" data-tone="amber" data-tip={MODIFIED_TIP} data-testid="wf-kind">Modified</span>
+            ) : meta.is_catalogue ? (
+              <span className="wf-chip" data-tone="accent" data-tip={STANDARD_TIP} data-testid="wf-kind">Standard</span>
+            ) : meta.definition_id ? (
+              <span className="wf-chip" data-testid="wf-kind">Yours</span>
+            ) : null}
+          </span>
 
           {meta.is_catalogue && meta.standard?.new_standard ? (
             <button type="button" className="wf-chip wf-chip-btn" data-tone="accent" data-tip={NEW_STANDARD_TIP}

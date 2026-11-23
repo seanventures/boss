@@ -149,8 +149,28 @@ describe("the bar stays one row", () => {
     expect((name.parentElement as HTMLElement).style.getPropertyValue("--wf-name-ch")).toBe(String("Standard Product Delivery".length + 2));
     const sheet = css();
     expect(sheet).toMatch(/\.wf-bar-identity > \* \{ flex: none; white-space: nowrap; \}/);
-    expect(sheet).toMatch(/\.wf-bar-identity > \.wf-name \{\s*flex: 0 1 calc\(var\(--wf-name-ch[^;]+;\s*min-width: min\(calc\(var\(--wf-name-ch[^;]+, 100%\);\s*\}/);
+    expect(sheet).toMatch(/\.wf-bar-identity > \.wf-name \{\s*flex: 0 1 calc\(var\(--wf-name-ch[^;]+;\s*width: calc\([^;]+;\s*min-width: min\(calc\(var\(--wf-name-ch[^;]+, 100%\);\s*\}/);
     expect(sheet).toMatch(/\.wf-name-input \{[^}]*min-width: 0;[^}]*text-overflow: ellipsis;/);
+  });
+
+  it("never draws the Standard chip under the actions: the bar measures the name at the size it draws it", async () => {
+    // Found at 1440px: the bar measured the name field at the input's default size, kept one
+    // row, and the identity spilled under Undo, its icon drawn over the end of "Standard".
+    await mount();
+    const sheet = css();
+    const rule = sheet.match(/\.wf-bar-identity > \.wf-name \{([^}]*)\}/)![1];
+    const basis = rule.match(/flex: 0 1 (calc\([^;]+\));/)![1];
+    expect(rule).toContain(`width: ${basis};`);
+    // N characters ask for N characters of the NAME's font: the label carries it, the input inherits.
+    expect(sheet).toMatch(/\.wf-name \{[^}]*font: 600 1\.25rem\/1\.2 var\(--display\);/);
+    expect(sheet).toMatch(/\.wf-name-input \{[^}]*font: inherit;/);
+    // A line too narrow for the whole identity wraps its chips under the name, never under the actions.
+    expect(sheet).toMatch(/\.wf-bar-identity \{[^}]*min-width: 0;[^}]*flex-wrap: wrap;/);
+    // v1 and Standard wrap together.
+    const kind = byTest("wf-kind").parentElement!;
+    expect(kind.className).toBe("wf-bar-kind");
+    expect(kind.contains(byTest("wf-version"))).toBe(true);
+    expect(sheet).toMatch(/\.wf-bar-kind \{ display: inline-flex;[^}]*\}/);
   });
 });
 
