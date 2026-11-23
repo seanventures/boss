@@ -128,9 +128,6 @@ const STEP_UP_ACTIONS = [
   "workflow_run:delete", "app_secret:live", "app_secret:write",
   // The knowledge graph: forgetting/promoting facts (BOSSAPP-622) and Rules review (BOSSAPP-768).
   "knowledge:manage", "knowledge:review",
-  // The agent platform's fleet and instances (P8, BOSSAPP-1060..1063): deploying an agent,
-  // managing hosts and instances ask too. Stricter, added on purpose; pinned here in BOSSAPP-1429.
-  "agent:deploy", "fleet:manage", "instance:manage",
 ].sort();
 
 describe("the step-up list", () => {
