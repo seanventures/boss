@@ -973,7 +973,9 @@ def _production(engine: Any, item: Item) -> bool:
             "SELECT COALESCE(r.environment, t.environment) FROM deployment_runs r LEFT JOIN "
             "deployment_targets t ON t.id = r.deployment_target_id WHERE r.id = :i"),
             {"i": item.id}).scalar()
-    return str(env or "production").strip().lower() in ("production", "prod", "live")
+    from .production import resolve_environment
+
+    return resolve_environment(env).prod
 
 
 #: deploy_repair.underway's states in which an agent is genuinely acting on the deployment.

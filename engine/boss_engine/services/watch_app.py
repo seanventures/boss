@@ -148,8 +148,10 @@ def _env_key(word: str) -> str:
         "dev" if w.startswith("dev") else w
 
 
-def _is_prod(env: Any) -> bool:
-    return bool(re.match(r"^(prod|production|live)$", str(env or ""), re.I))
+def _production_named(env: Any) -> bool:
+    from .production import is_production_environment
+
+    return is_production_environment(env)
 
 
 # ── the app it means ──────────────────────────────────────────────────────────────────────
@@ -371,7 +373,7 @@ def boundary(target: Optional[Mapping[str, Any]]) -> dict[str, Any]:
     approval and a production deploy wait for a person; so does anything sent outside."""
     from .decide_list import BY_KEY
 
-    prod = _is_prod((target or {}).get("environment"))
+    prod = _production_named((target or {}).get("environment"))
     alone = [{"key": "triage", "label": "triage", "icon": "magnifying-glass"},
              {"key": "investigate", "label": "find the cause", "icon": "graph"},
              {"key": "fix_pr", "label": "open a fix PR", "icon": "git-pull-request"},
@@ -524,7 +526,7 @@ def start(connection, settings: Any, project_id: str, *, actor: str,
     night = str(spec.get("night") or "wake")
     if night not in NIGHT:
         raise WatchRefused("At night is Wake me, Wait till 08:00, or Fix alone, tell me")
-    prod = _is_prod(t["environment"])
+    prod = _production_named(t["environment"])
     alone = bool(spec.get("alone", True)) and not prod
     words = str(spec.get("words") or "")[:2000]
     reason = (str(spec.get("reason") or "").strip() or f"Watch this app: {words}".strip())[:500]

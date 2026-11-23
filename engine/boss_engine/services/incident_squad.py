@@ -69,6 +69,7 @@ from typing import Any, Iterable, Mapping, Optional, Protocol
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from . import production as _production_names
 from .ambient import board, collab, ledger, policy, signals
 from .ambient._common import clean_text, party_id, person, short_label
 
@@ -76,8 +77,7 @@ LOG = logging.getLogger(__name__)
 
 INCIDENT_CLASSES = ("incident_response", "incident_staging_mitigation")
 #: The environments where a mitigation is a staging one (A2, automatic after a critic agrees).
-NON_PROD_ENVS = frozenset({"staging", "stage", "preview", "dev", "development", "test", "qa",
-                           "sandbox"})
+NON_PROD_ENVS = frozenset(_production_names.STAGING_NAMES | _production_names.DEV_NAMES)
 #: Model turns one pass of the squad may spend (verdict + critique + three votes + slack).
 MAX_MODEL_CALLS = 6
 #: A past incident counts as "the same signature" at or above this similarity.
@@ -438,7 +438,8 @@ class Ctx:
 
     @property
     def is_prod(self) -> bool:
-        return self.environment not in NON_PROD_ENVS
+        # The one resolver (services/production.py): a name it cannot place is production.
+        return _production_names.resolve_environment(self.environment).prod
 
     @property
     def failing_route(self) -> Optional[str]:

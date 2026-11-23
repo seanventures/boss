@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .production import is_production_environment
+
 import json
 from typing import Any, Optional
 
@@ -152,7 +154,7 @@ class PromotionOrchestrator:
         )
         if staging["environment"] != "staging":
             raise ValueError("staging_target_id must reference a staging target.")
-        if production["environment"] != "production":
+        if not is_production_environment(production["environment"]):
             raise ValueError("production_target_id must reference a production target.")
         if staging["app_name"] != production["app_name"] or staging["repo"] != production["repo"]:
             raise ValueError("Promotion targets must belong to the same app and repository.")

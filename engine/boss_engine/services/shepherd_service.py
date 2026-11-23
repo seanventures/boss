@@ -19,6 +19,8 @@ its output is narrative attached to a decision the code already made. That is wh
 """
 from __future__ import annotations
 
+from .production import is_production_environment
+
 import json
 import logging
 from typing import Any, Optional
@@ -1209,8 +1211,6 @@ def act(engine, settings: Settings, jobs, run_id: str, *,
     return p
 
 
-# Deployment environments a request for "live" could mean.
-LIVE_ENVIRONMENTS = ("production", "prod", "live")
 
 
 def describe_undeployable(*, status: str, repo: str, targets: list) -> str:
@@ -1227,7 +1227,7 @@ def describe_undeployable(*, status: str, repo: str, targets: list) -> str:
     completed. The agent's answer is only as good as the facts it is handed.
     """
     envs = [str(t.get("environment") or "?").lower() for t in targets]
-    live = [t for t in targets if str(t.get("environment") or "").lower() in LIVE_ENVIRONMENTS]
+    live = [t for t in targets if is_production_environment(t.get("environment"))]
 
     if not targets:
         where = "This app has NO deployment targets configured at all."

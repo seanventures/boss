@@ -4,6 +4,8 @@ endpoint that changes it. No new write path: the old screens keep working and li
 """
 from __future__ import annotations
 
+from ..production import is_production_environment
+
 from typing import Any
 
 from sqlalchemy import text
@@ -147,7 +149,7 @@ def _deploy_values(connection: Connection, project_id: str) -> dict[str, Any]:
         bound_envs = {_values_env_label(e).lower() for e in envs}
         missing = sorted(e for e in required.get(name, set())
                          if _values_env_label(e).lower() not in bound_envs
-                         and not ("deploy" in envs and e not in ("production", "prod")))
+                         and not ("deploy" in envs and not is_production_environment(e)))
         app_key = str(newest["app_key"])
         deploy_env = "deploy" if "deploy" in envs else envs[0]
         put = f"/v1/apps/{app_key}/secrets/{name}"
@@ -271,7 +273,7 @@ def _targets(connection: Connection, project_id: str) -> dict[str, Any]:
                                 f"/v1/deployment-targets/{r['id']}/auto-deploy",
                                 permission="deployment_target:manage",
                                 open_href=href(project_id, area="infra", target=r["id"]))]})
-    if not any(str(r["environment"] or "").lower() in ("production", "prod") for r in rows):
+    if not any(is_production_environment(r["environment"]) for r in rows):
         items.append({"kind": "missing", "id": "production", "env": "production",
                       "env_label": "Production", "words": "no host yet", "state": "you",
                       "action": {"label": "Pick host",

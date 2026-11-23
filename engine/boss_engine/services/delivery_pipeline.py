@@ -28,6 +28,7 @@ import fnmatch
 import json
 from typing import Any, Optional
 
+from . import production as _production
 from ..config import Settings
 from ..ports import sql
 from .core import create_blocking_decision, emit_event
@@ -1047,7 +1048,7 @@ def block_ungoverned_connector_execution(
             {"action": "plan_governed_changeset", "deployment_run_id": run_id},
             {"deployment_run_id": run_id, "reason": reason_code},
             reason_code,
-            risk_tier=3 if run.get("environment") == "production" else 2,
+            risk_tier=_production.risk_tier_for(run.get("environment")),
         )
         connection.execute(
             sql("UPDATE deployment_runs SET status = 'blocked', decision_id = :decision_id, "

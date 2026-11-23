@@ -234,15 +234,9 @@ def _confine_one(rule: Confine, object_id: str, *, org_id: str, project_id: Opti
 
 # ---- production ------------------------------------------------------------------------------------
 
-#: Environment names that mean production. Conservative: a name that might be production is.
-PRODUCTION_NAMES = frozenset({"production", "prod", "prd", "live"})
-
-
-def is_production_environment(environment: Any) -> bool:
-    env = str(environment or "").strip().lower()
-    if not env:
-        return False
-    return env in PRODUCTION_NAMES or env.startswith(("production", "prod-", "prod_", "live-"))
+#: Environment names that mean production: the ONE resolver's (services/production.py).
+from ..services.production import PRODUCTION_NAMES  # noqa: E402,F401 — re-exported
+from ..services.production import is_production_environment  # noqa: E402,F401 — re-exported
 
 
 @dataclass(frozen=True)

@@ -29,6 +29,8 @@ and `source_url` on the run, so the Work row shows the issue chip (#12) linking 
 """
 from __future__ import annotations
 
+from ..production import is_production_environment
+
 import re
 from statistics import median
 from typing import Any, Mapping, Optional
@@ -587,7 +589,7 @@ def targets(connection: Connection, project_id: str) -> list[dict[str, Any]]:
         out.append({"id": r["id"], "label": env_label(r["environment"]),
                     "environment": r["environment"], "app": r["app_name"], "url": url,
                     "port": int(port.group(1)) if port else None,
-                    "prod": str(r["environment"] or "").lower() in ("production", "prod")})
+                    "prod": is_production_environment(r["environment"])})
     return out
 
 

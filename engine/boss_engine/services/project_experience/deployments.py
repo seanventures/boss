@@ -7,6 +7,8 @@ listing (names only). Production is never automatic: a target in production is `
 """
 from __future__ import annotations
 
+from ..production import is_production_environment
+
 from typing import Any, Optional
 
 from sqlalchemy import text
@@ -16,7 +18,6 @@ from . import demo_logins as demo
 from .common import href, iso, project_href
 from .health import env_label, health_word
 
-PRODUCTION = ("production", "prod")
 
 
 def _last_deploys(connection: Connection, target_ids: list[str]) -> dict[str, dict[str, Any]]:
@@ -278,7 +279,7 @@ def view(connection: Connection, project_id: str) -> dict[str, Any]:
         h = hosts_by_id.get(str(t.get("host_id") or "")) or {}
         t.update(host_name=h.get("name"), host_address=h.get("address"),
                  host_status=h.get("status"))
-    targets.sort(key=lambda t: (str(t["environment"] or "").lower() in PRODUCTION,
+    targets.sort(key=lambda t: (is_production_environment(t["environment"]),
                                 str(t["environment"] or ""), str(t["app_name"] or "")))
     told = truth(connection, targets)
     health = {t["target_id"]: t for t in health_view(connection, project_id).get("targets") or []}
@@ -311,7 +312,7 @@ def view(connection: Connection, project_id: str) -> dict[str, Any]:
         label = env_label(t["environment"])
         if len(apps) > 1:
             label = f"{t['app_name']} {label}"
-        is_prod = str(t["environment"] or "").lower() in PRODUCTION
+        is_prod = is_production_environment(t["environment"])
         envs.append({
             "key": t["environment"], "label": label, "app": t["app_name"], "target_id": t["id"],
             "url": url, "address": said["address"],
@@ -351,7 +352,7 @@ def view(connection: Connection, project_id: str) -> dict[str, Any]:
             "href": project_href(project_id, tab="deployments", drawer=f"env:{t['id']}"),
             "manage_href": href(project_id, area="infra", target=t["id"]),
         })
-    has_prod = any(str(e["key"] or "").lower() in PRODUCTION for e in envs)
+    has_prod = any(is_production_environment(e["key"]) for e in envs)
     if has_prod:
         production: dict[str, Any] = {"state": "ready", "action": None}
     else:
@@ -375,7 +376,7 @@ def view(connection: Connection, project_id: str) -> dict[str, Any]:
     # project may use, with its role. The app picks one here; production stays a person's choice.
     from ..add_server import servers_for_project
 
-    has_staging = any(str(e["key"] or "").lower() not in PRODUCTION for e in envs)
+    has_staging = any(not is_production_environment(e["key"]) for e in envs)
     servers = []
     for sv in servers_for_project(connection, project_id):
         if sv["role"] == "prod":
@@ -425,8 +426,8 @@ def ship_path(envs: list[dict[str, Any]]) -> list[dict[str, str]]:
     """How code ships, as a strip (screen 8): merge → build → the first non-production
     environment (auto or a person, from its target's policy) → its health check → production,
     always a person's approval. States come from what the environments show today."""
-    pre = next((e for e in envs if str(e["key"] or "").lower() not in PRODUCTION), None)
-    prod = next((e for e in envs if str(e["key"] or "").lower() in PRODUCTION), None)
+    pre = next((e for e in envs if not is_production_environment(e["key"])), None)
+    prod = next((e for e in envs if is_production_environment(e["key"])), None)
     shipped = _went_live(pre)
     nodes = [{"label": "PR merged", "state": "done" if shipped else "todo"},
              {"label": "Image built", "state": "done" if shipped else "todo"}]
@@ -447,8 +448,8 @@ def ship_path(envs: list[dict[str, Any]]) -> list[dict[str, str]]:
 def live_url(envs: list[dict[str, Any]]) -> Optional[str]:
     """The URL the header chip opens: staging first, then any non-production, then prod."""
     ordered = sorted(envs, key=lambda e: (str(e["key"]).lower() not in ("staging", "stage"),
-                                          str(e["key"]).lower() in PRODUCTION))
+                                          is_production_environment(e["key"])))
     return next((e["url"] for e in ordered if e.get("url")), None)
 
 
-__all__ = ["PRODUCTION", "host_label", "live_url", "ship_path", "view"]
+__all__ = ["host_label", "live_url", "ship_path", "view"]

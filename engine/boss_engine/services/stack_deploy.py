@@ -57,6 +57,7 @@ from urllib.parse import quote
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from . import production as _production
 from ..config import Settings
 from .app_deploy_manifest import (
     DEFAULT_MANIFEST_PATH,
@@ -3487,7 +3488,7 @@ def manifest_misfit(connection: Connection, *, manifest: Any, rendered: Mapping[
     served = _served_text(connection, run_id, workdir, read)
     given = {e.key for e in manifest.env or ()} | {str(n) for n in provided or ()}
     if (served is not None and "DEMO_PASSWORD" in given
-            and str(target.get("environment") or "").lower() == "production"
+            and _production.is_production_environment(target.get("environment"))
             and refuses_in_production(served, "DEMO_PASSWORD")):
         return ("The app refuses DEMO_PASSWORD in production, and this production deploy "
                 "gives it one: it would not start.",
