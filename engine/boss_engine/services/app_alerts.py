@@ -2486,11 +2486,16 @@ def _respond(connection, alert: dict, incident_id: Optional[str],
     return {"run_id": None, "word": got.get("word") or "Could not start the response"}
 
 
-def respond_link(connection, project_id: str, rule_name: str) -> dict[str, Any]:
+def respond_link(connection, project_id: str, rule_name: str,
+                 actor: str = "monitor") -> dict[str, Any]:
     """Switching Respond automatically on: the person's standing grant covering the response
     workflow, or ConsentRequired (409, the console asks once). {} outside a person's session."""
     from ..identity import consent as _consent
+    from .workflow_marketplace import ensure_installed
 
+    # SWITCHING IT ON IS ASKING FOR INCIDENT RESPONSE: the SRE / Helpdesk pack is installed into
+    # the project's own workflows when it is not here (it is no longer seeded by default).
+    ensure_installed(connection, project_id, "sre-helpdesk", actor)
     spec = connection.execute(sql(
         "SELECT v.spec FROM workflow_definitions d JOIN workflow_versions v "
         "ON v.id = d.active_version_id WHERE d.project_id = :p AND d.workflow_key = :k"),
@@ -2782,7 +2787,8 @@ def update_rule(connection, target: dict, rule_id: Optional[str], change: dict[s
         # (`AppErrorRate`, X-73): rule_label, the one name every surface shows.
         ann = new.get("annotations") if isinstance(new.get("annotations"), dict) else {}
         link = respond_link(connection, target["project_id"],
-                            rule_label(new.get("kind"), new["alert"], ann.get("summary"))) or None
+                            rule_label(new.get("kind"), new["alert"], ann.get("summary")),
+                            actor=actor) or None
     if not new.get("auto_respond"):
         link = None
     after = _snapshot(new)

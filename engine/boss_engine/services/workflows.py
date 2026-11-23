@@ -1876,7 +1876,8 @@ def list_definitions(
                      WHERE v.id = d.active_version_id) AS active_version,
                    -- A STANDARD THE OPERATOR EDITED (workflow_standards): its active version
                    -- is not the shipped baseline. The library chips it Modified.
-                   (d.is_catalogue AND d.standard_content_hash IS NOT NULL
+                   ((d.is_catalogue OR d.marketplace_pack_id IS NOT NULL)
+                    AND d.standard_content_hash IS NOT NULL
                     AND (SELECT v.content_hash FROM workflow_versions v
                           WHERE v.id = d.active_version_id)
                         IS DISTINCT FROM d.standard_content_hash) AS standard_modified,
@@ -1932,10 +1933,38 @@ def list_definitions(
             ).mappings()
         }
 
+    # The Marketplace packs the installed copies came from: names and current versions, once.
+    pack_names: dict[str, str] = {}
+    pack_versions: dict[str, str] = {}
+    if any(row.get("marketplace_pack_id") for row in rows):
+        from .workflow_marketplace import SHIPPED_PACKS
+
+        for pack in SHIPPED_PACKS.values():
+            pack_names[pack.pack_id], pack_versions[pack.pack_id] = pack.name, pack.version
+        org_ids = [str(r["marketplace_pack_id"]) for r in rows
+                   if r.get("marketplace_pack_id") and r["marketplace_pack_id"] not in SHIPPED_PACKS]
+        if org_ids:
+            for pack in connection.execute(
+                    text("SELECT id, name, version FROM workflow_packs WHERE id = ANY(:ids)"),
+                    {"ids": org_ids}).mappings():
+                pack_names[str(pack["id"])], pack_versions[str(pack["id"])] = (
+                    str(pack["name"]), str(pack["version"]))
+    # WHAT THIS PROJECT PUBLISHED to its org's Marketplace, by the workflow it came from.
+    published: dict[str, dict[str, Any]] = {}
+    if _table_exists(connection, "workflow_packs"):
+        for pack in connection.execute(
+                text("SELECT id, name, summary, version, status, source_definition_id "
+                     "FROM workflow_packs WHERE source_project_id = :p"),
+                {"p": project_id}).mappings():
+            published[str(pack["source_definition_id"])] = {
+                "pack_id": pack["id"], "name": pack["name"], "summary": pack["summary"] or "",
+                "version": pack["version"], "status": pack["status"]}
     items = []
     for row in rows:
         item = _serialize_definition(row)
         item["version_count"] = int(row["version_count"])
+        if str(row["id"]) in published:
+            item["published"] = published[str(row["id"])]
         from .command_center import is_marker_step
 
         specs = row["step_specs"] if isinstance(row["step_specs"], list) else None
@@ -1971,6 +2000,23 @@ def list_definitions(
             item["new_standard_available"] = bool(
                 waiting and waiting != row.get("standard_dismissed_version_id")
                 and waiting != row.get("standard_version_id"))
+        elif row.get("marketplace_pack_id"):
+            # FROM THE MARKETPLACE (workflow_marketplace): Yours, with where it came from, the
+            # pack version, Modified, and a newer version waiting for the operator's call.
+            from .workflow_marketplace import (
+                SHIPPED_PACKS, update_waiting as _update_waiting)
+
+            pack_id = str(row["marketplace_pack_id"])
+            item["marketplace"] = {
+                "pack_id": pack_id,
+                "pack_name": pack_names.get(pack_id) or pack_id,
+                "source": "boss" if pack_id in SHIPPED_PACKS else "org",
+                "version": row.get("marketplace_version"),
+                "modified": bool(row.get("standard_modified")),
+                "update": ({"version": pack_versions.get(pack_id)}
+                           if _update_waiting(dict(row)) else None),
+                "waiting": row.get("marketplace_waiting") or None,
+            }
         items.append(item)
     return items
 

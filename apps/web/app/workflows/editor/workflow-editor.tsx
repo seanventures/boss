@@ -20,7 +20,7 @@ import type { CustomStepDef, FlowLink, PaletteItem, Spec, StepView } from "../..
 import { TOAST_EVENT } from "../../../lib/api-write";
 import {
   checkSpec, deleteWorkflow, designAction, draftFromDescription, fetchDesigns, fetchLibrary,
-  fetchRunContext, fetchSpec, standardAct, type DesignAction, type RunContext,
+  fetchRunContext, fetchSpec, standardAct, uninstallPack, type DesignAction, type RunContext,
 } from "../../../lib/workflow-api";
 import type { StandardAct } from "../../../lib/workflow-editor-types";
 import { buildPipeline, type DesignsInfo } from "../../../lib/pipeline-model";
@@ -47,6 +47,8 @@ import { StartsWith } from "./starts-with";
 import { SummaryChips } from "./summary-chips";
 import { NO_DELETE_TIP, TopBar } from "./top-bar";
 import { StandardStrip } from "./standard-strip";
+import { MarketStrip } from "./market-strip";
+import { PublishForm } from "../publish-form";
 import { TestRunPanel } from "./test-run-panel";
 import { useCan } from "../../../components/identity/identity-provider";
 import { useAreaKeydown } from "../../../lib/area-keys";
@@ -148,6 +150,7 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
   const publishGate = useCan("workflow:publish");
   // Delete (DELETE /v1/delivery-workflows/{id}) and Describe (…/draft) have their own permissions.
   const deleteGate = useCan("workflow:delete");
+  const installGate = useCan("workflow:install");
   const draftGate = useCan("workflow:create");
   useAutoCheck(state, dispatch, projectId);
 
@@ -488,6 +491,25 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
     }
   }, [projectId, meta.definition_id, meta.workflow_key, standardBusy, dispatch]);
 
+  /* ── From the Marketplace: Uninstall its pack; a Yours workflow publishes to the org's. ── */
+  const uninstallThis = useCallback(async (): Promise<string | null> => {
+    const pack = meta.marketplace?.pack_id;
+    if (!pack) return null;
+    try {
+      await uninstallPack(projectId, pack);
+      toast("success", "Uninstalled");
+      onBack();
+      return null;
+    } catch (e) {
+      return e instanceof Error ? e.message : String(e);
+    }
+  }, [projectId, meta.marketplace?.pack_id, onBack]);
+  const reloadMeta = useCallback(async () => {
+    if (!meta.workflow_key) return;
+    const got = await fetchSpec(projectId, meta.workflow_key);
+    dispatch({ type: "LOAD", spec: got.spec, meta: got.meta });
+  }, [projectId, meta.workflow_key, dispatch]);
+
   const deleteThis = useCallback(async () => {
     if (!meta.definition_id) return;
     try {
@@ -590,6 +612,20 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
               saveAsCopyBlocked={!publishGate.allowed ? publishGate.reason : noSteps ? "Add a step first" : null}
               onNewStandard={() => setOfferOpen(true)}
               fullPage={fullPage} onFullPage={onFullPage}
+              publishForm={meta.definition_id && !meta.is_catalogue && !meta.marketplace ? (close) => (
+                <PublishForm projectId={projectId} definitionId={meta.definition_id as string}
+                             workflowName={meta.name} description={meta.description} published={meta.published}
+                             onCancel={close}
+                             onDone={(pack) => {
+                               close();
+                               toast("success", `Published v${pack?.version ?? ""}. Your org can install it.`);
+                               void reloadMeta();
+                             }} />
+              ) : undefined}
+              publishBlocked={!publishGate.allowed ? publishGate.reason : dirty ? "Save first"
+                : meta.version === null ? "Save a version first" : null}
+              onUninstall={meta.marketplace ? uninstallThis : undefined}
+              uninstallBlocked={!installGate.allowed ? installGate.reason : null}
               deleteBlocked={!deleteGate.allowed ? deleteGate.reason : meta.is_catalogue ? NO_DELETE_TIP : !meta.definition_id ? "Not saved yet" : null} />
       {saveFlow.popover}
       {testing && meta.workflow_key ? (
@@ -634,6 +670,15 @@ export function WorkflowEditor({ projectId, workflowKey, onBack, onStart, actor,
                        : dirty ? "Save or discard your changes first" : null}
                      copyBlocked={!publishGate.allowed ? publishGate.reason
                        : readOnly ? `Viewing v${meta.readOnlyVersion}` : noSteps ? "Add a step first" : null} />
+
+      <MarketStrip projectId={projectId} meta={meta}
+                   blocked={!installGate.allowed ? installGate.reason
+                     : readOnly ? `Viewing v${meta.readOnlyVersion}`
+                     : dirty ? "Save or discard your changes first" : null}
+                   onUpdated={(_after, act) => {
+                     toast("success", act === "dismiss" ? "Kept as it is." : "Update taken");
+                     void reloadMeta();
+                   }} />
 
       <SummaryChips state={state} views={views} typicalMinutes={typicalMinutes}
                     onSettings={openSettings} onIssues={selectFirstProblem} />

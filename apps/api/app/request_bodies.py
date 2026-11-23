@@ -1167,6 +1167,30 @@ class WorkflowStandardActBody(ProjectBody):
     act: str | None = None
 
 
+class WorkflowPackBody(ProjectBody):
+    """A Marketplace pack acted on in a project: install, uninstall, unpublish."""
+    model_config = ConfigDict(json_schema_extra={"required": ["project_id", "pack_id"]})
+
+    pack_id: str | None = None
+
+
+class WorkflowPackUpdateBody(ProjectBody):
+    model_config = ConfigDict(json_schema_extra={"required": ["project_id", "definition_id", "act"]})
+
+    definition_id: str | None = None
+    #: take | take_keep | dismiss
+    act: str | None = None
+
+
+class WorkflowPackPublishBody(ProjectBody):
+    model_config = ConfigDict(json_schema_extra={"required": ["project_id", "definition_id"]})
+
+    definition_id: str | None = None
+    name: str | None = None
+    summary: str | None = None
+    version: str | None = None
+
+
 class WorkflowRenameBody(ProjectBody):
     model_config = ConfigDict(json_schema_extra={"required": ["project_id"]})
 

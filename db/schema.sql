@@ -4324,6 +4324,59 @@ UPDATE workflow_definitions d
   FROM workflow_versions v
  WHERE d.is_catalogue AND d.standard_version_id IS NULL AND v.id = d.active_version_id;
 
+-- THE WORKFLOW MARKETPLACE (workflow_marketplace.py). A pack is a versioned set of workflows a
+-- project INSTALLS into its own workflows ("Yours"), never into the standards. BOSS ships two
+-- (Banking Data Quality, SRE / Helpdesk; defined in code); an org publishes its own from any of
+-- its workflows, visible to every project in that org. An installed copy carries where it came
+-- from (`marketplace_pack_id`, `marketplace_version`) and uses the standard baseline columns
+-- above for "Modified" and "Update available": an unmodified copy takes a newer pack version by
+-- itself, a modified one is offered it and never overwritten. `marketplace_waiting` says why an
+-- installed copy has no runnable version yet (a connector the pack needs is not set up).
+ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS marketplace_pack_id TEXT;
+ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS marketplace_version TEXT;
+ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS marketplace_waiting TEXT;
+CREATE INDEX IF NOT EXISTS idx_workflow_definitions_marketplace
+  ON workflow_definitions(marketplace_pack_id) WHERE marketplace_pack_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS workflow_packs (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES orgs(id),
+  name TEXT NOT NULL,
+  summary TEXT,
+  publisher TEXT NOT NULL,
+  version TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'published' CHECK (status IN ('published', 'unpublished')),
+  source_project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  source_definition_id TEXT NOT NULL,
+  published_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(source_definition_id)
+);
+CREATE INDEX IF NOT EXISTS idx_workflow_packs_org ON workflow_packs(org_id, status, updated_at DESC);
+CREATE TABLE IF NOT EXISTS workflow_pack_versions (
+  id TEXT PRIMARY KEY,
+  pack_id TEXT NOT NULL REFERENCES workflow_packs(id) ON DELETE CASCADE,
+  version TEXT NOT NULL,
+  -- [{workflow_key, name, description, spec}]: what an install copies.
+  workflows JSONB NOT NULL,
+  published_by TEXT NOT NULL,
+  published_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(pack_id, version)
+);
+-- DQ AND INCIDENT RESPONSE MOVED FROM THE STANDARDS INTO MARKETPLACE PACKS. A project that already
+-- has them keeps them, now as installed copies (Yours · from Marketplace): same definition, same
+-- versions, same runs, and the shipped baseline above stays their baseline. Idempotent: only rows
+-- still marked standard.
+UPDATE workflow_definitions
+   SET is_catalogue = false,
+       marketplace_pack_id = CASE WHEN workflow_key = 'incident_response' THEN 'sre-helpdesk'
+                                  ELSE 'banking-dq' END,
+       marketplace_version = '1.0',
+       updated_at = now()
+ WHERE is_catalogue
+   AND workflow_key IN ('dq_incident_rca', 'dq_incident_escalation', 'dq_monitor_intake',
+                        'incident_response');
+
 CREATE TABLE IF NOT EXISTS workflow_mappings (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id),

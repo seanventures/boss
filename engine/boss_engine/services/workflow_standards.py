@@ -73,7 +73,8 @@ def _version(connection: Connection, version_id: Optional[str]) -> Optional[dict
 def _definition(connection: Connection, project_id: str, definition_id: str) -> dict[str, Any]:
     definition = workflows.require_namespace(connection, project_id, definition_id,
                                              workflows.PRODUCT_NAMESPACE)
-    if not definition.get("is_catalogue"):
+    # A MARKETPLACE INSTALL has a shipped baseline too (workflow_marketplace): its pack version.
+    if not definition.get("is_catalogue") and not definition.get("marketplace_pack_id"):
         raise StandardError(f"'{definition['name']}' is not a standard workflow, so there is "
                             "no shipped version to go back to.")
     return definition
@@ -145,6 +146,12 @@ def state(connection: Connection, definition: dict[str, Any]) -> Optional[dict[s
     """
     if not definition.get("is_catalogue"):
         return None
+    return baseline_state(connection, definition)
+
+
+def baseline_state(connection: Connection, definition: dict[str, Any]) -> dict[str, Any]:
+    """`state` for any definition with a shipped baseline: a standard, or a Marketplace install
+    (workflow_marketplace.install_state reads its update from here)."""
     baseline = _version(connection, definition.get("standard_version_id"))
     active = _version(connection, definition.get("active_version_id"))
     modified = bool(baseline and active and active["content_hash"] != baseline["content_hash"])

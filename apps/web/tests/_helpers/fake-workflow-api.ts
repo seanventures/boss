@@ -19,6 +19,9 @@ export type FakeWorkflow = {
   last_run?: { id: string; status: string; at: string } | null;
   /** A standard's state as the API sends it (`standard` on the spec). Unset: unmodified. */
   standard?: Obj | null;
+  /** Installed from the Marketplace / published to it (`marketplace`, `published` on the spec). */
+  marketplace?: Obj | null;
+  published?: Obj | null;
 };
 
 const UNMODIFIED = (w: FakeWorkflow) => ({ modified: false, baseline_version: w.version, changes: [], new_standard: null });
@@ -97,6 +100,7 @@ export function fakeWorkflowApi(palette: Palette, workflows: FakeWorkflow[],
             definition_id: w.definition_id, workflow_key: w.workflow_key, name: w.name, description: "",
             is_catalogue: w.is_catalogue, version: at.version, spec: at.spec, copy: w.copy ?? null,
             standard: w.is_catalogue ? (w.standard ?? UNMODIFIED(w)) : null,
+            marketplace: w.marketplace ?? null, published: w.published ?? null,
             versions: versions.map((v) => ({ version: v.version, published_at: "2026-10-01T10:00:00Z",
                                              is_active: v.version === w.version })),
           });

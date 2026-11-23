@@ -2279,6 +2279,8 @@ def catalogue_summary(prd_auto_approve: Optional[bool] = None) -> list[dict[str,
             "key": entry["key"],
             "name": entry["name"],
             "description": entry["description"],
+            # IN A MARKETPLACE PACK (workflow_marketplace): installed from there, not a standard.
+            "pack": in_pack(entry["key"]),
             "work_class": entry["work_class"],
             # Markers (fork/join) are not steps: the same count as the plan and a run's "k of n".
             "step_count": sum(1 for s in entry["steps"]
@@ -2308,6 +2310,15 @@ def catalogue_summary(prd_auto_approve: Optional[bool] = None) -> list[dict[str,
     return out
 
 
+def in_pack(workflow_key: str) -> Optional[str]:
+    """The Marketplace pack a catalogue entry ships in (Banking Data Quality, SRE / Helpdesk), or
+    None for a standard. A pack's workflows are never seeded: a project installs the pack, and
+    they land in its own workflows, not the standards (workflow_marketplace)."""
+    from .workflow_marketplace import PACK_OF_KEY
+
+    return PACK_OF_KEY.get(str(workflow_key or ""))
+
+
 def _gated(entry: dict[str, Any]) -> bool:
     """The entry installs only where the project has something (`requires`, or the pack its
     step contracts name), so a seed that ran before it arrived skipped it."""
@@ -2321,8 +2332,16 @@ def seed_now_unlocked(connection: Connection, project_id: str,
     loaded, a document confirmed — so the entry is there the moment it can run, not at the next
     boot (2026-11-01: the DQ platform and rulebook loads left rulebook_extraction uninstalled
     and "Extract rules" answered "no delivery workflow"). Idempotent."""
+    # AN INSTALLED PACK WAITING FOR THIS (a connector the DQ pipeline calls) is published now.
+    from .workflow_marketplace import publish_waiting
+
+    try:
+        with connection.begin_nested():
+            publish_waiting(connection, project_id, actor=actor)
+    except Exception:  # noqa: BLE001 — the boot sync tries again
+        pass
     keys = frozenset(e["key"] for e in CATALOGUE
-                     if _gated(e) and not _unmet(connection, project_id, e))
+                     if _gated(e) and not in_pack(e["key"]) and not _unmet(connection, project_id, e))
     if not keys:
         return {"project_id": project_id, "installed": [], "count": 0, "mapped": []}
     return seed(connection, project_id, actor=actor, only=keys)
@@ -2342,7 +2361,8 @@ def missing_keys(connection: Connection, project_id: str) -> frozenset[str]:
     have = set(str(k) for k in connection.execute(
         text("SELECT workflow_key FROM workflow_definitions WHERE project_id = :p"),
         {"p": project_id}).scalars().all())
-    return frozenset(e["key"] for e in CATALOGUE if not _gated(e) and e["key"] not in have)
+    return frozenset(e["key"] for e in CATALOGUE
+                     if not _gated(e) and not in_pack(e["key"]) and e["key"] not in have)
 
 
 def seed_missing_everywhere(connection: Connection, actor: str = "boss",
@@ -2381,7 +2401,7 @@ def seed(connection: Connection, project_id: str, actor: str = "boss",
     # `_staffed_for` dropped every one and the run (and its consent) fell back to other agents.
     # Through the shipped-cast install path: additive, an operator's delete holds.
     wanted = [role for entry in CATALOGUE
-              if (only is None or entry["key"] in only)
+              if (only is None or entry["key"] in only) and not in_pack(entry["key"])
               and not _unmet(connection, project_id, entry)
               for role in roles_needed(entry)]
     if wanted:
@@ -2396,6 +2416,13 @@ def seed(connection: Connection, project_id: str, actor: str = "boss",
     ).scalars().all())
     for entry in CATALOGUE:
         if only is not None and entry["key"] not in only:
+            continue
+        pack = in_pack(entry["key"])
+        if pack:
+            # NOT SHIPPED BY DEFAULT (the operator, 2026-11-22): a Marketplace pack's workflow is
+            # installed by the project (Workflows › Marketplace › Install), into its own.
+            installed.append({"key": entry["key"], "version_id": None, "version": None,
+                              "skipped": f"in the '{pack}' Marketplace pack"})
             continue
         unmet = _unmet(connection, project_id, entry)
         if unmet:
@@ -2510,7 +2537,7 @@ def restaff_role_agent_entries(connection: Connection, project_id: str,
     judgement, so a project that installed them before their steps named the role agents (or
     before the roles were installed) is backfilled on the next boot (shipped_cast.sync_project).
     Idempotent: an unchanged spec publishes nothing. None when the project has none of them."""
-    keys = frozenset(e["key"] for e in CATALOGUE if roles_needed(e))
+    keys = frozenset(e["key"] for e in CATALOGUE if roles_needed(e) and not in_pack(e["key"]))
     have = frozenset(str(k) for k in connection.execute(
         text("SELECT workflow_key FROM workflow_definitions WHERE project_id = :p "
              "AND workflow_key = ANY(:k)"), {"p": project_id, "k": sorted(keys)}).scalars())

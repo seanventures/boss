@@ -150,6 +150,8 @@ export type CatalogueEntry = {
   key: string;
   name: string;
   description: string;
+  /** In a Marketplace pack (engine workflow_marketplace): installed from there, not a standard. */
+  pack?: string | null;
   work_class: string;
   step_count: number;
   steps: { id: string; capability: string }[];
@@ -1193,7 +1195,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
           ])}
           examples={Object.fromEntries(catalogue.map((c) => [c.key, c.example ?? null]))}
           workClasses={[...new Set(catalogue.map((c) => c.work_class).filter(Boolean))].sort()}
-          uninstalledStandards={catalogue.filter((c) => !installedStandards.has(c.key)).length}
+          uninstalledStandards={catalogue.filter((c) => !c.pack && !installedStandards.has(c.key)).length}
           onInstallStandards={() => void act("Install the standards", "install", {})}
           customSteps={customSteps} riskFloor={riskFloor}
           onStart={(key, example) => openComposerOn(key, example)}

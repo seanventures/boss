@@ -529,11 +529,11 @@ def start(connection, settings: Any, project_id: str, *, actor: str,
     words = str(spec.get("words") or "")[:2000]
     reason = (str(spec.get("reason") or "").strip() or f"Watch this app: {words}".strip())[:500]
     if alone:
-        # FIXING ALONE IS THE incident_response WORKFLOW (app_alerts._respond starts it): it is
-        # installed from the catalogue when it is not here yet, as a boot's seed would.
-        from .workflow_catalogue import seed as seed_catalogue
+        # FIXING ALONE IS THE incident_response WORKFLOW (app_alerts._respond starts it): asking
+        # for it installs the SRE / Helpdesk pack when it is not here yet (workflow_marketplace).
+        from .workflow_marketplace import ensure_installed
 
-        seed_catalogue(connection, project_id, actor=actor, only=frozenset({aa.RESPONSE_WORKFLOW}))
+        ensure_installed(connection, project_id, "sre-helpdesk", actor)
     rules = {r["kind"]: r for r in aa.ensure_rules(connection, t) if r["kind"] != "custom"}
     wanted: dict[str, Mapping[str, Any]] = {}
     for w in watches:

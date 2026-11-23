@@ -39,6 +39,8 @@ const VIEWS: Record<string, (project: string) => string> = {
   costs: (p) => `/v1/delivery-workflows/costs?project_id=${encodeURIComponent(p)}`,
   // Every time the operator will be asked, per path — what New project's plan counts from.
   asks: (p) => `/v1/delivery-workflows/asks?project_id=${encodeURIComponent(p)}`,
+  // The Workflow Marketplace: packs to install into Yours, BOSS's and the org's own.
+  marketplace: (p) => `/v1/delivery-workflows/marketplace?project_id=${encodeURIComponent(p)}`,
 };
 
 /** `view=run_detail&run_id=…` — one run's steps, each with what it read and wrote (KG P6b's
@@ -240,6 +242,13 @@ const ACTIONS: Record<string, string> = {
   standard: "/v1/delivery-workflows/standard",
   draft: "/v1/delivery-workflows/draft",
   wire: "/v1/delivery-workflows/wire",
+  // The Workflow Marketplace (install / uninstall / review update: workflow:install; publish /
+  // unpublish: workflow:publish). Under /v1/delivery-workflows: community, not the paid surface.
+  market_install: "/v1/delivery-workflows/marketplace/install",
+  market_uninstall: "/v1/delivery-workflows/marketplace/uninstall",
+  market_update: "/v1/delivery-workflows/marketplace/update",
+  market_publish: "/v1/delivery-workflows/marketplace/publish",
+  market_unpublish: "/v1/delivery-workflows/marketplace/unpublish",
 };
 
 /** Actions addressed to ONE run. Kept apart because their path carries the run id. */
