@@ -1088,8 +1088,9 @@ def propose(connection: Connection, settings: Any, *, project_id: str, run_id: s
         boss_recommendations.link_self_fix(connection, project_id, recommendation_id, sfx_id,
                                            klass)
     sfx = transition(connection, sfx_id, CLAIMED, actor=ACTOR_AGENT,
-                     sentence=(f"{AGENT_NAME}: a BOSS repair is queued ({klass}); "
-                               "the execution time limit starts when the worker begins."),
+                     sentence=(f"{AGENT_NAME}: this is a bug in BOSS, not in your app, so BOSS "
+                               f"is fixing itself ({klass}); it starts when a worker is free, "
+                               "and its time limit counts from then."),
                      data={"recommendation_id": recommendation_id},
                      started_at=None)
     audit(connection, "self_fix.started", actor=ACTOR_AGENT, sfx=sfx,

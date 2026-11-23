@@ -366,9 +366,9 @@ def on_level(connection: Any, *, host_id: str, level: str, previous: str,
         return out
 
     inc_id = inc["id"]
-    cause_key, cause_text = explain_cause(sample, forecast, thresholds)
-    changes: dict[str, Any] = {"free_pct_now": free_now, "cause_key": cause_key,
-                               "cause_text": cause_text,
+    # The cause stays the one the incident opened (or escalated) with: the rule a person
+    # ticks, and the report's "learned", are filed under it (review of PR #300).
+    changes: dict[str, Any] = {"free_pct_now": free_now,
                                "host_label": sample.get("host_label") or inc.get("host_label")}
     if level == "critical" and inc.get("severity") != "critical":
         # Escalate: the open incident is reused (one per host).
