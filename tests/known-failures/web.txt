@@ -24,6 +24,3 @@ apps/web/tests/the-step-up-is-the-top-layer.test.tsx | BOSSAPP-944 | web console
 apps/web/tests/the-tree-names-no-design-reference.test.ts | BOSSAPP-944 | web console | 2026-11-10 | a tracked file names the design reference
 apps/web/tests/the-walks-refused-controls-are-pre-greyed.test.ts | BOSSAPP-944 | web console | 2026-11-10 | app/setup/setup-board.tsx su-test-all is not pre-greyed on setup:manage
 apps/web/tests/ui-simplification.test.tsx | BOSSAPP-944 | web console | 2026-11-10 | refresh failures and simplified lists do not render as the test expects
-apps/web/tests/every-client-fetch-has-a-route.test.ts | BOSSAPP-944 | web console | 2026-11-10 | a client /api/* call has no handler under app/api
-apps/web/tests/every-idea-has-a-drawing.test.ts | BOSSAPP-944 | web console | 2026-11-10 | catalogue ideas are left with the plain cover / without a labelled 320x180 drawing
-apps/web/tests/sign-in-shared-password.test.tsx | BOSSAPP-944 | web console | 2026-11-10 | the shared console password is not offered / shown as the test expects after the claim

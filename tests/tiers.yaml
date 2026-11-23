@@ -67,6 +67,8 @@ P0:
     - engine/tests/test_web_quarantine_holds_only_real_failures.py
     # Red is not normal (BOSSAPP-1429): the baselines only shrink and hold no security guard
     - engine/tests/test_red_is_not_normal.py
+    # a streamed export's transaction survives Starlette's per-step context copies
+    - engine/tests/test_a_streamed_transaction_survives_a_context_switch.py
     # Every failure says what happened and what to do (BOSSAPP-1428)
     - engine/tests/test_every_failure_says_what_and_what_to_do.py
   api:

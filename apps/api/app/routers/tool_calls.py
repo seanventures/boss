@@ -86,8 +86,8 @@ def build_tool_calls_router(*, engine, require_reader: Callable[..., None]) -> A
                 c, project_id=project_id, max_rows=cap, **filters).truncated
 
         def lines() -> Iterator[str]:
-            # Not begin(): its contextvar cannot span streamed chunks. Each chunk runs in a
-            # fresh worker context, and the token reset then fails.
+            # Its own connection, not begin(): each chunk runs in a fresh worker context, so
+            # begin()'s open-transactions stack would not list it after the first chunk anyway.
             connection = engine.connect()
             transaction = connection.begin()
             try:
