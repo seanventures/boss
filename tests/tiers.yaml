@@ -59,6 +59,11 @@ P0:
     # a local install is not) and a policy a project can only make stricter
     - engine/tests/test_one_production_resolver.py
     - engine/tests/test_autonomy_policy_is_stricter_never_looser.py
+    # ... and outside production only credential, spend, explicit-stop and production-release
+    # cards wait; every other card is decided by a named agent with the same follow-on, and
+    # keeps its undo
+    - engine/tests/test_only_allowed_classes_wait_outside_production.py
+    - engine/tests/test_dev_autonomy_acts_and_logs.py
     # Governed deploy + health
     - engine/tests/test_an_app_is_deployed_the_way_it_says.py
     - engine/tests/test_a_smoke_test_asks_the_deployment_not_a_url.py
