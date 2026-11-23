@@ -14,13 +14,13 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import text
 
 from boss_engine.config import get_settings
 from boss_engine.db import begin, get_engine
-from boss_engine.identity import P, Scope, permit
+from boss_engine.identity import P, Production, Scope, permit
 
 router = APIRouter(tags=["autonomy"])
 _settings = get_settings()
@@ -99,16 +99,21 @@ def put_autonomy_policy(payload: PolicyBody) -> dict[str, Any]:
 
 @router.put("/v1/autonomy/org-policy")
 @permit(P.ORG_UPDATE, scope=Scope.org())
-def put_autonomy_org_policy(payload: PolicyBody) -> dict[str, Any]:
+def put_autonomy_org_policy(payload: PolicyBody, request: Request) -> dict[str, Any]:
     """The org default every project starts from (`project_id` names the org by one of its
-    projects)."""
+    projects, which must be the caller's own org)."""
+    from apps.api.app import identity_guard
     from boss_engine.services import autonomy_policy as ap
 
     with begin(_engine) as connection:
-        actor = _write_actor(connection, payload.project_id, payload.actor)
         org_id = _org(connection, payload.project_id)
+        ctx = identity_guard.request_auth(request)
+        if ctx is not None and str(ctx.principal.org_id) != org_id:
+            raise HTTPException(status_code=404, detail="no such project")
+        actor = _write_actor(connection, payload.project_id, payload.actor)
         saved = _refused(lambda: ap.save(connection, kind=ap.ORG, scope_id=org_id,
-                                         raw=payload.policy, actor=actor))
+                                         raw=payload.policy, actor=actor,
+                                         event_project_id=payload.project_id))
         return {"org_default": ap.describe(saved),
                 "policy": ap.describe(ap.load(connection, payload.project_id, org_id=org_id))}
 
@@ -143,7 +148,10 @@ class TierBody(BaseModel):
 
 
 @router.put("/v1/deployment-targets/{target_id}/tier")
-@permit(P.DEPLOYMENT_TARGET_MANAGE, scope=Scope.of("deployment_target", path="target_id"))
+# Relabelling a production target is a production change (as PATCH /v1/deployment-targets is):
+# deployment:production is held whenever the target is production now, by name or by tier.
+@permit(P.DEPLOYMENT_TARGET_MANAGE, scope=Scope.of("deployment_target", path="target_id"),
+        production=Production(target="path:target_id"))
 def put_deployment_target_tier(target_id: str, payload: TierBody) -> dict[str, Any]:
     """Say what a target is: dev, staging or prod. Null clears it (BOSS then reads its name and
     where it runs; an unlabelled remote server is production)."""
@@ -181,7 +189,10 @@ class ShipsToBody(BaseModel):
 
 
 @router.put("/v1/repository-bindings/{binding_id}/ships-to")
-@permit(P.REPOSITORY_MANAGE, scope=Scope.of("github_repository_binding", path="binding_id"))
+# Where a default branch ships decides whether its merges are production releases, so saying it
+# is a production change: deployment:production, always.
+@permit(P.REPOSITORY_MANAGE, scope=Scope.of("github_repository_binding", path="binding_id"),
+        production=Production(always=True))
 def put_repository_ships_to(binding_id: str, payload: ShipsToBody) -> dict[str, Any]:
     """Where a repository's default branch ships. A merge into it is a production release when
     it ships to a production target, or when nobody said."""

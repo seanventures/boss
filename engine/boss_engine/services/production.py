@@ -46,8 +46,8 @@ PRODUCTION_NAMES = frozenset({"production", "prod", "prd", "live"})
 #: Prefixes that keep a production name production (`prod-eu`, `production2`, `live-b`).
 PRODUCTION_PREFIXES = ("production", "prod-", "prod_", "live-", "live_", "prd-", "prd_")
 #: Names that are staging: shipped to before production, never production itself.
-STAGING_NAMES = frozenset({"staging", "stage", "stg", "preview", "preprod", "pre-prod",
-                           "pre_prod", "uat", "qa", "test", "testing"})
+STAGING_NAMES = frozenset({"staging", "stage", "stg", "preview", "qa", "test", "testing"})
+# "preprod", "uat" and the like are often production-shaped: BOSS cannot tell, so they are unknown.
 #: Names that are development.
 DEV_NAMES = frozenset({"dev", "development", "local", "localhost", "sandbox", "ci",
                        "review", "feature"})
@@ -103,6 +103,11 @@ def environment_tier(environment: Any) -> Optional[str]:
     if not env:
         return None
     if env in PRODUCTION_NAMES or env.startswith(PRODUCTION_PREFIXES):
+        return "prod"
+    # A name that might be production is: any part of it a production word ("dev-prod",
+    # "staging_live", "test-production") makes it production.
+    if any(part in PRODUCTION_NAMES or part.startswith("production")
+           for part in re.split(r"[-_./]", env)):
         return "prod"
     if env in STAGING_NAMES:
         return "staging"
@@ -162,8 +167,7 @@ def is_local_address(address: Any) -> bool:
 
 
 #: Target kinds that run on this machine by construction.
-LOCAL_TARGET_KINDS = frozenset({"local", "local_docker", "local_compose", "localhost",
-                                "preview", "sandbox"})
+LOCAL_TARGET_KINDS = frozenset({"local", "local_docker", "local_compose", "localhost"})
 
 
 def resolve_environment(environment: Any, *, host: Any = None, local: Optional[bool] = None,
@@ -180,7 +184,10 @@ def resolve_environment(environment: Any, *, host: Any = None, local: Optional[b
         return _prod("environment_name", f"environment '{_norm(environment)}'")
     if named in ("dev", "staging"):
         return _dev(named, "environment_name", f"environment '{_norm(environment)}'")
-    if local is True or (local is None and is_local_address(host)):
+    if (local is True or (local is None and is_local_address(host))) \
+            and install_tier() != "prod":
+        # This machine is development unless BOSS itself is a production install: then a target
+        # on this machine is that production box.
         return _dev("dev", "local_host", f"runs on this machine ({_host_of(host) or 'local'})")
     what = _norm(environment) or "no environment"
     where = _host_of(host)
@@ -217,6 +224,15 @@ def target_verdict(target: Mapping[str, Any]) -> Verdict:
     local = True if kind in LOCAL_TARGET_KINDS else None
     return resolve_environment(target.get("environment"), host=host, local=local,
                                tier=target.get("tier"))
+
+
+def target_is_production(target: Mapping[str, Any]) -> bool:
+    """For a gate that held the NAME rule (a production name asks): the set tier wins in both
+    directions, else the name. An unknown name is not escalated here (target_verdict does)."""
+    tier = _norm(target.get("tier"))
+    if tier in TIERS:
+        return tier == "prod"
+    return is_production_environment(target.get("environment"))
 
 
 def resolve_target(connection: Any, target_id: Any) -> Verdict:
@@ -259,7 +275,8 @@ def resolve_project_environment(connection: Any, project_id: str, environment: A
                "SELECT t.id, t.environment, t.tier, t.target_kind, t.target_ref, "
                "h.address AS host_address FROM deployment_targets t "
                "LEFT JOIN deployment_hosts h ON h.id = t.host_id "
-               "WHERE t.project_id = :p AND lower(t.environment) = :e "
+               "WHERE t.project_id = :p "
+               "AND replace(lower(trim(t.environment)), ' ', '_') = :e "
                "AND t.status NOT IN ('deleted', 'retired') "
                "ORDER BY t.updated_at DESC NULLS LAST LIMIT 1",
                {"p": project_id, "e": _norm(environment)})
@@ -304,11 +321,16 @@ def resolve_merge(connection: Any, *, project_id: Optional[str], repo: Any,
     default = str((binding or {}).get("default_branch") or "").strip()
     if not base:
         return _prod("merge_base", "no base branch named", known=False)
-    if default and base != default:
+    releasing = _releasing_branch(base)
+    if default and base.lower() != default.lower() and not releasing:
         return _dev("dev", "merge_base", f"{base} is not {full or 'the repository'}'s default "
                                          f"branch ({default})")
-    if not default and base not in ("main", "master", "trunk", "production", "release"):
-        return _dev("dev", "merge_base", f"{base} is not a default branch")
+    if not default and not releasing:
+        return _dev("dev", "merge_base", f"{base} is not a default or release branch")
+    if default and base.lower() != default.lower():
+        # git-flow: the default branch is `develop` and `main` / `release/*` is what ships.
+        return _prod("merge_base", f"{base} is a release branch of {full or 'the repository'}; "
+                                   "where it ships is not set", known=False)
     ships = str((binding or {}).get("default_branch_ships_to") or "").strip()
     if ships == SHIPS_NOWHERE:
         return _dev("dev", "default_branch_ships_to", f"{base} ships nowhere (set on the repo)")
@@ -318,6 +340,15 @@ def resolve_merge(connection: Any, *, project_id: Optional[str], repo: Any,
                        f"{base} ships to target {ships}: {verdict.evidence}")
     return _prod("default_branch_ships_to",
                  f"where {full or 'the repository'}'s {base} ships is not set", known=False)
+
+
+#: Branch names that are what a repository releases from, whatever its default branch is.
+_RELEASING = ("main", "master", "trunk", "production", "prod", "live", "stable")
+
+
+def _releasing_branch(base: str) -> bool:
+    name = base.strip().lower()
+    return name in _RELEASING or name.startswith(("release", "prod/", "production/", "hotfix"))
 
 
 # ---- BOSS itself ------------------------------------------------------------------------------

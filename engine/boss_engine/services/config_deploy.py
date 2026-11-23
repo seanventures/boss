@@ -692,9 +692,9 @@ def plan_config_deployment(rp: Any, connection: Connection, *, project_id: str, 
     from .resource_plane import _SURFACE_LEASE_SECONDS
 
     cfg = read_target(target)
-    from .production import is_production_environment
+    from .production import target_is_production
 
-    if is_production_environment(cfg.environment):
+    if target_is_production(target):
         # PRODUCTION IS A PERSON'S ANSWER (review of #119): no environment policy and no gate a
         # step passes in approves configuration for production; a person approves this run.
         person_required, approval_decision_id = True, None
@@ -732,7 +732,7 @@ def plan_config_deployment(rp: Any, connection: Connection, *, project_id: str, 
              else "this machine")
     previous = governed.previous_success(connection, cfg.id)
     deployment_run_id = make_id("deprun")
-    risk_tier = _production.risk_tier_for(cfg.environment)
+    risk_tier = 3 if _production.target_is_production(target) else 2
     names = ", ".join(f["path"] for f in manifest[:5]) + (" …" if len(manifest) > 5 else "")
 
     reservation = BudgetGovernor(rp.settings).reserve(
@@ -768,7 +768,7 @@ def plan_config_deployment(rp: Any, connection: Connection, *, project_id: str, 
                  "failed check."),
         operations=[{"skill_id": OPERATION_SKILL, "action": "deploy", "resource_type": RESOURCE_TYPE,
                      "resource_ref": f"{cfg.id}:{cfg.app_name}", "desired_state": desired,
-                     "risk_tier": 1, "production_affecting": _production.production_affecting(environment=cfg.environment)}],
+                     "risk_tier": 1, "production_affecting": _production.target_is_production(target)}],
         expected_cost_usd_micros=0, reservation_id=reservation_id, rollback_plan=rollback_plan,
         risk_tier=1, approval_required=False, actor=actor)
     review = {
@@ -989,11 +989,11 @@ def promote(engine: Any, settings: Settings, *, project_id: str, actor: str,
             if str(target["id"]) == str(src["deployment_target_id"]):
                 raise ConfigDeployError("That is the target the files are already on.",
                                         "Promote to the next environment's target.")
-            from .production import is_production_environment
+            from .production import target_is_production
 
             # PRODUCTION IS A PERSON'S ANSWER: no environment policy and no gate passed in by a
             # step answers a promotion to production; a person approves this very deployment.
-            to_production = is_production_environment(str(target.get("environment") or ""))
+            to_production = target_is_production(target)
             if to_production:
                 # THE BAR FOLLOWS WHERE IT SHIPS (quality_bar.py): the build behind this
                 # deployment (named by its release packet or its workflow run) must pass the

@@ -968,14 +968,11 @@ class Deployments(Surface):
 
 def _production(engine: Any, item: Item) -> bool:
     """Is this host deploy's environment production (or unknown: then it is treated as one)?"""
-    with engine.begin() as c:
-        env = c.execute(text(
-            "SELECT COALESCE(r.environment, t.environment) FROM deployment_runs r LEFT JOIN "
-            "deployment_targets t ON t.id = r.deployment_target_id WHERE r.id = :i"),
-            {"i": item.id}).scalar()
-    from .production import resolve_environment
+    from .production import resolve_deployment_run
 
-    return resolve_environment(env).prod
+    with engine.begin() as c:
+        # The target's tier and host count, not only its name (services/production.py).
+        return resolve_deployment_run(c, item.id).prod
 
 
 #: deploy_repair.underway's states in which an agent is genuinely acting on the deployment.

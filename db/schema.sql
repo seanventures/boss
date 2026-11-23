@@ -16709,8 +16709,8 @@ BEGIN
         WHEN lower(environment) IN ('production', 'prod', 'prd', 'live')
           OR lower(environment) LIKE 'production%' OR lower(environment) LIKE 'prod-%'
           OR lower(environment) LIKE 'prod\_%' OR lower(environment) LIKE 'live-%' THEN 'prod'
-        WHEN lower(environment) IN ('staging', 'stage', 'stg', 'preview', 'preprod', 'uat', 'qa',
-                                    'test', 'testing') THEN 'staging'
+        WHEN lower(environment) IN ('staging', 'stage', 'stg', 'preview', 'qa', 'test', 'testing')
+          THEN 'staging'
         WHEN lower(environment) IN ('dev', 'development', 'local', 'localhost', 'sandbox', 'ci')
           THEN 'dev'
         ELSE NULL END

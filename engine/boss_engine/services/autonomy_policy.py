@@ -195,7 +195,7 @@ def load(connection: Any, project_id: Optional[str], *, org_id: Optional[str] = 
 
 
 def save(connection: Any, *, kind: str, scope_id: str, raw: Mapping[str, Any],
-         actor: str) -> Policy:
+         actor: str, event_project_id: Optional[str] = None) -> Policy:
     """Save the org default (kind 'org') or a project's stricter row (kind 'project')."""
     from sqlalchemy import text
 
@@ -217,7 +217,7 @@ def save(connection: Any, *, kind: str, scope_id: str, raw: Mapping[str, Any],
         "ON CONFLICT (scope_kind, scope_id) DO UPDATE SET policy = EXCLUDED.policy, "
         "set_by = EXCLUDED.set_by, set_at = now()"),
         {"k": kind, "s": scope_id, "p": json.dumps(policy.stored()), "a": actor})
-    project_for_event = scope_id if kind == PROJECT else None
+    project_for_event = scope_id if kind == PROJECT else event_project_id
     if project_for_event:
         emit_event(connection, project_for_event, "autonomy.policy_set", actor,
                    "autonomy_policy", f"{kind}:{scope_id}", policy.stored())

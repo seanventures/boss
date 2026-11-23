@@ -2884,7 +2884,7 @@ class ResourcePlaneService:
                     "health_check_results": results,
                 },
                 "deployment_health_failed",
-                risk_tier=_production.risk_tier_for(deployment_run["environment"]),
+                risk_tier=_production.risk_tier_for(target=target),
             )
 
         connection.execute(

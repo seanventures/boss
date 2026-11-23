@@ -278,13 +278,13 @@ class Production:
         return "production(" + ",".join(f"{k}={w}.{n}" for k, w, n in self._sources) + ")"
 
 
-_TARGET_SQL = text("SELECT project_id, environment FROM deployment_targets WHERE id = :i")
-_RUN_SQL = text("SELECT r.project_id, r.environment, t.environment FROM deployment_runs r "
+_TARGET_SQL = text("SELECT project_id, environment, tier FROM deployment_targets WHERE id = :i")
+_RUN_SQL = text("SELECT r.project_id, r.environment, t.environment, t.tier FROM deployment_runs r "
                 "LEFT JOIN deployment_targets t ON t.id = r.deployment_target_id WHERE r.id = :i")
-_STACK_SQL = text("SELECT s.project_id, t.environment FROM stack_deployments s "
+_STACK_SQL = text("SELECT s.project_id, t.environment, t.tier FROM stack_deployments s "
                   "JOIN deployment_targets t ON t.id = s.target_id WHERE s.id = :i")
 #: the deployment `redeploy` re-ships: the build's latest (shepherd_service.redeploy_latest_deployment)
-_CODE_TASK_SQL = text("SELECT r.project_id, r.environment, t.environment FROM deployment_runs r "
+_CODE_TASK_SQL = text("SELECT r.project_id, r.environment, t.environment, t.tier FROM deployment_runs r "
                       "LEFT JOIN deployment_targets t ON t.id = r.deployment_target_id "
                       "WHERE r.release_packet->>'code_task_run_id' = :i "
                       "ORDER BY r.created_at DESC LIMIT 1")
@@ -315,6 +315,9 @@ def production_projects(spec: Production, values: RequestValues, *, scope: Resol
         with connection(db) as conn:
             for sql, object_id in lookups:
                 row = conn.execute(sql, {"i": object_id}).first()
-                if row is not None and any(is_production_environment(e) for e in row[1:]):
+                # A target's set tier counts too (deployment_targets.tier, BOSSAPP-1441): a
+                # person's "prod" holds deployment:production whatever the name says.
+                if row is not None and (any(is_production_environment(e) for e in row[1:])
+                                        or str(row[-1] or "").strip().lower() == "prod"):
                     out.append(str(row[0]))
     return list(dict.fromkeys(out))

@@ -77,7 +77,8 @@ LOG = logging.getLogger(__name__)
 
 INCIDENT_CLASSES = ("incident_response", "incident_staging_mitigation")
 #: The environments where a mitigation is a staging one (A2, automatic after a critic agrees).
-NON_PROD_ENVS = frozenset(_production_names.STAGING_NAMES | _production_names.DEV_NAMES)
+NON_PROD_ENVS = frozenset({"staging", "stage", "preview", "dev", "development", "test", "qa",
+                           "sandbox"})
 #: Model turns one pass of the squad may spend (verdict + critique + three votes + slack).
 MAX_MODEL_CALLS = 6
 #: A past incident counts as "the same signature" at or above this similarity.

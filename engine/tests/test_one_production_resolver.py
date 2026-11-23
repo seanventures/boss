@@ -248,3 +248,42 @@ def test_a_merge_follows_where_the_default_branch_ships(repo_db):
 def test_a_local_repository_ships_nowhere(repo_db):
     assert not production.resolve_merge(repo_db, project_id="p", repo="local_p/app",
                                          base_branch="main").prod
+
+
+@pytest.mark.parametrize("name", ["staging-prod", "dev-prod", "test-production", "qa_live"])
+def test_a_name_with_a_production_word_in_it_is_production(name):
+    assert production.resolve_environment(name, host="localhost").prod
+
+
+@pytest.mark.parametrize("name", ["uat", "preprod"])
+def test_production_shaped_names_are_not_assumed_staging(name):
+    verdict = production.resolve_environment(name, host="203.0.113.7")
+    assert verdict.prod and not verdict.known
+
+
+def test_this_machine_is_production_on_a_production_install(monkeypatch):
+    monkeypatch.setenv("BOSS_INSTALL_TIER", "production")
+    assert production.resolve_environment("eu1", host="localhost").prod
+
+
+def test_a_remote_preview_kind_is_not_taken_as_local():
+    assert production.target_verdict({"environment": "eu1", "target_kind": "preview",
+                                      "target_ref": "deploy@203.0.113.7"}).prod
+
+
+def test_a_set_tier_wins_both_ways_for_the_name_gates():
+    assert production.target_is_production({"environment": "staging", "tier": "prod"})
+    assert not production.target_is_production({"environment": "production", "tier": "staging"})
+    assert production.target_is_production({"environment": "live"})
+
+
+def test_git_flow_merges_into_main_are_not_development(repo_db):
+    repo_db.exec_driver_sql(
+        "INSERT INTO github_repository_bindings VALUES "
+        "('b6','p','acme/gitflow','develop','github','active',NULL)")
+    assert production.resolve_merge(repo_db, project_id="p", repo="acme/gitflow",
+                                     base_branch="main").prod
+    assert production.resolve_merge(repo_db, project_id="p", repo="acme/gitflow",
+                                     base_branch="release/2.1").prod
+    assert not production.resolve_merge(repo_db, project_id="p", repo="acme/gitflow",
+                                         base_branch="feature/x").prod
