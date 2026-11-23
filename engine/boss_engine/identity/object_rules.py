@@ -209,9 +209,10 @@ ORG_SHARED_KINDS = frozenset({
     "agent_host", "agent_host_join_token", "director_node", "factory_launch_attachment",
     "github_repo", "org_llm_gateway", "org_skill_policy_rule", "remote_agent_profile",
     "workspace",
-    # A provider sign-in is the install's CLI login: one live session per provider, and a start
-    # from any project is handed the live one (subscription_sign_in.start), so the org's
-    # projects all poll it.
+    # A provider sign-in (object_kinds.InProcessOrgKind) belongs to the ORG it was started for:
+    # its token lands in that org's model home, and a start from any project of that org is
+    # handed the live one, so the org's projects all poll it. Another org's is not found, and
+    # start refuses another org's live session (409) rather than hand it over.
     "subscription_sign_in",
 })
 

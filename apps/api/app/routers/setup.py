@@ -321,11 +321,11 @@ def build_setup_router(
         with begin(engine) as connection:
             require_actor(connection, body.project_id, actor, "entitlement_manage")
             # The org's model home holds the connection (read only: never sets a home).
-            try:
-                from boss_engine.services import org_models
+            from boss_engine.services import org_models
 
-                home = org_models.home_project(connection,
-                                               org_models.org_of(connection, body.project_id))
+            org_id = org_models.org_of(connection, body.project_id)
+            try:
+                home = org_models.home_project(connection, org_id)
             except Exception:  # noqa: BLE001
                 home = None
             rejected = sign_in.last_login_rejected(connection, [body.project_id, home or ""],
@@ -339,7 +339,7 @@ def build_setup_router(
             store = sign_in_store(engine, get_settings(), home or body.project_id, actor)
         try:
             return sign_in.start(provider, project_id=body.project_id, actor=actor,
-                                 settings=get_settings(), login_rejected=rejected,
+                                 org_id=org_id, settings=get_settings(), login_rejected=rejected,
                                  fresh=bool(body.fresh), store=store)
         except sign_in.SignInError as error:
             sign_in_failed(error)

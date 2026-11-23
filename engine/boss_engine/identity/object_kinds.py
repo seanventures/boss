@@ -43,16 +43,22 @@ class ObjectKind:
         return (str(row[0]), str(row[1])) if row else None
 
 
+#: The placement of an id several projects hold, for a kind that must not let it pass: it matches
+#: no org and no project, so the confinement answers it 404 (object_rules._confine_one).
+AMBIGUOUS = ("<ambiguous>", "<ambiguous>")
+
+
 class UniqueProjectKind(ObjectKind):
     """An object found by a non-unique key (a dedupe key, a sandbox task id): it resolves only when
     every row the key matches is in ONE project; anything else is answered as not found."""
 
-    def __init__(self, kind: str, sql: str) -> None:
+    def __init__(self, kind: str, sql: str, *, refuse_ambiguous: bool = False) -> None:
         object.__setattr__(self, "kind", kind)
         object.__setattr__(self, "table", "")
         object.__setattr__(self, "id_column", "")
         object.__setattr__(self, "project", "")
         object.__setattr__(self, "_projects_sql", sql)
+        object.__setattr__(self, "_refuse_ambiguous", refuse_ambiguous)
 
     def sql(self) -> str:
         return ("SELECT w.org_id, p.id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
@@ -61,7 +67,13 @@ class UniqueProjectKind(ObjectKind):
     def load(self, db: Any, object_id: str) -> Optional[tuple[str, str]]:
         with connection(db) as conn:
             rows = conn.execute(text(self.sql()), {"id": str(object_id)}).all()
-        return (str(rows[0][0]), str(rows[0][1])) if len(rows) == 1 else None
+        if len(rows) == 1:
+            return (str(rows[0][0]), str(rows[0][1]))
+        if rows and self._refuse_ambiguous:
+            # A key whose handler still reads ONE of its rows (by org): several projects hold it,
+            # so no single placement is true; answered as no tenant's, which every check refuses.
+            return AMBIGUOUS
+        return None
 
 
 class AccessRequestKind(ObjectKind):
@@ -160,10 +172,28 @@ class InProcessKind(ObjectKind):
         return (str(row[0]), str(row[1])) if row else None
 
 
-def _sign_in_project(sign_in_id: str) -> Optional[str]:
+class InProcessOrgKind(InProcessKind):
+    """An object held in this process that belongs to an ORGANISATION (a provider sign-in: the
+    install's CLI login, whose token lands in the org's model home). `owner_of(id)` answers
+    (org, project); the loader answers (org, None), the org taken from the project when the
+    object did not record one."""
+
+    def load(self, db: Any, object_id: str) -> Optional[tuple[str, None]]:
+        owner = self._project_of(str(object_id))
+        if not owner:
+            return None
+        org_id, project_id = owner
+        if not org_id and project_id:
+            with connection(db) as conn:
+                row = conn.execute(text(self.sql()), {"id": str(project_id)}).first()
+            org_id = row[0] if row else None
+        return (str(org_id), None) if org_id else None
+
+
+def _sign_in_owner(sign_in_id: str) -> Optional[tuple[Optional[str], str]]:
     from ..services import subscription_sign_in
 
-    return subscription_sign_in.project_of(sign_in_id)
+    return subscription_sign_in.owner_of(sign_in_id)
 
 
 def _disclosure_project(disclosure_id: str) -> Optional[str]:
@@ -397,8 +427,10 @@ KINDS: tuple[ObjectKind, ...] = (
                project="(SELECT f.project_id FROM self_fixes f WHERE f.id = t.self_fix_id)"),
     # task_voice: a transcript id is the caller's key, unique per org; the handler returns the
     # row stored under it (task_voice._by_transcript_id), so it must be this project's
+    # task_voice: UNIQUE (org_id, transcript_id), so one id may be held in several orgs; the
+    # handler reads by org alone. An id held in more than one project is refused, never passed.
     UniqueProjectKind("task_voice_transcript", "SELECT project_id FROM task_voice_transcripts "
-                                               "WHERE transcript_id = :id"),
+                                               "WHERE transcript_id = :id", refuse_ambiguous=True),
     # Objects the ORGANISATION owns (OrgKind; object_rules.ORG_SHARED_KINDS for the ones a
     # project-level route may name)
     OrgKind("agent_host", "agent_hosts"),
@@ -417,7 +449,7 @@ KINDS: tuple[ObjectKind, ...] = (
                 "JOIN workspaces w ON w.id = p.workspace_id WHERE p.id = t.target_id) END",
             project="CASE WHEN t.scope = 'project' THEN t.target_id END"),
     # held in this process (the service answers the project)
-    InProcessKind("subscription_sign_in", _sign_in_project),
+    InProcessOrgKind("subscription_sign_in", _sign_in_owner),
     InProcessKind("provider_terms_disclosure", _disclosure_project),
 )
 
@@ -517,7 +549,8 @@ ID_PARAM_KINDS: dict[str, tuple[str, ...]] = {
     "evidence_id": ("assurance_evidence",), "experiment_id": ("experiment",),
     "finding_id": ("system_finding",),
     "resource_id": _RESOURCES, "from_resource_id": _RESOURCES, "to_resource_id": _RESOURCES,
-    "host_id": ("deployment_host",),
+    #: a deployment host; POST /v1/agents/{role_key}/deployments records an agent-fleet host here
+    "host_id": ("deployment_host", "agent_host"),
     "incident_id": ("incident",), "reliability_incident_id": ("incident",),
     "ins_id": ("agent_instruction",),
     "instance_id": ("worker_instance",), "worker_instance_id": ("worker_instance",),
@@ -611,7 +644,8 @@ ID_PARAM_KINDS: dict[str, tuple[str, ...]] = {
     "profile_id": ("remote_agent_profile",),
     "prompt_id": ("project_prompt",),
     "recommendation_id": ("boss_recommendation",),
-    "repo_id": ("github_repo",), "repo_ids": ("github_repo",),
+    #: the org's registry repository, or a project's binding of one
+    "repo_id": ("github_repo", "github_repository_binding"), "repo_ids": ("github_repo",),
     "rerun_id": ("validation_rerun",),
     "review_id": ("architecture_review", "deliverable_review"),
     "rule_id": ("app_alert_rule", "skill_policy_rule", "org_skill_policy_rule", "kg_node"),
