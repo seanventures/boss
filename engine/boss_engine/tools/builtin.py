@@ -1913,15 +1913,17 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                     {"p": pid, "k": key},
                 ).mappings().first()
                 if existing:
-                    # THE TWELVE BOSS SHIPS ARE READ-ONLY. The visual builder already
-                    # refuses this (`require_editable`). start_workflow and the unmapped
-                    # default both take the latest version of this key, so publishing
-                    # here would silently replace the gated path every new Build follows.
+                    # A DRAFT NEVER LANDS ON A STANDARD. People edit standards in place in the
+                    # Workflow editor (where Changes from standard and Reset to standard are);
+                    # this tool runs without a press, and start_workflow and the unmapped
+                    # default take this key's running version, so publishing here would
+                    # silently replace the gated path every new Build follows.
                     if existing["is_catalogue"]:
                         return {"ok": False,
-                                "error": f"{key} is one of BOSS's catalogue workflows. "
-                                         "Fork it and edit the fork; editing it would "
-                                         "change the path every new Build follows."}
+                                "error": f"{key} is one of BOSS's catalogue workflows (a "
+                                         "standard). Draft under a new key, or ask the person "
+                                         "to edit the standard in the Workflow editor, where "
+                                         "Reset to standard can undo it."}
                     definition_id = str(existing["id"])
                 else:
                     definition_id = wf.create_definition(

@@ -4264,8 +4264,10 @@ CREATE TABLE IF NOT EXISTS workflow_definitions (
   -- a customer workflow has to say what it is.
   namespace TEXT NOT NULL DEFAULT 'system'
     CHECK (namespace IN ('system', 'product')),
-  -- Catalogue workflows BOSS ships are read-only: a customer forks one to change it, which is
-  -- what keeps "reset to the standard" possible and the diff against it visible.
+  -- A catalogue workflow BOSS ships (a "standard"). Editable in place: an edit publishes the
+  -- next version of this same definition, and the shipped spec stays recorded as its baseline
+  -- (standard_version_id below), so "Modified", the diff and "Reset to standard" all have
+  -- something to compare against.
   is_catalogue BOOLEAN NOT NULL DEFAULT false,
   forked_from_version_id TEXT,
   active_version_id TEXT,
@@ -4304,6 +4306,23 @@ ALTER TABLE workflow_versions
   GENERATED ALWAYS AS (workflow_definition_id) STORED;
 CREATE INDEX IF NOT EXISTS idx_workflow_versions_project
   ON workflow_versions(project_id, workflow_definition_id, version DESC);
+
+-- A STANDARD'S BASELINE (workflow_standards.py). `standard_version_id` is the version holding
+-- the spec BOSS last shipped for this standard and `standard_content_hash` that version's hash:
+-- the definition is "Modified" when its active version's hash differs. A newer shipped spec
+-- for a Modified standard is published as a version that is NOT made active and pointed at by
+-- `standard_available_version_id` ("New standard available"); "Not now" records the one the
+-- operator set aside in `standard_dismissed_version_id`. A seed never overwrites an edit.
+ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS standard_version_id TEXT;
+ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS standard_content_hash TEXT;
+ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS standard_available_version_id TEXT;
+ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS standard_dismissed_version_id TEXT;
+-- Until standards were editable, a standard's active version WAS what BOSS shipped: that is
+-- its baseline. Idempotent: only rows with no baseline yet.
+UPDATE workflow_definitions d
+   SET standard_version_id = d.active_version_id, standard_content_hash = v.content_hash
+  FROM workflow_versions v
+ WHERE d.is_catalogue AND d.standard_version_id IS NULL AND v.id = d.active_version_id;
 
 CREATE TABLE IF NOT EXISTS workflow_mappings (
   id TEXT PRIMARY KEY,

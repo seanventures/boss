@@ -25,7 +25,9 @@ import { CHECK_TIP } from "./save/use-save-flow";
 
 export type VersionRow = { version: number; published_at: string; is_active: boolean };
 
-export const STANDARD_TIP = "Shipped with BOSS. Saving makes your own copy.";
+export const STANDARD_TIP = "Shipped with BOSS. Edit it here; Reset to standard brings the shipped one back.";
+export const MODIFIED_TIP = "You changed this standard. Reset to standard brings the shipped one back.";
+export const NEW_STANDARD_TIP = "BOSS shipped a newer version of this standard. Your changes were kept.";
 export const VERSION_TIP = "Each save is a new version. Running work keeps its version.";
 export const NO_DELETE_TIP = "Standards can't be deleted.";
 
@@ -69,6 +71,10 @@ export function TopBar(p: {
   onSave(): void; saveLabel: string; saveBlocked?: string | null; saveTip: string; saving: boolean;
   saveRef: RefObject<HTMLButtonElement | null>;
   onDuplicate(): void; duplicateBlocked?: string | null; onUseFor(): void; onChanges(): void; onDiscard(): void; onDelete(): void;
+  /** A standard only: make your own copy instead of editing it (secondary to Save). */
+  onSaveAsCopy?(): void; saveAsCopyBlocked?: string | null;
+  /** Opens the standard's "New standard available" offer. */
+  onNewStandard?(): void;
   deleteBlocked?: string | null;
   readOnly: boolean;
   /** Whether the editor has the whole window (`page=full`), and the press that switches it.
@@ -108,7 +114,7 @@ export function TopBar(p: {
               bar wraps its actions to the next line rather than squeeze it to "DQ RCA a…". */}
           <label className="wf-name" data-error={p.nameError ? "true" : undefined}
                  style={{ ["--wf-name-ch" as string]: String(Math.max(8, meta.name.trim().length + 2)) } as React.CSSProperties}>
-            <input className="wf-name-input" value={meta.name} aria-label="Name" readOnly={p.readOnly}
+            <input className="wf-name-input" value={meta.name} aria-label="Name" readOnly={p.readOnly || meta.is_catalogue}
                    autoFocus={p.autoFocusName} data-testid="wf-name" aria-invalid={p.nameError ? true : undefined}
                    data-tip={meta.name.trim() || undefined} data-tip-when="cut"
                    onFocus={(e) => { if (p.autoFocusName) e.currentTarget.select(); }}
@@ -133,10 +139,19 @@ export function TopBar(p: {
             </button>
           ) : null}
 
-          {meta.is_catalogue ? (
+          {meta.is_catalogue && meta.standard?.modified ? (
+            <span className="wf-chip" data-tone="amber" data-tip={MODIFIED_TIP} data-testid="wf-kind">Modified</span>
+          ) : meta.is_catalogue ? (
             <span className="wf-chip" data-tone="accent" data-tip={STANDARD_TIP} data-testid="wf-kind">Standard</span>
           ) : meta.definition_id ? (
             <span className="wf-chip" data-testid="wf-kind">Yours</span>
+          ) : null}
+
+          {meta.is_catalogue && meta.standard?.new_standard ? (
+            <button type="button" className="wf-chip wf-chip-btn" data-tone="accent" data-tip={NEW_STANDARD_TIP}
+                    onClick={() => p.onNewStandard?.()} data-testid="wf-new-standard">
+              New standard available
+            </button>
           ) : null}
 
           {meta.is_catalogue && meta.copy ? (
@@ -277,6 +292,11 @@ export function TopBar(p: {
           </div>
         ) : (
           <ul className="wf-menu" role="none">
+            {meta.is_catalogue && p.onSaveAsCopy ? (
+              <li role="none"><Btn role="menuitem" className="wf-menu-item" onClick={() => { close(); p.onSaveAsCopy?.(); }}
+                                   blocked={(p.readOnly && `Viewing v${viewing}`) || p.saveAsCopyBlocked}
+                                   testId="wf-menu-save-copy">Save as your copy</Btn></li>
+            ) : null}
             <li role="none"><Btn role="menuitem" className="wf-menu-item" onClick={() => { close(); p.onDuplicate(); }}
                                  blocked={(p.readOnly && `Viewing v${viewing}`) || p.duplicateBlocked} testId="wf-menu-duplicate">Duplicate</Btn></li>
             <li role="none"><Btn role="menuitem" className="wf-menu-item" onClick={() => { close(); p.onUseFor(); }}

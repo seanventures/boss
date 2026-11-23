@@ -17,7 +17,11 @@ export type FakeWorkflow = {
   copy?: { definition_id: string; workflow_key: string; name: string } | null;
   /** The run the Pipeline tab's "after a run" trace table reads (KG P6b). */
   last_run?: { id: string; status: string; at: string } | null;
+  /** A standard's state as the API sends it (`standard` on the spec). Unset: unmodified. */
+  standard?: Obj | null;
 };
+
+const UNMODIFIED = (w: FakeWorkflow) => ({ modified: false, baseline_version: w.version, changes: [], new_standard: null });
 
 /** `view=context_trace`, by run id — what each step of the run read and wrote in the graph
  *  (`fetchRunContext`, the Pipeline tab's last run). */
@@ -71,6 +75,8 @@ export function fakeWorkflowApi(palette: Palette, workflows: FakeWorkflow[],
             definition_id: w.definition_id, workflow_key: w.workflow_key, name: w.name,
             is_catalogue: w.is_catalogue, version: w.version, run_count: 0,
             last_run: w.last_run ?? null,
+            ...(w.is_catalogue ? { modified: Boolean(w.standard?.modified),
+                                   new_standard_available: Boolean(w.standard?.new_standard) } : {}),
             steps: w.spec.steps.map((s) => ({ id: s.id, title: s.title ?? s.id,
                                               capability: (s.binding as Obj | undefined)?.capability })),
           })) });
@@ -90,6 +96,7 @@ export function fakeWorkflowApi(palette: Palette, workflows: FakeWorkflow[],
           return Response.json({
             definition_id: w.definition_id, workflow_key: w.workflow_key, name: w.name, description: "",
             is_catalogue: w.is_catalogue, version: at.version, spec: at.spec, copy: w.copy ?? null,
+            standard: w.is_catalogue ? (w.standard ?? UNMODIFIED(w)) : null,
             versions: versions.map((v) => ({ version: v.version, published_at: "2026-10-01T10:00:00Z",
                                              is_active: v.version === w.version })),
           });
@@ -109,6 +116,17 @@ export function fakeWorkflowApi(palette: Palette, workflows: FakeWorkflow[],
         if (api.problems.length) return Response.json({ problems: api.problems }, { status: 422 });
         const existing = api.workflows.find((w) => w.definition_id === body.definition_id)
           ?? api.workflows.find((w) => w.definition_id === body.update_copy_id);
+        // A STANDARD IS EDITED IN PLACE under its own name, unless saved as a copy.
+        if (existing && existing.is_catalogue && !body.as_copy && !body.update_copy_id
+            && body.name === existing.name) {
+          existing.version += 1;
+          existing.spec = spec;
+          existing.standard = { modified: true, baseline_version: existing.version - 1,
+                                changes: [{ change: "changed", step_id: null, text: "~ Edited in place" }],
+                                new_standard: (existing.standard?.new_standard as Obj | undefined) ?? null };
+          return Response.json({ definition: { id: existing.definition_id, workflow_key: existing.workflow_key,
+                                               name: existing.name }, version: existing.version, created: false });
+        }
         if (existing && !existing.is_catalogue) {
           existing.version += 1;
           existing.spec = spec;
@@ -123,6 +141,20 @@ export function fakeWorkflowApi(palette: Palette, workflows: FakeWorkflow[],
         api.workflows.push(made);
         return Response.json({ definition: { id: made.definition_id, workflow_key: made.workflow_key, name: made.name },
                                version: 1, created: true });
+      }
+      if (body.action === "standard") {
+        const w = api.workflows.find((x) => x.definition_id === body.definition_id);
+        if (!w || !w.is_catalogue) return Response.json({ detail: "not a standard" }, { status: 409 });
+        const offer = w.standard?.new_standard as Obj | null | undefined;
+        if (body.act !== "reset" && !offer) return Response.json({ detail: "no new standard" }, { status: 409 });
+        if (body.act === "dismiss") {
+          w.standard = { ...(w.standard ?? UNMODIFIED(w)), new_standard: null };
+          return Response.json({ standard: w.standard });
+        }
+        w.version += 1;
+        w.standard = body.act === "take_new_keep"
+          ? { ...(w.standard ?? UNMODIFIED(w)), new_standard: null } : { ...UNMODIFIED(w) };
+        return Response.json({ version: w.version, standard: w.standard });
       }
       if (body.action === "draft") {
         return api.draft ? Response.json(api.draft) : Response.json({ detail: "no model" }, { status: 409 });

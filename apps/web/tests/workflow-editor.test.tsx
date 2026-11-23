@@ -155,14 +155,18 @@ describe("the bar stays one row", () => {
 });
 
 describe("the bar and the summary", () => {
-  it("says what is open: name, version, Standard, and Save as my copy", async () => {
+  it("says what is open: name, version, Standard, and Save (a standard is edited in place)", async () => {
     await mount();
     expect((byTest("wf-name") as HTMLInputElement).value).toBe("Standard Product Delivery");
+    // A standard keeps its name: Save as your copy names one differently.
+    expect((byTest("wf-name") as HTMLInputElement).readOnly).toBe(true);
     expect(byTest("wf-version").textContent).toBe("v3");
     expect(byTest("wf-version").dataset.tip).toBe("Each save is a new version. Running work keeps its version.");
     expect(byTest("wf-kind").textContent).toBe("Standard");
-    expect(byTest("wf-kind").dataset.tip).toBe("Shipped with BOSS. Saving makes your own copy.");
-    expect(byTest("wf-save").textContent).toBe("Save as my copy");
+    expect(byTest("wf-kind").dataset.tip).toBe(
+      "Shipped with BOSS. Edit it here; Reset to standard brings the shipped one back.");
+    expect(byTest("wf-save").textContent).toBe("Save");
+    expect(byTest("wf-std-save-copy").textContent).toBe("Save as your copy");
     expect(byTest("wf-check").dataset.tip).toBe("Runs every check Save runs, without saving.");
   });
 

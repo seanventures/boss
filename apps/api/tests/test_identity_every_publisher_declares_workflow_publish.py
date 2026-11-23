@@ -13,7 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
 #: the functions that write a new runnable workflow version
-PUBLISHERS = ("publish_version", "publish_from_editor")
+PUBLISHERS = ("publish_version", "publish_from_editor", "reset_to_standard", "take_new_standard")
 #: catalogue installs publish the catalogue's own reviewed spec: that is what workflow:install means
 INSTALL_PERMISSION = "P.WORKFLOW_INSTALL"
 

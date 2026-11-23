@@ -2415,8 +2415,8 @@ def seed(connection: Connection, project_id: str, actor: str = "boss",
 
         if existing:
             definition_id = existing["id"]
-            # A catalogue workflow is read-only (a customer forks it to change it), so its name
-            # and description follow the catalogue: a reworded standard reads the new words.
+            # A standard's name and description follow the catalogue (renaming one is refused:
+            # workflows.require_own), so a reworded standard reads the new words.
             connection.execute(
                 text("UPDATE workflow_definitions SET name = :n, description = :d, "
                      "updated_at = now() WHERE id = :id AND is_catalogue "
@@ -2437,12 +2437,15 @@ def seed(connection: Connection, project_id: str, actor: str = "boss",
 
         spec = entry_spec(_staffed_for(entry, present))
         try:
-            version = workflows.publish_version(
-                connection, project_id=project_id, definition_id=definition_id,
-                spec=spec, actor=actor,
-            )
+            # THROUGH THE STANDARD'S BASELINE (workflow_standards.record_shipped): an unmodified
+            # standard takes the new spec; a standard the operator edited is never overwritten —
+            # the new spec waits beside it as "New standard available".
+            from .workflow_standards import record_shipped
+
+            version = record_shipped(connection, definition_id, spec, actor)
             installed.append({"key": entry["key"], "version_id": version["id"],
-                              "version": version["version"]})
+                              "version": version["version"],
+                              **({"offered": True} if version.get("offered") else {})})
         except workflows.WorkflowConflictError:
             # Same content hash: already published. Nothing to do, and not an error.
             installed.append({"key": entry["key"], "version_id": None, "version": None})
@@ -2593,7 +2596,8 @@ def restaff_without(connection: Connection, project_id: str, role_key: str, *,
     rows = connection.execute(
         text(
             """
-            SELECT d.id AS definition_id, d.workflow_key, v.spec
+            SELECT d.id AS definition_id, d.workflow_key, v.spec, d.is_catalogue,
+                   (v.content_hash = d.standard_content_hash) AS unmodified
               FROM workflow_definitions d
               JOIN workflow_versions v ON v.id = d.active_version_id
              WHERE d.project_id = :p
@@ -2615,6 +2619,14 @@ def restaff_without(connection: Connection, project_id: str, role_key: str, *,
                 spec={**spec, "steps": staffed["steps"]}, actor=actor)
         except workflows.WorkflowConflictError:
             continue
+        if row["is_catalogue"] and row["unmodified"]:
+            # An unmodified standard restaffed is still the standard (for this project's
+            # agents): it stays unmodified, and Reset goes back to a spec that can run here.
+            connection.execute(
+                text("UPDATE workflow_definitions SET standard_version_id = :v, "
+                     "standard_content_hash = :h WHERE id = :id"),
+                {"v": version["id"], "h": version["content_hash"],
+                 "id": row["definition_id"]})
         republished.append({"workflow_key": row["workflow_key"],
                             "version": version.get("version")})
     return republished
@@ -2666,11 +2678,13 @@ def _repoint_default(
             or not row["is_catalogue"]):
         return False                       # the operator's, not ours
 
+    # THE VERSION THAT RUNS (the definition's active one), not the newest row: a standard the
+    # operator edited has a newer SHIPPED version waiting beside their edit, not in use.
     newest = connection.execute(
         text("SELECT v.id FROM workflow_versions v "
              "  JOIN workflow_definitions d ON d.id = v.workflow_definition_id "
              " WHERE v.project_id = :p AND d.workflow_key = :k AND v.status = 'published' "
-             " ORDER BY v.created_at DESC LIMIT 1"),
+             " ORDER BY (v.id = d.active_version_id) DESC, v.created_at DESC LIMIT 1"),
         {"p": project_id, "k": workflow_key},
     ).first()
     if not newest or newest[0] == row["workflow_version_id"]:
@@ -2684,6 +2698,23 @@ def _repoint_default(
         {"v": newest[0], "m": mapping_id},
     )
     return True
+
+
+def repoint_defaults_for(connection: Connection, project_id: str, workflow_key: str) -> int:
+    """Move BOSS's own default mappings for this standard onto its active version — called when
+    an operator edits, resets or upgrades a standard, so new work follows what they saved.
+    An operator's own mapping is never moved (_repoint_default). Returns how many moved."""
+    moved = 0
+    for work_class, key in _DEFAULT_MAPPINGS:
+        if key != workflow_key:
+            continue
+        rows = connection.execute(
+            text("SELECT id FROM workflow_mappings WHERE project_id = :p "
+                 "AND selector_kind = 'work_class' AND selector_value = :sv AND enabled"),
+            {"p": project_id, "sv": work_class}).scalars().all()
+        for mapping_id in rows:
+            moved += int(_repoint_default(connection, str(mapping_id), project_id, key))
+    return moved
 
 
 def _seed_default_mappings(
@@ -2724,7 +2755,7 @@ def _seed_default_mappings(
             text("SELECT v.id FROM workflow_versions v "
                  "  JOIN workflow_definitions d ON d.id = v.workflow_definition_id "
                  " WHERE v.project_id=:p AND d.workflow_key=:k AND v.status='published' "
-                 " ORDER BY v.created_at DESC LIMIT 1"),
+                 " ORDER BY (v.id = d.active_version_id) DESC, v.created_at DESC LIMIT 1"),
             {"p": project_id, "k": key},
         ).first()
         if not version:

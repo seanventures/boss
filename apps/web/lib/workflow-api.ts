@@ -14,7 +14,7 @@ import { apiWrite } from "./api-write";
 import { designsFrom, type DesignsInfo } from "./pipeline-model";
 import type {
   BlockDef, Capability, ControlDef, CheckResult, CustomStepDef, EditorMeta, Palette, Problem,
-  PublishRequest, PublishResult, RosterAgent, Spec, WorkflowSummary,
+  PublishRequest, PublishResult, RosterAgent, Spec, StandardAct, StandardChange, StandardState, WorkflowSummary,
 } from "./workflow-editor-types";
 
 /** `publishSpec` (and `checkSpec`) on a 422: the problems, each pinned to a step and field. */
@@ -284,6 +284,8 @@ function toSummary(raw: unknown): WorkflowSummary {
     forked_from_name: str(w.forked_from_name) || null,
     run_count: Number(w.run_count ?? 0),
     active_version_id: str(w.active_version_id) || null,
+    ...(w.is_catalogue ? { modified: w.modified === true,
+                           new_standard_available: w.new_standard_available === true } : {}),
     last_run: str(lastRun.status)
       ? { ...(str(lastRun.id) ? { id: str(lastRun.id) } : {}), status: str(lastRun.status), at: str(lastRun.at) }
       : null,
@@ -352,8 +354,44 @@ export async function fetchSpec(projectId: string, key: string, version?: number
       copy,
       // A version other than the one that runs opens read-only ("Viewing v2 · Restore").
       readOnlyVersion: version !== undefined && version !== active ? version : null,
+      standard: isCatalogue ? toStandard(body.standard) : null,
     },
   };
+}
+
+const toChanges = (value: unknown): StandardChange[] => list(value).map((raw) => {
+  const row = asObj(raw);
+  const change = str(row.change);
+  return { change: (["added", "removed", "changed"].includes(change) ? change : "setting") as StandardChange["change"],
+           step_id: str(row.step_id) || null, text: str(row.text) };
+}).filter((c) => c.text);
+
+/** A standard's state as the API sends it (`standard` on the spec), or null when absent. */
+export function toStandard(value: unknown): StandardState | null {
+  if (!value || typeof value !== "object") return null;
+  const body = asObj(value);
+  const offer = body.new_standard && typeof body.new_standard === "object" ? asObj(body.new_standard) : null;
+  return {
+    modified: body.modified === true,
+    baseline_version: typeof body.baseline_version === "number" ? body.baseline_version : null,
+    changes: toChanges(body.changes),
+    new_standard: offer ? {
+      version: Number(offer.version ?? 0), changes: toChanges(offer.changes),
+      applies_cleanly: offer.applies_cleanly === true, conflicts: strings(offer.conflicts),
+    } : null,
+  };
+}
+
+/**
+ * Reset a standard to what BOSS shipped, or answer "New standard available": take it with your
+ * changes, take it only, or not now. Runs already going keep their version. Throws the API's
+ * sentence on a refusal (a clash on "keep my changes" names what clashed).
+ */
+export async function standardAct(projectId: string, definitionId: string, act: StandardAct): Promise<{
+  version: number | null; standard: StandardState | null;
+}> {
+  const body = await send("POST", { action: "standard", project_id: projectId, definition_id: definitionId, act });
+  return { version: typeof body.version === "number" ? body.version : null, standard: toStandard(body.standard) };
 }
 
 /** One graph kind a step read or wrote on a run: how many nodes, a few of their names. */

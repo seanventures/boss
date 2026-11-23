@@ -133,6 +133,8 @@
 }
 .wf-tag[data-kind="yours"] { color: var(--green); border-color: var(--green); }
 .wf-tag[data-kind="standard"] { color: var(--accent); border-color: var(--accent); }
+.wf-tag[data-kind="modified"] { color: var(--amber); border-color: var(--amber); }
+.wf-tag[data-kind="new-standard"] { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
 .wf-tag[data-kind="from"] { max-width: 160px; }
 /* A TAG THAT IS A BUTTON (a run's Agents and Credits). `.wf-tag` was written for a span and sets
    no background, so on a <button> the browser's own button face showed through: a white pill

@@ -12,7 +12,7 @@ What went wrong before, each pinned here against a real database:
   * The builder learned what was wrong one problem per save. `/check` returns every problem at
     once, each on its step and field — and it is the collector publish raises from, so Check
     and Save can never disagree.
-  * A standard could be published over in place through the generic versions endpoint.
+  * A standard is edited in place (any door) and Reset to standard brings the shipped one back.
   * Describe wrote a workflow before the operator had seen it. `/draft` writes nothing.
 """
 from __future__ import annotations
@@ -422,21 +422,67 @@ def test_renaming_publishes_no_version_and_refuses_a_standard_and_a_taken_name(c
     assert refused.status_code == 403, refused.text
 
 
-# ── The generic versions endpoint ─────────────────────────────────────────────────────────────
+# ── A standard edited in place, and Reset to standard ─────────────────────────────────────────
 
 
-def test_a_standard_cannot_be_published_over_through_the_generic_endpoint(client, engine):
+def _reset(client, standard) -> None:
+    reset = _post(client, "standard", definition_id=standard["definition_id"], act="reset")
+    assert reset.status_code == 200, reset.text
+
+
+def test_a_standard_is_edited_in_place_and_reset_to_what_boss_shipped(client, engine):
+    """REWRITTEN: this pinned that a standard could not be edited in place. Operator:
+    "we should make all the workflows editable, and if they make mistakes we should go back to
+    factory mode which is reset to original value"."""
     standard = _standard(client)
+    assert standard["standard"]["modified"] is False
+    assert standard["standard"]["changes"] == []
+    own_before = _own_definitions(engine)
     changed = copy.deepcopy(standard["spec"])
     changed["steps"][0]["title"] = "Edited in place"
-    before = _count(engine, "SELECT count(*) FROM workflow_versions "
-                            "WHERE workflow_definition_id = :d", d=standard["definition_id"])
-    refused = client.post(f"/v1/workflows/{standard['definition_id']}/versions", json={
-        "project_id": PROJECT, "actor": "ceo", "spec": changed})
-    assert refused.status_code == 403, refused.text
-    assert _count(engine, "SELECT count(*) FROM workflow_versions "
-                          "WHERE workflow_definition_id = :d",
-                  d=standard["definition_id"]) == before
+    try:
+        saved = _post(client, "publish", definition_id=standard["definition_id"],
+                      name=standard["name"], spec=changed)
+        assert saved.status_code == 200, saved.text
+        assert saved.json()["definition"]["id"] == standard["definition_id"]
+        assert saved.json()["created"] is False
+        assert _own_definitions(engine) == own_before, "an edit of a standard made a copy"
+
+        edited = _standard(client)
+        assert edited["is_catalogue"] is True
+        assert edited["version"] != standard["version"]
+        assert edited["standard"]["modified"] is True
+        assert edited["standard"]["baseline_version"] == standard["version"]
+        assert [c["change"] for c in edited["standard"]["changes"]] == ["changed"]
+        row = next(r for r in client.get("/v1/delivery-workflows",
+                                         params={"project_id": PROJECT}).json()["items"]
+                   if r["id"] == standard["definition_id"])
+        assert row["modified"] is True
+
+        # The same edit through the generic versions endpoint is an edit too, not a 403.
+        again = copy.deepcopy(changed)
+        again["steps"][0]["title"] = "Edited through the generic door"
+        generic = client.post(f"/v1/workflows/{standard['definition_id']}/versions", json={
+            "project_id": PROJECT, "actor": "ceo", "spec": again})
+        assert generic.status_code == 201, generic.text
+    finally:
+        _reset(client, standard)
+    reset = _standard(client)
+    assert reset["version"] == standard["version"], "reset did not bring the shipped one back"
+    assert reset["standard"]["modified"] is False
+    # The edits stay in the version list (Restore brings them back).
+    assert len(reset["versions"]) >= len(standard["versions"]) + 2
+
+
+def test_a_standard_act_needs_a_standard_and_a_known_act(client):
+    made = _post(client, "publish", definition_id=None, name=_name(), spec=_media_spec()).json()
+    mine = _post(client, "standard", definition_id=made["definition"]["id"], act="reset")
+    assert mine.status_code == 409, mine.text
+    standard = _standard(client)
+    unknown = _post(client, "standard", definition_id=standard["definition_id"], act="explode")
+    assert unknown.status_code == 400
+    nothing = _post(client, "standard", definition_id=standard["definition_id"], act="take_new")
+    assert nothing.status_code == 409, nothing.text
 
 
 # ── Describe and Auto-wire ────────────────────────────────────────────────────────────────────
