@@ -16,6 +16,7 @@ import {
 } from "@phosphor-icons/react";
 import { WorkTreeView } from "./work-tree";
 import { InboxView } from "./work-inbox";
+import { DecidedForYou } from "../autonomy/decided";
 
 import { GatedButton, useGate } from "../../components/gated";
 import {
@@ -203,6 +204,8 @@ export function WorkTab({ ctx }: { ctx: PxCtx }) {
           ))}
         </div>
       )}
+      {/* DECIDED FOR YOU (dev autonomy, BOSSAPP-1441): what agents decided alone, with Undo. */}
+      {!ctx.demo && view !== "tree" && view !== "mine" ? <DecidedForYou projectId={ctx.projectId} /> : null}
     </div>
     </RowChipsProvider>
   );

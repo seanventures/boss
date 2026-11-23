@@ -74,6 +74,7 @@ const PASSTHROUGH: Record<string, string> = {
   "lib/work-ux.ts": "its helpers (registered) send through obsWrite; app/projects/work-item-extras.tsx gates each press on work_item:manage",
   "lib/work-items.ts": "its helpers (registered) send through obsWrite; app/projects/work-tree.tsx and work-access.tsx gate each press on work_item:manage / role_binding:assign",
   "lib/documents.ts": "its helpers (registered) send through obsWrite; app/projects/work-docs.tsx gates each press on work_item:manage",
+  "lib/autonomy.ts": "its helpers (registered) send through obsWrite; app/autonomy/control.tsx gates Save on org:update / autonomy:manage, app/autonomy/decided.tsx gates Undo and Looks good on decision:approve",
   "lib/inbox.ts": "its helpers (registered) send through obsWrite; app/projects/work-inbox.tsx gates each press on work_item:read",
   "lib/tool-policies.ts": "its helpers (registered) send through obsWrite; app/skills/tool-rules.tsx gates each press on mcp_server:review / mcp_server:read",
   "lib/infra-storage.ts": "its helpers (registered) send through obsWrite; the strip (app/infra/infra-strip-banner.tsx) gates Acknowledge on system:operate, Storage (app/infra/storage-card.tsx) gates Clean now and the rule toggles on autonomy:manage, the deletion card (app/infra/storage-delete-decision.tsx) gates Delete and the alternatives on decision:approve",
