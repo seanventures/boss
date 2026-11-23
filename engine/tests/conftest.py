@@ -21,6 +21,10 @@ import os
 # and lease jobs with no principal, as an upgrading install does, so the suite runs shadow
 # EXPLICITLY; identity tests set the mode they test on the one settings object.
 os.environ.setdefault("BOSS_AUTHZ_MODE", "shadow")
+# DEV AUTONOMY decides a card on a thread once its producer commits (autonomy_gate). A test that
+# raises a card and reads it back must not race that thread; the tests of autonomy itself call
+# autonomy_gate.decide / sweep directly, and turn this on where they test the thread.
+os.environ.setdefault("BOSS_AUTONOMY_IMMEDIATE", "0")
 
 # A code task's build database arrives as a plain postgresql:// URL (build-services serves every
 # language, and node/psql want that form). SQLAlchemy reads that scheme as psycopg2, which BOSS

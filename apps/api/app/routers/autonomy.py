@@ -9,6 +9,9 @@ GET  /v1/autonomy/resolve                "is this production?" for a target, a m
                                          environment or BOSS itself (services/production.py)
 PUT  /v1/deployment-targets/{id}/tier    a target's tier: dev | staging | prod (or null)
 PUT  /v1/repository-bindings/{id}/ships-to   where a repository's default branch ships
+GET  /v1/autonomy/decided                "Decided for you": every auto-decision, latest first
+POST /v1/autonomy/decided/{id}/undo      undo it by its stored undo kind
+POST /v1/autonomy/decided/{id}/reviewed  "Looks good"
 """
 from __future__ import annotations
 
@@ -224,3 +227,76 @@ def put_repository_ships_to(binding_id: str, payload: ShipsToBody) -> dict[str, 
                                            repo=row["full_name"],
                                            base_branch=row["default_branch"] or "main")
         return {"binding_id": binding_id, "ships_to": ships, "verdict": verdict.as_dict()}
+
+
+# ---- "Decided for you": what BOSS decided under dev autonomy, with undo -------------------------
+
+@router.get("/v1/autonomy/decided")
+@permit(P.DECISION_READ, scope=Scope.project(query="project_id"))
+def get_decided_for_you(project_id: str, limit: int = 50) -> dict[str, Any]:
+    """Every card BOSS decided for you under dev autonomy, latest first: who decided, why it was
+    not production, when, the links, and the undo it offers (or why there is none)."""
+    from boss_engine.services import autonomy_gate
+
+    with begin(_engine) as connection:
+        _main().require_project_reader(connection, project_id)
+        items = autonomy_gate.decided_for_you(connection, project_id, limit=limit)
+        return {"items": items, "count": len(items),
+                "unreviewed": sum(1 for i in items if not i["reviewed"])}
+
+
+class DecidedBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    project_id: str = Field(min_length=1, max_length=200)
+    actor: Optional[str] = None
+
+
+def _decision_actor(connection, project_id: str, claimed: Optional[str]) -> str:
+    from apps.api.app import identity_guard
+
+    return identity_guard.request_actor() or _main().require_project_write_actor(
+        connection, project_id, claimed, "decision_resolve")
+
+
+def _owned(connection, decision_id: str, project_id: str) -> None:
+    owner = connection.execute(text("SELECT project_id FROM decisions WHERE id = :d"),
+                               {"d": decision_id}).scalar()
+    if owner != project_id:
+        raise HTTPException(status_code=404, detail="no such decision")
+
+
+@router.post("/v1/autonomy/decided/{decision_id}/undo")
+@permit(P.DECISION_APPROVE, scope=Scope.of("decision", path="decision_id"))
+def post_undo_decided(decision_id: str, payload: DecidedBody) -> dict[str, Any]:
+    """Undo one auto-decision by the undo kind stored when it was decided (revert the merge, roll
+    the deploy back, stop the build it started, revoke the grant...). 409 when it has none."""
+    from boss_engine.services import autonomy_gate
+
+    with begin(_engine) as connection:
+        _owned(connection, decision_id, payload.project_id)
+        actor = _decision_actor(connection, payload.project_id, payload.actor)
+        try:
+            return autonomy_gate.undo(connection, _settings, decision_id,
+                                      project_id=payload.project_id, actor=actor)
+        except autonomy_gate.UndoRefused as refused:
+            raise HTTPException(status_code=409, detail=str(refused)) from refused
+        except LookupError as missing:
+            raise HTTPException(status_code=404, detail=str(missing)) from missing
+
+
+@router.post("/v1/autonomy/decided/{decision_id}/reviewed")
+@permit(P.DECISION_APPROVE, scope=Scope.of("decision", path="decision_id"))
+def post_reviewed_decided(decision_id: str, payload: DecidedBody) -> dict[str, Any]:
+    """"Looks good": a person reviewed what BOSS decided. Nothing else changes."""
+    from boss_engine.services import autonomy_gate
+
+    with begin(_engine) as connection:
+        _owned(connection, decision_id, payload.project_id)
+        actor = _decision_actor(connection, payload.project_id, payload.actor)
+        try:
+            return autonomy_gate.mark_reviewed(connection, decision_id,
+                                               project_id=payload.project_id, actor=actor)
+        except autonomy_gate.UndoRefused as refused:
+            raise HTTPException(status_code=409, detail=str(refused)) from refused
+        except LookupError as missing:
+            raise HTTPException(status_code=404, detail=str(missing)) from missing

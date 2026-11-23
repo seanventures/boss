@@ -42,7 +42,8 @@ def assert_manual_gate():
 
 
 @pytest.mark.parametrize("mode,setting,automatic", [
-    ("enforce", None, False),
+    # Dev autonomy (BOSSAPP-1441): unset follows the autonomy policy, not the authz mode.
+    ("enforce", None, True),
     ("shadow", None, True),
     ("off", None, True),
     ("enforce", "false", False),

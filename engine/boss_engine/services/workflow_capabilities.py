@@ -1322,18 +1322,33 @@ def notify_channel_need(channel: str) -> str:
     return f"channel:{value}"
 
 
-def approval_mode_for(capability_key: str, requested: Optional[str]) -> str:
+#: Capabilities whose gate follows WHERE they ship (dev autonomy, BOSSAPP-1441): the risk floor
+#: makes them manual only when the resolved target is production or unknown.
+TARGET_GATED = frozenset({"deploy", "redeploy", "config_deploy"})
+
+
+def approval_mode_for(capability_key: str, requested: Optional[str], *,
+                      target_prod: Optional[bool] = None, autonomy_acts: bool = False) -> str:
     """The approval mode this step will ACTUALLY run under.
 
     A workflow may ask for `auto`; a capability at or above the risk floor gets `manual`
     regardless. Deploying to production and merging a pull request are not things a
     configuration file gets to decide were fine.
 
+    A DEPLOY FOLLOWS ITS TARGET (dev autonomy, BOSSAPP-1441): for TARGET_GATED capabilities, when
+    the target is resolved NOT production (`target_prod=False`, services/production.py) and the
+    project's autonomy policy acts in development (`autonomy_acts`), the floor does not apply.
+    Unknown (`None`) is production. The floor is decided before the target is known (a published
+    plan), so it says manual there; the runner asks again with the target.
+
     Returning the effective value — rather than validating the requested one and storing it
     unchanged — means the stored plan says what will happen. A plan that reads `auto` next to a
     step that will stop and wait is a plan nobody can trust.
     """
     capability = get(capability_key)
+    if (capability_key in TARGET_GATED and target_prod is False and autonomy_acts
+            and str(requested or "").strip().lower() != "manual"):
+        return "auto"
     if capability.risk_tier >= MANUAL_APPROVAL_RISK_FLOOR:
         return "manual"
     mode = (requested or "auto").strip().lower()
@@ -1593,6 +1608,14 @@ def effective_approval(
         resolved["follows_policy"] = True
     resolved["risk_tier"] = capability.risk_tier
     resolved["forced_manual"] = capability.risk_tier >= MANUAL_APPROVAL_RISK_FLOOR
+    # WHAT THE AUTHOR ASKED FOR, before the floor (dev autonomy, BOSSAPP-1441): an author's own
+    # "manual" is a stop a person set and is honoured even where the floor no longer applies.
+    # Only read from a raw step (one not resolved before), so a forced "manual" never reads as
+    # the author's.
+    if approval.get("requested_mode"):
+        resolved["requested_mode"] = str(approval["requested_mode"]).lower()
+    elif "forced_manual" not in approval and approval.get("mode"):
+        resolved["requested_mode"] = str(approval["mode"]).strip().lower()
     return resolved
 
 

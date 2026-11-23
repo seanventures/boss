@@ -72,6 +72,11 @@ def principal_name(actor: Any, connection: Any = None) -> Optional[str]:
     pid = str(actor or "").strip()
     if not pid or pid == "auto_approval" or pid.startswith("policy:"):
         return None
+    if pid.startswith("autonomy:dev:"):
+        # "Decided by <Agent> under dev autonomy" (autonomy_gate, BOSSAPP-1441).
+        from .autonomy_gate import ACTOR_PREFIX, decided_words
+
+        return decided_words(pid[len(ACTOR_PREFIX):])
     if pid == "ceo":
         return "the owner"
     if not looks_like_an_id(pid):

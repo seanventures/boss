@@ -12,8 +12,10 @@ the same rules the runtime acts on:
           step is a gate for you unless it follows the environment's policy AND that policy
           ships without asking (deploy_policy.step_answer — the answer the runner acts on);
           then it is listed as BOSS's, with the policy named, and `says` carries the words.
-- merge — the pull request a build opens. Always you: the merge decision is raised with
-          `no_auto_merge: True` and nothing in BOSS approves it on anyone's behalf. Every
+- merge — the pull request a build opens. You, when the branch it merges into ships to
+          production or BOSS cannot tell where it ships (services/production.resolve_merge);
+          under dev autonomy (BOSSAPP-1441) the release manager agent merges it otherwise, and
+          the card is decided and logged, never silently skipped (`merge_answer`). Every
           build-like step of one run writes the SAME branch and PR, and a later attempt's merge
           question withdraws the earlier one (run_decisions.withdraw_superseded_pr_questions),
           so a run asks once — after its last build-like step.
@@ -96,6 +98,7 @@ def holds_for_spec(steps: list[dict[str, Any]], step_id: str) -> bool:
 def asks_for_spec(spec: dict[str, Any], *, prd_auto_approve: bool,
                   roster: Optional[frozenset[str]] = None,
                   deploy_answer: Optional[Callable[[dict[str, Any]], dict[str, Any]]] = None,
+                  merge_answer: Optional[dict[str, Any]] = None,
                   ) -> list[dict[str, Any]]:
     """The asks one workflow version will raise, in run order.
 
@@ -116,9 +119,9 @@ def asks_for_spec(spec: dict[str, Any], *, prd_auto_approve: bool,
             answer = deploy_answer(step) if deploy_answer else {"who": "you",
                                                                  "says": PERSON_SAYS}
             ask = {"step_id": step["id"], "label": _label(step), "kind": "gate",
-                   "who": "you" if answer.get("who") != "policy" else "boss",
+                   "who": "you" if answer.get("who") not in ("policy", "agent") else "boss",
                    "says": answer.get("says") or PERSON_SAYS,
-                   "promised": promises_a_person(step)}
+                   "promised": bool(answer.get("promised", promises_a_person(step)))}
             if answer.get("who") == "policy":
                 ask["policy"] = answer.get("environment")
             out.append(ask)
@@ -132,8 +135,35 @@ def asks_for_spec(spec: dict[str, Any], *, prd_auto_approve: bool,
                         "who": "you"})
         if index == last_build:
             out.append({"step_id": step["id"], "label": MERGE_LABEL, "kind": "merge",
-                        "who": "you"})
+                        **(merge_answer or {"who": "you"})})
     return out
+
+
+def merge_answer_for(connection: Connection, project_id: str) -> dict[str, Any]:
+    """Who answers a build's merge in this project: BOSS (dev autonomy) when the primary
+    repository's default branch does not ship to production, else you."""
+    from . import autonomy_policy, production
+
+    point = connection.begin_nested()
+    try:
+        row = connection.execute(text(
+            "SELECT full_name, default_branch FROM github_repository_bindings "
+            "WHERE project_id = :p AND status = 'active' ORDER BY (role = 'primary') DESC "
+            "LIMIT 1"), {"p": project_id}).mappings().first()
+        verdict = None
+        if row is not None and autonomy_policy.dev_acts(connection, project_id):
+            verdict = production.resolve_merge(connection, project_id=project_id,
+                                               repo=row["full_name"],
+                                               base_branch=row["default_branch"] or "main")
+    except Exception:  # noqa: BLE001 — unknown: you
+        point.rollback()
+        return {"who": "you"}
+    point.commit()
+    if verdict is None:
+        return {"who": "you"}
+    if verdict.prod:
+        return {"who": "you", "says": verdict.words}
+    return {"who": "boss", "says": f"Merged by the release manager agent: {verdict.words}"}
 
 
 def route_asks(*, prd_auto_approve: bool) -> dict[str, list[dict[str, Any]]]:
@@ -162,6 +192,7 @@ def project_asks(connection: Connection, settings: Any, project_id: str,
         "AND status <> 'retired' ORDER BY workflow_key"),
         {"p": project_id}).scalars().all()
     roster = project_roster(connection, project_id)
+    merge = merge_answer_for(connection, project_id)
     workflows: dict[str, list[dict[str, Any]]] = {}
     for key in keys:
         running = running_version(connection, project_id, str(key))
@@ -177,6 +208,7 @@ def project_asks(connection: Connection, settings: Any, project_id: str,
                 spec = {}
         workflows[str(key)] = asks_for_spec(
             spec, prd_auto_approve=auto, roster=roster,
-            deploy_answer=lambda step: step_answer(connection, project_id, step))
+            deploy_answer=lambda step: step_answer(connection, project_id, step),
+            merge_answer=merge)
     return {"project_id": project_id, "prd_auto_approve": auto, "workflows": workflows,
             "routes": route_asks(prd_auto_approve=auto)}

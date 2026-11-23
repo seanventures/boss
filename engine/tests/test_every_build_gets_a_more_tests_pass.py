@@ -23,6 +23,23 @@ from boss_engine.services.workflow_catalogue import CATALOGUE, entry_spec
 from .test_workflow_capability_runner import eng, project  # noqa: F401 - fixtures by name
 
 
+@pytest.fixture(autouse=True)
+def _this_project_asks_in_development(eng, project):  # noqa: F811
+    """These pin the promise a Deploy step makes to a PERSON, so the project's autonomy policy
+    says ask in development (BOSSAPP-1441). Dev autonomy's default — the agent ships to a
+    development target and every surface says so — is pinned in test_dev_autonomy_acts_and_logs
+    and test_only_allowed_classes_wait_outside_production."""
+    from boss_engine.services import autonomy_policy
+
+    with eng.begin() as c:
+        autonomy_policy.save(c, kind=autonomy_policy.PROJECT, scope_id=project,
+                             raw={"dev": "ask"}, actor="test")
+    yield
+    with eng.begin() as c:
+        c.execute(text("DELETE FROM autonomy_policies WHERE scope_id = :p"), {"p": project})
+
+
+
 def _cap(step):
     return (step.get("binding") or {}).get("capability")
 
