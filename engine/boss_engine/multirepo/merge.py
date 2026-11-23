@@ -42,10 +42,12 @@ def merge_set(db: Any, settings: Any, cs_id: str, *, actor: str = "boss") -> dic
 
     # 1. THE HEADS ARE STILL WHAT WAS APPROVED.
     moved = []
+    pulls: dict[str, dict[str, Any]] = {}
     for lane in lanes:
         if lane.get("merged_sha"):
             continue
-        head = (repos[lane["full_name"]].pull(lane["pr_number"]).get("head") or {}).get("sha")
+        pulls[lane["full_name"]] = repos[lane["full_name"]].pull(lane["pr_number"])
+        head = (pulls[lane["full_name"]].get("head") or {}).get("sha")
         if head != approved.get(lane["full_name"]) or head != lane["head_sha"]:
             moved.append(lane["full_name"])
     if moved:
@@ -60,6 +62,15 @@ def merge_set(db: Any, settings: Any, cs_id: str, *, actor: str = "boss") -> dic
     for lane in lanes:
         if lane.get("merged_sha"):
             continue
+        if lane.get("ci_state") == "fail" and (pulls.get(lane["full_name"]) or {}).get("draft"):
+            # THE DRAFT BOSS OPENED WITH ITS CHECKS FAILING (checks_failing.py), whose merge a person
+            # decided with a reason (ci_gate.refuse_approval allowed only that): mark it ready, so
+            # GitHub accepts the merge. A refusal shows as GitHub's own merge refusal below.
+            try:
+                repos[lane["full_name"]].mark_ready(pulls[lane["full_name"]])
+            except Exception as error:  # noqa: BLE001
+                log.warning("change set %s: could not mark %s ready: %s", cs_id, lane["full_name"],
+                            type(error).__name__)
         answer = repos[lane["full_name"]].merge(lane["pr_number"], approved[lane["full_name"]],
                                                 title=f"{title} (#{lane['pr_number']})")
         if answer.status == 200 and isinstance(answer.body, dict) and answer.body.get("merged") is not False:

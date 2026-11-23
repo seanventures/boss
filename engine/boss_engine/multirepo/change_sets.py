@@ -549,6 +549,66 @@ def _latest_attempt(db: Any, run_id: str) -> str:
     return current
 
 
+def lane_checks_failing(db: Any, run_id: Optional[str], pr_url: Optional[str] = None) -> Optional[dict[str, Any]]:
+    """The checks-failing record a lane's pull request carries, exactly as a single-PR merge card
+    would (acceptance_gate.merge_card_checks): the build's own `finalize_ctx.checks_failing`, else
+    the gates its PR's lineage shipped past. None when nothing is failing. Never raises."""
+    if not run_id:
+        return None
+    from ..services import acceptance_gate
+    from ..services import checks_failing as cf
+
+    try:
+        with db.begin_nested():
+            row = db.execute(sql("SELECT finalize_ctx, state, pull_request_url FROM code_task_runs WHERE id = :r"),
+                             {"r": run_id}).mappings().first()
+    except Exception:  # noqa: BLE001
+        row = None
+    if row is None:
+        return None
+    fctx = jload(row.get("finalize_ctx"), {}) or {}
+    own = fctx.get(cf.KEY) if isinstance(fctx.get(cf.KEY), dict) and fctx[cf.KEY].get("gates") else None
+    card, _ = acceptance_gate.merge_card_checks(
+        db, run_id=run_id, evidence=jload(row.get("state"), {}) or {}, checks_failing=own,
+        pr_url=pr_url or row.get("pull_request_url"))
+    return dict(card) if isinstance(card, dict) and card.get("gates") else None
+
+
+def set_checks_failing(db: Any, touched: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    """ONE record for the set's card (checks_failing.collect's shape): every failing gate of every
+    lane, security first, each finding tagged with its repository, and which PR fails what. None
+    when every lane's checks pass."""
+    from ..services import checks_failing as cf
+
+    gates: dict[str, dict[str, Any]] = {}
+    findings: list[dict[str, Any]] = []
+    lanes: list[dict[str, Any]] = []
+    draft = False
+    for lane in touched:
+        rec = lane_checks_failing(db, lane.get("code_task_run_id"), lane.get("pr_url"))
+        if not rec:
+            continue
+        draft = draft or bool(rec.get("draft"))
+        for g in rec.get("gates") or []:
+            name = str(g.get("gate") or "")
+            if not name:
+                continue
+            entry = gates.setdefault(name, {"gate": name, "label": g.get("label") or name,
+                                            "security": bool(g.get("security")), "repositories": []})
+            entry["repositories"].append(lane["full_name"])
+        findings.extend({**f, "repository": lane["full_name"]} for f in rec.get("findings") or [])
+        lanes.append({"repository": lane["full_name"], "pr_number": lane.get("pr_number"),
+                      "pr_url": lane.get("pr_url"), "gates": cf.gate_names(rec),
+                      "security": bool(rec.get("security"))})
+    if not gates:
+        return None
+    ordered = sorted(gates.values(), key=lambda g: 0 if g["security"] else 1)
+    for g in ordered:
+        g["detail"] = "failing on " + ", ".join(_short(r) for r in g.pop("repositories"))
+    return {"gates": ordered, "findings": findings[:cf.MAX_FINDINGS], "lanes": lanes,
+            "security": any(g["security"] for g in ordered), "draft": draft, "label": cf.LABEL}
+
+
 def _refresh_lane(db: Any, settings: Any, cs: dict[str, Any], lane: dict[str, Any]) -> dict[str, Any]:
     """Read the lane's build and say what the lane is now."""
     from . import github
@@ -582,10 +642,17 @@ def _refresh_lane(db: Any, settings: Any, cs: dict[str, Any], lane: dict[str, An
             log.warning("change set %s: could not read %s: %s", cs["id"], lane["full_name"], error.code)
         if not patch["sha"]:
             return lane                                    # not ready until GitHub says which commit
+        # A PR OPENED WITH ITS CHECKS FAILING (services/checks_failing.py: a draft, after the repair
+        # rounds) is built, so the set can still be asked, but its gates are NOT green: the lane
+        # says `fail`, and the set's card carries the record (_ask), so nothing merges it without
+        # a person's stated reason (ci_gate.refuse_approval, autonomy_gate.route).
+        state = "fail" if lane_checks_failing(db, rid, run["pull_request_url"]) else "pass"
+        patch["state"] = state
         db.execute(sql("UPDATE change_set_prs SET lane_state = 'ready', pr_number = :n, pr_url = :u, head_sha = :sha, "
-                       "branch = :br, additions = :add, deletions = :del, changed_files = :files, review_state = 'pass', "
-                       "ci_state = COALESCE(ci_state, 'pass'), updated_at = now() WHERE id = :i"), patch)
-        return {**lane, "lane_state": "ready", "pr_number": patch["n"], "head_sha": patch["sha"], "branch": patch["br"]}
+                       "branch = :br, additions = :add, deletions = :del, changed_files = :files, review_state = :state, "
+                       "ci_state = :state, updated_at = now() WHERE id = :i"), patch)
+        return {**lane, "lane_state": "ready", "pr_number": patch["n"], "head_sha": patch["sha"], "branch": patch["br"],
+                "ci_state": state, "review_state": state}
     return lane
 
 
@@ -712,18 +779,30 @@ def _ask(db: Any, cs: dict[str, Any], touched: list[dict[str, Any]]) -> str:
     prs = [{"repository": lane["full_name"], "pr_number": lane["pr_number"], "pr_url": lane["pr_url"],
             "head_sha": lane["head_sha"], "additions": lane.get("additions"), "deletions": lane.get("deletions"),
             "components": list(lane["components"] or [])} for lane in touched]
+    from ..services import checks_failing as cf
+
+    # CHECKS FAILING ON ANY PR OF THE SET (set_checks_failing): the card leads with them, and the
+    # approval is a person's stated decision with a reason (ci_gate.refuse_approval) — dev
+    # autonomy never makes it (autonomy_gate.route asks on a merge card that carries the record).
+    failing = set_checks_failing(db, touched)
+    summary = (f"One decision for all {n} pull requests of “{cs['title']}”. They merge together and deploy "
+               "together, or not at all.")
+    if failing:
+        summary = cf.decision_summary(failing) + " " + summary
     recommendation = {
         "action": "approve_change_set", "change_set_id": cs["id"], "app_key": cs["app_key"],
         "app_name": cs.get("app_name") or cs["app_key"], "title": cs["title"], "pull_requests": prs,
         "head_shas": heads,
-        "summary": (f"One decision for all {n} pull requests of “{cs['title']}”. They merge together and deploy "
-                    "together, or not at all."),
+        "summary": summary,
+        **({cf.KEY: failing} if failing else {}),
         "action_preview": {"kind": "fields", "content_hash": content_hash(heads),
                            "fields": [{"label": p["repository"], "value": f"#{p['pr_number']} @ {p['head_sha'][:12]}"}
                                       for p in prs]},
     }
     decision_id = create_blocking_decision(
-        db, cs["project_id"], cs.get("task_id"), f"Ship a change · {cs.get('app_name') or cs['app_key']}: {cs['title']}",
+        db, cs["project_id"], cs.get("task_id"),
+        ("Checks failing — decide the merge: " if failing else "")
+        + f"Ship a change · {cs.get('app_name') or cs['app_key']}: {cs['title']}",
         recommendation, {}, "change_set_approval_required", risk_tier=2)
     db.execute(sql("UPDATE repo_change_sets SET state = 'in_review', decision_id = :d, approved_shas = NULL, "
                    "approved_by = NULL, approved_at = NULL, blocked_reason = NULL, updated_at = now() WHERE id = :i"),

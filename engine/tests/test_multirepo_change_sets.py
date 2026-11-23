@@ -56,6 +56,14 @@ class FakeGitHub:
 
     def __call__(self, method, path, token, body=None):
         self.calls.append((method, path))
+        if path == github.GRAPHQL:                       # markPullRequestReadyForReview
+            for r in self.repos.values():
+                for pr in r["pulls"].values():
+                    if pr.get("node_id") == body["variables"]["id"]:
+                        pr["draft"] = False
+                        return github.Answer(200, {"data": {"markPullRequestReadyForReview": {
+                            "pullRequest": {"isDraft": False}}}})
+            return github.Answer(200, {"errors": [{"message": "no such node"}]})
         parts = path.split("/")
         full = f"{parts[2]}/{parts[3]}"
         r = self.repo(full)
@@ -65,6 +73,8 @@ class FakeGitHub:
             pr = r["pulls"][n]
             if full in self.refuse_merge:
                 return github.Answer(405, {"message": "Base branch was modified. Review and try the merge again."})
+            if pr.get("draft"):
+                return github.Answer(405, {"message": "Pull Request is still a draft"})
             if body.get("sha") != pr["head"]["sha"]:
                 return github.Answer(409, {"message": "Head branch was modified."})
             old = r["refs"][pr["base"]["ref"]]
@@ -298,6 +308,99 @@ def _approve(eng, cs_id, jobs, *, decision_id=None):
         # As DecisionService does: the decision is approved first, then the follow-on runs.
         db.execute(text("UPDATE decisions SET status = 'approved' WHERE id = :d"), {"d": row["id"]})
         change_sets.on_decision(db, row, status="approved", actor="usr_approver", jobs=jobs)
+
+
+# ── checks failing on a lane: never merged by autonomy, still by a person with a reason ─────────
+
+def _ready_set_with_red(eng, gh, builds, jobs, red: set[str]) -> tuple[str, dict[str, Any]]:
+    """As _ready_set, but the builds of `red` open their PR as a draft with checks failing
+    (checks_failing.py: the record the build writes on finalize_ctx)."""
+    from boss_engine.services import checks_failing
+
+    world = make_world(eng)
+    app = _setup_app(eng, world)
+    cs_id = _start(eng, app["pid"], jobs)
+    for _ in range(3):
+        _advance(eng, cs_id, jobs)
+        for run in [b for b in builds if not b.get("done")]:
+            run["done"] = True
+            n = _finish(eng, gh, run)
+            if run["repo"] in red:
+                pr = gh.repos[run["repo"]]["pulls"][n]
+                pr.update(draft=True, node_id=f"PR_{run['repo']}_{n}")
+                record = {**checks_failing.collect(["security_clean", "tests_pass"]), "draft": True}
+                with eng.begin() as db:
+                    db.execute(text("UPDATE code_task_runs SET finalize_ctx = finalize_ctx || "
+                                    "jsonb_build_object('checks_failing', CAST(:r AS JSONB)) WHERE id = :i"),
+                               {"r": json.dumps(record), "i": run["run_id"]})
+    _advance(eng, cs_id, jobs)
+    return cs_id, _view(eng, cs_id)
+
+
+def _set_card(eng, cs_id) -> dict[str, Any]:
+    with eng.begin() as db:
+        row = dict(db.execute(text("SELECT * FROM decisions WHERE id = :d"),
+                              {"d": change_sets._row(db, cs_id)["decision_id"]}).mappings().first())
+    rec = row["recommendation"]
+    row["recommendation"] = json.loads(rec) if isinstance(rec, str) else rec
+    return row
+
+
+def _dev(row: dict[str, Any]) -> dict[str, Any]:
+    """The same card on a development base, so only the checks decide the route."""
+    return {**row, "recommendation": {**row["recommendation"], "pr_base": "rel/rc11", "repo": "o/unknown"}}
+
+
+def test_a_lane_with_checks_failing_is_red_and_autonomy_never_merges_the_set(eng, gh, model, builds):
+    from boss_engine.services import autonomy_gate, ci_gate, decision_actions
+
+    jobs = Jobs()
+    cs_id, v = _ready_set_with_red(eng, gh, builds, jobs, {"acme/api"})
+    lanes = {lane["full_name"]: lane for lane in v["lanes"]}
+    assert lanes["acme/api"]["ci_state"] == "fail" and lanes["acme/api"]["review_state"] == "fail"
+    assert lanes["acme/web"]["ci_state"] == "pass" and lanes["acme/contracts"]["review_state"] == "pass"
+    assert v["state"] == "in_review"                              # still asked: a person may decide
+    row = _set_card(eng, cs_id)
+    failing = row["recommendation"]["checks_failing"]
+    assert [g["gate"] for g in failing["gates"]] == ["security_clean", "tests_pass"] and failing["security"]
+    assert [x["repository"] for x in failing["lanes"]] == ["acme/api"]
+    assert row["recommendation"]["summary"].startswith("CHECKS FAILING")
+    with eng.begin() as db:
+        routed = autonomy_gate.route(db, _dev(row))
+        # Dev autonomy's approval is a policy approval: refused at the gate as well.
+        with pytest.raises(ci_gate.CiGateRefused) as by_policy:
+            ci_gate.refuse_approval(db, row, "agent:release_manager", system_policy=True)
+    assert not routed.acts and routed.cls == autonomy_gate.EXPLICIT_STOP
+    assert "checks are failing" in routed.why
+    assert by_policy.value.code == "person_approval_required"
+    # A PERSON still merges it: with a reason (forced), never with a plain Approve.
+    person = type("P", (), {"run_token": None, "credential": None, "legacy": None, "is_human_session": True,
+                            "principal": type("Id", (), {"id": "usr_alice"})()})()
+    with eng.begin() as db:
+        with pytest.raises(ci_gate.CiGateRefused) as plain:
+            ci_gate.refuse_approval(db, row, "usr_alice", identity_ctx=person)
+        ci_gate.refuse_approval(db, row, "usr_alice", identity_ctx=person, force=True)
+    assert plain.value.code == "checks_failing"
+    approve = next(a for a in decision_actions.allowed_actions(row) if a["action"] == "approve")
+    assert approve["needs"] == "note" and "checks failing" in approve["label"]
+    _approve(eng, cs_id, jobs)
+    with eng.begin() as db:
+        out = merge.merge_set(db, get_settings(), cs_id)
+    assert out["status"] == "merged"                             # the draft was made ready first
+    assert gh.repos["acme/api"]["pulls"][1]["draft"] is False
+
+
+def test_a_green_set_card_carries_no_checks_failing_and_autonomy_acts(eng, gh, model, builds):
+    from boss_engine.services import autonomy_gate
+
+    jobs = Jobs()
+    cs_id, v = _ready_set(eng, gh, builds, jobs)
+    assert all(lane["ci_state"] == "pass" for lane in v["lanes"] if lane["lane_state"] == "ready")
+    row = _set_card(eng, cs_id)
+    assert "checks_failing" not in row["recommendation"]
+    with eng.begin() as db:
+        routed = autonomy_gate.route(db, _dev(row))
+    assert routed.acts, routed.why
 
 
 # ── adversarial ──────────────────────────────────────────────────────────────────────────────

@@ -134,7 +134,10 @@ def test_a_merge_into_a_branch_that_ships_to_production_asks(eng, project):
 
 
 def test_a_merge_with_failing_checks_is_never_decided_by_autonomy(eng, project):
-    red = {"gates": [{"name": "tests", "status": "failed"}]}
+    from boss_engine.services import checks_failing
+
+    red = checks_failing.collect(["tests_pass", "security_clean"])
+    assert red["gates"][0]["gate"] == "security_clean"          # the record the build writes
     with eng.begin() as c:
         failing = autonomy_gate.route(c, {"project_id": project, "recommendation": {
             "action": "review_pull_request", "pr_base": "rel/rc11", "repo": "o/unknown",
