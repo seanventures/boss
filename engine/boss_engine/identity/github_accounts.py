@@ -143,7 +143,8 @@ def app_installations(db: Any) -> list[dict[str, Any]]:
         resp = github_app._call("GET", f"/app/installations?per_page=100&page={page}", token=jwt)  # noqa: SLF001
         if resp.status != 200:
             raise GitHubSetupError("installations_unavailable", 502, status=resp.status,
-                                   message=github_refusal("the BOSS app's installations", status=resp.status))
+                                   message=github_refusal("the BOSS app's installations", status=resp.status,
+                                                          app_level=True))
         items = [i for i in (resp.json() or []) if isinstance(i, dict)]
         out.extend(items)
         if len(items) < 100:

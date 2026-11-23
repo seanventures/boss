@@ -161,10 +161,16 @@ def judge(*, ran: Iterable[str], failed: Iterable[str], unfinished: Iterable[str
     for e in entries:
         if e.file not in ran or e.file in unfinished or any(e.covers(f) for f in failed):
             continue
+        suite = suite_of(e.id)
         if passed_ids is None or any(e.covers(p) for p in passed_ids):
-            suite = suite_of(e.id)
             problems.append(f"STALE: {e.id} passes now ({e.ticket}): delete line {e.line} of "
                             f"tests/known-failures/{suite}.txt (the list only shrinks)")
+        else:
+            # Neither passed nor failed: skipped here, or renamed away. A line nobody can judge
+            # would sit forever, so it is refused too: fix the test or delete the line.
+            problems.append(f"NOT JUDGED: {e.id} neither failed nor passed here (skipped, or no "
+                            f"such test) ({e.ticket}): fix it or delete line {e.line} of "
+                            f"tests/known-failures/{suite}.txt")
     return problems, known
 
 

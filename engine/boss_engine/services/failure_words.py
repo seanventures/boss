@@ -182,7 +182,7 @@ def _timed_out(error: object) -> bool:
 
 
 def github_refusal(what: str, error: object = None, *, status: Optional[int] = None,
-                   account: str = "") -> str:
+                   account: str = "", app_level: bool = False) -> str:
     """"GitHub did not list <what>" WITH GitHub's answer and the way out — the one wording for
     every GitHub listing that failed (Setup's pickers, the repository registry, an account's
     repositories). `error` is the exception in scope; `status` GitHub's HTTP status when the
@@ -190,6 +190,12 @@ def github_refusal(what: str, error: object = None, *, status: Optional[int] = N
     code = status if status is not None else (http_status_of(error) if error is not None else None)
     who = f" for {account}" if account else ""
     lead = f"GitHub did not list {what}{who}"
+    if app_level and code in (401, 403, 404):
+        # A call made as the GitHub App itself (its JWT), not as an account: the App's own key
+        # or registration is what GitHub refused, never an account's sign-in.
+        return (f"{lead}: GitHub refused the BOSS GitHub App itself (HTTP {code}); its private "
+                "key or App ID on this install is wrong, or the App was deleted. Set the App "
+                "up again in Setup › Repositories, then open the list again.")
     if code == 401:
         return (f"{lead}: it refused BOSS's sign-in (HTTP 401). Reconnect the GitHub account in "
                 "Setup › Repositories, then open the list again.")

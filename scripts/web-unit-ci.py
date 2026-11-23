@@ -104,7 +104,10 @@ def main(argv: list[str] | None = None) -> int:
     # (tests/control-plane-visible.test.ts, 2026-11-10). A new failure that also fails alone is
     # real and still fails the job; a file that passes its retry is reported as FLAKY, never
     # hidden. Quarantined files get no retry: they are expected to fail.
-    unexpected = [f for f in failing if f not in quarantine and (WEB / f).exists()]
+    # A security guard gets no retry: a red one is red (BOSSAPP-1429).
+    guards = web_security_files()
+    unexpected = [f for f in failing if f not in quarantine and f not in guards
+                  and (WEB / f).exists()]
     if unexpected and not args.only_quarantined:
         print(f"\nweb-unit-ci: retrying {len(unexpected)} unexpected failure(s) alone: "
               + ", ".join(unexpected))

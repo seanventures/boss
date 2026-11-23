@@ -407,9 +407,14 @@ def storage_said(error: object) -> dict:
                 "turn_action": ("Try again in a minute: BOSS lost its database connection and "
                                 "reconnects by itself. If it persists, run `boss doctor`.")}
     if _DUPLICATE.search(said_text):
+        # A unique violation is a COLLISION: a name already taken, or another save of the same
+        # thing landing at the same moment (a chat thread's insert race). Say both; retry stays
+        # allowed because the race clears on a second try.
         return {"storage_cause": "duplicate", "retry": True,
-                "headline": "This was already saved, so BOSS did not save it twice.",
-                "action": "Reload this page to see it.",
+                "headline": ("BOSS did not save this: something with the same name or key is "
+                             "already saved."),
+                "action": ("Reload to see what is there. If it is not what you meant, choose a "
+                           "different name and try again; the error is in the Activity Log."),
                 "turn_action": ("Try again: another save landed at the same moment. If it "
                                 "repeats, Details shows the error.")}
     if _BUSY.search(said_text):
@@ -447,7 +452,7 @@ def explain_turn_failure(error: object, *, source_id: Optional[str] = None) -> d
     (`sentence`); `detail` is technical_summary, for a collapsed Details and the server log.
     A turn that failed for no better-named reason says its one-line cause (never the SQL).
     """
-    said = dict(explain(error, source_id=source_id))
+    said = dict(_redacted(_explain(error, source_id=source_id)))
     if said["kind"] == "storage":
         said["headline"] = "BOSS couldn't save this conversation."
         said["action"] = said.get("turn_action") or said["action"]
@@ -467,7 +472,13 @@ def explain(error: object, *, source_id: Optional[str] = None) -> dict:
     """{kind, headline, action, href, retry} for a failure. Never repeats a credential: every
     word of it (a headline that quotes the error, the `detail` for Details) is redacted here,
     once, whichever branch said it."""
-    said = _explain(error, source_id=source_id)
+    said = _redacted(_explain(error, source_id=source_id))
+    # The chat wording of a storage failure is explain_turn_failure's, never a caller's payload.
+    said.pop("turn_action", None)
+    return said
+
+
+def _redacted(said: dict) -> dict:
     from .redaction import redact_secrets
 
     for key, value in list(said.items()):
@@ -475,7 +486,8 @@ def explain(error: object, *, source_id: Optional[str] = None) -> dict:
             try:
                 said[key] = redact_secrets(value)
             except Exception:  # noqa: BLE001 — never show what could not be redacted
-                said[key] = "" if key == "detail" else value
+                said[key] = ("" if key in ("detail", "turn_action") else
+                             "BOSS could not say this safely; the error is in the Activity Log.")
     return said
 
 

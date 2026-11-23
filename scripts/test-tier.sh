@@ -30,6 +30,9 @@ esac
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
 OUT="${TEST_TIER_OUT:-$(mktemp -d -t boss-tier-XXXX)}"
+# A reused TEST_TIER_OUT must not judge an earlier run's logs.
+rm -f "$OUT"/*.log "$OUT"/*.files "$OUT"/api.shard* "$OUT"/failed.txt "$OUT"/passed.txt \
+  "$OUT"/ran.txt "$OUT"/unfinished.txt "$OUT"/judge.txt 2>/dev/null
 DBC="${BOSS_TEST_DB_CONTAINER:-boss-community-db-1}"
 # The test databases: <prefix> for the engine suite, <prefix>_t1..tN for the API shards.
 DBP="${TEST_TIER_DB_PREFIX:-boss_test}"
@@ -107,7 +110,12 @@ try:
     listed_files = sorted({e.file for b in kf.load_all().values() for e in b.values()})
 except ValueError as error:
     sys.exit(f"tests/known-failures: {error}")
-for f in listed_files:
+# Every security guard runs in every tier: a red one fails every gate, so it must be in every run.
+try:
+    guard_files = sorted(kf.security_files())
+except ValueError as error:
+    sys.exit(f"tests/tiers.yaml: {error}")
+for f in listed_files + guard_files:
     s = kf.suite_of(f)
     if s and f not in by_path[s]:
         by_path[s].append(f)
@@ -216,7 +224,7 @@ fi
 PYLOGS=$(ls "$OUT"/engine.log "$OUT"/worker.log "$OUT"/scripts.log "$OUT"/api[0-9]*.log 2>/dev/null)
 cat $PYLOGS /dev/null | grep -E "^(FAILED|ERROR) " | sed 's/ - .*//' | awk '{print $2}' \
   | grep -E '^(engine|apps|scripts)/' > "$OUT/failed.txt"
-grep -E "^ FAIL " "$OUT/web.log" 2>/dev/null | sed 's/^ FAIL  *//; s/ >.*//' | sed 's#^#apps/web/#' >> "$OUT/failed.txt"
+grep -E "^ FAIL " "$OUT/web.log" 2>/dev/null | sed -E 's/^ FAIL  *//; s/ (>|\[).*//' | sed 's#^#apps/web/#' >> "$OUT/failed.txt"
 # What ran: every file of every suite that ran. A run that never printed its summary ("N passed
 # in 12.3s") crashed or was killed: that is a failure too, never a silent pass, and its files are
 # "unfinished" (their baseline lines cannot be judged stale). "no tests ran" IS a summary, and it
@@ -230,7 +238,8 @@ for log in $PYLOGS; do
   if grep -qE 'no tests ran.* in [0-9.]+s' "$log"; then
     echo "$name: no tests ran (see $log)" >> "$OUT/failed.txt"
   fi
-  if ! grep -qE '(passed|failed|error|skipped|no tests ran).* in [0-9.]+s' "$log"; then
+  # A collection error interrupts the whole session: nothing else in that run was judged.
+  if grep -q 'Interrupted: ' "$log" || ! grep -qE '(passed|failed|error|skipped|no tests ran).* in [0-9.]+s' "$log"; then
     echo "$name: the pytest run did not finish (see $log)" >> "$OUT/failed.txt"
     cat "$files" >> "$OUT/unfinished.txt" 2>/dev/null
   fi

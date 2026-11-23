@@ -6,4 +6,3 @@
 # Format: <test id or test file> | <ticket> | <owner> | <since YYYY-MM-DD> | <why it fails today>
 # Seeded 2026-11-23 from the P0 tier and the listed tests at b73f45b56.
 engine/tests/test_every_template_says_what_it_needs.py::test_every_door_that_starts_a_run_checks_readiness_first | BOSSAPP-1442 | engine | 2026-10-15 | workflow_schedules.run_due starts a run without asking readiness first (product call)
-engine/tests/test_sandbox_s1_go.py::test_go_sandbox_service_unit_tests | BOSSAPP-1442 | engine | 2026-10-13 | the Go sandbox service suite; skipped without Go, unverified since it was listed

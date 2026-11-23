@@ -193,6 +193,7 @@ def test_each_database_cause_has_its_own_sentence():
     assert "out of disk space" in disk["headline"] and "`boss doctor`" in disk["action"]
     assert "Govern › Infrastructure" in disk["action"]
     assert said["storage: duplicate"]["action"].startswith("Reload")
+    assert "already saved" in said["storage: duplicate"]["headline"]
     assert "reconnects by itself" in said["storage: connection"]["action"]
     assert "a value it needs was missing" in said["storage: not null"]["headline"]
     other = said["storage: other"]
@@ -474,3 +475,19 @@ def test_no_module_says_a_vague_failure():
             found.append(f"{path.relative_to(ROOT)}:{hit}")
     assert not found, ("A failure sentence names a symptom only — say what happened and what "
                        "to do (failure_words.problems):\n" + "\n".join(found))
+
+
+def test_explain_keeps_the_chat_wording_out_of_its_payload():
+    """Callers spread explain() into API payloads; the turn wording is explain_turn_failure's."""
+    from boss_engine.services.model_failures import explain
+
+    said = explain("duplicate key value violates unique constraint \"x_key\"")
+    assert said["kind"] == "storage" and "turn_action" not in said
+
+
+def test_an_app_level_github_refusal_names_the_app_not_an_account():
+    from boss_engine.services.failure_words import github_refusal, problems
+
+    said = github_refusal("the BOSS app's installations", status=401, app_level=True)
+    assert "GitHub App itself" in said and "Reconnect the GitHub account" not in said
+    assert problems(what=said, action=said) == []

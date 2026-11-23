@@ -167,11 +167,29 @@ def test_a_line_listed_twice_is_refused(tmp_path):
         kf.load("engine", _tree(tmp_path, f"{line}\n{line}"))
 
 
-def test_a_listed_test_that_was_skipped_here_is_not_stale():
-    """A Go test skipped on a machine without Go is not evidence that it is fixed."""
+def test_a_listed_test_that_neither_passed_nor_failed_cannot_sit_in_the_baseline():
+    """Skipped here (no Go toolchain) or renamed away: not evidence it is fixed, and not a
+    failure either. A line nobody can judge would sit forever, so the gate refuses it."""
     base = _baselines(f"{A}::test_go")
-    assert kf.judge(ran=[A], failed=[], passed=[f"{A}::test_other"], baselines=base,
-                    security=set())[0] == []
+    problems, _ = kf.judge(ran=[A], failed=[], passed=[f"{A}::test_other"], baselines=base,
+                           security=set())
+    assert len(problems) == 1 and problems[0].startswith(f"NOT JUDGED: {A}::test_go")
     problems, _ = kf.judge(ran=[A], failed=[], passed=[f"{A}::test_go"], baselines=base,
                            security=set())
     assert problems and problems[0].startswith("STALE")
+
+
+def test_every_security_guard_runs_in_every_tier():
+    """A guard outside P0 (the validation-redaction test) never ran in any gate."""
+    tier = (ROOT / "scripts" / "test-tier.sh").read_text(encoding="utf-8")
+    assert "kf.security_files()" in tier and "listed_files + guard_files" in tier
+
+
+def test_a_web_file_that_fails_to_load_is_read_as_its_file():
+    """vitest prints ` FAIL  tests/x.test.ts [ tests/x.test.ts ]` for a file that fails to load."""
+    tier = (ROOT / "scripts" / "test-tier.sh").read_text(encoding="utf-8")
+    line = " FAIL  tests/x.test.ts [ tests/x.test.ts ]\n FAIL  tests/y.test.ts > a > b\n"
+    pipe = next(l for l in tier.splitlines() if l.startswith('grep -E "^ FAIL "'))
+    sed = pipe.split("|", 1)[1].rsplit(">>", 1)[0]
+    done = subprocess.run(["bash", "-c", sed], input=line, capture_output=True, text=True)
+    assert done.stdout.split() == ["apps/web/tests/x.test.ts", "apps/web/tests/y.test.ts"]

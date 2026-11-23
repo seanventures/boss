@@ -45,6 +45,13 @@ WORDS = {
     "last_factor": "This pool requires a second factor: add another before removing this one.",
     "mail_unavailable": "This BOSS cannot send email yet, so this step is unavailable.",
     "too_many": "Too many attempts. Wait a few minutes, then try again.",
+    "challenge_invalid": "That sign-in request expired. Go back and start it again.",
+    "passkey_failed": ("Your passkey could not be checked. Try it again, or sign in with your "
+                       "password."),
+    "passkey_limit": "You have the most passkeys allowed. Remove one before adding another.",
+    "passkeys_off": "This app does not use passkeys. Sign in with your password.",
+    "passkeys_unavailable": ("Passkeys do not work on this browser or device. Sign in with your "
+                             "password."),
 }
 
 
