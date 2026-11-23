@@ -11,6 +11,12 @@ type Capacity = {
   next_build: { admitted: boolean; shortfall: string | null };
 };
 
+/** Why the limits could not be read, and what to do: never a bare "unavailable". */
+export function capacityReadError(status: number): string {
+  if (status === 401 || status === 403) return "Agent capacity needs the system:read permission. Ask an admin to grant it, then reload Setup.";
+  return `Could not read agent capacity${status ? ` (HTTP ${status})` : ""}. Reload Setup; if it stays, check that the API is up in Observability › System.`;
+}
+
 export function AgentCapacityRow() {
   const { projectId } = useBoard();
   const [state, setState] = useState<Capacity | null>(null);
@@ -23,7 +29,7 @@ export function AgentCapacityRow() {
     async function read() {
       try {
         const response = await fetch(`/api/setup?project_id=${encodeURIComponent(projectId)}&agent_capacity=1`);
-        if (!response.ok) throw new Error("Could not read agent capacity");
+        if (!response.ok) throw new Error(capacityReadError(response.status));
         const body = await response.json();
         if (active && body.admission) {
           setState(body.admission);
@@ -31,7 +37,7 @@ export function AgentCapacityRow() {
           setBuilds(body.admission.builds_at_once.auto ? "auto" : String(body.admission.builds_at_once.pinned));
         }
       } catch (cause) {
-        if (active) setError(cause instanceof Error ? cause.message : "Capacity unavailable");
+        if (active) setError(cause instanceof Error && cause.message ? cause.message : capacityReadError(0));
       }
     }
     void read();

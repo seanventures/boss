@@ -228,8 +228,8 @@ class CodexCodeAgent(GenericCliCodeAgent):
             raise harness_failures.HarnessFailure(harness_failures.HarnessVerdict(
                 engine="codex", kind="policy_denied", where="preflight",
                 message="engine_write_unavailable: the recorded engine check cannot write here",
-                fix=(setup_sentence("codex", policy) or "Restore the engine's write capability")
-                    + "; then rerun the engine check in Setup > Models before retrying the build"))
+                fix=(setup_sentence("codex", policy) or "Restore the engine's write capability").rstrip(". ")
+                    + "; then press Re-check on Codex in Setup › Models before retrying the build"))
         writer = codex_writer_mode(policy, workload_env(env) if env is not None else None)
         if read_only and not by_copy:
             mode, extra = "read-only", []

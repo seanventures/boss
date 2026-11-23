@@ -477,7 +477,7 @@ export function storageActivity(i: StorageIncident): string {
   if (i.plan.some(step => step.state === "active" && (step.where === "api" || i.helper.reachable))) return "Infra Agent is cleaning";
   if (!i.helper.reachable) return "Cleanup blocked: host helper unavailable";
   if (i.plan.some(step => step.state === "waiting")) return "Cleanup queued";
-  return "Cleanup exhausted: needs attention";
+  return "Cleanup exhausted: free space by hand";
 }
 export function stripSubline(i: StorageIncident): string {
   const parts: string[] = [];

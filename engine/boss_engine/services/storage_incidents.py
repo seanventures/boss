@@ -174,7 +174,7 @@ def activity_text(incident: Mapping[str, Any]) -> str:
         return "Cleanup blocked: host helper unavailable"
     if any(step.get("state") in ("planned", "queued") for step in plan):
         return "Cleanup queued"
-    return "Cleanup exhausted: needs attention"
+    return "Cleanup exhausted: free space by hand"
 
 
 def last_resolved(connection: Any, host_id: str) -> Optional[dict[str, Any]]:

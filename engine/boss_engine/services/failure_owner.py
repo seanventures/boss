@@ -303,7 +303,7 @@ def classify(error: Any, *, failure_class: Any = None, reason_code: Any = None
     if "engine_write_unavailable" in raw:
         return PERSON, "engine_write_unavailable", (
             "A host administrator must resolve the recorded engine sandbox/policy failure. "
-            "Run the engine check in Setup > Models and confirm it can write, then press "
+            "Press Re-check on the coding engine in Setup › Models until it can write, then press "
             "Done — retry. Repeating the app build cannot repair this host restriction.")
     if str(reason_code or "") in AGENT_OWNED_REASONS:
         # THE BUILD'S OWN WORK WAS WRONG (a copied answer, an invented block): a new build with

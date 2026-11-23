@@ -2,7 +2,7 @@
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
-import { AgentCapacityRow } from "../app/setup/agent-capacity-row";
+import { AgentCapacityRow, capacityReadError } from "../app/setup/agent-capacity-row";
 
 const write = vi.hoisted(() => vi.fn());
 vi.mock("../lib/setup-client", () => ({ setupWrite: write }));
@@ -26,6 +26,24 @@ it("separates job slots from heavy builds and saves bounded settings", async () 
     await act(async () => host.querySelector("button")!.click());
     expect(write).toHaveBeenCalledWith("local-project", "agent_capacity", { value: 1, worker_slots: 3 },
       { label: "Save agent capacity" });
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+  }
+});
+
+it("says why capacity could not be read and what to do", async () => {
+  expect(capacityReadError(403)).toContain("system:read");
+  expect(capacityReadError(502)).toContain("HTTP 502");
+  expect(capacityReadError(502)).toContain("Observability › System");
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 403, json: async () => ({}) }));
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(<AgentCapacityRow />));
+    expect(host.querySelector('[role="alert"]')!.textContent).toContain("Ask an admin");
   } finally {
     await act(async () => root.unmount());
     host.remove();

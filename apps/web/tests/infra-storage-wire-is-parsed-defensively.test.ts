@@ -86,7 +86,7 @@ describe("the storage incident wire", () => {
     const blocked = { ...incident, plan: [], helper: { lastSeenAt: null, reachable: false } };
     expect(stripHeadline(blocked)).toContain("Cleanup blocked: host helper unavailable");
     expect(stripHeadline({ ...blocked, helper: { lastSeenAt: null, reachable: true } }))
-      .toContain("Cleanup exhausted: needs attention");
+      .toContain("Cleanup exhausted: free space by hand");
     expect(withInfraStatus({ key: "infra_incident", text: "Infra Agent is cleaning", tone: "red", tip: "" }, blocked).text)
       .toBe("Cleanup blocked: host helper unavailable");
     expect(stripHeadline({ ...blocked, status: "asking" })).toContain("needs one answer");

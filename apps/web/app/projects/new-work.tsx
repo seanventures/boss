@@ -807,7 +807,7 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
         <div className="px-nw-body">
           <label>Application
             <select className="px-input" aria-label="Application to change" value={appPick} onChange={(event) => setAppPick(event.target.value)}>
-              <option value="">{p?.appChoices?.length === 1 ? `Use ${p.appChoices[0].app}` : "Choose an application"}</option>
+              <option value="">{p?.appChoices?.length === 1 ? `Use ${p.appChoices[0].app}` : p?.appChoices?.length ? "Choose an application" : "No app yet: build a new one"}</option>
               {anchorApp && !p?.appChoices?.some((item) => item.runId === anchorApp) ? <option value={anchorApp}>{anchor?.app || anchorApp}</option> : null}
               {p?.appChoices?.map((item) => <option key={item.runId} value={item.runId}>{item.app}</option>)}
               <option value="__new__">Create a new app</option>

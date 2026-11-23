@@ -132,7 +132,7 @@ def diagnose(*, expected: str, actual: str, label: Optional[str],
                             "An exec denial marked 'no new privs' is a profile-transition "
                             "conflict, not evidence of a missing helper path; do not disable "
                             "no-new-privileges or AppArmor. After correcting the host setup, "
-                            "rerun the engine check in Setup > Models. " + FIX_APPARMOR)}
+                            "press Re-check on Codex in Setup › Models. " + FIX_APPARMOR)}
         return {"ok": False, "layer": "kernel",
                 "sentence": ("The containers were created with BOSS's seccomp profile, yet the "
                              "namespaces are still refused, so the Docker host's kernel refuses "

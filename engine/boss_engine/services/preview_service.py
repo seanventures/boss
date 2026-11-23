@@ -1053,12 +1053,17 @@ def _declared_command_in(directory: Path) -> Optional[str]:
     if report.is_file():
         from .report_preview import report_path
 
-        config = json.loads(report.read_text())
+        example = ('write it as {"path": "report.html", "prepare": "<command that writes '
+                   'report.html>"}')
+        try:
+            config = json.loads(report.read_text(errors="replace"))
+        except ValueError as error:
+            raise ValueError(f"boss.preview.report is not valid JSON ({error}); {example}") from None
         if not isinstance(config, dict) or not isinstance(config.get("path"), str):
-            raise ValueError("boss.preview.report requires a JSON object with an HTML path")
+            raise ValueError(f"boss.preview.report has no HTML path; {example}")
         prepare = config.get("prepare", "")
         if not isinstance(prepare, str):
-            raise ValueError("boss.preview.report prepare must be a shell command string")
+            raise ValueError(f"boss.preview.report's prepare must be one shell command; {example}")
         report_path(directory, config["path"])
         source = Path(__file__).with_name("report_preview.py").read_text()
         return shlex.join(["python3", "-c", source, config["path"], "--prepare", prepare])

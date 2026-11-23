@@ -28148,13 +28148,17 @@ def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = Non
     preview_anchor = str(run_input.get("preview_id") or "").strip()
     if preview_anchor and not extends_run_id:
         if run_input.get("base_branch") or run_input.get("release_base_sha"):
-            raise HTTPException(status_code=422, detail="A preview repair with an explicit base must name extends_run_id")
+            raise HTTPException(status_code=422, detail=(
+                "A preview repair that sets base_branch or release_base_sha must also name "
+                "extends_run_id, the build to repair. Start it from that build's page instead."))
         with _tx() as connection:
             extends_run_id = str(connection.execute(text(
                 "SELECT run_id FROM app_previews WHERE id = :id AND project_id = :project"),
                 {"id": preview_anchor, "project": project_id}).scalar() or "")
         if not extends_run_id:
-            raise HTTPException(status_code=404, detail="that preview has no app build in this project")
+            raise HTTPException(status_code=404, detail=(
+                "That preview is not an app build of this project. Open the app in Work and "
+                "start the repair from its build."))
     run_input.pop("extends_run_id", None)
     if extends_run_id:
         from boss_engine.services.code_task_service import (

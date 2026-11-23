@@ -11,7 +11,7 @@ def test_cleanup_status_distinguishes_blocked_running_and_exhausted():
     assert storage_incidents.activity_text(incident) == "Infra Agent is cleaning"
     incident["helper"]["reachable"] = True
     incident["plan"] = [{"state": "skipped"}]
-    assert storage_incidents.activity_text(incident) == "Cleanup exhausted: needs attention"
+    assert storage_incidents.activity_text(incident) == "Cleanup exhausted: free space by hand"
     incident["status"] = "asking"
     assert storage_incidents.activity_text(incident) == "Infra Agent needs one answer"
 

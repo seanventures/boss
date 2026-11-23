@@ -13,8 +13,9 @@ def test_known_writer_block_stops_before_launch(monkeypatch):
         "state": "cannot_write", "managed": True, "sandbox_proven": False,
         "sandbox_error": "sandbox transition refused",
     })
-    with pytest.raises(harness_failures.HarnessFailure, match="engine_write_unavailable"):
+    with pytest.raises(harness_failures.HarnessFailure, match="engine_write_unavailable") as refused:
         agent._codex_argv(read_only=False, model=None, resume=None, final_path="/tmp/result")
+    assert "Re-check on Codex in Setup › Models" in refused.value.verdict.fix
     with pytest.raises(harness_failures.HarnessFailure):
         agent._codex_argv(read_only=True, by_copy=True, model=None,
                           resume="session", final_path="/tmp/result")
@@ -27,7 +28,7 @@ def test_known_host_block_is_not_an_app_retry_even_when_classified_infra():
     assert kind == failure_owner.PERSON
     assert cause == "engine_write_unavailable"
     assert "host administrator" in action
-    assert "engine check" in action
+    assert "Re-check" in action and "Setup › Models" in action
 
 
 def test_invalid_recovery_response_does_not_claim_model_is_disconnected():
@@ -35,9 +36,12 @@ def test_invalid_recovery_response_does_not_claim_model_is_disconnected():
         {"headline": "The app branch is missing"}, {"action": "retry"},
         refused="not the JSON object asked for")
     assert decision["action"] == step_recovery.ASK_PERSON
-    assert "No repair action was accepted" in decision["question"]
-    assert "Connect a model" not in decision["question"]
-    assert "only after" in decision["after"]
+    question = decision["question"]
+    assert question.startswith("The app branch is missing.")
+    assert "changed nothing" in question
+    assert "press Retry on this step" in question and "Setup › Models" in question
+    assert "Connect a model" not in question
+    assert "Retry" in decision["after"]
 
 
 def test_new_failure_ends_the_person_retry_grace_period():

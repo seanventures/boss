@@ -1513,9 +1513,11 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             with ctx.begin() as connection:
                 preview = _preview_in_project(connection, preview_id, pid)
             if not preview or not preview.get("run_id"):
-                return {"ok": False, "error": "The preview has no app build in this project; select the build to repair."}
+                return {"ok": False, "error": ("That preview is not an app build of this project. Name the build to repair "
+                                               "as extends_run_id (list_previews shows each preview's build).")}
             if base_branch or args.get("release_base_sha"):
-                return {"ok": False, "error": "A preview repair with an explicit base must also name extends_run_id."}
+                return {"ok": False, "error": ("A preview repair that sets base_branch or release_base_sha must also name "
+                                               "extends_run_id, the build to repair.")}
             extends = str(preview["run_id"])
         # AN APP BUILT FROM SEVERAL REPOSITORIES gets one change set — a lane per repository, in
         # dependency order, linked PRs, one approval — instead of a single build in one repo.

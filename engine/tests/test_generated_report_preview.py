@@ -85,3 +85,13 @@ def test_generated_report_serves_without_exposing_repo(tmp_path):
 
         os.killpg(process.pid, signal.SIGTERM)
         process.wait(timeout=5)
+
+
+@pytest.mark.parametrize("body, said", [("{not json", "not valid JSON"),
+                                        ('{"prepare": "make"}', "has no HTML path"),
+                                        ('{"path": "r.html", "prepare": ["make"]}', "one shell command")])
+def test_a_bad_report_declaration_says_how_to_write_it(tmp_path, body, said):
+    (tmp_path / "boss.preview.report").write_text(body)
+    with pytest.raises(ValueError, match=said) as refused:
+        preview_service.find_run_declaration(tmp_path, ["boss.preview.report"])
+    assert '{"path": "report.html", "prepare":' in str(refused.value)
