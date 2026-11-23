@@ -177,6 +177,10 @@ class _Session:
     #: returned; dropped when the session ends.
     screen: Any = field(default=None, repr=False)
     code_sent_at: Optional[float] = None
+    #: The organisation the sign-in is for: its token lands in that org's model home, so only
+    #: that org's projects may see, answer or cancel it (identity.object_kinds), and a start from
+    #: another org is refused while it is live (start).
+    org_id: Optional[str] = None
 
 
 class _Screen:
@@ -746,6 +750,7 @@ def _cannot_keep_token(provider: str, settings: Any) -> Optional[str]:
 
 
 def start(provider: str, *, project_id: str, actor: str, settings: Any = None,
+          org_id: Optional[str] = None,
           login_rejected: bool = False, fresh: bool = False,
           signed_in: Optional[Callable[[], bool]] = None,
           argv: Optional[tuple[str, ...]] = None,
@@ -773,6 +778,14 @@ def start(provider: str, *, project_id: str, actor: str, settings: Any = None,
         _sweep(now)
         live = next((s for s in _SESSIONS.values() if s.provider == name and s.state in LIVE),
                     None)
+        if live is not None and live.org_id != org_id:
+            # ONE CLI LOGIN PER PROVIDER PER INSTALL, AND IT IS ANOTHER ORG'S. Never handed over
+            # (its link and code would sign this org in under the other org's model home) and
+            # never replaced from here (that would kill their sign-in).
+            raise SignInError(
+                409, f"Another organization is signing in to {login.label} right now",
+                "Only one sign-in per provider can run on this server at a time. Try again in a "
+                "few minutes, once theirs finishes or expires.")
         if live is not None:
             with live.lock:
                 # NEVER HAND BACK A STUCK SESSION. A code that went in and got no answer, or an
@@ -787,7 +800,7 @@ def start(provider: str, *, project_id: str, actor: str, settings: Any = None,
             _kill(old)
         session = _Session(sign_in_id=f"si_{secrets.token_hex(10)}", provider=name,
                            project_id=project_id, actor=actor, started=now,
-                           expires=now + SESSION_TTL_SECONDS)
+                           expires=now + SESSION_TTL_SECONDS, org_id=org_id)
         if not replace and _safe(check):
             session.state = "signed_in"
             session.expires = None
@@ -862,6 +875,14 @@ def _get(sign_in_id: str) -> _Session:
                           "It finished more than an hour ago or BOSS restarted. Start the "
                           "sign-in again.")
     return session
+
+
+def owner_of(sign_in_id: str) -> Optional[tuple[Optional[str], str]]:
+    """(org, project) a sign-in was started for (None: no such sign-in). status / submit_code /
+    cancel take only the id, so the central confinement (identity.object_kinds) asks this first."""
+    with _LOCK:
+        session = _SESSIONS.get(str(sign_in_id or ""))
+    return (session.org_id, session.project_id) if session else None
 
 
 def status(sign_in_id: str) -> dict[str, Any]:
