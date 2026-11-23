@@ -21,7 +21,8 @@ it("separates job slots from heavy builds and saves bounded settings", async () 
   const root = createRoot(host);
   try {
     await act(async () => root.render(<AgentCapacityRow />));
-    expect(host.textContent).toContain("Waiting: CPU pressure");
+    expect(host.querySelector('[data-testid="su-capacity-now"]')!.getAttribute("data-tip")).toContain("Waiting: CPU pressure");
+    expect(host.textContent).toContain("Now: 1 heavy build, waiting");
     expect(Array.from(host.querySelectorAll("select")).map(select => select.value)).toEqual(["3", "1"]);
     await act(async () => host.querySelector("button")!.click());
     expect(write).toHaveBeenCalledWith("local-project", "agent_capacity", { value: 1, worker_slots: 3 },
@@ -43,7 +44,8 @@ it("says why capacity could not be read and what to do", async () => {
   const root = createRoot(host);
   try {
     await act(async () => root.render(<AgentCapacityRow />));
-    expect(host.querySelector('[role="alert"]')!.textContent).toContain("Ask an admin");
+    expect(host.querySelector('[role="alert"]')!.textContent).toBe("Couldn't read capacity");
+    expect(host.querySelector('[data-testid="su-capacity-error"]')!.getAttribute("data-tip")).toContain("Ask an admin");
   } finally {
     await act(async () => root.unmount());
     host.remove();

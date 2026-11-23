@@ -1,9 +1,21 @@
 "use client";
 
+/**
+ * AGENT CAPACITY (Setup › Advanced): total job slots (1-4, what the worker leases at once)
+ * apart from the heavy-build ceiling (admission's "builds at once", never above what the host
+ * measures). Install-wide: projects share the workers and the host. Short labels, the why in
+ * tooltips (the board's copy budget).
+ */
 import React, { useEffect, useState } from "react";
 import { GatedButton } from "../../components/gated";
 import { setupWrite } from "../../lib/setup-client";
+import { SectionLabel } from "../section-label";
 import { toast, useBoard } from "./parts";
+import { Tip } from "./pill";
+
+const TIP = "Install-wide. Heavy builds wait while CPU, memory or disk is short.";
+const SLOTS_TIP = "Jobs at once. Lowering it lets running jobs finish; none is stopped.";
+const BUILDS_TIP = "Heavy builds at once. Never above what this machine measures it can run.";
 
 type Capacity = {
   worker_slots: number;
@@ -13,8 +25,8 @@ type Capacity = {
 
 /** Why the limits could not be read, and what to do: never a bare "unavailable". */
 export function capacityReadError(status: number): string {
-  if (status === 401 || status === 403) return "Agent capacity needs the system:read permission. Ask an admin to grant it, then reload Setup.";
-  return `Could not read agent capacity${status ? ` (HTTP ${status})` : ""}. Reload Setup; if it stays, check that the API is up in Observability › System.`;
+  if (status === 401 || status === 403) return "Needs system:read. Ask an admin for it, then reload Setup.";
+  return `Read failed${status ? ` (HTTP ${status})` : ""}. Reload Setup, or check Observability › System.`;
 }
 
 export function AgentCapacityRow() {
@@ -55,22 +67,24 @@ export function AgentCapacityRow() {
       toast(cause instanceof Error ? cause.message : "Could not save capacity", "error");
     } finally { setBusy(false); }
   }
-  return <section className="su-row" aria-label="Agent capacity">
-    <div className="su-row-label">Agent capacity</div>
+  const bao = state?.builds_at_once;
+  const waiting = state && !state.next_build?.admitted && state.next_build?.shortfall ? state.next_build.shortfall : "";
+  return <section className="su-row" aria-label="Agent capacity" data-testid="su-row-agent-capacity">
+    <div className="su-row-label"><SectionLabel as="span" tip={TIP}>Agent capacity</SectionLabel></div>
     <div className="su-row-body su-stack">
-      <p>Install-wide limits. Heavy builds automatically wait when CPU, memory or storage is under pressure. Active work is not killed.</p>
-      {error && <p role="alert">{error}</p>}
-      <label>Total job slots <select value={workers} onChange={event => setWorkers(Number(event.target.value))} disabled={busy || !state}>
-        {[1, 2, 3, 4].map(value => <option key={value} value={value}>{value}</option>)}
-      </select></label>
-      <label>Heavy builds at once <select value={builds} onChange={event => setBuilds(event.target.value)} disabled={busy || !state}>
-        <option value="auto">Auto (host capacity)</option>
-        {[1, 2, 3, 4].map(value => <option key={value} value={value}>{value}</option>)}
-      </select></label>
-      <p>Recommended for a 4-core / 8 GiB laptop: 3 job slots, 1 heavy build. Parallel streams within a build remain in Govern.</p>
-      {state && <p>Effective heavy-build limit: {state.builds_at_once.value}. {state.builds_at_once.warning}
-        {!state.next_build?.admitted && state.next_build?.shortfall ? ` Waiting: ${state.next_build.shortfall}` : ""}</p>}
-      <GatedButton permission="project:update" className="su-btn su-btn-sm" disabled={busy || !state} onClick={() => void save()}>Save agent capacity</GatedButton>
+      {error ? <Tip tip={error} className="su-faint" testid="su-capacity-error"><span role="alert">Couldn&apos;t read capacity</span></Tip> : null}
+      <div className="su-line">
+        <Tip tip={SLOTS_TIP}><label>Job slots <select value={workers} onChange={event => setWorkers(Number(event.target.value))} disabled={busy || !state}>
+          {[1, 2, 3, 4].map(value => <option key={value} value={value}>{value}</option>)}
+        </select></label></Tip>
+        <Tip tip={BUILDS_TIP}><label>Heavy builds <select value={builds} onChange={event => setBuilds(event.target.value)} disabled={busy || !state}>
+          <option value="auto">Auto</option>
+          {[1, 2, 3, 4].map(value => <option key={value} value={value}>{value}</option>)}
+        </select></label></Tip>
+        <GatedButton permission="project:update" className="su-btn su-btn-sm" disabled={busy || !state} onClick={() => void save()}>Save</GatedButton>
+      </div>
+      {bao ? <Tip tip={[bao.warning, waiting ? `Waiting: ${waiting}` : ""].filter(Boolean).join(" ") || "Heavy builds this machine runs at once now."}
+                  className="su-faint" testid="su-capacity-now">{`Now: ${bao.value} heavy build${bao.value === 1 ? "" : "s"}${waiting ? ", waiting" : ""}`}</Tip> : null}
     </div>
   </section>;
 }
