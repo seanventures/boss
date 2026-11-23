@@ -303,10 +303,15 @@ def record_shipped(connection: Connection, definition_id: str, spec: dict[str, A
     Modified: never overwrite. Publish it NOT active and offer it ("New standard available"),
     unless it is the baseline already. Returns publish_version's result plus `offered`.
     """
+    project_id = str(connection.execute(
+        text("SELECT project_id FROM workflow_definitions WHERE id = :id"),
+        {"id": definition_id}).scalar_one())
+    # The reach lock BEFORE the row lock, in the order publish_version and an agent delete
+    # (restaff_without) take them, so a boot seed beside an agent delete cannot deadlock.
+    workflows.hold_workflow_reach(connection, project_id)
     definition = connection.execute(
         text("SELECT * FROM workflow_definitions WHERE id = :id FOR UPDATE"),
         {"id": definition_id}).mappings().one()
-    project_id = str(definition["project_id"])
     baseline_hash = definition.get("standard_content_hash")
     active = _version(connection, definition.get("active_version_id"))
     modified = bool(baseline_hash and active and active["content_hash"] != baseline_hash)
@@ -319,6 +324,12 @@ def record_shipped(connection: Connection, definition_id: str, spec: dict[str, A
                                         definition_id=definition_id, spec=spec, actor=actor,
                                         activate=False)
     if version["content_hash"] == baseline_hash:
+        return {**version, "offered": False}
+    baseline = _version(connection, definition.get("standard_version_id"))
+    if baseline is not None and not structural_diff(baseline["spec"], version["spec"]):
+        # NOTHING THE OPERATOR WOULD SEE CHANGED (an agent-rules stamp moved on): the new
+        # version becomes the baseline quietly. Offering it would show an empty "New standard".
+        _set_baseline(connection, definition_id, version, clear_offer=True)
         return {**version, "offered": False}
     if definition.get("standard_available_version_id") != version["id"]:
         connection.execute(
@@ -338,18 +349,44 @@ def _after_publish(connection: Connection, project_id: str, definition: dict[str
     repoint_defaults_for(connection, project_id, str(definition["workflow_key"]))
 
 
+def _staffed(connection: Connection, project_id: str, spec: Any) -> dict[str, Any]:
+    """The spec with every default agent this project still HAS; a default whose agent was
+    deleted since it shipped goes to Auto (workflow_catalogue._staffed_for, as the seed does).
+    A shipped baseline recorded before a delete must not bring the deleted agent back."""
+    from .workflow_catalogue import DEFAULT_CAPTAIN_FALLBACK, _set_default_captain
+
+    spec = _spec(spec)
+    present = frozenset(str(k) for k in connection.execute(
+        text("SELECT role_key FROM roles WHERE project_id = :p"), {"p": project_id}).scalars())
+    steps = []
+    for step in spec.get("steps") or []:
+        if isinstance(step, dict):
+            default = step.get("default_captain")
+            # Only a SOFT default whose agent is gone: anything a person named is theirs.
+            if default and step.get("captain") == default and default not in present:
+                stand_in = DEFAULT_CAPTAIN_FALLBACK.get(default)
+                step = _set_default_captain(dict(step), stand_in if stand_in in present else None)
+        steps.append(step)
+    return {**spec, "steps": steps}
+
+
 def reset_to_standard(connection: Connection, project_id: str, definition_id: str,
                       actor: str) -> dict[str, Any]:
     """Make the shipped spec the version new runs use. The edits stay in the version list."""
     definition = _definition(connection, project_id, definition_id)
-    # The NEWEST shipped standard: a newer one waiting is what "factory" means now.
-    baseline = (_version(connection, definition.get("standard_available_version_id"))
+    # The NEWEST shipped standard: a newer one waiting is what "factory" means now, unless the
+    # operator set it aside ("Not now") — then the one they started from.
+    waiting = definition.get("standard_available_version_id")
+    if waiting and waiting == definition.get("standard_dismissed_version_id"):
+        waiting = None
+    baseline = (_version(connection, waiting)
                 or _version(connection, definition.get("standard_version_id")))
     if baseline is None:
         raise StandardError(f"'{definition['name']}' has no shipped version recorded to reset to.")
     version = workflows.publish_version(connection, project_id=project_id,
                                         definition_id=definition_id,
-                                        spec=_spec(baseline["spec"]), actor=actor)
+                                        spec=_staffed(connection, project_id, baseline["spec"]),
+                                        actor=actor)
     # Publishing the baseline's spec again may hash differently if the agent rules moved on
     # since it shipped; either way what is now active is the shipped spec, so it is the baseline.
     _set_baseline(connection, definition_id, version, clear_offer=True)
@@ -382,12 +419,14 @@ def take_new_standard(connection: Connection, project_id: str, definition_id: st
                                 + "; ".join(conflicts[:3]) + "). Take the new standard only, "
                                 "then make your change again.")
         published = workflows.publish_version(connection, project_id=project_id,
-                                              definition_id=definition_id, spec=merged,
+                                              definition_id=definition_id,
+                                              spec=_staffed(connection, project_id, merged),
                                               actor=actor)
     else:
         published = workflows.publish_version(connection, project_id=project_id,
                                               definition_id=definition_id,
-                                              spec=_spec(offered["spec"]), actor=actor)
+                                              spec=_staffed(connection, project_id, offered["spec"]),
+                                              actor=actor)
     _set_baseline(connection, definition_id, offered, clear_offer=True)
     _after_publish(connection, project_id, definition)
     emit_event(connection, project_id, "workflow.standard_taken", actor,

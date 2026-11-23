@@ -28752,17 +28752,22 @@ def publish_workflow_version(
                 workflow_runtime.refuse_operator_edit_of_boss_workflow(
                     dict(definition), settings.specpack_root / "workflows")
             # A standard is edited in place through any door, and its shipped spec stays its
-            # baseline (workflow_standards), so publishing here is an edit like the editor's.
-            return WorkflowVersionSummary(
-                **workflow_runtime.publish_version(
-                    connection,
-                    project_id=payload.project_id,
-                    definition_id=definition_id,
-                    spec=payload.spec,
-                    actor=payload.actor,
-                    activate=payload.activate,
-                )
+            # baseline (workflow_standards), so publishing here is an edit like the editor's —
+            # and, like the editor's, BOSS's own default mapping follows it.
+            published = workflow_runtime.publish_version(
+                connection,
+                project_id=payload.project_id,
+                definition_id=definition_id,
+                spec=payload.spec,
+                actor=payload.actor,
+                activate=payload.activate,
             )
+            if definition and definition.get("is_catalogue") and payload.activate:
+                from boss_engine.services.workflow_catalogue import repoint_defaults_for
+
+                repoint_defaults_for(connection, payload.project_id,
+                                     str(definition["workflow_key"]))
+            return WorkflowVersionSummary(**published)
         except workflow_runtime.WorkflowNamespaceError as error:
             raise HTTPException(status_code=403, detail=str(error)) from error
         except workflow_runtime.WorkflowError as error:

@@ -166,6 +166,8 @@ describe("a standard is edited in place", () => {
     const keep = byTest("wf-std-take-keep")!;
     expect(keep.getAttribute("aria-disabled")).toBe("true");
     expect(keep.dataset.tip).toContain("step 'Review' agent");
+    // Said on the page too: a phone has no hover.
+    expect(byTest("wf-std-clash")!.textContent).toContain("step 'Review' agent");
     await press("wf-std-take-keep");
     expect(acts()).toEqual([]);
     await press("wf-std-not-now");

@@ -71,6 +71,12 @@ export function StandardStrip({ meta, blocked, busy, offerOpen, onOfferOpen, onA
               <span data-user-text>{standard.changes.map((c) => c.text.replace(/^[+~−-]\s*/, "")).join(" · ")}</span>
             </div>
           ) : null}
+          {!offer.applies_cleanly ? (
+            <div className="wf-std-hint" data-testid="wf-std-clash">
+              <span>Clashes with your changes:</span>{" "}
+              <span data-user-text>{offer.conflicts.slice(0, 3).join(" · ")}</span>
+            </div>
+          ) : null}
           <div className="wf-std-row">
             <button type="button" className="wf-btn wf-btn-primary" data-testid="wf-std-take-keep"
                     aria-disabled={blocked || !offer.applies_cleanly ? true : undefined}

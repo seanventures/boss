@@ -279,3 +279,64 @@ def test_a_run_in_flight_keeps_its_version_through_edit_and_reset(eng, project):
         standards.reset_to_standard(c, project, d["id"], "test")
         assert c.execute(text("SELECT workflow_version_id FROM workflow_runs WHERE id=:r"),
                          {"r": run_id}).scalar() == d["active_version_id"]
+
+
+def test_an_agent_rules_bump_alone_offers_no_empty_new_standard(eng, project, monkeypatch):
+    """Review of #297: the hash carries the agent-rules stamp, so a rules bump re-shipped every
+    standard as "new" with zero changes. Nothing the operator would see changed: no offer."""
+    with eng.begin() as c:
+        catalogue.seed(c, project, only=frozenset({KEY}))
+        _edit(c, project)
+        edited = _definition(c, project)
+        monkeypatch.setattr(workflows, "CURRENT_AGENT_RULES", workflows.CURRENT_AGENT_RULES + 1)
+        catalogue.seed(c, project, only=frozenset({KEY}))
+        after = _definition(c, project)
+        state = standards.state(c, after)
+        assert state["new_standard"] is None
+        assert state["modified"] is True
+        assert after["active_version_id"] == edited["active_version_id"]
+
+
+def test_reset_never_brings_back_a_deleted_default_agent(eng, project):
+    """Review of #297: Reset republished the baseline as shipped, naming an agent deleted since."""
+    entry = next(e for e in catalogue.CATALOGUE if e["key"] == KEY)
+    keys = sorted({s.get("default_captain") for s in entry["steps"] if s.get("default_captain")})
+    assert keys, "the standard names default agents"
+    with eng.begin() as c:
+        for k in keys:
+            c.execute(text("INSERT INTO roles (id, project_id, role_key, display_name) "
+                           "VALUES (:i, :p, :k, :k)"),
+                      {"i": f"r_{uuid.uuid4().hex[:10]}", "p": project, "k": k})
+    try:
+        with eng.begin() as c:
+            catalogue.seed(c, project, only=frozenset({KEY}))
+            _edit(c, project)
+            gone = keys[0]
+            c.execute(text("DELETE FROM roles WHERE project_id=:p AND role_key=:k"),
+                      {"p": project, "k": gone})
+            catalogue.restaff_without(c, project, gone, actor="test")
+            d = _definition(c, project)
+            standards.reset_to_standard(c, project, d["id"], "test")
+            spec = _active_spec(c, _definition(c, project))
+            assert gone not in [s.get("captain") for s in spec["steps"]]
+    finally:
+        with eng.begin() as c:
+            for table in ("role_skills", "role_mcp_servers", "roles"):
+                try:
+                    with c.begin_nested():
+                        c.execute(text(f"DELETE FROM {table} WHERE project_id=:p"), {"p": project})
+                except Exception:
+                    pass
+
+
+def test_reset_after_not_now_goes_back_to_what_you_started_from(eng, project, monkeypatch):
+    with eng.begin() as c:
+        catalogue.seed(c, project, only=frozenset({KEY}))
+        shipped = _definition(c, project)
+        _edit(c, project)
+        _ship_a_newer_standard(monkeypatch)
+        catalogue.seed(c, project, only=frozenset({KEY}))
+        d = _definition(c, project)
+        standards.dismiss_new_standard(c, project, d["id"], "test")
+        standards.reset_to_standard(c, project, d["id"], "test")
+        assert _definition(c, project)["active_version_id"] == shipped["active_version_id"]
