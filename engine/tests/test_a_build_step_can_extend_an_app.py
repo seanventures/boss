@@ -85,6 +85,29 @@ def test_the_composers_own_words_count_as_that_promise():
     assert cts.with_existing_tests_criterion(["A snoozed lead comes back"])[-1] == cts.EXISTING_TESTS_CRITERION
 
 
+def test_preview_only_repair_uses_the_previews_build(started, monkeypatch):
+    monkeypatch.setattr(builtin, "_preview_in_project", lambda *_: {"id": "prev_app", "run_id": "crun_app"})
+    out = _call({"title": "Repair preview", "instructions": "Serve the existing report.",
+                 "preview_id": "prev_app", "workflow_run_id": "wfr_1"})
+    assert started["parent_run_id"] == "crun_app"
+    assert started["workflow_run_id"] == "wfr_1"
+    assert out["base_branch"] == "boss/code/crun_app"
+
+
+def test_preview_without_a_project_build_does_not_start_fresh(started, monkeypatch):
+    monkeypatch.setattr(builtin, "_preview_in_project", lambda *_: None)
+    out = _call({"preview_id": "prev_elsewhere", "instructions": "Repair preview"})
+    assert out["ok"] is False
+    assert not started
+
+
+def test_preview_repair_does_not_override_an_explicit_base(started, monkeypatch):
+    monkeypatch.setattr(builtin, "_preview_in_project", lambda *_: {"run_id": "crun_app"})
+    out = _call({"preview_id": "prev_app", "instructions": "Repair preview", "base_branch": "release"})
+    assert out["ok"] is False
+    assert not started
+
+
 def test_a_build_of_the_app_still_on_the_line_is_waited_for_not_adopted(started, monkeypatch):
     """Found walking it: the app's launch-check repair was still building its branch, and
     start_code_task's same-app guard handed THAT run back — the step waited on someone else's

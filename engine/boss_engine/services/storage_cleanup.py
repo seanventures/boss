@@ -381,7 +381,25 @@ def advance(engine: Any, incident_id: str, *, actor: str = "agent:infra") -> dic
                 return _start(c, engine, inc, plan, step, actor=actor)
             if state in ("queued", "running"):
                 return _poll(c, engine, inc, plan, step, actor=actor)
+        from .storage_watch import latest, STALE_AFTER
+
+        sample = latest(c, str(inc["host_id"]))
+        if sample and sample.get("at") and _now() - sample["at"] <= STALE_AFTER:
+            extended = extend_exhausted_plan(c, inc, sample, plan)
+            if len(extended) > len(plan):
+                _save_plan(c, incident_id, extended)
+                return {"incident_id": incident_id, "state": "plan_extended"}
         return {"incident_id": incident_id, "state": "plan_exhausted"}
+
+
+def extend_exhausted_plan(connection: Any, incident: Mapping[str, Any], sample: Mapping[str, Any],
+                          plan: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if any(step.get("state") not in TERMINAL for step in plan):
+        return plan
+    known = {step["tool"] for step in plan}
+    candidates = build_plan(connection, incident, sample,
+                            max_tier=3 if incident.get("severity") == "critical" else 1)
+    return [*plan, *(step for step in candidates if step["tool"] not in known)]
 
 
 def _start(c: Any, engine: Any, inc: dict, plan: list, step: dict, *, actor: str) -> dict[str, Any]:

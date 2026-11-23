@@ -1508,6 +1508,15 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         if started_by:
             finalize_ctx["origin"] = started_by
         extends = str(args.get("extends_run_id") or "").strip()
+        preview_id = str(args.get("preview_id") or "").strip()
+        if preview_id and not extends:
+            with ctx.begin() as connection:
+                preview = _preview_in_project(connection, preview_id, pid)
+            if not preview or not preview.get("run_id"):
+                return {"ok": False, "error": "The preview has no app build in this project; select the build to repair."}
+            if base_branch or args.get("release_base_sha"):
+                return {"ok": False, "error": "A preview repair with an explicit base must also name extends_run_id."}
+            extends = str(preview["run_id"])
         # AN APP BUILT FROM SEVERAL REPOSITORIES gets one change set — a lane per repository, in
         # dependency order, linked PRs, one approval — instead of a single build in one repo.
         multi = _multirepo_change(ctx, pid, actor, args, extends, finalize_ctx)
@@ -5974,7 +5983,7 @@ def _preview_in_project(connection, preview_id: str, project_id: str):
     """Load a preview only when it belongs to the session project."""
     return connection.execute(
         _text(
-            "SELECT id, project_id, status FROM app_previews "
+            "SELECT id, project_id, status, run_id FROM app_previews "
             "WHERE id=:id AND project_id=:p"
         ),
         {"id": preview_id, "p": project_id},

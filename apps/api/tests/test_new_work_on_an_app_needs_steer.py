@@ -29,16 +29,23 @@ def _the_app(engine, project_id: str) -> None:
                                  "base_branch": "main"})})
 
 
-def test_a_start_only_person_cannot_build_onto_an_app(world, client, engine, project):  # noqa: F811
+def test_a_start_only_person_cannot_build_onto_an_app(world, client, engine, project, monkeypatch):  # noqa: F811
     _the_app(engine, project)
+    from boss_engine.services.project_experience import new_work
+
+    monkeypatch.setattr(new_work, "app_choices", lambda *_: [{"run_id": APP_RUN, "app": "Steer App"}])
     starter = world.person("nw-start-only")
     role = world.custom_role("start-only", ("workflow_run:start", "project:read"))
     world.bind(starter, role, project=project)
     with world.acting_as(world.ctx(starter)):
         refused = client.post(f"/v1/projects/{project}/work",
                               json={"kind": "feature", "app": APP_RUN, "text": "Add a route."})
+        inferred = client.post(f"/v1/projects/{project}/work",
+                               json={"kind": "feature", "text": "Add a route."})
     assert refused.status_code == 403, refused.text
     assert "code_task:steer" in refused.text
+    assert inferred.status_code == 403, inferred.text
+    assert "code_task:steer" in inferred.text
 
 
 def test_an_owner_is_not_refused_for_steering(world, client, engine, project):  # noqa: F811

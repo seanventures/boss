@@ -914,6 +914,11 @@ class Build:
 
     # -- the stages ---------------------------------------------------------------------------
     def run(self) -> dict[str, Any]:
+        with self.engine.begin() as connection:
+            connection.execute(text(
+                "UPDATE self_fixes SET started_at = COALESCE(started_at, :now) "
+                "WHERE id = :id AND status IN ('claimed', 'fixing')"),
+                {"now": sf.now_utc(), "id": self.sfx_id})
         sfx = self.sfx()
         work_root = Path(self.work_root or _work_root(self.settings)) / self.sfx_id
         try:

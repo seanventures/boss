@@ -300,6 +300,11 @@ def classify(error: Any, *, failure_class: Any = None, reason_code: Any = None
     first (a sandbox permission error is never the person's login)."""
     raw = f"{error or ''} {reason_code or ''}"
     fc = str(failure_class or "")
+    if "engine_write_unavailable" in raw:
+        return PERSON, "engine_write_unavailable", (
+            "A host administrator must resolve the recorded engine sandbox/policy failure. "
+            "Run the engine check in Setup > Models and confirm it can write, then press "
+            "Done — retry. Repeating the app build cannot repair this host restriction.")
     if str(reason_code or "") in AGENT_OWNED_REASONS:
         # THE BUILD'S OWN WORK WAS WRONG (a copied answer, an invented block): a new build with
         # the violations as its brief, never a person's waiver.
@@ -1891,6 +1896,16 @@ class _Budget:
     acts: int
 
 
+def _person_retry_pending(row: Optional[Mapping[str, Any]], item: Item, now: datetime) -> bool:
+    if not row or row.get("owned_by") != "person" or row.get("state") != FIXING:
+        return False
+    approved_at = _aware(row.get("updated_at"))
+    if approved_at is None or approved_at <= now - timedelta(minutes=PERSON_GRACE_MINUTES):
+        return False
+    failed_at = _aware(item.failed_at)
+    return failed_at is None or failed_at <= approved_at
+
+
 def _own(engine: Any, settings: Any, jobs: Any, surface: Surface, item: Item, now: datetime,
          budget: _Budget) -> str:
     """Give ONE failed item its owner. Returns the state it ends in."""
@@ -1937,8 +1952,7 @@ def _own(engine: Any, settings: Any, jobs: Any, surface: Surface, item: Item, no
             _withdraw_own_card(c, item, str(row["decision_id"]),
                                "Withdrawn: BOSS's agent can fix this itself now — "
                                + (AGENT_REMEDIES.get(cause_code) or "it builds a fix") + ".")
-        if row and row.get("owned_by") == "person" and row["state"] == FIXING and \
-                (_aware(row.get("updated_at")) or now) > now - timedelta(minutes=PERSON_GRACE_MINUTES):
+        if _person_retry_pending(row, item, now):
             return FIXING                       # a person just said it is done: give it time
         if cls == PERSON and not agent_remedy:
             reason = _WHY_PERSON.get(cause_code, "Its agent cannot supply what it needs itself.")

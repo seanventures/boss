@@ -240,7 +240,8 @@ class Env:
         self.backup_root = Path(backup_root or self._env("BOSS_BACKUP_DIR", "") or "~/boss-backups").expanduser()
         self.state_dir = Path(state_dir or self._env("BOSS_STEWARD_STATE", "") or "~/.boss").expanduser()
         self.log_path = Path(log_path or self._env("BOSS_STEWARD_LOG", "") or (self.state_dir / "steward.log"))
-        self.docker = docker or ["docker"]
+        docker_context = self._env("BOSS_DOCKER_CONTEXT", "")
+        self.docker = docker or (["docker", "--context", docker_context] if docker_context else ["docker"])
         self.image_tag = self._env("BOSS_COMMUNITY_IMAGE_TAG", "") or self._env("COMPOSE_PROJECT_NAME", "boss-community")
         self.compose_project = self._env("COMPOSE_PROJECT_NAME", "boss-community")
         #: Build cache is Docker-wide. It is pruned only through a BOSS-owned buildx builder
@@ -392,10 +393,34 @@ def docker_df(env: Env, runner: Callable = run_cmd) -> dict[str, float]:
     return out
 
 
+def colima_profile(env: Env) -> Optional[str]:
+    import re
+
+    if "--context" not in env.docker:
+        return None
+    context = env.docker[env.docker.index("--context") + 1]
+    if context == "colima":
+        return "default"
+    if context.startswith("colima-") and re.fullmatch(r"[a-zA-Z0-9_-]+", context[7:]):
+        return context[7:]
+    return None
+
+
 def docker_raw(env: Env) -> tuple[Optional[float], Optional[float]]:
-    """(allocated bytes on APFS, apparent size) of Docker Desktop's disk image; (None, None) elsewhere."""
+    """Allocated and apparent disk bytes for the selected local macOS container runtime."""
     if not env.is_mac:
         return None, None
+    profile = colima_profile(env)
+    if profile:
+        name = "colima" if profile == "default" else f"colima-{profile}"
+        root = Path(env._env("COLIMA_HOME", "~/.colima")).expanduser() / "_lima"
+        paths = [root / name / "diffdisk", root / name / "disk",
+                 root / "_disks" / name / "datadisk"]
+        disks = {path.resolve() for path in paths if path.is_file()}
+        if not disks:
+            return None, None
+        return (float(sum(path.stat().st_blocks * 512 for path in disks)),
+                float(sum(path.stat().st_size for path in disks)))
     for cand in DOCKER_RAW_CANDIDATES:
         p = Path(cand).expanduser()
         if p.exists():
@@ -789,7 +814,7 @@ def verb_cap_logs(env: Env, args: dict, *, dry_run: bool, runner: Callable) -> t
 
 
 def verb_docker_trim(env: Env, args: dict, *, dry_run: bool, runner: Callable) -> tuple[list[str], float]:
-    """Docker Desktop: fstrim inside the VM so Docker.raw hands blocks back to APFS. Linux: no-op."""
+    """Discard unused VM blocks for the selected Colima or Docker Desktop runtime."""
     if not env.is_mac:
         return [], 0.0
     alloc, _ = docker_raw(env)
@@ -798,11 +823,15 @@ def verb_docker_trim(env: Env, args: dict, *, dry_run: bool, runner: Callable) -
     df = docker_df(env, runner)
     used = df["images"] + df["cache"] + df["volumes"] + df["containers"]
     reclaim = max(0.0, alloc - used)
-    items = ["Docker.raw"] if reclaim > 0 else []
+    profile = colima_profile(env)
+    items = [f"colima:{profile}" if profile else "Docker.raw"] if reclaim > 0 else []
     if dry_run or not items:
         return items, reclaim
-    res = runner([*env.docker, "run", "--rm", "--privileged", "--pid=host", TRIM_IMAGE,
-                  "nsenter", "-t", "1", "-m", "-u", "-n", "-i", "fstrim", "/var/lib/docker"], timeout=900)
+    command = (["colima", "--profile", profile, "ssh", "--", "sudo", "fstrim", "-a"]
+               if profile else
+               [*env.docker, "run", "--rm", "--privileged", "--pid=host", TRIM_IMAGE,
+                "nsenter", "-t", "1", "-m", "-u", "-n", "-i", "fstrim", "/var/lib/docker"])
+    res = runner(command, timeout=900)
     if res.returncode != 0:
         raise Refused(f"fstrim inside the Docker VM failed: {(res.stderr or '').strip()[:160]}")
     time.sleep(2)

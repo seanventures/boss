@@ -467,15 +467,23 @@ export function daysWord(days: number | null): string {
 
 /** The strip's one sentence: "Storage critical on this Mac · Infra Agent is cleaning". */
 export function stripHeadline(i: StorageIncident): string {
-  const doing = i.status === "asking" ? "Infra Agent needs one answer" : i.status === "resuming" ? "Infra Agent is resuming work"
-    : i.status === "warn" ? "Infra Agent is tidying early" : "Infra Agent is cleaning";
+  const doing = storageActivity(i);
   return `Storage ${i.severity === "warn" ? "low" : "critical"} on ${i.hostLabel} · ${doing}`;
+}
+export function storageActivity(i: StorageIncident): string {
+  if (i.status === "resolved") return "Storage recovered";
+  if (i.status === "asking") return "Infra Agent needs one answer";
+  if (i.status === "resuming") return "Infra Agent is resuming work";
+  if (i.plan.some(step => step.state === "active" && (step.where === "api" || i.helper.reachable))) return "Infra Agent is cleaning";
+  if (!i.helper.reachable) return "Cleanup blocked: host helper unavailable";
+  if (i.plan.some(step => step.state === "waiting")) return "Cleanup queued";
+  return "Cleanup exhausted: needs attention";
 }
 export function stripSubline(i: StorageIncident): string {
   const parts: string[] = [];
   if (i.freePctNow !== null) parts.push(`${Math.round(i.freePctNow)} % free`);
   if (i.pausedRuns > 0) parts.push(`${i.pausedRuns} run${i.pausedRuns === 1 ? "" : "s"} paused at a checkpoint`, "nothing is lost");
-  if (!i.helper.reachable) parts.push("host helper unreachable");
+  if (!i.helper.reachable) parts.push("host helper unreachable", "on the host, check: boss steward status");
   return parts.join(" · ");
 }
 /** Progress towards the target, 0..1. */
@@ -491,8 +499,8 @@ export function progressToTarget(i: Pick<StorageIncident, "freePctStart" | "free
  *  host_critical, as the server orders them; contract §9). */
 export function withInfraStatus<S extends { key: string; text: string; tone: string; tip: string }>(status: S, incident: StorageIncident | null): S {
   if (!incident || incident.status === "resolved") return status;
-  if (status.key === "unreachable" || status.key === "budget_stopped" || status.key === "infra_incident") return status;
-  return { ...status, key: "infra_incident", text: "Infra Agent is cleaning", tone: "red",
+  if (status.key === "unreachable" || status.key === "budget_stopped") return status;
+  return { ...status, key: "infra_incident", text: storageActivity(incident), tone: "red",
            tip: incident.causeText ? `Storage on ${incident.hostLabel}: ${incident.causeText}` : `Storage incident on ${incident.hostLabel}` };
 }
 

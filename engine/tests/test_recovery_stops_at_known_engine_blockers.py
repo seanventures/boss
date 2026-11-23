@@ -1,0 +1,52 @@
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+from boss_engine.services import failure_owner, harness_failures, step_recovery
+from boss_engine.services.codex_code_agent import CodexCodeAgent
+
+
+def test_known_writer_block_stops_before_launch(monkeypatch):
+    agent = object.__new__(CodexCodeAgent)
+    monkeypatch.setattr(agent, "_resolve_binary", lambda: "codex")
+    monkeypatch.setattr(agent, "_policy", lambda: {
+        "state": "cannot_write", "managed": True, "sandbox_proven": False,
+        "sandbox_error": "sandbox transition refused",
+    })
+    with pytest.raises(harness_failures.HarnessFailure, match="engine_write_unavailable"):
+        agent._codex_argv(read_only=False, model=None, resume=None, final_path="/tmp/result")
+    with pytest.raises(harness_failures.HarnessFailure):
+        agent._codex_argv(read_only=True, by_copy=True, model=None,
+                          resume="session", final_path="/tmp/result")
+    argv = agent._codex_argv(read_only=True, model=None, resume=None, final_path="/tmp/result")
+    assert argv[argv.index("--sandbox") + 1] == "read-only"
+
+
+def test_known_host_block_is_not_an_app_retry_even_when_classified_infra():
+    kind, cause, action = failure_owner.classify("engine_write_unavailable", failure_class="infra")
+    assert kind == failure_owner.PERSON
+    assert cause == "engine_write_unavailable"
+    assert "host administrator" in action
+    assert "engine check" in action
+
+
+def test_invalid_recovery_response_does_not_claim_model_is_disconnected():
+    decision = step_recovery.no_model_ask(
+        {"headline": "The app branch is missing"}, {"action": "retry"},
+        refused="not the JSON object asked for")
+    assert decision["action"] == step_recovery.ASK_PERSON
+    assert "No repair action was accepted" in decision["question"]
+    assert "Connect a model" not in decision["question"]
+    assert "only after" in decision["after"]
+
+
+def test_new_failure_ends_the_person_retry_grace_period():
+    now = datetime.now(timezone.utc)
+    approved = now - timedelta(minutes=2)
+    row = {"owned_by": "person", "state": failure_owner.FIXING, "updated_at": approved}
+    item = failure_owner.Item("workflow_run", "run", "run", "project", "Repair", "failed",
+                              now - timedelta(minutes=1))
+    assert not failure_owner._person_retry_pending(row, item, now)
+    item.failed_at = approved - timedelta(minutes=1)
+    assert failure_owner._person_retry_pending(row, item, now)
+    assert not failure_owner._person_retry_pending(row, item, now + timedelta(hours=1))

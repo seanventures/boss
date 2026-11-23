@@ -1041,10 +1041,10 @@ export function MeetingCompact({ meetingId, projectId, buildState }: {
         {/* THE BUILD'S PRD STEP SHOWS THE PRD (BOSSAPP-929): readable here, the full page and
             the meeting one press away, and its file in the repository. */}
         {!live && meeting.prd_markdown && !meeting.security_review?.run_id ? (
-          <PrdRecordView testid="meeting-compact-prd" prd={{
+          <div className="rp-cmp-prd"><PrdRecordView testid="meeting-compact-prd" prd={{
             title: titleOf(meeting), markdown: meeting.prd_markdown, fullPage: full, meeting: null,
             repo: parsePrdRepo((meeting as { prd_repo?: unknown }).prd_repo),
-          }} />
+          }} /></div>
         ) : null}
         {meeting.status === "failed" && meeting.error ? (
           <div className="rp-cmp-err"><div className="rp-attn"><b>Why it stopped</b><span>{meeting.error}</span></div></div>

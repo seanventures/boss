@@ -1,0 +1,33 @@
+// @vitest-environment happy-dom
+import React, { act } from "react";
+import { createRoot } from "react-dom/client";
+import { afterEach, expect, it, vi } from "vitest";
+import { AgentCapacityRow } from "../app/setup/agent-capacity-row";
+
+const write = vi.hoisted(() => vi.fn());
+vi.mock("../lib/setup-client", () => ({ setupWrite: write }));
+vi.mock("../app/setup/parts", () => ({ useBoard: () => ({ projectId: "local-project" }), toast: vi.fn() }));
+vi.mock("../components/gated", () => ({ GatedButton: ({ permission, ...props }: any) => <button {...props} /> }));
+afterEach(() => vi.unstubAllGlobals());
+
+it("separates job slots from heavy builds and saves bounded settings", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const state = { worker_slots: 3, builds_at_once: { value: 1, auto: false, pinned: 1, warning: null },
+    next_build: { admitted: false, shortfall: "CPU pressure" } };
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ admission: state }) }));
+  write.mockResolvedValue(state);
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(<AgentCapacityRow />));
+    expect(host.textContent).toContain("Waiting: CPU pressure");
+    expect(Array.from(host.querySelectorAll("select")).map(select => select.value)).toEqual(["3", "1"]);
+    await act(async () => host.querySelector("button")!.click());
+    expect(write).toHaveBeenCalledWith("local-project", "agent_capacity", { value: 1, worker_slots: 3 },
+      { label: "Save agent capacity" });
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+  }
+});

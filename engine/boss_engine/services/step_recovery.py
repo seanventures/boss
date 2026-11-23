@@ -995,6 +995,15 @@ def no_model_ask(failure: Mapping[str, Any], triage: Mapping[str, Any], *, refus
                    or "the step failed").strip().rstrip(".")
     who = (provider or "its provider").strip() or "its provider"
     out_of_credit = credit_exhausted(error)
+    if refused:
+        return {"action": ASK_PERSON, "cause": headline[:300],
+                "reasoning": f"The recovery model answered, but its response was rejected: {refused}"[:600],
+                "question": ("Automatic recovery stopped because the model's recovery response "
+                             "was invalid. No repair action was accepted. Review the recovery "
+                             "output and correct the underlying failure before retrying. "
+                             f"Original failure: {headline}")[:600],
+                "after": "Retry only after the blocker or recovery response has been corrected.",
+                "evidence": [headline[:300], str(refused)[:300]]}
     why = (f"the model's answer was refused ({refused})" if refused else
            f"credit balance too low on {who}" if out_of_credit else
            "BOSS needs a connected model to decide how to recover this step, and none answered"

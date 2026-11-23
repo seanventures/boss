@@ -4,11 +4,10 @@
 # Apache-2.0): `deny mount`, the same /proc and /sys rules. Unlike docker-default it declares
 # `abi <abi/4.0>`. docker-default declares no ABI, and AppArmor 4 then does not mediate user
 # namespaces for it at all (`unshare -U` succeeds under it on Ubuntu 24.04). With the 4.0 ABI
-# they are mediated, and refused here. Only a coding engine's own sandbox helper (Codex's bundled
-# bubblewrap) gets more: executing it moves the process into the child profile `engine_sandbox`,
-# the one place that may create user namespaces, mount and pivot_root. Repository code that never
-# goes through the helper (a postinstall script, a test suite) is refused user namespaces at this
-# layer.
+# they are mediated, and refused here. The trusted BOSS launcher enters `engine_sandbox`
+# before dropping to the build uid and setting no_new_privs. Its workloads inherit that
+# profile, so bubblewrap needs no later privilege-increasing profile transition. Direct
+# engine helper execution also enters that profile. The control plane remains restricted.
 #
 # AppArmor 3 hosts have neither the 4.0 ABI nor a `userns` rule (the 3.x parser rejects both) and
 # do not mediate user namespaces; load this file with scripts/sandbox/load_apparmor.sh, which
@@ -29,6 +28,8 @@ profile boss-engine flags=(attach_disconnected,mediate_deleted) {
   capability,
   file,
   umount,
+
+  /usr/local/libexec/boss/boss-sandbox-exec Cx -> engine_sandbox,
 
   # Codex's bundled bubblewrap (npm @openai/codex-linux-<arch>, scripts/install/cli-lock) and a
   # system bwrap. Exact paths, no globs: an exact path outranks the `file,` rule's inherit-exec,

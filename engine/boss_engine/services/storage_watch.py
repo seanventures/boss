@@ -344,15 +344,29 @@ def latest(connection: Any, host_id: str, *, within: timedelta = timedelta(minut
     for k in _SAMPLE_FIELDS:
         if merged.get(k) is not None:
             merged[k] = float(merged[k]) if k != "backups_n" else int(merged[k])
+    helper = next((row for row in rows if row["source"] in ("steward", "hostd")
+                   and row.get("free_gb") is not None and row.get("total_gb") is not None
+                   and row["at"] >= _now() - STALE_AFTER), None)
+    if helper:
+        for key in ("total_gb", "free_gb", "used_pct", "source", "at", "host_label"):
+            merged[key] = helper[key]
     merged["sources"] = sorted(seen)
     return merged
+
+
+def disk_source(connection: Any, host_id: str) -> str:
+    source = connection.execute(text(
+        "SELECT source FROM storage_samples WHERE host_id = :h AND free_gb IS NOT NULL "
+        "AND at >= :since ORDER BY CASE WHEN source IN ('steward', 'hostd') THEN 0 ELSE 1 END, "
+        "at DESC LIMIT 1"), {"h": host_id, "since": _now() - STALE_AFTER}).scalar()
+    return str(source or "api")
 
 
 def last_two(connection: Any, host_id: str) -> list[dict[str, Any]]:
     """The two newest DISK readings (rows that carry free_gb), oldest first."""
     rows = connection.execute(text(
-        "SELECT * FROM storage_samples WHERE host_id = :h AND free_gb IS NOT NULL "
-        "ORDER BY at DESC LIMIT 2"), {"h": host_id}).mappings().all()
+        "SELECT * FROM storage_samples WHERE host_id = :h AND free_gb IS NOT NULL AND source = :source "
+        "ORDER BY at DESC LIMIT 2"), {"h": host_id, "source": disk_source(connection, host_id)}).mappings().all()
     return [dict(r) for r in reversed(rows)]
 
 
@@ -361,8 +375,8 @@ def used_series(connection: Any, host_id: str, *, days: int = KEEP_DAYS,
     """(at, used_gb, free_gb), oldest first, downsampled to ≤ max_points."""
     rows = connection.execute(text(
         "SELECT at, total_gb, free_gb FROM storage_samples WHERE host_id = :h "
-        "AND free_gb IS NOT NULL AND total_gb IS NOT NULL AND at >= :since ORDER BY at"),
-        {"h": host_id, "since": _now() - timedelta(days=days)}).all()
+        "AND free_gb IS NOT NULL AND total_gb IS NOT NULL AND source = :source AND at >= :since ORDER BY at"),
+        {"h": host_id, "source": disk_source(connection, host_id), "since": _now() - timedelta(days=days)}).all()
     pts = [(r[0] if r[0].tzinfo else r[0].replace(tzinfo=timezone.utc),
             float(r[1]) - float(r[2]), float(r[2])) for r in rows]
     if len(pts) > max_points:

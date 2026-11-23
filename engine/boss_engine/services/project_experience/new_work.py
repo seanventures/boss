@@ -707,6 +707,36 @@ def _change_state(connection: Connection, run: Mapping[str, Any]) -> Optional[st
     return state if state in (pr_merge.MERGED, pr_merge.CLOSED) else "open"
 
 
+def app_choices(connection: Connection, project_id: str) -> list[dict[str, str]]:
+    from ..factory_view import app_name
+
+    rows = connection.execute(text(
+        "SELECT DISTINCT ON (COALESCE(finalize_ctx->>'app_id', "
+        "finalize_ctx->>'root_run_id', id)) id, title, spec, finalize_ctx, state "
+        "FROM code_task_runs WHERE project_id = :p "
+        "AND status IN ('completed', 'succeeded') "
+        "ORDER BY COALESCE(finalize_ctx->>'app_id', finalize_ctx->>'root_run_id', id), "
+        "created_at DESC, id DESC"), {"p": project_id}).mappings().all()
+    return [{"run_id": str(row["id"]), "app": app_name(dict(row))} for row in rows]
+
+
+def work_anchor(connection: Connection, project_id: str, app: Optional[str],
+                *, new_app: bool = False) -> Optional[dict[str, Any]]:
+    if new_app:
+        if (app or "").strip():
+            raise ValueError("Choose an existing app or create a new app, not both.")
+        return None
+    handle = (app or "").strip()
+    if not handle:
+        choices = app_choices(connection, project_id)
+        if len(choices) > 1:
+            raise ValueError("Choose which existing app to change, or explicitly create a new app.")
+        if not choices:
+            return None
+        handle = choices[0]["run_id"]
+    return app_anchor(connection, project_id, handle)
+
+
 def app_anchor(connection: Connection, project_id: str, app: Optional[str]
                ) -> Optional[dict[str, Any]]:
     """THE APP NEW WORK BUILDS ONTO (AR-20): every "+ Add a feature" door names the app (`app=`,

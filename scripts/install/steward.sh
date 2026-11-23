@@ -76,7 +76,18 @@ cmd_uninstall() {
 
 cmd_status() {
   case "$(uname -s)" in
-    Darwin) if [[ -f "$PLIST" ]]; then echo "installed: launchd $LABEL"; launchctl print "gui/$(id -u)/$LABEL" 2>/dev/null | grep -E 'state|last exit' | sed 's/^/  /' || true; else echo "not installed"; fi ;;
+    Darwin)
+      if [[ -f "$PLIST" ]]; then
+        if status="$(launchctl print "gui/$(id -u)/$LABEL" 2>/dev/null)"; then
+          echo "installed: launchd $LABEL"
+          printf '%s\n' "$status" | grep -E 'state|last exit' | sed 's/^/  /' || true
+        else
+          echo "configured but not loaded: launchd $LABEL; run boss steward install"
+        fi
+      else
+        echo "not installed"
+      fi
+      ;;
     Linux) systemctl --user is-active boss-steward.timer >/dev/null 2>&1 && echo "installed: systemd boss-steward.timer (active)" || echo "not installed" ;;
   esac
   if [[ -f "$LOG_DIR/steward.log" ]]; then echo "last run:"; tail -n 1 "$LOG_DIR/steward.log" | sed 's/^/  /'; fi
