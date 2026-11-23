@@ -5,11 +5,13 @@
     python3 scripts/web-unit-ci.py --only-quarantined
                                                 run just the quarantined files: each must fail
 
-The quarantine (tests/web-quarantine.txt) lists the files that fail on main, each with its ticket
-and the reason. The run FAILS when:
+The quarantine is the web suite's known-failures baseline (tests/known-failures/web.txt,
+scripts/known_failures.py: BOSSAPP-1429): the files that fail on main, each with its ticket, owner,
+date and reason. The run FAILS when:
   * a file fails that is not in the quarantine (a new failure), or
   * a quarantined file passes (it was fixed: delete its line, so the list only shrinks), or
-  * a quarantined file no longer exists.
+  * a quarantined file no longer exists, or
+  * a security guard (tests/tiers.yaml `security:`) fails — listed or not.
 Nothing is hidden: every quarantined failure is printed with its ticket on every run.
 """
 from __future__ import annotations
@@ -23,24 +25,24 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WEB = ROOT / "apps" / "web"
-QUARANTINE = ROOT / "tests" / "web-quarantine.txt"
+QUARANTINE = ROOT / "tests" / "known-failures" / "web.txt"
+sys.path.insert(0, str(ROOT / "scripts"))
+import known_failures as kf  # noqa: E402
+
+#: How the baseline names a web file (repository-relative) vs how vitest does (under apps/web).
+PREFIX = "apps/web/"
 
 
-def read_quarantine(path: Path = QUARANTINE) -> dict[str, dict[str, str]]:
-    """{file under apps/web: {ticket, reason}}. Raises ValueError on a malformed line."""
-    out: dict[str, dict[str, str]] = {}
-    for n, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        parts = [p.strip() for p in line.split("|")]
-        if len(parts) != 3 or not all(parts):
-            raise ValueError(f"{path.name}:{n}: expected '<file> | <ticket> | <reason>'")
-        file, ticket, reason = parts
-        if file in out:
-            raise ValueError(f"{path.name}:{n}: {file} is listed twice")
-        out[file] = {"ticket": ticket, "reason": reason}
-    return out
+def read_quarantine(root: Path = ROOT) -> dict[str, dict[str, str]]:
+    """{file under apps/web: {ticket, owner, since, reason}}. Raises ValueError on a malformed
+    line (scripts/known_failures.load names it)."""
+    return {e.id[len(PREFIX):]: {"ticket": e.ticket, "owner": e.owner, "since": e.since,
+                                 "reason": e.reason}
+            for e in kf.load("web", root).values()}
+
+
+def web_security_files(root: Path = ROOT) -> set[str]:
+    return {f[len(PREFIX):] for f in kf.security_files(root) if f.startswith(PREFIX)}
 
 
 def run_vitest(files: list[str]) -> dict[str, str]:
@@ -66,12 +68,16 @@ def run_vitest(files: list[str]) -> dict[str, str]:
     return out
 
 
-def judge(results: dict[str, str], quarantine: dict[str, dict[str, str]]) -> list[str]:
+def judge(results: dict[str, str], quarantine: dict[str, dict[str, str]],
+          security: set[str] | None = None) -> list[str]:
     """Every reason the run fails, as sentences."""
     problems = []
     failing = {f for f, s in results.items() if s == "failed"}
-    for f in sorted(failing - set(quarantine)):
-        problems.append(f"NEW FAILURE: {f} (not in tests/web-quarantine.txt)")
+    security = web_security_files() if security is None else security
+    for f in sorted(failing & security):
+        problems.append(f"SECURITY GUARD RED: {f} (a security guard is fixed, never baselined)")
+    for f in sorted(failing - set(quarantine) - security):
+        problems.append(f"NEW FAILURE: {f} (not in tests/known-failures/web.txt)")
     for f, q in sorted(quarantine.items()):
         if not (WEB / f).exists():
             problems.append(f"QUARANTINED FILE IS GONE: {f} ({q['ticket']}): delete its line")

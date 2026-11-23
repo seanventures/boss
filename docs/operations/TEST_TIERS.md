@@ -42,8 +42,25 @@ How it runs:
 - **Console tests** run in parallel with the API shards.
 - **Output:** each suite's wall-clock time, and the logs in a temporary directory. Set `TEST_TIER_OUT` to keep them elsewhere.
 
-**Only new failures fail the gate.** `tests/known-failures.txt` lists failures that also happen on
-`origin/main`. They are reported but not counted. Delete a line when its test is fixed; never add a line to make a gate pass.
+**Red is not normal (BOSSAPP-1429).** Each suite has one known-failures baseline,
+`tests/known-failures/<suite>.txt` (engine, api, worker, scripts, web). Every line names a test (or a
+whole test file), its ticket, an owner, the date it was listed and why it fails:
+
+```
+engine/tests/test_x.py::test_y | BOSSAPP-123 | engine | 2026-11-23 | the sqlite stub has no host column
+```
+
+`scripts/known_failures.py` judges every run (`scripts/test-tier.sh`, `scripts/web-unit-ci.py`, CI and
+the local merge gate). A run fails on:
+
+- a failure no line names (a **new** failure);
+- a listed test that ran and passed (**stale**: delete its line, the list only shrinks). Every file a
+  baseline names runs in every tier, so every line is judged on every run;
+- a red **security guard** (`tests/tiers.yaml` `security:`), listed or not. A security guard can never be
+  listed: `scripts/known_failures.py check` refuses the baseline.
+
+Never add a line to make a gate pass: a line is added only for a failure that also happens on
+`origin/main`, with its ticket. The worker suite (`apps/worker/tests`) is small and runs whole in every tier.
 
 **Without the install's database container** (CI, `.github/workflows/ci.yml`), these settings apply:
 
@@ -52,7 +69,7 @@ How it runs:
 | `BOSS_TEST_PG_URL=postgresql://user:pass@host:port` | Uses any Postgres that may create databases, instead of `boss-community-db-1` |
 | `TEST_TIER_DB_PREFIX` | Names the databases (default `boss_test`, so `boss_test` and `boss_test_t1..tN`). The name must start with `boss_test` |
 | `TEST_TIER_SHARDS` | Sets the number of API shards |
-| `TEST_TIER_SUITES=engine,api` | Limits the run to those suites |
+| `TEST_TIER_SUITES=engine,api,worker,scripts` | Limits the run to those suites (default: all five) |
 
 A fresh database needs the schema and the install's first-boot seed:
 `python scripts/ci_apply_schema.py boss_test`.
@@ -113,9 +130,10 @@ lock table is too small for the schema it is about to hold.
 
 **CI runs** three jobs on every pull request:
 
-- `p0`: this tier's engine and API suites;
+- `p0`: this tier's engine, API and scripts tests, the whole worker suite, and every test a baseline
+  names, judged against `tests/known-failures/` (no new failure, no stale line, no red security guard);
 - `web`: the type check, and the whole web unit suite. Failing files that are known are listed in
-  `tests/web-quarantine.txt` with their ticket. That list can only shrink;
+  `tests/known-failures/web.txt` with their ticket. That list can only shrink;
 - `bench-scripted`: the harness benchmark on the scripted engine against its committed baseline
   (`docs/architecture/HARNESS_BENCHMARK.md`).
 

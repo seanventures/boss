@@ -65,6 +65,12 @@ P0:
     - engine/tests/test_harness_bench_compare.py
     - engine/tests/test_decision_eval_has_a_floor.py
     - engine/tests/test_web_quarantine_holds_only_real_failures.py
+    # Red is not normal (BOSSAPP-1429): the baselines only shrink and hold no security guard;
+    # a streamed export's transaction survives Starlette's per-step context copies
+    - engine/tests/test_red_is_not_normal.py
+    - engine/tests/test_a_streamed_transaction_survives_a_context_switch.py
+    # Every failure says what happened and what to do (BOSSAPP-1428)
+    - engine/tests/test_every_failure_says_what_and_what_to_do.py
   api:
     - apps/api/tests/test_api_e2e_smoke.py
     # Sign-in, step-up, CSRF
@@ -81,6 +87,7 @@ P0:
     - apps/api/tests/test_a_stack_deploys_only_through_an_approved_changeset.py
     - apps/api/tests/test_a_deploy_asks_once_or_as_its_policy_says.py
   web:
+    - apps/web/tests/every-failure-says-what-to-do.test.ts
     - apps/web/tests/console-routes-answer-what-the-console-asks.test.ts
     - apps/web/tests/sign-in-shows-every-option-and-says-why.test.tsx
     - apps/web/tests/sign-in-keeps-your-place-and-you-can-sign-out.test.ts
@@ -241,3 +248,36 @@ P1:
     - apps/web/tests/the-app-drawer-shows-its-alerts.test.tsx
     - apps/web/tests/observability-alerts-shows-every-app.test.tsx
     - apps/web/tests/factory-app-menu-links-to-its-alerts.test.tsx
+
+# SECURITY GUARDS (BOSSAPP-1429, scripts/known_failures.py). A red one fails every gate outright,
+# and none of them may ever be listed in tests/known-failures/: a red security guard is fixed,
+# never baselined. Most of them also run in P0 above; the gate judges a failure by its file.
+security:
+  # Secrets never leave: redaction, the audit log, the API's log
+  - engine/tests/test_redaction_masks_every_credential.py
+  - engine/tests/test_identity_audit_redaction.py
+  - apps/api/tests/test_no_secret_leaves_the_log.py
+  - scripts/tests/test_api_validation_redaction.py
+  # The public tree names no private host, network, project or home directory
+  - engine/tests/test_the_public_tree_names_no_private_infrastructure.py
+  # A self-fix never touches a protected path or symbol, never weakens a test, never carries
+  # a host address or private infrastructure out
+  - engine/tests/test_a_self_fix_never_touches_a_protected_path.py
+  - engine/tests/test_protected_symbols_still_exist.py
+  - engine/tests/test_a_self_fix_never_weakens_a_test.py
+  - engine/tests/test_a_recommendation_never_holds_a_host_address.py
+  - engine/tests/test_a_self_fix_upstream_send_carries_no_private_infrastructure.py
+  # The sandbox boundary and the network fence
+  - engine/tests/test_identity_f1_sandbox_boundary.py
+  - engine/tests/test_sandbox_network_fence.py
+  - engine/tests/test_egress_enterprise_fence.py
+  # Every tool argument that names an object is confined to the caller's org
+  - engine/tests/test_identity_authz_tool_object_args.py
+  # The test suite refuses to wipe a database not named like a test one
+  - engine/tests/test_the_suite_refuses_to_wipe_production.py
+  # Sign-in, step-up, CSRF, the authz matrix, API confinement
+  - apps/api/tests/test_identity_authn_signin.py
+  - apps/api/tests/test_identity_fxd_step_up.py
+  - apps/api/tests/test_identity_f3_authn_security.py
+  - apps/api/tests/test_identity_authz_matrix.py
+  - apps/api/tests/test_identity_f2_api_confinement.py

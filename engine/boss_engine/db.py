@@ -774,4 +774,13 @@ def begin(engine: Optional[Engine] = None):
         try:
             yield connection
         finally:
-            _OPEN_TRANSACTIONS.reset(token)
+            try:
+                _OPEN_TRANSACTIONS.reset(token)
+            except ValueError:
+                # A GENERATOR RESUMED IN ANOTHER CONTEXT: a streamed response (the activity log's
+                # export) is iterated by Starlette one step per thread-pool call, each in a copy of
+                # the context, so the token was made in a different Context and reset() refuses
+                # it. The export then died mid-stream (test_no_secret_leaves_the_log, red on
+                # main). Drop this connection from the stack this context sees instead.
+                _OPEN_TRANSACTIONS.set(tuple(c for c in _OPEN_TRANSACTIONS.get()
+                                             if c is not connection))
