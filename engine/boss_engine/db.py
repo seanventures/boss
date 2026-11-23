@@ -780,4 +780,6 @@ def begin(engine: Optional[Engine] = None):
             # step in a fresh copy of the request's context, and ContextVar.reset refuses a token
             # "created in a different Context" - the activity log's CSV and NDJSON exports died
             # mid-stream. In the ordinary nested case this is what reset did (it is the last one).
+            # Limit: across such steps the stack holds only within one step; a later step's copy
+            # never saw the push, so open_transactions() does not list the streamed transaction.
             _OPEN_TRANSACTIONS.set(tuple(c for c in _OPEN_TRANSACTIONS.get() if c is not connection))

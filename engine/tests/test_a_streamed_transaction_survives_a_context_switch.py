@@ -30,7 +30,9 @@ def test_a_generator_resumed_in_another_context_closes_its_transaction_cleanly()
     stream = rows()
     # Each step in a fresh copy of the context, as starlette.concurrency.iterate_in_threadpool does.
     assert contextvars.copy_context().run(next, stream) == 1
-    assert contextvars.copy_context().run(next, stream) == 2
+    # The known limit: a later step's context copy never saw the push.
+    assert contextvars.copy_context().run(
+        lambda: (next(stream), db.open_transactions())) == (2, ())
     assert contextvars.copy_context().run(lambda: list(stream)) == []
     assert db.open_transactions() == ()
 
