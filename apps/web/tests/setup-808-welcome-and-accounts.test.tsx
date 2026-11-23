@@ -138,6 +138,15 @@ describe("Setup never shows the Welcome", () => {
     expect(q(again.container, "su-open-welcome")).toBeNull();
   });
 
+  it("the board shows the one-line Autonomy row (BOSSAPP-1441), not only the classic layout", async () => {
+    const view = withAccounts(board());
+    fakeApi(view);
+    const { container } = await mount(view);
+    expect(q(container, "su-advanced-all")).not.toBeNull();
+    expect(q(container, "su-row-autonomy")).not.toBeNull();
+    expect(q(container, "su-autonomy-change")!.getAttribute("href")).toContain("tab=autonomy");
+  });
+
   it("Welcome's Add another account lands on the board's Add GitHub account", async () => {
     const view = withAccounts(board());
     fakeApi(view);

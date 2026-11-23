@@ -595,6 +595,8 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
                         focused={focus === "events"}>
             <div ref={ref("events")}><EventsRow projectId={projectId} /></div>
           </SetupSection>
+          {/* AUTONOMY (BOSSAPP-1441): the same one line as the classic board; set in Govern. */}
+          <div className="su-sec-line"><AutonomySetupRow projectId={projectId} /></div>
           <details className="su-advanced su-advanced-all" data-testid="su-advanced-all" ref={classicRef}
                    open={classicOpen}
                    onToggle={(e) => setClassicOpen((e.currentTarget as HTMLDetailsElement).open)}>
