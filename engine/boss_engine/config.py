@@ -1067,10 +1067,14 @@ class Settings(BaseSettings):
         default=None, alias="BOSS_MEETING_PRD_AUTO_APPROVE"
     )
 
+    # DEV AUTONOMY (BOSSAPP-1441) REPLACES "FOLLOWS ENFORCEMENT": unset, the PRD gate follows the
+    # project's autonomy policy (services/autonomy_policy.py: development acts by default), not
+    # BOSS_AUTHZ_MODE. The policy is set by an Owner/Admin with step-up, which is the seat's
+    # standing word for non-production work. Setting it false is a stop a person set: honoured.
     @model_validator(mode="after")
-    def _prd_auto_approve_follows_enforcement(self):
+    def _prd_auto_approve_follows_autonomy(self):
         if self.meeting_prd_auto_approve is None:
-            self.meeting_prd_auto_approve = (self.authz_mode or "").strip().lower() != "enforce"
+            self.meeting_prd_auto_approve = True
         return self
     # Cost/rigor dial for the governed pipeline: lean | balanced | strict (or a custom profile
     # name once the profiles API lands). Scales which steps run and which models run them.

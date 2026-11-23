@@ -200,6 +200,15 @@ class FakeConn:
         self.updates = []
         self.statements = []
 
+    def begin_nested(self):
+        class _Point:
+            def commit(self):
+                pass
+
+            def rollback(self):
+                pass
+        return _Point()
+
     def execute(self, statement, params=None):
         raw = str(statement)
         self.statements.append((raw, dict(params or {})))
@@ -267,27 +276,48 @@ AUTO_ROW = {"mode": FULL_AUTO, "threshold_usd": 500.0, "max_risk_tier": 1,
             "set_by": "ceo", "set_at": None}
 
 
-def test_a_qualifying_gate_is_approved_and_marked_as_unreviewed():
+def _transitions(monkeypatch):
+    """approve_by_policy now runs the SAME follow-on a person's approval runs, through
+    DecisionService.transition (BOSSAPP-1441): recorded here instead of a raw UPDATE."""
+    from boss_engine.services import decisions
+
+    calls = []
+    monkeypatch.setattr(decisions.DecisionService, "__init__", lambda self, settings: None)
+    monkeypatch.setattr(decisions.DecisionService, "transition",
+                        lambda self, c, decision_id, **k: calls.append({"id": decision_id, **k}))
+    monkeypatch.setattr("boss_engine.services.ci_gate.refuse_approval", lambda *a, **k: None)
+    # Dev autonomy's route decides whether a setting may answer at all (never production, a
+    # credential or spend past the budget); here it says act.
+    from boss_engine.services import autonomy_gate
+
+    monkeypatch.setattr(autonomy_gate, "route",
+                        lambda *a, **k: autonomy_gate.Route("act", autonomy_gate.ACT, "test"))
+    return calls
+
+
+def test_a_qualifying_gate_is_approved_and_marked_as_unreviewed(monkeypatch):
     from boss_engine.services.autonomy import apply_policy
 
+    calls = _transitions(monkeypatch)
     conn = FakeConn(policy_row=AUTO_ROW, pending=[pending("d1", usd=12.0)])
     out = apply_policy(conn, "p")
     assert [a["id"] for a in out["approved"]] == ["d1"]
-    update = conn.updates[0]
     # Named so the trail can never read as a person: "approved by ceo" and "approved by the
-    # policy ceo turned on" are different facts.
-    assert update["actor"] == "autonomy:full_auto"
-    assert "no human reviewed this" in update["note"]
+    # policy ceo turned on" are different facts. And carried out: the approval's follow-on runs.
+    assert calls[0]["actor"] == "autonomy:full_auto" and calls[0]["action"] == "approve"
+    assert calls[0]["system_policy"] is True
+    assert "no human reviewed this" in calls[0]["note"]
 
 
-def test_the_update_cannot_resolve_an_already_resolved_gate():
-    """A concurrent human approval must win; the UPDATE is guarded on status."""
-    from boss_engine.services.autonomy import apply_policy
+def test_the_update_cannot_resolve_an_already_resolved_gate(monkeypatch):
+    """A concurrent human approval must win: a gate no longer pending is never approved."""
+    from boss_engine.services.decisions import approve_by_policy
 
-    conn = FakeConn(policy_row=AUTO_ROW, pending=[pending("d1")])
-    apply_policy(conn, "p")
-    update_sql = [s for s, _ in conn.statements if "UPDATE decisions" in s][0]
-    assert "status = 'pending'" in update_sql
+    calls = _transitions(monkeypatch)
+    conn = FakeConn(pending=[{**pending("d1"), "status": "approved"}])
+    assert approve_by_policy(conn, "d1", project_id="p", actor="autonomy:full_auto",
+                             note="x") is False
+    assert calls == []
 
 
 def test_refusals_are_returned_with_their_reasons():
@@ -342,3 +372,17 @@ def test_changing_the_mode_records_who_did_it():
     assert insert["a"] == "ceo"
     assert insert["m"] == FULL_AUTO
     assert insert["t"] == 250
+
+
+def test_full_auto_never_answers_a_card_dev_autonomy_would_keep_for_a_person(monkeypatch):
+    """Production, a credential or spend past the budget: the same route refuses Full auto."""
+    from boss_engine.services import autonomy_gate
+    from boss_engine.services.decisions import approve_by_policy
+
+    calls = _transitions(monkeypatch)
+    monkeypatch.setattr(autonomy_gate, "route", lambda *a, **k: autonomy_gate.Route(
+        "ask", autonomy_gate.ASK_PROD_RELEASE, "production"))
+    conn = FakeConn(pending=[pending("d1")])
+    assert approve_by_policy(conn, "d1", project_id="p", actor="autonomy:full_auto",
+                             note="x") is False
+    assert calls == []

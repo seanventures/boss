@@ -16736,3 +16736,6 @@ CREATE TABLE IF NOT EXISTS autonomy_policies (
   set_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (scope_kind, scope_id)
 );
+-- Dev autonomy decides only cards written from here on (or stamped by the sink): a card pending
+-- before this install had none of the markers a person's stop is written with.
+INSERT INTO schema_once (key) VALUES ('dev_autonomy_started') ON CONFLICT (key) DO NOTHING;

@@ -247,6 +247,14 @@ def describe(policy: Policy) -> dict[str, Any]:
             "modes_available": list(DEV_MODES)}
 
 
+def dev_acts(connection: Any, project_id: Optional[str]) -> bool:
+    """Whether the project's policy acts in development (False when it cannot be read)."""
+    try:
+        return load(connection, project_id).dev_acts
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def tool_threshold(connection: Any, project_id: Optional[str], base: int) -> int:
     """The agent tool-call autonomy ceiling: a tier-2 write acts without asking under dev
     autonomy (its effect stays in the run's sandbox or branch); tier 3 always asks."""

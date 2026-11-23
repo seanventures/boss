@@ -225,11 +225,21 @@ class CodexCodeAgent(GenericCliCodeAgent):
         # The roots are the WORKLOAD's: under a build's sandbox identity its own HOME.
         policy = self._policy()
         if (not read_only or by_copy) and policy.get("state") == "cannot_write":
+            # BOSS RE-CHECKS ITSELF FIRST (BOSSAPP-1441): a person used to press Re-check in
+            # Setup › Models; the same governed check now runs here, once per login per window.
+            from .engine_policy import recheck_before_refusing
+
+            policy = recheck_before_refusing(
+                getattr(self, "settings", None),
+                getattr(getattr(self, "spec", None), "entitlement_source_id", None),
+                "codex") or policy
+            self.engine_policy = policy
+        if (not read_only or by_copy) and policy.get("state") == "cannot_write":
             raise harness_failures.HarnessFailure(harness_failures.HarnessVerdict(
                 engine="codex", kind="policy_denied", where="preflight",
                 message="engine_write_unavailable: the recorded engine check cannot write here",
                 fix=(setup_sentence("codex", policy) or "Restore the engine's write capability").rstrip(". ")
-                    + "; then press Re-check on Codex in Setup › Models before retrying the build"))
+                    + "; BOSS re-checked Codex itself and it still cannot write here"))
         writer = codex_writer_mode(policy, workload_env(env) if env is not None else None)
         if read_only and not by_copy:
             mode, extra = "read-only", []

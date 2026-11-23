@@ -1573,6 +1573,19 @@ def _finalize_meeting(connection, settings, run_id) -> dict:
     # PRD" decision beside it would publish findings into the repository and could auto-start a
     # build nobody chose. So it raises none (security_scan/review.py).
     security_review = (run.get("constraints") or {}).get("purpose") == "security_review"
+    # WHO APPROVES THIS PRD, WHEN THE CALLER SAID (Easy Mode): the person's start covers it on
+    # the light lane, whatever the install's setting; "Review the plan first" always waits.
+    approval = spec_approval_of(run.get("constraints"))
+    # A STOP A PERSON SET is written on the card, so dev autonomy honours it (autonomy_gate):
+    # "Review the plan first", the install's own "a person approves every PRD", or a PRD that
+    # departs from the stack the person's brief named.
+    deviates = prd_blocks_auto_approve(run.get("directive"), state.get("prd_markdown"))
+    explicit_stop = (
+        "Review the plan first" if approval == SPEC_APPROVED_BY_PERSON else
+        "BOSS_MEETING_PRD_AUTO_APPROVE=false: a person approves every PRD"
+        if getattr(settings, "meeting_prd_auto_approve", True) is False
+        and approval != SPEC_APPROVED_BY_START else
+        "the PRD declares a different stack from the brief" if deviates else None)
     decision_id = None if security_review else create_blocking_decision(connection, project_id, task_id,
         _PRD_DECISION_QUESTION,
         {"action": "execute_agent_tool", "tool": "publish_document", "start_code_task": True,
@@ -1582,7 +1595,8 @@ def _finalize_meeting(connection, settings, run_id) -> dict:
          # A panel convened for a FEATURE OF AN APP THAT EXISTS: approving its PRD builds onto
          # that app (decisions._build_prd_onto_app). Carried as data, never as text in the PRD.
          **({"extends_run_id": str((run.get("constraints") or {})["extends_run_id"])}
-            if (run.get("constraints") or {}).get("extends_run_id") else {})},
+            if (run.get("constraints") or {}).get("extends_run_id") else {}),
+         **({"explicit_stop": explicit_stop} if explicit_stop else {})},
         {}, "meeting_prd_ready_to_publish", risk_tier=2)
 
     # Resolve the gate the panel has already satisfied.
@@ -1597,16 +1611,13 @@ def _finalize_meeting(connection, settings, run_id) -> dict:
     # reader can always tell which approvals a human made. The follow-on (start the governed
     # build) is the same code path a human approval runs.
     auto_approve = bool(decision_id and getattr(settings, "meeting_prd_auto_approve", False))
-    # WHO APPROVES THIS PRD, WHEN THE CALLER SAID (Easy Mode): the person's start covers it on
-    # the light lane, whatever the install's setting; "Review the plan first" always waits.
-    approval = spec_approval_of(run.get("constraints"))
     if approval == SPEC_APPROVED_BY_START:
         auto_approve = bool(decision_id)
     elif approval == SPEC_APPROVED_BY_PERSON:
         auto_approve = False
     # A swapped stack is the blocking question, not a silent start. The spec gate asks
     # enable / accept / stop; approving the PRD here would build the substitute.
-    if auto_approve and prd_blocks_auto_approve(run.get("directive"), state.get("prd_markdown")):
+    if auto_approve and deviates:
         emit_event(connection, project_id, "meeting.prd_stack_deviation", "boss",
                    "decision", decision_id,
                    {"why": "The PRD declares a different stack from the brief. "
@@ -1616,12 +1627,17 @@ def _finalize_meeting(connection, settings, run_id) -> dict:
         from .decisions import SYSTEM_ACTOR, DecisionService
 
         try:
-            DecisionService(settings).transition(
-                connection, decision_id, action="approve", actor=SYSTEM_ACTOR,
-                system_policy=True,
-                note=(APPROVED_BY_START_NOTE if approval == SPEC_APPROVED_BY_START else
-                      "Approved automatically: the agent panel reviewed and drafted this PRD. "
-                      "Set BOSS_MEETING_PRD_AUTO_APPROVE=false to require a human approval."))
+            if approval == SPEC_APPROVED_BY_START:
+                DecisionService(settings).transition(
+                    connection, decision_id, action="approve", actor=SYSTEM_ACTOR,
+                    system_policy=True, note=APPROVED_BY_START_NOTE)
+            else:
+                # DEV AUTONOMY decides it (autonomy_gate): the product manager agent, named, with
+                # the same follow-on (start the governed build); a project whose policy says ask
+                # in development keeps the card for a person.
+                from . import autonomy_gate
+
+                autonomy_gate.decide(connection, settings, decision_id)
             if approval == SPEC_APPROVED_BY_START:
                 emit_event(connection, project_id, "meeting.prd_approved_by_start", "boss",
                            "decision", decision_id,

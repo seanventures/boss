@@ -1239,6 +1239,8 @@ class _Pass:
             self.c, self.item_id, actor=self.squad.lead, token=self.token,
             question=f"{proposal['body']['summary']}?",
             recommendation={"action": NEEDS_YOU_ACTION, "mitigation": proposal["body"]["action"],
+                            # Where it runs: dev autonomy asks for production (autonomy_gate).
+                            "environment": self.ctx.environment,
                             "proposal_id": proposal["id"], "squad_act_id": rec["act_id"],
                             "votes": f"{approve}/{voted}",
                             "dissent": [d.get("reason") for d in dissent][:3],

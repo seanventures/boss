@@ -673,6 +673,12 @@ def _create_blocking_decision_postgres(
             "risk_tier": risk_tier,
         },
     )
+    # DEV AUTONOMY'S ONE CHOKE POINT (services/autonomy_gate.py, BOSSAPP-1441): the card is
+    # classified and, when BOSS answers it in development, decided after this commits with the
+    # same follow-on a person's Approve runs. It never fails the producer.
+    from . import autonomy_gate
+
+    autonomy_gate.on_created(connection, project_id, decision_id)
     return decision_id
 
 

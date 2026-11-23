@@ -46,6 +46,8 @@ FOLLOWS_POLICY = "follows_policy"
 
 #: What a surface says about a deploy a person approves.
 PERSON_SAYS = "Ships only when you say yes"
+#: What a surface says about a deploy dev autonomy ships (BOSSAPP-1441).
+AUTONOMY_SAYS = "Ships automatically: not production"
 
 
 def policy_says(environment: Any) -> str:
@@ -174,6 +176,18 @@ def step_answer(connection: Connection, project_id: str, spec_step: Any,
     """WHO ANSWERS FOR THIS DEPLOY STEP, and the words for it — the one answer the runner acts
     on and every surface shows. {who: "you" | "policy", environment, policy_id, says}."""
     env = step_environment(spec_step, run_input)
+    # DEV AUTONOMY FIRST (BOSSAPP-1441): a deploy whose target is resolved NOT production ships
+    # without asking when the project's policy acts in development — and every surface says so,
+    # so the words and the behaviour come from the same place (D2).
+    try:
+        from . import autonomy_policy, production
+
+        verdict = production.resolve_project_environment(connection, project_id, env)
+        if not verdict.prod and autonomy_policy.load(connection, project_id).dev_acts:
+            return {"who": "agent", "environment": _environment(env), "policy_id": None,
+                    "promised": False, "says": AUTONOMY_SAYS, "verdict": verdict.as_dict()}
+    except Exception:  # noqa: BLE001 — unknown: the person's answer, as before
+        pass
     policy: dict[str, Any] = {}
     if follows_policy(spec_step):
         try:

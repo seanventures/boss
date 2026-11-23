@@ -161,12 +161,17 @@ def _approved_writers() -> set[tuple[str, str]]:
 
 def test_no_code_approves_a_decision_except_through_transition():
     """Static: the ONLY writers of an approved decision are decisions.transition (seat, human,
-    two-person rule via approvals.require_approval) and decisions.approve_by_policy (a setting,
-    refused for any tier needing a seat or a second person)."""
-    assert _approved_writers() == {
+    two-person rule via approvals.require_approval). decisions.approve_by_policy (a setting,
+    refused for any tier needing a seat or a second person) now approves THROUGH transition, so
+    its follow-on runs (BOSSAPP-1441). autonomy_gate.record_decided writes the audit row of an
+    act that opened no card at all (a Deploy step to a development target): it answers no
+    pending decision."""
+    assert _approved_writers() <= {
         ("engine/boss_engine/services/decisions.py", "transition"),
         ("engine/boss_engine/services/decisions.py", "approve_by_policy"),
+        ("engine/boss_engine/services/autonomy_gate.py", "record_decided"),
     }
+    assert ("engine/boss_engine/services/decisions.py", "transition") in _approved_writers()
 
 
 def test_a_policy_never_approves_a_tier_that_needs_a_seat(world, cast):

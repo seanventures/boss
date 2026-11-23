@@ -739,6 +739,11 @@ def _actor_words(who: str) -> Optional[str]:
         return None
     if who in SEAT_WORDS:
         return SEAT_WORDS[who]
+    if who.startswith("autonomy:dev:"):
+        # Named for the agent that decided it (dev autonomy, BOSSAPP-1441).
+        from .autonomy_gate import ACTOR_PREFIX, decided_words
+
+        return decided_words(who[len(ACTOR_PREFIX):])
     if who.startswith(("autonomy:", "auto_approval", "policy:", "system")):
         return "BOSS (automatic)"
     return who.replace("_", " ")

@@ -42,7 +42,8 @@ from .decisions import SYSTEM_ACTOR as DECISION_SYSTEM_ACTOR
 from .run_decisions import open_step_decision
 from . import release_scope, security_review_steps, workflow_capabilities, workflow_outcomes
 from . import start_from_file
-from .workflow_capabilities import CAPABILITY_KEYS, get as get_capability
+from .workflow_capabilities import (CAPABILITY_KEYS, TARGET_GATED, approval_mode_for,
+                                     get as get_capability)
 
 log = logging.getLogger(__name__)
 
@@ -7951,6 +7952,11 @@ def _gate_subject(
         # plan, the host and the manifest — is the gate. Approving it releases the apply;
         # rejecting it rejects the step. Every other deploy keeps its gate exactly as before.
         return None
+    if key in TARGET_GATED and context is not None and _dev_deploy_needs_no_gate(
+            connection, project_id, spec_step, context, key):
+        # A DEPLOY TO A DEVELOPMENT TARGET ASKS NOBODY (dev autonomy, BOSSAPP-1441): the step
+        # runs and its deployment is decided by the agent, logged in "Decided for you".
+        return None
     if key == "deploy" and context is not None:
         # A DEPLOY THAT WILL BE REFUSED ASKS NOBODY: an app that was told to declare how it
         # runs and did not, or a Postgres app with no manifest to bring its database, is refused
@@ -8057,6 +8063,65 @@ def _gate_subject(
             "risk_tier": capability.risk_tier, "completes_step": False,
         }
     return None
+
+
+def _dev_deploy_needs_no_gate(connection: Connection, project_id: str, spec_step: dict[str, Any],
+                              context: dict[str, Any], key: str) -> bool:
+    """Whether this deploy-like step's gate is answered by dev autonomy: its resolved target is
+    not production and the project's policy acts in development. Writes the audit record (once
+    per run and step) when it is. Unknown, or anything unreadable, opens the gate as before."""
+    from . import autonomy_gate, autonomy_policy, production
+    from .deploy_policy import step_environment
+
+    point = connection.begin_nested()
+    try:
+        policy = autonomy_policy.load(connection, project_id)
+        ready = (deploy_step_inputs(connection, spec_step, context) or {}) if key == "deploy" \
+            else {}
+        target_id = ready.get("target_id") or ((spec_step.get("binding") or {}).get(
+            "inputs") or {}).get("target_id")
+        environment = step_environment(spec_step, context.get("input"))
+        if not (isinstance(target_id, str) and target_id.strip()) and key != "deploy":
+            # A redeploy re-ships wherever the run last deployed, and a config deploy picks its
+            # target itself: without the target named, the gate opens as before.
+            point.commit()
+            return False
+        verdict = (production.resolve_target(connection, target_id)
+                   if isinstance(target_id, str) and target_id.strip()
+                   else production.resolve_project_environment(connection, project_id,
+                                                                environment))
+        approval = spec_step.get("approval") or {}
+        mode = approval_mode_for(key, approval.get("requested_mode"),
+                                 target_prod=verdict.prod, autonomy_acts=policy.dev_acts)
+        if mode != "auto":
+            point.commit()
+            return False
+        run_id = str(context.get("run_id") or "")
+        step_id = str(spec_step.get("id") or "")
+        seen = connection.execute(text(
+            "SELECT 1 FROM decisions WHERE project_id = :p AND status = 'approved' "
+            "AND recommendation->>'workflow_run_id' = :r AND recommendation->>'step_id' = :s "
+            "AND approved_by LIKE :pre LIMIT 1"),
+            {"p": project_id, "r": run_id, "s": step_id,
+             "pre": autonomy_gate.ACTOR_PREFIX + "%"}).first()
+        if seen is None:
+            rule = autonomy_gate.GATES[key]
+            found = autonomy_gate.Route(
+                "act", rule.cls, verdict.words, rule.agent, rule.undo, verdict.as_dict(),
+                {"dev": policy.dev, "source": policy.source, "set_by": policy.set_by})
+            autonomy_gate.record_decided(
+                connection, project_id, task_id=None,
+                question=f"{_step_word(spec_step, get_capability(key).label)} · {environment}",
+                recommendation={"capability": key, "workflow_run_id": run_id,
+                                "step_id": step_id, "environment": environment,
+                                **({"target_id": target_id} if target_id else {})},
+                found=found)
+    except Exception as error:  # noqa: BLE001 — unknown: the gate opens as it always did
+        point.rollback()
+        log.warning("dev autonomy could not judge the %s gate: %s", key, error)
+        return False
+    point.commit()
+    return True
 
 
 def _assignment_refusal(
@@ -8262,6 +8327,14 @@ def _open_gate(
         # Whether answering this finishes the step or merely lets it run. The two have
         # different consequences and the page has never been able to tell them apart.
         "gate_completes_step": bool(subject["completes_step"]),
+        # What dev autonomy reads (autonomy_gate.route, BOSSAPP-1441): the step's author chose
+        # "manual" (a stop a person set), and why only a person may answer this gate.
+        **({"approval_mode_requested": "manual"}
+           if str(approval.get("requested_mode") or "").lower() == "manual"
+           or (str(approval.get("mode") or "").lower() == "manual"
+               and approval.get("forced_manual") is False)
+           else {}),
+        **({"requires_person": requires_person} if requires_person else {}),
         **recommendation_extra,
     }
     if capability_key == "rules_review":

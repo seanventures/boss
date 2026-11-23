@@ -81,6 +81,9 @@ DIRECT_INSERTS = {
     ("engine/boss_engine/services/self_fix_install.py", "_incident"),
     # Taking an installed self-fix back out asks a person first (self_fix.remove).
     ("engine/boss_engine/services/self_fix_install.py", "request_removal"),
+    # Dev autonomy's audit row for an act that opens no card (a Deploy step to a development
+    # target): written already APPROVED by the agent, so it never waits and offers no button.
+    ("engine/boss_engine/services/autonomy_gate.py", "record_decided"),
 }
 #: The Postgres body of create_blocking_decision: its callers are the producers scanned above.
 SINK_INSERTS = {("engine/boss_engine/services/core.py", "_create_blocking_decision_postgres")}

@@ -55,6 +55,8 @@ _NON_PROD_PREFIXES = tuple(f"{n}{sep}" for n in sorted(STAGING_NAMES | DEV_NAMES
                            for sep in ("-", "_"))
 
 TIERS = ("dev", "staging", "prod")
+#: A merge base meaning "the repository's default branch, whatever it is called".
+DEFAULT_BRANCH = "@default"
 #: A merge base that ships nowhere: `default_branch_ships_to = 'none'`.
 SHIPS_NOWHERE = "none"
 
@@ -319,6 +321,8 @@ def resolve_merge(connection: Any, *, project_id: Optional[str], repo: Any,
     if binding is not None and _norm(binding.get("host")) == "local":
         return _dev("dev", "local_repository", f"{full} is a local repository on this machine")
     default = str((binding or {}).get("default_branch") or "").strip()
+    if base == DEFAULT_BRANCH:
+        base = default or "main"
     if not base:
         return _prod("merge_base", "no base branch named", known=False)
     releasing = _releasing_branch(base)
