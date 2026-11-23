@@ -1089,9 +1089,10 @@ def propose(connection: Connection, settings: Any, *, project_id: str, run_id: s
                                            klass)
     sfx = transition(connection, sfx_id, CLAIMED, actor=ACTOR_AGENT,
                      sentence=(f"{AGENT_NAME}: this is a bug in BOSS, not in your app, so BOSS "
-                               f"is fixing itself ({klass}); reading BOSS's own code first."),
+                               f"is fixing itself ({klass}); it starts when a worker is free, "
+                               "and its time limit counts from then."),
                      data={"recommendation_id": recommendation_id},
-                     started_at=now_utc())
+                     started_at=None)
     audit(connection, "self_fix.started", actor=ACTOR_AGENT, sfx=sfx,
           details={"run_id": run_id, "step_id": step_id, "confidence": confidence["level"]})
     enqueue_build(connection, sfx, jobs=jobs)

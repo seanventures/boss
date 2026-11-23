@@ -182,8 +182,10 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
   // ── Helm's plan for this kind (and the picked workflow), with the chips' defaults ──────────
   // A Ticket whose issue is labelled a bug runs the project's bug workflow (its default).
   const planKind: Kind = kind === "ticket" && issueIsBug(issue) ? "bug" : kind;
-  const anchorApp = prefill?.app?.trim() ?? "";
-  const plan = usePxRead<PlanDetail>(planDetailPath(pid, planKind, picked.v, anchorApp), parsePlanDetail,
+  const [appPick, setAppPick] = useState(prefill?.app?.trim() ?? "");
+  const newApp = appPick === "__new__";
+  const anchorApp = newApp ? "" : appPick;
+  const plan = usePxRead<PlanDetail>(planDetailPath(pid, planKind, picked.v, anchorApp, newApp), parsePlanDetail,
     { everyMs: 120_000, demo: () => parsePlanDetail({ ...FX_WORK_PLAN, kind: planKind, ...DEMO_DETAIL }) });
   const p = plan.data;
   const k = KINDS.find((x) => x.key === kind)!;
@@ -379,7 +381,7 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
   const fields = (anyway: string[]) => ({
     brief: status === "ready" ? brief : null, priority: priority.v, notify: notify.v, issue: issueChoice,
     ...(wfKey ? { workflow_key: wfKey } : {}), ...(anyway.length ? { start_anyway: anyway } : {}),
-    ...(anchorApp ? { app: anchorApp } : {}),
+    ...(newApp ? { new_app: true } : anchorApp || p?.anchor?.runId ? { app: anchorApp || p?.anchor?.runId } : { infer_app: true }),
     ...(runProfile ? { profile: runProfile } : {}),
   });
   const locked = Boolean(refusal) && unaccepted(refusal, startAnyway).length > 0;
@@ -387,7 +389,7 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
   const len = briefLength(words());
   // AN APP THAT IS NOT THIS PROJECT'S holds Start: it never quietly builds on main instead.
   const anchor = p?.anchor ?? null;
-  const anchorBad = Boolean(anchorApp) && Boolean(p?.anchorError);
+  const anchorBad = Boolean(p?.anchorError);
   const start = async () => {
     const t = words();
     if (!text.trim() || busy || locked || len.over || anchorBad) return;
@@ -787,11 +789,11 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
         <div className="px-sheet-h px-nw-head">
           <span className="px-ico" data-c="teal" aria-hidden><PlusCircle size={16} /></span>
           <h2 id={titleId}>New work</h2>
-          {anchorApp ? (
+          {anchorApp || anchor || anchorBad ? (
             // AN APP'S DOOR (AR-20): which app, which branch and which change Start builds onto.
             <span className="px-tag" data-testid="px-nw-anchor" data-tone={anchorBad ? "red" : undefined}
                   title={anchor ? `Builds onto ${anchor.app}'s branch ${anchor.branch} and its open change, as Change it does` : anchorBad ? p?.anchorError : "Finding the app…"}>
-              <GitBranch size={11} aria-hidden /> {anchor ? anchorWords(anchor) : anchorBad ? "that app is not in this project" : "finding the app…"}</span>
+              <GitBranch size={11} aria-hidden /> {anchor ? anchorWords(anchor) : anchorBad ? p?.anchorError : "finding the app…"}</span>
           ) : (
             <span className="px-tag px-hide-phone" title="Builds onto this project's branch"><GitBranch size={11} aria-hidden /> {ctx.overview.project.name} · its branch</span>
           )}
@@ -803,6 +805,14 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
           <button type="button" className="px-icon-btn" onClick={onClose} title="Close (Esc) · your words are kept as a draft" aria-label="Close" data-testid="px-nw-close"><X size={15} /></button>
         </div>
         <div className="px-nw-body">
+          <label>Application
+            <select className="px-input" aria-label="Application to change" value={appPick} onChange={(event) => setAppPick(event.target.value)}>
+              <option value="">{p?.appChoices?.length === 1 ? `Use ${p.appChoices[0].app}` : p?.appChoices?.length ? "Choose an application" : "No app yet: build a new one"}</option>
+              {anchorApp && !p?.appChoices?.some((item) => item.runId === anchorApp) ? <option value={anchorApp}>{anchor?.app || anchorApp}</option> : null}
+              {p?.appChoices?.map((item) => <option key={item.runId} value={item.runId}>{item.app}</option>)}
+              <option value="__new__">Create a new app</option>
+            </select>
+          </label>
           <div className="px-nw-main px-nw-top">
             {kinds}
             {showWords || wordsOpen ? box_ : folded}

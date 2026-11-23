@@ -707,6 +707,51 @@ def _change_state(connection: Connection, run: Mapping[str, Any]) -> Optional[st
     return state if state in (pr_merge.MERGED, pr_merge.CLOSED) else "open"
 
 
+def app_choices(connection: Connection, project_id: str) -> list[dict[str, str]]:
+    """The project's apps with a finished build, grouped the way every app view groups runs
+    (factory_view.group_into_apps over the non-internal window), newest first: {run_id, app},
+    run_id being the app's newest completed build."""
+    from ..code_task_service import is_internal_run, list_code_task_runs
+    from ..factory_view import FLOOR_RUNS, app_name, group_into_apps
+
+    runs = [r for r in list_code_task_runs(connection, project_id, FLOOR_RUNS,
+                                           exclude_internal=True) if not is_internal_run(r)]
+    out: list[dict[str, str]] = []
+    for group in group_into_apps(runs):
+        built = [r for r in group if str(r.get("status") or "") in ("completed", "succeeded")]
+        if built:
+            out.append({"run_id": str(built[0]["id"]), "app": app_name(built[0])})
+    return out
+
+
+def work_anchor(connection: Connection, project_id: str, app: Optional[str],
+                *, new_app: bool = False, infer: bool = True) -> Optional[dict[str, Any]]:
+    """The app New work builds onto: the named app (app_anchor), none for an explicit new app,
+    and with nothing named, when `infer` (the New work modal, its plan): the project's only
+    app, else a ValueError asking which — never a silent fresh build beside the app it was
+    meant to change. Without `infer` nothing named stays a fresh build, as every other caller
+    of POST …/work (chat cards, roadmap, onboarding, agents) has always had it."""
+    if new_app:
+        if (app or "").strip():
+            raise ValueError("Choose an existing app or create a new app, not both.")
+        return None
+    handle = (app or "").strip()
+    if not handle and not infer:
+        return None
+    if not handle:
+        choices = app_choices(connection, project_id)
+        if len(choices) > 1:
+            names = ", ".join(choice.get("app") or choice["run_id"] for choice in choices[:3])
+            more = f" and {len(choices) - 3} more" if len(choices) > 3 else ""
+            raise ValueError(
+                f"This project has {len(choices)} apps ({names}{more}). Pick one under "
+                "Application in New work, or pick Create a new app.")
+        if not choices:
+            return None
+        handle = choices[0]["run_id"]
+    return app_anchor(connection, project_id, handle)
+
+
 def app_anchor(connection: Connection, project_id: str, app: Optional[str]
                ) -> Optional[dict[str, Any]]:
     """THE APP NEW WORK BUILDS ONTO (AR-20): every "+ Add a feature" door names the app (`app=`,

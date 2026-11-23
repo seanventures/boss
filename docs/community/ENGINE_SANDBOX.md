@@ -64,7 +64,7 @@ To turn it off, remove the line from `.env`, run `boss start`, then unload the p
 ### What it allows
 
 - **seccomp** (`scripts/sandbox/engine-seccomp.json`). This is Docker's default profile ([moby/profiles](https://github.com/moby/profiles), Apache-2.0, vendored in `scripts/sandbox/vendor/` and checked by hash; nothing is downloaded at install time) plus three rules. `clone` and `unshare` are allowed only when they create a new user namespace. `mount`, `umount2` and `pivot_root` are allowed. Their arguments are pointers that seccomp cannot inspect, so the remaining guard is the kernel: each needs CAP_SYS_ADMIN in the user namespace that owns the mount, which a container process has only inside a user namespace it created itself. `sethostname`, `setns`, `clone3`, `bpf`, `keyctl` and every capability stay as in Docker's default.
-- **AppArmor** (`scripts/sandbox/boss-engine.apparmor`). The container profile follows Docker's `docker-default`: mounts denied, the same `/proc` and `/sys` rules. Unlike `docker-default`, it declares the AppArmor 4.0 ABI. That matters because `docker-default` declares no ABI, so AppArmor 4 does not mediate user namespaces under it. On Ubuntu 24.04 with only the seccomp profile, any process in the container can create one. Under `boss-engine` they are refused (`unshare -U` fails). Only executing Codex's bundled bubblewrap (or `/usr/bin/bwrap`) moves a process into the child profile `engine_sandbox`, which may create user namespaces, mount and pivot_root. On an AppArmor host, use `seccomp+apparmor`, not `seccomp` alone. On AppArmor 3 the loader drops the ABI line and the `userns` rule; AppArmor 3 does not mediate user namespaces.
+- **AppArmor** (`scripts/sandbox/boss-engine.apparmor`). The control-plane profile follows Docker's `docker-default`: mounts denied, the same `/proc` and `/sys` rules, plus the AppArmor 4.0 ABI to mediate user namespaces. The fixed, root-owned BOSS launcher enters `engine_sandbox` before dropping to the build uid and setting `no_new_privs`. Build workloads inherit this profile, including its namespace, mount and pivot-root permissions; they do not gain host capabilities. This avoids attempting a privilege-increasing profile transition when Codex later executes bubblewrap. Direct execution of the bundled bubblewrap or `/usr/bin/bwrap` also enters that profile. On an AppArmor host, use `seccomp+apparmor`, not `seccomp` alone. On AppArmor 3 the loader drops the ABI line and the `userns` rule; AppArmor 3 does not mediate user namespaces.
 
 ### The honest attack surface
 
@@ -73,6 +73,24 @@ Unprivileged user namespaces are a real kernel attack surface. Bugs in overlayfs
 What still holds: no capability is added, each build runs as its own unprivileged uid, a new network namespace has no route out, so the per-build egress fence still applies, and on a Mac the Colima or Docker Desktop VM separates all of it from the Mac. What a kernel exploit from inside would reach: the container's root, which has NET_ADMIN to manage that fence, and the API's environment. Keep the host kernel patched. Turn it on only when an engine needs it, and review the two profiles before you do.
 
 When a future Codex release needs a call these profiles do not allow, the check in `boss doctor` and Setup fails and names it. BOSS never widens the profiles on its own.
+
+### Trusted launcher and unattended repair
+
+With inner-sandbox support enabled, the launcher permission applies automatically to
+isolated workloads, not to a particular named agent or logged-in user. The launcher
+remains root-owned, executable only by the BOSS group, and restricted to its fixed uid
+pool and operations. AppArmor stays enforced; per-build uid isolation, zero effective
+workload capabilities, `no_new_privs`, seccomp and the egress fence remain in place.
+The tradeoff is explicit: all launcher workloads can use user namespaces, rather than
+only commands that first execute bubblewrap. They still cannot modify host policy.
+
+An older profile can let a direct `codex sandbox` smoke check pass while an isolated
+build fails with an AppArmor exec denial marked `no new privs`. Load this release's
+profile through the administrator-controlled loader, then run Setup's engine check.
+Only its successful isolated file-write and command proof clears `cannot_write`.
+Do not grant agents unrestricted sudo, Docker socket access, or permission to rewrite
+AppArmor policies. Host security changes remain administrator-controlled; application
+repairs use the existing bounded recovery and governance rules.
 
 ## Managed engine policies
 

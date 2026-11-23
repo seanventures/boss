@@ -155,6 +155,7 @@ export type PlanDetail = WorkPlan & {
   steps: Step[]; optionDetail: Record<string, OptionDetail>; defaults: NwDefaults | null;
   /** Only when an app was asked for: the anchor, or why that app is not one of this project's. */
   anchor?: Anchor | null; anchorError?: string;
+  appChoices?: { runId: string; app: string }[];
 };
 
 /** THE BRIEF'S LIMIT (AR-21): the engine's MAX_DIRECTIVE (services/project_experience/add_project.py)
@@ -213,6 +214,7 @@ export const parsePlanDetail = (v: unknown): PlanDetail => {
     ...base,
     ...("anchor" in x ? { anchor: parseAnchor(x.anchor) } : {}),
     ...(s(x.anchor_error) ? { anchorError: s(x.anchor_error) } : {}),
+    appChoices: a(x.app_choices).map((item) => ({ runId: s(o(item).run_id), app: s(o(item).app) })),
     steps: a(x.steps).map((z) => ({ id: s(o(z).id), label: s(o(z).label), you: o(z).you === true, approve: s(o(z).approve), agent: parseAgent(o(z).agent) })).filter((z) => z.label),
     optionDetail,
     defaults: d ? {
@@ -226,8 +228,8 @@ export const parsePlanDetail = (v: unknown): PlanDetail => {
   };
 };
 
-export const planDetailPath = (projectId: string, kind: string, workflowKey = "", app = "") =>
-  `${PX_PATHS.workPlan(projectId, kind, workflowKey)}&detail=true${app ? `&app=${encodeURIComponent(app)}` : ""}`;
+export const planDetailPath = (projectId: string, kind: string, workflowKey = "", app = "", newApp = false) =>
+  `${PX_PATHS.workPlan(projectId, kind, workflowKey)}&detail=true${app ? `&app=${encodeURIComponent(app)}` : ""}${newApp ? "&new_app=true" : ""}`;
 
 // ── Start and Add to Next ────────────────────────────────────────────────────────────────────
 export type IssueChoice = { mode: "none" } | { mode: "link"; url: string } | { mode: "create" };
@@ -236,6 +238,9 @@ export type StartFields = {
   workflow_key?: string; start_anyway?: string[];
   /** The app it builds onto (AR-20): the door's `app`, sent as is; the engine resolves it. */
   app?: string;
+  new_app?: boolean;
+  /** Nothing named: the engine builds onto the only app, or asks which (never a fresh build). */
+  infer_app?: boolean;
   /** The profile it runs on (BOSSAPP-1334): lean | balanced | strict. */
   profile?: string;
 };
@@ -251,6 +256,8 @@ export function workBody(kind: WorkKind, text: string, f: StartFields): R {
     ...(f.workflow_key ? { workflow_key: f.workflow_key } : {}),
     ...(f.start_anyway?.length ? { start_anyway: f.start_anyway } : {}),
     ...(f.app ? { app: f.app } : {}),
+    ...(f.new_app ? { new_app: true } : {}),
+    ...(f.infer_app ? { infer_app: true } : {}),
     ...(f.profile ? { profile: f.profile } : {}),
   };
 }

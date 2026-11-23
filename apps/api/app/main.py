@@ -28145,6 +28145,24 @@ def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = Non
     # it, would otherwise convene a panel and fail only at the build.
     extends: Optional[dict] = None
     extends_run_id = str(run_input.get("extends_run_id") or "").strip()
+    preview_anchor = str(run_input.get("preview_id") or "").strip()
+    if preview_anchor and not extends_run_id:
+        # A REPAIR STARTED FROM A PREVIEW continues that preview's build. A preview of this
+        # project with no build behind it (started from a branch) has no lineage: the start
+        # goes on as before, the preview id ignored.
+        with _tx() as connection:
+            seen_preview = connection.execute(text(
+                "SELECT id, run_id FROM app_previews WHERE id = :id AND project_id = :project"),
+                {"id": preview_anchor, "project": project_id}).first()
+        if not seen_preview:
+            raise HTTPException(status_code=404, detail=(
+                "That preview is not in this project. Open the app in Work and start the "
+                "repair from its build."))
+        extends_run_id = str(seen_preview[1] or "")
+        if extends_run_id and (run_input.get("base_branch") or run_input.get("release_base_sha")):
+            raise HTTPException(status_code=422, detail=(
+                "A preview repair that sets base_branch or release_base_sha must also name "
+                "extends_run_id, the build to repair. Start it from that build's page instead."))
     run_input.pop("extends_run_id", None)
     if extends_run_id:
         from boss_engine.services.code_task_service import (

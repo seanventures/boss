@@ -29,6 +29,7 @@ import {
 import type { RowKey, SetupView } from "../../lib/setup-types";
 import { BuildDatabaseRow } from "./build-database-row";
 import { BuildSpeedRow } from "./build-speed-row";
+import { AgentCapacityRow } from "./agent-capacity-row";
 import { EmbeddingModelRow } from "./embedding-model-row";
 import { CapacityRow } from "./capacity-row";
 import { ModelsRow } from "./models-row";
@@ -374,6 +375,7 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
           <div className="su-adv-item" ref={ref("ci")}><Why id="ci" /><CiPermission /></div>
           <div className="su-adv-item" ref={ref("build_database")}><Why id="build_database" /><BuildDatabaseRow /></div>
           <div className="su-adv-item" ref={ref("build_speed")}><Why id="build_speed" /><BuildSpeedRow /></div>
+          <div className="su-adv-item"><AgentCapacityRow /></div>
           <div className="su-adv-item" ref={ref("toolchains")}><Why id="toolchains" /><ToolchainsRow /></div>
           {view.harness_adapters?.length ? (
             <div className="su-adv-item"><Why id="adapters" /><HarnessAdaptersRow /></div>

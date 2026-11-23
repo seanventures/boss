@@ -1049,6 +1049,24 @@ def _strip_cd_into_itself(directory: Path, command: str) -> str:
 
 def _declared_command_in(directory: Path) -> Optional[str]:
     """The run command declared in ONE directory, from either form, or None."""
+    report = directory / "boss.preview.report"
+    if report.is_file():
+        from .report_preview import report_path
+
+        example = ('write it as {"path": "report.html", "prepare": "<command that writes '
+                   'report.html>"}')
+        try:
+            config = json.loads(report.read_text(errors="replace"))
+        except ValueError as error:
+            raise ValueError(f"boss.preview.report is not valid JSON ({error}); {example}") from None
+        if not isinstance(config, dict) or not isinstance(config.get("path"), str):
+            raise ValueError(f"boss.preview.report has no HTML path; {example}")
+        prepare = config.get("prepare", "")
+        if not isinstance(prepare, str):
+            raise ValueError(f"boss.preview.report's prepare must be one shell command; {example}")
+        report_path(directory, config["path"])
+        source = Path(__file__).with_name("report_preview.py").read_text()
+        return shlex.join(["python3", "-c", source, config["path"], "--prepare", prepare])
     hint = directory / RUN_DECLARATION_FILE
     if hint.is_file():
         command = hint.read_text(errors="ignore").strip()
@@ -1086,7 +1104,7 @@ def find_run_declaration(workdir: Path, changed: Optional[list[str]] = None
     owned = [str(c).strip() for c in (changed or []) if str(c).strip()]
     for rel in owned:
         name = rel.rsplit("/", 1)[-1]
-        if name not in (RUN_DECLARATION_FILE, "package.json"):
+        if name not in (RUN_DECLARATION_FILE, "boss.preview.report", "package.json"):
             continue
         rel_dir = rel.rsplit("/", 1)[0] if "/" in rel else "."
         directory = workdir if rel_dir == "." else workdir / rel_dir
@@ -2615,6 +2633,12 @@ def _serve_failure(log_path: str, port_hint: int, health_path: str = "/") -> str
 # What the implement stage is told to produce. Kept here, beside the reader, so the prompt and
 # find_run_declaration cannot describe two different files.
 RUN_DECLARATION_INSTRUCTION = (
+    "- GENERATED HTML REPORTS: a CLI can provide a browser preview without becoming a web app. "
+    "Write boss.preview.report in its app directory: a JSON object with path (a relative HTML "
+    "file) and prepare (a command that generates it from checked-in demo fixtures in a fresh clone). "
+    "BOSS runs prepare and serves only that HTML file over HTTP; use self-contained HTML. "
+    "Do not use xdg-open/open or boss.preview.command for this report mode. "
+    "Generating a preview is not proof that functional acceptance tests pass.\n"
     "- HOW TO RUN IT (required if what you built serves HTTP — a web app, API or service): "
     "write a `boss.preview.command` file containing ONE shell command that starts the app "
     "and serves HTTP on the port in the `PORT` environment variable (bind 0.0.0.0). Put it in "
@@ -2675,7 +2699,7 @@ def _proof_tree(workdir: Path) -> Path:
 # them (docs, tests, fixtures) changed nothing the serve proof could catch.
 _RUNNABLE_SUFFIXES = (".py", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".html", ".vue",
                       ".svelte")
-_RUNNABLE_NAMES = frozenset({"package.json", RUN_DECLARATION_FILE, DECLARED_APP_FILE,
+_RUNNABLE_NAMES = frozenset({"package.json", RUN_DECLARATION_FILE, "boss.preview.report", DECLARED_APP_FILE,
                              "Procfile", "requirements.txt", "pyproject.toml"})
 
 
@@ -2921,12 +2945,16 @@ def prove_app_serves(workdir: Path, changed: Optional[list[str]], *,
         # an undeclared build is never launched — and never failed for what the repository
         # holds — on the strength of a guess. how_app_runs asks find_run_declaration the same
         # question with the same files first, so a declaration here is the command run below.
-        if not known_service and find_run_declaration(tree, files or None) is None:
-            return _not_a_service(
-                "the build wrote no boss.preview.command, so its tests are its proof")
-
         try:
+            # A MALFORMED boss.preview.report fails the proof with its own sentence (how to
+            # write it), never as an exception out of the build step.
+            if not known_service and find_run_declaration(tree, files or None) is None:
+                return _not_a_service(
+                    "the build wrote no boss.preview.command, so its tests are its proof")
             plan = how_app_runs(tree, files or None)
+        except ValueError as exc:
+            record.update(ok=False, source="declared", error=str(exc))
+            return record
         except AmbiguousAppError as exc:
             record.update(ok=False, source="ambiguous", error=(
                 f"this build serves HTTP but did not declare how to run it, and the "

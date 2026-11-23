@@ -121,6 +121,20 @@ def test_namespaces_are_granted_only_in_the_helper_child_profile():
     assert transitions and all("*" not in t for t in transitions)
 
 
+def test_trusted_launcher_transitions_before_enforcing_no_new_privileges():
+    base, child = _apparmor_parts()
+    helper = "/usr/local/libexec/boss/boss-sandbox-exec"
+    assert f"{helper} Cx -> engine_sandbox," in base
+    assert "Cx ->" not in child
+    assert "file," in _rule_lines(child)
+    source = (ROOT / "scripts/sandbox/boss-sandbox-exec.c").read_text()
+    assert "prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0)" in source
+    assert "setresuid(uid, uid, uid)" in source
+    assert "setgroups(0, NULL)" in source
+    dockerfile = (ROOT / "Dockerfile.community").read_text()
+    assert f"chmod 0750 {helper}" in dockerfile
+
+
 def test_the_transition_covers_every_codex_platform_package_bundled():
     lock = json.loads((ROOT / "scripts/install/cli-lock/package-lock.json").read_text())
     triples = {"arm64": "aarch64-unknown-linux-musl", "x64": "x86_64-unknown-linux-musl"}

@@ -141,7 +141,7 @@ def project_work(project_id: str, state: Optional[str] = None, q: Optional[str] 
 @permit(P.PROJECT_READ, scope=Scope.project(path="project_id"))
 def project_work_plan(project_id: str, kind: str = "feature",
                       workflow_key: Optional[str] = None, detail: bool = False,
-                      app: Optional[str] = None) -> dict[str, Any]:
+                      app: Optional[str] = None, new_app: bool = False) -> dict[str, Any]:
     """Helm's plan for new work (screen 05): the workflow Start would run for this kind (or the
     one picked with "change"), its real steps as a strip, time and cost from this project's own
     history, and the workflows "change" offers. `detail` (the New work modal): the workflow's
@@ -162,12 +162,12 @@ def project_work_plan(project_id: str, kind: str = "feature",
         except LookupError as error:
             raise HTTPException(status_code=422, detail={
                 "error": "unknown_workflow", "message": str(error)}) from None
-        if (app or "").strip():
-            try:
-                out["anchor"] = new_work.app_anchor(connection, project_id, app)
-            except LookupError as error:
-                out["anchor"] = None
-                out["anchor_error"] = str(error)
+        out["app_choices"] = new_work.app_choices(connection, project_id)
+        try:
+            out["anchor"] = new_work.work_anchor(connection, project_id, app, new_app=new_app)
+        except (LookupError, ValueError) as error:
+            out["anchor"] = None
+            out["anchor_error"] = str(error)
         return out
 
 
@@ -254,6 +254,11 @@ class NewWorkBody(BaseModel):
     #: the app's key). Start then continues that app's lineage — its branch, its open PR — as
     #: the start door's `extends_run_id`; a name that is no app of this project is refused.
     app: Optional[str] = None
+    #: "Create a new app": never built onto an existing one.
+    new_app: bool = False
+    #: Nothing named: build onto the project's only app, or ask which (the New work modal
+    #: sends it). Unset, nothing named stays a fresh build, as it always was for every caller.
+    infer_app: bool = False
     #: THE PROFILE THE PERSON PICKED (BOSSAPP-1334): lean | balanced | strict, the build runs on
     #: it (run input `profile`, bound to the build step). Empty: the project's default.
     profile: Optional[str] = None
@@ -380,7 +385,11 @@ def project_new_work(project_id: str, payload: NewWorkBody, request: Request) ->
         # THE APP NAMED BY THE DOOR (AR-20): built onto, or refused — never a fresh build on
         # the default branch under a modal that said it was adding to the app.
         try:
-            anchor = new_work.app_anchor(connection, project_id, payload.app)
+            anchor = new_work.work_anchor(connection, project_id, payload.app,
+                                          new_app=payload.new_app, infer=payload.infer_app)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail={
+                "error": "app_selection_required", "message": str(error)}) from None
         except new_work.AnchorClosed as error:
             raise HTTPException(status_code=409, detail={
                 "error": "change_closed", "message": str(error)}) from None

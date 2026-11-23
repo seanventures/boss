@@ -855,7 +855,9 @@ def status(*, counts: Mapping[str, Any], attention: list[Mapping[str, Any]],
     if infra and str(infra.get("severity") or "") == "critical" and infra.get("status") != "resolved":
         # THE INFRA AGENT IS CLEANING (BOSSAPP-1157, LLD §6.2): between the budget and the host,
         # because it is the one red state BOSS is already fixing by itself.
-        return {"key": "infra_incident", "text": "Infra Agent is cleaning", "tone": "red",
+        from .storage_incidents import activity_text
+
+        return {"key": "infra_incident", "text": activity_text(infra), "tone": "red",
                 "tip": _clip(str(infra.get("cause_text") or
                                  "Storage is critical; work is paused at its checkpoints"))}
     if host.get("show") and host.get("severity") == "critical":

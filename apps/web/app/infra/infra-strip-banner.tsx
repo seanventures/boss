@@ -15,7 +15,7 @@ import { ArrowRight, Check } from "@phosphor-icons/react";
 
 import { useGate } from "../../components/gated";
 
-import { ACKNOWLEDGE_PERMISSION, acknowledgeIncident, clock, etaWords, gb, stripHeadline, stripSubline, useInfraIncident, type StorageIncident } from "../../lib/infra-storage";
+import { ACKNOWLEDGE_PERMISSION, acknowledgeIncident, clock, etaWords, gb, storageActivity, stripHeadline, stripSubline, useInfraIncident, type StorageIncident } from "../../lib/infra-storage";
 import { linkTo, navigate, plainClick } from "../agents/live-util";
 import { AgentAvatar } from "../agent-avatar";
 import { showToast } from "../client-forms";
@@ -56,7 +56,8 @@ export function InfraStripBannerView({ incident, actor, acked, onAcknowledge, bu
     return () => window.clearTimeout(t);
   }, []);
   if (state === "hidden") return null;
-  const step = incident.stepCount > 0 ? `step ${Math.min(incident.stepIndex, incident.stepCount)} of ${incident.stepCount}` : "";
+  const step = incident.plan.some(item => item.state === "active" || item.state === "waiting")
+    ? `step ${Math.min(incident.stepIndex, incident.stepCount)} of ${incident.stepCount}` : "";
   const eta = etaWords(incident.etaSeconds);
   if (state === "acknowledged") {
     const who = incident.acknowledgedBy ?? actor;
@@ -67,7 +68,7 @@ export function InfraStripBannerView({ incident, actor, acked, onAcknowledge, bu
         <span className="ia-line">
           <b>Storage {incident.severity === "warn" ? "low" : "critical"}</b>
           <span className="ia-sep" aria-hidden>·</span>
-          <span>{incident.status === "asking" ? "Infra Agent needs one answer" : incident.status === "resuming" ? "Infra Agent resuming work" : "Infra Agent cleaning"}</span>
+          <span>{storageActivity(incident)}</span>
           <span className="ia-sep" aria-hidden>·</span>
           <span data-testid="infra-strip-acked">acknowledged by {who}{when ? ` ${when}` : ""}</span>
           {sample ? <span className="ia-sample" data-testid="infra-strip-sample">Sample data</span> : null}
@@ -85,7 +86,7 @@ export function InfraStripBannerView({ incident, actor, acked, onAcknowledge, bu
         <span className="ia-sub" aria-live="off" data-testid="infra-strip-sub" data-more={[` · ${gb(incident.freedGb)} freed`, eta ? ` · ${eta}` : "", step ? ` · ${step}` : ""].join("")}>{stripSubline(incident)}</span>
       </span>
       <span className="ia-meta" aria-live="off" data-testid="infra-strip-meta">
-        <span className="ia-chip" data-tone="green"><Check size={11} weight="bold" aria-hidden />{gb(incident.freedGb)} freed</span>
+        <span className="ia-chip" data-tone={incident.freedGb > 0 ? "green" : "amber"}>{incident.freedGb > 0 ? <Check size={11} weight="bold" aria-hidden /> : null}{gb(incident.freedGb)} freed</span>
         {eta ? <span className="ia-chip" data-tone="amber">{eta}</span> : null}
         {step ? <span className="ia-chip" data-tone="blue">{step}</span> : null}
       </span>

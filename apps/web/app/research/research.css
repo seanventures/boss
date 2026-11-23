@@ -453,6 +453,9 @@
   display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 14px 16px; align-items: center;
 }
 .rp-cmp-body { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.rp-cmp-prd { grid-column: 1 / -1; min-width: 0; overflow-wrap: anywhere; }
+.rp-cmp-prd > section { min-width: 0; }
+.rp-cmp-prd .mono { white-space: normal; overflow-wrap: anywhere; }
 .rp-cmp-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .rp-cmp-title { font: 600 0.89474rem/1.3 var(--display); overflow-wrap: anywhere; }
 .rp-cmp-line { font-size: 0.68421rem; line-height: 1.5; color: var(--rp-muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }

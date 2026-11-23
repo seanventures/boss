@@ -4289,6 +4289,9 @@ def _perform_capability(
         # starts it from the app's branch and lineage. Read from the run input, which the start
         # endpoint validated, rather than bound by each workflow — every build step honours it.
         extends = str((context.get("input") or {}).get("extends_run_id") or "").strip()
+        preview_anchor = str((context.get("input") or {}).get("preview_id") or "").strip()
+        if preview_anchor:
+            inputs = {**inputs, "preview_id": preview_anchor}
         if extends:
             inputs = {**inputs, "extends_run_id": extends}
             # The preview the operator was looking at (validated by the start endpoint).

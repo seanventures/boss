@@ -995,6 +995,20 @@ def no_model_ask(failure: Mapping[str, Any], triage: Mapping[str, Any], *, refus
                    or "the step failed").strip().rstrip(".")
     who = (provider or "its provider").strip() or "its provider"
     out_of_credit = credit_exhausted(error)
+    if refused and not (triage.get("action") == ASK_PERSON and triage.get("question")):
+        # (BOSS's own reading that already is a question is asked as it stands, below.)
+        # THE MODEL ANSWERED, BADLY: not a missing connection, so never "Connect a model". Say
+        # what happened, that nothing was changed, and the two things a person can do.
+        hint = (f" BOSS's own reading: {str(triage.get('cause') or headline)[:200]}."
+                if triage.get("cause") else "")
+        return {"action": ASK_PERSON, "cause": headline[:300],
+                "reasoning": f"The recovery model answered, but its answer was rejected: {refused}"[:600],
+                "question": (f"{headline}. The recovery model's answer was unusable, so BOSS "
+                             f"changed nothing.{hint} Fix the cause and press Retry on this "
+                             "step; if the model keeps answering badly, pick another in "
+                             "Setup › Models.")[:600],
+                "after": "Press Retry on this step once the cause is fixed; recovery starts again.",
+                "evidence": [headline[:300], str(refused)[:300]]}
     why = (f"the model's answer was refused ({refused})" if refused else
            f"credit balance too low on {who}" if out_of_credit else
            "BOSS needs a connected model to decide how to recover this step, and none answered"
