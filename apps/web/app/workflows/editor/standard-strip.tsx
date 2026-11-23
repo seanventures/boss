@@ -94,7 +94,7 @@ export function StandardStrip({ meta, blocked, busy, offerOpen, onOfferOpen, onA
       ) : null}
 
       {standard.modified ? (
-        <details className="wf-std-changes" data-testid="wf-std-changes">
+        <details className="wf-std-changes" data-testid="wf-std-changes" open>
           <summary>Changes from standard · {n}</summary>
           <Changes changes={standard.changes} testId="wf-std-change-list" />
         </details>
