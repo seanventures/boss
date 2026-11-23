@@ -1225,6 +1225,37 @@ def actor_is_person(connection: Any, project_id: str, actor: str) -> bool:
     return kind in (None, "human")
 
 
+#: The one approval of a multi-repo change set (multirepo/change_sets.ACTION).
+CHANGE_SET_ACTION = "approve_change_set"
+
+
+def _refuse_checks_failing(connection: Any, row: Mapping[str, Any], actor: str, project_id: str, *,
+                           identity_ctx: Any, system_policy: bool, force: bool,
+                           delegated: Any) -> None:
+    """CHECKS FAILING (checks_failing.py): the PR (or a PR of the set) opened after its repair
+    rounds with BOSS's own checks still failing. It is merged only by a PERSON who says why (a
+    forced merge, whose note decisions.transition requires), never by a click, a policy or an
+    agent."""
+    from .checks_failing import merge_refusal, of_decision
+
+    failing = of_decision(row)
+    if failing is None:
+        return
+    # A person's approval delegate (identity/approval_delegations.py) decides this merge FOR
+    # them only when the grant carries `merge_to_release_branch` and the PR's base is the
+    # project's bound release branch — both checked by its authorize() before this runs.
+    by_delegate = (delegated is not None
+                   and getattr(delegated, "kind", None) == "merge_to_release_branch")
+    if system_policy or not (by_delegate or is_person(connection, project_id, actor,
+                                                      identity_ctx)):
+        raise CiGateRefused(
+            "person_approval_required",
+            merge_refusal(failing) + " Only a person signed in to BOSS can decide it.",
+            checks_failing=True)
+    if not force:
+        raise CiGateRefused("checks_failing", merge_refusal(failing), checks_failing=True)
+
+
 def refuse_approval(connection: Any, row: Mapping[str, Any], actor: str, *,
                     identity_ctx: Any = None, system_policy: bool = False,
                     force: bool = False, delegated: Any = None) -> None:
@@ -1233,6 +1264,12 @@ def refuse_approval(connection: Any, row: Mapping[str, Any], actor: str, *,
     rec = _rec(row)
     action = str(rec.get("action") or "")
     project_id = str(row.get("project_id") or "")
+    if action == CHANGE_SET_ACTION:
+        # A MULTI-REPO CHANGE'S ONE MERGE (multirepo/change_sets.py): when any of its PRs opened
+        # with its checks failing, the set card carries them, and merging the set is the same
+        # person's stated decision as a single PR's (below): never a policy, an agent or a click.
+        _refuse_checks_failing(connection, row, actor, project_id, identity_ctx=identity_ctx,
+                               system_policy=system_policy, force=force, delegated=delegated)
     if action not in DEPLOY_ACTIONS | MERGE_ACTIONS and not rec.get("requires_person_approval"):
         return
     changed = ci_changed_for(connection, project_id, rec)
@@ -1267,27 +1304,8 @@ def refuse_approval(connection: Any, row: Mapping[str, Any], actor: str, *,
         if held is not None:
             raise CiGateRefused("review_comments_open", held["reason"],
                                 open_comments=held["open_comments"])
-        # CHECKS FAILING (checks_failing.py): the PR opened after its repair rounds with BOSS's
-        # own checks still failing. It is merged only by a PERSON who says why (a forced merge,
-        # whose note decisions.transition requires), never by a click, a policy or an agent.
-        from .checks_failing import merge_refusal, of_decision
-
-        failing = of_decision(row)
-        # A person's approval delegate (identity/approval_delegations.py) decides this merge FOR
-        # them only when the grant carries `merge_to_release_branch` and the PR's base is the
-        # project's bound release branch — both checked by its authorize() before this runs.
-        by_delegate = (delegated is not None
-                       and getattr(delegated, "kind", None) == "merge_to_release_branch")
-        if failing is not None:
-            if system_policy or not (by_delegate or is_person(connection, project_id, actor,
-                                                              identity_ctx)):
-                raise CiGateRefused(
-                    "person_approval_required",
-                    merge_refusal(failing) + " Only a person signed in to BOSS can decide it.",
-                    checks_failing=True)
-            if not force:
-                raise CiGateRefused("checks_failing", merge_refusal(failing),
-                                    checks_failing=True)
+        _refuse_checks_failing(connection, row, actor, project_id, identity_ctx=identity_ctx,
+                               system_policy=system_policy, force=force, delegated=delegated)
     wait = latest_wait(connection, project_id, pull_request_url=rec.get("pull_request_url"),
                        shas=_shas(rec))
     if wait is not None and wait["status"] in RECHECKABLE:

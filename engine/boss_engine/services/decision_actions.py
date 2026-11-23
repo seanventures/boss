@@ -905,6 +905,23 @@ def allowed_actions(decision: Mapping[str, Any]) -> list[dict[str, Any]]:
         # ONE DECISION FOR EVERY PR OF A MULTI-REPO CHANGE: no per-PR approval exists, so there
         # is no Delegate either — the set is approved as one by someone who may approve it.
         n = len(_rec(decision).get("pull_requests") or [])
+        from .checks_failing import of_decision
+
+        if of_decision(decision) is not None:
+            # CHECKS FAILING ON A PR OF THE SET (change_sets.set_checks_failing): the merge is a
+            # person's stated decision, sent as a forced merge with their reason
+            # (ci_gate.refuse_approval refuses anything else); keeping it blocked is the other.
+            return [
+                _action("approve", f"Merge all {n} with checks failing" if n else
+                        "Merge with checks failing", "reject",
+                        "Merges every pull request of the set although BOSS's checks are failing on "
+                        "some of them. Say why: your reason is recorded with the merge.", needs="note"),
+                _action("revise", "Send back", "neutral",
+                        "Every pull request gets a fix build from your note; the set is reviewed and "
+                        "asked again.", needs="note"),
+                _action("reject", "Keep blocked", "reject",
+                        "Nothing is merged or deployed. The pull requests stay open."),
+            ]
         return [
             _action("approve", f"Approve and ship all {n}" if n else "Approve and ship", "approve",
                     "Merges every pull request of the set at the reviewed commits, in dependency order, "

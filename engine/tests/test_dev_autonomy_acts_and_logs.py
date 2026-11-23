@@ -133,6 +133,22 @@ def test_a_merge_into_a_branch_that_ships_to_production_asks(eng, project):
     assert not main.acts and main.cls == autonomy_gate.ASK_PROD_RELEASE
 
 
+def test_a_merge_with_failing_checks_is_never_decided_by_autonomy(eng, project):
+    from boss_engine.services import checks_failing
+
+    red = checks_failing.collect(["tests_pass", "security_clean"])
+    assert red["gates"][0]["gate"] == "security_clean"          # the record the build writes
+    with eng.begin() as c:
+        failing = autonomy_gate.route(c, {"project_id": project, "recommendation": {
+            "action": "review_pull_request", "pr_base": "rel/rc11", "repo": "o/unknown",
+            "checks_failing": red}})
+        green = autonomy_gate.route(c, {"project_id": project, "recommendation": {
+            "action": "review_pull_request", "pr_base": "rel/rc11", "repo": "o/unknown"}})
+    assert not failing.acts and failing.cls == autonomy_gate.EXPLICIT_STOP
+    assert "checks are failing" in failing.why
+    assert green.acts
+
+
 def test_a_stop_a_person_set_is_honoured(eng, project):
     settings = get_settings()
     with eng.begin() as c:

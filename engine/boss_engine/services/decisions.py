@@ -1209,6 +1209,19 @@ class DecisionService:
                 change_sets.on_decision(connection, row, status="approved", actor=actor, jobs=self.jobs)
             except MultiRepoError as refused:
                 raise InvalidDecisionTransitionError(refused.message) from refused
+            from . import checks_failing as _checks_failing
+
+            _failing = _checks_failing.of_decision(row)
+            if _failing is not None and force:
+                # A PERSON DECIDED TO MERGE THE SET WITH CHECKS FAILING (ci_gate.refuse_approval
+                # let only that through): who, why, which checks, and whether security was one.
+                emit_event(
+                    connection, row["project_id"], _checks_failing.MERGE_EVENT, actor,
+                    "decision", row["id"],
+                    {"reason": (note or "").strip()[:500],
+                     "failing_gates": _checks_failing.gate_names(_failing),
+                     "security": bool(_failing.get("security")),
+                     "change_set_id": recommendation.get("change_set_id")})
             return
         if action == "waive_finding":
             # A P0 WAIVE (finding_overrides, SPEC §3): only the person it names approves it; the

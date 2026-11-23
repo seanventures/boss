@@ -432,6 +432,15 @@ def route(connection: Any, decision: Mapping[str, Any], *, policy: Any = None) -
     stop = _explicit_stop(action, rec)
     if stop:
         return Route("ask", EXPLICIT_STOP, stop, rule.agent, rule.undo, policy=pol)
+    if rule.scope == "merge":
+        from .checks_failing import of_decision
+
+        if of_decision(decision) is not None:
+            # CHECKS FAILING (checks_failing.py): merging over red checks is a person's stated
+            # decision with a written reason; dev autonomy never makes it. The follow-up build
+            # fixes the checks and the merge card comes back green.
+            return Route("ask", EXPLICIT_STOP, "its checks are failing; merging anyway needs a "
+                         "person's reason", rule.agent, rule.undo, policy=pol)
     two = _two_person_tier(decision, rec)
     if two is not None:
         # THE TWO-PERSON RULE (identity/approvals.TWO_PERSON_TIERS). Dev autonomy decides through
