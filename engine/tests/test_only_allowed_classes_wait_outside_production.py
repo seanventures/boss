@@ -37,6 +37,80 @@ def test_the_allowed_waits_are_exactly_the_operators_four_plus_explicit_stops():
     assert autonomy_gate.ALLOWED_DEV_WAITS == PINNED_ALLOWED_DEV_WAITS
 
 
+#: EVERY CARD THAT STILL WAITS OUTSIDE PRODUCTION, BY NAME. Moving an action into a wait class
+#: (or adding one) fails here until this list is edited, next to the operator's words: that edit
+#: is the review of a new ask.
+PINNED_WAITS = {
+    "ask_credential": {
+        "configure_supported_channel", "configure_target_github_and_retry_phase",
+        "provide_github_token", "provide_openai_api_key", "retry_when_secret_set",
+        "review_entitlement_sources", "sign_in_to_subscription_again", "store_proposed_secret",
+        # Raised only when no safe move is left: a sign-in, a host or a key in a person's hand.
+        "stuck_work_needs_person"},
+    "ask_prod_release": {
+        "github.community.merge_authorization", "promote_agent_deployment",
+        # Widening egress or a data boundary reaches outside; a changed tool definition is
+        # untrusted; a standing grant or an autonomy raise is authority that reaches production.
+        "allow_repository_or_change_clone_target", "rules_forbidden",
+        "reclassify_or_configure_approved_boundary_adapter", "review_tool_change",
+        "grant_builder_authority", "role.autonomy_change"},
+    "ask_spend": {
+        "approve_budget_increase_or_accept_degraded_mode", "approve_initiative_budget",
+        "budget_denied", "budget_tier2_frozen", "configure_or_enable_infra_provisioning",
+        "increase_allocation_or_defer", "increase_budget_or_defer",
+        "increase_budget_or_defer_work", "model_capacity_denied", "model_capacity_exhausted",
+        "raise_cap_or_wait_for_headroom", "restore_model_capacity_or_raise_budget",
+        "review_cost_anomaly", "review_provider_spend_kill_switch",
+        "set_BOSS_INFRA_REAL_PROVISION_ALLOWED",
+        # A paid or host-effecting call whose outcome is unknown: approving re-runs it.
+        "architecture_reconciliation", "conversation_reconciliation",
+        "discovery_reconciliation", "reconcile_legacy_model_exposure",
+        "reconcile_legacy_provider_exposure", "review_model_spend_and_host_effects_before_retry",
+        "review_model_spend_and_receipts_before_retry", "typed_decision_lease_expired",
+        "typed_decision_reconciliation", "verify_provider_outcome_before_retry"},
+    "explicit_stop": {"review_always_on_build"},
+}
+PINNED_GATE_WAITS = {"agent_work": "explicit_stop", "promote_config": "ask_prod_release",
+                     "social_publish": "ask_prod_release"}
+PINNED_KIND_WAITS = {"app_secret_live": "ask_credential"}
+
+
+def test_the_cards_that_wait_outside_production_are_exactly_the_pinned_ones():
+    found: dict[str, set[str]] = {c: set() for c in PINNED_ALLOWED_DEV_WAITS}
+    for action, rule in autonomy_gate.ACTIONS.items():
+        if rule.cls in autonomy_gate.ALLOWED_DEV_WAITS:
+            found[rule.cls].add(action)
+    assert found == PINNED_WAITS
+    assert {k: r.cls for k, r in autonomy_gate.GATES.items()
+            if r.cls in autonomy_gate.ALLOWED_DEV_WAITS} == PINNED_GATE_WAITS
+    assert {k: r.cls for k, r in autonomy_gate.KINDS.items()
+            if r.cls in autonomy_gate.ALLOWED_DEV_WAITS} == PINNED_KIND_WAITS
+    for prefix, rule in autonomy_gate.PREFIXES.items():
+        # configure_or_enable_<provider>: turning a channel provider on is a credential.
+        assert (prefix, rule.cls) == ("configure_or_enable_", "ask_credential")
+
+
+#: Producers the scan cannot read an action from, each with what its card carries. A new one
+#: fails until it is read here.
+UNRESOLVED_OK = {
+    # agent_loop's held calls: action "resume_agent_run" written before **bind_held_call,
+    # which adds the call's binding and no `action` key.
+    "engine/boss_engine/services/agent_loop.py",
+    # config_deploy: action is governed.DECISION_ACTION ("deploy_host"), classified.
+    "engine/boss_engine/services/config_deploy.py",
+}
+
+
+def test_no_producer_writes_a_card_the_autonomy_check_cannot_read():
+    unread = sorted({f.where.rsplit(":", 1)[0] for f in scan.ALL_FINDINGS if f.unresolved}
+                    - UNRESOLVED_OK)
+    assert not unread, f"read these producers' actions in the scan: {unread}"
+    from boss_engine.services import governed_host_deploy
+
+    assert governed_host_deploy.DECISION_ACTION in autonomy_gate.ACTIONS
+    assert "resume_agent_run" in autonomy_gate.ACTIONS
+
+
 def _produced_actions() -> set[str]:
     out = set()
     for found in scan.ALL_FINDINGS:
@@ -54,26 +128,87 @@ def test_every_card_boss_writes_has_an_autonomy_class():
                          "/ ask_prod_only, or one of the allowed waits): " + ", ".join(missing))
 
 
-def test_every_gate_capability_has_a_class():
-    gates = [c.key for c in workflow_capabilities.CAPABILITIES.values()
-             if c.is_gate or c.risk_tier >= workflow_capabilities.MANUAL_APPROVAL_RISK_FLOOR]
-    for key in gates:
-        rule = autonomy_gate.rule_for({"recommendation": {"capability": key}})
-        assert rule is not None, key
-        assert rule.cls in autonomy_gate.ACTS_IN_DEV | autonomy_gate.ALLOWED_DEV_WAITS, key
+#: The cards that write no `action` (scan.NO_ACTION_BY_DESIGN), each as its producer writes it.
+NO_ACTION_SHAPES = {
+    ("engine/boss_engine/services/sre_runbooks.py", "_hold_decision"):
+        {"kind": "sre_runbook"},
+    ("engine/boss_engine/services/canonical.py", "_create_meeting_decision"):
+        {"meeting_id": "mtg_1", "summary": "x"},
+    ("engine/boss_engine/templates/secrets.py", "_live_decision"):
+        {"kind": "app_secret_live"},
+    ("engine/boss_engine/services/ambient/board.py", "needs_you"):
+        {"action": "incident_squad.mitigate", "work_item_id": "w", "asked_by": "a"},
+    ("engine/boss_engine/services/ambient/board.py", "needs_you_batch"):
+        {"action": "anything_an_agent_asks", "work_item_id": "w", "asked_by": "a"},
+    ("engine/boss_engine/services/ambient/asks.py", "raise_card"):
+        {"action": "ambient_card", "work_item_id": "w", "asked_by": "a"},
+}
 
 
-@pytest.mark.parametrize("action", sorted(autonomy_gate.ACTIONS))
-def test_no_class_waits_outside_production_unless_it_is_allowed(action):
-    rule = autonomy_gate.ACTIONS[action]
-    assert rule.cls in autonomy_gate.ACTS_IN_DEV | autonomy_gate.ALLOWED_DEV_WAITS, (
-        f"{action}: class {rule.cls!r} would wait for a person outside production")
+def test_every_card_without_an_action_is_classified_by_its_shape(monkeypatch):
+    assert set(NO_ACTION_SHAPES) == set(scan.NO_ACTION_BY_DESIGN)
+    _dev_world(monkeypatch, prod=False)
+    for where, rec in NO_ACTION_SHAPES.items():
+        assert autonomy_gate.rule_for({"recommendation": rec}) is not None, where
+        found = autonomy_gate.route(None, {"project_id": "p", "recommendation": rec})
+        assert found.cls != "unclassified", where
+        assert found.acts or found.cls in autonomy_gate.ALLOWED_DEV_WAITS, (where, found)
 
 
-def _dev_world(monkeypatch, *, prod: bool):
+def test_every_catalogue_gate_capability_is_listed_by_name():
+    """No catalogue gate falls to the custom-step fallback (GATE_DEFAULT)."""
+    gates = {c.key for c in workflow_capabilities.CAPABILITIES.values()
+             if c.is_gate or c.risk_tier >= workflow_capabilities.MANUAL_APPROVAL_RISK_FLOOR}
+    assert gates <= set(autonomy_gate.GATES), sorted(gates - set(autonomy_gate.GATES))
+
+
+#: Card fields that make a card wait whatever its class, and the modules that write them.
+PERSON_FORCING_KEYS = ("explicit_stop", "approval_mode_requested", "requires_person",
+                       "requires_person_approval", "ci_changed")
+PINNED_PERSON_FORCING_WRITERS = {
+    "apps/api/app/main.py", "apps/api/app/routers/ci.py",
+    "engine/boss_engine/identity/approval_delegations.py",
+    "engine/boss_engine/services/agent_loop.py", "engine/boss_engine/services/autonomy_gate.py",
+    "engine/boss_engine/services/ci_gate.py", "engine/boss_engine/services/meeting_service.py",
+    "engine/boss_engine/services/ruleset_changes.py",
+    "engine/boss_engine/services/skill_catalogue.py",
+    "engine/boss_engine/services/software_factory.py",
+    "engine/boss_engine/services/work_agreement.py",
+    "engine/boss_engine/services/workflow_capabilities.py",
+    "engine/boss_engine/services/workflow_capability_runner.py",
+    "engine/boss_engine/services/workflow_custom_steps.py",
+    "engine/boss_engine/services/workflows.py", "engine/boss_engine/tools/builtin.py",
+}
+
+
+def test_the_modules_that_can_force_a_wait_are_pinned():
+    from pathlib import Path
+
+    root = Path(scan.ROOT)
+    found = set()
+    for base in ("engine/boss_engine", "apps/api/app"):
+        for path in (root / base).rglob("*.py"):
+            text = path.read_text(encoding="utf-8")
+            if any(f'"{k}"' in text for k in PERSON_FORCING_KEYS):
+                found.add(str(path.relative_to(root)))
+    assert found == PINNED_PERSON_FORCING_WRITERS, (
+        "a module now writes (or stops writing) a key that makes a card wait: review it and "
+        f"edit this list. new: {sorted(found - PINNED_PERSON_FORCING_WRITERS)}, gone: "
+        f"{sorted(PINNED_PERSON_FORCING_WRITERS - found)}")
+
+
+def _dev_world(monkeypatch, *, prod: bool) -> list:
+    """The default policy, and the resolver answering `prod` — recording the scope each card
+    hands it, so a test can check the card asked about the right place."""
     monkeypatch.setattr(autonomy_policy, "load", lambda *a, **k: autonomy_policy.DEFAULT)
     verdict = production.Verdict(prod, True, "prod" if prod else "staging", "test", "test")
-    monkeypatch.setattr(production, "resolve", lambda *a, **k: verdict)
+    scopes: list = []
+
+    def resolve(connection, scope, **kwargs):
+        scopes.append(dict(scope))
+        return verdict
+    monkeypatch.setattr(production, "resolve", resolve)
+    return scopes
 
 
 @pytest.mark.parametrize("action", sorted(autonomy_gate.ACTIONS))
@@ -100,13 +235,40 @@ def test_in_production_every_prod_only_card_asks(action, monkeypatch):
 def test_production_still_asks_for_deploys_merges_and_infrastructure(action, monkeypatch):
     rule = autonomy_gate.ACTIONS[action]
     assert rule.cls == autonomy_gate.ASK_PROD_ONLY
-    _dev_world(monkeypatch, prod=True)
+    scopes = _dev_world(monkeypatch, prod=True)
     assert not autonomy_gate.route(None, {"project_id": "p", "recommendation": {
         "action": action, "target_id": "t", "pr_base": "main", "repo": "o/r"}}).acts
+    # ... and it asked about the right place.
+    expected = {"merge": {"pr_base": "main", "repo": "o/r"}, "install": {"install": True},
+                "target": {"target_id": "t"}}[rule.scope]
+    assert scopes == [expected], (action, scopes)
 
 
-def test_a_production_release_by_construction_always_asks(monkeypatch):
-    _dev_world(monkeypatch, prod=False)
+def test_a_merge_card_naming_no_base_asks_about_the_repositorys_default_branch(monkeypatch):
+    scopes = _dev_world(monkeypatch, prod=True)
+    autonomy_gate.route(None, {"project_id": "p", "recommendation": {
+        "action": "review_pull_request",
+        "pull_request_url": "https://github.com/acme/app/pull/7"}})
+    assert scopes == [{"pr_base": production.DEFAULT_BRANCH, "repo": "acme/app"}]
+
+
+def test_a_local_change_set_is_development_by_where_it_lives():
+    assert autonomy_gate._scope_of(  # noqa: SLF001
+        {"pull_request_url": "http://boss-local/local_p/app/changes/3"},
+        autonomy_gate.ACTIONS["review_pull_request"])["host"] == "localhost"
+
+
+def test_an_unknown_gate_capability_never_acts_in_production(monkeypatch):
+    """A custom step's gate (GATE_DEFAULT) at tier 3 asks; listed gates follow their rule."""
+    _dev_world(monkeypatch, prod=True)
+    found = autonomy_gate.route(None, {"project_id": "p", "risk_tier": 3, "recommendation": {
+        "capability": "a_custom_step"}})
+    assert not found.acts
+
+
+@pytest.mark.parametrize("prod", [False, True])
+def test_a_production_release_by_construction_always_asks(monkeypatch, prod):
+    _dev_world(monkeypatch, prod=prod)
     for capability in ("social_publish", "promote_config"):
         found = autonomy_gate.route(None, {"project_id": "p", "recommendation": {
             "capability": capability}})
