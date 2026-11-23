@@ -55,6 +55,10 @@ P0:
     # A deploy that promises a person always asks one, whatever the environment policy (D2)
     - engine/tests/test_a_promised_approval_is_always_asked.py
     - engine/tests/test_a_workflow_follows_a_retry.py
+    # Dev autonomy (BOSSAPP-1441): one answer to "is this production?" (an unlabelled remote is,
+    # a local install is not) and a policy a project can only make stricter
+    - engine/tests/test_one_production_resolver.py
+    - engine/tests/test_autonomy_policy_is_stricter_never_looser.py
     # Governed deploy + health
     - engine/tests/test_an_app_is_deployed_the_way_it_says.py
     - engine/tests/test_a_smoke_test_asks_the_deployment_not_a_url.py
