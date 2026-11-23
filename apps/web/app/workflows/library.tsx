@@ -672,12 +672,7 @@ function LibraryCard(p: CardProps) {
             <span className="wf-tag" data-kind="new-standard" data-testid={`wf-card-new-standard-${w.workflow_key}`}
                   title="BOSS shipped a newer version of this standard. Open it to review.">New standard</span>
           ) : null}
-          {installed ? (
-            <span className="wf-tag" data-kind="from" data-testid={`wf-card-from-market-${w.workflow_key}`}
-                  title={`${installed.pack_name}${installed.modified ? ". You changed it: updates wait for you." : ". Updates by itself."}`}>
-              from Marketplace · v{installed.version ?? "?"}{installed.modified ? " · Modified" : ""}
-            </span>
-          ) : w.version ? (
+          {installed ? null : w.version ? (
             <span className="wf-tag" title="Each save is a new version. Running work keeps its version.">
               v{w.version}
             </span>
@@ -699,6 +694,12 @@ function LibraryCard(p: CardProps) {
         </span>
       </header>
 
+      {installed ? (
+        <p className="wf-card-from" data-testid={`wf-card-from-market-${w.workflow_key}`}
+           title={`${installed.pack_name}${installed.modified ? ". You changed it: updates wait for you." : ". Updates by itself."}`}>
+          from Marketplace · v{installed.version ?? "?"}{installed.modified ? " · Modified" : ""}
+        </p>
+      ) : null}
       <p className="wf-card-desc" title={w.description || undefined} data-user-text>
         {w.description || "\u00a0"}
       </p>
