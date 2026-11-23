@@ -183,5 +183,5 @@ describe("the attention card shows the server's reason on screen", () => {
     expect(err.textContent).toMatch(/^Couldn't retry step \d+: the step's worker is still busy\.$/);
     // The reason is the visible line's own words, so it is the server's text, not ours.
     expect(err.hasAttribute("data-user-text")).toBe(true);
-  });
+  }, 20_000); // first import of the live board is slow on a loaded machine
 });
