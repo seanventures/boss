@@ -55,10 +55,10 @@
 
 /* ── Top bar ── */
 /* Two groups: who this is (Library, name, chips, the unsaved dot) and what you can do (undo
-   through ⋯). ONE ROW: the name gives way first (cut with an ellipsis, the whole name is its
-   tooltip), then the copy chip; the actions never move. Only a bar under 1100px (measured on the
-   bar, a container query, not the window) wraps, and then by group: the actions go to their own
-   line, aligned right, as one block. On a phone the actions split once more, Check · Start ·
+   through ⋯). ONE ROW while the whole name fits; when it does not, the bar wraps by group: the
+   actions go to their own line, aligned right, as one block (never under the identity). Only a
+   line too narrow for the identity itself cuts the name (ellipsis, the whole name is its tooltip)
+   and wraps its chips under it. On a phone the actions split once more, Check · Start ·
    Save · ⋯ staying together, so ⋯ is never left alone on a line. */
 .wf-topbar {
   position: sticky; top: 0; z-index: 10;
@@ -75,15 +75,24 @@
 .wf-bar-identity {
   display: flex; align-items: center; gap: 8px;
   flex: 1 1 auto; min-width: 0;
+  flex-wrap: wrap; row-gap: 6px;
 }
 .wf-bar-identity > * { flex: none; white-space: nowrap; }
 /* THE NAME IS WHAT YOU ARE EDITING; it keeps room before anything else gives way. On a standard
-   with a copy, "Standard…" was all that showed while "You have a copy" kept its width. The copy
-   chip now yields first (shrink 8 vs 1) down to its icon-sized minimum. */
+   with a copy, "Standard…" was all that showed while "You have a copy" kept its width. Chips now
+   wrap under the name first; the copy chip shrinks (8 vs 1) only when it alone is wider than a line. */
+/* NEVER UNDER THE ACTIONS: the field's room is its WIDTH as well as its basis, so the bar measures
+   the identity at the size it is drawn. With the basis alone the bar measured the input's default
+   size, kept one row, and the identity spilled under Undo ("Standard" drawn under ↺). Its em is
+   the name's own font (the label carries it), so N characters ask for N characters' room. When
+   even its own line is too narrow, the chips wrap under the name instead of off the bar. */
 .wf-bar-identity > .wf-name {
-  flex: 0 1 calc(var(--wf-name-ch, 40) * 0.72em + 40px);
-  min-width: min(calc(var(--wf-name-ch, 20) * 0.72em + 40px), 100%);
+  flex: 0 1 calc(var(--wf-name-ch, 40) * 0.52em + 40px);
+  width: calc(var(--wf-name-ch, 40) * 0.52em + 40px);
+  min-width: min(calc(var(--wf-name-ch, 20) * 0.52em + 40px), 100%);
 }
+.wf-bar-kind { display: inline-flex; align-items: center; gap: 8px; }
+.wf-bar-kind:empty { display: none; }
 .wf-bar-identity > .wf-open-copy { flex: 0 8 auto; min-width: 3ch; overflow: hidden; text-overflow: ellipsis; }
 .wf-bar-actions {
   display: flex; align-items: center; justify-content: flex-end; gap: 8px;
@@ -99,19 +108,21 @@
    available) wrap under it instead of running off the bar; the tool and commit groups wrap
    inside themselves, left-aligned, so no control is cut off at the edge. ⋯ still follows Save. */
 @container wf-topbar (width < 520px) {
-  .wf-bar-identity { flex-wrap: wrap; row-gap: 6px; }
   .wf-bar-actions { justify-content: flex-start; margin-left: 0; }
   .wf-bar-actions { max-width: 100%; min-width: 0; }
   .wf-bar-tools, .wf-bar-commit { flex-wrap: wrap; row-gap: 6px; flex: 0 1 auto; max-width: 100%; min-width: 0; }
 }
 .wf-bar-group { display: inline-flex; gap: 2px; }
 .wf-cut { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.wf-name { position: relative; display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
+.wf-name {
+  position: relative; display: inline-flex; align-items: center; gap: 4px; min-width: 0;
+  font: 600 1.25rem/1.2 var(--display);
+}
 .wf-name-input {
   flex: 1 1 auto; min-width: 0; width: 100%;
   padding: 4px 6px; border: 1px solid transparent; border-radius: var(--r);
   background: transparent; color: var(--ink);
-  font: 600 1.25rem/1.2 var(--display);
+  font: inherit;
   text-overflow: ellipsis;
 }
 .wf-name-input:hover { border-color: var(--border); }
@@ -119,6 +130,8 @@
 .wf-name-pencil { color: var(--faint); opacity: 0; transition: opacity 120ms ease; }
 .wf-name:hover .wf-name-pencil { opacity: 1; }
 .wf-name[data-error="true"] .wf-name-input { border-color: var(--red); }
+/* The error line under the name keeps its room, so a wrapped chip row never sits under it. */
+.wf-name[data-error="true"] { margin-bottom: 1rem; }
 .wf-name-error {
   position: absolute; left: 6px; top: 100%; margin-top: 2px;
   color: var(--red); font: 600 0.75rem/1.2 var(--sans); white-space: nowrap;
