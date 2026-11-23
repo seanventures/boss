@@ -159,7 +159,9 @@ def test_seeding_installs_every_workflow_as_a_product_standard(eng, project):
         rows = workflows.list_definitions(c, project, namespace="product")
         # An entry that needs a pack or a sample's connectors installs where they are, and is
         # skipped (with why) here.
-        installable = [e for e in catalogue.CATALOGUE if not catalogue._unmet(c, project, e)]
+        # A Marketplace pack's workflow is never seeded (workflow_marketplace): installed by choice.
+        installable = [e for e in catalogue.CATALOGUE
+                       if not catalogue._unmet(c, project, e) and not catalogue.in_pack(e["key"])]
     assert result["count"] == len(catalogue.CATALOGUE)
     assert len(rows) == len(installable)
     assert all(i.get("skipped") for i in result["installed"]
@@ -222,7 +224,8 @@ def test_seeding_twice_does_not_create_a_second_copy(eng, project):
         versions = c.execute(
             text("SELECT count(*) FROM workflow_versions WHERE project_id=:p"), {"p": project}
         ).scalar()
-        n = sum(1 for e in catalogue.CATALOGUE if not catalogue._unmet(c, project, e))
+        n = sum(1 for e in catalogue.CATALOGUE
+                if not catalogue._unmet(c, project, e) and not catalogue.in_pack(e["key"]))
     assert len(definitions) == n
     assert versions == n, f"re-seeding published {versions - n} redundant versions"
 

@@ -413,6 +413,11 @@ def _install_workflows(connection: Connection, project_id: str, actor: str) -> l
     from ..workflow_marketplace import install as install_pack
 
     result = install_pack(connection, project_id, PACK_ID, actor)
+    # AN EARLIER SAMPLE'S WORKFLOWS GO (a standard the catalogue no longer ships), as the
+    # catalogue seed did before the pack was installed from the Marketplace.
+    from ..workflow_catalogue import retire_dropped
+
+    retire_dropped(connection, project_id)
     # And whatever else the banking-dq pack now completes with the project's other packs
     # (rulebook_extraction needs its kinds and a document pack's), so "Extract rules" works
     # the moment the rulebook is added.
