@@ -204,3 +204,40 @@ def test_the_sweep_decides_a_card_written_without_the_sink(eng, project):
         row = _row(c, decision_id)
     assert out["decided"] >= 1
     assert row["status"] == "approved" and row["approved_by"].startswith("autonomy:dev:")
+
+
+def test_a_tier_three_card_waits_for_two_people_not_for_autonomy(eng, project):
+    """#307 review P1-2: dev autonomy decides through transition(system_policy=True), which skips
+    the two-person rule, so a card of a two-person tier is never decided by it."""
+    settings = get_settings()
+    with eng.begin() as c:
+        decision_id = _card(c, project, {"capability": "security_review"}, risk_tier=3)
+        result = autonomy_gate.decide(c, settings, decision_id)
+        row = _row(c, decision_id)
+    assert result["decided"] is False and "two-person" in result["why"]
+    assert row["status"] == "pending"
+
+
+def test_a_deploy_steps_answer_honours_its_author_and_its_own_target(eng, project):
+    """#307 review P2: deploy_policy.step_answer — a step set to ask is a person's; the step's
+    own target_id decides, not only its environment name."""
+    from boss_engine.services import deploy_policy
+
+    with eng.begin() as c:
+        prod = _target(c, project, "eu1", tier="prod")
+        local = _target(c, project, "eu1", ref="deploy@localhost:22")
+
+        def step(**extra):
+            inputs = {"environment": "staging", **extra.pop("inputs", {})}
+            return {"id": "d", "kind": "capability",
+                    "binding": {"capability": "deploy", "inputs": inputs}, **extra}
+
+        plain = deploy_policy.step_answer(c, project, step())
+        manual = deploy_policy.step_answer(c, project, step(approval={"mode": "manual"}))
+        to_prod = deploy_policy.step_answer(c, project, step(inputs={"target_id": prod}))
+        to_local = deploy_policy.step_answer(c, project, step(inputs={"target_id": local}))
+        run_target = deploy_policy.step_answer(c, project, step(), {"target_id": prod})
+    assert plain["who"] == "agent"
+    assert manual["who"] == "you"
+    assert to_prod["who"] == "you" and to_local["who"] == "agent"
+    assert run_target["who"] == "you"

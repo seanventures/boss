@@ -143,11 +143,13 @@ ACTIONS: dict[str, Rule] = {
     "gateway_request_approval": _r(ACT_CAPPED, NONE_RECORD, "software_engineer"),
     "review_tool_change": _r(ASK_PROD_RELEASE, NONE_VERSION, _SEC),
     "grant_tool_access": _r(ACT_CAPPED, "revoke_grant", _SEC),
-    "activate_authored_skill": _r(ACT, "disable_skill", _EM),
-    "apply_agent_prompt_diff": _r(ACT, NONE_VERSION, _EM),
+    # These three change the agents production work runs with: a person approves them
+    # (PERSON_ONLY_ACTIONS, the list a setting may never approve either).
+    "activate_authored_skill": _r(ASK_PROD_RELEASE, "disable_skill", _EM),
+    "apply_agent_prompt_diff": _r(ASK_PROD_RELEASE, NONE_VERSION, _EM),
     "apply_wiki_patch": _r(ACT, NONE_VERSION, _PM),
     "apply_confluence_publish": _r(ACT, NONE_PUBLISH, _PM),
-    "role.hire": _r(ACT, NONE_RECORD, "vp_agents"),
+    "role.hire": _r(ASK_PROD_RELEASE, NONE_RECORD, "vp_agents"),
     "role.autonomy_change": _r(ASK_PROD_RELEASE, NONE_RECORD, "vp_agents"),
     "ambient_card": _r(ACT, NONE_RECORD, "metatron"),
     "ambient_route": _r(ACT, NONE_RECORD, "metatron"),
@@ -246,13 +248,25 @@ PREFIXES: dict[str, Rule] = {
     "configure_or_enable_": _r(ASK_CREDENTIAL, NONE_RECORD, _PM),
 }
 
+#: THE ACTIONS ONLY A PERSON APPROVES — never dev autonomy (route() asks) and never a setting
+#: (decisions.approve_by_policy refuses SETTING_NEVER_APPROVES, which contains these). They change
+#: the agents production work runs with: an agent-drafted skill, an agent's prompt, a new hire.
+PERSON_ONLY_ACTIONS = frozenset({"activate_authored_skill", "apply_agent_prompt_diff",
+                                 "role.hire"})
+#: What a SETTING (the autonomy policy's approve_by_policy) never approves: the person-only
+#: actions, plus an architecture and BOSS's own self-fix (their follow-ons need a person's
+#: transition; dev autonomy routes them by ACTIONS).
+SETTING_NEVER_APPROVES = PERSON_ONLY_ACTIONS | frozenset({
+    "review_architecture", "self_fix.install", "self_fix.remove"})
+
 #: Workflow gates, by capability (a gate card carries `capability`, not an action).
 _DEPLOY_GATES = ("deploy", "redeploy", "config_deploy")
 GATES: dict[str, Rule] = {
     **{key: _r(ASK_PROD_ONLY, "rollback_deploy", _DM, "target") for key in _DEPLOY_GATES},
     # Promoting configuration INTO production is a production release by construction.
     "promote_config": _r(ASK_PROD_RELEASE, NONE_RECORD, _DM),
-    "release_approval": _r(ASK_PROD_ONLY, NONE_RECORD, _RM, "incident"),
+    # A release gate a workflow's author put in front of a release: a stop a person set.
+    "release_approval": _r(EXPLICIT_STOP, NONE_RECORD, _RM),
     "social_publish": _r(ASK_PROD_RELEASE, NONE_RECORD, "comms_manager"),
     "spec_review": _r(ACT, "send_back", _PM),
     "ux_review": _r(ACT, NONE_RECORD, "design_critic"),
@@ -261,6 +275,10 @@ GATES: dict[str, Rule] = {
     "rules_review": _r(ACT, NONE_RECORD, _PM),
     "regulatory_trace_review": _r(ACT, NONE_RECORD, _PM),
     "fix_pr": _r(ACT, "revert_merge", _EM),
+    # A message or a comment that may reach people outside the team: production by the
+    # resolver's own rule (production.resolve_audience), unless it names the team's own channel.
+    "notify": _r(ASK_PROD_ONLY, NONE_RECORD, "comms_manager", "audience"),
+    "github_comment": _r(ASK_PROD_ONLY, NONE_RECORD, _RM, "audience"),
     "merge": _r(ASK_PROD_ONLY, "revert_merge", _RM, "merge"),
     # A step whose AUTHOR chose "manual" ("Let an agent work it out", ask me first).
     "agent_work": _r(EXPLICIT_STOP, NONE_RECORD, _EM),
@@ -414,6 +432,17 @@ def route(connection: Any, decision: Mapping[str, Any], *, policy: Any = None) -
     stop = _explicit_stop(action, rec)
     if stop:
         return Route("ask", EXPLICIT_STOP, stop, rule.agent, rule.undo, policy=pol)
+    two = _two_person_tier(decision, rec)
+    if two is not None:
+        # THE TWO-PERSON RULE (identity/approvals.TWO_PERSON_TIERS). Dev autonomy decides through
+        # transition(system_policy=True), which does not run approvals.require_approval, so a
+        # card of a two-person tier is never answered by it — whatever its class, findings or
+        # environment.
+        return Route("ask", ASK_PROD_RELEASE, f"a tier-{two} card needs two people to approve "
+                     "it (the two-person rule)", rule.agent, rule.undo, policy=pol)
+    if action in PERSON_ONLY_ACTIONS:
+        return Route("ask", ASK_PROD_RELEASE, "it changes the agents production work runs "
+                     "with; a person approves it", rule.agent, rule.undo, policy=pol)
     cls = rule.cls
     # Dynamic classes a card's own facts decide.
     if action == "execute_agent_tool" and str(rec.get("tool") or "") != "publish_document":
@@ -477,10 +506,11 @@ def route(connection: Any, decision: Mapping[str, Any], *, policy: Any = None) -
     if rec.get("requires_person_approval") or rec.get("ci_changed"):
         return Route("ask", ASK_PROD_RELEASE, "it changes CI, which gates every production "
                      "release", rule.agent, rule.undo, policy=pol)
-    if cls in (ASK_CREDENTIAL, ASK_SPEND, ASK_PROD_RELEASE):
+    if cls in (ASK_CREDENTIAL, ASK_SPEND, ASK_PROD_RELEASE, EXPLICIT_STOP):
         words = {ASK_CREDENTIAL: "a credential only a person can enter",
                  ASK_SPEND: "spend beyond the budget a person set",
-                 ASK_PROD_RELEASE: "a release to production or the public"}[cls]
+                 ASK_PROD_RELEASE: "a release to production or the public",
+                 EXPLICIT_STOP: "a stop a person set on this step"}[cls]
         return Route("ask", cls, words, rule.agent, rule.undo, policy=pol)
     if not policy.dev_acts:
         return Route("ask", EXPLICIT_STOP, "this project's autonomy policy says ask in "
@@ -489,6 +519,8 @@ def route(connection: Any, decision: Mapping[str, Any], *, policy: Any = None) -
         scope = _scope_of(rec, rule)
         if rule.scope == "incident":
             scope = {"environment": rec.get("environment") or rec.get("incident_environment")}
+        elif rule.scope == "audience":
+            scope = {"audience": rec.get("channel") or rec.get("audience") or ""}
         verdict = production.resolve(connection, scope, project_id=project_id or None)
         if verdict.prod:
             return Route("ask", ASK_PROD_RELEASE, verdict.words, rule.agent, rule.undo,
@@ -504,6 +536,20 @@ def route(connection: Any, decision: Mapping[str, Any], *, policy: Any = None) -
              ACT_CAPPED: "development work within the autonomy cap",
              NOTICE: "a notice; nothing waits on an answer"}.get(cls, cls)
     return Route("act", cls, words, rule.agent, rule.undo, policy=pol)
+
+
+def _two_person_tier(decision: Mapping[str, Any], rec: Mapping[str, Any]) -> Optional[int]:
+    """The card's risk tier when it is one the two-person rule covers, else None."""
+    from ..identity.approvals import TWO_PERSON_TIERS
+
+    tiers = []
+    for raw in (decision.get("risk_tier"), rec.get("risk_tier")):
+        try:
+            tiers.append(int(raw))
+        except (TypeError, ValueError):
+            continue
+    hit = [t for t in tiers if t in TWO_PERSON_TIERS]
+    return max(hit) if hit else None
 
 
 #: Agent-proposed tools (execute_agent_tool) that always keep a person.

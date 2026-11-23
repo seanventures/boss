@@ -3172,11 +3172,12 @@ def approve_by_policy(connection: Connection, decision_id: str, *, project_id: s
         {"id": decision_id, "p": project_id}).mappings().first()
     if row is None or row["status"] != "pending":
         return False
-    if row.get("action") in ("review_architecture", "self_fix.install", "self_fix.remove",
-                             "activate_authored_skill", "apply_agent_prompt_diff"):
-        # An architecture, a BOSS self-fix, and an agent-drafted skill are approved by a person,
-        # never by a setting. Policy approval would mark the card approved and skip the
-        # follow-on, so the skill would stay unusable and nobody could approve it again.
+    from . import autonomy_gate
+
+    if row.get("action") in autonomy_gate.SETTING_NEVER_APPROVES:
+        # An architecture, a BOSS self-fix, an agent-drafted skill, an agent's prompt and a new
+        # hire are approved by a person, never by a setting: ONE list (autonomy_gate), which dev
+        # autonomy's own person-only actions are part of, so the two cannot diverge.
         return False
     tier = int(row["risk_tier"] or 0)
     if _approvals.seats_for_tier(tier) or tier in _approvals.TWO_PERSON_TIERS:
@@ -3192,8 +3193,6 @@ def approve_by_policy(connection: Connection, decision_id: str, *, project_id: s
         return False
     # NEVER PRODUCTION, A CREDENTIAL OR SPEND PAST THE BUDGET (BOSSAPP-1441): the same route dev
     # autonomy takes decides whether a setting may answer this card at all.
-    from . import autonomy_gate
-
     if not autonomy_gate.route(connection, dict(full)).acts:
         return False
     # THE SAME FOLLOW-ON A PERSON'S APPROVAL RUNS (BOSSAPP-1441). This used to UPDATE the

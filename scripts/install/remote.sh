@@ -39,6 +39,9 @@ MODEL_NAME=""
 MODEL_BASE_URL=""
 PROJECT_ID="boss-dogfood"
 SECRET_STORE=""
+# A remote install is PRODUCTION unless the operator says otherwise (BOSSAPP-1441).
+INSTALL_TIER="prod"
+INSTALL_TIER_EXPLICIT=0
 EXTRA_INSTALL_ARGS=()
 REMOTE_DOCKER="docker"
 
@@ -99,6 +102,11 @@ options:
   --project ID         model/env: project id (default boss-dogfood)
   --secret-store WHICH install: database (default, 4 containers) or infisical (6 containers,
                        ~400MB more, a real secret store). Both stay on the server
+  --install-tier dev|prod
+                       install/update: whether BOSS on this host is a development or a
+                       production install (BOSS_INSTALL_TIER). Default prod: in production BOSS
+                       asks a person before it deploys or merges; in development it acts and
+                       logs. An update keeps the host's tier unless this flag is passed
   --                   everything after this is passed through to install.sh
 
 Model keys are read from a hidden prompt or stdin. Do not pass them as arguments; the
@@ -123,6 +131,11 @@ while [[ $# -gt 0 ]]; do
     --token|--token=*|--api-key|--api-key=*)
       die "Refusing a secret on the command line. It would be saved in shell history and process listings. Use the hidden prompt or pipe one line on stdin." ;;
     --secret-store) SECRET_STORE="${2:-}"; shift 2 ;;
+    --install-tier)
+      case "${2:-}" in
+        dev|prod) INSTALL_TIER="$2"; INSTALL_TIER_EXPLICIT=1; shift 2 ;;
+        *) die "--install-tier takes dev or prod" ;;
+      esac ;;
     --accept-database-fallback)
       die "--accept-database-fallback is gone: a subscription signs in inside BOSS (subscription --provider codex|claude_code|grok); nothing is stored from this laptop." ;;
     --purge-data) PURGE_DATA=1; shift ;;
@@ -342,6 +355,12 @@ cmd_install() {
   # Community ports remain on the VM's loopback. A laptop connects through
   # the tunnel command, which makes 127.0.0.1 the correct browser API address.
   [[ -n "$SECRET_STORE" ]] && args+=(--secret-store "$SECRET_STORE")
+  # The host's tier: an explicit flag wins; otherwise a reinstall keeps the tier its .env has
+  # (ensure_install_tier writes prod when it has none) and a first install is prod.
+  ensure_install_tier
+  if [[ "$INSTALL_TIER_EXPLICIT" -eq 1 ]] || ! rshq "[ -f '$DIR/.env' ]"; then
+    args+=(--install-tier "$INSTALL_TIER")
+  fi
   [[ "$ASSUME_YES" -eq 1 ]] && args+=(-y --skip-model-key)
   [[ ${#EXTRA_INSTALL_ARGS[@]} -gt 0 ]] && args+=("${EXTRA_INSTALL_ARGS[@]}")
   say "running the installer on the host — this builds images and takes a while"
@@ -400,6 +419,27 @@ prune_remote() {
   out="$(rsh "cd '$DIR' && bash scripts/install/prune.sh --dedicated" 2>&1)" \
     || { warn "disk prune skipped: ${out##*$'\n'}"; return 0; }
   say "disk: $(printf '%s\n' "$out" | grep -E '^disk (before|after)' | tr '\n' ' ')"
+}
+
+# THE INSTALL TIER (BOSSAPP-1441, dev autonomy). BOSS acts on its own in development and asks a
+# person in production; a host this script installs is remote, so it is production unless the
+# operator passed --install-tier dev. A tier already in .env is kept unless the flag was passed.
+ensure_install_tier() {
+  local out
+  out="$(rsh "f='$DIR/.env'
+       [ -f \"\$f\" ] || exit 0
+       if grep -q '^BOSS_INSTALL_TIER=.' \"\$f\"; then
+         [ '$INSTALL_TIER_EXPLICIT' = 1 ] || exit 0
+         grep -q '^BOSS_INSTALL_TIER=$INSTALL_TIER\$' \"\$f\" && exit 0
+       fi
+       tmp=\"\$f.tier.\$\$\"
+       grep -v '^BOSS_INSTALL_TIER=' \"\$f\" > \"\$tmp\" || true
+       if [ -s \"\$tmp\" ] && [ -n \"\$(tail -c 1 \"\$tmp\")\" ]; then printf '\n' >> \"\$tmp\"; fi
+       printf 'BOSS_INSTALL_TIER=$INSTALL_TIER\n' >> \"\$tmp\"
+       chmod 600 \"\$tmp\" && mv \"\$tmp\" \"\$f\" && echo wrote")" \
+    || { warn "could not write BOSS_INSTALL_TIER=$INSTALL_TIER to $DIR/.env; BOSS reads its public URL instead (remote = production)"; return 0; }
+  [[ "$out" == *wrote* ]] && say "BOSS on $HOST is a ${INSTALL_TIER} install (BOSS_INSTALL_TIER=$INSTALL_TIER in .env)"
+  return 0
 }
 
 # THE DEDICATED-HOST MARK. The same reason as prune_remote, for the prunes that run between
@@ -491,6 +531,8 @@ cmd_update() {
 
   # Installs made before the mark existed get it here, before the build and recreate below.
   ensure_dedicated_mark
+  # The same for the install tier (BOSS_INSTALL_TIER): a host with none becomes prod.
+  ensure_install_tier
 
   # Archive updates do not run install.sh. Prepare a private copy of .env with
   # the dedicated worker key, then build against that copy. A failed build

@@ -251,6 +251,8 @@ class Production:
     environment_default  the environment the operation uses when the request names none
     always            True when every call of this operation counts as production (an
                       operation that reaches a host with no environment of its own)
+    resolved          a `target` counts when the one production resolver says production or
+                      cannot tell (relabelling a target's tier: BOSSAPP-1441)
     """
     target: Optional[str] = None
     deployment_run: Optional[str] = None
@@ -259,6 +261,9 @@ class Production:
     environment: Optional[str] = None
     environment_default: Optional[str] = None
     always: bool = False
+    #: True: a `target` source counts as production whenever services/production.py says so,
+    #: unknown included (an unlabelled remote server), not only by its name or set tier.
+    resolved: bool = False
     _sources: tuple[tuple[str, str, str], ...] = field(default=(), compare=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -275,6 +280,8 @@ class Production:
     def describe(self) -> str:
         if self.always:
             return "production:always"
+        if self.resolved:
+            return "production:resolved(" + ",".join(f"{k}={w}.{n}" for k, w, n in self._sources) + ")"
         return "production(" + ",".join(f"{k}={w}.{n}" for k, w, n in self._sources) + ")"
 
 
@@ -315,6 +322,12 @@ def production_projects(spec: Production, values: RequestValues, *, scope: Resol
         with connection(db) as conn:
             for sql, object_id in lookups:
                 row = conn.execute(sql, {"i": object_id}).first()
+                if row is not None and spec.resolved and sql is _TARGET_SQL:
+                    from ..services.production import resolve_target
+
+                    if resolve_target(conn, object_id).prod:
+                        out.append(str(row[0]))
+                    continue
                 # A target's set tier counts too (deployment_targets.tier, BOSSAPP-1441): a
                 # person's "prod" holds deployment:production whatever the name says.
                 if row is not None and (any(is_production_environment(e) for e in row[1:])

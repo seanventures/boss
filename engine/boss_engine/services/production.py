@@ -19,8 +19,9 @@ THE RULES, in order (`Verdict.source` says which one answered):
   4. Anything else is PRODUCTION, and says it could not tell (`known=False`): an unlabelled
      remote server is treated as production, so BOSS asks (operator decision, 2026-11-23).
 
-For BOSS ITSELF the install's tier is `BOSS_INSTALL_TIER` (dev | prod); an install that does
-not say is a development install — a laptop, Colima, a dev VM — unless it says production.
+For BOSS ITSELF the install's tier is `BOSS_INSTALL_TIER` (dev | prod), which the installer
+writes (dev for a local install, prod for a remote one by remote.sh). An install that does not say
+is development only when BOSS's own public URL is on this machine; anything else is production.
 
 For a MERGE the question is whether the branch SHIPS to production: a branch other than the
 repository's default branch never does; the default branch ships wherever the repository's
@@ -62,7 +63,7 @@ SHIPS_NOWHERE = "none"
 
 #: Install tier words.
 _INSTALL_PROD = frozenset({"prod", "production", "live", "prd"})
-_INSTALL_DEV = frozenset({"dev", "development", "local", "staging", "test", ""})
+_INSTALL_DEV = frozenset({"dev", "development", "local", "staging", "test"})
 
 
 @dataclass(frozen=True)
@@ -347,49 +348,127 @@ def resolve_merge(connection: Any, *, project_id: Optional[str], repo: Any,
 
 
 #: Branch names that are what a repository releases from, whatever its default branch is.
-_RELEASING = ("main", "master", "trunk", "production", "prod", "live", "stable")
+_RELEASING = ("main", "master", "trunk", "production", "prod", "prd", "live", "stable",
+              "deploy", "deployment")
+
+
+#: Prefixes of branch names that release (`release/2.1`, `prod-eu`, `production_2`, `live/x`,
+#: `deploy`, `deploy/eu`): a name that might ship is treated as shipping.
+_RELEASING_PREFIXES = ("release", "hotfix", "deploy", "prod/", "prod-", "prod_", "production",
+                       "live/", "live-", "live_", "prd/", "prd-", "prd_", "stable/", "stable-")
 
 
 def _releasing_branch(base: str) -> bool:
     name = base.strip().lower()
-    return name in _RELEASING or name.startswith(("release", "prod/", "production/", "hotfix"))
+    return name in _RELEASING or name.startswith(_RELEASING_PREFIXES)
 
 
 # ---- BOSS itself ------------------------------------------------------------------------------
 
 def install_tier() -> str:
-    """dev | prod for THIS BOSS install (BOSS_INSTALL_TIER; unset = dev)."""
-    raw = _norm(os.environ.get("BOSS_INSTALL_TIER"))
-    if raw in _INSTALL_PROD:
-        return "prod"
-    return "dev"
+    """dev | prod for THIS BOSS install (`resolve_install`: BOSS_INSTALL_TIER, else where BOSS's
+    own console is reached; a remote or unknown public URL is production)."""
+    return "prod" if resolve_install().prod else "dev"
+
+
+#: How long a read of the claim-bound public origin is reused (it changes once, at the claim).
+_ORIGIN_TTL_S = 60.0
+_ORIGIN_CACHE: dict[str, Any] = {"at": 0.0, "origin": None}
+
+
+def _bound_origin() -> Optional[str]:
+    """The public origin bound at the network claim (identity_settings.policy.public_origin), the
+    address people open BOSS at when BOSS_PUBLIC_URL is not set. None when it cannot be read."""
+    import time
+
+    now = time.monotonic()
+    if _ORIGIN_CACHE["at"] and now - _ORIGIN_CACHE["at"] < _ORIGIN_TTL_S:
+        return _ORIGIN_CACHE["origin"]
+    origin: Optional[str] = None
+    try:
+        from sqlalchemy import text
+
+        from ..db import get_engine
+
+        with get_engine().connect() as connection:
+            origin = connection.execute(text(
+                "SELECT policy->>'public_origin' FROM identity_settings "
+                "WHERE COALESCE(policy->>'public_origin', '') <> '' "
+                "ORDER BY org_id LIMIT 1")).scalar()
+    except Exception:  # noqa: BLE001 — unreadable: BOSS cannot tell, so production
+        origin = None
+    _ORIGIN_CACHE.update(at=now, origin=str(origin or "").strip() or None)
+    return _ORIGIN_CACHE["origin"]
+
+
+def install_public_url() -> tuple[str, str]:
+    """(url, where it came from) for the address people open THIS BOSS at."""
+    for key in ("BOSS_PUBLIC_URL", "BOSS_CONSOLE_PUBLIC_ORIGIN"):
+        value = str(os.environ.get(key) or "").strip()
+        if value:
+            return value, key
+    bound = _bound_origin()
+    if bound:
+        return bound, "the origin bound at the claim"
+    return "", ""
 
 
 def resolve_install() -> Verdict:
+    """THIS BOSS install. BOSS_INSTALL_TIER (the installer writes it: `dev` for a local install,
+    `prod` for a remote one) wins. Unset, BOSS reads where it runs: only a public URL on this
+    machine (loopback, localhost, `*.localhost`, the Docker/Colima host) is development; any other
+    URL, or none BOSS can read, is production because BOSS could not tell (operator rule,
+    2026-11-23: local install = dev, unlabelled remote = prod)."""
     raw = _norm(os.environ.get("BOSS_INSTALL_TIER"))
     if raw in _INSTALL_PROD:
         return _prod("install_tier", f"BOSS_INSTALL_TIER={raw}")
     if raw in _INSTALL_DEV:
-        return _dev("dev", "install_tier",
-                    f"BOSS_INSTALL_TIER={raw}" if raw else "BOSS install with no tier set "
-                    "(a development install unless BOSS_INSTALL_TIER=production)")
-    # An install tier word BOSS does not know: fail closed.
-    return _prod("install_tier", f"BOSS_INSTALL_TIER={raw} is not dev or prod", known=False)
+        return _dev("dev", "install_tier", f"BOSS_INSTALL_TIER={raw}")
+    if raw:
+        # An install tier word BOSS does not know: fail closed.
+        return _prod("install_tier", f"BOSS_INSTALL_TIER={raw} is not dev or prod", known=False)
+    url, source = install_public_url()
+    if url and is_local_address(url):
+        return _dev("dev", "install_url", f"no BOSS_INSTALL_TIER; BOSS is opened at {url} "
+                                          f"({source}), on this machine")
+    if url:
+        return _prod("install_url", f"no BOSS_INSTALL_TIER; BOSS is opened at {url} ({source}), "
+                                    "a remote address", known=False)
+    return _prod("install_url", "no BOSS_INSTALL_TIER and no public URL BOSS can read",
+                 known=False)
 
 
 # ---- one entry point --------------------------------------------------------------------------
 
 PUBLIC = _prod("public", "a public audience is production")
 
+#: Channels that reach only the team BOSS works for (its own chat workspace). A message anywhere
+#: else — an email address, a pull request comment, a public post, or a channel BOSS cannot read
+#: — may reach people outside the team, and a public audience is production.
+_TEAM_CHANNELS = ("slack:", "mattermost:", "teams:", "msteams:")
+
+
+def resolve_audience(channel: Any) -> Verdict:
+    """Whether a message or comment's audience is production: only the team's own chat is not."""
+    where = str(channel or "").strip().lower()
+    if where.startswith(_TEAM_CHANNELS):
+        return _dev("dev", "audience", f"a message to the team's own channel ({where})")
+    if not where:
+        return _prod("audience", "the message names no channel, so it may reach people outside "
+                                 "the team", known=False)
+    return _prod("audience", f"{where} may reach people outside the team")
+
 
 def resolve(connection: Any, scope: Mapping[str, Any], *,
             project_id: Optional[str] = None) -> Verdict:
-    """The verdict for whatever `scope` names, in order: public, BOSS's install, a deployment
+    """The verdict for whatever `scope` names, in order: public, an audience, BOSS's install, a deployment
     target, a deployment run, a change set, a merge, a named environment. Nothing named: unknown,
     so production."""
     scope = scope or {}
     if scope.get("public"):
         return PUBLIC
+    if "audience" in scope:
+        return resolve_audience(scope.get("audience"))
     if scope.get("install") or scope.get("boss_install"):
         return resolve_install()
     for key in ("target_id", "deployment_target_id"):

@@ -25,6 +25,9 @@ os.environ.setdefault("BOSS_AUTHZ_MODE", "shadow")
 # raises a card and reads it back must not race that thread; the tests of autonomy itself call
 # autonomy_gate.decide / sweep directly, and turn this on where they test the thread.
 os.environ.setdefault("BOSS_AUTONOMY_IMMEDIATE", "0")
+# The suite runs as a development install (a laptop). Unset, BOSS would read its public URL from
+# the database (production.resolve_install); the resolver tests unset this where they test that.
+os.environ.setdefault("BOSS_INSTALL_TIER", "dev")
 
 # A code task's build database arrives as a plain postgresql:// URL (build-services serves every
 # language, and node/psql want that form). SQLAlchemy reads that scheme as psycopg2, which BOSS

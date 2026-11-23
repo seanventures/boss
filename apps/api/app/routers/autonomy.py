@@ -152,9 +152,11 @@ class TierBody(BaseModel):
 
 @router.put("/v1/deployment-targets/{target_id}/tier")
 # Relabelling a production target is a production change (as PATCH /v1/deployment-targets is):
-# deployment:production is held whenever the target is production now, by name or by tier.
+# deployment:production is held whenever the resolver says the target is production now — by
+# name, by tier, or because BOSS cannot tell (an unlabelled remote server): calling one "dev"
+# is what would let BOSS ship to it unasked.
 @permit(P.DEPLOYMENT_TARGET_MANAGE, scope=Scope.of("deployment_target", path="target_id"),
-        production=Production(target="path:target_id"))
+        production=Production(target="path:target_id", resolved=True))
 def put_deployment_target_tier(target_id: str, payload: TierBody) -> dict[str, Any]:
     """Say what a target is: dev, staging or prod. Null clears it (BOSS then reads its name and
     where it runs; an unlabelled remote server is production)."""

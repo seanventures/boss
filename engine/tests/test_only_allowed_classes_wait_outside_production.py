@@ -53,7 +53,10 @@ PINNED_WAITS = {
         # untrusted; a standing grant or an autonomy raise is authority that reaches production.
         "allow_repository_or_change_clone_target", "rules_forbidden",
         "reclassify_or_configure_approved_boundary_adapter", "review_tool_change",
-        "grant_builder_authority", "role.autonomy_change"},
+        "grant_builder_authority", "role.autonomy_change",
+        # They change the agents production work runs with (autonomy_gate.PERSON_ONLY_ACTIONS,
+        # #307 review P1-3): an agent-drafted skill, an agent's prompt, a new hire.
+        "activate_authored_skill", "apply_agent_prompt_diff", "role.hire"},
     "ask_spend": {
         "approve_budget_increase_or_accept_degraded_mode", "approve_initiative_budget",
         "budget_denied", "budget_tier2_frozen", "configure_or_enable_infra_provisioning",
@@ -71,7 +74,9 @@ PINNED_WAITS = {
     "explicit_stop": {"review_always_on_build"},
 }
 PINNED_GATE_WAITS = {"agent_work": "explicit_stop", "promote_config": "ask_prod_release",
-                     "social_publish": "ask_prod_release"}
+                     "social_publish": "ask_prod_release",
+                     # A release gate a workflow's author put there (#307 review P1-3).
+                     "release_approval": "explicit_stop"}
 PINNED_KIND_WAITS = {"app_secret_live": "ask_credential"}
 
 
@@ -326,3 +331,75 @@ def test_a_catalogue_deploy_gate_opens_only_for_production(where, key):
     assert mode(key, None, target_prod=False, autonomy_acts=False) == "manual", where
     # The step's author asked for a person: honoured.
     assert mode(key, "manual", target_prod=False, autonomy_acts=True) == "manual", where
+
+
+# ---- #307 review: the two-person rule, person-only actions, stops a person set ---------------
+
+@pytest.mark.parametrize("card", [
+    # The catalogue's security review gate (risk tier 3).
+    {"capability": "security_review"},
+    # The findings park ("Continue this workflow?", workflow_capability_runner, tier 3), which
+    # GATE_DEFAULT's `not findings` exception used to let through.
+    {"capability": "a_custom_step", "findings": [{"severity": "high"}]},
+    # An action that acts at tier 2.
+    {"action": "resume_code_task"},
+    {"action": "review_pull_request", "pr_base": "rel/x", "repo": "o/r"},
+])
+def test_a_two_person_tier_card_is_never_answered_by_autonomy(card, monkeypatch):
+    """transition(system_policy=True) skips approvals.require_approval, so route() itself asks
+    for every tier the two-person rule covers, whatever the card's class or environment."""
+    from boss_engine.identity.approvals import TWO_PERSON_TIERS
+
+    _dev_world(monkeypatch, prod=False)
+    for tier in sorted(TWO_PERSON_TIERS):
+        found = autonomy_gate.route(None, {"project_id": "p", "risk_tier": tier,
+                                           "recommendation": card})
+        assert not found.acts and found.cls in autonomy_gate.ALLOWED_DEV_WAITS, (card, found)
+        assert "two-person" in found.why
+    # The same card one tier lower is not held by this rule.
+    found = autonomy_gate.route(None, {"project_id": "p", "risk_tier": 2, "recommendation": card})
+    assert "two-person" not in found.why
+
+
+def test_person_only_actions_ask_and_are_one_list_with_the_settings_list(monkeypatch):
+    _dev_world(monkeypatch, prod=False)
+    assert autonomy_gate.PERSON_ONLY_ACTIONS == {"activate_authored_skill",
+                                                 "apply_agent_prompt_diff", "role.hire"}
+    assert autonomy_gate.PERSON_ONLY_ACTIONS <= autonomy_gate.SETTING_NEVER_APPROVES
+    for action in autonomy_gate.PERSON_ONLY_ACTIONS:
+        found = autonomy_gate.route(None, {"project_id": "p", "risk_tier": 1,
+                                           "recommendation": {"action": action}})
+        assert not found.acts, action
+    # decisions.approve_by_policy reads the one list, not a copy of its own.
+    import inspect
+
+    from boss_engine.services import decisions
+
+    source = inspect.getsource(decisions.approve_by_policy)
+    assert "autonomy_gate.SETTING_NEVER_APPROVES" in source
+    assert "activate_authored_skill" not in source
+
+
+@pytest.mark.parametrize("prod", [False, True])
+def test_a_stop_class_rule_never_acts(monkeypatch, prod):
+    """A rule whose class is explicit_stop asks — it used to fall through to act."""
+    _dev_world(monkeypatch, prod=prod)
+    for capability in ("release_approval", "agent_work"):
+        found = autonomy_gate.route(None, {"project_id": "p", "risk_tier": 2,
+                                           "recommendation": {"capability": capability}})
+        assert not found.acts and found.cls == autonomy_gate.EXPLICIT_STOP, capability
+    found = autonomy_gate.route(None, {"project_id": "p", "risk_tier": 1,
+                                       "recommendation": {"action": "review_always_on_build"}})
+    assert not found.acts and found.cls == autonomy_gate.EXPLICIT_STOP
+
+
+def test_a_message_gate_asks_unless_it_goes_to_the_teams_own_channel(monkeypatch):
+    monkeypatch.setattr(autonomy_policy, "load", lambda *a, **k: autonomy_policy.DEFAULT)
+    for capability in ("notify", "github_comment"):
+        for channel, acts in (("slack:C123", True), ("mattermost:abc", True),
+                              ("email:someone@example.com", False),
+                              ("github:acme/app#12", False), ("", False)):
+            found = autonomy_gate.route(None, {"project_id": "p", "risk_tier": 1,
+                                               "recommendation": {"capability": capability,
+                                                                  "channel": channel}})
+            assert found.acts is acts, (capability, channel, found)

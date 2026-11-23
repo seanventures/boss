@@ -171,9 +171,55 @@ def test_a_set_tier_wins_over_the_name():
     assert not production.target_verdict({"environment": "eu1", "target_kind": "local"}).prod
 
 
-def test_the_install_is_development_unless_it_says_production(monkeypatch):
-    monkeypatch.delenv("BOSS_INSTALL_TIER", raising=False)
+def _no_url(monkeypatch, bound=None):
+    for key in ("BOSS_INSTALL_TIER", "BOSS_PUBLIC_URL", "BOSS_CONSOLE_PUBLIC_ORIGIN"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(production, "_bound_origin", lambda: bound)
+
+
+@pytest.mark.parametrize("url", ["http://localhost:3000", "http://127.0.0.1:3000",
+                                 "http://boss.localhost", "http://host.docker.internal:3000",
+                                 "http://colima:3000", "http://[::1]:3000"])
+def test_an_install_with_no_tier_opened_on_this_machine_is_development(monkeypatch, url):
+    _no_url(monkeypatch)
+    monkeypatch.setenv("BOSS_PUBLIC_URL", url)
+    verdict = production.resolve_install()
+    assert not verdict.prod and verdict.known and verdict.source == "install_url"
+    assert production.install_tier() == "dev"
+
+
+@pytest.mark.parametrize("url", ["https://boss.example.com", "http://203.0.113.7:3000",
+                                 "https://boss-1.tail1234.ts.net"])
+def test_an_install_with_no_tier_opened_from_elsewhere_is_production(monkeypatch, url):
+    _no_url(monkeypatch)
+    monkeypatch.setenv("BOSS_CONSOLE_PUBLIC_ORIGIN", url)
+    verdict = production.resolve_install()
+    assert verdict.prod and not verdict.known
+    assert production.install_tier() == "prod"
+    # ... and a target on that machine is that production box.
+    assert production.resolve_environment("eu1", host="localhost").prod
+
+
+def test_an_install_with_no_tier_and_no_url_is_production(monkeypatch):
+    _no_url(monkeypatch)
+    verdict = production.resolve_install()
+    assert verdict.prod and not verdict.known
+
+
+def test_the_laptop_install_reads_the_origin_bound_at_the_claim(monkeypatch):
+    """~/boss: no BOSS_INSTALL_TIER yet, BOSS_PUBLIC_URL empty, claimed at http://localhost:3000."""
+    _no_url(monkeypatch, bound="http://localhost:3000")
     assert not production.resolve_install().prod
+    _no_url(monkeypatch, bound="https://boss.example.com")
+    assert production.resolve_install().prod
+
+
+def test_the_install_tier_the_installer_wrote_wins(monkeypatch):
+    _no_url(monkeypatch)
+    monkeypatch.setenv("BOSS_PUBLIC_URL", "https://boss.example.com")
+    monkeypatch.setenv("BOSS_INSTALL_TIER", "dev")
+    assert not production.resolve_install().prod
+    monkeypatch.setenv("BOSS_PUBLIC_URL", "http://localhost:3000")
     monkeypatch.setenv("BOSS_INSTALL_TIER", "production")
     assert production.resolve_install().prod and production.install_tier() == "prod"
     monkeypatch.setenv("BOSS_INSTALL_TIER", "something-else")
@@ -261,6 +307,20 @@ def test_production_shaped_names_are_not_assumed_staging(name):
     assert verdict.prod and not verdict.known
 
 
+@pytest.mark.parametrize("base", ["prod-eu", "production_2", "live/x", "live-b", "deploy",
+                                  "deploy/eu", "deployment", "prd-1", "stable/2", "release-9"])
+def test_a_branch_named_for_production_or_deploys_is_releasing(repo_db, base):
+    verdict = production.resolve_merge(repo_db, project_id="p", repo="acme/app",
+                                       base_branch=base)
+    assert verdict.prod, base
+
+
+def test_a_message_reaches_outside_the_team_unless_it_names_the_teams_chat():
+    assert not production.resolve({}, {"audience": "slack:C1"}).prod
+    assert production.resolve({}, {"audience": "email:a@example.com"}).prod
+    assert production.resolve({}, {"audience": ""}).prod
+
+
 def test_this_machine_is_production_on_a_production_install(monkeypatch):
     monkeypatch.setenv("BOSS_INSTALL_TIER", "production")
     assert production.resolve_environment("eu1", host="localhost").prod
@@ -287,3 +347,29 @@ def test_git_flow_merges_into_main_are_not_development(repo_db):
                                      base_branch="release/2.1").prod
     assert not production.resolve_merge(repo_db, project_id="p", repo="acme/gitflow",
                                          base_branch="feature/x").prod
+
+
+def test_relabelling_a_target_needs_deployment_production_whenever_the_resolver_says_prod(repo_db):
+    """#307 review P2: PUT /tier counts a target by the resolver (Production(resolved=True)), so an
+    unlabelled remote server — production because BOSS cannot tell — cannot be called "dev"
+    without deployment:production. A target on this machine or one set to staging can."""
+    from boss_engine.identity.object_rules import Production, production_projects
+    from boss_engine.identity.scope import RequestValues, ResolvedScope
+
+    repo_db.exec_driver_sql(
+        "INSERT INTO deployment_targets VALUES "
+        "('t_remote','p','eu1',NULL,'ssh_host','x@203.0.113.9',NULL,'active',NULL),"
+        "('t_local','p','eu1',NULL,'ssh_host','x@localhost',NULL,'active',NULL)")
+    scope = ResolvedScope.in_project("org", "p")
+
+    def needs(target_id, *, resolved):
+        spec = Production(target="path:target_id", resolved=resolved)
+        return production_projects(spec, RequestValues({"target_id": target_id}, {}),
+                                   scope=scope, db=repo_db)
+
+    assert needs("t_remote", resolved=True) == ["p"]
+    assert needs("t_prod", resolved=True) == ["p"]
+    assert needs("t_local", resolved=True) == []
+    assert needs("t_stg", resolved=True) == []
+    # The name rule alone (every other declaration) does not escalate an unknown name.
+    assert needs("t_remote", resolved=False) == []
