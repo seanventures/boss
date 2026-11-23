@@ -770,8 +770,16 @@ def open_transactions() -> tuple:
 def begin(engine: Optional[Engine] = None):
     active_engine = engine or get_engine()
     with active_engine.begin() as connection:
-        token = _OPEN_TRANSACTIONS.set(_OPEN_TRANSACTIONS.get() + (connection,))
+        _OPEN_TRANSACTIONS.set(_OPEN_TRANSACTIONS.get() + (connection,))
         try:
             yield connection
         finally:
-            _OPEN_TRANSACTIONS.reset(token)
+            # Pop THIS connection from the stack the closing context sees; never reset(token).
+            # A `begin` held inside a generator can close in another Context than it opened in:
+            # Starlette iterates a sync StreamingResponse body one step per thread-pool call, each
+            # step in a fresh copy of the request's context, and ContextVar.reset refuses a token
+            # "created in a different Context" - the activity log's CSV and NDJSON exports died
+            # mid-stream. In the ordinary nested case this is what reset did (it is the last one).
+            # Limit: across such steps the stack holds only within one step; a later step's copy
+            # never saw the push, so open_transactions() does not list the streamed transaction.
+            _OPEN_TRANSACTIONS.set(tuple(c for c in _OPEN_TRANSACTIONS.get() if c is not connection))
