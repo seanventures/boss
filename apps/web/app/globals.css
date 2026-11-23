@@ -9720,3 +9720,68 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
 .decision-inbox-section .dq-filter-count { font-size: var(--fs-tag); }
 .decision-inbox-section .dq-title { font-size: var(--fs-title); }
 .decision-inbox-section .dq-rationale { font-size: var(--fs-ui); }
+
+/* APPROVALS: THREE PLAIN LINES PER CARD (approvals wireframe B). The operator: "Do you think these
+   things are really readable?" Each card is: (1) what deciding does + when, (2) one status line,
+   green when ready and red when something must be fixed first, (3) the answer, primary + one
+   secondary with the rest behind "…", and where the work is on the right. The rest (severity
+   boxes, sha, build id, evidence) is folded behind Checks / Details. Shared type scale only. */
+.dq-card { display: grid; gap: 6px; padding: 12px 18px; min-width: 0; }
+.dq-card-bad { box-shadow: inset 3px 0 0 var(--red); }
+.dq-card-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; min-width: 0; }
+.dq-card .dq-title,
+.decision-inbox-section .dq-card .dq-title {
+  margin: 0; flex: 1 1 240px; min-width: 0; font-size: var(--fs-title); line-height: 1.35; overflow-wrap: anywhere;
+}
+.dq-when {
+  margin-left: auto; font-size: var(--fs-tag); color: var(--quiet, var(--muted));
+  white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+.dq-when.late { color: var(--amber); }
+.dq-status { margin: 0; font-size: var(--fs-ui); line-height: 1.5; color: var(--muted); overflow-wrap: anywhere; }
+.dq-status.ok { color: var(--green); }
+.dq-status.bad { color: var(--red); }
+.dq-phrase.bad { color: var(--red); }
+.dq-status a, .dq-status .linklike, .dq-links a, .dq-links .linklike, .dq-also .linklike {
+  color: var(--accent-text, var(--accent)); text-decoration: none; font: inherit;
+}
+.dq-status a:hover, .dq-status .linklike:hover, .dq-links a:hover, .dq-links .linklike:hover, .dq-also .linklike:hover { text-decoration: underline; }
+.dq-card-act { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; min-width: 0; }
+.dq-card-act .dq-actions { flex: 1 1 auto; gap: 8px; min-width: 0; }
+.dq-actions-compact > button, .dq-reasoned-fold > summary { padding: 6px 12px; font-size: var(--fs-ui); line-height: 1.3; }
+.dq-links { margin-left: auto; display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; font-size: var(--fs-meta); }
+.dq-card-resolved .dq-links { margin-left: 0; }
+/* "Merge anyway…" and "…" open in place: the reason box takes the whole row, never a popover. */
+.dq-reasoned-fold > summary, .dq-overflow > summary { list-style: none; cursor: pointer; display: inline-flex; align-items: center; }
+.dq-reasoned-fold > summary::-webkit-details-marker, .dq-overflow > summary::-webkit-details-marker { display: none; }
+.dq-reasoned-fold[open], .dq-overflow[open] { flex-basis: 100%; }
+.dq-reasoned.dq-reasoned-fold { display: block; width: auto; }
+.dq-reasoned.dq-reasoned-fold[open] { width: 100%; }
+.dq-reasoned-fold .dq-pop { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; }
+.dq-reasoned-fold .dq-pop .decision-note { flex: 1 1 260px; min-width: 0; }
+.dq-reasoned-fold .dq-pop .dq-blocked-rows { flex: 1 1 100%; }
+.dq-more.dq-overflow > summary {
+  font-family: inherit; font-size: var(--fs-ui); font-weight: 700; letter-spacing: .08em; color: var(--muted);
+  padding: 5px 10px; border-radius: 8px; border: 1px solid var(--panel-border);
+}
+.dq-more.dq-overflow > summary::before { content: none; }
+.dq-overflow[open] > summary { color: var(--ink); }
+.dq-pop { margin-top: 8px; min-width: 0; max-width: 560px; }
+.dq-details { border-top: 1px dashed var(--panel-border); padding-top: 10px; margin-top: 2px; min-width: 0; }
+.dq-details[hidden] { display: none; }
+.dq-details .dq-evidence { margin-top: 8px; }
+.dq-card-resolved .dq-card-head .dq-title { flex: 0 1 auto; font-size: var(--fs-row); }
+.dq-card-resolved .dq-note { font-size: var(--fs-meta); }
+.dq-also { margin: 10px 0 4px; font-size: var(--fs-meta); color: var(--muted); }
+.dq-also-list { list-style: none; margin: 6px 0 0; padding: 0 0 0 10px; border-left: 2px solid var(--panel-border); display: grid; gap: 3px; }
+.dq-also-list a { color: var(--accent-text, var(--accent)); text-decoration: none; }
+.dq-also-list a:hover { text-decoration: underline; }
+.dq-also-count { color: var(--muted); font-variant-numeric: tabular-nums; }
+/* The same card at the step that waits (Workflow run screen). */
+.dw-step-decision { border: 1px solid var(--panel-border); border-radius: 10px; }
+.dw-step-decision .dq-card { padding: 10px 14px; }
+@media (max-width: 639px) {
+  .dq-card { padding: 12px; }
+  .dq-actions-compact > button, .dq-overflow > summary, .dq-reasoned-fold > summary { min-height: 44px; }
+  .dq-links { margin-left: 0; }
+}

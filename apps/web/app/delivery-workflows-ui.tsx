@@ -11,6 +11,8 @@ import { ShareRunButton } from "./improve/share-run";
 import { OPEN_GATE, needsYou as gateNeedsYou, personWait, stepClock, waitsForMerge as mergeWait } from "../lib/step-timing";
 
 import { ActionPreview, actionPreviewOf } from "./action-preview";
+import { DecisionCard } from "./decision-inbox-ui";
+import { isAnswerableDecision, mapDecision, type DecisionFeedItem } from "../lib/decisions";
 import { appIdentity, identityKey, type AppRun } from "./app-identity";
 import { notifyChanged, onChanged } from "./changed";
 import { Markdown } from "./markdown";
@@ -2895,7 +2897,31 @@ export function stepQuestion(step: Pick<RunStep, "step_id" | "status">, label?: 
  *  same call. Approving a deployment off a step badge is a decision made blind. The Approvals
  *  page is where that context lives, so this goes there with the decision already selected.
  */
-function ReviewAndDecide({ step }: { step: RunStep }) {
+/** THE WAITING DECISION, AS APPROVALS DRAWS IT (approvals wireframe B): the same three-line card,
+ *  read live from the decision itself; null until it loads or once it is no longer answerable. */
+function useStepDecision(decisionId: string | null | undefined, projectId: string): DecisionFeedItem | null {
+  const [decision, setDecision] = useState<DecisionFeedItem | null>(null);
+  useEffect(() => {
+    if (!decisionId || !projectId) { setDecision(null); return undefined; }
+    let alive = true;
+    const load = async () => {
+      try {
+        const r = await fetch(`/v1/decisions/${encodeURIComponent(decisionId)}?project_id=${encodeURIComponent(projectId)}`,
+                              { cache: "no-store" });
+        if (!r.ok) { if (alive) setDecision(null); return; }
+        const item = mapDecision(await r.json());
+        if (alive) setDecision(isAnswerableDecision(item) ? item : null);
+      } catch { if (alive) setDecision(null); }
+    };
+    void load();
+    const off = onChanged(() => { void load(); });
+    return () => { alive = false; off(); };
+  }, [decisionId, projectId]);
+  return decision;
+}
+
+export function ReviewAndDecide({ step, projectId = "", actor = "" }: { step: RunStep; projectId?: string; actor?: string }) {
+  const decision = useStepDecision(step.decision_id, projectId);
   const role = (step.approval as { approver_role?: string })?.approver_role;
   const merge = (step.output as { merge?: { pull_request_number?: number;
                                             pull_request_url?: string } } | undefined)?.merge;
@@ -2916,6 +2942,16 @@ function ReviewAndDecide({ step }: { step: RunStep }) {
   // WHAT IT WILL DO, ON THE STEP TOO. The decision card has the buttons; the step at least
   // shows what is waiting on them, so "Email the newsletter, needs you" says which email.
   const preview = actionPreviewOf(step.action_preview);
+  if (decision) {
+    // THE SAME CARD AS APPROVALS: title, one status line, the answers and the links; the
+    // preview, the effect and the evidence behind its Details.
+    const orgId = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("org") ?? undefined : undefined;
+    return (
+      <div className="dw-step-decision" data-testid="dw-step-decision">
+        <DecisionCard decision={decision} projectId={projectId} actorId={actor} orgId={orgId} />
+      </div>
+    );
+  }
   return (
     <>
     {preview ? <ActionPreview preview={preview} /> : null}
@@ -3741,14 +3777,14 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
           {/* A gate opened before stack deploys stopped being gated (a run already waiting at
               it when BOSS was upgraded) is still answerable, through the Approvals page, the
               way it was raised. New runs never have one. */}
-          {needsYou(step) ? <ReviewAndDecide step={step} /> : null}
+          {needsYou(step) ? <ReviewAndDecide step={step} projectId={projectId} actor={actor} /> : null}
         </>
       ) : isDeployStep(step, capability) && shippedTo ? (
         <div className="dw-ship-single" data-testid="dw-ship-single">
           {targetControl}
           {needsYou(step) ? (
             <div className="dw-ship-single-act">
-              <ReviewAndDecide step={step} />
+              <ReviewAndDecide step={step} projectId={projectId} actor={actor} />
               <Explain label="What approving does">
                 The press that ships it: BOSS builds a container from this app and runs it on{" "}
                 {boundHostName || "the bound host"} at{" "}
@@ -3841,7 +3877,7 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
               {/* THE BUTTON, INSIDE THE THING IT DOES. It used to sit three blocks further
                   down, past "Ask BOSS about this step", which is how it came to look like a
                   peer of "Set target" rather than the step after it. */}
-              {needsYou(step) && shippedTo ? <ReviewAndDecide step={step} /> : null}
+              {needsYou(step) && shippedTo ? <ReviewAndDecide step={step} projectId={projectId} actor={actor} /> : null}
             </div>
           </li>
         </ol>
@@ -3862,7 +3898,7 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
       {/* ANSWER THE APPROVAL WHERE IT IS SEEN. A gate answerable only in another area makes the
           operator leave the screen that told them it was waiting. */}
       {/* On a deploy this is rendered inside step 2 above, where it belongs in the sequence. */}
-      {needsYou(step) && !isDeployStep(step, capability) ? <ReviewAndDecide step={step} /> : null}
+      {needsYou(step) && !isDeployStep(step, capability) ? <ReviewAndDecide step={step} projectId={projectId} actor={actor} /> : null}
 
       {/* THE CLICK LANDED. SAY SO.
           An operator approved a deploy, came back here, and saw the identical "waiting, gate ·

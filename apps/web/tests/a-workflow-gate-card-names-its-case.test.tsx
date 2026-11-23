@@ -102,7 +102,7 @@ describe("a workflow gate's card", () => {
     expect(summary.textContent).toContain("What the AML Analyst (Sift) produced");
     expect(summary.textContent).toContain("Recommends ESCALATE for ALERT-3 (confidence 0.93).");
     const html = row.innerHTML;
-    expect(html.indexOf("decision-gate-summary")).toBeLessThan(html.indexOf("dq-why"));
+    expect(html.indexOf("decision-gate-summary")).toBeLessThan(html.indexOf('class="dq-why"'));
     const open = row.querySelector('[data-testid="decision-open-run"]') as HTMLAnchorElement;
     expect(open.textContent).toBe("Open the run");
     expect(open.getAttribute("href")).toBe("/?org=org_1&area=delivery_workflows&wfr=wfr_a3");
