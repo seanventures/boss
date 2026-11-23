@@ -64,6 +64,9 @@ P0:
     # keeps its undo
     - engine/tests/test_only_allowed_classes_wait_outside_production.py
     - engine/tests/test_dev_autonomy_acts_and_logs.py
+    # Every decision BOSS raises has its buttons decided: a scan of every producer, so a new
+    # card cannot offer Approve "Carries out…" on nothing, or "starts nothing" on a deletion
+    - engine/tests/test_every_decision_boss_raises_has_its_buttons_decided.py
     # Governed deploy + health
     - engine/tests/test_an_app_is_deployed_the_way_it_says.py
     - engine/tests/test_a_smoke_test_asks_the_deployment_not_a_url.py

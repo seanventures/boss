@@ -2492,6 +2492,8 @@ def _hold_for_untrusted_content(
         f"({origin}), and it has not been sent."
     )
     recommendation: dict[str, Any] = {
+        # The binding first: nothing spread into a held call's card may replace its action.
+        **bind_held_call(name, args),
         "action": "resume_agent_run",
         "run_id": run_id,
         "tool": name,
@@ -2499,7 +2501,6 @@ def _hold_for_untrusted_content(
         "task_id": task_id,
         "sink": sink,
         "untrusted_origin": hold.get("origin"),
-        **bind_held_call(name, args),
     }
     if name in mcp_map:
         server, tool = mcp_map[name]
@@ -3605,6 +3606,7 @@ class AgentStepToolSet:
                     (f"Approve MCP tool: {server['name']} / {_key_words(tool_name)}"
                      + (" (server not reviewed yet)" if unreviewed else "")),
                     {
+                        **bind_held_call(name, args),
                         "action": "resume_agent_run",
                         "run_id": run_id,
                         "tool": name,
@@ -3617,7 +3619,6 @@ class AgentStepToolSet:
                         **({"unreviewed_server": True} if unreviewed or quarantined else {}),
                         **({"explicit_stop": "set to ask a person each time in Skills & MCP"}
                            if chosen == "ask" else {}),
-                        **bind_held_call(name, args),
                     },
                     {},
                     "agent_mcp_requires_approval",
@@ -3787,6 +3788,7 @@ class AgentStepToolSet:
                     f"Approve agent skill: {skill.get('label') or skill.get('name') or _key_words(skill_id)}"
                     + (" (its MCP server is not reviewed yet)" if unreviewed_server else ""),
                     {
+                        **bind_held_call(name, args),
                         "action": "resume_agent_run",
                         "run_id": run_id,
                         "tool": name,
@@ -3800,7 +3802,6 @@ class AgentStepToolSet:
                         **({"explicit_stop": person_reason}
                            if person_reason and not unreviewed_server and not screen_asks
                            else {}),
-                        **bind_held_call(name, args),
                     },
                     {},
                     "agent_skill_requires_approval",
@@ -3868,10 +3869,10 @@ class AgentStepToolSet:
                 decision_id = _open_hold_interrupt(
                     connection, project_id, task_id,
                     f"Approve agent action: {name}",
-                    {"action": "resume_agent_run", "run_id": run_id, "tool": name,
+                    {**bind_held_call(name, args),
+                     "action": "resume_agent_run", "run_id": run_id, "tool": name,
                      "args": args, "task_id": task_id,
-                     **({"tool_screen": "untrusted"} if screen_hold else {}),
-                     **bind_held_call(name, args)},
+                     **({"tool_screen": "untrusted"} if screen_hold else {})},
                     {}, "agent_tool_requires_approval", risk_tier=risk,
                 )
                 result = {"status": "deferred_for_approval", "decision_id": decision_id, "message": f"'{name}' (risk tier {risk}) requires human approval; the run is paused and resumes on approval."}

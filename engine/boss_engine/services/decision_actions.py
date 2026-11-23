@@ -176,6 +176,12 @@ CARRIED_OUT_ON_APPROVAL = frozenset({
     # A build's delivery workflow did not start (code_task_service.start_delivery_workflow):
     # approving starts it now, adopting the running build (attach_delivery_workflow).
     "start_delivery_workflow",
+    # THE INFRA AGENT'S CARDS (BOSSAPP-1157). Approving a tier-3 storage deletion runs exactly
+    # the dry run's plan (storage_cleanup.on_delete_decision); approving a proposed retention
+    # rule writes it (storage_incidents.on_rule_decision). They were KINDS but not classified,
+    # so Approve said "BOSS starts nothing" and an approved card offered "Mark executed".
+    "storage_delete",
+    "storage_rule",
 })
 
 #: "Request changes" DOES SOMETHING ONLY FOR THESE: DecisionService._handle_non_approved_follow_on

@@ -216,3 +216,14 @@ def test_the_transition_refuses_an_action_the_card_does_not_offer(monkeypatch):
     with pytest.raises(InvalidDecisionTransitionError) as refused:
         service.transition(object(), "dec_1", action="approve", actor="ceo", note=None)
     assert "notice" in str(refused.value)
+
+
+@pytest.mark.parametrize("kind", ["storage_delete", "storage_rule"])
+def test_a_storage_card_says_approve_carries_it_out_and_offers_nothing_once_approved(kind):
+    """The Infra Agent's two cards were KINDS but not classified actions: Approve said "BOSS
+    starts nothing" on a card whose approval deletes backups or writes a retention rule, and an
+    approved one offered "Mark executed" for work BOSS had already done."""
+    approve = next(a for a in da.allowed_actions(SAMPLES[kind]) if a["action"] == "approve")
+    assert approve["effect"] == "Carries out what this card proposes."
+    assert "revise" not in {a["action"] for a in da.allowed_actions(SAMPLES[kind])}
+    assert da.allowed_actions({**SAMPLES[kind], "status": "approved"}) == []
