@@ -228,7 +228,18 @@ ACTIONS: dict[str, Rule] = {
     "github.community.merge_authorization": _r(ASK_PROD_RELEASE, "revert_merge", _RM),
     # H. workflow control
     "change_sync_branch": _r(ACT, NONE_RECORD, _RM),
+    # The incident squad's mitigation (ambient Needs-you): production incidents keep a person.
+    "incident_squad.mitigate": _r(ASK_PROD_ONLY, NONE_RECORD, _SRE, "incident"),
 }
+#: Cards that write no `action` (the producer scan's NO_ACTION_BY_DESIGN), by what they carry.
+KINDS: dict[str, Rule] = {
+    # An external SRE runbook on an open incident: production incidents keep a person.
+    "sre_runbook": _r(ASK_PROD_ONLY, NONE_RECORD, _SRE, "incident"),
+    # A deploy would use a LIVE app secret: a credential a person stands behind.
+    "app_secret_live": _r(ASK_CREDENTIAL, NONE_RECORD, _SEC),
+}
+#: A meeting's own decision item: the panel's recommendation is recorded as the answer.
+MEETING_ITEM = _r(ACT, NONE_RECORD, _PM)
 #: Producers that build the action from a provider key (comms: configure_or_enable_slack_...):
 #: turning on a channel provider is a credential a person enters.
 PREFIXES: dict[str, Rule] = {
@@ -263,6 +274,15 @@ def rule_for(decision: Mapping[str, Any]) -> Optional[Rule]:
     action = str(rec.get("action") or "")
     if action in ACTIONS:
         return ACTIONS[action]
+    if decision_actions_is_ambient(decision):
+        # An always-on agent's Needs-you card: its action is the asker's own (route() still
+        # keeps an entry on Where people decide for a person).
+        return ACTIONS["ambient_card"]
+    kind = str(rec.get("kind") or "")
+    if not action and kind in KINDS:
+        return KINDS[kind]
+    if not action and rec.get("meeting_id"):
+        return MEETING_ITEM
     for prefix, rule in PREFIXES.items():
         if action.startswith(prefix):
             return rule
@@ -275,6 +295,15 @@ def rule_for(decision: Mapping[str, Any]) -> Optional[Rule]:
     if reason in ACTIONS:
         return ACTIONS[reason]
     return None
+
+
+def decision_actions_is_ambient(decision: Mapping[str, Any]) -> bool:
+    from .decision_actions import is_ambient_card
+
+    try:
+        return is_ambient_card(dict(decision))
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _rec(decision: Mapping[str, Any]) -> dict[str, Any]:
@@ -435,7 +464,7 @@ def route(connection: Any, decision: Mapping[str, Any], *, policy: Any = None) -
         if tier >= 3 and not rec.get("findings"):
             return Route("ask", ASK_PROD_RELEASE, f"a tier-{tier} step is treated as "
                          "production", rule.agent, rule.undo, policy=pol)
-    if action in ("ambient_card", "ambient_route"):
+    if action in ("ambient_card", "ambient_route") or rule is ACTIONS["ambient_card"]:
         # AN ALWAYS-ON AGENT'S ASK: the asking agent decides it, except an entry on Where people
         # decide (decide_list.classify), which keeps its person.
         from . import decide_list
