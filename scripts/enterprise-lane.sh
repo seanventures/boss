@@ -342,6 +342,10 @@ step_install() {
       (cd "$INSTALL" && docker compose $(bash scripts/install/compose_files.sh . 2>/dev/null | tr '\n' ' ') \
         --env-file .env down -v --remove-orphans --rmi all) >/dev/null 2>&1 || true
     fi
+    # Whatever compose could not take down (a half-made install): its containers would recreate
+    # their bind-mount sources inside the directory as root.
+    local proj; proj="$(compose_project)"; proj="${proj:-boss-community}"
+    docker ps -aq --filter "label=com.docker.compose.project=$proj" | xargs -r docker rm -f >/dev/null 2>&1
     sudo rm -rf "$INSTALL"
   fi
   # Every run builds from scratch on a clean disk: no BOSS image, volume or build cache left
