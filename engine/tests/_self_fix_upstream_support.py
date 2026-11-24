@@ -153,3 +153,18 @@ def client_for(fake: FakeGitHub, token: str = "a-person-token"):
     from boss_engine.services import self_fix_upstream as up
 
     return up.GitHubUpstream(token, call=fake)
+
+
+#: The machine the pinned install knows (pin_known_hosts). Never an address another test's
+#: fixture uses: the DIFF above names 203.0.113.10 as a documentation address.
+KNOWN_HOST = "deploy-7.example.org"
+
+
+def pin_known_hosts(monkeypatch, hosts=(KNOWN_HOST,)):
+    """The machines this install knows, pinned: self_fix_privacy.known_hosts reads every
+    deployment host in the shared test database, so a row another test left (203.0.113.10, the
+    documentation address DIFF uses) blocked these sends by test order, not by their content."""
+    from boss_engine.services import self_fix_privacy
+
+    monkeypatch.setattr(self_fix_privacy, "known_hosts",
+                        lambda connection, project_id=None: list(hosts))

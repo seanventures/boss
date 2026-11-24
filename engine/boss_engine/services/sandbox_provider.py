@@ -452,7 +452,7 @@ class MicroVMProvider:
                 raise RuntimeError(
                     f"sandbox task {sid} never started: the sandbox-service kept it queued for "
                     f"{queue_s}s (BOSS_SANDBOX_QUEUE_TIMEOUT_SECONDS) and BOSS withdrew it. The host "
-                    "has no free sandbox; free one, then retry the step"
+                    "has no free sandbox; free one, then retry the step (press Retry on this step)"
                 )
             raise RuntimeError(
                 f"sandbox task {sid} did not finish within {timeout_s}s of starting "

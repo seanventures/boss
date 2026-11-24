@@ -8,6 +8,7 @@
  */
 import React, { useEffect, useState } from "react";
 import { GatedButton } from "../../components/gated";
+import { couldNot, reasonOf } from "../../lib/action-result";
 import { setupWrite } from "../../lib/setup-client";
 import { SectionLabel } from "../section-label";
 import { toast, useBoard } from "./parts";
@@ -64,7 +65,7 @@ export function AgentCapacityRow() {
       setState(previous => previous ? { ...previous, ...result } : previous);
       toast("Agent capacity saved; active jobs finish without interruption");
     } catch (cause) {
-      toast(cause instanceof Error ? cause.message : "Could not save capacity", "error");
+      toast(couldNot("save Agent capacity", reasonOf(cause), "Nothing changed."), "error");
     } finally { setBusy(false); }
   }
   const bao = state?.builds_at_once;

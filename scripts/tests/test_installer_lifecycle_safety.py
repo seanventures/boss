@@ -199,7 +199,10 @@ def test_checkup_treats_private_env_as_data(tmp_path: Path) -> None:
     )
     result = subprocess.run(
         ["bash", str(ROOT / "scripts/install/checkup.sh")],
-        env={**os.environ, "BOSS_ENV_FILE": str(env_file)},
+        # A stack name no install has: the checkup must never exec into this machine's own
+        # running BOSS (its claim-status call there took longer than the timeout).
+        env={**os.environ, "BOSS_ENV_FILE": str(env_file),
+             "COMPOSE_PROJECT_NAME": "boss-checkup-test-no-such-stack"},
         cwd=tmp_path,
         capture_output=True,
         text=True,
@@ -485,12 +488,16 @@ def test_installer_sources_do_not_name_private_hosts_or_registries() -> None:
         line.strip() for line in compose.splitlines()
         if re.search(r'- "[^"]+:\d+"\s*$', line)
     ]
-    assert published == [
-        '- "127.0.0.1:${BOSS_POSTGRES_PORT:-5432}:5432"',
-        '- "127.0.0.1:${INFISICAL_PORT:-8080}:8080"',
-        '- "${BOSS_API_BIND:-127.0.0.1}:${BOSS_API_PORT:-8000}:8000"',
-        '- "127.0.0.1:${BOSS_WEB_PORT:-3000}:3000"',
-    ]
+    # Every published port binds the loopback address (the API's bind is a setting whose default
+    # is loopback). The list of services grew (db-test, Grafana, Mailpit, the toolchain
+    # registry), and an exact list went red on main for a reason that was not a leak; the
+    # property is what a stranger's install needs (BOSSAPP-1429).
+    assert published, "the compose file publishes no port: the parse is wrong"
+    exposed = [line for line in published
+               if not (line.startswith('- "127.0.0.1:')
+                       or line.startswith('- "${BOSS_API_BIND:-127.0.0.1}:'))]
+    assert exposed == [], "a published port must bind 127.0.0.1"
+    assert '- "${BOSS_API_BIND:-127.0.0.1}:${BOSS_API_PORT:-8000}:8000"' in published
     assert all("0.0.0.0" not in line for line in published)
     installer = (ROOT / "install.sh").read_text(encoding="utf-8")
     assert 'BIND_ADDRESS="127.0.0.1"' in installer

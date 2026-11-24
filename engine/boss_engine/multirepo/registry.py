@@ -58,8 +58,10 @@ def _list_from_app(db: Any) -> list[dict[str, Any]]:
             resp = github_app._call("GET", f"/installation/repositories?per_page=100&page={page}",  # noqa: SLF001
                                     token=token)
             if resp.status != 200:
+                from ..services.failure_words import github_refusal
+
                 raise MultiRepoError(502, "github_unreachable",
-                                     "GitHub did not list the App's repositories. Try again.")
+                                     github_refusal("the App's repositories", status=resp.status))
             items = (resp.json() or {}).get("repositories") or []
             out.extend(i for i in items if isinstance(i, dict))
             if len(items) < 100:

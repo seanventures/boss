@@ -952,7 +952,7 @@ export const parseOverview = (v: unknown): Overview => {
     recent_work: a(x.recent_work).map(parseWorkItem).slice(0, 5),
     next: a(x.next).map(parseNext),
     backlog: a(x.backlog).map(parseNext),
-    errors: Object.fromEntries(Object.entries(o(x.errors)).map(([k, v]) => [k, s(v, "Couldn't load")])),
+    errors: Object.fromEntries(Object.entries(o(x.errors)).map(([k, v]) => [k, s(v, "BOSS gave no reason")])),
     try_it: Object.keys(ti).length ? { url: s(ti.url), demo_logins: a(ti.demo_logins).map(parseLogin) } : null,
     app: parseYourApp(x.app),
     about: parseAbout(x.about),

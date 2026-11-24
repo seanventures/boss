@@ -15,7 +15,8 @@ from boss_engine.services import private_infra
 from boss_engine.services import self_fix_upstream as up
 
 from ._self_fix_upstream_support import settings as _settings
-from ._self_fix_upstream_support import DIFF, FakeGitHub, client_for, insert_verified
+from ._self_fix_upstream_support import (DIFF, KNOWN_HOST, FakeGitHub, client_for,
+                                         insert_verified, pin_known_hosts)
 from ._self_fix_support import clean_project
 from .test_workflow_capability_runner import eng, project  # noqa: F401
 
@@ -76,6 +77,7 @@ def verified(eng, project, monkeypatch):  # noqa: F811
     fake = FakeGitHub(fork="pat-example/boss")
     monkeypatch.setattr(up, "CLIENT", lambda c, actor: client_for(fake))
     monkeypatch.setattr(up, "_names", lambda c, p: [("NAME", "acme-payroll")])
+    pin_known_hosts(monkeypatch)
     yield {"eng": eng, "project": project, "fake": fake}
     clean_project(eng, project)
 
@@ -94,6 +96,17 @@ def test_a_private_name_in_the_diff_blocks_the_preview_and_the_send(verified):
         with eng.begin() as c:
             up.send(c, _settings(), sfx_id, got["send_id"], actor="usr_test", checked=True)
     assert not any(m == "POST" and p.endswith("/pulls") for m, p, _ in verified["fake"].calls)
+
+
+def test_a_machine_this_install_knows_in_the_diff_blocks_the_preview(verified):
+    """The install's own machines (self_fix_privacy.known_hosts) block a send that names one."""
+    eng, project = verified["eng"], verified["project"]
+    sfx_id = insert_verified(eng, project, diff=DIFF + f"+    host = '{KNOWN_HOST}'\n")
+    with eng.begin() as c:
+        got = up.preview(c, _settings(), sfx_id, actor="usr_test")
+    assert got["status"] == "blocked"
+    assert any(f["kind"] == "a machine this install knows" and KNOWN_HOST in f["detail"]
+               for f in got["check"]["findings"]), got["check"]
 
 
 def test_the_body_and_evidence_are_scrubbed_and_the_machine_block_survives(verified):

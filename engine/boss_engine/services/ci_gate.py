@@ -725,7 +725,9 @@ def settle(outcome: CiOutcome, *, elapsed: float, timeout: float, has_ci: Option
         if outcome.summary.startswith(UNREADABLE_PREFIX):
             return CiOutcome("unreadable", outcome.summary, [])
         return CiOutcome("timed_out", f"CI did not finish in {_minutes(timeout)}: no checks "
-                                      "were reported for this commit.", [])
+                                      "were reported for this commit. Check that the "
+                                      "repository's workflows run on this branch, then press "
+                                      "Re-check on this card.", [])
     ran_for = elapsed if ran is None else min(float(ran), elapsed)
     if ran_for < timeout:
         return outcome
@@ -740,7 +742,9 @@ def settle(outcome: CiOutcome, *, elapsed: float, timeout: float, has_ci: Option
                      + f" (the {_minutes(timeout)} count from when the first check started "
                        "running" + (f"; the {_minutes(queued_for)} it waited for a GitHub "
                                     "runner before that are not counted)"
-                                    if queued_for >= 60 else ")"),
+                                    if queued_for >= 60 else ")")
+                     + ". Open the check on GitHub to see why it is slow, then press Re-check "
+                       "on this card.",
                      outcome.checks, url, [c["name"] for c in pend])
 
 

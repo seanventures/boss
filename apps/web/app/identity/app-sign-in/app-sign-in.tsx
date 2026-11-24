@@ -22,6 +22,7 @@ import { EmptyState } from "../../../components/identity/states";
 import { ListHeader } from "../../../components/identity/list-header";
 import { ErrorLine, Sheet } from "../../../components/identity/kit";
 import { showToast } from "../../client-forms";
+import { couldNot, reasonOf } from "../../../lib/action-result";
 import { IdentityError, enc, idDelete, idGet, idPatch, idPost } from "../../../lib/identity/api";
 
 export type Pool = { id: string; name: string; kind: "workforce" | "customer"; signup: string; signup_domains: string[]; mfa: string; passkeys: boolean; password_policy: Record<string, unknown> };
@@ -62,6 +63,12 @@ export const APP_KEY = /^[a-z0-9][a-z0-9_-]{0,79}$/;
 export function words(e: unknown, fallback: string): string {
   if (e instanceof IdentityError) return e.status === 403 ? "You don't hold the permission for this." : e.message;
   return fallback;
+}
+
+/** "Disabling a user needs a fresh check." -> "finish disabling a user", for couldNot. */
+export function finishing(why: string): string {
+  const doing = why.replace(/\s*needs a fresh check\.?$/i, "").trim();
+  return doing ? `finish ${doing.charAt(0).toLowerCase()}${doing.slice(1)}` : "finish that";
 }
 
 /** "one per line" text -> trimmed, non-empty lines. */
@@ -423,7 +430,7 @@ function UserSheet({ poolId, user, onClose, reload }: { poolId: string; user: Po
   const [error, setError] = useState<string | null>(null);
   const act = async (why: string, call: () => Promise<unknown>, done: string) => {
     setError(null);
-    try { await guarded(why, call); showToast("success", done); await reload(); onClose(); } catch (e) { setError(words(e, "That did not work.")); }
+    try { await guarded(why, call); showToast("success", done); await reload(); onClose(); } catch (e) { setError(couldNot(finishing(why), words(e, reasonOf(e)))); }
   };
   const base = `/v1/oidc/pools/${enc(poolId)}/users`;
   return (
@@ -474,7 +481,7 @@ function Roles({ clients, pools }: { clients: Client[]; pools: Pool[] }) {
   if (!clients.length) return <EmptyState icon={<ShieldCheck size={22} />} title="No apps yet">App roles belong to an app. Register one on Clients.</EmptyState>;
   const run = async (why: string, call: () => Promise<unknown>) => {
     setError(null);
-    try { await guarded(why, call); await load(); } catch (e) { setError(words(e, "That did not work.")); }
+    try { await guarded(why, call); await load(); } catch (e) { setError(couldNot(finishing(why), words(e, reasonOf(e)))); }
   };
   return (
     <>

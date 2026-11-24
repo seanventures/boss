@@ -127,7 +127,7 @@ async function postJsonReturn(path: string, body: Record<string, unknown>): Prom
     }
     return { ok: true, data: await r.json() };
   } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : "request failed" };
+    return { ok: false, error: describeActionError(e) };
   }
 }
 
@@ -307,7 +307,7 @@ async function getJsonReturn(path: string): Promise<ActionResult> {
     }
     return { ok: true, data: await r.json() };
   } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : "request failed" };
+    return { ok: false, error: describeActionError(e) };
   }
 }
 

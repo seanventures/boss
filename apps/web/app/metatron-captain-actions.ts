@@ -7,6 +7,7 @@ import {
   describeMetatronCaptainUnavailable,
   isCaptainUnavailableStatus,
 } from "../lib/metatron-captain";
+import { describeActionError } from "../lib/action-result";
 import { apiWrite } from "../lib/api-write";
 import { loadPath } from "../lib/writing-get";
 import { declareAction } from "../lib/identity/guarded-action";
@@ -65,7 +66,7 @@ async function captainGet(path: string): Promise<MetatronCaptainActionResult> {
       data: (await response.json()) as Record<string, unknown>,
     };
   } catch (error) {
-    return fail(undefined, error instanceof Error ? error.message : "request failed");
+    return fail(undefined, describeActionError(error));
   }
 }
 
@@ -93,7 +94,7 @@ async function captainPost(
       data: (await response.json()) as Record<string, unknown>,
     };
   } catch (error) {
-    return fail(undefined, error instanceof Error ? error.message : "request failed");
+    return fail(undefined, describeActionError(error));
   }
 }
 

@@ -4782,24 +4782,32 @@ def existing_suite_stands(app_tests: list[str]) -> list[str]:
     return [str(p) for p in (app_tests or []) if str(p).strip()]
 
 
-def write_tests_exhausted_message(*, stronger_lane: bool) -> str:
+def write_tests_exhausted_message(*, stronger_lane: bool, last_words: str = "",
+                                  changed: Optional[Sequence[str]] = None) -> str:
     """What the operator reads when the test author wrote nothing.
 
     "escalating to a frontier model" is said only when a different lane actually
-    ran. The same engine and model is "no stronger lane is configured"."""
-    if stronger_lane:
-        return (
-            "Test author produced no test files even after escalating to a frontier "
-            "model. No recognized test-file changes were found in the run workspace. "
-            "The cause is not established: inspect the test-author tool output and "
-            "changed paths before retrying. No application test result is available."
-        )
-    return (
-        "Test author produced no test files. No stronger lane is configured. "
-        "No recognized test-file changes were found in the run workspace. "
-        "The cause is not established: inspect the test-author tool output and "
-        "changed paths before retrying. No application test result is available."
-    )
+    ran. The same engine and model is "no stronger lane is configured".
+
+    It says WHAT WAS OBSERVED, never "inspect the tool output" (BOSSAPP-1428): the test
+    author's own last words (`last_words`, its run's summary; redacted and cut) and the paths it
+    did change (`changed`: none of them a test) — and the next step. It invents no cause."""
+    from .failure_words import short
+
+    lead = ("The test author wrote no test files, even after escalating to a frontier model."
+            if stronger_lane else
+            "The test author wrote no test files, and no stronger lane is configured to try.")
+    said = short(last_words, 160).replace("'", "’")
+    words = f" It ended by saying: '{said}'." if said else " It ended without a summary."
+    paths = [str(p) for p in (changed or []) if str(p).strip()]
+    if paths:
+        shown = ", ".join(paths[:5]) + (f" and {len(paths) - 5} more" if len(paths) > 5 else "")
+        files = f" It changed {shown} (none of them tests)."
+    else:
+        files = " It changed no files."
+    return (f"{lead}{words}{files} No application test result is available. Next: open this "
+            "build in Code Tasks and read the test author's turns, or press Retry with a note "
+            "naming the test folder (for example tests/).")
 
 
 def _implement_budget_seconds(engine, project_id, settings) -> int:
@@ -8865,11 +8873,20 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                            else "no_test_files_no_stronger_lane")})
                     _release(budget, c, project_id, reservation_id, "no independent tests authored", run_id=run_id)
                 _rescue_pr("the test author produced no test files")
+                # WHAT WAS OBSERVED, for the sentence: the author's last words and what it did
+                # change (the harness verdict was checked first, _stop_on_harness_failure).
+                try:
+                    _author_changed = [fc.path for fc in sandbox.diff()]
+                except Exception:  # noqa: BLE001 — the sentence says what it can
+                    _log_caught(logger)
+                    _author_changed = []
                 with _transaction(engine) as c:
                     return _fail(
                         c, run_id, project_id,
                         write_tests_exhausted_message(
-                            stronger_lane=_tests_escalation["stronger"]),
+                            stronger_lane=_tests_escalation["stronger"],
+                            last_words=str((r1 or {}).get("summary") or ""),
+                            changed=_author_changed),
                         failure_class="needs_human", reason_code="no_test_files")
             if not use_microvm:
                 # The placed template tests are frozen with QA's own.

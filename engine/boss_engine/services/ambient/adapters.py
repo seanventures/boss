@@ -55,7 +55,7 @@ def error_class(message: Any) -> str:
     same failure on two runs fingerprints the same and a different failure does not."""
     first = str(message or "").strip().splitlines()[0] if str(message or "").strip() else ""
     folded = _NOISE.sub("#", _ID.sub("<id>", first.lower()))
-    return re.sub(r"\s+", " ", folded)[:160] or "unknown error"
+    return re.sub(r"\s+", " ", folded)[:160] or "no error text"
 
 
 def _severity_from(labels: Mapping[str, Any], urgency: str) -> str:

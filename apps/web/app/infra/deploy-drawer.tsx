@@ -12,6 +12,7 @@ import React, { useState } from "react";
 import { RateIt } from "../improve/rate-it";
 
 import { showToast } from "../client-forms";
+import { couldNot } from "../../lib/action-result";
 import { actorWords } from "../../lib/actor-words";
 import { buildHref, changeHref, deployLogsHref, useDeployDetail, type DeployDetail, type DeployRow, type StepState } from "../../lib/infra-view";
 import { roleWords } from "../agents/chain-model";
@@ -20,6 +21,11 @@ import { StepDots, shownWord, useVerdict } from "./deploy-row";
 import { afterWrite, decideDeploy, deployTarget, redeployDelivery, rollbackDeploy, runHealthCheck } from "./infra-actions";
 import { CopyButton, ErrorLine, Menu, copyText, dur } from "./infra-util";
 import { Drawer, DrawerSection, Skeleton, StateWord } from "./kit";
+
+/** What each drawer button does, for "Couldn't <do it>: <reason>." */
+const DEPLOY_DOING: Record<string, string> = {
+  rollback: "roll back", redeploy: "redeploy", health: "run the health check",
+};
 
 export { DeployRail, DeployRowView } from "./deploy-row";
 
@@ -118,7 +124,7 @@ function DeployBody({ d, projectId, actor, refresh, onOpen }: {
     setBusy(key); setError(null);
     const r = await fn();
     setBusy(null);
-    if (!r.ok) { setError(r.error ?? "Couldn't do that"); return null; }
+    if (!r.ok) { setError(couldNot(DEPLOY_DOING[key] ?? key, r.error)); return null; }
     const data = (r.data ?? {}) as Record<string, unknown>;
     showToast("success", toast(data));
     refresh();

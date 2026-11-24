@@ -120,7 +120,7 @@ export function GroupDrawer({ projectId, group, keyName, row, since, onClose }: 
                 <span className="inf-trunc inf-mono inf-faint" data-copy="data">{c.model ?? "—"}</span>
                 <span className="inf-num" title="Tokens in / out">{compact(c.tokensIn)}/{compact(c.tokensOut)}</span>
                 <span className="inf-num">{ms(c.latencyMs)}</span>
-                <span className={c.ok ? "obs-ok" : "obs-bad"} title={c.ok ? "OK" : c.error ?? "Failed"} aria-label={c.ok ? "OK" : "Failed"}>{c.ok ? "ok" : "✗"}</span>
+                <span className={c.ok ? "obs-ok" : "obs-bad"} title={c.ok ? "OK" : c.error ?? "The call failed and BOSS recorded no error"} aria-label={c.ok ? "OK" : "Failed"}>{c.ok ? "ok" : "✗"}</span>
                 <CallErrorLine sentence={callErrorSentence(c.ok, c.error)} />
                 <span className="inf-num inf-faint" title="Retries">{c.retries ? `↻${c.retries}` : ""}</span>
                 {c.runId ? (

@@ -2089,7 +2089,7 @@ def execute_slack_post(context: "SkillExecutorContext", inputs: dict[str, Any]
     resp.raise_for_status()
     data = resp.json()
     if not data.get("ok"):
-        raise RuntimeError(f"Slack refused the post: {data.get('error') or 'unknown error'}")
+        raise RuntimeError(f"Slack refused the post: {data.get('error') or 'Slack gave no reason'}")
     return {"provider_ref": f"slack:{data.get('channel')}:{data.get('ts')}", "channel": channel}
 
 

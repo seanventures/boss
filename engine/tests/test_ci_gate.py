@@ -233,7 +233,9 @@ def test_no_checks_on_a_repo_with_ci_configured_is_not_a_pass():
     clock = Clock()
     out = _wait(FakeCi([[]], has_workflows=True), clock, timeout_seconds=600)
     assert out.state == "timed_out"
-    assert out.summary == "CI did not finish in 10 min: no checks were reported for this commit."
+    assert out.summary.startswith("CI did not finish in 10 min: no checks were reported for "
+                                  "this commit.")
+    assert out.summary.endswith("press Re-check on this card.")
     assert out.state not in ci_gate.CLEARED
 
 

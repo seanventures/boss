@@ -1016,7 +1016,7 @@ function failureReason(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
   }
-  return "unknown error";
+  return "no reason given";
 }
 
 function isNotFoundFailure(error: unknown): boolean {

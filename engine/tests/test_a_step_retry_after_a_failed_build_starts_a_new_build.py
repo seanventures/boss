@@ -213,7 +213,9 @@ def test_a_real_database_failure_is_recorded_on_the_step_and_its_dead_letter(
         dead = c.execute(text("SELECT reason, payload FROM deadletters WHERE payload->>"
                               "'workflow_run_id' = :r"), {"r": run_id}).mappings().one()
     assert step["status"] == "deadlettered"
-    assert step["last_error"].startswith("BOSS couldn't save this to its database.")
+    # A lost connection is said as that, with its way out (BOSSAPP-1428), never "couldn't save".
+    assert step["last_error"].startswith("BOSS lost its connection to its database"), step
+    assert "`boss doctor`" in step["last_error"]
     assert "server log" not in step["last_error"]
     record = step["output"]["error_record"]
     assert record["type"] == "sqlalchemy.exc.OperationalError"

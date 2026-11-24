@@ -483,7 +483,10 @@ export function stripSubline(i: StorageIncident): string {
   const parts: string[] = [];
   if (i.freePctNow !== null) parts.push(`${Math.round(i.freePctNow)} % free`);
   if (i.pausedRuns > 0) parts.push(`${i.pausedRuns} run${i.pausedRuns === 1 ? "" : "s"} paused at a checkpoint`, "nothing is lost");
-  if (!i.helper.reachable) parts.push("host helper unreachable", "on the host, check: boss steward status");
+  if (!i.helper.reachable) {
+    parts.push("The host helper isn't answering, so BOSS can't free space. On the host run "
+      + "`boss steward status`, then `boss steward install`.");
+  }
   return parts.join(" · ");
 }
 /** Progress towards the target, 0..1. */

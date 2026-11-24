@@ -17,6 +17,7 @@ import { AgentAvatar } from "../agent-avatar";
 import { useWrapMarks } from "../../lib/wrap-flow";
 import { costWords, isExternal, nodeWords, pxHref, readPxUrl, writePxUrl, type Agent, type Health, type Node, type PxUrl, type ReadState, type StepState } from "../../lib/project-experience";
 import { useLocalTime } from "../../lib/local-time";
+import { couldNot } from "../../lib/action-result";
 
 export type Tone = "teal" | "green" | "amber" | "red" | "violet" | "blue";
 
@@ -431,12 +432,13 @@ export function Cost({ usd, list, testid, empty }: { usd: number | null | undefi
   );
 }
 
-/** A card that couldn't load this time (04 states): "Couldn't load · Retry", inside the card,
- *  while every other card still shows. */
+/** A card that couldn't load this time (04 states): "Couldn't load: <why>. · Retry", inside the
+ *  card, while every other card still shows. The reason is on screen, not only in the tooltip
+ *  (BOSSAPP-1428). */
 export function CardFailed({ card, why, onRetry }: { card: string; why?: string; onRetry?: () => void }) {
   return (
     <div className="px-card-failed" role="alert" data-testid={`px-card-failed-${card}`} title={why || undefined}>
-      <CloudSlash size={14} aria-hidden /><span>Couldn&apos;t load</span><span aria-hidden>·</span>
+      <CloudSlash size={14} aria-hidden /><span data-user-text>{couldNot("load", why)}</span><span aria-hidden>·</span>
       {/* Inside a tile (itself a button) Retry is a span with the button role, never nested. */}
       <span role="button" tabIndex={0} className="px-linkbtn" data-testid={`px-card-retry-${card}`}
             onClick={(e) => { e.stopPropagation(); onRetry?.(); }}

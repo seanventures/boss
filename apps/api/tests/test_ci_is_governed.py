@@ -295,7 +295,8 @@ def test_ci_that_never_finishes_times_out_in_words_and_blocks(client, engine, mo
     assert polled["status"] == "timed_out"
     assert polled["summary"] == ("CI did not finish in 1 min: 'e2e' still running — "
                                  "https://github.test/acme/web/runs/3 (the 1 min count from when "
-                                 "the first check started running)")
+                                 "the first check started running). Open the check on GitHub "
+                                 "to see why it is slow, then press Re-check on this card.")
     deploy = _decision(engine, {"action": "review_deployment", "pull_request_url": url,
                                 "environment": api_main.settings.sandbox_deploy_environment})
     refused = client.post(f"/v1/decisions/{deploy}/approve", json={"actor": "ceo", "note": "x"})

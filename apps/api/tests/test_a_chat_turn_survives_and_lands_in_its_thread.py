@@ -134,7 +134,11 @@ def test_a_turn_killed_midway_keeps_the_message_and_ends_failed(client, engine, 
         "project_id": PROJECT, "actor": ACTOR, "thread_id": thread,
         "message": "Please keep this question"})
     assert said.status_code == 500
-    assert said.json()["detail"].startswith("BOSS couldn't finish this turn.")
+    detail = said.json()["detail"]
+    # Its one-line cause is said (BOSSAPP-1428), and where to look if it repeats.
+    assert detail.startswith("BOSS couldn't finish this turn: `"), detail
+    assert "worker lost its model connection" in detail
+    assert "Details shows the error" in detail
 
     read = _messages(client, thread)
     assert [m["role"] for m in read["messages"]] == ["user", "assistant"]
@@ -145,7 +149,8 @@ def test_a_turn_killed_midway_keeps_the_message_and_ends_failed(client, engine, 
         row = c.execute(text("SELECT status, error FROM agent_chat_turns WHERE thread_id = :t"),
                         {"t": thread}).mappings().one()
     assert row["status"] == "failed" and row["error"].startswith("BOSS couldn't finish")
-    assert "RuntimeError" not in row["error"]
+    # The cause is quoted once, as the error's own words (BOSSAPP-1428) — never a stack.
+    assert "worker lost its model connection" in row["error"] and "Traceback" not in row["error"]
 
 
 def test_a_turn_whose_process_died_is_swept_to_failed(client, engine):

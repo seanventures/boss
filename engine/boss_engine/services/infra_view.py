@@ -229,7 +229,10 @@ def deploy_status(raw_status: Optional[str], *, decision_status: Optional[str] =
                     + (f": {checked}." if checked else " (no result was recorded)."))
     elif phase == "failed":
         first = (str(failure or "").strip().splitlines() or [""])[0][:200]
-        sentence = first or ("Blocked before it ran." if status == "blocked" else "Failed.")
+        sentence = first or ("Blocked before it ran; no reason was recorded. Open it in Infra › "
+                             "Deploys to see its plan, then deploy again." if status == "blocked"
+                             else "It failed without recording why. Open its log in Infra › "
+                             "Deploys, then deploy again.")
     return {"phase": phase, "word": w["word"], "tone": w["tone"],
             "sentence": sentence or f"{w['word']}.", "now": now,
             # Offered only for a deploy that went live AND passed the health check it recorded:

@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import { API_URL, authHeaders } from "../lib/client";
+import { describeActionError } from "../lib/action-result";
 import { apiWrite } from "../lib/api-write";
 import { declareAction } from "../lib/identity/guarded-action";
 
@@ -51,7 +52,7 @@ async function get(
   } catch (error) {
     return {
       ok: false,
-      error: error instanceof Error ? error.message : "request failed",
+      error: describeActionError(error),
     };
   }
 }
@@ -88,7 +89,7 @@ async function post(
   } catch (error) {
     return {
       ok: false,
-      error: error instanceof Error ? error.message : "request failed",
+      error: describeActionError(error),
     };
   }
 }

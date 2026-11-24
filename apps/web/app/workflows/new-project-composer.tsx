@@ -72,6 +72,7 @@ import { ComposeSheet } from "../../components/v2/templates/compose-sheet";
 import { stackLabel, templatesApi, type Applied, type TemplateCard } from "../../lib/templates";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { useGuardedCall } from "../../components/identity/identity-provider";
+import { couldNot } from "../../lib/action-result";
 import { MULTIREPO_PLACES, listWords, multirepo, refusalMessage, roleLabel, shortName,
          type ProjectRepo } from "../../lib/multirepo";
 import { ComponentRows, rowKey, rowsToInput, type MapRow } from "../multirepo/parts";
@@ -853,7 +854,7 @@ export function NewProjectComposer({ projectId, actor, workflows, catalogue, onS
       ...(stackCheck.refused && stackCheck.allowed ? { allow_unsupported_stack: true } : {}),
     });
     if (!r.ok) {
-      setError(r.error ?? "Could not start it.");
+      setError(r.error || couldNot("start the run"));
       // Refused for what the project lacks: draw the list where the operator is looking.
       if ("readiness" in r && r.readiness) setRefusal(r.readiness);
       return { ok: false as const, id: null };
