@@ -162,8 +162,7 @@ make_ca() {
     openssl x509 -req -in "$ca/registry.csr" -CA "$ca/ca.crt" -CAkey "$ca/ca.key" -CAcreateserial \
       -days 60 -extfile "$ca/registry.ext" -out "$ca/registry.crt" 2>/dev/null || return 1
   fi
-  # mitmproxy's confdir: the CA key and certificate in one file. The image's entrypoint runs
-  # mitmproxy as the confdir's owner, which is what the egress rule below lets out.
+  # mitmproxy's confdir: the CA key and certificate in one file, owned by the proxy's uid.
   sudo rm -rf "$STATE/mitm"; mkdir -p "$STATE/mitm"
   cat "$ca/ca.key" "$ca/ca.crt" > "$STATE/mitm/mitmproxy-ca.pem"
   cp "$ca/ca.crt" "$STATE/mitm/mitmproxy-ca-cert.pem"
@@ -198,9 +197,13 @@ start_infra() {
   docker run -d --name entlane-dns --restart unless-stopped --network host "$IMG_DNS" \
     --listen-address="$DNS_IP" --bind-interfaces --no-resolv --server="$up" \
     --address=/entlane.internal/"$REG_IP" >/dev/null || return 1
+  # As PROXY_UID itself (the egress rule below lets that uid out), not through the image's
+  # entrypoint, which would re-own the confdir.
   docker run -d --name entlane-proxy --restart unless-stopped --network host \
-    -v "$STATE/mitm":/home/mitmproxy/.mitmproxy "$IMG_MITM" \
-    mitmdump --listen-host "$PROXY_IP" --listen-port 8080 --set flow_detail=1 >/dev/null || return 1
+    --user "$PROXY_UID:$PROXY_UID" -e HOME=/tmp --entrypoint mitmdump \
+    -v "$STATE/mitm":/entlane-mitm "$IMG_MITM" \
+    --set confdir=/entlane-mitm --listen-host "$PROXY_IP" --listen-port 8080 \
+    --set flow_detail=1 >/dev/null || return 1
   docker run -d --name entlane-npm --restart unless-stopped --network "$CORP_NET" \
     -p 127.0.0.1:47873:4873 -v "$HERE/verdaccio.yaml":/verdaccio/conf/config.yaml:ro \
     -v "$STATE/verdaccio":/verdaccio/storage "$IMG_VERDACCIO" >/dev/null || return 1
