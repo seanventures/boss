@@ -36,7 +36,7 @@ printf '%s %s\n' "$me" "$*" >> "$FAKE/calls"
 key() { printf '%s' "$1" | tr '/:' '__'; }
 case "$me" in
   sudo) exec "$@" ;;
-  update-ca-certificates) exit 0 ;;
+  update-ca-certificates|apt-get) exit 0 ;;
   systemctl)
     [ "$1 $2" = "restart docker" ] || exit 0
     [ -n "${FAKE_RESTART_KEEPS_PROXY:-}" ] && exit 0
@@ -90,7 +90,7 @@ esac
 exit 0
 """
 
-TOOLS = ("docker", "sudo", "iptables", "ip6tables", "systemctl", "update-ca-certificates")
+TOOLS = ("docker", "sudo", "iptables", "ip6tables", "systemctl", "update-ca-certificates", "apt-get")
 
 # The step itself, with the parts that need a real Linux box stubbed: packages, the CA, the dummy
 # LAN, and the post-bring-up checks (verify_network: proven on the VM, held statically below).
@@ -222,12 +222,25 @@ def test_the_reset_alone_takes_back_everything_a_run_set(tmp_path):
     w = World(tmp_path)
     assert w.network().returncode == 0
     (w.fake / "calls").unlink()
+    cache = Path(w.env["ENTLANE_STATE"]) / "verdaccio" / "storage"
+    cache.mkdir(parents=True)
+    (cache / "is-number.tgz").write_text("cached")
     r = subprocess.run(["bash", "-c", 'source "$LANE"; reset_lane_network'], env=w.env,
                        capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stdout + r.stderr
     assert w.settings() == {"daemon": None, "apt": None, "trust": False, "firewall": [],
                             "proxy_up": False}
     assert not (w.fake / "daemon-proxy").exists()
+    # The mirror fetches again, as on the first run (and its cache is disk the install needs).
+    assert not cache.parent.exists()
+
+
+def test_every_run_starts_from_a_fresh_checkout():
+    """Fetching the bundle into the old checkout added a whole-history pack per run (2.5 GB after
+    21 runs): the rerun's install ran the 30 GB box out of disk."""
+    lima = (REPO / "scripts" / "enterprise-lane" / "lima.sh").read_text()
+    assert "rm -rf ~/boss-src" in lima and "git clone -q /tmp/boss.bundle ~/boss-src" in lima
+    assert "fetch -q /tmp/boss.bundle" not in lima
 
 
 def test_a_daemon_still_holding_a_proxy_with_a_clean_file_gets_one_restart(tmp_path):

@@ -42,7 +42,11 @@ rm -rf "$(dirname "$BUNDLE")"
 limactl shell "$VM" -- bash -lc "
   set -e
   command -v git >/dev/null || { sudo apt-get update -q && sudo DEBIAN_FRONTEND=noninteractive apt-get install -yq git; }
-  if [ -d ~/boss-src/.git ]; then git -C ~/boss-src fetch -q /tmp/boss.bundle HEAD; else git clone -q /tmp/boss.bundle ~/boss-src; fi
+  # A fresh clone every run: fetching a bundle into the old one added a whole-history pack per run
+  # (21 runs, 2.5 GB), disk the install then lacked. The tenth run starts like the first.
+  rm -rf ~/boss-src
+  git clone -q /tmp/boss.bundle ~/boss-src
+  rm -f /tmp/boss.bundle
   git -C ~/boss-src -c advice.detachedHead=false checkout -q --detach $SHA"
 
 set +e

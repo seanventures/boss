@@ -209,6 +209,10 @@ reset_lane_network() {
     sudo "$tool" -F "$chain" 2>/dev/null; sudo "$tool" -X "$chain" 2>/dev/null
   done
   sudo rm -f "$APT_PROXY_FILE"
+  # The npm mirror's cache: a rerun must fetch through the mirror as the first run did, and the
+  # install needs the disk (1 GB after a few runs on a 30 GB box). apt's download cache too.
+  sudo rm -rf "$STATE/verdaccio"
+  command -v apt-get >/dev/null 2>&1 && sudo apt-get clean
   if [ -e "$CA_TRUST_FILE" ]; then
     sudo rm -f "$CA_TRUST_FILE" && sudo update-ca-certificates >/dev/null 2>&1
   fi
