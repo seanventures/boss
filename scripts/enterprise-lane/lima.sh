@@ -47,7 +47,7 @@ limactl shell "$VM" -- bash -lc "
 
 set +e
 LANE_ARGS=""; [ $# -eq 0 ] || LANE_ARGS="$(printf '%q ' "$@")"
-limactl shell "$VM" -- bash -lc "cd ~/boss-src && scripts/enterprise-lane.sh --report ~/boss-ent-lane/report.md $LANE_ARGS"
+limactl shell "$VM" -- bash -lc "cd ~/boss-src && ENTLANE_THROWAWAY_VM=1 scripts/enterprise-lane.sh --report ~/boss-ent-lane/report.md $LANE_ARGS"
 rc=$?
 set -e
 limactl shell "$VM" -- bash -lc "cat ~/boss-ent-lane/report.md" > "$ROOT/enterprise-lane-report.md" 2>/dev/null &&

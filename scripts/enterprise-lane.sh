@@ -61,6 +61,12 @@ while [ $# -gt 0 ]; do
 done
 [ "$(uname -s)" = Linux ] || { echo "enterprise-lane: run this on the Linux VM (scripts/enterprise-lane/lima.sh on a Mac)" >&2; exit 2; }
 [ "$(id -u)" != 0 ] || { echo "enterprise-lane: run as a normal user with sudo, not as root" >&2; exit 2; }
+# It rewrites Docker's daemon settings, adds iptables REJECT rules, prunes Docker's build cache and
+# deletes its install directory: only on a VM made for it (lima.sh sets this).
+[ "${ENTLANE_THROWAWAY_VM:-}" = 1 ] || {
+  echo "enterprise-lane: this reconfigures the whole machine (Docker, firewall, apt). Run it only on a" >&2
+  echo "throwaway VM made for it, with ENTLANE_THROWAWAY_VM=1 (scripts/enterprise-lane/lima.sh sets it)." >&2
+  exit 2; }
 
 mkdir -p "$STATE/logs" "$STATE/ca" "$STATE/mitm"
 REPORT="${REPORT:-$STATE/report.md}"
@@ -329,6 +335,7 @@ boss_cmd() { (cd "$INSTALL" && env -u BOSS_INSTALL_DIR bash scripts/install/boss
 
 step_install() {
   if [ -e "$INSTALL" ]; then
+    [ -f "$INSTALL/.entlane" ] || { echo "$INSTALL exists and is not a lane install; refusing to remove it"; return 1; }
     echo "removing the previous lane install at $INSTALL"
     if [ -f "$INSTALL/.env" ]; then
       (cd "$INSTALL" && docker compose $(bash scripts/install/compose_files.sh . 2>/dev/null | tr '\n' ' ') \
@@ -358,6 +365,7 @@ step_install() {
   local health
   health=$(curl -fsS --max-time 10 "http://127.0.0.1:$(awk -F= '/^BOSS_API_PORT=/ {print $2}' "$INSTALL/.env")/health" 2>&1) ||
     { echo "the API does not answer /health after the install: $health"; return 1; }
+  touch "$INSTALL/.entlane"   # marks the directory as the lane's own, for the next run
   local before after
   before=$(df -Pk "$HOME" | awk 'NR==2 {print int($4/1048576)}')
   # The 30 GB box: an install leaves its build cache behind (about 10 GB), and the e2e gate
@@ -385,7 +393,9 @@ step_sandbox() {
   cat "$LOGS/doctor.txt"
   local line; line=$(grep -i 'engine sandbox' "$LOGS/doctor.txt" | head -n1)
   [ -n "$line" ] || { echo "boss doctor printed no engine sandbox line"; return 1; }
-  grep -qiE '(✗|bad|fail|FAIL)' <<<"$line" && { echo "boss doctor: $line"; return 1; }
+  # doctor prints "ok" or "bad"/"✗" first on each line.
+  grep -qE '^[[:space:]]*(✗|FAIL|bad|BAD|warn|WARN)\b' <<<"$line" && { echo "boss doctor: $line"; return 1; }
+  grep -qE '^[[:space:]]*(✓|ok|OK)\b' <<<"$line" || { echo "boss doctor: $line"; return 1; }
   echo "inner sandbox $SANDBOX_MODE on; boss doctor: $(echo "$line" | sed 's/^[^a-zA-Z]*//' | cut -c1-160)"
 }
 
@@ -429,6 +439,7 @@ step_build() {
   local pw; pw=$(awk -F= '/^BOSS_DB_PASSWORD=/ {print $2}' "$INSTALL/.env")
   local envf; envf="$(mktemp)"; chmod 600 "$envf"
   # The gate's database lives on the install's own Postgres (a lane VM's throwaway install).
+  pw=$(printf '%s' "$pw" | python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.stdin.read(), safe=""))')
   printf 'BOSS_E2E_GATE_PG_URL=postgresql://boss:%s@db:5432/postgres\n' "$pw" > "$envf"
   unset pw
   docker exec -u 0 "$w" rm -rf /tmp/entlane-gate && docker exec -u 0 "$w" mkdir -p /tmp/entlane-gate &&
@@ -497,6 +508,8 @@ fi
 TOTAL=$(( $(date +%s) - STARTED ))
 FAILS=$(awk -F'\t' '$2 != "PASS"' "$RESULTS" | wc -l | tr -d ' ')
 VERDICT=PASS; [ "$FAILS" = 0 ] || VERDICT=FAIL
+# Only a full run from a fresh install is release evidence.
+if [ "$VERDICT" = PASS ] && { [ -n "$ONLY" ] || [ "$REUSE" = 1 ]; }; then VERDICT=PARTIAL; fi
 {
   echo "# Enterprise lane report"
   echo
@@ -521,4 +534,4 @@ VERDICT=PASS; [ "$FAILS" = 0 ] || VERDICT=FAIL
 } > "$REPORT"
 echo
 echo "== enterprise lane: $VERDICT ($FAILS failing) in $(( TOTAL / 60 )) min. Report: $REPORT"
-[ "$VERDICT" = PASS ]
+[ "$VERDICT" != FAIL ]

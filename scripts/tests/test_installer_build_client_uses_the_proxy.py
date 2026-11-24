@@ -34,12 +34,15 @@ with open(os.environ["TRACE"], "a") as f:
                         "no": os.environ.get("NO_PROXY", "")}) + "\\n")
 """)
     fake.chmod(0o700)
-    sudo = tmp_path / "sudo"     # a sudo that resets the environment, as the real one does
-    sudo.write_text('#!/bin/sh\nexec env -u HTTPS_PROXY -u NO_PROXY "$@"\n')
+    sudo = tmp_path / "sudo"
+    # A sudo that resets the environment and takes its own options, as the real one does.
+    sudo.write_text('#!/bin/sh\nwhile [ "${1#-}" != "$1" ]; do shift; done\n'
+                    'exec env -u HTTPS_PROXY -u NO_PROXY "$@"\n')
     sudo.chmod(0o700)
     envf = tmp_path / ".env"
     envf.write_text(env_lines)
-    compose_cmd = shlex.quote(str(fake)) if compose == "fake" else f"sudo {shlex.quote(str(fake))}"
+    compose_cmd = (shlex.quote(str(fake)) if compose == "fake" else
+                   f"sudo -n {shlex.quote(str(fake))} --host unix:///var/run/docker.sock compose")
     script = tmp_path / "build.sh"
     script.write_text(
         "set -euo pipefail\nui_info() { :; }\ndie() { echo \"$*\" >&2; exit 1; }\n"

@@ -1667,7 +1667,11 @@ if [[ -n "$_up_proxy" ]]; then
   [[ -z "$_up_extra" ]] || _up_no_proxy="$_up_no_proxy,$_up_extra"
   _proxy_env=(env "HTTPS_PROXY=$_up_proxy" "https_proxy=$_up_proxy" "NO_PROXY=$_up_no_proxy" "no_proxy=$_up_no_proxy")
   if [[ "${COMPOSE[0]}" == sudo ]]; then
-    _BUILD_CMD=(sudo "${_proxy_env[@]}" "${COMPOSE[@]:1}")
+    # sudo and its own options (the scoped fallback passes -n), then env, then docker.
+    _i=1
+    while [[ $_i -lt ${#COMPOSE[@]} && "${COMPOSE[$_i]}" == -* ]]; do _i=$((_i + 1)); done
+    _BUILD_CMD=("${COMPOSE[@]:0:$_i}" "${_proxy_env[@]}" "${COMPOSE[@]:$_i}")
+    unset _i
   else
     _BUILD_CMD=("${_proxy_env[@]}" "${COMPOSE[@]}")
   fi

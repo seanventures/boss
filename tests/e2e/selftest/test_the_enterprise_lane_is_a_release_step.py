@@ -35,7 +35,7 @@ def test_the_lane_runs_what_the_rca_asked_for():
         assert setting in src, setting
     # The inner sandbox on, through the documented loader and .env line.
     assert "load_apparmor.sh" in src and "BOSS_ENGINE_INNER_SANDBOX=$SANDBOX_MODE" in src
-    # Both tier-A gates, under the install's profiles; the build inside the installed worker.
+    # Both tier-A gates, under the install's profiles; the build inside the installed api container.
     assert 'gate plumbing' in src and 'gate engines' in src and "--inner-sandbox" in src
     assert "engines.py" in src and "--scenario clean" in src
     # The managed Codex policy and the check through the real launcher (sandbox_identity.bind).

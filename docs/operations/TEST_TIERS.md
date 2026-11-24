@@ -259,6 +259,11 @@ scripts/enterprise-lane.sh --only codex,build  # only some steps (host and netwo
 | engines | `scripts/e2e-gate.sh engines --inner-sandbox <mode>`: the whole build pipeline on the scripted engine, the same way | A build breaks under the hardened profiles |
 | build | One scripted build (the engines gate's clean scenario) inside the INSTALLED api container, where builds run: its real profiles, fence, CA and launcher | A build breaks on the real install, not only in the gate's container |
 
+**Only a full run counts.** A run with `--only` or `--reuse-install` ends in `PARTIAL`, never
+`PASS`: use it while fixing, then run the whole lane for the release. The script refuses to run
+unless `ENTLANE_THROWAWAY_VM=1` (the Lima driver sets it), because it rewrites Docker's settings,
+the firewall and apt on the machine it runs on.
+
 **No model key is needed.** Builds use the scripted conformance engine. When `CODEX_API_KEY` or
 `OPENAI_API_KEY` is exported, the installer receives it the way a person would give it; nothing
 the lane prints carries a credential.
