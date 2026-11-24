@@ -435,7 +435,10 @@ gate() {
   # This checkout (the commit the install was made from), in the installed worker image. Not the
   # install directory itself: the installer makes it private to its owner (umask 077).
   bash "$ROOT/scripts/e2e-gate.sh" "$tier" --image "$(docker inspect -f '{{.Config.Image}}' "$(ctr worker)")" \
-    --inner-sandbox "$SANDBOX_MODE" --enterprise-env "$INSTALL/.env" --keep 2>&1; rc=$?
+    --inner-sandbox "$SANDBOX_MODE" --enterprise-env "$INSTALL/.env" --keep > "$LOGS/$tier-gate.txt" 2>&1; rc=$?
+  cat "$LOGS/$tier-gate.txt"
+  # The gate's own verdict line is this step's evidence.
+  grep -E '^(PASS|FAIL): ' "$LOGS/$tier-gate.txt" | tail -n 1 || true
   return $rc
 }
 step_plumbing() { gate plumbing; }

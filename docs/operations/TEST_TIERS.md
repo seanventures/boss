@@ -269,8 +269,8 @@ the firewall and apt on the machine it runs on.
 the lane prints carries a credential.
 
 **When it runs.** Before every release (it is listed under `P0: release:` in `tests/tiers.yaml`),
-and nightly when a VM is free. It takes about an hour on the 4 vCPU VM, most of it the image
-build through the proxy.
+and nightly when a VM is free. It took 44 minutes on the 4 vCPU VM (2026-11-24): about 9 minutes for the
+from-scratch install through the proxy, 28 for the engines tier.
 
 **A red lane.** Read the step's log (`~/boss-ent-lane/logs/<step>.log` on the VM). A red
 `network` or `host` is the lane's own problem; fix the lane. Any other red is a product bug
