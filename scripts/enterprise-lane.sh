@@ -400,7 +400,8 @@ step_codex() {
   done
   docker cp "$HERE/launcher_check.py" "$(ctr api):/tmp/entlane_launcher_check.py" || return 1
   local out rc
-  out=$(docker exec "$(ctr api)" /usr/local/libexec/boss/with-extra-ca \
+  # As `boss`, the user the API runs builds as (docker exec defaults to root).
+  out=$(docker exec -u boss "$(ctr api)" /usr/local/libexec/boss/with-extra-ca \
         python3 /tmp/entlane_launcher_check.py boss-dogfood 2>&1); rc=$?
   echo "$out"
   [ "$rc" = 0 ] || { echo "launcher check failed: $(echo "$out" | tail -n1 | cut -c1-300)"; return 1; }
@@ -410,7 +411,9 @@ step_codex() {
 # ---- 6/7. the e2e gate, with the install's security profiles ---------------------------------------
 gate() {
   local tier="$1" out rc
-  (cd "$INSTALL" && bash scripts/e2e-gate.sh "$tier" --inner-sandbox "$SANDBOX_MODE" --keep) 2>&1; rc=$?
+  # The gate's code from this checkout; the BOSS under test is the installed tree.
+  bash "$ROOT/scripts/e2e-gate.sh" "$tier" --boss-root "$INSTALL" --image "$(docker inspect -f '{{.Config.Image}}' "$(ctr worker)")" \
+    --inner-sandbox "$SANDBOX_MODE" --keep 2>&1; rc=$?
   return $rc
 }
 step_plumbing() { gate plumbing; }
@@ -428,12 +431,12 @@ step_build() {
   printf 'BOSS_E2E_GATE_PG_URL=postgresql://boss:%s@db:5432/postgres\n' "$pw" > "$envf"
   unset pw
   docker exec -u 0 "$w" rm -rf /tmp/entlane-gate && docker exec -u 0 "$w" mkdir -p /tmp/entlane-gate &&
-  docker cp "$INSTALL/tests/e2e" "$w:/tmp/entlane-gate/e2e" &&
+  docker cp "$ROOT/tests/e2e" "$w:/tmp/entlane-gate/e2e" &&
   docker exec -u 0 "$w" chown -R boss /tmp/entlane-gate || { rm -f "$envf"; echo "could not copy the gate into the api container"; return 1; }
   local rc
   # The gate enters builds without a person (identity in shadow), as the engines tier does: it
   # tests the pipeline in this container, not who may start it.
-  docker exec --env-file "$envf" -e BOSS_AUTHZ_MODE=shadow -e BOSS_ARTIFACTS_DIR=/tmp/entlane-gate/artifacts \
+  docker exec -u boss --env-file "$envf" -e BOSS_AUTHZ_MODE=shadow -e BOSS_ARTIFACTS_DIR=/tmp/entlane-gate/artifacts \
     -e BOSS_BUILD_SERVICES_PREFIX=boss_entlane_ -w /tmp "$w" \
     /usr/local/libexec/boss/with-extra-ca python3 /tmp/entlane-gate/e2e/gate/engines.py \
     --scenario clean --out /tmp/entlane-gate/results.json; rc=$?
