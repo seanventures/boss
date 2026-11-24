@@ -56,5 +56,8 @@ rc=$?
 set -e
 limactl shell "$VM" -- bash -lc "cat ~/boss-ent-lane/report.md" > "$ROOT/enterprise-lane-report.md" 2>/dev/null &&
   echo "report: $ROOT/enterprise-lane-report.md"
+# Hand the space the run freed inside the VM (pruned images, build cache) back to this Mac: the
+# VM's disk file only grows otherwise (a failed install grew it 8 GB, under this script's 40 GB floor).
+limactl shell "$VM" -- sudo fstrim -a >/dev/null 2>&1 || true
 [ "$KEEP" = 1 ] || limactl stop "$VM" >/dev/null
 exit $rc
