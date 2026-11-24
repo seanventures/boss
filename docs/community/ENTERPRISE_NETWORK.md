@@ -134,7 +134,10 @@ address is the container itself. Use `host.docker.internal` or the machine's net
 `BOSS_UPSTREAM_HTTP_PROXY` is the proxy for plain `http://`, and is used only if you set it (for
 example, when Debian's apt mirrors are reachable only through the proxy during the image build).
 Without it, plain http (previews, app sidecars, a model server on the LAN) never goes to the
-proxy.
+proxy. Before it builds, the installer checks that `deb.debian.org` answers over plain http the
+way the build will reach it. If it does not, it stops and names the setting (when your
+`BOSS_UPSTREAM_PROXY` would reach it, it says to set `BOSS_UPSTREAM_HTTP_PROXY` to the same
+value). `BOSS_APT_PREFLIGHT=warn` lets the install go on anyway.
 
 * Image builds get `HTTPS_PROXY`, `HTTP_PROXY` (when set) and `NO_PROXY` for every download step.
   The build command itself (the `docker` client, which fetches registry tokens for BuildKit) gets

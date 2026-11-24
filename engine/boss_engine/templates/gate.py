@@ -465,15 +465,34 @@ INSTALL_NEXT = ("Open the build's Checks to read the install output, resolve the
                 "--legacy-peer-deps), then retry the build.")
 
 
-def install_reason(install_failure: Any) -> Optional[str]:
+def install_refusal(install_failure: Any) -> Optional[dict]:
+    """network_refusal.explain for a recorded install failure: a download the company network
+    refused (its CA, BOSS's fence, the company proxy), with the setting that fixes it; else None."""
+    if not isinstance(install_failure, Mapping):
+        return None
+    from ..services.network_refusal import explain
+
+    env = install_failure.get("environment")
+    evidence = str(env.get("evidence") or "") if isinstance(env, Mapping) else ""
+    return explain(f"{evidence}\n{install_failure.get('summary') or ''}")
+
+
+def install_reason(install_failure: Any, *, with_action: bool = True) -> Optional[str]:
     """"dependencies did not install: ERESOLVE …" for a recorded install failure
-    (verification_target.install_failure), else None."""
+    (verification_target.install_failure), else None. A download the network refused also says
+    what happened and, with `with_action`, the setting that fixes it (BOSSAPP-1435/1436): a code
+    change never would. No final full stop: callers end the sentence."""
     if not isinstance(install_failure, Mapping):
         return None
     summary = str(install_failure.get("summary") or "").strip()
     if not summary:
         how = "timed out" if install_failure.get("timed_out") else f"exit {install_failure.get('exit_code')}"
         summary = f"`{install_failure.get('command') or 'the install'}` {how}"
+    refused = install_refusal(install_failure)
+    if refused:
+        said = " ".join([refused["what"]] + ([refused["action"], "Then retry the build"]
+                                             if with_action else []))
+        return f"dependencies did not install: {summary[:500].rstrip('.')}. {said.rstrip('.')}"
     return f"dependencies did not install: {summary[:500]}"
 
 
@@ -544,10 +563,14 @@ def hold_outcome(failing: Any, install_failure: Any = None, *, app_serves: Any =
         # The blocked line says WHERE, so nobody has to open the Checks to learn which file.
         whys["no_committed_secrets"] += secret_scan_where(secret_scan)
     next_step = _NEXT[gates[0]]
-    install = install_reason(install_failure)
+    install = install_reason(install_failure, with_action=False)
     if install and "template_tests" in whys:
         whys["template_tests"] = install
-        next_step = INSTALL_NEXT if gates[0] == "template_tests" else next_step
+        refused = install_refusal(install_failure)
+        if gates[0] == "template_tests":
+            # The network's refusal is fixed by a setting, never by resolving a dependency.
+            next_step = (f"{refused['action']} Then retry the build." if refused
+                         else INSTALL_NEXT)
     if not install and "template_tests" in whys and _derived_from_tests(template_tests):
         from ..services.verification_target import checks_headline
 

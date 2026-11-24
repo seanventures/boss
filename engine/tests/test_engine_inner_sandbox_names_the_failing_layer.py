@@ -137,7 +137,14 @@ def test_a_managed_login_names_the_layer_in_its_cannot_write_sentence():
     assert "refuses unprivileged user namespaces" in sentence and "Fix:" in sentence
 
 
-def test_checkup_runs_the_probe_in_the_worker_only_when_env_opts_in():
+def test_checkup_runs_the_probe_where_builds_start_codex_only_when_env_opts_in():
     checkup = (ROOT / "scripts/install/checkup.sh").read_text()
     assert "boss_engine.services.engine_inner_sandbox --expect" in checkup
+    # The launcher (boss-sandbox-exec, the sandboxes volume) is in the api container, not the
+    # worker: a probe in the worker always reported the launcher "unavailable".
+    line = next(ln for ln in checkup.splitlines() if "engine_inner_sandbox --expect" in ln)
+    assert '"${STACK}-api-1"' in line and "worker" not in line
+    compose = (ROOT / "scripts/install/community-compose.yml").read_text()
+    api = compose[compose.index("\n  api:\n"):compose.index("\n  worker:\n")]
+    assert "/var/lib/boss/sandboxes" in api
     assert 'engine_mode="$(env_value BOSS_ENGINE_INNER_SANDBOX' in checkup

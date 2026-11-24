@@ -291,3 +291,90 @@ def test_boss_uses_the_docker_context_the_install_was_made_with(tmp_path):
     assert run({}) == "[colima-boss]"
     assert run({"DOCKER_CONTEXT": "desktop-linux"}) == "[desktop-linux]"      # the shell's choice wins
     assert run({"DOCKER_HOST": "unix:///tmp/x.sock"}) == "[]"
+
+
+# ---- Debian's plain-http mirror (BOSSAPP-1446) ------------------------------------------------------
+#
+# The image build's apt-get reaches deb.debian.org over plain http, through a proxy only when
+# BOSS_UPSTREAM_HTTP_PROXY names one. On a proxy-only box the TLS check passed and the build died
+# minutes in with "Unable to locate package gcc". The preflight now asks the mirror first.
+
+@pytest.fixture
+def forward_proxy():
+    """A plain-http forward proxy that answers every absolute-URI request with 200."""
+    seen = []
+
+    class Proxy(http.server.BaseHTTPRequestHandler):
+        def do_HEAD(self):
+            seen.append(self.path)
+            self.send_response(200)
+            self.end_headers()
+
+        do_GET = do_HEAD
+
+        def log_message(self, *_):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Proxy)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_port}", seen
+    server.shutdown()
+    server.server_close()
+
+
+# An address nothing listens on: "direct" egress refused, as on the lane's locked-down box.
+NO_ROUTE = "http://127.0.0.1:9/debian/dists/bookworm/InRelease"
+
+
+def _apt(tmp_path, http_proxy, https_proxy, url=NO_ROUTE):
+    env = {k: v for k, v in os.environ.items() if not k.lower().endswith("_proxy")}
+    env["DOCKER_CONFIG"] = str(tmp_path / "docker")          # no client proxies from this machine
+    env["http_proxy"] = "http://127.0.0.1:9"                 # a shell proxy must not be used
+    script = f'set -euo pipefail; . "{PREFLIGHT}"; boss_apt_diagnose "$1" "$2" "$3"'
+    return subprocess.run(["bash", "-c", script, "-", http_proxy, https_proxy, url], env=env,
+                          capture_output=True, text=True, timeout=60)
+
+
+def test_a_mirror_reachable_only_through_the_https_proxy_names_the_setting_to_copy(tmp_path, forward_proxy):
+    proxy, seen = forward_proxy
+    result = _apt(tmp_path, "", proxy)
+    assert result.returncode == 1
+    assert "Unable to locate package gcc" in result.stdout
+    assert 'export BOSS_UPSTREAM_HTTP_PROXY="$BOSS_UPSTREAM_PROXY"' in result.stdout
+    assert proxy not in result.stdout and proxy.rsplit(":", 1)[1] not in result.stdout  # never the proxy
+    assert seen and seen[0].startswith("http://127.0.0.1:9/")
+
+
+def test_with_the_http_proxy_set_the_mirror_check_passes(tmp_path, forward_proxy):
+    proxy, _ = forward_proxy
+    assert _apt(tmp_path, proxy, proxy).returncode == 0
+
+
+def test_no_way_to_the_mirror_says_what_to_set_and_what_to_ask_it(tmp_path):
+    result = _apt(tmp_path, "", "")
+    assert result.returncode == 1
+    assert "cannot reach it directly" in result.stdout
+    assert "Set BOSS_UPSTREAM_HTTP_PROXY" in result.stdout and "port 80" in result.stdout
+
+
+def test_a_refusing_http_proxy_is_named_as_the_one_to_fix(tmp_path):
+    result = _apt(tmp_path, "http://127.0.0.1:9", "")
+    assert result.returncode == 1
+    assert "through BOSS_UPSTREAM_HTTP_PROXY" in result.stdout and "Ask IT" in result.stdout
+
+
+def test_the_docker_clients_own_http_proxy_counts(tmp_path, forward_proxy):
+    """Docker's client hands ~/.docker/config.json proxies to every build: the build would reach
+    the mirror, so the preflight must not refuse."""
+    proxy, _ = forward_proxy
+    (tmp_path / "docker").mkdir()
+    (tmp_path / "docker" / "config.json").write_text(json.dumps({"proxies": {"default": {"httpProxy": proxy}}}))
+    assert _apt(tmp_path, "", "").returncode == 0
+
+
+def test_the_installer_checks_the_mirror_before_the_build():
+    install = (ROOT / "install.sh").read_text()
+    build = install.index('ui_step "Building and starting Community stack')
+    check = install.index('boss_apt_diagnose "$(env_value BOSS_UPSTREAM_HTTP_PROXY)" "$(env_value BOSS_UPSTREAM_PROXY)"')
+    assert check < build
+    assert "BOSS_APT_PREFLIGHT" in install

@@ -13,6 +13,12 @@
 #       ~/.docker/config.json names a credential helper (credsStore) that is not installed: every
 #       image pull fails with "docker-credential-…: executable file not found". The usual cause is
 #       a Mac where Docker Desktop was removed (credsStore: desktop) in favour of Colima.
+#   boss_apt_diagnose HTTP_PROXY HTTPS_PROXY [URL]
+#       Can the image build reach Debian's package mirror? The build's apt-get (gcc, git, curl)
+#       fetches over PLAIN http from deb.debian.org, through a proxy only when
+#       BOSS_UPSTREAM_HTTP_PROXY names one. On a network whose only way out is the company proxy,
+#       the build otherwise dies minutes in with "Unable to locate package gcc" (BOSSAPP-1446).
+#       It names the setting to change, and says when the proxy BOSS_UPSTREAM_PROXY would work.
 
 boss_tls_issuer() {
   # The issuer of the certificate HOST presents, as curl reports it (no verification).
@@ -102,5 +108,71 @@ except Exception:
       printf '      Install docker-credential-%s, or back up %s and remove its "credsStore" line.\n' "$store" "$cfg" ;;
   esac
   printf '    See docs/community/COLIMA.md (Docker credential helper).\n'
+  return 1
+}
+
+# The HTTP status of URL fetched through PROXY ("" = no proxy at all, whatever the shell has):
+# "000" when nothing answered. Never prints a proxy value (it may carry a login).
+boss_http_status() {
+  local url="$1" proxy="$2" code
+  if [ -n "$proxy" ]; then
+    code="$(curl -sS -o /dev/null -I --max-time 10 -w '%{http_code}' --proxy "$proxy" "$url" 2>/dev/null || true)"
+  else
+    code="$(curl -sS -o /dev/null -I --max-time 10 -w '%{http_code}' --noproxy '*' "$url" 2>/dev/null || true)"
+  fi
+  printf '%s\n' "${code:-000}"
+}
+
+# The plain-http proxy Docker's client hands every build on its own (~/.docker/config.json
+# "proxies"), or "".
+boss_docker_client_http_proxy() {
+  local cfg="${DOCKER_CONFIG:-$HOME/.docker}/config.json"
+  [ -f "$cfg" ] || return 0
+  python3 -c 'import json, sys
+try:
+    p = (json.load(open(sys.argv[1])).get("proxies") or {}).get("default") or {}
+    print(p.get("httpProxy") or "")
+except Exception:
+    print("")' "$cfg" 2>/dev/null || true
+}
+
+boss_apt_diagnose() {
+  local http_proxy_setting="$1" https_proxy_setting="$2"
+  local url="${3:-http://deb.debian.org/debian/dists/bookworm/InRelease}"
+  local host code via code_https how
+  host="${url#*://}"; host="${host%%/*}"
+  via="$http_proxy_setting"; how=" through BOSS_UPSTREAM_HTTP_PROXY"
+  if [ -z "$via" ]; then
+    via="$(boss_docker_client_http_proxy)"; how=" through the proxy in Docker's config.json"
+  fi
+  [ -n "$via" ] || how=" directly"
+  code="$(boss_http_status "$url" "$via")"
+  case "$code" in 2??|3??) return 0 ;; esac
+  if [ "$code" = 000 ]; then
+    printf '\n  ✗ The image build installs Debian packages (gcc, git, curl) over plain http from %s, and this machine cannot reach it%s.\n' \
+      "$host" "$how"
+  else
+    printf '\n  ✗ The image build installs Debian packages (gcc, git, curl) over plain http from %s, and it answered HTTP %s%s.\n' \
+      "$host" "$code" "$how"
+  fi
+  printf '    Without it the build stops minutes in with "Unable to locate package gcc".\n'
+  if [ -z "$http_proxy_setting" ] && [ -n "$https_proxy_setting" ]; then
+    code_https="$(boss_http_status "$url" "$https_proxy_setting")"
+    case "$code_https" in
+      2??|3??)
+        printf '    It is reachable through your proxy (BOSS_UPSTREAM_PROXY), which BOSS uses only for https.\n'
+        printf '    Use it for plain http too, then run the installer again:\n'
+        printf '      export BOSS_UPSTREAM_HTTP_PROXY="$BOSS_UPSTREAM_PROXY"\n'
+        return 1 ;;
+    esac
+    printf '    Not through BOSS_UPSTREAM_PROXY either (%s).\n' "$([ "$code_https" = 000 ] && echo 'no answer' || echo "HTTP $code_https")"
+  fi
+  if [ -n "$http_proxy_setting" ]; then
+    printf '    Ask IT to let that proxy reach %s on port 80, or set BOSS_UPSTREAM_HTTP_PROXY to the proxy that does, then run the installer again.\n' "$host"
+  else
+    printf '    Set BOSS_UPSTREAM_HTTP_PROXY to your company proxy for plain http (export BOSS_UPSTREAM_HTTP_PROXY=http://proxy.example.com:8080),\n'
+    printf '    or ask IT to allow %s on port 80, then run the installer again.\n' "$host"
+  fi
+  printf '    See docs/community/ENTERPRISE_NETWORK.md.\n'
   return 1
 }

@@ -74,16 +74,22 @@ def _provider_sentence(error: str, fallback: str) -> str:
 
 def unavailable_reply(error: Optional[str], provider: Optional[str] = None) -> Optional[str]:
     """Why no model answered, in the provider's own words, or None when they say nothing
-    specific. Two causes a person must never be sent to Setup to "connect a model" for:
+    specific. Causes a person must never be sent to Setup to "connect a model" for:
 
       * OUT OF CREDIT (BOSSAPP-604): add credit or switch provider;
       * A USAGE LIMIT (laptop 2026-11-20): the model IS connected and signed in — its
         subscription window is used up ("You've hit your weekly limit · resets 6pm (UTC)").
         Ask BOSS answered "connect one in Setup" for a whole day while Setup showed the model
         connected; the person needs the reset time, and that another connected model can take
-        the work meanwhile."""
+        the work meanwhile;
+      * BOSS'S OWN SCRATCH FOLDER could not be made (BOSSAPP-1449): the model was never asked."""
     from . import provider_limits
+    from .scratch import explain as scratch_failure
 
+    # BOSS's own side, not the model's: the CLI never ran (scratch.py, BOSSAPP-1449).
+    own = scratch_failure(error)
+    if own:
+        return own
     who = (provider or "").strip() or "its provider"
     if provider_limits.credit_exhausted(error):
         return (f"BOSS could not get an answer: credit balance too low on {who}. Add credit there "
@@ -910,9 +916,13 @@ def decide(connection: Any, settings: Any, project_id: str, *, situation: str, m
     except Exception as exc:  # noqa: BLE001 — no model is an answer, never a crash
         if envelope is not None:
             raise
-        log.info("agent decision had no model: %s", exc)
-        return AgentDecision(NO_MODEL, error=f"{type(exc).__name__}: {exc}"[:300],
-                             provider=_provider_name(adapter))
+        from .scratch import ScratchUnavailable
+
+        # BOSS's own failure is logged as one, never as "no model" (BOSSAPP-1449).
+        (log.warning if isinstance(exc, ScratchUnavailable) else log.info)(
+            "agent decision had no model: %s", exc)
+        return AgentDecision(NO_MODEL, error=f"{type(exc).__name__}: {exc}"[
+            :600 if isinstance(exc, ScratchUnavailable) else 300], provider=_provider_name(adapter))
 
     if structured:
         return _structured_result(got, candidates, bar, adapter)

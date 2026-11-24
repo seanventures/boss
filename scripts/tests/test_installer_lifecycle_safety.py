@@ -381,6 +381,9 @@ def test_installer_rerun_keeps_headless_choice_and_credentials(tmp_path: Path) -
         "    print('200',end='')\n"
         "elif '/health' in ' '.join(args):\n"
         "    print('200',end='')\n"
+        # The apt preflight's probe of Debian's mirror (BOSSAPP-1446): it answers.
+        "elif 'deb.debian.org' in ' '.join(args):\n"
+        "    print('200',end='')\n"
     )
     curl.chmod(0o700)
     env = {
