@@ -607,10 +607,15 @@ def mark_first_use(db: Any, grant: DelegationGrant) -> None:
 
     from . import lineage
 
-    was = db.execute(text("SELECT last_used_at FROM identity_delegation_grants WHERE id = :g FOR UPDATE"),
-                     {"g": grant.id}).scalar()
+    # NEVER WAITS (BOSSAPP-1456): `last_used_at` is a marker, not a lock to queue on. A grant row
+    # another transaction holds (a tick mid-step, a cascade) is being used or changed right now;
+    # that transaction stamps it, and a token is never held up for it.
+    row = db.execute(text("SELECT id, last_used_at FROM identity_delegation_grants WHERE id = :g "
+                          "FOR UPDATE SKIP LOCKED"), {"g": grant.id}).first()
+    if row is None:
+        return
     db.execute(text("UPDATE identity_delegation_grants SET last_used_at = now() WHERE id = :g"), {"g": grant.id})
-    if was is None:
+    if row[1] is None:
         lineage.grant_event(db, grant, "delegation.used_first")
 
 

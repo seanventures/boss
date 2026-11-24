@@ -28820,6 +28820,19 @@ def run_delivery_capabilities(payload: open_bodies.DeliveryCapabilitiesRunBody) 
         raise HTTPException(status_code=400, detail="project_id is required")
     ctx = EngineContext.create()
     worker_id = str(payload.get("worker_id") or "capability-runner")
+    # BACKGROUND WORK (boss_engine.db.background, BOSSAPP-1456): every transaction the tick and
+    # its sweeps open waits a bounded time for a lock, is ended when it idles past the background
+    # limit, and appends its audit events at its commit — so no tick can hold up a sign-in.
+    from boss_engine.db import background
+
+    with background():
+        return _advance_delivery_capabilities(ctx, project_id, worker_id)
+
+
+def _advance_delivery_capabilities(ctx: Any, project_id: str, worker_id: str) -> dict:
+    """The body of POST /v1/delivery-workflows/run-capabilities, run as background work."""
+    from boss_engine.services import workflow_capability_runner
+
     with begin(engine) as connection:
         projects = workflow_capability_runner.projects_with_work(connection, project_id)
     advanced: dict[str, Any] = {}
