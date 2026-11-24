@@ -365,18 +365,37 @@ def test_a_named_service_builds_whatever_its_profile_and_an_unknown_name_is_refu
 
 
 def test_the_pins_stage_runs_on_the_real_requirement_files(tmp_path):
-    """The lane's first build of the pins stage failed: the agent SDK is pinned in two requirement
-    files, so 'exactly one pin' counted two. Run the stage's own shell against the real files."""
+    """The lane's first build of the pins stage failed: one COPY of api/ and worker/requirements.txt
+    into /tmp/req/ keeps only the last file (same name), so the playwright pin was lost. Copy the
+    files the way Docker does (destination name = the COPY's target) and run the stage's own shell."""
     text = DOCKERFILE.read_text()
-    copy = re.search(r"^COPY (.+?) /tmp/req/\s*$", text, re.M)
+    copies = re.findall(r"^COPY (\S+) (/tmp/req/\S*)\s*$", text, re.M)
+    multi = re.findall(r"^COPY (?:\S+ ){2,}/tmp/req/\s*$", text, re.M)
+    assert not multi, "copy each requirements file to its own name; one COPY of several keeps only the last"
     run = re.search(r"^RUN (mkdir /pins .*?)(?<!\\)\n", text, re.M | re.S)
-    assert copy and run, "the pins stage moved; update this test"
+    assert copies and run, "the pins stage moved; update this test"
     req = tmp_path / "req"
     req.mkdir()
-    for i, rel in enumerate(copy.group(1).split()):
-        shutil.copy(REPO / rel, req / f"{i}.txt")
+    for src, dest in copies:
+        name = dest.rsplit("/", 1)[1] or Path(src).name
+        shutil.copy(REPO / src, req / name)  # same overwrite semantics as Docker
     cmd = run.group(1).replace("\\\n", " ").replace("/tmp/req", str(req)) \
         .replace("/tmp/all.txt", str(tmp_path / "all.txt")).replace("/pins", str(tmp_path / "pins"))
     done = subprocess.run(["sh", "-c", cmd], capture_output=True, text=True)
     assert done.returncode == 0, done.stderr
     assert (tmp_path / "pins" / "agent.txt").read_text().startswith("claude-agent-sdk==")
+    assert (tmp_path / "pins" / "playwright.txt").read_text().startswith("playwright==")
+
+
+def test_no_copy_writes_two_files_to_one_name():
+    """Docker's COPY of several sources into a directory keeps only the last of any that share a
+    name, silently. That lost a pin once; no COPY may do it anywhere in the Dockerfile."""
+    clashes = []
+    for n, line in enumerate(DOCKERFILE.read_text().splitlines(), 1):
+        m = re.match(r"^COPY\s+(?:--\S+\s+)*(.+)$", line.strip())
+        parts = m.group(1).split() if m else []
+        if len(parts) > 2 and parts[-1].endswith("/"):
+            names = [Path(p.rstrip("/")).name for p in parts[:-1]]
+            if len(names) != len(set(names)):
+                clashes.append(f"line {n}: {line.strip()}")
+    assert not clashes, "copy each file to its own name: " + "; ".join(clashes)

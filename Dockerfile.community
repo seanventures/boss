@@ -289,8 +289,11 @@ ENTRYPOINT ["python3", "/usr/local/libexec/boss/recovery_guard.py"]
 # browser's version), the Agent SDK (the agent images only; it bundles a 250 MB Claude binary), and
 # everything else (every image).
 FROM python-base AS pins
-COPY apps/api/requirements.txt apps/worker/requirements.txt /tmp/req/
-# sort -u: one pin listed in several requirement files counts once (two files list the agent SDK).
+# One COPY per file, each to its own name: both are called requirements.txt, and a single
+# COPY of both into /tmp/req/ keeps only the last (the api's playwright pin was lost).
+COPY apps/api/requirements.txt /tmp/req/api.txt
+COPY apps/worker/requirements.txt /tmp/req/worker.txt
+# sort -u: a pin listed in both files counts once.
 RUN mkdir /pins && cat /tmp/req/*.txt | sed 's/[[:space:]]*#.*//' | grep -v '^[[:space:]]*$' | sed 's/[[:space:]]*$//' | sort -u > /tmp/all.txt \
     && grep -E '^playwright==' /tmp/all.txt > /pins/playwright.txt \
     && grep -E '^claude-agent-sdk==' /tmp/all.txt > /pins/agent.txt \
