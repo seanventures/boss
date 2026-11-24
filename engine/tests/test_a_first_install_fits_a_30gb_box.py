@@ -216,9 +216,9 @@ def test_prune_cache_only_touches_no_image_or_container(tmp_path):
     out = subprocess.run(["bash", str(prune), "--dry-run", "--cache-only", "--room", "--dir", str(install)],
                          capture_output=True, text=True, env=env, timeout=30)
     assert out.returncode == 0, out.stderr
-    would = [l for l in out.stdout.splitlines() if "would run:" in l]
-    assert any("builder prune" in l for l in would)
-    assert not any(w in l for l in would for w in (" rmi ", " rm ", "image prune"))
+    would = [line for line in out.stdout.splitlines() if "would run:" in line]
+    assert any("builder prune" in line for line in would)
+    assert not any(w in line for line in would for w in (" rmi ", " rm ", "image prune"))
 
 
 # ---- the size budget -----------------------------------------------------------------------------
