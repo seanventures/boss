@@ -67,6 +67,9 @@ fi
 if [ -n "${BOSS_PIP_INDEX_URL:-}" ]; then
   export PIP_INDEX_URL="$BOSS_PIP_INDEX_URL"
 fi
+# pip's 15 s read timeout and 5 retries lose large wheels (the Agent SDK bundles its CLI) behind a
+# slow inspecting proxy while other stages download in parallel; a caller's own value wins.
+export PIP_DEFAULT_TIMEOUT="${PIP_DEFAULT_TIMEOUT:-120}" PIP_RETRIES="${PIP_RETRIES:-10}"
 if [ -n "${BOSS_PLAYWRIGHT_DOWNLOAD_HOST:-}" ]; then
   export PLAYWRIGHT_DOWNLOAD_HOST="${BOSS_PLAYWRIGHT_DOWNLOAD_HOST%/}"
 fi
