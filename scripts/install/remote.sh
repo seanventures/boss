@@ -601,7 +601,7 @@ cmd_update() {
 
   say "building — this takes a few minutes"
   ssh "${SSH_OPTS[@]}" ${TTY_OPT[@]+"${TTY_OPT[@]}"} "$HOST" \
-    "cd '$DIR' && $compose_build build $services" \
+    "cd '$DIR' && bash scripts/install/build_images.sh --dir . --only '$services' -- $compose_build" \
     || { rsh "rm -f '$DIR/$next_env'"; die "the build failed on $HOST. Old containers still run; previous source is at $DIR.prev."; }
 
   rsh "cd '$DIR' && mv '$next_env' .env && chmod 600 .env" \

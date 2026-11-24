@@ -1667,54 +1667,7 @@ if ! BUILD_SERVICES="$("${COMPOSE[@]}" \
   ${COMPOSE_FILES:--f scripts/install/community-compose.yml} \
   --env-file "$ENV_FILE" \
   $COMPOSE_PROFILES \
-  config --format json </dev/null 2>/dev/null | python3 -c '
-import argparse, json, os, re, sys
-parser = argparse.ArgumentParser()
-parser.add_argument("--profile", action="append", default=[])
-active = set(parser.parse_args().profile)
-services = json.load(sys.stdin)["services"]
-def family(build):
-    # The stage a target grows from: follow FROM <stage> inside its Dockerfile to the first stage
-    # built FROM an outside image. Images of one family share their layers (BOSSAPP-1458).
-    context = build.get("context") or "."
-    path = os.path.join(context, build.get("dockerfile") or "Dockerfile")
-    try:
-        text = open(path, encoding="utf-8").read()
-    except OSError:
-        return path
-    stages, last = {}, None
-    for m in re.finditer(r"(?m)^FROM\s+(?:--\S+\s+)*(\S+)(?:\s+[Aa][Ss]\s+(\S+))?\s*$", text):
-        last = m.group(2) or last
-        if m.group(2):
-            stages[m.group(2)] = m.group(1)
-    stage, seen = build.get("target") or last, set()
-    while stage in stages and stages[stage] in stages and stage not in seen:
-        seen.add(stage)
-        stage = stages[stage]
-    return path + "#" + str(stage)
-order, images = {}, {}
-for name, service in services.items():
-    profiles = set(service.get("profiles", []))
-    if "build" not in service or (profiles and not active.intersection(profiles) and "*" not in active):
-        continue
-    if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*", name):
-        raise SystemExit("Invalid build service name in Compose configuration")
-    # Two services on one image with one build (kg-mcp runs the worker image) build it once: a
-    # second build after the build cache was evicted made a second, unshared copy of every layer.
-    # The service named like the image (worker, not kg-mcp) is the one the log names.
-    key = (service.get("image") or name, json.dumps(service["build"], sort_keys=True))
-    if key in images:
-        if re.search(r"-" + re.escape(name) + r"(:|$)", key[0]):
-            names = order[family(service["build"])]
-            names[names.index(images[key])] = name
-            images[key] = name
-        continue
-    images[key] = name
-    order.setdefault(family(service["build"]), []).append(name)
-for index, names in enumerate(order.values()):
-    for name in names:
-        print(name, index)
-' $COMPOSE_PROFILES 2>/dev/null)"; then
+  config --format json </dev/null 2>/dev/null | python3 scripts/install/build_order.py $COMPOSE_PROFILES 2>/dev/null)"; then
   die "Could not resolve the selected Compose build services; stopping before image builds. Check the Compose configuration and .env."
 fi
 # THE BUILD CLIENT GOES THROUGH THE PROXY TOO. BuildKit fetches registry tokens (the

@@ -329,7 +329,7 @@ def test_installer_rerun_keeps_headless_choice_and_credentials(tmp_path: Path) -
     helpers = checkout / "scripts/install"
     helpers.mkdir(parents=True)
     for name in ("restore_preserved_env.sh", "reconcile_api_credentials.py", "post_check.sh",
-                 "network_preflight.sh"):
+                 "network_preflight.sh", "build_order.py"):
         shutil.copy2(ROOT / "scripts/install" / name, helpers / name)
     enterprise = checkout / "engine/boss_engine/services"
     enterprise.mkdir(parents=True)

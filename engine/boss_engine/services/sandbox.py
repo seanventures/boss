@@ -73,6 +73,21 @@ _log = logging.getLogger(__name__)
 _TOOL_CACHE_ROOT = os.environ.get("BOSS_SANDBOX_TOOL_CACHE", "/var/tmp/boss-tool-cache")
 
 
+def _scratch_browsers_env() -> dict:
+    """PLAYWRIGHT_BROWSERS_PATH at a scratch directory every sandbox uid can write (sticky, like
+    /tmp), or {} when even that cannot be made."""
+    import tempfile
+
+    path = Path(tempfile.gettempdir()) / "boss-pw-browsers"
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        path.chmod(0o1777)
+    except OSError as exc:
+        _log.warning("no scratch directory for Playwright browsers at %s (%s)", path, exc)
+        return {}
+    return {"PLAYWRIGHT_BROWSERS_PATH": str(path)}
+
+
 def _shared_tool_caches() -> dict:
     """Env pointing npm and Playwright at a cache that outlives one sandbox."""
     try:
@@ -98,7 +113,10 @@ def _shared_tool_caches() -> dict:
         # simply be as slow as before.
         _log.warning("sandbox tool cache unavailable at %s (%s); running uncached",
                      _TOOL_CACHE_ROOT, exc)
-        return {}
+        # Never the image's own /opt/pw-browsers: it holds only BOSS's headless shell and is
+        # root-owned, so a build's `playwright install chromium` would fail writing there
+        # (BOSSAPP-1458). A scratch directory any build can download into, as before the cache.
+        return _scratch_browsers_env()
     # The browsers: BOSS's shared, install-wide copy on the toolchain cache volume when this
     # process has one (playwright_cache — downloaded once, read-only to builds), else the old
     # per-container directory.

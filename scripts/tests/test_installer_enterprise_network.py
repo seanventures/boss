@@ -223,7 +223,7 @@ def test_every_lifecycle_path_finalizes_before_it_builds():
     remote = (ROOT / "scripts/install/remote.sh").read_text()
     update = remote.split("cmd_update() {", 1)[1].split("\n}\n", 1)[0]
     assert "enterprise_network.py finalize" in update and "--previous .env" in update
-    assert update.index("enterprise_network.py finalize") < update.index("$compose_build build")
+    assert update.index("enterprise_network.py finalize") < update.index("build_images.sh --dir . --only")
     assert "recreate-ca-mount" in update
 
 

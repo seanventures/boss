@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -142,6 +143,7 @@ elif "build" in args:
     fake.chmod(0o755)
     work = tmp_path / "install"
     (work / "scripts" / "install").mkdir(parents=True)
+    shutil.copy(REPO / "scripts" / "install" / "build_order.py", work / "scripts" / "install")
     (work / "scripts" / "install" / "prune.sh").write_text(
         f'printf "prune %s\\n" "$*" >> {str(log)!r}\n'
         "echo \"Docker's disk has 9 GB free, under the 20 GB floor (BOSS_DISK_FLOOR_GB): keeping 0 GB of build cache\"\n")
@@ -271,3 +273,75 @@ def test_the_first_install_preflight_says_the_measured_need():
     installer = (REPO / "install.sh").read_text()
     m = re.search(r'BOSS_INSTALL_NEEDS_GB="\$\{BOSS_INSTALL_NEEDS_GB:-(\d+)\}"', installer)
     assert m and int(m.group(1)) == image_budget.FIRST_INSTALL_NEEDS_GB
+
+
+# ---- every path that builds the images builds them the same way -----------------------------------
+
+def test_every_build_path_uses_the_one_build_order():
+    installer = (REPO / "install.sh").read_text()
+    assert "python3 scripts/install/build_order.py" in installer
+    boss = (REPO / "scripts" / "install" / "boss.sh").read_text()
+    assert 'compose --build-images "$services"' in boss and "compose build $services" not in boss
+    assert "scripts/install/build_images.sh" in boss
+    remote = (REPO / "scripts" / "install" / "remote.sh").read_text()
+    assert "bash scripts/install/build_images.sh --dir . --only '$services' -- $compose_build" in remote
+    assert "$compose_build build" not in remote
+    self_fix = (REPO / "scripts" / "install" / "self_fix_installer.py").read_text()
+    assert 'host.compose("build"' not in self_fix and self_fix.count("host.build_images(") == 3
+    script = (REPO / "scripts" / "install" / "build_images.sh").read_text()
+    assert "build_order.py" in script and "--room --cache-only" in script
+
+
+def test_build_images_builds_each_image_once_in_families_and_names_a_failure(tmp_path):
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"services": {
+        "api": _community("api", "boss-community-api:t"),
+        "kg-mcp": _community("worker", "boss-community-worker:t"),
+        "web": {**_community("web", "boss-community-web:t"), "profiles": ["web"]},
+        "worker": _community("worker", "boss-community-worker:t"),
+        "egress": _community("egress", "boss-community-egress:t"),
+    }}))
+    log = tmp_path / "log"
+    fake = tmp_path / "docker"
+    fake.write_text(f"""#!/usr/bin/env python3
+import os, sys
+a = sys.argv[1:]
+if a[-3:] == ["config", "--format", "json"]:
+    print(open({str(config)!r}).read()); sys.exit(0)
+if "build" in a:
+    open({str(log)!r}, "a").write("build " + " ".join(a[a.index("build") + 1:]) + "\\n")
+    sys.exit(7 if a[-1] == os.environ.get("FAIL", "") else 0)
+""")
+    fake.chmod(0o755)
+    script = REPO / "scripts" / "install" / "build_images.sh"
+    env = {**os.environ, "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}"}
+    # prune.sh is the real one: the fake docker answers nothing it needs, so it trims nothing.
+    ok = subprocess.run(["bash", str(script), "--dir", str(tmp_path), "--build-arg", "A=1", "--",
+                         str(fake), "compose", "--profile", "web"], capture_output=True, text=True,
+                        env=env, timeout=60)
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+    lines = log.read_text().splitlines()
+    assert [line.split()[-1] for line in lines] == ["api", "worker", "egress", "web"], lines
+    assert all("--build-arg A=1" in line for line in lines)
+    log.unlink()
+    only = subprocess.run(["bash", str(script), "--only", "api egress", "--", str(fake), "compose"],
+                          capture_output=True, text=True, env=env, timeout=60)
+    assert only.returncode == 0
+    assert [line.split()[-1] for line in log.read_text().splitlines()] == ["api", "egress"]
+    log.unlink()
+    bad = subprocess.run(["bash", str(script), "--", str(fake), "compose"], capture_output=True,
+                         text=True, env={**env, "FAIL": "worker"}, timeout=60)
+    assert bad.returncode == 7 and "The worker image did not build" in bad.stderr
+    assert [line.split()[-1] for line in log.read_text().splitlines()] == ["api", "worker"]
+    said = bad.stderr.strip().splitlines()[-1]
+    assert fw.problems(what=said.split("; ", 1)[0], action=said.split("; ", 1)[1]) == []
+
+
+def test_a_build_without_the_shared_cache_never_writes_to_the_images_browsers(monkeypatch, tmp_path):
+    from boss_engine.services import sandbox
+
+    monkeypatch.setattr(sandbox, "_TOOL_CACHE_ROOT", "/proc/no-such-dir/cache")
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+    env = sandbox._shared_tool_caches()
+    assert env["PLAYWRIGHT_BROWSERS_PATH"] == str(tmp_path / "boss-pw-browsers")
+    assert (tmp_path / "boss-pw-browsers").stat().st_mode & 0o1777 == 0o1777

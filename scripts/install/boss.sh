@@ -260,6 +260,18 @@ compose() {
   [[ "$(env_value BOSS_COMMUNITY_SECRET_STORE)" != infisical ]] || profiles+=(--profile secrets)
   # The local test inbox runs only on an install that opted in (install.sh --with-mailpit).
   [[ -z "$(env_value BOSS_EMAIL_DEV_INBOX)" ]] || profiles+=(--profile mail)
+  # `compose --build-images "svc svc"`: build them the installer's way (BOSSAPP-1458): each image
+  # once, image families together, the finished family's cache dropped on a small disk.
+  if [[ "${1:-}" == --build-images && -f "$INSTALL_DIR/scripts/install/build_images.sh" ]]; then
+    COMPOSE_PROJECT_NAME="$COMPOSE_PROJECT_NAME" \
+    BOSS_COMMUNITY_IMAGE_TAG="${BOSS_COMMUNITY_IMAGE_TAG:-$COMPOSE_PROJECT_NAME}" \
+      bash "$INSTALL_DIR/scripts/install/build_images.sh" --dir "$INSTALL_DIR" --only "${2:-}" -- \
+      "${DOCKER[@]}" compose "${BOSS_COMPOSE_FILES[@]}" --env-file "$ENV_FILE" ${profiles[@]+"${profiles[@]}"}
+    return
+  elif [[ "${1:-}" == --build-images ]]; then
+    # shellcheck disable=SC2086 # a list of service names
+    set -- build ${2:-}
+  fi
   # The images are tagged with the compose project name (install.sh); without the same
   # default here Compose looks for boss-community-api:local, which was never built.
   COMPOSE_PROJECT_NAME="$COMPOSE_PROJECT_NAME" \
@@ -722,7 +734,7 @@ cmd_toolchains() {
   services="$(toolchain_services)"
   printf 'Saved BOSS_TOOLCHAINS=%s in .env. Rebuilding: %s...\n' "$wanted" "$services"
   # shellcheck disable=SC2086 # a list of service names
-  if ! compose build $services </dev/null; then
+  if ! compose --build-images "$services" </dev/null; then
     printf '  ✗ The image build failed. .env says BOSS_TOOLCHAINS=%s; fix the cause and run: '"$(hint_command)"' update\n' "$wanted"
     return 1
   fi

@@ -176,7 +176,7 @@ def install_pair(tmp_path: Path) -> tuple[Path, str, str, dict[str, str], Path]:
     (source / "install.sh").write_bytes((REPO / "install.sh").read_bytes())
     (source / "install.sh").chmod(0o755)
     for helper in ("restore_preserved_env.sh", "reconcile_api_credentials.py", "backup_archive.py",
-                   "network_preflight.sh"):
+                   "network_preflight.sh", "build_order.py"):
         (source / "scripts/install" / helper).write_bytes(
             (REPO / "scripts/install" / helper).read_bytes()
         )

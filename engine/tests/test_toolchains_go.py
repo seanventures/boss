@@ -193,7 +193,10 @@ def _boss_sh_toolchains_command() -> str:
     stubs = ("need_install() { :; }\ndie() { echo \"$*\" >&2; exit 1; }\nhint_command() { echo boss; }\n"
              # build/up are recorded; `ps --services` lists a runner when FAKE_RUNNER is set;
              # `exec -T SERVICE cat manifest` answers FAKE_MANIFEST_<SERVICE> (absent: not running).
-             "compose() { case \"$1\" in build) echo \"BUILT $*\" ;; up) echo \"UP $*\" ;;\n"
+             # A rebuild goes through `compose --build-images "svc svc"` (scripts/install/
+             # build_images.sh, BOSSAPP-1458): recorded as the build it is.
+             "compose() { case \"$1\" in build) echo \"BUILT $*\" ;; --build-images) echo \"BUILT build $2\" ;;\n"
+             "  up) echo \"UP $*\" ;;\n"
              "  ps) [[ -z \"${FAKE_RUNNER:-}\" ]] || echo runner ;;\n"
              "  exec) local v=\"FAKE_MANIFEST_${3//-/_}\"; [[ -n \"${!v:-}\" ]] || return 1;"
              " printf '%s\\n' \"${!v}\" ;; esac; return 0; }\n"

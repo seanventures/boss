@@ -305,6 +305,29 @@ class Host:
                 "--env-file", str(self.env_file), *profiles, *args]
         return self.run(argv, env={**self.compose_env(), **(env or {})})
 
+    def build_images(self, *, compose_file: Path, project_dir: Path,
+                     env: Optional[dict[str, str]] = None) -> tuple[int, str]:
+        """Build the images from a source tree the installer's way (BOSSAPP-1458): its own
+        scripts/install/build_images.sh, so each image builds once, image families build together
+        and a small disk drops a finished family's cache. A tree from before that script builds
+        with one `compose build`, as it always did."""
+        script = compose_file.parent / "build_images.sh"
+        if not script.is_file():
+            return self.compose("build", compose_file=compose_file, project_dir=project_dir, env=env)
+        profiles: list[str] = []
+        if self.env_value("BOSS_COMMUNITY_WEB_ENABLED") != "0":
+            profiles += ["--profile", "web"]
+        if self.env_value("BOSS_COMMUNITY_SECRET_STORE") == "infisical":
+            profiles += ["--profile", "secrets"]
+        try:
+            files = self.compose_files(compose_file)
+        except RuntimeError as error:
+            return 1, str(error)
+        argv = ["bash", str(script), "--dir", str(self.dir), "--",
+                *self.docker, "compose", *files, "--project-directory", str(project_dir),
+                "--env-file", str(self.env_file), *profiles]
+        return self.run(argv, env={**self.compose_env(), **(env or {})})
+
     # -- the API --------------------------------------------------------------------------
     def api_url(self) -> str:
         if self._api:
@@ -552,7 +575,7 @@ def install(host: Host, claims: dict[str, Any], bundle_b64: Optional[str]) -> st
     try:
         host.keep_previous()
         wt = host.worktree()
-        code, said = host.compose("build", compose_file=wt / "scripts/install/community-compose.yml",
+        code, said = host.build_images(compose_file=wt / "scripts/install/community-compose.yml",
                                   project_dir=wt / "scripts/install",
                                   env={"BOSS_SOURCE_SHA": host.release_sha(),
                                        "BOSS_STACK_HEAD": fix})
@@ -686,7 +709,7 @@ def remove(host: Host, claims: dict[str, Any]) -> str:
     host.report(ticket_id, "apply", True, f"{ref} → {new_head[:12]} ({len(keep)} fix(es) stay)")
     try:
         host.keep_previous()
-        code, said = host.compose("build", compose_file=wt / "scripts/install/community-compose.yml",
+        code, said = host.build_images(compose_file=wt / "scripts/install/community-compose.yml",
                                   project_dir=wt / "scripts/install",
                                   env={"BOSS_SOURCE_SHA": release, "BOSS_STACK_HEAD": new_head})
         if code != 0:
@@ -1106,7 +1129,7 @@ def cmd_restack(host: Host, to_ref: str, without: list[str]) -> int:
     host.git("update-ref", new_ref, head)
     host.keep_previous()
     wt = host.worktree()
-    code, said = host.compose("build", compose_file=wt / "scripts/install/community-compose.yml",
+    code, said = host.build_images(compose_file=wt / "scripts/install/community-compose.yml",
                               project_dir=wt / "scripts/install",
                               env={"BOSS_SOURCE_SHA": host.release_sha(), "BOSS_STACK_HEAD": head})
     if code == 0:
