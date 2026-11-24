@@ -21,6 +21,10 @@
 #       (scripts/install/compose_files.sh): BOSS's seccomp profile, plus AppArmor `boss-engine`
 #       (loaded on the host first: scripts/sandbox/load_apparmor.sh). The enterprise lane
 #       (scripts/enterprise-lane.sh) runs both tiers this way. Default: Docker's own profiles.
+#   --enterprise-env FILE  (plumbing, engines) give the gate the company network an install's .env
+#       names: the package mirrors, the outbound proxy and the extra CA (docs/community/
+#       ENTERPRISE_NETWORK.md). Only those settings are read; nothing else in FILE is used. Without
+#       it, a box whose only way out is a proxy fails the gate's dependency installs.
 #   scripts/e2e-gate.sh agent [--brief <name>] [--with-connector] [--budget-min N] [--keep]
 #       Tier B: ONE real, model-driven build of a known-good brief (tests/e2e/briefs/), started
 #       on the local install as the test owner through BOSS's API, watched to an opened PR,
@@ -51,11 +55,14 @@ BOSS_ROOT="$ROOT"
 IMAGE=""
 KEEP=0
 INNER=off
+ENT_ENV=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --boss-root) BOSS_ROOT="$(cd "${2:?--boss-root needs a directory}" && pwd)"; shift 2 ;;
     --image) IMAGE="${2:?--image needs an image}"; shift 2 ;;
     --keep) KEEP=1; shift ;;
+    --enterprise-env) ENT_ENV="${2:?--enterprise-env needs an install .env}"; shift 2
+      [ -r "$ENT_ENV" ] || { echo "e2e-gate: cannot read $ENT_ENV" >&2; exit 2; } ;;
     --inner-sandbox)
       case "${2:-}" in
         off|seccomp|seccomp+apparmor) INNER="$2"; shift 2 ;;
@@ -128,14 +135,38 @@ for _ in $(seq 1 60); do
   sleep 0.5
 done
 
+# The company network (an install's enterprise block), when asked: URLs only, never a credential
+# (the installer refuses a URL carrying one), and the CA certificate, mounted read-only.
+ENTERPRISE=()
+ENTRY=()
+if [ -n "$ENT_ENV" ]; then
+  for key in BOSS_NPM_REGISTRY BOSS_PIP_INDEX_URL BOSS_UPSTREAM_PROXY BOSS_UPSTREAM_HTTP_PROXY \
+             BOSS_UPSTREAM_NO_PROXY BOSS_EGRESS_PRIVATE_ALLOW BOSS_GOPROXY BOSS_MAVEN_MIRROR; do
+    val="$(grep -m 1 "^$key=" "$ENT_ENV" | cut -d= -f2- || true)"
+    [ -z "$val" ] || ENTERPRISE+=(-e "$key=$val")
+  done
+  proxy="$(grep -m 1 '^BOSS_UPSTREAM_PROXY=' "$ENT_ENV" | cut -d= -f2- || true)"
+  if [ -n "$proxy" ]; then
+    no_proxy="localhost,127.0.0.1,$PG"
+    extra="$(grep -m 1 '^BOSS_UPSTREAM_NO_PROXY=' "$ENT_ENV" | cut -d= -f2- || true)"
+    [ -z "$extra" ] || no_proxy="$no_proxy,$extra"
+    ENTERPRISE+=(-e "HTTPS_PROXY=$proxy" -e "https_proxy=$proxy" -e "NO_PROXY=$no_proxy" -e "no_proxy=$no_proxy")
+  fi
+  ca="$(grep -m 1 '^BOSS_EXTRA_CA_FILE=' "$ENT_ENV" | cut -d= -f2- || true)"
+  if [ -n "$ca" ] && [ -s "$ca" ]; then
+    ENTERPRISE+=(-v "$ca:/etc/boss/extra-ca.pem:ro")
+    ENTRY=(/usr/local/libexec/boss/with-extra-ca)
+  fi
+fi
+
 echo "== e2e-gate $TIER: BOSS $(git -C "$BOSS_ROOT" rev-parse --short HEAD 2>/dev/null || echo '?') in $IMAGE$([ "$INNER" = off ] || echo " (inner sandbox $INNER)")"
-docker run --name "$GATE" --network "$NET" --label boss-e2egate=1 ${SECURITY[@]+"${SECURITY[@]}"} \
+docker run --name "$GATE" --network "$NET" --label boss-e2egate=1 ${SECURITY[@]+"${SECURITY[@]}"} ${ENTERPRISE[@]+"${ENTERPRISE[@]}"} \
   --entrypoint "" -w /tmp --env-file "$WORK/gate.env" \
   -e BOSS_SANDBOX_ISOLATION=required -e BOSS_SANDBOX_NETWORK=off \
   -e BOSS_BUILD_SERVICES_PREFIX=boss_e2egate_ -e BOSS_ARTIFACTS_DIR=/tmp/boss-e2egate-artifacts \
   -e PYTHONPATH=/boss:/boss/engine -e PYTHONDONTWRITEBYTECODE=1 \
   -v "$BOSS_ROOT":/boss:ro -v "$ROOT":/gate-src:ro -v "$WORK/out":/out \
-  "$IMAGE" python3 "/gate-src/tests/e2e/gate/$TIER.py" --out /out/results.json > "$WORK/out/gate.log" 2>&1
+  "$IMAGE" ${ENTRY[@]+"${ENTRY[@]}"} python3 "/gate-src/tests/e2e/gate/$TIER.py" --out /out/results.json > "$WORK/out/gate.log" 2>&1
 status=$?
 grep '^\[gate\]' "$WORK/out/gate.log" >/dev/null 2>&1 || tail -30 "$WORK/out/gate.log"
 
