@@ -49,7 +49,7 @@ set +e
 limactl shell "$VM" -- bash -lc "cd ~/boss-src && scripts/enterprise-lane.sh --report ~/boss-ent-lane/report.md $(printf '%q ' "$@")"
 rc=$?
 set -e
-limactl shell "$VM" -- cat boss-ent-lane/report.md > "$ROOT/enterprise-lane-report.md" 2>/dev/null &&
+limactl shell "$VM" -- bash -lc "cat ~/boss-ent-lane/report.md" > "$ROOT/enterprise-lane-report.md" 2>/dev/null &&
   echo "report: $ROOT/enterprise-lane-report.md"
 [ "$KEEP" = 1 ] || limactl stop "$VM" >/dev/null
 exit $rc
