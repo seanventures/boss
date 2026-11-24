@@ -1651,12 +1651,35 @@ for name, service in services.items():
 ' $COMPOSE_PROFILES 2>/dev/null)"; then
   die "Could not resolve the selected Compose build services; stopping before image builds. Check the Compose configuration and .env."
 fi
+# THE BUILD CLIENT GOES THROUGH THE PROXY TOO. BuildKit fetches registry tokens (the
+# `# syntax=` frontend, base images) through the CLIENT's session, so the Docker daemon's own
+# proxy settings are not enough: on a box whose only way out is BOSS_UPSTREAM_PROXY, the build
+# failed at "failed to fetch anonymous token" (enterprise lane, BOSSAPP-1430). Give the build
+# command the proxy explicitly; sudo resets the environment, so it goes after sudo.
+_BUILD_CMD=("${COMPOSE[@]}")
+_up_proxy="" _up_extra=""
+if declare -F env_value >/dev/null; then
+  _up_proxy="$(env_value BOSS_UPSTREAM_PROXY || true)"
+  _up_extra="$(env_value BOSS_UPSTREAM_NO_PROXY || true)"
+fi
+if [[ -n "$_up_proxy" ]]; then
+  _up_no_proxy="localhost,127.0.0.1"
+  [[ -z "$_up_extra" ]] || _up_no_proxy="$_up_no_proxy,$_up_extra"
+  _proxy_env=(env "HTTPS_PROXY=$_up_proxy" "https_proxy=$_up_proxy" "NO_PROXY=$_up_no_proxy" "no_proxy=$_up_no_proxy")
+  if [[ "${COMPOSE[0]}" == sudo ]]; then
+    _BUILD_CMD=(sudo "${_proxy_env[@]}" "${COMPOSE[@]:1}")
+  else
+    _BUILD_CMD=("${_proxy_env[@]}" "${COMPOSE[@]}")
+  fi
+  unset _proxy_env _up_no_proxy
+fi
+unset _up_proxy _up_extra
 while IFS= read -r _build_service; do
   [[ -n "$_build_service" ]] || continue
   ui_info "Building $_build_service (one image at a time)"
   # Pass observed metadata as build arguments: sudo may reset exported variables.
   # shellcheck disable=SC2086
-  "${COMPOSE[@]}" ${COMPOSE_FILES:--f scripts/install/community-compose.yml} --env-file "$ENV_FILE" \
+  "${_BUILD_CMD[@]}" ${COMPOSE_FILES:--f scripts/install/community-compose.yml} --env-file "$ENV_FILE" \
     $COMPOSE_PROFILES build \
     --build-arg "BOSS_SOURCE_SHA=$BOSS_SOURCE_SHA" \
     --build-arg "BOSS_BUILT_AT=$BOSS_BUILT_AT" "$_build_service" </dev/null
