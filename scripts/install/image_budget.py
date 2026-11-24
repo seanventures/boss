@@ -36,7 +36,7 @@ BUDGETS: dict[str, int] = {
     "worker": int(4.4 * GB),
     "runner": int(4.4 * GB),
     "egress": int(0.9 * GB),
-    "mcp-tools": int(1.6 * GB),
+    "mcp-tools": int(1.8 * GB),
     "web": int(2.5 * GB),
 }
 #: What a first install needs free on Docker's disk, measured on the enterprise lane (2026-11-24:

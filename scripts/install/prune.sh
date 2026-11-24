@@ -25,8 +25,8 @@
 #   * on a small Docker disk (less than BOSS_DISK_FLOOR_GB, 20, free): build cache down to what
 #     fits above that floor, none on a small box (BOSSAPP-1447). Only on a dedicated host or with
 #     --room (the installer, right after its own build): the cache is Docker-wide.
-#   * --cache-only: the build cache steps alone (4 and 5), for the installer BETWEEN two image
-#     families (BOSSAPP-1458): no image or container is touched mid-build.
+#   * --cache-only: the build cache steps alone (4 and 5; no image, container or rollback point is
+#     touched mid-build), for the installer BETWEEN two image families (BOSSAPP-1458).
 # Never volumes, never `system prune`, never a container or image without a BOSS name/label.
 set -euo pipefail
 
@@ -132,7 +132,7 @@ api_healthy() {
   [[ -n "$("${D[@]}" ps -q --filter "label=com.docker.compose.project=$PROJECT" \
             --filter "label=com.docker.compose.service=api" --filter health=healthy 2>/dev/null)" ]]
 }
-if [[ -f "$ROLLBACK_FILE" && -z "$(rb_value BOSS_PREV_EXPIRED_AT)" && -n "$(rb_value BOSS_PREV_SAVED_AT)" ]]; then
+if [[ "$CACHE_ONLY" -eq 0 && -f "$ROLLBACK_FILE" && -z "$(rb_value BOSS_PREV_EXPIRED_AT)" && -n "$(rb_value BOSS_PREV_SAVED_AT)" ]]; then
   age_h="$(hours_since "$(rb_value BOSS_PREV_SAVED_AT)")"
   prev_tag="$(rb_value BOSS_PREV_IMAGE_TAG)"
   if [[ "$age_h" =~ ^[0-9]+$ && "$age_h" -ge "$KEEP_HOURS" && "$prev_tag" == "prev-$TAG" ]]; then
