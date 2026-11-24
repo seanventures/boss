@@ -42,10 +42,12 @@ def merge_set(db: Any, settings: Any, cs_id: str, *, actor: str = "boss") -> dic
 
     # 1. THE HEADS ARE STILL WHAT WAS APPROVED.
     moved = []
+    pulls: dict[str, dict[str, Any]] = {}
     for lane in lanes:
         if lane.get("merged_sha"):
             continue
-        head = (repos[lane["full_name"]].pull(lane["pr_number"]).get("head") or {}).get("sha")
+        pulls[lane["full_name"]] = repos[lane["full_name"]].pull(lane["pr_number"])
+        head = (pulls[lane["full_name"]].get("head") or {}).get("sha")
         if head != approved.get(lane["full_name"]) or head != lane["head_sha"]:
             moved.append(lane["full_name"])
     if moved:
@@ -53,6 +55,32 @@ def merge_set(db: Any, settings: Any, cs_id: str, *, actor: str = "boss") -> dic
         change_sets._set_state(db, cs_id, "building")  # noqa: SLF001
         event(db, cs["project_id"], "change_set.approval_stale", actor, "change_set", cs_id, {"moved": moved})
         return {"status": "stale", "moved": moved, "change_set_id": cs_id}
+
+    # 2. BOSS'S CHECKS-FAILING DRAFTS ARE MADE READY FIRST (checks_failing.py: a person decided this
+    # merge with a reason; ci_gate.refuse_approval allowed only that). All of them before any merge,
+    # so a draft GitHub will not turn ready stops the set with nothing merged, never half-merged.
+    unready = []
+    for lane in lanes:
+        pull = pulls.get(lane["full_name"]) or {}
+        if lane.get("merged_sha") or lane.get("ci_state") != "fail" or not pull.get("draft"):
+            continue
+        try:
+            ready = repos[lane["full_name"]].mark_ready(pull)
+        except Exception as error:  # noqa: BLE001
+            log.warning("change set %s: could not mark %s ready: %s", cs_id, lane["full_name"], type(error).__name__)
+            ready = False
+        if not ready:
+            unready.append(lane["full_name"])
+    if unready:
+        sentence = (f"GitHub did not mark the draft pull request of {', '.join(unready)} ready for review, so nothing "
+                    "was merged. Mark it ready on GitHub, then approve the change again.")
+        db.execute(sql("UPDATE repo_change_sets SET state = 'failed', error = :e, updated_at = now() WHERE id = :i"),
+                   {"e": sentence, "i": cs_id})
+        grants.end(db, cs_id)
+        event(db, cs["project_id"], "change_set.merge_failed", actor, "change_set", cs_id,
+              {"failed": unready[0], "reverted": [], "revert_failed": [], "draft_not_ready": unready})
+        return {"status": "failed", "change_set_id": cs_id, "failed": unready[0], "reverted": [],
+                "revert_failed": [], "message": sentence}
 
     change_sets._set_state(db, cs_id, "merging")  # noqa: SLF001
     landed: list[dict[str, Any]] = [lane for lane in lanes if lane.get("merged_sha")]

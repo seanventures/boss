@@ -16,10 +16,28 @@ thing replaced: the real request_meeting tool convenes the real meeting run, and
 finalizer raises (and approves) the PRD decision from the PRD a panel would have written.
 """
 from __future__ import annotations
+import pytest
 
 from sqlalchemy import text
 
 from apps.api.app.config import get_settings
+
+
+@pytest.fixture(autouse=True)
+def _the_org_asks_in_development(engine):
+    """These pin what a PERSON is asked, so the org's autonomy policy says ask in development
+    (BOSSAPP-1441); dev autonomy's default is pinned in test_dev_autonomy_api."""
+    from boss_engine.config import get_settings
+    from boss_engine.services import autonomy_policy
+
+    org = get_settings().default_org_id
+    with engine.begin() as c:
+        autonomy_policy.save(c, kind=autonomy_policy.ORG, scope_id=org, raw={"dev": "ask"},
+                             actor="test")
+    yield
+    with engine.begin() as c:
+        c.execute(text("DELETE FROM autonomy_policies WHERE scope_id = :o"), {"o": org})
+
 
 PRD = "# PRD: Notes\n\n## Acceptance Criteria\n- A person adds a note and sees it in the list.\n"
 

@@ -86,6 +86,8 @@ def person_reject_note(note: Optional[str]) -> Optional[str]:
 #: The actor recorded when a policy, not a person, resolves a gate. Deliberately not a member
 #: of any org: it must be impossible to sign in as, and obvious in an audit trail.
 SYSTEM_ACTOR = "auto_approval"
+#: The policy actors a `system_policy` approval may name besides SYSTEM_ACTOR.
+POLICY_ACTOR_PREFIXES = ("autonomy:",)
 
 
 class DecisionService:
@@ -603,7 +605,10 @@ class DecisionService:
             if separated:
                 raise InvalidDecisionTransitionError(separated)
         identity_ctx = None if system_policy else _identity_decides(connection, row)
-        if system_policy and action == "approve" and actor == SYSTEM_ACTOR:
+        if system_policy and action == "approve" and (
+                actor == SYSTEM_ACTOR or str(actor).startswith(POLICY_ACTOR_PREFIXES)):
+            # A setting answering, named for what it is: SYSTEM_ACTOR, the Full auto policy
+            # (`autonomy:full_auto`), or dev autonomy (`autonomy:dev:<agent>`, BOSSAPP-1441).
             pass
         elif identity_ctx is not None:
             # IDENTITY §6.13: the route's/tool's declaration already checked the permission; the
@@ -822,7 +827,10 @@ class DecisionService:
                 from .change_recheck import fix_refusal, may_start_fix
                 from .run_decisions import _withdraw_with_note
 
-                if not may_start_fix(connection, str(row["project_id"]), actor):
+                from .autonomy_gate import permits as _autonomy_permits
+
+                if not may_start_fix(connection, str(row["project_id"]), actor) \
+                        and not _autonomy_permits(row, actor):
                     raise InvalidDecisionTransitionError(
                         "Starting the fix is a person's call: it needs a person with the Steer "
                         "builds permission (code_task:steer) on this project, never an agent or "
@@ -1201,6 +1209,19 @@ class DecisionService:
                 change_sets.on_decision(connection, row, status="approved", actor=actor, jobs=self.jobs)
             except MultiRepoError as refused:
                 raise InvalidDecisionTransitionError(refused.message) from refused
+            from . import checks_failing as _checks_failing
+
+            _failing = _checks_failing.of_decision(row)
+            if _failing is not None and force:
+                # A PERSON DECIDED TO MERGE THE SET WITH CHECKS FAILING (ci_gate.refuse_approval
+                # let only that through): who, why, which checks, and whether security was one.
+                emit_event(
+                    connection, row["project_id"], _checks_failing.MERGE_EVENT, actor,
+                    "decision", row["id"],
+                    {"reason": (note or "").strip()[:500],
+                     "failing_gates": _checks_failing.gate_names(_failing),
+                     "security": bool(_failing.get("security")),
+                     "change_set_id": recommendation.get("change_set_id")})
             return
         if action == "waive_finding":
             # A P0 WAIVE (finding_overrides, SPEC §3): only the person it names approves it; the
@@ -1375,9 +1396,11 @@ class DecisionService:
         elif action == "start_recheck_followup":
             # FIX THESE (change_recheck, #168 review R1): a re-check never starts a build on its
             # own; a person with the steer permission starts the follow-up here.
+            from .autonomy_gate import permits as _autonomy_permits
             from .change_recheck import fix_refusal, may_start_fix, start_fix
 
-            if not may_start_fix(connection, str(row["project_id"]), actor):
+            if not may_start_fix(connection, str(row["project_id"]), actor) \
+                    and not _autonomy_permits(row, actor):
                 raise InvalidDecisionTransitionError(
                     "Starting the fix is a person's call: it needs a person with the Steer "
                     "builds permission (code_task:steer) on this project, never an agent or a "
@@ -2068,6 +2091,26 @@ class DecisionService:
                 {"decision_id": row["id"], "task_id": task_id},
             )
             return
+        # NOTHING NAMED BESIDE SEVERAL APPS (new_work, BOSSAPP-1455): a panel that named no app
+        # in a project that holds several does not quietly build a fresh app on the default
+        # branch beside them (RCA #9). The build is not started and the card says which apps
+        # there are and where to start it; one app or none builds as before.
+        from .project_experience import new_work
+
+        try:
+            new_work.require_app_choice(connection, row["project_id"], (
+                "The approved PRD names none of them, so BOSS did not start a build. Start it "
+                "from New work on the Project page: pick the app under Application, or pick "
+                "Create a new app."))
+        except new_work.AppChoiceNeeded as asked:
+            emit_event(connection, row["project_id"], "code_task.not_started", actor, "task",
+                       task_id, {"decision_id": row["id"], "reason": "app_choice_needed",
+                                 "detail": str(asked)[:600], "app_choices": asked.choices[:20]})
+            connection.execute(text(
+                "UPDATE decisions SET resolution_note = CONCAT_WS(E'\\n\\n', "
+                "NULLIF(resolution_note, ''), CAST(:why AS TEXT)), updated_at = now() "
+                "WHERE id = :d"), {"d": row["id"], "why": str(asked)[:1000]})
+            return
         # WHERE IT IS BUILT is the project's connected repository, resolved the way
         # create_code_task resolves it — the environment's single repo only when the project
         # has none registered. Reading the env alone meant a project with a connected repo and
@@ -2298,6 +2341,12 @@ class DecisionService:
         governing = connection.execute(text(
             "SELECT workflow_run_id FROM workflow_step_runs WHERE decision_id = :d "
             "ORDER BY created_at DESC LIMIT 1"), {"d": row["id"]}).scalar()
+        # WHICH CHANGE (new_work.build_mode, the one resolver every door asks — BOSSAPP-1455):
+        # the app's open change continues on its branch; a MERGED change starts a new change of
+        # the app from the default branch, never a push onto merged history.
+        from .project_experience import new_work
+
+        mode = new_work.build_mode(connection, project_id, extend_run_id)
         try:
             started = start_followup_task(
                 connection,
@@ -2312,6 +2361,7 @@ class DecisionService:
                 is_person_request=True,
                 workflow_run_id=str(governing) if governing else None,
                 finalize_extra={"origin": origin},
+                new_change=bool(mode and mode.get("mode") == "new_change"),
             )
         except ValueError as error:
             _not_started("followup_refused", detail=str(error)[:400])
@@ -3162,11 +3212,12 @@ def approve_by_policy(connection: Connection, decision_id: str, *, project_id: s
         {"id": decision_id, "p": project_id}).mappings().first()
     if row is None or row["status"] != "pending":
         return False
-    if row.get("action") in ("review_architecture", "self_fix.install", "self_fix.remove",
-                             "activate_authored_skill", "apply_agent_prompt_diff"):
-        # An architecture, a BOSS self-fix, and an agent-drafted skill are approved by a person,
-        # never by a setting. Policy approval would mark the card approved and skip the
-        # follow-on, so the skill would stay unusable and nobody could approve it again.
+    from . import autonomy_gate
+
+    if row.get("action") in autonomy_gate.SETTING_NEVER_APPROVES:
+        # An architecture, a BOSS self-fix, an agent-drafted skill, an agent's prompt and a new
+        # hire are approved by a person, never by a setting: ONE list (autonomy_gate), which dev
+        # autonomy's own person-only actions are part of, so the two cannot diverge.
         return False
     tier = int(row["risk_tier"] or 0)
     if _approvals.seats_for_tier(tier) or tier in _approvals.TWO_PERSON_TIERS:
@@ -3180,11 +3231,26 @@ def approve_by_policy(connection: Connection, decision_id: str, *, project_id: s
         ci_gate.refuse_approval(connection, dict(full), actor, system_policy=True)
     except ci_gate.CiGateRefused:
         return False
-    done = connection.execute(text(
-        "UPDATE decisions SET status = 'approved', approved_by = :actor, approved_at = now(), "
-        "resolution_note = :note WHERE id = :id AND project_id = :p AND status = 'pending' "
-        "RETURNING id"), {"id": decision_id, "p": project_id, "actor": actor, "note": note}).first()
-    return done is not None
+    # NEVER PRODUCTION, A CREDENTIAL OR SPEND PAST THE BUDGET (BOSSAPP-1441): the same route dev
+    # autonomy takes decides whether a setting may answer this card at all.
+    if not autonomy_gate.route(connection, dict(full)).acts:
+        return False
+    # THE SAME FOLLOW-ON A PERSON'S APPROVAL RUNS (BOSSAPP-1441). This used to UPDATE the
+    # status and stop, so an auto-approved card was marked approved and nothing was carried out.
+    if not str(actor).startswith(POLICY_ACTOR_PREFIXES):
+        actor = f"autonomy:{actor}"
+    from ..config import get_settings
+
+    point = connection.begin_nested()
+    try:
+        DecisionService(get_settings()).transition(
+            connection, decision_id, action="approve", actor=actor, note=note,
+            system_policy=True)
+    except Exception:  # noqa: BLE001 — a refused or failed follow-on leaves the card pending
+        point.rollback()
+        return False
+    point.commit()
+    return True
 
 
 def _delegate_words(delegated: Any) -> dict:

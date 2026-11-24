@@ -19,6 +19,8 @@ its output is narrative attached to a decision the code already made. That is wh
 """
 from __future__ import annotations
 
+from .production import is_production_environment
+
 import json
 import logging
 from typing import Any, Optional
@@ -228,12 +230,39 @@ def check_hypothesis(sig: dict[str, Any], failure_class: int) -> tuple[bool, str
 # Propose — one step of reasoning, persisted
 # --------------------------------------------------------------------------- #
 def _shepherd_minutes(connection, run_id: str) -> float:
-    """Minutes since this shepherd's FIRST reasoning step on this task. Zero if it has not
-    started, however old the underlying failure is."""
-    v = connection.execute(
-        sql("SELECT EXTRACT(EPOCH FROM (now() - MIN(created_at)))/60 "
-            "FROM shepherd_reasoning WHERE task_ref = :t"), {"t": run_id}).scalar()
-    return float(v or 0.0)
+    """Minutes this shepherd has WORKED this task: since its first reasoning step, less the time
+    the builds its remedies started sat in the job queue (BOSSAPP-1454). Zero if it has not
+    started, however old the underlying failure is.
+
+    A retry the shepherd starts is queued behind other work (JOB_PRIORITY_BACKGROUND, and on a
+    one-slot host for hours): that wait is not the shepherd's effort, and counting it ended
+    shepherds by "deadline" before their first remedy had run. The queue time is measured the
+    way step recovery measures its repair builds' (step_recovery.runs_queued_seconds)."""
+    first = connection.execute(
+        sql("SELECT MIN(created_at) FROM shepherd_reasoning WHERE task_ref = :t"),
+        {"t": run_id}).scalar()
+    if first is None:
+        return 0.0
+    age = float(connection.execute(
+        sql("SELECT EXTRACT(EPOCH FROM (now() - CAST(:f AS timestamptz)))"),
+        {"f": first}).scalar() or 0.0)
+    return max(0.0, age - remedies_queued_seconds(connection, run_id, since=first)) / 60.0
+
+
+def remedies_queued_seconds(connection, run_id: str, *, since: Any = "epoch") -> float:
+    """Seconds the builds this shepherd's remedies started for `run_id` waited in the queue
+    (shepherd.acted events name them as `successor_run`), never more than the shepherd's age."""
+    from .step_recovery import runs_queued_seconds
+
+    try:
+        with connection.begin_nested():
+            successors = [str(r) for r in connection.execute(sql(
+                "SELECT DISTINCT data->>'successor_run' FROM events "
+                "WHERE event_type = 'shepherd.acted' AND entity_id = :t "
+                "AND data->>'successor_run' IS NOT NULL"), {"t": run_id}).scalars() if r]
+    except Exception:  # noqa: BLE001 — an unread list subtracts nothing
+        return 0.0
+    return runs_queued_seconds(connection, successors, since=since)
 
 
 def propose(engine, settings: Settings, run_id: str, *,
@@ -1209,8 +1238,6 @@ def act(engine, settings: Settings, jobs, run_id: str, *,
     return p
 
 
-# Deployment environments a request for "live" could mean.
-LIVE_ENVIRONMENTS = ("production", "prod", "live")
 
 
 def describe_undeployable(*, status: str, repo: str, targets: list) -> str:
@@ -1227,7 +1254,7 @@ def describe_undeployable(*, status: str, repo: str, targets: list) -> str:
     completed. The agent's answer is only as good as the facts it is handed.
     """
     envs = [str(t.get("environment") or "?").lower() for t in targets]
-    live = [t for t in targets if str(t.get("environment") or "").lower() in LIVE_ENVIRONMENTS]
+    live = [t for t in targets if is_production_environment(t.get("environment"))]
 
     if not targets:
         where = "This app has NO deployment targets configured at all."

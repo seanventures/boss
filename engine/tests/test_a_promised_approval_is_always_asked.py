@@ -16,6 +16,7 @@ outline and the explained plan say — for every catalogue workflow, under a per
 """
 from __future__ import annotations
 
+import pytest
 import inspect
 import re
 
@@ -30,6 +31,23 @@ from boss_engine.services.workflow_asks import asks_for_spec, project_asks
 from boss_engine.services.workflow_capabilities import effective_approval
 
 from .test_workflow_capability_runner import _publish, eng, project  # noqa: F401
+
+
+@pytest.fixture(autouse=True)
+def _this_project_asks_in_development(eng, project):  # noqa: F811
+    """These pin the promise a Deploy step makes to a PERSON, so the project's autonomy policy
+    says ask in development (BOSSAPP-1441). Dev autonomy's default — the agent ships to a
+    development target and every surface says so — is pinned in test_dev_autonomy_acts_and_logs
+    and test_only_allowed_classes_wait_outside_production."""
+    from boss_engine.services import autonomy_policy
+
+    with eng.begin() as c:
+        autonomy_policy.save(c, kind=autonomy_policy.PROJECT, scope_id=project,
+                             raw={"dev": "ask"}, actor="test")
+    yield
+    with eng.begin() as c:
+        c.execute(text("DELETE FROM autonomy_policies WHERE scope_id = :p"), {"p": project})
+
 
 #: Words that tell a person they approve the release. Matched on what the catalogue SHOWS a
 #: person (description, objective, the start form's field texts) — a safety check on our own

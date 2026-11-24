@@ -173,6 +173,14 @@ if [ "${BOSS_CONSOLE_ORIGIN_EXPLICIT:-0}" != "1" ]; then
   fi
 fi
 
+# The install tier (dev | prod): the previous one wins unless this run passed --install-tier.
+if [ "${BOSS_INSTALL_TIER_EXPLICIT:-0}" != "1" ]; then
+  old="$(old_val BOSS_INSTALL_TIER)"
+  if [ -n "$old" ]; then
+    set_val BOSS_INSTALL_TIER "$old"
+  fi
+fi
+
 if [ "${BOSS_API_BIND_EXPLICIT:-0}" != "1" ]; then
   old="$(old_val BOSS_API_BIND)"
   if [ -n "$old" ]; then

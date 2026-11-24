@@ -705,12 +705,38 @@ def open_investigation(connection, *, project_id: str, question: str, actor: str
     # `updated_at` moves on every state change, so a row that has not moved in the window is
     # abandoned. Marked, not silently reused, because "it stopped when the API restarted" is
     # something the operator should be able to read afterwards.
+    #
+    # A QUEUED INVESTIGATION IS WAITING, NOT ABANDONED (R3, BOSSAPP-1431). On a one-slot host
+    # its job can wait behind a build for longer than 25 minutes; measured from when it was
+    # queued, it was marked "the process running it stopped" before anything ran it. A queued
+    # row is abandoned only when its job can no longer run it (gone, failed, cancelled).
     connection.execute(
         sql("UPDATE investigations SET status = 'abandoned', token = NULL, "
             "error = 'the process running it stopped (deploy or restart) before it finished', "
             "finished_at = now(), updated_at = now() "
-            "WHERE project_id = :p AND status IN ('queued', 'running') "
+            "WHERE project_id = :p AND status = 'running' "
             "  AND updated_at < now() - INTERVAL '25 minutes'"),
+        {"p": project_id})
+    connection.execute(
+        sql("UPDATE investigations i SET status = 'abandoned', token = NULL, "
+            "error = 'its job ended before it started (cancelled, failed or lost); "
+            "start the investigation again', "
+            "finished_at = now(), updated_at = now() "
+            "WHERE i.project_id = :p AND i.status = 'queued' "
+            "  AND i.updated_at < now() - INTERVAL '25 minutes' "
+            "  AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.id = i.job_id "
+            "                  AND j.status IN ('queued', 'leased', 'running', "
+            "                                   'failed_retryable'))"),
+        {"p": project_id})
+    # ... and never waits forever: a day in the queue (no worker ever takes its kind) ends it,
+    # saying so, so one stuck row cannot refuse every later investigation as "already running".
+    connection.execute(
+        sql("UPDATE investigations SET status = 'abandoned', token = NULL, "
+            "error = 'it waited a day in the queue and never started (no worker took it); "
+            "check the workers in System health, then start the investigation again', "
+            "finished_at = now(), updated_at = now() "
+            "WHERE project_id = :p AND status = 'queued' "
+            "  AND created_at < now() - INTERVAL '24 hours'"),
         {"p": project_id})
     live = connection.execute(
         sql("SELECT id FROM investigations WHERE project_id = :p "

@@ -91,16 +91,8 @@ def test_the_working_case_is_ok():
     assert found["ok"] and found["layer"] == ""
 
 
-def test_doctor_prints_one_line_and_exits_by_verdict(monkeypatch, capsys):
-    monkeypatch.setenv(eis.ENV, "seccomp")
-    monkeypatch.setattr(eis, "apparmor_label", lambda *a: None)
-    monkeypatch.setattr(eis, "probe", lambda *a, **k: {"ok": False, "output": BWRAP})
-    assert eis.main(["--expect", "seccomp"]) == 1
-    line = capsys.readouterr().out.strip()
-    assert line.startswith("bad [kernel] ") and "Fix:" in line
-    monkeypatch.setattr(eis, "probe", lambda *a, **k: {"ok": True, "output": ""})
-    assert eis.main(["--expect", "seccomp"]) == 0
-    assert capsys.readouterr().out.startswith("ok ")
+# `boss doctor`'s line, through the build's launcher: test_engine_checks_go_through_the_build_
+# launcher.test_doctor_prints_one_line_and_exits_by_verdict (BOSSAPP-1433 R5).
 
 
 # ── Setup's engine check ──────────────────────────────────────────────────────────────────────

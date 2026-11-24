@@ -176,6 +176,12 @@ CARRIED_OUT_ON_APPROVAL = frozenset({
     # A build's delivery workflow did not start (code_task_service.start_delivery_workflow):
     # approving starts it now, adopting the running build (attach_delivery_workflow).
     "start_delivery_workflow",
+    # THE INFRA AGENT'S CARDS (BOSSAPP-1157). Approving a tier-3 storage deletion runs exactly
+    # the dry run's plan (storage_cleanup.on_delete_decision); approving a proposed retention
+    # rule writes it (storage_incidents.on_rule_decision). They were KINDS but not classified,
+    # so Approve said "BOSS starts nothing" and an approved card offered "Mark executed".
+    "storage_delete",
+    "storage_rule",
 })
 
 #: "Request changes" DOES SOMETHING ONLY FOR THESE: DecisionService._handle_non_approved_follow_on
@@ -899,6 +905,23 @@ def allowed_actions(decision: Mapping[str, Any]) -> list[dict[str, Any]]:
         # ONE DECISION FOR EVERY PR OF A MULTI-REPO CHANGE: no per-PR approval exists, so there
         # is no Delegate either — the set is approved as one by someone who may approve it.
         n = len(_rec(decision).get("pull_requests") or [])
+        from .checks_failing import of_decision
+
+        if of_decision(decision) is not None:
+            # CHECKS FAILING ON A PR OF THE SET (change_sets.set_checks_failing): the merge is a
+            # person's stated decision, sent as a forced merge with their reason
+            # (ci_gate.refuse_approval refuses anything else); keeping it blocked is the other.
+            return [
+                _action("approve", f"Merge all {n} with checks failing" if n else
+                        "Merge with checks failing", "reject",
+                        "Merges every pull request of the set although BOSS's checks are failing on "
+                        "some of them. Say why: your reason is recorded with the merge.", needs="note"),
+                _action("revise", "Send back", "neutral",
+                        "Every pull request gets a fix build from your note; the set is reviewed and "
+                        "asked again.", needs="note"),
+                _action("reject", "Keep blocked", "reject",
+                        "Nothing is merged or deployed. The pull requests stay open."),
+            ]
         return [
             _action("approve", f"Approve and ship all {n}" if n else "Approve and ship", "approve",
                     "Merges every pull request of the set at the reviewed commits, in dependency order, "

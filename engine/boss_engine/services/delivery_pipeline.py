@@ -28,6 +28,7 @@ import fnmatch
 import json
 from typing import Any, Optional
 
+from . import production as _production
 from ..config import Settings
 from ..ports import sql
 from .core import create_blocking_decision, emit_event
@@ -790,9 +791,14 @@ def redeploy(engine, settings: Settings, deployment_run_id: str, *,
 # healthy deploy is a worse failure than a stale row. This bounds the case that actually
 # happened — a step that spins forever because its worker died or an SSH never returned.
 DEPLOYMENT_MAX_RUNTIME_SECONDS = 45 * 60
+#: A deployment planned but never started (its fan-out or caller died before its turn, its
+#: changeset was rejected) is closed after this long; one whose changeset still waits for a
+#: person is not closed by time.
+DEPLOYMENT_NEVER_STARTED_SECONDS = 24 * 60 * 60
 
 
-def fail_hung_deployments(engine, *, max_seconds: int = DEPLOYMENT_MAX_RUNTIME_SECONDS
+def fail_hung_deployments(engine, *, max_seconds: int = DEPLOYMENT_MAX_RUNTIME_SECONDS,
+                          never_started_seconds: int = DEPLOYMENT_NEVER_STARTED_SECONDS
                           ) -> dict[str, Any]:
     """Close out deployments that have been running implausibly long.
 
@@ -801,22 +807,50 @@ def fail_hung_deployments(engine, *, max_seconds: int = DEPLOYMENT_MAX_RUNTIME_S
     faithfully polling a step that would never finish. Startup-only cleanup assumes the thing
     that goes wrong is a restart; the thing that actually goes wrong is a hang.
 
+    THE CLOCK STARTS WHEN THE DEPLOYMENT STARTS, NOT WHEN IT WAS PLANNED (R3, BOSSAPP-1431).
+    A row is inserted `created` with `started_at = now()` at PLAN time, and then waits: behind
+    the apps before it in a sequential fan-out, or for its changeset's approval. Measured from
+    there, app N of a fan-out (or a changeset approved after 45 minutes) was failed as "ran
+    longer than the maximum" before it ever ran. A `created` row's runtime now counts from its
+    first recorded step (StepRecorder writes it as execution begins); `running` rows from
+    `started_at`, which execution itself sets. A row that never started is not hung: it is
+    only closed when it has waited a day with nothing to wait for (no changeset), and it says
+    so.
+
     Safe to call on a schedule — it only touches rows that are BOTH still open and older than
     the cap, so a healthy long deploy is never interrupted.
     """
     from ..db import begin
 
+    started = ("(jsonb_typeof(steps) = 'array' AND jsonb_array_length(steps) > 0)")
     with begin(engine) as c:
         rows = c.execute(
             sql("UPDATE deployment_runs SET status='failed', finished_at=now(), "
                 "failure_reason = COALESCE(failure_reason, "
                 "  'this deployment ran longer than the maximum and was treated as hung. "
                 "The host may hold a partial release — redeploy to be sure.') "
-                "WHERE status IN ('created','running','in_progress') "
-                "  AND COALESCE(started_at, created_at) < now() - make_interval(secs => :s) "
+                "WHERE ((status IN ('running','in_progress') "
+                "        AND COALESCE(started_at, created_at) < now() - make_interval(secs => :s)) "
+                f"    OR (status = 'created' AND {started} "
+                "        AND COALESCE((steps->0->>'started_at')::timestamptz, started_at, created_at)"
+                "            < now() - make_interval(secs => :s))) "
                 "RETURNING id"),
             {"s": int(max_seconds)}).mappings().all()
-    return {"failed": [r["id"] for r in rows]}
+        waited = c.execute(
+            sql("UPDATE deployment_runs SET status='failed', finished_at=now(), "
+                "failure_reason = COALESCE(failure_reason, "
+                "  'this deployment was planned but never started: whatever was to run it "
+                "stopped before its turn. Nothing reached the host; deploy it again.') "
+                f"WHERE status = 'created' AND NOT {started} "
+                # Waiting on its changeset's person is a wait, not a stall; a rejected,
+                # dead-lettered or vanished changeset leaves nothing to wait for.
+                "  AND (changeset_id IS NULL OR NOT EXISTS (SELECT 1 FROM changesets cs "
+                "       WHERE cs.id = deployment_runs.changeset_id "
+                "         AND cs.status IN ('draft', 'pending_approval', 'approved'))) "
+                "  AND created_at < now() - make_interval(secs => :w) "
+                "RETURNING id"),
+            {"w": int(never_started_seconds)}).mappings().all()
+    return {"failed": [r["id"] for r in rows], "never_started": [r["id"] for r in waited]}
 
 
 def fail_orphaned_deployments(engine) -> dict[str, Any]:
@@ -1047,7 +1081,7 @@ def block_ungoverned_connector_execution(
             {"action": "plan_governed_changeset", "deployment_run_id": run_id},
             {"deployment_run_id": run_id, "reason": reason_code},
             reason_code,
-            risk_tier=3 if run.get("environment") == "production" else 2,
+            risk_tier=_production.risk_tier_for(run.get("environment")),
         )
         connection.execute(
             sql("UPDATE deployment_runs SET status = 'blocked', decision_id = :decision_id, "

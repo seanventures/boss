@@ -125,6 +125,8 @@ PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
 MAX_BODY_BYTES = 8 * 1024 * 1024
 MIN_TTL_SECONDS = 3600
 TTL_GRACE_SECONDS = 900
+#: How long an expired, unrevoked grant is kept so a session that starts late can renew it.
+SWEEP_AFTER_EXPIRY_SECONDS = 24 * 3600
 
 #: The decision actions this module raises (decision_actions.RECORDED_ON_APPROVAL: approving
 #: records the answer; the parked call reads it — nothing else is started by the card).
@@ -340,6 +342,9 @@ class GatewayGrant:
     deployment_id: Optional[str] = None
     org_id: Optional[str] = None
     epoch: Optional[int] = None
+    #: The token's lifetime, renewed from each session's start (`session_started`): a build that
+    #: waited in the queue before its session began has not spent it (BOSSAPP-1451).
+    ttl: float = 0.0
 
     def live(self, now: Optional[float] = None) -> bool:
         return not self.revoked and (now or time.time()) < self.expires_at
@@ -448,7 +453,7 @@ class McpGateway:
                              expires_at=time.time() + max(1.0, float(ttl)),
                              servers={str(k): dict(v) for k, v in servers.items()},
                              role_key=role_key, run_id=run_id,
-                             gateway_id=f"mcpgw_{_hash(token)[:16]}")
+                             gateway_id=f"mcpgw_{_hash(token)[:16]}", ttl=max(1.0, float(ttl)))
         with self._lock:
             self._sweep()
             self._grants[grant.token_hash] = grant
@@ -466,6 +471,21 @@ class McpGateway:
             grant = self._grants.get(_hash(token))
             if grant is not None and not grant.run_id:
                 grant.run_id = str(run_id)
+
+    def session_started(self, token: str, run_id: Optional[str]) -> bool:
+        """A session that uses this token is starting: bind it to the run (`bind_run`) and give
+        the token its full lifetime FROM NOW. The token is issued when the build attempt begins;
+        on a small host the attempt can queue for hours before its session starts, and that
+        wait used to spend the lifetime (BOSSAPP-1451). Never extends a revoked token and never
+        shortens one. True when the token is live for the session."""
+        self.bind_run(token, run_id)
+        with self._lock:
+            grant = self._grants.get(_hash(token))
+            if grant is None or grant.revoked:
+                return False
+            if grant.ttl > 0:
+                grant.expires_at = max(grant.expires_at, time.time() + grant.ttl)
+            return grant.live()
 
     def revoke(self, token: str) -> None:
         with self._lock:
@@ -486,7 +506,10 @@ class McpGateway:
         return n
 
     def _sweep(self) -> None:
-        cutoff = time.time() - 6 * 3600
+        # An unrevoked token whose build is still queued may lapse before its session starts,
+        # which renews it (`session_started`): it is kept for a day past its expiry, so a long
+        # queue finds it still there. A revoked one goes once it has expired.
+        cutoff = time.time() - SWEEP_AFTER_EXPIRY_SECONDS
         for key in [k for k, g in self._grants.items()
                     if g.expires_at < cutoff or (g.revoked and g.expires_at < time.time())]:
             del self._grants[key]
@@ -1281,10 +1304,10 @@ class HostLane:
         if row is None:
             raise Refused(401, "unknown_handle")
         if row["revoked_at"] is not None:
-            raise Refused(401, "handle_revoked")
+            raise Refused(401, "handle_revoked", _lapsed_say("handle_revoked"))
         expires = row["expires_at"]
         if expires is not None and expires.timestamp() <= time.time():
-            raise Refused(401, "handle_expired")
+            raise Refused(401, "handle_expired", _lapsed_say("handle_expired"))
         if caller.org_id and row["org_id"] != caller.org_id:
             self._replay(connection, caller, row, "another_org")
         if row["vm_id"] is None and caller.vm_id:
@@ -1395,9 +1418,17 @@ class QueueSink(Sink):
 
 # ── HTTP ─────────────────────────────────────────────────────────────────────────────────────
 
+def _lapsed_say(reason: str) -> str:
+    from .lapsed import say
+
+    return say(reason)
+
+
 def _refusal(status: int, reason: str) -> bytes:
+    from .lapsed import say
+
     return json.dumps({"jsonrpc": "2.0", "id": None, "error": {
-        "code": -32001, "message": f"boss mcp gateway: {reason}"}}).encode()
+        "code": -32001, "message": f"boss mcp gateway: {say(reason)}"}}).encode()
 
 
 class _SseSink(Sink):

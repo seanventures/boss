@@ -853,6 +853,7 @@ class Build:
             cap_minutes = sf._int_setting(c, self.settings, "self_fix_max_minutes")
         if not ok:
             raise Stop("switched_off", why, cancel=True)
+        self.keep_hold(sfx, cap_minutes, spends=spends)
         budget = int(sfx.get("budget_usd_micros") or 0)
         over: dict[str, Any] = {}
         if budget and self.cost_micros >= budget:
@@ -860,7 +861,10 @@ class Build:
                 raise Stop("budget", f"spent ${self.cost_micros / 1e6:.2f} of "
                                      f"${budget / 1e6:.2f}")
             over["budget"] = {"spent_micros": self.cost_micros, "cap_micros": budget}
-        started = sfx.get("started_at") or sfx.get("created_at")
+        # THE TIME CAP COUNTS FROM WHEN THE BUILD STARTED, NEVER FROM WHEN IT WAS QUEUED (R3):
+        # "311 minutes (the most is 60)", all of it waiting for a worker on a one-slot host.
+        # No started_at means it has not started; created_at is never the clock.
+        started = sfx.get("started_at")
         if started:
             age = (sf.now_utc() - datetime.fromisoformat(str(started))).total_seconds()
             if age > cap_minutes * 60:
@@ -877,6 +881,47 @@ class Build:
             self.write(review={**(sfx.get("review") or {}), "overrun": over})
             self.say(f"{sf.AGENT_NAME}: every gate and reviewer passed; the last review {words}. "
                      "The fix is kept and still needs your approval.")
+
+    def keep_hold(self, sfx: Mapping[str, Any], cap_minutes: int, *, spends: bool = True) -> None:
+        """THE BUDGET HOLD LIVES AS LONG AS THE WORK (R3, BOSSAPP-1431). It was reserved at
+        claim and never renewed, so a self-fix that ran long lost its hold silently, and the
+        money it held was free for other work while it still spent. Renewed from now at the
+        start and at every boundary. A hold that lapsed (expired, or settled by the reconcile)
+        is reserved again before a stage that spends; when the budget refuses that, the fix
+        stops saying what lapsed and what to do. A hold released on purpose (refused,
+        cancelled) is never reserved again, and delivery (`spends=False`) only renews: a fix
+        that passed every gate is never stopped over its hold."""
+        from .budget import BudgetGovernor
+
+        reservation = str(sfx.get("budget_reservation_id") or "")
+        if not reservation:
+            return
+        project_id = str(sfx["project_id"])
+        governor = BudgetGovernor(self.settings)
+        with self.engine.begin() as c:
+            if governor.extend(c, project_id, reservation, cap_minutes + 30) or not spends:
+                return
+            status = c.execute(text("SELECT status FROM budget_reservations WHERE id = :i"),
+                               {"i": reservation}).scalar()
+            if status not in (None, "expired", "settled"):
+                return                       # released on purpose: the fix is ending
+            fresh, why_not = sf._reserve(c, self.settings, project_id, self.sfx_id,
+                                         int(sfx.get("budget_usd_micros") or 0), cap_minutes)
+            if fresh:
+                moved = c.execute(text(
+                    "UPDATE self_fixes SET budget_reservation_id = :new WHERE id = :i "
+                    "AND budget_reservation_id = :old AND status = ANY(:building)"),
+                    {"new": fresh, "old": reservation, "i": self.sfx_id,
+                     "building": sorted(sf.BUILDING)}).rowcount
+                if not moved:                # the fix moved on meanwhile: hold nothing for it
+                    governor.release(c, project_id, fresh, reason="self-fix no longer building")
+                    return
+                sf.say(c, self.sfx_id, f"{sf.AGENT_NAME}: its budget hold had lapsed "
+                                       f"({status or 'gone'}); BOSS reserved it again.")
+                return
+        raise Stop("budget", f"its budget hold lapsed ({status or 'gone'}) and could not be "
+                             f"reserved again: {why_not}. Raise the project's cap or wait for "
+                             "room, then retry the self-fix")
 
     # -- an engine turn -----------------------------------------------------------------------
     def turn_budget_usd(self, agent: Any) -> Optional[float]:
@@ -939,8 +984,8 @@ class Build:
         with self.engine.begin() as connection:
             connection.execute(text(
                 "UPDATE self_fixes SET started_at = COALESCE(started_at, :now) "
-                "WHERE id = :id AND status IN ('claimed', 'fixing')"),
-                {"now": sf.now_utc(), "id": self.sfx_id})
+                "WHERE id = :id AND status = ANY(:building)"),
+                {"now": sf.now_utc(), "id": self.sfx_id, "building": sorted(sf.BUILDING)})
         sfx = self.sfx()
         work_root = Path(self.work_root or _work_root(self.settings)) / self.sfx_id
         try:

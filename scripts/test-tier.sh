@@ -45,6 +45,8 @@ import yaml
 
 tier, since, out = sys.argv[1], sys.argv[2], sys.argv[3]
 tiers = yaml.safe_load(open("tests/tiers.yaml"))
+# worker: apps/worker/tests (the lease loops, job slots, the idle/stall clock). It was never run
+# by any gate until R3 (BOSSAPP-1431): a 4-core / 8 GiB host's one-slot bug lived there.
 SUITES = {"engine": ("engine/tests", ".py"), "api": ("apps/api/tests", ".py"),
           "worker": ("apps/worker/tests", ".py"), "scripts": ("scripts/tests", ".py"),
           "web": ("apps/web/tests", (".ts", ".tsx"))}
@@ -187,11 +189,14 @@ if [ -s "$OUT/engine.files" ]; then
   summary+=("engine $(( $(secs) - t0 ))s: $(tail -1 "$OUT/engine.log")")
 fi
 
-# ---- worker and scripts (no database; each its own run) --------------------------------------
+# ---- worker and scripts (no database of their own; each its own run) --------------------------
+# worker: its tests fake the control plane; the one real-Postgres test opts in with
+# BOSS_RUN_WORKER_ACK_TEST=1. `boss_worker` is importable both ways.
 for s in worker scripts; do
   [ -s "$OUT/$s.files" ] || continue
   t0=$(secs)
-  PYTHONPATH=.:engine perl -e 'alarm shift; exec @ARGV' "$RUN_TIMEOUT" \
+  BOSS_TEST_DATABASE_URL="postgresql+psycopg://$PGU:$PW@$PGHOSTNAME:$PORT/$DBP" PYTHONPATH=.:engine:apps/worker \
+    perl -e 'alarm shift; exec @ARGV' "$RUN_TIMEOUT" \
     python3 -m pytest -q -p no:cacheprovider -W ignore $(cat "$OUT/$s.files") -rA > "$OUT/$s.log" 2>&1
   summary+=("$s $(( $(secs) - t0 ))s: $(tail -1 "$OUT/$s.log")")
 done

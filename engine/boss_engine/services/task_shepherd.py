@@ -440,7 +440,8 @@ class ShepherdState:
     used_remedies: set[tuple[int, str]] = field(default_factory=set)
     # (failure_class, remedy_id) -> how many times this pair was followed by the SAME failure
     attempt_history: list[tuple[int, str, str]] = field(default_factory=list)
-    # How long THIS SHEPHERD has been working the task — not how old the run is.
+    # How long THIS SHEPHERD has been working the task — not how old the run is, and not the
+    # time its remedies' builds sat in the job queue (shepherd_service._shepherd_minutes).
     # First run against real data stopped every proposal with "deadline" because run age was
     # passed here: a failure from yesterday is not a shepherd that has been trying for a day,
     # it is a shepherd that has not started. The deadline bounds effort, not staleness.
@@ -474,7 +475,9 @@ def next_step(state: ShepherdState, failure_class: int, *, succeeded: bool = Fal
 
     if state.shepherd_minutes >= state.deadline_minutes:
         return Verdict("stop", None,
-                       f"wall-clock deadline reached ({state.deadline_minutes:.0f} min)",
+                       f"the shepherd worked this task for its {state.deadline_minutes:.0f} "
+                       "minutes (time its remedies waited in the queue is not counted); a "
+                       "person decides what happens next on this run's card",
                        "deadline")
 
     remedies = REMEDIES.get(failure_class, (ESCALATE,))

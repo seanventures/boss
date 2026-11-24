@@ -516,6 +516,15 @@ def tick(engine, settings: Any, *, now: Optional[datetime] = None,
         with begin(engine) as c:
             return DecisionService(settings).expire_overdue(c)
     out["decisions_expired"] = guard("deadlines", deadlines) or 0
+
+    # DEV AUTONOMY'S SWEEP (autonomy_gate, BOSSAPP-1441): cards BOSS answers in development that
+    # the after-commit decide did not reach (a direct insert, a restart) are decided here, with
+    # the same follow-on a person's Approve runs.
+    def autonomy():
+        from .autonomy_gate import sweep
+
+        return sweep(engine, settings)
+    out["autonomy"] = guard("autonomy", autonomy)
     out["routed"] = guard("routes", routes)
     # A PERSON'S WATCHDOGS ON WORK TREES (BOSSAPP-880, work_watchdogs): a subtree that stopped
     # unfinished, has blocked work, closed or stalled is told once per fingerprint, queued in

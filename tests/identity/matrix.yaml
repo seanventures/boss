@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 2442 operations.
+# 2451 operations.
 "GET /.well-known/agent-card.json": ["public:jwks", "OAPVU"]
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /.well-known/boss-mcp-client.json": ["public:jwks", "OAPVU"]
@@ -391,6 +391,13 @@
 "POST /v1/auth/webauthn/options": ["public:auth_endpoint", "OAPVU"]
 "POST /v1/auth/webauthn/verify": ["public:auth_endpoint", "OAPVU"]
 "GET /v1/autonomy": ["permit improvement:read @ project(query=project_id)", "OAPVU"]
+"GET /v1/autonomy/decided": ["permit decision:read @ project(query=project_id)", "OAPVU"]
+"POST /v1/autonomy/decided/{decision_id}/reviewed": ["permit decision:approve @ decision(path=decision_id)", "OAP"]
+"POST /v1/autonomy/decided/{decision_id}/undo": ["permit decision:approve @ decision(path=decision_id)", "OAP"]
+"PUT /v1/autonomy/org-policy": ["permit org:update @ org", "OA"]
+"GET /v1/autonomy/policy": ["permit autonomy:read @ project(query=project_id)", "OAPVU"]
+"PUT /v1/autonomy/policy": ["permit autonomy:manage @ project(body=project_id)", "OA"]
+"GET /v1/autonomy/resolve": ["permit autonomy:read @ project(query=project_id)", "OAPVU"]
 "GET /v1/autonomy/runs/{run_id}": ["permit improvement:read @ project(query=project_id)", "OAPVU"]
 "GET /v1/autoscaler/plans": ["permit infra:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/autoscaler/plans": ["permit infra:provision @ project(body=project_id)", "OA"]
@@ -744,13 +751,14 @@
 "GET /v1/deployment-targets": ["permit deployment:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/deployment-targets": ["permit deployment_target:manage @ project(body=project_id) +production(environment=body.environment)", "OA"]
 "DELETE /v1/deployment-targets/{target_id}": ["permit deployment_target:manage @ deployment_target(path=target_id)", "OA"]
-"PATCH /v1/deployment-targets/{target_id}": ["permit deployment_target:manage @ deployment_target(path=target_id) +production(target=path.target_id,environment=body.environment)", "OA"]
+"PATCH /v1/deployment-targets/{target_id}": ["permit deployment_target:manage @ deployment_target(path=target_id) +production:resolved(target=path.target_id,environment=body.environment)", "OA"]
 "POST /v1/deployment-targets/{target_id}/auto-deploy": ["permit deployment_target:manage @ deployment_target(path=target_id)", "OA"]
 "POST /v1/deployment-targets/{target_id}/bootstrap": ["permit deployment_target:manage @ deployment_target(path=target_id)", "OA"]
 "POST /v1/deployment-targets/{target_id}/purge": ["permit deployment_target:manage @ deployment_target(path=target_id)", "OA"]
 "POST /v1/deployment-targets/{target_id}/remove": ["permit deployment:create @ deployment_target(path=target_id)", "OAP"]
 "POST /v1/deployment-targets/{target_id}/secrets": ["permit deployment_target:manage @ project(body=project_id)", "OA"]
 "POST /v1/deployment-targets/{target_id}/teardown": ["permit deployment_target:manage @ deployment_target(path=target_id)", "OA"]
+"PUT /v1/deployment-targets/{target_id}/tier": ["permit deployment_target:manage @ deployment_target(path=target_id) +production:resolved(target=path.target_id)", "OA"]
 "GET /v1/deployments": ["permit deployment:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/deployments": ["permit deployment_target:manage @ project(body=project_id)", "OA"]
 "GET /v1/deployments/stack": ["permit deployment:read @ project(query=project_id)", "OAPVU"]
@@ -1939,6 +1947,7 @@
 "POST /v1/repair-policy": ["permit policy:read @ org", "OAPVU"]
 "GET /v1/reports/summary": ["permit observability:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/repos/push-pending/execute": ["permit worker:lease @ org", "-"]
+"PUT /v1/repository-bindings/{binding_id}/ships-to": ["permit repository:manage @ github_repository_binding(path=binding_id) +production:always", "OA"]
 "POST /v1/resource-janitor/run": ["permit infra:terminate @ project(body=project_id)", "OA"]
 "GET /v1/resource-receipts": ["permit activity:read @ project(query=project_id)", "OAPVU"]
 "GET /v1/resource-topology": ["permit infra:read @ project(query=project_id)", "OAPVU"]

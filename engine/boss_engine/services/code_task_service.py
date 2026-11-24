@@ -3815,9 +3815,16 @@ def _run_code_task(engine, settings: Settings, jobs, run_id: str,
     with _transaction(engine) as c:
         _bases = _build_base.resolve_build_base(
             c, project_id=project_id, owner=owner, repo=repo,
-            explicit=spec.get("base_branch"), host_default=_host_default, run_id=run_id)
+            explicit=spec.get("base_branch"), host_default=_host_default, run_id=run_id,
+            # A DEFAULT BRANCH THAT MOVED is followed, and said (BOSSAPP-1439).
+            branch_exists=(getattr(sf.github, "branch_exists", None)
+                           if repo_host_kind == "github" else None))
         emit_event(c, project_id, "code_task.base_branch_resolved", "boss", "code_task_run",
                    run_id, _bases.as_event())
+        if _bases.note:
+            emit_event(c, project_id, "code_task.default_branch_moved", "boss",
+                       "code_task_run", run_id, {"message": _bases.note,
+                                                 "from": _bases.moved_from, "to": _bases.clone})
     base_branch = _bases.clone     # may advance to work_branch below (a repair)
     repo_base_branch = _bases.pr   # the PR's base
     token = _clone_token(engine, settings, owner=owner, repo=repo, project_id=project_id,

@@ -1067,10 +1067,14 @@ class Settings(BaseSettings):
         default=None, alias="BOSS_MEETING_PRD_AUTO_APPROVE"
     )
 
+    # DEV AUTONOMY (BOSSAPP-1441) REPLACES "FOLLOWS ENFORCEMENT": unset, the PRD gate follows the
+    # project's autonomy policy (services/autonomy_policy.py: development acts by default), not
+    # BOSS_AUTHZ_MODE. The policy is set by an Owner/Admin with step-up, which is the seat's
+    # standing word for non-production work. Setting it false is a stop a person set: honoured.
     @model_validator(mode="after")
-    def _prd_auto_approve_follows_enforcement(self):
+    def _prd_auto_approve_follows_autonomy(self):
         if self.meeting_prd_auto_approve is None:
-            self.meeting_prd_auto_approve = (self.authz_mode or "").strip().lower() != "enforce"
+            self.meeting_prd_auto_approve = True
         return self
     # Cost/rigor dial for the governed pipeline: lean | balanced | strict (or a custom profile
     # name once the profiles API lands). Scales which steps run and which models run them.
@@ -1796,6 +1800,10 @@ class Settings(BaseSettings):
     # The Sandbox Agent (host service) the microvm provider dispatches tasks to.
     sandbox_agent_url: str = Field(default="http://127.0.0.1:8088", alias="BOSS_SANDBOX_AGENT_URL")
     sandbox_agent_timeout_seconds: int = Field(default=1500, alias="BOSS_SANDBOX_AGENT_TIMEOUT_SECONDS")
+    #: How long the sandbox-service may keep a task queued before it starts (R3): the agent
+    #: timeout above counts only from when the task runs. Capped so queue + run fit the guest's
+    #: handle lifetime (sandbox_provider.run_code_task).
+    sandbox_queue_timeout_seconds: int = Field(default=2700, alias="BOSS_SANDBOX_QUEUE_TIMEOUT_SECONDS")
     # Shared bearer for the sandbox-service (sent as X-Sandbox-Token). Empty => no auth header.
     sandbox_token: str = Field(default="", alias="BOSS_SANDBOX_TOKEN")
     # Poll cadence while waiting on an async micro-VM task (§2 submit -> poll -> release).

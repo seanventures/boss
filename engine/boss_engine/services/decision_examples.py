@@ -212,7 +212,10 @@ def anonymize_example(example: dict[str, Any], people: Optional[_Pseudonyms] = N
     record = {
         "question": snap.get("question") or "",
         "action": snap.get("action"),
-        "context": {k: v for k, v in (snap.get("recommendation") or {}).items() if k != "action"},
+        # Dev autonomy's routing record (autonomy_gate) is BOSS's own bookkeeping, not the context
+        # a person decided on.
+        "context": {k: v for k, v in (snap.get("recommendation") or {}).items()
+                    if k not in ("action", "autonomy")},
         "options": snap.get("options") or [],
         "risk_tier": snap.get("risk_tier"),
         "recommended": example.get("recommended"),

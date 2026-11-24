@@ -2099,6 +2099,10 @@ def _step_outline(specs: Any, step_labels: dict[str, str],
             if answer.get("who") == "policy":
                 outline[-1]["approval"] = "policy"
                 outline[-1]["policy"] = answer.get("environment")
+            elif answer.get("who") == "agent":
+                # Dev autonomy ships it: the target is not production (BOSSAPP-1441).
+                outline[-1]["approval"] = "agent"
+                outline[-1]["policy"] = answer.get("environment")
             outline[-1]["says"] = answer.get("says") or PERSON_SAYS
     return outline
 

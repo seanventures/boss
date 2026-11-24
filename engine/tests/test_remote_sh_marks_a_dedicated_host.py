@@ -66,6 +66,7 @@ exit 0
 #: the way the real one does (a rerun keeps unknown lines; a first run writes a fresh file).
 FAKE_INSTALL = """#!/usr/bin/env bash
 printf 'install.sh saw BOSS_DEDICATED_HOST=%s\\n' "${BOSS_DEDICATED_HOST-<unset>}" >> "$FAKE_LOG"
+printf 'install.sh args: %s\\n' "$*" >> "$FAKE_LOG"
 if [ -f .env ]; then
   { printf 'BOSS_EDITION=community\\n'; grep -v '^BOSS_EDITION=' .env; } > .env.new && mv .env.new .env
 else
@@ -90,7 +91,8 @@ ENTERPRISE = "engine/boss_engine/services/enterprise_network.py"
 
 def _run(tmp_path: Path, cmd: str, host_env: str | None,
          extra_env: dict[str, str] | None = None,
-         ship_enterprise: bool = True) -> tuple[subprocess.CompletedProcess, Path, str]:
+         ship_enterprise: bool = True,
+         args: tuple[str, ...] = ()) -> tuple[subprocess.CompletedProcess, Path, str]:
     host_dir = tmp_path / "host" / "boss"
     (host_dir / "scripts" / "install").mkdir(parents=True)
     (host_dir / "install.sh").write_text(FAKE_INSTALL)
@@ -120,7 +122,8 @@ def _run(tmp_path: Path, cmd: str, host_env: str | None,
     env = {k: v for k, v in os.environ.items() if k != "BOSS_DEDICATED_HOST"}
     env.update(PATH=f"{bin_dir}:{env['PATH']}", FAKE_LOG=str(log), **(extra_env or {}))
     result = subprocess.run(
-        ["bash", str(repo / "remote_test.sh"), cmd, "--host", "fake-host", "--dir", str(host_dir)],
+        ["bash", str(repo / "remote_test.sh"), cmd, "--host", "fake-host", "--dir", str(host_dir),
+         *args],
         env=env, text=True, capture_output=True, timeout=60)
     return result, host_dir / ".env", log.read_text()
 

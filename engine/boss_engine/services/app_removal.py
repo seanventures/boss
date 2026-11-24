@@ -23,6 +23,7 @@ from typing import Any, Optional
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from . import production as _production
 from .core import create_blocking_decision, emit_event, make_id
 
 REMOTE_BASE = "/opt/boss-apps"
@@ -155,7 +156,7 @@ def plan_removal(rp, connection: Connection, *, project_id: str, target: dict, a
     host_name = str(host.get("name") or _split_ref(target.get("target_ref") or "")[1])
     user, address, _port = _split_ref(target.get("target_ref") or "")
     run_id = make_id("deprun")
-    risk_tier = 3 if environment == "production" else 2
+    risk_tier = _production.risk_tier_for(target=target)
     reservation = BudgetGovernor(rp.settings).reserve(
         connection, project_id, "provider", 0, f"Remove {app} from {host_name} ({run_id})",
         expires_in_minutes=24 * 60, risk_tier=risk_tier)
@@ -176,7 +177,7 @@ def plan_removal(rp, connection: Connection, *, project_id: str, target: dict, a
                      "resource_type": "ssh_host.app", "resource_ref": f"{target['id']}:{app}",
                      "desired_state": desired, "risk_tier": 1, "destructive": True,
                      "effect_kind": "deployment_target.teardown",
-                     "production_affecting": environment == "production"}],
+                     "production_affecting": _production.production_affecting(target=target)}],
         expected_cost_usd_micros=0, reservation_id=reservation["reservation_id"],
         rollback_plan=rollback_plan, risk_tier=1, approval_required=False, actor=actor)
     review = {"app_name": app, "environment": environment, "host": host_name,

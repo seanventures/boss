@@ -673,7 +673,51 @@ def run_check(engine: Any, settings: Any, *, job_id: str, project_id: str, provi
             "writer_mode": policy.get("writer_mode")}
 
 
-__all__ = ["CHECK_ESTIMATE_USD_MICROS", "JOB_KIND", "execute_job", "run_check", "start_check",
+#: BOSS re-runs a failed writer check itself at most this often per login (BOSSAPP-1441).
+RECHECK_SECONDS = 600
+_RECHECKED: dict[str, float] = {}
+
+
+def recheck_before_refusing(settings: Any, source_id: Optional[str], provider: str, *,
+                            project_id: Optional[str] = None,
+                            runner: Optional[Callable[..., dict]] = None) -> dict[str, Any]:
+    """A recorded "cannot write" is re-proved by BOSS ITSELF before writers are refused: the same
+    governed, sandboxed engine check Setup's Re-check runs, synchronously, at most once per login
+    per RECHECK_SECONDS. A person used to have to press Re-check (dev autonomy, BOSSAPP-1441).
+    Returns the policy recorded afterwards (unchanged when the check could not run)."""
+    if not source_id:
+        return recorded(source_id)
+    key = f"{provider}:{source_id}"
+    now = time.monotonic()
+    with _CACHE_LOCK:
+        last = _RECHECKED.get(key)
+        if last is not None and now - last < RECHECK_SECONDS:
+            return recorded(source_id)
+        _RECHECKED[key] = now
+    try:
+        from ..db import get_engine
+        from .core import make_id
+
+        if not project_id:
+            try:
+                from .llm_telemetry import get_llm_context
+
+                project_id = (get_llm_context() or {}).get("project_id")
+            except Exception:  # noqa: BLE001
+                project_id = None
+        project_id = project_id or str(getattr(settings, "default_project_id", "") or "")
+        if not project_id:
+            return recorded(source_id)
+        (runner or run_check)(get_engine(settings), settings, job_id=make_id("engchk"),
+                              project_id=project_id, provider=provider, source_id=source_id,
+                              actor="boss")
+    except Exception:  # noqa: BLE001 — the recorded verdict stands
+        _log.warning("engine re-check of %s could not run", key, exc_info=True)
+    forget(source_id)
+    return recorded(source_id)
+
+
+__all__ = ["CHECK_ESTIMATE_USD_MICROS", "recheck_before_refusing", "JOB_KIND", "execute_job", "run_check", "start_check",
            "summary", "workload_env", "CLAUDE_MANAGED_PATHS", "CODEX_SOURCE", "DOC", "MANAGED_MARKER", "POLICY_KEY",
            "PROBE_COMMAND", "PROBE_FILE", "PROBE_PROMPT", "PROBE_TOKEN", "cache_roots",
            "check_engine", "claude_managed_settings", "codex_downgrades", "codex_sandbox_proof",

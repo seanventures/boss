@@ -15,6 +15,7 @@ Design (architecture doc §3, "Own Layer 2"):
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import contextlib
 import contextvars
 import json
 import os
@@ -194,11 +195,17 @@ def _stage_deadline() -> Optional[float]:
         deadline = float(raw) if raw else None
     except (TypeError, ValueError):
         return None
-    # THE CLOCK STOPS WHILE THE RUN WAITS FOR A PERSON (stage_clock, BOSSAPP-814): a call parked
-    # at the MCP gateway moves the stage's deadline out by the time it waited.
+    # THE CLOCK STOPS WHILE THE RUN WAITS FOR A PERSON (stage_clock, BOSSAPP-814) OR FOR A MODEL
+    # SLOT (BOSSAPP-1450): a call parked at the MCP gateway, or queued behind another on the
+    # provider's lane, moves the stage's deadline out by the time it waited — counted from when
+    # the stage set its deadline, so the wait before the first session counts too.
     from . import stage_clock
 
-    return stage_clock.extended(ctx.get("run_id"), deadline)
+    try:
+        since = float(ctx["stage_deadline_since"]) if ctx.get("stage_deadline_since") else None
+    except (TypeError, ValueError):
+        since = None
+    return stage_clock.extended(ctx.get("run_id"), deadline, since=since)
 
 
 def _cap_to_deadline(timeout: int, *, read_only: bool) -> int:
@@ -2527,10 +2534,22 @@ class PacedCodeAgent:
         started = time.monotonic()
         acquired_at: Optional[float] = None
         watchdog = _SlotWatchdog(self._limiter, self._provider)
+        # WAITING FOR A SLOT IS QUEUE TIME (stage_clock, BOSSAPP-1450): the implement budget and
+        # a review seat's deadline start when the model call starts, not while it queues behind
+        # another on a one-slot lane. Closed the moment the slot is held (or the wait fails).
+        waiting = contextlib.ExitStack()
+        try:
+            from . import stage_clock
+            from .llm_telemetry import get_llm_context
+
+            waiting.enter_context(stage_clock.waiting_for_a_slot(get_llm_context().get("run_id")))
+        except Exception:  # noqa: BLE001 — metering never blocks a dispatch
+            pass
         try:
             watchdog.start()
             with self._limiter.slot(self._provider) as slot:
                 acquired_at = time.monotonic()
+                waiting.close()
                 watchdog.stop()
                 try:
                     out = fn(*args, **kwargs)
@@ -2547,6 +2566,7 @@ class PacedCodeAgent:
                 self._record_never_dispatched(exc, time.monotonic() - started)
             raise
         finally:
+            waiting.close()
             watchdog.stop()
 
     def _record_never_dispatched(self, exc: Exception, waited: float) -> None:
