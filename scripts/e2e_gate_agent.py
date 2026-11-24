@@ -109,6 +109,39 @@ def code_task_body(brief: dict[str, Any], *, base_branch: str, stamp: str) -> di
     }
 
 
+def new_work_body(brief: dict[str, Any], *, app: Optional[str], stamp: str) -> dict[str, Any]:
+    """POST /v1/projects/{p}/work as the New work modal sends it: no app (`infer_app`, so BOSS
+    must ask which when the project has several) or the chosen app."""
+    body: dict[str, Any] = {"kind": brief.get("kind") or "feature", "text": brief["change"],
+                            "title": f"{brief['title']} · e2e gate {stamp}",
+                            "acceptance_criteria": list(brief.get("acceptance_criteria") or []),
+                            "profile": brief.get("profile")}
+    if app:
+        body["app"] = app
+    else:
+        body["infer_app"] = True
+    return body
+
+
+def asked_which_app(status: int, out: Any) -> bool:
+    """New work with no app chosen beside several apps must ASK (422 app_selection_required),
+    never start a fresh build on the default branch."""
+    detail = out.get("detail") if isinstance(out, dict) else None
+    return status == 422 and isinstance(detail, dict) \
+        and detail.get("error") == "app_selection_required"
+
+
+def base_check(events: list[dict], expected_branch: Optional[str]) -> tuple[str, bool, str]:
+    """The build started from the chosen app's branch (code_task.base_branch_resolved), never the
+    bare default branch when that app's change is still open."""
+    seen = _latest(events, "code_task.base_branch_resolved")
+    base = ((seen or {}).get("data") or {}).get("base_branch")
+    if not expected_branch:
+        return ("builds on the chosen app", False, "New work's plan named no branch for the app")
+    return ("builds on the chosen app", base == expected_branch,
+            f"cloned {base or '(no base_branch_resolved event)'}, the app's branch is {expected_branch}")
+
+
 def apply_body(brief: dict[str, Any], *, egress: list[str], stamp: str) -> dict[str, Any]:
     conn = brief["connector"]
     return {
@@ -498,6 +531,7 @@ class Started:
     title: str = ""
     notes: list[str] = field(default_factory=list)
     answered: list[str] = field(default_factory=list)
+    expected_branch: Optional[str] = None
 
 
 def start(person: Person, brief: dict, stamp: str) -> Started:
@@ -515,6 +549,37 @@ def start(person: Person, brief: dict, stamp: str) -> Started:
         if not wf_id:
             raise GateFail(f"the apply started no workflow run: {str(out)[:300]}")
         return Started(None, wf_id, title=f"{body['new_app']['name']}: add")
+    if brief.get("start") == "new_work_app":
+        work = f"/v1/projects/{urllib.parse.quote(PROJECT, safe='')}/work"
+        status, plan = person.call("GET", f"{work}/plan?kind={brief.get('kind') or 'feature'}")
+        if status != 200:
+            raise GateFail(f"New work's plan answered {status}")
+        choices = plan.get("app_choices") or []
+        if len(choices) < 2:
+            raise GateFail(f"project {PROJECT} has {len(choices)} built app(s); this brief needs "
+                           "at least two (set BOSS_E2E_PROJECT)")
+        status, out = person.call("POST", work, new_work_body(brief, app=None, stamp=stamp))
+        if not asked_which_app(status, out):
+            raise GateFail(f"New work with no app chosen beside {len(choices)} apps did not ask "
+                           f"which: {status} {str(out)[:300]}")
+        print(f"  asked which app, as it must: {str((out.get('detail') or {}).get('message'))[:120]}",
+              flush=True)
+        app = os.environ.get("BOSS_E2E_APP") or choices[0]["run_id"]
+        status, plan = person.call("GET", f"{work}/plan?app={urllib.parse.quote(app, safe='')}")
+        anchor = (plan or {}).get("anchor") if status == 200 else None
+        if not anchor:
+            raise GateFail(f"New work cannot build onto {app}: {str(plan)[:300]}")
+        out = person.start_with_consent(work, new_work_body(brief, app=app, stamp=stamp))
+        wf_id = out.get("run_id") or (out.get("run") or {}).get("id")
+        if not wf_id:
+            raise GateFail(f"New work started no workflow run: {str(out)[:300]}")
+        print(f"  building onto {anchor.get('app')} ({anchor.get('mode')}, {anchor.get('branch')})",
+              flush=True)
+        # A merged app's new change starts from the project's mainline (resolved at the build,
+        # not knowable here): only an open change has a branch to compare.
+        return Started(None, wf_id, title=new_work_body(brief, app=app, stamp=stamp)["title"],
+                       expected_branch=anchor.get("branch") if anchor.get("mode") == "continue"
+                       else "")
     if brief.get("base") == "web_scaffold" and not branch_exists(SCAFFOLD_BRANCH):
         raise GateFail(f"the scaffold base {SCAFFOLD_BRANCH} is gone from {REPO}; set BOSS_E2E_BASE_BRANCH "
                        "to a branch POST /v1/web-app seeded")
@@ -597,7 +662,11 @@ def main(argv: Optional[list[str]] = None) -> int:
             time.sleep(POLL_S)
 
         minutes = (time.time() - t0) / 60
-        checks = final_checks(run, run_events(run["id"]))
+        events = run_events(run["id"])
+        checks = final_checks(run, events)
+        if brief.get("start") == "new_work_app":
+            if started.expected_branch != "":
+                checks.append(base_check(events, started.expected_branch))
         print("\nchecks:")
         for check, ok, detail in checks:
             print(f"  [{'ok' if ok else 'FAIL'}] {check}: {detail}")

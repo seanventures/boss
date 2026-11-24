@@ -14,15 +14,26 @@ container was CREATED with. Two callers, one diagnosis:
 
 The probe is Codex's own sandbox with no model: `codex sandbox` in workspace-write running
 `true`. Nothing here changes the mode a writer runs in; that stays engine_policy's rule.
+
+THROUGH THE BUILD'S LAUNCHER (RCA row 12, BOSSAPP-1433 R5). A build starts Codex with
+owned_process.popen under a build owner holding a sandbox uid, so the spawn is wrapped by
+owned_process.workload_spawn: `boss-sandbox-exec run <uid> -- codex ...`, with the sandbox's
+environment. The launcher sets PR_SET_NO_NEW_PRIVS before exec'ing, which is exactly what made
+an AppArmor exec transition into bubblewrap fail on hosts where `codex sandbox` run directly
+passed (#269). So the probe is spawned the same way (`as_a_build` + owned_process.run): under the
+engine-check job it reuses the job's sandbox identity; from `boss doctor` it holds one for the
+probe. The result names the launcher it went through.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import subprocess
 import sys
+import uuid
 from pathlib import Path
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, Callable, Iterator, Mapping, Optional
 
 ENV = "BOSS_ENGINE_INNER_SANDBOX"
 PROFILE = "boss-engine"
@@ -65,11 +76,51 @@ def apparmor_label(files: tuple[str, ...] = _LABEL_FILES) -> Optional[str]:
     return None
 
 
+#: The owner kind the probe runs under when no engine-check job holds one (engine_policy's).
+OWNER_KIND = "engine_check"
+
+
+@contextlib.contextmanager
+def as_a_build(owner_id: Optional[str] = None) -> Iterator[dict[str, Any]]:
+    """Run the block where a build's Codex runs: under an owner holding a build sandbox uid, so
+    every owned_process spawn inside is wrapped by the build's launcher (boss-sandbox-exec).
+
+    Reuses the identity already bound (the engine-check job binds one); otherwise binds its own
+    for the block, as a build does (sandbox_identity.bind). Yields {launcher, uid, error}:
+    launcher "boss-sandbox-exec" when spawns are wrapped, "none" when isolation is off (or
+    `auto` without the helper: builds then run unwrapped too), "unavailable" when isolation is
+    required and the launcher cannot hold a uid (builds cannot start either)."""
+    from . import owned_process, sandbox_identity
+
+    held = sandbox_identity.current()
+    if held is not None:
+        yield {"launcher": "boss-sandbox-exec", "uid": held.uid, "error": ""}
+        return
+    # Unique per check: two checks in one process must not share (and release) one identity.
+    owner_id = owner_id or f"engchk_inner_{os.getpid()}_{uuid.uuid4().hex[:8]}"
+    with owned_process.owner_scope(OWNER_KIND, owner_id, fresh=True), \
+            contextlib.ExitStack() as stack:
+        try:
+            ident = stack.enter_context(sandbox_identity.bind(owner_id))
+        except Exception as exc:  # noqa: BLE001 — SandboxUnavailable, a helper or disk error:
+            # the launcher cannot hold a uid, said as the launcher layer, never a traceback
+            yield {"launcher": "unavailable", "uid": None, "error": str(exc)[:240]}
+            return
+        yield {"launcher": "boss-sandbox-exec" if ident is not None else "none",
+               "uid": ident.uid if ident is not None else None, "error": ""}
+
+
 def probe(binary: str = "codex", *, run: Optional[Callable[..., Any]] = None,
           env: Optional[Mapping[str, str]] = None, timeout: int = 60) -> dict[str, Any]:
-    """Codex's own sandbox with no model: workspace-write running `true`. {ok, output}."""
+    """Codex's own sandbox with no model: workspace-write running `true`. {ok, output}.
+
+    Spawned with owned_process.run, the build's spawn: inside `as_a_build` it goes through
+    boss-sandbox-exec exactly as a build's Codex does."""
     argv = [binary, "sandbox", "-c", 'sandbox_mode="workspace-write"', "--", "true"]
-    run = run or subprocess.run
+    if run is None:
+        from . import owned_process
+
+        run = owned_process.run
     try:
         done = run(argv, capture_output=True, text=True, timeout=timeout,
                    env=None if env is None else dict(env))
@@ -149,12 +200,21 @@ def diagnose(*, expected: str, actual: str, label: Optional[str],
 def check(binary: str = "codex", *, expected: Optional[str] = None,
           run: Optional[Callable[..., Any]] = None, env: Optional[Mapping[str, str]] = None,
           label: Optional[str] = "__read__") -> dict[str, Any]:
-    """The whole check where this process runs: mode, AppArmor label, probe, diagnosis."""
+    """The whole check where this process runs: mode, AppArmor label, probe (through the
+    build's launcher, `as_a_build`), diagnosis. `launcher` says which path was proved."""
     actual = mode()
     seen = apparmor_label() if label == "__read__" else label
-    result = probe(binary, run=run, env=env)
+    with as_a_build() as where:
+        if where["launcher"] == "unavailable":
+            return {"ok": False, "layer": "launcher", "mode": actual, "apparmor": seen,
+                    "launcher": "unavailable",
+                    "sentence": ("BOSS's build launcher (boss-sandbox-exec) cannot hold a "
+                                 "sandbox here, so no build can start Codex: "
+                                 + where["error"]),
+                    "fix": f"Run `boss doctor` and fix the sandbox helper it names. See {DOC}."}
+        result = probe(binary, run=run, env=env)
     found = diagnose(expected=expected or actual, actual=actual, label=seen, result=result)
-    found.update(mode=actual, apparmor=seen)
+    found.update(mode=actual, apparmor=seen, launcher=where["launcher"])
     return found
 
 
@@ -170,9 +230,10 @@ def main(argv: list[str]) -> int:
     if "--json" in argv:
         print(json.dumps(found))
     elif found["ok"]:
-        print(f"ok {found['sentence']}")
+        print(f"ok {found['sentence']} (probed through {found.get('launcher') or 'none'})")
     else:
-        print(f"bad [{found['layer']}] {found['sentence']} Fix: {found['fix']}")
+        print(f"bad [{found['layer']}] {found['sentence']} Fix: {found['fix']} "
+              f"(probed through {found.get('launcher') or 'none'})")
     return 0 if found["ok"] else 1
 
 

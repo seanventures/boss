@@ -743,15 +743,47 @@ def work_anchor(connection: Connection, project_id: str, app: Optional[str],
     if not handle:
         choices = app_choices(connection, project_id)
         if len(choices) > 1:
-            names = ", ".join(choice.get("app") or choice["run_id"] for choice in choices[:3])
-            more = f" and {len(choices) - 3} more" if len(choices) > 3 else ""
-            raise ValueError(
-                f"This project has {len(choices)} apps ({names}{more}). Pick one under "
-                "Application in New work, or pick Create a new app.")
+            raise AppChoiceNeeded(choices, "Pick one under Application in New work, or pick "
+                                           "Create a new app.")
         if not choices:
             return None
         handle = choices[0]["run_id"]
     return app_anchor(connection, project_id, handle)
+
+
+class AppChoiceNeeded(ValueError):
+    """Nothing named the app and the project has several: BOSS asks (Choose an application /
+    Create a new app) — never a quiet fresh build on the default branch beside them (RCA #9)."""
+
+    def __init__(self, choices: list[dict[str, str]], ask: str) -> None:
+        self.choices = choices
+        names = ", ".join(choice.get("app") or choice["run_id"] for choice in choices[:3])
+        more = f" and {len(choices) - 3} more" if len(choices) > 3 else ""
+        super().__init__(f"This project has {len(choices)} apps ({names}{more}). {ask}")
+
+
+def require_app_choice(connection: Connection, project_id: str, ask: str) -> None:
+    """Raise AppChoiceNeeded when a build that names no app would start beside SEVERAL apps.
+    The agent's create_code_task (MCP, Ask BOSS) asks this, with its own words for how to name
+    the app; New work asks it through work_anchor."""
+    choices = app_choices(connection, project_id)
+    if len(choices) > 1:
+        raise AppChoiceNeeded(choices, ask)
+
+
+def build_mode(connection: Connection, project_id: str, run_id: str) -> Optional[dict[str, Any]]:
+    """WHICH CHANGE a build onto an existing app's build continues — the one answer every door
+    that names a build asks (New work's app, Repair from preview's build, the agent's
+    extends_run_id / preview_id / task): app_anchor's `mode` — `continue` the lineage's open
+    change on its branch, `new_change` from the default branch when that change was merged.
+    None (the build continues the lineage's branch, as before) when the change was closed
+    without merging — only New work's modal refuses that, offering Create a new app — or the
+    run is not this project's. Only the mode and branch are read; the build continues the run
+    the door named."""
+    try:
+        return app_anchor(connection, project_id, run_id)
+    except LookupError:      # AnchorClosed included
+        return None
 
 
 def app_anchor(connection: Connection, project_id: str, app: Optional[str]
@@ -827,6 +859,7 @@ def app_anchor(connection: Connection, project_id: str, app: Optional[str]
             "pr_state": state, "mode": mode}
 
 
-__all__ = ["CHOOSABLE_PROFILES", "KINDS", "WAS_SIZE", "AnchorClosed", "app_anchor", "chosen_profile", "choose", "create_issue", "defaults", "estimate",
+__all__ = ["CHOOSABLE_PROFILES", "KINDS", "WAS_SIZE", "AnchorClosed", "AppChoiceNeeded", "app_anchor",
+           "build_mode", "require_app_choice", "chosen_profile", "choose", "create_issue", "defaults", "estimate",
            "issue_of", "options", "plan", "round_minutes", "starts_from_file", "steps", "strip", "targets", "tell",
            "ticket_link", "ticket_title", "tracker"]

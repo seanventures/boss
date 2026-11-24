@@ -77,6 +77,10 @@ P0:
     - engine/tests/test_harness_bench_compare.py
     - engine/tests/test_decision_eval_has_a_floor.py
     - engine/tests/test_web_quarantine_holds_only_real_failures.py
+    # No mocked last mile (R5, BOSSAPP-1433): a P0/P1 test may mock the model, never the step
+    # that fails for users; each preview declaration kind is started for real
+    - engine/tests/test_gate_tests_never_mock_the_last_mile.py
+    - engine/tests/test_each_preview_kind_starts_for_real.py
     # Small host, long queue (R3, BOSSAPP-1431): every time cap counts from when the work
     # started, never its queue (deployments, investigations, step recovery, sandbox tasks, job
     # leases, the self-fix's clock and budget hold), and a token, handle or hold that lapses
@@ -98,6 +102,10 @@ P0:
     - apps/api/tests/test_a_host_deploys_only_through_an_approved_changeset.py
     - apps/api/tests/test_a_stack_deploys_only_through_an_approved_changeset.py
     - apps/api/tests/test_a_deploy_asks_once_or_as_its_policy_says.py
+    # A project with several apps never builds on the bare default branch (R4, BOSSAPP-1432):
+    # the agent's create_code_task asked nothing and built on main; a task's app, a preview
+    # repair of a merged or closed change (bugs fixed with it)
+    - apps/api/tests/test_a_multi_app_project_never_builds_on_main.py
   web:
     - apps/web/tests/console-routes-answer-what-the-console-asks.test.ts
     - apps/web/tests/sign-in-shows-every-option-and-says-why.test.tsx
@@ -193,6 +201,13 @@ P1:
     - engine/tests/test_app_alerts.py
     - engine/tests/test_an_app_incident_is_responded_to.py
     - engine/tests/test_incident_response_starts_per_rule_never_per_app.py
+    # No mocked last mile (R5): the engine check goes through the build launcher; Setup's
+    # repository proof writes to a real (local) remote
+    - engine/tests/test_engine_checks_go_through_the_build_launcher.py
+    - engine/tests/test_setup_repository_proof_writes_to_a_real_remote.py
+    # Multi-app projects (R4): New work, Change it and extend paths that build onto an app
+    - engine/tests/test_a_build_step_can_extend_an_app.py
+    - engine/tests/test_new_work_app_selection.py
     # A 4-core / 8 GiB host under pressure (R3, BOSSAPP-1431): builds at once follow the box,
     # job slots are their own setting, heavy builds back off, lowering capacity drains
     - engine/tests/test_a_small_host_admits_by_its_room_and_backs_off.py
@@ -230,6 +245,9 @@ P1:
     - apps/api/tests/test_self_fix_routes.py
     # App alerts: rules, silences, history, token rotation, Grafana linked only when it answers
     - apps/api/tests/test_app_alerts_api.py
+    # Multi-app projects (R4): New work names its app; a feature builds onto its app
+    - apps/api/tests/test_new_work_builds_onto_the_named_app.py
+    - apps/api/tests/test_a_feature_builds_onto_its_app.py
   web:
     - apps/web/tests/a-promised-deploy-is-always-asked.test.ts
     # Workflows and run card

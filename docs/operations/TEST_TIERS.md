@@ -183,6 +183,17 @@ listed is P2.
 - **P0** stays small. Before adding a test there, ask: would a user hit this in their first ten minutes, or would it lose data or leak a secret? If neither, it belongs in P1.
 - **Every bug an operator reports** gets its regression test in P1.
 
+**A P0/P1 test may mock the model, never the step that fails for users.** The model is slow,
+costly and not ours to test, so a scripted answer is fine. The last mile is not: starting the
+preview, launching the engine through `boss-sandbox-exec`, writing to the repository, the
+app-start proof. Each of these once passed its test while failing for a customer, because the
+test replaced exactly that step (a preview row inserted as "running" and never started; a sandbox
+check run without the build launcher; a Setup proof that only read). Where the real step cannot
+run in the tier, run BOSS's real code path against a local fake service (a local HTTP server,
+a local bare git remote, a fake binary on `PATH`), never a monkeypatch of our own function.
+`engine/tests/test_gate_tests_never_mock_the_last_mile.py` fails when a P0/P1 test patches one
+of the named last-mile functions.
+
 ## The end-to-end gate, tier B: one real build (`scripts/e2e-gate.sh agent`)
 
 Tier A proves the plumbing with scripted models. Tier B proves that BOSS still builds: ONE real,
