@@ -90,7 +90,9 @@ def test_the_runner_wraps_each_run_in_a_savepoint():
     #   each step         — so a step that aborts the transaction can still be RECORDED failed
     assert source.count("connection.begin_nested()") == 4, (
         "the revival loop, the run loop, each gate and each step all need their own savepoint")
-    assert source.count(".rollback()") == 4
+    # Each rolled back through the one helper, which raises TransactionLost instead of carrying
+    # on in a transaction that is gone (BOSSAPP-1456).
+    assert source.count("release_failed_savepoint(") == 4
     assert source.count(".commit()") == 4
 
 
@@ -133,9 +135,9 @@ def test_a_step_that_aborts_the_transaction_can_still_be_recorded_as_failed():
     assert "step_point = connection.begin_nested()" in source
     # BaseException, not Exception: a step killed by a timeout or a cancellation leaves the
     # connection just as unusable, and its failure is just as worth recording.
-    assert "except BaseException:" in source
+    assert "except BaseException as error:" in source
     body = source[source.index("step_point = connection.begin_nested()"):]
-    rollback = body.index("step_point.rollback()")
+    rollback = body.index("release_failed_savepoint(step_point")
     fail = body.index("workflows.fail_step(")
     assert rollback < fail, "the rollback has to come before anything tries to record"
 
@@ -178,5 +180,5 @@ def test_an_executor_that_fails_in_the_database_can_still_be_recorded():
     body = source[source.index("attempt_point = connection.begin_nested()"):]
     # The rollback must come before `last_error` is set, because everything after the abort —
     # including recording the message — needs a working connection.
-    assert body.index("attempt_point.rollback()") < body.index("last_error = str(exc)")
+    assert body.index("release_failed_savepoint(attempt_point") < body.index("last_error = str(exc)")
     assert "attempt_point.commit()" in source

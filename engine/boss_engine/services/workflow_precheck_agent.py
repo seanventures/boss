@@ -210,11 +210,10 @@ def _savepoint(connection: Any, fn: Callable[[], Any], default: Any) -> Any:
         out = fn()
         point.commit()
         return out
-    except Exception:  # noqa: BLE001 — a missing piece of evidence is not a failed pre-check
-        try:
-            point.rollback()
-        except Exception:  # noqa: BLE001
-            pass
+    except Exception as error:  # noqa: BLE001 — a missing piece of evidence is not a failed pre-check
+        from ..db import release_failed_savepoint
+
+        release_failed_savepoint(point, error, connection=connection)
         return default
 
 
