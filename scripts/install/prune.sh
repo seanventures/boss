@@ -17,8 +17,6 @@
 #     (72) after the upgrade that kept it, and only while the running release is healthy
 #     (BOSSAPP-1459). .boss-rollback then records BOSS_PREV_EXPIRED_AT and `boss rollback` says
 #     the images are gone instead of trying;
-#   * the test Postgres's volume, which only `boss dev up` creates, once no container of this
-#     install uses it: test data stays only while the install runs a test Postgres (BOSSAPP-1459);
 #   * build cache above BOSS_BUILD_CACHE_CAP_GB (10; 0 turns the cap off). Docker keeps the
 #     newest cache up to the cap and drops the rest. The cache is Docker-wide, so on a shared
 #     machine the cap also bounds other projects' cache: set it higher or to 0 there;
@@ -156,21 +154,6 @@ if [[ -f "$ROLLBACK_FILE" && -z "$(rb_value BOSS_PREV_EXPIRED_AT)" && -n "$(rb_v
     fi
   fi
 fi
-
-# 3c. TEST LEFTOVERS (BOSSAPP-1459). Only `boss dev up` creates the test Postgres (compose profile
-#     `dev`), yet its volume was found on an install that runs no tests (4.8 GB on the operator's
-#     laptop). Test data is kept exactly while this install has a test Postgres: a db-test
-#     container, running or stopped, keeps its volume; with none, the volume is a leftover a test
-#     run recreates (labelled boss.kind=test) and goes. Only the two volume names Compose gives that
-#     service in THIS project, checked against the volume's own Compose labels: nothing else.
-for key in boss_community_pg_test_v2 boss_community_pg_test; do
-  vol="${PROJECT}_${key}"
-  labels="$("${D[@]}" volume inspect --format '{{index .Labels "com.docker.compose.project"}}|{{index .Labels "com.docker.compose.volume"}}' "$vol" 2>/dev/null || true)"
-  [[ "$labels" == "$PROJECT|$key" ]] || continue
-  [[ -z "$("${D[@]}" ps -aq --filter "volume=$vol" 2>/dev/null)" ]] || continue
-  run "${D[@]}" volume rm "$vol"
-  [[ "$DRY" -eq 1 ]] || printf 'removed %s: no test Postgres uses it (boss dev up makes a new one)\n' "$vol"
-done
 
 # 4. Build cache. The cap holds on every host: Docker keeps the newest BOSS_BUILD_CACHE_CAP_GB
 #    of cache and drops the rest, so the cache can no longer grow without bound between deploys.

@@ -131,7 +131,7 @@ TELEMETRY_TABLES: tuple[str, ...] = (
     "process_manager_ticks", "llm_calls", "tool_call_audit", "run_events", "trace_spans",
     "trace_payloads", "storage_samples", "identity_egress_log", "focused_agent_ticks",
     "worker_autoscaling_history", "trace_export_attempts", "a2a_transport_attempts",
-    "policy_eval_log", "identity_egress_credentials",
+    "policy_eval_log", "identity_egress_credentials", "intake_events",
 )
 
 #: The database split, as SQL returning bytes. The same statements run in the API (storage

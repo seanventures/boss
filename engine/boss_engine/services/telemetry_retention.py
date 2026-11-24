@@ -1192,7 +1192,10 @@ def run_once(engine: Any, *, now: Optional[datetime] = None, convert: bool = Tru
             report["partitioning"] = ensure_partitioned(engine, now=now)
         report["sweep"] = sweep(engine, now=now)
         try:
-            report["compacted"] = compact(engine)
+            from ..db import background
+
+            with background():
+                report["compacted"] = compact(engine)
         except Exception:  # noqa: BLE001 — compaction never fails the sweep
             _log.info("compaction pass skipped", exc_info=True)
             report["compacted"] = []

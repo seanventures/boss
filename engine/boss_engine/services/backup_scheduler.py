@@ -361,15 +361,18 @@ def prune(engine: Any, settings: Any = None, *,
         if _remove(engine, row, remover):
             pruned.append(str(row["id"]))
     kept = [r for r in rows if str(r["id"]) in keep]
-    with engine.begin() as c:
-        max_count, cap_gb, approved = cap_policy(c, settings)
-    over = over_cap(kept, max_count=max_count, cap_gb=cap_gb)
-    if over and approved:
-        for row in over:
-            if _remove(engine, row, remover, why="over-cap"):
-                pruned.append(str(row["id"]))
-    elif over:
-        ask_over_cap(engine, over, max_count=max_count, cap_gb=cap_gb)
+    from ..db import background
+
+    with background():
+        with engine.begin() as c:
+            max_count, cap_gb, approved = cap_policy(c, settings)
+        over = over_cap(kept, max_count=max_count, cap_gb=cap_gb)
+        if over and approved:
+            for row in over:
+                if _remove(engine, row, remover, why="over-cap"):
+                    pruned.append(str(row["id"]))
+        elif over:
+            ask_over_cap(engine, over, max_count=max_count, cap_gb=cap_gb)
     return pruned
 
 

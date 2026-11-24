@@ -565,6 +565,12 @@ if [[ -f "$INSTALL_DIR/scripts/install/steward.py" ]] && command -v python3 >/de
   python3 "$INSTALL_DIR/scripts/install/steward.py" --install-dir "$INSTALL_DIR" --relabel-volumes </dev/null ||
     echo 'BOSS volume labels were not checked; the Infra Agent lists any it cannot judge.' >&2
 fi
+# TEST LEFTOVERS (BOSSAPP-1459): the test Postgres's volume goes when no container uses it.
+if [[ -f "$INSTALL_DIR/scripts/install/steward.py" ]] && command -v python3 >/dev/null 2>&1 &&
+   grep -q -- '--test-leftovers' "$INSTALL_DIR/scripts/install/steward.py"; then
+  python3 "$INSTALL_DIR/scripts/install/steward.py" --install-dir "$INSTALL_DIR" --test-leftovers </dev/null ||
+    echo 'Test leftovers were not checked; boss prune does it later.' >&2
+fi
 # Read only now: the installer and its backup never touch db-test, so this is the container
 # that ran through the upgrade (and a failed upgrade makes no Docker call for it at all).
 TEST_DB_BEFORE="$(test_db_running)"

@@ -27,7 +27,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 from sqlalchemy import text
 
@@ -270,7 +270,8 @@ def test_server_present(host: str = TEST_SERVER_HOST) -> bool:
         return False
 
 
-def reap_test_databases(engine: Any, *, test_server: Optional[bool] = None) -> dict[str, Any]:
+def reap_test_databases(engine: Any, *, test_server: Optional[bool] = None,
+                        only: Optional[Sequence[str]] = None) -> dict[str, Any]:
     """TEST DATABASES ON AN INSTALL THAT RUNS NO TESTS (BOSSAPP-1459). Only the test suites and
     scratch work make `boss_test*` / `boss_scratch*` databases, and they belong on the test
     Postgres (`boss dev up`, BOSSAPP-1152). Found on the live server of an install that runs no
@@ -296,6 +297,8 @@ def reap_test_databases(engine: Any, *, test_server: Optional[bool] = None) -> d
             "AND (datname LIKE 'boss\\_test%' OR datname LIKE 'boss\\_scratch%')")).all()]
     dropped: list[str] = []
     for name in names:
+        if only is not None and name not in only:
+            continue        # a test's own databases only, never a neighbour's on the same server
         if not is_test_database(name) or not re.fullmatch(r"[a-z0-9_]{1,63}", name):
             continue
         try:
@@ -685,9 +688,13 @@ def tick(engine: Any, settings: Any = None) -> dict[str, Any]:
     if engine is not None and time.time() - _last_tables > _TABLES_EVERY:
         _last_tables = time.time()
         report["tables"] = _safe(lambda: prune_tables(engine))
-        # BOSSAPP-1459: what a run or a test left behind and nothing uses any more.
-        report["sandbox_dirs"] = _safe(lambda: reap_sandbox_dirs(engine))
-        report["test_databases"] = _safe(lambda: reap_test_databases(engine))
+        # BOSSAPP-1459: what a run or a test left behind and nothing uses any more. Background
+        # work (db.background): its transactions get the tick's lock and idle limits.
+        from ..db import background
+
+        with background():
+            report["sandbox_dirs"] = _safe(lambda: reap_sandbox_dirs(engine))
+            report["test_databases"] = _safe(lambda: reap_test_databases(engine))
     _LAST.clear()
     _LAST.update(report)
     return report

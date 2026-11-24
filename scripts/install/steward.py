@@ -821,6 +821,39 @@ def relabel_volumes(env: Env, runner: Callable = run_cmd, *, apply: bool = True)
     return out
 
 
+def remove_test_leftovers(env: Env, runner: Callable = run_cmd, *, apply: bool = True) -> list[dict[str, str]]:
+    """TEST DATA ONLY WITH A TEST POSTGRES (BOSSAPP-1459; upgrade.sh and `boss prune` run it). Only
+    `boss dev up` makes the test Postgres, yet its volume (4.8 GB on the operator's laptop) was
+    found on installs that run no tests. Its volume is removed when NO container — running or
+    stopped — uses it: a db-test container means someone runs tests here, and its data stays. Only
+    this install's Compose test volumes (REBUILDABLE/RETIRED keys of kind `test`), checked against
+    the volume's own Compose labels at the moment of removal. Never stops anything; never raises."""
+    out: list[dict[str, str]] = []
+    keys = [k for k, kind in {**REBUILDABLE_COMPOSE_VOLUMES, **RETIRED_COMPOSE_VOLUMES}.items() if kind == "test"]
+    for key in keys:
+        name = f"{env.compose_project}_{key}"
+        try:
+            if _inspect_label(env, runner, "volume", name, COMPOSE_PROJECT_LABEL) != env.compose_project \
+                    or _inspect_label(env, runner, "volume", name, COMPOSE_VOLUME_LABEL) != key:
+                continue            # absent, or not this project's: never ours to touch
+            users = _containers_using(env, runner, name)
+            if users:
+                out.append({"volume": name, "action": "kept",
+                            "reason": "a test Postgres uses it (boss dev up): test data stays"})
+                continue
+            if not apply:
+                out.append({"volume": name, "action": "would_remove",
+                            "reason": "test data with no test Postgres: would be removed"})
+                continue
+            res = runner([*env.docker, "volume", "rm", name], timeout=120)
+            out.append({"volume": name, "action": "removed" if res.returncode == 0 else "skipped",
+                        "reason": "test data with no test Postgres; `boss dev up` makes a new one"
+                        if res.returncode == 0 else f"docker volume rm: {(res.stderr or '').strip()[:120]}"})
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            out.append({"volume": name, "action": "skipped", "reason": f"docker unavailable: {type(exc).__name__}"})
+    return out
+
+
 def verb_cap_logs(env: Env, args: dict, *, dry_run: bool, runner: Callable) -> tuple[list[str], float]:
     """Truncate json logs above the cap for labelled containers (Linux, when the file is ours to
     write). On macOS the files live inside Docker Desktop's VM: nothing to do here (the compose
@@ -1076,7 +1109,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--relabel-volumes", action="store_true",
                     help="recreate BOSS's rebuildable volumes that predate their labels, when unused "
                          "(the upgrade step; data volumes are never touched)")
-    ap.add_argument("--dry-run", action="store_true", help="with --relabel-volumes: say what would change")
+    ap.add_argument("--test-leftovers", action="store_true",
+                    help="remove the test Postgres volume when no container uses it (BOSSAPP-1459)")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="with --relabel-volumes or --test-leftovers: say what would change")
     ap.add_argument("--version", action="store_true")
     ns = ap.parse_args(argv)
     if ns.version:
@@ -1095,6 +1131,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     if ns.relabel_volumes:
         done = relabel_volumes(env, run_cmd, apply=not ns.dry_run)
         log_line(env, {"host_id": env.host_id, "relabel_volumes": done})
+        for row in done:
+            print(f"{row['volume']}: {row['action']} — {row['reason']}")
+        return 0
+    if ns.test_leftovers:
+        done = remove_test_leftovers(env, run_cmd, apply=not ns.dry_run)
+        log_line(env, {"host_id": env.host_id, "test_leftovers": done})
         for row in done:
             print(f"{row['volume']}: {row['action']} — {row['reason']}")
         return 0
