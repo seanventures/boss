@@ -124,7 +124,11 @@ step_host() {
   fi
   echo "$aa" > "$STATE/apparmor"
   echo "cpus=$cpus mem=${mem_gb}G free_disk=${disk_gb}G apparmor=$aa kernel=$(uname -r)"
-  [ "$disk_gb" -ge 15 ] || { echo "only ${disk_gb} GB free; the lane needs 15 GB"; return 1; }
+  if [ "$disk_gb" -lt 15 ]; then
+    # A rerun's previous install (images, build cache) is removed by the install step.
+    if [ -f "$INSTALL/.env" ]; then echo "WARNING: only ${disk_gb} GB free before the previous lane install is removed"
+    else echo "only ${disk_gb} GB free; the lane needs 15 GB"; return 1; fi
+  fi
   if [ "$cpus" -gt 4 ] || [ "$mem_gb" -gt 9 ]; then
     echo "WARNING: this VM is bigger than the enterprise box (4 vCPU / 8 GB); small-host gaps may hide"
   fi
@@ -328,10 +332,11 @@ step_install() {
     echo "removing the previous lane install at $INSTALL"
     if [ -f "$INSTALL/.env" ]; then
       (cd "$INSTALL" && docker compose $(bash scripts/install/compose_files.sh . 2>/dev/null | tr '\n' ' ') \
-        --env-file .env down -v --remove-orphans) >/dev/null 2>&1 || true
+        --env-file .env down -v --remove-orphans --rmi all) >/dev/null 2>&1 || true
     fi
     sudo rm -rf "$INSTALL"
   fi
+  docker builder prune -af >/dev/null 2>&1 || true   # every run builds from scratch
   local key_note="no model key (scripted engine only)"
   if [ -n "${CODEX_API_KEY:-}${OPENAI_API_KEY:-}" ]; then
     export OPENAI_API_KEY="${OPENAI_API_KEY:-${CODEX_API_KEY:-}}"
@@ -353,7 +358,14 @@ step_install() {
   local health
   health=$(curl -fsS --max-time 10 "http://127.0.0.1:$(awk -F= '/^BOSS_API_PORT=/ {print $2}' "$INSTALL/.env")/health" 2>&1) ||
     { echo "the API does not answer /health after the install: $health"; return 1; }
-  echo "installed: $(git -C "$INSTALL" rev-parse --short HEAD), tier $(awk -F= '/^BOSS_INSTALL_TIER=/ {print $2}' "$INSTALL/.env"), API healthy"
+  local before after
+  before=$(df -Pk "$HOME" | awk 'NR==2 {print int($4/1048576)}')
+  # The 30 GB box: an install leaves its build cache behind (about 10 GB), and the e2e gate
+  # needs 5 GB free. Free it as an operator would (`docker builder prune`).
+  docker builder prune -af >/dev/null 2>&1 || true
+  after=$(df -Pk "$HOME" | awk 'NR==2 {print int($4/1048576)}')
+  echo "disk after install: ${before} GB free, ${after} GB after pruning the build cache"
+  echo "installed: $(git -C "$INSTALL" rev-parse --short HEAD), ${before}->${after} GB free, tier $(awk -F= '/^BOSS_INSTALL_TIER=/ {print $2}' "$INSTALL/.env"), API healthy"
 }
 
 # ---- 4. engine inner sandbox ---------------------------------------------------------------------
@@ -369,7 +381,7 @@ step_sandbox() {
   local label
   label=$(docker exec "$(ctr worker)" cat /proc/1/attr/current 2>/dev/null | tr -d '\0')
   echo "worker AppArmor label: ${label:-none}"
-  boss_cmd doctor > "$LOGS/doctor.txt" 2>&1
+  boss_cmd doctor 2>&1 | sed 's/\x1b\[[0-9;]*m//g' > "$LOGS/doctor.txt"
   cat "$LOGS/doctor.txt"
   local line; line=$(grep -i 'engine sandbox' "$LOGS/doctor.txt" | head -n1)
   [ -n "$line" ] || { echo "boss doctor printed no engine sandbox line"; return 1; }
@@ -417,7 +429,9 @@ step_build() {
   docker cp "$INSTALL/tests/e2e" "$w:/tmp/entlane-gate/e2e" &&
   docker exec -u 0 "$w" chown -R boss /tmp/entlane-gate || { rm -f "$envf"; echo "could not copy the gate into the worker"; return 1; }
   local rc
-  docker exec --env-file "$envf" -e BOSS_ARTIFACTS_DIR=/tmp/entlane-gate/artifacts \
+  # The gate enters builds without a person (identity in shadow), as the engines tier does: it
+  # tests the pipeline in this container, not who may start it.
+  docker exec --env-file "$envf" -e BOSS_AUTHZ_MODE=shadow -e BOSS_ARTIFACTS_DIR=/tmp/entlane-gate/artifacts \
     -e BOSS_BUILD_SERVICES_PREFIX=boss_entlane_ -w /tmp "$w" \
     /usr/local/libexec/boss/with-extra-ca python3 /tmp/entlane-gate/e2e/gate/engines.py \
     --scenario clean --out /tmp/entlane-gate/results.json; rc=$?
