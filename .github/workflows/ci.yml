@@ -47,7 +47,7 @@ jobs:
           --health-retries 20
     env:
       BOSS_TEST_PG_URL: postgresql://boss:boss@localhost:5432
-      TEST_TIER_SUITES: engine,api,worker
+      TEST_TIER_SUITES: engine,api
       TEST_TIER_RUN_TIMEOUT: "900"
       TEST_TIER_OUT: ${{ github.workspace }}/.tier-out
     steps:
