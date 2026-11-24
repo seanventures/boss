@@ -343,7 +343,12 @@ step_install() {
     fi
     sudo rm -rf "$INSTALL"
   fi
-  docker builder prune -af >/dev/null 2>&1 || true   # every run builds from scratch
+  # Every run builds from scratch on a clean disk: no BOSS image, volume or build cache left
+  # from an earlier run (the lane's own proxy, mirrors and DNS keep theirs: they are running).
+  docker image prune -af >/dev/null 2>&1 || true
+  docker volume prune -af >/dev/null 2>&1 || true
+  docker builder prune -af >/dev/null 2>&1 || true
+  echo "disk before install: $(df -Pk "$HOME" | awk 'NR==2 {print int($4/1048576)}') GB free"
   local key_note="no model key (scripted engine only)"
   if [ -n "${CODEX_API_KEY:-}${OPENAI_API_KEY:-}" ]; then
     export OPENAI_API_KEY="${OPENAI_API_KEY:-${CODEX_API_KEY:-}}"
