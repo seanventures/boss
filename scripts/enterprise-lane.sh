@@ -343,6 +343,7 @@ step_install() {
   ( cd "$ROOT" &&
     BOSS_EXTRA_CA_FILE="$STATE/ca/ca.crt" \
     BOSS_UPSTREAM_PROXY="http://$PROXY_IP:8080" \
+    BOSS_UPSTREAM_HTTP_PROXY="http://$PROXY_IP:8080" \
     BOSS_UPSTREAM_NO_PROXY=".entlane.internal" \
     BOSS_NPM_REGISTRY="https://$NPM_HOST/" \
     BOSS_PIP_INDEX_URL="https://$PYPI_HOST/index/" \
