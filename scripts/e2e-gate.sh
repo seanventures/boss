@@ -16,6 +16,11 @@
 #       clean build, a failing test, a reviewer BLOCKER, a server that crashes on start and an
 #       engine that cannot run. Every engine must show the same stages, gates, fix rounds, PR,
 #       events, profile fields and failure words (tests/e2e/gate/engines.py). Same container.
+#   --inner-sandbox seccomp|seccomp+apparmor  (plumbing, engines) create the gate container with the
+#       security profiles an install with BOSS_ENGINE_INNER_SANDBOX gives its api and worker
+#       (scripts/install/compose_files.sh): BOSS's seccomp profile, plus AppArmor `boss-engine`
+#       (loaded on the host first: scripts/sandbox/load_apparmor.sh). The enterprise lane
+#       (scripts/enterprise-lane.sh) runs both tiers this way. Default: Docker's own profiles.
 #   scripts/e2e-gate.sh agent [--brief <name>] [--with-connector] [--budget-min N] [--keep]
 #       Tier B: ONE real, model-driven build of a known-good brief (tests/e2e/briefs/), started
 #       on the local install as the test owner through BOSS's API, watched to an opened PR,
@@ -38,18 +43,24 @@ TIER="${1:-}"; shift || true
 case "$TIER" in
   plumbing|engines) ;;
   agent) exec python3 "$ROOT/scripts/e2e_gate_agent.py" "$@" ;;
-  *) echo "usage: scripts/e2e-gate.sh plumbing|engines [--boss-root DIR] [--image IMAGE] [--keep]" >&2
+  *) echo "usage: scripts/e2e-gate.sh plumbing|engines [--boss-root DIR] [--image IMAGE] [--keep] [--inner-sandbox MODE]" >&2
      echo "       scripts/e2e-gate.sh agent [--brief <name>] [--with-connector] [--budget-min N] [--keep]" >&2; exit 2 ;;
 esac
 
 BOSS_ROOT="$ROOT"
 IMAGE=""
 KEEP=0
+INNER=off
 while [ $# -gt 0 ]; do
   case "$1" in
     --boss-root) BOSS_ROOT="$(cd "${2:?--boss-root needs a directory}" && pwd)"; shift 2 ;;
     --image) IMAGE="${2:?--image needs an image}"; shift 2 ;;
     --keep) KEEP=1; shift ;;
+    --inner-sandbox)
+      case "${2:-}" in
+        off|seccomp|seccomp+apparmor) INNER="$2"; shift 2 ;;
+        *) echo "--inner-sandbox takes off, seccomp or seccomp+apparmor" >&2; exit 2 ;;
+      esac ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -69,6 +80,21 @@ if [ "${free_gb:-0}" -lt 5 ]; then
 fi
 [ -f "$BOSS_ROOT/engine/boss_engine/__init__.py" ] || {
   echo "e2e-gate: $BOSS_ROOT is not a BOSS checkout" >&2; exit 2; }
+# The install's engine inner-sandbox profiles (the same options compose_files.sh writes).
+SECURITY=()
+if [ "$INNER" != off ]; then
+  [ -f "$ROOT/scripts/sandbox/engine-seccomp.json" ] || {
+    echo "e2e-gate: $ROOT/scripts/sandbox/engine-seccomp.json is missing" >&2; exit 2; }
+  SECURITY=(--security-opt "seccomp=$ROOT/scripts/sandbox/engine-seccomp.json"
+            -e "BOSS_ENGINE_INNER_SANDBOX=$INNER")
+  if [ "$INNER" = seccomp+apparmor ]; then
+    if [ -r /sys/kernel/security/apparmor/profiles ] &&
+       ! grep -q '^boss-engine (' /sys/kernel/security/apparmor/profiles; then
+      echo "e2e-gate: AppArmor profile boss-engine is not loaded: sudo scripts/sandbox/load_apparmor.sh" >&2; exit 2
+    fi
+    SECURITY+=(--security-opt apparmor=boss-engine)
+  fi
+fi
 
 ID="$(date +%s)-$$"
 NET="boss-e2egate-$ID"
@@ -101,8 +127,8 @@ for _ in $(seq 1 60); do
   sleep 0.5
 done
 
-echo "== e2e-gate $TIER: BOSS $(git -C "$BOSS_ROOT" rev-parse --short HEAD 2>/dev/null || echo '?') in $IMAGE"
-docker run --name "$GATE" --network "$NET" --label boss-e2egate=1 \
+echo "== e2e-gate $TIER: BOSS $(git -C "$BOSS_ROOT" rev-parse --short HEAD 2>/dev/null || echo '?') in $IMAGE$([ "$INNER" = off ] || echo " (inner sandbox $INNER)")"
+docker run --name "$GATE" --network "$NET" --label boss-e2egate=1 ${SECURITY[@]+"${SECURITY[@]}"} \
   --entrypoint "" -w /tmp --env-file "$WORK/gate.env" \
   -e BOSS_SANDBOX_ISOLATION=required -e BOSS_SANDBOX_NETWORK=off \
   -e BOSS_BUILD_SERVICES_PREFIX=boss_e2egate_ -e BOSS_ARTIFACTS_DIR=/tmp/boss-e2egate-artifacts \
