@@ -21,11 +21,14 @@
 #   * on a small Docker disk (less than BOSS_DISK_FLOOR_GB, 20, free): build cache down to what
 #     fits above that floor, none on a small box (BOSSAPP-1447). Only on a dedicated host or with
 #     --room (the installer, right after its own build): the cache is Docker-wide.
+#   * --cache-only: the build cache steps alone (4 and 5), for the installer BETWEEN two image
+#     families (BOSSAPP-1458): no image or container is touched mid-build.
 # Never volumes, never `system prune`, never a container or image without a BOSS name/label.
 set -euo pipefail
 
 DEDICATED=0
 ROOM=0
+CACHE_ONLY=0
 DRY=0
 THRESHOLD=75
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -34,6 +37,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --dedicated) DEDICATED=1; shift ;;
     --room) ROOM=1; shift ;;
+    --cache-only) CACHE_ONLY=1; shift ;;
     --dry-run) DRY=1; shift ;;
     --threshold) THRESHOLD="${2:?}"; shift 2 ;;
     --dir) INSTALL_DIR="${2:?--dir needs a path}"; shift 2 ;;
@@ -64,6 +68,7 @@ used_pct() { df -P / | awk 'NR==2 {gsub("%","",$5); print $5}'; }
 before=$(used_pct)
 printf 'disk before: %s%% used\n' "$before"
 
+if [[ "$CACHE_ONLY" -eq 0 ]]; then
 # 1. Stopped preview containers, then preview images nothing uses.
 for c in $("${D[@]}" ps -a --filter status=exited --filter status=created --filter status=dead \
              --format '{{.Names}}' | grep '^boss-prev-' || true); do
@@ -94,6 +99,7 @@ for repo in $("${D[@]}" images --format '{{.Repository}}' | grep '^boss-communit
     grep -qxF "$img" <<<"$in_use" || run "${D[@]}" rmi "$img"
   done <<<"$tags"
 done
+fi
 
 # 4. Build cache. The cap holds on every host: Docker keeps the newest BOSS_BUILD_CACHE_CAP_GB
 #    of cache and drops the rest, so the cache can no longer grow without bound between deploys.

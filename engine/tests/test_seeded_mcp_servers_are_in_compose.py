@@ -37,5 +37,7 @@ def test_the_service_builds_from_the_image_that_has_chromium():
     spec = (yaml.safe_load(COMPOSE.read_text()) or {})["services"]["mcp-tools"]
     assert spec["build"]["dockerfile"] == "Dockerfile.community"
     dockerfile = (ROOT / "Dockerfile.community").read_text()
-    assert "FROM python-runtime AS mcp-tools" in dockerfile
+    assert "FROM python-browser AS mcp-tools" in dockerfile
+    browser = dockerfile.split(" AS python-browser\n", 1)[1].split("\nFROM ", 1)[0]
+    assert "playwright install --with-deps --only-shell chromium" in browser
     assert "tools.mcp_tools_mux" in dockerfile

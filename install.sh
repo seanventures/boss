@@ -1668,18 +1668,47 @@ if ! BUILD_SERVICES="$("${COMPOSE[@]}" \
   --env-file "$ENV_FILE" \
   $COMPOSE_PROFILES \
   config --format json </dev/null 2>/dev/null | python3 -c '
-import argparse, json, re, sys
+import argparse, json, os, re, sys
 parser = argparse.ArgumentParser()
 parser.add_argument("--profile", action="append", default=[])
 active = set(parser.parse_args().profile)
 services = json.load(sys.stdin)["services"]
+def family(build):
+    # The stage a target grows from: follow FROM <stage> inside its Dockerfile to the first stage
+    # built FROM an outside image. Images of one family share their layers (BOSSAPP-1458).
+    context = build.get("context") or "."
+    path = os.path.join(context, build.get("dockerfile") or "Dockerfile")
+    try:
+        text = open(path, encoding="utf-8").read()
+    except OSError:
+        return path
+    stages, last = {}, None
+    for m in re.finditer(r"(?im)^FROM\s+(?:--\S+\s+)*(\S+)(?:\s+AS\s+(\S+))?\s*$", text):
+        last = m.group(2) or last
+        if m.group(2):
+            stages[m.group(2)] = m.group(1)
+    stage, seen = build.get("target") or last, set()
+    while stage in stages and stages[stage] in stages and stage not in seen:
+        seen.add(stage)
+        stage = stages[stage]
+    return path + "#" + str(stage)
+order, seen_images = {}, set()
 for name, service in services.items():
     profiles = set(service.get("profiles", []))
     if "build" not in service or (profiles and not active.intersection(profiles) and "*" not in active):
         continue
     if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*", name):
         raise SystemExit("Invalid build service name in Compose configuration")
-    print(name)
+    # Two services on one image (kg-mcp runs the worker image) build it once: a second build
+    # after the build cache was evicted made a second, unshared copy of every layer.
+    image = service.get("image") or name
+    if image in seen_images:
+        continue
+    seen_images.add(image)
+    order.setdefault(family(service["build"]), []).append(name)
+for index, names in enumerate(order.values()):
+    for name in names:
+        print(name, index)
 ' $COMPOSE_PROFILES 2>/dev/null)"; then
   die "Could not resolve the selected Compose build services; stopping before image builds. Check the Compose configuration and .env."
 fi
@@ -1710,8 +1739,25 @@ if [[ -n "$_up_proxy" ]]; then
   unset _proxy_env _up_no_proxy
 fi
 unset _up_proxy _up_extra
-while IFS= read -r _build_service; do
+# IMAGES OF ONE FAMILY BUILD TOGETHER (BOSSAPP-1458). The list above is grouped by the stage the
+# images grow from (the Python services share python-base; the console is its own), so each family
+# builds while its cache is warm. Between families, on a disk under BOSS_DISK_FLOOR_GB free, the
+# finished family's build cache is dropped (prune.sh --room --cache-only): a fresh 30 GB box ran out
+# of disk with the Python family's cache still held while the console built.
+_build_family=""
+while IFS=' ' read -r _build_service _next_family; do
   [[ -n "$_build_service" ]] || continue
+  if [[ -n "$_build_family" && "$_next_family" != "$_build_family" && -f scripts/install/prune.sh ]]; then
+    if _prune_out="$(bash scripts/install/prune.sh --dir "${INSTALL_DIR:-.}" --room --cache-only </dev/null 2>&1)"; then
+      while IFS= read -r _l; do
+        case "$_l" in *"under the"*"floor"*) ui_info "$_l" ;; esac
+      done <<< "$_prune_out"
+    else
+      ui_warn "The build cache could not be trimmed between images; the build continues. If it stops with \"no space left on device\", run: boss prune, then run the installer again."
+    fi
+    unset _prune_out _l
+  fi
+  _build_family="$_next_family"
   ui_info "Building $_build_service (one image at a time)"
   # Pass observed metadata as build arguments: sudo may reset exported variables.
   # shellcheck disable=SC2086
@@ -1720,6 +1766,7 @@ while IFS= read -r _build_service; do
     --build-arg "BOSS_SOURCE_SHA=$BOSS_SOURCE_SHA" \
     --build-arg "BOSS_BUILT_AT=$BOSS_BUILT_AT" "$_build_service" </dev/null
 done <<< "$BUILD_SERVICES"
+unset _build_family _next_family
 # ---- end serial image builds ----------------------------------------------
 
 # A rerun/upgrade may already have a worker polling the old API. Keep it up
