@@ -13,7 +13,9 @@
 # a red SECURITY GUARD (tests/tiers.yaml `security:`), listed or not. Every file a baseline names
 # runs in every tier, so every line is judged on every run. The worker suite is small and always
 # runs whole. The API tests spend ~6 s each resetting their database, so they run sharded across
-# boss_test_t1..tN (created when missing) on the boss-community-db-1 container.
+# boss_test_t1..tN (created when missing) on the test Postgres (`boss dev up`, the
+# boss-community-db-test-1 container, :55700) — never the install's own `db`, where test databases
+# are leftovers BOSS removes (BOSSAPP-1459). BOSS_TEST_PG_URL or BOSS_TEST_DB_CONTAINER override.
 set -uo pipefail
 
 TIER="${1:-}"; shift || true
@@ -33,7 +35,7 @@ OUT="${TEST_TIER_OUT:-$(mktemp -d -t boss-tier-XXXX)}"
 # A reused TEST_TIER_OUT must not judge an earlier run's logs.
 rm -f "$OUT"/*.log "$OUT"/*.files "$OUT"/api.shard* "$OUT"/failed.txt "$OUT"/passed.txt \
   "$OUT"/ran.txt "$OUT"/unfinished.txt "$OUT"/judge.txt 2>/dev/null
-DBC="${BOSS_TEST_DB_CONTAINER:-boss-community-db-1}"
+DBC="${BOSS_TEST_DB_CONTAINER:-boss-community-db-test-1}"
 # The test databases: <prefix> for the engine suite, <prefix>_t1..tN for the API shards.
 DBP="${TEST_TIER_DB_PREFIX:-boss_test}"
 case "$DBP" in boss_test*) ;; *) echo "TEST_TIER_DB_PREFIX must start with boss_test" >&2; exit 2 ;; esac
@@ -161,7 +163,7 @@ for k, v in (("PGU", u.username or ""), ("PW", pw), ("PGHOSTNAME", u.hostname or
 PY
 )" || { echo "BOSS_TEST_PG_URL: cannot reach Postgres or create the test databases" >&2; exit 2; }
 else
-  PGU=$(docker exec "$DBC" printenv POSTGRES_USER 2>/dev/null) || { echo "no $DBC container" >&2; exit 2; }
+  PGU=$(docker exec "$DBC" printenv POSTGRES_USER 2>/dev/null) || { echo "no $DBC container: start the test Postgres with \`boss dev up\` (or set BOSS_TEST_PG_URL)" >&2; exit 2; }
   PGP=$(docker exec "$DBC" printenv POSTGRES_PASSWORD)
   PORT=$(docker port "$DBC" 5432 | head -1 | awk -F: '{print $NF}')
   PW=$(python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.argv[1],safe=""))' "$PGP")

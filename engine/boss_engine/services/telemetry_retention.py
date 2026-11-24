@@ -215,6 +215,22 @@ POLICIES: tuple[Policy, ...] = (
            False, "Metrics scrapes"),
     Policy("deployment_health_samples", "deployment_health_samples", "checked_at", 30,
            DIAGNOSTIC_FLOOR_DAYS, False, "Health samples"),
+    # BOSSAPP-1459: the append-only tables that had no rule at all (RETENTION_OWNERS below is
+    # the census; test_a_running_install_stays_in_its_budget keeps it complete).
+    Policy("focused_agent_ticks", "focused_agent_ticks", "created_at", 14, DIAGNOSTIC_FLOOR_DAYS,
+           False, "Focused agent ticks"),
+    Policy("worker_autoscaling_history", "worker_autoscaling_history", "created_at", 30,
+           DIAGNOSTIC_FLOOR_DAYS, False, "Autoscaling history"),
+    Policy("trace_export_attempts", "trace_export_attempts", "created_at", 30,
+           DIAGNOSTIC_FLOOR_DAYS, False, "Trace exports"),
+    Policy("a2a_transport_attempts", "a2a_transport_attempts", "created_at", 30,
+           DIAGNOSTIC_FLOOR_DAYS, False, "Agent bus attempts"),
+    Policy("policy_eval_log", "policy_eval_log", "created_at", 90, AUDIT_FLOOR_DAYS, True,
+           "Policy checks"),
+    # A sandbox's egress credential is a hash that stops working at expires_at; a week after
+    # that it proves nothing.
+    Policy("identity_egress_credentials", "identity_egress_credentials", "expires_at", 7,
+           DIAGNOSTIC_FLOOR_DAYS, False, "Expired egress credentials"),
 )
 POLICY_BY_KEY = {p.key: p for p in POLICIES}
 
@@ -225,7 +241,52 @@ TS_INDEXES: tuple[tuple[str, str, str], ...] = (
     ("idx_anomaly_signals_ts", "anomaly_signals", "ts"),
     ("idx_app_metrics_scrapes_at", "app_metrics_scrapes", "scraped_at"),
     ("idx_health_samples_checked", "deployment_health_samples", "checked_at"),
+    ("idx_focused_agent_ticks_created", "focused_agent_ticks", "created_at"),
+    ("idx_worker_autoscaling_history_created", "worker_autoscaling_history", "created_at"),
+    ("idx_trace_export_attempts_created", "trace_export_attempts", "created_at"),
+    ("idx_a2a_transport_attempts_created", "a2a_transport_attempts", "created_at"),
+    ("idx_policy_eval_log_created", "policy_eval_log", "created_at"),
+    ("idx_identity_egress_credentials_expires", "identity_egress_credentials", "expires_at"),
 )
+
+#: EVERY APPEND-ONLY TABLE HAS AN OWNER (BOSSAPP-1459). A table that only grows — an event log, a
+#: tick, a sample, a signal, an attempt, an audit — is listed here with what bounds it: a policy
+#: of this module (`POLICIES`), another module's retention, or the reason it is kept. The census
+#: test reads db/schema.sql and fails on an append-only-shaped table missing from this map, so a
+#: new one cannot ship without a decision.
+RETENTION_OWNERS: dict[str, str] = {
+    **{p.table: "telemetry_retention" for p in POLICIES},
+    "events_archive": "kept: the non-chatter events of dropped months (audit evidence)",
+    "agent_turns": "activity_retention",
+    "app_logs": "activity_retention",
+    "metatron_watch_ticks": "resource_reaper.prune_tables",
+    "process_manager_ticks": "resource_reaper.prune_tables",
+    "llm_calls": "ledger_retention",
+    "tool_call_audit": "ledger_retention",
+    "run_events": "ledger_retention (monthly partitions)",
+    "trace_spans": "trace_payloads.sweep",
+    "storage_samples": "storage_watch.prune",
+    "identity_egress_log": "identity.hygiene (monthly partitions)",
+    "intake_events": "event_intake (expires_at)",
+    "identity_security_events": "kept: hash-chained security audit; a deleted row breaks the chain",
+    "secret_access_events": "kept: who read which secret (audit)",
+    "ip_allow_audit": "kept: allow-list decisions (audit)",
+    "kg_audit": "kept: knowledge changes (audit)",
+    "guest_calls": "kept: sandbox guest calls (audit)",
+    "host_events": "kept: operator actions on hosts (audit)",
+    "cost_events": "kept: spend (finance records)",
+    "provider_usage_events": "kept: provider usage (finance records)",
+    "routing_logs": "kept: referenced by route decisions (foreign key)",
+    "delivery_presence_events": "kept: the dedupe ledger; a deleted row lets a notice post again",
+    "github_reconciliation_signals": "kept: the reconciliation ledger of provider events",
+    "regression_signals": "kept: incident evidence",
+    "agent_chat_turns": "kept: people's conversations",
+    "agent_conversation_turns": "kept: people's conversations",
+    "builder_turns": "kept: people's conversations",
+    "agent_deployment_history": "kept: which agent version ran when (records)",
+    "shepherd_reasoning": "kept: the learning record of recoveries",
+    "tm_heartbeats": "kept: one row per install per day (the collector's own data)",
+}
 
 
 def _now() -> datetime:
@@ -1006,6 +1067,90 @@ def share(connection: Any) -> dict[str, Any]:
             "tables": sorted(rows, key=lambda r: -r["bytes"]), "last_sweep": last}
 
 
+# ── compaction: a table whose file stayed big after its rows went (BOSSAPP-1459) ─────────────
+
+#: Deleted rows free space INSIDE a table; the file keeps its size. A table that once churned
+#: (kg_vec_1536 rewrote every vector on every embedding write before that was fixed) can hold
+#: almost nothing and still fill the disk: 924 MB for 145 rows on the operator's laptop. Such a
+#: table is rewritten (VACUUM FULL) when ALL hold — small live data, so the rewrite takes seconds
+#: and the lock it needs is short; a big file; and the live data a small share of it:
+COMPACT_MIN_BYTES = 256 * 1024 * 1024
+COMPACT_MAX_LIVE_ROWS = 50_000
+COMPACT_MAX_LIVE_SHARE = 0.10
+COMPACT_STATEMENT_TIMEOUT = "120s"
+#: The rewrite copies the live data and rebuilds every index (an HNSW one included): above this
+#: much live data it could hold its lock for the whole timeout, so it is not attempted.
+COMPACT_MAX_LIVE_BYTES = 64 * 1024 * 1024
+#: A table whose rewrite failed, or did not halve it, is left alone this long.
+COMPACT_RETRY_AFTER = timedelta(hours=24)
+_COMPACT_BACKOFF: dict[str, datetime] = {}
+
+
+def compaction_candidates(connection: Any) -> list[dict[str, Any]]:
+    """Ordinary public tables (never a partition or a partitioned parent) that pass every
+    COMPACT_* bound. Statistics only pre-select (they can be stale: kg_vec_1536 was never analysed
+    and said 145 rows for 1,599); the live figure is counted, at most COMPACT_MAX_LIVE_ROWS + 1
+    rows read."""
+    rows = connection.execute(text("""
+        SELECT c.relname, pg_total_relation_size(c.oid) AS bytes
+          FROM pg_class c
+          JOIN pg_namespace n ON n.oid = c.relnamespace
+          JOIN pg_stat_user_tables s ON s.relid = c.oid
+         WHERE n.nspname = 'public' AND c.relkind = 'r' AND NOT c.relispartition
+           AND pg_total_relation_size(c.oid) >= :min
+           AND s.n_live_tup <= :max_rows
+         ORDER BY 2 DESC"""), {"min": COMPACT_MIN_BYTES, "max_rows": COMPACT_MAX_LIVE_ROWS}).all()
+    out = []
+    for name, size in rows:
+        if not _IDENT.match(str(name)):
+            continue
+        got = connection.execute(text(
+            f'SELECT count(*), COALESCE(sum(pg_column_size(t.*)), 0) FROM '
+            f'(SELECT * FROM "{name}" LIMIT :n) t'), {"n": COMPACT_MAX_LIVE_ROWS + 1}).first()
+        live_rows, live_bytes = int(got[0] or 0), int(got[1] or 0)
+        if live_rows <= COMPACT_MAX_LIVE_ROWS and live_bytes <= COMPACT_MAX_LIVE_BYTES \
+                and live_bytes <= COMPACT_MAX_LIVE_SHARE * int(size):
+            out.append({"table": str(name), "bytes": int(size), "live_rows": live_rows,
+                        "live_bytes": live_bytes})
+    return out
+
+
+def compact(engine: Any, *, dry_run: bool = False) -> list[dict[str, Any]]:
+    """Rewrite each candidate (VACUUM FULL, its indexes rebuilt), a lock wait bounded by
+    LOCK_TIMEOUT and the rewrite by COMPACT_STATEMENT_TIMEOUT. A table that cannot get its lock is
+    left for the next pass. Returns [{table, bytes, after, error}]."""
+    with engine.connect() as c:
+        found = compaction_candidates(c)
+    now = _now()
+    found = [x for x in found if not (_COMPACT_BACKOFF.get(x["table"]) and _COMPACT_BACKOFF[x["table"]] > now)]
+    if dry_run:
+        return found
+    out = []
+    for cand in found:
+        name = cand["table"]
+        try:
+            with _autocommit(engine) as c:
+                try:
+                    c.execute(text(f"SET lock_timeout = '{LOCK_TIMEOUT}'"))
+                    c.execute(text(f"SET statement_timeout = '{COMPACT_STATEMENT_TIMEOUT}'"))
+                    c.execute(text(f'VACUUM (FULL, ANALYZE) "{name}"'))
+                    after = int(c.execute(text("SELECT pg_total_relation_size(to_regclass(:t))"),
+                                          {"t": name}).scalar() or 0)
+                finally:
+                    # A pooled connection never keeps these limits, whatever happened above.
+                    c.execute(text("RESET statement_timeout"))
+                    c.execute(text("RESET lock_timeout"))
+            out.append({**cand, "after": after, "error": None})
+            if after * 2 > cand["bytes"]:
+                _COMPACT_BACKOFF[name] = now + COMPACT_RETRY_AFTER   # it did not shrink: stop trying
+            _log.info("compacted %s: %d → %d bytes", name, cand["bytes"], after)
+        except Exception as exc:  # noqa: BLE001 — a busy table waits; a failed one backs off
+            _COMPACT_BACKOFF[name] = now + COMPACT_RETRY_AFTER
+            out.append({**cand, "after": None, "error": f"{type(exc).__name__}"})
+            _log.info("table %s not compacted this pass", name, exc_info=True)
+    return out
+
+
 # ── the service: hourly, one process at a time ──────────────────────────────────────────────
 
 _LAST: dict[str, Any] = {}
@@ -1061,10 +1206,20 @@ def run_once(engine: Any, *, now: Optional[datetime] = None, convert: bool = Tru
         if convert:
             report["partitioning"] = ensure_partitioned(engine, now=now)
         report["sweep"] = sweep(engine, now=now)
+        try:
+            from ..db import background
+
+            with background():
+                report["compacted"] = compact(engine)
+        except Exception:  # noqa: BLE001 — compaction never fails the sweep
+            _log.info("compaction pass skipped", exc_info=True)
+            report["compacted"] = []
         last = {k: report["sweep"][k] for k in ("at", "rows", "bytes", "partitions", "archived",
                                                  "errors", "receipt_id")}
         last["tables"] = [{k: t[k] for k in ("policy", "rows", "bytes", "days")}
                           for t in report["sweep"]["tables"]]
+        last["compacted"] = [{k: t.get(k) for k in ("table", "bytes", "after")}
+                             for t in report["compacted"] if not t.get("error")]
         ok = not report["sweep"]["errors"] and not report.get("partitioning", {}).get("error")
         system_services.beat(engine, SERVICE_KEY, ok=ok,
                              error=None if ok else "; ".join(report["sweep"]["errors"])[:400]
@@ -1099,7 +1254,7 @@ def start(engine: Any, settings: Any = None, *, interval: float = INTERVAL_SECON
     return _THREAD
 
 
-__all__ = ["AUDIT_FLOOR_DAYS", "CHATTER_SQL", "CONVERSION_LOCK", "NOISE_EVENT_TYPES", "POLICIES",
+__all__ = ["AUDIT_FLOOR_DAYS", "CHATTER_SQL", "RETENTION_OWNERS", "compact", "compaction_candidates", "CONVERSION_LOCK", "NOISE_EVENT_TYPES", "POLICIES",
            "POLICY_BY_KEY", "Policy", "TICK_RECEIPT_KINDS", "clear_stale_bound", "configured_days",
            "effective_days",
            "ensure_indexes", "ensure_months", "ensure_partitioned", "is_partitioned", "items_of",

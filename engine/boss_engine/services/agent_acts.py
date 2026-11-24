@@ -251,10 +251,16 @@ def resolve_role(key_or_title: Optional[str]) -> Optional[str]:
 def quietly(connection: Connection, what: str, fn, *args: Any, **kwargs: Any) -> Any:
     """Run a ledger write in its own savepoint. The work it records always wins: a failure here
     is logged and rolled back to the savepoint, never raised into a run, a build or a chat."""
+    from ..db import TransactionLost, transaction_lost
+
     try:
         with connection.begin_nested():
             return fn(connection, *args, **kwargs)
     except Exception as error:  # noqa: BLE001 — the ledger must never break the work
+        if transaction_lost(connection, error):
+            # Not a ledger failure: the transaction itself is gone (BOSSAPP-1456). Carrying on
+            # would leave the work's connection poisoned; its caller rolls it back whole.
+            raise error if isinstance(error, TransactionLost) else TransactionLost(error) from error
         log.warning("agent acts: could not %s: %s: %s", what, type(error).__name__, error)
         return None
 
@@ -2130,8 +2136,10 @@ def _person_names(connection: Connection, ids: set[str]) -> dict[str, str]:
             "SELECT id, display_name FROM identity_principals WHERE id = ANY(:i)"),
             {"i": sorted(ids)}).mappings().all()
         point.commit()
-    except Exception:  # noqa: BLE001 — an id is still the fact
-        point.rollback()
+    except Exception as error:  # noqa: BLE001 — an id is still the fact
+        from ..db import release_failed_savepoint
+
+        release_failed_savepoint(point, error, connection=connection)
         return {}
     return {str(r["id"]): str(r["display_name"]) for r in rows if r["display_name"]}
 

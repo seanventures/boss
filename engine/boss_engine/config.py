@@ -117,6 +117,12 @@ class Settings(BaseSettings):
     backup_keep_daily: int = Field(default=7, alias="BOSS_BACKUP_KEEP_DAILY", ge=0)
     backup_keep_weekly: int = Field(default=4, alias="BOSS_BACKUP_KEEP_WEEKLY", ge=0)
     backup_keep_monthly: int = Field(default=6, alias="BOSS_BACKUP_KEEP_MONTHLY", ge=0)
+    # THE CAP OVER THE TIERS (BOSSAPP-1459): the tiers alone keep up to 23 dumps, unbounded in
+    # bytes (6.4 GB on the operator's laptop). Past either number the oldest go — automatically
+    # once a `backups` retention rule is approved (or on a dev install, whose autonomy answers the
+    # card), else through ONE storage decision. The newest three always stay.
+    backup_max_count: int = Field(default=12, alias="BOSS_BACKUP_MAX_COUNT", ge=3)
+    backup_cap_gb: float = Field(default=5.0, alias="BOSS_BACKUP_SCHEDULED_CAP_GB", gt=0)
     # Upload each verified dump to S3_BUCKET (S3_ENDPOINT for MinIO) under this prefix.
     backup_s3_upload: bool = Field(default=False, alias="BOSS_BACKUP_S3_UPLOAD")
     backup_s3_prefix: str = Field(default="boss-backups", alias="BOSS_BACKUP_S3_PREFIX")

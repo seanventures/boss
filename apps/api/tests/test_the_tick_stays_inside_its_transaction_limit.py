@@ -42,7 +42,7 @@ def test_each_step_ticks_in_its_own_transaction():
     assert re.search(r"for pid in projects:.*?workflow_capability_runner\.tick_per_step\(\s*"
                      r"engine,", after, re.S), "the tick must commit per step"
     assert "workflow_capability_runner.tick(" not in body
-    src = inspect.getsource(workflow_capability_runner.tick_per_step)
+    src = inspect.getsource(workflow_capability_runner._tick_per_step)
     per_run = src.index("for run in runs:")
     assert "with open_tx() as connection:" in src[per_run:]
     assert "_advance_one_run(connection" in src[per_run:]

@@ -15100,8 +15100,9 @@ CREATE INDEX IF NOT EXISTS idx_storage_actions_incident ON storage_actions (inci
 CREATE TABLE IF NOT EXISTS retention_rules (
   id TEXT PRIMARY KEY,
   host_id TEXT,
-  kind TEXT NOT NULL CHECK (kind IN ('backups', 'images', 'build_cache', 'logs', 'telemetry',
-                                     'scratch_db', 'kg_derived', 'docker_trim', 'threshold')),
+  kind TEXT NOT NULL CHECK (kind IN ('backups', 'scheduled_backups', 'images', 'build_cache',
+                                     'logs', 'telemetry', 'scratch_db', 'kg_derived', 'docker_trim',
+                                     'threshold')),
   rule JSONB NOT NULL DEFAULT '{}'::jsonb,
   enabled BOOLEAN NOT NULL DEFAULT true,
   source TEXT NOT NULL DEFAULT 'default' CHECK (source IN ('default', 'operator', 'learned')),
@@ -15110,6 +15111,21 @@ CREATE TABLE IF NOT EXISTS retention_rules (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ
 );
+-- BOSSAPP-1459: the scheduled (in-app) backups' cap has its OWN rule kind, never `backups` (the
+-- host's pre-upgrade recovery archives): approving one must not make deleting the other automatic.
+DO $$ BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'retention_rules_kind_check'
+      AND pg_get_constraintdef(oid) NOT LIKE '%scheduled_backups%'
+  ) THEN
+    ALTER TABLE retention_rules DROP CONSTRAINT retention_rules_kind_check;
+    ALTER TABLE retention_rules
+      ADD CONSTRAINT retention_rules_kind_check
+      CHECK (kind IN ('backups', 'scheduled_backups', 'images', 'build_cache', 'logs', 'telemetry',
+                      'scratch_db', 'kg_derived', 'docker_trim', 'threshold'));
+  END IF;
+END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS retention_rules_one_per_kind_host
   ON retention_rules (kind, COALESCE(host_id, ''));
 

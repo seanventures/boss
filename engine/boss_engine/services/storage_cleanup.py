@@ -625,6 +625,13 @@ def on_delete_decision(connection: Any, engine: Any, decision: Mapping[str, Any]
     from . import storage_incidents
 
     rec = _json(decision.get("recommendation"), {}) or {}
+    from . import backup_scheduler
+
+    if rec.get("tool") == backup_scheduler.CAP_TOOL:
+        # Scheduled backups past their cap (BOSSAPP-1459): the same card, no incident behind it.
+        return backup_scheduler.on_cap_decision(connection, {**dict(decision), "recommendation": rec},
+                                                verdict=verdict, actor=actor, make_rule=make_rule,
+                                                args=args)
     incident_id = str(rec.get("incident_id") or "")
     inc, plan = _plan(connection, incident_id)
     if inc is None:

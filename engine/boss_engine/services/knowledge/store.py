@@ -1157,7 +1157,9 @@ class PostgresKnowledgeStore:
     def _copy_embedding_to_index(self, connection: Connection, *, embedding_id: str, dimensions: int) -> None:
         """ONE ROW into kg_vec_<dim>: the row just written, never the whole kg_embeddings table
         (that copy, once per embedding, rewrote every vector of every project inside the sync's
-        transaction and held 14-16 searches waiting on it)."""
+        transaction and held 14-16 searches waiting on it). An unchanged vector (same node, model
+        and content hash) is not rewritten: every rewrite leaves a dead 6 KB vector behind, and
+        the churn grew the table to 924 MB for 1,599 rows (BOSSAPP-1459)."""
         table = _vec_table(dimensions)
         connection.execute(
             text(
@@ -1175,6 +1177,9 @@ class PostgresKnowledgeStore:
                   model_id = EXCLUDED.model_id,
                   content_hash = EXCLUDED.content_hash,
                   embedding = EXCLUDED.embedding
+                WHERE ({table}.project_id, {table}.node_id, {table}.model_id, {table}.content_hash)
+                      IS DISTINCT FROM
+                      (EXCLUDED.project_id, EXCLUDED.node_id, EXCLUDED.model_id, EXCLUDED.content_hash)
                 """
             ),
             {"id": embedding_id},
@@ -1227,6 +1232,9 @@ class PostgresKnowledgeStore:
                   model_id = EXCLUDED.model_id,
                   content_hash = EXCLUDED.content_hash,
                   embedding = EXCLUDED.embedding
+                WHERE ({table}.project_id, {table}.node_id, {table}.model_id, {table}.content_hash)
+                      IS DISTINCT FROM
+                      (EXCLUDED.project_id, EXCLUDED.node_id, EXCLUDED.model_id, EXCLUDED.content_hash)
                 """
             ),
             {"dim": dimensions},

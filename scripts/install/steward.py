@@ -26,6 +26,7 @@ when present; otherwise a small pure-Python Ed25519 verifier). Every run appends
 from __future__ import annotations
 
 import argparse
+import contextlib
 import base64
 import datetime as _dt
 import hashlib
@@ -650,18 +651,59 @@ def verb_prune_build_cache(env: Env, args: dict, *, dry_run: bool, runner: Calla
     return items, max(0.0, df["cache"] - after["cache"])
 
 
+#: How long `boss rollback`'s images stay after a healthy upgrade (prune.sh, disk_budget; BOSSAPP-1459).
+ROLLBACK_KEEP_HOURS = 72.0
+
+
+def rollback_expired(env: Env, runner: Callable, now: Optional[_dt.datetime] = None) -> bool:
+    """The prev-<tag> rollback point is past its window: .boss-rollback was written more than
+    BOSS_ROLLBACK_KEEP_HOURS ago, was not already dropped, and the API is healthy now (an
+    unhealthy release keeps its way back)."""
+    record: dict[str, str] = {}
+    try:
+        for line in (env.install_dir / ".boss-rollback").read_text().splitlines():
+            k, sep, v = line.partition("=")
+            if sep and not k.startswith("#"):
+                record[k.strip()] = v.strip()
+    except OSError:
+        return False
+    if record.get("BOSS_PREV_EXPIRED_AT") or record.get("BOSS_PREV_IMAGE_TAG") != f"prev-{env.image_tag}":
+        return False
+    try:
+        keep = float(env._env("BOSS_ROLLBACK_KEEP_HOURS", "") or ROLLBACK_KEEP_HOURS)
+        saved = parse_iso(record.get("BOSS_PREV_SAVED_AT", ""))
+    except ValueError:
+        return False
+    age_h = ((now or _dt.datetime.now(_dt.timezone.utc)) - saved).total_seconds() / 3600
+    if age_h < max(1.0, keep):
+        return False
+    res = runner([*env.docker, "ps", "-q", "--filter", f"label={COMPOSE_PROJECT_LABEL}={env.compose_project}",
+                  "--filter", "label=com.docker.compose.service=api", "--filter", "health=healthy"])
+    return bool((res.stdout or "").strip())
+
+
+def _mark_rollback_expired(env: Env) -> None:
+    with contextlib.suppress(OSError):
+        with open(env.install_dir / ".boss-rollback", "a", encoding="utf-8") as fh:
+            fh.write(f"BOSS_PREV_EXPIRED_AT={_dt.datetime.now(_dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}\n")
+
+
 def verb_remove_images(env: Env, args: dict, *, dry_run: bool, runner: Callable) -> tuple[list[str], float]:
-    """Labelled images other than the current tag, the prev-<tag> rollback point and any in use."""
+    """Labelled images other than the current tag, the prev-<tag> rollback point and any in use.
+    The rollback point too once it is past its window (`rollback_expired`)."""
     in_use = set()
     ps = runner([*env.docker, "ps", "-a", "--format", "{{.Image}}"])
     for line in (ps.stdout or "").splitlines():
         in_use.add(line.strip())
-    keep_tags = {env.image_tag, f"prev-{env.image_tag}"}
+    prev = f"prev-{env.image_tag}"
+    expired = rollback_expired(env, runner)
+    keep_tags = {env.image_tag} | (set() if expired else {prev})
     items, size = [], 0.0
     for row in _labelled(env, runner, "image"):
         repo, tag = str(row.get("Repository") or ""), str(row.get("Tag") or "")
         ref = f"{repo}:{tag}" if tag and tag != "<none>" else str(row.get("ID") or "")
-        if tag in keep_tags or tag.startswith("prev-") or ref in in_use or f"{repo}:{tag}" in in_use:
+        if tag in keep_tags or (tag.startswith("prev-") and not (expired and tag == prev)) \
+                or ref in in_use or f"{repo}:{tag}" in in_use:
             continue
         if not ref:
             continue
@@ -677,6 +719,11 @@ def verb_remove_images(env: Env, args: dict, *, dry_run: bool, runner: Callable)
         res = runner([*env.docker, "rmi", ref], timeout=300)
         if res.returncode == 0:
             done.append(ref)
+    if expired and any(r.endswith(f":{prev}") for r in done):
+        still = [r for r in items if r.endswith(f":{prev}") and runner(
+            [*env.docker, "image", "inspect", r]).returncode == 0]
+        if not still:            # only when every kept image is really gone
+            _mark_rollback_expired(env)
     after = docker_df(env, runner)
     freed = size if done else 0.0
     return done, freed if after else freed
@@ -774,6 +821,39 @@ def relabel_volumes(env: Env, runner: Callable = run_cmd, *, apply: bool = True)
                             "reason": f"{NEEDS_RELABEL} (docker volume rm: {(res.stderr or '').strip()[:120]})"})
         except (OSError, subprocess.TimeoutExpired) as exc:
             out.append({"volume": name, "action": "skipped", "reason": f"{NEEDS_RELABEL} ({type(exc).__name__})"})
+    return out
+
+
+def remove_test_leftovers(env: Env, runner: Callable = run_cmd, *, apply: bool = True) -> list[dict[str, str]]:
+    """TEST DATA ONLY WITH A TEST POSTGRES (BOSSAPP-1459; upgrade.sh and `boss prune` run it). Only
+    `boss dev up` makes the test Postgres, yet its volume (4.8 GB on the operator's laptop) was
+    found on installs that run no tests. Its volume is removed when NO container — running or
+    stopped — uses it: a db-test container means someone runs tests here, and its data stays. Only
+    this install's Compose test volumes (REBUILDABLE/RETIRED keys of kind `test`), checked against
+    the volume's own Compose labels at the moment of removal. Never stops anything; never raises."""
+    out: list[dict[str, str]] = []
+    keys = [k for k, kind in {**REBUILDABLE_COMPOSE_VOLUMES, **RETIRED_COMPOSE_VOLUMES}.items() if kind == "test"]
+    for key in keys:
+        name = f"{env.compose_project}_{key}"
+        try:
+            if _inspect_label(env, runner, "volume", name, COMPOSE_PROJECT_LABEL) != env.compose_project \
+                    or _inspect_label(env, runner, "volume", name, COMPOSE_VOLUME_LABEL) != key:
+                continue            # absent, or not this project's: never ours to touch
+            users = _containers_using(env, runner, name)
+            if users:
+                out.append({"volume": name, "action": "kept",
+                            "reason": "a test Postgres uses it (boss dev up): test data stays"})
+                continue
+            if not apply:
+                out.append({"volume": name, "action": "would_remove",
+                            "reason": "test data with no test Postgres: would be removed"})
+                continue
+            res = runner([*env.docker, "volume", "rm", name], timeout=120)
+            out.append({"volume": name, "action": "removed" if res.returncode == 0 else "skipped",
+                        "reason": "test data with no test Postgres; `boss dev up` makes a new one"
+                        if res.returncode == 0 else f"docker volume rm: {(res.stderr or '').strip()[:120]}"})
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            out.append({"volume": name, "action": "skipped", "reason": f"docker unavailable: {type(exc).__name__}"})
     return out
 
 
@@ -1032,7 +1112,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--relabel-volumes", action="store_true",
                     help="recreate BOSS's rebuildable volumes that predate their labels, when unused "
                          "(the upgrade step; data volumes are never touched)")
-    ap.add_argument("--dry-run", action="store_true", help="with --relabel-volumes: say what would change")
+    ap.add_argument("--test-leftovers", action="store_true",
+                    help="remove the test Postgres volume when no container uses it (BOSSAPP-1459)")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="with --relabel-volumes or --test-leftovers: say what would change")
     ap.add_argument("--version", action="store_true")
     ns = ap.parse_args(argv)
     if ns.version:
@@ -1051,6 +1134,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     if ns.relabel_volumes:
         done = relabel_volumes(env, run_cmd, apply=not ns.dry_run)
         log_line(env, {"host_id": env.host_id, "relabel_volumes": done})
+        for row in done:
+            print(f"{row['volume']}: {row['action']} — {row['reason']}")
+        return 0
+    if ns.test_leftovers:
+        done = remove_test_leftovers(env, run_cmd, apply=not ns.dry_run)
+        log_line(env, {"host_id": env.host_id, "test_leftovers": done})
         for row in done:
             print(f"{row['volume']}: {row['action']} — {row['reason']}")
         return 0

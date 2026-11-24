@@ -733,6 +733,10 @@ services:
       BOSS_BACKUP_KEEP_DAILY: ${BOSS_BACKUP_KEEP_DAILY:-7}
       BOSS_BACKUP_KEEP_WEEKLY: ${BOSS_BACKUP_KEEP_WEEKLY:-4}
       BOSS_BACKUP_KEEP_MONTHLY: ${BOSS_BACKUP_KEEP_MONTHLY:-6}
+      # The cap over the tiers (BOSSAPP-1459): past either the oldest go, through one storage
+      # decision until a `backups` rule is approved (dev autonomy answers it on a dev install).
+      BOSS_BACKUP_MAX_COUNT: ${BOSS_BACKUP_MAX_COUNT:-12}
+      BOSS_BACKUP_SCHEDULED_CAP_GB: ${BOSS_BACKUP_SCHEDULED_CAP_GB:-5}
       BOSS_BACKUP_S3_UPLOAD: ${BOSS_BACKUP_S3_UPLOAD:-false}
       S3_ENDPOINT: ${S3_ENDPOINT:-}
       S3_BUCKET: ${S3_BUCKET:-}

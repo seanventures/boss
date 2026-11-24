@@ -451,6 +451,67 @@ def rules_reclaim_gb(sample: Mapping[str, Any], rules: Sequence[Mapping[str, Any
     return round(gain, 2)
 
 
+#: The sandbox tree is walked at most this often for the budget (it can hold GBs of files).
+_SANDBOX_DU_EVERY = 600.0
+_SANDBOX_DU: dict[str, Any] = {"at": 0.0, "gb": None}
+
+
+def _sandboxes_gb() -> Optional[float]:
+    import time
+
+    if time.monotonic() - _SANDBOX_DU["at"] < _SANDBOX_DU_EVERY and _SANDBOX_DU["at"]:
+        return _SANDBOX_DU["gb"]
+    try:
+        from .resource_reaper import _du
+        from .sandbox_identity import run_root
+
+        root = run_root()
+        gb = round(_du(root) / 1e9, 3) if root.is_dir() else None
+    except Exception:  # noqa: BLE001 — unknown, not zero
+        gb = None
+    _SANDBOX_DU.update({"at": time.monotonic(), "gb": gb})
+    return gb
+
+
+def budget(connection: Any, sample: Mapping[str, Any]) -> dict[str, Any]:
+    """THE ONE DISK BUDGET (disk_budget.CATEGORIES, BOSSAPP-1459) as the Storage card shows it:
+    what the API measures itself (the database split, test databases, scheduled backups, the
+    sandboxes) and what the host helper's last reading says (images, build cache, logs). A
+    category nobody measured is `unknown`, never zero. `boss doctor` shows the full host split."""
+    from . import disk_budget
+    from .resource_reaper import test_server_present
+
+    raw: dict[str, Optional[float]] = {}
+    for key, sql in disk_budget.DB_SQL.items():
+        try:
+            with connection.begin_nested():
+                raw[key] = float(connection.execute(text(sql)).scalar() or 0)
+        except Exception:  # noqa: BLE001 — a role without the right is an unknown reading
+            raw[key] = None
+    db = disk_budget.split_db(raw)
+    try:
+        with connection.begin_nested():
+            app_backups = float(connection.execute(text(
+                "SELECT COALESCE(sum(bytes), 0) FROM backups WHERE status = 'verified'")).scalar() or 0)
+    except Exception:  # noqa: BLE001
+        app_backups = None
+    host_backups = _f(sample.get("backups_gb")) if sample.get("source") == "steward" else None
+    measured: dict[str, Optional[float]] = {
+        "images": _f(sample.get("images_gb")),
+        "build_cache": _f(sample.get("cache_gb")),
+        "logs": _f(sample.get("logs_gb")),
+        "db_records": db["db_records"], "db_knowledge": db["db_knowledge"],
+        "db_telemetry": db["db_telemetry"], "test_data": db["test_databases"],
+        "backups": (None if app_backups is None and host_backups is None
+                    else (app_backups or 0.0) / 1e9 + (host_backups or 0.0)),
+        "sandboxes": _sandboxes_gb(),
+    }
+    test_server = test_server_present()
+    rows = disk_budget.evaluate(measured, test_server=test_server)
+    return {"rows": rows, "total": disk_budget.total(rows), "test_server": test_server,
+            "warn_at_pct": round(100 * disk_budget.WARN_AT)}
+
+
 def summary(connection: Any, host_id: Optional[str] = None) -> dict[str, Any]:
     """`GET /v1/infra/storage/summary` (docs/infra/INFRA_AGENT_API.md §4)."""
     from . import storage_incidents
@@ -477,6 +538,11 @@ def summary(connection: Any, host_id: Optional[str] = None) -> dict[str, Any]:
             telemetry = telemetry_retention.share(connection)
     except Exception:  # noqa: BLE001 — the card renders without it
         telemetry = None
+    try:
+        disk_budget = budget(connection, sample)
+    except Exception:  # noqa: BLE001 — the card renders without it
+        _log.info("disk budget not read", exc_info=True)
+        disk_budget = None
     host_rows = []
     for h in hosts(connection):
         s = latest(connection, h, within=timedelta(days=2)) or {}
@@ -504,6 +570,8 @@ def summary(connection: Any, host_id: Optional[str] = None) -> dict[str, Any]:
             # BOSSAPP-1193: what the orphan-volume job could really free, and how many BOSS
             # volumes it cannot judge until `--relabel-volumes` has removed them.
             "volumes": volume_reading(sample),
+            # BOSSAPP-1459: where the space goes by category, against the one budget.
+            "budget": disk_budget,
             "hosts": host_rows}
 
 

@@ -155,13 +155,12 @@ def routed_reservation_estimate(connection: Any, settings: Any, project_id: str,
         included = call_is_included(connection, settings, project_id, None)
         if nested is not None:
             nested.commit()  # raises if a lookup inside failed: rolled back below
-    except Exception:  # noqa: BLE001 — a lookup failure reserves the full estimate
+    except Exception as error:  # noqa: BLE001 — a lookup failure reserves the full estimate
         included = False
-        try:
-            if nested is not None and nested.is_active:
-                nested.rollback()
-        except Exception:  # noqa: BLE001
-            pass
+        if nested is not None:
+            from ..db import release_failed_savepoint
+
+            release_failed_savepoint(nested, error, connection=connection)
     return 0 if included else int(estimate_usd_micros)
 
 

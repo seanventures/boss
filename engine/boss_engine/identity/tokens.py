@@ -328,10 +328,12 @@ def mint_run_token(*, subject: AuthContext, agent: AgentInstance, grant_id: Opti
                                 exp=_exp_cap(now, grant))
         if claims.exp <= now:
             raise _refused("grant_expired")
-        issued = _issue(db, claims, "token.issued")
+        # The grant's row BEFORE the token's audit event (BOSSAPP-1456): `_issue` takes the org's
+        # audit-chain lock, which every sign-in needs, and a row wait after it held every sign-in
+        # of the org for as long as another transaction held the grant.
         if grant is not None:
             grants.mark_first_use(db, grant)
-        return issued
+        return _issue(db, claims, "token.issued")
     except TokenError as exc:
         lineage.denied(db, org_id=org_id, event_type="token.denied", reason=exc.reason, run_id=task.run_id,
                        grant_id=grant_id, sub=subject.principal.id if subject else None)

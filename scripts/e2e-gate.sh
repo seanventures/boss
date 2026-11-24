@@ -113,8 +113,12 @@ chmod 700 "$WORK"
 mkdir -p "$WORK/out" && chmod 777 "$WORK/out"
 
 cleanup() {
-  docker rm -f "$GATE" >/dev/null 2>&1 || true
-  docker rm -f "$PG" >/dev/null 2>&1 || true
+  # -v: the Postgres image declares a data VOLUME, and `rm -f` without it left a ~435 MB
+  # anonymous volume behind on every run (BOSSAPP-1459). The label sweeps any a crash left.
+  docker rm -f -v "$GATE" >/dev/null 2>&1 || true
+  docker rm -f -v "$PG" >/dev/null 2>&1 || true
+  docker volume ls -q --filter label=boss-e2egate=1 --filter dangling=true 2>/dev/null |
+    xargs docker volume rm >/dev/null 2>&1 || true
   docker network rm "$NET" >/dev/null 2>&1 || true
   if [ "$KEEP" = 1 ]; then echo "e2e-gate: kept $WORK/out"; else rm -rf "$WORK"; fi
 }
@@ -129,7 +133,8 @@ unset PW
 
 docker network create "$NET" >/dev/null
 docker run -d --name "$PG" --network "$NET" --env-file "$WORK/pg.env" \
-  --label boss-e2egate=1 postgres:16-alpine >/dev/null || { echo "e2e-gate: could not start Postgres" >&2; exit 2; }
+  --label boss-e2egate=1 --mount type=volume,dst=/var/lib/postgresql/data,volume-label=boss-e2egate=1 \
+  postgres:16-alpine >/dev/null || { echo "e2e-gate: could not start Postgres" >&2; exit 2; }
 for _ in $(seq 1 60); do
   docker exec "$PG" pg_isready -U postgres -q >/dev/null 2>&1 && break
   sleep 0.5

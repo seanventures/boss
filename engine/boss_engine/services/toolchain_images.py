@@ -386,7 +386,7 @@ def _remove_container(settings: Any, container: str, run: Optional[DockerRun]) -
     if not container:
         return
     try:
-        _docker(run)([_binary(settings), "rm", "-f", container], 60)
+        _docker(run)([_binary(settings), "rm", "-f", "-v", container], 60)
     except Exception as exc:  # noqa: BLE001 — teardown never masks the real outcome
         _log.warning("could not remove toolchain setup container %s: %s", container[:12], exc)
 
