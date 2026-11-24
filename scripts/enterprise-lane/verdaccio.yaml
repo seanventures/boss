@@ -1,0 +1,21 @@
+# The lane's private npm mirror (scripts/enterprise-lane.sh). Anonymous reads, every package
+# proxied from the public registry and cached; nobody can publish. TLS is terminated in front of
+# it (nginx.conf), with a certificate issued by the lane's own "company" CA.
+storage: /verdaccio/storage/data
+uplinks:
+  npmjs:
+    url: https://registry.npmjs.org/
+    timeout: 60s
+    max_fails: 5
+packages:
+  '@*/*':
+    access: $all
+    publish: $authenticated
+    proxy: npmjs
+  '**':
+    access: $all
+    publish: $authenticated
+    proxy: npmjs
+server:
+  keepAliveTimeout: 60
+log: { type: stdout, format: pretty, level: warn }

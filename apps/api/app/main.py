@@ -10100,6 +10100,8 @@ def delivery_health_sweep_endpoint(project_id: Optional[str] = None):
     result = sweep(engine, settings, project_id=project_id)
     if hung.get("failed"):
         result = {**result, "hung_deployments_failed": hung["failed"]}
+    if hung.get("never_started"):
+        result = {**result, "never_started_deployments_failed": hung["never_started"]}
     return result
 
 

@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7
 # BOSS's database image: PostgreSQL 16 on Alpine with pgvector and Apache AGE compiled in
 # (BOSSAPP-622; operator decision 2026-10-22).
 #
@@ -15,7 +16,18 @@ ARG PG_IMAGE=postgres:16.12-alpine3.23
 FROM ${PG_IMAGE} AS build
 ARG PGVECTOR_VERSION=0.8.1
 ARG AGE_VERSION=1.6.0
-RUN apk add --no-cache --virtual .build build-base bison flex perl curl ca-certificates \
+# The enterprise network for this step (docs/community/ENTERPRISE_NETWORK.md): the proxy, and the
+# company CA as the BuildKit secret boss_build_ca, through the same helper Dockerfile.community
+# uses (bind-mounted, never copied). Without it a TLS-inspecting gateway stopped the install here
+# ("apk ... TLS: unspecified error"; enterprise lane, BOSSAPP-1430).
+ARG BOSS_UPSTREAM_PROXY=
+ARG BOSS_UPSTREAM_HTTP_PROXY=
+ARG BOSS_UPSTREAM_NO_PROXY=
+RUN --mount=type=secret,id=boss_build_ca \
+    --mount=type=bind,source=build-network.sh,target=/usr/local/libexec/boss-build-network \
+    --mount=type=tmpfs,target=/run/boss-build-network \
+    . /usr/local/libexec/boss-build-network \
+    && apk add --no-cache --virtual .build build-base bison flex perl curl ca-certificates \
     && mkdir -p /out \
     && curl -fsSL -o /tmp/pgvector.tar.gz \
         "https://github.com/pgvector/pgvector/archive/refs/tags/v${PGVECTOR_VERSION}.tar.gz" \

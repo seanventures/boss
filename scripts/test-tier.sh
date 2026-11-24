@@ -38,7 +38,10 @@ import yaml
 
 tier, since, out = sys.argv[1], sys.argv[2], sys.argv[3]
 tiers = yaml.safe_load(open("tests/tiers.yaml"))
+# worker: apps/worker/tests (the lease loops, job slots, the idle/stall clock). It was never run
+# by any gate until R3 (BOSSAPP-1431): a 4-core / 8 GiB host's one-slot bug lived there.
 SUITES = {"engine": ("engine/tests", ".py"), "api": ("apps/api/tests", ".py"),
+          "worker": ("apps/worker/tests", ".py"),
           "web": ("apps/web/tests", (".ts", ".tsx"))}
 
 def listed(t):
@@ -92,9 +95,9 @@ for s in SUITES:
 PY
 [ $? -eq 0 ] || exit 2
 
-# Only some suites (CI's p0 job runs engine,api; its web job runs the whole web suite).
-for s in engine api web; do
-  case ",${TEST_TIER_SUITES:-engine,api,web}," in *",$s,"*) ;; *) : > "$OUT/$s.files" ;; esac
+# Only some suites (CI's p0 job runs engine,api,worker; its web job runs the whole web suite).
+for s in engine api worker web; do
+  case ",${TEST_TIER_SUITES:-engine,api,worker,web}," in *",$s,"*) ;; *) : > "$OUT/$s.files" ;; esac
 done
 
 # ---- database ------------------------------------------------------------------------------
@@ -148,6 +151,15 @@ if [ -s "$OUT/engine.files" ]; then
   summary+=("engine $(( $(secs) - t0 ))s: $(tail -1 "$OUT/engine.log")")
 fi
 
+# ---- worker (no database of its own: its tests fake the control plane; the one real-Postgres
+# test opts in with BOSS_RUN_WORKER_ACK_TEST=1). `boss_worker` is importable both ways.
+if [ -s "$OUT/worker.files" ]; then
+  t0=$(secs)
+  BOSS_TEST_DATABASE_URL="postgresql+psycopg://$PGU:$PW@$PGHOSTNAME:$PORT/$DBP" PYTHONPATH=.:engine:apps/worker \
+    perl -e 'alarm shift; exec @ARGV' "$RUN_TIMEOUT" python3 -m pytest -q -p no:cacheprovider -W ignore $(cat "$OUT/worker.files") -rfE > "$OUT/worker.log" 2>&1
+  summary+=("worker $(( $(secs) - t0 ))s: $(tail -1 "$OUT/worker.log")")
+fi
+
 # ---- api (sharded) and web (in parallel with it) ---------------------------------------------
 t0=$(secs)
 if [ -s "$OUT/api.files" ]; then
@@ -173,13 +185,13 @@ fi
 
 # ---- only NEW failures fail the gate ----------------------------------------------------------
 # Only real test ids (a log line such as "ERROR boss.api:main.py:1728" is not a failed test).
-cat "$OUT"/engine.log "$OUT"/api[0-9]*.log 2>/dev/null | grep -E "^(FAILED|ERROR) " | sed 's/ - .*//' | awk '{print $2}' \
+cat "$OUT"/engine.log "$OUT"/worker.log "$OUT"/api[0-9]*.log 2>/dev/null | grep -E "^(FAILED|ERROR) " | sed 's/ - .*//' | awk '{print $2}' \
   | grep -E '^(engine|apps)/' > "$OUT/failed.txt"
 grep -E "^ FAIL " "$OUT/web.log" 2>/dev/null | sed 's/^ FAIL  *//; s/ >.*//' >> "$OUT/failed.txt"
 # A pytest run that never printed its summary ("N passed in 12.3s") crashed or was killed: that
 # is a failure too, never a silent pass. "no tests ran" IS a summary, and it is a failure: an
 # empty file on the tier must not pass the gate (BOSSAPP-972).
-for log in "$OUT"/engine.log "$OUT"/api[0-9]*.log; do
+for log in "$OUT"/engine.log "$OUT"/worker.log "$OUT"/api[0-9]*.log; do
   [ -f "$log" ] || continue
   if grep -qE 'no tests ran.* in [0-9.]+s' "$log"; then
     echo "$(basename "$log" .log): no tests ran (see $log)" >> "$OUT/failed.txt"

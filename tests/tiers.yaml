@@ -81,6 +81,12 @@ P0:
     # that fails for users; each preview declaration kind is started for real
     - engine/tests/test_gate_tests_never_mock_the_last_mile.py
     - engine/tests/test_each_preview_kind_starts_for_real.py
+    # Small host, long queue (R3, BOSSAPP-1431): every time cap counts from when the work
+    # started, never its queue (deployments, investigations, step recovery, sandbox tasks, job
+    # leases, the self-fix's clock and budget hold), and a token, handle or hold that lapses
+    # mid-run says what lapsed and what to do
+    - engine/tests/test_every_time_cap_counts_from_when_work_started.py
+    - engine/tests/test_a_self_fix_keeps_its_clock_and_hold_through_a_long_queue.py
   api:
     - apps/api/tests/test_api_e2e_smoke.py
     # Sign-in, step-up, CSRF
@@ -109,12 +115,19 @@ P0:
     - apps/web/tests/a-press-is-sent-once.test.ts
     - apps/web/tests/a-workflow-is-started-once-per-press.test.ts
     - apps/web/tests/a-deploy-is-approved-once-and-opens-its-app.test.tsx
+  # The worker's lease loop (apps/worker/tests, run by no gate before R3): one lease per poll,
+  # a lease outlives a stopping worker, a clean stop hands its job back
+  worker:
+    - apps/worker/tests/test_a_failed_poll_never_leases_twice.py
+    - apps/worker/tests/test_a_leased_job_survives_the_worker_that_held_it_stopping.py
+    - apps/worker/tests/test_worker_stops_cleanly.py
   # Release steps: commands, not test files (scripts/test-tier.sh does not run them). Before a
-  # release: test-tier major + e2e-gate plumbing + e2e-gate engines + e2e-gate agent
-  # (docs/operations/TEST_TIERS.md).
+  # release: test-tier major + e2e-gate plumbing + e2e-gate engines + e2e-gate agent + a green
+  # enterprise lane (docs/operations/TEST_TIERS.md).
   release:
     - scripts/e2e-gate.sh plumbing
     - scripts/e2e-gate.sh engines
+    - scripts/enterprise-lane.sh
 
 P1:
   engine:
@@ -195,6 +208,9 @@ P1:
     # Multi-app projects (R4): New work, Change it and extend paths that build onto an app
     - engine/tests/test_a_build_step_can_extend_an_app.py
     - engine/tests/test_new_work_app_selection.py
+    # A 4-core / 8 GiB host under pressure (R3, BOSSAPP-1431): builds at once follow the box,
+    # job slots are their own setting, heavy builds back off, lowering capacity drains
+    - engine/tests/test_a_small_host_admits_by_its_room_and_backs_off.py
   api:
     # The harness score per change (BOSSAPP-959)
     - apps/api/tests/test_harness_score_api.py
@@ -271,3 +287,21 @@ P1:
     - apps/web/tests/the-app-drawer-shows-its-alerts.test.tsx
     - apps/web/tests/observability-alerts-shows-every-app.test.tsx
     - apps/web/tests/factory-app-menu-links-to-its-alerts.test.tsx
+  # The rest of the worker suite (R3): job slots on a small host drain, never kill; the
+  # stall clock, the ticks, the runtime ceiling, completion acks, credentials
+  worker:
+    - apps/worker/tests/test_a_busy_worker_is_not_a_stalled_host.py
+    - apps/worker/tests/test_a_crashed_step_is_reported_not_lost.py
+    - apps/worker/tests/test_a_missed_heartbeat_does_not_discard_the_build.py
+    - apps/worker/tests/test_a_refused_completion_does_not_hold_the_job.py
+    - apps/worker/tests/test_a_small_host_drains_job_slots_never_kills.py
+    - apps/worker/tests/test_a_waiting_stack_deploy_is_neither_completed_nor_failed.py
+    - apps/worker/tests/test_completion_ack_lifecycle.py
+    - apps/worker/tests/test_completion_ack_real_postgres.py
+    - apps/worker/tests/test_the_ambient_tick_runs_while_the_worker_is_busy.py
+    - apps/worker/tests/test_the_runtime_ceiling_never_drops_a_progressing_lease.py
+    - apps/worker/tests/test_the_subscription_keepalive_tick_runs_hourly.py
+    - apps/worker/tests/test_the_wake_tick_covers_every_live_project.py
+    - apps/worker/tests/test_watching_work_does_not_wait_for_idle.py
+    - apps/worker/tests/test_worker.py
+    - apps/worker/tests/test_worker_credentials.py

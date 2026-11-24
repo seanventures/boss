@@ -406,7 +406,20 @@ class MicroVMProvider:
                     "sandbox-service did not return a sandbox_task_id"
                 )
             self.last_sandbox_task_id = sid  # expose so the control plane can retain/inspect
-            deadline = time.monotonic() + timeout_s
+            # THE TIMEOUT COUNTS FROM WHEN THE TASK STARTS RUNNING (R3, BOSSAPP-1431). Time
+            # the sandbox-service keeps it `queued` (a busy small host) is waiting, bounded on
+            # its own and said as such: "did not finish within 1500s (last status=queued)"
+            # blamed a task that never ran.
+            # The guest's model and tool handles are minted with the submit body and live
+            # HANDLE_TTL_SECONDS, so queue + run must fit inside them (review of R3): a longer
+            # queue allowance would trade "timed out in the queue" for "handle_expired" mid-run.
+            from .streaming_model_gateway import HANDLE_TTL_SECONDS
+
+            queue_s = int(getattr(self.settings, "sandbox_queue_timeout_seconds", 0) or 2700)
+            queue_s = max(60, min(queue_s, HANDLE_TTL_SECONDS - timeout_s - 300))
+            submitted = time.monotonic()
+            deadline = submitted + queue_s
+            running_since = None
             while time.monotonic() < deadline:
                 time.sleep(poll)
                 try:
@@ -418,6 +431,9 @@ class MicroVMProvider:
                     ) from exc
                 pdata = pr.json()
                 last_status = pdata.get("status")
+                if running_since is None and str(last_status or "queued").lower() != "queued":
+                    running_since = time.monotonic()
+                    deadline = running_since + timeout_s
                 # EVERY terminal status ends the poll — the §2 contract's set
                 # (sandbox_contract.is_terminal), not a private subset of it.
                 # "cancelled" was missing here, so a cancelled task was polled
@@ -430,8 +446,17 @@ class MicroVMProvider:
             # keeps the rootfs (~2h) for inspection. See code_task_service.
 
         if data is None:
+            if running_since is None:
+                # Withdrawn, so it never starts later as a ghost run on the only slot.
+                self.release(sid)
+                raise RuntimeError(
+                    f"sandbox task {sid} never started: the sandbox-service kept it queued for "
+                    f"{queue_s}s (BOSS_SANDBOX_QUEUE_TIMEOUT_SECONDS) and BOSS withdrew it. The host "
+                    "has no free sandbox; free one, then retry the step"
+                )
             raise RuntimeError(
-                f"sandbox task {sid} did not finish within {timeout_s}s (last status={last_status})"
+                f"sandbox task {sid} did not finish within {timeout_s}s of starting "
+                f"(last status={last_status})"
             )
         if data.get("status") != "done":
             raise RuntimeError(data.get("error") or f"sandbox task {data.get('status')}")

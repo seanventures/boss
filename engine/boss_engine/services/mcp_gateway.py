@@ -1281,10 +1281,10 @@ class HostLane:
         if row is None:
             raise Refused(401, "unknown_handle")
         if row["revoked_at"] is not None:
-            raise Refused(401, "handle_revoked")
+            raise Refused(401, "handle_revoked", _lapsed_say("handle_revoked"))
         expires = row["expires_at"]
         if expires is not None and expires.timestamp() <= time.time():
-            raise Refused(401, "handle_expired")
+            raise Refused(401, "handle_expired", _lapsed_say("handle_expired"))
         if caller.org_id and row["org_id"] != caller.org_id:
             self._replay(connection, caller, row, "another_org")
         if row["vm_id"] is None and caller.vm_id:
@@ -1395,9 +1395,17 @@ class QueueSink(Sink):
 
 # ── HTTP ─────────────────────────────────────────────────────────────────────────────────────
 
+def _lapsed_say(reason: str) -> str:
+    from .lapsed import say
+
+    return say(reason)
+
+
 def _refusal(status: int, reason: str) -> bytes:
+    from .lapsed import say
+
     return json.dumps({"jsonrpc": "2.0", "id": None, "error": {
-        "code": -32001, "message": f"boss mcp gateway: {reason}"}}).encode()
+        "code": -32001, "message": f"boss mcp gateway: {say(reason)}"}}).encode()
 
 
 class _SseSink(Sink):

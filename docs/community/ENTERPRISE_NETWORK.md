@@ -137,6 +137,8 @@ Without it, plain http (previews, app sidecars, a model server on the LAN) never
 proxy.
 
 * Image builds get `HTTPS_PROXY`, `HTTP_PROXY` (when set) and `NO_PROXY` for every download step.
+  The build command itself (the `docker` client, which fetches registry tokens for BuildKit) gets
+  `HTTPS_PROXY` and `NO_PROXY` too: the Docker daemon's own proxy settings below do not cover it.
 * Every container gets them, with BOSS's own services (`api`, `egress`, `db` and the rest) and
   `localhost` always in `NO_PROXY`. Add internal hosts (a model server, a Git host) to
   `BOSS_UPSTREAM_NO_PROXY`: host names, `.domain` suffixes or CIDR ranges, comma-separated.

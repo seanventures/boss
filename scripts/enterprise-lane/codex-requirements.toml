@@ -1,0 +1,6 @@
+# A MANAGED Codex policy, as a ChatGPT Enterprise/Business workspace sets it: full access is
+# forbidden, so Codex must run inside its own sandbox (bubblewrap) to write. The lane puts this at
+# /etc/codex/requirements.toml in the api and worker containers (docs/community/ENGINE_SANDBOX.md,
+# "Managed engine policies").
+allowed_sandbox_modes = ["read-only", "workspace-write"]
+allowed_approval_policies = ["untrusted", "on-request", "never"]

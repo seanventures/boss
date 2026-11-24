@@ -319,7 +319,13 @@ def _refusal(provider: str, status: int, reason: str) -> bytes:
     kind = "authentication_error" if status == 401 else (
         "permission_error" if status == 403 else "not_found_error")
     return json.dumps({"type": "error", "error": {
-        "type": kind, "message": f"boss model proxy: {reason}"}}).encode()
+        "type": kind, "message": f"boss model proxy: {_say(reason)}"}}).encode()
+
+
+def _say(reason: str) -> str:
+    from .lapsed import say
+
+    return say(reason)
 
 
 def _handler_for(proxy: ModelProxy):
