@@ -39,10 +39,11 @@ BUDGETS: dict[str, int] = {
     "mcp-tools": int(1.6 * GB),
     "web": int(2.5 * GB),
 }
-#: What a first install needs free on Docker's disk, measured on the enterprise lane: the peak
-#: during the build (images + one family's build cache) plus room to start. install.sh's
+#: What a first install needs free on Docker's disk, measured on the enterprise lane (2026-11-24:
+#: 24 GB free before, 9.1 GB at the lowest, so 15 GB at the peak: the images plus one family's
+#: build cache) plus the 6 GB the e2e gate needs after it. install.sh's
 #: BOSS_INSTALL_NEEDS_GB default is this number (test_a_first_install_fits_a_30gb_box).
-FIRST_INSTALL_NEEDS_GB = 25
+FIRST_INSTALL_NEEDS_GB = 21
 #: The opt-in security toolchain (Semgrep, OSV-Scanner, ...): allowed on top of the full images.
 EXTRA_FOR_SECURITY = int(1.5 * GB)
 FULL_IMAGES = ("api", "worker", "runner")

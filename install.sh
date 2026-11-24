@@ -729,7 +729,7 @@ fi
 ui_info "About 100 GB of working capacity is recommended for images, cache and agent work (the images include Java and Go by default); actual needs vary."
 # WHAT THE FIRST BUILD NEEDS (BOSSAPP-1447): the images and the build cache while building, then
 # room to work. Said as a number before the build, not found out as "no space left" during it.
-BOSS_INSTALL_NEEDS_GB="${BOSS_INSTALL_NEEDS_GB:-25}"
+BOSS_INSTALL_NEEDS_GB="${BOSS_INSTALL_NEEDS_GB:-21}"
 if [[ "$_docker_root" == /* && -d "$_docker_root" && -n "$_docker_os" && "$_docker_os" != *"Docker Desktop"* ]]; then
   _docker_free_gb=""
   [[ ! "${_last_free_kb:-}" =~ ^[0-9]+$ ]] || _docker_free_gb=$(( _last_free_kb / 1048576 ))
