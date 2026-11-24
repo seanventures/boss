@@ -248,8 +248,25 @@ def test_an_upstream_refusal_is_reported_as_the_proxy_s_not_the_registry_s(monke
     monkeypatch.setenv("BOSS_UPSTREAM_PROXY", f"http://proxy.example.com:{proxy.port}")
     answer = _serve_one(b"CONNECT pkg.example.com:443 HTTP/1.1\r\n\r\n")
     status = answer.split(b"\r\n", 1)[0].decode()
-    assert status.startswith("HTTP/1.1 502 BOSS egress: the upstream proxy (BOSS_UPSTREAM_PROXY) refused")
-    assert "407" in status
+    assert status.startswith("HTTP/1.1 502 BOSS egress: your company proxy (BOSS_UPSTREAM_PROXY) "
+                             "refused pkg.example.com:443 (HTTP/1.1 407")
+    # What to do, for a proxy that wants a login (BOSSAPP-1436).
+    assert "local authenticating proxy" in status and "boss upgrade" in status
+
+
+def test_an_upstream_refusal_of_a_host_says_who_allows_it_and_the_setting(monkeypatch):
+    proxy = _FakeProxy(b"HTTP/1.1 403 Forbidden\r\n\r\n")
+    _unresolvable(monkeypatch, "pkg.example.com")
+    monkeypatch.setenv("BOSS_EGRESS_CONNECT_ALLOW", "pkg.example.com")
+    monkeypatch.setenv("BOSS_UPSTREAM_PROXY", f"http://proxy.example.com:{proxy.port}")
+    status = _serve_one(b"CONNECT pkg.example.com:443 HTTP/1.1\r\n\r\n").split(b"\r\n", 1)[0].decode()
+    assert "refused pkg.example.com:443 (HTTP/1.1 403 Forbidden)" in status
+    assert "Ask IT to allow it" in status and "BOSS_UPSTREAM_NO_PROXY" in status
+    # The engine reads the same words back into the card (network_refusal).
+    from boss_engine.services import network_refusal
+
+    got = network_refusal.explain(status)
+    assert got and got["kind"] == "company_proxy" and got["host"] == "pkg.example.com"
 
 
 def test_no_proxy_hosts_are_dialled_directly_and_unresolvable_ones_are_named(monkeypatch):

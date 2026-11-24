@@ -315,7 +315,9 @@ fi
 # ENGINE INNER-SANDBOX SUPPORT (docs/community/ENGINE_SANDBOX.md), only when .env opts in: the
 # containers must have been created with it, run under the AppArmor profile when asked for (the
 # label proves the profile is loaded on the Docker host), and Codex's own sandbox must start in
-# the worker. The failing layer is named, with its fix.
+# the API container, where builds start it (through boss-sandbox-exec, which only the api and
+# runner containers carry: probed in the worker, the launcher was always "unavailable" — the
+# enterprise lane, 2026-11-23). The failing layer is named, with its fix.
 engine_mode="$(env_value BOSS_ENGINE_INNER_SANDBOX | tr -d "\"' " | tr '[:upper:]' '[:lower:]')"
 case "$engine_mode" in
   ""|0|off|false|no|none) engine_mode="" ;;
@@ -324,11 +326,11 @@ esac
 if [ -n "$engine_mode" ] && [ "${#DOCKER[@]}" -gt 0 ]; then
   case "$engine_mode" in
     seccomp|seccomp+apparmor)
-      _inner="$("${DOCKER[@]}" exec -u boss "${STACK}-worker-1" python -m boss_engine.services.engine_inner_sandbox --expect "$engine_mode" 2>/dev/null | tail -n 1)"
+      _inner="$("${DOCKER[@]}" exec -u boss "${STACK}-api-1" python -m boss_engine.services.engine_inner_sandbox --expect "$engine_mode" 2>/dev/null | tail -n 1)"
       case "$_inner" in
         ok\ *) ok "engine sandbox: ${_inner#ok }" ;;
         bad\ *) bad "engine sandbox: ${_inner#bad }" engine_sandbox ;;
-        *) bad "engine sandbox: the worker could not run the check (is it running? ${BOSS_COMMAND:-boss} logs worker)" engine_sandbox ;;
+        *) bad "engine sandbox: the API container could not run the check (is it running? ${BOSS_COMMAND:-boss} logs api)" engine_sandbox ;;
       esac ;;
     *) bad "engine sandbox: BOSS_ENGINE_INNER_SANDBOX=$engine_mode in .env is not one of: seccomp, seccomp+apparmor" engine_sandbox ;;
   esac

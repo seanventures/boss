@@ -117,6 +117,15 @@ EXITS: dict[str, Exit] = {
     "person_cause:registry_access": E("failure_owner._PERSON_RULES", False,
                                       "the organisation's registry credential: " + _CRED),
     "person_cause:connector_login": E("failure_owner._PERSON_RULES", False, _CRED),
+    "person_cause:company_ca": E("failure_owner._PERSON_RULES", False,
+                                 "the company's root CA goes in the BOSS host's .env "
+                                 "(BOSS_EXTRA_CA_FILE); BOSS never turns TLS checks off"),
+    "person_cause:egress_fence": E("failure_owner._PERSON_RULES", False,
+                                   "widening the sandbox fence (BOSS_EGRESS_CONNECT_ALLOW) is a "
+                                   "security decision for an operator, never an agent"),
+    "person_cause:company_proxy": E("failure_owner._PERSON_RULES", False,
+                                    "the company proxy belongs to IT; BOSS cannot change what "
+                                    "it allows"),
     "person_cause:model_login": E("failure_owner._PERSON_RULES", False, _CRED),
     "person_cause:grant": E("failure_owner._PERSON_RULES", True,
                             "AGENT_REMEDIES: the agent continues with the starter's authority; "
