@@ -31,6 +31,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ..config import get_settings
+from ..db import TransactionLost, release_failed_savepoint, rollback_quietly, transaction_lost
 from . import (agent_acts, change_record, deploy_repair, step_agents,
                self_fix, step_recovery, workflows)
 from . import workflow_custom_steps as custom_steps
@@ -936,8 +937,8 @@ def deploy_step_inputs(connection: Connection, spec_step: dict[str, Any],
         inputs = _resolve_inputs(binding.get("inputs") or {}, scratch,
                                  optional=frozenset(capability.optional_inputs or ()))
         inputs = _fill_optional_from_run_input(capability, inputs, scratch)
-    except Exception:  # noqa: BLE001 — unresolvable now
-        point.rollback()
+    except Exception as failed:  # noqa: BLE001 — unresolvable now
+        release_failed_savepoint(point, failed, connection=connection)
         return None
     point.commit()
     return inputs
@@ -973,8 +974,8 @@ def stack_target_for_step(
 
         target = stack_target_for_deploy(connection, project_id, inputs,
                                          default_owner=default_owner)
-    except Exception:  # noqa: BLE001 — unresolvable now means "not known to be a stack deploy"
-        point.rollback()
+    except Exception as failed:  # noqa: BLE001 — unresolvable now means "not known to be a stack deploy"
+        release_failed_savepoint(point, failed, connection=connection)
         return None
     point.commit()
     return target
@@ -1014,8 +1015,8 @@ def stack_deploy_for_step(
         point = connection.begin_nested()
         try:
             deployment = get_stack_deployment(connection, deployment_id)
-        except Exception:  # noqa: BLE001 — a page must render without it
-            point.rollback()
+        except Exception as failed:  # noqa: BLE001 — a page must render without it
+            release_failed_savepoint(point, failed, connection=connection)
             deployment = None
         else:
             point.commit()
@@ -3303,7 +3304,7 @@ def _look_at_ci(connection: Connection, project_id: str, wait_id: str) -> None:
         ci_gate.poll_wait(connection, wait_id, reader)
         point.commit()
     except Exception as error:  # noqa: BLE001 — looked at again next tick; the deadline holds
-        point.rollback()
+        release_failed_savepoint(point, error, connection=connection)
         log.warning("cannot look at CI wait %s: %s", wait_id, error)
 
 
@@ -3598,7 +3599,7 @@ def _look_at_recovery(connection: Connection, check_id: str) -> None:
         incident_response.look_at_recovery(connection, check_id)
         point.commit()
     except Exception as error:  # noqa: BLE001 — looked at again next tick; the deadline holds
-        point.rollback()
+        release_failed_savepoint(point, error, connection=connection)
         log.warning("cannot look at recovery check %s: %s", check_id, error)
 
 
@@ -5595,7 +5596,7 @@ def _revive_after_boss_update(connection: Connection, *, project_id: str, run_id
             note="BOSS was updated since this step failed; trying it again by itself.")
         point.commit()
     except Exception as error:  # noqa: BLE001 — a person's Retry still works
-        point.rollback()
+        release_failed_savepoint(point, error, connection=connection)
         log.info("step %s/%s not revived after the update: %s", run_id, step["step_id"], error)
         return []
     emit_event(connection, project_id, step_recovery.RESUMED_EVENT, "boss", "workflow_run",
@@ -7455,7 +7456,7 @@ def _evidence_quietly(connection: Connection, kind: str, awaited_id: str) -> dic
     try:
         evidence = _terminal_evidence(connection, kind, awaited_id)
     except Exception as error:  # noqa: BLE001
-        point.rollback()
+        release_failed_savepoint(point, error, connection=connection)
         log.warning("cannot read what %s %s reached: %s", kind, awaited_id, error)
         return {}
     point.commit()
@@ -7503,8 +7504,8 @@ def _why_it_ended(connection: Connection, table: str, awaited_id: str) -> str:
         ).mappings().first()
         reason = str((row or {}).get("error") or "").strip()
         point.commit()
-    except Exception:  # noqa: BLE001 — a table without an `error` column is not fatal
-        point.rollback()
+    except Exception as failed:  # noqa: BLE001 — a table without an `error` column is not fatal
+        release_failed_savepoint(point, failed, connection=connection)
         reason = ""
 
     # "No job remains" describes the SWEEP, not the failure. The job it is talking about
@@ -7531,8 +7532,8 @@ def _why_it_ended(connection: Connection, table: str, awaited_id: str) -> str:
                 if detail:
                     reason = f"{kind_of}: {detail}" if kind_of else detail
             point.commit()
-        except Exception:  # noqa: BLE001 — the status is still reportable without this
-            point.rollback()
+        except Exception as failed:  # noqa: BLE001 — the status is still reportable without this
+            release_failed_savepoint(point, failed, connection=connection)
     return _without_internal_urls(reason)[:400]
 
 
@@ -7969,8 +7970,8 @@ def _gate_subject(
             point = connection.begin_nested()
             try:
                 undeclared = undeclared_deploy_refusal(connection, str(ready["run_id"]))
-            except Exception:  # noqa: BLE001 — unknown: the gate opens as it always did
-                point.rollback()
+            except Exception as failed:  # noqa: BLE001 — unknown: the gate opens as it always did
+                release_failed_savepoint(point, failed, connection=connection)
                 undeclared = None
             else:
                 point.commit()
@@ -8117,7 +8118,7 @@ def _dev_deploy_needs_no_gate(connection: Connection, project_id: str, spec_step
                                 **({"target_id": target_id} if target_id else {})},
                 found=found)
     except Exception as error:  # noqa: BLE001 — unknown: the gate opens as it always did
-        point.rollback()
+        release_failed_savepoint(point, error, connection=connection)
         log.warning("dev autonomy could not judge the %s gate: %s", key, error)
         return False
     point.commit()
@@ -8453,7 +8454,7 @@ def _release_card(connection: Connection, project_id: str, run_id: str,
             connection, _settings(), project_id, build_run_id=build, serving_sha=serving,
             workflow_run_id=run_id)
     except Exception as error:  # noqa: BLE001 — logged; the card then carries no list
-        point.rollback()
+        release_failed_savepoint(point, error, connection=connection)
         log.warning("release card for %s: %s", run_id, error)
         return None
     point.commit()
@@ -8790,10 +8791,7 @@ def tick(
                 connection, project_id=project_id, run_id=run["id"], worker_id=worker_id
             ))
         except Exception as error:  # noqa: BLE001 — a revival must never break the tick
-            try:
-                savepoint.rollback()
-            except Exception:  # noqa: BLE001
-                pass
+            release_failed_savepoint(savepoint, error, connection=connection)
             log.warning("could not revive %s: %s", run["id"], error)
         else:
             savepoint.commit()
@@ -8828,7 +8826,22 @@ def tick_per_step(
     messages, builds and PRs wherever they were not keyed. Here every run's share of the tick
     -- at most one claimed step and its recorded outcome -- is its own transaction, committed
     before the next run is touched. A step that dies rolls back alone; the steps before it
-    stay done and are never re-run. `begin` opens a transaction (default `engine.begin`)."""
+    stay done and are never re-run. `begin` opens a transaction (default `engine.begin`).
+
+    BACKGROUND WORK (db.background, BOSSAPP-1456): every transaction this tick opens — its own
+    and any a step opens on another connection — waits a bounded time for a lock, is ended by
+    Postgres when it idles past the background limit, and appends its audit events at its commit,
+    so a tick never holds the org's audit-chain lock that every sign-in takes. A run whose
+    transaction was lost is rolled back whole and its connection given back (db.TransactionLost)."""
+    from .. import db as _db
+
+    with _db.background():
+        return _tick_per_step(engine, ctx, project_id=project_id, worker_id=worker_id,
+                              limit=limit, begin=begin)
+
+
+def _tick_per_step(engine: Any, ctx: Any, *, project_id: str, worker_id: str, limit: int,
+                   begin: Optional[Callable[[], Any]]) -> dict[str, Any]:
     from . import projects_archive
 
     open_tx = begin or engine.begin
@@ -8857,10 +8870,21 @@ def tick_per_step(
         if len(performed) >= limit:
             break
         mine: list[dict[str, Any]] = []
+        trace: dict[str, Any] = {}
         try:
             with open_tx() as connection:
                 _advance_one_run(connection, ctx, run, project_id=project_id,
-                                 worker_id=worker_id, performed=mine)
+                                 worker_id=worker_id, performed=mine, trace=trace)
+        except TransactionLost as lost:
+            # The whole transaction is rolled back and its connection returned (the `with` above
+            # has ended it), so nothing this run did is left holding a lock. Said plainly, once.
+            log.warning("capability runner rolled back run %s: %s", run["id"], lost)
+            mine = [{"run_id": run["id"], "outcome": "rolled_back", "error": str(lost),
+                     "cause": f"{type(lost.cause).__name__}: {lost.cause}"}]
+            stopped = _count_lost_transaction(open_tx, project_id=project_id, worker_id=worker_id,
+                                              step_run_id=trace.get("step_run_id"), lost=lost)
+            if stopped:
+                mine[0].update(outcome="failed", error=stopped)
         except Exception as error:  # noqa: BLE001 — this run's step rolls back, alone
             log.warning("capability runner rolled back run %s (its step only): %s: %s",
                         run["id"], type(error).__name__, error)
@@ -8870,8 +8894,64 @@ def tick_per_step(
     return {"project_id": project_id, "performed": performed, "count": len(performed)}
 
 
+#: A step whose transaction is lost this many times in a row is not run again by itself: the
+#: cause repeats (it idles past the limit every time, it ends its own session), and running it
+#: again would repeat its messages, builds and model spend for ever, with nobody told.
+LOST_TRANSACTION_LIMIT = 3
+LOST_TRANSACTION_KEY = "transactions_lost"
+
+
+def lost_transaction_words(times: int) -> tuple[str, str]:
+    """(what, action) for a step stopped after its transaction was lost `times` times."""
+    return (f"This step's database transaction was lost {times} times in a row (its session was "
+            "ended while the step ran), so BOSS stopped running it again by itself.",
+            "Press Retry on this step once the step can finish its work in under five minutes; "
+            "Activity shows each attempt.")
+
+
+def _count_lost_transaction(open_tx: Callable[[], Any], *, project_id: str, worker_id: str,
+                            step_run_id: Optional[str], lost: TransactionLost) -> Optional[str]:
+    """Count one lost transaction against the step the run had claimed (its claim was rolled
+    back: it is `ready` again). At LOST_TRANSACTION_LIMIT the step fails, not retryable, with
+    words a person can act on; returns that sentence. Never raises."""
+    if not step_run_id:
+        return None
+    try:
+        with open_tx() as connection:
+            row = connection.execute(text(
+                "SELECT status, COALESCE((binding_snapshot->>:k)::int, 0) AS n "
+                "FROM workflow_step_runs WHERE id = :i AND project_id = :p FOR UPDATE"),
+                {"k": LOST_TRANSACTION_KEY, "i": step_run_id, "p": project_id}).mappings().first()
+            if row is None or row["status"] != "ready":
+                return None
+            times = int(row["n"]) + 1
+            connection.execute(text(
+                "UPDATE workflow_step_runs SET binding_snapshot = COALESCE(binding_snapshot, "
+                "'{}'::jsonb) || jsonb_build_object(CAST(:k AS text), :n) WHERE id = :i"),
+                {"k": LOST_TRANSACTION_KEY, "n": times, "i": step_run_id})
+            if times < LOST_TRANSACTION_LIMIT:
+                return None
+            what, action = lost_transaction_words(times)
+            sentence = f"{what} {action}"
+            # Failed the one way a step is failed (its record, its run, its card): leased to this
+            # worker for the instant fail_step needs, never executed.
+            connection.execute(text(
+                "UPDATE workflow_step_runs SET status = 'leased', lease_owner = :w, "
+                "lease_expires_at = now() + interval '1 minute', heartbeat_at = now(), "
+                "binding_snapshot = binding_snapshot - CAST(:k AS text) WHERE id = :i"),
+                {"w": worker_id, "i": step_run_id, "k": LOST_TRANSACTION_KEY})
+            workflows.fail_step(connection, project_id=project_id, step_run_id=step_run_id,
+                                worker_id=worker_id, error=sentence, retryable=False)
+            return sentence
+    except Exception:  # noqa: BLE001 — counting must never break the tick; the next loss counts
+        log.warning("BOSS could not count a lost transaction against step %s, so it runs again "
+                    "on the next tick. Nothing to do — the next loss is counted.", step_run_id,
+                    exc_info=True)
+        return None
+
+
 def _advance_one_run(connection: Connection, ctx: Any, run: Any, *, project_id: str,
-                     worker_id: str, performed: list) -> None:
+                     worker_id: str, performed: list, trace: Optional[dict] = None) -> None:
     """One run's share of a tick: resume finished work, release waits, open gates, then claim
     and execute at most ONE step and record its outcome. Its work is a SAVEPOINT of
     `connection`; `tick_per_step` gives each call a transaction of its own (AP-P0)."""
@@ -8990,10 +9070,7 @@ def _advance_one_run(connection: Connection, ctx: Any, run: Any, *, project_id: 
                          "capability": subject["key"], "outcome": "gate_opened"}
                     )
             except Exception as error:  # noqa: BLE001 — one gate must not stop the run
-                try:
-                    gate_point.rollback()
-                except Exception:  # noqa: BLE001
-                    pass
+                release_failed_savepoint(gate_point, error, connection=connection)
                 log.warning("could not %s: %s: %s",
                             phase, type(error).__name__, error)
                 performed.append({
@@ -9019,6 +9096,8 @@ def _advance_one_run(connection: Connection, ctx: Any, run: Any, *, project_id: 
         )
         if claimed is None:
             return
+        if trace is not None:
+            trace["step_run_id"] = claimed["id"]
         # `external_agent` (KG P6a) too: a bank's agent's step is an outbound call this
         # runner makes. Left out, it was leased, skipped "for another claimant" that does not
         # exist, and timed out on every run (2026-10-31).
@@ -9084,11 +9163,13 @@ def _advance_one_run(connection: Connection, ctx: Any, run: Any, *, project_id: 
                                 STACK_GATE_TARGET),
                         },
                     )
-            except BaseException:
-                try:
-                    step_point.rollback()
-                except Exception:  # noqa: BLE001 — already gone; the raise below matters
-                    pass
+            except BaseException as error:
+                if isinstance(error, Exception):
+                    # A step whose transaction is gone raises TransactionLost here: its run's
+                    # whole transaction rolls back (tick_per_step), never recorded on a dead one.
+                    release_failed_savepoint(step_point, error, connection=connection)
+                else:
+                    rollback_quietly(step_point)
                 raise
             else:
                 step_point.commit()
@@ -9184,6 +9265,8 @@ def _advance_one_run(connection: Connection, ctx: Any, run: Any, *, project_id: 
                     "run_id": run_id, "step_id": claimed["step_id"],
                     "capability": output.get("capability"), "outcome": "succeeded",
                 })
+        except TransactionLost:
+            raise                             # nothing can be recorded on it
         except CapabilityExecutionError as error:
             agent_acts.note_ran_as(claimed["id"], step_agents.last_resolved())
             if step_recovery.authority_message(str(error)):
@@ -9238,6 +9321,10 @@ def _advance_one_run(connection: Connection, ctx: Any, run: Any, *, project_id: 
                     "outcome": "failed", "error": str(error),
                 })
         except Exception as error:  # noqa: BLE001
+            if transaction_lost(connection, error):
+                # The step's own work ended the session (or it was ended under it): there is no
+                # transaction left to fail the step in. Its run rolls back whole (BOSSAPP-1456).
+                raise TransactionLost(error) from error
             # A CLAIMED STEP MUST NOT BE STRANDED BY A SURPRISE.
             #
             # Only CapabilityExecutionError released the lease. Anything else — a KeyError,
@@ -9271,10 +9358,7 @@ def _advance_one_run(connection: Connection, ctx: Any, run: Any, *, project_id: 
     except Exception as error:                 # noqa: BLE001 - one run must not stop the rest
         # ROLL BACK TO THE SAVEPOINT FIRST. Until that happens the connection is unusable,
         # so even the logging below would fail if it touched the database.
-        try:
-            savepoint.rollback()
-        except Exception:  # noqa: BLE001 — already rolled back, or the connection is gone
-            pass
+        release_failed_savepoint(savepoint, error, connection=connection)
         # The TYPE, always. `(non-fatal): 'deploy'` is a KeyError wearing a disguise: it
         # names neither what went wrong nor where, and it cost a day of guessing.
         log.warning(

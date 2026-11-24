@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import weakref
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Optional
@@ -783,3 +784,279 @@ def begin(engine: Optional[Engine] = None):
             # Limit: across such steps the stack holds only within one step; a later step's copy
             # never saw the push, so open_transactions() does not list the streamed transaction.
             _OPEN_TRANSACTIONS.set(tuple(c for c in _OPEN_TRANSACTIONS.get() if c is not connection))
+
+
+# ── BACKGROUND WORK NEVER STRANDS A TRANSACTION OR HOLDS UP A SIGN-IN (BOSSAPP-1456) ───────────
+#
+# 2026-11-24, the laptop: a capability-runner tick's connection sat `idle in transaction` for
+# minutes holding row locks on identity_delegation_grants. A second session waited on them while
+# holding the org's audit-chain lock (audit.record's pg_advisory_xact_lock), the first sign-in
+# waited on that lock while holding its rate-limit row, and every later sign-in queued on the row:
+# POST /v1/auth/mfa/totp never answered until the backend was killed by hand. The tick's next
+# statement then raised PendingRollbackError, which the runner logged as "skipped run (non-fatal)".
+#
+# Three mechanisms, in one place:
+#   * `release_failed_savepoint` / `TransactionLost`: a handler that rolls a savepoint back and
+#     carries on first asks whether the transaction CAN carry on. When it cannot (the session was
+#     ended, the connection invalidated, the savepoint itself would not roll back) it raises, so
+#     the OUTER transaction is rolled back whole and its connection given back to the pool —
+#     never kept, poisoned, for the rest of a tick;
+#   * `background()`: every transaction opened inside it, on any engine and any connection, waits
+#     at most BACKGROUND_LOCK_TIMEOUT_SECONDS for a lock and is ended by Postgres after
+#     BACKGROUND_IDLE_IN_TRANSACTION_SECONDS idle. A background wait is bounded; a request's
+#     connections are not changed;
+#   * `at_commit`: work registered on a transaction runs right before it commits (dropped when the
+#     transaction, or the savepoint it was registered in, rolls back). audit.record uses it in
+#     background work, so a tick never holds the org's audit-chain lock — which every sign-in
+#     takes — while it thinks, waits or idles: only for the instant of its commit.
+
+
+#: How long a background transaction waits for a lock before its statement fails (the tick then
+#: rolls back that run's step and runs it again on the next tick).
+BACKGROUND_LOCK_TIMEOUT_SECONDS = _env_int("BOSS_BACKGROUND_LOCK_TIMEOUT_SECONDS", 30)
+#: How long a background transaction may sit idle before Postgres ends its session. Unset: the
+#: API's own limit (BOSS_API_DB_IDLE_IN_TRANSACTION_SECONDS, 300) — a step that asks a model thinks
+#: for minutes between two statements — applied on EVERY engine background work opens, so an
+#: abandoned transaction never outlives the tick that opened it by more than that.
+BACKGROUND_IDLE_IN_TRANSACTION_SECONDS: Optional[int] = (
+    _env_int("BOSS_BACKGROUND_IDLE_IN_TRANSACTION_SECONDS", 0)
+    if __import__("os").environ.get("BOSS_BACKGROUND_IDLE_IN_TRANSACTION_SECONDS") else None)
+
+_BACKGROUND: ContextVar[bool] = ContextVar("boss_background_work", default=False)
+
+
+class TransactionLost(RuntimeError):
+    """The transaction a piece of work ran in cannot continue: roll it back whole, never carry on."""
+
+    WHAT = ("The database connection this work ran on was lost in the middle of its transaction, "
+            "so BOSS rolled back everything that transaction had done.")
+    #: What to do, by who is doing the work: a tick retries by itself, a request is sent again.
+    ACTION = "Nothing to do — it runs again by itself on the next tick."
+    REQUEST_ACTION = ("Press the same button again on this card or page — nothing from the first "
+                      "attempt was saved.")
+
+    def __init__(self, error: BaseException):
+        self.cause = error
+        action = self.ACTION if in_background() else self.REQUEST_ACTION
+        super().__init__(f"{self.WHAT} {action} (`{type(error).__name__}`)")
+
+
+def _aborted(connection: object) -> bool:
+    """True when the database transaction under `connection` is in the failed state (every
+    statement until a rollback raises InFailedSqlTransaction)."""
+    try:
+        raw = connection.connection.dbapi_connection   # type: ignore[attr-defined]
+        status = raw.info.transaction_status
+        import psycopg
+
+        return status == psycopg.pq.TransactionStatus.INERROR
+    except Exception:  # noqa: BLE001 — not psycopg, or no connection to ask: not known aborted
+        return False
+
+
+def transaction_lost(connection: object, error: Optional[BaseException] = None) -> bool:
+    """True when `connection`'s transaction cannot carry on after `error`: SQLAlchemy is waiting
+    for a full rollback (PendingRollbackError), or the connection was invalidated (its session was
+    ended, a disconnect) or closed."""
+    from sqlalchemy.exc import PendingRollbackError
+
+    if isinstance(error, (PendingRollbackError, TransactionLost)):
+        return True
+    if getattr(error, "connection_invalidated", False):
+        return True
+    try:
+        return bool(getattr(connection, "invalidated", False) or getattr(connection, "closed", False))
+    except Exception:  # noqa: BLE001 — a connection that cannot even say is gone
+        return True
+
+
+def release_failed_savepoint(savepoint: object, error: BaseException, *, connection: object) -> None:
+    """Roll back a failed piece of work's savepoint so its transaction can carry on — or raise
+    TransactionLost when it cannot, so the caller's transaction is rolled back whole and its
+    connection given back. Every handler that catches a failure inside a savepoint and goes on
+    (one run of a tick, one gate, one ledger write) calls this instead of a bare rollback."""
+    if isinstance(error, TransactionLost):
+        rollback_quietly(savepoint)
+        raise error
+    if transaction_lost(connection, error):
+        rollback_quietly(savepoint)
+        raise TransactionLost(error) from error
+    try:
+        if getattr(savepoint, "is_active", True):
+            savepoint.rollback()   # type: ignore[attr-defined]
+        elif _aborted(connection):
+            # Its RELEASE failed (`commit()` inside the try): SQLAlchemy marked it inactive and a
+            # rollback() sends nothing, while the database transaction stays aborted.
+            _rollback_to(connection, savepoint)
+    except Exception as failed:  # noqa: BLE001 — the savepoint would not roll back: nor will it
+        raise TransactionLost(failed) from error
+    if transaction_lost(connection) or _aborted(connection):
+        raise TransactionLost(error) from error
+
+
+def _rollback_to(connection: object, savepoint: object) -> None:
+    name = str(getattr(savepoint, "_savepoint", "") or "")
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+        raise RuntimeError("no savepoint name to roll back to")
+    deactivate = getattr(savepoint, "_deactivate_from_connection", None)
+    if callable(deactivate):
+        deactivate(warn=False)     # until then SQLAlchemy refuses every statement on it
+    connection.exec_driver_sql(f"ROLLBACK TO SAVEPOINT {name}")   # type: ignore[attr-defined]
+    _drop_registered_in(connection, name)
+
+
+def rollback_quietly(savepoint: object) -> None:
+    """Roll a savepoint back when it is still open, ignoring a failure: for a handler that is about
+    to re-raise (its caller rolls the whole transaction back) or a KeyboardInterrupt on its way out."""
+    import warnings
+
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")   # "already deassociated": a lost one, as expected
+            if getattr(savepoint, "is_active", True):
+                savepoint.rollback()   # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001 — the outer rollback is the one that matters
+        pass
+
+
+@contextmanager
+def background():
+    """Mark the work inside as background work (a tick, a sweep): see the block comment above."""
+    token = _BACKGROUND.set(True)
+    try:
+        yield
+    finally:
+        _BACKGROUND.reset(token)
+
+
+def in_background() -> bool:
+    return _BACKGROUND.get()
+
+
+def _idle_seconds() -> int:
+    if BACKGROUND_IDLE_IN_TRANSACTION_SECONDS is not None:
+        return int(BACKGROUND_IDLE_IN_TRANSACTION_SECONDS)
+    try:
+        return int(get_settings().api_db_idle_in_transaction_seconds)
+    except Exception:  # noqa: BLE001 — settings unreadable: the shipped default
+        return 300
+
+
+def background_limits_sql() -> list[str]:
+    """Pure: the statement every background transaction starts with. Transaction-local
+    (`set_config(..., true)`), and it only ever TIGHTENS: a session that already has a lower limit
+    (one a test or an operator set) keeps it; one with none (0) gets ours."""
+    limits = [(name, int(seconds) * 1000) for name, seconds in (
+        ("lock_timeout", BACKGROUND_LOCK_TIMEOUT_SECONDS),
+        ("idle_in_transaction_session_timeout", _idle_seconds()),
+    ) if int(seconds) > 0]
+    if not limits:
+        return []
+    wanted = ", ".join(f"('{name}', {ms})" for name, ms in limits)
+    return [
+        "SELECT set_config(s.name, (CASE WHEN s.setting::bigint = 0 THEN w.ms "
+        "ELSE LEAST(s.setting::bigint, w.ms) END)::text, true) "
+        f"FROM pg_settings s JOIN (VALUES {wanted}) AS w(name, ms) ON w.name = s.name"
+    ]
+
+
+#: Per open transaction (keyed by its Connection): the callables `at_commit` registered, each
+#: with the names of the savepoints open when it was registered. A savepoint that rolls back
+#: drops exactly what was registered inside it, whatever order savepoints close in (savepoint
+#: names are unique per Connection, so a name is never reused for another savepoint).
+_AT_COMMIT: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+
+def _open_savepoints(connection: object) -> frozenset:
+    names = []
+    nested = getattr(connection, "_nested_transaction", None)
+    while nested is not None:
+        names.append(getattr(nested, "_savepoint", None))
+        nested = getattr(nested, "_previous_nested", None)
+    return frozenset(n for n in names if n)
+
+
+def at_commit(connection: object, fn) -> None:
+    """Run `fn(connection)` right before `connection`'s transaction commits, inside it. Dropped
+    when the transaction — or a savepoint open now — rolls back. A failure in `fn` fails the
+    commit, and the database transaction is rolled back with it."""
+    _AT_COMMIT.setdefault(connection, []).append((_open_savepoints(connection), fn))
+
+
+def _drop_registered_in(conn, name: str) -> None:  # noqa: ANN001
+    pending = _AT_COMMIT.get(conn)
+    if pending:
+        pending[:] = [(names, fn) for names, fn in pending if name not in names]
+
+
+def _on_begin(conn) -> None:  # noqa: ANN001
+    if not _BACKGROUND.get() or conn.dialect.name != "postgresql":
+        return
+    statements = background_limits_sql()
+    if not statements:
+        return
+    raw = None
+    try:
+        raw = conn.connection.dbapi_connection
+        if getattr(raw, "autocommit", False):
+            return
+        cursor = raw.cursor()
+        try:
+            for statement in statements:
+                cursor.execute(statement)
+        finally:
+            cursor.close()
+    except Exception:  # noqa: BLE001 — the limits are a safety net; the work itself goes on
+        try:
+            if raw is not None:
+                raw.rollback()      # a failed statement must not leave the transaction aborted
+        except Exception:  # noqa: BLE001
+            pass
+        import logging
+
+        logging.getLogger("boss.db").warning(
+            "BOSS could not set the background lock and idle limits on a transaction, so it runs "
+            "without them. Nothing to do — the next transaction sets them again.", exc_info=True)
+
+
+def _on_rollback_savepoint(conn, name, _context) -> None:  # noqa: ANN001
+    if name:
+        _drop_registered_in(conn, name)
+
+
+def _on_commit(conn) -> None:  # noqa: ANN001
+    # Until none is left: a callable may register another (an event its own write records).
+    try:
+        while _AT_COMMIT.get(conn):
+            _names, fn = _AT_COMMIT[conn].pop(0)
+            fn(conn)
+    except BaseException:
+        # The commit fails; SQLAlchemy marks the transaction inactive and sends no ROLLBACK after
+        # it, so the database transaction would stay open with this work in it. End it here.
+        _AT_COMMIT.pop(conn, None)
+        try:
+            conn.connection.dbapi_connection.rollback()
+        except Exception:  # noqa: BLE001 — a connection that cannot roll back is discarded
+            try:
+                conn.invalidate()
+            except Exception:  # noqa: BLE001
+                pass
+        raise
+    _AT_COMMIT.pop(conn, None)
+
+
+def _on_rollback(conn) -> None:  # noqa: ANN001
+    _AT_COMMIT.pop(conn, None)
+
+
+def _install_transaction_hooks() -> None:
+    """On the Engine CLASS, so every engine — the API's, the worker's, one a test builds — has them."""
+    from sqlalchemy import event
+
+    for name, fn in (("begin", _on_begin), ("rollback_savepoint", _on_rollback_savepoint),
+                     ("commit", _on_commit), ("rollback", _on_rollback)):
+        if not event.contains(Engine, name, fn):
+            event.listen(Engine, name, fn)
+
+
+_install_transaction_hooks()

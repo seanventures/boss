@@ -41,6 +41,8 @@ from typing import Any, Mapping, Optional
 
 from sqlalchemy import text
 
+from ..db import release_failed_savepoint
+
 log = logging.getLogger(__name__)
 
 # ---- classes ----------------------------------------------------------------------------------
@@ -611,8 +613,8 @@ def _retried_recently(connection: Any, project_id: str, rec: Mapping[str, Any]) 
             "AND approved_at > now() - interval '24 hours' LIMIT 1"),
             {"p": project_id, "pre": ACTOR_PREFIX + "%", "c": str(rec.get("cause_code") or ""),
              "s": str(rec.get("surface") or "")}).first()
-    except Exception:  # noqa: BLE001 — unknown: no auto retry
-        point.rollback()
+    except Exception as error:  # noqa: BLE001 — unknown: no auto retry
+        release_failed_savepoint(point, error, connection=connection)
         return True
     point.commit()
     return seen is not None
@@ -658,10 +660,7 @@ def on_created(connection: Any, project_id: str, decision_id: str) -> Optional[R
         found = route(connection, dict(row))
         stamp(connection, decision_id, found)
     except Exception as error:  # noqa: BLE001 — a classification never fails the producer
-        try:
-            point.rollback()
-        except Exception:  # noqa: BLE001
-            pass
+        release_failed_savepoint(point, error, connection=connection)
         log.warning("autonomy route for %s failed: %s", decision_id, error)
         return None
     point.commit()
@@ -749,7 +748,7 @@ def decide(connection: Any, settings: Any, decision_id: str) -> dict[str, Any]:
         found = route(connection, dict(row))
         stamp(connection, decision_id, found)
     except Exception as error:  # noqa: BLE001 — never poisons the caller's transaction
-        outer.rollback()
+        release_failed_savepoint(outer, error, connection=connection)
         return {"decided": False,
                 "why": (f"BOSS could not route this card ({type(error).__name__}: "
                         f"{str(error)[:160]}), so it waits for a person; answer it on this "
@@ -771,7 +770,7 @@ def decide(connection: Any, settings: Any, decision_id: str) -> dict[str, Any]:
             system_policy=True, choose=choose or None)
     except Exception as refused:  # noqa: BLE001 — a refused or failed follow-on keeps the card
         # for a person, saying why; it is never retried by every sweep.
-        point.rollback()
+        release_failed_savepoint(point, refused, connection=connection)
         record = {**found.record(), "route": "ask", "refused": str(refused)[:300],
                   "what_to_do": "BOSS's answer was refused, so the card waits for you: read "
                                 "why in Details, then answer it on this card."}
@@ -932,8 +931,8 @@ def _runs_started_by(connection: Any, decision_id: str, rec: Mapping[str, Any]) 
             "WHERE (data->>'decision_id' = :d OR entity_id = :d) AND "
             "event_type IN ('code_task.started_from_prd', 'decision.follow_on_job_queued') "
             ), {"d": decision_id}).scalars().all()
-    except Exception:  # noqa: BLE001 — an events table of another shape: what the card names
-        point.rollback()
+    except Exception as error:  # noqa: BLE001 — an events table of another shape: what the card names
+        release_failed_savepoint(point, error, connection=connection)
         found = []
     else:
         point.commit()
