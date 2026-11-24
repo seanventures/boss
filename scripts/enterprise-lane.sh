@@ -411,8 +411,9 @@ step_codex() {
 # ---- 6/7. the e2e gate, with the install's security profiles ---------------------------------------
 gate() {
   local tier="$1" out rc
-  # The gate's code from this checkout; the BOSS under test is the installed tree.
-  bash "$ROOT/scripts/e2e-gate.sh" "$tier" --boss-root "$INSTALL" --image "$(docker inspect -f '{{.Config.Image}}' "$(ctr worker)")" \
+  # This checkout (the commit the install was made from), in the installed worker image. Not the
+  # install directory itself: the installer makes it private to its owner (umask 077).
+  bash "$ROOT/scripts/e2e-gate.sh" "$tier" --image "$(docker inspect -f '{{.Config.Image}}' "$(ctr worker)")" \
     --inner-sandbox "$SANDBOX_MODE" --keep 2>&1; rc=$?
   return $rc
 }
