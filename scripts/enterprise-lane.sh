@@ -335,7 +335,8 @@ boss_cmd() { (cd "$INSTALL" && env -u BOSS_INSTALL_DIR bash scripts/install/boss
 
 step_install() {
   if [ -e "$INSTALL" ]; then
-    [ -f "$INSTALL/.entlane" ] || { echo "$INSTALL exists and is not a lane install; refusing to remove it"; return 1; }
+    { [ -f "$INSTALL/.entlane" ] || grep -qxF "$INSTALL" "$STATE/owned-install" 2>/dev/null; } ||
+      { echo "$INSTALL exists and is not a lane install; refusing to remove it"; return 1; }
     echo "removing the previous lane install at $INSTALL"
     if [ -f "$INSTALL/.env" ]; then
       (cd "$INSTALL" && docker compose $(bash scripts/install/compose_files.sh . 2>/dev/null | tr '\n' ' ') \
@@ -354,6 +355,7 @@ step_install() {
     export OPENAI_API_KEY="${OPENAI_API_KEY:-${CODEX_API_KEY:-}}"
     key_note="an OpenAI/Codex key from the environment (not printed)"
   fi
+  echo "$INSTALL" > "$STATE/owned-install"   # the lane made it: a later run may remove it
   echo "installing $(git -C "$ROOT" rev-parse --short HEAD) into $INSTALL with $key_note"
   # install.sh copies THIS checkout's HEAD (a local installer tree), as a person who downloaded
   # the release would get it. The enterprise block, the way ENTERPRISE_NETWORK.md says.
