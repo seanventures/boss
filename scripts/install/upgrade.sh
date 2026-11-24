@@ -121,7 +121,9 @@ Use --web or --no-web to change the existing choice deliberately.
 If the new release fails to start, the previous release is put back and
 started again (data volumes are kept). --no-rollback leaves it as it is.
 The images running before the upgrade are kept as prev-<tag>: `boss rollback`
-(rollback.sh) puts that release back later, without a build.
+(rollback.sh) puts that release back later, without a build. One previous set only: the next
+upgrade replaces it, and once this release has run BOSS_ROLLBACK_KEEP_HOURS (72) with a
+healthy API, prune.sh drops it (docs/operations/DISK_BUDGET.md).
 
 DISK CHECK (storage hygiene layer 1). Before anything is built, the free space on this host
 and on Docker's own disk is measured against what the upgrade will need: about

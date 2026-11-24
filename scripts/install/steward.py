@@ -26,6 +26,7 @@ when present; otherwise a small pure-Python Ed25519 verifier). Every run appends
 from __future__ import annotations
 
 import argparse
+import contextlib
 import base64
 import datetime as _dt
 import hashlib
@@ -650,18 +651,59 @@ def verb_prune_build_cache(env: Env, args: dict, *, dry_run: bool, runner: Calla
     return items, max(0.0, df["cache"] - after["cache"])
 
 
+#: How long `boss rollback`'s images stay after a healthy upgrade (prune.sh, disk_budget; BOSSAPP-1459).
+ROLLBACK_KEEP_HOURS = 72.0
+
+
+def rollback_expired(env: Env, runner: Callable, now: Optional[_dt.datetime] = None) -> bool:
+    """The prev-<tag> rollback point is past its window: .boss-rollback was written more than
+    BOSS_ROLLBACK_KEEP_HOURS ago, was not already dropped, and the API is healthy now (an
+    unhealthy release keeps its way back)."""
+    record: dict[str, str] = {}
+    try:
+        for line in (env.install_dir / ".boss-rollback").read_text().splitlines():
+            k, sep, v = line.partition("=")
+            if sep and not k.startswith("#"):
+                record[k.strip()] = v.strip()
+    except OSError:
+        return False
+    if record.get("BOSS_PREV_EXPIRED_AT") or record.get("BOSS_PREV_IMAGE_TAG") != f"prev-{env.image_tag}":
+        return False
+    try:
+        keep = float(env._env("BOSS_ROLLBACK_KEEP_HOURS", "") or ROLLBACK_KEEP_HOURS)
+        saved = parse_iso(record.get("BOSS_PREV_SAVED_AT", ""))
+    except ValueError:
+        return False
+    age_h = ((now or _dt.datetime.now(_dt.timezone.utc)) - saved).total_seconds() / 3600
+    if age_h < max(1.0, keep):
+        return False
+    res = runner([*env.docker, "ps", "-q", "--filter", f"label={COMPOSE_PROJECT_LABEL}={env.compose_project}",
+                  "--filter", "label=com.docker.compose.service=api", "--filter", "health=healthy"])
+    return bool((res.stdout or "").strip())
+
+
+def _mark_rollback_expired(env: Env) -> None:
+    with contextlib.suppress(OSError):
+        with open(env.install_dir / ".boss-rollback", "a", encoding="utf-8") as fh:
+            fh.write(f"BOSS_PREV_EXPIRED_AT={_dt.datetime.now(_dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}\n")
+
+
 def verb_remove_images(env: Env, args: dict, *, dry_run: bool, runner: Callable) -> tuple[list[str], float]:
-    """Labelled images other than the current tag, the prev-<tag> rollback point and any in use."""
+    """Labelled images other than the current tag, the prev-<tag> rollback point and any in use.
+    The rollback point too once it is past its window (`rollback_expired`)."""
     in_use = set()
     ps = runner([*env.docker, "ps", "-a", "--format", "{{.Image}}"])
     for line in (ps.stdout or "").splitlines():
         in_use.add(line.strip())
-    keep_tags = {env.image_tag, f"prev-{env.image_tag}"}
+    prev = f"prev-{env.image_tag}"
+    expired = rollback_expired(env, runner)
+    keep_tags = {env.image_tag} | (set() if expired else {prev})
     items, size = [], 0.0
     for row in _labelled(env, runner, "image"):
         repo, tag = str(row.get("Repository") or ""), str(row.get("Tag") or "")
         ref = f"{repo}:{tag}" if tag and tag != "<none>" else str(row.get("ID") or "")
-        if tag in keep_tags or tag.startswith("prev-") or ref in in_use or f"{repo}:{tag}" in in_use:
+        if tag in keep_tags or (tag.startswith("prev-") and not (expired and tag == prev)) \
+                or ref in in_use or f"{repo}:{tag}" in in_use:
             continue
         if not ref:
             continue
@@ -677,6 +719,8 @@ def verb_remove_images(env: Env, args: dict, *, dry_run: bool, runner: Callable)
         res = runner([*env.docker, "rmi", ref], timeout=300)
         if res.returncode == 0:
             done.append(ref)
+    if expired and any(r.endswith(f":{prev}") for r in done):
+        _mark_rollback_expired(env)
     after = docker_df(env, runner)
     freed = size if done else 0.0
     return done, freed if after else freed

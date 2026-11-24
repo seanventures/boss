@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import tempfile
 import threading
@@ -131,6 +132,184 @@ def reap_dirs(*, tmp: Optional[Path] = None, min_age: float = DIR_MIN_AGE_SECOND
             release("dir", key, "reaped: unclaimed")
     return {"removed": len(removed), "kept": kept, "freed_mb": round(freed / 1e6, 1),
             "paths": removed[:20]}
+
+
+#: A sandbox run directory nothing holds and nothing touched for this long is a leftover.
+SANDBOX_ORPHAN_SECONDS = 24 * 3600
+_HEX_KEY = re.compile(r"^[0-9a-f]{24}$")
+
+
+def _newest_mtime(path: Path, depth: int = 2) -> float:
+    """The newest mtime of `path` and what is under it to `depth` levels (a run writes into its
+    workspaces and HOME, not into the run directory itself). Unreadable entries are skipped."""
+    newest = 0.0
+    stack = [(path, 0)]
+    while stack:
+        p, d = stack.pop()
+        try:
+            st = p.lstat()
+        except OSError:
+            continue
+        newest = max(newest, st.st_mtime)
+        if d < depth and p.is_dir() and not p.is_symlink():
+            try:
+                stack.extend((c, d + 1) for c in p.iterdir())
+            except OSError:
+                continue
+    return newest
+
+
+def _uid_lock_free(uid: int) -> bool:
+    """No process in this container holds the run lease of `uid` (sandbox_identity._lease_uid)."""
+    import fcntl
+
+    from . import sandbox_identity
+
+    path = os.path.join(sandbox_identity.SHIM_ROOT, f"uid-{uid}.lock")
+    try:
+        fd = os.open(path, os.O_RDWR)
+    except OSError:
+        return True             # never leased here since the container started
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return True
+    except OSError:
+        return False
+    finally:
+        os.close(fd)
+
+
+def _uid_has_processes(uid: int) -> bool:
+    for status in Path("/proc").glob("[0-9]*/status"):
+        try:
+            for line in status.read_text().splitlines():
+                if line.startswith("Uid:"):
+                    if str(uid) in line.split()[1:2]:
+                        return True
+                    break
+        except OSError:
+            continue
+    return False
+
+
+def reap_sandbox_dirs(engine: Any = None, *, root: Optional[Path] = None,
+                      min_age: float = SANDBOX_ORPHAN_SECONDS,
+                      now: Optional[float] = None) -> dict[str, Any]:
+    """A SANDBOX THAT OUTLIVED ITS RUN (BOSSAPP-1459). `sandbox_identity.release` removes a run's
+    directory when the run ends; a run that died with its process (an API restart, a deploy)
+    never got there, and its workspace stayed: 2.7 GB of them on the operator's laptop, the oldest
+    a week old. A directory under the sandbox root is a leftover only when ALL hold:
+
+    * it is one BOSS made: a 24-hex owner key, owned by a uid of the sandbox pool;
+    * no lease on that uid is held in this container, and no process runs as it;
+    * it is not the directory of a live owner (a running preview, an unended build, a lease of
+      this process): BOSS holds a preview's directory across restarts;
+    * nothing under it (two levels deep) changed for `min_age` (24 h).
+
+    Then it is removed the way `release` removes one (as the run's uid, then as BOSS)."""
+    from . import sandbox_identity
+
+    root = root or sandbox_identity.run_root()
+    now = now if now is not None else time.time()
+    live: set[str] = set(owned_process.live_owner_ids())
+    with sandbox_identity._ACTIVE_LOCK:
+        live |= set(sandbox_identity._ACTIVE)
+    if engine is not None:
+        try:
+            live |= live_preview_handles(engine)["ids"]
+            tasks = _live_sandbox_tasks(engine)
+        except Exception:  # noqa: BLE001 — unknown: keep every sandbox
+            return {"removed": 0, "kept": "live owners unknown"}
+        if "*" in tasks:
+            return {"removed": 0, "kept": "live owners unknown"}
+        live |= tasks
+    live_keys = {sandbox_identity.owner_key(o) for o in live}
+    removed, kept, freed = [], 0, 0
+    try:
+        entries = sorted(p for p in root.iterdir() if p.is_dir() and not p.is_symlink())
+    except OSError:
+        return {"removed": 0, "kept": 0}
+    pool = range(sandbox_identity.UID_BASE, sandbox_identity.UID_BASE + sandbox_identity.UID_COUNT)
+    for path in entries:
+        try:
+            uid = path.lstat().st_uid
+        except OSError:
+            continue
+        if not _HEX_KEY.match(path.name) or uid not in pool or path.name in live_keys:
+            kept += 1
+            continue
+        if now - _newest_mtime(path) < min_age or not _uid_lock_free(uid) or _uid_has_processes(uid):
+            kept += 1
+            continue
+        size = _du(path)
+        sandbox_identity._purge(sandbox_identity.SandboxIdentity(key=path.name, uid=uid, run_dir=path))
+        if not path.exists():
+            removed.append(path.name)
+            freed += size
+    return {"removed": len(removed), "kept": kept, "freed_mb": round(freed / 1e6, 1),
+            "keys": removed[:20]}
+
+
+# ------------------------------------------------------------------------------------------ #
+# test databases on the live server
+# ------------------------------------------------------------------------------------------ #
+
+#: The test Postgres's Compose service name (`boss dev up`). Resolvable on this network only
+#: while an install runs one: then the test data is someone's, and it stays.
+TEST_SERVER_HOST = "db-test"
+
+
+def test_server_present(host: str = TEST_SERVER_HOST) -> bool:
+    import socket
+
+    try:
+        socket.getaddrinfo(host, 5432)
+        return True
+    except OSError:
+        return False
+
+
+def reap_test_databases(engine: Any, *, test_server: Optional[bool] = None) -> dict[str, Any]:
+    """TEST DATABASES ON AN INSTALL THAT RUNS NO TESTS (BOSSAPP-1459). Only the test suites and
+    scratch work make `boss_test*` / `boss_scratch*` databases, and they belong on the test
+    Postgres (`boss dev up`, BOSSAPP-1152). Found on the live server of an install that runs no
+    tests (eight of them on the operator's laptop), they are leftovers: each one nobody is
+    connected to is dropped. Kept, all of them, when:
+
+    * this install runs a test Postgres (the `db-test` host resolves): a developer works here;
+    * the database BOSS itself runs on is a test one (a test suite's own API, a CI shard):
+      the others on that server are its siblings', never this process's to drop."""
+    from .disk_budget import is_test_database
+
+    if test_server is None:
+        test_server = test_server_present()
+    if test_server:
+        return {"dropped": [], "kept": "a test Postgres runs on this install"}
+    with engine.connect() as c:
+        current = str(c.execute(text("SELECT current_database()")).scalar() or "")
+        if is_test_database(current) or os.environ.get("BOSS_ENVIRONMENT", "").strip().lower() in \
+                ("test", "e2e", "ci"):
+            return {"dropped": [], "kept": "this BOSS runs on a test database"}
+        names = [str(r[0]) for r in c.execute(text(
+            "SELECT datname FROM pg_database WHERE NOT datistemplate AND datname <> current_database() "
+            "AND (datname LIKE 'boss\\_test%' OR datname LIKE 'boss\\_scratch%')")).all()]
+    dropped: list[str] = []
+    for name in names:
+        if not is_test_database(name) or not re.fullmatch(r"[a-z0-9_]{1,63}", name):
+            continue
+        try:
+            with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as c:
+                c.execute(text("SET lock_timeout = '2s'"))
+                busy = c.execute(text("SELECT 1 FROM pg_stat_activity WHERE datname = :n LIMIT 1"),
+                                 {"n": name}).first()
+                if busy:
+                    continue
+                c.execute(text(f'DROP DATABASE IF EXISTS "{name}"'))
+            dropped.append(name)
+        except Exception:  # noqa: BLE001 — a connection arrived, or no right: the next pass
+            _log.info("test database %s not dropped", name, exc_info=True)
+    return {"dropped": dropped}
 
 
 def _du(path: Path) -> int:
@@ -260,7 +439,7 @@ def reap_docker(engine: Any, *, install_id: Optional[str], binary: str = "docker
                 cid in live["containers"] or \
                 any(cid.startswith(x) or x.startswith(cid) for x in live["containers"] if x):
             continue
-        _docker(["rm", "-f", cid], binary=binary)
+        _docker(["rm", "-f", "-v", cid], binary=binary)
         removed_c.append(name or cid)
     # Images: same two ways in. An image a remaining container uses, or a young one, stays.
     used = set(_docker(["ps", "-a", "--format", "{{.Image}}"], binary=binary).split())
@@ -506,6 +685,9 @@ def tick(engine: Any, settings: Any = None) -> dict[str, Any]:
     if engine is not None and time.time() - _last_tables > _TABLES_EVERY:
         _last_tables = time.time()
         report["tables"] = _safe(lambda: prune_tables(engine))
+        # BOSSAPP-1459: what a run or a test left behind and nothing uses any more.
+        report["sandbox_dirs"] = _safe(lambda: reap_sandbox_dirs(engine))
+        report["test_databases"] = _safe(lambda: reap_test_databases(engine))
     _LAST.clear()
     _LAST.update(report)
     return report

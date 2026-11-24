@@ -418,6 +418,23 @@ if [ -f "$_enterprise" ] && [ -f "$ENV_FILE" ]; then
   fi
 fi
 
+# 11. THE DISK BUDGET (BOSSAPP-1459; docs/operations/DISK_BUDGET.md). Where this install's disk
+# goes, by category, against the one budget (engine/boss_engine/services/disk_budget.py, run by
+# path: it needs only the standard library). Advisory: a category at 80 % of its budget or past
+# it is a warning that says what to do, never a failure.
+_budget="$HERE/../../engine/boss_engine/services/disk_budget.py"
+if [ -f "$_budget" ] && [ "${#DOCKER[@]}" -gt 0 ]; then
+  _sudo=()
+  [ "${DOCKER[0]}" = sudo ] && _sudo=(--sudo)
+  while IFS= read -r _line; do
+    case "$_line" in
+      ok\ *) ok "${_line#ok }" ;;
+      warn\ *) warn "${_line#warn }" ;;
+      note\ *) note "${_line#note }" ;;
+    esac
+  done < <(python3 "$_budget" report --install-dir "$(dirname "$ENV_FILE")" ${_sudo[@]+"${_sudo[@]}"} 2>/dev/null)
+fi
+
 printf "\n"
 if [ "$fail" -ne 0 ]; then printf "  ${R}${B}Not ready.${N} Fix the FAIL lines above, then run this again.\n\n"
 elif [ "$warns" -eq 0 ]; then printf "  ${G}${B}BOSS is ready.${N}  Mission Control: %s\n\n" "$CONSOLE_URL"
