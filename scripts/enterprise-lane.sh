@@ -43,15 +43,18 @@
 # ~/boss-ent-lane), the install under $ENTLANE_INSTALL_DIR (default ~/boss-lane-install).
 set -uo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HERE="$ROOT/scripts/enterprise-lane"
 STATE="${ENTLANE_STATE:-$HOME/boss-ent-lane}"
 INSTALL="${ENTLANE_INSTALL_DIR:-$HOME/boss-lane-install}"
+# Sourced (the repo's own tests, engine/tests/test_the_enterprise_lane_reruns_from_a_known_state.py)
+# it only defines its functions: no arguments, no machine checks and no run.
+SOURCED=0; [ "${BASH_SOURCE[0]}" = "$0" ] || SOURCED=1
 ARGS=("$@")
 REPORT=""
 REUSE=0
 ONLY=""
-while [ $# -gt 0 ]; do
+while [ "$SOURCED" = 0 ] && [ $# -gt 0 ]; do
   case "$1" in
     --report) REPORT="${2:?--report needs a file}"; shift 2 ;;
     --reuse-install) REUSE=1; shift ;;
@@ -60,9 +63,6 @@ while [ $# -gt 0 ]; do
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
-# Sourced (the repo's own tests, engine/tests/test_the_enterprise_lane_reruns_from_a_known_state.py)
-# it only defines its functions: no machine checks and no run.
-SOURCED=0; [ "${BASH_SOURCE[0]}" = "$0" ] || SOURCED=1
 if [ "$SOURCED" = 0 ]; then
 [ "$(uname -s)" = Linux ] || { echo "enterprise-lane: run this on the Linux VM (scripts/enterprise-lane/lima.sh on a Mac)" >&2; exit 2; }
 [ "$(id -u)" != 0 ] || { echo "enterprise-lane: run as a normal user with sudo, not as root" >&2; exit 2; }
@@ -185,6 +185,15 @@ provision_packages() {
 
 LANE_CONTAINERS="entlane-dns entlane-proxy entlane-npm entlane-pypi entlane-tls"
 
+docker_answers() {  # up to 60 s for the daemon to answer
+  local _
+  for _ in $(seq 1 60); do sudo docker info >/dev/null 2>&1 && return 0; sleep 1; done
+  return 1
+}
+docker_proxy() {  # the proxy the RUNNING daemon uses ("" for none); fails when Docker does not answer
+  sudo docker info --format '{{.HTTPProxy}}{{.HTTPSProxy}}' 2>/dev/null
+}
+
 reset_lane_network() {
   # Everything the network step points at the company network, taken back. A reboot clears the
   # firewall and the dummy LAN but not these files; a rerun without a reboot keeps all of it.
@@ -218,7 +227,8 @@ print(json.dumps(d, indent=2) if d else "")')" ||
       echo "reset: took the previous run's proxy and DNS out of $DAEMON_JSON"
       sudo systemctl restart docker ||
         { echo "Docker did not restart after the previous run's proxy was taken out. Run \`sudo systemctl status docker\` on the host (the lane VM) to see why."; return 1; }
-      for _ in $(seq 1 60); do sudo docker info >/dev/null 2>&1 && break; sleep 1; done
+      docker_answers ||
+        { echo "Docker did not come back after the previous run's proxy was taken out. Run \`sudo systemctl status docker\` on the host (the lane VM) to see why."; return 1; }
     fi
   fi
   command -v docker >/dev/null 2>&1 || { echo "reset: no Docker yet (a fresh VM)"; return 0; }
@@ -226,7 +236,13 @@ print(json.dumps(d, indent=2) if d else "")')" ||
   # no longer exists).
   sudo docker rm -f $LANE_CONTAINERS >/dev/null 2>&1
   local proxy
-  proxy="$(sudo docker info --format '{{.HTTPProxy}}{{.HTTPSProxy}}' 2>/dev/null)"
+  proxy="$(docker_proxy)" ||
+    { echo "Docker does not answer, so the reset cannot show it has no proxy left. Run \`sudo systemctl status docker\` on the host (the lane VM) to see why."; return 1; }
+  if [ -n "$proxy" ]; then
+    # daemon.json is clean but the running daemon still holds a proxy (a file edited without a
+    # restart, or an interrupted run): one restart applies the file.
+    sudo systemctl restart docker && docker_answers && proxy="$(docker_proxy)" || proxy="(Docker did not come back)"
+  fi
   [ -z "$proxy" ] ||
     { echo "Docker still uses a proxy after the reset, so the lane's own images cannot be fetched. Run \`docker info\` on the host (the lane VM) to see where it is set."; return 1; }
   echo "reset: no proxy, company DNS, firewall rule or lane container left from an earlier run"
@@ -235,7 +251,8 @@ print(json.dumps(d, indent=2) if d else "")')" ||
 fetch_infra_images() {
   # Before any proxy is set: the proxy cannot be what fetches its own image.
   local proxy img
-  proxy="$(docker info --format '{{.HTTPProxy}}{{.HTTPSProxy}}' 2>/dev/null)"
+  proxy="$(docker_proxy)" ||
+    { echo "Docker does not answer, so the lane's own images cannot be fetched. Run \`sudo systemctl status docker\` on the host (the lane VM) to see why."; return 1; }
   [ -z "$proxy" ] ||
     { echo "Docker points at a proxy before the lane's own images are fetched, so the pulls would need the proxy they start. Run \`docker info\` on the host (the lane VM) to see where it is set."; return 1; }
   for img in "$IMG_ALPINE" "$IMG_MITM" "$IMG_VERDACCIO" "$IMG_PROXPI" "$IMG_NGINX"; do
@@ -252,6 +269,13 @@ fetch_infra_images() {
 
 make_ca() {
   local ca="$STATE/ca"
+  # The certificates last 60 days: a VM older than that would fail TLS on every rerun.
+  if [ -s "$ca/ca.crt" ] && ! openssl x509 -checkend 86400 -noout -in "$ca/ca.crt" >/dev/null 2>&1; then
+    rm -f "$ca/ca.crt" "$ca/ca.key" "$ca/registry.crt"
+  fi
+  if [ -s "$ca/registry.crt" ] && ! openssl x509 -checkend 86400 -noout -in "$ca/registry.crt" >/dev/null 2>&1; then
+    rm -f "$ca/registry.crt"
+  fi
   if [ ! -s "$ca/ca.crt" ]; then
     openssl req -x509 -newkey rsa:2048 -nodes -days 60 -keyout "$ca/ca.key" -out "$ca/ca.crt" \
       -subj "/O=BOSS Enterprise Lane/CN=BOSS Enterprise Lane Root CA" \
@@ -384,14 +408,14 @@ wait_http() {  # wait_http URL [curl args]: up to 90 s for a 2xx
 
 step_network() {
   reset_lane_network || return 1
-  provision_packages || { echo "could not install the VM's packages"; return 1; }
-  docker info >/dev/null 2>&1 || { echo "docker is not usable by $(id -un) (docker group?)"; return 1; }
-  make_ca || { echo "could not make the lane CA"; return 1; }
-  corp_lan || { echo "could not add the company LAN addresses"; return 1; }
+  provision_packages || { echo "could not install the VM's packages. Run \`sudo apt-get update\` on the host (the lane VM) to see why."; return 1; }
+  docker info >/dev/null 2>&1 || { echo "Docker is not usable by $(id -un) (not in the docker group?). Run \`docker info\` on the host (the lane VM) to see why."; return 1; }
+  make_ca || { echo "could not make the lane CA in $STATE/ca. Run \`sudo ls -l $STATE/ca\` on the host (the lane VM) to check it is writable."; return 1; }
+  corp_lan || { echo "could not add the company LAN addresses. Run \`sudo ip addr show entlane0\` on the host (the lane VM) to see them."; return 1; }
   fetch_infra_images || return 1
   start_infra || { echo "could not start the proxy, mirrors and DNS from the images on the VM. Run \`docker ps -a\` on the host (the lane VM) and read this log."; return 1; }
   docker_daemon_corp || { echo "could not point Docker at the proxy and company DNS. Run \`sudo systemctl status docker\` on the host (the lane VM) to see why."; return 1; }
-  lockdown || { echo "could not lock the VM's egress down"; return 1; }
+  lockdown || { echo "could not lock the VM's egress down. Run \`sudo iptables -S ENTLANE-OUT\` on the host (the lane VM) to see the rules."; return 1; }
   verify_network
 }
 

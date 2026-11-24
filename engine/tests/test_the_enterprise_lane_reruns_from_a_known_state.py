@@ -68,8 +68,9 @@ case "$me" in
       image) [ -e "$FAKE/img/$(key "$3")" ]; exit $? ;;
       pull) img="${@: -1}"; fetch_ok "$img" || exit 1; mkdir -p "$FAKE/img"; touch "$FAKE/img/$(key "$img")"; exit 0 ;;
       build)
-        tag=""; prev=""
-        for a in "$@"; do [ "$prev" = -t ] && tag="$a"; prev="$a"; done
+        tag=""; prev=""; file=""
+        for a in "$@"; do [ "$prev" = -t ] && tag="$a"; [ "$prev" = -f ] && file="$a"; prev="$a"; done
+        [ -f "$file" ] || { echo "no Dockerfile at $file" >&2; exit 1; }
         fetch_ok alpine:3.20 || exit 1
         mkdir -p "$FAKE/img"; touch "$FAKE/img/$(key "$tag")"; exit 0 ;;
       run)
@@ -202,18 +203,40 @@ def test_a_rerun_ends_where_the_first_run_did(tmp_path, rebooted):
     assert reset < pull, calls   # the previous run's proxy came out before the pull
 
 
-def test_the_old_order_is_the_bootstrap_loop(tmp_path):
-    """Without the reset, the fake refuses the pull the way the real daemon did on 2026-11-24 —
-    so the tests above would catch a reorder."""
+def test_the_fetch_refuses_while_docker_points_at_a_proxy_that_is_down(tmp_path):
+    """The bootstrap loop of 2026-11-24, met head on: the fetch stops with words, never pulls."""
     w = World(tmp_path)
     assert w.network().returncode == 0
     w.install_pruned()
     w.reboot()
+    (w.fake / "calls").unlink()
     r = subprocess.run(["bash", "-c", 'source "$LANE"; fetch_infra_images'], env=w.env,
                        capture_output=True, text=True, timeout=60)
     assert r.returncode == 1
     assert "points at a proxy before the lane's own images are fetched" in r.stdout
     assert _usable(_last(r.stdout)) == []
+    assert not any(c.startswith(("docker pull", "docker build")) for c in w.calls())
+
+
+def test_the_reset_alone_takes_back_everything_a_run_set(tmp_path):
+    w = World(tmp_path)
+    assert w.network().returncode == 0
+    (w.fake / "calls").unlink()
+    r = subprocess.run(["bash", "-c", 'source "$LANE"; reset_lane_network'], env=w.env,
+                       capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert w.settings() == {"daemon": None, "apt": None, "trust": False, "firewall": [],
+                            "proxy_up": False}
+    assert not (w.fake / "daemon-proxy").exists()
+
+
+def test_a_daemon_still_holding_a_proxy_with_a_clean_file_gets_one_restart(tmp_path):
+    w = World(tmp_path)
+    (w.fake / "daemon-proxy").write_text("http://10.77.0.10:8080\n")   # file clean, daemon not
+    r = subprocess.run(["bash", "-c", 'source "$LANE"; reset_lane_network'], env=w.env,
+                       capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "systemctl restart docker" in w.calls()
 
 
 def test_a_proxy_the_reset_cannot_take_back_stops_the_step_and_says_where(tmp_path):
@@ -257,11 +280,9 @@ def test_every_bring_up_failure_line_passes_the_contract():
             text = msg.replace("\\`", "`")
             for var, val in samples.items():
                 text = text.replace(var, val)
-            if "Run `" not in text and "run `" not in text:
-                continue   # the older one-line evidence the step already had (not bring-up order)
             found += 1
             assert _usable(text) == [], text
-    assert found >= 7
+    assert found >= 14
 
 
 def test_the_egress_proof_is_unchanged():
