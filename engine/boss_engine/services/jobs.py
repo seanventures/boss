@@ -1185,6 +1185,8 @@ class JobLeaseService:
                 "job_id": job_id,
             },
         )
+        if not handing_back:
+            self._renew_own_reservations(connection, row["project_id"], job_id, current_time)
         if row["kind"] == "agent.studio.execute":
             connection.execute(
                 text(
@@ -2776,6 +2778,31 @@ class JobLeaseService:
             "budget_reservation_id"
         )
         return str(reservation_id) if reservation_id else None
+
+    def _renew_own_reservations(self, connection: Connection, project_id: str, job_id: str,
+                                current_time) -> int:
+        """A LIVE JOB KEEPS ITS HOLDS (BOSSAPP-1452). A build renewed its budget hold only at
+        its stage boundaries, so one long stage on a small host outlived the hold's 45 minutes
+        and the build ran on a lapsed reservation. The lease heartbeat is the proof the job is
+        alive, so every heartbeat renews the job's own active holds to a full window from now
+        (never shortening one, never reviving a settled, released or expired one). A job that
+        died stops heartbeating, and its holds lapse as before. Never fails a heartbeat."""
+        held = self._own_reservations(connection, project_id, job_id)
+        if not held:
+            return 0
+        from .build_budget import RESERVATION_MINUTES
+
+        try:
+            with connection.begin_nested():
+                renewed = connection.execute(
+                    text("UPDATE budget_reservations SET expires_at = GREATEST(expires_at, :at) "
+                         "WHERE id = ANY(:ids) AND project_id = :p AND status = 'active' "
+                         "AND expires_at > :now"),
+                    {"ids": held, "p": project_id, "now": current_time,
+                     "at": current_time + timedelta(minutes=RESERVATION_MINUTES)})
+                return int(getattr(renewed, "rowcount", 0) or 0)
+        except Exception:  # noqa: BLE001 — a hold not renewed lapses as it did before
+            return 0
 
     @staticmethod
     def _own_reservations(connection: Connection, project_id: str, job_id: str) -> list[str]:

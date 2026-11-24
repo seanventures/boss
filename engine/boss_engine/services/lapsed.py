@@ -13,9 +13,10 @@ SENTENCES: dict[str, str] = {
     # mcp_gateway: the run token a build session calls BOSS's tools with
     "token_expired": (
         "this session's run token reached the end of its lifetime while the session was still "
-        "running (it lasts BOSS_CODE_AGENT_TIMEOUT_SECONDS + 15 minutes from when it was "
-        "issued). Nothing was lost: retry the step and BOSS issues a fresh token; work that "
-        "needs longer needs a higher BOSS_CODE_AGENT_TIMEOUT_SECONDS"),
+        "running (it lasts BOSS_CODE_AGENT_TIMEOUT_SECONDS + 15 minutes from when the session "
+        "started; time the build waited in the queue before that is not counted). Nothing was "
+        "lost: retry the step and BOSS issues a fresh token; work that needs longer needs a "
+        "higher BOSS_CODE_AGENT_TIMEOUT_SECONDS"),
     # streaming_model_gateway, mcp_gateway's host lane, egress: the run handle a session or a
     # guest reaches its model, tools or the network with
     "handle_expired": (

@@ -5892,9 +5892,15 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         _bases = _bbb.resolve_build_base(
             c, project_id=project_id, owner=owner, repo=repo,
             explicit=spec.get("base_branch"),
-            host_default=lambda: _bbb.host_default_branch(sf.github), run_id=run_id)
+            host_default=lambda: _bbb.host_default_branch(sf.github), run_id=run_id,
+            # A DEFAULT BRANCH THAT MOVED is followed, and said (BOSSAPP-1439).
+            branch_exists=getattr(sf.github, "branch_exists", None))
         emit_event(c, project_id, "code_task.base_branch_resolved", "boss", "code_task_run",
                    run_id, _bases.as_event())
+        if _bases.note:
+            emit_event(c, project_id, "code_task.default_branch_moved", "boss",
+                       "code_task_run", run_id, {"message": _bases.note,
+                                                 "from": _bases.moved_from, "to": _bases.clone})
     base_branch = _bases.clone     # may advance to work_branch below (a repair, a release)
     repo_base_branch = _bases.pr   # the PR base
     # Feedback-iteration: attempts after the first share ONE branch derived from the root
@@ -8950,7 +8956,11 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # that fixes the failing tests on a warm session.
         _impl_work_deadline = implement_work_deadline(_impl_deadline, _impl_budget_s)
         _warm_fix_ran = [False]
-        set_llm_context(stage_deadline=_impl_work_deadline)
+        # WHEN THE STAGE'S CLOCK STARTED (the `since` its deadline is extended from): a model-slot wait
+        # before the first session reads its deadline is queue time too (BOSSAPP-1450).
+        set_llm_context(stage_deadline=_impl_work_deadline,
+                        stage_deadline_since=(_impl_deadline - _impl_budget_s)
+                        if _impl_deadline is not None else None)
 
         def _impl_over_budget(final: bool = False) -> bool:
             dl = _impl_deadline if (final or _warm_fix_ran[0]) else _impl_work_deadline
@@ -9546,7 +9556,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                                for v in _fidelity["violations"]][:20]})
 
         # The implement budget ends with the stage: later writing turns are not cut by it.
-        set_llm_context(stage_deadline=None)
+        set_llm_context(stage_deadline=None, stage_deadline_since=None)
         if _budget_exhausted[0] or (_impl_over_budget(final=True) and not tests_passed):
             with _transaction(engine) as c:
                 c.execute(sql(
@@ -10194,7 +10204,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             if _seat_run.timed_out:
                 review_errors.append(
                     f"{len(_seat_run.timed_out)} review check(s) exceeded {review_deadline}s "
-                    f"({', '.join(_seat_run.timed_out)}) — degraded")
+                    f"({', '.join(_seat_run.timed_out)}) — degraded. The deadline counts each "
+                    "check's own work from when it started; time waiting for a model slot is "
+                    "not counted (BOSS_CODE_AGENT_REVIEW_TIMEOUT_SECONDS sets it)")
                 review_errors.append(
                     f"terminated {_seat_run.killed} stuck review process(es) past the deadline"
                     if _seat_run.killed else

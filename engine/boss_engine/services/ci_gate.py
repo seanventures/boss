@@ -55,6 +55,18 @@ DEFAULT_POLL_SECONDS = 10
 MAX_POLL_SECONDS = 120
 #: How long a repository with no CI configured is given for an external CI to report a status.
 NO_CI_GRACE_SECONDS = 60
+#: THE CI WAIT COUNTS FROM WHEN A CHECK STARTS RUNNING (BOSSAPP-1453). Time every check sits
+#: queued for a GitHub runner is not CI's run time: on a busy organisation, or one with a single
+#: self-hosted runner, a check can queue longer than the whole timeout. The queue has its own
+#: bound, from when the wait began, so a runner that never comes still ends the wait in words.
+QUEUE_TIMEOUT_SECONDS = 6 * 3600
+#: A check run's statuses before a runner picks it up (GitHub: queued, waiting, requested,
+#: pending). A commit status has no queued state: `pending` there is normalised to running.
+QUEUED_STATUSES = frozenset({"queued", "waiting", "requested", "pending"})
+#: A build that waits for CI IN its own run (run_blocking) holds a worker slot and its budget
+#: hold while it waits, so its queue bound is shorter: an hour, or the run timeout when longer.
+#: The answer is `timed_out` ("CI never started"), which Re-check reads again later.
+IN_BUILD_QUEUE_TIMEOUT_SECONDS = 3600
 
 _log = logging.getLogger("boss.ci_gate")
 TERMINAL = frozenset({"passed", "failed", "timed_out", "no_ci", "unreadable", "cancelled"})
@@ -663,17 +675,41 @@ def look(reader: CiReader, sha: str) -> CiOutcome:
     return evaluate(normalise(reader.check_runs(sha), reader.statuses(sha)))
 
 
+def running(checks: Iterable[Mapping[str, Any]]) -> bool:
+    """Whether any check has left the queue (a runner took it, or it already finished)."""
+    return any(str(c.get("status") or "queued") not in QUEUED_STATUSES for c in checks or ())
+
+
 def settle(outcome: CiOutcome, *, elapsed: float, timeout: float, has_ci: Optional[bool],
-           repository: str = "", grace: float = NO_CI_GRACE_SECONDS) -> CiOutcome:
+           repository: str = "", grace: float = NO_CI_GRACE_SECONDS,
+           ran: Optional[float] = None,
+           queue_timeout: float = QUEUE_TIMEOUT_SECONDS) -> CiOutcome:
     """Turn a non-terminal look into a terminal answer when time says so.
 
     `has_ci` has three values: True (workflows found, or a check reported), False (none), None
     (BOSS could not tell). UNKNOWN NEVER MEANS "HAS CI": with no check reported by the grace
     period, an unknown repository is `unreadable` (terminal and fail closed: the merge and the
     deploy stay refused in words, and an explicit look reads it again), not a 30-minute wait for
-    checks that may never come."""
+    checks that may never come.
+
+    `elapsed` is the time since the wait began; `ran` the time since a check was first seen
+    running (None: not known, read as `elapsed`). The timeout counts `ran`: checks that are all
+    still queued for a runner are bounded by `queue_timeout` instead (BOSSAPP-1453)."""
     if outcome.terminal:
         return outcome
+    if outcome.checks and not running(outcome.checks):
+        if elapsed < queue_timeout:
+            return outcome
+        head = outcome.checks[0]
+        url = head.get("url")
+        n = len(outcome.checks)
+        return CiOutcome(
+            "timed_out",
+            f"CI never started: {n} check{'s' if n != 1 else ''} waited "
+            f"{_minutes(elapsed)} for a GitHub runner and none began running ('{head['name']}' "
+            f"is still queued{' — ' + url if url else ''}). Check the repository's runners on "
+            "GitHub (Settings › Actions › Runners), then press Re-check on this card.",
+            outcome.checks, url, [c["name"] for c in outcome.checks])
     if not outcome.checks and has_ci is False and elapsed >= min(grace, timeout):
         where = f" for {repository}" if repository else ""
         return CiOutcome("no_ci", f"No CI is configured{where} (no .github/workflows and no "
@@ -683,21 +719,29 @@ def settle(outcome: CiOutcome, *, elapsed: float, timeout: float, has_ci: Option
         return CiOutcome("unreadable", unreadable_words(
             f"BOSS could not tell whether {where}has CI, and no check reported in "
             f"{_minutes(min(grace, timeout))}. Read CI again once the host answers"), [])
-    if elapsed >= timeout:
-        if not outcome.checks and outcome.summary.startswith(UNREADABLE_PREFIX):
+    if not outcome.checks:
+        if elapsed < timeout:
+            return outcome
+        if outcome.summary.startswith(UNREADABLE_PREFIX):
             return CiOutcome("unreadable", outcome.summary, [])
-        if not outcome.checks:
-            return CiOutcome("timed_out", f"CI did not finish in {_minutes(timeout)}: no checks "
-                                          "were reported for this commit.", [])
-        pend = [c for c in outcome.checks if c["status"] != "completed"]
-        head = pend[0] if pend else None
-        url = head.get("url") if head else None
-        return CiOutcome("timed_out",
-                         f"CI did not finish in {_minutes(timeout)}"
-                         + (f": '{head['name']}' still running" if head else "")
-                         + (f" — {url}" if url else ""), outcome.checks, url,
-                         [c["name"] for c in pend])
-    return outcome
+        return CiOutcome("timed_out", f"CI did not finish in {_minutes(timeout)}: no checks "
+                                      "were reported for this commit.", [])
+    ran_for = elapsed if ran is None else min(float(ran), elapsed)
+    if ran_for < timeout:
+        return outcome
+    pend = [c for c in outcome.checks if c["status"] != "completed"]
+    head = pend[0] if pend else None
+    url = head.get("url") if head else None
+    queued_for = max(0.0, elapsed - ran_for)
+    return CiOutcome("timed_out",
+                     f"CI did not finish in {_minutes(timeout)}"
+                     + (f": '{head['name']}' still running" if head else "")
+                     + (f" — {url}" if url else "")
+                     + f" (the {_minutes(timeout)} count from when the first check started "
+                       "running" + (f"; the {_minutes(queued_for)} it waited for a GitHub "
+                                    "runner before that are not counted)"
+                                    if queued_for >= 60 else ")"),
+                     outcome.checks, url, [c["name"] for c in pend])
 
 
 def next_interval(attempt: int, poll: float = DEFAULT_POLL_SECONDS,
@@ -717,6 +761,7 @@ def wait_for_ci(reader: CiReader, sha: str, *, timeout_seconds: float = DEFAULT_
     if has_ci is None:
         has_ci = _safe_has_workflows(reader, sha)
     start = clock()
+    running_since: Optional[float] = None
     attempt = 0
     while True:
         try:
@@ -725,13 +770,23 @@ def wait_for_ci(reader: CiReader, sha: str, *, timeout_seconds: float = DEFAULT_
             outcome = CiOutcome("waiting", unreadable_words(error), [])
         if outcome.checks:
             has_ci = True
+        if running_since is None and running(outcome.checks):
+            running_since = clock()
+        ran = None if running_since is None else clock() - running_since
         outcome = settle(outcome, elapsed=clock() - start, timeout=timeout_seconds,
-                         has_ci=has_ci, repository=repository)
+                         has_ci=has_ci, repository=repository,
+                         ran=ran if ran is not None else (0.0 if outcome.checks else None))
         if on_look:
             on_look(outcome)
         if outcome.terminal:
             return outcome
-        remaining = timeout_seconds - (clock() - start)
+        elapsed = clock() - start
+        if ran is not None:
+            remaining = timeout_seconds - ran
+        elif outcome.checks:
+            remaining = QUEUE_TIMEOUT_SECONDS - elapsed
+        else:
+            remaining = timeout_seconds - elapsed
         sleep(max(0.0, min(next_interval(attempt, poll_seconds), max(remaining, 0.0))))
         attempt += 1
 
@@ -1013,7 +1068,8 @@ def get_wait(connection: Any, wait_id: str) -> dict[str, Any]:
     out = dict(row)
     if isinstance(out.get("checks"), str):
         out["checks"] = json.loads(out["checks"])
-    for k in ("deadline_at", "next_poll_at", "finished_at", "created_at", "updated_at"):
+    for k in ("deadline_at", "next_poll_at", "finished_at", "created_at", "updated_at",
+              "running_since"):
         if isinstance(out.get(k), datetime):
             out[k] = out[k].isoformat()
     out["blocks_deploy"] = out["status"] not in CLEARED
@@ -1021,7 +1077,8 @@ def get_wait(connection: Any, wait_id: str) -> dict[str, Any]:
 
 
 def poll_wait(connection: Any, wait_id: str, reader: CiReader, *, force: bool = False,
-              now: Optional[datetime] = None, rearm: bool = True) -> dict[str, Any]:
+              now: Optional[datetime] = None, rearm: bool = True,
+              queue_timeout: Optional[float] = None) -> dict[str, Any]:
     """One look at CI for a recorded wait, when it is due (or `force`). Never blocks."""
     from .core import emit_event
 
@@ -1064,10 +1121,11 @@ def poll_wait(connection: Any, wait_id: str, reader: CiReader, *, force: bool = 
         connection.execute(text(
             "UPDATE ci_waits SET status = 'waiting', summary = :su, checks = CAST(:c AS JSONB), "
             "failing_url = NULL, finished_at = NULL, attempts = 0, deadline_at = :d, "
-            "next_poll_at = :now, updated_at = :now WHERE id = :i"),
+            "running_since = :rs, next_poll_at = :now, updated_at = :now WHERE id = :i"),
             {"su": ("CI is running again: " + outcome.summary)[:1000],
              "c": json.dumps(outcome.checks), "d": now + timedelta(seconds=int(
-                 row["timeout_seconds"] or DEFAULT_TIMEOUT_SECONDS)), "now": now, "i": wait_id})
+                 row["timeout_seconds"] or DEFAULT_TIMEOUT_SECONDS)), "now": now, "i": wait_id,
+             "rs": now if running(outcome.checks) else None})
         emit_event(connection, row["project_id"], "ci.rerun", "boss", "ci_wait", wait_id,
                    {"head_sha": row["head_sha"], "was": row["status"]})
         return get_wait(connection, wait_id)
@@ -1077,15 +1135,24 @@ def poll_wait(connection: Any, wait_id: str, reader: CiReader, *, force: bool = 
     deadline = row.get("deadline_at") if hasattr(row, "get") else row["deadline_at"]
     elapsed = (timeout - (deadline - now).total_seconds()) if deadline else \
         (now - row["created_at"]).total_seconds()
+    # THE RUN CLOCK STARTS WHEN A CHECK FIRST LEAVES THE QUEUE (BOSSAPP-1453), recorded on the
+    # wait so every later look counts from there; queued time before it is not run time.
+    running_since = row.get("running_since") if hasattr(row, "get") else None
+    if running_since is None and running(outcome.checks):
+        running_since = now
+    ran = (now - running_since).total_seconds() if running_since is not None else (
+        0.0 if outcome.checks else None)
     outcome = settle(outcome, elapsed=elapsed, timeout=timeout,
-                     has_ci=has_ci, repository=row["repository"])
+                     has_ci=has_ci, repository=row["repository"], ran=ran,
+                     queue_timeout=(QUEUE_TIMEOUT_SECONDS if queue_timeout is None
+                                    else queue_timeout))
     attempts = int(row["attempts"] or 0) + 1
     connection.execute(text(
         "UPDATE ci_waits SET status = :st, summary = :su, checks = CAST(:c AS JSONB), "
-        "failing_url = :f, has_ci = :h, attempts = :a, next_poll_at = :np, "
+        "failing_url = :f, has_ci = :h, attempts = :a, next_poll_at = :np, running_since = :rs, "
         "finished_at = CASE WHEN :term THEN :now ELSE NULL END, updated_at = :now WHERE id = :i"),
         {"st": outcome.state, "su": outcome.summary[:1000], "c": json.dumps(outcome.checks),
-         "f": outcome.failing_url, "h": has_ci, "a": attempts,
+         "f": outcome.failing_url, "h": has_ci, "a": attempts, "rs": running_since,
          "np": now + timedelta(seconds=next_interval(attempts)), "term": outcome.terminal,
          "now": now, "i": wait_id})
     if outcome.terminal:
@@ -1096,14 +1163,24 @@ def poll_wait(connection: Any, wait_id: str, reader: CiReader, *, force: bool = 
     return get_wait(connection, wait_id)
 
 
+def _timeout_of(connection: Any, wait_id: str) -> float:
+    value = connection.execute(text("SELECT timeout_seconds FROM ci_waits WHERE id = :i"),
+                               {"i": wait_id}).scalar()
+    return float(value or DEFAULT_TIMEOUT_SECONDS)
+
+
 def run_blocking(begin: Callable[[], Any], wait_id: str, reader: CiReader, *,
                  sleep: Callable[[float], None] = time.sleep) -> dict[str, Any]:
     """Poll a recorded wait until it is terminal, each look in its own short transaction (a
-    30-minute wait never holds a transaction open). Bounded by the wait's own deadline."""
+    30-minute wait never holds a transaction open). Bounded by the wait's own deadline, and
+    while every check is still queued for a runner by IN_BUILD_QUEUE_TIMEOUT_SECONDS (or the
+    wait's timeout when longer): a build blocked here holds its worker."""
     attempt = 0
     while True:
         with begin() as connection:
-            got = poll_wait(connection, wait_id, reader, force=True)
+            got = poll_wait(connection, wait_id, reader, force=True,
+                            queue_timeout=max(IN_BUILD_QUEUE_TIMEOUT_SECONDS,
+                                              float(_timeout_of(connection, wait_id))))
         if got["status"] in TERMINAL:
             return got
         sleep(next_interval(attempt))

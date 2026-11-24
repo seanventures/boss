@@ -3504,28 +3504,69 @@ class IntentRouter:
             self._require(connection, project_id, actor, "task_create", "code_task:create")
             title = str(arguments.get("title") or "Code task")[:300]
             instructions = str(arguments.get("instructions") or title)
-            # BUILD-ON-EXISTING: if the chat is scoped to a task that already shipped an app, extend
-            # THAT app's branch (one lean web build on top) instead of a new task built on main.
-            base_branch, root = self._existing_app_for_task(connection, project_id, external_ref)
-            extend = base_branch is not None
-            if extend:
-                task = {"task_id": external_ref}
-                instructions = (
-                    "The repo ALREADY CONTAINS a working app on this branch — EXTEND it, do NOT "
-                    "re-scaffold or rebuild from scratch. Change only what the request needs and keep "
-                    "`npm run build` green.\n\nREQUEST:\n" + instructions)
-            else:
-                task = self.intake.create_task(
-                    connection,
-                    project_id=project_id,
-                    title=title,
-                    description=instructions,
-                    dedupe_key=stable_dedupe_key("agent-code", project_id, title, instructions),
-                    priority="p1",
-                    risk_tier=1,
-                    inputs={"source": "orchestration_agent", "instructions": instructions},
-                    required_artifacts=["pull_request"],
-                )
+            # BUILD-ON-EXISTING: if the chat is scoped to a task or run that already built an
+            # app, the request changes THAT app — through the one resolver every door asks
+            # (new_work.build_mode, BOSSAPP-1455): its open change continues on its branch, a
+            # MERGED change becomes a new change of the app from the default branch. The build
+            # is the app's follow-up (start_followup_task), as the agent's create_code_task and
+            # Change it make it: the app's repository, lineage and app id, never the
+            # environment's single repo.
+            _branch, root = self._existing_app_for_task(connection, project_id, external_ref)
+            from .project_experience import new_work
+
+            if root is not None:
+                from .code_task_service import start_followup_task
+
+                mode = new_work.build_mode(connection, project_id, root)
+                try:
+                    started = start_followup_task(
+                        connection, parent_run_id=str((mode or {}).get("run_id") or root),
+                        instructions=instructions, jobs=self.jobs, title=title, actor=actor,
+                        # The person's own words in chat: their request joins the contract,
+                        # as at every other door (New work, Change it, a panel's PRD).
+                        is_person_request=True,
+                        finalize_extra={"source": "orchestration_agent"},
+                        new_change=bool(mode and mode.get("mode") == "new_change"))
+                except ValueError as error:
+                    return RouterTurn(
+                        reply=f"I couldn’t start that change: {error}. Open the app's card and "
+                              "use Change it, or start it from New work on the Project page.",
+                        tool_calls=[{"name": name, "arguments": arguments}])
+                run_id = started["run_id"]
+                action = {"kind": "code_task_created", "task_id": external_ref,
+                          "run_id": run_id, "href": f"/?area=code_tasks&run={run_id}"}
+                new_change = bool(mode and mode.get("mode") == "new_change")
+                return RouterTurn(
+                    reply=("On it — this app's last change was merged, so this is a new change "
+                           "of the app, built from the default branch. I'll open a PR with just "
+                           "the change." if new_change else
+                           "On it — extending the existing app for this task (building on top of "
+                           "its current branch). I'll open a PR with just the change."),
+                    actions=[action], tool_calls=[{"name": name, "arguments": arguments}])
+            # NOTHING NAMED BESIDE SEVERAL APPS: ask which, never a quiet fresh build on the
+            # default branch beside them (RCA #9) — the same question New work and the agent's
+            # create_code_task ask.
+            try:
+                new_work.require_app_choice(connection, project_id, (
+                    "Which one should this change? Open that app's card and ask there, or use "
+                    "New work on the Project page to pick the app (or Create a new app)."))
+            except new_work.AppChoiceNeeded as asked:
+                return RouterTurn(
+                    reply=str(asked),
+                    actions=[{"kind": "app_choice_needed", "app_choices": asked.choices,
+                              "href": "/?area=projects"}],
+                    tool_calls=[{"name": name, "arguments": arguments}])
+            task = self.intake.create_task(
+                connection,
+                project_id=project_id,
+                title=title,
+                description=instructions,
+                dedupe_key=stable_dedupe_key("agent-code", project_id, title, instructions),
+                priority="p1",
+                risk_tier=1,
+                inputs={"source": "orchestration_agent", "instructions": instructions},
+                required_artifacts=["pull_request"],
+            )
             run_id = start_code_task(
                 connection,
                 project_id=project_id,
@@ -3533,14 +3574,12 @@ class IntentRouter:
                 title=title,
                 instructions=instructions,
                 acceptance_criteria=[],
-                test_commands=(["npm run build"] if extend else []),
+                test_commands=[],
                 owner=self.settings.target_github_owner,
                 repo=self.settings.target_github_repo,
-                base_branch=base_branch or None,
-                finalize_ctx=({"source": "orchestration_agent", "actor": actor,
-                               "web_app_build": True, "root_run_id": root} if extend
-                              else {"source": "orchestration_agent", "actor": actor}),
-                risk_tier=(0 if extend else None),
+                base_branch=None,
+                finalize_ctx={"source": "orchestration_agent", "actor": actor},
+                risk_tier=None,
                 jobs=self.jobs,
             )
             action = {
@@ -3550,9 +3589,7 @@ class IntentRouter:
                 "href": f"/?area=code_tasks&run={run_id}",
             }
             return RouterTurn(
-                reply=("On it — extending the existing app for this task (building on top of its "
-                       "current branch). I'll open a PR with just the change."
-                       if extend else f"Started the governed code task “{title}”."),
+                reply=f"Started the governed code task “{title}”.",
                 actions=[action],
                 tool_calls=[{"name": name, "arguments": arguments}],
             )

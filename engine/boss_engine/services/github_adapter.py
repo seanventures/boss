@@ -583,16 +583,19 @@ class GitHubAdapter:
         )
         return default_branch, ref["object"]["sha"]
 
-    def branch_exists(self, branch_name: str) -> bool:
+    def branch_exists(self, branch_name: str) -> Optional[bool]:
         """True if the branch already exists on the remote (used to clone prior work
-        when a feedback-iteration reuses an existing task branch)."""
+        when a feedback-iteration reuses an existing task branch). False only when GitHub
+        says it is not there (404); None when GitHub could not answer (403, 429, 5xx), so an
+        outage is never read as a deleted branch (build_base_branch, BOSSAPP-1439)."""
         try:
             self._request(
                 "GET", f"/repos/{self.repository_full_name}/git/ref/heads/{branch_name}"
             )
             return True
-        except httpx.HTTPStatusError:
-            return False
+        except httpx.HTTPStatusError as error:
+            return False if error.response is not None and error.response.status_code == 404 \
+                else None
 
     def ensure_branch(self, branch_name: str, base_branch: Optional[str] = None) -> str:
         """Return the branch's sha, creating it from `base_branch` if it does not exist.
