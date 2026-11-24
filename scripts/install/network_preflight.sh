@@ -139,18 +139,21 @@ except Exception:
 boss_apt_diagnose() {
   local http_proxy_setting="$1" https_proxy_setting="$2"
   local url="${3:-http://deb.debian.org/debian/dists/bookworm/InRelease}"
-  local host code via code_https
+  local host code via code_https how
   host="${url#*://}"; host="${host%%/*}"
-  via="$http_proxy_setting"
-  [ -n "$via" ] || via="$(boss_docker_client_http_proxy)"
+  via="$http_proxy_setting"; how=" through BOSS_UPSTREAM_HTTP_PROXY"
+  if [ -z "$via" ]; then
+    via="$(boss_docker_client_http_proxy)"; how=" through the proxy in Docker's config.json"
+  fi
+  [ -n "$via" ] || how=" directly"
   code="$(boss_http_status "$url" "$via")"
   case "$code" in 2??|3??) return 0 ;; esac
   if [ "$code" = 000 ]; then
     printf '\n  ✗ The image build installs Debian packages (gcc, git, curl) over plain http from %s, and this machine cannot reach it%s.\n' \
-      "$host" "$([ -n "$via" ] && echo ' through BOSS_UPSTREAM_HTTP_PROXY' || echo ' directly')"
+      "$host" "$how"
   else
     printf '\n  ✗ The image build installs Debian packages (gcc, git, curl) over plain http from %s, and it answered HTTP %s%s.\n' \
-      "$host" "$code" "$([ -n "$via" ] && echo ' through BOSS_UPSTREAM_HTTP_PROXY' || echo '')"
+      "$host" "$code" "$how"
   fi
   printf '    Without it the build stops minutes in with "Unable to locate package gcc".\n'
   if [ -z "$http_proxy_setting" ] && [ -n "$https_proxy_setting" ]; then

@@ -133,3 +133,23 @@ def test_a_blocked_build_says_the_setting_and_a_template_hold_never_says_package
     # An ordinary dependency conflict keeps its own words and next step.
     plain = _install_failure("npm error code ERESOLVE\nnpm error ERESOLVE could not resolve")
     assert hold_outcome(["template_tests"], plain)["next_step"] == INSTALL_NEXT
+
+
+@pytest.mark.parametrize("error", [
+    "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: certificate has expired",
+    "403 " + connect.refusal_reason("github.com", 443, "host_not_allowed"),
+])
+def test_what_the_module_rules_out_never_reaches_a_network_card(error):
+    """Review P1: the fallback rules reused the bare patterns, so an expired certificate became
+    "set BOSS_EXTRA_CA_FILE" and GitHub's own route became "widen the fence"."""
+    _cls, cause, _action = fo.classify(error)
+    assert cause not in nr.CODES
+
+
+def test_a_huge_log_is_read_in_bounded_time():
+    import time
+
+    log = ("a." * 20000) + "\ncertificate verify failed\n" + ("b." * 20000)
+    t0 = time.monotonic()
+    nr.explain(log, ca=False)
+    assert time.monotonic() - t0 < 1.0

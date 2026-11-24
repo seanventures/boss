@@ -36,7 +36,7 @@ esac
 """
 
 
-def _world(tmp_path: Path, free_gb: int, cache: str = "4.2GB", **extra: str) -> dict:
+def _world(tmp_path: Path, free_gb: int, cache: str = "4.2GB", room: bool = True, dry: bool = False, **extra: str) -> dict:
     bindir = tmp_path / "bin"
     bindir.mkdir(exist_ok=True)
     exe = bindir / "docker"
@@ -47,9 +47,14 @@ def _world(tmp_path: Path, free_gb: int, cache: str = "4.2GB", **extra: str) -> 
     env = {k: v for k, v in os.environ.items() if not k.startswith("BOSS_")}
     env.update({"PATH": f"{bindir}{os.pathsep}{env['PATH']}", "FAKE_DOCKER_LOG": str(tmp_path / "log"),
                 "FAKE_FREE_KB": str(free_gb * 1048576), "FAKE_CACHE": cache, **extra})
-    out = subprocess.run(["bash", str(PRUNE), "--dry-run", "--dir", str(install)], env=env,
+    args = ["--room"] if room else []
+    out = subprocess.run(["bash", str(PRUNE), *(["--dry-run"] if dry else []), "--dir", str(install), *args], env=env,
                          capture_output=True, text=True, timeout=60, check=True)
-    calls = [ln.strip()[len("would run: "):] for ln in out.stdout.splitlines() if "would run:" in ln]
+    # Every docker call the script made, against the fake (a dry run never starts the container
+    # that measures a VM's disk, so these tests run for real against the fake docker).
+    log = tmp_path / "log"
+    calls = ["docker " + ln for ln in (log.read_text().splitlines() if log.exists() else [])]
+    log.unlink(missing_ok=True)
     return {"out": out.stdout, "calls": calls}
 
 
@@ -86,10 +91,19 @@ def test_the_installer_trims_after_the_build_and_states_the_disk_a_first_install
     install = (REPO / "install.sh").read_text()
     build = install.index('ui_step "Building and starting Community stack')
     need = install.index("a first install needs about ${BOSS_INSTALL_NEEDS_GB} GB")
-    trim = install.index('bash "$INSTALL_DIR/scripts/install/prune.sh" --dir "$INSTALL_DIR"')
+    trim = install.index('bash "$INSTALL_DIR/scripts/install/prune.sh" --dir "$INSTALL_DIR" --room')
     assert need < build < trim
     # The lane checks what the install left; it no longer prunes for it.
     lane = (REPO / "scripts" / "enterprise-lane.sh").read_text()
     body = lane[lane.index("step_install() {"):lane.index("step_preflight() {")]
     after = body[body.index("install.sh --dir"):]
     assert "builder prune" not in after and '[ "$after" -ge 6 ]' in after
+
+
+def test_a_shared_machine_keeps_other_projects_cache_unless_asked(tmp_path):
+    """The cache is Docker-wide: a plain `boss prune` on a shared machine never drops it below the
+    cap; only the installer (--room) or a dedicated host does."""
+    w = _world(tmp_path, free_gb=5, room=False)
+    assert not any("prune -af" in c for c in w["calls"]), w["out"]
+    d = _world(tmp_path, free_gb=5, room=False, BOSS_DEDICATED_HOST="1")
+    assert "docker builder prune -af" in d["calls"]

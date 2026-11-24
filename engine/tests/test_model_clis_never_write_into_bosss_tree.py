@@ -30,6 +30,8 @@ def read_only_tree(tmp_path, monkeypatch):
     tree.chmod(stat.S_IRUSR | stat.S_IXUSR)
     monkeypatch.setattr(Settings, "repo_root", property(lambda self: tree))
     monkeypatch.setenv("TMPDIR", str(tmp_path / "tmp"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     (tmp_path / "tmp").mkdir()
     import tempfile
     monkeypatch.setattr(tempfile, "tempdir", None)
@@ -41,7 +43,7 @@ def read_only_tree(tmp_path, monkeypatch):
 def test_a_read_only_boss_tree_still_gets_a_scratch_folder_outside_it(read_only_tree, tmp_path, adapter):
     got = Path(adapter(Settings())._scratch_dir())
     assert got.is_dir() and os.access(got, os.W_OK)
-    assert read_only_tree not in got.parents and str(tmp_path / "tmp") in str(got)
+    assert read_only_tree not in got.parents and str(tmp_path / "cache") in str(got)
     assert list(read_only_tree.iterdir()) == []
 
 
@@ -57,6 +59,8 @@ def test_an_unwritable_temp_dir_says_what_happened_and_what_to_do(tmp_path, monk
     blocked.chmod(stat.S_IRUSR | stat.S_IXUSR)
     import tempfile
     monkeypatch.setattr(tempfile, "tempdir", str(blocked))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(blocked / "cache"))
+    monkeypatch.setenv("HOME", str(blocked / "home"))
     try:
         with pytest.raises(scratch.ScratchUnavailable) as caught:
             scratch.scratch_dir("claude")
@@ -72,3 +76,20 @@ def test_an_unwritable_temp_dir_says_what_happened_and_what_to_do(tmp_path, monk
     reply = agent_decision.unavailable_reply(recorded, "claude")
     assert reply and reply.startswith(scratch.LEAD) and "Connect" not in reply
     assert len(f"ScratchUnavailable: {said}") <= 600
+
+
+def test_a_folder_someone_else_planted_is_never_used(tmp_path, monkeypatch):
+    """On a shared host another user (or a symlink) must not supply the CLI's working folder."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.setenv("HOME", str(tmp_path / "cache"))     # ~/.cache/boss is the same planted link
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (tmp_path / "cache").mkdir()
+    (tmp_path / "cache" / "boss").symlink_to(elsewhere)
+    import tempfile
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "tmp"))
+    (tmp_path / "tmp").mkdir()
+    got = Path(scratch.scratch_dir("claude"))
+    assert elsewhere not in got.resolve().parents and (tmp_path / "cache" / "boss") not in got.parents
+    assert not list(elsewhere.iterdir())
+    assert oct(got.stat().st_mode & 0o777) == "0o700"

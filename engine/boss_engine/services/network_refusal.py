@@ -38,10 +38,13 @@ _UNKNOWN_ISSUER = re.compile(
     r"|CERTIFICATE_VERIFY_FAILED|SSLCertVerificationError|certificate verify failed", re.I)
 _NOT_A_CA_PROBLEM = re.compile(r"certificate has expired|CERT_HAS_EXPIRED|hostname mismatch"
                                r"|ERR_TLS_CERT_ALTNAME_INVALID|doesn't match|not valid for", re.I)
-_URL_HOST = re.compile(r"https?://(?P<host>[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}|[0-9.]{7,15})"
+_URL_HOST = re.compile(r"https?://(?P<host>(?:[A-Za-z0-9-]{1,63}\.){1,10}[A-Za-z]{2,24}|[0-9.]{7,15})"
                        r"(?::(?P<port>\d+))?")
 _PIP_HOST = re.compile(r"host='(?P<host>[^']+)'")
-_HOST_PORT = re.compile(r"\b(?P<host>[a-z0-9][a-z0-9.-]*\.[a-z]{2,}):(?P<port>443|\d{4,5})\b", re.I)
+_HOST_PORT = re.compile(r"(?<![\w.-])(?P<host>(?:[a-z0-9-]{1,63}\.){1,10}[a-z]{2,24}):(?P<port>443|\d{4,5})\b",
+                        re.I)
+#: How much of a failure's text is read (a whole build log can be megabytes).
+_READ = 20000
 _SAFE = re.compile(r"[^A-Za-z0-9.*:-]")
 
 #: Where the containers see the company CA (enterprise_network.CA_CONTAINER_PATH).
@@ -66,7 +69,7 @@ def _line(text: str, at: int) -> str:
 
 
 def _host(text: str, near: str) -> str:
-    for source in (near, text):
+    for source in (near, text[:4000]):
         for pattern in (_URL_HOST, _PIP_HOST, _HOST_PORT):
             m = pattern.search(source)
             if m:
@@ -103,6 +106,8 @@ def explain(error: Any, *, ca: Optional[bool] = None) -> Optional[dict[str, str]
     """{kind, host, setting, what, action} when `error` is a download the network refused for
     one of CODES, else None. `ca`: whether a company CA is configured (default: read the mount)."""
     text = str(error or "")
+    if len(text) > _READ:
+        text = text[:_READ // 2] + "\n" + text[-_READ // 2:]
     if not text:
         return None
     fence = _FENCE.search(text)

@@ -691,11 +691,13 @@ ui_ok "Install dir: $INSTALL_DIR"
 # These are planning measurements, not an installation admission threshold.
 report_disk_space() {
   local label="$1" path="$2" free_kb
+  _last_free_kb=""
   if ! need_cmd df || ! free_kb="$(df -Pk "$path" 2>/dev/null | awk 'NR==2{print $4}')" ||
      [[ ! "$free_kb" =~ ^[0-9]+$ ]]; then
     ui_warn "$label: free space could not be measured."
     return
   fi
+  _last_free_kb="$free_kb"
   ui_info "$label ($path): $(awk -v kb="$free_kb" 'BEGIN {printf "%.1f", kb/1048576}') GiB free."
   if [[ "$free_kb" -lt 80000000 ]]; then
     ui_warn "$label has less than about 80 GB free; builds and agent work may need more space. This is advisory."
@@ -729,7 +731,8 @@ ui_info "About 100 GB of working capacity is recommended for images, cache and a
 # room to work. Said as a number before the build, not found out as "no space left" during it.
 BOSS_INSTALL_NEEDS_GB="${BOSS_INSTALL_NEEDS_GB:-25}"
 if [[ "$_docker_root" == /* && -d "$_docker_root" && -n "$_docker_os" && "$_docker_os" != *"Docker Desktop"* ]]; then
-  _docker_free_gb="$(df -Pk "$_docker_root" 2>/dev/null | awk 'NR==2 {print int($4/1048576)}' || true)"
+  _docker_free_gb=""
+  [[ ! "${_last_free_kb:-}" =~ ^[0-9]+$ ]] || _docker_free_gb=$(( _last_free_kb / 1048576 ))
   if [[ "$_docker_free_gb" =~ ^[0-9]+$ && "$_docker_free_gb" -lt "$BOSS_INSTALL_NEEDS_GB" ]]; then
     ui_warn "Docker's disk has ${_docker_free_gb} GB free; a first install needs about ${BOSS_INSTALL_NEEDS_GB} GB (the images, plus the build cache while building; it is trimmed afterwards). Free space or grow the disk first, or the build may stop with \"no space left on device\"."
   fi
@@ -1585,13 +1588,19 @@ ui_ok "Network: TLS to the package registries verifies"
 # names one, so a proxy-only network passed the TLS check and then failed the build with
 # "Unable to locate package gcc" (BOSSAPP-1446).
 if ! boss_apt_diagnose "$(env_value BOSS_UPSTREAM_HTTP_PROXY)" "$(env_value BOSS_UPSTREAM_PROXY)"; then
-  if [ "${BOSS_APT_PREFLIGHT:-}" = warn ]; then
+  # A proxy set in Docker's own daemon (Docker Desktop's settings) may carry the build where
+  # this machine's direct probe cannot: say so, do not stop.
+  _daemon_proxy="$("${DOCKER[@]}" info --format '{{.HTTPProxy}}' 2>/dev/null || true)"
+  if [ -n "$_daemon_proxy" ] && [ "${BOSS_APT_PREFLIGHT:-}" != strict ]; then
+    ui_warn "Continuing: Docker has its own http proxy configured, which the build may use. If it stops at \"Unable to locate package\", set BOSS_UPSTREAM_HTTP_PROXY as shown above."
+  elif [ "${BOSS_APT_PREFLIGHT:-}" = warn ]; then
     ui_warn "Continuing (BOSS_APT_PREFLIGHT=warn): the image build will fail at its first apt-get unless something else reaches Debian's mirror."
   else
     die "Image builds cannot reach Debian's package mirror. Set what is shown above (or BOSS_APT_PREFLIGHT=warn to try anyway)."
   fi
 fi
-ui_ok "Network: Debian's package mirror answers"
+unset _daemon_proxy
+ui_ok "Network: Debian's package mirror checked"
 
 ui_step "Building and starting Community stack (this can take several minutes the first time)"
 ui_info "Services: Postgres · API · worker$( [[ $WITH_WEB -eq 1 ]] && echo ' · Mission Control' )"
@@ -1950,11 +1959,11 @@ chmod 600 "$INSTALL_DIR/boss-community.env.sh"
 # left 5 GB free. The same retention every upgrade runs (prune.sh): old BOSS tags go, the cache is
 # capped, and on a small Docker disk it is trimmed to keep BOSS_DISK_FLOOR_GB free. Best effort.
 if [[ -f "$INSTALL_DIR/scripts/install/prune.sh" ]]; then
-  if _prune_out="$(bash "$INSTALL_DIR/scripts/install/prune.sh" --dir "$INSTALL_DIR" </dev/null 2>&1)"; then
+  if _prune_out="$(bash "$INSTALL_DIR/scripts/install/prune.sh" --dir "$INSTALL_DIR" --room </dev/null 2>&1)"; then
     while IFS= read -r _l; do
       case "$_l" in *"build cache"*|*"could not be measured"*) ui_info "$_l" ;; esac
     done <<< "$_prune_out"
-    ui_ok "Build cache trimmed (disk $(printf '%s\n' "$_prune_out" | sed -n 's/^disk after: //p' | tail -1))"
+    ui_ok "Old images and build cache pruned"
   else
     ui_warn "The build cache was not trimmed; run: boss prune"
   fi

@@ -341,6 +341,8 @@ def classify(error: Any, *, failure_class: Any = None, reason_code: Any = None
     if fc != "needs_human" and _PLATFORM_FIRST.search(raw):
         return PLATFORM, "platform", ""
     for code, pattern, action in _PERSON_RULES:
+        if code in _nr.CODES:
+            continue                 # decided by network_refusal above (its exclusions hold)
         if re.search(pattern, raw, re.I):
             return PERSON, code, action
     if fc == "needs_human":

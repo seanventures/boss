@@ -19,11 +19,13 @@
 #   * additionally, on a dedicated BOSS host (--dedicated / BOSS_DEDICATED_HOST=1) above
 #     --threshold (75%) disk: build cache older than 72h, down to 20% of the disk;
 #   * on a small Docker disk (less than BOSS_DISK_FLOOR_GB, 20, free): build cache down to what
-#     fits above that floor, none on a small box (BOSSAPP-1447). The installer runs this too.
+#     fits above that floor, none on a small box (BOSSAPP-1447). Only on a dedicated host or with
+#     --room (the installer, right after its own build): the cache is Docker-wide.
 # Never volumes, never `system prune`, never a container or image without a BOSS name/label.
 set -euo pipefail
 
 DEDICATED=0
+ROOM=0
 DRY=0
 THRESHOLD=75
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -31,6 +33,7 @@ INSTALL_DIR="${BOSS_INSTALL_DIR:-$(cd "$SCRIPT_DIR/../.." && pwd -P)}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dedicated) DEDICATED=1; shift ;;
+    --room) ROOM=1; shift ;;
     --dry-run) DRY=1; shift ;;
     --threshold) THRESHOLD="${2:?}"; shift 2 ;;
     --dir) INSTALL_DIR="${2:?--dir needs a path}"; shift 2 ;;
@@ -124,9 +127,13 @@ FLOOR_GB="$(env_or_dotenv BOSS_DISK_FLOOR_GB 20)"
 docker_disk_free_gb() {
   local root os kb=""
   IFS='|' read -r root os <<< "$("${D[@]}" info --format '{{.DockerRootDir}}|{{.OperatingSystem}}' 2>/dev/null || true)"
-  if [[ "$(uname -s)" == Linux && "$root" == /* && -d "$root" && "$os" != *"Docker Desktop"* ]]; then
+  local endpoint
+  endpoint="$("${D[@]}" context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null || true)"
+  [[ -z "${DOCKER_HOST:-}" ]] || endpoint="$DOCKER_HOST"
+  if [[ "$(uname -s)" == Linux && "${endpoint:-unix://}" == unix://* && "$root" == /* && -d "$root" && "$os" != *"Docker Desktop"* ]]; then
     kb="$(df -Pk "$root" 2>/dev/null | awk 'NR==2 {print $4}')" || kb=""
-  elif [[ -n "$root" ]]; then
+  elif [[ -n "$root" && "$DRY" -eq 0 ]]; then
+    # A container is started to read the VM's disk: never in a dry run, which changes nothing.
     kb="$("${D[@]}" run --rm --pull never --entrypoint df "boss-community-api:$TAG" -Pk / 2>/dev/null </dev/null | awk 'NR==2 {print $4}')" || kb=""
   fi
   [[ "$kb" =~ ^[0-9]+$ ]] && printf '%s\n' $(( kb / 1048576 ))
@@ -143,7 +150,9 @@ build_cache_gb() {  # whole GB, rounded down; "" when unknown
     else if (u == "tb") n *= 1e3
     printf "%d\n", n }'
 }
-if [[ "$CACHE_CAP_GB" -gt 0 ]]; then
+# The cache is Docker-wide: only a host that runs BOSS alone (--dedicated) or the installer right
+# after its own build (--room) trims below the cap.
+if [[ "$CACHE_CAP_GB" -gt 0 && ( "$DEDICATED" -eq 1 || "$ROOM" -eq 1 ) ]]; then
   free_gb="$(docker_disk_free_gb)"
   if [[ -z "$free_gb" ]]; then
     printf "Docker's disk could not be measured; the build cache is kept at its cap (%s GB)\n" "$CACHE_CAP_GB"
