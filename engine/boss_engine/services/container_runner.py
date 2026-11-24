@@ -203,7 +203,7 @@ class ContainerCommandRunner:
         if not cid:
             return
         try:
-            owned_process.boss_run([self.binary, "rm", "-f", cid],
+            owned_process.boss_run([self.binary, "rm", "-f", "-v", cid],
                            capture_output=True, text=True, timeout=30)
         except Exception as exc:  # noqa: BLE001 — teardown must never mask the real failure
             _log.warning("could not remove sandbox container %s: %s", cid[:12], exc)

@@ -75,6 +75,8 @@ Commands:
                       upgrade kept (prev-<tag>), in seconds and without a build. Refuses when
                       the upgrade changed the database schema, unless --restore-backup PATH
                       (the backup the upgrade printed) restores the pre-upgrade database first.
+                      The kept images last BOSS_ROLLBACK_KEEP_HOURS (72) after a healthy
+                      upgrade; then boss prune drops them and this names boss upgrade --to REF.
                       Also: --dry-run
   self-fix COMMAND    BOSS fixes itself: install the fixes you approved (scripts/install/
                       self_fix_installer.py). seed (mirror BOSS's source for its fixes),
@@ -90,7 +92,9 @@ Commands:
                       a typed confirmation, then removes the boss command the installer
                       put on PATH for this install. Also: --yes, --dry-run, --backup-dir PATH
   prune [--dedicated] Free disk BOSS used: stopped previews, unused preview images, BOSS image
-                      tags other than the release and its prev-<tag> rollback point; caps the
+                      tags other than the release and its prev-<tag> rollback point (that too
+                      once past BOSS_ROLLBACK_KEEP_HOURS, 72, with a healthy API), the test
+                      Postgres volume once no container uses it (boss dev up); caps the
                       build cache at BOSS_BUILD_CACHE_CAP_GB (10); above 75% disk on a BOSS-only
                       host (--dedicated) drops cache older than 72h too. Runs after every
                       upgrade and update. Also: --dry-run
@@ -545,6 +549,12 @@ cmd_prune() {
   need_install
   BOSS_DEDICATED_HOST="$(env_value BOSS_DEDICATED_HOST)" \
     bash "$INSTALL_DIR/scripts/install/prune.sh" "$@"
+  # The test Postgres's volume, when no container uses it (BOSSAPP-1459): the steward, whose
+  # label gate is the one place BOSS removes a volume.
+  local dry=()
+  [[ " $* " == *" --dry-run "* ]] && dry=(--dry-run)
+  python3 "$INSTALL_DIR/scripts/install/steward.py" --install-dir "$INSTALL_DIR" --test-leftovers \
+    ${dry[@]+"${dry[@]}"} </dev/null || printf 'boss: test leftovers not checked\n' >&2
 }
 
 # ---- dev: the test Postgres (storage hygiene, BOSSAPP-1152/1162) -----------------------------

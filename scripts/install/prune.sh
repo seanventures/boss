@@ -13,6 +13,10 @@
 #   * dangling images of the boss-community compose project;
 #   * boss-community-* image tags other than the current one (<tag>, from .env) and the
 #     prev-<tag> rollback point upgrade.sh keeps — never one a container uses;
+#   * the prev-<tag> rollback point itself once it is past its window: BOSS_ROLLBACK_KEEP_HOURS
+#     (72) after the upgrade that kept it, and only while the running release is healthy
+#     (BOSSAPP-1459). .boss-rollback then records BOSS_PREV_EXPIRED_AT and `boss rollback` says
+#     the images are gone instead of trying;
 #   * build cache above BOSS_BUILD_CACHE_CAP_GB (10; 0 turns the cap off). Docker keeps the
 #     newest cache up to the cap and drops the rest. The cache is Docker-wide, so on a shared
 #     machine the cap also bounds other projects' cache: set it higher or to 0 there;
@@ -94,6 +98,69 @@ for repo in $("${D[@]}" images --format '{{.Repository}}' | grep '^boss-communit
     grep -qxF "$img" <<<"$in_use" || run "${D[@]}" rmi "$img"
   done <<<"$tags"
 done
+
+# 3b. THE ROLLBACK POINT HAS A WINDOW (BOSSAPP-1459). upgrade.sh keeps the images that ran before
+#     it as prev-<tag> so `boss rollback` takes seconds; kept for ever they were a whole second
+#     image set on every install (~15 GB real on the operator's laptop). Once the upgrade has run
+#     BOSS_ROLLBACK_KEEP_HOURS (72) and the API is healthy, the release is known good and the
+#     rollback images go. The record stays, marked, so `boss rollback` says what happened. An
+#     unhealthy release keeps them: that is exactly when a rollback is needed.
+PROJECT="$(env_or_dotenv COMPOSE_PROJECT_NAME boss-community)"
+ROLLBACK_FILE="$INSTALL_DIR/.boss-rollback"
+KEEP_HOURS="$(env_or_dotenv BOSS_ROLLBACK_KEEP_HOURS 72)"
+[[ "$KEEP_HOURS" =~ ^[0-9]+$ && "$KEEP_HOURS" -ge 1 ]] || KEEP_HOURS=72
+rb_value() { grep -m 1 "^$1=" "$ROLLBACK_FILE" 2>/dev/null | cut -d= -f2- || true; }
+hours_since() {  # whole hours since an ISO UTC stamp; empty when it cannot be read
+  python3 - "$1" <<'PY' 2>/dev/null || true
+import sys
+from datetime import datetime, timezone
+try:
+    t = datetime.fromisoformat(sys.argv[1].replace("Z", "+00:00"))
+except ValueError:
+    sys.exit(0)
+t = t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+print(int((datetime.now(timezone.utc) - t).total_seconds() // 3600))
+PY
+}
+api_healthy() {
+  [[ -n "$("${D[@]}" ps -q --filter "label=com.docker.compose.project=$PROJECT" \
+            --filter "label=com.docker.compose.service=api" --filter health=healthy 2>/dev/null)" ]]
+}
+if [[ -f "$ROLLBACK_FILE" && -z "$(rb_value BOSS_PREV_EXPIRED_AT)" && -n "$(rb_value BOSS_PREV_SAVED_AT)" ]]; then
+  age_h="$(hours_since "$(rb_value BOSS_PREV_SAVED_AT)")"
+  prev_tag="$(rb_value BOSS_PREV_IMAGE_TAG)"
+  if [[ "$age_h" =~ ^[0-9]+$ && "$age_h" -ge "$KEEP_HOURS" && "$prev_tag" == "prev-$TAG" ]]; then
+    if api_healthy; then
+      dropped=0
+      for repo in $(rb_value BOSS_PREV_IMAGES); do
+        [[ "$repo" =~ ^boss-community-[a-z0-9-]+$ ]] || continue
+        img="$repo:$prev_tag"
+        "${D[@]}" image inspect "$img" >/dev/null 2>&1 || continue
+        if grep -qxF "$img" <<<"$in_use"; then
+          printf 'kept %s: a container still runs it\n' "$img"
+          continue
+        fi
+        run "${D[@]}" rmi "$img"
+        dropped=$((dropped + 1))
+      done
+      # Marked only when every kept image is really gone (an rmi can fail, a container can still
+      # run one): otherwise `boss rollback` would refuse while its images are still here.
+      left=0
+      for repo in $(rb_value BOSS_PREV_IMAGES); do
+        [[ "$repo" =~ ^boss-community-[a-z0-9-]+$ ]] || continue
+        "${D[@]}" image inspect "$repo:$prev_tag" >/dev/null 2>&1 && left=$((left + 1))
+      done
+      if [[ "$DRY" -eq 0 && "$left" -eq 0 ]]; then
+        printf 'BOSS_PREV_EXPIRED_AT=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$ROLLBACK_FILE"
+      fi
+      printf '%s the rollback images of %s (%s images, kept %s h; the window is %s h)\n' \
+        "$([[ "$DRY" -eq 1 ]] && echo 'would drop' || echo dropped)" \
+        "$(rb_value BOSS_PREV_REF | cut -c1-40)" "$dropped" "$age_h" "$KEEP_HOURS"
+    else
+      printf 'kept the rollback images: the running release is not healthy, so `boss rollback` may be needed\n'
+    fi
+  fi
+fi
 
 # 4. Build cache. The cap holds on every host: Docker keeps the newest BOSS_BUILD_CACHE_CAP_GB
 #    of cache and drops the rest, so the cache can no longer grow without bound between deploys.

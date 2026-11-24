@@ -16,7 +16,7 @@ from sqlalchemy import text
 
 from .core import make_id
 
-KINDS = ("backups", "images", "build_cache", "logs", "telemetry", "scratch_db", "kg_derived",
+KINDS = ("backups", "scheduled_backups", "images", "build_cache", "logs", "telemetry", "scratch_db", "kg_derived",
          "docker_trim", "threshold")
 
 #: Thresholds as proposed (LLD §4.1 table) — settings, not constants.
@@ -43,7 +43,7 @@ DEFAULT_RULES: dict[str, dict[str, Any]] = {
 PROPOSED_BACKUP_RULE: dict[str, Any] = {"keep_newest": 10, "keep_days": 7, "cap_gb": 20}
 
 LABELS = {
-    "backups": "Backups", "images": "Images", "build_cache": "Build cache", "logs": "Logs",
+    "backups": "Backups", "scheduled_backups": "Scheduled backups", "images": "Images", "build_cache": "Build cache", "logs": "Logs",
     "telemetry": "Telemetry", "scratch_db": "Scratch DBs", "kg_derived": "KG derived",
     "docker_trim": "Docker trim", "threshold": "Thresholds",
 }
@@ -65,6 +65,8 @@ def _json(value: Any) -> dict[str, Any]:
 def rule_label(kind: str, rule: Mapping[str, Any]) -> str:
     """The chip on the Storage card: ≤ 4 words."""
     r = dict(rule or {})
+    if kind == "scheduled_backups":
+        return f"keep {r.get('keep_newest', '?')} · {r.get('cap_gb', '?')} GB"
     if kind == "backups":
         return f"keep {r.get('keep_newest', '?')} · {r.get('keep_days', '?')} d · {r.get('cap_gb', '?')} GB"
     if kind == "images":

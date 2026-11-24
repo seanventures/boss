@@ -133,7 +133,13 @@ export type StorageSummary = {
   telemetry: TelemetryShare | null;
   /** BOSSAPP-1193: what orphan-volume cleanup could free, and BOSS volumes it cannot judge yet. */
   volumes: { reclaimableGb: number; needsRelabel: number } | null;
+  /** BOSSAPP-1459: where the space goes by category, against the one budget (disk_budget.py). */
+  budget: DiskBudget | null;
 };
+
+export type BudgetLevel = "ok" | "near" | "over" | "unknown";
+export type BudgetRow = { key: string; label: string; gb: number | null; budgetGb: number; level: BudgetLevel; boundedBy: string; what: string; action: string };
+export type DiskBudget = { rows: BudgetRow[]; totalGb: number; budgetGb: number; warnAtPct: number };
 
 export type TelemetrySweep = { at: string; rows: number; bytes: number; partitions: string[]; archived: number; errors: string[]; receiptId: string | null };
 export type TelemetryShare = {
@@ -151,6 +157,22 @@ export function parseTelemetry(w: unknown): TelemetryShare | null {
     tables: arr(o.tables).map((t) => { const x = obj(t); return { table: str(x.table), gb: num(x.gb), keepDays: optNum(x.keep_days), partitioned: x.partitioned === true }; }).filter((t) => t.table),
     lastSweep: str(last.at) ? { at: str(last.at), rows: num(last.rows), bytes: num(last.bytes), partitions: strs(last.partitions), archived: num(last.archived), errors: strs(last.errors), receiptId: optStr(last.receipt_id) } : null,
   };
+}
+
+/** The budget block of the summary; null when the API sends none (an older one) or odd shapes. */
+export function parseBudget(w: unknown): DiskBudget | null {
+  if (!w || typeof w !== "object" || Array.isArray(w)) return null;
+  const o = obj(w);
+  const levels: BudgetLevel[] = ["ok", "near", "over", "unknown"];
+  const rows = arr(o.rows).map((r) => {
+    const x = obj(r);
+    const level = str(x.level) as BudgetLevel;
+    return { key: str(x.key), label: str(x.label) || str(x.key), gb: optNum(x.gb), budgetGb: num(x.budget_gb),
+             level: levels.includes(level) ? level : "unknown", boundedBy: str(x.bounded_by), what: str(x.what), action: str(x.action) };
+  }).filter((r) => r.key);
+  if (!rows.length) return null;
+  const t = obj(o.total);
+  return { rows, totalGb: num(t.gb), budgetGb: num(t.budget_gb), warnAtPct: num(o.warn_at_pct, 80) };
 }
 
 // ── parse ───────────────────────────────────────────────────────────────────────────────────
@@ -402,6 +424,7 @@ export function parseSummary(w: unknown): StorageSummary | null {
     volumes: o.volumes && typeof o.volumes === "object"
       ? { reclaimableGb: num(obj(o.volumes).reclaimable_gb), needsRelabel: Math.max(0, Math.floor(num(obj(o.volumes).needs_relabel))) }
       : null,
+    budget: parseBudget(o.budget),
   };
 }
 

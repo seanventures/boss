@@ -4263,7 +4263,7 @@ def stream_preview_logs(engine, preview_id: str):
 def _docker_rm(container_id: Optional[str]) -> None:
     if container_id:
         try:
-            owned_process.boss_run(["docker", "rm", "-f", container_id], capture_output=True,
+            owned_process.boss_run(["docker", "rm", "-f", "-v", container_id], capture_output=True,
                               timeout=60)
         except Exception:  # noqa: BLE001 — the reaper's substrate sweep is the backstop
             pass
