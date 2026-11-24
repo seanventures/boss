@@ -60,6 +60,10 @@ while [ $# -gt 0 ]; do
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
+# Sourced (the repo's own tests, engine/tests/test_the_enterprise_lane_reruns_from_a_known_state.py)
+# it only defines its functions: no machine checks and no run.
+SOURCED=0; [ "${BASH_SOURCE[0]}" = "$0" ] || SOURCED=1
+if [ "$SOURCED" = 0 ]; then
 [ "$(uname -s)" = Linux ] || { echo "enterprise-lane: run this on the Linux VM (scripts/enterprise-lane/lima.sh on a Mac)" >&2; exit 2; }
 [ "$(id -u)" != 0 ] || { echo "enterprise-lane: run as a normal user with sudo, not as root" >&2; exit 2; }
 # It rewrites Docker's daemon settings, adds iptables REJECT rules, prunes Docker's build cache and
@@ -68,6 +72,7 @@ done
   echo "enterprise-lane: this reconfigures the whole machine (Docker, firewall, apt). Run it only on a" >&2
   echo "throwaway VM made for it, with ENTLANE_THROWAWAY_VM=1 (scripts/enterprise-lane/lima.sh sets it)." >&2
   exit 2; }
+fi
 
 mkdir -p "$STATE/logs" "$STATE/ca" "$STATE/mitm"
 REPORT="${REPORT:-$STATE/report.md}"
@@ -91,6 +96,11 @@ IMG_PROXPI=epicwink/proxpi:1.3.1
 IMG_NGINX=nginx:1.27-alpine
 IMG_ALPINE=alpine:3.20
 IMG_DNS=entlane-dnsmasq:1
+# What the network step points at the company network, and the reset takes back (tests point
+# these at a scratch directory).
+APT_PROXY_FILE="${ENTLANE_APT_PROXY_FILE:-/etc/apt/apt.conf.d/90entlane-proxy}"
+DAEMON_JSON="${ENTLANE_DAEMON_JSON:-/etc/docker/daemon.json}"
+CA_TRUST_FILE="${ENTLANE_CA_TRUST_FILE:-/usr/local/share/ca-certificates/entlane-ca.crt}"
 
 want() {  # want STEP: is this step selected (--only)?
   [ -z "$ONLY" ] || [[ "$ONLY" == *",$1,"* ]]
@@ -143,9 +153,20 @@ step_host() {
 }
 
 # ---- 2. the company network --------------------------------------------------------------------
+# BRING-UP NEVER DEPENDS ON WHAT IT BRINGS UP, AND EVERY RUN STARTS FROM THE SAME STATE.
+# A rerun on a VM an earlier run left pointed at the company proxy (Docker's daemon.json, apt, the
+# firewall) could not start that proxy: its image pull went through the proxy that was not up
+# (2026-11-24, "proxyconnect tcp: dial tcp 10.77.0.10:8080: connect: connection refused"). So the
+# network step runs in this order, and the repo's own test holds it to it:
+#   reset_lane_network   take back every setting an earlier run made (first run == tenth run)
+#   fetch_infra_images   pull/build the proxy, mirror, DNS and probe images with direct egress
+#   start_infra          run them, from images already on the VM (no fetch)
+#   docker_daemon_corp   only now: Docker, apt and the trust store pointed at the company network
+#   lockdown             and nothing leaves except through the proxy
+# The checks after it (verify_network) still prove the VM and its containers reach nothing directly.
 write_apt_proxy() {  # apt through the proxy, as IT configures a company box
   printf 'Acquire::http::Proxy "http://%s:8080";\nAcquire::https::Proxy "http://%s:8080";\n' \
-    "$PROXY_IP" "$PROXY_IP" | sudo tee /etc/apt/apt.conf.d/90entlane-proxy >/dev/null
+    "$PROXY_IP" "$PROXY_IP" | sudo tee "$APT_PROXY_FILE" >/dev/null
 }
 
 provision_packages() {
@@ -157,11 +178,76 @@ provision_packages() {
   docker buildx version >/dev/null 2>&1 || need+=(buildx)
   [ ${#need[@]} -eq 0 ] && return 0
   echo "installing: ${need[*]}"
-  # A VM an earlier run locked down reaches the archive only through the lane's proxy.
-  if sudo iptables -S ENTLANE-OUT >/dev/null 2>&1; then write_apt_proxy; fi
   sudo apt-get update -q &&
   sudo DEBIAN_FRONTEND=noninteractive apt-get install -yq docker.io docker-buildx docker-compose-v2 \
     git make python3 python3-venv curl openssl iptables jq apparmor apparmor-utils ca-certificates
+}
+
+LANE_CONTAINERS="entlane-dns entlane-proxy entlane-npm entlane-pypi entlane-tls"
+
+reset_lane_network() {
+  # Everything the network step points at the company network, taken back. A reboot clears the
+  # firewall and the dummy LAN but not these files; a rerun without a reboot keeps all of it.
+  local spec tool hook chain cur new
+  for spec in "iptables OUTPUT ENTLANE-OUT" "iptables DOCKER-USER ENTLANE-FWD" \
+              "ip6tables OUTPUT ENTLANE-OUT6" "ip6tables FORWARD ENTLANE-FWD6"; do
+    read -r tool hook chain <<<"$spec"
+    command -v "$tool" >/dev/null 2>&1 || continue
+    while sudo "$tool" -C "$hook" -j "$chain" 2>/dev/null; do
+      sudo "$tool" -D "$hook" -j "$chain" ||
+        { echo "could not remove the previous run's $chain firewall rule. Run \`sudo $tool -S $hook\` on the host (the lane VM) to see it."; return 1; }
+    done
+    sudo "$tool" -F "$chain" 2>/dev/null; sudo "$tool" -X "$chain" 2>/dev/null
+  done
+  sudo rm -f "$APT_PROXY_FILE"
+  if [ -e "$CA_TRUST_FILE" ]; then
+    sudo rm -f "$CA_TRUST_FILE" && sudo update-ca-certificates >/dev/null 2>&1
+  fi
+  if [ -f "$DAEMON_JSON" ]; then
+    cur="$(sudo cat "$DAEMON_JSON")"
+    new="$(printf '%s' "$cur" | python3 -c '
+import json, sys
+text = sys.stdin.read()
+d = json.loads(text) if text.strip() else {}
+for k in ("proxies", "dns"):
+    d.pop(k, None)
+print(json.dumps(d, indent=2) if d else "")')" ||
+      { echo "Docker's daemon settings ($DAEMON_JSON) are not valid JSON, so the previous run's proxy could not be taken out. Fix or delete the file, then run \`docker info\` on the host (the lane VM) to check."; return 1; }
+    if [ "$new" != "$cur" ]; then
+      if [ -z "$new" ]; then sudo rm -f "$DAEMON_JSON"; else printf '%s\n' "$new" | sudo tee "$DAEMON_JSON" >/dev/null; fi
+      echo "reset: took the previous run's proxy and DNS out of $DAEMON_JSON"
+      sudo systemctl restart docker ||
+        { echo "Docker did not restart after the previous run's proxy was taken out. Run \`sudo systemctl status docker\` on the host (the lane VM) to see why."; return 1; }
+      for _ in $(seq 1 60); do sudo docker info >/dev/null 2>&1 && break; sleep 1; done
+    fi
+  fi
+  command -v docker >/dev/null 2>&1 || { echo "reset: no Docker yet (a fresh VM)"; return 0; }
+  # The previous run's proxy, mirrors and DNS (a reboot leaves them restarting on an address that
+  # no longer exists).
+  sudo docker rm -f $LANE_CONTAINERS >/dev/null 2>&1
+  local proxy
+  proxy="$(sudo docker info --format '{{.HTTPProxy}}{{.HTTPSProxy}}' 2>/dev/null)"
+  [ -z "$proxy" ] ||
+    { echo "Docker still uses a proxy after the reset, so the lane's own images cannot be fetched. Run \`docker info\` on the host (the lane VM) to see where it is set."; return 1; }
+  echo "reset: no proxy, company DNS, firewall rule or lane container left from an earlier run"
+}
+
+fetch_infra_images() {
+  # Before any proxy is set: the proxy cannot be what fetches its own image.
+  local proxy img
+  proxy="$(docker info --format '{{.HTTPProxy}}{{.HTTPSProxy}}' 2>/dev/null)"
+  [ -z "$proxy" ] ||
+    { echo "Docker points at a proxy before the lane's own images are fetched, so the pulls would need the proxy they start. Run \`docker info\` on the host (the lane VM) to see where it is set."; return 1; }
+  for img in "$IMG_ALPINE" "$IMG_MITM" "$IMG_VERDACCIO" "$IMG_PROXPI" "$IMG_NGINX"; do
+    docker image inspect "$img" >/dev/null 2>&1 && continue
+    docker pull -q "$img" >/dev/null ||
+      { echo "could not pull $img before the proxy was set (direct egress). Run \`docker pull $img\` on the host (the lane VM) to see why."; return 1; }
+  done
+  if ! docker image inspect "$IMG_DNS" >/dev/null 2>&1; then
+    docker build -q -t "$IMG_DNS" -f "$HERE/dnsmasq.Dockerfile" "$HERE" >/dev/null ||
+      { echo "could not build the lane's DNS image $IMG_DNS before the proxy was set. Run \`docker build -f scripts/enterprise-lane/dnsmasq.Dockerfile scripts/enterprise-lane\` on the host (the lane VM) to see why."; return 1; }
+  fi
+  echo "lane images on the VM before any proxy is set"
 }
 
 make_ca() {
@@ -202,32 +288,32 @@ upstream_dns() {
 }
 
 start_infra() {
-  local up; up="$(upstream_dns)"
+  # From the images fetch_infra_images put on the VM: nothing here pulls or builds.
+  local up img; up="$(upstream_dns)"
+  for img in "$IMG_DNS" "$IMG_MITM" "$IMG_VERDACCIO" "$IMG_PROXPI" "$IMG_NGINX"; do
+    docker image inspect "$img" >/dev/null 2>&1 ||
+      { echo "the lane's image $img is not on the VM, and starting the network must not pull it. Run \`docker images\` on the host (the lane VM): the fetch before it should have put it there."; return 1; }
+  done
   docker network inspect "$CORP_NET" >/dev/null 2>&1 ||
     docker network create --subnet "$CORP_SUBNET" "$CORP_NET" >/dev/null || return 1
-  docker image inspect "$IMG_DNS" >/dev/null 2>&1 ||
-    docker build -q -t "$IMG_DNS" -f "$HERE/dnsmasq.Dockerfile" "$HERE" >/dev/null || return 1
-  for img in "$IMG_MITM" "$IMG_VERDACCIO" "$IMG_PROXPI" "$IMG_NGINX" "$IMG_ALPINE"; do
-    docker image inspect "$img" >/dev/null 2>&1 || docker pull -q "$img" >/dev/null || return 1
-  done
-  docker rm -f entlane-dns entlane-proxy entlane-npm entlane-pypi entlane-tls >/dev/null 2>&1
+  docker rm -f $LANE_CONTAINERS >/dev/null 2>&1
   mkdir -p "$STATE/verdaccio"; sudo chown 10001:65533 "$STATE/verdaccio" 2>/dev/null || true
-  docker run -d --name entlane-dns --restart unless-stopped --network host "$IMG_DNS" \
+  docker run -d --pull never --name entlane-dns --restart unless-stopped --network host "$IMG_DNS" \
     --listen-address="$DNS_IP" --bind-interfaces --no-resolv --server="$up" \
     --address=/entlane.internal/"$REG_IP" >/dev/null || return 1
   # As PROXY_UID itself (the egress rule below lets that uid out), not through the image's
   # entrypoint, which would re-own the confdir.
-  docker run -d --name entlane-proxy --restart unless-stopped --network host \
+  docker run -d --pull never --name entlane-proxy --restart unless-stopped --network host \
     --user "$PROXY_UID:$PROXY_UID" -e HOME=/tmp --entrypoint mitmdump \
     -v "$STATE/mitm":/entlane-mitm "$IMG_MITM" \
     --set confdir=/entlane-mitm --listen-host "$PROXY_IP" --listen-port 8080 \
     --set flow_detail=1 >/dev/null || return 1
-  docker run -d --name entlane-npm --restart unless-stopped --network "$CORP_NET" \
+  docker run -d --pull never --name entlane-npm --restart unless-stopped --network "$CORP_NET" \
     -p 127.0.0.1:47873:4873 -v "$HERE/verdaccio.yaml":/verdaccio/conf/config.yaml:ro \
     -v "$STATE/verdaccio":/verdaccio/storage "$IMG_VERDACCIO" >/dev/null || return 1
-  docker run -d --name entlane-pypi --restart unless-stopped --network "$CORP_NET" \
+  docker run -d --pull never --name entlane-pypi --restart unless-stopped --network "$CORP_NET" \
     -p 127.0.0.1:45000:5000 "$IMG_PROXPI" >/dev/null || return 1
-  docker run -d --name entlane-tls --restart unless-stopped --network host \
+  docker run -d --pull never --name entlane-tls --restart unless-stopped --network host \
     -v "$HERE/nginx.conf":/etc/nginx/nginx.conf:ro \
     -v "$STATE/ca/registry.crt":/etc/entlane/registry.crt:ro \
     -v "$STATE/ca/registry.key":/etc/entlane/registry.key:ro "$IMG_NGINX" >/dev/null || return 1
@@ -235,16 +321,18 @@ start_infra() {
 
 docker_daemon_corp() {
   # The company CA in the VM's trust store, Docker's pulls through the proxy, and the company DNS
-  # for every container (ENTERPRISE_NETWORK.md, "Docker's own downloads", Linux).
-  sudo cp "$STATE/ca/ca.crt" /usr/local/share/ca-certificates/entlane-ca.crt
+  # for every container (ENTERPRISE_NETWORK.md, "Docker's own downloads", Linux). Only after
+  # start_infra: from here on a pull needs the proxy up.
+  sudo cp "$STATE/ca/ca.crt" "$CA_TRUST_FILE"
   sudo update-ca-certificates >/dev/null 2>&1
   write_apt_proxy
   local want
-  want=$(jq -n --arg p "http://$PROXY_IP:8080" --arg d "$DNS_IP" \
-    '{dns: [$d], proxies: {"http-proxy": $p, "https-proxy": $p,
-      "no-proxy": "localhost,127.0.0.1,.entlane.internal,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"}}')
-  if ! sudo cmp -s <(echo "$want") /etc/docker/daemon.json 2>/dev/null; then
-    echo "$want" | sudo tee /etc/docker/daemon.json >/dev/null
+  want=$(python3 -c 'import json, sys; p = sys.argv[1]; print(json.dumps({"dns": [sys.argv[2]],
+    "proxies": {"http-proxy": p, "https-proxy": p,
+      "no-proxy": "localhost,127.0.0.1,.entlane.internal,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"}}, indent=2))' \
+    "http://$PROXY_IP:8080" "$DNS_IP")
+  if ! sudo cmp -s <(echo "$want") "$DAEMON_JSON" 2>/dev/null; then
+    echo "$want" | sudo tee "$DAEMON_JSON" >/dev/null
     sudo systemctl restart docker || return 1
     for _ in $(seq 1 60); do docker info >/dev/null 2>&1 && break; sleep 1; done
   fi
@@ -295,13 +383,19 @@ wait_http() {  # wait_http URL [curl args]: up to 90 s for a 2xx
 }
 
 step_network() {
+  reset_lane_network || return 1
   provision_packages || { echo "could not install the VM's packages"; return 1; }
   docker info >/dev/null 2>&1 || { echo "docker is not usable by $(id -un) (docker group?)"; return 1; }
   make_ca || { echo "could not make the lane CA"; return 1; }
   corp_lan || { echo "could not add the company LAN addresses"; return 1; }
-  start_infra || { echo "could not start the proxy, mirrors and DNS"; return 1; }
-  docker_daemon_corp || { echo "could not point Docker at the proxy and company DNS"; return 1; }
+  fetch_infra_images || return 1
+  start_infra || { echo "could not start the proxy, mirrors and DNS from the images on the VM. Run \`docker ps -a\` on the host (the lane VM) and read this log."; return 1; }
+  docker_daemon_corp || { echo "could not point Docker at the proxy and company DNS. Run \`sudo systemctl status docker\` on the host (the lane VM) to see why."; return 1; }
   lockdown || { echo "could not lock the VM's egress down"; return 1; }
+  verify_network
+}
+
+verify_network() {
   local ca="$STATE/ca/ca.crt" issuer bad=0
   for _ in $(seq 1 30); do (exec 3<>"/dev/tcp/$PROXY_IP/8080") 2>/dev/null && break; sleep 1; done
   # The proxy re-signs public HTTPS with the lane's CA (it inspects).
@@ -323,7 +417,8 @@ step_network() {
   wait_http "https://$NPM_HOST/-/ping" --cacert "$ca" || { echo "FAIL the npm mirror"; bad=1; }
   wait_http "https://$NPM_HOST/is-number" --cacert "$ca" || { echo "FAIL the npm mirror cannot fetch a package"; bad=1; }
   wait_http "https://$PYPI_HOST/index/six/" --cacert "$ca" || { echo "FAIL the PyPI mirror"; bad=1; }
-  # Docker's own pulls go through the proxy.
+  # Docker's own pulls go through the proxy (removed first, so it is a real pull on every run).
+  docker rmi -f hello-world:latest >/dev/null 2>&1
   docker pull -q hello-world:latest >/dev/null 2>&1 || { echo "FAIL docker pull through the proxy"; bad=1; }
   [ "$bad" = 0 ] || return 1
   echo "company network up: inspecting proxy $PROXY_IP:8080 (lane CA), npm + PyPI mirrors on $REG_IP, direct egress refused"
@@ -504,6 +599,7 @@ PY
 }
 
 # ---- the run --------------------------------------------------------------------------------------
+[ "$SOURCED" = 0 ] || return 0
 run_step host step_host || echo "[lane] the host is smaller than the lane needs; continuing"
 # Docker for this user: install it on a fresh VM, then run the rest in the docker group (once).
 if ! docker info >/dev/null 2>&1; then
