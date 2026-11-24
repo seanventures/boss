@@ -592,6 +592,10 @@ def runs_on_included_capacity(connection: Connection, settings: Any, project_id:
         return False
 
 
+#: How long a claimed self-fix's budget hold waits for a worker before its build starts.
+QUEUE_ALLOWANCE_MINUTES = 12 * 60
+
+
 def _reserve(connection: Connection, settings: Any, project_id: str, sfx_id: str,
              micros: int, minutes: int) -> tuple[Optional[str], str]:
     """(reservation id, why not). `budget.reserve(category="self_fix")`: BOSS's spend on itself,
@@ -1077,8 +1081,13 @@ def propose(connection: Connection, settings: Any, *, project_id: str, run_id: s
                 {"f": winner["id"], "r": run_id, "s": step_id, "p": project_id})
             return {"outcome": "waiting_on", "self_fix": winner}
         return {"outcome": "skipped", "why": "another self-fix claimed this cause first"}
+    # The hold must outlive the QUEUE as well as the run (R3, BOSSAPP-1431): reserved here, at
+    # claim, it lapsed after cap + 30 minutes while the fix waited for a worker on a one-slot
+    # host, and the reconcile then counted a lapsed paid hold as spent. The build renews it
+    # from its own start (self_fix_build.keep_hold).
     reservation, why_not = _reserve(connection, settings, project_id, sfx_id, budget_micros,
-                                    _int_setting(connection, settings, "self_fix_max_minutes"))
+                                    _int_setting(connection, settings, "self_fix_max_minutes")
+                                    + QUEUE_ALLOWANCE_MINUTES)
     if reservation is None:
         refuse(connection, sfx_id, "budget", why_not, settings=settings)
         return {"outcome": "skipped", "why": why_not, "confidence": confidence}

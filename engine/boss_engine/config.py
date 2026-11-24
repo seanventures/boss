@@ -1800,6 +1800,10 @@ class Settings(BaseSettings):
     # The Sandbox Agent (host service) the microvm provider dispatches tasks to.
     sandbox_agent_url: str = Field(default="http://127.0.0.1:8088", alias="BOSS_SANDBOX_AGENT_URL")
     sandbox_agent_timeout_seconds: int = Field(default=1500, alias="BOSS_SANDBOX_AGENT_TIMEOUT_SECONDS")
+    #: How long the sandbox-service may keep a task queued before it starts (R3): the agent
+    #: timeout above counts only from when the task runs. Capped so queue + run fit the guest's
+    #: handle lifetime (sandbox_provider.run_code_task).
+    sandbox_queue_timeout_seconds: int = Field(default=2700, alias="BOSS_SANDBOX_QUEUE_TIMEOUT_SECONDS")
     # Shared bearer for the sandbox-service (sent as X-Sandbox-Token). Empty => no auth header.
     sandbox_token: str = Field(default="", alias="BOSS_SANDBOX_TOKEN")
     # Poll cadence while waiting on an async micro-VM task (§2 submit -> poll -> release).

@@ -74,6 +74,8 @@ from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Callable, Iterable, Mapping, Optional
 from urllib.parse import quote, unquote, urlsplit
 
+from . import lapsed
+
 log = logging.getLogger("boss.model_gateway")
 
 TOKEN_PREFIX = "boss_mdl_"
@@ -1227,9 +1229,9 @@ class ModelGateway:
         if handle is None:
             raise Refused(401, "unknown_handle")
         if handle.revoked_at is not None:
-            raise Refused(401, "handle_revoked")
+            raise Refused(401, "handle_revoked", lapsed.say("handle_revoked"))
         if not handle.live():
-            raise Refused(401, "handle_expired")
+            raise Refused(401, "handle_expired", lapsed.say("handle_expired"))
         if caller.org_id and handle.org_id != caller.org_id:
             self._replay(connection, caller, handle, "another_org")
         if not caller.direct:
