@@ -61,6 +61,7 @@ This is a test candidate. Cutting the tag does not deploy a host or publish an i
 
 ## Known issues
 
+- The failure-message rewrite and the shrinking known-failures lists (PR #304) are not in this release or in rc10.33, although the rc10.33 notes first said they were. They ship in rc10.35.
 - On a development install, deleting old backups is decided automatically and cannot be undone. A production install asks.
 - Approval delegates cannot yet answer development deploys.
 - The rc10.33 known issues still apply: Marketplace org packs with project-specific custom steps, two people publishing at once, the Library header wrapping at 1440px, Approvals cards missing run numbers, spec cards without Request changes, and ⋯ on its own line in the phone-width editor bar.
