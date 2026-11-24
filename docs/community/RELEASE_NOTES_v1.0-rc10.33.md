@@ -49,11 +49,10 @@ This is a test candidate. Cutting the tag does not deploy a host or publish an i
 - With the engine sandbox enabled, the AppArmor launcher enters the engine sandbox profile before setting no-new-privileges. Codex writers then work under the hardened profile.
 - Failure messages in these areas now say what happened and what to do next.
 
-**Failures that tell you what to do, and tests that stay green**
+**Correction (2026-11-24): not in this release**
 
-- About 65 failure messages now say what happened, who acts and where. Database errors are told apart: a full disk says the Infra Agent frees space and work resumes, and the others are connection lost, a duplicate name, a conflicting change, or the one-line cause. A refused retry shows its reason on the card, not only in a tooltip. Recovery whose model answered badly says nothing was changed and what to press.
-- A new test fails the build when a vague failure message is added.
-- Each test suite has a known-failures list that can only shrink. A red security guard can never be listed. The worker suite runs in full again.
+- The earlier version of these notes listed about 65 rewritten failure messages, a test that fails the build on a vague failure message, and per-suite known-failures lists that only shrink. That change (PR #304) passed its checks but was never merged, so it is not in rc10.33 or rc10.34. It is being brought up to date and will ship in the next release.
+- The failure-message fixes listed under **From enterprise testing** above are in this release.
 
 **Security**
 
@@ -87,4 +86,3 @@ This is a test candidate. Cutting the tag does not deploy a host or publish an i
 - End-to-end plumbing gate on the laptop install: 20 of 20 passed. The engines gate (scripted conformance engine, both engine profiles) is updated to the pipeline as it now records review, mutation and must-have follow-ups. It is stricter, and passed 21 of 21.
 - The merge gate now also runs the P0 tier, about 13 minutes per PR, and counts only failures new against main.
 - Laptop install walked in a browser: Approvals (40 links opened), the workflow editor, Library, Marketplace and the install confirm, and Setup › Agent capacity. No horizontal scroll at 1024, 768 or 400 px.
-
