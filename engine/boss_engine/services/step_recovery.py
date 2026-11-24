@@ -330,10 +330,41 @@ def budget_left(connection: Connection, state: Mapping[str, Any],
             age = (now_utc() - datetime.fromisoformat(started)).total_seconds()
         except ValueError:
             age = 0
+        # Recovering is working, not waiting in line: the time its repair builds sat queued
+        # for a worker is not recovery time (R3, BOSSAPP-1431; a one-slot host queues a repair
+        # build for hours behind other work, and the window ran out before it ever started).
+        age = max(0.0, age - builds_queued_seconds(connection, state))
         if age >= int(caps["max_seconds"]):
             return False, (f"BOSS has been recovering this step for {int(age // 60)} minutes "
                            f"(the most it does by itself is {int(caps['max_seconds']) // 60})")
     return True, ""
+
+
+def builds_queued_seconds(connection: Connection, state: Mapping[str, Any]) -> float:
+    """How long this window's repair builds waited in the job queue before a worker leased
+    them: from each build's creation to its job's first lease (or to now, while still queued).
+    0 when unreadable: an unknown wait is never subtracted."""
+    builds = [str(b) for b in state.get("build_ids") or [] if b]
+    if not builds:
+        return 0.0
+    try:
+        with connection.begin_nested():
+            # Per build: its job's first lease, or now while the job is still queued. A build
+            # with no lease on record and no queued job (finished, its events pruned) counts
+            # nothing: an unknown wait is never subtracted.
+            waited = connection.execute(text(
+                "SELECT COALESCE(SUM(GREATEST(0, EXTRACT(EPOCH FROM (COALESCE("
+                "  (SELECT min(e.created_at) FROM jobs j JOIN events e "
+                "     ON e.project_id = j.project_id AND e.entity_id = j.id "
+                "    AND e.event_type = 'job.leased' "
+                "   WHERE j.kind = 'code.task' AND j.payload->>'run_id' = r.id), "
+                "  (SELECT now() FROM jobs j WHERE j.kind = 'code.task' "
+                "     AND j.payload->>'run_id' = r.id AND j.status = 'queued' LIMIT 1), "
+                "  r.created_at) - r.created_at)))), 0) "
+                "FROM code_task_runs r WHERE r.id = ANY(:ids)"), {"ids": builds}).scalar()
+    except Exception:  # noqa: BLE001
+        return 0.0
+    return max(0.0, float(waited or 0.0))
 
 
 def _money(micros: int) -> str:

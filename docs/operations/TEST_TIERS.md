@@ -39,6 +39,7 @@ How it runs:
 
 - **Engine tests** run against `boss_test`.
 - **API tests** run sharded across `boss_test_t1..tN` on the `boss-community-db-1` container. N is half the cores, at most 6. The databases are created when missing.
+- **Worker tests** (`apps/worker/tests`: the lease loops, job slots, the stall clock) run after the engine suite, with `apps/worker` on the path. No gate ran them before R3 (BOSSAPP-1431).
 - **Console tests** run in parallel with the API shards.
 - **Output:** each suite's wall-clock time, and the logs in a temporary directory. Set `TEST_TIER_OUT` to keep them elsewhere.
 
@@ -52,7 +53,7 @@ How it runs:
 | `BOSS_TEST_PG_URL=postgresql://user:pass@host:port` | Uses any Postgres that may create databases, instead of `boss-community-db-1` |
 | `TEST_TIER_DB_PREFIX` | Names the databases (default `boss_test`, so `boss_test` and `boss_test_t1..tN`). The name must start with `boss_test` |
 | `TEST_TIER_SHARDS` | Sets the number of API shards |
-| `TEST_TIER_SUITES=engine,api` | Limits the run to those suites |
+| `TEST_TIER_SUITES=engine,api,worker` | Limits the run to those suites (`engine`, `api`, `worker`, `web`) |
 
 A fresh database needs the schema and the install's first-boot seed:
 `python scripts/ci_apply_schema.py boss_test`.
