@@ -294,6 +294,12 @@ scripts/enterprise-lane.sh --only codex,build  # only some steps (host and netwo
 unless `ENTLANE_THROWAWAY_VM=1` (the Lima driver sets it), because it rewrites Docker's settings,
 the firewall and apt on the machine it runs on.
 
+**The tenth run behaves like the first.** The network step first takes back everything an
+earlier run set (Docker's proxy and DNS, apt's proxy, the lane CA in the trust store, the firewall
+chains, the lane's containers), then fetches every image it runs while egress is still direct, and
+only then points the VM at the proxy it just started. Bringing the network up never depends on
+the network it brings up (`engine/tests/test_the_enterprise_lane_reruns_from_a_known_state.py`).
+
 **No model key is needed.** Builds use the scripted conformance engine. When `CODEX_API_KEY` or
 `OPENAI_API_KEY` is exported, the installer receives it the way a person would give it; nothing
 the lane prints carries a credential.
