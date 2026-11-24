@@ -234,6 +234,12 @@ _PERSON_SAMPLES = {
     "approval_expired": "the approval expired before anybody answered",
     "merge_conflict": "the branch does not merge cleanly with its base",
     "host": "Host key verification failed.",
+    # The network refused a download (network_refusal, #319): one .env setting fixes each.
+    "company_ca": "npm ERR! request to https://registry.npmjs.org/x failed, reason: "
+                  "SELF_SIGNED_CERT_IN_CHAIN",
+    "egress_fence": "403 Blocked by BOSS network fence: pypi.org is not on the allow list",
+    "company_proxy": "502 the company proxy (BOSS_UPSTREAM_PROXY) refused pypi.org:443 "
+                     "(403 Forbidden)",
 }
 
 

@@ -199,7 +199,10 @@ def test_checkup_treats_private_env_as_data(tmp_path: Path) -> None:
     )
     result = subprocess.run(
         ["bash", str(ROOT / "scripts/install/checkup.sh")],
-        env={**os.environ, "BOSS_ENV_FILE": str(env_file)},
+        # A stack name no install has: the checkup must never exec into this machine's own
+        # running BOSS (its claim-status call there took longer than the timeout).
+        env={**os.environ, "BOSS_ENV_FILE": str(env_file),
+             "COMPOSE_PROJECT_NAME": "boss-checkup-test-no-such-stack"},
         cwd=tmp_path,
         capture_output=True,
         text=True,

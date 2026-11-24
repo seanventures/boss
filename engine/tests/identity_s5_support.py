@@ -115,6 +115,12 @@ def db(s5_engine):
     conn = s5_engine.connect()
     trans = conn.begin()
     conn.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+    # A daily anchor another suite committed to the shared test database (an API test's worker
+    # tick) names a chain this transaction never wrote, so verify_chain read it as a truncated
+    # chain: a red security guard by test order. Each test judges the chain it writes, against
+    # the anchors it publishes (the delete is rolled back with the rest).
+    if conn.execute(text("SELECT to_regclass('events')")).scalar():
+        conn.execute(text("DELETE FROM events WHERE event_type = 'identity.audit_anchor'"))
     try:
         yield conn
     finally:
