@@ -88,8 +88,9 @@ if [ "$INNER" != off ]; then
   SECURITY=(--security-opt "seccomp=$ROOT/scripts/sandbox/engine-seccomp.json"
             -e "BOSS_ENGINE_INNER_SANDBOX=$INNER")
   if [ "$INNER" = seccomp+apparmor ]; then
-    if [ -r /sys/kernel/security/apparmor/profiles ] &&
-       ! grep -q '^boss-engine (' /sys/kernel/security/apparmor/profiles; then
+    # The profile list is readable by root only; when this user cannot read it, Docker says so.
+    if _aa="$(cat /sys/kernel/security/apparmor/profiles 2>/dev/null)" &&
+       ! grep -q '^boss-engine (' <<<"$_aa"; then
       echo "e2e-gate: AppArmor profile boss-engine is not loaded: sudo scripts/sandbox/load_apparmor.sh" >&2; exit 2
     fi
     SECURITY+=(--security-opt apparmor=boss-engine)

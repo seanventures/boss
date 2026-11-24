@@ -257,7 +257,7 @@ scripts/enterprise-lane.sh --only codex,build  # only some steps (host and netwo
 | codex | Puts a managed Codex policy (`requirements.toml` forbidding full access) in the api and worker containers, then runs Codex's own sandbox under a build's identity, through the real launcher `boss-sandbox-exec`: it must start, write, write every toolchain cache and reach the private npm mirror through BOSS's fence. No model is called | A managed Codex login cannot write on a hardened host |
 | plumbing | `scripts/e2e-gate.sh plumbing --inner-sandbox <mode>`: tier A in a container with the install's seccomp and AppArmor profiles | The post-agent pipeline breaks under the hardened profiles |
 | engines | `scripts/e2e-gate.sh engines --inner-sandbox <mode>`: the whole build pipeline on the scripted engine, the same way | A build breaks under the hardened profiles |
-| build | One scripted build (the engines gate's clean scenario) inside the INSTALLED worker container: its real profiles, fence, CA and launcher | A build breaks on the real install, not only in the gate's container |
+| build | One scripted build (the engines gate's clean scenario) inside the INSTALLED api container, where builds run: its real profiles, fence, CA and launcher | A build breaks on the real install, not only in the gate's container |
 
 **No model key is needed.** Builds use the scripted conformance engine. When `CODEX_API_KEY` or
 `OPENAI_API_KEY` is exported, the installer receives it the way a person would give it; nothing

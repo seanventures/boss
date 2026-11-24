@@ -22,7 +22,7 @@
 #   6. plumbing   scripts/e2e-gate.sh plumbing, in a container with the install's security profiles
 #   7. engines    scripts/e2e-gate.sh engines, the same
 #   8. build      one scripted build (the engines gate's clean scenario) INSIDE the installed
-#                 worker: the real container, profiles, fence, CA and launcher
+#                 api container, where builds run: its real profiles, fence, CA and launcher
 #
 # Output: one PASS/FAIL line and a report file (Markdown) with every step, its time and its
 # evidence. Exit 0 only on PASS.
@@ -416,9 +416,11 @@ gate() {
 step_plumbing() { gate plumbing; }
 step_engines() { gate engines; }
 
-# ---- 8. one scripted build inside the installed worker ---------------------------------------------
+# ---- 8. one scripted build inside the installed stack (api container, where builds run) ---------------------------------------------
 step_build() {
-  local w; w="$(ctr worker)"
+  # Builds run in the api container (the worker leases jobs; the API container holds the CLIs,
+  # boss-sandbox-exec and the fence), so that is where the real build path is.
+  local w; w="$(ctr api)"
   local db; db="$(ctr db)"
   local pw; pw=$(awk -F= '/^BOSS_DB_PASSWORD=/ {print $2}' "$INSTALL/.env")
   local envf; envf="$(mktemp)"; chmod 600 "$envf"
@@ -427,7 +429,7 @@ step_build() {
   unset pw
   docker exec -u 0 "$w" rm -rf /tmp/entlane-gate && docker exec -u 0 "$w" mkdir -p /tmp/entlane-gate &&
   docker cp "$INSTALL/tests/e2e" "$w:/tmp/entlane-gate/e2e" &&
-  docker exec -u 0 "$w" chown -R boss /tmp/entlane-gate || { rm -f "$envf"; echo "could not copy the gate into the worker"; return 1; }
+  docker exec -u 0 "$w" chown -R boss /tmp/entlane-gate || { rm -f "$envf"; echo "could not copy the gate into the api container"; return 1; }
   local rc
   # The gate enters builds without a person (identity in shadow), as the engines tier does: it
   # tests the pipeline in this container, not who may start it.
@@ -446,7 +448,7 @@ except Exception as exc:
 for r in rows:
     print(f"{r['status']:5} {r['check']}: {r.get('detail', '')[:300]}")
 bad = [r for r in rows if r["status"] != "PASS"]
-print(("FAIL " if bad else "") + f"scripted build in the installed worker: {len(rows) - len(bad)}/{len(rows)} checks pass")
+print(("FAIL " if bad else "") + f"scripted build in the installed stack: {len(rows) - len(bad)}/{len(rows)} checks pass")
 sys.exit(1 if bad or not rows else 0)
 PY
   [ $? = 0 ] && [ "$rc" = 0 ]
