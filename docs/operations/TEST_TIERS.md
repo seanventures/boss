@@ -13,15 +13,21 @@ matter for it.
 
 **Release gates**
 
-Before a release: **test-tier major + e2e-gate plumbing + e2e-gate agent.**
+Before a release: **test-tier major + e2e-gate plumbing + e2e-gate agent + a green enterprise lane.**
+
+**A release needs a green enterprise lane** (`scripts/enterprise-lane.sh`, [below](#the-enterprise-lane-scriptsenterprise-lanesh)).
+A red lane step blocks the release until it is fixed or ticketed as a real product bug with an
+owner; it is never waived to ship.
 
 - **Major release:** `scripts/test-tier.sh major` (P0 then P1), then the end-to-end gate below.
 - **Minor release (rc10.x):** `scripts/test-tier.sh changed --since <last release>`. This is P0 plus every test that touches a file changed since that ref. Then the end-to-end gate below.
 - **Every release:** `scripts/e2e-gate.sh plumbing` (tier A, about 1–2 min), `scripts/e2e-gate.sh engines` (tier A, no model: the real build pipeline end to end on the scripted conformance engine, as the poorest and the richest engine, across a clean build and four injected faults; every engine must show the same stages, gates, fix rounds, PR, events, profile fields and failure words) and `scripts/e2e-gate.sh agent` (tier B, a real build with a model). All are listed under `P0: release:` in `tests/tiers.yaml`.
+- **Every release:** `scripts/enterprise-lane.sh` (on a fresh 4 vCPU / 8 GB Linux VM; on a Mac, `scripts/enterprise-lane/lima.sh`) ends in `PASS`. Attach its report to the release notes' checklist.
 - **P2:** `scripts/test-tier.sh P2` when a change works in its area, or overnight.
 - **Before a release:** `scripts/test-tier.sh major` + `scripts/e2e-gate.sh plumbing` and
   `scripts/e2e-gate.sh engines` (tier A) +
-  `scripts/e2e-gate.sh agent` (tier B, below).
+  `scripts/e2e-gate.sh agent` (tier B, below) +
+  a green `scripts/enterprise-lane.sh` (below).
 
 New effort goes into checks a person would notice: performance and latency budgets, build time,
 and browser walks of the main screens. It does not go into more unit tests.
@@ -216,3 +222,61 @@ scripts/e2e-gate.sh agent --brief <name>     # another brief in tests/e2e/briefs
 - **Afterwards.** A PASS rejects the build's merge question, closes the PR and deletes its
   branch (`--keep` keeps them). A FAIL keeps the run, the branch and the PR, and says where
   they are. A FAIL on a real BOSS bug is the gate working: fix BOSS, not the gate.
+
+## The enterprise lane (`scripts/enterprise-lane.sh`)
+
+**Why it exists.** Every other gate runs on our own machines: big hosts, Docker Desktop or native
+Docker, direct internet, personal model logins, the engine inner sandbox off. Companies run BOSS
+on a small, locked-down box: a TLS-inspecting proxy with the company's own CA, internal package
+mirrors on private addresses, AppArmor with the inner sandbox on, and a Codex login whose
+organisation forbids full access. Most of the problems those users hit (the enterprise RCA of
+2026-11-22: 13 of 32 gaps) only happen there, so our tests never saw them. The lane is that
+box, made reproducible.
+
+**What it is.** One script that turns a fresh Linux VM (Ubuntu 24.04, 4 vCPU, 8 GB, 30 GB) into
+that box, installs BOSS on it from scratch, and runs the release gates there. It prints one
+`PASS` or `FAIL` line and writes a report (Markdown) with every step, its time and its evidence.
+
+```bash
+scripts/enterprise-lane.sh                     # on the Linux VM, from a BOSS checkout (needs sudo)
+scripts/enterprise-lane/lima.sh                # on a Mac: makes/reuses the Lima VM boss-ent-lane,
+                                               # copies this checkout's HEAD in, runs the lane,
+                                               # brings the report back, stops the VM
+scripts/enterprise-lane.sh --reuse-install     # keep the last run's install (skip step 3)
+scripts/enterprise-lane.sh --only codex,build  # only some steps (host and network always run)
+```
+
+**The steps, in plain words.**
+
+| Step | What happens | What a red step means |
+|---|---|---|
+| host | Checks the VM is the small one and whether it has AppArmor | The VM is wrong, not BOSS |
+| network | Starts the "company network": an HTTPS-inspecting proxy (mitmproxy) with its own CA, a private npm mirror (verdaccio) and PyPI mirror (proxpi) on a private address with TLS from that CA, and a company DNS. Then locks the VM down: nothing leaves except through the proxy, Docker's own pulls included. It proves each of these before going on | The lane's setup broke, not BOSS |
+| install | `install.sh` from scratch, `--install-tier dev`, given the CA, proxy and mirrors exactly as [ENTERPRISE_NETWORK.md](../community/ENTERPRISE_NETWORK.md) tells a customer | A customer behind a company proxy cannot install BOSS |
+| sandbox | Turns on engine inner-sandbox support the way [ENGINE_SANDBOX.md](../community/ENGINE_SANDBOX.md) says (load the AppArmor profile, `BOSS_ENGINE_INNER_SANDBOX=seccomp+apparmor`, or `seccomp` without AppArmor, then `boss start`) and requires `boss doctor`'s engine sandbox line to be green | The documented hardening does not work |
+| codex | Puts a managed Codex policy (`requirements.toml` forbidding full access) in the api and worker containers, then runs Codex's own sandbox under a build's identity, through the real launcher `boss-sandbox-exec`: it must start, write, write every toolchain cache and reach the private npm mirror through BOSS's fence. No model is called | A managed Codex login cannot write on a hardened host |
+| plumbing | `scripts/e2e-gate.sh plumbing --inner-sandbox <mode>`: tier A in a container with the install's seccomp and AppArmor profiles | The post-agent pipeline breaks under the hardened profiles |
+| engines | `scripts/e2e-gate.sh engines --inner-sandbox <mode>`: the whole build pipeline on the scripted engine, the same way | A build breaks under the hardened profiles |
+| build | One scripted build (the engines gate's clean scenario) inside the INSTALLED api container, where builds run: its real profiles, fence, CA and launcher | A build breaks on the real install, not only in the gate's container |
+
+**Only a full run counts.** A run with `--only` or `--reuse-install` ends in `PARTIAL`, never
+`PASS`: use it while fixing, then run the whole lane for the release. The script refuses to run
+unless `ENTLANE_THROWAWAY_VM=1` (the Lima driver sets it), because it rewrites Docker's settings,
+the firewall and apt on the machine it runs on.
+
+**No model key is needed.** Builds use the scripted conformance engine. When `CODEX_API_KEY` or
+`OPENAI_API_KEY` is exported, the installer receives it the way a person would give it; nothing
+the lane prints carries a credential.
+
+**When it runs.** Before every release (it is listed under `P0: release:` in `tests/tiers.yaml`),
+and nightly when a VM is free. It took 44 minutes on the 4 vCPU VM (2026-11-24): about 9 minutes for the
+from-scratch install through the proxy, 28 for the engines tier.
+
+**A red lane.** Read the step's log (`~/boss-ent-lane/logs/<step>.log` on the VM). A red
+`network` or `host` is the lane's own problem; fix the lane. Any other red is a product bug
+until shown otherwise: fix it, or ticket it with the report attached. Never edit the lane to
+make a step pass.
+
+**What it does not cover yet.** A Colima install on a real Mac (do that by hand weekly with
+[COLIMA.md](../community/COLIMA.md)), a proxy that needs a login, authenticated registries,
+low-disk and long-queue behaviour, and a real managed Codex login doing a full build.

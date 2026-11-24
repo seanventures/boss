@@ -16,6 +16,15 @@
 #       clean build, a failing test, a reviewer BLOCKER, a server that crashes on start and an
 #       engine that cannot run. Every engine must show the same stages, gates, fix rounds, PR,
 #       events, profile fields and failure words (tests/e2e/gate/engines.py). Same container.
+#   --inner-sandbox seccomp|seccomp+apparmor  (plumbing, engines) create the gate container with the
+#       security profiles an install with BOSS_ENGINE_INNER_SANDBOX gives its api and worker
+#       (scripts/install/compose_files.sh): BOSS's seccomp profile, plus AppArmor `boss-engine`
+#       (loaded on the host first: scripts/sandbox/load_apparmor.sh). The enterprise lane
+#       (scripts/enterprise-lane.sh) runs both tiers this way. Default: Docker's own profiles.
+#   --enterprise-env FILE  (plumbing, engines) give the gate the company network an install's .env
+#       names: the package mirrors, the outbound proxy and the extra CA (docs/community/
+#       ENTERPRISE_NETWORK.md). Only those settings are read; nothing else in FILE is used. Without
+#       it, a box whose only way out is a proxy fails the gate's dependency installs.
 #   scripts/e2e-gate.sh agent [--brief <name>] [--with-connector] [--budget-min N] [--keep]
 #       Tier B: ONE real, model-driven build of a known-good brief (tests/e2e/briefs/), started
 #       on the local install as the test owner through BOSS's API, watched to an opened PR,
@@ -38,18 +47,27 @@ TIER="${1:-}"; shift || true
 case "$TIER" in
   plumbing|engines) ;;
   agent) exec python3 "$ROOT/scripts/e2e_gate_agent.py" "$@" ;;
-  *) echo "usage: scripts/e2e-gate.sh plumbing|engines [--boss-root DIR] [--image IMAGE] [--keep]" >&2
+  *) echo "usage: scripts/e2e-gate.sh plumbing|engines [--boss-root DIR] [--image IMAGE] [--keep] [--inner-sandbox MODE]" >&2
      echo "       scripts/e2e-gate.sh agent [--brief <name>] [--with-connector] [--budget-min N] [--keep]" >&2; exit 2 ;;
 esac
 
 BOSS_ROOT="$ROOT"
 IMAGE=""
 KEEP=0
+INNER=off
+ENT_ENV=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --boss-root) BOSS_ROOT="$(cd "${2:?--boss-root needs a directory}" && pwd)"; shift 2 ;;
     --image) IMAGE="${2:?--image needs an image}"; shift 2 ;;
     --keep) KEEP=1; shift ;;
+    --enterprise-env) ENT_ENV="${2:?--enterprise-env needs an install .env}"; shift 2
+      [ -r "$ENT_ENV" ] || { echo "e2e-gate: cannot read $ENT_ENV" >&2; exit 2; } ;;
+    --inner-sandbox)
+      case "${2:-}" in
+        off|seccomp|seccomp+apparmor) INNER="$2"; shift 2 ;;
+        *) echo "--inner-sandbox takes off, seccomp or seccomp+apparmor" >&2; exit 2 ;;
+      esac ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -69,6 +87,22 @@ if [ "${free_gb:-0}" -lt 5 ]; then
 fi
 [ -f "$BOSS_ROOT/engine/boss_engine/__init__.py" ] || {
   echo "e2e-gate: $BOSS_ROOT is not a BOSS checkout" >&2; exit 2; }
+# The install's engine inner-sandbox profiles (the same options compose_files.sh writes).
+SECURITY=()
+if [ "$INNER" != off ]; then
+  [ -f "$ROOT/scripts/sandbox/engine-seccomp.json" ] || {
+    echo "e2e-gate: $ROOT/scripts/sandbox/engine-seccomp.json is missing" >&2; exit 2; }
+  SECURITY=(--security-opt "seccomp=$ROOT/scripts/sandbox/engine-seccomp.json"
+            -e "BOSS_ENGINE_INNER_SANDBOX=$INNER")
+  if [ "$INNER" = seccomp+apparmor ]; then
+    # The profile list is readable by root only; when this user cannot read it, Docker says so.
+    if _aa="$(cat /sys/kernel/security/apparmor/profiles 2>/dev/null)" &&
+       ! grep -q '^boss-engine (' <<<"$_aa"; then
+      echo "e2e-gate: AppArmor profile boss-engine is not loaded: sudo scripts/sandbox/load_apparmor.sh" >&2; exit 2
+    fi
+    SECURITY+=(--security-opt apparmor=boss-engine)
+  fi
+fi
 
 ID="$(date +%s)-$$"
 NET="boss-e2egate-$ID"
@@ -101,14 +135,38 @@ for _ in $(seq 1 60); do
   sleep 0.5
 done
 
-echo "== e2e-gate $TIER: BOSS $(git -C "$BOSS_ROOT" rev-parse --short HEAD 2>/dev/null || echo '?') in $IMAGE"
-docker run --name "$GATE" --network "$NET" --label boss-e2egate=1 \
+# The company network (an install's enterprise block), when asked: URLs only, never a credential
+# (the installer refuses a URL carrying one), and the CA certificate, mounted read-only.
+ENTERPRISE=()
+ENTRY=()
+if [ -n "$ENT_ENV" ]; then
+  for key in BOSS_NPM_REGISTRY BOSS_PIP_INDEX_URL BOSS_UPSTREAM_PROXY BOSS_UPSTREAM_HTTP_PROXY \
+             BOSS_UPSTREAM_NO_PROXY BOSS_EGRESS_PRIVATE_ALLOW BOSS_GOPROXY BOSS_MAVEN_MIRROR; do
+    val="$(grep -m 1 "^$key=" "$ENT_ENV" | cut -d= -f2- || true)"
+    [ -z "$val" ] || ENTERPRISE+=(-e "$key=$val")
+  done
+  proxy="$(grep -m 1 '^BOSS_UPSTREAM_PROXY=' "$ENT_ENV" | cut -d= -f2- || true)"
+  if [ -n "$proxy" ]; then
+    no_proxy="localhost,127.0.0.1,$PG"
+    extra="$(grep -m 1 '^BOSS_UPSTREAM_NO_PROXY=' "$ENT_ENV" | cut -d= -f2- || true)"
+    [ -z "$extra" ] || no_proxy="$no_proxy,$extra"
+    ENTERPRISE+=(-e "HTTPS_PROXY=$proxy" -e "https_proxy=$proxy" -e "NO_PROXY=$no_proxy" -e "no_proxy=$no_proxy")
+  fi
+  ca="$(grep -m 1 '^BOSS_EXTRA_CA_FILE=' "$ENT_ENV" | cut -d= -f2- || true)"
+  if [ -n "$ca" ] && [ -s "$ca" ]; then
+    ENTERPRISE+=(-v "$ca:/etc/boss/extra-ca.pem:ro")
+    ENTRY=(/usr/local/libexec/boss/with-extra-ca)
+  fi
+fi
+
+echo "== e2e-gate $TIER: BOSS $(git -C "$BOSS_ROOT" rev-parse --short HEAD 2>/dev/null || echo '?') in $IMAGE$([ "$INNER" = off ] || echo " (inner sandbox $INNER)")"
+docker run --name "$GATE" --network "$NET" --label boss-e2egate=1 ${SECURITY[@]+"${SECURITY[@]}"} ${ENTERPRISE[@]+"${ENTERPRISE[@]}"} \
   --entrypoint "" -w /tmp --env-file "$WORK/gate.env" \
   -e BOSS_SANDBOX_ISOLATION=required -e BOSS_SANDBOX_NETWORK=off \
   -e BOSS_BUILD_SERVICES_PREFIX=boss_e2egate_ -e BOSS_ARTIFACTS_DIR=/tmp/boss-e2egate-artifacts \
   -e PYTHONPATH=/boss:/boss/engine -e PYTHONDONTWRITEBYTECODE=1 \
   -v "$BOSS_ROOT":/boss:ro -v "$ROOT":/gate-src:ro -v "$WORK/out":/out \
-  "$IMAGE" python3 "/gate-src/tests/e2e/gate/$TIER.py" --out /out/results.json > "$WORK/out/gate.log" 2>&1
+  "$IMAGE" ${ENTRY[@]+"${ENTRY[@]}"} python3 "/gate-src/tests/e2e/gate/$TIER.py" --out /out/results.json > "$WORK/out/gate.log" 2>&1
 status=$?
 grep '^\[gate\]' "$WORK/out/gate.log" >/dev/null 2>&1 || tail -30 "$WORK/out/gate.log"
 

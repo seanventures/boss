@@ -60,6 +60,10 @@ services:
     build:
       context: .
       dockerfile: db-image/Dockerfile
+      secrets:
+        - boss_build_ca
+      args:
+        <<: *boss-enterprise-build-args
     image: ${BOSS_RECOVERY_DB_IMAGE_ID:-boss-community-db:pg16.12-vector0.8.1-age1.6.0}
     pull_policy: ${BOSS_RECOVERY_PULL_POLICY:-missing}
     # AGE is preloaded even when the data directory's postgresql.conf predates this image.
@@ -127,6 +131,10 @@ services:
     build:
       context: .
       dockerfile: db-image/Dockerfile
+      secrets:
+        - boss_build_ca
+      args:
+        <<: *boss-enterprise-build-args
     image: boss-community-db:pg16.12-vector0.8.1-age1.6.0
     pull_policy: ${BOSS_RECOVERY_PULL_POLICY:-missing}
     restart: unless-stopped
@@ -187,6 +195,10 @@ services:
     build:
       context: .
       dockerfile: db-image/Dockerfile
+      secrets:
+        - boss_build_ca
+      args:
+        <<: *boss-enterprise-build-args
     image: boss-community-db:pg16.12-vector0.8.1-age1.6.0
     pull_policy: ${BOSS_RECOVERY_PULL_POLICY:-missing}
     profiles: ["dev"]
