@@ -927,7 +927,7 @@ def on_decision(db: Any, decision_row: dict[str, Any], *, status: str, actor: st
         lanes = [lane for lane in _lanes(db, cs_id) if lane["lane_state"] != "unchanged"]
         heads = _heads(lanes)
         if heads != (rec.get("head_shas") or {}):
-            raise MultiRepoError(409, "stale_heads", "New commits arrived after this was asked. BOSS asks again.")
+            raise MultiRepoError(409, "stale_heads", "New commits arrived after this was asked. Nothing to do: BOSS asks again by itself.")
         from ..services import checks_failing as cf
 
         if cf.of_decision(decision_row) is None and set_checks_failing(db, lanes):
@@ -935,7 +935,7 @@ def on_decision(db: Any, decision_row: dict[str, Any], *, status: str, actor: st
             # or dev autonomy's) is not of what would merge. BOSS asks again (advance) with the
             # failing checks on the card, where only a person's stated reason merges it.
             raise MultiRepoError(409, "checks_failing_now", "Checks are failing on a pull request of this "
-                                                            "change now. BOSS asks again with them on the card.")
+                                                            "change now. Nothing to do: BOSS asks again by itself, with them on the card.")
         db.execute(sql("UPDATE repo_change_sets SET state = 'approved', approved_shas = CAST(:h AS JSONB), "
                        "approved_by = :a, approved_at = now(), updated_at = now() WHERE id = :i"),
                    {"h": jdump(heads), "a": actor, "i": cs_id})

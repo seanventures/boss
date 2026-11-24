@@ -118,6 +118,16 @@ def test_a_red_security_guard_fails_even_when_listed():
     assert known == []
 
 
+def test_a_security_guard_that_did_not_run_is_red():
+    """A suite filtered out of a run, or a moved guard, must not pass the gate silently."""
+    problems, _known = kf.judge(ran=[], failed=[], baselines={}, security={G},
+                                suites=["engine"])
+    assert problems == [f"SECURITY GUARD RED: {G} did not run (every gate runs every security "
+                        "guard of its suites; tests/tiers.yaml `security:`)"]
+    # A guard of a suite this run does not cover is the other run's to judge.
+    assert kf.judge(ran=[], failed=[], baselines={}, security={G}, suites=["web"])[0] == []
+
+
 # ── loading refuses a dishonest line ──────────────────────────────────────────────────────────
 
 def _tree(tmp_path: Path, line: str, security: str = "[]") -> Path:

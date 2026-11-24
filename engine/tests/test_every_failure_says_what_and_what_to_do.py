@@ -491,3 +491,185 @@ def test_an_app_level_github_refusal_names_the_app_not_an_account():
     said = github_refusal("the BOSS app's installations", status=401, app_level=True)
     assert "GitHub App itself" in said and "Reconnect the GitHub account" not in said
     assert problems(what=said, action=said) == []
+
+
+# ── messages main added since (dev autonomy, change sets, time caps, CI queue) ───────────────
+
+def test_every_lapsed_credential_sentence_says_what_and_what_to_do():
+    from boss_engine.services import lapsed
+
+    assert len(lapsed.SENTENCES) >= 4
+    for code, sentence in lapsed.SENTENCES.items():
+        _ok(sentence, sentence)
+        assert "Retry on this step" in sentence or "Workflows or Code Tasks" in sentence
+        # The code stays first, for classifiers and audit rows; the words after it are the
+        # contract's.
+        assert lapsed.say(code) == f"{code}: {sentence}"
+
+
+def test_work_that_never_started_says_what_and_where_to_start_it_again():
+    from boss_engine.services import debug_session, delivery_pipeline
+
+    for said in (debug_session.JOB_ENDED_BEFORE_START, debug_session.NEVER_STARTED_IN_A_DAY,
+                 delivery_pipeline.NEVER_STARTED_DEPLOYMENT):
+        _ok(said, said)
+
+
+def _ci(status: str, *, url: str = "https://github.test/acme/web/runs/3"):
+    return [{"name": "e2e", "status": status, "conclusion": None, "url": url}]
+
+
+@pytest.mark.parametrize("label, outcome, kw", [
+    ("never started", ("waiting", _ci("queued")), {"elapsed": 7 * 3600, "timeout": 1800,
+                                                   "has_ci": True}),
+    ("ran too long", ("waiting", _ci("in_progress")), {"elapsed": 4000, "timeout": 1800,
+                                                       "has_ci": True, "ran": 3000}),
+    ("ran too long, no link", ("waiting", _ci("in_progress", url="")),
+     {"elapsed": 4000, "timeout": 1800, "has_ci": True, "ran": 3000}),
+    ("no checks", ("waiting", []), {"elapsed": 4000, "timeout": 1800, "has_ci": True}),
+])
+def test_a_ci_wait_that_ended_says_what_and_what_to_do(label, outcome, kw):
+    from boss_engine.services import ci_gate
+
+    state, checks = outcome
+    out = ci_gate.settle(ci_gate.CiOutcome(state, "waiting", checks), **kw)
+    assert out.state == "timed_out", (label, out)
+    # Checked WITHOUT its link: the sentence itself names the next step and where.
+    _ok(out.summary, out.summary)
+
+
+@pytest.mark.parametrize("failing, stopped", [
+    (["tests_pass"], None),
+    (["security_clean", "tests_pass"], None),
+    (["tests_pass"], {"no_followup": True, "words": "the host has no Go toolchain"}),
+], ids=["follow-up queued", "security finding", "no follow-up"])
+def test_a_merge_with_checks_failing_says_what_and_what_to_do(failing, stopped):
+    from boss_engine.services import checks_failing as cf
+
+    record = cf.collect(failing)
+    if stopped:
+        record["stopped"] = stopped
+    assert cf.decision_summary(record)
+    assert record["security"] is ("security_clean" in failing)
+    _ok(cf.decision_summary(record), cf.decision_summary(record))
+    _ok(cf.merge_refusal(record), cf.merge_refusal(record))
+
+
+def _multirepo_refusals(path: Path, codes: set[str]) -> dict[str, str]:
+    found = {}
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        if (isinstance(node, ast.Call) and getattr(node.func, "id", "") == "MultiRepoError"
+                and len(node.args) >= 3 and isinstance(node.args[1], ast.Constant)
+                and node.args[1].value in codes):
+            parts = [node.args[2]]
+            text_ = ""
+            while parts:
+                part = parts.pop(0)
+                if isinstance(part, ast.BinOp):
+                    parts[:0] = [part.left, part.right]
+                elif isinstance(part, ast.Constant):
+                    text_ += part.value
+            found[node.args[1].value] = text_
+    return found
+
+
+def test_a_change_set_whose_approval_went_stale_says_boss_asks_again_by_itself():
+    codes = {"stale_heads", "checks_failing_now"}
+    said = _multirepo_refusals(ROOT / "engine" / "boss_engine" / "multirepo" / "change_sets.py",
+                               codes)
+    assert set(said) == codes, said
+    for words in said.values():
+        _ok(words, words)
+
+
+def _ask_routes() -> list[tuple[int, str, str]]:
+    """(line, class constant, why text) for every literal ask Route in autonomy_gate.route."""
+    from boss_engine.services import autonomy_gate as ag
+
+    tree = ast.parse((SVC / "autonomy_gate.py").read_text(encoding="utf-8"))
+    fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "route")
+    out = []
+    for node in ast.walk(fn):
+        if not (isinstance(node, ast.Call) and getattr(node.func, "id", "") == "Route"
+                and len(node.args) >= 3 and isinstance(node.args[0], ast.Constant)
+                and node.args[0].value == "ask"):
+            continue
+        cls_node, why = node.args[1], node.args[2]
+        # A class held in a variable (`cls`, decided above) is checked against every ask class.
+        cls = (getattr(ag, cls_node.id, None) if isinstance(cls_node, ast.Name)
+               else cls_node.value if isinstance(cls_node, ast.Constant) else None)
+        if isinstance(why, ast.JoinedStr):
+            text_ = "".join(v.value if isinstance(v, ast.Constant) else "tier 3"
+                            for v in why.values)
+        elif isinstance(why, ast.Constant):
+            text_ = why.value
+        else:
+            text_ = ""         # a computed reason: checked by the class's action below
+        out.append((node.lineno, cls, text_))
+    # The reason table for a class-only ask (`words = {ASK_CREDENTIAL: "...", ...}`).
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Dict) and node.keys and all(
+                isinstance(k, ast.Name) and k.id in ("ASK_CREDENTIAL", "ASK_SPEND",
+                                                     "ASK_PROD_RELEASE", "EXPLICIT_STOP")
+                for k in node.keys):
+            for key, value in zip(node.keys, node.values):
+                out.append((node.lineno, getattr(ag, key.id), value.value))
+    return out
+
+
+def test_every_card_dev_autonomy_leaves_for_a_person_says_why_and_what_to_do():
+    from boss_engine.services import autonomy_gate as ag
+
+    asks = _ask_routes()
+    assert len(asks) >= 12, "the scan no longer sees route()'s ask routes"
+    assert any(why.startswith("a credential only a person") for _l, _c, why in asks), \
+        "the scan no longer sees route()'s reason table"
+    for line, cls, why in asks:
+        actions = [ag.ASK_WHAT_TO_DO[cls]] if cls is not None else list(
+            ag.ASK_WHAT_TO_DO.values())
+        assert cls is None or cls in ag.ASK_WHAT_TO_DO, \
+            f"autonomy_gate.py:{line}: no action for class {cls!r}"
+        for action in actions:
+            _ok(why or "Dev autonomy left this card for a person.", action)
+    route = ag.Route("ask", ag.ASK_SPEND, "over the dev top-up of $5.00")
+    assert route.record()["what_to_do"] == ag.ASK_WHAT_TO_DO[ag.ASK_SPEND]
+    assert "what_to_do" not in ag.Route("act", ag.ACT, "development work").record()
+
+
+#: The installer, the update path and the release lanes an operator reads failures from.
+_SHELL = sorted({ROOT / "install.sh", ROOT / "scripts" / "enterprise-lane.sh",
+                 ROOT / "scripts" / "e2e-gate.sh",
+                 *(ROOT / "scripts" / "install").glob("*.sh"),
+                 *(ROOT / "scripts" / "enterprise-lane").glob("*.sh")})
+_SAID = re.compile(r'\b(?:echo|die|warn|fail|say|err|printf)\b[^"\n]*"((?:[^"\\]|\\.)*)"')
+
+
+def shell_lint(source: str) -> list[str]:
+    """The same two rules as lint(), over what a shell script echoes, dies or warns with."""
+    hits = []
+    for number, line in enumerate(source.splitlines(), 1):
+        for said in _SAID.finditer(line):
+            text_ = said.group(1)
+            hits += [f"{number}: vague {p!r} in {text_[:100]!r}" for p in fw.vague_in(text_)]
+            stripped = text_.strip()
+            end = _ENDS_IN_RETRY.search(stripped)
+            rest = stripped[:end.start()].strip() if end else ""
+            if rest and _SYMPTOM.search(rest) and not _CAUSE.search(rest):
+                hits.append(f"{number}: symptom then 'try again', no cause: {text_[:100]!r}")
+    return hits
+
+
+def test_the_shell_lint_catches_a_planted_vague_message():
+    planted = ('die "Something went wrong"\n'
+               'echo "The image did not build. Try again."\n'
+               'warn "could not write BOSS_INSTALL_TIER to .env; BOSS reads its public URL"\n')
+    hits = shell_lint(planted)
+    assert len(hits) == 2 and all(h.startswith(("1:", "2:")) for h in hits), hits
+
+
+def test_no_installer_or_release_lane_says_a_vague_failure():
+    assert ROOT / "scripts" / "enterprise-lane.sh" in _SHELL and len(_SHELL) > 10
+    found = [f"{path.relative_to(ROOT)}:{hit}" for path in _SHELL
+             for hit in shell_lint(path.read_text(encoding="utf-8"))]
+    assert not found, ("An installer or release-lane failure names a symptom only — say what "
+                       "happened and what to do:\n" + "\n".join(found))

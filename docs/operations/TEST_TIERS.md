@@ -137,8 +137,8 @@ lock table is too small for the schema it is about to hold.
 
 **CI runs** three jobs on every pull request:
 
-- `p0`: this tier's engine, API and scripts tests, the whole worker suite, and every test a baseline
-  names, judged against `tests/known-failures/` (no new failure, no stale line, no red security guard);
+- `p0`: this tier's tests of the suites `TEST_TIER_SUITES` names in `ci.yml` (today engine and API;
+  worker and scripts need a workflow change, BOSSAPP-1429), and every test a baseline names, judged against `tests/known-failures/` (no new failure, no stale line, no red security guard);
 - `web`: the type check, and the whole web unit suite. Failing files that are known are listed in
   `tests/known-failures/web.txt` with their ticket. That list can only shrink;
 - `bench-scripted`: the harness benchmark on the scripted engine against its committed baseline

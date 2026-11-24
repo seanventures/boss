@@ -128,8 +128,8 @@ for s in SUITES:
 PY
 [ $? -eq 0 ] || exit 2
 
-# Only some suites (CI's p0 job runs engine,api,worker,scripts; its web job runs the whole web
-# suite through scripts/web-unit-ci.py).
+# Only some suites (CI's p0 job runs the ones ci.yml's TEST_TIER_SUITES names; its web job
+# runs the whole web suite through scripts/web-unit-ci.py).
 SUITES_ON="${TEST_TIER_SUITES:-engine,api,worker,scripts,web}"
 for s in engine api worker scripts web; do
   case ",$SUITES_ON," in *",$s,"*) ;; *) : > "$OUT/$s.files" ;; esac

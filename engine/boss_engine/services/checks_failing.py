@@ -415,19 +415,19 @@ def decision_summary(record: Optional[Mapping[str, Any]]) -> str:
     if stopped.get("no_followup"):
         return (f"CHECKS FAILING ({stopped.get('words')}).{sec} The pull request opened anyway; "
                 "no follow-up build is queued, since it would hit the same problem. Merging it "
-                "is your decision: say why when you merge.")
+                "is your decision: say why when you merge it on this card.")
     return (f"CHECKS FAILING: {headline(record)}.{sec} The pull request opened anyway after "
             "the repair rounds; the failing checks are queued as a follow-up build. Merging "
-            "it is your decision: say why when you merge.")
+            "it is your decision: say why when you merge it on this card.")
 
 
 def merge_refusal(record: Mapping[str, Any]) -> str:
     """Why an approval without a person's stated reason is refused."""
     return (f"Checks are failing on this pull request ({headline(record)})"
             + (", including a security finding" if record.get("security") else "")
-            + ". BOSS does not merge it silently: merge with checks failing and say why "
-              "(a forced merge with a note), or keep it blocked while the follow-up build "
-              "fixes them.")
+            + ". BOSS does not merge it silently: merge with checks failing on this card and "
+              "say why (a forced merge with a note), or keep it blocked while the follow-up "
+              "build fixes them.")
 
 
 def of_decision(row: Mapping[str, Any]) -> Optional[dict[str, Any]]:

@@ -350,10 +350,33 @@ class Route:
     def acts(self) -> bool:
         return self.answer == "act"
 
+    @property
+    def what_to_do(self) -> str:
+        """The person's next action and where, when the card waits for them; else ""."""
+        if self.acts:
+            return ""
+        return ASK_WHAT_TO_DO.get(self.cls, ASK_WHAT_TO_DO[ASK_PROD_RELEASE])
+
     def record(self) -> dict[str, Any]:
-        return {"route": self.answer, "class": self.cls, "why": self.why, "agent": self.agent,
-                "undo": self.undo, "verdict": self.verdict, "policy": self.policy,
-                "human_reviewed": False}
+        out = {"route": self.answer, "class": self.cls, "why": self.why, "agent": self.agent,
+               "undo": self.undo, "verdict": self.verdict, "policy": self.policy,
+               "human_reviewed": False}
+        if not self.acts:
+            out["what_to_do"] = self.what_to_do
+        return out
+
+
+#: WHAT THE PERSON DOES with a card BOSS left for them, by its class (BOSSAPP-1428: every
+#: failure, and every "why this waits for you", says what to do and where). The route's `why`
+#: is the what; this is the action, stamped beside it on the card's autonomy record.
+ASK_WHAT_TO_DO: dict[str, str] = {
+    ASK_CREDENTIAL: "Enter the sign-in or key it needs, then answer it on this card.",
+    ASK_SPEND: "Approve or reject the spend on this card, or raise the cap in Govern.",
+    ASK_PROD_RELEASE: "Approve or reject it on this card.",
+    EXPLICIT_STOP: "Answer it on this card; the stop stays until the person who set it lifts "
+                   "it.",
+    "unclassified": "Answer it on this card.",
+}
 
 
 #: A failure only a person can clear: a sign-in or key they type, or the host's admin (sudo).
@@ -727,10 +750,14 @@ def decide(connection: Any, settings: Any, decision_id: str) -> dict[str, Any]:
         stamp(connection, decision_id, found)
     except Exception as error:  # noqa: BLE001 — never poisons the caller's transaction
         outer.rollback()
-        return {"decided": False, "why": f"could not route: {error}"[:300]}
+        return {"decided": False,
+                "why": (f"BOSS could not route this card ({type(error).__name__}: "
+                        f"{str(error)[:160]}), so it waits for a person; answer it on this "
+                        "card")[:300]}
     outer.commit()
     if not found.acts:
-        return {"decided": False, "why": found.why, "class": found.cls}
+        return {"decided": False, "why": found.why, "class": found.cls,
+                "what_to_do": found.what_to_do}
     actor = f"{ACTOR_PREFIX}{found.agent}"
     rec = _rec(dict(row))
     note = (f"{decided_words(found.agent)}: {found.why}. Undo: "
@@ -745,7 +772,9 @@ def decide(connection: Any, settings: Any, decision_id: str) -> dict[str, Any]:
     except Exception as refused:  # noqa: BLE001 — a refused or failed follow-on keeps the card
         # for a person, saying why; it is never retried by every sweep.
         point.rollback()
-        record = {**found.record(), "route": "ask", "refused": str(refused)[:300]}
+        record = {**found.record(), "route": "ask", "refused": str(refused)[:300],
+                  "what_to_do": "BOSS's answer was refused, so the card waits for you: read "
+                                "why in Details, then answer it on this card."}
         connection.execute(text(
             "UPDATE decisions SET recommendation = COALESCE(recommendation, '{}'::jsonb) "
             "|| jsonb_build_object('autonomy', CAST(:a AS JSONB)) WHERE id = :d"),

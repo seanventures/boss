@@ -920,8 +920,8 @@ class Build:
                                        f"({status or 'gone'}); BOSS reserved it again.")
                 return
         raise Stop("budget", f"its budget hold lapsed ({status or 'gone'}) and could not be "
-                             f"reserved again: {why_not}. Raise the project's cap or wait for "
-                             "room, then retry the self-fix")
+                             f"reserved again: {why_not}. Raise the project's cap in Govern or wait "
+                             "for room, then retry the self-fix in Self-fixes")
 
     # -- an engine turn -----------------------------------------------------------------------
     def turn_budget_usd(self, agent: Any) -> Optional[float]:

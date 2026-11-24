@@ -38,6 +38,11 @@ from .core import create_blocking_decision, emit_event
 # visible, reviewable change, not a config toggle.
 AUTO_DEPLOY_ENVIRONMENTS = frozenset({"staging", "dev", "preview"})
 
+#: What a deployment that was planned and never started says (R3; the failure_words contract).
+NEVER_STARTED_DEPLOYMENT = (
+    "this deployment was planned but never started: whatever was to run it stopped before its "
+    "turn. Nothing reached the host; deploy it again from the app's card in Infra.")
+
 
 def fanout_entry_status(outcome: Optional[dict[str, Any]]) -> str:
     """Report the actual result of a merge-triggered deployment."""
@@ -838,9 +843,7 @@ def fail_hung_deployments(engine, *, max_seconds: int = DEPLOYMENT_MAX_RUNTIME_S
             {"s": int(max_seconds)}).mappings().all()
         waited = c.execute(
             sql("UPDATE deployment_runs SET status='failed', finished_at=now(), "
-                "failure_reason = COALESCE(failure_reason, "
-                "  'this deployment was planned but never started: whatever was to run it "
-                "stopped before its turn. Nothing reached the host; deploy it again.') "
+                "failure_reason = COALESCE(failure_reason, :why) "
                 f"WHERE status = 'created' AND NOT {started} "
                 # Waiting on its changeset's person is a wait, not a stall; a rejected,
                 # dead-lettered or vanished changeset leaves nothing to wait for.
@@ -849,7 +852,7 @@ def fail_hung_deployments(engine, *, max_seconds: int = DEPLOYMENT_MAX_RUNTIME_S
                 "         AND cs.status IN ('draft', 'pending_approval', 'approved'))) "
                 "  AND created_at < now() - make_interval(secs => :w) "
                 "RETURNING id"),
-            {"w": int(never_started_seconds)}).mappings().all()
+            {"w": int(never_started_seconds), "why": NEVER_STARTED_DEPLOYMENT}).mappings().all()
     return {"failed": [r["id"] for r in rows], "never_started": [r["id"] for r in waited]}
 
 

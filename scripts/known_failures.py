@@ -133,15 +133,18 @@ def load_all(root: Path = ROOT, suites: Iterable[str] = SUITES) -> dict[str, dic
 
 def judge(*, ran: Iterable[str], failed: Iterable[str], unfinished: Iterable[str] = (),
           passed: Iterable[str] | None = None,
-          baselines: Mapping[str, Mapping[str, Entry]], security: set[str]
-          ) -> tuple[list[str], list[str]]:
+          baselines: Mapping[str, Mapping[str, Entry]], security: set[str],
+          suites: Iterable[str] | None = None) -> tuple[list[str], list[str]]:
     """(problems, known): every reason the run fails, as sentences, and the known failures seen.
 
     `ran` is the test FILES that ran; `failed` the failed test ids (or a file, or a sentence for
     a run that crashed); `unfinished` the files whose run never finished (their entries cannot
     be judged stale); `passed` the test ids (or, for the web suite, files) that PASSED. With
     `passed`, a line is stale only when a test it covers passed: a test SKIPPED here (no Go
-    toolchain, no Apache AGE) is not evidence that it is fixed."""
+    toolchain, no Apache AGE) is not evidence that it is fixed.
+
+    With `suites`, every security guard of those suites must be in `ran`: a guard that silently
+    did not run (a filtered suite, a moved file) is as red as one that failed."""
     ran, unfinished = set(ran), set(unfinished)
     passed_ids = None if passed is None else {p for p in passed if p}
     failed = sorted({f for f in failed if f})
@@ -158,6 +161,12 @@ def judge(*, ran: Iterable[str], failed: Iterable[str], unfinished: Iterable[str
             problems.append(f"NEW FAILURE: {f} (not in tests/known-failures/)")
         else:
             known.append(f"{f} ({hit.ticket}, {hit.owner})")
+    if suites is not None:
+        on = set(suites)
+        for g in sorted(security):
+            if suite_of(g) in on and g not in ran:
+                problems.append(f"SECURITY GUARD RED: {g} did not run (every gate runs every "
+                                "security guard of its suites; tests/tiers.yaml `security:`)")
     for e in entries:
         if e.file not in ran or e.file in unfinished or any(e.covers(f) for f in failed):
             continue
@@ -214,7 +223,7 @@ def main(argv: list[str] | None = None) -> int:
                             unfinished=_lines(args.unfinished),
                             passed=_lines(args.passed) if args.passed else None,
                             baselines=baselines,
-                            security=security_files())
+                            security=security_files(), suites=suites)
     print(f"known failures (listed, not counted): {len(known)}")
     for k in known:
         print("  " + k)
