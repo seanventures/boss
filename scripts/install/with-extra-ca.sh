@@ -1,7 +1,7 @@
 #!/bin/sh
 # Start a BOSS service inside the install's enterprise network (docs/community/ENTERPRISE_NETWORK.md).
 #
-# Every BOSS image built from python-runtime starts through this (its ENTRYPOINT, and the compose
+# Every BOSS Python image (python-base and the images built on it) starts through this (its ENTRYPOINT, and the compose
 # entrypoints that override it), so the service and every process it starts — the coding CLIs, a
 # sandboxed build's npm, pip, go, mvn and git, boss-egress's upstream calls, the model SDKs —
 # trust the same certificates and use the same outbound proxy:

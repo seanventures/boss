@@ -66,7 +66,8 @@ that is off shows the command that turns it on.
 `toolchains-go`, `toolchains-security`). From `ARG BOSS_TOOLCHAINS` it works out, for each
 toolchain, either that toolchain's stage or the empty one (`tc-java`, `tc-go`, `tc-security`).
 The `toolchains` stage lays their `/opt/toolchains` trees over one another and merges their
-manifests into one `manifest.json`, and `python-runtime` copies `/opt/toolchains` from it.
+manifests into one `manifest.json`, and `python-runtime` copies `/opt/toolchains` from it (the
+slim egress image copies only the manifest, to know which package hosts to open).
 BuildKit skips any stage that nothing uses, so an install with `BOSS_TOOLCHAINS=none` never
 downloads a JDK or Go. We picked this over the alternatives:
 

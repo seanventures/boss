@@ -60,8 +60,8 @@ DEFAULT_ALLOW = (
     "api.osv.dev",
 )
 #: OPT-IN TOOLCHAINS' HOSTS (docs/community/TOOLCHAINS.md), allowed only when THIS image carries the
-#: toolchain (its /opt/toolchains/manifest.json; egress is built from the same python-runtime
-#: stage as the api and worker, with the same BOSS_TOOLCHAINS). Every allowlisted host is a way
+#: toolchain (its /opt/toolchains/manifest.json: the slim egress image copies the same manifest the
+#: api and worker carry, built with the same BOSS_TOOLCHAINS). Every allowlisted host is a way
 #: OUT as well as in: a package proxy that accepts arbitrary paths (proxy.golang.org fetches any
 #: public module path on request; Maven Central and the Gradle portal take any GET) can carry
 #: data a sandboxed run encodes into the requests it makes. That is why each list is the

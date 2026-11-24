@@ -80,8 +80,9 @@ def test_the_package_drops_on_import_and_the_image_names_its_user():
     init = (ROOT / "engine" / "boss_engine" / "__init__.py").read_text()
     assert "_become_runtime_user()" in init
     docker = (ROOT / "Dockerfile.community").read_text()
-    runtime = docker.split("AS python-runtime", 1)[1].split("\nFROM ", 1)[0]
-    assert re.search(r"BOSS_RUNTIME_USER=boss\b", runtime), "the runtime stage must name its user"
+    # python-base: every BOSS Python image (api, worker, runner, egress, mcp-tools) descends from it.
+    base = docker.split("AS python-base", 1)[1].split("\nFROM ", 1)[0]
+    assert re.search(r"BOSS_RUNTIME_USER=boss\b", base), "the base stage must name its user"
 
 
 def test_the_entrypoint_heals_root_owned_files_in_the_service_volumes():

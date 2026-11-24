@@ -5118,6 +5118,17 @@ def _process_control_step(connection: Connection, run: Any, row: Any) -> None:
             **({"what_to_check": guidance} if guidance else {}),
             **({"review": review} if review else {}),
             **({"gate": card} if card else {}),
+            # AN AUTHOR'S "ASK ME" IS A STOP A PERSON SET (dev autonomy, BOSSAPP-1441): an
+            # Approval gate whose author chose `approval: {mode: manual}` is answered by a person
+            # even on a development install, exactly as a capability step's manual gate is
+            # (workflow_capability_runner; autonomy_gate._explicit_stop reads this key).
+            **({"approval_mode_requested": "manual"}
+               if "manual" in {str(approval_of.get(k) or "").strip().lower()
+                               for approval_of in [template.get("approval")
+                                                   if isinstance(template.get("approval"), dict)
+                                                   else {"mode": template.get("approval")}]
+                               for k in ("requested_mode", "mode")}
+               else {}),
             # LAST, so a spec's own recommendation cannot replace it. This card is the step's
             # gate: approving it must release the step, and the buttons the inbox draws are
             # decided by this action (decision_actions). It came first, before the spread.

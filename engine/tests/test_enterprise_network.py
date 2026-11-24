@@ -35,7 +35,7 @@ yaml = pytest.importorskip("yaml")
 REPO = Path(__file__).resolve().parents[2]
 COMPOSE = REPO / "scripts" / "install" / "community-compose.yml"
 SECRET = "s3cr3t-value-never-printed"
-#: Every BOSS service built from the api image (python-runtime): each must see the block.
+#: Every BOSS service built from the Python image family (python-base): each must see the block.
 PYTHON_RUNTIME_SERVICES = ("api", "worker", "runner", "egress", "model-gateway", "mcp-tools", "kg-mcp")
 
 

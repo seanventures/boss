@@ -229,10 +229,22 @@ def test_there_is_no_switch_that_turns_tls_verification_off():
 
 
 def test_registry_arguments_are_declared_late_so_a_change_rebuilds_only_from_there():
-    runtime = DOCKERFILE.read_text().split(" AS python-runtime\n", 1)[1].split("\nFROM ", 1)[0]
-    assert "BOSS_NPM_REGISTRY" not in runtime.splitlines()[0]
+    text = DOCKERFILE.read_text()
+    stage = lambda name: text.split(f" AS {name}\n", 1)[1].split("\nFROM ", 1)[0]  # noqa: E731
+    # Each mirror is declared in the stage that downloads from it, right before that step
+    # (BOSSAPP-1458 split the runtime into python-base -> python-browser -> python-runtime).
+    base, browser, runtime = stage("python-base"), stage("python-browser"), stage("python-runtime")
+    assert "BOSS_NPM_REGISTRY" not in base and "BOSS_NPM_REGISTRY" not in browser
     assert runtime.index("ARG BOSS_NPM_REGISTRY=") > runtime.index("apt-get install")
-    assert runtime.index("ARG BOSS_PIP_INDEX_URL=") > runtime.index("npm ci --prefix /opt/boss-clis")
+    assert runtime.index("ARG BOSS_NPM_REGISTRY=") < runtime.index("npm ci --prefix /opt/boss-clis")
+    # pip's mirror reaches only the dependency stages (copied into each image LAST) and the
+    # browser stage's throwaway download venv: a change to it never rebuilds the user, the CLIs or
+    # the toolchains.
+    assert "BOSS_PIP_INDEX_URL" not in base and "BOSS_PIP_INDEX_URL" not in runtime
+    for name in ("pydeps", "pydeps-agent"):
+        deps = stage(name)
+        assert deps.index("ARG BOSS_PIP_INDEX_URL=") < deps.index("pip install"), name
+    assert browser.index("ARG BOSS_PLAYWRIGHT_DOWNLOAD_HOST=") < browser.index("playwright install")
 
 
 def test_the_coding_clis_come_from_a_lockfile_with_integrity_for_every_package():

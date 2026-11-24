@@ -53,28 +53,34 @@ def _stage_body(dockerfile: str, target: str) -> str:
 
 def test_community_runtime_vendors_its_local_dependencies() -> None:
     dockerfile = (ROOT / "Dockerfile.community").read_text()
-    runtime = _stage_body(dockerfile, "python-runtime")
+    app = _stage_body(dockerfile, "app-src")
     for path in ("engine/boss_engine", "apps/api", "apps/worker", "apps/egress",
                  "db", "api", "packages/specpack", "tools"):
-        assert f"COPY {path} ./" in runtime
+        assert f"COPY {path} ./" in app
         assert (ROOT / path).is_dir()
-    assert "PYTHONPATH=/app:/app/engine" in runtime
-    for target in ("api", "worker", "egress", "mcp-tools"):
-        assert f"FROM python-runtime AS {target}" in dockerfile
+    assert "PYTHONPATH=/app:/app/engine" in _stage_body(dockerfile, "python-base")
+    # Every Python image takes the one assembled /app (BOSSAPP-1458).
+    for target, parent in (("api", "python-app"), ("worker", "python-app"), ("runner", "python-app"),
+                           ("egress", "python-base"), ("mcp-tools", "python-browser")):
+        assert f"FROM {parent} AS {target}" in dockerfile
+    for stage in ("python-app", "egress", "mcp-tools"):
+        assert "COPY --from=app-src /app /app" in _stage_body(dockerfile, stage)
     assert "COPY . " not in dockerfile
 
 
 def test_runtime_images_copy_v1_lock_and_traceability() -> None:
     dockerfile = (ROOT / "Dockerfile.community").read_text()
-    runtime = _stage_body(dockerfile, "python-runtime")
+    app = _stage_body(dockerfile, "app-src")
     for path in ("docs/product/V1_FEATURE_LOCK.md", "docs/product/TRACEABILITY.md",
                  "LICENSE", "THIRD-PARTY-NOTICES.md"):
-        assert f"COPY {path} ./" in runtime
+        assert f"COPY {path} ./" in app
         assert (ROOT / path).is_file()
     assert "COPY docs ./" not in dockerfile
     web = _stage_body(dockerfile, "web")
     assert "NODE_ENV=production" in web
-    assert "USER boss" in runtime and "USER boss" in web
+    assert "USER boss" in web
+    for stage in ("python-app", "egress", "mcp-tools"):
+        assert "USER boss" in _stage_body(dockerfile, stage), stage
 
 
 def test_runtime_context_excludes_tests_and_scratch_but_retains_runtime_sources() -> None:

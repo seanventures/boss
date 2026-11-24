@@ -25,11 +25,14 @@
 #   * on a small Docker disk (less than BOSS_DISK_FLOOR_GB, 20, free): build cache down to what
 #     fits above that floor, none on a small box (BOSSAPP-1447). Only on a dedicated host or with
 #     --room (the installer, right after its own build): the cache is Docker-wide.
+#   * --cache-only: the build cache steps alone (4 and 5; no image, container or rollback point is
+#     touched mid-build), for the installer BETWEEN two image families (BOSSAPP-1458).
 # Never volumes, never `system prune`, never a container or image without a BOSS name/label.
 set -euo pipefail
 
 DEDICATED=0
 ROOM=0
+CACHE_ONLY=0
 DRY=0
 THRESHOLD=75
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -38,6 +41,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --dedicated) DEDICATED=1; shift ;;
     --room) ROOM=1; shift ;;
+    --cache-only) CACHE_ONLY=1; shift ;;
     --dry-run) DRY=1; shift ;;
     --threshold) THRESHOLD="${2:?}"; shift 2 ;;
     --dir) INSTALL_DIR="${2:?--dir needs a path}"; shift 2 ;;
@@ -68,6 +72,7 @@ used_pct() { df -P / | awk 'NR==2 {gsub("%","",$5); print $5}'; }
 before=$(used_pct)
 printf 'disk before: %s%% used\n' "$before"
 
+if [[ "$CACHE_ONLY" -eq 0 ]]; then
 # 1. Stopped preview containers, then preview images nothing uses.
 for c in $("${D[@]}" ps -a --filter status=exited --filter status=created --filter status=dead \
              --format '{{.Names}}' | grep '^boss-prev-' || true); do
@@ -98,6 +103,7 @@ for repo in $("${D[@]}" images --format '{{.Repository}}' | grep '^boss-communit
     grep -qxF "$img" <<<"$in_use" || run "${D[@]}" rmi "$img"
   done <<<"$tags"
 done
+fi
 
 # 3b. THE ROLLBACK POINT HAS A WINDOW (BOSSAPP-1459). upgrade.sh keeps the images that ran before
 #     it as prev-<tag> so `boss rollback` takes seconds; kept for ever they were a whole second
@@ -126,7 +132,7 @@ api_healthy() {
   [[ -n "$("${D[@]}" ps -q --filter "label=com.docker.compose.project=$PROJECT" \
             --filter "label=com.docker.compose.service=api" --filter health=healthy 2>/dev/null)" ]]
 }
-if [[ -f "$ROLLBACK_FILE" && -z "$(rb_value BOSS_PREV_EXPIRED_AT)" && -n "$(rb_value BOSS_PREV_SAVED_AT)" ]]; then
+if [[ "$CACHE_ONLY" -eq 0 && -f "$ROLLBACK_FILE" && -z "$(rb_value BOSS_PREV_EXPIRED_AT)" && -n "$(rb_value BOSS_PREV_SAVED_AT)" ]]; then
   age_h="$(hours_since "$(rb_value BOSS_PREV_SAVED_AT)")"
   prev_tag="$(rb_value BOSS_PREV_IMAGE_TAG)"
   if [[ "$age_h" =~ ^[0-9]+$ && "$age_h" -ge "$KEEP_HOURS" && "$prev_tag" == "prev-$TAG" ]]; then

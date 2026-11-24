@@ -257,3 +257,22 @@ def test_a_deploy_steps_answer_honours_its_author_and_its_own_target(eng, projec
     assert manual["who"] == "you"
     assert to_prod["who"] == "you" and to_local["who"] == "agent"
     assert run_target["who"] == "you"
+
+
+def test_an_approval_gate_its_author_set_to_ask_waits_for_a_person(eng, project):
+    """An Approval gate step with `approval: {mode: manual}` is a stop a person set: the gate card
+    workflows.py opens carries it, and dev autonomy leaves the card to the person (the enterprise
+    lane's step-up check got 409 "already approved" when BOSS answered the person's gate)."""
+    import inspect
+
+    from boss_engine.services import workflows
+
+    source = inspect.getsource(workflows)
+    assert '{"approval_mode_requested": "manual"}' in source
+    with eng.begin() as c:
+        manual = autonomy_gate.route(c, {"project_id": project, "recommendation": {
+            "action": "resume_workflow", "approval_mode_requested": "manual"}})
+        plain = autonomy_gate.route(c, {"project_id": project, "recommendation": {
+            "action": "resume_workflow"}})
+    assert not manual.acts and manual.cls == autonomy_gate.EXPLICIT_STOP
+    assert plain.acts

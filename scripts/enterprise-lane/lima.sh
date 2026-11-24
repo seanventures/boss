@@ -44,7 +44,9 @@ limactl shell "$VM" -- bash -lc "
   command -v git >/dev/null || { sudo apt-get update -q && sudo DEBIAN_FRONTEND=noninteractive apt-get install -yq git; }
   # A fresh clone every run: fetching a bundle into the old one added a whole-history pack per run
   # (21 runs, 2.5 GB), disk the install then lacked. The tenth run starts like the first.
-  rm -rf ~/boss-src
+  # sudo: the previous run's install leaves root-owned files in the checkout, which a plain rm
+  # cannot remove, and the clone then fails to write over them (Permission denied).
+  sudo rm -rf ~/boss-src
   git clone -q /tmp/boss.bundle ~/boss-src
   rm -f /tmp/boss.bundle
   git -C ~/boss-src -c advice.detachedHead=false checkout -q --detach $SHA"

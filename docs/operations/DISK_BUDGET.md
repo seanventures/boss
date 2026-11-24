@@ -35,10 +35,40 @@ A typical install: one to three projects, used daily. The budget is the warn lin
 | Unused volumes | 1 GB | Every container BOSS removes takes its anonymous volumes with it (`docker rm -v`). |
 | Containers and logs | 2 GB | Compose caps each log (50 MB × 3). |
 
-Steady state for a typical install, measured from the laptop install's per-unit figures below:
-images ~7.5 GB, build cache ≤ 10 GB, database 2–4 GB, backups ~2.5 GB (twelve dumps of about
-200 MB), sandboxes under 1 GB between builds, other volumes ~3.5 GB, containers ~1.5 GB: **about
-25–30 GB**, plus the rollback images (~7 GB) for the 72 hours after an upgrade.
+Steady state for a typical install: a fresh install on the enterprise lane (30 GB VM, 2026-11-24,
+below) took **11 GB** in all (images, volumes, an empty database) with no build cache left. Daily
+use then adds the database (2–4 GB), backups (~2.5 GB: twelve dumps of about 200 MB), sandboxes
+(under 1 GB between builds), other volumes (~3.5 GB) and up to `BOSS_BUILD_CACHE_CAP_GB` (10) of
+build cache on a large disk (none kept on a small one): **about 20–30 GB**, plus the rollback
+images (~7 GB) for the 72 hours after an upgrade.
+
+## The images and the first install (BOSSAPP-1458)
+
+The Python services were one fat image (every service carried the coding CLIs, compilers, the
+browser and the build toolchains). They are now one family of stages: egress and mcp-tools carry
+only what they run, and every image shares the layers below it, so a shared layer is stored once.
+`scripts/install/image_budget.py` holds each image to a budget (uncompressed, the sum of its
+layers); the enterprise lane fails its install step when one is over.
+
+Measured on the enterprise lane (arm64), Docker 29 with the containerd image store. "On disk" is
+Docker's own per-image figure (unpacked plus compressed, shared layers counted in every image);
+"uncompressed" is the image's own layers.
+
+| Image | Before, on disk | After, on disk | After, uncompressed | Budget |
+|---|---|---|---|---|
+| api, worker, runner | 6.84 GB | 5.55 GB | 4.0 GB (shared by all three) | 4.4 GB |
+| egress (and the model gateway) | 6.84 GB | 1.38 GB | 1.0 GB, ~0.65 GB once the Agent SDK left it | 0.9 GB |
+| mcp-tools | 6.84 GB | 2.28 GB | 1.7 GB, ~1.45 GB once the Agent SDK left it | 1.8 GB |
+| web | 2.68 GB | 2.68 GB | 2.3 GB | 2.5 GB |
+
+The first install: 24 GB free before, **9.1 GB at the lowest** during the build, 13 GB free after,
+0 B of build cache kept. The peak is the images plus ONE image family's build cache: the installer
+builds each image once, builds a family back to back, and on a disk under `BOSS_DISK_FLOOR_GB` (20)
+free drops the finished family's cache before the next (`prune.sh --room --cache-only`). So a first
+install needs **21 GB** free on Docker's disk (the 15 GB peak plus the 6 GB the e2e gate needs
+after it); the installer says so before it builds (`BOSS_INSTALL_NEEDS_GB`). Before the fix it ran
+a 30 GB box out of disk: BuildKit's own garbage collector dropped the Python cache while the console
+built, and the worker image was then built a second time, unshared.
 
 ## Measured on the laptop install, 2026-11-24
 

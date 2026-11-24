@@ -729,7 +729,7 @@ fi
 ui_info "About 100 GB of working capacity is recommended for images, cache and agent work (the images include Java and Go by default); actual needs vary."
 # WHAT THE FIRST BUILD NEEDS (BOSSAPP-1447): the images and the build cache while building, then
 # room to work. Said as a number before the build, not found out as "no space left" during it.
-BOSS_INSTALL_NEEDS_GB="${BOSS_INSTALL_NEEDS_GB:-25}"
+BOSS_INSTALL_NEEDS_GB="${BOSS_INSTALL_NEEDS_GB:-21}"
 if [[ "$_docker_root" == /* && -d "$_docker_root" && -n "$_docker_os" && "$_docker_os" != *"Docker Desktop"* ]]; then
   _docker_free_gb=""
   [[ ! "${_last_free_kb:-}" =~ ^[0-9]+$ ]] || _docker_free_gb=$(( _last_free_kb / 1048576 ))
@@ -1667,20 +1667,7 @@ if ! BUILD_SERVICES="$("${COMPOSE[@]}" \
   ${COMPOSE_FILES:--f scripts/install/community-compose.yml} \
   --env-file "$ENV_FILE" \
   $COMPOSE_PROFILES \
-  config --format json </dev/null 2>/dev/null | python3 -c '
-import argparse, json, re, sys
-parser = argparse.ArgumentParser()
-parser.add_argument("--profile", action="append", default=[])
-active = set(parser.parse_args().profile)
-services = json.load(sys.stdin)["services"]
-for name, service in services.items():
-    profiles = set(service.get("profiles", []))
-    if "build" not in service or (profiles and not active.intersection(profiles) and "*" not in active):
-        continue
-    if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*", name):
-        raise SystemExit("Invalid build service name in Compose configuration")
-    print(name)
-' $COMPOSE_PROFILES 2>/dev/null)"; then
+  config --format json </dev/null 2>/dev/null | python3 scripts/install/build_order.py $COMPOSE_PROFILES 2>/dev/null)"; then
   die "Could not resolve the selected Compose build services; stopping before image builds. Check the Compose configuration and .env."
 fi
 # THE BUILD CLIENT GOES THROUGH THE PROXY TOO. BuildKit fetches registry tokens (the
@@ -1710,8 +1697,25 @@ if [[ -n "$_up_proxy" ]]; then
   unset _proxy_env _up_no_proxy
 fi
 unset _up_proxy _up_extra
-while IFS= read -r _build_service; do
+# IMAGES OF ONE FAMILY BUILD TOGETHER (BOSSAPP-1458). The list above is grouped by the stage the
+# images grow from (the Python services share python-base; the console is its own), so each family
+# builds while its cache is warm. Between families, on a disk under BOSS_DISK_FLOOR_GB free, the
+# finished family's build cache is dropped (prune.sh --room --cache-only): a fresh 30 GB box ran out
+# of disk with the Python family's cache still held while the console built.
+_build_family=""
+while IFS=' ' read -r _build_service _next_family; do
   [[ -n "$_build_service" ]] || continue
+  if [[ -n "$_build_family" && "$_next_family" != "$_build_family" && -f scripts/install/prune.sh ]]; then
+    if _prune_out="$(bash scripts/install/prune.sh --dir "${INSTALL_DIR:-.}" --room --cache-only </dev/null 2>&1)"; then
+      while IFS= read -r _l; do
+        case "$_l" in *"under the"*"floor"*) ui_info "$_l" ;; esac
+      done <<< "$_prune_out"
+    else
+      ui_warn "The build cache could not be trimmed between images; the build continues. If it stops with \"no space left on device\", run: boss prune, then run the installer again."
+    fi
+    unset _prune_out _l
+  fi
+  _build_family="$_next_family"
   ui_info "Building $_build_service (one image at a time)"
   # Pass observed metadata as build arguments: sudo may reset exported variables.
   # shellcheck disable=SC2086
@@ -1720,6 +1724,7 @@ while IFS= read -r _build_service; do
     --build-arg "BOSS_SOURCE_SHA=$BOSS_SOURCE_SHA" \
     --build-arg "BOSS_BUILT_AT=$BOSS_BUILT_AT" "$_build_service" </dev/null
 done <<< "$BUILD_SERVICES"
+unset _build_family _next_family
 # ---- end serial image builds ----------------------------------------------
 
 # A rerun/upgrade may already have a worker polling the old API. Keep it up
