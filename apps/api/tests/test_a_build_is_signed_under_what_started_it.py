@@ -129,5 +129,5 @@ def test_the_build_tool_records_who_started_it(monkeypatch):
     spec = {s.name: s for s in _tool_registry().specs()}["create_code_task"]
     with agent_acts.origin(act_id="act_turn", actor="ceo"):
         spec.handler(Ctx(), project_id=PROJECT, actor="ceo",
-                     args={"title": "Dark mode", "instructions": "Add it."})
+                     args={"title": "Dark mode", "instructions": "Add it.", "new_app": True})
     assert seen["finalize_ctx"]["origin"] == {"act_id": "act_turn", "actor": "ceo"}

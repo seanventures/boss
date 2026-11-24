@@ -1213,6 +1213,19 @@ def _build_onto_existing_app(ctx, cts, pid: str, actor: str, args: dict, extends
 
                 raise CapabilityWaitError(said, wait_seconds=60, kind="app_busy")
             return {"ok": False, "error": said}
+        # WHICH CHANGE (new_work.build_mode, the one resolver every door asks): the app's open
+        # change continues on its branch; a MERGED change starts a new change of the app from
+        # the default branch — a repair from a preview or an agent's extends never pushes onto
+        # merged history (only New work used to check). A change whose merge was rejected keeps
+        # its branch (a person asking for a change after "not yet" continues it). A release fix
+        # is cut from its serving commit instead, and stays the lineage's follow-up.
+        release_base = str(args.get("release_base_sha") or "").strip() or None
+        new_change = bool(args.get("extends_from_default")) and not release_base
+        if not release_base and not new_change:
+            from ..services.project_experience import new_work
+
+            mode = new_work.build_mode(c, pid, extends)
+            new_change = bool(mode and mode.get("mode") == "new_change")
         agent = _building_agent(c, pid, actor)
         instructions = args.get("instructions") or ""
         preview_id = str(args.get("preview_id") or "").strip()
@@ -1242,8 +1255,8 @@ def _build_onto_existing_app(ctx, cts, pid: str, actor: str, args: dict, extends
                 reference_links=args.get("reference_links") or None,
                 workflow_run_id=finalize_ctx.get("workflow_run_id"),
                 finalize_extra={"origin": finalize_ctx.get("origin"), "agent": agent},
-                release_base_sha=str(args.get("release_base_sha") or "").strip() or None,
-                new_change=bool(args.get("extends_from_default")),
+                release_base_sha=release_base,
+                new_change=new_change,
             )
         except ValueError as exc:  # a simulated or vanished parent: say so, start nothing
             return {"ok": False, "error": str(exc)}
@@ -1432,9 +1445,17 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 },
                 "preview_id": {
                     "type": "string",
-                    "description": "with extends_run_id: the running preview (prev_...) the "
-                                   "operator was looking at when they asked for this. The "
-                                   "builder is told which one.",
+                    "description": "the running preview (prev_...) the operator was looking "
+                                   "at when they asked for this. The builder is told which "
+                                   "one; without extends_run_id the task is a repair of that "
+                                   "preview's build, on its app's branch.",
+                },
+                "new_app": {
+                    "type": "boolean",
+                    "description": "the person asked for a NEW app. Only then may a project "
+                                   "with several apps get a task that names none of them "
+                                   "(extends_run_id, preview_id, task_id): otherwise BOSS "
+                                   "asks which app to change.",
                 },
                 "extends_from_default": {
                     "type": "boolean",
@@ -1509,6 +1530,10 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             finalize_ctx["origin"] = started_by
         extends = str(args.get("extends_run_id") or "").strip()
         preview_id = str(args.get("preview_id") or "").strip()
+        new_app = args.get("new_app") is True
+        if new_app and (extends or preview_id):
+            return {"ok": False, "error": ("Name the app to change (extends_run_id or preview_id) "
+                                           "or ask for a new app (new_app), not both.")}
         if preview_id and not extends:
             with ctx.begin() as connection:
                 preview = _preview_in_project(connection, preview_id, pid)
@@ -1521,6 +1546,32 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                     return {"ok": False, "error": ("A preview repair that sets base_branch or release_base_sha must "
                                                    "also name extends_run_id, the build to repair.")}
                 extends = str(preview["run_id"])
+        # A TASK WHOSE APP IS ALREADY BUILT continues that app (its branch, its open change),
+        # through the same path as extends_run_id. The task's first build is often the lineage's
+        # root (no root_run_id): the old lookup read only root_run_id, found none and started a
+        # fresh build on the default branch beside the app.
+        if not extends and task_id and not base_branch and not new_app:
+            with ctx.begin() as connection:
+                extends = _task_app_run(connection, pid, str(task_id)) or ""
+        # NOTHING NAMED BESIDE SEVERAL APPS: ask which (Choose an application / Create a new
+        # app), never a quiet fresh build on the default branch (RCA #9). A workflow's build step
+        # was decided at its start door; an explicit base, a release fix or a task are named.
+        from ..services.workflow_capability_runner import _IN_STEP_AUTHORITY
+
+        if (not extends and not new_app and not base_branch and not task_id
+                and not args.get("release_base_sha") and not finalize_ctx.get("workflow_run_id")
+                and not _IN_STEP_AUTHORITY.get()):
+            from ..services.project_experience import new_work
+
+            try:
+                with ctx.begin() as connection:
+                    new_work.require_app_choice(connection, pid, (
+                        "Which one should this change? Name it as extends_run_id (or the "
+                        "preview_id the person was looking at), or pass new_app: true to "
+                        "create a new app. list_code_tasks shows each app's build."))
+            except new_work.AppChoiceNeeded as asked:
+                return {"ok": False, "needs_app_choice": True, "error": str(asked),
+                        "app_choices": asked.choices}
         # AN APP BUILT FROM SEVERAL REPOSITORIES gets one change set — a lane per repository, in
         # dependency order, linked PRs, one approval — instead of a single build in one repo.
         multi = _multirepo_change(ctx, pid, actor, args, extends, finalize_ctx)
@@ -1553,23 +1604,6 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                     c, ctx.settings, pid, selector=args.get("repository"))
             except rr.RepositoryResolutionError as exc:
                 return {"ok": False, "error": str(exc)}
-            # Build-on-existing: if this task already has a built app (a completed
-            # code task with a PR), EXTEND that app's branch instead of a fresh
-            # build on main. Mirrors intent_router._existing_app_for_task.
-            if task_id and not args.get("base_branch"):
-                branch, root = _existing_app_branch(c, pid, task_id)
-                if branch:
-                    base_branch = branch
-                    extended_from = root
-                    finalize_ctx = {"root_run_id": root, "web_app_build": True,
-                                    **({"origin": finalize_ctx["origin"]}
-                                       if finalize_ctx.get("origin") else {})}
-                    risk_tier = 0 if risk_tier is None else risk_tier
-                    instructions = (
-                        "EXTEND the existing app on this branch — do NOT rebuild from scratch. "
-                        "Make the smallest change that satisfies the request, preserving all "
-                        "current features.\n\n" + instructions
-                    )
             # WHO BUILDS IT. A workflow step that names an agent runs this tool AS that agent
             # (step_agents.resolve → `actor`), so a build step naming the Frontend Engineer
             # hands the code task to the Frontend Engineer, recorded where the run's stages
@@ -6002,28 +6036,17 @@ def _decision_in_project(connection, decision_id: str, project_id: str):
     ).mappings().first()
 
 
-def _existing_app_branch(conn, project_id: str, task_id: str) -> tuple:
-    """The app branch + lineage root for a task that already has a built app
-    (latest completed code-task run with a PR). Mirrors intent_router so chat
-    enhancements extend the existing PR instead of rebuilding on main."""
-    row = conn.execute(
+def _task_app_run(conn, project_id: str, task_id: str) -> "_Optional[str]":
+    """The build of the app a task already has — its newest completed run with a PR — or None
+    (the task has no app yet). create_code_task builds onto it as onto extends_run_id."""
+    return conn.execute(
         _text(
-            "SELECT finalize_ctx FROM code_task_runs "
+            "SELECT id FROM code_task_runs "
             "WHERE project_id = :p AND task_id = :t AND status = 'completed' "
             "AND pull_request_url IS NOT NULL ORDER BY created_at DESC LIMIT 1"
         ),
         {"p": project_id, "t": task_id},
-    ).mappings().first()
-    if not row:
-        return None, None
-    fc = row["finalize_ctx"]
-    if isinstance(fc, str):
-        try:
-            fc = json.loads(fc)
-        except (ValueError, TypeError):
-            fc = {}
-    root = (fc or {}).get("root_run_id")
-    return (f"boss/code/{root}", root) if root else (None, None)
+    ).scalar()
 
 
 def _workflow_step_of(c, project_id: str, run_id: str) -> "_Optional[dict]":

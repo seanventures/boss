@@ -153,3 +153,18 @@ def pr_base_for_run(connection, run: dict, adapter: Any) -> str:
         connection, project_id=run.get("project_id") or "", owner=owner or "", repo=repo or "",
         explicit=spec.get("base_branch"),
         host_default=lambda: host_default_branch(adapter), run_id=run.get("id")).pr
+
+
+def lineage_clone(run_id: str, fctx: Optional[dict], resolved_clone: str,
+                  branch_exists: Callable[[str], bool]) -> tuple[str, str]:
+    """(work_branch, clone_branch) for a build of a lineage — the branch the build pushes to and
+    the branch it clones. A later attempt (a retry, a repair, a follow-up) shares ONE branch
+    derived from the root run and clones it when it exists, so it builds on the app's code;
+    a first build clones ``resolved_clone`` (resolve_build_base). The pipeline asks this
+    (governed_code_task_service) and so does every test that asserts where a build lands.
+    A release fix or a pushed local branch is decided by the pipeline before this."""
+    root = str((fctx or {}).get("root_run_id") or run_id)
+    work_branch = f"boss/code/{root}"
+    if root != run_id and branch_exists(work_branch):
+        return work_branch, work_branch
+    return work_branch, resolved_clone

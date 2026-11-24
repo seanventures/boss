@@ -5901,7 +5901,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     # run and clone the prior attempt's code, so the model builds ON prior work instead of
     # regenerating from base. The PR on that branch is reused (see create_pull_request).
     root_run = fctx.get("root_run_id") or run_id
-    work_branch = f"boss/code/{root_run}"
+    work_branch = _bbb.lineage_clone(run_id, fctx, base_branch, lambda _b: False)[0]
     # A REPAIR continues earlier work of this lineage. A retry whose earlier attempts produced
     # nothing (code_task_service.retry_code_task marks it `fresh_build`: crun_2f76585e died at
     # the clone) is a FRESH build of the same brief: its tree holds no work of this app, so the
@@ -5931,8 +5931,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # build works on the branch the person pushed, so its change set is the one refreshed.
         work_branch = _pushed_branch
         base_branch = work_branch
-    elif root_run != run_id and sf.github.branch_exists(work_branch):
-        base_branch = work_branch  # prior attempt's code is present in the clone
+    else:
+        # prior attempt's code is present in the clone (build_base_branch.lineage_clone)
+        work_branch, base_branch = _bbb.lineage_clone(run_id, fctx, base_branch,
+                                                      sf.github.branch_exists)
     app = GitHubAppAdapter(settings)
     # Shared decision — see repo_token. Prefer the bound MC adapter's token when the
     # factory plane is mission_control_binding so clone and PR use the same credentials.

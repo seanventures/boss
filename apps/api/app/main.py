@@ -28361,8 +28361,22 @@ def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = Non
 
         _require_permission(None, P.CODE_TASK_STEER, project_id, label="extends_run_id")
         run_input["extends_run_id"] = extends_run_id
-        extends = {"run_id": extends_run_id, "app": app_name(parent),
-                   "branch": work_branch_for(parent)}
+        # WHICH CHANGE, from the one resolver New work and the build step ask
+        # (new_work.build_mode): a merged change is continued as a new change from the default
+        # branch; an open (or rejected) one continues on the app's branch.
+        from boss_engine.services.project_experience import new_work as _new_work
+
+        branch = work_branch_for(parent)
+        # An incident's or a release's fix is cut from the serving commit at its build step
+        # (release_base_for), never re-based here.
+        if (run_input.get("extends_from_default") is not True and not run_input.get("incident_id")
+                and not run_input.get("release_base_sha")):
+            with _tx() as connection:
+                mode = _new_work.build_mode(connection, project_id, extends_run_id)
+            if mode and mode.get("mode") == "new_change":
+                run_input["extends_from_default"] = True
+                branch = mode["branch"]
+        extends = {"run_id": extends_run_id, "app": app_name(parent), "branch": branch}
     # WHICH RUNNING PREVIEW the operator was looking at when they asked for the change: the
     # build is told, as the quick change's feedback is (anchor /v1/previews/<id>/web/). Only
     # alongside extends_run_id, and only a preview of this project.
