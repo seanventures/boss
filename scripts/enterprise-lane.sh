@@ -132,6 +132,11 @@ step_host() {
 }
 
 # ---- 2. the company network --------------------------------------------------------------------
+write_apt_proxy() {  # apt through the proxy, as IT configures a company box
+  printf 'Acquire::http::Proxy "http://%s:8080";\nAcquire::https::Proxy "http://%s:8080";\n' \
+    "$PROXY_IP" "$PROXY_IP" | sudo tee /etc/apt/apt.conf.d/90entlane-proxy >/dev/null
+}
+
 provision_packages() {
   local need=()
   for c in docker git make python3 curl openssl iptables jq apparmor_parser; do
@@ -141,6 +146,8 @@ provision_packages() {
   docker buildx version >/dev/null 2>&1 || need+=(buildx)
   [ ${#need[@]} -eq 0 ] && return 0
   echo "installing: ${need[*]}"
+  # A VM an earlier run locked down reaches the archive only through the lane's proxy.
+  if sudo iptables -S ENTLANE-OUT >/dev/null 2>&1; then write_apt_proxy; fi
   sudo apt-get update -q &&
   sudo DEBIAN_FRONTEND=noninteractive apt-get install -yq docker.io docker-buildx docker-compose-v2 \
     git make python3 python3-venv curl openssl iptables jq apparmor apparmor-utils ca-certificates
@@ -220,9 +227,7 @@ docker_daemon_corp() {
   # for every container (ENTERPRISE_NETWORK.md, "Docker's own downloads", Linux).
   sudo cp "$STATE/ca/ca.crt" /usr/local/share/ca-certificates/entlane-ca.crt
   sudo update-ca-certificates >/dev/null 2>&1
-  # apt through the proxy too, as IT configures a company box (the installer may add packages).
-  printf 'Acquire::http::Proxy "http://%s:8080";\nAcquire::https::Proxy "http://%s:8080";\n' \
-    "$PROXY_IP" "$PROXY_IP" | sudo tee /etc/apt/apt.conf.d/90entlane-proxy >/dev/null
+  write_apt_proxy
   local want
   want=$(jq -n --arg p "http://$PROXY_IP:8080" --arg d "$DNS_IP" \
     '{dns: [$d], proxies: {"http-proxy": $p, "https-proxy": $p,
