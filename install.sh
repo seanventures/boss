@@ -1683,7 +1683,7 @@ def family(build):
     except OSError:
         return path
     stages, last = {}, None
-    for m in re.finditer(r"(?im)^FROM\s+(?:--\S+\s+)*(\S+)(?:\s+AS\s+(\S+))?\s*$", text):
+    for m in re.finditer(r"(?m)^FROM\s+(?:--\S+\s+)*(\S+)(?:\s+[Aa][Ss]\s+(\S+))?\s*$", text):
         last = m.group(2) or last
         if m.group(2):
             stages[m.group(2)] = m.group(1)
@@ -1692,19 +1692,24 @@ def family(build):
         seen.add(stage)
         stage = stages[stage]
     return path + "#" + str(stage)
-order, seen_images = {}, set()
+order, images = {}, {}
 for name, service in services.items():
     profiles = set(service.get("profiles", []))
     if "build" not in service or (profiles and not active.intersection(profiles) and "*" not in active):
         continue
     if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*", name):
         raise SystemExit("Invalid build service name in Compose configuration")
-    # Two services on one image (kg-mcp runs the worker image) build it once: a second build
-    # after the build cache was evicted made a second, unshared copy of every layer.
-    image = service.get("image") or name
-    if image in seen_images:
+    # Two services on one image with one build (kg-mcp runs the worker image) build it once: a
+    # second build after the build cache was evicted made a second, unshared copy of every layer.
+    # The service named like the image (worker, not kg-mcp) is the one the log names.
+    key = (service.get("image") or name, json.dumps(service["build"], sort_keys=True))
+    if key in images:
+        if re.search(r"-" + re.escape(name) + r"(:|$)", key[0]):
+            names = order[family(service["build"])]
+            names[names.index(images[key])] = name
+            images[key] = name
         continue
-    seen_images.add(image)
+    images[key] = name
     order.setdefault(family(service["build"]), []).append(name)
 for index, names in enumerate(order.values()):
     for name in names:

@@ -805,8 +805,8 @@ def sandbox_facts() -> str:
                  else "- curl is NOT installed: probe HTTP with node (fetch) instead.")
     browsers = os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or ""
     if browsers and Path(browsers).is_dir():
-        lines.append(f"- A Chromium for Playwright is preinstalled at {browsers} "
-                     "(PLAYWRIGHT_BROWSERS_PATH is set); do not download browsers.")
+        lines.append(f"- A headless Chromium shell for Playwright is preinstalled at {browsers} "
+                     "(PLAYWRIGHT_BROWSERS_PATH is set); do not download browsers for headless runs.")
     arch = {"aarch64": "arm64", "x86_64": "x64"}.get(platform.machine(), platform.machine())
     lines.append(f"- {platform.system().lower()}-{arch}: a native npm module with no prebuilt binary for it fails to "
                  "build here (argon2 does). Use pure-JS packages: bcryptjs for password hashing.")

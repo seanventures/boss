@@ -234,17 +234,20 @@ PY
 # each adding only what the next needs, so a layer two images share is the same layer (stored
 # once) and an image that needs less carries less:
 #
-#   python-base     Python, the runtime user, the recovery guard, BOSS's Python dependencies
-#     ├─ egress           the credential proxy and the model gateway: base + the code   (slim)
-#     └─ python-browser   + Playwright's headless Chromium (web-intel renders pages)
-#          ├─ mcp-tools   the MCP servers BOSS ships: browser + the code               (slim)
+#   python-base     Python, the runtime user, the recovery guard
+#     ├─ egress           the credential proxy and the model gateway                   (slim)
+#     └─ python-browser   + Playwright's headless Chromium shell (web-intel renders pages)
+#          ├─ mcp-tools   the MCP servers BOSS ships                                    (slim)
 #          └─ python-runtime  + Node, the coding CLIs, the C toolchain, ffmpeg, pg_dump, the
 #               │              build toolchains (java,go): everything an agent run needs
-#               └─ api, worker, runner (and kg-mcp, from the worker image)
+#               └─ python-app -> api, worker, runner (and kg-mcp, from the worker image)
 #
-# The code (/app) is assembled once in `app-src` and copied whole into each image. A fresh
-# 30 GB enterprise box ran out of disk building the old single fat stage under every service
-# (6.84 GB each); tests/test_image_size_budget.py holds each image to a budget.
+# Each image then takes, LAST, what changes most: BOSS's Python dependencies (`pydeps`, built in a
+# stage of their own and copied in whole, so a requirements change rebuilds only that layer and the
+# code, never the browser, the CLIs or the toolchains below it), the Agent SDK (`pydeps-agent`, the
+# agent images only), and the code (`app-src`, assembled once). A fresh 30 GB enterprise box ran
+# out of disk building the old single fat stage under every service (6.84 GB each on disk);
+# scripts/install/image_budget.py holds each image to a budget.
 FROM python:3.11-slim-bookworm@sha256:a36c24f9cbdf4fd0f52d67f0823eeac19c2028c637cecc392d97f980d4fec56b AS python-base
 
 COPY EXPORT_CANDIDATE_STATUS.json /tmp/community-export-status.json
@@ -279,9 +282,23 @@ RUN addgroup --system --gid 102 boss \
 COPY scripts/install/recovery_guard.py /usr/local/libexec/boss/recovery_guard.py
 COPY scripts/install/with-extra-ca.sh /usr/local/libexec/boss/with-extra-ca
 RUN chmod 0755 /usr/local/libexec/boss/recovery_guard.py /usr/local/libexec/boss/with-extra-ca
+ENTRYPOINT ["python3", "/usr/local/libexec/boss/recovery_guard.py"]
 
-COPY apps/api/requirements.txt /tmp/api-requirements.txt
-COPY apps/worker/requirements.txt /tmp/worker-requirements.txt
+# THE PINS: the requirements split three ways, each its own small file, so a stage that uses one
+# rebuilds only when THAT part changes (a COPY is cached by content): the Playwright pin (the
+# browser's version), the Agent SDK (the agent images only; it bundles a 250 MB Claude binary), and
+# everything else (every image).
+FROM python-base AS pins
+COPY apps/api/requirements.txt apps/worker/requirements.txt /tmp/req/
+RUN mkdir /pins && cat /tmp/req/*.txt | sed 's/[[:space:]]*#.*//' | grep -v '^[[:space:]]*$' > /tmp/all.txt \
+    && grep -E '^playwright==' /tmp/all.txt > /pins/playwright.txt \
+    && grep -E '^claude-agent-sdk==' /tmp/all.txt > /pins/agent.txt \
+    && grep -vE '^claude-agent-sdk==' /tmp/all.txt > /pins/core.txt \
+    && test "$(wc -l < /pins/playwright.txt)" = 1 && test "$(wc -l < /pins/agent.txt)" = 1
+
+# BOSS's Python dependencies, installed under /opt/pydeps (as if it were /), copied into each image.
+FROM python-base AS pydeps
+COPY --from=pins /pins/core.txt /tmp/core.txt
 ARG BOSS_UPSTREAM_PROXY=
 ARG BOSS_UPSTREAM_HTTP_PROXY=
 ARG BOSS_UPSTREAM_NO_PROXY=
@@ -290,24 +307,43 @@ RUN --mount=type=secret,id=boss_build_ca \
     --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
     --mount=type=tmpfs,target=/run/boss-build-network \
     . /usr/local/libexec/boss-build-network && pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r /tmp/api-requirements.txt -r /tmp/worker-requirements.txt
-ENTRYPOINT ["python3", "/usr/local/libexec/boss/recovery_guard.py"]
+    && pip install --no-cache-dir --root /opt/pydeps -r /tmp/core.txt
 
-# THE BROWSER: the headless shell matched to the pinned Python Playwright package, with its system
-# libraries. Only the shell: BOSS launches Chromium headless (web-intel, the console driver), and a
-# built app's own Playwright tests download their browsers into the per-project cache
-# (services/playwright_cache.py), never this one. The full Chromium was another 620 MB.
-FROM python-base AS python-browser
+# The Agent SDK on top of them: pip sees the core already installed and puts only what is new
+# under /opt/pydeps-agent.
+FROM python-base AS pydeps-agent
+COPY --from=pydeps /opt/pydeps/usr/local /usr/local
+COPY --from=pins /pins/agent.txt /tmp/agent.txt
 ARG BOSS_UPSTREAM_PROXY=
 ARG BOSS_UPSTREAM_HTTP_PROXY=
 ARG BOSS_UPSTREAM_NO_PROXY=
+ARG BOSS_PIP_INDEX_URL=
+RUN --mount=type=secret,id=boss_build_ca \
+    --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
+    --mount=type=tmpfs,target=/run/boss-build-network \
+    . /usr/local/libexec/boss-build-network && pip install --no-cache-dir --root /opt/pydeps-agent -r /tmp/agent.txt \
+    && test -d /opt/pydeps-agent/usr/local/lib/python3.11/site-packages/claude_agent_sdk
+
+# THE BROWSER: the headless shell matched to the pinned Playwright, with its system libraries.
+# Only the shell: BOSS launches Chromium headless (web-intel, the console driver), and a built
+# app's own Playwright tests download their browsers into the per-project cache
+# (services/playwright_cache.py), never this one. The full Chromium was another 620 MB. The
+# Playwright package used for the download is a throwaway venv: the image's own comes with pydeps.
+FROM python-base AS python-browser
+COPY --from=pins /pins/playwright.txt /tmp/playwright.txt
+ARG BOSS_UPSTREAM_PROXY=
+ARG BOSS_UPSTREAM_HTTP_PROXY=
+ARG BOSS_UPSTREAM_NO_PROXY=
+ARG BOSS_PIP_INDEX_URL=
 ARG BOSS_PLAYWRIGHT_DOWNLOAD_HOST=
 RUN --mount=type=secret,id=boss_build_ca \
     --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
     --mount=type=tmpfs,target=/run/boss-build-network \
-    . /usr/local/libexec/boss-build-network && python -m playwright install --with-deps --only-shell chromium \
+    . /usr/local/libexec/boss-build-network && python -m venv /tmp/pw \
+    && /tmp/pw/bin/pip install --no-cache-dir -r /tmp/playwright.txt \
+    && /tmp/pw/bin/python -m playwright install --with-deps --only-shell chromium \
     && chmod -R a+rX /opt/pw-browsers \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /tmp/pw /var/lib/apt/lists/*
 
 FROM python-browser AS python-runtime
 
@@ -358,7 +394,7 @@ RUN --mount=type=secret,id=boss_build_ca \
     && rm -rf /opt/boss-clis/node_modules/@anthropic-ai/claude-code-linux-*-musl \
     && for b in claude codex grok pnpm pnpx; do ln -s "/opt/boss-clis/node_modules/.bin/$b" "/usr/local/bin/$b"; done \
     && for b in claude codex grok pnpm; do test -x "$(readlink -f "/usr/local/bin/$b")"; done \
-    && claude --version >/dev/null \
+    && HOME=/tmp/claude-probe claude --version >/dev/null && rm -rf /tmp/claude-probe \
     && npm cache clean --force \
     && rm -rf /root/.npm /home/boss/.npm /home/boss/.cache
 
@@ -456,6 +492,8 @@ RUN chown -R boss:boss /app && chmod -R go-w /app
 
 # THE FULL IMAGE: the runtime and the code.
 FROM python-runtime AS python-app
+COPY --from=pydeps /opt/pydeps/usr/local /usr/local
+COPY --from=pydeps-agent /opt/pydeps-agent/usr/local /usr/local
 COPY --from=app-src /app /app
 ARG BOSS_SOURCE_SHA=unknown
 ARG BOSS_BUILT_AT=unknown
@@ -497,6 +535,7 @@ CMD ["python", "-m", "apps.runner.boss_runner"]
 # toolchain (boss_egress/connect.py toolchain_hosts), and the manifest is how it knows.
 FROM python-base AS egress
 COPY --from=toolchains /opt/toolchains/manifest.json /opt/toolchains/manifest.json
+COPY --from=pydeps /opt/pydeps/usr/local /usr/local
 COPY --from=app-src /app /app
 ARG BOSS_SOURCE_SHA=unknown
 ARG BOSS_BUILT_AT=unknown
@@ -510,10 +549,10 @@ CMD ["python", "-m", "apps.egress.boss_egress"]
 
 # THE MCP SERVERS BOSS SHIPS (devops-reference, web-intel, doc-render), one process, three ports.
 # Every install seeds them and the cast holds them; without this service they were unreachable.
-# web-intel renders pages in headless Chromium, so this is python-browser and the code (no Node,
-# CLIs, compilers or toolchains; the toolchain manifest, so every BOSS image answers the same).
+# web-intel renders pages in headless Chromium, so this is python-browser, BOSS's Python
+# dependencies and the code: no Node, CLIs, compilers, toolchains or Agent SDK.
 FROM python-browser AS mcp-tools
-COPY --from=toolchains /opt/toolchains/manifest.json /opt/toolchains/manifest.json
+COPY --from=pydeps /opt/pydeps/usr/local /usr/local
 COPY --from=app-src /app /app
 ARG BOSS_SOURCE_SHA=unknown
 ARG BOSS_BUILT_AT=unknown

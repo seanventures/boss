@@ -510,8 +510,12 @@ step_install() {
   echo "disk after install: ${after} GB free, build cache ${cache:-unknown}"
   [ "$after" -ge 6 ] || { echo "the install left ${after} GB free (build cache ${cache:-unknown}); the e2e gate needs 5 GB (BOSSAPP-1447)"; return 1; }
   # EVERY IMAGE WITHIN ITS BUDGET (BOSSAPP-1458): a fat layer fails the lane here, by name, before
-  # it fills an enterprise box's disk. The installer tags the images with the compose project name.
-  local tag; tag="$(compose_project || true)"; tag="${tag:-boss-community}"
+  # it fills an enterprise box's disk. The installer's tag: BOSS_COMMUNITY_IMAGE_TAG, else the
+  # compose project name.
+  local tag
+  tag="$(awk -F= '/^BOSS_COMMUNITY_IMAGE_TAG=/ {print $2}' "$INSTALL/.env" 2>/dev/null | tail -n1)"
+  [ -n "$tag" ] || tag="$(compose_project || true)"
+  tag="${tag:-boss-community}"
   docker image ls --format '{{.Repository}}:{{.Tag}} {{.Size}}' | grep '^boss-community-' || true
   python3 "$ROOT/scripts/install/image_budget.py" --tag "$tag" ||
     { echo "an image is over its size budget (above); slim it in Dockerfile.community (BOSSAPP-1458)"; return 1; }

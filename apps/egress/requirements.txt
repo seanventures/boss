@@ -1,1 +1,2 @@
-# boss-egress runs on the engine's dependencies (the python-runtime image); nothing extra.
+# boss-egress runs on the engine's dependencies (the slim egress image: python-base + pydeps,
+# Dockerfile.community); nothing extra.

@@ -237,9 +237,13 @@ def test_registry_arguments_are_declared_late_so_a_change_rebuilds_only_from_the
     assert "BOSS_NPM_REGISTRY" not in base and "BOSS_NPM_REGISTRY" not in browser
     assert runtime.index("ARG BOSS_NPM_REGISTRY=") > runtime.index("apt-get install")
     assert runtime.index("ARG BOSS_NPM_REGISTRY=") < runtime.index("npm ci --prefix /opt/boss-clis")
-    assert base.index("ARG BOSS_PIP_INDEX_URL=") > base.index("adduser")
-    assert base.index("ARG BOSS_PIP_INDEX_URL=") < base.index("pip install")
-    assert "BOSS_PIP_INDEX_URL" not in browser and "BOSS_PIP_INDEX_URL" not in runtime
+    # pip's mirror reaches only the dependency stages (copied into each image LAST) and the
+    # browser stage's throwaway download venv: a change to it never rebuilds the user, the CLIs or
+    # the toolchains.
+    assert "BOSS_PIP_INDEX_URL" not in base and "BOSS_PIP_INDEX_URL" not in runtime
+    for name in ("pydeps", "pydeps-agent"):
+        deps = stage(name)
+        assert deps.index("ARG BOSS_PIP_INDEX_URL=") < deps.index("pip install"), name
     assert browser.index("ARG BOSS_PLAYWRIGHT_DOWNLOAD_HOST=") < browser.index("playwright install")
 
 
