@@ -341,7 +341,24 @@ def test_a_build_without_the_shared_cache_never_writes_to_the_images_browsers(mo
     from boss_engine.services import sandbox
 
     monkeypatch.setattr(sandbox, "_TOOL_CACHE_ROOT", "/proc/no-such-dir/cache")
-    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
     env = sandbox._shared_tool_caches()
-    assert env["PLAYWRIGHT_BROWSERS_PATH"] == str(tmp_path / "boss-pw-browsers")
-    assert (tmp_path / "boss-pw-browsers").stat().st_mode & 0o1777 == 0o1777
+    # Hermetic: each project's own node_modules, never a directory two sandboxes share.
+    assert env == {"PLAYWRIGHT_BROWSERS_PATH": "0"}
+
+
+def _order(services: dict, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run([sys.executable, str(REPO / "scripts" / "install" / "build_order.py"), *args],
+                          input=json.dumps({"services": services}), capture_output=True, text=True,
+                          timeout=30)
+
+
+def test_a_named_service_builds_whatever_its_profile_and_an_unknown_name_is_refused():
+    services = {"api": _community("api", "boss-community-api:t"),
+                "runner": {**_community("runner", "boss-community-runner:t"), "profiles": ["runner"]}}
+    # `boss toolchains` names a running runner; boss.sh passes no runner profile.
+    named = _order(services, "--profile", "web", "--only", "api runner")
+    assert named.returncode == 0 and named.stdout.split()[::2] == ["api", "runner"]
+    # Without --only, the profile still decides.
+    assert _order(services, "--profile", "web").stdout.split()[::2] == ["api"]
+    typo = _order(services, "--only", "api wroker")
+    assert typo.returncode == 2 and "wroker" in typo.stderr and typo.stdout == ""

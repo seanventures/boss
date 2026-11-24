@@ -74,18 +74,11 @@ _TOOL_CACHE_ROOT = os.environ.get("BOSS_SANDBOX_TOOL_CACHE", "/var/tmp/boss-tool
 
 
 def _scratch_browsers_env() -> dict:
-    """PLAYWRIGHT_BROWSERS_PATH at a scratch directory every sandbox uid can write (sticky, like
-    /tmp), or {} when even that cannot be made."""
-    import tempfile
-
-    path = Path(tempfile.gettempdir()) / "boss-pw-browsers"
-    try:
-        path.mkdir(parents=True, exist_ok=True)
-        path.chmod(0o1777)
-    except OSError as exc:
-        _log.warning("no scratch directory for Playwright browsers at %s (%s)", path, exc)
-        return {}
-    return {"PLAYWRIGHT_BROWSERS_PATH": str(path)}
+    """Playwright's hermetic mode (PLAYWRIGHT_BROWSERS_PATH=0): each project downloads its
+    browsers into its own node_modules, which only that run's uid writes. Never a directory two
+    sandboxes share (one project's browser binaries run by another), and never the image's
+    root-owned /opt/pw-browsers."""
+    return {"PLAYWRIGHT_BROWSERS_PATH": "0"}
 
 
 def _shared_tool_caches() -> dict:

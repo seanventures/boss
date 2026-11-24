@@ -310,7 +310,8 @@ RUN --mount=type=secret,id=boss_build_ca \
     && pip install --no-cache-dir --root /opt/pydeps -r /tmp/core.txt
 
 # The Agent SDK on top of them: pip sees the core already installed and puts only what is new
-# under /opt/pydeps-agent.
+# under /opt/pydeps-agent. The core is a CONSTRAINT: the SDK's dependencies resolve to the
+# versions the core holds (or the build stops), never a second copy of one beside the core's.
 FROM python-base AS pydeps-agent
 COPY --from=pydeps /opt/pydeps/usr/local /usr/local
 COPY --from=pins /pins/agent.txt /tmp/agent.txt
@@ -321,7 +322,8 @@ ARG BOSS_PIP_INDEX_URL=
 RUN --mount=type=secret,id=boss_build_ca \
     --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
     --mount=type=tmpfs,target=/run/boss-build-network \
-    . /usr/local/libexec/boss-build-network && pip install --no-cache-dir --root /opt/pydeps-agent -r /tmp/agent.txt \
+    . /usr/local/libexec/boss-build-network && pip freeze > /tmp/core.lock \
+    && pip install --no-cache-dir --root /opt/pydeps-agent -c /tmp/core.lock -r /tmp/agent.txt \
     && test -d /opt/pydeps-agent/usr/local/lib/python3.11/site-packages/claude_agent_sdk
 
 # THE BROWSER: the headless shell matched to the pinned Playwright, with its system libraries.
@@ -494,6 +496,7 @@ RUN chown -R boss:boss /app && chmod -R go-w /app
 FROM python-runtime AS python-app
 COPY --from=pydeps /opt/pydeps/usr/local /usr/local
 COPY --from=pydeps-agent /opt/pydeps-agent/usr/local /usr/local
+RUN pip check
 COPY --from=app-src /app /app
 ARG BOSS_SOURCE_SHA=unknown
 ARG BOSS_BUILT_AT=unknown

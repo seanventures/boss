@@ -5123,7 +5123,10 @@ def _process_control_step(connection: Connection, run: Any, row: Any) -> None:
             # even on a development install, exactly as a capability step's manual gate is
             # (workflow_capability_runner; autonomy_gate._explicit_stop reads this key).
             **({"approval_mode_requested": "manual"}
-               if "manual" in {str((template.get("approval") or {}).get(k) or "").strip().lower()
+               if "manual" in {str(approval_of.get(k) or "").strip().lower()
+                               for approval_of in [template.get("approval")
+                                                   if isinstance(template.get("approval"), dict)
+                                                   else {"mode": template.get("approval")}]
                                for k in ("requested_mode", "mode")}
                else {}),
             # LAST, so a spec's own recommendation cannot replace it. This card is the step's

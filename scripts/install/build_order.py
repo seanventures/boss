@@ -62,11 +62,17 @@ def order(services: dict, active: set[str], only: set[str] | None = None) -> lis
     families: dict[str, list[str]] = {}
     images: dict[tuple[str, str], str] = {}
     for name, service in services.items():
-        profiles = set(service.get("profiles") or [])
-        if "build" not in service or (profiles and not active & profiles and "*" not in active):
+        if "build" not in service:
             continue
-        if only is not None and name not in only:
-            continue
+        if only is not None:
+            # A service named here builds whatever its profile, as `compose build NAME` does
+            # (`boss toolchains` rebuilds a running runner, which sits in the runner profile).
+            if name not in only:
+                continue
+        else:
+            profiles = set(service.get("profiles") or [])
+            if profiles and not active & profiles and "*" not in active:
+                continue
         if not _NAME.fullmatch(name):
             raise SystemExit("Invalid build service name in Compose configuration")
         build = service["build"] if isinstance(service["build"], dict) else {"context": service["build"]}
@@ -94,7 +100,15 @@ def main(argv: list[str] | None = None) -> int:
               "Compose files and .env with: docker compose config", file=sys.stderr)
         return 2
     only = set(args.only.split()) if args.only and args.only.strip() else None
-    for name, index in order(services, set(args.profile), only):
+    built = order(services, set(args.profile), only)
+    if only is not None:
+        buildable = {n for n, s in services.items() if isinstance(s, dict) and "build" in s}
+        unknown = sorted(only - buildable)
+        if unknown:
+            print(f"Not a service with an image to build: {', '.join(unknown)}. Check the names "
+                  "with: docker compose config --services", file=sys.stderr)
+            return 2
+    for name, index in built:
         print(name, index)
     return 0
 
