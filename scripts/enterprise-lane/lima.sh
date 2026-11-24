@@ -43,10 +43,11 @@ limactl shell "$VM" -- bash -lc "
   set -e
   command -v git >/dev/null || { sudo apt-get update -q && sudo DEBIAN_FRONTEND=noninteractive apt-get install -yq git; }
   if [ -d ~/boss-src/.git ]; then git -C ~/boss-src fetch -q /tmp/boss.bundle HEAD; else git clone -q /tmp/boss.bundle ~/boss-src; fi
-  git -C ~/boss-src checkout -q --detach $SHA"
+  git -C ~/boss-src -c advice.detachedHead=false checkout -q --detach $SHA"
 
 set +e
-limactl shell "$VM" -- bash -lc "cd ~/boss-src && scripts/enterprise-lane.sh --report ~/boss-ent-lane/report.md $(printf '%q ' "$@")"
+LANE_ARGS=""; [ $# -eq 0 ] || LANE_ARGS="$(printf '%q ' "$@")"
+limactl shell "$VM" -- bash -lc "cd ~/boss-src && scripts/enterprise-lane.sh --report ~/boss-ent-lane/report.md $LANE_ARGS"
 rc=$?
 set -e
 limactl shell "$VM" -- bash -lc "cat ~/boss-ent-lane/report.md" > "$ROOT/enterprise-lane-report.md" 2>/dev/null &&
