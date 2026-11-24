@@ -215,7 +215,8 @@ def resolve_build_base(
         if branch_exists is None:
             return None
         try:
-            return bool(branch_exists(branch))
+            said = branch_exists(branch)
+            return None if said is None else bool(said)
         except Exception:  # noqa: BLE001 — unknown is never "gone"
             return None
 
@@ -224,7 +225,9 @@ def resolve_build_base(
         if host_default is None:
             return None
         gone = exists(branch) is False
-        if not (gone or recorded_by_host):
+        # A branch a PERSON chose that is gone is theirs to replace (Setup › Repositories):
+        # only a default of its day (read from the host, or main/master) is followed.
+        if not (recorded_by_host or (gone and branch in DEFAULT_NAMES)):
             return None
         new = host_branch()
         if not new or new == branch or is_boss_branch(new):
@@ -254,7 +257,8 @@ def resolve_build_base(
     asked = _clean(explicit)
     if asked and not is_boss_branch(asked):
         recorded = binding["default_branch"] if binding else None
-        move = (moved_to(asked, recorded_by_host=False)
+        recorded_from_host = bool(binding) and binding.get("from") == "host"
+        move = (moved_to(asked, recorded_by_host=recorded_from_host and asked == recorded)
                 if asked == recorded or (not recorded and asked in DEFAULT_NAMES) else None)
         if move and move[1]:
             new, _gone = move

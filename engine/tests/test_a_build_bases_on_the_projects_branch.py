@@ -134,6 +134,20 @@ def test_a_branch_a_person_chose_is_kept_when_the_host_default_differs(conn):
     assert _resolve(conn, host="main", branches={"main", "rel/x"})[0].clone == "rel/x"
 
 
+def test_a_deleted_branch_a_person_chose_is_never_swapped_for_the_default(conn):
+    _bind(conn, "release/2.0", recorded_from="person")
+    base, _ = _resolve(conn, host="main", branches={"main"})
+    assert (base.clone, base.clone_source, base.note) == ("release/2.0", bbb.SOURCE_BINDING, None)
+
+
+def test_a_lookup_github_could_not_answer_is_not_a_deleted_branch(conn):
+    _bind(conn, "master")
+    base = bbb.resolve_build_base(conn, project_id="boss-platform", owner="paramg", repo="boss",
+                                  host_default=lambda: "main",
+                                  branch_exists=lambda b: None if b == "master" else True)
+    assert (base.clone, base.clone_source) == ("master", bbb.SOURCE_BINDING)
+
+
 def test_a_host_that_cannot_confirm_the_new_default_changes_nothing(conn):
     """branch_exists answers False on any error: "gone" alone never moves a build."""
     _bind(conn, "master")

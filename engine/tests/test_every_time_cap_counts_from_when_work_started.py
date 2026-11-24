@@ -786,3 +786,22 @@ def test_the_shepherds_deadline_does_not_count_its_remedies_queue_time(eng, proj
             c.execute(text("DELETE FROM jobs WHERE id = :j"), {"j": job_id})
             c.execute(text("DELETE FROM code_task_runs WHERE id = :r"), {"r": retry})
             c.execute(text("DELETE FROM shepherd_reasoning WHERE task_ref = :t"), {"t": failed})
+
+
+def test_a_build_blocked_on_ci_runners_stops_waiting_within_its_own_bound(eng, project):  # noqa: F811
+    """A build that waits for CI holds a worker; queued checks end it in an hour, in words."""
+    from boss_engine.services import ci_gate
+
+    reader = _Ci(lambda t: _check("queued"), {"t": 0.0})
+    try:
+        with eng.begin() as c:
+            wait = ci_gate.start_wait(c, project_id=project, repository="acme/app",
+                                      head_sha="c" * 40, timeout_seconds=1800, has_ci=True)
+            c.execute(text("UPDATE ci_waits SET created_at = now() - interval '61 minutes', "
+                           "deadline_at = now() - interval '31 minutes' WHERE id = :i"),
+                      {"i": wait["id"]})
+        got = ci_gate.run_blocking(eng.begin, wait["id"], reader, sleep=lambda s: None)
+        assert got["status"] == "timed_out" and got["summary"].startswith("CI never started")
+    finally:
+        with eng.begin() as c:
+            c.execute(text("DELETE FROM ci_waits WHERE project_id = :p"), {"p": project})

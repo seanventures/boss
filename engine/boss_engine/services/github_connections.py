@@ -725,7 +725,7 @@ class GitHubConnectionService:
             if default_branch is not None
             else existing["default_branch"]
         )
-        if default_branch is not None:
+        if default_branch is not None and next_default_branch != existing["default_branch"]:
             # A branch a person chose is kept even when the host's default moves
             # (build_base_branch, BOSSAPP-1439); one read from the host is followed.
             next_metadata = {**(next_metadata or {}), "default_branch_from": "person"}

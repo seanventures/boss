@@ -3522,6 +3522,9 @@ class IntentRouter:
                     started = start_followup_task(
                         connection, parent_run_id=str((mode or {}).get("run_id") or root),
                         instructions=instructions, jobs=self.jobs, title=title, actor=actor,
+                        # The person's own words in chat: their request joins the contract,
+                        # as at every other door (New work, Change it, a panel's PRD).
+                        is_person_request=True,
                         finalize_extra={"source": "orchestration_agent"},
                         new_change=bool(mode and mode.get("mode") == "new_change"))
                 except ValueError as error:

@@ -63,6 +63,10 @@ QUEUE_TIMEOUT_SECONDS = 6 * 3600
 #: A check run's statuses before a runner picks it up (GitHub: queued, waiting, requested,
 #: pending). A commit status has no queued state: `pending` there is normalised to running.
 QUEUED_STATUSES = frozenset({"queued", "waiting", "requested", "pending"})
+#: A build that waits for CI IN its own run (run_blocking) holds a worker slot and its budget
+#: hold while it waits, so its queue bound is shorter: an hour, or the run timeout when longer.
+#: The answer is `timed_out` ("CI never started"), which Re-check reads again later.
+IN_BUILD_QUEUE_TIMEOUT_SECONDS = 3600
 
 _log = logging.getLogger("boss.ci_gate")
 TERMINAL = frozenset({"passed", "failed", "timed_out", "no_ci", "unreadable", "cancelled"})
@@ -1073,7 +1077,8 @@ def get_wait(connection: Any, wait_id: str) -> dict[str, Any]:
 
 
 def poll_wait(connection: Any, wait_id: str, reader: CiReader, *, force: bool = False,
-              now: Optional[datetime] = None, rearm: bool = True) -> dict[str, Any]:
+              now: Optional[datetime] = None, rearm: bool = True,
+              queue_timeout: Optional[float] = None) -> dict[str, Any]:
     """One look at CI for a recorded wait, when it is due (or `force`). Never blocks."""
     from .core import emit_event
 
@@ -1138,7 +1143,9 @@ def poll_wait(connection: Any, wait_id: str, reader: CiReader, *, force: bool = 
     ran = (now - running_since).total_seconds() if running_since is not None else (
         0.0 if outcome.checks else None)
     outcome = settle(outcome, elapsed=elapsed, timeout=timeout,
-                     has_ci=has_ci, repository=row["repository"], ran=ran)
+                     has_ci=has_ci, repository=row["repository"], ran=ran,
+                     queue_timeout=(QUEUE_TIMEOUT_SECONDS if queue_timeout is None
+                                    else queue_timeout))
     attempts = int(row["attempts"] or 0) + 1
     connection.execute(text(
         "UPDATE ci_waits SET status = :st, summary = :su, checks = CAST(:c AS JSONB), "
@@ -1156,14 +1163,24 @@ def poll_wait(connection: Any, wait_id: str, reader: CiReader, *, force: bool = 
     return get_wait(connection, wait_id)
 
 
+def _timeout_of(connection: Any, wait_id: str) -> float:
+    value = connection.execute(text("SELECT timeout_seconds FROM ci_waits WHERE id = :i"),
+                               {"i": wait_id}).scalar()
+    return float(value or DEFAULT_TIMEOUT_SECONDS)
+
+
 def run_blocking(begin: Callable[[], Any], wait_id: str, reader: CiReader, *,
                  sleep: Callable[[float], None] = time.sleep) -> dict[str, Any]:
     """Poll a recorded wait until it is terminal, each look in its own short transaction (a
-    30-minute wait never holds a transaction open). Bounded by the wait's own deadline."""
+    30-minute wait never holds a transaction open). Bounded by the wait's own deadline, and
+    while every check is still queued for a runner by IN_BUILD_QUEUE_TIMEOUT_SECONDS (or the
+    wait's timeout when longer): a build blocked here holds its worker."""
     attempt = 0
     while True:
         with begin() as connection:
-            got = poll_wait(connection, wait_id, reader, force=True)
+            got = poll_wait(connection, wait_id, reader, force=True,
+                            queue_timeout=max(IN_BUILD_QUEUE_TIMEOUT_SECONDS,
+                                              float(_timeout_of(connection, wait_id))))
         if got["status"] in TERMINAL:
             return got
         sleep(next_interval(attempt))
