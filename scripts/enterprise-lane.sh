@@ -10,8 +10,9 @@
 #                 (proxpi) behind TLS signed by that CA, and a company DNS for *.entlane.internal.
 #                 Then the box is locked down: nothing leaves except through the proxy, Docker
 #                 pulls included
+#   2b. preflight the installer's apt check refuses without BOSS_UPSTREAM_HTTP_PROXY, naming it
 #   3. install    install.sh from scratch with --install-tier dev, given the CA, the proxy and the
-#                 mirrors the way ENTERPRISE_NETWORK.md says
+#                 mirrors the way ENTERPRISE_NETWORK.md says; it must leave 6 GB free on its own
 #   4. sandbox    engine inner-sandbox support on: the AppArmor profile loaded,
 #                 BOSS_ENGINE_INNER_SANDBOX=seccomp+apparmor (seccomp where AppArmor is missing),
 #                 `boss start`, and `boss doctor`'s engine sandbox line
@@ -377,14 +378,33 @@ step_install() {
   health=$(curl -fsS --max-time 10 "http://127.0.0.1:$(awk -F= '/^BOSS_API_PORT=/ {print $2}' "$INSTALL/.env")/health" 2>&1) ||
     { echo "the API does not answer /health after the install: $health"; return 1; }
   touch "$INSTALL/.entlane"   # marks the directory as the lane's own, for the next run
-  local before after
-  before=$(df -Pk "$HOME" | awk 'NR==2 {print int($4/1048576)}')
-  # The 30 GB box: an install leaves its build cache behind (about 10 GB), and the e2e gate
-  # needs 5 GB free. Free it as an operator would (`docker builder prune`).
-  docker builder prune -af >/dev/null 2>&1 || true
+  # THE INSTALL LEAVES ROOM TO WORK (BOSSAPP-1447): the installer trims its own build cache on
+  # a small disk. The lane no longer prunes for it; it checks what the install left: the e2e
+  # gate needs 5 GB free.
+  local after cache
   after=$(df -Pk "$HOME" | awk 'NR==2 {print int($4/1048576)}')
-  echo "disk after install: ${before} GB free, ${after} GB after pruning the build cache"
-  echo "installed: $(git -C "$INSTALL" rev-parse --short HEAD), ${before}->${after} GB free, tier $(awk -F= '/^BOSS_INSTALL_TIER=/ {print $2}' "$INSTALL/.env"), API healthy"
+  cache=$(docker system df --format '{{.Type}}|{{.Size}}' 2>/dev/null | awk -F'|' '$1 ~ /Build Cache/ {print $2; exit}')
+  echo "disk after install: ${after} GB free, build cache ${cache:-unknown}"
+  [ "$after" -ge 6 ] || { echo "the install left ${after} GB free (build cache ${cache:-unknown}); the e2e gate needs 5 GB (BOSSAPP-1447)"; return 1; }
+  echo "installed: $(git -C "$INSTALL" rev-parse --short HEAD), ${after} GB free after the install (build cache ${cache:-unknown}), tier $(awk -F= '/^BOSS_INSTALL_TIER=/ {print $2}' "$INSTALL/.env"), API healthy"
+}
+
+# ---- 2b. the installer's network preflight on this box ---------------------------------------------
+step_preflight() {
+  # BOSSAPP-1446: Debian's mirror is plain http, and this box reaches it only through the proxy.
+  # Without BOSS_UPSTREAM_HTTP_PROXY the preflight must refuse BEFORE the build and name the
+  # setting (it used to pass, and the build died on "Unable to locate package gcc"); with it,
+  # it must pass.
+  local out rc
+  out=$(bash -c '. "$1"; boss_apt_diagnose "" "$2"' - "$ROOT/scripts/install/network_preflight.sh" \
+        "http://$PROXY_IP:8080" 2>&1); rc=$?
+  echo "$out"
+  [ "$rc" != 0 ] || { echo "the apt preflight passed with no plain-http proxy on a proxy-only box"; return 1; }
+  grep -q 'BOSS_UPSTREAM_HTTP_PROXY="$BOSS_UPSTREAM_PROXY"' <<<"$out" ||
+    { echo "the apt preflight refused but did not name BOSS_UPSTREAM_HTTP_PROXY"; return 1; }
+  bash -c '. "$1"; boss_apt_diagnose "$2" "$2"' - "$ROOT/scripts/install/network_preflight.sh" \
+    "http://$PROXY_IP:8080" || { echo "the apt preflight refused with BOSS_UPSTREAM_HTTP_PROXY set"; return 1; }
+  echo "apt preflight: refuses without BOSS_UPSTREAM_HTTP_PROXY and names it; passes with it"
 }
 
 # ---- 4. engine inner sandbox ---------------------------------------------------------------------
@@ -495,6 +515,7 @@ if ! docker info >/dev/null 2>&1; then
   echo "enterprise-lane: docker is not usable by $(id -un)" >&2; exit 2
 fi
 NET_OK=0; run_step network step_network && NET_OK=1
+[ "$NET_OK" != 1 ] || run_step preflight step_preflight
 INSTALL_OK=0
 if [ "$NET_OK" != 1 ]; then
   for s in install sandbox codex plumbing engines build; do skip "$s" "the company network is not up"; done

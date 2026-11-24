@@ -380,6 +380,22 @@ def refusal_reason(host: str, port: int, reason: str) -> str:
     return f"{fence}: not a CONNECT request"
 
 
+def upstream_refusal(host: str, port: int, status: str) -> str:
+    """The 502's reason phrase when the COMPANY proxy refused the chained CONNECT: ASCII, one line,
+    what happened (its own status) and what to do (BOSSAPP-1436). Read back by
+    boss_engine.services.network_refusal, which matches "(BOSS_UPSTREAM_PROXY) refused HOST:PORT"."""
+    host = _SAFE_HOST.sub("", host.lower())[:200] or "this host"
+    said = " ".join(status.split())[:80].encode("ascii", "replace").decode() or "no answer"
+    if re.search(r"\b407\b", said):
+        return (f"BOSS egress: your company proxy (BOSS_UPSTREAM_PROXY) refused {host}:{port} "
+                f"({said}): it wants a login BOSS does not hold. An operator points "
+                "BOSS_UPSTREAM_PROXY at a local authenticating proxy (see "
+                "docs/community/ENTERPRISE_NETWORK.md) and runs boss upgrade")
+    return (f"BOSS egress: your company proxy (BOSS_UPSTREAM_PROXY) refused {host}:{port} "
+            f"({said}). Ask IT to allow it on that proxy; if {host} is internal, an operator "
+            "adds it to BOSS_UPSTREAM_NO_PROXY in .env and runs boss upgrade")
+
+
 def _refuse(client: socket.socket, status: str, phrase: str) -> None:
     body = (phrase + "\n").encode("ascii", "replace")
     client.sendall(f"HTTP/1.1 {status} {phrase}\r\nContent-Type: text/plain\r\n"
@@ -456,9 +472,7 @@ def handle(client: socket.socket) -> None:
             if upstream is None:
                 log.warning("connect failed: upstream proxy said %r host=%s port=%s peer=%s",
                             status[:80], route.host, route.port, _peer(client))
-                _refuse(client, "502", f"BOSS egress: the upstream proxy (BOSS_UPSTREAM_PROXY) "
-                        f"refused {_SAFE_HOST.sub('', route.host)}:{route.port}: "
-                        f"{status[:80].encode('ascii', 'replace').decode()}")
+                _refuse(client, "502", upstream_refusal(route.host, route.port, status))
                 return
         else:
             upstream = socket.socket(route[0], route[1], route[2])

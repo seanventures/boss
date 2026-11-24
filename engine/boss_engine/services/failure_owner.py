@@ -179,6 +179,8 @@ class NeedsPerson(Exception):
         self.exit = exit
 
 
+from . import network_refusal as _nr  # noqa: E402  (the network's refusals, BOSSAPP-1435/1436)
+
 # ─────────────────────────────── classification ───────────────────────────────
 
 #: BOSS's own side, checked FIRST: a permission error inside BOSS's sandbox reads "Permission
@@ -226,6 +228,19 @@ _PERSON_RULES: tuple[tuple[str, str, str], ...] = (
                         r"\.tgz|\.whl|\.jar|/@v/)",
      "Give BOSS's builds the package registry's credential (or the proxy's) on the BOSS host "
      "(docs/community/ENGINE_SANDBOX.md, \"Package registries\"), then press Done — retry."),
+    # THE NETWORK REFUSED A DOWNLOAD (network_refusal, BOSSAPP-1435/1436): one setting in the
+    # BOSS host's .env fixes it. classify() reads these FIRST, with the host and whether a company
+    # CA is configured, so the card names both; the actions here are the words without them.
+    ("company_ca", _nr._UNKNOWN_ISSUER.pattern,
+     "An operator sets BOSS_EXTRA_CA_FILE in .env to the company's root CA (PEM) and runs "
+     "`boss upgrade` on the BOSS host, then press Done — retry."),
+    ("egress_fence", _nr._FENCE.pattern,
+     "An operator adds the host it names to BOSS_EGRESS_CONNECT_ALLOW in .env and runs "
+     "`boss upgrade` on the BOSS host, then press Done — retry."),
+    ("company_proxy", _nr._UPSTREAM.pattern,
+     "Ask IT to allow the host it names on the company proxy (or, for an internal host, an "
+     "operator adds it to BOSS_UPSTREAM_NO_PROXY in .env and runs `boss upgrade`), then press "
+     "Done — retry."),
     ("connector_login", r"\bmcp\b[^\n]{0,160}?\b401\b|\b401\b[^\n]{0,160}?\bmcp\b",
      "Reconnect the MCP server or connector it names in Setup, then press Done — retry."),
     ("model_login", r"not logged in|re-?authenticate|failed to authenticate|token (?:has )?expired|"
@@ -271,6 +286,11 @@ _WHY_PERSON = {
     "registry_access": "The registry credential is the organisation's; a person provisions it on "
                        "the BOSS host.",
     "connector_login": "Only the connector's owner can sign in to it again.",
+    "company_ca": "The company's CA lives on the BOSS host's .env, which only an operator edits; "
+                  "BOSS never turns certificate checks off.",
+    "egress_fence": "Widening BOSS's network fence is a security decision an operator makes in "
+                    "the BOSS host's .env, never an agent.",
+    "company_proxy": "The company proxy is IT's; BOSS cannot change what it allows.",
     "grant": "BOSS's agents act with the starter's authority by default, but that default is "
              "turned off here (or the person revoked it), so the agent may not continue.",
     "approval_expired": "The step waited for a person's approval and nobody answered; an "
@@ -309,11 +329,20 @@ def classify(error: Any, *, failure_class: Any = None, reason_code: Any = None
         # THE BUILD'S OWN WORK WAS WRONG (a copied answer, an invented block): a new build with
         # the violations as its brief, never a person's waiver.
         return APP, f"app:{reason_code}", ""
+    # A DOWNLOAD THE NETWORK REFUSED (network_refusal): before BOSS's own side, whose words it
+    # shares (the fence's refusal is a 502; a TLS failure reads like a crash), and whatever the
+    # record's class: no repair or retry changes a setting in .env.
+    refused = _nr.explain(raw)
+    if refused:
+        return PERSON, refused["kind"], (f"{refused['what']} {refused['action']} Then press "
+                                         "Done — retry.")
     if fc == "infra":
         return PLATFORM, f"platform:{str(reason_code or 'infra')}", ""
     if fc != "needs_human" and _PLATFORM_FIRST.search(raw):
         return PLATFORM, "platform", ""
     for code, pattern, action in _PERSON_RULES:
+        if code in _nr.CODES:
+            continue                 # decided by network_refusal above (its exclusions hold)
         if re.search(pattern, raw, re.I):
             return PERSON, code, action
     if fc == "needs_human":
