@@ -290,11 +290,12 @@ ENTRYPOINT ["python3", "/usr/local/libexec/boss/recovery_guard.py"]
 # everything else (every image).
 FROM python-base AS pins
 COPY apps/api/requirements.txt apps/worker/requirements.txt /tmp/req/
-RUN mkdir /pins && cat /tmp/req/*.txt | sed 's/[[:space:]]*#.*//' | grep -v '^[[:space:]]*$' > /tmp/all.txt \
+# sort -u: one pin listed in several requirement files counts once (two files list the agent SDK).
+RUN mkdir /pins && cat /tmp/req/*.txt | sed 's/[[:space:]]*#.*//' | grep -v '^[[:space:]]*$' | sed 's/[[:space:]]*$//' | sort -u > /tmp/all.txt \
     && grep -E '^playwright==' /tmp/all.txt > /pins/playwright.txt \
     && grep -E '^claude-agent-sdk==' /tmp/all.txt > /pins/agent.txt \
     && grep -vE '^claude-agent-sdk==' /tmp/all.txt > /pins/core.txt \
-    && test "$(wc -l < /pins/playwright.txt)" = 1 && test "$(wc -l < /pins/agent.txt)" = 1
+    && test "$(grep -c . /pins/playwright.txt)" = 1 && test "$(grep -c . /pins/agent.txt)" = 1
 
 # BOSS's Python dependencies, installed under /opt/pydeps (as if it were /), copied into each image.
 FROM python-base AS pydeps

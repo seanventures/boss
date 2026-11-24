@@ -362,3 +362,21 @@ def test_a_named_service_builds_whatever_its_profile_and_an_unknown_name_is_refu
     assert _order(services, "--profile", "web").stdout.split()[::2] == ["api"]
     typo = _order(services, "--only", "api wroker")
     assert typo.returncode == 2 and "wroker" in typo.stderr and typo.stdout == ""
+
+
+def test_the_pins_stage_runs_on_the_real_requirement_files(tmp_path):
+    """The lane's first build of the pins stage failed: the agent SDK is pinned in two requirement
+    files, so 'exactly one pin' counted two. Run the stage's own shell against the real files."""
+    text = DOCKERFILE.read_text()
+    copy = re.search(r"^COPY (.+?) /tmp/req/\s*$", text, re.M)
+    run = re.search(r"^RUN (mkdir /pins .*?)(?<!\\)\n", text, re.M | re.S)
+    assert copy and run, "the pins stage moved; update this test"
+    req = tmp_path / "req"
+    req.mkdir()
+    for i, rel in enumerate(copy.group(1).split()):
+        shutil.copy(REPO / rel, req / f"{i}.txt")
+    cmd = run.group(1).replace("\\\n", " ").replace("/tmp/req", str(req)) \
+        .replace("/tmp/all.txt", str(tmp_path / "all.txt")).replace("/pins", str(tmp_path / "pins"))
+    done = subprocess.run(["sh", "-c", cmd], capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    assert (tmp_path / "pins" / "agent.txt").read_text().startswith("claude-agent-sdk==")
