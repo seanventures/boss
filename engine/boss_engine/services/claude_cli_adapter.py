@@ -565,10 +565,11 @@ class ClaudeCliAdapter(CliChatBrain):
         return configured
 
     def _scratch_dir(self) -> str:
-        # run in an empty dir so the CLI doesn't load a project's CLAUDE.md
-        d = (self.settings.repo_root / ".local-logs" / "claude-scratch").resolve()
-        d.mkdir(parents=True, exist_ok=True)
-        return str(d)
+        # Run in an empty dir so the CLI doesn't load a project's CLAUDE.md: outside BOSS's own
+        # tree, which may be read-only (scratch.py, BOSSAPP-1449).
+        from .scratch import scratch_dir
+
+        return scratch_dir("claude")
 
     # NO BUILT-IN TOOLS, so Claude is a pure reasoning brain: BOSS, not Claude, controls all
     # data access and actions. `--tools ""` is the CLI's own switch for that (its --help: 'Use

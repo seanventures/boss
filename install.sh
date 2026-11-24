@@ -725,6 +725,18 @@ else
   ui_warn "Docker image-store free space is unknown here. Check the selected Docker host or Docker Desktop disk settings; install filesystem space is not Docker-store headroom."
 fi
 ui_info "About 100 GB of working capacity is recommended for images, cache and agent work (the images include Java and Go by default); actual needs vary."
+# WHAT THE FIRST BUILD NEEDS (BOSSAPP-1447): the images and the build cache while building, then
+# room to work. Said as a number before the build, not found out as "no space left" during it.
+BOSS_INSTALL_NEEDS_GB="${BOSS_INSTALL_NEEDS_GB:-25}"
+if [[ "$_docker_root" == /* && -d "$_docker_root" && -n "$_docker_os" && "$_docker_os" != *"Docker Desktop"* ]]; then
+  _docker_free_gb="$(df -Pk "$_docker_root" 2>/dev/null | awk 'NR==2 {print int($4/1048576)}' || true)"
+  if [[ "$_docker_free_gb" =~ ^[0-9]+$ && "$_docker_free_gb" -lt "$BOSS_INSTALL_NEEDS_GB" ]]; then
+    ui_warn "Docker's disk has ${_docker_free_gb} GB free; a first install needs about ${BOSS_INSTALL_NEEDS_GB} GB (the images, plus the build cache while building; it is trimmed afterwards). Free space or grow the disk first, or the build may stop with \"no space left on device\"."
+  fi
+  unset _docker_free_gb
+else
+  ui_info "A first install needs about ${BOSS_INSTALL_NEEDS_GB} GB free on Docker's disk (the images, plus the build cache while building; it is trimmed afterwards)."
+fi
 # ---- end storage advice ---------------------------------------------------
 
 # A noninteractive reinstall or upgrade must retain the service profile chosen on the
@@ -1569,6 +1581,17 @@ if ! NO_PROXY="$(env_value BOSS_UPSTREAM_NO_PROXY)" boss_tls_diagnose "$(env_val
   fi
 fi
 ui_ok "Network: TLS to the package registries verifies"
+# Debian's mirror is plain http: it goes through a proxy only when BOSS_UPSTREAM_HTTP_PROXY
+# names one, so a proxy-only network passed the TLS check and then failed the build with
+# "Unable to locate package gcc" (BOSSAPP-1446).
+if ! boss_apt_diagnose "$(env_value BOSS_UPSTREAM_HTTP_PROXY)" "$(env_value BOSS_UPSTREAM_PROXY)"; then
+  if [ "${BOSS_APT_PREFLIGHT:-}" = warn ]; then
+    ui_warn "Continuing (BOSS_APT_PREFLIGHT=warn): the image build will fail at its first apt-get unless something else reaches Debian's mirror."
+  else
+    die "Image builds cannot reach Debian's package mirror. Set what is shown above (or BOSS_APT_PREFLIGHT=warn to try anyway)."
+  fi
+fi
+ui_ok "Network: Debian's package mirror answers"
 
 ui_step "Building and starting Community stack (this can take several minutes the first time)"
 ui_info "Services: Postgres · API · worker$( [[ $WITH_WEB -eq 1 ]] && echo ' · Mission Control' )"
@@ -1921,6 +1944,22 @@ export BOSS_PROJECT_ID="boss-dogfood"
 export BOSS_EDITION="community"
 EOF
 chmod 600 "$INSTALL_DIR/boss-community.env.sh"
+
+# ---- room to work after the build (BOSSAPP-1447) -------------------------
+# The image build leaves its cache behind: on a 30 GB box a first install kept ~4 GB of it and
+# left 5 GB free. The same retention every upgrade runs (prune.sh): old BOSS tags go, the cache is
+# capped, and on a small Docker disk it is trimmed to keep BOSS_DISK_FLOOR_GB free. Best effort.
+if [[ -f "$INSTALL_DIR/scripts/install/prune.sh" ]]; then
+  if _prune_out="$(bash "$INSTALL_DIR/scripts/install/prune.sh" --dir "$INSTALL_DIR" </dev/null 2>&1)"; then
+    while IFS= read -r _l; do
+      case "$_l" in *"build cache"*|*"could not be measured"*) ui_info "$_l" ;; esac
+    done <<< "$_prune_out"
+    ui_ok "Build cache trimmed (disk $(printf '%s\n' "$_prune_out" | sed -n 's/^disk after: //p' | tail -1))"
+  else
+    ui_warn "The build cache was not trimmed; run: boss prune"
+  fi
+  unset _prune_out _l
+fi
 
 # ---- models and subscriptions already on this machine ----------------------
 # Finding is read only and prints found / not found, never a value. Exported API keys were
