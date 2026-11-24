@@ -725,7 +725,18 @@ def open_investigation(connection, *, project_id: str, question: str, actor: str
             "WHERE i.project_id = :p AND i.status = 'queued' "
             "  AND i.updated_at < now() - INTERVAL '25 minutes' "
             "  AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.id = i.job_id "
-            "                  AND j.status IN ('queued', 'leased', 'running'))"),
+            "                  AND j.status IN ('queued', 'leased', 'running', "
+            "                                   'failed_retryable'))"),
+        {"p": project_id})
+    # ... and never waits forever: a day in the queue (no worker ever takes its kind) ends it,
+    # saying so, so one stuck row cannot refuse every later investigation as "already running".
+    connection.execute(
+        sql("UPDATE investigations SET status = 'abandoned', token = NULL, "
+            "error = 'it waited a day in the queue and never started (no worker took it); "
+            "check the workers in System health, then start the investigation again', "
+            "finished_at = now(), updated_at = now() "
+            "WHERE project_id = :p AND status = 'queued' "
+            "  AND created_at < now() - INTERVAL '24 hours'"),
         {"p": project_id})
     live = connection.execute(
         sql("SELECT id FROM investigations WHERE project_id = :p "

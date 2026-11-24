@@ -47,7 +47,7 @@ def _target(c, pid: str) -> str:
 
 
 def _deployment(c, pid: str, tid: str, *, status: str, planned_ago: timedelta,
-                steps_began_ago=None, started_ago=None) -> str:
+                steps_began_ago=None, started_ago=None, changeset=None) -> str:
     did = f"deprun_{uuid.uuid4().hex[:8]}"
     steps = []
     if steps_began_ago is not None:
@@ -57,9 +57,10 @@ def _deployment(c, pid: str, tid: str, *, status: str, planned_ago: timedelta,
     c.execute(text(
         "INSERT INTO deployment_runs (id, project_id, deployment_target_id, app_name, "
         "environment, repo, target_kind, target_ref, status, created_by, created_at, "
-        "started_at, steps) VALUES (:d, :p, :t, 'app', 'staging', 'acme/app', 'ssh', "
-        "'deploy@203.0.113.9:22', :s, 'test', :planned, :started, CAST(:steps AS JSONB))"),
-        {"d": did, "p": pid, "t": tid, "s": status, "planned": planned,
+        "started_at, steps, changeset_id) VALUES (:d, :p, :t, 'app', 'staging', 'acme/app', "
+        "'ssh', 'deploy@203.0.113.9:22', :s, 'test', :planned, :started, CAST(:steps AS JSONB), "
+        ":cs)"),
+        {"d": did, "p": pid, "t": tid, "s": status, "planned": planned, "cs": changeset,
          # started_at is stamped at PLAN time on insert (resource_plane), and again when
          # execution reaches `running`.
          "started": now_utc() - started_ago if started_ago is not None else planned,
@@ -72,6 +73,8 @@ def deployments(eng, project):  # noqa: F811
     yield eng, project
     with eng.begin() as c:
         c.execute(text("DELETE FROM deployment_runs WHERE project_id = :p"), {"p": project})
+        c.execute(text("DELETE FROM deployment_targets WHERE project_id = :p"), {"p": project})
+        c.execute(text("DELETE FROM changesets WHERE project_id = :p"), {"p": project})
 
 
 def test_a_deployment_queued_past_the_cap_is_not_failed_as_hung(deployments):
@@ -112,6 +115,27 @@ def test_a_deployment_planned_but_never_started_for_a_day_says_so(deployments):
                            {"d": stranded}).scalar()
     assert "never started" in reason and "deploy it again" in reason
     assert "ran longer than the maximum" not in reason
+
+
+def _changeset(c, pid: str, status: str) -> str:
+    cid = f"cs_{uuid.uuid4().hex[:8]}"
+    c.execute(text("INSERT INTO changesets (id, project_id, title, summary, status, created_by) "
+                   "VALUES (:i, :p, 'deploy', 'deploy', :s, 'test')"),
+              {"i": cid, "p": pid, "s": status})
+    return cid
+
+
+def test_a_deployment_waits_for_its_changesets_person_but_not_for_a_rejected_one(deployments):
+    eng, pid = deployments
+    with eng.begin() as c:
+        tid = _target(c, pid)
+        waiting = _deployment(c, pid, tid, status="created", planned_ago=timedelta(hours=30),
+                              changeset=_changeset(c, pid, "pending_approval"))
+        rejected = _deployment(c, pid, tid, status="created", planned_ago=timedelta(hours=30),
+                               changeset=_changeset(c, pid, "rejected"))
+    out = delivery_pipeline.fail_hung_deployments(eng)
+    assert rejected in out["never_started"]
+    assert waiting not in out["never_started"] and waiting not in out["failed"]
 
 
 # ── investigations ──────────────────────────────────────────────────────────────────────────
@@ -177,6 +201,21 @@ def test_an_investigation_whose_job_ended_before_it_started_says_so(investigatio
     assert "stopped" in rows[stale]["error"]
 
 
+def test_an_investigation_never_waits_in_the_queue_forever(investigations):
+    from boss_engine.services import debug_session
+
+    eng, pid = investigations
+    with eng.begin() as c:
+        stuck = _investigation(c, pid, status="queued", ago=timedelta(hours=25),
+                               job_status="queued")
+    with eng.begin() as c:
+        out = debug_session.open_investigation(c, project_id=pid, question="again", actor="test")
+        row = c.execute(text("SELECT status, error FROM investigations WHERE id = :i"),
+                        {"i": stuck}).mappings().first()
+    assert row["status"] == "abandoned" and "never started" in row["error"]
+    assert out.get("already_running") != stuck
+
+
 # ── step recovery's window ──────────────────────────────────────────────────────────────────
 
 def test_recovery_time_does_not_count_its_repair_builds_queue(eng, project):  # noqa: F811
@@ -213,6 +252,10 @@ def test_recovery_time_does_not_count_its_repair_builds_queue(eng, project):  # 
             long_ago = {**state, "started_at": (opened - timedelta(minutes=200)).isoformat()}
             ok, why = step_recovery.budget_left(c, long_ago, caps)
             assert not ok and "recovering this step for" in why
+            # A window opened after the build was created counts only the wait since it
+            # opened, never more than the window's own age.
+            later = {**state, "started_at": (opened + timedelta(minutes=300)).isoformat()}
+            assert step_recovery.builds_queued_seconds(c, later) <= 12 * 60
             # A build whose lease is not on record (events pruned) and is not queued counts
             # no wait: an unknown wait is never subtracted.
             c.execute(text("DELETE FROM events WHERE entity_id = :j"), {"j": job_id})
@@ -241,12 +284,12 @@ def test_a_job_queued_for_hours_gets_a_full_lease_and_a_lapsed_lease_is_said(eng
     job_id = f"job_{uuid.uuid4().hex[:8]}"
     with eng.begin() as c:
         c.execute(text("INSERT INTO jobs (id, project_id, kind, payload, created_at, priority) "
-                       "VALUES (:j, :p, 'meeting.step', '{}'::jsonb, :at, 1)"),
+                       "VALUES (:j, :p, 'r3.long_queue_probe', '{}'::jsonb, :at, 1)"),
                   {"j": job_id, "p": project, "at": now_utc() - LONG_QUEUE})
     svc = JobLeaseService(Settings())
     try:
         with eng.begin() as c:
-            leased = svc.claim_job(c, "w_r3", ["meeting.step"], 300)
+            leased = svc.claim_job(c, "w_r3", ["r3.long_queue_probe"], 300)
         assert leased is not None and leased["id"] == job_id
         with eng.begin() as c:
             expires = c.execute(text("SELECT lease_expires_at FROM jobs WHERE id = :j"),
@@ -317,6 +360,9 @@ def _sandbox(monkeypatch, statuses):
         def get(self, *a, **k):
             return Resp({"status": statuses(clock.t - submitted["at"])})
 
+        def delete(self, url, *a, **k):
+            submitted["withdrawn"] = url
+
     monkeypatch.setattr(httpx, "Client", Client)
     provider = object.__new__(sp.MicroVMProvider)
     provider.settings = SimpleNamespace(sandbox_token="", sandbox_agent_timeout_seconds=1500,
@@ -328,7 +374,7 @@ def _sandbox(monkeypatch, statuses):
 
 
 def test_a_sandbox_task_queued_past_its_timeout_still_gets_its_full_timeout(monkeypatch):
-    queued_for = 3 * 1500                       # three times the agent timeout, in the queue
+    queued_for = 2000                           # longer than the 1500s agent timeout, queued
 
     def statuses(since):
         return "queued" if since < queued_for else "running"
@@ -346,8 +392,10 @@ def test_a_sandbox_task_that_never_starts_says_it_never_started(monkeypatch):
     with pytest.raises(RuntimeError) as err:
         provider.run_code_task({})
     said = str(err.value)
-    assert "never started" in said and "queued for 7200s" in said
-    assert "sandbox_queue_timeout_seconds" in said and "retry" in said
+    # 7200 asked, capped so queue + run fit the guest's handle (4500 - 1500 - 300).
+    assert "never started" in said and "queued for 2700s" in said
+    assert "BOSS_SANDBOX_QUEUE_TIMEOUT_SECONDS" in said and "retry the step" in said
+    assert _["withdrawn"].endswith("/v1/sandbox/tasks/sbx_1"), "withdrawn, never a ghost run"
 
 
 # ── tokens and handles that lapse mid-run ───────────────────────────────────────────────────

@@ -791,8 +791,9 @@ def redeploy(engine, settings: Settings, deployment_run_id: str, *,
 # healthy deploy is a worse failure than a stale row. This bounds the case that actually
 # happened — a step that spins forever because its worker died or an SSH never returned.
 DEPLOYMENT_MAX_RUNTIME_SECONDS = 45 * 60
-#: A deployment planned but never started (its fan-out or caller died before its turn) is
-#: closed after this long; one waiting on its changeset's approval is never closed by time.
+#: A deployment planned but never started (its fan-out or caller died before its turn, its
+#: changeset was rejected) is closed after this long; one whose changeset still waits for a
+#: person is not closed by time.
 DEPLOYMENT_NEVER_STARTED_SECONDS = 24 * 60 * 60
 
 
@@ -840,7 +841,12 @@ def fail_hung_deployments(engine, *, max_seconds: int = DEPLOYMENT_MAX_RUNTIME_S
                 "failure_reason = COALESCE(failure_reason, "
                 "  'this deployment was planned but never started: whatever was to run it "
                 "stopped before its turn. Nothing reached the host; deploy it again.') "
-                f"WHERE status = 'created' AND NOT {started} AND changeset_id IS NULL "
+                f"WHERE status = 'created' AND NOT {started} "
+                # Waiting on its changeset's person is a wait, not a stall; a rejected,
+                # dead-lettered or vanished changeset leaves nothing to wait for.
+                "  AND (changeset_id IS NULL OR NOT EXISTS (SELECT 1 FROM changesets cs "
+                "       WHERE cs.id = deployment_runs.changeset_id "
+                "         AND cs.status IN ('draft', 'pending_approval', 'approved'))) "
                 "  AND created_at < now() - make_interval(secs => :w) "
                 "RETURNING id"),
             {"w": int(never_started_seconds)}).mappings().all()

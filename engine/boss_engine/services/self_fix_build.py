@@ -831,7 +831,7 @@ class Build:
             cap_minutes = sf._int_setting(c, self.settings, "self_fix_max_minutes")
         if not ok:
             raise Stop("switched_off", why, cancel=True)
-        self.keep_hold(sfx, cap_minutes)
+        self.keep_hold(sfx, cap_minutes, spends=spends)
         budget = int(sfx.get("budget_usd_micros") or 0)
         over: dict[str, Any] = {}
         if budget and self.cost_micros >= budget:
@@ -860,31 +860,40 @@ class Build:
             self.say(f"{sf.AGENT_NAME}: every gate and reviewer passed; the last review {words}. "
                      "The fix is kept and still needs your approval.")
 
-    def keep_hold(self, sfx: Mapping[str, Any], cap_minutes: int) -> None:
+    def keep_hold(self, sfx: Mapping[str, Any], cap_minutes: int, *, spends: bool = True) -> None:
         """THE BUDGET HOLD LIVES AS LONG AS THE WORK (R3, BOSSAPP-1431). It was reserved at
-        claim for the cap + 30 minutes and never renewed, so a self-fix that waited in the
-        queue (or ran long) lost its hold silently, and the money it held was free for other
-        work while it still spent. Renewed from now at the start and at every boundary; a hold
-        that already lapsed is reserved again, and when the budget refuses that, the fix stops
-        saying what lapsed and what to do."""
+        claim and never renewed, so a self-fix that ran long lost its hold silently, and the
+        money it held was free for other work while it still spent. Renewed from now at the
+        start and at every boundary. A hold that lapsed (expired, or settled by the reconcile)
+        is reserved again before a stage that spends; when the budget refuses that, the fix
+        stops saying what lapsed and what to do. A hold released on purpose (refused,
+        cancelled) is never reserved again, and delivery (`spends=False`) only renews: a fix
+        that passed every gate is never stopped over its hold."""
         from .budget import BudgetGovernor
 
         reservation = str(sfx.get("budget_reservation_id") or "")
         if not reservation:
             return
         project_id = str(sfx["project_id"])
+        governor = BudgetGovernor(self.settings)
         with self.engine.begin() as c:
-            if BudgetGovernor(self.settings).extend(c, project_id, reservation, cap_minutes + 30):
+            if governor.extend(c, project_id, reservation, cap_minutes + 30) or not spends:
                 return
             status = c.execute(text("SELECT status FROM budget_reservations WHERE id = :i"),
                                {"i": reservation}).scalar()
-            if status == "active":          # renewed to an earlier time: still live
-                return
+            if status not in (None, "expired", "settled"):
+                return                       # released on purpose: the fix is ending
             fresh, why_not = sf._reserve(c, self.settings, project_id, self.sfx_id,
                                          int(sfx.get("budget_usd_micros") or 0), cap_minutes)
             if fresh:
-                c.execute(text("UPDATE self_fixes SET budget_reservation_id = :r WHERE id = :i"),
-                          {"r": fresh, "i": self.sfx_id})
+                moved = c.execute(text(
+                    "UPDATE self_fixes SET budget_reservation_id = :new WHERE id = :i "
+                    "AND budget_reservation_id = :old AND status = ANY(:building)"),
+                    {"new": fresh, "old": reservation, "i": self.sfx_id,
+                     "building": sorted(sf.BUILDING)}).rowcount
+                if not moved:                # the fix moved on meanwhile: hold nothing for it
+                    governor.release(c, project_id, fresh, reason="self-fix no longer building")
+                    return
                 sf.say(c, self.sfx_id, f"{sf.AGENT_NAME}: its budget hold had lapsed "
                                        f"({status or 'gone'}); BOSS reserved it again.")
                 return

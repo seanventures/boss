@@ -410,7 +410,13 @@ class MicroVMProvider:
             # the sandbox-service keeps it `queued` (a busy small host) is waiting, bounded on
             # its own and said as such: "did not finish within 1500s (last status=queued)"
             # blamed a task that never ran.
-            queue_s = int(getattr(self.settings, "sandbox_queue_timeout_seconds", 0) or 3600)
+            # The guest's model and tool handles are minted with the submit body and live
+            # HANDLE_TTL_SECONDS, so queue + run must fit inside them (review of R3): a longer
+            # queue allowance would trade "timed out in the queue" for "handle_expired" mid-run.
+            from .streaming_model_gateway import HANDLE_TTL_SECONDS
+
+            queue_s = int(getattr(self.settings, "sandbox_queue_timeout_seconds", 0) or 2700)
+            queue_s = max(60, min(queue_s, HANDLE_TTL_SECONDS - timeout_s - 300))
             submitted = time.monotonic()
             deadline = submitted + queue_s
             running_since = None
@@ -425,7 +431,7 @@ class MicroVMProvider:
                     ) from exc
                 pdata = pr.json()
                 last_status = pdata.get("status")
-                if running_since is None and last_status not in (None, "queued"):
+                if running_since is None and str(last_status or "queued").lower() != "queued":
                     running_since = time.monotonic()
                     deadline = running_since + timeout_s
                 # EVERY terminal status ends the poll — the §2 contract's set
@@ -441,10 +447,12 @@ class MicroVMProvider:
 
         if data is None:
             if running_since is None:
+                # Withdrawn, so it never starts later as a ghost run on the only slot.
+                self.release(sid)
                 raise RuntimeError(
                     f"sandbox task {sid} never started: the sandbox-service kept it queued for "
-                    f"{queue_s}s (sandbox_queue_timeout_seconds). The host has no free sandbox; "
-                    "free one or raise the limit, then retry"
+                    f"{queue_s}s (BOSS_SANDBOX_QUEUE_TIMEOUT_SECONDS) and BOSS withdrew it. The host "
+                    "has no free sandbox; free one, then retry the step"
                 )
             raise RuntimeError(
                 f"sandbox task {sid} did not finish within {timeout_s}s of starting "

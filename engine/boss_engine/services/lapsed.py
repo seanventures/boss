@@ -20,8 +20,8 @@ SENTENCES: dict[str, str] = {
     # guest reaches its model, tools or the network with
     "handle_expired": (
         "this run's handle (its access to models, tools or the network) reached the end of its "
-        "lifetime while the run was still going. Nothing was lost: retry the step and BOSS issues a fresh handle; work that "
-        "needs longer needs a higher BOSS_CODE_AGENT_TIMEOUT_SECONDS"),
+        "lifetime while the run was still going. Nothing was lost: retry the step and BOSS "
+        "issues a fresh handle; a run this long should be split into smaller steps"),
     "token_revoked": (
         "this run's token was revoked (the run was cancelled, finished or its grant was "
         "withdrawn); start the work again if it should still run"),

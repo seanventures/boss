@@ -340,10 +340,16 @@ def budget_left(connection: Connection, state: Mapping[str, Any],
     return True, ""
 
 
+#: The most queue time a recovery window excludes from its clock (R3).
+MAX_QUEUE_EXCLUDED_SECONDS = 12 * 3600
+
+
 def builds_queued_seconds(connection: Connection, state: Mapping[str, Any]) -> float:
     """How long this window's repair builds waited in the job queue before a worker leased
-    them: from each build's creation to its job's first lease (or to now, while still queued).
-    0 when unreadable: an unknown wait is never subtracted."""
+    them: from each build's creation (never before the window opened) to its job's first lease
+    (or to now, while still queued), at most MAX_QUEUE_EXCLUDED_SECONDS. 0 when unreadable: an
+    unknown wait is never subtracted. Builds of one window run one after another, so their
+    waits do not overlap; `budget_left` never lets the result exceed the window's age."""
     builds = [str(b) for b in state.get("build_ids") or [] if b]
     if not builds:
         return 0.0
@@ -360,11 +366,14 @@ def builds_queued_seconds(connection: Connection, state: Mapping[str, Any]) -> f
                 "   WHERE j.kind = 'code.task' AND j.payload->>'run_id' = r.id), "
                 "  (SELECT now() FROM jobs j WHERE j.kind = 'code.task' "
                 "     AND j.payload->>'run_id' = r.id AND j.status = 'queued' LIMIT 1), "
-                "  r.created_at) - r.created_at)))), 0) "
-                "FROM code_task_runs r WHERE r.id = ANY(:ids)"), {"ids": builds}).scalar()
+                "  r.created_at) - GREATEST(r.created_at, CAST(:since AS timestamptz)))))), 0) "
+                "FROM code_task_runs r WHERE r.id = ANY(:ids)"),
+                {"ids": builds, "since": str(state.get("started_at") or "epoch")}).scalar()
     except Exception:  # noqa: BLE001
         return 0.0
-    return max(0.0, float(waited or 0.0))
+    # Never more than a ceiling: a repair build no worker ever takes must not hold the window
+    # open forever (its own job lifecycle ends it; this ends the window's patience).
+    return min(max(0.0, float(waited or 0.0)), MAX_QUEUE_EXCLUDED_SECONDS)
 
 
 def _money(micros: int) -> str:

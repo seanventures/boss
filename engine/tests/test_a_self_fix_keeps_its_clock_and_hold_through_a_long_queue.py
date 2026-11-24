@@ -72,3 +72,23 @@ def test_the_time_cap_never_falls_back_to_when_it_was_queued(harness):
     build = self_fix_build.Build(engine=harness.eng, settings=harness.settings, sfx_id=sfx["id"],
                                  source=harness.mirror)
     build.boundary()                             # raises Stop("time") on the old fallback
+
+
+def test_delivery_never_stops_a_passed_fix_over_its_hold_and_a_released_hold_stays_released(
+        harness):
+    """Review of R3: boundary(spends=False) only renews; a hold released on purpose (refused,
+    cancelled) is never reserved again."""
+    harness.script("good_fix")
+    sfx = harness.propose()["self_fix"]
+    lapsed = _queued_311_minutes_with_a_lapsed_hold(harness, sfx["id"])
+    harness.mp.setattr(sf, "_reserve", lambda *a, **k: (None, "over the project's daily cap"))
+    build = self_fix_build.Build(engine=harness.eng, settings=harness.settings, sfx_id=sfx["id"],
+                                 source=harness.mirror)
+    build.boundary(spends=False)                 # delivery: renews or does nothing, never stops
+    calls = []
+    harness.mp.setattr(sf, "_reserve", lambda *a, **k: calls.append(1) or ("x", ""))
+    with harness.eng.begin() as c:
+        c.execute(text("UPDATE budget_reservations SET status = 'released' WHERE id = :r"),
+                  {"r": lapsed})
+    build.boundary()
+    assert calls == [], "a released hold is never reserved again"
