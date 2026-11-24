@@ -8956,7 +8956,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # that fixes the failing tests on a warm session.
         _impl_work_deadline = implement_work_deadline(_impl_deadline, _impl_budget_s)
         _warm_fix_ran = [False]
-        # WHEN THE STAGE'S CLOCK STARTED (stage_clock.extended's `since`): a model-slot wait
+        # WHEN THE STAGE'S CLOCK STARTED (the `since` its deadline is extended from): a model-slot wait
         # before the first session reads its deadline is queue time too (BOSSAPP-1450).
         set_llm_context(stage_deadline=_impl_work_deadline,
                         stage_deadline_since=(_impl_deadline - _impl_budget_s)

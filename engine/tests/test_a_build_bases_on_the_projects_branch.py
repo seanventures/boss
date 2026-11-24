@@ -171,8 +171,8 @@ def test_a_moved_default_updates_the_projects_binding(eng, project):  # noqa: F8
     cid, bid = f"ghc_{project}", f"ghb_{project}"
     with eng.begin() as c:
         c.execute(_t("INSERT INTO github_connections (id, project_id, connection_label, "
-                     "auth_method, credential_ref, created_by) VALUES (:i, :p, 'gh', 'pat', "
-                     "'secret://gh', 'test')"), {"i": cid, "p": project})
+                     "auth_method, credential_ref, created_by) VALUES (:i, :p, 'gh', "
+                     "'personal_access_token', 'secret://gh', 'test')"), {"i": cid, "p": project})
         c.execute(_t("INSERT INTO github_repository_bindings (id, project_id, connection_id, "
                      "owner, name, full_name, default_branch, created_by) VALUES (:b, :p, :c, "
                      "'paramg', 'boss', 'paramg/boss', 'master', 'test')"),
