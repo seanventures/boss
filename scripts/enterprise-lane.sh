@@ -284,6 +284,7 @@ step_network() {
   docker_daemon_corp || { echo "could not point Docker at the proxy and company DNS"; return 1; }
   lockdown || { echo "could not lock the VM's egress down"; return 1; }
   local ca="$STATE/ca/ca.crt" issuer bad=0
+  for _ in $(seq 1 30); do (exec 3<>"/dev/tcp/$PROXY_IP/8080") 2>/dev/null && break; sleep 1; done
   # The proxy re-signs public HTTPS with the lane's CA (it inspects).
   issuer=$(echo | timeout 20 openssl s_client -proxy "$PROXY_IP:8080" -connect registry.npmjs.org:443 \
     -servername registry.npmjs.org 2>/dev/null | openssl x509 -noout -issuer 2>/dev/null)
