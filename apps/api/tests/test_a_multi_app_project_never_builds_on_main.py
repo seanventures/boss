@@ -14,6 +14,9 @@ preview, a failed attempt — and each build must land on the chosen (or origina
   each lands on its app's branch; only an explicit new_app starts fresh.
 * One resolver (new_work.build_mode) says which change: an open change continues on its
   branch, a merged one becomes a new change of the same app, a closed one is refused.
+* A panel's approved PRD (the meeting's auto-started build) and the agent's chat fallback
+  (intent_router's create_code_task) ask the same questions (BOSSAPP-1455): naming no app beside
+  several asks which and builds nothing; naming a merged app starts a new change of it.
 
 Where a build lands is read the way the pipeline reads it: build_base_branch.resolve_build_base,
 then lineage_clone (the clone governed_code_task_service makes). The only thing replaced is the
@@ -324,3 +327,110 @@ def test_an_incident_fix_is_not_rebased_at_the_start_door(client, engine, apps):
         assert not run_input.get("extends_from_default")
     else:   # the door may refuse an unknown incident; it never re-bases it
         assert "extends_from_default" not in started.text
+
+
+# ── A panel's approved PRD: the meeting's auto-started build (BOSSAPP-1455) ─────────────────
+
+def _prd_follow_on(engine, monkeypatch, *, extends=None, task="task_auditpage") -> tuple:
+    """Approve a panel's PRD-publish decision and run its follow-on (the auto-started build)
+    as decisions does; the thread a fresh PRD build is launched on is recorded, not run."""
+    from boss_engine.services import decisions
+
+    launched: list = []
+    monkeypatch.setattr(get_settings(), "auto_code_task_after_prd", True)
+    monkeypatch.setattr(decisions, "_spawn_as_this_request", lambda fn: launched.append(fn))
+    rec = {"action": "execute_agent_tool", "tool": "publish_document", "start_code_task": True,
+           "args": {"title": "PRD: Audit page", "markdown": "# Audit page\nShow who did what.",
+                    "repo_subdir": "docs/prd"},
+           "task_id": task, **({"extends_run_id": extends} if extends else {})}
+    decision_id = f"dec_prd_{task[-8:]}"
+    with engine.begin() as connection:
+        connection.execute(text(
+            "INSERT INTO tasks (id, project_id, title, description, status, dedupe_key) VALUES "
+            "(:t, :p, 'Audit page', 'An audit page', 'in_progress', :t) "
+            "ON CONFLICT (id) DO NOTHING"), {"t": task, "p": _project()})
+        connection.execute(text(
+            "INSERT INTO decisions (id, project_id, task_id, question, recommendation, status) "
+            "VALUES (:d, :p, :t, 'Publish this PRD?', CAST(:r AS JSONB), 'approved')"),
+            {"d": decision_id, "p": _project(), "t": task, "r": json.dumps(rec)})
+        row = dict(connection.execute(text("SELECT * FROM decisions WHERE id = :d"),
+                                      {"d": decision_id}).mappings().one())
+        decisions.DecisionService(get_settings())._start_code_task_after_prd(
+            connection, row, "ceo", rec)
+    return decision_id, launched
+
+
+def test_a_panels_prd_that_names_no_app_never_builds_beside_several(engine, apps, monkeypatch):
+    before = _count(engine, "code_task_runs")
+    decision_id, launched = _prd_follow_on(engine, monkeypatch)
+    assert launched == [], "a fresh build on the default branch was launched beside the apps"
+    assert _count(engine, "code_task_runs") == before
+    with engine.begin() as connection:
+        said = connection.execute(text(
+            "SELECT data FROM events WHERE event_type = 'code_task.not_started' "
+            "AND data->>'decision_id' = :d"), {"d": decision_id}).scalar()
+        note = connection.execute(text("SELECT resolution_note FROM decisions WHERE id = :d"),
+                                  {"d": decision_id}).scalar()
+    assert said["reason"] == "app_choice_needed"
+    assert {c["run_id"] for c in said["app_choices"]} == {A_RUN, B_ROOT}
+    assert "Northgate Gateway" in note and "Lumen Pay Ledger" in note
+    assert "New work" in note and "Create a new app" in note
+
+
+def test_a_panels_prd_for_a_merged_app_is_a_new_change_of_it(engine, apps, monkeypatch):
+    _merge(engine, B_ROOT)
+    decision_id, launched = _prd_follow_on(engine, monkeypatch, extends=B_ROOT,
+                                           task="task_ledgeraudit")
+    assert launched == []
+    with engine.begin() as connection:
+        run_id = connection.execute(text(
+            "SELECT id FROM code_task_runs WHERE finalize_ctx->'origin'->>'decision_id' = :d"),
+            {"d": decision_id}).scalar()
+    assert run_id, "the PRD's build onto the app did not start"
+    assert _run(engine, run_id)["finalize_ctx"].get("after_merged_run_id") == B_ROOT
+    assert _clones(engine, run_id) != f"boss/code/{B_ROOT}"
+
+
+def test_a_panels_prd_for_an_open_app_continues_its_branch(engine, apps, monkeypatch):
+    decision_id, _ = _prd_follow_on(engine, monkeypatch, extends=B_ROOT, task="task_ledgeropen")
+    with engine.begin() as connection:
+        run_id = connection.execute(text(
+            "SELECT id FROM code_task_runs WHERE finalize_ctx->'origin'->>'decision_id' = :d"),
+            {"d": decision_id}).scalar()
+    assert run_id and _clones(engine, run_id) == f"boss/code/{B_ROOT}"
+
+
+# ── The agent's chat fallback: intent_router's create_code_task (BOSSAPP-1455) ──────────────
+
+def _router_creates(engine, external_ref=None):
+    from boss_engine.services.intent_router import IntentRouter
+
+    with engine.begin() as connection:
+        return IntentRouter(get_settings())._dispatch(
+            connection, "create_code_task",
+            {"title": "Totals row", "instructions": "Fix the totals row."},
+            project_id=_project(), actor="executive_console", external_ref=external_ref)
+
+
+def test_the_chat_fallback_naming_no_app_asks_which(engine, apps):
+    before = _count(engine, "code_task_runs")
+    turn = _router_creates(engine)
+    assert "Northgate Gateway" in turn.reply and "Lumen Pay Ledger" in turn.reply
+    assert turn.actions[0]["kind"] == "app_choice_needed"
+    assert {c["run_id"] for c in turn.actions[0]["app_choices"]} == {A_RUN, B_ROOT}
+    assert _count(engine, "code_task_runs") == before
+
+
+def test_the_chat_fallback_scoped_to_an_app_builds_on_its_branch(engine, apps):
+    turn = _router_creates(engine, external_ref=B_FAILED)
+    assert turn.actions[0]["kind"] == "code_task_created"
+    assert _clones(engine, turn.actions[0]["run_id"]) == f"boss/code/{B_ROOT}"
+
+
+def test_the_chat_fallback_for_a_merged_app_starts_a_new_change(engine, apps):
+    _merge(engine, B_ROOT)
+    turn = _router_creates(engine, external_ref=B_ROOT)
+    run = _run(engine, turn.actions[0]["run_id"])
+    assert run["finalize_ctx"].get("after_merged_run_id") == B_ROOT
+    assert _clones(engine, run["id"]) != f"boss/code/{B_ROOT}"
+    assert "new change" in turn.reply

@@ -2091,6 +2091,26 @@ class DecisionService:
                 {"decision_id": row["id"], "task_id": task_id},
             )
             return
+        # NOTHING NAMED BESIDE SEVERAL APPS (new_work, BOSSAPP-1455): a panel that named no app
+        # in a project that holds several does not quietly build a fresh app on the default
+        # branch beside them (RCA #9). The build is not started and the card says which apps
+        # there are and where to start it; one app or none builds as before.
+        from .project_experience import new_work
+
+        try:
+            new_work.require_app_choice(connection, row["project_id"], (
+                "The approved PRD names none of them, so BOSS did not start a build. Start it "
+                "from New work on the Project page: pick the app under Application, or pick "
+                "Create a new app."))
+        except new_work.AppChoiceNeeded as asked:
+            emit_event(connection, row["project_id"], "code_task.not_started", actor, "task",
+                       task_id, {"decision_id": row["id"], "reason": "app_choice_needed",
+                                 "detail": str(asked)[:600], "app_choices": asked.choices[:20]})
+            connection.execute(text(
+                "UPDATE decisions SET resolution_note = CONCAT_WS(E'\\n\\n', "
+                "NULLIF(resolution_note, ''), CAST(:why AS TEXT)), updated_at = now() "
+                "WHERE id = :d"), {"d": row["id"], "why": str(asked)[:1000]})
+            return
         # WHERE IT IS BUILT is the project's connected repository, resolved the way
         # create_code_task resolves it — the environment's single repo only when the project
         # has none registered. Reading the env alone meant a project with a connected repo and
@@ -2321,6 +2341,12 @@ class DecisionService:
         governing = connection.execute(text(
             "SELECT workflow_run_id FROM workflow_step_runs WHERE decision_id = :d "
             "ORDER BY created_at DESC LIMIT 1"), {"d": row["id"]}).scalar()
+        # WHICH CHANGE (new_work.build_mode, the one resolver every door asks — BOSSAPP-1455):
+        # the app's open change continues on its branch; a MERGED change starts a new change of
+        # the app from the default branch, never a push onto merged history.
+        from .project_experience import new_work
+
+        mode = new_work.build_mode(connection, project_id, extend_run_id)
         try:
             started = start_followup_task(
                 connection,
@@ -2335,6 +2361,7 @@ class DecisionService:
                 is_person_request=True,
                 workflow_run_id=str(governing) if governing else None,
                 finalize_extra={"origin": origin},
+                new_change=bool(mode and mode.get("mode") == "new_change"),
             )
         except ValueError as error:
             _not_started("followup_refused", detail=str(error)[:400])

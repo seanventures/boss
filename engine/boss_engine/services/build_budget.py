@@ -43,8 +43,10 @@ CATEGORY = BUILD_CATEGORY
 #: waiver, a checks-failing PR): no agent runs, so a small envelope for the PR step's own call.
 DELIVERY_ESTIMATE_USD_MICROS = 200_000
 
-#: How long a build reservation lives between stage boundaries. Each boundary renews it
-#: (`renew`), so a build that runs for hours keeps its hold; one that died lets it lapse.
+#: How long a build reservation lives between renewals. Each stage boundary renews it
+#: (`renew`), and so does every lease heartbeat of the build's job (jobs.heartbeat,
+#: BOSSAPP-1452), so a build that runs for hours, or one long stage on a small host, keeps its
+#: hold; one that died stops heartbeating and lets it lapse.
 RESERVATION_MINUTES = 45
 
 

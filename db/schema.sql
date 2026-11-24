@@ -1289,6 +1289,8 @@ CREATE INDEX IF NOT EXISTS idx_ci_waits_project_sha
   ON ci_waits(project_id, head_sha, created_at DESC);
 -- BOSSAPP-946: whether a repository has CI can be unknown (NULL); unknown never means "has CI".
 ALTER TABLE ci_waits ALTER COLUMN has_ci DROP NOT NULL;
+-- BOSSAPP-1453: when a check first left the runner queue; the CI timeout counts from here.
+ALTER TABLE ci_waits ADD COLUMN IF NOT EXISTS running_since TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS github_branch_policies (
   id TEXT PRIMARY KEY,

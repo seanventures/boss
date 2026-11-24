@@ -350,7 +350,17 @@ def builds_queued_seconds(connection: Connection, state: Mapping[str, Any]) -> f
     (or to now, while still queued), at most MAX_QUEUE_EXCLUDED_SECONDS. 0 when unreadable: an
     unknown wait is never subtracted. Builds of one window run one after another, so their
     waits do not overlap; `budget_left` never lets the result exceed the window's age."""
-    builds = [str(b) for b in state.get("build_ids") or [] if b]
+    return runs_queued_seconds(connection, state.get("build_ids") or [],
+                               since=str(state.get("started_at") or "epoch"))
+
+
+def runs_queued_seconds(connection: Connection, run_ids, *, since: Any = "epoch") -> float:
+    """How long these builds (code task runs) waited in the job queue before a worker leased
+    them, from each one's creation (never before `since`) to its job's first lease, or to now
+    while still queued; at most MAX_QUEUE_EXCLUDED_SECONDS, 0 when unreadable. The one
+    measure every clock that excludes its builds' queue time reads: step recovery's window
+    (builds_queued_seconds) and the Task Shepherd's deadline (shepherd_service, BOSSAPP-1454)."""
+    builds = [str(b) for b in run_ids or [] if b]
     if not builds:
         return 0.0
     try:
@@ -368,7 +378,7 @@ def builds_queued_seconds(connection: Connection, state: Mapping[str, Any]) -> f
                 "     AND j.payload->>'run_id' = r.id AND j.status = 'queued' LIMIT 1), "
                 "  r.created_at) - GREATEST(r.created_at, CAST(:since AS timestamptz)))))), 0) "
                 "FROM code_task_runs r WHERE r.id = ANY(:ids)"),
-                {"ids": builds, "since": str(state.get("started_at") or "epoch")}).scalar()
+                {"ids": builds, "since": str(since or "epoch")}).scalar()
     except Exception:  # noqa: BLE001
         return 0.0
     # Never more than a ceiling: a repair build no worker ever takes must not hold the window
