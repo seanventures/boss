@@ -173,6 +173,38 @@ def _rows(n: int, gb_each: float) -> list[dict]:
     return [{"id": f"b{i}", "started_at": T0 - timedelta(hours=i), "bytes": gb_each * 1e9} for i in range(n)]
 
 
+def test_the_cap_is_monotone_a_big_newer_backup_never_leaves_an_older_one_kept():
+    rows = [{"id": "b0", "started_at": T0, "bytes": 1e9}, {"id": "b1", "started_at": T0 - timedelta(hours=1), "bytes": 1e9},
+            {"id": "b2", "started_at": T0 - timedelta(hours=2), "bytes": 1e9},
+            {"id": "b3", "started_at": T0 - timedelta(hours=3), "bytes": 4e9},
+            {"id": "b4", "started_at": T0 - timedelta(hours=4), "bytes": 0.1e9}]
+    assert [r["id"] for r in bs.over_cap(rows, max_count=12, cap_gb=5)] == ["b3", "b4"]
+
+
+def test_other_numbers_on_the_card_never_delete_what_they_keep(monkeypatch):
+    """"Keep 20 instead": the card listed b12, b13 under keep 12; with 20 nothing is past it."""
+    rows = [{"id": f"b{i}", "started_at": T0 - timedelta(hours=i), "bytes": 1} for i in range(14)]
+
+    class Conn:
+        def __init__(self):
+            self.updates = []
+
+        def execute(self, stmt, params=None):
+            sql = str(stmt)
+            if "UPDATE backups" in sql:
+                self.updates.append(params["i"])
+            data = rows if "status = 'verified'" in sql and "ANY" not in sql and "LIMIT" not in sql else []
+            return SimpleNamespace(mappings=lambda: [dict(r) for r in data], all=lambda: [])
+
+    monkeypatch.setattr(bs, "s3_remover", lambda settings: None)
+    conn = Conn()
+    rec = {"tool": bs.CAP_TOOL, "to_delete": ["b12", "b13"],
+           "rule_proposal": {"kind": bs.CAP_RULE_KIND, "rule": {"keep_newest": 12, "cap_gb": 5}}}
+    got = bs.on_cap_decision(conn, {"id": "d1", "recommendation": rec}, verdict="approve", actor="p",
+                             make_rule=False, args={"keep_newest": 20})
+    assert got["removed"] == [] and conn.updates == []
+
+
 def test_the_cap_takes_the_oldest_past_the_count_or_the_bytes_never_the_newest_three():
     assert [r["id"] for r in bs.over_cap(_rows(14, 0.1), max_count=12, cap_gb=5)] == ["b12", "b13"]
     assert [r["id"] for r in bs.over_cap(_rows(13, 0.5), max_count=12, cap_gb=5)] == ["b10", "b11", "b12"]
@@ -192,7 +224,10 @@ case "$1" in
     if [[ "$*" == *"volume="* ]]; then [[ -n "${FAKE_VOLUME_USED:-}" ]] && echo cid2; exit 0; fi
     [[ "$*" == *"{{.Image}}"* ]] && printf 'boss-community-api:boss-community\n'
     exit 0 ;;
-  image) [[ "$2" == inspect ]] && exit 0; exit 0 ;;
+  image)
+    # an image this fake already removed is gone
+    if [[ "$2" == inspect ]]; then grep -qxF "rmi ${@: -1}" "$FAKE_DOCKER_LOG" && exit 1; exit 0; fi
+    exit 0 ;;
   volume)
     if [[ "$2" == inspect ]]; then
       case "${@: -1}" in
@@ -235,14 +270,14 @@ def _prune(env: dict, install: Path, *extra: str) -> subprocess.CompletedProcess
 
 def _removed(tmp_path: Path) -> list[str]:
     log = (tmp_path / "docker.log").read_text().splitlines()
-    return [l for l in log if l.startswith("rmi ") or l.startswith("volume rm ")]
+    return [ln for ln in log if ln.startswith("rmi ") or ln.startswith("volume rm ")]
 
 
 def test_prune_keeps_the_rollback_images_inside_the_window(tmp_path):
     env, install = _world(tmp_path, saved_hours_ago=10, FAKE_HEALTHY="1")
     out = _prune(env, install)
     assert out.returncode == 0, out.stderr
-    assert not any("prev-boss-community" in l for l in _removed(tmp_path))
+    assert not any("prev-boss-community" in ln for ln in _removed(tmp_path))
     assert "BOSS_PREV_EXPIRED_AT" not in (install / ".boss-rollback").read_text()
 
 
@@ -258,13 +293,13 @@ def test_prune_drops_the_rollback_images_past_the_window_when_healthy_and_marks_
     # a second prune does nothing more
     (tmp_path / "docker.log").write_text("")
     _prune(env, install)
-    assert not any("prev-" in l for l in _removed(tmp_path))
+    assert not any("prev-" in ln for ln in _removed(tmp_path))
 
 
 def test_an_unhealthy_release_keeps_its_way_back(tmp_path):
     env, install = _world(tmp_path, saved_hours_ago=200)
     out = _prune(env, install)
-    assert not any("prev-" in l for l in _removed(tmp_path))
+    assert not any("prev-" in ln for ln in _removed(tmp_path))
     assert "not healthy" in out.stdout
 
 
@@ -322,7 +357,7 @@ def test_the_test_volume_goes_only_when_no_container_uses_it_and_only_this_proje
 
 
 def test_prune_itself_never_touches_a_volume():
-    code = "\n".join(l for l in (INSTALL / "prune.sh").read_text().splitlines() if not l.lstrip().startswith("#"))
+    code = "\n".join(ln for ln in (INSTALL / "prune.sh").read_text().splitlines() if not ln.lstrip().startswith("#"))
     assert "volume rm" not in code and "volume inspect" not in code
     assert "--test-leftovers" in (INSTALL / "boss.sh").read_text()
     assert "--test-leftovers" in (INSTALL / "upgrade.sh").read_text()
@@ -456,24 +491,35 @@ def test_a_test_database_nobody_uses_is_dropped_from_a_live_server(db, monkeypat
     monkeypatch.delenv("BOSS_ENVIRONMENT", raising=False)
     base = scratch_url.rsplit("/", 1)[0]
     stamp = uuid.uuid4().hex[:8]
-    live, leftover, busy = f"bossdisk_live_{stamp}", f"boss_scratch_diskleft_{stamp}", f"boss_scratch_diskbusy_{stamp}"
+    # stamped and past its 24 h TTL (dev/test_databases), stamped and young, unstamped (test-tier's)
+    live = f"bossdisk_live_{stamp}"
+    leftover = f"boss_scratch_diskleft{stamp}_20200101t000000"
+    busy = f"boss_scratch_diskbusy{stamp}_20200101t000000"
+    young = f"boss_scratch_diskyoung{stamp}_{datetime.now(timezone.utc):%Y%m%dt%H%M%S}"
+    shard = f"boss_test_disk{stamp}_t1"
     admin = create_engine(scratch_url, future=True).execution_options(isolation_level="AUTOCOMMIT")
     with admin.connect() as c:
-        for name in (live, leftover, busy):
+        for name in (live, leftover, busy, young, shard):
             c.execute(text(f'CREATE DATABASE "{name}"'))
     live_engine = create_engine(f"{base}/{live}", future=True)
     holder = create_engine(f"{base}/{busy}", future=True).connect()
     try:
-        got = rr.reap_test_databases(live_engine, test_server=False, only=(leftover, busy))
-        assert got["dropped"] == [leftover]
+        only = (leftover, busy, young, shard)
+        t = time.time()
+        got = rr.reap_test_databases(live_engine, test_server=False, only=only, now=t)
+        assert got["dropped"] == [leftover]          # the young one and a busy one stay
+        assert got["waiting"] == [shard]             # an unstamped one is only noted, first time
+        assert rr.reap_test_databases(live_engine, test_server=False, only=only, now=t + 60)["dropped"] == []
+        later = rr.reap_test_databases(live_engine, test_server=False, only=only, now=t + 3700)
+        assert later["dropped"] == [shard]           # idle and unchanged for an hour: a leftover
         with admin.connect() as c:
             names = {r[0] for r in c.execute(text("SELECT datname FROM pg_database"))}
-        assert leftover not in names and busy in names
+        assert leftover not in names and shard not in names and busy in names and young in names
     finally:
         holder.close()
         live_engine.dispose()
         with admin.connect() as c:
-            for name in (live, leftover, busy):
+            for name in (live, leftover, busy, young, shard):
                 c.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
         admin.dispose()
 
@@ -507,7 +553,7 @@ def test_backups_past_the_cap_ask_once_and_the_answer_removes_exactly_them(db, t
     monkeypatch.setattr(bs, "s3_remover", lambda settings: None)
     with engine.begin() as c:
         c.execute(text("DELETE FROM backups"))
-        c.execute(text("DELETE FROM retention_rules WHERE kind = 'backups'"))
+        c.execute(text("DELETE FROM retention_rules WHERE kind IN ('backups', 'scheduled_backups')"))
     paths = _backups(engine, tmp_path, 6, 2.0)           # 12 GB: three past the 5 GB cap
     assert bs.prune(engine, _settings()) == []            # nothing deleted without a yes
     assert bs.prune(engine, _settings()) == []
@@ -525,8 +571,11 @@ def test_backups_past_the_cap_ask_once_and_the_answer_removes_exactly_them(db, t
     assert got["state"] == "done" and len(got["removed"]) == 3
     assert [p.exists() for p in paths] == [True, True, True, False, False, False]
     with engine.begin() as c:
-        rule = c.execute(text("SELECT source, rule FROM retention_rules WHERE kind = 'backups'")).first()
+        rule = c.execute(text("SELECT source, rule FROM retention_rules WHERE kind = 'scheduled_backups'")).first()
+        host_rule = c.execute(text("SELECT 1 FROM retention_rules WHERE kind = 'backups'")).first()
     assert rule[0] == "learned"
+    # its own kind: approving it never makes deleting the host's recovery archives automatic
+    assert host_rule is None
     # next time it is automatic: the approved rule removes the oldest without a card
     (tmp_path / "n").mkdir()
     extra = _backups(engine, tmp_path / "n", 5, 2.0)

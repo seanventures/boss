@@ -96,7 +96,7 @@ CATEGORIES: tuple[Category, ...] = (
              where="db"),
     Category("test_data", "Test databases", 0.0,
              "only `boss dev up` makes a test Postgres; without one, test databases and its volume "
-             "are leftovers BOSS removes by itself (the API's reaper, prune.sh after an upgrade)",
+             "are leftovers BOSS removes by itself (the API reaper; the steward after an upgrade and on boss prune)",
              "Nothing to do: BOSS removes test leftovers by itself when no test Postgres runs; with "
              "one, `boss dev sweep-test-db` drops old test databases.", test_server_budget_gb=8.0),
     Category("backups", "Backups", 5.0,

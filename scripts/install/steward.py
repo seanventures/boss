@@ -720,7 +720,10 @@ def verb_remove_images(env: Env, args: dict, *, dry_run: bool, runner: Callable)
         if res.returncode == 0:
             done.append(ref)
     if expired and any(r.endswith(f":{prev}") for r in done):
-        _mark_rollback_expired(env)
+        still = [r for r in items if r.endswith(f":{prev}") and runner(
+            [*env.docker, "image", "inspect", r]).returncode == 0]
+        if not still:            # only when every kept image is really gone
+            _mark_rollback_expired(env)
     after = docker_df(env, runner)
     freed = size if done else 0.0
     return done, freed if after else freed

@@ -270,8 +270,15 @@ def test_server_present(host: str = TEST_SERVER_HOST) -> bool:
         return False
 
 
+#: An unstamped test database (`boss_test_t1`) is a leftover only once it was seen idle, with no
+#: transaction committed in it, on two passes at least this far apart.
+TEST_DB_QUIET_SECONDS = 3600.0
+_TEST_DB_SEEN: dict[str, tuple[float, int]] = {}
+
+
 def reap_test_databases(engine: Any, *, test_server: Optional[bool] = None,
-                        only: Optional[Sequence[str]] = None) -> dict[str, Any]:
+                        only: Optional[Sequence[str]] = None,
+                        now: Optional[float] = None) -> dict[str, Any]:
     """TEST DATABASES ON AN INSTALL THAT RUNS NO TESTS (BOSSAPP-1459). Only the test suites and
     scratch work make `boss_test*` / `boss_scratch*` databases, and they belong on the test
     Postgres (`boss dev up`, BOSSAPP-1152). Found on the live server of an install that runs no
@@ -280,8 +287,16 @@ def reap_test_databases(engine: Any, *, test_server: Optional[bool] = None,
 
     * this install runs a test Postgres (the `db-test` host resolves): a developer works here;
     * the database BOSS itself runs on is a test one (a test suite's own API, a CI shard):
-      the others on that server are its siblings', never this process's to drop."""
+      the others on that server are its siblings', never this process's to drop.
+
+    And each database only when nobody is connected AND it is provably done: a stamped one
+    (dev/test_databases.parse_stamped) past its 24 h TTL, or an unstamped one (`boss_test_t1`,
+    which an older branch's test-tier.sh still makes here) seen idle with the same commit count
+    on two passes TEST_DB_QUIET_SECONDS apart — never one a suite is between sessions in."""
+    from ..dev.test_databases import parse_stamped
     from .disk_budget import is_test_database
+
+    clock = now if now is not None else time.time()
 
     if test_server is None:
         test_server = test_server_present()
@@ -292,27 +307,48 @@ def reap_test_databases(engine: Any, *, test_server: Optional[bool] = None,
         if is_test_database(current) or os.environ.get("BOSS_ENVIRONMENT", "").strip().lower() in \
                 ("test", "e2e", "ci"):
             return {"dropped": [], "kept": "this BOSS runs on a test database"}
-        names = [str(r[0]) for r in c.execute(text(
-            "SELECT datname FROM pg_database WHERE NOT datistemplate AND datname <> current_database() "
-            "AND (datname LIKE 'boss\\_test%' OR datname LIKE 'boss\\_scratch%')")).all()]
+        rows = c.execute(text(
+            "SELECT d.datname, COALESCE(s.xact_commit, 0) FROM pg_database d "
+            "LEFT JOIN pg_stat_database s ON s.datname = d.datname "
+            "WHERE NOT d.datistemplate AND d.datname <> current_database() "
+            "AND (d.datname LIKE 'boss\\_test%' OR d.datname LIKE 'boss\\_scratch%')")).all()
     dropped: list[str] = []
-    for name in names:
+    waiting: list[str] = []
+    for name, commits in ((str(r[0]), int(r[1] or 0)) for r in rows):
         if only is not None and name not in only:
             continue        # a test's own databases only, never a neighbour's on the same server
         if not is_test_database(name) or not re.fullmatch(r"[a-z0-9_]{1,63}", name):
             continue
+        stamped = parse_stamped(name)
+        if stamped is not None:
+            if not stamped.expired():
+                continue
+        else:
+            seen = _TEST_DB_SEEN.get(name)
+            if seen is None or seen[1] != commits:
+                _TEST_DB_SEEN[name] = (clock, commits)      # first sight, or it was used since
+                waiting.append(name)
+                continue
+            if clock - seen[0] < TEST_DB_QUIET_SECONDS:
+                waiting.append(name)
+                continue
         try:
             with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as c:
-                c.execute(text("SET lock_timeout = '2s'"))
-                busy = c.execute(text("SELECT 1 FROM pg_stat_activity WHERE datname = :n LIMIT 1"),
-                                 {"n": name}).first()
-                if busy:
-                    continue
-                c.execute(text(f'DROP DATABASE IF EXISTS "{name}"'))
+                try:
+                    c.execute(text("SET lock_timeout = '2s'"))
+                    busy = c.execute(text("SELECT 1 FROM pg_stat_activity WHERE datname = :n LIMIT 1"),
+                                     {"n": name}).first()
+                    if busy:
+                        _TEST_DB_SEEN.pop(name, None)
+                        continue
+                    c.execute(text(f'DROP DATABASE IF EXISTS "{name}"'))
+                finally:
+                    c.execute(text("RESET lock_timeout"))    # a pooled connection keeps no limit
             dropped.append(name)
+            _TEST_DB_SEEN.pop(name, None)
         except Exception:  # noqa: BLE001 — a connection arrived, or no right: the next pass
             _log.info("test database %s not dropped", name, exc_info=True)
-    return {"dropped": dropped}
+    return {"dropped": dropped, "waiting": waiting}
 
 
 def _du(path: Path) -> int:

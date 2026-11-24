@@ -86,7 +86,7 @@ The one stale part was `kg_vec_1536`'s dead space, which the compaction pass ret
   cleanup drop it once `.boss-rollback` is `BOSS_ROLLBACK_KEEP_HOURS` old and the API is healthy,
   and write `BOSS_PREV_EXPIRED_AT`. `boss rollback` then refuses and names `boss upgrade --to REF`.
 * **Test data only with a test Postgres.** A `db-test` container (running or stopped) keeps its
-  volume and the test databases; without one, `prune.sh` removes the volume (checked against its
+  volume and the test databases; without one, the steward (`--test-leftovers`, run by every upgrade and `boss prune`) removes the volume (checked against its
   Compose labels) and the API's reaper drops `boss_test*` / `boss_scratch*` databases nobody is
   connected to. A BOSS whose own database is a test one never drops anything.
 * **Backups past the cap.** With an approved `backups` retention rule the oldest go at once.

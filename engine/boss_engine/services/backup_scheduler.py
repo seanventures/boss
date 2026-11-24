@@ -372,7 +372,8 @@ def prune(engine: Any, settings: Any = None, *,
                 if _remove(engine, row, remover, why="over-cap"):
                     pruned.append(str(row["id"]))
         elif over:
-            ask_over_cap(engine, over, max_count=max_count, cap_gb=cap_gb)
+            ask_over_cap(engine, over, max_count=max_count, cap_gb=cap_gb,
+                         kept_n=len(kept) - len(over))
     return pruned
 
 
@@ -382,6 +383,9 @@ def prune(engine: Any, settings: Any = None, *,
 
 #: The storage decision's tool name (storage_cleanup routes its answer here).
 CAP_TOOL = "storage.remove_scheduled_backups"
+#: Its OWN retention rule kind: never `backups`, which governs the host's pre-upgrade recovery
+#: archives (storage.remove_backups) — approving this card must not make deleting those automatic.
+CAP_RULE_KIND = "scheduled_backups"
 #: The newest backups the cap never takes, whatever the rule says.
 CAP_FLOOR = 3
 #: A "Not now" is asked again after this long.
@@ -389,8 +393,8 @@ ASK_AGAIN_AFTER = timedelta(hours=24)
 
 
 def cap_policy(connection: Any, settings: Any) -> tuple[int, float, bool]:
-    """(max count, cap GB, approved). An APPROVED `backups` retention rule (an operator's, or one
-    learned from an answered card) sets both numbers and makes removal automatic; without one
+    """(max count, cap GB, approved). An APPROVED `scheduled_backups` retention rule (an
+    operator's, or one learned from an answered card) sets both numbers and makes removal automatic; without one
     the settings give the numbers and the removal is asked (production) — or answered by the
     install's own autonomy (dev tier: autonomy_gate lets BOSS answer `storage_delete`)."""
     max_count = int(getattr(settings, "backup_max_count", 12) or 12)
@@ -399,7 +403,7 @@ def cap_policy(connection: Any, settings: Any) -> tuple[int, float, bool]:
         from . import storage_rules
 
         with connection.begin_nested():
-            rule = storage_rules.rule_for(connection, "backups")
+            rule = storage_rules.rule_for(connection, CAP_RULE_KIND)
     except Exception:  # noqa: BLE001 — no rules table: the settings, asked
         rule = None
     if rule and rule.get("source") in ("operator", "learned"):
@@ -419,18 +423,19 @@ def over_cap(rows: Iterable[Mapping[str, Any]], *, max_count: int, cap_gb: float
     `floor`. Pure: newest first, a backup stays while both numbers still hold."""
     ordered = sorted((dict(r) for r in rows), key=lambda r: _utc(r["started_at"]), reverse=True)
     cap = cap_gb * 1e9
-    used, out = 0.0, []
+    used, out, cut = 0.0, [], False
     for i, row in enumerate(ordered):
         size = float(row.get("bytes") or 0)
-        if i < floor or (i < max_count and used + size <= cap):
+        if i < floor or (not cut and i < max_count and used + size <= cap):
             used += size
             continue
+        cut = True          # monotone: once one is past the cap, every older one is too
         out.append(row)
     return out
 
 
 def ask_over_cap(engine: Any, over: list[Mapping[str, Any]], *, max_count: int,
-                 cap_gb: float) -> Optional[str]:
+                 cap_gb: float, kept_n: int = 0) -> Optional[str]:
     """ONE storage decision for the backups past the cap (the Infra Agent's card, kind
     `storage_delete`): it lists them, proposes the rule that makes it automatic next time, and is
     not raised again while one is open or for a day after a "Not now"."""
@@ -454,12 +459,12 @@ def ask_over_cap(engine: Any, over: list[Mapping[str, Any]], *, max_count: int,
         project_id = storage_incidents.default_project(c)
         if not project_id:
             return None
-        proposed = {"keep_newest": int(max_count), "cap_gb": float(cap_gb), "keep_days": 7}
+        proposed = {"keep_newest": int(max_count), "cap_gb": float(cap_gb)}
         question = (f"Delete {len(over)} old database backups ({gb:.1f} GB)? "
-                    f"The newest {max_count} stay.")
+                    f"The newest {max(CAP_FLOOR, kept_n)} stay.")
         reason = (f"Scheduled backups are past their cap ({max_count} backups or {cap_gb:g} GB). "
                   "Deleting a backup cannot be undone, so on a production install a person says yes "
-                  "once: tick the rule and next time it is automatic. "
+                  "once on this card: tick the rule and next time it is automatic. "
                   + storage_cleanup._LEFT_ALONE_LINE)
         host_id = storage_watch.local_host_id()
         ids = [str(r["id"]) for r in over]
@@ -469,7 +474,7 @@ def ask_over_cap(engine: Any, over: list[Mapping[str, Any]], *, max_count: int,
                "items": len(over), "gb": round(gb, 2), "keeps": int(max_count),
                "to_delete": ids[:500], "kept": [],
                "already_done_gb": 0.0, "free_pct_now": None, "target_pct": None, "paused_runs": 0,
-               "rule_proposal": {"kind": "backups", "rule": proposed, "preticked": True},
+               "rule_proposal": {"kind": CAP_RULE_KIND, "rule": proposed, "preticked": True},
                "alternatives": [], "never_automatic": ["unlabelled", "data volumes",
                                                        "non-scratch databases"],
                "left_alone": list(storage_cleanup.LEFT_ALONE), "ui": "StorageDeleteDecision"}
@@ -498,13 +503,26 @@ def on_cap_decision(connection: Any, decision: Mapping[str, Any], *, verdict: st
     if verdict != "approve":
         return {"state": "refused", "ask_again_after_hours": ASK_AGAIN_AFTER.total_seconds() / 3600}
     proposal = rec.get("rule_proposal") or {}
+    rule = {**dict(proposal.get("rule") or {}), **dict(args or {})}
     want_rule = bool(proposal.get("preticked")) if make_rule is None else bool(make_rule)
     if want_rule:
         from . import storage_rules
 
-        storage_rules.upsert(connection, kind="backups", rule=dict((args or proposal.get("rule")) or {}),
-                             source="learned", actor=actor, decision_id=str(decision.get("id") or ""))
+        storage_rules.upsert(connection, kind=CAP_RULE_KIND, rule=rule, source="learned", actor=actor,
+                             decision_id=str(decision.get("id") or ""))
     ids = [str(i) for i in (rec.get("to_delete") or [])]
+    if args:
+        # "Keep 20 instead": only what is STILL past the cap with the person's numbers goes —
+        # never a backup the card listed that the new numbers keep.
+        current = [dict(r) for r in connection.execute(text(
+            "SELECT id, started_at, bytes FROM backups WHERE status = 'verified'")).mappings()]
+        try:
+            still = {str(r["id"]) for r in over_cap(
+                current, max_count=max(CAP_FLOOR, int(rule.get("keep_newest") or CAP_FLOOR)),
+                cap_gb=float(rule.get("cap_gb") or 1e9))}
+        except (TypeError, ValueError):
+            still = set()
+        ids = [i for i in ids if i in still]
     rows = [dict(r) for r in connection.execute(text(
         "SELECT id, path, object_key, started_at, bytes FROM backups "
         "WHERE status = 'verified' AND id = ANY(:ids)"), {"ids": ids}).mappings()]

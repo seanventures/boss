@@ -143,7 +143,14 @@ if [[ -f "$ROLLBACK_FILE" && -z "$(rb_value BOSS_PREV_EXPIRED_AT)" && -n "$(rb_v
         run "${D[@]}" rmi "$img"
         dropped=$((dropped + 1))
       done
-      if [[ "$DRY" -eq 0 ]]; then
+      # Marked only when every kept image is really gone (an rmi can fail, a container can still
+      # run one): otherwise `boss rollback` would refuse while its images are still here.
+      left=0
+      for repo in $(rb_value BOSS_PREV_IMAGES); do
+        [[ "$repo" =~ ^boss-community-[a-z0-9-]+$ ]] || continue
+        "${D[@]}" image inspect "$repo:$prev_tag" >/dev/null 2>&1 && left=$((left + 1))
+      done
+      if [[ "$DRY" -eq 0 && "$left" -eq 0 ]]; then
         printf 'BOSS_PREV_EXPIRED_AT=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$ROLLBACK_FILE"
       fi
       printf '%s the rollback images of %s (%s images, kept %s h; the window is %s h)\n' \

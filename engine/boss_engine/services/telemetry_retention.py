@@ -1078,6 +1078,12 @@ COMPACT_MIN_BYTES = 256 * 1024 * 1024
 COMPACT_MAX_LIVE_ROWS = 50_000
 COMPACT_MAX_LIVE_SHARE = 0.10
 COMPACT_STATEMENT_TIMEOUT = "120s"
+#: The rewrite copies the live data and rebuilds every index (an HNSW one included): above this
+#: much live data it could hold its lock for the whole timeout, so it is not attempted.
+COMPACT_MAX_LIVE_BYTES = 64 * 1024 * 1024
+#: A table whose rewrite failed, or did not halve it, is left alone this long.
+COMPACT_RETRY_AFTER = timedelta(hours=24)
+_COMPACT_BACKOFF: dict[str, datetime] = {}
 
 
 def compaction_candidates(connection: Any) -> list[dict[str, Any]]:
@@ -1102,7 +1108,8 @@ def compaction_candidates(connection: Any) -> list[dict[str, Any]]:
             f'SELECT count(*), COALESCE(sum(pg_column_size(t.*)), 0) FROM '
             f'(SELECT * FROM "{name}" LIMIT :n) t'), {"n": COMPACT_MAX_LIVE_ROWS + 1}).first()
         live_rows, live_bytes = int(got[0] or 0), int(got[1] or 0)
-        if live_rows <= COMPACT_MAX_LIVE_ROWS and live_bytes <= COMPACT_MAX_LIVE_SHARE * int(size):
+        if live_rows <= COMPACT_MAX_LIVE_ROWS and live_bytes <= COMPACT_MAX_LIVE_BYTES \
+                and live_bytes <= COMPACT_MAX_LIVE_SHARE * int(size):
             out.append({"table": str(name), "bytes": int(size), "live_rows": live_rows,
                         "live_bytes": live_bytes})
     return out
@@ -1114,6 +1121,8 @@ def compact(engine: Any, *, dry_run: bool = False) -> list[dict[str, Any]]:
     left for the next pass. Returns [{table, bytes, after, error}]."""
     with engine.connect() as c:
         found = compaction_candidates(c)
+    now = _now()
+    found = [x for x in found if not (_COMPACT_BACKOFF.get(x["table"]) and _COMPACT_BACKOFF[x["table"]] > now)]
     if dry_run:
         return found
     out = []
@@ -1121,16 +1130,22 @@ def compact(engine: Any, *, dry_run: bool = False) -> list[dict[str, Any]]:
         name = cand["table"]
         try:
             with _autocommit(engine) as c:
-                c.execute(text(f"SET lock_timeout = '{LOCK_TIMEOUT}'"))
-                c.execute(text(f"SET statement_timeout = '{COMPACT_STATEMENT_TIMEOUT}'"))
-                c.execute(text(f'VACUUM (FULL, ANALYZE) "{name}"'))
-                after = int(c.execute(text("SELECT pg_total_relation_size(to_regclass(:t))"),
-                                      {"t": name}).scalar() or 0)
-                c.execute(text("RESET statement_timeout"))
-                c.execute(text("RESET lock_timeout"))
+                try:
+                    c.execute(text(f"SET lock_timeout = '{LOCK_TIMEOUT}'"))
+                    c.execute(text(f"SET statement_timeout = '{COMPACT_STATEMENT_TIMEOUT}'"))
+                    c.execute(text(f'VACUUM (FULL, ANALYZE) "{name}"'))
+                    after = int(c.execute(text("SELECT pg_total_relation_size(to_regclass(:t))"),
+                                          {"t": name}).scalar() or 0)
+                finally:
+                    # A pooled connection never keeps these limits, whatever happened above.
+                    c.execute(text("RESET statement_timeout"))
+                    c.execute(text("RESET lock_timeout"))
             out.append({**cand, "after": after, "error": None})
+            if after * 2 > cand["bytes"]:
+                _COMPACT_BACKOFF[name] = now + COMPACT_RETRY_AFTER   # it did not shrink: stop trying
             _log.info("compacted %s: %d → %d bytes", name, cand["bytes"], after)
-        except Exception as exc:  # noqa: BLE001 — a busy table waits for the next pass
+        except Exception as exc:  # noqa: BLE001 — a busy table waits; a failed one backs off
+            _COMPACT_BACKOFF[name] = now + COMPACT_RETRY_AFTER
             out.append({**cand, "after": None, "error": f"{type(exc).__name__}"})
             _log.info("table %s not compacted this pass", name, exc_info=True)
     return out
