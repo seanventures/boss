@@ -43,7 +43,7 @@ import socket
 import ssl
 import struct
 import threading
-from typing import Iterable, NamedTuple, Optional, Union
+from typing import Any, Iterable, NamedTuple, Optional, Union
 
 from boss_engine.identity import github_urls
 
@@ -172,8 +172,33 @@ def _matches(host: str, patterns: Iterable[str]) -> bool:
     return False
 
 
+_ENGINE: list = []
+
+
+def _db() -> Any:
+    """The egress database (one engine per process), for the GHES host list."""
+    if not _ENGINE:
+        from .app import _engine
+
+        _ENGINE.append(_engine())
+    return _ENGINE[0]
+
+
+def ghes_fenced(host: str) -> bool:
+    """A GitHub Enterprise Server host of this install — set on the host OR on any GitHub
+    connection's API base (github_connections.ghes_hosts) — is never tunnelled: its credential is
+    added only by the GitHub route (BOSSAPP-1286). Unreadable: fenced by name only (NEVER)."""
+    try:
+        from boss_engine.services.github_connections import ghes_hosts
+
+        return host.lower().rstrip(".") in ghes_hosts(_db())
+    except Exception as exc:  # noqa: BLE001 — the static fence still stands
+        log.warning("could not read the GHES hosts: %s", type(exc).__name__)
+        return False
+
+
 def _rules_for(host: str) -> list[Rule]:
-    if _matches(host, NEVER):
+    if _matches(host, NEVER) or ghes_fenced(host):
         return []
     return [r for r in allow_rules() if _matches(host, (r.pattern,))]
 
@@ -369,7 +394,7 @@ def refusal_reason(host: str, port: int, reason: str) -> str:
     host = _SAFE_HOST.sub("", host.lower())[:200] or "this host"
     where = host if port == 443 else f"{host}:{port}"
     fence = "Blocked by BOSS network fence"
-    if reason == "host_not_allowed" and _matches(host, NEVER):
+    if reason == "host_not_allowed" and (_matches(host, NEVER) or ghes_fenced(host)):
         return f"{fence}: {host} is reached through BOSS's GitHub proxy, not this tunnel"
     if reason == "host_not_allowed":
         return (f"{fence}: {host} is not on the egress allowlist. An operator can add {where} "

@@ -2020,6 +2020,62 @@ def can_create_repos(granted: Any, missing: Any) -> dict[str, Any]:
     return {"ok": None, "missing": []}
 
 
+#: How long the install's GHES host list is reused (egress asks per request).
+GHES_HOSTS_TTL_S = 60.0
+_GHES_HOSTS_CACHE: dict[str, Any] = {}
+#: Seam for tests: replaces the database read, ``(db) -> iterable of api_base_url values``.
+GHES_BASES_LOOKUP: Optional[Callable[[Any], Any]] = None
+
+
+def reset_ghes_hosts_cache() -> None:
+    _GHES_HOSTS_CACHE.clear()
+
+
+def _connection_api_bases(db: Any) -> list[str]:
+    if GHES_BASES_LOOKUP is not None:
+        return [str(b) for b in (GHES_BASES_LOOKUP(db) or ()) if b]
+    sql = text("SELECT DISTINCT api_base_url FROM github_connections "
+               "WHERE status IN ('configured', 'active') AND api_base_url IS NOT NULL")
+    if hasattr(db, "execute") and not hasattr(db, "connect"):      # a Connection
+        with db.begin_nested():
+            return [str(r[0]) for r in db.execute(sql)]
+    with db.connect() as c:                                          # an Engine
+        return [str(r[0]) for r in c.execute(sql)]
+
+
+def ghes_hosts(db: Any) -> dict[str, str]:
+    """THE GitHub Enterprise Server hosts this install reaches (BOSSAPP-1286), as
+    ``{host: REST base}``: the install's own (BOSS_GITHUB_API_URL / _WEB_URL) and every active or
+    configured connection's ``api_base_url`` that is not github.com. Both the web host and the API
+    host of each map to its REST base. Egress fences, routes and rewrites exactly these; cached
+    for GHES_HOSTS_TTL_S. A database that cannot be read keeps the last answer."""
+    import time
+    from urllib.parse import urlsplit
+
+    now = time.monotonic()
+    hit = _GHES_HOSTS_CACHE.get("hosts")
+    if hit is not None and now < hit[0]:
+        return dict(hit[1])
+    bases = [github_urls.install_api_base()]
+    try:
+        bases += _connection_api_bases(db)
+    except Exception as error:  # noqa: BLE001 — keep the last known list (or the install's)
+        logger.warning("github: could not read the connections' API bases: %s", type(error).__name__)
+        if hit is not None:
+            return dict(hit[1])
+    out: dict[str, str] = {}
+    for raw in bases:
+        api = github_urls.api_base(raw)
+        if api == github_urls.PUBLIC_API:
+            continue
+        for url in (api, github_urls.web_base_for(api)):
+            host = (urlsplit(url).hostname or "").lower()
+            if host and host not in github_urls.PUBLIC_HOSTS:
+                out.setdefault(host, api)
+    _GHES_HOSTS_CACHE["hosts"] = (now + GHES_HOSTS_TTL_S, out)
+    return dict(out)
+
+
 def api_base_for_repository(connection: Connection, project_id: Optional[str], owner: str = "",
                             repo: str = "") -> str:
     """THE REST base for a repository (BOSSAPP-1286): the ``api_base_url`` of the connection
