@@ -3,8 +3,8 @@
 **What this is:** how BOSS takes a partner's API gateway configuration from "pushed" to "live in
 production", explained for people (part 1), then the low-level design for build agents (part 2),
 then an 8–10 minute demo storyline (part 3).
-**Status:** part of the chain is on `main`; the rest is being built on branch
-`feat/config-onboarding-full-chain`. Every step below says which.
+**Status:** part of the chain is on `main`; the rest is being built under BOSSAPP-1132.
+Every step below says which.
 **Ticket:** BOSSAPP-1128 (epic BOSSAPP-1127). Demo data: BOSSAPP-1134,
 [`examples/api-gateway-onboarding/`](../../examples/api-gateway-onboarding/).
 **Names:** all fictional. **Northgate** is the gateway team, **Lumen Pay** is the partner being
@@ -121,7 +121,7 @@ someone to approve production. It takes days per partner, and the rules are appl
 The workflow on `main` (`onboard_config_file`) is:
 `build ("Fix the file") → review → merge → config_deploy ("Staging") → contract_test`.
 
-The target chain adds, in order (being built on `feat/config-onboarding-full-chain`; **none of
+The target chain adds, in order (BOSSAPP-1132; **none of
 these is on `main` yet**):
 
 1. **Intake route.** A push or PR matching the glob starts the workflow with `target_path` set to

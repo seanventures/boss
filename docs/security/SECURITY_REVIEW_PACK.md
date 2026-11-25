@@ -24,8 +24,9 @@ machine from `Dockerfile.community`.
 | `mcp-tools`, `kg-mcp`, `build-services` | Tool servers; a throwaway Postgres for builds' tests |
 | Optional profiles | `infisical` + `redis` (secrets), `prometheus` + `grafana`, `mailpit`, `registry`, `runner` |
 
-All ports are published on `127.0.0.1` by default; the API is widened only by `BOSS_API_BIND`
-(compose file). Repositories are kept as bare clones under `/var/lib/boss/repos`; each build works
+All ports are published on `127.0.0.1` by default. Two can be widened: the API by `BOSS_API_BIND`,
+and the app-preview origin by `BOSS_PREVIEW_BIND` (preview paths only, cookies and credentials
+stripped); web, Postgres and Infisical stay on loopback (compose file, `api` ports). Repositories are kept as bare clones under `/var/lib/boss/repos`; each build works
 in a throwaway clone under `/var/lib/boss/sandboxes` (compose volumes).
 
 ## 2. Data flow
@@ -96,7 +97,7 @@ Okta groups to roles: [OKTA_GROUPS_TO_ROLES.md](../operations/OKTA_GROUPS_TO_ROL
 
 | Control | Code | Test |
 |---|---|---|
-| Approvals need `decision:approve`, a human session (not an API key or agent) and the tier's seat; tier 3 needs two people | `identity/approvals.py::require_approval` | `apps/api/tests/test_identity_approval_seats.py` |
+| Approvals need `decision:approve`, a human session (not an API key or agent) and the tier's seat; tier 3 needs two people unless the org enables `single_operator_waiver` (automatic while the org has one active person) | `identity/approvals.py::require_approval` | `apps/api/tests/test_identity_approval_seats.py` |
 | A merge needs an approver independent of the change's creator, on the current head | `services/github_merges.py::authorize` | `apps/api/tests/test_github_merge_authorizations.py` |
 | Production (and an unknown target, treated as production) always asks a person | `services/autonomy_policy.py` (`prod: ask`), `services/config_deploy.py::promote` | `engine/tests/test_dev_autonomy_acts_and_logs.py` (`test_production_and_unknown_targets_still_ask`) |
 
