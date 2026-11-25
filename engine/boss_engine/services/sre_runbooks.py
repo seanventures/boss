@@ -95,7 +95,37 @@ CREATE INDEX IF NOT EXISTS idx_sre_runbook_runs_project
   ON sre_runbook_runs(project_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sre_runbook_runs_runbook
   ON sre_runbook_runs(project_id, runbook_id, created_at DESC);
+
+-- One approval authorises ONE remediation step of ONE run (BOSSAPP-1293): consumed here.
+CREATE TABLE IF NOT EXISTS sre_runbook_approvals_used (
+  decision_id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  run_id TEXT NOT NULL,
+  step_digest TEXT NOT NULL,
+  used_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 """
+
+
+def step_digest(runbook_id: str, incident_id: str, step_id: str, step: dict[str, Any]) -> str:
+    """What one approval authorises: this runbook, incident, step id, action and params. Any
+    change to them (an edited runbook, other params) is a different digest, so a new card."""
+    import hashlib
+
+    body = json.dumps({"runbook_id": runbook_id, "incident_id": incident_id, "step": step_id,
+                       "action": str(step.get("action") or ""),
+                       "params": step.get("params") or {}}, sort_keys=True, default=str)
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
+def _rec(row: Any) -> dict[str, Any]:
+    rec = row.get("recommendation") or {}
+    if isinstance(rec, str):
+        try:
+            rec = json.loads(rec)
+        except json.JSONDecodeError:
+            rec = {}
+    return rec if isinstance(rec, dict) else {}
 
 
 class SreRunbookError(Exception):
@@ -383,6 +413,7 @@ class SreRunbookService:
         receipt_id: Optional[str] = None
         extra: dict[str, Any] = {}
         approval: Optional[dict[str, Any]] = None
+        last_decision: Optional[str] = None
         for step in steps:
             step_id = str(step.get("id") or step.get("action") or "step")
             action = str(step.get("action") or "")
@@ -398,9 +429,14 @@ class SreRunbookService:
                     extra={"reason": "unknown_step", "action": action, "steps": results},
                 )
 
+            # ONE approval per gated step: the decision names this step, action and params
+            # (exactly what the card showed), and it is consumed by this run — it never carries
+            # over to the next step or replays on a later run.
+            approval = None
             if kind in ("external", "remediation"):
-                approval = approval or self._approved_decision(
-                    connection, project_id, runbook["id"], incident_id,
+                approval = self._approved_decision(
+                    connection, project_id, runbook["id"], incident_id, step=step,
+                    step_id=step_id, run_id=run_id,
                 )
             if kind in ("external", "remediation") and not approval:
                 decision_id = self._hold_decision(
@@ -462,6 +498,7 @@ class SreRunbookService:
                 except Exception as error:  # noqa: BLE001 — the receipt says what went wrong
                     outcome = {"ok": False, "error": f"{type(error).__name__}: {error}"[:500]}
                 ok = bool(outcome.get("ok", True))
+                last_decision = (approval or {}).get("decision_id") or last_decision
                 payload = {"action": action, "applied": ok and kind == "remediation",
                            "incident_id": incident_id, "params": params,
                            "approved_by": (approval or {}).get("approved_by"),
@@ -502,7 +539,7 @@ class SreRunbookService:
         )
         return self._finish(
             connection, run, status="completed",
-            decision_id=(approval or {}).get("decision_id"), receipt_id=receipt_id,
+            decision_id=last_decision, receipt_id=receipt_id,
             extra={**extra, "steps": results},
         )
 
@@ -543,6 +580,11 @@ class SreRunbookService:
             {"d": deployment_id}).scalar()
         if owner != project_id:
             return {"ok": False, "error": "That deployment is not this project's"}
+        refused = self._authority_refused(connection, project_id, approval,
+                                          action="rollback_deployment", key="deployment_id",
+                                          value=deployment_id)
+        if refused:
+            return {"ok": False, "error": refused}
         try:
             planned = rollback_stack_deploy(
                 self._engine(connection), self.settings, deployment_id=deployment_id,
@@ -565,6 +607,11 @@ class SreRunbookService:
             text("SELECT project_id FROM code_task_runs WHERE id = :r"), {"r": run_ref}).scalar()
         if owner != project_id:
             return {"ok": False, "error": "That build is not this project's"}
+        refused = self._authority_refused(connection, project_id, approval,
+                                          action="redeploy_deployment", key="run_id",
+                                          value=run_ref)
+        if refused:
+            return {"ok": False, "error": refused}
         result = redeploy_latest_deployment(self._engine(connection), self.settings, run_ref,
                                             actor)
         if result is None:
@@ -572,6 +619,33 @@ class SreRunbookService:
         status = str(result.get("status") or "")
         return {"ok": status not in ("failed", "error", "blocked", "not_found"),
                 "deployment_run_id": result.get("deployment_run_id"), "status": status}
+
+    def _authority_refused(self, connection: Connection, project_id: str,
+                           approval: Optional[dict[str, Any]], *, action: str, key: str,
+                           value: str) -> Optional[str]:
+        """Why ``approval`` does NOT authorise ``action`` on ``value`` here, or None. It must be
+        a person's approved runbook decision in this project, for this action and this target,
+        claimed by the run that carries it (sre_runbook_approvals_used)."""
+        a = approval or {}
+        if a.get("source") != "sre_runbook" or not a.get("decision_id"):
+            return f"{action} needs a person's approval of this step"
+        if a.get("action") != action or str((a.get("params") or {}).get(key) or "") != value \
+                or a.get("project_id") != project_id:
+            return f"The approval does not name this {action} ({key}={value})"
+        row = connection.execute(
+            text("SELECT status, recommendation FROM decisions WHERE id = :d AND project_id = :p"),
+            {"d": a["decision_id"], "p": project_id}).mappings().first()
+        rec = _rec(row) if row else {}
+        if not row or row.get("status") != "approved" or rec.get("step_digest") != a.get("step_digest") \
+                or rec.get("step_action") != action \
+                or str((rec.get("params") or {}).get(key) or "") != value:
+            return f"No approved decision for this {action}"
+        used = connection.execute(
+            text("SELECT run_id FROM sre_runbook_approvals_used WHERE decision_id = :d"),
+            {"d": a["decision_id"]}).scalar()
+        if used != a.get("run_id"):
+            return "That approval belongs to another run"
+        return None
 
     # ── internals ──────────────────────────────────────────────────────────
     def _insert_run(
@@ -739,9 +813,15 @@ class SreRunbookService:
         project_id: str,
         runbook_id: str,
         incident_id: str,
+        *,
+        step: dict[str, Any],
+        step_id: str,
+        run_id: str,
     ) -> Optional[dict[str, Any]]:
-        """The person's approval of this runbook for this incident, as the authority a
-        remediation carries ({decision_id, approved_by, source}), or None."""
+        """The person's approval of THIS step — same runbook, incident, step id, action and
+        params as the card they approved (its step_digest) — consumed by ``run_id`` so it
+        authorises exactly one execution. Returns the authority a remediation carries, or None."""
+        digest = step_digest(runbook_id, incident_id, step_id, step)
         rows = connection.execute(
             text(
                 """
@@ -753,19 +833,29 @@ class SreRunbookService:
             {"project_id": project_id, "status": "approved"},
         ).mappings().all()
         for row in rows:
-            rec = row.get("recommendation") or {}
-            if isinstance(rec, str):
-                try:
-                    rec = json.loads(rec)
-                except json.JSONDecodeError:
-                    rec = {}
-            if (
-                rec.get("runbook_id") == runbook_id
-                and rec.get("incident_id") == incident_id
-                and rec.get("kind") == "sre_runbook"
-            ):
-                return {"source": "sre_runbook", "decision_id": row["id"],
-                        "approved_by": str(row.get("approved_by") or "a person")}
+            rec = _rec(row)
+            if rec.get("kind") != "sre_runbook" or rec.get("step_digest") != digest:
+                continue
+            if rec.get("runbook_id") != runbook_id or rec.get("incident_id") != incident_id:
+                continue
+            claimed = connection.execute(
+                text(
+                    """
+                    INSERT INTO sre_runbook_approvals_used
+                      (decision_id, project_id, run_id, step_digest)
+                    VALUES (:d, :p, :r, :g)
+                    ON CONFLICT (decision_id) DO NOTHING
+                    """
+                ),
+                {"d": row["id"], "p": project_id, "r": run_id, "g": digest},
+            )
+            if getattr(claimed, "rowcount", 0) != 1:
+                continue                     # already used by an earlier run: never replays
+            return {"source": "sre_runbook", "decision_id": row["id"],
+                    "approved_by": str(row.get("approved_by") or "a person"),
+                    "step": step_id, "action": str(step.get("action") or ""),
+                    "params": dict(step.get("params") or {}), "step_digest": digest,
+                    "run_id": run_id, "project_id": project_id}
         return None
 
     def _hold_decision(
@@ -779,6 +869,7 @@ class SreRunbookService:
         actor: str,
         step: Optional[dict[str, Any]] = None,
     ) -> str:
+        digest = step_digest(runbook["id"], incident_id, step_id, step or {})
         existing = connection.execute(
             text(
                 """
@@ -798,8 +889,7 @@ class SreRunbookService:
                     rec = {}
             if (
                 rec.get("kind") == "sre_runbook"
-                and rec.get("runbook_id") == runbook["id"]
-                and rec.get("incident_id") == incident_id
+                and rec.get("step_digest") == digest
                 and row.get("status") == "pending"
             ):
                 return row["id"]
@@ -807,7 +897,8 @@ class SreRunbookService:
             connection,
             project_id,
             None,
-            f"Approve SRE runbook {runbook['name']!r} for the open incident?",
+            f"Approve step {step_id!r} ({str((step or {}).get('action') or '')}) of SRE runbook "
+            f"{runbook['name']!r} for the open incident?",
             {
                 "kind": "sre_runbook",
                 "runbook_id": runbook["id"],
@@ -816,6 +907,7 @@ class SreRunbookService:
                 "step": step_id,
                 "step_action": str((step or {}).get("action") or ""),
                 "params": dict((step or {}).get("params") or {}),
+                "step_digest": digest,
                 "actor": actor,
             },
             {"estimated_cost": 0, "spend": False},

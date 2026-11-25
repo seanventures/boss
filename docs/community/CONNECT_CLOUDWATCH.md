@@ -34,6 +34,8 @@ code, so a bug cannot widen what the policy allows.
 - store the access key pair in the secret store, deployed as env vars, and name those vars:
   `access_key_env`, `secret_key_env` (and `session_token_env` for temporary keys).
   A named var that is empty fails the connection with a 422 instead of returning nothing.
+  Only `AWS_*`, `CW_*` or `CLOUDWATCH_*` names are accepted; naming any other variable (another
+  credential BOSS holds) is refused with a 422.
 
 ## 2. The connection
 

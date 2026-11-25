@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import urllib.parse
 import urllib.request
 from typing import Any, Optional
@@ -359,6 +360,22 @@ def parse_metric_query(q: str, period: int) -> list[dict[str, Any]]:
         "Period": period, "Stat": stat}}]
 
 
+#: The ONLY env-var names a CloudWatch connection may name for its keys (PR #330 review): AWS's
+#: own (AWS_*) or a CloudWatch secret-store key (CW_* / CLOUDWATCH_*). A connection must never be
+#: able to point the AWS client at another credential the process holds (BOSS_GITHUB_TOKEN,
+#: DATABASE_URL, a model key) and have it sent to AWS or echoed in an error.
+_AWS_KEY_ENV = re.compile(r"^(AWS|CW|CLOUDWATCH)_[A-Z0-9_]{1,64}$")
+
+
+def aws_key_env_refused(name: str) -> str:
+    """Why ``name`` may not hold a CloudWatch credential, or "" when it may."""
+    name = (name or "").strip()
+    if not name or _AWS_KEY_ENV.fullmatch(name):
+        return ""
+    return (f"connector 'cloudwatch' key env {name!r} is not allowed: name an AWS_* variable or "
+            "a CloudWatch secret-store key (CW_* or CLOUDWATCH_*)")
+
+
 class CloudWatchSource:
     """AWS CloudWatch, READ-ONLY, on the same TelemetrySource contract as Prometheus/Loki:
 
@@ -381,6 +398,10 @@ class CloudWatchSource:
         self.region = region
         self.period = max(1, int(period_seconds or 60))
         self.endpoint_url = endpoint_url
+        for name in (access_key_env, secret_key_env, session_token_env):
+            why = aws_key_env_refused(name)
+            if why:
+                raise ConnectorNotReady(why, status_code=422)
         self._env = (access_key_env, secret_key_env, session_token_env)
         # injectable for tests; defaults to boto3 at call time so importing this module never
         # requires AWS creds
@@ -718,6 +739,9 @@ def ensure_connector_ready(spec: dict[str, Any]) -> None:
         named = [(k, (spec.get(k) or "").strip()) for k in
                  ("access_key_env", "secret_key_env", "session_token_env")]
         declared = {k: v for k, v in named if v}
+        refused = [aws_key_env_refused(v) for v in declared.values() if aws_key_env_refused(v)]
+        if refused:
+            raise ConnectorNotReady(refused[0], status_code=422)
         if bool(declared.get("access_key_env")) != bool(declared.get("secret_key_env")):
             raise ConnectorNotReady(
                 "connector 'cloudwatch' needs both access_key_env and secret_key_env, or "

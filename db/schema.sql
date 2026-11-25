@@ -6628,6 +6628,15 @@ CREATE INDEX IF NOT EXISTS idx_sre_runbook_runs_project
 CREATE INDEX IF NOT EXISTS idx_sre_runbook_runs_runbook
   ON sre_runbook_runs(project_id, runbook_id, created_at DESC);
 
+-- One approval authorises ONE remediation step of ONE run (BOSSAPP-1293): consumed here.
+CREATE TABLE IF NOT EXISTS sre_runbook_approvals_used (
+  decision_id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  run_id TEXT NOT NULL,
+  step_digest TEXT NOT NULL,
+  used_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 
 -- Platform ops: release planning
 CREATE TABLE IF NOT EXISTS release_plans (

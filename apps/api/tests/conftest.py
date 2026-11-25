@@ -201,6 +201,7 @@ def clean_tables(engine):
             "oncall_pages",
             "oncall_policies",
             "oncall_schedules",
+            "sre_runbook_approvals_used",
             "sre_runbook_runs",
             "sre_runbooks",
             "release_board_items",

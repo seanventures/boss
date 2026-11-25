@@ -152,3 +152,34 @@ def test_credentials_are_named_env_vars_and_fail_closed(monkeypatch):
     catalog = {c["kind"]: c for c in tc.list_connector_catalog()}["cloudwatch"]
     assert set(catalog["capabilities"]) == {"metrics", "logs", "alerts"} and catalog["read_only"]
     assert set(catalog["iam_actions"]) == set(tc.CLOUDWATCH_IAM_ACTIONS)
+
+
+@pytest.mark.parametrize("name", ["BOSS_GITHUB_TOKEN", "DATABASE_URL", "ANTHROPIC_API_KEY",
+                                  "aws_access_key_id", "AWS", "PATH"])
+def test_a_key_env_must_name_an_aws_or_cloudwatch_secret(name, monkeypatch):
+    """PR #330 review: a connection may not point the AWS client at another credential."""
+    from boss_engine.services.reliability import build_source
+    from boss_engine.services.telemetry_connectors import (
+        CloudWatchSource, ConnectorNotReady, ensure_connector_ready)
+
+    monkeypatch.setenv(name, "x" * 20)
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "y" * 20)
+    spec = {"kind": "cloudwatch", "log_group": "/app", "access_key_env": name,
+            "secret_key_env": "AWS_SECRET_ACCESS_KEY"}
+    with pytest.raises(ConnectorNotReady) as refused:
+        ensure_connector_ready(spec)
+    assert refused.value.status_code == 422 and "not allowed" in str(refused.value)
+    with pytest.raises(ConnectorNotReady):
+        build_source(spec)
+    with pytest.raises(ConnectorNotReady):
+        CloudWatchSource("/app", session_token_env=name)
+
+
+@pytest.mark.parametrize("name", ["AWS_ACCESS_KEY_ID", "CW_ACCESS_KEY_ID", "CLOUDWATCH_KEY"])
+def test_aws_and_cloudwatch_key_envs_are_accepted(name, monkeypatch):
+    from boss_engine.services.telemetry_connectors import ensure_connector_ready
+
+    monkeypatch.setenv(name, "x" * 20)
+    monkeypatch.setenv("CW_SECRET_ACCESS_KEY", "y" * 20)
+    ensure_connector_ready({"kind": "cloudwatch", "log_group": "/app", "access_key_env": name,
+                            "secret_key_env": "CW_SECRET_ACCESS_KEY"})
