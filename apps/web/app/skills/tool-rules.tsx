@@ -10,6 +10,7 @@
  * No rule can lift Off, the tier floor (tier 2+ always asks) or a quarantine — the simulate
  * answer says so when it happens.
  */
+import { Check, Play, Plus, X } from "@phosphor-icons/react";
 import React, { useCallback, useEffect, useState } from "react";
 
 import { GatedButton } from "../../components/gated";
@@ -56,7 +57,7 @@ export function ToolRules({ projectId }: { projectId: string; actor?: string }) 
         <span className="kit-spacer" />
         <GatedButton permission="mcp_server:review" projectId={projectId} className="kit-btn"
                      data-testid="tool-rules-add" onClick={() => setAdding((a) => !a)}>
-          {adding ? "Close" : "Add rule"}
+          {adding ? <><X size={14} aria-hidden="true" /> Close</> : <><Plus size={14} aria-hidden="true" /> Add rule</>}
         </GatedButton>
       </div>
       {said ? <p className="tp-said" role="status" data-testid="tool-rules-said">{said}</p> : null}
@@ -217,7 +218,7 @@ function AddRule({ projectId, onAdded }: { projectId: string; onAdded: () => voi
         placeholder={"$.path prefix /prod\n$.branch equals \"main\""} onChange={(e) => setConds(e.target.value)} /></label>
       {err || parsed.error ? <p className="tp-said">{err ?? parsed.error}</p> : null}
       <GatedButton permission="mcp_server:review" projectId={projectId} className="kit-btn" data-testid="tool-rules-save"
-                   disabled={!!scope.error || !!parsed.error} onClick={() => void save()}>Save rule</GatedButton>
+                   disabled={!!scope.error || !!parsed.error} onClick={() => void save()}><Check size={14} aria-hidden="true" /> Save rule</GatedButton>
     </div>
   );
 }
@@ -245,7 +246,7 @@ function SimulateBox({ projectId }: { projectId: string }) {
         <label>Agent<input aria-label="Simulate agent" value={role} placeholder="optional role key" onChange={(e) => setRole(e.target.value)} /></label>
         <label className="tp-wide">Arguments (JSON)<textarea aria-label="Simulate arguments" rows={2} value={args} onChange={(e) => setArgs(e.target.value)} /></label>
         <GatedButton permission="mcp_server:read" projectId={projectId} className="kit-btn" data-testid="tool-rules-simulate-run"
-                     disabled={!server.trim() || !tool.trim()} onClick={() => void run()}>Simulate</GatedButton>
+                     disabled={!server.trim() || !tool.trim()} onClick={() => void run()}><Play size={14} aria-hidden="true" /> Simulate</GatedButton>
       </div>
       {err ? <p className="tp-said">{err}</p> : null}
       {out ? (

@@ -192,3 +192,5 @@
   .abw-kinds { grid-template-columns: 1fr; }
   .abw-btn { min-height: 44px; }
 }
+/* Add MCP server under the MCP list (BOSSAPP-1478): an icon button, left-aligned. */
+.abw-add-mcp { justify-self: start; display: inline-flex; align-items: center; gap: 6px; }

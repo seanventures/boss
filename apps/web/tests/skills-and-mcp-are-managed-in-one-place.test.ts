@@ -35,7 +35,7 @@ describe("one home for MCP servers", () => {
       .filter((f) => /\/v1\/mcp\/servers/.test(codeOnly(f)) || /mcpApi\.(register|update|remove|review|policy)/.test(codeOnly(f)))
       .map((f) => path.relative(APP, f)).sort();
     expect(writers).toEqual(["api/mcp/route.ts", "skills/add-mcp-sheet.tsx", "skills/import-sheet.tsx",
-                             "skills/mcp-drawer.tsx", "skills/mcp-signin.tsx", "skills/tools-section.tsx"]);
+                             "skills/mcp-drawer.tsx", "skills/mcp-servers.tsx", "skills/mcp-signin.tsx", "skills/tools-section.tsx"]);
   });
 
   it("Capabilities shows a link to it, and no screen carries an MCP panel", () => {
@@ -45,7 +45,7 @@ describe("one home for MCP servers", () => {
     const caps = codeOnly("app/capabilities-ui.tsx");
     expect(page).not.toContain("McpServersPanel");
     expect(caps).not.toContain("McpServersPanel");
-    expect(caps).toContain('href="?area=skills&tab=library&lib=mcp"');
+    expect(caps).toContain('href="?area=skills&section=mcp"');
   });
 
   it("no screen tells an operator to call the API", () => {
