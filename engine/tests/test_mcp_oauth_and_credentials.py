@@ -492,9 +492,29 @@ def test_a_token_the_server_refuses_early_is_refreshed_once_and_the_call_made_ag
     assert _call(eng, project, sid, "early:2")["output"]
     assert fake.refreshes == before + 1
     assert _headers(eng, project, sid)["Authorization"] == "Bearer at-2"
+    # A server that refuses even the freshly refreshed token: the sign-in needs a person,
+    # never a refresh on every call.
+    class Refusing(set):
+        def add(self, _token):   # the server accepts no token, not even a fresh one
+            return None
+
+    real = fake.valid_access
+    fake.valid_access = Refusing()
+    before = fake.refreshes
+    with pytest.raises(creds.CredentialNeedsReauth, match="freshly refreshed"):
+        _call(eng, project, sid, "early:2b")
+    assert fake.refreshes == before + 1
+    assert _server(eng, project, sid)["auth_status"] == "needs_reauth"
+    with pytest.raises(creds.CredentialNeedsReauth):
+        _call(eng, project, sid, "early:2c")
+    assert fake.refreshes == before + 1
+    fake.valid_access = real
+    _sign_in(eng, project, fake, sid)
+    assert _call(eng, project, sid, "early:2d")["output"]
     # A refresh the provider refuses leaves the server needing reconnect, in words.
-    fake.valid_access.discard("at-2")
-    fake.revoked_refresh.add("rt-2")
+    latest = _headers(eng, project, sid)["Authorization"].split()[-1]
+    fake.valid_access.discard(latest)
+    fake.revoked_refresh.add("rt-" + latest.split("-")[-1])
     with pytest.raises(creds.CredentialNeedsReauth, match="Reconnect it"):
         _call(eng, project, sid, "early:3")
 

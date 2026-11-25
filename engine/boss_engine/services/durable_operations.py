@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import timedelta
 from typing import Any, Callable, Optional
 
@@ -127,7 +128,10 @@ def ambiguous_outcome(error: dict[str, Any]) -> bool:
     blob = f"{error.get('type') or ''} {error.get('message') or ''}".lower()
     if not blob.strip():
         return False
-    if any(mark in blob for mark in _UNAMBIGUOUS_MARKS):
+    if any(re.search(rf"(?<![a-z0-9_]){re.escape(mark)}(?![a-z0-9_])", blob)
+           for mark in _UNAMBIGUOUS_MARKS):
+        # WHOLE WORDS ONLY: "did not run" decides a retry of an irreversible call, so a port
+        # (4010), a tool name (not_found_check) or a host must never trip it.
         return False
     return any(mark in blob for mark in _AMBIGUOUS_MARKS)
 

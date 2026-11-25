@@ -2098,14 +2098,32 @@ def call_tool_with_receipt(
                                        rejected=headers,
                                        **({} if credential_principal is None
                                           else {"principal": credential_principal}))
-                output = MCPClient(settings).call_tool(
-                    server["url"], tool_name, inputs, headers=headers,
-                    **({"call_headers": forwarded} if forwarded else {}))
+                try:
+                    output = MCPClient(settings).call_tool(
+                        server["url"], tool_name, inputs, headers=headers,
+                        **({"call_headers": forwarded} if forwarded else {}))
+                except Exception as again:  # noqa: BLE001
+                    if not _oauth_refused(again, connection, project_id, server):
+                        raise
+                    # Refused again with the token just refreshed: never a refresh per call.
+                    from .connection_credentials import refused_after_refresh
+
+                    refused_after_refresh(
+                        connection, project_id, server,
+                        **({} if credential_principal is None
+                           else {"principal": credential_principal}))
     except Exception as exc:
+        from .mcp_client import failed_call as _failed_call
+
+        _said_failure = _failed_call(exc, str(server.get("url") or ""))
         receipts.mark_failed(
             connection,
             receipt["id"],
-            {"type": type(exc).__name__, "message": str(exc)},
+            # `code: unknown_outcome` is the structured mark durable_operations reads first: a
+            # call that may have run is never classified from words.
+            {"type": type(exc).__name__, "message": str(exc),
+             **({"code": "unknown_outcome"}
+                if getattr(_said_failure, "outcome", None) == "unknown_outcome" else {})},
         )
         if _is_transport_failure(exc):
             record_reachability_quietly(connection, project_id, server, reachable=False,

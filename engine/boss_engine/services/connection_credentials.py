@@ -514,6 +514,23 @@ def headers_for(connection: Connection, settings: Any, project_id: str, server: 
     return headers
 
 
+def refused_after_refresh(connection: Connection, project_id: str, server: dict[str, Any], *,
+                          principal: Optional[CredentialPrincipal] = None) -> None:
+    """The server answered 401 to a token BOSS had JUST refreshed: refreshing again would only
+    repeat it on every call. The credential needs a person to sign in again (needs_reauth),
+    and the call says so. Raises CredentialNeedsReauth."""
+    who = principal if principal is not None else principal_from_context(connection, project_id)
+    policy = str(server.get("credential_policy") or _policy_of(connection, server) or "shared")
+    found = resolve(connection, project_id, policy=policy, principal=who,
+                    server_id=str(server.get("id") or ""), static_shared=False)
+    if found.credential is not None:
+        mark_needs_reauth(connection, project_id, found.credential["id"],
+                          reason="refused_after_refresh")
+    raise CredentialNeedsReauth(
+        f"{server.get('name') or 'This server'} refused a freshly refreshed sign-in. "
+        "Reconnect it in Skills & MCP.")
+
+
 def _policy_of(connection: Connection, server: dict[str, Any]) -> Optional[str]:
     try:
         with connection.begin_nested():

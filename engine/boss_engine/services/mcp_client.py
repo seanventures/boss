@@ -45,6 +45,8 @@ SESSION_TTL_SECONDS = 600
 #: How long a server's probed era is trusted before BOSS probes again.
 ERA_TTL_SECONDS = 3600
 
+#: How long a TCP/TLS connect may take, whatever the read budget (a dead host fails fast).
+CONNECT_TIMEOUT_SECONDS = 10.0
 #: tools/list pages followed before BOSS stops asking (a server that paginates forever).
 MAX_TOOL_PAGES = 10
 #: A task's suggested polling interval is honoured within these bounds (seconds).
@@ -86,14 +88,20 @@ class MCPInputRequired(MCPError):
 class MCPTimeout(MCPError):
     """tools/call did not answer within the client's call timeout. The server was reached, so
     this is not an unreachable server; the call was cancelled (notifications/cancelled). The
-    words keep "timed out": durable_operations reads that as an unknown outcome, never retried
-    blind."""
+    words keep "timed out": durable_operations reads that as an unknown outcome. NEVER RETRIED
+    (`retryable` False on the class, read by skill_runtime): the call may have run. The message
+    names no tool or host, so nothing in it can read as a "did not run" mark; `outcome` says
+    the same thing structurally."""
+
+    retryable = False
+    outcome = "unknown_outcome"
 
     def __init__(self, tool: str, seconds: float):
         super().__init__(
-            f"{tool} did not answer within {int(seconds)}s (timed out); BOSS cancelled the call. "
-            "The server is reachable: if this tool is slow by design, raise "
-            "BOSS_MCP_CALL_TIMEOUT (seconds) on the install, otherwise check the server's logs.")
+            f"The tool did not answer within {int(seconds)}s (timed out); BOSS cancelled the "
+            "call and does not know whether it ran. The server is reachable: if this tool is "
+            "slow by design, raise BOSS_MCP_CALL_TIMEOUT (seconds) on the install, otherwise "
+            "check the server's logs.")
         self.tool = tool
         self.seconds = seconds
 
@@ -158,8 +166,9 @@ def describe_failure(error: BaseException, url: str = "") -> str:
         if code == 429:
             return f"{status}: {host} is rate limiting BOSS. Next: try again later."
         if code >= 500:
-            return (f"{status}: {host} failed while answering. Next: check the server's own "
-                    "logs.")
+            # No host or path here: an ambiguous failure's words must not carry anything that
+            # reads as a "did not run" mark (durable_operations).
+            return f"{status}: the server failed while answering. Next: check its own logs."
         return f"{status}: {host} refused the request."
     from .mcp_stdio_supervisor import StdioUnavailable
 
@@ -189,9 +198,9 @@ def describe_failure(error: BaseException, url: str = "") -> str:
                     "host.docker.internal or the machine's address.")
         return f"BOSS could not connect to {hostport} ({detail})."
     if isinstance(error, httpx.TimeoutException):
-        return f"{hostport} did not answer in time (timed out)."
-    if isinstance(error, (httpx.RemoteProtocolError, httpx.ReadError)):
-        return (f"{hostport} dropped the connection before it answered (connection reset). "
+        return "The server did not answer in time (timed out)."
+    if isinstance(error, (httpx.RemoteProtocolError, httpx.ReadError, httpx.WriteError)):
+        return ("The server dropped the connection before it answered (connection reset). "
                 "Next: check the server's logs; a proxy that does not pass streams can do this.")
     return f"{type(error).__name__}: {detail}"
 
@@ -199,17 +208,22 @@ def describe_failure(error: BaseException, url: str = "") -> str:
 def failed_call(error: BaseException, url: str = "") -> BaseException:
     """`error` as the MCPError a caller raises: an MCPError as it is, anything from the way
     (httpx) as MCPCallFailed in words. A timeout is never retried blind (unknown outcome)."""
-    if isinstance(error, MCPTimeout):
-        error.retryable = False  # type: ignore[attr-defined]
-        return error
     if isinstance(error, MCPError) or not isinstance(error, httpx.HTTPError):
         return error  # already words (a refusal, a sign-in to reconnect) or not from the way
     status = error.response.status_code if isinstance(error, httpx.HTTPStatusError) else None
     words = describe_failure(error, url)
-    deterministic = (status is not None and 400 <= status < 500 and status != 429) or (
-        "could not connect" in words and "connection refused" not in words
-        and not isinstance(error, httpx.ConnectTimeout))
-    return MCPCallFailed(words, status=status, retryable=not deterministic)
+    # RETRIED ONLY WHEN THE CALL CERTAINLY DID NOT RUN AND MAY WORK NEXT TIME: nothing was
+    # listening or the connect timed out, or the server said 429/503. A 4xx, TLS or name
+    # failure fails the same way again; a timeout, a reset or another 5xx may have run.
+    transient = (isinstance(error, httpx.ConnectTimeout)
+                 or (isinstance(error, httpx.ConnectError) and "connection refused" in words)
+                 or status in (429, 503))
+    failed = MCPCallFailed(words, status=status, retryable=transient)
+    if (isinstance(error, (httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout,
+                           httpx.RemoteProtocolError, httpx.ReadError, httpx.WriteError))
+            or (status is not None and status >= 500 and status != 503)):
+        failed.outcome = "unknown_outcome"  # type: ignore[attr-defined]
+    return failed
 
 
 def default_call_timeout() -> float:
@@ -415,7 +429,9 @@ class MCPClient:
         # THE PROXY DECISION (outbound_proxy): NO_PROXY read with its CIDR ranges, which httpx
         # ignores, so an internal server on 10.x is not sent to the company proxy.
         read = self._call_slot("timeout") if payload.get("method") == "tools/call" else None
-        return httpx.post(url, json=payload, headers=sent, timeout=read or self.timeout,
+        wait = float(read or self.timeout)
+        return httpx.post(url, json=payload, headers=sent,
+                          timeout=httpx.Timeout(wait, connect=min(wait, CONNECT_TIMEOUT_SECONDS)),
                           **outbound_proxy.httpx_options(url))
 
     def _call_slot(self, name: str) -> Any:
@@ -714,7 +730,7 @@ class MCPClient:
             post({"jsonrpc": "2.0", "id": rid, "method": method, "params": params or {}}, extra)
             try:
                 message = answer(rid)
-            except httpx.ReadTimeout:
+            except (httpx.ReadTimeout, httpx.WriteTimeout):
                 if method == "tools/call":
                     self._cancel_quietly(lambda note: post(note), rid)
                 raise
@@ -844,7 +860,7 @@ class MCPClient:
         self._calling.timeout, self._calling.rid = self.call_timeout, rid
         try:
             result = self._call(url, "tools/call", params, headers, call_headers) or {}
-        except httpx.ReadTimeout:
+        except (httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout):
             # A SLOW TOOL IS NOT A DEAD SERVER. The connection worked; the answer did not come
             # in time. Say so in words (not "ReadTimeout"), and tell the server BOSS stopped
             # waiting so it can stop the work (MCP notifications/cancelled). Raised as an
