@@ -16,10 +16,16 @@ from pathlib import Path
 from boss_engine.services import codex_login, sandbox_identity
 
 
-@dataclass
-class _Ident:
-    home: Path
-    key: str = "run-key"
+class _Ident(sandbox_identity.SandboxIdentity):
+    """A run identity whose HOME is the given folder (its run directory is the parent)."""
+
+    def __init__(self, home: Path, key: str = "run-key") -> None:
+        super().__init__(key=key, uid=61001, run_dir=Path(home).parent)
+        self._home = Path(home)
+
+    @property
+    def home(self) -> Path:  # type: ignore[override]
+        return self._home
 
 
 def _login(tmp_path: Path, monkeypatch, *, expires_in: float, refresh: str = "REFRESH_1",
@@ -207,7 +213,7 @@ def test_the_session_login_is_readable_by_the_runs_own_uid(tmp_path, monkeypatch
     env, proxy, _doc = _session(monkeypatch, _Ident(run_home))
     login = Path(env["CODEX_HOME"]) / "auth.json"
     assert stat.S_IMODE(login.stat().st_mode) & stat.S_IROTH
-    assert Path(env["CODEX_HOME"]).parent == run_home
+    assert Path(env["CODEX_HOME"]).parent == run_home.parent / ".boss-sessions"
     proxy.stop()
 
 

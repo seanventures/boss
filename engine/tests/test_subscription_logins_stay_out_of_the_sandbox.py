@@ -445,3 +445,70 @@ def test_stale_session_homes_are_swept(monkeypatch, tmp_path):
     os.utime(other, (long_ago, long_ago))
     subscription_shield._sweep_stale_session_homes()
     assert not old.exists() and fresh.exists() and other.exists()
+
+
+# ── races: a leftover agent process acting while BOSS builds a session (second review) ────────
+
+def _snapshot(secret: Path) -> tuple:
+    import stat as _stat
+
+    return (_stat.S_IMODE(secret.stat().st_mode),
+            sorted((p.name, p.read_text()) for p in secret.iterdir() if p.is_file()),
+            sorted(p.name for p in secret.iterdir()))
+
+
+def test_session_homes_live_in_a_boss_owned_dir_the_run_cannot_write(upstream, sandbox):
+    import stat as _stat
+
+    env = sandbox.env(_codex_env(_settings()))
+    home = Path(env["CODEX_HOME"])
+    assert home.parent == sandbox.sessions_dir
+    st = os.lstat(sandbox.sessions_dir)
+    assert _stat.S_ISDIR(st.st_mode) and st.st_uid == os.geteuid()
+    assert _stat.S_IMODE(st.st_mode) == 0o711
+
+
+@pytest.mark.parametrize("engine", ["codex", "grok"])
+def test_a_session_home_swapped_for_a_link_mid_build_never_touches_the_target(
+        engine, upstream, sandbox, tmp_path, monkeypatch):
+    secret = _secret_dir(tmp_path)
+    before = _snapshot(secret)
+
+    fired = []
+
+    def swap(event, path):
+        if event == "session_home_made":
+            os.rename(path, path + ".moved")
+            os.symlink(secret, path)
+            fired.append(path)
+    monkeypatch.setattr(subscription_shield, "_hook", swap)
+    _start_within(10, lambda: GenericCliCodeAgent(_settings(),
+                                                  BUILTIN_CLI_HARNESSES[engine])._env())
+    assert fired, "the race point was reached"
+    assert _snapshot(secret) == before                  # no file, link or chmod in the target
+
+
+@pytest.mark.parametrize("engine", ["codex", "grok"])
+def test_a_state_home_swapped_after_it_was_opened_is_not_followed(engine, upstream, sandbox,
+                                                                  tmp_path, monkeypatch):
+    import shutil as _shutil
+
+    secret = _secret_dir(tmp_path)
+    before = _snapshot(secret)
+    state = sandbox.home / f".{engine}"
+
+    fired = []
+
+    def swap(event, path):
+        if event == "state_home_opened":
+            _shutil.rmtree(state)
+            state.symlink_to(secret)
+            fired.append(path)
+    monkeypatch.setattr(subscription_shield, "_hook", swap)
+    env = _start_within(10, lambda: sandbox.env(
+        GenericCliCodeAgent(_settings(), BUILTIN_CLI_HARNESSES[engine])._env()))
+    assert fired, "the race point was reached"
+    assert _snapshot(secret) == before
+    home = Path(env[f"{engine.upper()}_HOME"])
+    assert not any("PLANTED_SECRET_VALUE" in p.read_text()
+                   for p in home.iterdir() if p.is_file() and not p.is_symlink())

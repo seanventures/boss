@@ -18,10 +18,16 @@ from boss_engine.services import model_proxy, sandbox_identity, subscription_shi
 from boss_engine.services.cli_harness import BUILTIN_CLI_HARNESSES, GenericCliCodeAgent
 
 
-@dataclass
-class _Ident:
-    home: Path
-    key: str = "run-x"
+class _Ident(sandbox_identity.SandboxIdentity):
+    """A run identity whose HOME is the given folder (its run directory is the parent)."""
+
+    def __init__(self, home: Path, key: str = "run-x") -> None:
+        super().__init__(key=key, uid=61001, run_dir=Path(home).parent)
+        self._home = Path(home)
+
+    @property
+    def home(self) -> Path:  # type: ignore[override]
+        return self._home
 
 
 def _doc(access: str) -> str:
@@ -60,7 +66,7 @@ def test_the_default_codex_home_login_is_used_when_codex_home_is_unset(tmp_path,
     (service_home / ".codex" / "auth.json").write_text(_doc("FROM_DEFAULT_HOME"))
     monkeypatch.setenv("HOME", str(service_home))
     env, login = _session_login(run_home)
-    assert Path(env["CODEX_HOME"]).parent == run_home
+    assert Path(env["CODEX_HOME"]).parent == run_home.parent / ".boss-sessions"
     assert model_proxy.held_for(login["tokens"]["access_token"], proxy) == "FROM_DEFAULT_HOME"
     assert "FROM_DEFAULT_HOME" not in json.dumps(login)
 

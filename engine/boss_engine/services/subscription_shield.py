@@ -35,6 +35,7 @@ import contextlib
 import json
 import logging
 import os
+import secrets
 import shlex
 import shutil
 import stat
@@ -125,71 +126,108 @@ def _sweep_stale_session_homes() -> None:
                 shutil.rmtree(path, ignore_errors=True)
 
 
-def _run_dir_of(sandbox: Any) -> Path:
-    return Path(getattr(sandbox, "run_dir", None) or Path(sandbox.home).parent)
+_DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
 
 
-def _trusted_dir(path: str, sandbox: Any) -> bool:
-    """Is `path` (in a tree the run's uid writes) a REAL directory BOSS owns, inside the run?
-    Checked with lstat and never followed: an agent can plant a link or a FIFO in its own HOME
-    between sessions, and BOSS acting on it as boss would act on the link's target."""
+def _hook(event: str, path: str) -> None:
+    """Tests only: a point where a hostile run could act (rename, plant a link) mid-operation."""
+
+
+def _owned_dir_fd(fd: int) -> bool:
+    st = os.fstat(fd)
+    return stat.S_ISDIR(st.st_mode) and st.st_uid == os.geteuid()
+
+
+def _open_state(sandbox: Any, name: str) -> Optional[int]:
+    """A directory fd on the run's `<home>/<name>` (made at acquire), opened component
+    by component with O_NOFOLLOW from the run directory (whose own name sits in a BOSS-owned
+    root), and only if it is a real directory BOSS owns. None otherwise. Everything after works
+    on the fd, so a rename or a planted link after this point changes nothing BOSS does."""
     try:
-        st = os.lstat(path)
+        run_fd = os.open(str(sandbox.run_dir), _DIR_FLAGS)
     except OSError:
-        return False
-    if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid():
-        return False
-    run = os.path.realpath(str(_run_dir_of(sandbox)))
-    real = os.path.realpath(path)
-    return real == os.path.abspath(path) and (real + os.sep).startswith(run + os.sep)
+        return None
+    fd = run_fd
+    try:
+        parts = Path(sandbox.home).relative_to(sandbox.run_dir).parts + (name,)
+        for part in parts:
+            nxt = os.open(part, _DIR_FLAGS, dir_fd=fd)
+            os.close(fd)
+            fd = nxt
+    except (OSError, ValueError):
+        os.close(fd)
+        return None
+    if not _owned_dir_fd(fd):
+        os.close(fd)
+        return None
+    return fd
 
 
 def _session_home(prefix: str, state_home: str, sandbox: Any, *,
                   skip: tuple[str, ...] = (),
                   files: Optional[dict[str, str]] = None) -> str:
-    """A fresh home for one session: `files` (written here, by name), and links to every entry
-    of `state_home` (the CLI's own state) except login files, `skip` and `files`.
+    """A fresh home for one session: `files` (written here), and links to every entry of the
+    CLI's state home except login files, `skip` and `files`.
 
-    In a sandbox the session home lives in the run's HOME. NOTHING in the run's tree is chmod-ed,
-    created, opened or read here: those dirs were made at acquire, before any agent code ran
-    (sandbox_identity._seed_cli_logins), and an agent may since have planted links or FIFOs. So
-    `state_home` is used only if it is still a real directory BOSS owns inside the run (lstat),
-    and its entries are linked BY NAME, never followed. The session home is made 0700, filled,
-    and only then opened to the run's uid (2777), so nothing can be planted in it first.
-    Removed when the session ends (model_proxy.on_session_end); a sandbox's also with its run."""
+    In a sandbox the session home is made in `<run_dir>/.boss-sessions` — BOSS-owned, 0711, made
+    at acquire before any agent code ran (SandboxIdentity.sessions_fd): the run's uid can reach
+    it but cannot create, rename or swap anything in it. Every operation goes through directory
+    fds (mkdir/open/symlink with dir_fd, fchmod on fds), never a path BOSS re-resolves, and the
+    state home is read through an fd opened with O_NOFOLLOW (_open_state). The session home is
+    filled at 0700 and opened to the run's uid only at the end. Removed when the session ends
+    (model_proxy.on_session_end), through the same parent fd; a sandbox's also with its run."""
     files = files or {}
     if sandbox is not None:
-        home = tempfile.mkdtemp(prefix=prefix, dir=str(sandbox.home))
-        use_state = _trusted_dir(state_home, sandbox)
+        parent_fd = sandbox.sessions_fd()
+        name = prefix + secrets.token_hex(8)
+        os.mkdir(name, 0o700, dir_fd=parent_fd)
+        home_fd = os.open(name, _DIR_FLAGS, dir_fd=parent_fd)
+        path = os.path.join(str(sandbox.sessions_dir), name)
+        state_fd = _open_state(sandbox, os.path.basename(state_home))
+        cleanup = lambda: shutil.rmtree(name, dir_fd=parent_fd, ignore_errors=True)  # noqa: E731
     else:
         _sweep_stale_session_homes()
-        home = tempfile.mkdtemp(prefix=prefix)
-        use_state = os.path.isdir(state_home)
-    os.chmod(home, 0o700)
-    for name, text in files.items():
-        _write(os.path.join(home, name), text, sandbox=sandbox)
-    if use_state:
-        for entry in os.listdir(state_home):
-            if _is_login_file(entry) or entry in skip or entry in files:
-                continue
-            with contextlib.suppress(OSError):
-                os.symlink(os.path.join(state_home, entry), os.path.join(home, entry))
-    if sandbox is not None:
-        os.chmod(home, 0o2777)
-    if not model_proxy.on_session_end(lambda: shutil.rmtree(home, ignore_errors=True)):
-        log.debug("subscription shield: no session scope; %s is removed with its run", home)
-    return home
+        path = tempfile.mkdtemp(prefix=prefix)
+        home_fd = os.open(path, _DIR_FLAGS)
+        try:
+            state_fd = os.open(state_home, _DIR_FLAGS) if os.path.isdir(state_home) else None
+        except OSError:
+            state_fd = None
+        cleanup = lambda: shutil.rmtree(path, ignore_errors=True)  # noqa: E731
+    try:
+        if not _owned_dir_fd(home_fd):
+            raise OSError("the session home is not BOSS's own directory")
+        _hook("session_home_made", path)
+        for entry, text in files.items():
+            _write(home_fd, entry, text, sandbox=sandbox)
+        if state_fd is not None:
+            _hook("state_home_opened", state_home)
+            for entry in os.listdir(state_fd):
+                if _is_login_file(entry) or entry in skip or entry in files:
+                    continue
+                with contextlib.suppress(OSError):
+                    # Linked BY NAME for the CLI (the run's uid) to resolve; BOSS never follows it.
+                    os.symlink(os.path.join(state_home, entry), entry, dir_fd=home_fd)
+        os.fchmod(home_fd, 0o2777 if sandbox is not None else 0o700)
+    finally:
+        os.close(home_fd)
+        if state_fd is not None:
+            os.close(state_fd)
+    if not model_proxy.on_session_end(cleanup):
+        log.debug("subscription shield: no session scope; %s is removed with its run", path)
+    return path
 
 
-def _write(path: str, text: str, *, sandbox: Any) -> None:
-    """A run-token file in a session home BOSS just made (0700 while it is written): 0644 in a
-    sandbox (the run's uid reads it; it holds no secret), 0600 otherwise. Created exclusively,
-    never through a link."""
+def _write(dir_fd: int, name: str, text: str, *, sandbox: Any) -> None:
+    """A run-token file in a session home BOSS just made: created exclusively in the directory
+    fd, never through a link, mode set on the file's own fd. 0644 in a sandbox (the run's uid
+    reads it; it holds no secret), 0600 otherwise."""
     mode = 0o644 if sandbox is not None else 0o600
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
+    fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+                 | getattr(os, "O_CLOEXEC", 0), mode, dir_fd=dir_fd)
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        os.fchmod(fh.fileno(), mode)
         fh.write(text)
-    os.chmod(path, mode)
 
 
 # ── Claude Code ───────────────────────────────────────────────────────────────────────────────

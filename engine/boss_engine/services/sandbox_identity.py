@@ -160,6 +160,36 @@ class SandboxIdentity:
     #: A uid of the SEALED sub-pool (loopback only): env() gives it no proxy, and git in it reads
     #: no system/global config and has no credential helper.
     sealed: bool = False
+    #: An fd on `sessions_dir`, held for the run: session homes are made through it, so a rename
+    #: of the name by the run's uid (it owns run_dir) changes nothing BOSS does.
+    _sessions_fd: Optional[int] = field(default=None, repr=False)
+
+    @property
+    def sessions_dir(self) -> Path:
+        """Where a session's CLI home is made (subscription_shield): BOSS-owned, 0711 — the run's
+        uid can traverse it but never create, rename or replace anything in it."""
+        return self.run_dir / ".boss-sessions"
+
+    def sessions_fd(self) -> int:
+        """Open (creating it, at acquire, before agent code) `sessions_dir`, refusing anything
+        but a real directory BOSS owns that no one else can write."""
+        if self._sessions_fd is not None:
+            return self._sessions_fd
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+        run_fd = os.open(str(self.run_dir), flags)
+        try:
+            with contextlib.suppress(FileExistsError):
+                os.mkdir(self.sessions_dir.name, 0o711, dir_fd=run_fd)
+            fd = os.open(self.sessions_dir.name, flags, dir_fd=run_fd)
+        finally:
+            os.close(run_fd)
+        st = os.fstat(fd)
+        if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid():
+            os.close(fd)
+            raise SandboxUnavailable("the run's session directory is not BOSS's own")
+        os.fchmod(fd, 0o711)
+        self._sessions_fd = fd
+        return fd
 
     @property
     def home(self) -> Path:
@@ -422,6 +452,7 @@ def acquire(owner_id: str, *, project_id: Optional[str] = None,
             _seed_cli_logins(ident)
         _seed_toolchains(ident, project_id)
         ident._helper("adopt", str(uid), str(ident.run_dir))
+        ident.sessions_fd()                # before any agent code: BOSS's own, 0711
     except BaseException:
         ident.killall()
         _purge(ident)
@@ -515,6 +546,10 @@ def release(owner_id: str, *, project_id: Optional[str] = None) -> None:
             os.ftruncate(ident._lock_fd, 0)
         with contextlib.suppress(OSError):
             os.close(ident._lock_fd)
+    if ident._sessions_fd is not None:
+        with contextlib.suppress(OSError):
+            os.close(ident._sessions_fd)
+        ident._sessions_fd = None
 
 
 def owner_key(owner_id: str) -> str:
