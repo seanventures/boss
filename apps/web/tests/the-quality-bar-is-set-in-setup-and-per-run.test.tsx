@@ -82,6 +82,15 @@ describe("Setup › Quality bar", () => {
     expect(tid("su-qb-always")!.textContent).toContain("waits for a person's approval");
   });
 
+  it("is its own fold on the Setup page, its state in the summary line", async () => {
+    const api = fakeApi(withQb(qbView({ overrides: { consistent: "follow_up" } })));
+    mounted = await mountBoard(api.view, "?area=setup&focus=quality_bar", true, "setup");
+    const sum = tid("su-sec-quality_bar-summary")!;
+    expect(sum.textContent).toBe("Standard · 1 gate changed · production always asks you");
+    expect(tid("su-sec-quality_bar")!.querySelector('[data-testid="su-row-quality-bar"]')).toBeTruthy();
+    expect(tid("su-qb-each-gate")!.textContent).toContain("1 changed");
+  });
+
   it("a press saves the project's bar", async () => {
     const api = fakeApi(withQb(qbView()));
     mounted = await mountBoard(api.view);
@@ -100,13 +109,16 @@ describe("Setup › Advanced › Each gate", () => {
   let mounted: Mounted | null = null;
   afterEach(() => { mounted?.unmount(); mounted = null; });
 
-  it("the floor always blocks; another gate is Preset, Blocks or Follow-up; Reset clears", async () => {
+  it("the floor always blocks, in one line; another gate is Preset, Blocks or Follow-up; Reset clears", async () => {
     const api = fakeApi(withQb(qbView()));
     mounted = await mountBoard(api.view, "?area=setup&focus=quality_gates");
-    const floor = tid("su-qg-security_clean")!;
-    expect(floor.textContent).toContain("Always blocks");
+    const floor = tid("su-qg-floor")!;
+    expect(floor.textContent).toContain("Always block");
+    expect(floor.textContent).toContain("Security clean");
     expect(floor.querySelector("button")).toBeNull();
-    expect(tid("su-qg-code_review_passed-default")!.textContent).toContain("Preset · Blocks");
+    expect(tid("su-qg-security_clean-follow_up")).toBeNull();
+    expect(tid("su-qg-code_review_passed-default")!.textContent).toContain("Preset");
+    expect(tid("su-qg-code_review_passed-now")!.textContent).toContain("blocks");
     expect(tid("su-qg-code_review_passed-default")!.getAttribute("aria-checked")).toBe("true");
     expect(tid("su-qg-code_review_passed-follow_up")!.querySelector("svg")).toBeTruthy();
     api.view = withQb(qbView({ overrides: { code_review_passed: "follow_up" } }));

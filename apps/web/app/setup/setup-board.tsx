@@ -20,7 +20,7 @@
  */
 import { GatedButton, useGate } from "../../components/gated";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowClockwise, BookOpen, CaretDown, Cpu, GitBranch, Lightning, SlidersHorizontal, Ticket } from "@phosphor-icons/react";
+import { ArrowClockwise, BookOpen, CaretDown, Cpu, GitBranch, Lightning, ShieldCheck, SlidersHorizontal, Ticket } from "@phosphor-icons/react";
 
 import { fetchSetup, SetupFailure, setupWrite } from "../../lib/setup-client";
 import {
@@ -608,6 +608,18 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
                         focused={focus === "events"}>
             <div ref={ref("events")}><EventsRow projectId={projectId} /></div>
           </SetupSection>
+          {/* QUALITY BAR (BOSSAPP-1362): what blocks a build, what becomes a follow-up; each gate
+              under Advanced. */}
+          {view.quality_bar ? (
+            <SetupSection id="quality_bar" title="Quality bar" icon={<ShieldCheck size={16} />}
+                          summary={`${view.quality_bar.presets.find((x) => x.key === view.quality_bar!.bar)?.label ?? view.quality_bar.bar}`
+                            + (Object.keys(view.quality_bar.overrides).length
+                              ? ` · ${Object.keys(view.quality_bar.overrides).length} gate${Object.keys(view.quality_bar.overrides).length === 1 ? "" : "s"} changed` : "")
+                            + " · production always asks you"}
+                          focused={focus === "quality_bar"}>
+              <div ref={ref("quality_bar")}><QualityBarRow onEachGate={() => openAdvanced("quality_gates")} /></div>
+            </SetupSection>
+          ) : null}
           {/* AUTONOMY (BOSSAPP-1441): the same one line as the classic board; set in Govern. */}
           <div className="su-sec-line"><AutonomySetupRow projectId={projectId} /></div>
           <details className="su-advanced su-advanced-all" data-testid="su-advanced-all" ref={classicRef}

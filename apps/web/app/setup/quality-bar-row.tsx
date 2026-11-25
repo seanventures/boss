@@ -108,23 +108,18 @@ const LEVEL_WORD: Record<GateLevel, string> = { block: "Blocks", follow_up: "Fol
 
 function GateLine({ g, bar, busy, onSet }: { g: QualityGate; bar: QualityPreset; busy: boolean;
                                             onSet: (gate: string, level: GateLevel | "default") => void }) {
-  if (g.floor) {
-    return (
-      <li className="su-qb-gate" data-testid={`su-qg-${g.gate}`} data-floor="">
-        <span className="su-qb-gname">{g.label}</span>
-        <span className="su-pill" title="Part of the floor: no preset or level relaxes it." data-tip="Part of the floor: no preset or level relaxes it.">
-          <Lock size={12} aria-hidden /> Always blocks</span>
-      </li>
-    );
-  }
   const options: { key: GateLevel | "default"; label: string; tip: string }[] = [
-    { key: "default", label: `Preset · ${LEVEL_WORD[g.presets[bar]]}`, tip: g.note ?? `What ${bar} does with it` },
-    { key: "block", label: "Blocks", tip: "A failure holds the build" },
+    { key: "default", label: "Preset", tip: `${bar} ${LEVEL_WORD[g.presets[bar]] === "Blocks" ? "blocks on it" : "makes it a follow-up"}${g.note ? `. ${g.note}` : ""}` },
+    { key: "block", label: "Block", tip: "A failure holds the build" },
     { key: "follow_up", label: "Follow-up", tip: "A failure is listed on the PR and the run; BOSS fixes it after" },
   ];
   return (
     <li className="su-qb-gate" data-testid={`su-qg-${g.gate}`}>
-      <span className="su-qb-gname" title={g.note} data-tip={g.note}>{g.label}</span>
+      <span className="su-qb-gname-wrap">
+        <span className="su-qb-gname" title={g.note} data-tip={g.note}>{g.label}</span>
+        <span className="su-qb-now" data-testid={`su-qg-${g.gate}-now`} data-level={g.effective}>
+          {g.effective === "block" ? "blocks" : "follow-up"}</span>
+      </span>
       <span className="su-line su-qb-levels" role="radiogroup" aria-label={g.label}>
         {options.map((o) => {
           const on = g.level === o.key;
@@ -173,8 +168,18 @@ export function QualityGatesRow() {
               <ArrowCounterClockwise size={13} aria-hidden /> Reset</GatedButton>
           ) : null}
         </span>
+        {/* THE FLOOR, ONE LINE: no preset or level relaxes these, so there is nothing to choose. */}
+        <div className="su-qb-floor" data-testid="su-qg-floor">
+          <span className="su-qb-h"><Lock size={13} weight="bold" aria-hidden /> Always block</span>
+          <span className="su-chips">
+            {qb.gates.filter((g) => g.floor).map((g) => (
+              <span key={g.gate} className="su-chip" data-testid={`su-qg-${g.gate}`}
+                    title="Part of the floor: no preset or level relaxes it.">{g.label}</span>
+            ))}
+          </span>
+        </div>
         <ul className="su-qb-gates">
-          {qb.gates.map((g) => <GateLine key={g.gate} g={g} bar={qb.bar} busy={busy} onSet={set} />)}
+          {qb.gates.filter((g) => !g.floor).map((g) => <GateLine key={g.gate} g={g} bar={qb.bar} busy={busy} onSet={set} />)}
         </ul>
       </div>
     </section>
