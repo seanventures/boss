@@ -190,6 +190,13 @@ def schedule(
     projects_archive.refuse_new_work(connection, project_id, "new schedules")
     if not (prompt or "").strip():
         raise WakeupError("say what to do on each run")
+    from .golden_journeys.service import WAKE_MARKER
+
+    if prompt.strip().lower().startswith(WAKE_MARKER):
+        # The journeys' daily wake is BOSS's own (golden_journeys.service.arm_daily, which needs
+        # assurance permissions); a schedule's words can never name it.
+        raise WakeupError("that marker is reserved for BOSS's golden-journeys schedule; "
+                          "Govern › Journeys arms it")
     first = next_scheduled_wake(at_time, days or [], tz_name)
     wake_id = make_id("wake")
     connection.execute(
@@ -294,7 +301,7 @@ def due(
     rows = connection.execute(
         text("SELECT id, project_id, kind, thread_id, actor, prompt, exit_condition, "
              "       interval_seconds, at_time, days, timezone, cycle, max_cycles, "
-             "       deadline_at, next_wake_at "
+             "       deadline_at, next_wake_at, purpose "
              "  FROM agent_wakeups "
              " WHERE status='active' AND next_wake_at <= now() "
              "   AND (deadline_at IS NULL OR deadline_at > now()) "
@@ -497,6 +504,20 @@ def wake_one(settings: Any, engine: Any, row: Any) -> dict[str, Any]:
         if row["kind"] == "monitor"
         else SCHEDULE_BRIEF.format(prompt=row["prompt"])
     )
+    from .golden_journeys import service as _journeys
+
+    if _journeys.is_journeys_wake(row):
+        # THE DAILY GOLDEN JOURNEYS (BOSSAPP-1284) are started by BOSS itself, not by a model
+        # turn: no chat turn may start a run, and a daily run should not cost a turn to begin.
+        try:
+            reply = _journeys.wake(engine, settings, row)
+            ok = True
+        except Exception as error:  # noqa: BLE001 — recorded against the wakeup
+            reply, ok = f"{type(error).__name__}: {str(error)[:400]}", False
+        with engine.begin() as connection:
+            outcome = advance(connection, wakeup_id=row["id"], ok=ok, result=reply)
+        return {"project_id": row["project_id"], "kind": row["kind"], **outcome,
+                **({} if ok else {"error": reply})}
     try:
         # THE CONNECTION IS THE FIRST POSITIONAL ARGUMENT, and omitting it meant every
         # single wake raised TypeError before any model call — the feature was 100%

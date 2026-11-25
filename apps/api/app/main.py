@@ -33519,6 +33519,9 @@ app.include_router(build_instance_router())
 from .routes_scoped_budgets import build_scoped_budgets_router  # noqa: E402  (BOSSAPP-863)
 
 app.include_router(build_scoped_budgets_router())
+from .routes_golden_journeys import build_golden_journeys_router  # noqa: E402  (BOSSAPP-1284/1285)
+
+app.include_router(build_golden_journeys_router())
 from .routes_pilot_metrics import build_pilot_metrics_router  # noqa: E402  (BOSSAPP-1292)
 
 app.include_router(build_pilot_metrics_router())

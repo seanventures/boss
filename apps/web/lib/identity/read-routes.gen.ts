@@ -370,6 +370,7 @@ export const READ_ROUTES: ReadonlyArray<readonly [string, Permission]> = [
   ["github/repository-ref-states", "github:read"],
   ["github/resolution-plans", "github:read"],
   ["github/resolution-plans/{}", "github:read"],
+  ["golden-journeys", "assurance:read"],
   ["govern", "budget:read"],
   ["govern/envelopes", "budget:read"],
   ["govern/project-limits", "budget:read"],

@@ -16831,3 +16831,36 @@ BEGIN
       ON CONFLICT (key) DO NOTHING;
   END IF;
 END $$;
+
+-- GOLDEN JOURNEYS (BOSSAPP-1284/1285, services/golden_journeys): one row per journey per day per
+-- host, judged by the Acceptance Agent's verdict. A red stays red for its day; `runs` counts the
+-- runs. The green-day counter of the feature freeze (docs/preview/FREEZE.md) is read from here.
+CREATE TABLE IF NOT EXISTS golden_journey_results (
+  id TEXT PRIMARY KEY,
+  host TEXT NOT NULL,
+  day DATE NOT NULL,
+  journey_id TEXT NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  mode TEXT NOT NULL DEFAULT 'real' CHECK (mode IN ('real', 'scripted')),
+  status TEXT NOT NULL CHECK (status IN ('green', 'red', 'pending', 'not_run')),
+  verdict TEXT,
+  why TEXT NOT NULL DEFAULT '',
+  items JSONB NOT NULL DEFAULT '[]'::jsonb,
+  calls JSONB NOT NULL DEFAULT '[]'::jsonb,
+  seconds DOUBLE PRECISION NOT NULL DEFAULT 0,
+  runs INTEGER NOT NULL DEFAULT 1,
+  recorded_by TEXT NOT NULL DEFAULT '',
+  -- run: this install's own run (counted); posted: sent by another caller (shown, never counted)
+  source TEXT NOT NULL DEFAULT 'run' CHECK (source IN ('run', 'posted')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (host, day, journey_id)
+);
+CREATE INDEX IF NOT EXISTS golden_journey_results_day_idx ON golden_journey_results (day DESC);
+-- WHAT A WAKE IS FOR, when BOSS itself (not an agent's prompt) decides it: set only by
+-- services/golden_journeys/service.arm_daily ('golden_journeys'). agent_wakeups.schedule never
+-- writes it, so no schedule_work prompt can become the journeys wake.
+ALTER TABLE agent_wakeups ADD COLUMN IF NOT EXISTS purpose TEXT;
+-- One daily journeys wake per install (service.arm_daily also takes an advisory lock).
+CREATE UNIQUE INDEX IF NOT EXISTS agent_wakeups_one_golden_journeys
+  ON agent_wakeups ((1)) WHERE purpose = 'golden_journeys' AND status = 'active';

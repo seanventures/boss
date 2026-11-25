@@ -1,0 +1,135 @@
+{
+  "id": "J5",
+  "title": "A failure, a retry, a recovery",
+  "ticket": "BOSSAPP-1284",
+  "summary": "A build whose first test run fails: BOSS's own fix round repairs it without a person, and the build still ends completed with a pull request and its gates green. On the scripted engine the failing test is the conformance engine's `failing_test` fault; on an install the sandbox repository's journey-j5 branch carries a failing test the ticket asks to fix.",
+  "modes": [
+    "scripted",
+    "real"
+  ],
+  "needs": {
+    "fixtures": [
+      "real: a branch (base_branch) whose npm test fails until the bug it describes is fixed"
+    ],
+    "defaults": {
+      "base_branch": "main",
+      "profile": "balanced",
+      "model_config": null,
+      "title": "Fix the slug bug the failing test shows",
+      "instructions": "npm test fails: slug() must lowercase and join words with hyphens. Make the failing test pass without weakening it.",
+      "criteria": [
+        "npm test passes",
+        "slug lowercases and joins words with hyphens"
+      ]
+    },
+    "scripted": {
+      "faults": "failing_test",
+      "vars": {
+        "title": "Slug service (a test fails first)",
+        "instructions": "Build a tiny plain Node ESM service at the repository root: slug(text) in src/slug.js and an HTTP server in src/server.js answering GET /?q=<text> with {\"slug\": ...} on $PORT. Tests under node --test.",
+        "criteria": [
+          "slug lowercases and joins words with hyphens",
+          "GET /?q= answers the slug as JSON"
+        ]
+      }
+    }
+  },
+  "steps": [
+    {
+      "id": "start",
+      "call": "POST /v1/code-tasks",
+      "expect_status": [
+        200
+      ],
+      "body": {
+        "project_id": "{{project_id}}",
+        "title": "{{title}}",
+        "instructions": "{{instructions}}",
+        "acceptance_criteria": "{{criteria}}",
+        "test_commands": [
+          "npm test"
+        ],
+        "owner": "{{owner}}",
+        "repo": "{{repo}}",
+        "base_branch": "{{base_branch}}",
+        "open_pr": true,
+        "profile": "{{profile}}",
+        "risk_tier": 1,
+        "model_config": "{{model_config}}"
+      },
+      "save": {
+        "run_id": "run_id"
+      }
+    },
+    {
+      "id": "work",
+      "do": "drain"
+    },
+    {
+      "id": "done",
+      "call": "GET /v1/code-tasks/{{run_id}}",
+      "until": {
+        "path": "status",
+        "in": [
+          "completed",
+          "failed",
+          "blocked",
+          "cancelled"
+        ]
+      },
+      "timeout_s": 2700,
+      "every_s": 20
+    },
+    {
+      "id": "gates",
+      "call": "GET /v1/code-tasks/{{run_id}}/gates",
+      "expect_status": [
+        200
+      ]
+    }
+  ],
+  "acceptance": [
+    {
+      "text": "The first test run failed",
+      "step": "done",
+      "path": "state.repair_log[0].tests_passed",
+      "equals": false
+    },
+    {
+      "text": "BOSS ran a fix round on its own",
+      "step": "done",
+      "path": "state.repair_attempts",
+      "at_least": 1
+    },
+    {
+      "text": "The tests passed after the fix round",
+      "step": "done",
+      "path": "state.tests_passed",
+      "equals": true
+    },
+    {
+      "text": "The build recovered and finished as completed",
+      "step": "done",
+      "path": "status",
+      "equals": "completed"
+    },
+    {
+      "text": "A pull request was opened after the repair",
+      "step": "done",
+      "path": "pull_request_url",
+      "present": true
+    },
+    {
+      "text": "The old tests still pass on the final gate",
+      "step": "gates",
+      "path": "gates[name=existing_tests_intact].ok",
+      "equals": true
+    },
+    {
+      "text": "BOSS's acceptance check found every must-have met",
+      "step": "gates",
+      "path": "gates[name=acceptance_met].ok",
+      "equals": true
+    }
+  ]
+}

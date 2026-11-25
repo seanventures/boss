@@ -1,0 +1,66 @@
+{
+  "id": "J6",
+  "title": "Approval gate, deploy to staging, promote",
+  "ticket": "BOSSAPP-1284",
+  "summary": "A deployment of an app to its staging target in the journeys' fixture project stops at its approval card: the journey asserts the card is waiting for a person and stops there. The journey account never approves its own deploy, and a production promotion always waits for a separate person (the account holds no deployment:production).",
+  "modes": [
+    "real"
+  ],
+  "needs": {
+    "fixtures": [
+      "a sandbox app in the fixture project with an active staging deployment target (staging_target)"
+    ],
+    "defaults": {
+      "ref": "main"
+    }
+  },
+  "steps": [
+    {
+      "id": "plan",
+      "call": "POST /v1/delivery/deploy",
+      "expect_status": [
+        200
+      ],
+      "body": {
+        "target_id": "{{staging_target}}",
+        "ref": "{{ref}}",
+        "actor": "{{actor}}"
+      },
+      "save": {
+        "deployment_run_id": "deployment_run_id"
+      }
+    },
+    {
+      "id": "waiting",
+      "call": "GET /v1/delivery/deployments/{{deployment_run_id}}",
+      "until": {
+        "path": "waiting",
+        "equals": true
+      },
+      "timeout_s": 600,
+      "every_s": 10,
+      "save": {
+        "decision_id": "decision_id"
+      }
+    }
+  ],
+  "acceptance": [
+    {
+      "text": "The staging deployment was planned",
+      "step": "plan",
+      "status": 200
+    },
+    {
+      "text": "The staging deployment waits at its approval card for a person",
+      "step": "waiting",
+      "path": "waiting",
+      "equals": true
+    },
+    {
+      "text": "The approval card exists",
+      "step": "waiting",
+      "path": "decision_id",
+      "present": true
+    }
+  ]
+}

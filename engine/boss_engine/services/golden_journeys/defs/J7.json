@@ -1,0 +1,116 @@
+{
+  "id": "J7",
+  "title": "Okta sign-in with group-to-role mapping",
+  "ticket": "BOSSAPP-1284",
+  "summary": "A developer provisioned from Okta (SCIM) into the preview group signs in through Okta SSO and lands with the role the group maps to; removing them from the group takes the role away.",
+  "modes": [
+    "real"
+  ],
+  "pending": {
+    "waits_for": "an Okta preview tenant and its SCIM token on the install (BOSSAPP-1294)",
+    "why": "there is no Okta tenant to sign in through yet; and its SCIM calls need the SCIM bearer token Okta holds (scim:provision is org-wide), never the journey account, which is confined to the fixture project"
+  },
+  "needs": {
+    "fixtures": [
+      "an Okta OIDC provider on the install (okta_provider)",
+      "a SCIM group mapped to the operator role (okta_group_id)"
+    ],
+    "defaults": {
+      "user_name": "journey-dev-{{stamp}}@example.com"
+    }
+  },
+  "steps": [
+    {
+      "id": "provider",
+      "call": "GET /v1/identity/providers/{{okta_provider}}",
+      "expect_status": [
+        200
+      ]
+    },
+    {
+      "id": "provision",
+      "call": "POST /scim/v2/Users",
+      "expect_status": [
+        201
+      ],
+      "body": {
+        "schemas": [
+          "urn:ietf:params:scim:schemas:core:2.0:User"
+        ],
+        "userName": "{{user_name}}",
+        "active": true
+      },
+      "save": {
+        "user_id": "id"
+      }
+    },
+    {
+      "id": "join",
+      "call": "PATCH /scim/v2/Groups/{{okta_group_id}}",
+      "expect_status": [
+        200,
+        204
+      ],
+      "body": {
+        "schemas": [
+          "urn:ietf:params:scim:api:messages:2.0:PatchOp"
+        ],
+        "Operations": [
+          {
+            "op": "add",
+            "path": "members",
+            "value": [
+              {
+                "value": "{{user_id}}"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "user",
+      "call": "GET /scim/v2/Users/{{user_id}}",
+      "expect_status": [
+        200
+      ]
+    }
+  ],
+  "acceptance": [
+    {
+      "text": "The Okta provider is configured and enabled",
+      "step": "provider",
+      "path": "enabled",
+      "equals": true
+    },
+    {
+      "text": "The developer was provisioned",
+      "step": "provision",
+      "status": 201
+    },
+    {
+      "text": "The developer is in the mapped group",
+      "step": "user",
+      "path": "groups",
+      "at_least": 1
+    }
+  ],
+  "cleanup": [
+    {
+      "id": "deprovision",
+      "call": "PATCH /scim/v2/Users/{{user_id}}",
+      "body": {
+        "schemas": [
+          "urn:ietf:params:scim:api:messages:2.0:PatchOp"
+        ],
+        "Operations": [
+          {
+            "op": "replace",
+            "path": "active",
+            "value": false
+          }
+        ]
+      }
+    }
+  ]
+}

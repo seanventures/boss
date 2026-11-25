@@ -51,8 +51,9 @@ Acceptance Agent accepts the outcome (`engine/boss_engine/services/acceptance/ve
 | J8 | API gateway onboarding end to end (bad config rejected, fix PR, staging, contract tests, approval, production) | the full chain ([design](../design/API_GATEWAY_ONBOARDING.md#what-is-on-main-today)) |
 | J9 | Post-deploy error → alert → runbook remediation | BOSSAPP-1293 |
 
-**Not yet:** the daily runner for these journeys (BOSSAPP-1284). Today they are a list, not a
-schedule. The console journeys in `tests/e2e/harness/journeys.py` are UI checks, not these.
+The daily runner for these journeys (BOSSAPP-1284) and the green-day counter (BOSSAPP-1285) are
+described in [FREEZE.md](FREEZE.md#what-exists-today). The console journeys in
+`tests/e2e/harness/journeys.py` are UI checks, not these.
 
 ## Readiness bar
 
