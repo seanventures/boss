@@ -132,3 +132,12 @@ runtime:
 - A build that runs in a microVM cannot reach host-supervised services, so it fails with that reason.
 
 Without a manifest, a Python repository with a `conftest.py`, a `pytest.ini`, or pytest configured in `pyproject.toml`, `setup.cfg` or `tox.ini` is verified with `python3 -m pytest -q`. Other Python repositories use `unittest`. Web defaults run in the package that contains the change.
+
+## Inspecting a host (read-only)
+
+Agents and operators in BOSS Community can inspect registered deployment hosts over SSH using two read-only tools (`permission="host:exec"`):
+
+- **`inspect_host`** runs one allow-listed, read-only command (`docker ps/logs/inspect/images/stats --no-stream`, `systemctl status`, `journalctl`, `ss`, `df`, `free`, `uptime`, `uname`, `ls`, `cat /etc/os-release`, `ps aux`, `whoami`, plus bounded host performance diagnostics `sar`, `vmstat`, `iostat`, `mpstat`, and `top -b -n 1`). Shell metacharacters, pipes, output redirections, file-writing flags (`sar -o`, `sar -f`, `iostat -o`), and unbounded streaming invocations are refused before any database query or SSH credential lookup.
+- **`collect_diagnostics`** captures a bounded multi-section snapshot (`system`, `cpu`, `memory`, `io`, `network`, `disk`, `processes`) with `interval_seconds` (1–5), `count` (1–5, `interval_seconds * count <= 10`), and optional `task_id` / `ticket_ref`, returning redacted structured sections, a ticket-ready `ticket_markdown` summary (`<= 6000` chars), and a `host_diagnostics` `artifact_payload`.
+
+If `sar`, `iostat`, or `mpstat` is not installed on the target host, BOSS returns a structured `missing_package: "sysstat"` hint so an operator can install `sysstat` manually; BOSS never auto-installs packages on hosts, and free-form `run_on_host` remains disabled in Community.

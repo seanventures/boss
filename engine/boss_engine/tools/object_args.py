@@ -25,6 +25,7 @@ CONFINED: dict[str, dict[str, str | tuple[str, ...]]] = {
     "apply_template": {"extends_run_id": CODE_TASK},
     "cancel_code_task": {"run_id": CODE_TASK},
     "cancel_job": {"job_id": "job"},
+    "collect_diagnostics": {"task_id": "task"},
     "create_code_task": {"task_id": "task", "workflow_run_id": "workflow_run",
                          "extends_run_id": CODE_TASK, "preview_id": "app_preview"},
     "create_deployment_target": {"host_id": "deployment_host"},

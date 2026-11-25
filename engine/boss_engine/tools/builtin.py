@@ -14,7 +14,6 @@ from __future__ import annotations
 import json
 import os as _os
 import re
-import shlex
 import subprocess as _subprocess
 from typing import Any, Optional as _Optional
 
@@ -27,6 +26,14 @@ from ..services.workflow_drafting import (
     _ensure_steps_for_skills,
     _resolve_subworkflows,
     _spec_from_steps,
+)
+from .host_diagnostics_rules import (
+    INSPECT_HOST_VERBS as _INSPECT_HOST_VERBS,  # noqa: F401
+    JOURNALCTL_FLAGS as _JOURNALCTL_FLAGS,  # noqa: F401
+    JOURNALCTL_VALUE_FLAGS as _JOURNALCTL_VALUE_FLAGS,  # noqa: F401
+    SHELL_META as _INSPECT_HOST_SHELL_META,  # noqa: F401
+    detect_missing_sysstat as _detect_missing_sysstat,
+    validate_inspect_host_command as _validate_inspect_host_command,
 )
 from .registry import PROJECT_ARG, PROJECT_ARG_SCHEMA, Exposure, ToolRegistry, ToolSpec
 
@@ -52,22 +59,6 @@ def _obj(props: dict, required: list[str] | None = None) -> dict:
 _LIMIT = {"type": "integer", "minimum": 1, "maximum": 200, "default": 25}
 _PAID_EFFECT_EDITIONS = frozenset({
     "cloud", "enterprise", "enterprise_cloud", "enterprise_self_hosted",
-})
-
-
-_INSPECT_HOST_VERBS = (
-    "docker ps", "docker logs", "docker inspect", "docker stats --no-stream",
-    "docker images", "df", "free", "uptime", "uname", "ls", "cat /etc/os-release",
-    "systemctl status", "journalctl", "ss -", "netstat", "ps aux", "whoami",
-)
-_INSPECT_HOST_SHELL_META = frozenset("&;|<>`$\\")
-_JOURNALCTL_FLAGS = frozenset({
-    "-b", "--boot", "-k", "--dmesg", "-q", "--quiet", "-r", "--reverse",
-    "-x", "--catalog", "--no-pager", "--utc",
-})
-_JOURNALCTL_VALUE_FLAGS = frozenset({
-    "-u", "--unit", "-n", "--lines", "-p", "--priority", "-o", "--output",
-    "--since", "--until",
 })
 
 
@@ -126,72 +117,8 @@ def _app_logs_command(ctx: Any, project_id: str, args: dict) -> tuple[Any, Any]:
 
 
 def _inspect_host_command(raw_value: object) -> tuple[str | None, str | None]:
-    """Return one shell-safe read command, or a reason before any credential/SSH access.
-
-    SSH transports a *single string* interpreted by a remote shell. A permitted prefix such
-    as ``ls`` does not make ``ls & touch /tmp/x`` safe. Reject shell syntax before tokenizing,
-    verify the complete verb and its read-only options, then quote every token for that shell.
-    """
-    if not isinstance(raw_value, str):
-        return None, "a read-only command is required"
-    if any(ord(ch) < 32 or ord(ch) == 127 or ch in _INSPECT_HOST_SHELL_META
-           for ch in raw_value):
-        return None, "shell metacharacters and control characters are not permitted"
-    try:
-        words = shlex.split(raw_value.strip(), posix=True)
-    except ValueError:
-        return None, "unbalanced command quoting is not permitted"
-    if not words:
-        return None, "a read-only command is required"
-
-    verb = words[0]
-    if verb == "docker":
-        allowed = len(words) >= 2 and words[1] in {"ps", "logs", "inspect", "images"}
-        allowed = allowed or (len(words) >= 3 and words[1:3] == ["stats", "--no-stream"])
-    elif verb == "cat":
-        allowed = words == ["cat", "/etc/os-release"]
-    elif verb == "systemctl":
-        allowed = (len(words) >= 2 and words[1] == "status"
-                   and all(re.fullmatch(r"[A-Za-z0-9_.@:-]+", unit)
-                           for unit in words[2:]))
-    elif verb == "journalctl":
-        allowed = True
-        index = 1
-        while index < len(words):
-            option = words[index]
-            if option in _JOURNALCTL_FLAGS:
-                index += 1
-            elif option in _JOURNALCTL_VALUE_FLAGS and index + 1 < len(words):
-                value = words[index + 1]
-                if not value or value.startswith("-"):
-                    allowed = False
-                    break
-                index += 2
-            elif any(option.startswith(flag + "=") and option[len(flag) + 1:]
-                     for flag in _JOURNALCTL_VALUE_FLAGS if flag.startswith("--")):
-                index += 1
-            else:
-                allowed = False
-                break
-    elif verb == "ss":
-        # `ss -K`/`ss --kill` terminates sockets; only listing switches belong here.
-        allowed = len(words) >= 2 and all(
-            re.fullmatch(r"-[tulnpaHs46]+", option)
-            or option in {"--tcp", "--udp", "--listening", "--numeric",
-                          "--processes", "--all", "--summary", "--no-header"}
-            for option in words[1:]
-        )
-    elif verb == "ps":
-        allowed = words == ["ps", "aux"]
-    elif verb in {"df", "free", "uptime", "uname", "ls", "netstat", "whoami"}:
-        allowed = True
-    else:
-        allowed = False
-    if not allowed:
-        return None, "only read-only commands are allowed here: " + ", ".join(
-            _INSPECT_HOST_VERBS
-        )
-    return shlex.join(words), None
+    """Return one shell-safe read command, or a reason before any credential/SSH access."""
+    return _validate_inspect_host_command(raw_value)
 
 
 def _community_restricted(settings: Any) -> bool:
@@ -9456,12 +9383,13 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
     @reg.tool(
         "inspect_host",
         "Run a READ-ONLY command on a registered deployment host over SSH — what is "
-        "running there, disk, a deployed app's own container logs. The database records "
-        "what BOSS INTENDED; this shows what the machine is actually doing. Refuses "
-        "anything that could change the host.",
+        "running there, disk, a deployed app's own container logs, or bounded host "
+        "performance metrics (sar, vmstat, iostat, mpstat, top -b -n 1). The database "
+        "records what BOSS INTENDED; this shows what the machine is actually doing. "
+        "Refuses anything that could change the host.",
         _obj({"host": {"type": "string", "description": "host name or id from the fleet"},
               "command": {"type": "string",
-                          "description": "e.g. 'docker ps', 'df -h', 'docker logs --tail 50 app'"}},
+                          "description": "e.g. 'docker ps', 'df -h', 'sar -u 1 5', 'top -b -n 1'"}},
              ["host", "command"]), permission="host:exec",
         exposure=Exposure(tags=("deploy", "hosts")))
     def inspect_host(ctx, *, project_id, actor, args):
@@ -9469,7 +9397,270 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         if error:
             return {"ok": False, "error": error,
                     "note": "this tool inspects; it never changes a host."}
-        return _run_read_on_host(ctx, project_id, (args.get("host") or "").strip(), command)
+        res = _run_read_on_host(ctx, project_id, (args.get("host") or "").strip(), command)
+        if res.get("ok") is False:
+            return res
+        missing = _detect_missing_sysstat(
+            command, res.get("exit_code"), res.get("stderr") or "",
+        )
+        if missing:
+            return {
+                "ok": False,
+                "host": res["host"],
+                "command": res["command"],
+                "exit_code": res["exit_code"],
+                "error": "missing_package",
+                "missing_package": missing["package"],
+                "message": (
+                    f"'{missing['verb']}' is unavailable on {res['host']}: the "
+                    f"'{missing['package']}' package is not installed. "
+                    f"{missing['install_hint']}"
+                ),
+                "install_hint": missing["install_hint"],
+                "stdout": res["stdout"],
+                "stderr": res["stderr"],
+            }
+        return res
+
+    @reg.tool(
+        "collect_diagnostics",
+        "Collect a bounded, read-only performance and health diagnostics snapshot from a "
+        "registered deployment host (CPU, memory, block I/O, network, disk, and top "
+        "processes) and return structured sections plus a ticket-ready markdown summary "
+        "and artifact payload.",
+        _obj({
+            "host": {"type": "string", "description": "host name or id from the fleet"},
+            "interval_seconds": {"type": "integer", "minimum": 1, "maximum": 5, "default": 1,
+                                 "description": "sample interval in seconds (1..5)"},
+            "count": {"type": "integer", "minimum": 1, "maximum": 5, "default": 3,
+                      "description": "sample count (1..5, interval * count <= 10)"},
+            "sections": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "enum": ["system", "cpu", "memory", "io", "network", "disk", "processes"],
+                },
+                "description": "optional subset of diagnostic sections to collect",
+            },
+            "task_id": {"type": "string", "description": "optional task id to link in payload"},
+            "ticket_ref": {"type": "string", "description": "optional ticket key for summary"},
+            "project_id": {"type": "string"},
+        }, ["host"]),
+        permission="host:exec",
+        exposure=Exposure(
+            tags=("deploy", "hosts", "diagnostics"),
+            search_hint="sar vmstat iostat mpstat top cpu memory disk network snapshot ticket",
+        ),
+    )
+    def collect_diagnostics(ctx, *, project_id, actor, args):
+        from datetime import datetime, timezone
+
+        from ..services.agent_baseline import redact_for_agent
+
+        host_hint = str(args.get("host") or "").strip()
+        if not host_hint:
+            return {"ok": False, "error": "host is required"}
+
+        raw_interval = args.get("interval_seconds")
+        interval = 1 if raw_interval is None else raw_interval
+        if isinstance(interval, bool) or not isinstance(interval, int) or interval < 1 or interval > 5:
+            return {"ok": False, "error": "interval_seconds must be an integer between 1 and 5"}
+
+        raw_count = args.get("count")
+        count = 3 if raw_count is None else raw_count
+        if isinstance(count, bool) or not isinstance(count, int) or count < 1 or count > 5:
+            return {"ok": False, "error": "count must be an integer between 1 and 5"}
+
+        if interval * count > 10:
+            return {
+                "ok": False,
+                "error": (
+                    f"interval_seconds * count ({interval * count}s) exceeds the 10s "
+                    "sampling window cap for collect_diagnostics"
+                ),
+            }
+
+        all_sections = ("system", "cpu", "memory", "io", "network", "disk", "processes")
+        raw_sections = args.get("sections")
+        if raw_sections is None or raw_sections == []:
+            selected = list(all_sections)
+        else:
+            if not isinstance(raw_sections, list):
+                return {"ok": False, "error": "sections must be a list of section names"}
+            selected = []
+            for sec in raw_sections:
+                if not isinstance(sec, str) or sec not in all_sections:
+                    return {
+                        "ok": False,
+                        "error": f"invalid diagnostics section {sec!r}; allowed: {', '.join(all_sections)}",
+                    }
+                if sec not in selected:
+                    selected.append(sec)
+
+        task_id = str(args.get("task_id") or "").strip() or None
+        ticket_ref = str(args.get("ticket_ref") or "").strip() or None
+
+        collectors: list[tuple[str, str, str]] = []
+        sar_targets = [s for s in selected if s in {"cpu", "memory", "io", "network"}]
+        if "system" in selected:
+            collectors.append(("system_uptime", "system", "uptime"))
+        if sar_targets:
+            collectors.append((
+                "sar_bundle",
+                sar_targets[0],
+                f"sar -u -r -q -n DEV -b -d {interval} {count}",
+            ))
+        if "cpu" in selected:
+            collectors.append(("cpu_mpstat", "cpu", f"mpstat -P ALL {interval} {count}"))
+        if "memory" in selected:
+            collectors.append(("memory_free", "memory", "free -m"))
+            collectors.append(("memory_vmstat", "memory", f"vmstat {interval} {count}"))
+        if "io" in selected:
+            collectors.append(("io_iostat", "io", f"iostat -xz {interval} {count}"))
+        if "network" in selected:
+            collectors.append(("network_ss", "network", "ss -tulnp"))
+        if "disk" in selected:
+            collectors.append(("disk_df", "disk", "df -h"))
+        if "processes" in selected:
+            collectors.append(("processes_top", "processes", "top -b -n 1 -w 160"))
+
+        script_parts = []
+        for cid, _sec, cmd in collectors:
+            safe_cmd, err = _inspect_host_command(cmd)
+            if err or not safe_cmd:
+                return {"ok": False, "error": err or f"invalid collector command: {cmd}"}
+            script_parts.append(
+                f"printf '===BOSS_DIAG:{cid}===\\n'; {safe_cmd} 2>&1; "
+                f"printf '\\n===BOSS_DIAG_RC:{cid}:%d===\\n' $?"
+            )
+        script = "; ".join(script_parts)
+
+        res = _run_read_on_host(ctx, project_id, host_hint, script, max_stdout=32768)
+        if res.get("ok") is False:
+            return res
+
+        raw_stdout = res.get("stdout") or ""
+        raw_stderr = res.get("stderr") or ""
+        parsed: dict[str, tuple[int, str]] = {}
+        marker_re = re.compile(
+            r"===BOSS_DIAG:([a-z0-9_]+)===\n(.*?)\n===BOSS_DIAG_RC:\1:(-?[0-9]+)===",
+            re.DOTALL,
+        )
+        for m in marker_re.finditer(raw_stdout):
+            parsed[m.group(1)] = (int(m.group(3)), m.group(2).strip())
+
+        if not parsed:
+            err_code = "ssh_timeout" if res.get("exit_code") == 124 else "ssh_error"
+            msg = (raw_stderr or raw_stdout or "failed to collect host diagnostics")[:500]
+            return {
+                "ok": False,
+                "host": res["host"],
+                "exit_code": res.get("exit_code"),
+                "error": err_code,
+                "message": str(redact_for_agent(msg)),
+            }
+
+        missing_packages: list[str] = []
+        warnings: list[str] = []
+        sections_out: dict[str, dict[str, Any]] = {
+            sec: {"status": "ok", "outputs": []} for sec in selected
+        }
+
+        for cid, sec, cmd in collectors:
+            rc, body = parsed.get(cid, (-1, "collector output missing"))
+            redacted = str(redact_for_agent(body))
+            if cid == "processes_top":
+                lines = redacted.splitlines()[:25]
+                bounded = "\n".join(lines)[:1500]
+            else:
+                bounded = redacted[:1200]
+
+            missing = _detect_missing_sysstat(cmd, rc, redacted)
+            entry: dict[str, Any] = {
+                "command": cmd,
+                "exit_code": rc,
+                "output": bounded,
+            }
+            if missing:
+                entry["missing_package"] = missing["package"]
+                if missing["package"] not in missing_packages:
+                    missing_packages.append(missing["package"])
+                hint_msg = (
+                    f"'{missing['verb']}' unavailable (missing '{missing['package']}'): "
+                    f"{missing['install_hint']}"
+                )
+                if hint_msg not in warnings:
+                    warnings.append(hint_msg)
+                if sections_out[sec]["status"] == "ok":
+                    sections_out[sec]["status"] = "degraded"
+            elif rc != 0:
+                if sections_out[sec]["status"] == "ok":
+                    sections_out[sec]["status"] = "partial"
+            sections_out[sec]["outputs"].append(entry)
+
+        if res.get("exit_code") == 124:
+            warnings.append("SSH connection timed out before all sections completed.")
+
+        collected_at = datetime.now(timezone.utc).isoformat()
+        meta_parts = [f"Collected: {collected_at}", f"Window: {interval}s x {count}"]
+        if ticket_ref:
+            meta_parts.append(f"Ticket: {ticket_ref}")
+        if task_id:
+            meta_parts.append(f"Task: {task_id}")
+        md_lines = [
+            f"### Host Diagnostics: {res['host']}",
+            " | ".join(meta_parts),
+        ]
+        if warnings:
+            md_lines.append("")
+            md_lines.append("**Warnings:**")
+            for w in warnings:
+                md_lines.append(f"- {w}")
+        for sec in selected:
+            sec_data = sections_out[sec]
+            md_lines.append("")
+            md_lines.append(f"#### {sec.capitalize()} ({sec_data['status']})")
+            for item in sec_data["outputs"]:
+                md_lines.append(f"`$ {item['command']}` (rc={item['exit_code']})")
+                md_lines.append("```text")
+                md_lines.append(item["output"] or "(no output)")
+                md_lines.append("```")
+
+        ticket_markdown = str(redact_for_agent("\n".join(md_lines)))
+        if len(ticket_markdown) > 6000:
+            ticket_markdown = ticket_markdown[:5984].rstrip() + "\n...(truncated)"
+
+        artifact_payload = redact_for_agent({
+            "artifact_type": "host_diagnostics",
+            "title": f"Host diagnostics — {res['host']} ({collected_at})",
+            "task_id": task_id,
+            "ticket_ref": ticket_ref,
+            "content": {
+                "host": res["host"],
+                "collected_at": collected_at,
+                "interval_seconds": interval,
+                "count": count,
+                "missing_packages": missing_packages,
+                "warnings": warnings,
+                "sections": sections_out,
+                "markdown": ticket_markdown,
+            },
+        })
+
+        return {
+            "ok": True,
+            "host": res["host"],
+            "collected_at": collected_at,
+            "interval_seconds": interval,
+            "count": count,
+            "task_id": task_id,
+            "ticket_ref": ticket_ref,
+            "missing_packages": missing_packages,
+            "warnings": warnings,
+            "sections": sections_out,
+            "ticket_markdown": ticket_markdown,
+            "artifact_payload": artifact_payload,
+        }
 
     @reg.tool(
         "read_app_logs",
@@ -9501,7 +9692,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         return {**out, "app": target["app_name"], "environment": target.get("environment"),
                 "containers_from": source}
 
-    def _run_read_on_host(ctx, project_id, want, command):
+    def _run_read_on_host(ctx, project_id, want, command, *, max_stdout: int | None = 6000):
         """inspect_host's transport: the registered host, its own key, one read command."""
         from ..services.deploy_service import (_discard_key_file, _materialise_key, _ssh,
                                                _ssh_key_file)
@@ -9531,8 +9722,10 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         finally:
             if ephemeral:
                 _discard_key_file(ephemeral)
+        raw_out = res.stdout or ""
+        stdout = raw_out[-max_stdout:] if max_stdout is not None else raw_out
         return {"host": host["name"], "command": command, "exit_code": res.returncode,
-                "stdout": (res.stdout or "")[-6000:], "stderr": (res.stderr or "")[-2000:]}
+                "stdout": stdout, "stderr": (res.stderr or "")[-2000:]}
 
     @reg.tool(
         "read_pull_request",
