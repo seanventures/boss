@@ -1513,32 +1513,37 @@ def remove_model(connection: Connection, settings: Any, project_id: str, source_
 # ── Model lists (the Model picker) ────────────────────────────────────────────────────────────
 
 _LISTS: dict[str, tuple[float, list[str]]] = {}
+_LIST_PRICES: dict[str, tuple[float, dict[str, dict[str, float]]]] = {}
 
 
-def model_catalogue(connection: Connection, settings: Any, project_id: str, provider: str, *,
-                    api_key: str = "", source_id: str = "", base_url: str = "",
-                    http: Optional[Http] = None) -> list[str]:
-    """The provider's own model list for this key, cached ten minutes (never by key value)."""
+def model_catalogue_with_prices(connection: Optional[Connection], settings: Any, project_id: str,
+                                provider: str, *, api_key: str = "", source_id: str = "",
+                                base_url: str = "",
+                                http: Optional[Http] = None) -> tuple[list[str], dict[str, dict[str, float]]]:
+    """The provider's own model list (and per-1M prices when available), cached ten minutes."""
+    from . import openrouter_catalog
     from .secret_backends import resolve_secret_ref
     from .setup_service import PROVIDERS
 
     provider = (provider or "").strip().lower()
     spec = PROVIDERS.get(provider)
     if spec is None:
-        return []
+        return [], {}
     if provider in setup_view.SUBSCRIPTIONS:
         try:
             from .cli_harness import offered_models
 
-            return list(offered_models(provider))
+            return list(offered_models(provider)), {}
         except Exception:  # noqa: BLE001
-            return []
+            return [], {}
     cache_key = f"{project_id}:{provider}:{source_id or ('pasted' if api_key else '')}:{base_url}"
     hit = _LISTS.get(cache_key)
     if hit and time.monotonic() < hit[0] and not api_key:
-        return hit[1]
+        phit = _LIST_PRICES.get(cache_key)
+        cached_prices = phit[1] if phit and time.monotonic() < phit[0] else {}
+        return hit[1], cached_prices
     key = api_key
-    if not key and source_id:
+    if not key and source_id and connection is not None:
         row = connection.execute(
             text("SELECT credential_secret_ref_id, connection_metadata FROM entitlement_sources "
                  "WHERE project_id = :p AND source_id = :s"),
@@ -1556,12 +1561,47 @@ def model_catalogue(connection: Connection, settings: Any, project_id: str, prov
         base_url = ollama_base_url(settings)
     base = (base_url or spec.get("base_url") or "").strip()
     if not base:
-        return []
-    names = setup_checks.list_models(api=spec.get("api") or "openai", base_url=base, api_key=key,
-                                     local_ollama=provider == "ollama", http=http)
+        return [], {}
+    if provider == "openrouter" and setup_checks.list_models is getattr(setup_checks, "_DEFAULT_LIST_MODELS", setup_checks.list_models):
+        names, prices = setup_checks.list_models_with_prices(
+            api=spec.get("api") or "openai", base_url=base, api_key=key,
+            local_ollama=False, http=http)
+    else:
+        names = setup_checks.list_models(
+            api=spec.get("api") or "openai", base_url=base, api_key=key,
+            local_ollama=provider == "ollama", http=http)
+        prices = {}
+    if provider == "openrouter":
+        catalog_map = openrouter_catalog.cached()
+        if not catalog_map and connection is not None:
+            openrouter_catalog.load(connection)
+            catalog_map = openrouter_catalog.cached()
+        if not names and catalog_map:
+            names = sorted(catalog_map.keys())[:500]
+        if catalog_map:
+            for mid in names:
+                if mid not in prices:
+                    cm = catalog_map.get(mid)
+                    if cm is not None and cm.prompt_usd_per_mtok is not None:
+                        prices[mid] = {
+                            "prompt_usd_per_mtok": cm.prompt_usd_per_mtok,
+                            "completion_usd_per_mtok": cm.completion_usd_per_mtok or 0.0,
+                        }
     if provider in setup_view.LOCALS and names:
         setup_view.remember_local(provider, base, names)
-    _LISTS[cache_key] = (time.monotonic() + 600.0, names)
+    expires = time.monotonic() + 600.0
+    _LISTS[cache_key] = (expires, names)
+    _LIST_PRICES[cache_key] = (expires, prices)
+    return names, prices
+
+
+def model_catalogue(connection: Optional[Connection], settings: Any, project_id: str, provider: str, *,
+                    api_key: str = "", source_id: str = "", base_url: str = "",
+                    http: Optional[Http] = None) -> list[str]:
+    """The provider's own model list for this key, cached ten minutes (never by key value)."""
+    names, _ = model_catalogue_with_prices(
+        connection, settings, project_id, provider,
+        api_key=api_key, source_id=source_id, base_url=base_url, http=http)
     return names
 
 

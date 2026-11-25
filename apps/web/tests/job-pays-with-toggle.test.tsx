@@ -89,5 +89,26 @@ describe("the job row", () => {
     api(view);
     mounted = await mountBoard(view, "?area=setup&focus=routing");
     expect(q(document.body, "su-job-pick-review")).toBeNull();
+    // ONE WAY: said as a plain label, never nothing (BOSSAPP-1349).
+    expect(q(document.body, "su-job-paid-review")?.textContent).toBe("Subscription");
+  });
+
+  it("Codex gets the same toggle when it can run on a subscription or an API key", async () => {
+    const view = withReviewOnSubscription();
+    const codex = [
+      { engine: "codex", model: "sub:gpt-6-sol", label: "Codex · subscription · gpt-6-sol", metered: false },
+      { engine: "codex", model: "key:gpt-6-sol", label: "Codex · API key · gpt-6-sol", metered: true },
+    ];
+    view.jobs = view.jobs.map((j) => j.job === "review"
+      ? { ...j, options: codex, choice: { engine: "codex", model: "sub:gpt-6-sol" },
+          resolved: { engine: "codex", model: "sub:gpt-6-sol", label: "Codex · subscription · gpt-6-sol", why: "chosen" } }
+      : j);
+    const writes = api(view);
+    mounted = await mountBoard(view, "?area=setup&focus=routing");
+    const toggle = q(document.body, "su-job-pick-review") as HTMLElement;
+    expect(toggle).not.toBeNull();
+    await click(q(toggle, "su-job-pick-review-key"));
+    const saved = writes.find((w) => w.op === "job") as { choice?: { engine?: string; model?: string } } | undefined;
+    expect(saved?.choice).toEqual({ engine: "codex", model: "key:gpt-6-sol" });
   });
 });

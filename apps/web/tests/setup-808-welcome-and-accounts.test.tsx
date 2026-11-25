@@ -290,10 +290,12 @@ describe("Screen 2 — Setup on one page", () => {
     const claude = block.querySelector('[data-testid="su-model-anthropic_claude_code"]')!;
     expect(claude.textContent).toContain("Claude Code");
     expect(block.querySelector('[data-testid="su-model-setup-openrouter"]')).not.toBeNull();
-    expect(q(container, "su-who-build")!.textContent).toBe("Build: Auto · Claude Code");
-    expect(q(container, "su-who-review")!.textContent).toBe("Review: OpenRouter · openai/gpt-5");
-    await click(q(container, "su-who-change"));
-    expect((q(container, "su-advanced-all") as HTMLDetailsElement).open).toBe(true);
+    expect(q(container, "su-who-build")!.textContent).toBe("Claude Code");
+    expect(q(container, "su-who-review")!.textContent).toBe("OpenRouter · openai/gpt-5");
+    // Change edits right beneath the summary; it does not send anyone to Advanced.
+    await click(q(container, "su-who-change-review"));
+    expect(q(container, "su-who-edit-review")!.querySelector("select")).not.toBeNull();
+    expect((q(container, "su-advanced-all") as HTMLDetailsElement).open).toBe(false);
   });
 
   it("shows each thing once: one Add model, one repo list, nothing repeated under Advanced settings", async () => {

@@ -14,6 +14,7 @@ Never raises to a caller that is doing work: an unreachable catalogue reads as e
 from __future__ import annotations
 
 import logging
+import math
 import re
 import threading
 import time
@@ -53,7 +54,9 @@ def _per_mtok(value: Any) -> Optional[float]:
         number = float(value)
     except (TypeError, ValueError):
         return None
-    return None if number < 0 else round(number * 1_000_000, 6)
+    if not math.isfinite(number) or number < 0:
+        return None
+    return round(number * 1_000_000, 6)
 
 
 def parse(data: Any) -> list[CatalogModel]:

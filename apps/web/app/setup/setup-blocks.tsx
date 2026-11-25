@@ -307,27 +307,4 @@ export function SetupBlocks({ onAdvanced, initialOpen = null }: {
   );
 }
 
-/** "Who does what:" one chip per main job, "Build → Claude Code", and Change (routing). */
-export function WhoDoesWhat({ view, onChange }: { view: SetupView; onChange: (job?: string) => void }) {
-  // EVERY JOB, as Routing lists them (tester, 2026-11-05: four chips here, six jobs in Advanced).
-  const jobs = view.jobs.filter((j) => j.resolved);
-  if (!jobs.length) return null;
-  return (
-    <div className="su-line su-who" data-testid="su-who-does-what">
-      <span className="su-faint">Who does what:</span>
-      {jobs.map((j) => (
-        <React.Fragment key={j.job}>
-          {/* EACH JOB IS ITS OWN CHOICE (operator: "we should provide options ... so customers
-              can use multiple models"): a chip opens routing on that job. */}
-          <button type="button" className="su-chip su-chip-btn" onClick={() => onChange(j.label)} data-testid={`su-who-${j.job}`}
-                  title={`${j.resolved!.why} Click to choose the model for ${j.label}.`}
-                  data-tip={`${j.resolved!.why} Click to choose the model for ${j.label}.`}>
-            {j.label}: {j.resolved!.label}
-          </button>
-          {j.resolved!.pill ? <Pill pill={j.resolved!.pill} testid={`su-who-pill-${j.job}`} /> : null}
-        </React.Fragment>
-      ))}
-      <button type="button" className="su-link" onClick={() => onChange()} data-testid="su-who-change">Change</button>
-    </div>
-  );
-}
+export { WhoDoesWhat } from "./job-cards";

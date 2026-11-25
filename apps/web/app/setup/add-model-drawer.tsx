@@ -44,6 +44,23 @@ function refusalOf(error: unknown): SetupRefusal {
 
 const usd = (micros: number) => `$${(micros / 1_000_000).toFixed(micros < 10_000 ? 4 : 2)}`;
 
+type ModelPrice = { prompt_usd_per_mtok?: number | null; completion_usd_per_mtok?: number | null };
+
+const isFiniteNonNeg = (n: unknown): n is number =>
+  typeof n === "number" && Number.isFinite(n) && n >= 0;
+
+const fmtUsdPerMtok = (n: number): string =>
+  n >= 0.01 ? `$${n.toFixed(2)}` : `$${Number(n.toPrecision(2))}`;
+
+function formatModelPrice(p: ModelPrice | undefined | null): string | undefined {
+  if (!p) return undefined;
+  const prompt = p.prompt_usd_per_mtok;
+  const completion = p.completion_usd_per_mtok;
+  if (!isFiniteNonNeg(prompt) || !isFiniteNonNeg(completion)) return undefined;
+  if (prompt === 0 && completion === 0) return "Free";
+  return `${fmtUsdPerMtok(prompt)} / ${fmtUsdPerMtok(completion)} per 1M`;
+}
+
 /**
  * A held proof, in words, with Review → "Release the hold". The hold is money BOSS kept because
  * it could not tell what the provider did; a person who can manage entitlements looks at the
@@ -131,10 +148,12 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
   const [baseUrl, setBaseUrl] = useState("");
   const [model, setModel] = useState("");
   const [models, setModels] = useState<string[]>([]);
+  const [prices, setPrices] = useState<Record<string, ModelPrice>>({});
   const [consent, setConsent] = useState(false);
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState<SetupRefusal | null>(null);
   const listTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const listSeq = useRef(0);
 
   const entry: CatalogueEntry | undefined = view.catalogue.find((c) => c.provider === provider);
   const detected: Detected | undefined = view.detected.find((d) => d.provider === provider);
@@ -155,8 +174,14 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
   const notOnServer = detected?.found === "not_on_server";
 
   useEffect(() => {
+    let cancelled = false;
+    listSeq.current += 1;
+    if (listTimer.current) {
+      clearTimeout(listTimer.current);
+      listTimer.current = null;
+    }
     // A new provider is a new form: nothing typed for the last one carries over.
-    setSecret(""); setModels([]); setRefusal(null); setResult(null);
+    setSecret(""); setModels([]); setPrices({}); setRefusal(null); setResult(null);
     setAgain(startSignIn && provider === initialProvider);
     // REPLACE ASKS FOR THE KEY ONLY: the model and URL of the connection it replaces stay.
     const replacing = view.models.find((m) => m.source_id === replaceSourceId
@@ -164,17 +189,33 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
     setModel(replacing?.model ?? entry?.example_model ?? "");
     setBaseUrl(replacing?.base_url
                ?? (provider === "ollama" ? (detected?.base_url ?? "") : ""));
-    if (provider === "ollama" && detected?.found === "found") void list("", detected.base_url ?? "");
+    if (provider === "ollama" && detected?.found === "found") {
+      void list("", detected.base_url ?? "", () => cancelled);
+    }
+    if (provider === "openrouter") {
+      void list("", "", () => cancelled);
+    }
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [provider]);
 
-  const list = async (key: string, url: string) => {
+  const list = async (key: string, url: string, isCancelled?: () => boolean) => {
+    const seq = ++listSeq.current;
     try {
-      const answer = await setupWrite<{ models: string[] }>(projectId, "model_catalogue", {
+      const answer = await setupWrite<{
+        models?: string[];
+        prices?: Record<string, ModelPrice>;
+      }>(projectId, "model_catalogue", {
         provider, kind: tile, api_key: key || undefined, base_url: url || undefined,
       }, { label: "Model", background: true });
+      if (isCancelled?.() || listSeq.current !== seq) return;
       setModels(answer.models ?? []);
-    } catch { setModels([]); }
+      setPrices(answer.prices ?? {});
+    } catch {
+      if (isCancelled?.() || listSeq.current !== seq) return;
+      setModels([]);
+      setPrices({});
+    }
   };
   const onKey = (value: string) => {
     setSecret(value);
@@ -199,7 +240,7 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
     // unauthenticated local server is Local › Other URL), so Connect never offers that 422.
     ready = ready && !!secret.trim()
             && (provider !== "custom" || !!baseUrl.trim())
-            && (!fields.includes("model") || !!model.trim());
+            && (!fields.includes("model") || entry?.model_optional || !!model.trim());
   } else {
     ready = ready && !!model.trim() && (provider === "ollama" || !!baseUrl.trim());
   }
@@ -221,7 +262,7 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
     if (tile === "api_key") {
       if (provider === "custom" && !baseUrl.trim()) return "Add the base URL first";
       if (!secret.trim()) return "Paste a key first";
-      if (fields.includes("model") && !model.trim()) return "Name the model first";
+      if (fields.includes("model") && !entry?.model_optional && !model.trim()) return "Name the model first";
       return "";
     }
     if (!model.trim()) return "Name the model first";
@@ -387,12 +428,22 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
         ) : null}
         {tile !== "subscription" && fields.includes("model") ? (
           <label className="su-field">
-            <span className="su-field-label">Model</span>
+            <span className="su-field-label">{entry?.model_optional ? "Model (optional)" : "Model"}</span>
             <input list="su-model-options" value={model} data-testid="su-model-name"
-                   aria-label="Model" onChange={(e) => setModel(e.target.value)} />
+                   aria-label="Model"
+                   placeholder={entry?.model_optional ? "Leave empty: the provider picks" : undefined}
+                   title={entry?.model_optional ? "Empty uses the provider's own routing. Each job's model is chosen in Who does what." : undefined}
+                   onChange={(e) => setModel(e.target.value)} />
             <datalist id="su-model-options">
-              {models.map((m) => <option key={m} value={m} />)}
+              {models.map((m) => {
+                const label = formatModelPrice(prices[m]);
+                return <option key={m} value={m} label={label} />;
+              })}
             </datalist>
+            {provider === "openrouter" ? (() => {
+              const text = formatModelPrice(prices[model.trim()]);
+              return text ? <span className="su-faint" data-testid="su-model-price">{text}</span> : null;
+            })() : null}
           </label>
         ) : null}
         {entry?.key_url ? <Out href={entry.key_url}>Get a key</Out> : null}

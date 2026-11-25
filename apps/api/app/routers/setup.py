@@ -467,10 +467,10 @@ def build_setup_router(
                 connection, project_id,
                 identity_guard.named_other_actor() or actor_for(None), "entitlement_manage",
             )
-            names = setup_actions.model_catalogue(connection, get_settings(), project_id,
-                                                  provider, source_id=source_id,
-                                                  base_url=base_url)
-        return {"models": names}
+            names, prices = setup_actions.model_catalogue_with_prices(
+                connection, get_settings(), project_id, provider,
+                source_id=source_id, base_url=base_url)
+        return {"models": names, "prices": prices}
 
     @router.post("/v1/setup/models/{provider}/catalogue")
     @permit(P.MODEL_PROVIDER_MANAGE, scope=Scope.project(body="project_id"))
@@ -480,10 +480,10 @@ def build_setup_router(
         with begin(engine) as connection:
             require_actor(connection, body.project_id, actor_for(body.actor),
                           "entitlement_manage")
-            names = setup_actions.model_catalogue(
+            names, prices = setup_actions.model_catalogue_with_prices(
                 connection, get_settings(), body.project_id, provider,
                 api_key=body.api_key or "", base_url=body.base_url or "")
-        return {"models": names}
+        return {"models": names, "prices": prices}
 
     @router.put("/v1/setup/jobs/{job}", response_model=SetupView, response_model_by_alias=True)
     @permit(P.SETUP_MANAGE, scope=Scope.project(body="project_id"))
