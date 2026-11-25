@@ -64,9 +64,10 @@ def test_each_level_is_told_once_through_the_usual_channels(eng, project, store)
     try:
         with eng.begin() as c:
             _pool_, (seat, _other) = _pool(c, project)
+            names = sh.alert_names(seat["account_key"])
             _windows(c, seat, used=0.85)                       # 15% left: the 20% level
             assert sh.notify_channels(c, _mine(c, seat)) == 1
-            assert _firing(c, project) == ["Claude Code · seat 0: 20% or less of the week left"]
+            assert _firing(c, project) == [names[20]]
             assert sh.notify_channels(c, _mine(c, seat)) == 0, "the same level is told once"
             # the usual channels: the outbox gets a message for the project's console
             from boss_engine.services import notify
@@ -80,16 +81,83 @@ def test_each_level_is_told_once_through_the_usual_channels(eng, project, store)
 
             _windows(c, seat, used=0.92)                       # 8% left: 10% replaces 20%
             assert sh.notify_channels(c, _mine(c, seat)) == 1
-            assert _firing(c, project) == ["Claude Code · seat 0: 10% or less of the week left"]
+            assert _firing(c, project) == [names[10]]
             _windows(c, seat, used=0.97)                       # 3% left
             sh.notify_channels(c, _mine(c, seat))
-            assert _firing(c, project) == ["Claude Code · seat 0: 5% or less of the week left"]
+            assert _firing(c, project) == [names[5]]
+            # a rename keeps the alert: it is keyed on the account, not its label
+            sp.update_member(c, Settings(), project, seat["id"], actor="o", label="Renamed")
+            assert sh.notify_channels(c, _mine(c, seat)) == 0
+            assert _firing(c, project) == [names[5]]
             _windows(c, seat, used=0.4)                        # room again: all resolve
             assert sh.notify_channels(c, _mine(c, seat)) == 0
             assert _firing(c, project) == []
     finally:
         with eng.begin() as c:
             _cleanup(c, project)
+
+
+def test_a_level_told_in_another_project_resolves_there_on_the_next_tick(eng, project, store):
+    """The run that observed the limit belonged to a project that is not the pool's: its alert
+    resolves on the doctor's tick (no project named) once the account has room again."""
+    import uuid
+
+    other = f"p_{uuid.uuid4().hex[:10]}"
+    with eng.begin() as c:
+        wid = c.execute(text("SELECT id FROM workspaces LIMIT 1")).scalar()
+        c.execute(text("INSERT INTO projects (id, workspace_id, name, slug) VALUES "
+                       "(:i, :w, 'observer 1342', :i)"), {"i": other, "w": wid})
+    try:
+        with eng.begin() as c:
+            _pool_, (seat, _o) = _pool(c, project)
+            _windows(c, seat, used=0.85)
+            sh.notify_channels(c, _mine(c, seat), project_ids=[other])
+            assert _firing(c, other) == [sh.alert_names(seat["account_key"])[20]]
+            _windows(c, seat, used=0.3)
+            sh.notify_channels(c, _mine(c, seat))              # the tick: no project named
+            assert _firing(c, other) == [] and _firing(c, project) == []
+    finally:
+        with eng.begin() as c:
+            _cleanup(c, project)
+            _cleanup(c, other)
+            c.execute(text("DELETE FROM projects WHERE id = :p"), {"p": other})
+
+
+def test_one_row_per_account_and_no_other_orgs_seat_name(eng, project, store):
+    """An install login adopted into two pools is ONE account, named by its engine only."""
+    import uuid
+
+    with eng.begin() as c:
+        pool_a, (seat, _o) = _pool(c, project)
+        key = f"claude_code:install-test-{uuid.uuid4().hex[:6]}"
+        c.execute(text("UPDATE subscription_pool_members SET account_key = :k WHERE id = :i"),
+                  {"k": key, "i": seat["id"]})
+        other = sp.create_pool(c, project, engine="codex", name="x", actor="o")
+        c.execute(text(
+            "INSERT INTO subscription_pool_members (id, pool_id, label, secret_name, account_key, "
+            "position, created_by) VALUES (:i, :p, 'Another org seat', 'X', :k, 5, 'o')"),
+            {"i": f"spm_{uuid.uuid4().hex[:8]}", "p": other["id"], "k": key})
+        c.execute(text("INSERT INTO subscription_accounts (account_key, engine, windows) VALUES "
+                       "(:k, 'claude_code', '{}'::jsonb)"), {"k": key})
+        rows = [a for a in sh.install_accounts(c) if a["account_key"] == key]
+        c.execute(text("DELETE FROM subscription_accounts WHERE account_key = :k"), {"k": key})
+    assert len(rows) == 1
+    assert "seat" not in rows[0]["label"].lower()
+
+
+def test_the_header_chip_is_memoised_until_the_router_changes(monkeypatch):
+    from boss_engine.services.model_router import store as router_store
+
+    calls = []
+    monkeypatch.setattr(sh, "_header_chip", lambda c, s, p: calls.append(p) or {"accounts": []})
+    sh._CHIP_MEMO.clear()
+    sh.header_chip(None, None, "p_memo")
+    sh.header_chip(None, None, "p_memo")
+    assert calls == ["p_memo"], "the 10 s poll reuses it"
+    router_store.invalidate("p_memo")
+    sh.header_chip(None, None, "p_memo")
+    assert calls == ["p_memo", "p_memo"], "a router change rebuilds it at once"
+    sh._CHIP_MEMO.clear()
 
 
 def test_a_pools_accounts_show_in_govern_and_the_one_taking_new_work_is_the_routers(

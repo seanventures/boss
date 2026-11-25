@@ -251,7 +251,43 @@ def project_view(connection: Any, settings: Any, project_id: str, *,
             "at": (now or datetime.now(timezone.utc)).isoformat()}
 
 
+#: The header chip is reused this long per project (the router snapshot's own TTL), and at once
+#: rebuilt when the router's state changes (store.generation): the Command Center polls every
+#: 10 s and must not pay the headroom reads each time (its query budget, BOSSAPP-1342 review).
+CHIP_MEMO_SECONDS = 20.0
+_CHIP_MEMO: dict[str, tuple[float, int, Optional[dict[str, Any]]]] = {}
+
+
+def chip_memo(project_id: str) -> tuple[bool, Optional[dict[str, Any]]]:
+    """(True, chip) while the memoised chip is fresh — read with no database work at all, so a
+    caller can skip even its savepoint — else (False, None)."""
+    import time
+
+    from .model_router import store
+
+    hit = _CHIP_MEMO.get(project_id)
+    if hit and time.monotonic() - hit[0] < CHIP_MEMO_SECONDS and hit[1] == store.generation():
+        return True, hit[2]
+    return False, None
+
+
 def header_chip(connection: Any, settings: Any, project_id: str) -> Optional[dict[str, Any]]:
+    """The Command Center header's headroom chip, memoised (CHIP_MEMO_SECONDS, store generation).
+    See `_header_chip`."""
+    import time
+
+    from .model_router import store
+
+    fresh, value = chip_memo(project_id)
+    if fresh:
+        return value
+    at, gen = time.monotonic(), store.generation()
+    value = _header_chip(connection, settings, project_id)
+    _CHIP_MEMO[project_id] = (at, gen, value)
+    return value
+
+
+def _header_chip(connection: Any, settings: Any, project_id: str) -> Optional[dict[str, Any]]:
     """The Command Center header's headroom chip: each account in a few words, worst first —
     project_view's own rows, so the chip, Govern and the router never disagree. None when the
     project has no subscription."""
@@ -339,9 +375,14 @@ def install_accounts(connection: Any, *, now: Optional[datetime] = None) -> list
     try:
         with connection.begin_nested():
             rows = connection.execute(text(
-                "SELECT a.account_key, a.engine, a.windows, a.learned_weekly_allowance_usd, "
-                "m.label AS member_label FROM subscription_accounts a LEFT JOIN "
-                "subscription_pool_members m ON m.account_key = a.account_key")).mappings().all()
+                # ONE ROW PER ACCOUNT: an install login adopted into several orgs' pools is one
+                # account with several seat names; only a pool seat's own key carries its name
+                # (never another org's label for the install login, BOSSAPP-1342 review).
+                "SELECT DISTINCT ON (a.account_key) a.account_key, a.engine, a.windows, "
+                "a.learned_weekly_allowance_usd, CASE WHEN a.account_key LIKE '%:pool:%' "
+                "THEN m.label END AS member_label FROM subscription_accounts a LEFT JOIN "
+                "subscription_pool_members m ON m.account_key = a.account_key "
+                "ORDER BY a.account_key, m.created_at")).mappings().all()
     except Exception:  # noqa: BLE001 — an older schema: nothing to alert about
         return []
     out = []
@@ -405,12 +446,13 @@ def findings_for(accounts: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 # ── the usual notification channels ─────────────────────────────────────────────────────────
 
-def alert_names(label: str) -> dict[Any, str]:
+def alert_names(account_key: str) -> dict[Any, str]:
     """One alert name per level, so crossing 20 -> 10 -> 5 -> the limit is a new message each
-    time and the level left behind resolves."""
-    names: dict[Any, str] = {lvl: f"{label}: {lvl}% or less of the week left"
+    time and the level left behind resolves. Keyed on the ACCOUNT, never its label: a renamed
+    seat still resolves its own alerts (the label is in the alert's summary)."""
+    names: dict[Any, str] = {lvl: f"Subscription {account_key}: {lvl}% or less of the week left"
                              for lvl in ALERT_LEVELS}
-    names[LIMIT] = f"{label}: limit reached"
+    names[LIMIT] = f"Subscription {account_key}: limit reached"
     return names
 
 
@@ -449,21 +491,26 @@ def notify_channels(connection: Any, accounts: list[dict[str, Any]], *,
         try:
             with connection.begin_nested():
                 level = alert_level(a)
-                names = alert_names(a["label"])
+                names = alert_names(a["account_key"])
                 found = findings_for([a])
                 summary = (found[0]["title"] + ". " + found[0]["detail"]) if found else ""
-                pids = dict.fromkeys([*(project_ids or []), *projects_using(connection, a)])
-                for pid in pids:
-                    firing = set(connection.execute(text(
-                        "SELECT alertname FROM app_alerts WHERE project_id = :p AND state = "
-                        "'firing' AND alertname = ANY(:n)"),
-                        {"p": pid, "n": list(names.values())}).scalars())
+                # WHEREVER THESE ALERTS FIRE: a level raised in a project that is not (or no
+                # longer) a user of the account — the run that observed it — resolves there too.
+                firing: dict[str, set[str]] = {}
+                for pid, name in connection.execute(text(
+                        "SELECT project_id, alertname FROM app_alerts WHERE state = 'firing' "
+                        "AND alertname = ANY(:n)"), {"n": list(names.values())}).all():
+                    firing.setdefault(str(pid), set()).add(str(name))
+                for pid, names_on in firing.items():
                     for lvl, name in names.items():
-                        if lvl == level and name not in firing:
-                            meta_alert(connection, pid, name, summary[:900], True, now)
-                            fired += 1
-                        elif lvl != level and name in firing:
+                        if lvl != level and name in names_on:
                             meta_alert(connection, pid, name, "", False, now)
+                if level is not None:
+                    pids = dict.fromkeys([*(project_ids or []), *projects_using(connection, a)])
+                    for pid in pids:
+                        if names[level] not in firing.get(pid, set()):
+                            meta_alert(connection, pid, names[level], summary[:900], True, now)
+                            fired += 1
         except Exception:  # noqa: BLE001 — telling people never breaks the tick or the call
             log.warning("subscription headroom notification failed (non-fatal)", exc_info=True)
     return fired
@@ -535,6 +582,6 @@ def govern_payload(connection: Any, settings: Any, project_id: str, *,
     return view
 
 
-__all__ = ["ALERT_LEVELS", "alert_level", "alert_names", "govern_payload", "account_label", "header_chip",
+__all__ = ["ALERT_LEVELS", "alert_level", "alert_names", "govern_payload", "account_label", "chip_memo", "header_chip",
            "findings_for", "install_accounts", "notify_channels", "observe_hook", "project_view",
            "projects_using"]

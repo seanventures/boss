@@ -1104,10 +1104,12 @@ def build(connection: Any, settings: Any, project_id: str, *, tz: Optional[str] 
     # The Infra Agent's open incident (BOSSAPP-1157): the most severe one, as the strip sees it.
     infra_incident = _quiet(connection, "the infra agent", _infra_incident, connection, default=None)
     # The header's headroom chip (BOSSAPP-1342): each subscription account, Govern's own numbers.
-    from .subscription_headroom import header_chip
+    from .subscription_headroom import chip_memo, header_chip
 
-    headroom = _quiet(connection, "subscription headroom", header_chip, connection, settings,
-                      project_id, default=None)
+    fresh, headroom = chip_memo(project_id)      # the 10 s poll: no database work at all
+    if not fresh:
+        headroom = _quiet(connection, "subscription headroom", header_chip, connection, settings,
+                          project_id, default=None)
     view: dict[str, Any] = {
         "project_id": project_id,
         "etag": "",
