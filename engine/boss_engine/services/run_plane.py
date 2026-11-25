@@ -621,32 +621,38 @@ class _HostWaiters:
 
     # the two sweeps (one query each, whatever the number of waiters)
     def sweep(self, engine: Any) -> list:
+        from ..db import background
+
         targets = self.wanted()
         if not targets:
             return []
-        with engine.connect() as c:
-            found = [r[0] for r in c.execute(text("""
-                SELECT DISTINCT target FROM jobs
-                 WHERE target = ANY(:t) AND run_after <= now()
-                   AND (status IN ('queued', 'failed_retryable')
-                        OR (status IN ('leased', 'running') AND lease_expires_at <= now()))"""),
-                {"t": targets}).all()]
+        with background():
+            with engine.connect() as c:
+                found = [r[0] for r in c.execute(text("""
+                    SELECT DISTINCT target FROM jobs
+                     WHERE target = ANY(:t) AND run_after <= now()
+                       AND (status IN ('queued', 'failed_retryable')
+                            OR (status IN ('leased', 'running') AND lease_expires_at <= now()))"""),
+                    {"t": targets}).all()]
         self.sweeps += 1
         if found:
             self.wake(set(found))
         return found
 
     def sweep_desired(self, engine: Any) -> None:
+        from ..db import background
+
         with self._lock:
             waiting = list(self._desired)
         if not waiting:
             return
-        with engine.connect() as c:
-            gens = {r[0]: int(r[1]) for r in c.execute(text(
-                "SELECT id, desired_generation FROM agent_hosts WHERE id = ANY(:h) "
-                "UNION ALL "
-                "SELECT id, desired_generation FROM director_nodes WHERE id = ANY(:h)"),
-                {"h": sorted({w.host_id for w in waiting})}).all()}
+        with background():
+            with engine.connect() as c:
+                gens = {r[0]: int(r[1]) for r in c.execute(text(
+                    "SELECT id, desired_generation FROM agent_hosts WHERE id = ANY(:h) "
+                    "UNION ALL "
+                    "SELECT id, desired_generation FROM director_nodes WHERE id = ANY(:h)"),
+                    {"h": sorted({w.host_id for w in waiting})}).all()}
         for waiter in waiting:
             if gens.get(waiter.host_id, 0) > waiter.since:
                 waiter.set()

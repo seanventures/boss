@@ -42,7 +42,7 @@ from sqlalchemy import create_engine, text
 from boss_engine.services import intent_router as ir
 from boss_engine.services.turn_budget import TurnBudget
 from boss_engine.services.turn_subject import (
-    RESOLVERS, SUBJECT_KINDS, SubjectRef, cites_the_record, parse_subject, resolve_subject,
+    RESOLVERS, SUBJECT_KINDS, SubjectRef, answer_contract, cites_the_record, parse_subject, resolve_subject,
     stays_on_subject, strays_from_subject,
 )
 
@@ -97,6 +97,10 @@ def db(tmp_path):
             "CREATE TABLE deployment_health_samples (id TEXT, project_id TEXT,"
             " deployment_target_id TEXT, checked_at TEXT, ok BOOLEAN, status_code INTEGER,"
             " latency_ms INTEGER, error TEXT, observed_version TEXT)",
+            # Readers count samples through this view (db/schema.sql). A target with no probe
+            # signature yet counts every sample, which is the case these rows model.
+            "CREATE VIEW counted_health_samples AS SELECT s.* FROM deployment_health_samples s"
+            " JOIN deployment_targets t ON t.id = s.deployment_target_id",
         ):
             c.execute(text(ddl))
         c.execute(text(
@@ -311,6 +315,10 @@ def test_the_incidents_context_opens_with_the_steps_error_and_an_answer_contract
     # And the contract that it be answered.
     assert "Your FIRST SENTENCE answers the operator's question above" in first_block
     assert "Do not answer about a different object" in first_block
+    # The acting rules ride on the subject, not in the door's question.
+    assert "check the run's newer attempts" in first_block
+    assert "a proposal the operator consents to" in first_block
+    assert "unless a tool result or the evidence above shows it" in first_block
     # Not the old framing that sent it to the PRD.
     assert "Call read_spec with this run id FIRST" not in system
 
@@ -484,6 +492,7 @@ def _agent(adapter):
 
     agent = EngineAgent.__new__(EngineAgent)
     agent._adapter = adapter
+    agent.ctx = None  # no database: a suspended turn has nowhere durable to go
     agent._notes = []
     agent.ambient = {}
     # propose_action IS IN THE REAL REGISTRY, ALWAYS. The budget tests ran without it, so the
@@ -636,6 +645,8 @@ def threads(monkeypatch):
             " agent_role TEXT DEFAULT '', pending_plan_id TEXT, pending_plan_summary TEXT,"
             " created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,"
             " updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"))
+        # The thread lookup prefers the thread that HAS messages, as the real schema allows.
+        c.execute(text("CREATE TABLE agent_messages (id TEXT PRIMARY KEY, thread_id TEXT)"))
     with engine.begin() as conn:
         svc = agent_service.AgentService.__new__(agent_service.AgentService)
         yield svc, conn
@@ -861,3 +872,23 @@ def test_a_turn_that_ran_out_ends_with_one_press_to_continue(db, monkeypatch):
     assert turn.next_steps[0]["depth"] == "investigate"
     finished, _ = _router(monkeypatch, _Scripted(ANSWER))
     assert _ask(finished, db).next_steps == []
+
+
+@pytest.mark.parametrize("kind", SUBJECT_KINDS)
+def test_every_ask_door_gets_the_acting_rules(kind):
+    """Contributed from an enterprise install (2026-11-20): an advisory chat's hand-off stapled
+    these rules into its question, so only that door had them. Every subject's contract does."""
+    contract = answer_contract(SubjectRef(kind, "x_1"))
+    assert "a proposal the operator consents to" in contract
+    # A recovery already on record may be said: the evidence counts, not only this turn's tools.
+    assert "Never say a repair ran, or worked, unless a tool result or the evidence above shows it" in contract
+    assert "in this turn" not in contract
+    # Only security controls are a person's: a redeploy or host action BOSS can take is a proposal.
+    assert "Never weaken a security control (sandbox, TLS, a registry, a proxy)" in contract
+    assert "a person's action item" in contract and "how to check it" in contract
+    assert "change to the host" not in contract and "the network" not in contract
+    attempts = kind in ("workflow_run", "workflow_step", "code_task")
+    assert ("check the run's newer attempts" in contract) is attempts
+    # Numbered in order, nothing skipped.
+    numbers = [int(m) for m in re.findall(r"^(\d+)\. ", contract, re.M)]
+    assert numbers == list(range(1, len(numbers) + 1))

@@ -443,9 +443,9 @@ def complete_once(*, api: str, endpoint: str, api_key: str, model: str,
             "retry_at": _retry_after(answer.headers, detail) if state == "rate_limited" else None}
 
 
-def list_models(*, api: str, base_url: str, api_key: str = "", local_ollama: bool = False,
-                http: Optional[Http] = None) -> list[str]:
-    """The provider's own model list, for the Model picker. Empty when it will not say."""
+def list_models_with_prices(*, api: str, base_url: str, api_key: str = "", local_ollama: bool = False,
+                            http: Optional[Http] = None) -> tuple[list[str], dict[str, dict[str, float]]]:
+    """The provider's own model list (and per-1M pricing when listed, e.g. OpenRouter)."""
     http = http or default_http
     base = base_url.rstrip("/")
     if local_ollama:
@@ -453,12 +453,42 @@ def list_models(*, api: str, base_url: str, api_key: str = "", local_ollama: boo
         answer = http("GET", f"{root}/api/tags", headers={}, timeout=5)
         models = (answer.body or {}).get("models") if isinstance(answer.body, dict) else None
         return sorted(str(m.get("name")) for m in models or [] if isinstance(m, dict)
-                      and m.get("name"))
+                      and m.get("name")), {}
     headers = ({"x-api-key": api_key, "anthropic-version": "2023-06-01"} if api == "anthropic"
                else ({"Authorization": f"Bearer {api_key}"} if api_key else {}))
     answer = http("GET", f"{base}/models", headers=headers, timeout=10)
     data = (answer.body or {}).get("data") if isinstance(answer.body, dict) else None
     if answer.status != 200 or not isinstance(data, list):
-        return []
-    return sorted({str(item.get("id")) for item in data if isinstance(item, dict)
-                   and item.get("id")})[:500]
+        return [], {}
+    from .openrouter_catalog import _per_mtok
+
+    ids: set[str] = set()
+    raw_prices: dict[str, dict[str, float]] = {}
+    for item in data:
+        if not isinstance(item, dict) or not item.get("id"):
+            continue
+        mid = str(item["id"])
+        ids.add(mid)
+        pricing = item.get("pricing")
+        if isinstance(pricing, dict):
+            pi = _per_mtok(pricing.get("prompt"))
+            po = _per_mtok(pricing.get("completion"))
+            if pi is not None:
+                raw_prices[mid] = {
+                    "prompt_usd_per_mtok": pi,
+                    "completion_usd_per_mtok": po if po is not None else 0.0,
+                }
+    names = sorted(ids)[:500]
+    prices = {mid: raw_prices[mid] for mid in names if mid in raw_prices}
+    return names, prices
+
+
+def list_models(*, api: str, base_url: str, api_key: str = "", local_ollama: bool = False,
+                http: Optional[Http] = None) -> list[str]:
+    """The provider's own model list, for the Model picker. Empty when it will not say."""
+    names, _ = list_models_with_prices(api=api, base_url=base_url, api_key=api_key,
+                                       local_ollama=local_ollama, http=http)
+    return names
+
+
+_DEFAULT_LIST_MODELS = list_models

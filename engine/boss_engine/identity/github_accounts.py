@@ -34,6 +34,7 @@ from typing import Any, Optional
 from urllib.parse import unquote, urlsplit
 
 from . import github_app, github_setup, github_urls
+from ..services.failure_words import github_refusal
 from .github_setup import GitHubSetupError
 
 #: GitHub's rule for a user or organisation name: letters, digits and single hyphens, 39 at most.
@@ -142,7 +143,8 @@ def app_installations(db: Any) -> list[dict[str, Any]]:
         resp = github_app._call("GET", f"/app/installations?per_page=100&page={page}", token=jwt)  # noqa: SLF001
         if resp.status != 200:
             raise GitHubSetupError("installations_unavailable", 502, status=resp.status,
-                                   message="GitHub did not list the BOSS app's installations. Trying again.")
+                                   message=github_refusal("the BOSS app's installations", status=resp.status,
+                                                          app_level=True))
         items = [i for i in (resp.json() or []) if isinstance(i, dict)]
         out.extend(items)
         if len(items) < 100:
@@ -320,7 +322,7 @@ def repositories(db: Any, org_id: str, installation_id: str) -> dict[str, Any]:
         listed = github_setup.installation_repositories(db, str(row["installation_id"]))
     except GitHubSetupError as exc:
         raise GitHubSetupError("repositories_unavailable", 502,
-                               message="GitHub did not list this account's repositories. Try again.") from exc
+                               message=github_refusal("this account's repositories", exc)) from exc
     used = _used_by(db, org_id)
     known = _registry_rows(db, org_id)
     repos = []

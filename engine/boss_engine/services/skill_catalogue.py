@@ -213,7 +213,7 @@ def _authored_facts(
         "mcp": ({"mcp_server_id": str(config.get("mcp_server_id") or ""),
                  "mcp_tool": str(config.get("tool_name") or "")}
                 if behaviour == "mcp_tool" else {}),
-        # WHETHER A NON-ZERO EXIT FAILS THE STEP (AMEX-G3): a sandboxed_command's own setting,
+        # WHETHER A NON-ZERO EXIT FAILS THE STEP (BOSSAPP-1139): a sandboxed_command's own setting,
         # read here so the runner asks the catalogue, never the store. None for every other
         # behaviour — nothing to judge.
         "fail_on_exit": (_fail_on_exit(config) if behaviour == "sandboxed_command" else None),

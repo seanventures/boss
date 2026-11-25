@@ -155,8 +155,13 @@ CAPABILITIES: dict[str, Capability] = {
             # `research` is what makes the difference between a panel arguing from a one-line
             # directive and one arguing from evidence. Optional, because a workflow may skip
             # research entirely — but bindable, so one that does not can hand it over.
-            optional_inputs=("task_id", "research"),
-            produces=("meeting_run_id", "prd_markdown", "task_id"),
+            # `compact`, `time_budget_seconds`, `fallback_to_brief`: Easy Mode's fast panel
+            # (request_meeting) — three seats, one round, and a build from the brief when it
+            # fails or overruns. `spec_approval` can only be "person" here (a person reads the
+            # PRD first): approval by the start is server-only (workflows.SPEC_BY_START_KEY).
+            optional_inputs=("task_id", "research", "compact", "spec_approval",
+                             "time_budget_seconds", "fallback_to_brief"),
+            produces=("meeting_run_id", "prd_markdown", "task_id", "spec_fallback"),
             typical_minutes=20,
             is_async=True,
             needs_model=True,
@@ -229,7 +234,14 @@ CAPABILITIES: dict[str, Capability] = {
             # commits on the same PR (Incremental Build's later increments). `increment`: which
             # increment of the PRD's plan this build builds (workflow_catalogue.increment_brief).
             optional_inputs=("acceptance_criteria", "test_commands", "task_id", "repository",
-                             "reference_links", "spec_markdown", "extend", "increment"),
+                             "reference_links", "spec_markdown", "extend", "increment",
+                             # `remediate`: {input, output, answer_files, validator} — the
+                             # build fixes ONE input file and is held to it (input_fidelity).
+                             "remediate",
+                             # START FROM A FILE (start_from_file): the file the run was given
+                             # (a repo path, or an upload's name + text) and where the fixed file
+                             # goes; the runner turns them into `remediate`.
+                             "start_from", "start_from_content", "target_path"),
             produces=("code_task_run_id", "pull_request_url"),
             requires_project=("repository",),
             skills=("github.create_pr_real", "software_factory.sandbox_validation"),
@@ -491,8 +503,13 @@ CAPABILITIES: dict[str, Capability] = {
             # shipped pass 1, as a new deploy under the same policy (two_pass).
             # `monitoring_step`: the Set up monitoring step whose pack this release carries
             # (monitoring_pack); under `monitoring_gate: block` it cannot ship without one.
+            # `skip_without_host`: Easy Mode's deploy completes as skipped, in words, when the
+            # project has no target and no usable host (the app runs as its preview).
+            # `skip_without_deploy_ask`: Fast Fix's deploy skips itself for a bug request unless
+            # the request asked to deploy.
             optional_inputs=("environment", "target_id", "host_id", "pass_2_of",
-                             "monitoring_step"),
+                             "monitoring_step", "skip_without_host",
+                             "skip_without_deploy_ask"),
             produces=("deployment_id", "deployed_url"),
             requires_project=("deployment_target",),
             typical_minutes=8,
@@ -685,13 +702,30 @@ CAPABILITIES: dict[str, Capability] = {
             label="Contract test",
             summary="Run a list of HTTP cases against the deployed API — method, headers, JSON "
                     "body, the status each must answer and JSON-path assertions — and report a "
-                    "table. One failed case fails the step.",
+                    "table. One failed case fails the step. With no cases given, the project's "
+                    "own contract tests (.boss/contract_tests.yaml in its repository).",
             tool="contract_test",
             risk_tier=0,
-            required_inputs=("cases",),
-            optional_inputs=("base_url", "headers", "timeout_s"),
+            # `cases` OPTIONAL: a step without them runs the PROJECT'S contract tests, read from
+            # the repository (contract_tests.from_repo) — "Contract tests after staging".
+            optional_inputs=("cases", "base_url", "headers", "timeout_s"),
             produces=("passed", "failed", "total", "results_table", "failed_cases"),
             typical_minutes=2,
+        ),
+        _cap(
+            key="merge",
+            # whether the change is in: the merge card's checks and a person's (or a policy's) yes
+            captain="release_manager",
+            label="Merge",
+            summary="Wait for the build's change to be merged — its merge card holds the checks "
+                    "and the approval. The run goes on once it is merged; a change closed "
+                    "unmerged fails the step.",
+            tool=None,
+            risk_tier=0,
+            optional_inputs=("run_id",),
+            produces=("merged_build_run_id",),
+            requires_project=("repository",),
+            typical_minutes=5,
         ),
         _cap(
             key="github_comment",
@@ -764,7 +798,7 @@ CAPABILITIES: dict[str, Capability] = {
         _cap(
             key="config_deploy",
             family="deploy",
-            # CONFIGURATION, NOT A BUILT APP (AMEX-G4, BOSSAPP-1140): the validated tenant YAML
+            # CONFIGURATION, NOT A BUILT APP (BOSSAPP-1140): the validated tenant YAML
             # into the gateway's config directory. Same hands as a deploy: a ChangeSet, the
             # environment's policy or a person, a receipt, previous versions kept for rollback.
             captain="deployment_manager",
@@ -776,8 +810,10 @@ CAPABILITIES: dict[str, Capability] = {
             # WHAT ships: `files` (path → content or artifact id) or the previous CLI step's
             # `produced_artifacts` (wired with from_step). WHERE: a config_dir target, by id or by
             # app_name + environment (staging unless said otherwise).
+            # `source_file`: ONE repo file the build fixed, deployed under its own name (the
+            # runner maps it to source_paths {name: path}) — "Onboard a config file".
             optional_inputs=("files", "produced_artifacts", "target_id", "app_name",
-                             "environment"),
+                             "environment", "code_task_run_id", "source_paths", "source_file"),
             produces=("deployment_id", "deployed_url", "bundle_sha256"),
             requires_project=("deployment_target",),
             typical_minutes=3,
@@ -795,7 +831,7 @@ CAPABILITIES: dict[str, Capability] = {
                     "production's approval rules.",
             tool="promote_config",
             risk_tier=3,
-            # BOUND TO ITS OWN STAGING STEP (AMEX-G9, BOSSAPP-1167): `deployment_id` comes from
+            # BOUND TO ITS OWN STAGING STEP (BOSSAPP-1167): `deployment_id` comes from
             # this run's config_deploy step and is required — no "latest staging deploy for the
             # app" fallback, which crossed two tenants in flight. The runner checks the id is one
             # this run deployed and passes that step's bundle_sha256 for the tool to verify.
@@ -1275,7 +1311,7 @@ def stops_for_a_person(capability_key: str, requested: Optional[str] = None,
 #: start preflight checks (an SMTP server, a Mattermost bot).
 NOTIFY_CHANNEL_KINDS = {"email": "email", "mattermost": "mattermost",
                         # github:<owner/repo>#<n> or github:#<n> (the primary repository): the
-                        # outcome goes on the pull request or issue (AMEX-G5).
+                        # outcome goes on the pull request or issue (BOSSAPP-1141).
                         "github": "repository"}
 
 
@@ -1289,18 +1325,33 @@ def notify_channel_need(channel: str) -> str:
     return f"channel:{value}"
 
 
-def approval_mode_for(capability_key: str, requested: Optional[str]) -> str:
+#: Capabilities whose gate follows WHERE they ship (dev autonomy, BOSSAPP-1441): the risk floor
+#: makes them manual only when the resolved target is production or unknown.
+TARGET_GATED = frozenset({"deploy", "redeploy", "config_deploy"})
+
+
+def approval_mode_for(capability_key: str, requested: Optional[str], *,
+                      target_prod: Optional[bool] = None, autonomy_acts: bool = False) -> str:
     """The approval mode this step will ACTUALLY run under.
 
     A workflow may ask for `auto`; a capability at or above the risk floor gets `manual`
     regardless. Deploying to production and merging a pull request are not things a
     configuration file gets to decide were fine.
 
+    A DEPLOY FOLLOWS ITS TARGET (dev autonomy, BOSSAPP-1441): for TARGET_GATED capabilities, when
+    the target is resolved NOT production (`target_prod=False`, services/production.py) and the
+    project's autonomy policy acts in development (`autonomy_acts`), the floor does not apply.
+    Unknown (`None`) is production. The floor is decided before the target is known (a published
+    plan), so it says manual there; the runner asks again with the target.
+
     Returning the effective value — rather than validating the requested one and storing it
     unchanged — means the stored plan says what will happen. A plan that reads `auto` next to a
     step that will stop and wait is a plan nobody can trust.
     """
     capability = get(capability_key)
+    if (capability_key in TARGET_GATED and target_prod is False and autonomy_acts
+            and str(requested or "").strip().lower() != "manual"):
+        return "auto"
     if capability.risk_tier >= MANUAL_APPROVAL_RISK_FLOOR:
         return "manual"
     mode = (requested or "auto").strip().lower()
@@ -1560,6 +1611,14 @@ def effective_approval(
         resolved["follows_policy"] = True
     resolved["risk_tier"] = capability.risk_tier
     resolved["forced_manual"] = capability.risk_tier >= MANUAL_APPROVAL_RISK_FLOOR
+    # WHAT THE AUTHOR ASKED FOR, before the floor (dev autonomy, BOSSAPP-1441): an author's own
+    # "manual" is a stop a person set and is honoured even where the floor no longer applies.
+    # Only read from a raw step (one not resolved before), so a forced "manual" never reads as
+    # the author's.
+    if approval.get("requested_mode"):
+        resolved["requested_mode"] = str(approval["requested_mode"]).lower()
+    elif "forced_manual" not in approval and approval.get("mode"):
+        resolved["requested_mode"] = str(approval["mode"]).strip().lower()
     return resolved
 
 

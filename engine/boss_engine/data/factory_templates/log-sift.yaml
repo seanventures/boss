@@ -5,17 +5,18 @@ category: data
 prompt: |
   Build a Python app named Log Sift that reads a JSONL fixture of log lines, each with a timestamp
   and a message. Group messages that share the same letters after digits are replaced with a hash
-  mark, then let a local similarity model file shipped in the repo merge groups whose remaining
-  text is close. Do not call a hosted model. Store the groups and their counts in a sqlite file.
+  mark, then merge groups whose remaining text is close using Python's standard difflib with a
+  similarity threshold kept in a small settings file in the repo. Do not call a hosted model and
+  do not download a model. Store the groups and their counts in a sqlite file.
   A local page lists the groups by count descending and shows one example message. A passing test
   feeds six lines that collapse to two groups and checks both the stored counts and the order on
   the page.
 stack: Python
+toolchain: python
 resources:
   - repo
   - preview
   - database
-  - model
 workflows:
   - name: build
     steps:

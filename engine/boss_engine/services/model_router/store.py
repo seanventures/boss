@@ -422,7 +422,9 @@ def _openrouter_catalogue(connection: Any, settings: Any, project_id: Optional[s
         finally:
             _CATALOGUE_REFRESHING.release()
 
-    threading.Thread(target=run, name="openrouter-catalogue", daemon=True).start()
+    from ...db import spawn_thread
+
+    spawn_thread(run, name="openrouter-catalogue", daemon=True, as_background=True)
 
 
 def _wire_deciders(snap: Snapshot, connection: Any, settings: Any,

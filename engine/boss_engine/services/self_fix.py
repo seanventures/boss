@@ -592,6 +592,10 @@ def runs_on_included_capacity(connection: Connection, settings: Any, project_id:
         return False
 
 
+#: How long a claimed self-fix's budget hold waits for a worker before its build starts.
+QUEUE_ALLOWANCE_MINUTES = 12 * 60
+
+
 def _reserve(connection: Connection, settings: Any, project_id: str, sfx_id: str,
              micros: int, minutes: int) -> tuple[Optional[str], str]:
     """(reservation id, why not). `budget.reserve(category="self_fix")`: BOSS's spend on itself,
@@ -701,6 +705,18 @@ def list_self_fixes(connection: Connection, *, project_id: Optional[str] = None,
         item.get("pr", {}).pop("diff", None) if isinstance(item.get("pr"), dict) else None
         out.append(item)
     return out
+
+
+def install_has_self_fixes(connection: Connection, project_id: str) -> bool:
+    """Whether ANY project of this project's org has a self-fix on record: the console's
+    "is this an install where BOSS is being developed" probe. The open project alone said no on
+    most of an operator's projects, and the rail items vanished there (review of #200)."""
+    return bool(connection.execute(text(
+        "SELECT EXISTS (SELECT 1 FROM self_fixes s JOIN projects p ON p.id = s.project_id "
+        "  JOIN workspaces w ON w.id = p.workspace_id "
+        " WHERE w.org_id = (SELECT w1.org_id FROM projects p1 JOIN workspaces w1 "
+        "                   ON w1.id = p1.workspace_id WHERE p1.id = :p))"),
+        {"p": project_id}).scalar())
 
 
 def _org_id(connection: Connection) -> Optional[str]:
@@ -1065,8 +1081,13 @@ def propose(connection: Connection, settings: Any, *, project_id: str, run_id: s
                 {"f": winner["id"], "r": run_id, "s": step_id, "p": project_id})
             return {"outcome": "waiting_on", "self_fix": winner}
         return {"outcome": "skipped", "why": "another self-fix claimed this cause first"}
+    # The hold must outlive the QUEUE as well as the run (R3, BOSSAPP-1431): reserved here, at
+    # claim, it lapsed after cap + 30 minutes while the fix waited for a worker on a one-slot
+    # host, and the reconcile then counted a lapsed paid hold as spent. The build renews it
+    # from its own start (self_fix_build.keep_hold).
     reservation, why_not = _reserve(connection, settings, project_id, sfx_id, budget_micros,
-                                    _int_setting(connection, settings, "self_fix_max_minutes"))
+                                    _int_setting(connection, settings, "self_fix_max_minutes")
+                                    + QUEUE_ALLOWANCE_MINUTES)
     if reservation is None:
         refuse(connection, sfx_id, "budget", why_not, settings=settings)
         return {"outcome": "skipped", "why": why_not, "confidence": confidence}
@@ -1077,9 +1098,10 @@ def propose(connection: Connection, settings: Any, *, project_id: str, run_id: s
                                            klass)
     sfx = transition(connection, sfx_id, CLAIMED, actor=ACTOR_AGENT,
                      sentence=(f"{AGENT_NAME}: this is a bug in BOSS, not in your app, so BOSS "
-                               f"is fixing itself ({klass}); reading BOSS's own code first."),
+                               f"is fixing itself ({klass}); it starts when a worker is free, "
+                               "and its time limit counts from then."),
                      data={"recommendation_id": recommendation_id},
-                     started_at=now_utc())
+                     started_at=None)
     audit(connection, "self_fix.started", actor=ACTOR_AGENT, sfx=sfx,
           details={"run_id": run_id, "step_id": step_id, "confidence": confidence["level"]})
     enqueue_build(connection, sfx, jobs=jobs)

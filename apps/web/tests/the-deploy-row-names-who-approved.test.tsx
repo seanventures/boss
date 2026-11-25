@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The deploy row names who approved. The face stays; the name is words beside it, never an id
  * parked only in a title.

@@ -52,6 +52,16 @@ function useVisible(): boolean {
 }
 
 /** How much the page may move. Exported for the tests. */
+/** The team section's line in plain words (stranger test r2: "36 configured roles, 0 observed
+ *  working" read like a log). */
+export function teamSummary(agents: number, working: number, reachable: boolean, ambientRunning = 0): string {
+  const team = `Team: ${agents} agent${agents === 1 ? "" : "s"}`;
+  if (!reachable) return `${team} · activity unavailable`;
+  if (working > 0) return `${team} · ${working} working now`;
+  if (ambientRunning > 0) return `${team} · ${ambientRunning} background ${ambientRunning === 1 ? "loop" : "loops"} running`;
+  return `${team} · none working now`;
+}
+
 export function motionOf({ paused, hidden, reachable, hostCritical, reduced, infraIncident = false }: {
   paused: boolean; hidden: boolean; reachable: boolean; hostCritical: boolean; reduced: boolean;
   /** A storage incident is open (BOSSAPP-1156): the page's own motion stops so the strip's pulse is the one thing that moves. */
@@ -325,7 +335,8 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
       {infraIncident ? <InfraCriticalCardView incident={infraIncident} projectId={projectId} actor={actor} orgId={orgId} sample={infra.sample} /> : null}
       {nowCards}
       <AgentsAtWorkCard view={ambient} orgId={orgId} />
-      <AppsShelf apps={appRows} attention={attention} orgId={orgId} projectId={projectId} />
+      <AppsShelf apps={appRows} attention={attention} orgId={orgId} projectId={projectId} actor={actor}
+                 openApp={pxSummary.data?.items.find((c) => c.id === projectId)?.app ?? null} />
       <details className="cc-secondary" data-testid="cc-template-details"
                onToggle={(e) => setTemplatesOpen((e.currentTarget as HTMLDetailsElement).open)}>
         <summary title="Ideas start a new app; connectors add a capability such as sign-in or payments to any app">Ideas and connectors</summary>
@@ -337,8 +348,8 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
       </details>
       {view ? (
         <details className="cc-secondary" data-testid="cc-team-details">
-          <summary>{view.counts.agents} configured roles, {reachable ? `${view.counts.working} observed working` : "current activity unavailable"}</summary>
-          <p className="cc-secondary-note">Configured roles; activity comes from records.</p>
+          <summary>{teamSummary(view.counts.agents, view.counts.working, reachable, ambient?.counts.running ?? 0)}</summary>
+          <p className="cc-secondary-note">What each agent is doing now.</p>
           <Proof n={proof} orgId={orgId} />
           <TeamGrid teams={view.teams} agents={view.agents} waiting={waiting} working={working} orgId={orgId}
                     still={motion !== "full"} />

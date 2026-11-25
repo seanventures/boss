@@ -10,6 +10,7 @@ prompt: |
   the level. The data is the CSV in the repo, not a remote feed. A passing test loads the fixture,
   counts twelve markers, and checks that a level of 200 is classified red.
 stack: Leaflet
+toolchain: node
 resources:
   - repo
   - preview

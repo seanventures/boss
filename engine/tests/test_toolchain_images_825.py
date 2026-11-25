@@ -70,6 +70,7 @@ def pg():
         c.execute(f'CREATE DATABASE "{DB_NAME}"')
     target = admin.rsplit("/", 1)[0] + f"/{DB_NAME}"
     with psycopg.connect(target, autocommit=True) as c:
+        c.execute("CREATE TABLE orgs (id TEXT PRIMARY KEY)")
         c.execute("CREATE TABLE projects (id TEXT PRIMARY KEY)")
         c.execute("CREATE TABLE code_task_runs (id TEXT PRIMARY KEY, project_id TEXT)")
         for statement in _statements(_environments_block()):

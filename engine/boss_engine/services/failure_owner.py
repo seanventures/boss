@@ -1,0 +1,2500 @@
+"""EVERY FAILURE HAS AN OWNER — nothing in BOSS is ever left as a bare "failed".
+
+THE OPERATOR'S WORDS (2026-11-19, said many times). "Any problems in the system the Agents should
+be actively involved, assume there are no humans to take a look. Agents should care about what's
+going on, attempt to fix, have a proper reason why it cannot be fixed, tag Human for Action
+Items, so they can fix and retry. Just leaving it as Failed is not Agentic Software factory."
+
+THE CASE (laptop, 2026-11-19). 66 failed and 133 blocked builds, 27 failed and 11 dead-lettered
+workflow runs, 686 dead-lettered jobs (355 model-connection proofs, 202 docs updates, 50
+repository indexes, 7 merges, 3 panel steps), 10 failed deployments, 4 failed previews and 2
+failed backups. Some of them had an agent on them — a build's bounded automatic retry (#222,
+#227), a workflow step's recovery agent (step_recovery), the Shepherd's diagnosis (stuck_work),
+a deploy's repair build (deploy_repair) — but most had nothing: 739 dead letters sat `open`
+with no remediation ever tried, and nothing anywhere said who owned them.
+
+THE INVARIANT, FOR THE CLASS. Every failed item a person could see (within REACH_DAYS, the
+reach every surface uses for "the project's failure", build_failure.REACH_DAYS) is, after each
+monitor tick, in exactly one of three states, recorded in `failure_owners`:
+
+  * fixing        an agent is acting on it: BOSS's own bounded attempt ("BOSS is fixing this:
+                  attempt 1 of 2 — …"), or another BOSS agent that already owns it (a build's
+                  automatic retry, a step's recovery agent, a repair build, the proof schedule);
+  * needs_person  ONE plain-words action item for a person (a decision, the Needs-you card and
+                  the bell), naming exactly what to do and WHY BOSS could not do it, with a
+                  "Done — retry" button that runs it again;
+  * resolved      it recovered, a newer attempt replaced it, or a person dismissed it.
+
+`unowned()` is the invariant as a query, and engine/tests/test_every_failure_has_an_owner.py
+enforces it — over every surface below, and over every table the code writes a failure state
+to (a table that fails rows and is neither a surface here nor in EXEMPT, with its reason, fails
+the guard).
+
+ONE OWNER LOOP (`sweep`, on the monitor tick), no second engine. For each failed item:
+  1. SETTLED?   it recovered or a newer attempt replaced it → resolved (and its card withdrawn).
+  2. MOVING?    a newer attempt of the same lineage is running → fixing (ours or another's).
+  3. HELD?      another BOSS agent or card already owns it → fixing / needs_person, by that one.
+  4. CLASSIFY   app (the work's own fault) / platform (BOSS's side) / person (only a person can:
+                a login, a key, a repository, a budget, a grant, a host) — the record's own
+                class first (failure_class, failure_kind, the deploy's cause), then the words.
+  5. ACT        app → a fix on the item's own lineage (a repair build told what failed), then
+                it runs again; platform → a bounded retry with backoff (MAX_ATTEMPTS, BACKOFF);
+                spent → a BOSS self-fix item (boss_recommendations) and the person's action
+                item; person → the action item at once. Work that failed more than ACT_HOURS ago
+                is not re-run by itself (what it was for may have changed): the item says so.
+Every attempt is recorded on the owner row (`history`) and as an event.
+"""
+from __future__ import annotations
+
+import json
+import logging
+import re
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from typing import Any, Callable, Mapping, Optional
+
+from sqlalchemy import text
+
+log = logging.getLogger("boss.failure_owner")
+
+#: How far back a failure still speaks for the project (the reach every surface uses).
+REACH_DAYS = 14
+#: BOSS re-runs work by itself only when it failed this recently.
+ACT_HOURS = 72
+#: BOSS's own attempts per item before it hands it to a person, with the reason: a BLIND retry
+#: (the same work again, BOSS's own side).
+MAX_ATTEMPTS = 2
+#: ...and when each attempt is a REAL FIX (a repair build that changes code or tests, a bad case
+#: dropped, an authority renewed, a conflict handed to the builder): one more is worth it.
+MAX_FIX_ATTEMPTS = 3
+#: Person-side causes an agent remedies itself with the starter's authority, by the org default
+#: (identity/fix_authority.py, operator 2026-11-21) — never handed to a person while it applies.
+AGENT_REMEDIES = {
+    "grant": "renews the run's authority from its person's fixer authority and runs it again",
+    "merge_conflict": "hands the conflict to the build agent (keep both sides, test, re-ask)",
+}
+
+
+def limit_for(cls: str, cause_code: str = "") -> int:
+    """How many attempts BOSS makes itself before a person is asked."""
+    base = str(cause_code or "").split(":", 1)[0]
+    if cause_code in FIDELITY_CAUSES:
+        return MAX_ATTEMPTS                     # a paid fidelity loop stays capped at 2 (#262)
+    return MAX_FIX_ATTEMPTS if cls == APP or base in AGENT_REMEDIES else MAX_ATTEMPTS
+#: Seconds before attempt n (1-based) may start, after the last failure.
+BACKOFF_SECONDS = (60, 600)
+#: Attempts started per tick (each may be a real build): bounded spend.
+MAX_ACTS_PER_TICK = 3
+#: Items read per surface per tick (newest first).
+MAX_ITEMS_PER_SURFACE = 300
+#: After a person's "Done — retry", how long BOSS waits for it to take before asking again.
+PERSON_GRACE_MINUTES = 30
+#: A model connection's re-checks that may die on BOSS's side before it is a person's item.
+PROOF_REPEATS = 3
+#: Who owns failures: the Shepherd, BOSS's agent for work that stopped moving (stuck_work).
+AGENT = "Shepherd"
+ACTOR = "agent:shepherd"
+#: The action item a person answers.
+CARD_ACTION = "failure_owner.retry"
+CARD_REASON = "failure_needs_person"
+
+FIXING, NEEDS_PERSON, RESOLVED = "fixing", "needs_person", "resolved"
+STATES = (FIXING, NEEDS_PERSON, RESOLVED)
+APP, PLATFORM, PERSON = "app", "platform", "person"
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _aware(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    return None
+
+
+def _json(value: Any, default: Any = None) -> Any:
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except ValueError:
+            return default
+    return default if value is None else value
+
+
+def _words(value: Any, n: int = 200) -> str:
+    """A failure as a person reads it: one redacted sentence, never a stack or a secret."""
+    from .build_failure import failure_words
+
+    said = failure_words(value)
+    return said if len(said) <= n else said[: n - 1].rstrip() + "…"
+
+
+# ─────────────────────────────── the item ───────────────────────────────
+
+
+@dataclass
+class Item:
+    """One failed thing, as the loop sees it. `key` names its LINEAGE (a build and its retries,
+    a workflow run, a job and its re-queues): attempts are counted per key, so a retry that
+    fails again is the same item's next attempt, never a fresh item with a fresh budget."""
+
+    surface: str
+    key: str
+    id: str
+    project_id: Optional[str]
+    title: str
+    error: str
+    failed_at: Optional[datetime]
+    hints: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class Said:
+    """What another owner says, or what an outcome is."""
+
+    state: str
+    words: str
+    by: str = ""
+    decision_id: Optional[str] = None
+    reason: str = ""
+
+
+class NeedsPerson(Exception):
+    """BOSS cannot do this attempt itself: `reason` says why, `action` what a person does, and
+    `exit` names the needs-person exit (needs_person_exits.EXITS) this is — a guard test fails a
+    raise that names none, so a new way to hand work to a person is never added silently."""
+
+    def __init__(self, reason: str, action: str = "", exit: str = ""):  # noqa: A002
+        super().__init__(reason)
+        self.reason = reason
+        self.action = action
+        self.exit = exit
+
+
+from . import network_refusal as _nr  # noqa: E402  (the network's refusals, BOSSAPP-1435/1436)
+
+# ─────────────────────────────── classification ───────────────────────────────
+
+#: BOSS's own side, checked FIRST: a permission error inside BOSS's sandbox reads "Permission
+#: denied" next to "login rejected" (the codex arg0 temp-dir bug, 301 proofs on the laptop) and
+#: is still BOSS's to fix, not the person's login.
+_PLATFORM_FIRST = re.compile(
+    r"os error 13|\[Errno 13\]|/var/lib/boss/|lease_lost|lost its holder|"
+    r"symlink, special file|Budget admission is busy|control plane crashed|"
+    r"Internal Server Error|\b50[0-4]\b|\b409 Conflict\b|timed? ?out|Connection (?:refused|reset)|"
+    r"EAI_AGAIN|stalled \(\d+s|"
+    # A credential asked for NO repository ("for /": empty owner and name) is BOSS's own bug —
+    # it never resolved the project's repository — not a repository a person must connect
+    # (docs.update on a project whose code is on this machine, laptop 2026-11-18).
+    r"No GitHub credentials for /[:\s]|"
+    # A project whose code is ON THIS MACHINE (`local_<project>/…`) never needs GitHub: asking
+    # for GitHub credentials for it is BOSS's own wrong turn, not a repository a person must
+    # connect (recipe-box, helpdesk-laptop cards, 2026-11-21).
+    r"No GitHub credentials for local_", re.I)
+
+#: (cause_code, pattern, what a person does) — ordered; the first match wins.
+_PERSON_RULES: tuple[tuple[str, str, str], ...] = (
+    ("budget", r"spending cap|max[_ ]budget|budget[_ ]cap|error_max_budget_usd|over the cap|"
+               r"budget_denied|raise the cap",
+     "Raise the spending cap in Govern › Budget, then press Done — retry."),
+    ("no_repository", r"No GitHub credentials|has no repository connected|no installation for it|"
+                      r"BOSS_GITHUB_TOKEN is not set",
+     "Connect this project's repository in Setup › Repositories (or install the GitHub App on "
+     "it), then press Done — retry."),
+    ("repo_access", r"repository '[^']*' not found|Permission to [\w./-]+ denied|Bad credentials|"
+                    r"repo_access_denied|Repository not found|returned error: 40[34]",
+     "Give BOSS access to the repository in Setup › Repositories (the account BOSS uses can't "
+     "reach it), then press Done — retry."),
+    ("toolchain", r"boss toolchains enable (\w+)",
+     "Turn on the toolchain it names on the BOSS host (`boss toolchains enable …`), then press "
+     "Done — retry."),
+    # SOMEONE ELSE'S 401 FIRST. A package registry's (npm E401, pnpm ERR_PNPM_FETCH_401, yarn,
+    # pip, Maven, the Go proxy) or a proxy's own 407 is the registry credential BOSS's builds
+    # lack; an MCP server's 401 is that connector's. Read by the bare-401 rule below, both sent
+    # the person to "Sign in to the model again" for a model that was fine.
+    ("registry_access", r"\bE40[17]\b|ERR_PNPM_FETCH_40[17]|\b407 Proxy Authentication|"
+                        r"proxy authentication required|"
+                        r"(?:registry|artifactory|nexus|pypi|maven|\.m2|proxy\.golang|goproxy)"
+                        r"[^\n]{0,160}?\b40[17]\b|"
+                        r"\b40[17]\b[^\n]{0,160}?(?:registry|artifactory|nexus|pypi|maven|"
+                        r"\.tgz|\.whl|\.jar|/@v/)",
+     "Give BOSS's builds the package registry's credential (or the proxy's) on the BOSS host "
+     "(docs/community/ENGINE_SANDBOX.md, \"Package registries\"), then press Done — retry."),
+    # THE NETWORK REFUSED A DOWNLOAD (network_refusal, BOSSAPP-1435/1436): one setting in the
+    # BOSS host's .env fixes it. classify() reads these FIRST, with the host and whether a company
+    # CA is configured, so the card names both; the actions here are the words without them.
+    ("company_ca", _nr._UNKNOWN_ISSUER.pattern,
+     "An operator sets BOSS_EXTRA_CA_FILE in .env to the company's root CA (PEM) and runs "
+     "`boss upgrade` on the BOSS host, then press Done — retry."),
+    ("egress_fence", _nr._FENCE.pattern,
+     "An operator adds the host it names to BOSS_EGRESS_CONNECT_ALLOW in .env and runs "
+     "`boss upgrade` on the BOSS host, then press Done — retry."),
+    ("company_proxy", _nr._UPSTREAM.pattern,
+     "Ask IT to allow the host it names on the company proxy (or, for an internal host, an "
+     "operator adds it to BOSS_UPSTREAM_NO_PROXY in .env and runs `boss upgrade`), then press "
+     "Done — retry."),
+    ("connector_login", r"\bmcp\b[^\n]{0,160}?\b401\b|\b401\b[^\n]{0,160}?\bmcp\b",
+     "Reconnect the MCP server or connector it names in Setup, then press Done — retry."),
+    ("model_login", r"plain http|credential_plain_http",
+     "Change the address to https in Setup › Models, then press Done — retry."),
+    ("model_login", r"not logged in|re-?authenticate|failed to authenticate|token (?:has )?expired|"
+                    r"login rejected|HTTP 401|(?<![\w.])401(?![\w.])|invalid api key|"
+                    r"model_auth_rejected|"
+                    r"credential_misdirected|harness_unavailable",
+     "Sign in to the model again (or fix its key or address) in Setup › Models, then press "
+     "Done — retry."),
+    ("grant", r"no person's grant|no one's authority|consent_required|authority carries over|"
+              r"no grant you gave|no_authority|needs your go-ahead|needs your OK|"
+              r"authority has ended|grant_does_not_name|renew it to continue|consent|"
+              r"No granted tool",
+     "Give the agent a grant for this work: press Done — retry and accept the grant it asks for."),
+    ("approval_expired", r"approval expired|expired before anybody answered",
+     "Answer its approval this time: press Done — retry and the step asks you again."),
+    ("merge_conflict", r"does not merge cleanly|conflicts with its base branch|merge conflict",
+     "Resolve the conflict on the pull request (or merge its base into it), then press "
+     "Done — retry."),
+    ("host", r"Host key verification failed|Permission denied \(publickey|No route to host|"
+             r"sudo: a password is required|no space left on device",
+     "Fix the host it names (access, sudo or disk) in Setup › Hosts, then press Done — retry."),
+)
+
+_PERSON_RULES_BY_CODE = {code: action for code, _pattern, action in _PERSON_RULES}
+
+#: The work's own fault: BOSS fixes it with a repair on the item's own lineage.
+_APP = re.compile(
+    r"tests? failed|failed its checks|quality gate|ERR_MODULE_NOT_FOUND|Cannot find (?:module|package)|"
+    r"SyntaxError|TypeError|exited \(code|exit(?:ed)? (?:code|status) [1-9]|returned 404|"
+    r"no page at the site root|command not found|npm ERR|build failed|compile|"
+    r"health check|did not answer as expected|"
+    # A contract test's case failed: the app (or the case itself) is the work's to fix, never
+    # "BOSS's own side" (northgate-gateway API onboarding, 2026-11-20: contract_remedy).
+    r"contract case\(s\) failed|contract did not hold", re.I)
+
+#: Why BOSS cannot fix a person-side cause itself, in one line.
+_WHY_PERSON = {
+    "budget": "Raising a budget is a person's call.",
+    "no_repository": "Only a person can connect a repository or install the GitHub App.",
+    "repo_access": "Only the repository's owner can give BOSS's account access to it.",
+    "toolchain": "Turning on a toolchain changes the BOSS host; a person does that.",
+    "model_login": "Only a person can sign in to their model account or set its key.",
+    "registry_access": "The registry credential is the organisation's; a person provisions it on "
+                       "the BOSS host.",
+    "connector_login": "Only the connector's owner can sign in to it again.",
+    "company_ca": "The company's CA lives on the BOSS host's .env, which only an operator edits; "
+                  "BOSS never turns certificate checks off.",
+    "egress_fence": "Widening BOSS's network fence is a security decision an operator makes in "
+                    "the BOSS host's .env, never an agent.",
+    "company_proxy": "The company proxy is IT's; BOSS cannot change what it allows.",
+    "grant": "BOSS's agents act with the starter's authority by default, but that default is "
+             "turned off here (or the person revoked it), so the agent may not continue.",
+    "approval_expired": "The step waited for a person's approval and nobody answered; an "
+                        "approval is a person's answer, never an agent's.",
+    "merge_conflict": "BOSS could not start the build agent to resolve the conflict itself.",
+    "host": "The host is yours: BOSS does not change its access, sudo or disk by itself.",
+    "needs_human": "The work stopped on something its agent cannot supply itself (an input "
+                   "only you have); the steps name it.",
+}
+
+
+#: Reason codes whose failure is the agents' to repair, whatever words the error carries
+#: (input_fidelity: the output was not a remediation of its input).
+AGENT_OWNED_REASONS = frozenset({"input_fidelity_failed"})
+#: Their cause codes (classify) and what a person does once the repair builds are spent.
+FIDELITY_CAUSES = frozenset({"app:input_fidelity_failed"})
+FIDELITY_ACTION = ("Read the violations: the output must be an edit of the named input file. "
+                   "Either correct the brief (name the right input and output, and remove any "
+                   "pointer to a reference answer such as a *.good.* file), or edit the output "
+                   "from the input by hand on the build's branch — then press Done — retry.")
+
+
+def classify(error: Any, *, failure_class: Any = None, reason_code: Any = None
+             ) -> tuple[str, str, str]:
+    """(class, cause_code, what a person does when it is theirs). The record's own class wins:
+    `needs_human` is the person's, `infra` is BOSS's; otherwise the words decide, BOSS's own side
+    first (a sandbox permission error is never the person's login)."""
+    raw = f"{error or ''} {reason_code or ''}"
+    fc = str(failure_class or "")
+    if "engine_write_unavailable" in raw:
+        return PERSON, "engine_write_unavailable", (
+            "A host administrator must resolve the recorded engine sandbox/policy failure. "
+            "Press Re-check on the coding engine in Setup › Models until it can write, then press "
+            "Done — retry. Repeating the app build cannot repair this host restriction.")
+    if str(reason_code or "") in AGENT_OWNED_REASONS:
+        # THE BUILD'S OWN WORK WAS WRONG (a copied answer, an invented block): a new build with
+        # the violations as its brief, never a person's waiver.
+        return APP, f"app:{reason_code}", ""
+    # A DOWNLOAD THE NETWORK REFUSED (network_refusal): before BOSS's own side, whose words it
+    # shares (the fence's refusal is a 502; a TLS failure reads like a crash), and whatever the
+    # record's class: no repair or retry changes a setting in .env.
+    refused = _nr.explain(raw)
+    if refused:
+        return PERSON, refused["kind"], (f"{refused['what']} {refused['action']} Then press "
+                                         "Done — retry.")
+    if fc == "infra":
+        return PLATFORM, f"platform:{str(reason_code or 'infra')}", ""
+    if fc != "needs_human" and _PLATFORM_FIRST.search(raw):
+        return PLATFORM, "platform", ""
+    for code, pattern, action in _PERSON_RULES:
+        if code in _nr.CODES:
+            continue                 # decided by network_refusal above (its exclusions hold)
+        if re.search(pattern, raw, re.I):
+            return PERSON, code, action
+    if fc == "needs_human":
+        return PERSON, "needs_human", ("Open the work and follow the 'What to do' it shows (it "
+                                       "names the missing input), then press Done — retry.")
+    if _APP.search(raw):
+        return APP, "app", ""
+    return PLATFORM, "platform", ""
+
+
+# ─────────────────────────────── the surfaces ───────────────────────────────
+
+
+class Surface:
+    """One kind of thing that can fail. Subclasses read their own tables and reuse the machinery
+    that already acts on them; nothing here is a second engine."""
+
+    key = ""
+    #: After an attempt was withheld (NeedsPerson), try again on a later pass (counted)?
+    retries_after_withheld = False
+    #: The tables whose failure states this surface owns (the invariant guard reads it).
+    tables: tuple[str, ...] = ()
+    noun = "Work"
+
+    def failed(self, c: Any, since: datetime, pid: Optional[str] = None) -> list[Item]:
+        """The failed items within reach, newest first; `pid` scopes them to one project."""
+        raise NotImplementedError
+
+    def settled(self, c: Any, item: Item) -> Optional[Said]:
+        """Resolved (recovered, replaced, ended by a person), or None."""
+        return None
+
+    def moving(self, c: Any, item: Item) -> Optional[Said]:
+        """A newer attempt of the lineage is running, or None."""
+        return None
+
+    def held(self, c: Any, item: Item) -> Optional[Said]:
+        """Another owner (agent or card) already has it, or None."""
+        return None
+
+    def classify(self, c: Any, item: Item) -> tuple[str, str, str]:
+        return classify(item.error, failure_class=item.hints.get("failure_class"),
+                        reason_code=item.hints.get("reason_code"))
+
+    def attempts_made(self, c: Any, item: Item, recorded: int) -> int:
+        return recorded
+
+    def retry(self, engine: Any, settings: Any, jobs: Any, item: Item, *, cls: str,
+              attempt: int, note: str) -> str:
+        """BOSS's own attempt. Returns what it started, in words; raises NeedsPerson."""
+        raise NeedsPerson("BOSS has no safe way to run this again by itself.",
+                          exit="surface_has_no_retry")
+
+    def person_retry(self, engine: Any, settings: Any, jobs: Any, ref: Mapping[str, Any],
+                     actor: str) -> str:
+        """The person's "Done — retry", run as that person."""
+        raise NeedsPerson("This cannot be run again from here; start it again from its page.",
+                          exit="surface_has_no_person_retry")
+
+    def still_failed(self, c: Any, ref: Mapping[str, Any]) -> Optional[bool]:
+        """For an open owner row not seen failing this tick: True still failed, False it is
+        fine now (resolve), None moving (keep)."""
+        return False
+
+
+def _lineage_newest(c: Any, project_id: str, root: str) -> Optional[dict[str, Any]]:
+    row = c.execute(text(
+        "SELECT id, status, finalize_ctx->'merge'->>'sha' AS merged FROM code_task_runs "
+        "WHERE project_id = :p AND (id = :r OR finalize_ctx->>'root_run_id' = :r) "
+        "ORDER BY created_at DESC LIMIT 1"), {"p": project_id, "r": root}).mappings().first()
+    return dict(row) if row else None
+
+
+_BUILD_LIVE = ("running", "queued", "repairing", "waiting_for_github", "provisioning",
+               "waiting_on_person")
+
+
+def _open_list() -> list[str]:
+    from .decision_actions import OPEN_STATUSES
+
+    return sorted(OPEN_STATUSES)
+
+
+def _open_decision(c: Any, decision_id: Any) -> Optional[str]:
+    if not decision_id:
+        return None
+    from .decision_actions import OPEN_STATUSES
+
+    found = c.execute(text("SELECT id FROM decisions WHERE id = :d AND status = ANY(:s)"),
+                      {"d": str(decision_id), "s": sorted(OPEN_STATUSES)}).scalar()
+    return str(found) if found else None
+
+
+class CodeTasks(Surface):
+    """A build that failed or was blocked, on its own (a workflow's build is its run's)."""
+
+    key = "code_task"
+    tables = ("code_task_runs",)
+    noun = "Build"
+
+    def failed(self, c, since, pid=None):
+        from .build_failure import _internal_clauses  # noqa: SLF001 — the one definition
+        from . import projects_archive
+
+        params: dict[str, Any] = {"since": since, "n": MAX_ITEMS_PER_SURFACE, "pid": pid}
+        rows = c.execute(text(
+            "SELECT c.id, c.project_id, c.title, c.status, c.error, c.updated_at, c.decision_id, "
+            "c.finalize_ctx, COALESCE(c.finalize_ctx->>'root_run_id', c.id) AS root "
+            "FROM code_task_runs c WHERE c.status IN ('failed', 'blocked') "
+            "AND c.updated_at >= :since AND c.finalize_ctx->>'workflow_run_id' IS NULL "
+            "AND (CAST(:pid AS text) IS NULL OR c.project_id = :pid) "
+            "AND COALESCE(c.finalize_ctx->>'simulated', 'false') <> 'true' "
+            "AND NOT EXISTS (SELECT 1 FROM code_task_runs n WHERE n.project_id = c.project_id "
+            "  AND COALESCE(n.finalize_ctx->>'root_run_id', n.id) = "
+            "      COALESCE(c.finalize_ctx->>'root_run_id', c.id) AND n.created_at > c.created_at) "
+            "AND " + projects_archive.live_sql("c.project_id") + " "
+            + _internal_clauses(params, "c") + "ORDER BY c.updated_at DESC LIMIT :n"),
+            params).mappings().all()
+        out = []
+        for r in rows:
+            fctx = _json(r["finalize_ctx"], {}) or {}
+            out.append(Item(self.key, str(r["root"]), str(r["id"]), r["project_id"],
+                            str(r["title"] or "Build"), str(r["error"] or ""),
+                            _aware(r["updated_at"]),
+                            {"status": r["status"], "decision_id": r["decision_id"],
+                             "failure_class": fctx.get("failure_class"),
+                             "reason_code": fctx.get("reason_code"), "fctx": fctx}))
+        return out
+
+    def settled(self, c, item):
+        merged = c.execute(text(
+            "SELECT id FROM code_task_runs WHERE project_id = :p AND (id = :r OR "
+            "finalize_ctx->>'root_run_id' = :r) AND finalize_ctx->'merge'->>'sha' IS NOT NULL "
+            "LIMIT 1"), {"p": item.project_id, "r": item.key}).scalar()
+        if merged:
+            return Said(RESOLVED, "Its change was merged.")
+        from .build_failure import waits_on
+
+        waits = waits_on(c, str(item.project_id), {"error": item.error})
+        if waits is not None and waits.get("resolved"):
+            return Said(RESOLVED, str(waits.get("detail") or "Its cause is gone."))
+        return None
+
+    def held(self, c, item):
+        fctx = item.hints.get("fctx") or {}
+        card = _open_decision(c, item.hints.get("decision_id"))
+        if card:
+            return Said(NEEDS_PERSON, "Its own card asks you what to do.", by="its card",
+                        decision_id=card, reason="It is waiting on your answer on its card.")
+        diag = fctx.get("diagnosis") if isinstance(fctx.get("diagnosis"), dict) else {}
+        card = _open_decision(c, diag.get("card_id"))
+        if card:
+            return Said(NEEDS_PERSON, str(diag.get("next") or "The Shepherd asks you."),
+                        by="stuck_work", decision_id=card,
+                        reason=str(diag.get("why_not") or diag.get("cause") or ""))
+        from .build_failure import waits_on
+
+        waits = waits_on(c, str(item.project_id), {"error": item.error})
+        if waits is not None and _open_decision(c, waits.get("decision_id")):
+            return Said(NEEDS_PERSON, str(waits.get("detail") or ""), by="its merge",
+                        decision_id=str(waits["decision_id"]),
+                        reason="It builds on a change that is not merged yet.")
+        return None
+
+    def classify(self, c, item):
+        cls, code, action = super().classify(c, item)
+        if cls == PERSON and item.hints.get("failure_class") == "needs_human":
+            from .build_failure import action_for
+
+            fix = (action_for(str(item.project_id), source="code_task", run_id=item.id,
+                              failure_class="needs_human",
+                              reason_code=item.hints.get("reason_code"),
+                              error=item.error).get("fix") or {})
+            if fix.get("detail"):
+                action = f"{str(fix['detail']).rstrip('.')}. Then press Done — retry."
+        if item.hints.get("status") == "blocked" and cls == PLATFORM and \
+                not item.hints.get("failure_class"):
+            cls, code = APP, "app"            # blocked at its own checks: the work's to fix
+        return cls, code, action
+
+    def attempts_made(self, c, item, recorded):
+        from .governed_code_task_service import auto_retries_made
+
+        fctx = item.hints.get("fctx") or {}
+        try:
+            lineage = int(c.execute(text(
+                "SELECT count(*) FROM code_task_runs WHERE project_id = :p AND "
+                "finalize_ctx->>'root_run_id' = :r AND (finalize_ctx ? 'auto_infra_retry' "
+                "OR finalize_ctx ? 'failure_owner_attempt')"),
+                {"p": item.project_id, "r": item.key}).scalar() or 0)
+        except Exception:  # noqa: BLE001 — the recorded count still bounds it
+            lineage = 0
+        return max(recorded, lineage, auto_retries_made(fctx))
+
+    def retry(self, engine, settings, jobs, item, *, cls, attempt, note):
+        from .code_task_service import RetryNeedsPerson, retry_code_task
+
+        # A build that failed before BOSS last restarted ran older code; with the org default
+        # (agents fix failures with the starter's authority) BOSS runs it again itself on the
+        # code it has now, within ACT_HOURS, instead of waiting for a person to press Retry.
+        restarted = _fix_default(engine, item.project_id)
+        try:
+            if cls == APP:
+                got = retry_code_task(engine, settings, jobs, item.id, automatic=True,
+                                      fix_note=note, after_update=restarted)
+            else:
+                got = retry_code_task(engine, settings, jobs, item.id, automatic=True,
+                                      platform_retry=True, auto_retry_attempt=attempt,
+                                      after_update=restarted)
+        except RetryNeedsPerson as withheld:
+            raise NeedsPerson(str(withheld), "Press Done — retry to let it run again.",
+                              exit="build_retry_withheld") from None
+        except ValueError as refused:
+            raise NeedsPerson(_words(refused, 280), exit="build_retry_refused") from None
+        new_id = str(got.get("run_id") or item.id)
+        if new_id != item.id:
+            with engine.begin() as c2:
+                c2.execute(text(
+                    "UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb) "
+                    "|| jsonb_build_object('failure_owner_attempt', CAST(:a AS int)) "
+                    "WHERE id = :i"), {"a": attempt, "i": new_id})
+        return (f"building a fix on the same branch (build {new_id})" if cls == APP
+                else f"running it again (build {new_id})")
+
+    def person_retry(self, engine, settings, jobs, ref, actor):
+        from .code_task_service import retry_code_task
+
+        got = retry_code_task(engine, settings, jobs, str(ref["id"]), by_person=True)
+        return f"build {got.get('run_id') or ref['id']}"
+
+    def still_failed(self, c, ref):
+        newest = _lineage_newest(c, str(ref.get("project_id") or ""), str(ref["key"]))
+        if newest is None or newest["merged"] or newest["status"] in ("completed", "cancelled"):
+            return False
+        if newest["status"] in _BUILD_LIVE:
+            return None
+        return True
+
+
+def _fix_default(engine_or_c: Any, project_id: Optional[str]) -> bool:
+    """Is the org default "agents fix failures with the starter's authority" on here?"""
+    if not project_id:
+        return False
+    from ..identity import fix_authority
+
+    try:
+        if hasattr(engine_or_c, "execute"):
+            with engine_or_c.begin_nested():
+                return fix_authority.enabled(engine_or_c, str(project_id))
+        with engine_or_c.begin() as c:
+            return fix_authority.enabled(c, str(project_id))
+    except Exception:  # noqa: BLE001 — unreadable: OFF (fix_authority.enabled logs why)
+        return False
+
+
+def _workflow_build(engine: Any, project_id: Any, run_id: str) -> Optional[str]:
+    """The newest build of a workflow run's lineage (the app its later steps check)."""
+    with engine.begin() as c:
+        found = c.execute(text(
+            "SELECT id FROM code_task_runs WHERE project_id = :p AND "
+            "finalize_ctx->>'workflow_run_id' = :r ORDER BY created_at DESC LIMIT 1"),
+            {"p": project_id, "r": run_id}).scalar()
+    return str(found) if found else None
+
+
+def _refused_by_a_person(output: Any) -> Any:
+    """The decision id (or True) when a workflow step failed because a person answered its
+    approval NO (`workflows._refuse_step` writes `rejected_by_approver`), else None."""
+    if not isinstance(output, dict) or not output.get("rejected_by_approver"):
+        return None
+    return str(output.get("decision_id") or "") or True
+
+
+class WorkflowRuns(Surface):
+    """A workflow run that failed or was dead-lettered (its builds and deploys are its own)."""
+
+    key = "workflow_run"
+    tables = ("workflow_runs", "workflow_step_runs")
+    noun = "Workflow run"
+
+    def failed(self, c, since, pid=None):
+        from . import projects_archive
+
+        rows = c.execute(text(
+            "SELECT r.id, r.project_id, r.status, COALESCE(r.error, r.blocked_reason) AS error, "
+            "COALESCE(r.input->>'title', d.name, 'Workflow') AS title, r.updated_at, "
+            "s.step_id, s.status AS step_status, s.last_error, s.output "
+            "FROM workflow_runs r LEFT JOIN workflow_definitions d ON d.id = r.workflow_definition_id "
+            "LEFT JOIN LATERAL (SELECT x.step_id, x.status, x.last_error, x.output "
+            "  FROM workflow_step_runs x WHERE x.workflow_run_id = r.id "
+            "  AND x.status IN ('failed', 'deadlettered') ORDER BY x.updated_at DESC LIMIT 1) s "
+            "  ON TRUE "
+            "WHERE r.status IN ('failed', 'deadlettered') AND r.updated_at >= :since "
+            "AND (CAST(:pid AS text) IS NULL OR r.project_id = :pid) "
+            "AND COALESCE(r.mode, 'normal') <> 'test' AND r.parent_run_id IS NULL "
+            "AND " + projects_archive.live_sql("r.project_id") + " "
+            "ORDER BY r.updated_at DESC LIMIT :n"),
+            {"since": since, "n": MAX_ITEMS_PER_SURFACE, "pid": pid}).mappings().all()
+        out = []
+        for r in rows:
+            output = _json(r["output"], {}) or {}
+            from .step_recovery import STATE_KEY
+
+            rec = output.get(STATE_KEY) if isinstance(output.get(STATE_KEY), dict) else {}
+            last = (rec.get("decisions") or [{}])[-1] if rec.get("decisions") else {}
+            out.append(Item(self.key, str(r["id"]), str(r["id"]), r["project_id"],
+                            str(r["title"]), str(r["last_error"] or r["error"] or ""),
+                            _aware(r["updated_at"]),
+                            {"step_id": r["step_id"], "step_status": r["step_status"],
+                             "recovery": last if isinstance(last, dict) else {},
+                             "refused": _refused_by_a_person(output),
+                             "capability": str(output.get("capability") or ""),
+                             "output": output}))
+        return out
+
+    def settled(self, c, item):
+        # A PERSON'S "NO" IS AN ANSWER, NOT A FAILURE (laptop 2026-11-20): a staging approval a
+        # person rejected left the step `failed` (workflows._refuse_step), the words "you
+        # rejected it" matched no cause, so the loop called it BOSS's own failure and re-ran
+        # the step — which asked the same person the same question again, twice, and would
+        # have filed a self-fix after that. The run stopped on their decision; nothing is owed.
+        refused = item.hints.get("refused")
+        if refused:
+            return Said(RESOLVED, "A person rejected its approval; the run stopped on their "
+                                  "answer.", by="its approver",
+                        decision_id=refused if isinstance(refused, str) else None)
+        return None
+
+    def moving(self, c, item):
+        live = c.execute(text(
+            "SELECT id FROM code_task_runs WHERE project_id = :p AND "
+            "finalize_ctx->>'workflow_run_id' = :r AND status IN ('running', 'queued', "
+            "'repairing', 'provisioning') LIMIT 1"),
+            {"p": item.project_id, "r": item.id}).scalar()
+        if live:
+            return Said(FIXING, f"its repair build {live} is running", by="step_recovery")
+        return None
+
+    def held(self, c, item):
+        from .decision_actions import OPEN_STATUSES
+
+        card = c.execute(text(
+            "SELECT id FROM decisions WHERE project_id = :p AND status = ANY(:s) AND "
+            "recommendation->>'workflow_run_id' = :r AND COALESCE(recommendation->>'action', '') "
+            "<> :mine ORDER BY created_at DESC LIMIT 1"),
+            {"p": item.project_id, "s": sorted(OPEN_STATUSES), "r": item.id,
+             "mine": CARD_ACTION}).scalar()
+        if card:
+            return Said(NEEDS_PERSON, "Its own card asks you what to do.", by="its card",
+                        decision_id=str(card), reason="It is waiting on your answer on its card.")
+        return None
+
+    def classify(self, c, item):
+        last = item.hints.get("recovery") or {}
+        if str(last.get("action") or "") == "ask_person" and last.get("question"):
+            # THE STEP'S OWN RECOVERY AGENT ALREADY DECIDED (step_recovery). When what it asks
+            # for is authority ("re-authorize", "grant … expired"), that is no longer a person's
+            # to give: BOSS's agents act with the starter's authority by default (AGENT_REMEDIES).
+            asked = f"{last.get('question') or ''} {last.get('reasoning') or ''} {item.error}"
+            if classify(asked)[1] == "grant" and _fix_default(c, item.project_id):
+                return PERSON, "grant", _PERSON_RULES_BY_CODE["grant"]
+            return PERSON, "asked_by_" + str(last.get("agent") or "agent").lower(), \
+                f"{str(last['question']).rstrip('?.')}? Then press Done — retry."
+        return super().classify(c, item)
+
+    def retry(self, engine, settings, jobs, item, *, cls, attempt, note):
+        from .code_task_service import PROCESS_STARTED_AT
+
+        fix_default = _fix_default(engine, item.project_id)
+        if item.failed_at is not None and item.failed_at < _aware(PROCESS_STARTED_AT) \
+                and not fix_default:
+            # The same rule as a build's automatic retry: a step that failed before BOSS last
+            # started (an upgrade or a restart) ran other code, and is a person's to re-run —
+            # unless the org default lets BOSS's agents re-run the starter's work themselves.
+            raise NeedsPerson("It failed before BOSS last started (an upgrade or a restart), and "
+                              "BOSS re-runs work from before a restart only when a person asks.",
+                              "Press Done — retry to run its failed step again.",
+                              exit="workflow_failed_before_restart")
+        renewed = ""
+        if fix_default:
+            # THE RUN'S GRANT ENDED? Its person's fixer authority continues it (the org default).
+            from ..identity import fix_authority
+
+            gap: list[str] = []
+            with engine.begin() as c:
+                from ..identity import consent
+
+                if consent.recorded_authority(c, item.id) is not None and \
+                        consent.acting_for_workflow_run(c, item.id) is None:
+                    if fix_authority.renew_run(c, project_id=str(item.project_id),
+                                               run_id=item.id, gap=gap) is None:
+                        raise NeedsPerson(
+                            "The authority this run was started under has ended and BOSS could "
+                            "not continue it with its person's authority: " + "; ".join(gap),
+                            exit="workflow_authority_not_renewable")
+                    renewed = "renewed the run's authority from its person's (org default), "
+        remedy = self._remedy(engine, settings, jobs, item, note)
+        if remedy is not None:
+            return renewed + remedy
+        return renewed + self._retry(engine, item.project_id, item.id, item.hints.get("step_id"),
+                                     actor=ACTOR, note=note)
+
+    def _remedy(self, engine, settings, jobs, item, note) -> Optional[str]:
+        """A step whose failure an agent can diagnose and FIX (not just re-run): a contract test's
+        unpassable case dropped with its reason, or the app repaired for the cases it fails
+        (contract_remedy). None: no remedy for this step, a plain retry."""
+        if item.hints.get("capability") != "contract_test":
+            return None
+        from . import contract_remedy, workflows
+        from .core import emit_event
+
+        output = item.hints.get("output") or {}
+        step_id = str(item.hints.get("step_id") or "")
+        with engine.begin() as c:
+            step = workflows._step_map(workflows._run_spec(c, item.id)).get(step_id) or {}  # noqa: SLF001
+            bound = (step.get("binding") or {}).get("inputs") or {}
+            spec_cases = bound.get("cases")
+            shared = bound.get("headers") if isinstance(bound.get("headers"), dict) else None
+            plan = contract_remedy.diagnose(output, spec_cases if isinstance(spec_cases, list)
+                                            else None, shared)
+            if plan["drop"] and not plan["fix_app"]:
+                amendment = {"drop": plan["drop"], "by": ACTOR, "at": _now().isoformat(),
+                             "why": "the case can never pass as written (light lane: a "
+                                    "non-production check is fixed by an agent, with the reason)"}
+                c.execute(text(
+                    "UPDATE workflow_step_runs SET output = COALESCE(output, '{}'::jsonb) || "
+                    "jsonb_build_object(CAST(:k AS text), CAST(:a AS jsonb)), updated_at = now() "
+                    "WHERE id = (SELECT id FROM workflow_step_runs WHERE workflow_run_id = :r AND "
+                    "step_id = :s ORDER BY updated_at DESC LIMIT 1)"),
+                    {"k": contract_remedy.AMENDMENT_KEY, "a": json.dumps(amendment),
+                     "r": item.id, "s": step_id})
+                emit_event(c, str(item.project_id), contract_remedy.EVENT, ACTOR, "workflow_run",
+                           item.id, {"step_id": step_id, "dropped": plan["drop"]})
+        if plan["drop"] and not plan["fix_app"]:
+            names = ", ".join(d["name"] for d in plan["drop"])
+            why = plan["drop"][0]["reason"]
+            self._retry(engine, item.project_id, item.id, step_id, actor=ACTOR,
+                        note=f"BOSS dropped {names}: {why}")
+            return f"dropped the case it can never pass ({names}) with the reason, and is " \
+                   f"running '{step_id}' again"
+        build = _workflow_build(engine, item.project_id, item.id)
+        if not build:
+            return None
+        from .code_task_service import RetryNeedsPerson, retry_code_task
+
+        try:
+            got = retry_code_task(engine, settings, jobs, build, automatic=True,
+                                  fix_note=contract_remedy.repair_note(plan["fix_app"]),
+                                  after_update=_fix_default(engine, item.project_id))
+        except (RetryNeedsPerson, ValueError) as refused:
+            raise NeedsPerson(_words(refused, 280), "Press Done — retry to let it run again.",
+                              exit="contract_repair_refused") from None
+        return (f"building a fix for the cases the API fails (build {got.get('run_id') or ''}); "
+                f"'{step_id}' runs again after it")
+
+    @staticmethod
+    def _retry(engine, project_id, run_id, step_id, *, actor, note):
+        from . import workflows
+
+        if not step_id:
+            raise NeedsPerson("BOSS could not tell which step failed, so it cannot retry one.",
+                              "Open the run and retry its failed step.",
+                              exit="workflow_step_unknown")
+        try:
+            with engine.begin() as c:
+                workflows.retry_failed_step(c, project_id=str(project_id), run_id=str(run_id),
+                                            step_id=str(step_id), actor=actor, note=note[:900])
+        except workflows.WorkflowError as refused:
+            raise NeedsPerson(_words(refused, 280), exit="workflow_retry_refused") from None
+        except Exception as exc:  # noqa: BLE001 — a consent refusal and the like
+            if type(exc).__name__ in ("ConsentRequired", "ConsentNeeded"):
+                raise NeedsPerson("Running the step again needs your grant.",
+                                  "Press Done — retry and accept the grant it asks for.",
+                                  exit="workflow_retry_consent") from None
+            raise
+        return f"running its '{step_id}' step again"
+
+    def person_retry(self, engine, settings, jobs, ref, actor):
+        return self._retry(engine, ref.get("project_id"), ref["id"],
+                           (ref.get("hints") or {}).get("step_id"), actor=actor,
+                           note="A person did what the action item asked; run the step again.")
+
+    def still_failed(self, c, ref):
+        status = c.execute(text("SELECT status FROM workflow_runs WHERE id = :r"),
+                           {"r": ref["id"]}).scalar()
+        if status in ("failed", "deadlettered"):
+            return True
+        return None if status in ("running", "waiting", "paused", "queued") else False
+
+
+class Deployments(Surface):
+    """A stack deployment or governed host deployment that failed."""
+
+    key = "deployment"
+    tables = ("stack_deployments", "deployment_runs", "changesets", "changeset_operations")
+    noun = "Deploy"
+
+    def failed(self, c, since, pid=None):
+        rows = c.execute(text(
+            "SELECT 'stack' AS kind, d.id, d.project_id, d.target_id, d.workflow_run_id, "
+            "COALESCE(d.failure_reason, d.error::text, '') AS error, d.updated_at, "
+            "d.repository, d.ref, d.commit_sha, d.code_task_run_id, "
+            "COALESCE(t.app_name, 'Deploy') AS title "
+            "FROM stack_deployments d LEFT JOIN deployment_targets t ON t.id = d.target_id "
+            "WHERE d.status = 'failed' AND d.updated_at >= :since AND (CAST(:pid AS text) IS NULL OR d.project_id = :pid) "
+            "UNION ALL SELECT 'host', r.id, r.project_id, r.deployment_target_id, NULL, "
+            "COALESCE(r.failure_reason, ''), r.updated_at, r.repo, r.commit_ref, r.commit_ref, "
+            "NULL, COALESCE(r.app_name, 'Deploy') FROM deployment_runs r "
+            "WHERE r.status = 'failed' AND r.updated_at >= :since AND (CAST(:pid AS text) IS NULL OR r.project_id = :pid) "
+            "ORDER BY 7 DESC LIMIT :n"), {"since": since, "n": MAX_ITEMS_PER_SURFACE, "pid": pid}
+        ).mappings().all()
+        return [Item(self.key, str(r["id"]), str(r["id"]), r["project_id"], str(r["title"]),
+                     str(r["error"] or ""), _aware(r["updated_at"]), dict(r)) for r in rows]
+
+    def _newer(self, c, item):
+        h = item.hints
+        if h["kind"] == "stack":
+            return c.execute(text(
+                "SELECT id, status, decision_id FROM stack_deployments WHERE target_id = :t "
+                "AND created_at > (SELECT created_at FROM stack_deployments WHERE id = :i) "
+                "ORDER BY created_at DESC LIMIT 1"), {"t": h["target_id"], "i": item.id}
+            ).mappings().first()
+        return c.execute(text(
+            "SELECT id, status, decision_id FROM deployment_runs WHERE deployment_target_id = :t "
+            "AND created_at > (SELECT created_at FROM deployment_runs WHERE id = :i) "
+            "ORDER BY created_at DESC LIMIT 1"), {"t": h["target_id"], "i": item.id}
+        ).mappings().first()
+
+    def settled(self, c, item):
+        said = _underway(c, item)
+        if said and str(said.get("state") or "") == "fixed":
+            return Said(RESOLVED, str(said.get("reason") or "BOSS fixed it and deployed again."),
+                        by="deploy_repair")
+        newer = self._newer(c, item)
+        if newer is not None and newer["status"] in ("healthy", "succeeded", "live", "active"):
+            return Said(RESOLVED, f"A later deploy ({newer['id']}) went live.")
+        wfr = item.hints.get("workflow_run_id")
+        if wfr:
+            status = c.execute(text("SELECT status FROM workflow_runs WHERE id = :r"),
+                               {"r": wfr}).scalar()
+            if status in ("completed", "cancelled"):
+                return Said(RESOLVED, f"Its workflow run {status.replace('_', ' ')} since.")
+        return None
+
+    def moving(self, c, item):
+        newer = self._newer(c, item)
+        if newer is not None and newer["status"] in ("planned", "applying", "running", "queued",
+                                                      "pending"):
+            return Said(FIXING, f"a new deploy ({newer['id']}) is under way", by="deploy")
+        return None
+
+    def held(self, c, item):
+        # THE DEPLOY'S OWN AGENT FIRST (deploy_repair.underway, fix/agents-fix-failed-deploys-
+        # themselves): what it says BOSS is doing about this deployment is the one answer.
+        said = _underway(c, item)
+        # ONLY WHAT IS REALLY UNDER WAY is fixing. `stuck` (its repair build stopped) is nobody's
+        # work and falls through; `fixed` resolves in `settled`; a fixed version waiting for
+        # approval is that approval's card, below.
+        if said and str(said.get("state") or "") in _UNDERWAY_ACTIVE:
+            return Said(FIXING, str(said.get("reason") or said.get("word") or ""),
+                        by="deploy_repair")
+        newer = self._newer(c, item)
+        if newer is not None and newer["status"] == "awaiting_approval":
+            card = _open_decision(c, newer["decision_id"])
+            if card:
+                return Said(NEEDS_PERSON, f"A new deploy ({newer['id']}) waits for your approval.",
+                            by="deploy", decision_id=card,
+                            reason="A deploy changes what runs on your host, so it waits for you.")
+        wfr = item.hints.get("workflow_run_id")
+        if wfr:
+            # A WORKFLOW'S DEPLOY IS ITS RUN'S: the run's owner (step_recovery, or this loop's
+            # workflow item, processed first) owns it.
+            row = c.execute(text("SELECT state, words, decision_id, reason FROM failure_owners "
+                                 "WHERE surface = 'workflow_run' AND item_key = :k"),
+                            {"k": wfr}).mappings().first()
+            if row is not None and row["state"] in (FIXING, NEEDS_PERSON):
+                return Said(row["state"], f"Its workflow run's owner has it: {row['words']}",
+                            by=f"workflow_run:{wfr}", decision_id=row["decision_id"],
+                            reason=str(row["reason"] or ""))
+        return None
+
+    def classify(self, c, item):
+        if item.hints.get("kind") == "stack":
+            from .deploy_repair import failure_of_deployment, is_app_side
+
+            try:
+                with c.begin_nested():
+                    failure = failure_of_deployment(c, item.id)
+            except Exception:  # noqa: BLE001
+                failure = None
+            if failure and is_app_side(failure):
+                return APP, "app", ""
+            if failure and str(failure.get("cause") or "") == "host":
+                return PERSON, "host", _PERSON_RULES[-1][2]
+        return super().classify(c, item)
+
+    def retry(self, engine, settings, jobs, item, *, cls, attempt, note):
+        if item.hints.get("workflow_run_id"):
+            raise NeedsPerson("Its workflow run's deploy step retries it; that step is not "
+                              "retryable now.", "Open the run and retry its deploy step.",
+                              exit="deploy_owned_by_its_run")
+        if item.hints.get("kind") != "stack":
+            if _fix_default(engine, item.project_id) and not _production(engine, item):
+                # A NON-PRODUCTION host deploy is re-PLANNED by the agent with the starter's
+                # authority (the org default): a new run and ChangeSet, held for approval by
+                # its target's own rule — never executed here, never production.
+                from .delivery_pipeline import redeploy
+
+                got = redeploy(engine, settings, item.id, actor=ACTOR, execute=False)
+                return (f"planning the deploy again (deploy "
+                        f"{got.get('id') or got.get('deployment_run_id') or ''}, held by its "
+                        "target's approval rule)")
+            raise NeedsPerson("A deploy to your host changes what runs there; BOSS re-plans a "
+                              "production deploy only when you ask.",
+                              exit="production_host_deploy")
+        return self._plan(engine, settings, item.project_id, item.hints, actor=ACTOR)
+
+    @staticmethod
+    def _plan(engine, settings, project_id, hints, *, actor):
+        from .stack_deploy import plan_stack_deploy
+
+        got = plan_stack_deploy(engine, settings, project_id=str(project_id),
+                                target_id=str(hints["target_id"]),
+                                repository=hints.get("repository"),
+                                ref=str(hints.get("commit_sha") or hints.get("ref") or ""),
+                                actor=actor, run_id=hints.get("code_task_run_id"))
+        return (f"planning it again (deploy {got.get('id') or got.get('deployment_id') or ''}, "
+                "held for your approval)")
+
+    def person_retry(self, engine, settings, jobs, ref, actor):
+        hints = ref.get("hints") or {}
+        # THE REDEPLOY ROUTE'S OWN RULE: the person who answered may deploy to this project
+        # (deployment:create under identity; providerops_manage as a member otherwise).
+        with engine.begin() as c:
+            require_deploy_permission(c, settings, str(ref.get("project_id") or ""), actor)
+        if hints.get("kind") == "host":
+            from .delivery_pipeline import redeploy
+
+            # A PLAN, never a direct execution: a new run and ChangeSet, approved then applied
+            # (the same as POST /v1/delivery/deployments/{id}/redeploy).
+            got = redeploy(engine, settings, str(ref["id"]), actor=actor, execute=False)
+            return f"deploy {got.get('id') or got.get('deployment_run_id') or ''}, planned"
+        return self._plan(engine, settings, ref.get("project_id"), hints, actor=actor)
+
+    def still_failed(self, c, ref):
+        table = "stack_deployments" if (ref.get("hints") or {}).get("kind") != "host" \
+            else "deployment_runs"
+        status = c.execute(text(f"SELECT status FROM {table} WHERE id = :i"),
+                           {"i": ref["id"]}).scalar()
+        return True if status == "failed" else False
+
+
+def _production(engine: Any, item: Item) -> bool:
+    """Is this host deploy's environment production (or unknown: then it is treated as one)?"""
+    from .production import resolve_deployment_run
+
+    with engine.begin() as c:
+        # The target's tier and host count, not only its name (services/production.py).
+        return resolve_deployment_run(c, item.id).prod
+
+
+#: deploy_repair.underway's states in which an agent is genuinely acting on the deployment.
+_UNDERWAY_ACTIVE = ("fixing", "retrying", "looking", "deploying_fix")
+
+
+def _underway(c: Any, item: Item) -> Optional[dict[str, Any]]:
+    """What the deploy's own agent says it is doing (deploy_repair.underway, #229), or None."""
+    from . import deploy_repair
+
+    if item.hints.get("kind") != "stack" or not item.hints.get("workflow_run_id"):
+        return None
+    try:
+        with c.begin_nested():
+            return deploy_repair.underway(c, [{**item.hints, "status": "failed", "error": None,
+                                               "failure_reason": item.error, "log_tail": "",
+                                               "finished_at": item.failed_at}]).get(item.id)
+    except Exception:  # noqa: BLE001 — its reading never costs this one
+        return None
+
+
+def require_deploy_permission(c: Any, settings: Any, project_id: str, actor: str) -> None:
+    """Raise NeedsPerson unless `actor` may plan a deploy in the project: the catalogue's
+    deployment:create through the PDP when identity is enforced (the route's @permit), else the
+    member permission providerops_manage (the route's require_project_actor)."""
+    from ..identity import lineage
+
+    ctx = lineage.current_context()
+    if lineage._enforced():  # noqa: SLF001 — the one mode source
+        from ..identity import authz
+        from ..identity.permissions_gen import P
+        from ..identity.scope import ResolvedScope
+
+        if ctx is None:
+            raise NeedsPerson("Only a signed-in person who may deploy here can redeploy it.",
+                              exit="redeploy_needs_signed_in_person")
+        decision = authz.check(ctx, P.DEPLOYMENT_CREATE,
+                               ResolvedScope.in_project(ctx.principal.org_id, project_id), db=c)
+        if not decision.allowed:
+            raise NeedsPerson("You may not deploy in this project; ask someone who may "
+                              "(deployment:create) to press Done — retry.",
+                              exit="redeploy_not_permitted")
+        return
+    from .members import (MemberDirectoryService, ProjectMemberNotFoundError,
+                          ProjectMemberPermissionError)
+
+    try:
+        MemberDirectoryService(settings).require_member(c, project_id, actor,
+                                                        permission="providerops_manage")
+    except (ProjectMemberNotFoundError, ProjectMemberPermissionError) as refused:
+        raise NeedsPerson(f"You may not deploy in this project: {refused}",
+                          exit="redeploy_not_permitted") from None
+
+
+class Previews(Surface):
+    """A preview of a build that failed to start or serve."""
+
+    key = "preview"
+    tables = ("app_previews", "preview_sandboxes")
+    noun = "Preview"
+
+    _PLATFORM_KINDS = ("port_timeout", "start_failed", "sandbox_error", "substrate_error",
+                       "workdir_missing")
+
+    def failed(self, c, since, pid=None):
+        rows = c.execute(text(
+            "SELECT p.id, p.project_id, p.run_id, p.failure_kind, p.error, p.created_at, "
+            "COALESCE(r.finalize_ctx->>'root_run_id', r.id, p.run_id) AS root, "
+            "COALESCE(r.title, 'Preview') AS title "
+            "FROM app_previews p LEFT JOIN code_task_runs r ON r.id = p.run_id "
+            "WHERE p.status = 'failed' AND p.created_at >= :since AND (CAST(:pid AS text) IS NULL OR p.project_id = :pid) "
+            "AND NOT EXISTS (SELECT 1 FROM app_previews q LEFT JOIN code_task_runs qr "
+            "  ON qr.id = q.run_id WHERE q.project_id = p.project_id AND q.created_at > p.created_at "
+            "  AND COALESCE(qr.finalize_ctx->>'root_run_id', qr.id, q.run_id) = "
+            "      COALESCE(r.finalize_ctx->>'root_run_id', r.id, p.run_id)) "
+            "ORDER BY p.created_at DESC LIMIT :n"), {"since": since, "n": MAX_ITEMS_PER_SURFACE,
+                                                     "pid": pid}
+        ).mappings().all()
+        return [Item(self.key, f"preview:{r['root']}", str(r["id"]), r["project_id"],
+                     str(r["title"]), str(r["error"] or r["failure_kind"] or ""),
+                     _aware(r["created_at"]),
+                     {"run_id": r["run_id"], "root": r["root"], "failure_kind": r["failure_kind"]})
+                for r in rows]
+
+    def settled(self, c, item):
+        newest = _lineage_newest(c, str(item.project_id), str(item.hints.get("root") or ""))
+        if newest is not None and newest["id"] != item.hints.get("run_id") and \
+                newest["status"] not in _BUILD_LIVE:
+            return Said(RESOLVED, f"A newer attempt ({newest['id']}) replaced the build it "
+                                  "previewed.")
+        return None
+
+    def moving(self, c, item):
+        newest = _lineage_newest(c, str(item.project_id), str(item.hints.get("root") or ""))
+        if newest is not None and newest["id"] != item.hints.get("run_id") and \
+                newest["status"] in _BUILD_LIVE:
+            return Said(FIXING, f"a fix build ({newest['id']}) is running", by="build")
+        return None
+
+    def classify(self, c, item):
+        kind = str(item.hints.get("failure_kind") or "")
+        if kind in self._PLATFORM_KINDS or "health check rejected" in item.error:
+            return PLATFORM, f"platform:{kind or 'preview'}", ""
+        if kind:
+            return APP, f"app:{kind}", ""
+        return super().classify(c, item)
+
+    def retry(self, engine, settings, jobs, item, *, cls, attempt, note):
+        run_id = str(item.hints.get("run_id") or "")
+        if cls == APP:
+            from .code_task_service import RetryNeedsPerson, retry_code_task
+
+            try:
+                got = retry_code_task(engine, settings, jobs, run_id, automatic=True,
+                                      fix_note=note)
+            except RetryNeedsPerson as withheld:
+                raise NeedsPerson(str(withheld), "Press Done — retry to let it run again.",
+                                  exit="build_retry_withheld") from None
+            except ValueError as refused:
+                raise NeedsPerson(_words(refused, 280), exit="build_retry_refused") from None
+            return f"building a fix so the app starts (build {got.get('run_id') or ''})"
+        from .preview_service import start_preview_async
+
+        got = start_preview_async(engine, settings, run_id, actor=ACTOR)
+        return f"starting the preview again ({got.get('id') or got.get('preview_id') or ''})"
+
+    def person_retry(self, engine, settings, jobs, ref, actor):
+        from .preview_service import start_preview_async
+
+        got = start_preview_async(engine, settings, str((ref.get("hints") or {}).get("run_id")),
+                                  actor=actor)
+        return f"preview {got.get('id') or got.get('preview_id') or ''}"
+
+    def still_failed(self, c, ref):
+        status = c.execute(text(
+            "SELECT p.status FROM app_previews p WHERE p.project_id = :pr AND p.run_id IN "
+            "(SELECT id FROM code_task_runs WHERE id = :r OR finalize_ctx->>'root_run_id' = :r) "
+            "ORDER BY p.created_at DESC LIMIT 1"),
+            {"pr": ref.get("project_id"), "r": str(ref["key"]).split(":", 1)[-1]}).scalar()
+        if status == "failed":
+            return True
+        return None if status == "starting" else False
+
+
+def _docs_update_moot(c: Any, project_id: str) -> Optional[str]:
+    """A docs update that does not apply to this project (its code is in a repository on this
+    machine, or it has no repository): every open docs.update dead letter of the project is
+    resolved at once with the reason — BOSS's own note, never a person's item. 72 of the
+    laptop's 202 "No GitHub credentials for /" docs dead letters were local-repo projects."""
+    from ..config import get_settings
+    from .docs_agent import docs_repository
+
+    _target, why_not = docs_repository(c, get_settings(), project_id)
+    if not why_not:
+        return None
+    resolve_docs_dead_letters(c, project_id)
+    return f"Nothing to do: {why_not}"
+
+
+def resolve_docs_dead_letters(c: Any, project_id: str) -> int:
+    """Close the project's open docs.update dead letters (docs do not apply to it)."""
+    return int(c.execute(text(
+        "UPDATE deadletters d SET status = 'resolved', resolved_by = :a, resolved_at = now(), "
+        "updated_at = now() FROM jobs j WHERE j.id = d.source_id AND d.source_kind = 'job' "
+        "AND d.status = 'open' AND j.kind = 'docs.update' AND j.project_id = :p"),
+        {"a": ACTOR, "p": project_id}).rowcount or 0)
+
+
+#: Job kinds whose failure another surface owns (the deadletter fails that record in words).
+_JOB_KINDS_OWNED_ELSEWHERE = ("code.task", "deployment.stack_apply", "deployment.host_apply")
+#: Kinds whose dedupe key is per attempt (a model check, a docs update per event): their lineage
+#: is what they keep doing — the role's model, the docs subscription, the repository binding.
+#: 334 proofs of one project's model, each its own dedupe key, are ONE thing failing.
+#: A model check's lineage is its role AND the model source it proves (`step_id`: claude_code,
+#: codex, setup-anthropic …): laptop 2026-11-20, an Anthropic API key failing every proof with
+#: HTTP 401 shared one lineage with Claude Code and Codex, so (a) each passing Claude Code proof
+#: "superseded" it and withdrew its card, which came back on the next project an hour later,
+#: and (b) its card said "Sign in to the model again" without naming which model.
+_JOB_LINEAGE: dict[str, tuple[str, ...]] = {
+    "connection.proof": ("role", "step_id"), "docs.update": ("subscription_id",),
+    "knowledge.repository.index": ("binding_id",)}
+#: How a model check's card names the source it proves.
+_PROOF_SOURCE = {"claude_code": "Claude Code", "codex": "Codex",
+                 "setup-anthropic": "Anthropic API key", "setup-openai": "OpenAI API key"}
+#: Payload fields that name what a job is about, for the lineage of a job with no dedupe key.
+_JOB_SUBJECT = ("pull_request_url", "run_id", "conversation_id", "binding_id", "repo",
+                "entity_id", "workflow_run_id", "target_id", "connection_id")
+
+
+class Jobs(Surface):
+    """A background job that ran out of attempts (an open dead letter): a model-connection
+    proof, a docs update, a repository index, a panel step, a merge, an agent turn."""
+
+    key = "job"
+    tables = ("jobs", "deadletters", "receipts", "resource_receipts", "meeting_runs",
+              "discovery_runs", "agent_conversation_turns", "agent_runs", "agent_wakeups",
+              "webhook_deliveries", "inbox_messages", "a2a_deliveries", "a2a_envelopes",
+              "a2a_transport_attempts")
+    noun = "Background job"
+
+    def failed(self, c, since, pid=None):
+        rows = c.execute(text(
+            "SELECT d.id AS dl_id, d.created_at, d.reason, j.id, j.project_id, j.kind, "
+            "j.dedupe_key, j.payload, j.last_error, j.on_behalf_of "
+            "FROM deadletters d JOIN jobs j ON j.id = d.source_id "
+            "WHERE d.status = 'open' AND d.source_kind = 'job' AND d.created_at >= :since "
+            "AND j.kind <> ALL(:owned) AND (CAST(:pid AS text) IS NULL OR j.project_id = :pid) "
+            "ORDER BY d.created_at DESC LIMIT :n"),
+            {"since": since, "owned": list(_JOB_KINDS_OWNED_ELSEWHERE), "pid": pid,
+             "n": MAX_ITEMS_PER_SURFACE * 3}).mappings().all()
+        out = []
+        for r in rows:
+            payload = _json(r["payload"], {}) or {}
+            subject = next((str(payload[k]) for k in _JOB_SUBJECT if payload.get(k)), "")
+            by_field = _lineage_field(str(r["kind"]), payload)
+            lineage = ("|".join(f"{f}:{v}" for f, v in by_field) if by_field else
+                       _job_lineage(c, str(r["id"]), r["dedupe_key"], payload))
+            err = _json(r["last_error"], {}) if r["last_error"] is not None else {}
+            words = (err.get("message") if isinstance(err, dict) else None) or r["reason"] or ""
+            out.append(Item(self.key, f"{r['kind']}:{lineage}"[:400], str(r["dl_id"]),
+                            r["project_id"], _job_title(str(r["kind"]), payload), str(words),
+                            _aware(r["created_at"]),
+                            {"job_id": r["id"], "kind": r["kind"], "dedupe_key": r["dedupe_key"],
+                             "subject": subject, "payload": payload,
+                             "principal": r["on_behalf_of"]}))
+        # ONE ITEM PER LINEAGE: the newest dead letter of it.
+        seen: dict[str, Item] = {}
+        for it in out:
+            seen.setdefault(it.key, it)
+        return list(seen.values())[:MAX_ITEMS_PER_SURFACE]
+
+    def _later_success(self, c, item) -> Optional[str]:
+        h = item.hints
+        by_field = _lineage_field(h["kind"], h["payload"] or {})
+        if by_field:
+            clause, params = _lineage_clause(by_field, "payload")
+        elif h.get("dedupe_key"):
+            clause, params = "dedupe_key = :k", {"k": h["dedupe_key"]}
+        elif h.get("subject"):
+            clause = " OR ".join(f"payload->>'{k}' = :s" for k in _JOB_SUBJECT)
+            clause, params = f"({clause})", {"s": h["subject"]}
+        else:
+            return None
+        return c.execute(text(
+            "SELECT id FROM jobs WHERE project_id = :p AND kind = :kind AND status = 'succeeded' "
+            "AND updated_at > :at AND " + clause + " ORDER BY updated_at DESC LIMIT 1"),
+            {"p": item.project_id, "kind": h["kind"], "at": item.failed_at, **params}).scalar()
+
+    def settled(self, c, item):
+        later = self._later_success(c, item)
+        if later:
+            self._close(c, item, f"superseded: job {later} did the same work since")
+            return Said(RESOLVED, f"The same job ran fine since ({later}).")
+        if item.hints["kind"] == "docs.update" and item.project_id:
+            moot = _docs_update_moot(c, str(item.project_id))
+            if moot:
+                return Said(RESOLVED, moot)
+        if item.hints["kind"] == "github.pull_request.merge":
+            decision = (item.hints["payload"] or {}).get("decision_id")
+            status = c.execute(text("SELECT status FROM decisions WHERE id = :d"),
+                               {"d": decision}).scalar() if decision else None
+            # A WITHDRAWN question settles its dead merge job: withdrawn by a hand-off (its
+            # builder is linked, merge_failed.handed_to), by a person, a cancelled run or a
+            # superseded change — on purpose. The one withdrawal that was not (the owner
+            # loop's old stale-card cleanup, #9) is owned by merge_failures.
+            # recover_orphaned_conflicts, never re-acted here, so two paths never both act.
+            if status in ("executed", "rejected", "withdrawn"):
+                self._close(c, item, f"its merge question was {status}")
+                return Said(RESOLVED, f"Its merge question was {status} since.")
+        return None
+
+    def moving(self, c, item):
+        live = c.execute(text(
+            "SELECT j.id FROM jobs j JOIN deadletters d ON d.requeued_job_id = j.id "
+            "WHERE d.id = :d AND j.status IN ('queued', 'leased', 'running')"),
+            {"d": item.id}).scalar()
+        if live:
+            return Said(FIXING, f"its re-run (job {live}) is in the queue", by="failure_owner")
+        return None
+
+    def held(self, c, item):
+        kind = item.hints["kind"]
+        if kind == "connection.proof":
+            # THE PROOF SCHEDULE OWNS A MODEL CONNECTION'S RE-CHECKS (proof_schedule: 1 h, 2 h,
+            # 4 h … 24 h). A cause only a person can fix is theirs at once (classify); BOSS's own
+            # failing again and again is handed over, with a fix for itself, below.
+            cls, _, _ = self.classify(c, item)
+            if cls != PERSON and self._dead_count(c, item) < PROOF_REPEATS:
+                return Said(FIXING, "BOSS re-checks this model connection on its own schedule "
+                                    "(1 h, 2 h, 4 h … up to a day apart)", by="proof_schedule")
+        if kind == "github.pull_request.merge":
+            card = _open_decision(c, (item.hints["payload"] or {}).get("decision_id"))
+            if card and self._conflict_is_agents(c, item, card):
+                # A CONFLICT IS THE BUILD AGENT'S (northgate-gateway #9, 2026-11-21): not held
+                # by the merge card — the loop hands it to the builder (AGENT_REMEDIES).
+                card = None
+            if card:
+                return Said(NEEDS_PERSON, "Its merge card says why the merge failed; Merge "
+                            "there runs it again.", by="merge_failures", decision_id=card,
+                            reason="A merge runs only on your approval.")
+        if kind == "meeting.step":
+            card = c.execute(text(
+                "SELECT d.id FROM decisions d WHERE d.project_id = :p AND d.status = ANY(:open) "
+                "AND d.recommendation->>'action' = "
+                "'review_stalled_meeting' AND d.recommendation->>'run_id' = :r LIMIT 1"),
+                {"p": item.project_id, "r": item.hints["subject"], "open": _open_list()}).scalar()
+            if card:
+                return Said(NEEDS_PERSON, "Its stalled-meeting card asks you.", by="meeting",
+                            decision_id=str(card), reason="A stalled panel asks a person.")
+            panel_status = c.execute(text(
+                "SELECT status FROM meeting_runs WHERE id = :r AND project_id = :p"),
+                {"r": item.hints["subject"], "p": item.project_id}).scalar()
+            if panel_status == "failed":
+                panel_card = c.execute(text(
+                    "SELECT decision_id FROM failure_owners WHERE surface = 'meeting' "
+                    "AND item_id = :r AND state <> 'resolved' ORDER BY updated_at DESC LIMIT 1"),
+                    {"r": item.hints["subject"]}).scalar()
+                return Said(NEEDS_PERSON, "Its panel card asks you.", by="meeting",
+                            decision_id=str(panel_card) if panel_card else None,
+                            reason="A failed panel asks a person.")
+        return None
+
+    def classify(self, c, item):
+        cls, code, action = super().classify(c, item)
+        if item.hints["kind"] == "connection.proof" and cls != PERSON:
+            code = "platform:connection_proof"
+        return (PLATFORM if cls == APP else cls), code, action   # a job has no app to fix
+
+    def _dead_count(self, c, item) -> int:
+        """Dead letters of this lineage within reach (each one an attempt that failed)."""
+        by_field = _lineage_field(item.hints["kind"], item.hints["payload"] or {})
+        clause, params = (_lineage_clause(by_field, "j.payload") if by_field
+                          else ("COALESCE(j.dedupe_key, '') = :dk",
+                                {"dk": item.hints.get("dedupe_key") or ""}))
+        return int(c.execute(text(
+            "SELECT count(*) FROM deadletters d JOIN jobs j ON j.id = d.source_id WHERE "
+            "d.source_kind = 'job' AND j.project_id = :p AND j.kind = :k AND " + clause +
+            " AND d.created_at > :since"),
+            {"p": item.project_id, "k": item.hints["kind"], **params,
+             "since": _now() - timedelta(days=REACH_DAYS)}).scalar() or 0)
+
+    def attempts_made(self, c, item, recorded):
+        if item.hints["kind"] == "connection.proof":
+            # Its re-checks ARE the attempts: past PROOF_REPEATS it is not retried again here.
+            return max(recorded, MAX_ATTEMPTS if self._dead_count(c, item) >= PROOF_REPEATS
+                       else recorded)
+        return recorded
+
+    def retry(self, engine, settings, jobs, item, *, cls, attempt, note):
+        from ..identity.lineage import DELEGATED_JOB_KINDS
+        from .deadletters import is_boss_principal
+
+        if item.hints["kind"] == "github.pull_request.merge":
+            return self._merge_conflict(engine, settings, item)
+        for_its_person = False
+        if not is_boss_principal(item.hints.get("principal")) or \
+                item.hints["kind"] in DELEGATED_JOB_KINDS:
+            if not _fix_default(engine, item.project_id):
+                raise NeedsPerson("This job ran for a person, so BOSS runs it again only when they "
+                                  "say so.", "Press Done — retry to run it again as you.",
+                                  exit="job_ran_for_a_person")
+            # THE ORG DEFAULT: re-run as exactly the person (and grant) it ran for — never a job
+            # whose effect no agent may cause or cannot be undone (a merge, a sent message).
+            from ..identity import fix_authority
+
+            ok, why_not = fix_authority.may_rerun_job(item.hints["kind"])
+            if not ok:
+                raise NeedsPerson(f"This job ran for a person and {why_not}.",
+                                  "Press Done — retry to run it again as you.",
+                                  exit="job_never_rerun_by_an_agent")
+            for_its_person = True
+        delay = BACKOFF_SECONDS[min(attempt, len(BACKOFF_SECONDS)) - 1]
+        return self._requeue(engine, settings, item.id, actor=ACTOR, as_boss=True,
+                             run_after_seconds=delay, for_its_person=for_its_person)
+
+    @staticmethod
+    def _conflict_is_agents(c, item, card: str) -> bool:
+        """The merge card's merge failed on a conflict, the org default applies, and BOSS has
+        not spent its attempts handing it to the builder."""
+        rec = c.execute(text("SELECT recommendation FROM decisions WHERE id = :d"),
+                        {"d": card}).scalar()
+        rec = _json(rec, {}) or {}
+        failed = rec.get("merge_failed") if isinstance(rec.get("merge_failed"), dict) else {}
+        if failed.get("kind") != "not_mergeable" or not _fix_default(c, item.project_id):
+            return False
+        if failed.get("handoff_refused"):
+            return False       # merge_failures.retry_refused_handoffs owns its retries (bounded)
+        from . import merge_failures
+
+        if not merge_failures._pr_runs(c, str(item.project_id),  # noqa: SLF001
+                                       str(rec.get("pull_request_url") or ""), card,
+                                       rec.get("branch_name")):
+            return False             # no CERTAIN build of this change: the card, with its steps
+        row = _row(c, item.surface, item.key) or {}
+        return int(row.get("attempts") or 0) < limit_for(PERSON, "merge_conflict")
+
+    @staticmethod
+    def _merge_conflict(engine, settings, item) -> str:
+        """A merge that failed on a conflict: the build agent updates the branch, keeping both
+        sides, runs the tests and the person is asked to merge again (merge_failures)."""
+        from . import merge_failures
+
+        decision = str((item.hints.get("payload") or {}).get("decision_id") or "")
+        with engine.begin() as c:
+            new_run = merge_failures.hand_off_conflict(c, settings, str(item.project_id),
+                                                       decision, item.error) if decision else None
+        if not new_run:
+            raise NeedsPerson("BOSS could not start the build agent to update the branch.",
+                              merge_failures.conflict_steps([]),
+                              exit="merge_conflict_not_handed_off")
+        return (f"handing the conflict to the build agent ({new_run}) to update the branch; "
+                "you are asked to merge again when it passes")
+
+    @staticmethod
+    def _requeue(engine, settings, deadletter_id, *, actor, as_boss, run_after_seconds=0,
+                 for_its_person=False):
+        from .deadletters import DeadletterRemediationBlocked, DeadletterRemediationService
+
+        try:
+            with engine.begin() as c:
+                reopened = _reopen_what_the_job_advances(c, deadletter_id)
+                got = DeadletterRemediationService(settings).requeue_job_deadletter(
+                    c, deadletter_id=deadletter_id, actor=actor,
+                    reason="failure_owner_retry", run_after_seconds=run_after_seconds,
+                    as_boss=as_boss, for_its_person=for_its_person)
+        except (DeadletterRemediationBlocked, ValueError) as refused:
+            raise NeedsPerson(_words(refused, 280), exit="job_requeue_refused") from None
+        return (f"{reopened}running it again (job {got.get('requeued_job_id') or ''})")
+
+    def person_retry(self, engine, settings, jobs, ref, actor):
+        return self._requeue(engine, settings, str(ref["id"]), actor=actor, as_boss=False)
+
+    @staticmethod
+    def _close(c, item, why):
+        c.execute(text(
+            "UPDATE deadletters SET status = 'resolved', resolved_by = :a, resolved_at = now(), "
+            "updated_at = now() WHERE id = :d AND status = 'open'"), {"a": ACTOR, "d": item.id})
+
+    def still_failed(self, c, ref):
+        row = c.execute(text(
+            "SELECT d.status, j.status AS requeued, src.payload->>'step_id' AS source "
+            "FROM deadletters d LEFT JOIN jobs j ON j.id = d.requeued_job_id "
+            "LEFT JOIN jobs src ON src.id = d.source_id WHERE d.id = :d"),
+            {"d": ref["id"]}).mappings().first()
+        if row is None or row["status"] == "resolved":
+            return False
+        key = str(ref.get("key") or "")
+        if key.startswith("connection.proof:") and "|step_id:" not in key and row["source"]:
+            # Owned under the role-only lineage from before a model check was keyed by its
+            # source: the per-source row owns this dead letter now, so this one stands down.
+            return False
+        if row["status"] == "open":
+            return True
+        if row["requeued"] in ("queued", "leased", "running"):
+            return None
+        return row["requeued"] in ("deadlettered", "failed_final")
+
+
+def _reopen_what_the_job_advances(c: Any, deadletter_id: str) -> str:
+    """A RE-RUN THAT RE-RUNS NOTHING IS NOT A RETRY (stranger test r8, 2026-11-19): "Done —
+    retry" on a dead panel step re-queued the `meeting.step` job, but its panel had been closed
+    meanwhile (cancelled as abandoned), so the step answered "cancelled, done", the job
+    succeeded doing nothing and the item read Resolved. A `meeting.step` re-run first reopens
+    its panel where it stopped (its finished phases are saved); a panel that cannot be reopened
+    raises NeedsPerson, and the item stays open saying why. Returns words for what it reopened."""
+    job = c.execute(text(
+        "SELECT j.kind, j.payload FROM deadletters d JOIN jobs j ON j.id = d.source_id "
+        "WHERE d.id = :d"), {"d": deadletter_id}).mappings().first()
+    if not job or str(job["kind"]) != "meeting.step":
+        return ""
+    run_id = str((_json(job["payload"], {}) or {}).get("run_id") or "")
+    if not run_id:
+        return ""
+    return _reopen_panel(c, run_id)
+
+
+def _reopen_panel(c: Any, run_id: str) -> str:
+    """Set a failed (or abandoned) panel running again from its saved phase; '' when it already
+    runs. Raises NeedsPerson when it cannot be resumed."""
+    row = c.execute(text("SELECT status, error FROM meeting_runs WHERE id = :r FOR UPDATE"),
+                    {"r": run_id}).mappings().first()
+    if row is None:
+        raise NeedsPerson("Its panel no longer exists, so there is nothing to run again.",
+                          "Start a new panel from the project's page.", exit="panel_gone")
+    status, error = str(row["status"] or ""), str(row["error"] or "")
+    if status == "running":
+        return ""
+    if status == "completed":
+        raise NeedsPerson("Its panel already finished, so there is nothing to run again.",
+                          "Open the panel from the project's page to read its PRD.", exit="panel_finished")
+    if status == "cancelled" and "built from the brief" in error.lower():
+        raise NeedsPerson("Its workflow already went on without this panel (BOSS built from "
+                          "the brief), so running the panel again would change nothing.",
+                          "Start a new panel from the project's page if you want a spec.", exit="panel_superseded")
+    if status not in ("failed", "cancelled"):
+        raise NeedsPerson(f"Its panel is {status or 'in an unknown state'}, so it cannot be "
+                          "resumed from here.", "Open the panel from the project's page.", exit="panel_unknown_state")
+    c.execute(text(
+        "UPDATE meeting_runs SET status = 'running', error = NULL, updated_at = now(), "
+        "state = (COALESCE(state, '{}'::jsonb) - 'failure_class' - 'reason_code') || "
+        "jsonb_build_object('resumed_at', CAST(now() AS text)) WHERE id = :r"), {"r": run_id})
+    return "reopened its panel where it stopped, "
+
+
+def _job_lineage(c: Any, job_id: str, dedupe_key: Any, payload: Mapping[str, Any]) -> str:
+    """What a job is FOR, across its re-runs: a re-queued job (deadletters.requeue_job_deadletter)
+    has no dedupe key of its own, so its lineage is the job it re-ran, followed back to the first;
+    the first's is its dedupe key, else the subject its payload names, else its id."""
+    for _ in range(8):
+        requeue = payload.get("requeue") if isinstance(payload.get("requeue"), dict) else {}
+        source = requeue.get("source_job_id")
+        if not source:
+            break
+        row = c.execute(text("SELECT id, dedupe_key, payload FROM jobs WHERE id = :i"),
+                        {"i": source}).mappings().first()
+        if row is None:
+            return str(source)
+        job_id, dedupe_key, payload = str(row["id"]), row["dedupe_key"], \
+            (_json(row["payload"], {}) or {})
+    subject = next((str(payload[k]) for k in _JOB_SUBJECT if payload.get(k)), "")
+    return str(dedupe_key or subject or job_id)
+
+
+def _lineage_field(kind: str, payload: Mapping[str, Any]) -> Optional[list[tuple[str, str]]]:
+    """The (field, value) pairs that name a job's lineage, or None when its first field is
+    absent. A later field a job does not carry (an older proof with no `step_id`) is left out,
+    so its lineage is what it was before."""
+    fields = _JOB_LINEAGE.get(kind) or ()
+    if not fields or not payload.get(fields[0]):
+        return None
+    return [(f, str(payload[f])) for f in fields if payload.get(f)]
+
+
+def _lineage_clause(pairs: list[tuple[str, str]], column: str) -> tuple[str, dict[str, str]]:
+    """SQL matching the same lineage, by every field named (each field is a fixed name from
+    _JOB_LINEAGE, never input; the values are bound)."""
+    clause = " AND ".join(f"{column}->>'{f}' = :lf{i}" for i, (f, _v) in enumerate(pairs))
+    return f"({clause})", {f"lf{i}": v for i, (_f, v) in enumerate(pairs)}
+
+
+def _job_title(kind: str, payload: Optional[Mapping[str, Any]] = None) -> str:
+    if kind == "connection.proof":
+        source = str((payload or {}).get("step_id") or "").strip()
+        if source:
+            return f"Model connection check · {_PROOF_SOURCE.get(source, source)}"
+    return {"connection.proof": "Model connection check", "docs.update": "Docs update",
+            "knowledge.repository.index": "Repository index", "meeting.step": "Panel step",
+            "github.pull_request.merge": "Merge", "agent.conversation": "Agent reply",
+            "architecture.draft": "Architecture draft", "discovery.run": "Research run",
+            }.get(kind, kind.replace(".", " ").replace("_", " ").capitalize())
+
+
+class Meetings(Surface):
+    """A panel (meeting) that failed or stalled."""
+
+    key = "meeting"
+    tables = ("meeting_runs", "panel_runs")
+    noun = "Panel"
+
+    def failed(self, c, since, pid=None):
+        rows = c.execute(text(
+            "SELECT id, project_id, task_id, COALESCE(title, directive, 'Panel') AS title, error, "
+            "phase, updated_at, state->>'failure_class' AS failure_class, "
+            "state->>'reason_code' AS reason_code "
+            "FROM meeting_runs WHERE status = 'failed' AND updated_at >= :since "
+            "AND (CAST(:pid AS text) IS NULL OR project_id = :pid) "
+            "ORDER BY updated_at DESC LIMIT :n"), {"since": since, "n": MAX_ITEMS_PER_SURFACE,
+                                                   "pid": pid}
+        ).mappings().all()
+        return [Item(self.key, str(r["id"]), str(r["id"]), r["project_id"],
+                     str(r["title"])[:120], str(r["error"] or ""), _aware(r["updated_at"]),
+                     {"task_id": r["task_id"], "phase": r["phase"],
+                      "failure_class": r["failure_class"], "reason_code": r["reason_code"]})
+                for r in rows]
+
+    def held(self, c, item):
+        card = c.execute(text(
+            "SELECT id FROM decisions WHERE project_id = :p AND status = ANY(:open) "
+            "AND recommendation->>'action' = 'review_stalled_meeting' AND "
+            "recommendation->>'run_id' = :r LIMIT 1"),
+            {"p": item.project_id, "r": item.id, "open": _open_list()}).scalar()
+        if card:
+            return Said(NEEDS_PERSON, "Its stalled-meeting card asks you.", by="meeting",
+                        decision_id=str(card), reason="A stalled panel asks a person.")
+        return None
+
+    def classify(self, c, item):
+        cls, code, action = super().classify(c, item)
+        return (PLATFORM if cls == APP else cls), code, action
+
+    def retry(self, engine, settings, jobs, item, *, cls, attempt, note):
+        return self._resume(engine, settings, jobs, item.project_id, item.id,
+                            item.hints.get("task_id"))
+
+    @staticmethod
+    def _resume(engine, settings, jobs, project_id, run_id, task_id):
+        """Resume the panel from the phase it stopped in: its earlier phases are saved."""
+        if jobs is None:
+            from .jobs import JobLeaseService
+
+            jobs = JobLeaseService(settings)
+        with engine.begin() as c:
+            status = c.execute(text("SELECT status FROM meeting_runs WHERE id = :r"),
+                               {"r": run_id}).scalar()
+            if status != "failed":
+                raise NeedsPerson("The panel is no longer failed, so there is nothing to resume.", exit="panel_not_failed")
+            _reopen_panel(c, run_id)
+            job = jobs.create_job(c, project_id=str(project_id), task_id=task_id,
+                                  kind="meeting.step", payload={"run_id": run_id})
+        return f"resuming the panel where it stopped (job {job.get('id') or ''})"
+
+    def person_retry(self, engine, settings, jobs, ref, actor):
+        return self._resume(engine, settings, jobs, ref.get("project_id"), str(ref["id"]),
+                            (ref.get("hints") or {}).get("task_id"))
+
+    def still_failed(self, c, ref):
+        status = c.execute(text("SELECT status FROM meeting_runs WHERE id = :r"),
+                           {"r": ref["id"]}).scalar()
+        if status == "failed":
+            return True
+        return None if status == "running" else False
+
+
+class Backups(Surface):
+    """BOSS's own database backup that failed."""
+
+    key = "backup"
+    tables = ("backups",)
+    noun = "Backup"
+
+    def failed(self, c, since, pid=None):
+        from .storage_incidents import default_project
+
+        if pid is not None and pid != default_project(c):
+            return []                  # BOSS's own backups belong to its first project only
+        rows = c.execute(text(
+            "SELECT id, kind, error, COALESCE(finished_at, started_at) AS at FROM backups "
+            "WHERE status = 'failed' AND COALESCE(finished_at, started_at) >= :since "
+            "ORDER BY 4 DESC LIMIT 20"), {"since": since}).mappings().all()
+        owner_pid = default_project(c) if rows else None
+        return [Item(self.key, "backups", str(r["id"]), owner_pid, "BOSS backup",
+                     str(r["error"] or ""), _aware(r["at"]), {"kind": r["kind"]})
+                for r in rows][:1]
+
+    def settled(self, c, item):
+        later = c.execute(text(
+            "SELECT id FROM backups WHERE status IN ('verified', 'pruned', 'succeeded', 'ok') "
+            "AND started_at > (SELECT started_at FROM backups WHERE id = :i) LIMIT 1"),
+            {"i": item.id}).scalar()
+        return Said(RESOLVED, f"A later backup ({later}) succeeded.") if later else None
+
+    def classify(self, c, item):
+        cls, code, action = super().classify(c, item)
+        return (PLATFORM if cls == APP else cls), code, action
+
+    def retry(self, engine, settings, jobs, item, *, cls, attempt, note):
+        from .backup_scheduler import run_backup
+
+        got = run_backup(engine, settings) or {}
+        return f"taking a new backup ({got.get('id') or got.get('status') or ''})"
+
+    def person_retry(self, engine, settings, jobs, ref, actor):
+        return self.retry(engine, settings, jobs, None, cls=PLATFORM, attempt=1, note="")  # type: ignore[arg-type]
+
+    def still_failed(self, c, ref):
+        newest = c.execute(text("SELECT status FROM backups ORDER BY started_at DESC LIMIT 1")
+                           ).scalar()
+        return newest == "failed"
+
+
+class GitHubConnections(Surface):
+    """A GitHub connection BOSS tested and found broken."""
+
+    key = "github_connection"
+    tables = ("github_connections",)
+    noun = "GitHub connection"
+
+    def failed(self, c, since, pid=None):
+        rows = c.execute(text(
+            "SELECT id, project_id, COALESCE(connection_label, account_login, 'GitHub') AS title, "
+            "last_error, updated_at FROM github_connections WHERE status = 'error' "
+            "AND revoked_at IS NULL AND disabled_at IS NULL AND updated_at >= :since "
+            "AND (CAST(:pid AS text) IS NULL OR project_id = :pid)"), {"since": since, "pid": pid}).mappings().all()
+        return [Item(self.key, str(r["id"]), str(r["id"]), r["project_id"], str(r["title"]),
+                     str(r["last_error"] or "GitHub refused BOSS's key."), _aware(r["updated_at"]),
+                     {}) for r in rows]
+
+    def classify(self, c, item):
+        return PERSON, "repo_access", ("Reconnect GitHub in Setup › Repositories (its key or "
+                                       "app installation was refused), then press Done — retry.")
+
+    def person_retry(self, engine, settings, jobs, ref, actor):
+        return "checking the connection again"
+
+    def still_failed(self, c, ref):
+        return c.execute(text("SELECT status FROM github_connections WHERE id = :i"),
+                         {"i": ref["id"]}).scalar() == "error"
+
+
+class ConnectionHolds(Surface):
+    """A model-connection proof whose provider outcome is unknown, its spend HELD on a
+    "Reconcile connection proof" card (connection_spend). Held, Connect for that model is stuck.
+
+    THE CASE (northgate-gateway, dec_c22f866208d046649986, 2026-11-20): Claude Code answered
+    "You've hit your weekly limit" with no HTTP status, BOSS could not tell whether the call was
+    billed, and the card asked the person to reconcile a receipt. The provider's own words say it
+    served nothing: BOSS's agent settles it REFUSED at $0 itself (connection_spend.agent_settle);
+    a truly unknown outcome is released at the conservative estimate, within what was held."""
+
+    key = "connection_hold"
+    tables = ("receipts",)
+    #: A settle that was refused (a lease race) is tried again on a later pass, counted, until
+    #: the attempts are spent — never one refusal and then a person's card for good.
+    retries_after_withheld = True
+    noun = "Model connection check"
+
+    def failed(self, c, since, pid=None):
+        rows = c.execute(text(
+            "SELECT id, project_id, question, cost_summary->>'receipt_id' AS receipt_id, "
+            "cost_summary->>'message' AS message, created_at FROM decisions "
+            "WHERE status = ANY(:open) AND recommendation->>'action' = 'connection_reconciliation' "
+            "AND created_at >= :since AND (CAST(:pid AS text) IS NULL OR project_id = :pid) "
+            "ORDER BY created_at DESC LIMIT :n"),
+            {"open": _open_list(), "since": since, "pid": pid, "n": MAX_ITEMS_PER_SURFACE}
+        ).mappings().all()
+        return [Item(self.key, f"hold:{r['receipt_id'] or r['id']}", str(r["id"]), r["project_id"],
+                     str(r["question"] or "Reconcile connection proof")[:120],
+                     str(r["message"] or "Connection provider outcome is unknown."),
+                     _aware(r["created_at"]), {"receipt_id": r["receipt_id"]}) for r in rows]
+
+    def classify(self, c, item):
+        return PLATFORM, "platform:held_proof", ""
+
+    def retry(self, engine, settings, jobs, item, *, cls, attempt, note):
+        from .connection_spend import HoldRefused, agent_settle
+
+        receipt = str(item.hints.get("receipt_id") or "")
+        if not receipt:
+            raise NeedsPerson("The card names no receipt, so BOSS cannot tell which hold it is.",
+                              "Open Setup › Models › Held checks and release it there.",
+                              exit="held_proof_unnamed")
+        try:
+            with engine.begin() as c:
+                agent_settle(c, settings, str(item.project_id), receipt, actor=ACTOR)
+                c.execute(text("UPDATE decisions SET status = 'resolved', resolution_note = "
+                               "'Settled by BOSS''s agent (failure owner)', updated_at = now() "
+                               "WHERE id = :d AND status = ANY(:open)"),
+                          {"d": item.id, "open": _open_list()})
+        except HoldRefused as refused:
+            if refused.status == 409 and "already settled" in str(refused):
+                with engine.begin() as c:
+                    c.execute(text("UPDATE decisions SET status = 'resolved', resolution_note = "
+                                   "'Already settled', updated_at = now() WHERE id = :d "
+                                   "AND status = ANY(:open)"), {"d": item.id, "open": _open_list()})
+                return "closing its card: the proof was already settled"
+            raise NeedsPerson(str(refused), "Open Setup › Models › Held checks and release it.",
+                              exit="held_proof_not_settled") from None
+        return "settling the held proof itself (the provider's outcome decides the charge)"
+
+    def person_retry(self, engine, settings, jobs, ref, actor):
+        return self.retry(engine, settings, jobs, Item(self.key, ref["key"], ref["id"],
+                                                       ref.get("project_id"), "", "", None,
+                                                       ref.get("hints") or {}),
+                          cls=PLATFORM, attempt=1, note="")
+
+    def still_failed(self, c, ref):
+        return _open_decision(c, ref["id"]) is not None
+
+
+#: THE REGISTRY, in processing order (a workflow run before the deployments it owns).
+SURFACES: dict[str, Surface] = {s.key: s for s in (
+    CodeTasks(), WorkflowRuns(), Deployments(), Previews(), Meetings(), Jobs(), Backups(),
+    GitHubConnections(), ConnectionHolds())}
+
+#: Tables the code writes a failure state to that are NOT a surface of their own, and why their
+#: failures still have an owner. The invariant guard fails on a table in neither place.
+EXEMPT: dict[str, str] = {
+    "receipts": "a receipt records one attempt of an effect; its job (Jobs) is the item",
+    "validation_reruns": "a validator re-run after an override; its change's merge card shows "
+                         "it failed with why, and the person who overrode re-runs or forces",
+    "model_gateway_invocations": "one model call; the build, step or job that made it owns it",
+    "changesets": "a deployment's change set; its deployment (Deployments) is the item",
+    "changeset_operations": "one step of a deployment's change set; its deployment owns it",
+    "repo_change_sets": "a multi-repo merge set; its merge card (approve_change_set) owns it",
+    "repo_push_pending": "a push waiting on GitHub; github_outage retries it and says so",
+    "github_resolution_plans": "a plan step of a merge; its merge card owns it",
+    "architecture_reviews": "a workflow's architecture step; its workflow run owns it",
+    "investigations": "an Ask BOSS investigation; it answers in its own thread",
+    "infra_plans": "a provisioning plan; its workflow step or deploy owns it",
+    "project_onboarding_runs": "onboarding ends needs_you with its own setup card (needs.setup_cards)",
+    "task_copies": "a copy to an external tracker; ticket_sync retries it with backoff",
+    "agent_conversation_turns": "one chat turn; the person sees the error in their thread and asks again",
+    # chat_turns.py (#267): a turn of the person's own chat with an agent. Its failure line in
+    # THEIR thread is the hand-over — the person who asked owns it and asks again; there is no
+    # work of BOSS's to re-run behind it (the same rule as agent_conversation_turns).
+    "agent_chat_turns": "one turn of a person's own chat; its failure line in their thread is "
+                        "the hand-over, and the person who asked owns it and asks again",
+    "agent_runs": "a kernel agent run; its job (Jobs) or work item owns it",
+    "agent_wakeups": "a timer for an agent; the agent's work item owns it",
+    "webhook_deliveries": "an outbound webhook; delivered with backoff and dead-lettered as a job",
+    "inbox_messages": "an inbound message; its job (Jobs) owns it",
+    "a2a_deliveries": "an agent-to-agent delivery; retried by its sender with backoff",
+    "a2a_envelopes": "an agent-to-agent envelope; its delivery owns it",
+    "a2a_transport_attempts": "one transport attempt of a delivery; its delivery owns it",
+    "resource_receipts": "a provisioned resource's receipt; its deploy step owns it",
+    "app_alerts": "a firing alert; the triage agent and the incident squad own it",
+    "incidents": "an incident; the incident squad owns it",
+    "storage_incidents": "disk pressure; the Infra Agent owns it and asks with its own card",
+    "discovery_runs": "a research run fails with its job; that dead letter (Jobs) is the item",
+}
+
+
+# ─────────────────────────────── the owner record ───────────────────────────────
+
+
+def _row(c: Any, surface: str, key: str) -> Optional[dict[str, Any]]:
+    r = c.execute(text("SELECT * FROM failure_owners WHERE surface = :s AND item_key = :k"),
+                  {"s": surface, "k": key}).mappings().first()
+    return dict(r) if r else None
+
+
+def _write(c: Any, item: Item, *, state: str, words: str, by: str = "failure_owner",
+           cls: Optional[str] = None, cause_code: Optional[str] = None, cause: str = "",
+           reason: str = "", action: str = "", decision_id: Optional[str] = None,
+           attempts: Optional[int] = None, next_attempt_at: Optional[datetime] = None,
+           note: Optional[dict[str, Any]] = None, now: Optional[datetime] = None,
+           max_attempts: Optional[int] = None) -> None:
+    """Upsert the item's owner row; `note` (an attempt, a hand-off) is appended to its history
+    and said as an event when the state or the words changed."""
+    from .core import emit_event, make_id
+
+    now = now or _now()
+    prev = _row(c, item.surface, item.key)
+    changed = prev is None or prev["state"] != state or prev["words"] != words \
+        or prev.get("decision_id") != decision_id
+    entry = {"at": now.isoformat(), "state": state, "words": words, "by": by,
+             **({"item_id": item.id} if item.id else {}), **(note or {})}
+    hints = {k: v for k, v in item.hints.items() if k in (
+        "step_id", "run_id", "task_id", "kind", "target_id", "repository", "ref", "commit_sha",
+        "code_task_run_id", "workflow_run_id", "root")}
+    c.execute(text(
+        "INSERT INTO failure_owners (id, surface, item_key, item_id, project_id, title, state, "
+        " class, cause_code, cause, owner, owned_by, attempts, max_attempts, next_attempt_at, words, "
+        " reason, action, decision_id, hints, history, failed_at, opened_at, updated_at, "
+        " resolved_at) VALUES (:id, :s, :k, :i, :p, :t, :st, :cl, :cc, :ca, :ow, :by, "
+        " COALESCE(CAST(:at AS int), 0), :mx, CAST(:na AS timestamptz), :w, :r, :ac, :d, CAST(:h AS JSONB), CAST(:hist AS JSONB), "
+        " CAST(:fa AS timestamptz), :now, :now, CASE WHEN :st = 'resolved' THEN CAST(:now AS timestamptz) END) "
+        "ON CONFLICT (surface, item_key) DO UPDATE SET item_id = EXCLUDED.item_id, "
+        " project_id = COALESCE(EXCLUDED.project_id, failure_owners.project_id), "
+        " title = EXCLUDED.title, state = EXCLUDED.state, "
+        " class = COALESCE(EXCLUDED.class, failure_owners.class), "
+        " cause_code = COALESCE(EXCLUDED.cause_code, failure_owners.cause_code), "
+        " cause = CASE WHEN EXCLUDED.cause <> '' THEN EXCLUDED.cause ELSE failure_owners.cause END, "
+        " owned_by = EXCLUDED.owned_by, max_attempts = EXCLUDED.max_attempts, attempts = COALESCE(CAST(:at AS int), failure_owners.attempts), "
+        " next_attempt_at = EXCLUDED.next_attempt_at, words = EXCLUDED.words, "
+        " reason = EXCLUDED.reason, action = EXCLUDED.action, decision_id = EXCLUDED.decision_id, "
+        " hints = EXCLUDED.hints, failed_at = COALESCE(EXCLUDED.failed_at, failure_owners.failed_at), "
+        " history = CASE WHEN CAST(:changed AS boolean) THEN (failure_owners.history || EXCLUDED.history) "
+        "   ELSE failure_owners.history END, updated_at = :now, "
+        " resolved_at = CASE WHEN EXCLUDED.state = 'resolved' THEN CAST(:now AS timestamptz) END"),
+        {"id": make_id("fown"), "s": item.surface, "k": item.key, "i": item.id,
+         "p": item.project_id, "t": item.title[:200], "st": state, "cl": cls, "cc": cause_code,
+         "ca": cause[:500], "ow": AGENT, "by": by, "at": attempts, "mx": max_attempts or MAX_ATTEMPTS,
+         "na": next_attempt_at, "w": words[:600], "r": reason[:800], "ac": action[:600],
+         "d": decision_id, "h": json.dumps(hints, default=str), "hist": json.dumps([entry],
+                                                                                  default=str),
+         "fa": item.failed_at, "now": now, "changed": changed})
+    if changed and item.project_id:
+        emit_event(c, str(item.project_id), f"failure_owner.{state}", ACTOR, item.surface,
+                   item.id or item.key, {"key": item.key, "words": words[:300], "by": by,
+                                         "reason": reason[:300], "decision_id": decision_id,
+                                         **(note or {})})
+
+
+def fixing_words(attempt: int, doing: str, limit: int = MAX_ATTEMPTS) -> str:
+    return f"BOSS is fixing this: attempt {attempt} of {max(limit, attempt)} — {doing}."
+
+
+def _card(c: Any, item: Item, *, cls: str, cause_code: str, cause: str, action: str,
+          reason: str, guidance: Optional[Mapping[str, Any]] = None,
+          exit: str = "") -> Optional[str]:  # noqa: A002
+    """ONE action item per cause per surface per project: a second item failing the same way
+    joins the first card (its `items`), so 28 docs updates that need a repository are one card."""
+    from .core import create_blocking_decision
+    from .decision_actions import OPEN_STATUSES
+
+    pid = item.project_id
+    if not pid:
+        return None
+    ref = {"surface": item.surface, "key": item.key, "id": item.id, "title": item.title}
+    found = c.execute(text(
+        "SELECT id FROM decisions WHERE project_id = :p AND status = ANY(:s) AND "
+        "recommendation->>'action' = :a AND recommendation->>'surface' = :sf AND "
+        "recommendation->>'cause_code' = :c ORDER BY created_at LIMIT 1"),
+        {"p": pid, "s": sorted(OPEN_STATUSES), "a": CARD_ACTION, "sf": item.surface,
+         "c": cause_code}).scalar()
+    if found:
+        c.execute(text(
+            "UPDATE decisions SET recommendation = jsonb_set(recommendation, '{items}', "
+            "COALESCE(recommendation->'items', '[]'::jsonb) || CAST(:r AS jsonb)), "
+            "updated_at = now() WHERE id = :id AND NOT EXISTS (SELECT 1 FROM "
+            "jsonb_array_elements(COALESCE(recommendation->'items', '[]'::jsonb)) e "
+            "WHERE e->>'key' = :k)"), {"r": json.dumps([ref]), "id": found, "k": item.key})
+        return str(found)
+    noun = SURFACES[item.surface].noun
+    what = item.title if item.title.lower() != noun.lower() else noun
+    guidance = dict(guidance or {})
+    first = (guidance.get("steps") or [action])[0]
+    question = _clip(f"{noun} · {what}: {cause.rstrip('.')}. Do: {first}", 280)
+    return create_blocking_decision(
+        c, str(pid), None, question,
+        {"action": CARD_ACTION, "surface": item.surface, "items": [ref],
+         "cause_code": cause_code, "class": cls, "cause": cause, "what_to_do": action,
+         "recommended": action, "why": reason, "why_a_person": reason, "why_not": reason,
+         "title": item.title, "asked_by": None, "exit": exit or None,
+         "what_failed": guidance.get("what_failed"), "steps": guidance.get("steps"),
+         "after": guidance.get("after")},
+        {}, CARD_REASON, default_action="hold")
+
+
+def _clip(s: str, n: int) -> str:
+    s = " ".join(str(s or "").split())
+    return s if len(s) <= n else s[: n - 1].rstrip() + "…"
+
+
+# ─────────────────────────────── the loop ───────────────────────────────
+
+
+@dataclass
+class _Budget:
+    acts: int
+
+
+def _person_retry_pending(row: Optional[Mapping[str, Any]], item: Item, now: datetime) -> bool:
+    if not row or row.get("owned_by") != "person" or row.get("state") != FIXING:
+        return False
+    approved_at = _aware(row.get("updated_at"))
+    if approved_at is None or approved_at <= now - timedelta(minutes=PERSON_GRACE_MINUTES):
+        return False
+    failed_at = _aware(item.failed_at)
+    return failed_at is None or failed_at <= approved_at
+
+
+def _own(engine: Any, settings: Any, jobs: Any, surface: Surface, item: Item, now: datetime,
+         budget: _Budget) -> str:
+    """Give ONE failed item its owner. Returns the state it ends in."""
+    from ..db import begin
+
+    with begin(engine) as c:
+        row = _row(c, surface.key, item.key)
+        if row and row["state"] == RESOLVED and row.get("item_id") == item.id:
+            return RESOLVED                     # a person dismissed this very failure
+        said = surface.settled(c, item)
+        if said is not None:
+            _write(c, item, state=RESOLVED, words=said.words, by=said.by or "failure_owner",
+                   reason=said.reason, attempts=(row or {}).get("attempts"), now=now)
+            return RESOLVED
+        said = surface.moving(c, item) or surface.held(c, item)
+        if said is not None:
+            words = said.words
+            if said.state == FIXING and row and row.get("owned_by") == "failure_owner" and \
+                    int(row.get("attempts") or 0) > 0:
+                words = fixing_words(int(row["attempts"]), said.words)
+            elif said.state == FIXING:
+                words = f"BOSS is fixing this: {said.words}."
+            _write(c, item, state=said.state, words=words, by=said.by,
+                   decision_id=said.decision_id, reason=said.reason or "",
+                   attempts=(row or {}).get("attempts"), now=now)
+            return said.state
+        cls, cause_code, action = surface.classify(c, item)
+        cause = _words(item.error, 200)
+        made = surface.attempts_made(c, item, int((row or {}).get("attempts") or 0))
+        old = item.failed_at is not None and now - item.failed_at > timedelta(hours=ACT_HOURS)
+        # AN AGENT REMEDIES IT WITH THE STARTER'S AUTHORITY (AGENT_REMEDIES, the org default):
+        # a cause that used to be a person's (an ended grant, a merge conflict) is the agent's.
+        agent_remedy = cls == PERSON and cause_code in AGENT_REMEDIES and \
+            _fix_default(c, item.project_id)
+        limit = limit_for(cls, cause_code)
+        if row and row["state"] == NEEDS_PERSON and _open_decision(c, row.get("decision_id")) \
+                and row.get("item_id") == item.id:
+            again = surface.retries_after_withheld and made < limit and not old \
+                and str(row.get("cause_code") or "").endswith(":withheld")
+            if not again and not _now_agents(row, cls, agent_remedy, made, limit, old):
+                return NEEDS_PERSON             # its card stands until it is answered
+            # THE CARD IS STALE: what it asked a person for is an agent's to do now (the org
+            # default, a re-classification: a contract case is the work's, not the host's).
+            _withdraw_own_card(c, item, str(row["decision_id"]),
+                               "Withdrawn: BOSS's agent can fix this itself now — "
+                               + (AGENT_REMEDIES.get(cause_code) or "it builds a fix") + ".")
+        if _person_retry_pending(row, item, now):
+            return FIXING                       # a person just said it is done: give it time
+        if cls == PERSON and not agent_remedy:
+            reason = _WHY_PERSON.get(cause_code, "Its agent cannot supply what it needs itself.")
+            if cause_code.startswith("asked_by_"):
+                rec = item.hints.get("recovery") or {}
+                reason = _clip(f"{rec.get('agent') or 'Its agent'} looked into it: "
+                               f"{rec.get('reasoning') or cause}", 600)
+            return _hand_over(c, item, cls=cls, cause_code=cause_code, cause=cause,
+                              action=action, reason=reason, attempts=made, now=now,
+                              exit=f"person_cause:{cause_code}")
+        if old:
+            # OLD WORK IS NEVER RE-RUN BY ITSELF, whatever was tried before (review #232).
+            return _hand_over(
+                c, item, cls=cls, cause_code=f"{cause_code}:old", cause=cause,
+                action="Press Done — retry to run it again now.",
+                reason=(f"It failed {_ago(item.failed_at, now)} ago. BOSS re-runs work by itself "
+                        f"only within {ACT_HOURS} hours of a failure, because what it was for "
+                        "may have changed since."), attempts=made, now=now, exit="old_work")
+        if made >= MAX_ATTEMPTS and cause_code in FIDELITY_CAUSES:
+            # THE CAP (MAX_ATTEMPTS fidelity repair builds per lineage: a paid loop risk, so it
+            # stays at 2, not MAX_FIX_ATTEMPTS), then EXACT guidance: what was violated, the
+            # evidence, what to do — never a loop, never a generic card.
+            return _hand_over(
+                c, item, cls=cls, cause_code=f"{cause_code}:spent", cause=cause,
+                action=FIDELITY_ACTION,
+                reason=_clip(f"BOSS built a fix {made} time{'s' if made != 1 else ''} and the "
+                             f"output was still not an edit of its input. "
+                             f"{item.error or cause}", 1500),
+                attempts=made, now=now, exit="fidelity_spent")
+        if made >= limit:
+            if cls == PLATFORM:
+                _self_fix(c, settings, item, cause_code, cause)
+            return _hand_over(
+                c, item, cls=cls, cause_code=f"{cause_code}:spent", cause=cause,
+                action=action or "Press Done — retry to run it again.",
+                reason=(f"BOSS tried {made} time{'s' if made != 1 else ''} and it failed the same "
+                        "way each time" + (" on BOSS's own side; BOSS recorded it as its own bug "
+                                           "to fix." if cls == PLATFORM else
+                                           ": its agent could not fix it.")),
+                attempts=made, now=now, exit="attempts_spent")
+        due = _aware((row or {}).get("next_attempt_at"))
+        attempt = made + 1
+        if (due is not None and due > now) or budget.acts <= 0:
+            # WAITING ITS TURN (the backoff, or this tick's attempts are spent): still owned,
+            # and said so — with the time when it is known.
+            later = (f"{_plan(cls)} at {due:%H:%M} UTC" if due is not None and due > now
+                     else f"{_plan(cls)} on its next pass")
+            _write(c, item, state=FIXING, cls=cls, cause_code=cause_code, cause=cause,
+                   words=fixing_words(attempt, later, limit), attempts=made,
+                   next_attempt_at=due if due is not None and due > now else None, now=now)
+            return FIXING
+    # ACT, outside the read transaction: an attempt opens its own.
+    budget.acts -= 1
+    note = _fix_note(surface, item, cause, cause_code)
+    # An agent remedy of a build's person-side cause (an ended grant) is a FIX of the work that
+    # failed under it: the build is retried told what failed, under the starter's authority.
+    act_cls = (APP if surface.key in ("code_task", "preview") else PLATFORM) \
+        if agent_remedy else cls
+    try:
+        doing = surface.retry(engine, settings, jobs, item, cls=act_cls, attempt=attempt,
+                              note=note)
+    except NeedsPerson as np:
+        with begin(engine) as c:
+            return _hand_over(c, item, cls=cls, cause_code=f"{cause_code}:withheld", cause=cause,
+                              action=np.action or "Press Done — retry to run it again.",
+                              reason=np.reason, now=now, exit=np.exit,
+                              attempts=attempt if surface.retries_after_withheld else made)
+    except Exception as exc:  # noqa: BLE001 — an attempt that could not start is still an attempt
+        log.warning("failure owner: attempt %s on %s %s did not start", attempt, surface.key,
+                    item.key, exc_info=True)
+        wait = BACKOFF_SECONDS[min(attempt, len(BACKOFF_SECONDS)) - 1]
+        with begin(engine) as c:
+            _write(c, item, state=FIXING, cls=cls, cause_code=cause_code, cause=cause,
+                   max_attempts=limit,
+                   words=fixing_words(attempt, f"the attempt could not start ({_words(exc, 120)}); "
+                                               f"BOSS tries again at "
+                                               f"{now + timedelta(seconds=wait):%H:%M} UTC",
+                                      limit),
+                   attempts=attempt, next_attempt_at=now + timedelta(seconds=wait),
+                   note={"attempt": attempt, "started": False, "error": _words(exc, 200)}, now=now)
+        return FIXING
+    wait = BACKOFF_SECONDS[min(attempt, len(BACKOFF_SECONDS)) - 1]
+    with begin(engine) as c:
+        _write(c, item, state=FIXING, cls=cls, cause_code=cause_code, cause=cause,
+               words=fixing_words(attempt, doing, limit), attempts=attempt, max_attempts=limit,
+               next_attempt_at=now + timedelta(seconds=wait),
+               note={"attempt": attempt, "started": True, "doing": doing, "class": cls}, now=now)
+        _close_other_owners_card(c, item, (row or {}).get("decision_id"), doing)
+    return FIXING
+
+
+def _close_other_owners_card(c: Any, item: Item, decision_id: Any, doing: str) -> None:
+    """THE REMEDY STARTED, SO THE OTHER OWNER'S QUESTION IS ANSWERED. A card another owner raised
+    for this item (a step-recovery "re-authorize" ask, the Shepherd's stuck-work question) is
+    closed in ITS owner's name, saying what the agent started — once the agent's remedy really
+    began, never before. A merge question is never closed here: only a linked builder closes it
+    (merge_failures.hand_off_conflict)."""
+    from .run_decisions import _withdraw_with_note
+
+    card = _open_decision(c, decision_id)
+    if not card or not item.project_id:
+        return
+    rec = _json(c.execute(text("SELECT recommendation FROM decisions WHERE id = :d"),
+                          {"d": card}).scalar(), {}) or {}
+    action = str(rec.get("action") or "")
+    if action in (CARD_ACTION, "review_pull_request", "approve_change_set") or \
+            rec.get("merge_failed") or any(w in action for w in ("deploy", "approve", "budget",
+                                                                  "merge", "waive")):
+        return                    # an approval is a person's answer: never closed by an agent
+    owner = str(rec.get("asked_by") or rec.get("agent") or action or "its owner")
+    _withdraw_with_note(c, card, str(item.project_id),
+                        f"Answered by BOSS's agent: {doing}.", actor=ACTOR,
+                        why={"why": "the agent's remedy started", "owner": owner,
+                             "key": item.key})
+
+
+def _plan(cls: str) -> str:
+    return "building a fix" if cls == APP else "running it again"
+
+
+def _ago(at: Optional[datetime], now: datetime) -> str:
+    if at is None:
+        return "a while"
+    hours = int((now - at).total_seconds() // 3600)
+    return f"{hours // 24} days" if hours >= 48 else f"{hours} hours"
+
+
+def _fix_note(surface: Surface, item: Item, cause: str, cause_code: str = "") -> str:
+    if cause_code in FIDELITY_CAUSES:
+        # THE REPAIR BRIEF STATES THE VIOLATIONS, whole: the build that failed already wrote
+        # them as its error (input_fidelity.repair_evidence).
+        return _clip(
+            "BOSS's failure owner started this build because the last one's output was not a "
+            "remediation of its input. Fix exactly these violations, starting again from the "
+            "input file, without reading or copying any reference answer:\n"
+            + str(item.error or cause), 1800)
+    return _clip(
+        f"BOSS's failure owner retried this after it failed: {cause} "
+        "Find why it failed and fix that cause; do not work around it or weaken a check.", 900)
+
+
+def _hand_over(c: Any, item: Item, *, cls: str, cause_code: str, cause: str, action: str,
+               reason: str, attempts: int, now: datetime, exit: str = "") -> str:  # noqa: A002
+    """ONE card for a person, with exact guidance (failure_guidance: what failed, why, the
+    steps, what BOSS does after) and the needs-person exit it is (needs_person_exits)."""
+    from . import failure_guidance
+
+    guidance = failure_guidance.build(cause_code=cause_code, cls=cls, title=item.title,
+                                      cause=cause, action=action, reason=reason, hints=item.hints)
+    card = _card(c, item, cls=cls, cause_code=cause_code, cause=cause, action=action,
+                 reason=reason, guidance=guidance, exit=exit)
+    _write(c, item, state=NEEDS_PERSON, cls=cls, cause_code=cause_code, cause=cause,
+           words=f"Needs you: {guidance['steps'][0]}", reason=reason, action=action,
+           decision_id=card, attempts=attempts,
+           note={"handed_over": True, "why": reason[:300], "exit": exit or None}, now=now)
+    return NEEDS_PERSON
+
+
+def _now_agents(row: Mapping[str, Any], cls: str, agent_remedy: bool, made: int, limit: int,
+                old: bool) -> bool:
+    """An open card that asks a person for what BOSS's agents may now do themselves: the cause is
+    an agent remedy (the org default), or it was handed over as BOSS's own side spent and the
+    failure now reads as the work's own (a real fix, with an attempt left)."""
+    if old or made >= limit:
+        return False
+    was = str(row.get("cause_code") or "")
+    if agent_remedy:
+        return True
+    return cls != PERSON and was.endswith(":spent") and str(row.get("class") or "") != cls
+
+
+def _withdraw_own_card(c: Any, item: Item, decision_id: str, note: str) -> None:
+    """Withdraw a stale card THIS loop created (failure_owner.retry) — never another owner's.
+
+    THE CASE (northgate-gateway #9, 2026-11-21 16:55): the item was held by its MERGE card, the
+    row named that card, and this withdrew the person's merge question before any build was
+    started; the next tick read "its merge question was withdrawn" as resolved, and change #9
+    was orphaned. Another owner's card is closed only by that owner, after its remedy really
+    happened (merge_failures.hand_off_conflict withdraws it once a builder run exists)."""
+    from .run_decisions import _withdraw_with_note
+
+    if not item.project_id:
+        return
+    mine = c.execute(text("SELECT recommendation->>'action' FROM decisions WHERE id = :d"),
+                     {"d": decision_id}).scalar()
+    if mine != CARD_ACTION:
+        return
+    _withdraw_with_note(c, decision_id, str(item.project_id), note, actor=ACTOR,
+                        why={"why": "BOSS's agent fixes it itself", "key": item.key})
+
+
+def _self_fix(c: Any, settings: Any, item: Item, cause_code: str, cause: str) -> None:
+    """A platform failure that repeated: written down for BOSS to fix itself
+    (boss_recommendations, the same record step_recovery's wait_for_boss writes)."""
+    if not item.project_id:
+        return
+    from . import boss_recommendations
+
+    boss_recommendations.record(
+        c, settings, project_id=str(item.project_id),
+        signature=f"failure_owner:{item.surface}:{cause_code}",
+        title=f"{SURFACES[item.surface].noun} keeps failing on BOSS's side: {cause}"[:200],
+        symptom=item.error[:1000], evidence=[f"{item.surface} {item.id}", cause],
+        ref={"surface": item.surface, "item_id": item.id, "key": item.key}, actor=ACTOR)
+
+
+def reconcile(c: Any, seen: set[tuple[str, str]], now: datetime, *,
+              project_id: Optional[str] = None, only: Optional[list[str]] = None
+              ) -> dict[str, int]:
+    """Owner rows still open whose item no longer shows as failed: resolved when it is fine
+    now (it recovered, a person's own retry, a newer attempt finished), kept while it moves.
+    Then every action item whose items are all resolved is withdrawn."""
+    out = {"resolved": 0, "withdrawn": 0}
+    rows = c.execute(text(
+        "SELECT * FROM failure_owners WHERE state <> 'resolved' AND "
+        "(CAST(:pid AS text) IS NULL OR project_id = :pid) AND "
+        "(CAST(:only AS text[]) IS NULL OR surface = ANY(CAST(:only AS text[]))) "
+        "ORDER BY updated_at LIMIT 1000"), {"pid": project_id, "only": only}).mappings().all()
+    for r in rows:
+        if (r["surface"], r["item_key"]) in seen:
+            continue
+        surface = SURFACES.get(r["surface"])
+        ref = {"id": r["item_id"], "key": r["item_key"], "project_id": r["project_id"],
+               "hints": _json(r["hints"], {}) or {}}
+        try:
+            with c.begin_nested():
+                failed = surface.still_failed(c, ref) if surface else False
+        except Exception:  # noqa: BLE001 — unreadable: leave it as it is
+            continue
+        if failed is False:
+            item = Item(r["surface"], r["item_key"], r["item_id"], r["project_id"],
+                        str(r["title"] or ""), "", _aware(r["failed_at"]),
+                        _json(r["hints"], {}) or {})
+            _write(c, item, state=RESOLVED, by=str(r["owned_by"] or "failure_owner"),
+                   words=("It works now" + (f", after {r['attempts']} attempt"
+                                            f"{'s' if r['attempts'] != 1 else ''} by BOSS."
+                                            if r["attempts"] else ".")),
+                   attempts=r["attempts"], now=now)
+            out["resolved"] += 1
+    out["withdrawn"] = withdraw_settled_cards(c, project_id=project_id)
+    return out
+
+
+def withdraw_settled_cards(c: Any, *, project_id: Optional[str] = None) -> int:
+    """An action item none of whose items still needs a person is withdrawn, with words."""
+    from .decision_actions import OPEN_STATUSES
+    from .run_decisions import _withdraw_with_note
+
+    n = 0
+    cards = c.execute(text(
+        "SELECT id, project_id, recommendation FROM decisions WHERE status = ANY(:s) AND "
+        "recommendation->>'action' = :a AND (CAST(:pid AS text) IS NULL OR project_id = :pid)"),
+        {"s": sorted(OPEN_STATUSES), "a": CARD_ACTION, "pid": project_id}
+    ).mappings().all()
+    for card in cards:
+        rec = _json(card["recommendation"], {}) or {}
+        keys = [str(i.get("key")) for i in rec.get("items") or [] if isinstance(i, dict)]
+        waiting = c.execute(text(
+            "SELECT count(*) FROM failure_owners WHERE surface = :s AND item_key = ANY(:k) "
+            "AND state = 'needs_person' AND decision_id = :d"),
+            {"s": rec.get("surface"), "k": keys, "d": card["id"]}).scalar() or 0
+        if not waiting and _withdraw_with_note(
+                c, str(card["id"]), str(card["project_id"]),
+                "Withdrawn: BOSS sees it moving or fixed now.", actor=ACTOR,
+                why={"why": "every failure on this card has recovered or is moving"}):
+            n += 1
+    return n
+
+
+def sweep(engine: Any, settings: Any, *, now: Optional[datetime] = None, jobs: Any = None,
+          max_acts: int = MAX_ACTS_PER_TICK, only: Optional[list[str]] = None,
+          project_id: Optional[str] = None) -> dict[str, Any]:
+    """The always-on pass (monitor tick): every failed item gets its owner. Never raises; one
+    item's trouble never costs another."""
+    from ..db import begin
+
+    now = now or _now()
+    since = now - timedelta(days=REACH_DAYS)
+    budget = _Budget(acts=max_acts)
+    report: dict[str, Any] = {"items": 0, FIXING: 0, NEEDS_PERSON: 0, RESOLVED: 0, "errors": 0}
+    seen: set[tuple[str, str]] = set()
+    if not only or "job" in only:
+        # A merge conflict whose question was withdrawn with no builder linked (an orphan, as
+        # #9 was): handed to the build agent now, or its question reopened with the steps.
+        try:
+            from . import merge_failures
+
+            report["orphaned_conflicts"] = merge_failures.recover_orphaned_conflicts(
+                engine, settings, project_id=project_id)
+            # A hand-off BOSS itself refused (the card says so) is tried again by BOSS, bounded.
+            report["handoffs_retried"] = merge_failures.retry_refused_handoffs(
+                engine, settings, project_id=project_id)
+        except Exception:  # noqa: BLE001 — one recovery never stops the sweep
+            log.exception("failure owner: orphaned merge conflicts")
+            report["errors"] += 1
+    for key, surface in SURFACES.items():
+        if only and key not in only:
+            continue
+        try:
+            with begin(engine) as c:
+                items = surface.failed(c, since, project_id)
+        except Exception:  # noqa: BLE001 — a surface an install lacks
+            log.warning("failure owner: could not read %s", key, exc_info=True)
+            report["errors"] += 1
+            continue
+        for item in items:
+            seen.add((item.surface, item.key))
+            try:
+                state = _own(engine, settings, jobs, surface, item, now, budget)
+                report[state] = report.get(state, 0) + 1
+                report["items"] += 1
+            except Exception:  # noqa: BLE001
+                log.exception("failure owner: %s %s", key, item.key)
+                report["errors"] += 1
+    try:
+        with begin(engine) as c:
+            report.update(reconcile(c, seen, now, project_id=project_id, only=only))
+    except Exception:  # noqa: BLE001
+        log.exception("failure owner: reconcile")
+        report["errors"] += 1
+    return report
+
+
+# ─────────────────────────────── the person's answer ───────────────────────────────
+
+
+def on_answered(connection: Any, settings: Any, jobs: Any, decision: Mapping[str, Any], *,
+                verdict: str, actor: str, spawn: Optional[Callable[[Callable[[], None]], Any]] = None
+                ) -> list[dict[str, Any]]:
+    """"Done — retry" (approve): every item on the card runs again as the person, its owner row
+    says so; "Leave it" (reject): BOSS stops owning those failures, saying who decided."""
+    rec = _json(decision.get("recommendation"), {}) or {}
+    surface = SURFACES.get(str(rec.get("surface") or ""))
+    now = _now()
+    refs = []
+    for ref in rec.get("items") or []:
+        if not isinstance(ref, dict):
+            continue
+        row = _row(connection, str(ref.get("surface") or rec.get("surface")), str(ref.get("key")))
+        if row is None:
+            continue
+        item = Item(row["surface"], row["item_key"], row["item_id"], row["project_id"],
+                    str(row["title"] or ""), "", _aware(row["failed_at"]),
+                    _json(row["hints"], {}) or {})
+        if verdict == "approve":
+            _write(connection, item, state=FIXING, by="person",
+                   words=f"BOSS is running it again: {actor_words(actor)} said it is done.",
+                   attempts=0, now=now, note={"retry_by": actor, "decision_id": decision["id"]})
+            refs.append({"id": row["item_id"], "key": row["item_key"],
+                         "project_id": row["project_id"], "hints": item.hints,
+                         "surface": row["surface"], "title": item.title,
+                         "failed_at": item.failed_at, "cause": str(row.get("cause") or "")})
+        else:
+            _write(connection, item, state=RESOLVED, by="person",
+                   words=f"{actor_words(actor)} chose not to retry it.",
+                   attempts=row["attempts"], now=now,
+                   note={"dismissed_by": actor, "decision_id": decision["id"]})
+    if verdict == "approve" and refs and surface is not None:
+        def run() -> None:
+            from ..db import get_engine
+
+            eng = get_engine()
+            for ref in refs:
+                try:
+                    did = SURFACES[ref["surface"]].person_retry(eng, settings, jobs, ref, actor)
+                    words = f"BOSS is running it again ({did}) because you said it is done."
+                except NeedsPerson as np:
+                    # NOTHING RAN, SO IT STAYS OPEN (stranger test r8): the item goes back to
+                    # the person with why, on a new card — never "running it again".
+                    try:
+                        with eng.begin() as c:
+                            _hand_over(
+                                c, Item(ref["surface"], ref["key"], ref["id"],
+                                        ref["project_id"], str(ref.get("title") or ""), "",
+                                        ref.get("failed_at"), ref.get("hints") or {}),
+                                cls=PERSON, cause_code="retry_refused",
+                                cause=ref.get("cause") or np.reason,
+                                action=np.action or "Start it again from its page.",
+                                reason=f"Could not run it again: {np.reason}",
+                                attempts=0, now=_now(), exit=np.exit or "person_retry_refused")
+                        continue
+                    except Exception:  # noqa: BLE001 — at least say so on the item, below
+                        log.warning("failure owner: could not hand back %s", ref["key"],
+                                    exc_info=True)
+                    words = f"Could not run it again: {np.reason}"
+                except Exception as exc:  # noqa: BLE001 — said on the item, never lost
+                    log.warning("failure owner: person retry of %s failed", ref["key"],
+                                exc_info=True)
+                    words = f"Could not run it again: {_words(exc, 200)}"
+                try:
+                    with eng.begin() as c:
+                        c.execute(text("UPDATE failure_owners SET words = :w, updated_at = now() "
+                                       "WHERE surface = :s AND item_key = :k"),
+                                  {"w": words[:600], "s": ref["surface"], "k": ref["key"]})
+                except Exception:  # noqa: BLE001
+                    log.warning("failure owner: could not record person retry", exc_info=True)
+
+        (spawn or (lambda fn: fn()))(run)
+    return refs
+
+
+def actor_words(actor: str) -> str:
+    return "You" if not actor or actor.startswith(("user:", "usr_", "ceo", "operator")) else actor
+
+
+# ─────────────────────────────── reading it ───────────────────────────────
+
+
+def public(row: Optional[Mapping[str, Any]]) -> Optional[dict[str, Any]]:
+    """What a surface shows of an owner row: never a bare failure."""
+    if not row:
+        return None
+    return {"state": row["state"], "words": row["words"], "reason": row.get("reason") or "",
+            "action": row.get("action") or "", "decision_id": row.get("decision_id"),
+            "attempts": int(row.get("attempts") or 0),
+            "max_attempts": int(row.get("max_attempts") or MAX_ATTEMPTS),
+            "owner": row.get("owner") or AGENT, "by": row.get("owned_by") or "",
+            "class": row.get("class"), "at": (row.get("updated_at").isoformat()
+                                              if isinstance(row.get("updated_at"), datetime)
+                                              else row.get("updated_at"))}
+
+
+def owners(connection: Any, surface: str, keys: list[str]) -> dict[str, dict[str, Any]]:
+    """{item key: public owner} for one surface; {} where the table is missing."""
+    keys = [k for k in dict.fromkeys(str(k) for k in keys if k)]
+    if not keys:
+        return {}
+    try:
+        with connection.begin_nested():
+            rows = connection.execute(text(
+                "SELECT * FROM failure_owners WHERE surface = :s AND item_key = ANY(:k)"),
+                {"s": surface, "k": keys}).mappings().all()
+    except Exception:  # noqa: BLE001 — an install before the table
+        return {}
+    return {str(r["item_key"]): public(dict(r)) for r in rows}
+
+
+def board(connection: Any, project_id: Optional[str] = None, *, limit: int = 50
+          ) -> list[dict[str, Any]]:
+    """What BOSS is fixing and what needs a person, newest first (the Command Center's list)."""
+    try:
+        with connection.begin_nested():
+            rows = connection.execute(text(
+                "SELECT * FROM failure_owners WHERE state <> 'resolved' AND "
+                "(CAST(:p AS text) IS NULL OR project_id = :p) ORDER BY updated_at DESC LIMIT :n"),
+                {"p": project_id, "n": limit}).mappings().all()
+    except Exception:  # noqa: BLE001
+        return []
+    return [{"surface": r["surface"], "item_id": r["item_id"], "project_id": r["project_id"],
+             "title": r["title"], **(public(dict(r)) or {})} for r in rows]
+
+
+def unowned(engine_or_connection: Any, *, now: Optional[datetime] = None,
+            only: Optional[list[str]] = None, project_id: Optional[str] = None
+            ) -> list[dict[str, Any]]:
+    """THE INVARIANT AS A QUERY: every failed item within reach with no valid owner — no row,
+    `fixing` with no words, `needs_person` with no reason or no open card, or `resolved` before
+    it failed again. Empty on a healthy install."""
+    now = now or _now()
+    since = now - timedelta(days=REACH_DAYS)
+    bad: list[dict[str, Any]] = []
+
+    def check(c: Any) -> None:
+        for key, surface in SURFACES.items():
+            if only and key not in only:
+                continue
+            for item in surface.failed(c, since, project_id):
+                row = _row(c, key, item.key)
+                why = _invalid(c, row, item)
+                if why:
+                    bad.append({"surface": key, "key": item.key, "id": item.id,
+                                "project_id": item.project_id, "why": why})
+
+    if hasattr(engine_or_connection, "begin") and not hasattr(engine_or_connection, "execute"):
+        with engine_or_connection.begin() as c:
+            check(c)
+    else:
+        check(engine_or_connection)
+    return bad
+
+
+def _invalid(c: Any, row: Optional[Mapping[str, Any]], item: Item) -> Optional[str]:
+    if row is None:
+        return "no owner"
+    if row["state"] == FIXING:
+        return None if str(row.get("words") or "").strip() else "fixing, but says nothing"
+    if row["state"] == NEEDS_PERSON:
+        if not str(row.get("reason") or "").strip():
+            return "handed to a person with no reason"
+        if not _open_decision(c, row.get("decision_id")):
+            return "handed to a person with no open action item"
+        return None
+    if row["state"] == RESOLVED:
+        # Settled or dismissed: valid for THIS failure only; a newer failure of the same
+        # lineage is a new one to own.
+        return None if str(row.get("item_id") or "") == item.id else \
+            "resolved an earlier failure; this one has no owner"
+    return f"unknown state {row['state']!r}"
+
+
+__all__ = ["ACT_HOURS", "AGENT", "APP", "CARD_ACTION", "CARD_REASON", "EXEMPT", "FIXING",
+           "Item", "MAX_ATTEMPTS", "NEEDS_PERSON", "NeedsPerson", "PERSON", "PLATFORM",
+           "REACH_DAYS", "RESOLVED", "SURFACES", "Surface", "board", "classify", "on_answered",
+           "owners", "public", "reconcile", "sweep", "unowned", "withdraw_settled_cards"]

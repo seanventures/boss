@@ -150,27 +150,14 @@ describe("Ask the captain (screen 09)", () => {
   });
 });
 
-describe("the work drawer (screen 05b)", () => {
-  it("tells how it went in words with each proof, the one action, preview and cost", async () => {
+describe("an rc10.32 work-panel link (Work panel v2)", () => {
+  it("opens the Work panel again, over the whole screen, and the Workflow link is the run's own", async () => {
     engine();
-    await open("&tab=work&drawer=work:wi_visual");
-    const d = tid("px-drawer-work")!;
-    expect(d).not.toBeNull();
-    expect(tid("px-drawer-work-number")!.textContent).toBe("Run #43");
-    expect(d.textContent).toContain("$2.10");
-    expect(d.textContent).toContain("31 min");
-    expect(tid("px-drawer-work-expand")!.getAttribute("href")).toContain("area=code_tasks");
-    expect(tid("px-drawer-work-merge")!.textContent).toContain("Merge PR #3");
-    expect($$("[data-testid='px-drawer-work-steps'] .px-step").map((r) => r.querySelector("b")!.textContent))
-      .toEqual(["Plan", "You approved", "Build", "Review & test", "Merge", "Staging"]);
-    expect(tid("px-drawer-step-plan")!.textContent).toContain("PRD agreed");
-    expect(tid("px-drawer-step-link-plan")!.getAttribute("href")).toContain("area=meetings");
-    expect(tid("px-drawer-step-link-build")!.getAttribute("href")).toBe("https://github.com/paramg/helpdesk-ai-demo/pull/3/files");
-    expect(tid("px-drawer-step-link-pr")!.getAttribute("target")).toBe("_blank");
-    expect(tid("px-drawer-step-pr")!.textContent).toContain("Only a person merges");
-    expect(tid("px-drawer-work-preview")!.getAttribute("href")).toBe("http://203.0.113.20:8104");
-    expect(tid("px-drawer-work-cost")!.querySelectorAll("span").length).toBe(3);
-    expect(d.textContent).toContain("Plan · Build · Review");
+    await open("&tab=work&drawer=work:wi_visual&wp=full");
+    expect(tid("px-drawer-work")!.getAttribute("data-chat-full")).toBe("1");
+    expect(params().get("drawer")).toBe("work:wi_visual");
+    const run = new URLSearchParams(tid("wp-link-run")!.getAttribute("href")!.split("?")[1]);
+    expect([run.get("area"), run.get("wfr")]).toEqual(["delivery_workflows", "wfr_43"]);
   });
 });
 
@@ -228,12 +215,15 @@ describe("closing a drawer never adds a history entry (PX-33)", () => {
     engine();
     await open("");
     const before = window.history.length;
-    await press(tid("px-needs-dec_merge3"));
-    expect(params().get("drawer")).toBe("needs:dec_merge3");
+    await press(tid("px-tab-work"));
+    const mid = window.history.length;
+    await press(tid("px-work-needs-act-dec_prodhost"));
+    expect(params().get("drawer")).toBe("needs:dec_prodhost");
     await act(async () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
     await settle(12);
     expect(params().get("drawer")).toBeNull();
-    expect(window.history.length).toBe(before + 1); // the drawer's own entry, stepped back over — no new one
+    expect(window.history.length).toBe(mid + 1); // the drawer's own entry, stepped back over — no new one
+    expect(mid).toBeGreaterThanOrEqual(before);
   });
   it("Esc on a drawer that came in on a link replaces it away", async () => {
     engine();

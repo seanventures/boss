@@ -892,6 +892,19 @@ These follow from the permissions not being delegable. In addition, the token se
 - **Leases:** existing lease tokens stay. Both the lease and the run token must be valid.
 - **Jobs with no agent (as built).** A leased job whose work is an agent's (a build, an agent loop, a workflow step, a skill) runs under a run token minted for its principal, grant and task, as above. A job whose work is BOSS delivering something with no agent in it (an outbox message, a webhook, an a2a dispatch, an infrastructure action) has no agent to put in a run token's chain, so it gets none. Instead its effect is authorized **when it is queued**: every job kind maps to the catalogue permission its effect needs (`boss_engine/identity/job_permissions.py`, one table, a test fails on an unmapped kind a worker leases), checked by the PDP at the job's project for the person or run that queues it; an unknown kind is refused under enforcement. The job row still carries `on_behalf_of`, `grant_id` and `chain`, so the cascade cancels it when that authority ends, and the worker's own identity still authorizes nothing.
 
+### 7.15 Agents fix failures with the starter's authority (org default)
+
+A grant that ends with its run, or covers one build only, no longer stops BOSS's agents from fixing that person's failing work. `identity/fix_authority.py` keeps one standing **fixer** grant per person and project (`authority_kind = 'fixer'`). BOSS creates it the first time a recovery needs it and widens it only to what a recovery of that person's work needs. Every hop of it stays bounded: the person's live permissions ∩ the agents' ceilings ∩ delegable keys, never the §7.13 keys, and only in the person's own org.
+
+- It is used by retries BOSS decides (`consent.carry_retry_authority`, `by_boss`), by workflow runs whose recorded grant ended (`fix_authority.renew_run`, the runner's `_live_run_authority`), and by dead jobs re-run as their own person.
+- It is never used as a person's consent for new work: `find_covering` and schedules skip it, as they skip the Captain authority.
+- When a person revokes it, or revokes the grant a run ran under, that counts as their "no", and BOSS does not re-create it.
+- It is on by default. It can be turned off per org (policy `agents_fix_failures`) or per project (setting `agents_fix_failures`, the switch at Govern › More › Advanced limits › Each failed step). The switch is checked every time a fixer grant is used (`grants.usable`: token mint, a run's authority, a carried retry). Turning it off therefore stops work already running on a fixer grant, not just new grants. A read of the switch that fails counts as off.
+- A run remembers the grant it was started under (`policy_snapshot.fixer_from`). Revoking that grant ends the run's fixer authority.
+- A key a person removes from their fixer grant is never added back.
+- A dead job is never re-run for its person when its permission is one an agent may not hold, or when its effect is IRREVERSIBLE, such as a merge (`fix_authority.may_rerun_job`).
+- Audit events: `delegation.created` (details `authority: fixer`, `org_default: agents_fix_failures`) and `delegation.org_default_applied`.
+
 ---
 
 ## 8. Audit: the security event log

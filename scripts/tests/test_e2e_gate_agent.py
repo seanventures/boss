@@ -119,3 +119,37 @@ def test_the_gate_signs_in_only_to_localhost():
     gate._localhost_only("http://localhost:8000")
     with pytest.raises(gate.GateFail):
         gate._localhost_only("https://boss.example.com")
+
+
+def test_the_owner_answers_only_its_own_workflows_prd_approval():
+    prd = {"id": "dec_prd", "question": "PRD approval — X", "capability": "spec_review", "workflow_run_id": "wfr_1"}
+    other_run = {**prd, "id": "dec_other", "workflow_run_id": "wfr_2"}
+    other_gate = {**prd, "id": "dec_ux", "capability": "ux_review"}
+    loose = {"id": "dec_loose", "question": "X", "capability": None, "workflow_run_id": None}
+    mine, rest = gate.ours_to_answer([prd, other_run, other_gate, loose], "wfr_1")
+    assert [d["id"] for d in mine] == ["dec_prd"]
+    assert [d["id"] for d in rest] == ["dec_other", "dec_ux", "dec_loose"]
+    # Without a workflow run the gate answers nothing: every pending decision still stops it.
+    assert gate.ours_to_answer([prd], None) == ([], [prd])
+
+
+def test_the_multi_app_brief_asks_first_then_builds_on_the_chosen_apps_branch():
+    """R4: New work with no app beside several must ask; the chosen app's build must clone that
+    app's branch, never the bare default branch."""
+    brief = gate.load_brief("multi-app-change")
+    assert brief["start"] == "new_work_app"
+    asked = gate.new_work_body(brief, app=None, stamp="s")
+    assert asked["infer_app"] is True and "app" not in asked and asked["text"] == brief["change"]
+    chosen = gate.new_work_body(brief, app="crun_x", stamp="s")
+    assert chosen["app"] == "crun_x" and "infer_app" not in chosen
+
+    assert gate.asked_which_app(422, {"detail": {"error": "app_selection_required"}})
+    assert not gate.asked_which_app(200, {"run_id": "wfr_1"})       # a quiet fresh build
+    assert not gate.asked_which_app(422, {"detail": "text too long"})
+
+    on_app = [ev("code_task.base_branch_resolved", base_branch="boss/code/crun_x")]
+    on_main = [ev("code_task.base_branch_resolved", base_branch="main")]
+    assert gate.base_check(on_app, "boss/code/crun_x")[1] is True
+    assert gate.base_check(on_main, "boss/code/crun_x")[1] is False
+    assert gate.base_check([], "boss/code/crun_x")[1] is False
+    assert gate.base_check(on_app, None)[1] is False

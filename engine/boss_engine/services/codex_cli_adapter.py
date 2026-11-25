@@ -75,9 +75,10 @@ class CodexCliAdapter(CliChatBrain):
         return env
 
     def _scratch_dir(self) -> str:
-        directory = (self.settings.repo_root / ".local-logs" / "codex-scratch").resolve()
-        directory.mkdir(parents=True, exist_ok=True)
-        return str(directory)
+        # Outside BOSS's own tree, which may be read-only (scratch.py, BOSSAPP-1449).
+        from .scratch import scratch_dir
+
+        return scratch_dir("codex")
 
     def _invoke(self, prompt: str) -> dict:
         own_timeout = int(getattr(self.settings, "codex_cli_timeout", 240) or 240)

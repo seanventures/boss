@@ -88,6 +88,9 @@ def test_a_person_starting_the_review_gets_the_builds_consent_contract_and_its_g
     assert body["github"]["repos"] == ["acme/web"] and body["github"]["permissions"]["contents"] == "write"
     assert body["task_run_id"].startswith(grants.PENDING_PREFIX)
     assert [d["kind"] for d in body["durations"]] == ["task", "standing"]
+    # A person's own start of a workflow says what one consent covers (stranger test r8: Easy
+    # Mode's easy_mode_mvp sheet lacked the line a build's sheet has).
+    assert body["covers"] == consent.DELIVERY_COVERS
     # grantBodyFor(request, durations[0]) -> POST /v1/identity/me/delegations (Alice, an Operator
     # here, holds what she delegates: the review's scans and its panel)
     env.world.grant(ALICE, set(body["permissions"]), env.project)
@@ -132,3 +135,14 @@ def test_a_preset_ceiling_grows_with_its_preset_and_a_custom_one_never_does(env)
                                {"a": agents["rook"]}).scalars())
     assert out[agents["sentry"]].startswith("ceiling grew") and {"meeting:read", "meeting:convene"} <= grown
     assert out[agents["rook"]] == "exists" and not {"meeting:read", "meeting:convene"} & custom
+
+
+def test_the_sheet_names_a_local_repository_by_its_app_never_its_id(env):  # noqa: F811
+    """Stranger test r8: "local_…-8955ad16/csv-quality-desk, on this machine"."""
+    with env.engine.begin() as db:
+        name = db.execute(text("SELECT name FROM projects WHERE id = :p"), {"p": env.project}).scalar()
+        blocks = consent.repo_blocks([f"local_{env.project}/csv-quality-desk", "acme/web"], db=db)
+    assert blocks["local"]["repos"] == [f"local_{env.project}/csv-quality-desk"]
+    assert blocks["local"]["names"] == [name]
+    # With no project to name it, the repository's own name in words — never the id.
+    assert consent.repo_blocks(["local_gone/csv-quality-desk"])["local"]["names"] == ["Csv quality desk"]

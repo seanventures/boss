@@ -207,7 +207,7 @@ describe("choosing the workflow", () => {
     // A silent select is indistinguishable from one that did nothing, and this control changes
     // what every future project does.
     expect(HERO).toContain('data-testid="askboss-wf-note"');
-    expect(HERO).toContain("could not save");
+    expect(HERO).toContain('couldNot("save the workflow for new projects"');
   });
 
   it("a per-piece-of-work picker still exists", () => {

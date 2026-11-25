@@ -75,9 +75,19 @@ boss_sudo_scope_safe() {
   _boss_docker_endpoint="$(docker context inspect default --format '{{.Endpoints.docker.Host}}' 2>/dev/null)" || return 1
   [ "$_boss_docker_endpoint" = unix:///var/run/docker.sock ]
 }
+# A Mac has no sudo fallback: there, "Docker is unavailable" means Docker Desktop or the Colima
+# profile is not running (or DOCKER_CONTEXT names another daemon). Say that, not the sudo text.
+# Prints the guidance and returns 0 on macOS; returns 1 elsewhere (the caller then goes on).
+boss_docker_unavailable_hint() {
+  [ "$(uname -s 2>/dev/null)" = Darwin ] || return 1
+  _boss_docker_context="$(docker context show 2>/dev/null || true)"
+  echo "Docker is not running for the selected context${_boss_docker_context:+ ($_boss_docker_context)}. Start Docker Desktop, or your Colima profile (colima start <profile>), check 'docker context ls' and 'docker info', then run this again. See docs/community/COLIMA.md." >&2
+  return 0
+}
 # ---- end scoped sudo Docker fallback --------------------------------------
 
 if ! docker info >/dev/null 2>&1; then
+  if boss_docker_unavailable_hint; then exit 1; fi
   boss_sudo_scope_safe "$BACKUP/.env" restore || { echo "Cannot safely use sudo for this Docker selection. Use direct Docker access for custom projects, contexts or connection settings." >&2; exit 1; }
   if command -v sudo >/dev/null 2>&1 && sudo -n docker --host unix:///var/run/docker.sock info >/dev/null 2>&1; then DOCKER=(sudo -n docker --host unix:///var/run/docker.sock)
   else echo 'Docker is unavailable.' >&2; exit 1; fi
@@ -210,7 +220,16 @@ import os, sys
 os.link(sys.argv[1], sys.argv[2])
 PY
 OVERRIDE="$INSTALL_DIR/.boss-restore-images.json"
-COMPOSE=("${DOCKER[@]}" compose -p "$PROJECT" -f "$COMPOSE_FILE" -f "$OVERRIDE" --env-file "$INSTALL_DIR/.env" --profile web --profile secrets)
+# The one compose-file resolver (compose_files.sh): adds the engine inner-sandbox overlay when
+# .env opts in, so this path never recreates containers without it. Not offline: that base is
+# the database alone, and the overlay names api, worker and runner.
+BOSS_COMPOSE_FILES=(-f "$COMPOSE_FILE")
+if [[ "$OFFLINE" -eq 0 && -f "$INSTALL_DIR/scripts/install/compose_files.sh" ]]; then
+  # shellcheck source=compose_files.sh
+  source "$INSTALL_DIR/scripts/install/compose_files.sh"
+  boss_compose_files "$INSTALL_DIR" "$INSTALL_DIR/.env" || exit 1
+fi
+COMPOSE=("${DOCKER[@]}" compose -p "$PROJECT" "${BOSS_COMPOSE_FILES[@]}" -f "$OVERRIDE" --env-file "$INSTALL_DIR/.env" --profile web --profile secrets)
 RESTORE_KINDS=(identity artifacts)
 if python3 -c 'import json,sys; sys.exit(0 if "repos.tar" in json.load(open(sys.argv[1]))["files"] else 1)' "$BACKUP/manifest.json"; then
   RESTORE_KINDS+=(repos)

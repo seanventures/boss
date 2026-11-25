@@ -27,7 +27,7 @@ from sqlalchemy import text
 MissionState = Literal["running", "waiting_you", "waiting_person", "waiting", "stopped",
                        "blocked", "stalled", "done"]
 AttentionKind = Literal["approval", "failed_step", "readiness", "gate_override", "budget_refused",
-                        "system_health"]
+                        "build_failed", "system_health"]
 
 
 class AttentionAction(TypedDict):
@@ -337,7 +337,7 @@ def attention_items(connection: Any, project_id: str, needs_you: list[dict[str, 
             item["decide_inline"] = decide_inline(
                 n.get("decision_kind"), n.get("risk_tier"), actions, bool(preview),
                 content_hash)
-        elif kind in ("gate_override", "budget_refused"):
+        elif kind in ("gate_override", "budget_refused", "build_failed"):
             # A build stopped for the operator (factory spec §6.5): the reviewer whose gate
             # failed, from the build's acts — or nobody (a refused budget is BOSS's).
             item["role_key"] = n.get("role_key")
@@ -670,8 +670,7 @@ def missions(connection: Any, project_id: str, read: Mapping[str, Any],
         order = {sid: i for i, sid in enumerate(spec)}
         run_steps = sorted(command_center._latest_per_step(by_run.get(str(run["id"]), [])),
                            key=lambda s: order.get(str(s.get("step_id")), len(order)))
-        done = sum(1 for s in run_steps if s.get("status") in ("succeeded", "skipped"))
-        count = max(len(spec), len(run_steps))
+        done, count = command_center.counted_steps(spec, run_steps)
         current = next((s for s in run_steps if s.get("status") in command_center.CURRENT_STEP),
                        None)
         failed = next((s for s in reversed(run_steps)
@@ -708,6 +707,9 @@ def missions(connection: Any, project_id: str, read: Mapping[str, Any],
                 state = "waiting_person"
                 waiting_role = str(approval.get("approver_role") or "") or None
                 waiting_on = waiting_role or str(current.get("decision_status") or "") or None
+            elif output.get("waiting_on_person"):
+                state = "waiting_you"
+                waiting_on = "you"
             else:
                 state = "waiting"
                 waiting_on = workflows.waiting_on_label({
@@ -1084,9 +1086,13 @@ def compose(connection: Any, settings: Any, project_id: str, *,
             # count, Approvals' badge and Needs action: decisions only (agents-home D2).
             "needs_you": int(cc["counts"]["needs_you"]),
             "setup": int(cc["counts"]["setup"]),
-            # RUNNING IS WHAT MOVES: a run with no progress for a week is `stalled`, counted
-            # apart, never "running" (an existing install said "8 running" for a month of nothing).
-            "running": sum(1 for m in rows if m["state"] not in ("done", "stopped", "stalled")),
+            # RUNNING IS WHAT MOVES: a run with no progress for a week is `stalled`, and a run
+            # parked on a person (`waiting_you` / `waiting_person`) is counted apart, never
+            # "running" (an existing install said "8 running" for a month of nothing).
+            "running": sum(
+                1 for m in rows
+                if m["state"] not in ("done", "stopped", "stalled", "waiting_you", "waiting_person")
+            ),
             "stalled": sum(1 for m in rows if m["state"] == "stalled"),
             # What NEEDS YOU lists as stopped work, counted by the one rule (attention_counts).
             "stopped": command_center.attention_counts(attention)["stopped"],

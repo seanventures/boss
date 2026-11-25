@@ -9,7 +9,7 @@ import { GatedButton, useGate } from "../../components/gated";
 import React, { forwardRef, useEffect, useState } from "react";
 import { CaretRight } from "@phosphor-icons/react";
 
-import { foldOptions, PICK_LABEL, PICK_TIP, pickFor, splitPick, withPick, type Pick }
+import { foldOptions, PICK_LABEL, PICK_TIP, payWay, pickFor, splitPick, withPick, type Pick }
   from "../../lib/job-picks";
 import { SetupFailure, setupWrite } from "../../lib/setup-client";
 import type { Job, SetupView } from "../../lib/setup-types";
@@ -91,6 +91,11 @@ export function JobLine({ job }: { job: Job }) {
   const chosen = job.choice ? splitPick(job.choice.model) : { pick: null, bare: null };
   const value = job.choice ? encode(job.choice.engine, chosen.bare) : "auto";
   const current = job.choice ? menu.find((m) => m.engine === job.choice?.engine && m.bare === chosen.bare) : undefined;
+  // On Auto the toggle still shows (for what Auto picked); clicking it pins that model + way.
+  const ran = job.resolved ? splitPick(job.resolved.model) : { pick: null, bare: null };
+  const shown = current ?? (!job.choice && job.resolved
+    ? menu.find((m) => m.engine === job.resolved!.engine && m.bare === ran.bare) : undefined);
+  const nowPick = chosen.pick ?? ran.pick;
   // What Auto resolves to now, when Auto is what runs; "Auto" alone while a choice stands.
   const autoLabel = job.resolved && !job.choice ? job.resolved.label : "Auto";
   const jobGate = useGate("setup:manage");
@@ -137,15 +142,15 @@ export function JobLine({ job }: { job: Job }) {
           ))}
         </select>
       )}
-      {current && current.picks.length > 1 ? (
+      {shown && shown.picks.length > 1 ? (
         <span className="su-pick" role="group" aria-label={`${job.label} pays with`}
               data-testid={`su-job-pick-${job.job}`}>
-          {current.picks.map((p) => (
+          {shown.picks.map((p) => (
             <GatedButton key={p} permission="setup:manage" type="button"
-                         className={`su-btn su-btn-sm${chosen.pick === p ? " su-btn-primary" : ""}`}
-                         aria-pressed={chosen.pick === p} title={PICK_TIP[p]} data-tip={PICK_TIP[p]}
+                         className={`su-btn su-btn-sm${nowPick === p ? " su-btn-primary" : ""}`}
+                         aria-pressed={nowPick === p} title={PICK_TIP[p]} data-tip={PICK_TIP[p]}
                          data-testid={`su-job-pick-${job.job}-${p}`} disabled={busy}
-                         onClick={() => { if (chosen.pick !== p) void save(value, undefined, p); }}>
+                         onClick={() => { if (nowPick !== p) void save(encode(shown.engine, shown.bare), undefined, p); }}>
               {PICK_LABEL[p]}
             </GatedButton>
           ))}
@@ -165,10 +170,13 @@ export function JobLine({ job }: { job: Job }) {
                        onClick={() => void save("auto", "project")}>Use org&apos;s</GatedButton>
         </>
       ) : null}
-      {job.resolved ? (
-        <Tip tip={job.metered ? "Metered: counts toward your budget." : "No per-call charge."}
-             className={`su-chip ${job.metered ? "su-chip-metered" : ""}`}>
-          {job.metered ? "Metered" : "Included"}
+      {job.resolved && !(shown && shown.picks.length > 1) ? (
+        // ONE WAY TO PAY: said as a plain label (the toggle above shows when there are two).
+        <Tip tip={job.metered ? "Runs on an API key: billed per call, counts toward your budget."
+                              : "Runs on the subscription's included usage. No per-call charge."}
+             className={`su-chip ${job.metered ? "su-chip-metered" : ""}`}
+             testid={`su-job-paid-${job.job}`}>
+          {PICK_LABEL[payWay(job)]}
         </Tip>
       ) : !none && job.job === "decisions" ? (
         // NOTHING HERE CAN DECIDE: decisions run on Claude Code or TypeSafe Jev, and an API key

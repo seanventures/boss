@@ -13,10 +13,12 @@ public repository. Fixtures use neutral stand-ins instead: "the shared server", 
 192.0.2.x / 198.51.100.x / 203.0.113.x (RFC 5737), 100.64.0.x (RFC 6598), plane.example.com.
 
 The denylist holds SHA-256 digests of lowercase identifiers, never the identifiers themselves, so
-this file cannot reintroduce what it guards against. Text is cut four ways and every piece is
+this file cannot reintroduce what it guards against. Text is cut five ways and every piece is
 hashed and compared:
 
-  words      runs of [a-z0-9]                       a host name, a project-id fragment, a tailnet
+  words      runs of [a-z0-9]                       a host name, a project-id fragment, a tailnet,
+                                                    a customer's company name
+  phrases    two adjacent words                     a company name written as two words
   dotted     a.b.c names and IPv4 addresses, and    a private domain under any sub-host, an
              every dot-suffix of them               address of a real machine
   pairs      a/b path segment pairs, and the user   a private repository, a local checkout path,
@@ -43,6 +45,14 @@ WORDS = {
     "b51b22062656794dd7d6de5287ccd709400a95a77e223163efc3f6147559ae28": "private tailnet name",
     "1994acb0c6f0473dbfb7cad2c6736c42edc8bbf03adee2772ea60a6ede7e859a": "private disk / local path",
     "8a15acc72b4b25c29c39e90080e1b48cf646e7aa293d940437b37c2de6f77b12": "owner's personal name",
+    # A customer's or design partner's company name: never in the public tree (operator rule).
+    "5344ae4677efc34b108f205590fcd8ba532c31a533bebd15b250ea671bad1fa5": "a customer name",
+    "488356b1b064c64eeb9fb7447453a615702e96a18190ef3e902b37428959304e": "a customer name",
+    "268ef950ed2a699ca80f0585189ada6f12621742b9f21f82e78864cfb53ad531": "a customer name",
+}
+# Two adjacent words, joined by one space (a company name written as two words).
+PHRASES = {
+    "066b5b5ad80702e14f11863bf5c6e976c2fa01e830f80320905d50fd99f155ed": "a customer name",
 }
 # A dotted name or IPv4 address, or any dot-suffix of one.
 DOTTED = {
@@ -87,8 +97,12 @@ def findings(text: str) -> list[str]:
     """Categories of private identifiers in `text` (never the identifiers themselves)."""
     low = text.lower()
     found: list[str] = []
-    for w in set(WORD_RE.findall(low)):
+    words = WORD_RE.findall(low)
+    for w in set(words):
         if (cat := WORDS.get(_h(w))):
+            found.append(cat)
+    for pair in set(zip(words, words[1:])):
+        if (cat := PHRASES.get(_h(" ".join(pair)))):
             found.append(cat)
     for name in set(DOTTED_RE.findall(low)):
         name = name.strip(".-")
@@ -114,4 +128,4 @@ def findings(text: str) -> list[str]:
     return sorted(set(found))
 
 
-__all__ = ["DOTTED", "EMAILS", "HOME_USERS", "PAIRS", "SCOPED", "WORDS", "findings"]
+__all__ = ["DOTTED", "EMAILS", "HOME_USERS", "PAIRS", "PHRASES", "SCOPED", "WORDS", "findings"]

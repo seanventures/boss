@@ -10,6 +10,7 @@
 P0:
   engine:
     # First run and install
+    - engine/tests/test_schema_applies_clean.py
     - engine/tests/test_first_run_setup.py
     - engine/tests/test_a_fresh_install_can_press_build.py
     # Secrets never leave
@@ -32,6 +33,17 @@ P0:
     - engine/tests/test_identity_f1_sandbox_boundary.py
     - engine/tests/test_sandbox_network_fence.py
     - engine/tests/test_a_build_fans_out_inside_its_sandbox.py
+    # The enterprise install lane, tier 1 (docs/community/ENTERPRISE_NETWORK.md): the one settings
+    # block and every consumer of it, no credential in a build argument, the extra CA trusted at
+    # build and run time against a real private-CA TLS server, no TLS-off switch, the fence's
+    # private/port/additive rules and its named refusals, the proxy chain, the installer's TLS and
+    # credential-helper checks, and a stopped Docker runtime on a Mac. No Docker, no network.
+    - engine/tests/test_enterprise_network.py
+    - engine/tests/test_egress_enterprise_fence.py
+    - scripts/tests/test_build_network.py
+    - scripts/tests/test_runtime_extra_ca.py
+    - scripts/tests/test_installer_enterprise_network.py
+    - scripts/tests/test_installer_macos_runtime.py
     # Build pipeline happy path. test_code_task_service.py was an empty file (pytest
     # "no tests ran"), which the P0 gate treated as a finished run (BOSSAPP-972).
     - engine/tests/test_a_build_proves_its_app_runs.py
@@ -44,6 +56,18 @@ P0:
     # A deploy that promises a person always asks one, whatever the environment policy (D2)
     - engine/tests/test_a_promised_approval_is_always_asked.py
     - engine/tests/test_a_workflow_follows_a_retry.py
+    # Dev autonomy (BOSSAPP-1441): one answer to "is this production?" (an unlabelled remote is,
+    # a local install is not) and a policy a project can only make stricter
+    - engine/tests/test_one_production_resolver.py
+    - engine/tests/test_autonomy_policy_is_stricter_never_looser.py
+    # ... and outside production only credential, spend, explicit-stop and production-release
+    # cards wait; every other card is decided by a named agent with the same follow-on, and
+    # keeps its undo
+    - engine/tests/test_only_allowed_classes_wait_outside_production.py
+    - engine/tests/test_dev_autonomy_acts_and_logs.py
+    # Every decision BOSS raises has its buttons decided: a scan of every producer, so a new
+    # card cannot offer Approve "Carries out…" on nothing, or "starts nothing" on a deletion
+    - engine/tests/test_every_decision_boss_raises_has_its_buttons_decided.py
     # Governed deploy + health
     - engine/tests/test_an_app_is_deployed_the_way_it_says.py
     - engine/tests/test_a_smoke_test_asks_the_deployment_not_a_url.py
@@ -54,6 +78,22 @@ P0:
     - engine/tests/test_harness_bench_compare.py
     - engine/tests/test_decision_eval_has_a_floor.py
     - engine/tests/test_web_quarantine_holds_only_real_failures.py
+    # Red is not normal (BOSSAPP-1429): the baselines only shrink and hold no security guard
+    - engine/tests/test_red_is_not_normal.py
+    # a streamed export's transaction survives Starlette's per-step context copies
+    - engine/tests/test_a_streamed_transaction_survives_a_context_switch.py
+    # Every failure says what happened and what to do (BOSSAPP-1428)
+    - engine/tests/test_every_failure_says_what_and_what_to_do.py
+    # No mocked last mile (R5, BOSSAPP-1433): a P0/P1 test may mock the model, never the step
+    # that fails for users; each preview declaration kind is started for real
+    - engine/tests/test_gate_tests_never_mock_the_last_mile.py
+    - engine/tests/test_each_preview_kind_starts_for_real.py
+    # Small host, long queue (R3, BOSSAPP-1431): every time cap counts from when the work
+    # started, never its queue (deployments, investigations, step recovery, sandbox tasks, job
+    # leases, the self-fix's clock and budget hold), and a token, handle or hold that lapses
+    # mid-run says what lapsed and what to do
+    - engine/tests/test_every_time_cap_counts_from_when_work_started.py
+    - engine/tests/test_a_self_fix_keeps_its_clock_and_hold_through_a_long_queue.py
   api:
     - apps/api/tests/test_api_e2e_smoke.py
     # Sign-in, step-up, CSRF
@@ -69,7 +109,12 @@ P0:
     - apps/api/tests/test_a_host_deploys_only_through_an_approved_changeset.py
     - apps/api/tests/test_a_stack_deploys_only_through_an_approved_changeset.py
     - apps/api/tests/test_a_deploy_asks_once_or_as_its_policy_says.py
+    # A project with several apps never builds on the bare default branch (R4, BOSSAPP-1432):
+    # the agent's create_code_task asked nothing and built on main; a task's app, a preview
+    # repair of a merged or closed change (bugs fixed with it)
+    - apps/api/tests/test_a_multi_app_project_never_builds_on_main.py
   web:
+    - apps/web/tests/every-failure-says-what-to-do.test.ts
     - apps/web/tests/console-routes-answer-what-the-console-asks.test.ts
     - apps/web/tests/sign-in-shows-every-option-and-says-why.test.tsx
     - apps/web/tests/sign-in-keeps-your-place-and-you-can-sign-out.test.ts
@@ -78,12 +123,19 @@ P0:
     - apps/web/tests/a-press-is-sent-once.test.ts
     - apps/web/tests/a-workflow-is-started-once-per-press.test.ts
     - apps/web/tests/a-deploy-is-approved-once-and-opens-its-app.test.tsx
+  # The worker's lease loop (apps/worker/tests, run by no gate before R3): one lease per poll,
+  # a lease outlives a stopping worker, a clean stop hands its job back
+  worker:
+    - apps/worker/tests/test_a_failed_poll_never_leases_twice.py
+    - apps/worker/tests/test_a_leased_job_survives_the_worker_that_held_it_stopping.py
+    - apps/worker/tests/test_worker_stops_cleanly.py
   # Release steps: commands, not test files (scripts/test-tier.sh does not run them). Before a
-  # release: test-tier major + e2e-gate plumbing + e2e-gate engines + e2e-gate agent
-  # (docs/operations/TEST_TIERS.md).
+  # release: test-tier major + e2e-gate plumbing + e2e-gate engines + e2e-gate agent + a green
+  # enterprise lane (docs/operations/TEST_TIERS.md).
   release:
     - scripts/e2e-gate.sh plumbing
     - scripts/e2e-gate.sh engines
+    - scripts/enterprise-lane.sh
 
 P1:
   engine:
@@ -157,6 +209,16 @@ P1:
     - engine/tests/test_app_alerts.py
     - engine/tests/test_an_app_incident_is_responded_to.py
     - engine/tests/test_incident_response_starts_per_rule_never_per_app.py
+    # No mocked last mile (R5): the engine check goes through the build launcher; Setup's
+    # repository proof writes to a real (local) remote
+    - engine/tests/test_engine_checks_go_through_the_build_launcher.py
+    - engine/tests/test_setup_repository_proof_writes_to_a_real_remote.py
+    # Multi-app projects (R4): New work, Change it and extend paths that build onto an app
+    - engine/tests/test_a_build_step_can_extend_an_app.py
+    - engine/tests/test_new_work_app_selection.py
+    # A 4-core / 8 GiB host under pressure (R3, BOSSAPP-1431): builds at once follow the box,
+    # job slots are their own setting, heavy builds back off, lowering capacity drains
+    - engine/tests/test_a_small_host_admits_by_its_room_and_backs_off.py
   api:
     # The harness score per change (BOSSAPP-959)
     - apps/api/tests/test_harness_score_api.py
@@ -191,6 +253,9 @@ P1:
     - apps/api/tests/test_self_fix_routes.py
     # App alerts: rules, silences, history, token rotation, Grafana linked only when it answers
     - apps/api/tests/test_app_alerts_api.py
+    # Multi-app projects (R4): New work names its app; a feature builds onto its app
+    - apps/api/tests/test_new_work_builds_onto_the_named_app.py
+    - apps/api/tests/test_a_feature_builds_onto_its_app.py
   web:
     - apps/web/tests/a-promised-deploy-is-always-asked.test.ts
     # Workflows and run card
@@ -230,3 +295,57 @@ P1:
     - apps/web/tests/the-app-drawer-shows-its-alerts.test.tsx
     - apps/web/tests/observability-alerts-shows-every-app.test.tsx
     - apps/web/tests/factory-app-menu-links-to-its-alerts.test.tsx
+  # The rest of the worker suite (R3): job slots on a small host drain, never kill; the
+  # stall clock, the ticks, the runtime ceiling, completion acks, credentials
+  worker:
+    - apps/worker/tests/test_a_busy_worker_is_not_a_stalled_host.py
+    - apps/worker/tests/test_a_crashed_step_is_reported_not_lost.py
+    - apps/worker/tests/test_a_missed_heartbeat_does_not_discard_the_build.py
+    - apps/worker/tests/test_a_refused_completion_does_not_hold_the_job.py
+    - apps/worker/tests/test_a_small_host_drains_job_slots_never_kills.py
+    - apps/worker/tests/test_a_waiting_stack_deploy_is_neither_completed_nor_failed.py
+    - apps/worker/tests/test_completion_ack_lifecycle.py
+    - apps/worker/tests/test_completion_ack_real_postgres.py
+    - apps/worker/tests/test_the_ambient_tick_runs_while_the_worker_is_busy.py
+    - apps/worker/tests/test_the_runtime_ceiling_never_drops_a_progressing_lease.py
+    - apps/worker/tests/test_the_subscription_keepalive_tick_runs_hourly.py
+    - apps/worker/tests/test_the_wake_tick_covers_every_live_project.py
+    - apps/worker/tests/test_watching_work_does_not_wait_for_idle.py
+    - apps/worker/tests/test_worker.py
+    - apps/worker/tests/test_worker_credentials.py
+
+# SECURITY GUARDS (BOSSAPP-1429, scripts/known_failures.py). A red one fails every gate outright,
+# and none of them may ever be listed in tests/known-failures/: a red security guard is fixed,
+# never baselined. Most of them also run in P0 above; the gate judges a failure by its file.
+security:
+  # Secrets never leave: redaction, the audit log, the API's log
+  - engine/tests/test_redaction_masks_every_credential.py
+  - engine/tests/test_identity_audit_redaction.py
+  - apps/api/tests/test_no_secret_leaves_the_log.py
+  - scripts/tests/test_api_validation_redaction.py
+  # The public tree names no private host, network, project or home directory
+  - engine/tests/test_the_public_tree_names_no_private_infrastructure.py
+  # A self-fix never touches a protected path or symbol, never weakens a test, never carries
+  # a host address or private infrastructure out
+  - engine/tests/test_a_self_fix_never_touches_a_protected_path.py
+  - engine/tests/test_protected_symbols_still_exist.py
+  - engine/tests/test_a_self_fix_never_weakens_a_test.py
+  - engine/tests/test_a_recommendation_never_holds_a_host_address.py
+  - engine/tests/test_a_self_fix_upstream_send_carries_no_private_infrastructure.py
+  # The sandbox boundary and the network fence
+  - engine/tests/test_identity_f1_sandbox_boundary.py
+  - engine/tests/test_sandbox_network_fence.py
+  - engine/tests/test_egress_enterprise_fence.py
+  # Every tool argument that names an object is confined to the caller's org
+  - engine/tests/test_identity_authz_tool_object_args.py
+  # The test suite refuses to wipe a database not named like a test one
+  - engine/tests/test_the_suite_refuses_to_wipe_production.py
+  # Sign-in, step-up, CSRF, the authz matrix, API confinement
+  - apps/api/tests/test_identity_authn_signin.py
+  - apps/api/tests/test_identity_fxd_step_up.py
+  - apps/api/tests/test_identity_f3_authn_security.py
+  - apps/api/tests/test_identity_authz_matrix.py
+  - apps/api/tests/test_identity_f2_api_confinement.py
+  # The console asks for step-up exactly where the API does, and mirrors its permissions
+  - apps/web/tests/step-up-only-on-a-press.test.tsx
+  - apps/web/tests/identity-mirroring.test.ts

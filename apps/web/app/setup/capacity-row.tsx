@@ -97,11 +97,25 @@ const words = (v: string) => v.replace(/[_-]+/g, " ").replace(/^\w/, (c) => c.to
 const SOURCE_NAMES: Record<string, string> = {
   openai_codex_chatgpt: "Codex (ChatGPT)", openai_api: "OpenAI API",
   anthropic_claude_code: "Claude Code", anthropic_api: "Anthropic API",
-  typesafe_jev: "TypeSafe Jev", google_gemini_cli: "Gemini CLI", google_api: "Google API",
+  // A stranger cannot place "TypeSafe Jev": the name says what it is for first.
+  typesafe_jev: "Decision model (TypeSafe Jev)", google_gemini_cli: "Gemini CLI", google_api: "Google API",
   cursor_cli: "Cursor CLI", cursor_api: "Cursor API", xai_grok_build: "Grok Build", xai_api: "xAI API",
   approved_local_model_host: "Local model", managed_cloud_model_gateway: "Managed gateway",
 };
-const sourceName = (id: string) => Object.hasOwn(SOURCE_NAMES, id) ? SOURCE_NAMES[id] : id;
+export const sourceName = (id: string) => Object.hasOwn(SOURCE_NAMES, id) ? SOURCE_NAMES[id] : id;
+/** NOT OFFERED IN THIS IMAGE (docs/community/MODEL_CONNECTIONS.md: "Cursor is not offered: its
+ *  CLI is not in the BOSS image"). The image installs only the Claude Code, Codex and Grok CLIs
+ *  (Dockerfile.community), so Cursor's CLI and API and the Gemini CLI could never connect here;
+ *  the picker no longer lists them (Gemini stays offered as an API key: Google API). An existing
+ *  row for one (an install that set it up by hand) still shows in the list. */
+export const NOT_OFFERED = new Set(["cursor_cli", "cursor_api", "google_gemini_cli"]);
+/** DECISIONS ONLY, NOT A MODEL TO ADD (stranger test r3, 2026-11-18): "Decision model (TypeSafe
+ *  Jev)" sat under More sources on a Community install, which runs decisions on Claude Code. It
+ *  writes no code, and its key is added from Decisions when someone has one. So the picker never
+ *  offers it untouched; once a TypeSafe key is configured its row is in use and shows as usual.
+ *  This console is the Community edition (page.tsx), so the rule is unconditional here. */
+export const DECISIONS_ONLY = new Set(["typesafe_jev"]);
+export const offeredInPicker = (id: string): boolean => !NOT_OFFERED.has(id) && !DECISIONS_ONLY.has(id);
 /** The badge: the source's proven pill when the API sends one, else its connection record. */
 export function badgeOf(src: CapSource): { label: string; tone: Tone; proven: boolean } {
   if (src.pill) return { label: src.pill.label, tone: src.pill.tone, proven: true };
@@ -555,6 +569,13 @@ function SourceRow({ item, sessions, onBoard, formOpen, onForm, actions }: {
             Next check {lt.full(entry.next_check_at)}
           </Tip>
         ) : null}
+        {entry?.write_check && entry.write_check.state !== "ok" ? (
+          <Tip tip={entry.write_check.tip || "Whether this login can write where builds run."}
+               className={entry.write_check.state === "cannot_write" ? "su-src-said" : "su-faint"}
+               testid="su-model-write-check">
+            {entry.write_check.label}
+          </Tip>
+        ) : null}
         {capacityWord ? <Tip tip="The capacity this source last reported." className="su-faint">{capacityWord}</Tip> : null}
         <span className="su-spacer" />
         {primary}
@@ -582,6 +603,10 @@ function SourceRow({ item, sessions, onBoard, formOpen, onForm, actions }: {
           {entry?.next_check_at ? <><dt>Next check</dt><dd>
             <Tip tip={entry.next_check_why ?? "BOSS proves this connection again then; Re-check tries now."}>
               {lt.full(entry.next_check_at)}
+            </Tip></dd></> : null}
+          {entry?.write_check ? <><dt>Write check</dt><dd>
+            <Tip tip={entry.write_check.tip || "Whether this login can write where builds run."}>
+              {entry.write_check.label}
             </Tip></dd></> : null}
           {entry?.scope === "org" ?<><dt>Scope</dt><dd><Tip tip="The org's connection: set once, every project in this org uses it." testid="su-model-scope">All projects</Tip></dd></> : null}
           {entry?.source === "install" ? <><dt>Set by</dt><dd><Tip tip="Set in the server's settings file. Replace here to manage it in BOSS.">The install</Tip></dd></> : null}
@@ -735,7 +760,8 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
     && picked !== src.sourceId;
   // More sources offers what can be added from a row (a key or a login). A local host or a
   // managed gateway nobody set up is simply not listed: it has nothing to press here.
-  const choices = (sources ?? []).filter((src) => confirmedUnused(src) && (takesKey(src) || isLogin(src)));
+  const choices = (sources ?? []).filter((src) => confirmedUnused(src) && (takesKey(src) || isLogin(src))
+    && offeredInPicker(src.sourceId));
   const choiceKey = choices.map((c) => c.sourceId).join(",");
   // The drawer offers the unused sources ("More sources"); the list keeps only what is in use.
   useEffect(() => {
@@ -765,6 +791,8 @@ export const CapacityRow = forwardRef<HTMLElement, { actor?: string; focused: bo
     // every catalogue source flashed into the list and out again. Wait for them; a source picked
     // or edited here still shows at once.
     ...(sources ?? []).filter((src) => !onBoard.has(src.sourceId) && !unused(src)
+                                       // Not offered here, and never set up: not a row either.
+                                       && (offeredInPicker(src.sourceId) || !confirmedUnusedShape(src))
                                        && (readsComplete || settled || sessionError !== null || edited.has(src.sourceId)
                                            || picked === src.sourceId || open === src.sourceId
                                            || !confirmedUnusedShape(src)))

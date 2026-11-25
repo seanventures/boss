@@ -237,6 +237,31 @@ def is_loopback_origin(origin: str) -> bool:
         return False
 
 
+#: The spellings of this machine's loopback a browser may use for one console.
+LOOPBACK_SPELLINGS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def same_console_origin(origin: Optional[str], expected: Optional[str]) -> bool:
+    """Is `origin` the console at `expected`? Equal, or BOTH are loopback spellings of this
+    machine (localhost, 127.0.0.1, [::1]) on the same scheme and port. An install bound to
+    http://127.0.0.1:<port> before rc10 is opened at http://localhost:<port> now that every printed
+    console URL says localhost (stranger test r3 review). Never a non-loopback host."""
+    if not origin or not expected:
+        return False
+    if origin == expected:
+        return True
+    a, b = urlsplit(origin), urlsplit(expected)
+    host_a = (a.hostname or "").strip("[]").lower()
+    host_b = (b.hostname or "").strip("[]").lower()
+    if host_a not in LOOPBACK_SPELLINGS or host_b not in LOOPBACK_SPELLINGS:
+        return False
+    try:
+        port_a, port_b = a.port, b.port
+    except ValueError:
+        return False
+    return a.scheme == b.scheme and a.scheme in ("http", "https") and port_a == port_b
+
+
 def public_origin(db: Any, org_id: Optional[str] = None) -> Optional[str]:
     """BOSS_PUBLIC_URL when set (it always wins), else the origin bound at the network claim
     (policy.public_origin, §4.12). None when neither exists."""

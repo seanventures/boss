@@ -39,6 +39,8 @@ export const SELF_FIX_OPS: Record<string, SelfFixOp> = {
 export const SELF_FIX_READS: Record<string, { path: (q: URLSearchParams) => string; raw?: boolean }> = {
   list: { path: (q) => `/v1/self-fixes?project_id=${enc(q.get("project_id"))}`
                      + (q.get("status") ? `&status=${enc(q.get("status"))}` : "") },
+  // Install-wide: any self-fix in the project's org (the rail's insider items).
+  exists: { path: (q) => `/v1/self-fixes/exists?project_id=${enc(q.get("project_id"))}` },
   one: { path: (q) => `/v1/self-fixes/${enc(q.get("id"))}?project_id=${enc(q.get("project_id"))}` },
   diff: { path: (q) => `/v1/self-fixes/${enc(q.get("id"))}/diff?project_id=${enc(q.get("project_id"))}` },
   settings: { path: (q) => `/v1/self-fix/settings?project_id=${enc(q.get("project_id"))}` },

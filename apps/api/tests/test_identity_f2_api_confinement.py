@@ -30,7 +30,7 @@ from sqlalchemy import text
 from apps.api.app.main import app
 from apps.api.tests import identity_matrix
 from apps.api.tests.identity_fixtures import IdentityWorld
-from boss_engine.identity import object_kinds
+from boss_engine.identity import object_kinds, object_rules
 from boss_engine.identity import scope as scope_module
 from boss_engine.identity.declarations import Permit, access_of
 
@@ -138,19 +138,34 @@ def admin(world):
     return person
 
 
+def _org_shared(name: str) -> bool:
+    """Every kind this id can name belongs to the ORGANISATION (object_rules.ORG_SHARED_KINDS: a
+    deployment host any project of the org may use, a registry repository, a workspace …): its
+    tenant boundary is the org, so its counter-example is another org's object."""
+    kinds = object_kinds.kinds_for_id(name)
+    return bool(kinds) and all(k in object_rules.ORG_SHARED_KINDS for k in kinds)
+
+
 @pytest.fixture
 def placed(monkeypatch, world):
     """b_* objects live in project B, x_* in ANOTHER org, everything else in project A (this org);
-    project ids are themselves (a project is its own project)."""
-    def load(db, oid):
-        oid = str(oid)
-        if oid in (world.project_a, world.project_b):
-            return (world.org, oid)
-        if oid.startswith("x_"):
-            return ("org_somebody_else", "p_somebody_else")
-        return (world.org, world.project_b if oid.startswith("b_") else world.project_a)
+    project ids are themselves (a project is its own project). An org-shared kind has no project
+    B object (b_* is not one of its rows): a name that can be either a project's row or an org's
+    (gateway_id, rule_id) is still checked against project B through its project kinds."""
+    def loader(shared):
+        def load(db, oid):
+            oid = str(oid)
+            if oid in (world.project_a, world.project_b):
+                return (world.org, oid)
+            if oid.startswith("x_"):
+                return ("org_somebody_else", "p_somebody_else")
+            if oid.startswith("b_"):
+                return None if shared else (world.org, world.project_b)
+            return (world.org, world.project_a)
+        return load
     for kind in scope_module.registered_object_kinds():
-        monkeypatch.setitem(scope_module._OBJECT_LOADERS, kind, load)  # noqa: SLF001
+        monkeypatch.setitem(scope_module._OBJECT_LOADERS, kind,  # noqa: SLF001
+                            loader(kind in object_rules.ORG_SHARED_KINDS))
 
 
 def _request(method, path, access, where, name, world, object_id):
@@ -179,10 +194,10 @@ def test_another_projects_object_named_anywhere_is_not_found(mirror, world, admi
     with world.acting_as(world.ctx(admin)):
         for method, path, access, where, name in NAMED:
             project_like = name in ("project_id", "project_ids", "scope_id")
-            org_level = access.scope.source.value == "org"
+            org_level = access.scope.source.value == "org" or _org_shared(name)
             # an org-level check confines to the org (another project of the same org is fine
-            # there): its counter-example is another org's object; a project check's is another
-            # project's.
+            # there), and an org-shared object is any project's of its org: the counter-example
+            # is another org's object; a project check's is another project's.
             other = "x_obj" if org_level else (world.project_b if project_like else "b_obj")
             own = world.project_a if project_like else "a_obj"
             allowed = mirror.request(**_request(method, path, access, where, name, world, own))
@@ -281,3 +296,52 @@ def test_a_second_org_cannot_be_created_under_enforce(client, orgs):
         out = client.post("/v1/orgs", json={"name": "Shadow Org"},
                           headers={"sec-fetch-site": "same-origin"})
     assert out.status_code == 409, out.text
+
+
+def test_another_orgs_execution_environment_is_404_and_unlisted(client, engine, orgs):
+    a, b, owner_a = orgs
+    owner_b = b.person("f2-B-owner")
+    b.bind(owner_b, "owner")
+    env_a_org = f"env_{uuid.uuid4().hex[:10]}"
+    env_a_proj = f"env_{uuid.uuid4().hex[:10]}"
+    _seed(engine,
+          "INSERT INTO execution_environments (id, project_id, org_id, name, driver) "
+          "VALUES (:i, NULL, :o, :n, 'local')",
+          i=env_a_org, o=a.org, n=f"org-wide-{env_a_org}")
+    _seed(engine,
+          "INSERT INTO execution_environments (id, project_id, org_id, name, driver) "
+          "VALUES (:i, :p, :o, :n, 'local')",
+          i=env_a_proj, o=a.org, p=a.project_a, n=f"proj-{env_a_proj}")
+
+    headers = {"sec-fetch-site": "same-origin"}
+    with b.acting_as(b.ctx(owner_b)):
+        listed = client.get("/v1/environments",
+                            params={"project_id": b.project_a, "actor": owner_b.id},
+                            headers=headers)
+        assert listed.status_code == 200, listed.text
+        ids = {item["id"] for item in listed.json()["items"]}
+        assert env_a_org not in ids
+        assert env_a_proj not in ids
+
+        for env_id in (env_a_org, env_a_proj):
+            put = client.put(f"/v1/environments/{env_id}",
+                             json={"project_id": b.project_a, "actor": owner_b.id, "name": "x"},
+                             headers=headers)
+            assert put.status_code == 404, put.text
+            dele = client.request(
+                "DELETE", f"/v1/environments/{env_id}",
+                json={"project_id": b.project_a, "actor": owner_b.id},
+                headers=headers)
+            assert dele.status_code == 404, dele.text
+            probe = client.post(f"/v1/environments/{env_id}/probe",
+                                json={"project_id": b.project_a, "actor": owner_b.id},
+                                headers=headers)
+            assert probe.status_code == 404, probe.text
+
+    with a.acting_as(a.ctx(owner_a)):
+        listed_a = client.get("/v1/environments",
+                              params={"project_id": a.project_a, "actor": owner_a.id},
+                              headers=headers)
+        assert listed_a.status_code == 200, listed_a.text
+        ids_a = {item["id"] for item in listed_a.json()["items"]}
+        assert {env_a_org, env_a_proj} <= ids_a

@@ -10,6 +10,7 @@
 import React, { useState } from "react";
 
 import { GatedButton } from "../../components/gated";
+import { couldNot, reasonOf } from "../../lib/action-result";
 import { fetchSetup, setupWrite } from "../../lib/setup-client";
 import { SectionLabel } from "../section-label";
 import { toast, useBoard } from "./parts";
@@ -32,13 +33,15 @@ export function BuildDatabaseRow() {
   const choose = async (next: string) => {
     if (next === mode) return;
     setBusy(true);
+    let saved = false;
     try {
       await setupWrite(projectId, "build_database", { key: db.key, value: next },
                        { label: `Build database: ${next}` });
+      saved = true;
       apply(await fetchSetup(projectId));
       toast(`Build database: ${MODES.find((m) => m.key === next)?.label ?? next}`);
     } catch (error) {
-      toast(error instanceof Error ? error.message : "Could not change it", "error");
+      toast(couldNot("save Build database", reasonOf(error), saved ? "It was saved; reload the page to see it." : "Nothing changed."), "error");
     } finally { setBusy(false); }
   };
   return (

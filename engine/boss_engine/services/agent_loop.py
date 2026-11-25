@@ -393,6 +393,18 @@ def _mcp_tool_policy(server: dict[str, Any], tool: dict[str, Any], *,
                        arguments=arguments, role_key=role_key)
 
 
+def _server_is_development(server: dict[str, Any]) -> bool:
+    """An MCP server whose writes stay in development (dev autonomy, BOSSAPP-1441): one on this
+    machine, or one a person labelled dev/staging. A write to an outside service (chat, mail, a
+    ticket system) reaches people and is treated as production."""
+    from .production import is_local_address, is_named_non_production
+
+    labels = server.get("labels") if isinstance(server.get("labels"), dict) else {}
+    if is_named_non_production(server.get("environment") or labels.get("environment")):
+        return True
+    return is_local_address(server.get("url") or server.get("endpoint") or "")
+
+
 def _mcp_tool_risk(server: dict[str, Any], tool: dict[str, Any]) -> int:
     # mcp_registry.tool_tier is the one statement of this rule. This had its own copy, which let
     # a tool's self-declared tier REPLACE the operator's blanket tier for the server — so the
@@ -2480,6 +2492,8 @@ def _hold_for_untrusted_content(
         f"({origin}), and it has not been sent."
     )
     recommendation: dict[str, Any] = {
+        # The binding first: nothing spread into a held call's card may replace its action.
+        **bind_held_call(name, args),
         "action": "resume_agent_run",
         "run_id": run_id,
         "tool": name,
@@ -2487,7 +2501,6 @@ def _hold_for_untrusted_content(
         "task_id": task_id,
         "sink": sink,
         "untrusted_origin": hold.get("origin"),
-        **bind_held_call(name, args),
     }
     if name in mcp_map:
         server, tool = mcp_map[name]
@@ -3356,7 +3369,14 @@ class AgentStepToolSet:
         self.skill_map = skill_map
         self.skill_resolution = skill_resolution
         self.on_demand_loader = on_demand_loader
-        self.threshold = int(settings.agent_autonomous_risk_max)
+        # DEV AUTONOMY (BOSSAPP-1441): a tier-2 write acts without asking when the project's
+        # policy acts in development (its effect stays in the run's sandbox and branch); tier 3,
+        # an unreviewed server, untrusted content and a tool set to ask still wait.
+        from .autonomy_policy import dev_acts, tool_threshold
+
+        self.threshold = tool_threshold(connection, project_id,
+                                        int(settings.agent_autonomous_risk_max))
+        self.dev_autonomy = dev_acts(connection, project_id)
         # One waiter per drive, so the per-run bound covers every call this drive makes.
         self.waiter = BudgetWaiter()
 
@@ -3566,6 +3586,18 @@ class AgentStepToolSet:
                     role_key=_run_role(finalize_ctx) or None),
             )
             asks = policy == "ask"
+            chosen = (server.get("tool_policy") or {}).get(tool_name)
+            from .mcp_registry import tool_quarantined
+
+            quarantined = tool_quarantined(server, tool_name)
+            if (asks and getattr(self, "dev_autonomy", False) and risk <= min(threshold, 2)
+                    and chosen not in ("ask", "off") and not (screen_hold and risk >= 2)
+                    and _server_is_development(server)):
+                if not quarantined:
+                    # DEV AUTONOMY (BOSSAPP-1441): the tier-2 floor's "ask" is not a person's
+                    # choice; in development the write acts and is logged. A tool a person set
+                    # to Ask, a quarantined tool and a write after untrusted content still wait.
+                    asks = False
             if risk > threshold or unreviewed or asks:
                 decision_id = _open_hold_interrupt(
                     connection,
@@ -3574,6 +3606,7 @@ class AgentStepToolSet:
                     (f"Approve MCP tool: {server['name']} / {_key_words(tool_name)}"
                      + (" (server not reviewed yet)" if unreviewed else "")),
                     {
+                        **bind_held_call(name, args),
                         "action": "resume_agent_run",
                         "run_id": run_id,
                         "tool": name,
@@ -3583,7 +3616,9 @@ class AgentStepToolSet:
                         "args": args,
                         "task_id": task_id,
                         **({"tool_screen": "untrusted"} if screen_hold and risk >= 2 else {}),
-                        **bind_held_call(name, args),
+                        **({"unreviewed_server": True} if unreviewed or quarantined else {}),
+                        **({"explicit_stop": "set to ask a person each time in Skills & MCP"}
+                           if chosen == "ask" else {}),
                     },
                     {},
                     "agent_mcp_requires_approval",
@@ -3753,6 +3788,7 @@ class AgentStepToolSet:
                     f"Approve agent skill: {skill.get('label') or skill.get('name') or _key_words(skill_id)}"
                     + (" (its MCP server is not reviewed yet)" if unreviewed_server else ""),
                     {
+                        **bind_held_call(name, args),
                         "action": "resume_agent_run",
                         "run_id": run_id,
                         "tool": name,
@@ -3762,7 +3798,10 @@ class AgentStepToolSet:
                         "args": args,
                         "task_id": task_id,
                         **({"tool_screen": "untrusted"} if screen_asks else {}),
-                        **bind_held_call(name, args),
+                        **({"unreviewed_server": True} if unreviewed_server else {}),
+                        **({"explicit_stop": person_reason}
+                           if person_reason and not unreviewed_server and not screen_asks
+                           else {}),
                     },
                     {},
                     "agent_skill_requires_approval",
@@ -3830,10 +3869,10 @@ class AgentStepToolSet:
                 decision_id = _open_hold_interrupt(
                     connection, project_id, task_id,
                     f"Approve agent action: {name}",
-                    {"action": "resume_agent_run", "run_id": run_id, "tool": name,
+                    {**bind_held_call(name, args),
+                     "action": "resume_agent_run", "run_id": run_id, "tool": name,
                      "args": args, "task_id": task_id,
-                     **({"tool_screen": "untrusted"} if screen_hold else {}),
-                     **bind_held_call(name, args)},
+                     **({"tool_screen": "untrusted"} if screen_hold else {})},
                     {}, "agent_tool_requires_approval", risk_tier=risk,
                 )
                 result = {"status": "deferred_for_approval", "decision_id": decision_id, "message": f"'{name}' (risk tier {risk}) requires human approval; the run is paused and resumes on approval."}

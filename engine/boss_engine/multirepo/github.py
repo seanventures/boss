@@ -25,7 +25,10 @@ class Answer:
 def _default_transport(method: str, path: str, token: str, body: Any = None) -> Answer:
     from ..identity import github_app
 
-    url = github_app.api_base().rstrip("/") + path
+    base = github_app.api_base().rstrip("/")
+    if path == GRAPHQL and base.endswith("/api/v3"):
+        base = base[: -len("/v3")]           # GitHub Enterprise: REST at /api/v3, GraphQL at /api/graphql
+    url = base + path
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method=method, headers={
         "Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
@@ -45,6 +48,9 @@ def _default_transport(method: str, path: str, token: str, body: Any = None) -> 
     except (urllib.error.URLError, TimeoutError, OSError) as error:
         return Answer(599, {"message": f"GitHub unreachable: {type(error).__name__}"})
 
+
+#: The GraphQL endpoint's path (a draft is made ready only through GraphQL).
+GRAPHQL = "/graphql"
 
 TRANSPORT: Callable[[str, str, str, Any], Answer] = _default_transport
 TokenFor = Callable[[Any, Any, str, str], str]
@@ -91,6 +97,20 @@ class Repo:
 
     def set_body(self, number: int, body: str) -> bool:
         return self.call("PATCH", f"/pulls/{int(number)}", {"body": body}).status == 200
+
+    def mark_ready(self, pull: dict[str, Any]) -> bool:
+        """Turn a draft PR into one GitHub will merge (REST cannot: the GraphQL
+        `markPullRequestReadyForReview` mutation). True when it is ready, or never was a draft."""
+        if not pull.get("draft"):
+            return True
+        if not pull.get("node_id"):
+            return False
+        got = TRANSPORT("POST", GRAPHQL, self._token, {
+            "query": "mutation($id: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $id}) "
+                     "{ pullRequest { isDraft } } }", "variables": {"id": pull["node_id"]}})
+        body = got.body if isinstance(got.body, dict) else {}
+        ready = ((body.get("data") or {}).get("markPullRequestReadyForReview") or {}).get("pullRequest") or {}
+        return got.status == 200 and not body.get("errors") and ready.get("isDraft") is False
 
     def merge(self, number: int, sha: str, *, title: str) -> Answer:
         """Merge exactly `sha`: GitHub refuses (409) when the head moved."""

@@ -173,7 +173,7 @@ describe("the workflow wizard", () => {
     await fill();
     await click("wf-wizard-save");
     await settle();
-    expect(el("wf-wizard-error").textContent).toBe("Name in use");
+    expect(el("wf-wizard-error").textContent).toBe("Couldn't save the workflow: Name in use. Nothing was saved.");
     expect(document.querySelector('[data-testid="wf-wizard-saved"]')).toBeNull();
     expect(document.querySelector('[data-testid="wf-wizard-key"]')).toBeNull();
     expect(document.body.textContent).not.toMatch(/\bSaved\b/);

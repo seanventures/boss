@@ -335,10 +335,9 @@ class SkillRuntimeService:
             except Exception as exc:  # noqa: BLE001 — retry per policy; capture for the record
                 # ROLL BACK FIRST. Until this happens the connection is unusable, so the retry
                 # below and every record of this failure would fail too.
-                try:
-                    attempt_point.rollback()
-                except Exception:  # noqa: BLE001 — already gone; the message is what matters
-                    pass
+                from ..db import release_failed_savepoint
+
+                release_failed_savepoint(attempt_point, exc, connection=connection)
                 last_error = str(exc)
                 if getattr(exc, "retryable", True) is False:
                     # A refusal that only a person can lift (mcp_registry.McpServerUnreviewed)

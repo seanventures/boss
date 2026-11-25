@@ -561,13 +561,16 @@ def sync_one(engine: Any, settings: Any, source_id: str, *,
 
 def sync_due(engine: Any, settings: Any, *, every_minutes: int = 360, limit: int = 20,
              fetcher: Optional[Fetcher] = None) -> list[dict[str, Any]]:
-    with engine.begin() as c:
-        ids = c.execute(
-            text("SELECT id FROM skill_sources WHERE last_sync_at IS NULL "
-                 "OR last_sync_at < now() - make_interval(mins => :m) "
-                 "ORDER BY last_sync_at NULLS FIRST LIMIT :l"),
-            {"m": int(every_minutes), "l": int(limit)}).scalars().all()
-    return [sync_one(engine, settings, sid, fetcher=fetcher) for sid in ids]
+    from ..db import background
+
+    with background():
+        with engine.begin() as c:
+            ids = c.execute(
+                text("SELECT id FROM skill_sources WHERE last_sync_at IS NULL "
+                     "OR last_sync_at < now() - make_interval(mins => :m) "
+                     "ORDER BY last_sync_at NULLS FIRST LIMIT :l"),
+                {"m": int(every_minutes), "l": int(limit)}).scalars().all()
+        return [sync_one(engine, settings, sid, fetcher=fetcher) for sid in ids]
 
 
 _STARTED = threading.Event()

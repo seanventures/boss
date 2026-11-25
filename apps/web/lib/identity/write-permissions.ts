@@ -109,6 +109,12 @@ export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permiss
 
   // lib/workflow-api.ts — the Workflow Studio editor (through /api/delivery-workflows)
   "lib/workflow-api.ts#publishSpec": "workflow:publish",          // POST /v1/delivery-workflows/publish
+  "lib/workflow-api.ts#standardAct": "workflow:publish",          // POST /v1/delivery-workflows/standard (reset / take new)
+  "lib/workflow-api.ts#installPack": "workflow:install",          // POST /v1/delivery-workflows/marketplace/install
+  "lib/workflow-api.ts#uninstallPack": "workflow:install",        // POST /v1/delivery-workflows/marketplace/uninstall
+  "lib/workflow-api.ts#updateInstalled": "workflow:install",      // POST /v1/delivery-workflows/marketplace/update
+  "lib/workflow-api.ts#publishPack": "workflow:publish",          // POST /v1/delivery-workflows/marketplace/publish
+  "lib/workflow-api.ts#unpublishPack": "workflow:publish",        // POST /v1/delivery-workflows/marketplace/unpublish
   "lib/workflow-api.ts#renameWorkflow": "workflow:create",        // PATCH /v1/delivery-workflows/{id}
   "lib/workflow-api.ts#deleteWorkflow": "workflow:delete",        // DELETE /v1/delivery-workflows/{id}
   "lib/workflow-api.ts#draftFromDescription": "workflow:create",  // POST /v1/delivery-workflows/draft
@@ -148,6 +154,11 @@ export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permiss
   "lib/documents.ts#replyTo": "work_item:manage",                 // POST …/threads/{t}/replies
   "lib/documents.ts#resolveThread": "work_item:manage",           // POST …/threads/{t}/resolve
   // lib/inbox.ts — the signed-in person's own read state and snoozes (BOSSAPP-875)
+  // lib/autonomy.ts — dev autonomy (BOSSAPP-1441): the org default (org:update, step-up), this
+  // project's stricter row (autonomy:manage), and Undo / Looks good on what agents decided.
+  "lib/autonomy.ts#savePolicy": ["org:update", "autonomy:manage"],  // PUT /v1/autonomy/org-policy | /v1/autonomy/policy
+  "lib/autonomy.ts#undoDecided": "decision:approve",               // POST /v1/autonomy/decided/{id}/undo
+  "lib/autonomy.ts#reviewDecided": "decision:approve",             // POST /v1/autonomy/decided/{id}/reviewed
   "lib/inbox.ts#markRead": "work_item:read",                      // POST /v1/inbox/read
   "lib/inbox.ts#snoozeEntry": "work_item:read",                   // POST /v1/inbox/snooze
   "lib/inbox.ts#archiveEntry": "work_item:read",                  // POST /v1/inbox/snooze archive
@@ -169,6 +180,12 @@ export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permiss
   "lib/subscription-pools.ts#setPoolStatus": "entitlement:manage",     // PATCH /v1/subscription-pools/{id}
   "lib/subscription-pools.ts#deletePool": "entitlement:manage",        // DELETE /v1/subscription-pools/{id} (empty only)
   // lib/tickets.ts — ticket systems (BOSSAPP-1047 Phase C): Setup › Ticket systems, import, start, sync
+  // lib/docs-connections.ts — Setup › Confluence (BOSSAPP-1384): the org's one Confluence connection
+  "lib/docs-connections.ts#connectDocs": "integration:manage",    // POST /v1/docs-connections (tests first; token to the vault)
+  "lib/docs-connections.ts#testDocs": "integration:manage",       // POST /v1/docs-connections/test
+  "lib/docs-connections.ts#saveDocsSpaces": "integration:manage", // PATCH /v1/docs-connections
+  "lib/docs-connections.ts#disconnectDocs": "integration:manage", // DELETE /v1/docs-connections
+  "lib/docs-connections.ts#syncDocsKnowledge": "knowledge:manage", // POST /v1/docs-connections/sync
   "lib/tickets.ts#connectTicketSystem": "integration:manage",     // POST /v1/ticket-systems (tests first; token to the vault)
   "lib/tickets.ts#testTicketSystem": "integration:manage",        // POST /v1/ticket-systems/{id}/test
   "lib/tickets.ts#saveTicketSettings": "integration:manage",      // PATCH /v1/ticket-systems/{id}
@@ -337,6 +354,10 @@ export const WRITE_OPS: Readonly<Record<string, Readonly<Record<string, WriteGat
     // A typed question's Send answer / Decline (app/typed-form-ui.tsx, BOSSAPP-832); "Approve +
     // always allow" on a tool-call Ask card (app/always-allow-ui.tsx, BOSSAPP-817).
     "/v1/decisions/": "decision:approve",
+    // Dev autonomy (lib/autonomy.ts, BOSSAPP-1441).
+    "/v1/autonomy/org-policy": "org:update",
+    "/v1/autonomy/policy": "autonomy:manage",
+    "/v1/autonomy/decided/": "decision:approve",
     // The Infra Agent's storage incident (lib/infra-storage.ts, BOSSAPP-1156).
     "/v1/infra/storage/incidents/": "system:operate",
     "/v1/infra/storage/clean": "autonomy:manage",
@@ -360,6 +381,9 @@ export const WRITE_OPS: Readonly<Record<string, Readonly<Record<string, WriteGat
     // sign-in (oauth/start/load, oauth/me) is connection:use_own, checked by the helper's gate.
     "/v1/ticket-systems": "integration:manage",
     "/v1/ticket-systems/": "integration:manage",
+    // Setup › Confluence (lib/docs-connections.ts, BOSSAPP-1384); the sync press is knowledge:manage.
+    "/v1/docs-connections": "integration:manage",
+    "/v1/docs-connections/sync": "knowledge:manage",
     // Setup › Events (lib/intake.ts, P9a-7): connect, replay and the Slack chat endpoint; each
     // helper's own gate (registered above) is what the screens check.
     "/v1/intake/connections": "integration:manage",

@@ -1,0 +1,25 @@
+{
+  "results": [
+    {
+      "content": {
+        "id": "103",
+        "type": "page",
+        "status": "current",
+        "title": "Rollback Guide"
+      },
+      "title": "Rollback Guide",
+      "excerpt": "how to @@@hl@@@deploy@@@endhl@@@ safely",
+      "url": "/spaces/ENG/pages/103/Rollback+Guide",
+      "lastModified": "2026-11-10T09:00:00.000Z",
+      "resultGlobalContainer": {
+        "title": "Engineering",
+        "displayUrl": "/spaces/ENG"
+      }
+    }
+  ],
+  "start": 2,
+  "limit": 2,
+  "size": 1,
+  "totalSize": 3,
+  "_links": {}
+}

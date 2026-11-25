@@ -1,0 +1,86 @@
+{
+  "path": "lumen-pay.yaml",
+  "violations": [
+    {
+      "rule_id": "tenant-rate-limit-required",
+      "severity": "error",
+      "title": "Every tenant must declare a tenant-level rate limit within bounds",
+      "why": "A per-route rate limit alone caps each route individually, but a tenant with many routes can still exhaust shared gateway capacity in aggregate; a tenant-level cap is the backstop for that.",
+      "fix": "Add a top-level rate_limit.rps and rate_limit.burst for the tenant (e.g. rps: 50, burst: 50).",
+      "line": 1,
+      "fixable": "never"
+    },
+    {
+      "rule_id": "pii-fields-declared",
+      "severity": "warn",
+      "title": "Tenants handling PII should declare which fields to redact",
+      "why": "A tenant whose data_classification names personal data but leaves pii_fields empty gets no redaction in access logs by name, only the gateway's fixed baseline.",
+      "fix": "Add pii_fields listing the request fields (e.g. query parameters) that carry personal data for this tenant.",
+      "line": 5,
+      "fixable": "never"
+    },
+    {
+      "rule_id": "rate-limit-required",
+      "severity": "error",
+      "title": "Every route must declare a rate limit within bounds",
+      "why": "Without a rate limit a single tenant (or a bug) can exhaust shared gateway capacity for everyone.",
+      "fix": "Add rate_limit.rps and rate_limit.burst (e.g. rps: 10, burst: 10).",
+      "line": 7,
+      "fixable": "mechanical"
+    },
+    {
+      "rule_id": "request-size-capped",
+      "severity": "error",
+      "title": "Every route must declare a request body size cap",
+      "why": "Without a per-route max_body_bytes, a single request can consume unbounded memory on the gateway before any other control sees it.",
+      "fix": "Add max_body_bytes to the route, e.g. max_body_bytes: 1048576.",
+      "line": 7,
+      "fixable": "mechanical"
+    },
+    {
+      "rule_id": "no-inlined-secrets",
+      "severity": "error",
+      "title": "No API keys, tokens or passwords inlined in plaintext",
+      "why": "A secret committed to a config repo is permanently compromised, it lives in git history even after deletion.",
+      "fix": "Remove the plaintext value; store a hash (api_key_hashed) or reference a secret manager entry instead.",
+      "line": 17,
+      "fixable": "never"
+    },
+    {
+      "rule_id": "cors-no-wildcard-with-credentials",
+      "severity": "error",
+      "title": "CORS must not combine a wildcard origin with credentials",
+      "why": "A wildcard origin plus allow_credentials:true lets any website replay a user's cookies/tokens against this tenant's API.",
+      "fix": "List explicit allowed origins, or set allow_credentials: false.",
+      "line": 20,
+      "fixable": "never"
+    },
+    {
+      "rule_id": "no-sensitive-paths-exposed",
+      "severity": "error",
+      "title": "Routes must not expose /admin, /internal or /debug paths",
+      "why": "These path segments are a strong signal of an operational surface that should never be reachable from the public gateway.",
+      "fix": "Remove the route, or move the admin/internal surface behind a separate, non-tenant-facing deployment.",
+      "line": 21,
+      "fixable": "never"
+    },
+    {
+      "rule_id": "request-size-capped",
+      "severity": "error",
+      "title": "Every route must declare a request body size cap",
+      "why": "Without a per-route max_body_bytes, a single request can consume unbounded memory on the gateway before any other control sees it.",
+      "fix": "Add max_body_bytes to the route, e.g. max_body_bytes: 1048576.",
+      "line": 21,
+      "fixable": "mechanical"
+    },
+    {
+      "rule_id": "upstream-https-required",
+      "severity": "error",
+      "title": "Upstream URLs must use https://",
+      "why": "A plaintext http upstream exposes every request (including auth tokens) to anyone on the network path.",
+      "fix": "Change the upstream url to https://.",
+      "line": 35,
+      "fixable": "mechanical"
+    }
+  ]
+}

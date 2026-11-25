@@ -146,6 +146,9 @@ export type ChangeSet = {
   /** The review decision whose approval merges it (pending while it is open). */
   decision: { id: string; status: string; question: string } | null;
   draft: boolean; labels: string[]; pending_push: boolean; run_id: string | null; head_sha: string | null;
+  /** The WORKFLOW run that made the change (engine finalize_ctx.workflow_run_id): `run_id` may be a
+   *  build (crun_…), and asking /v1/workflow-runs/ for a build answered 404 (validation-review §5.5). */
+  workflow_run_id: string | null;
   created_at: string | null; updated_at: string | null; merged_at: string | null;
   /** BOSSAPP-948: where the code lives, and the line-comment threads (lib/local-review.ts). */
   where: Where | null; comments: Thread[]; comment_summary: CommentSummary;
@@ -195,6 +198,7 @@ export function parseChangeSet(raw: unknown): ChangeSet {
     decision: decision && str(decision.id) ? { id: str(decision.id), status: str(decision.status, "pending"), question: str(decision.question) } : null,
     draft: r.draft === true, labels: Array.isArray(r.labels) ? r.labels.map((l) => str(l)).filter(Boolean) : [],
     pending_push: r.pending_push === true, run_id: str(r.run_id) || null, head_sha: str(r.head_sha) || null,
+    workflow_run_id: [str(r.workflow_run_id), str(r.run_id)].find((id) => id.startsWith("wfr_")) || null,
     created_at: str(r.created_at) || null, updated_at: str(r.updated_at) || null, merged_at: str(r.merged_at) || null,
     where: parseWhere(r.where), comments: parseThreads(r.comments), comment_summary: parseSummary(r.comment_summary),
     source: r.source === "github" ? "github" : "local", base_sha: str(r.base_sha) || null, author: str(r.author) || null,

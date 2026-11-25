@@ -112,6 +112,14 @@ def require_investigation_runtime(settings: Settings, *, allow_fix: bool = False
 
 JOB_KIND = "investigation.run"
 
+#: What an investigation that never ran says (R3, BOSSAPP-1431; the failure_words contract).
+JOB_ENDED_BEFORE_START = (
+    "its job ended before it started (cancelled, failed or lost); start the investigation "
+    "again from Observability")
+NEVER_STARTED_IN_A_DAY = (
+    "it waited a day in the queue and never started (no worker took it); check the workers "
+    "with `boss doctor` on the host, then start the investigation again from Observability")
+
 
 def _spend_class():
     """InvestigationSpend: Discovery's governed stage, for an investigation's one model call."""
@@ -498,11 +506,11 @@ def run_on_investigation_host(*, host: str, command: str, project_id: str,
     ephemeral = None
     with begin(get_engine(settings)) as c:
         row = c.execute(
-            sql(f"SELECT * FROM deployment_hosts WHERE {_usable_hosts()} AND (id = :h OR name = :h)"),
+            sql(_host_by_hint_sql()),
             {"p": project_id, "h": host.strip()}).mappings().first()
         if row is None:
             names = [r["name"] for r in c.execute(
-                sql("SELECT name FROM deployment_hosts WHERE project_id = :p"),
+                sql(f"SELECT name FROM deployment_hosts WHERE {_usable_hosts()}"),
                 {"p": project_id}).mappings().all()]
             return {"ok": False,
                     "error": f"no registered host {host!r}. This project has: {names}"}
@@ -705,13 +713,37 @@ def open_investigation(connection, *, project_id: str, question: str, actor: str
     # `updated_at` moves on every state change, so a row that has not moved in the window is
     # abandoned. Marked, not silently reused, because "it stopped when the API restarted" is
     # something the operator should be able to read afterwards.
+    #
+    # A QUEUED INVESTIGATION IS WAITING, NOT ABANDONED (R3, BOSSAPP-1431). On a one-slot host
+    # its job can wait behind a build for longer than 25 minutes; measured from when it was
+    # queued, it was marked "the process running it stopped" before anything ran it. A queued
+    # row is abandoned only when its job can no longer run it (gone, failed, cancelled).
     connection.execute(
         sql("UPDATE investigations SET status = 'abandoned', token = NULL, "
             "error = 'the process running it stopped (deploy or restart) before it finished', "
             "finished_at = now(), updated_at = now() "
-            "WHERE project_id = :p AND status IN ('queued', 'running') "
+            "WHERE project_id = :p AND status = 'running' "
             "  AND updated_at < now() - INTERVAL '25 minutes'"),
         {"p": project_id})
+    connection.execute(
+        sql("UPDATE investigations i SET status = 'abandoned', token = NULL, "
+            "error = :why, "
+            "finished_at = now(), updated_at = now() "
+            "WHERE i.project_id = :p AND i.status = 'queued' "
+            "  AND i.updated_at < now() - INTERVAL '25 minutes' "
+            "  AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.id = i.job_id "
+            "                  AND j.status IN ('queued', 'leased', 'running', "
+            "                                   'failed_retryable'))"),
+        {"p": project_id, "why": JOB_ENDED_BEFORE_START})
+    # ... and never waits forever: a day in the queue (no worker ever takes its kind) ends it,
+    # saying so, so one stuck row cannot refuse every later investigation as "already running".
+    connection.execute(
+        sql("UPDATE investigations SET status = 'abandoned', token = NULL, "
+            "error = :why, "
+            "finished_at = now(), updated_at = now() "
+            "WHERE project_id = :p AND status = 'queued' "
+            "  AND created_at < now() - INTERVAL '24 hours'"),
+        {"p": project_id, "why": NEVER_STARTED_IN_A_DAY})
     live = connection.execute(
         sql("SELECT id FROM investigations WHERE project_id = :p "
             "AND status IN ('queued', 'running') ORDER BY created_at DESC LIMIT 1"),
@@ -1282,6 +1314,13 @@ def get_investigation(connection, *, project_id: str,
 __all__ = ["open_investigation", "run_investigation", "get_investigation",
            "host_command_allowed", "sql_is_read_only", "sql_is_allowed",
            "run_on_investigation_host", "authorise", "run_db", "run_operation"]
+
+
+def _host_by_hint_sql(columns: str = "*") -> str:
+    """deployment_fleet.host_by_hint_sql: the one id/name/address lookup over usable hosts."""
+    from .deployment_fleet import host_by_hint_sql
+
+    return host_by_hint_sql(columns)
 
 
 def _usable_hosts(alias: str = "") -> str:

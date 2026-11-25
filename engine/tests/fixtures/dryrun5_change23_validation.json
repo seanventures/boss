@@ -1,0 +1,790 @@
+{
+ "fix": {
+  "exit": 1,
+  "seeded": false,
+  "command": "go run ./cmd/gwlint --fix .boss-validation/fixed/lumen-pay.yaml"
+ },
+ "after": {
+  "exit": 0,
+  "command": "go run ./cmd/gwlint validate config/tenants/lumen-pay.yaml --json",
+  "findings": [],
+  "head_sha": "70352f1bddece82698fb347e528f6bdded0e5b2f"
+ },
+ "error": null,
+ "fixes": [
+  {
+   "file": "config/tenants/lumen-pay.yaml",
+   "kind": "agent",
+   "line": 5,
+   "rule": "pii-fields-declared",
+   "after": "pii_fields: [\"merchant_id\"]",
+   "hunks": [
+    {
+     "id": "h-01",
+     "kind": "agent",
+     "line": 6,
+     "after": [
+      "pii_fields: [\"merchant_id\"]"
+     ],
+     "before": []
+    }
+   ],
+   "lines": 1,
+   "before": null,
+   "finding": "V-02",
+   "hunk_id": "h-01"
+  },
+  {
+   "file": "config/tenants/lumen-pay.yaml",
+   "kind": "agent",
+   "line": 5,
+   "rule": "tenant-rate-limit-required",
+   "after": "rate_limit:\n  rps: 50\n  burst: 50",
+   "hunks": [
+    {
+     "id": "h-01",
+     "kind": "agent",
+     "line": 6,
+     "after": [
+      "rate_limit:",
+      "  rps: 50",
+      "  burst: 50"
+     ],
+     "before": []
+    }
+   ],
+   "lines": 3,
+   "before": null,
+   "finding": "V-01",
+   "hunk_id": "h-01"
+  },
+  {
+   "file": "config/tenants/lumen-pay.yaml",
+   "kind": "auto",
+   "line": 6,
+   "rule": "request-size-capped",
+   "after": "    max_body_bytes: 1048576",
+   "hunks": [
+    {
+     "id": "h-02",
+     "kind": "auto",
+     "line": 7,
+     "after": [
+      "    max_body_bytes: 1048576"
+     ],
+     "before": []
+    }
+   ],
+   "lines": 1,
+   "before": null,
+   "finding": "V-04",
+   "hunk_id": "h-02"
+  },
+  {
+   "file": "config/tenants/lumen-pay.yaml",
+   "kind": "auto",
+   "line": 6,
+   "rule": "rate-limit-required",
+   "after": "    rate_limit:\n      rps: 10\n      burst: 10",
+   "hunks": [
+    {
+     "id": "h-02",
+     "kind": "auto",
+     "line": 7,
+     "after": [
+      "    rate_limit:",
+      "      rps: 10",
+      "      burst: 10"
+     ],
+     "before": []
+    }
+   ],
+   "lines": 3,
+   "before": null,
+   "finding": "V-03",
+   "hunk_id": "h-02"
+  },
+  {
+   "file": "config/tenants/lumen-pay.yaml",
+   "kind": "human",
+   "line": 17,
+   "rule": "no-inlined-secrets",
+   "after": null,
+   "hunks": [
+    {
+     "id": "h-03",
+     "kind": "agent",
+     "line": 17,
+     "after": [],
+     "before": [
+      "      api_key: \"[SECRET]\""
+     ]
+    }
+   ],
+   "lines": 1,
+   "before": "      api_key: \"[SECRET]\"",
+   "finding": "V-05",
+   "hunk_id": "h-03",
+   "override": "O-2",
+   "overrides": [
+    "O-2"
+   ]
+  },
+  {
+   "file": "config/tenants/lumen-pay.yaml",
+   "kind": "agent",
+   "line": 20,
+   "rule": "cors-no-wildcard-with-credentials",
+   "after": "      allow_credentials: false",
+   "hunks": [
+    {
+     "id": "h-04",
+     "kind": "agent",
+     "line": 20,
+     "after": [
+      "      allow_credentials: false"
+     ],
+     "before": [
+      "      allow_credentials: true"
+     ]
+    }
+   ],
+   "lines": 1,
+   "before": "      allow_credentials: true",
+   "finding": "V-06",
+   "hunk_id": "h-04"
+  },
+  {
+   "file": "config/tenants/lumen-pay.yaml",
+   "kind": "agent",
+   "line": 21,
+   "rule": "no-sensitive-paths-exposed",
+   "after": null,
+   "hunks": [
+    {
+     "id": "h-04",
+     "kind": "agent",
+     "line": 20,
+     "after": [],
+     "before": [
+      "  - path: /v1/admin/accounts",
+      "    description: \"Internal account admin surface, never meant for tenants.\"",
+      "    methods: [\"GET\"]",
+      "    upstream: lumen-pay-core",
+      "    auth:",
+      "      type: jwt",
+      "      issuer: \"https://issuer.lumenpay.example\"",
+      "      audience: \"northgate\"",
+      "      scopes: [\"admin.read\"]",
+      "      jwks_url: \"https://issuer.lumenpay.example/.well-known/jwks.json\"",
+      "    rate_limit:",
+      "      rps: 10",
+      "      burst: 10"
+     ]
+    }
+   ],
+   "lines": 13,
+   "before": "  - path: /v1/admin/accounts\n    description: \"Internal account admin surface, never meant for tenants.\"\n    methods: [\"GET\"]\n    upstream: lumen-pay-core\n    auth:\n      type: jwt\n      issuer: \"https://issuer.lumenpay.example\"\n      audience: \"northgate\"\n      scopes: [\"admin.read\"]\n      jwks_url: \"https://issuer.lumenpay.example/.well-known/jwks.json\"\n    rate_limit:\n      rps: 10\n      burst: 10",
+   "finding": "V-07",
+   "hunk_id": "h-04"
+  },
+  {
+   "file": "config/tenants/lumen-pay.yaml",
+   "kind": "auto",
+   "line": 36,
+   "rule": "upstream-https-required",
+   "after": "    url: \"https://lumen-pay-core.internal.example\"",
+   "hunks": [
+    {
+     "id": "h-05",
+     "kind": "auto",
+     "line": 36,
+     "after": [
+      "    url: \"https://lumen-pay-core.internal.example\""
+     ],
+     "before": [
+      "    url: \"http://lumen-pay-core.internal.example\""
+     ]
+    }
+   ],
+   "lines": 1,
+   "before": "    url: \"http://lumen-pay-core.internal.example\"",
+   "finding": "V-09",
+   "hunk_id": "h-05"
+  },
+  {
+   "file": "config/tenants/lumen-pay.yaml",
+   "kind": "auto",
+   "line": 7,
+   "rule": null,
+   "after": "  - path: \"/v1/payments\"",
+   "hunks": [
+    {
+     "id": "h-02",
+     "kind": "auto",
+     "line": 7,
+     "after": [
+      "  - path: \"/v1/payments\""
+     ],
+     "before": [
+      "  - path: /v1/payments"
+     ]
+    }
+   ],
+   "lines": 1,
+   "before": "  - path: /v1/payments",
+   "finding": null,
+   "hunk_id": "h-02",
+   "unexplained": true
+  }
+ ],
+ "guard": null,
+ "hunks": [
+  {
+   "id": "h-01",
+   "line": 6,
+   "added": 4,
+   "removed": 0,
+   "out_line": 6
+  },
+  {
+   "id": "h-02",
+   "line": 7,
+   "added": 5,
+   "removed": 1,
+   "out_line": 11
+  },
+  {
+   "id": "h-03",
+   "line": 17,
+   "added": 0,
+   "removed": 1,
+   "out_line": 25
+  },
+  {
+   "id": "h-04",
+   "line": 20,
+   "added": 1,
+   "removed": 14,
+   "out_line": 27
+  },
+  {
+   "id": "h-05",
+   "line": 36,
+   "added": 1,
+   "removed": 1,
+   "out_line": 30
+  }
+ ],
+ "input": {
+  "ref": "ae7c877e6a8315ea7c261253cf9aa88411df8f4e",
+  "file": "config/tenants/lumen-pay.yaml",
+  "from": "upload",
+  "sha256": "1aad98cb433687e6cfe234375ee2f56c374059cfa670aeeaafb271e8d314e406",
+  "text": "tenant: lumen-pay\nowner: \"Lumen Pay Platform Team\"\ncontact: \"platform@lumenpay.example\"\ntier: standard\ndata_classification: pii\nroutes:\n  - path: /v1/payments\n    description: \"List recent payments for the authenticated merchant.\"\n    methods: [\"GET\"]\n    upstream: lumen-pay-core\n    auth:\n      type: jwt\n      issuer: \"https://issuer.lumenpay.example\"\n      audience: \"northgate\"\n      scopes: [\"payments.read\"]\n      jwks_url: \"https://issuer.lumenpay.example/.well-known/jwks.json\"\n      api_key: \"[SECRET]\"\n    cors:\n      allow_origins: [\"*\"]\n      allow_credentials: true\n  - path: /v1/admin/accounts\n    description: \"Internal account admin surface, never meant for tenants.\"\n    methods: [\"GET\"]\n    upstream: lumen-pay-core\n    auth:\n      type: jwt\n      issuer: \"https://issuer.lumenpay.example\"\n      audience: \"northgate\"\n      scopes: [\"admin.read\"]\n      jwks_url: \"https://issuer.lumenpay.example/.well-known/jwks.json\"\n    rate_limit:\n      rps: 10\n      burst: 10\nupstreams:\n  lumen-pay-core:\n    url: \"http://lumen-pay-core.internal.example\"\n    timeout_ms: 2000\n"
+ },
+ "before": {
+  "exit": 1,
+  "command": "go run ./cmd/gwlint validate .boss-validation/lumen-pay.yaml --json",
+  "findings": [
+   "V-01",
+   "V-02",
+   "V-03",
+   "V-04",
+   "V-05",
+   "V-06",
+   "V-07",
+   "V-08",
+   "V-09"
+  ]
+ },
+ "schema": "boss.validation/v1",
+ "target": "config/tenants/lumen-pay.yaml",
+ "ruleset": {
+  "id": "northgate",
+  "sha": "2b7fa8ea8635",
+  "rules": {
+   "no-inlined-secrets": {
+    "guide": "Delete the key if the route already authenticates another way; otherwise replace with api_key_secret_ref: vault://<tenant>/<name>. Never write a hash you computed.",
+    "autofix": "never",
+    "enabled": true,
+    "severity": "P0"
+   },
+   "pii-fields-declared": {
+    "guide": "Declare the PII fields the route returns; ask the partner when unsure.",
+    "autofix": "agent",
+    "enabled": true,
+    "severity": "P2"
+   },
+   "rate-limit-required": {
+    "guide": null,
+    "autofix": "mechanical",
+    "enabled": true,
+    "severity": "P1"
+   },
+   "request-size-capped": {
+    "guide": null,
+    "autofix": "mechanical",
+    "enabled": true,
+    "severity": "P1"
+   },
+   "upstream-https-required": {
+    "guide": null,
+    "autofix": "mechanical",
+    "enabled": true,
+    "severity": "P0"
+   },
+   "no-sensitive-paths-exposed": {
+    "guide": "Removing a route is a product decision: leave it for a person.",
+    "autofix": "human",
+    "enabled": true,
+    "severity": "P0"
+   },
+   "tenant-id-matches-filename": {
+    "guide": null,
+    "autofix": "never",
+    "enabled": true,
+    "severity": "P1"
+   },
+   "tenant-rate-limit-required": {
+    "guide": "rps 50, burst 50 unless the brief names a quota.",
+    "autofix": "agent",
+    "enabled": true,
+    "severity": "P1"
+   },
+   "cors-no-wildcard-with-credentials": {
+    "guide": "Default to allow_credentials: false. Only keep credentials if the partner named exact origins in the brief.",
+    "autofix": "agent",
+    "enabled": true,
+    "severity": "P0"
+   }
+  },
+  "custom": [],
+  "version": 1
+ },
+ "evidence": [
+  {
+   "id": "E-1",
+   "cmd": "go run ./cmd/gwlint validate .boss-validation/lumen-pay.yaml --json",
+   "exit": 1,
+   "kind": "command"
+  },
+  {
+   "id": "E-2",
+   "cmd": "go run ./cmd/gwlint --fix .boss-validation/fixed/lumen-pay.yaml",
+   "exit": 1,
+   "kind": "command"
+  },
+  {
+   "id": "E-3",
+   "cmd": "go run ./cmd/gwlint validate config/tenants/lumen-pay.yaml --json",
+   "exit": 0,
+   "kind": "command"
+  }
+ ],
+ "findings": [
+  {
+   "id": "V-01",
+   "basis": "ruleset northgate v1",
+   "fixed": "rate_limit:",
+   "title": "Every tenant must declare a tenant-level rate limit within bounds",
+   "change": "added",
+   "source": {
+    "kind": "validator",
+    "name": "gwlint",
+    "rule_id": "tenant-rate-limit-required",
+    "rule_doc": "rules/api-guidelines.yaml#tenant-rate-limit-required"
+   },
+   "status": "fixed",
+   "hunk_id": "h-01",
+   "evidence": [
+    {
+     "id": "E-1",
+     "cmd": "go run ./cmd/gwlint validate .boss-validation/lumen-pay.yaml --json",
+     "exit": 1,
+     "kind": "command"
+    },
+    {
+     "id": "E-3",
+     "cmd": "go run ./cmd/gwlint validate config/tenants/lumen-pay.yaml --json",
+     "exit": 0,
+     "kind": "command",
+     "absent": true
+    }
+   ],
+   "fix_kind": "agent",
+   "fixed_by": "line",
+   "location": {
+    "file": "config/tenants/lumen-pay.yaml",
+    "line": 1,
+    "target_line": 1,
+    "partner_line": 1
+   },
+   "original": "tenant: lumen-pay",
+   "override": null,
+   "severity": "P1",
+   "native_severity": "error"
+  },
+  {
+   "id": "V-02",
+   "basis": "ruleset northgate v1",
+   "fixed": "pii_fields: [\"merchant_id\"]",
+   "title": "Tenants handling PII should declare which fields to redact",
+   "change": "added",
+   "source": {
+    "kind": "validator",
+    "name": "gwlint",
+    "rule_id": "pii-fields-declared",
+    "rule_doc": "rules/api-guidelines.yaml#pii-fields-declared"
+   },
+   "status": "fixed",
+   "hunk_id": "h-01",
+   "evidence": [
+    {
+     "id": "E-1",
+     "cmd": "go run ./cmd/gwlint validate .boss-validation/lumen-pay.yaml --json",
+     "exit": 1,
+     "kind": "command"
+    },
+    {
+     "id": "E-3",
+     "cmd": "go run ./cmd/gwlint validate config/tenants/lumen-pay.yaml --json",
+     "exit": 0,
+     "kind": "command",
+     "absent": true
+    }
+   ],
+   "fix_kind": "agent",
+   "fixed_by": "line",
+   "location": {
+    "file": "config/tenants/lumen-pay.yaml",
+    "line": 5,
+    "target_line": 5,
+    "partner_line": 5
+   },
+   "original": "data_classification: pii",
+   "override": null,
+   "severity": "P2",
+   "native_severity": "warn"
+  },
+  {
+   "id": "V-03",
+   "basis": "ruleset northgate v1",
+   "fixed": "    rate_limit:",
+   "title": "Every route must declare a rate limit within bounds",
+   "change": "edited",
+   "source": {
+    "kind": "validator",
+    "name": "gwlint",
+    "rule_id": "rate-limit-required",
+    "rule_doc": "rules/api-guidelines.yaml#rate-limit-required"
+   },
+   "status": "fixed",
+   "hunk_id": "h-02",
+   "evidence": [
+    {
+     "id": "E-1",
+     "cmd": "go run ./cmd/gwlint validate .boss-validation/lumen-pay.yaml --json",
+     "exit": 1,
+     "kind": "command"
+    },
+    {
+     "id": "E-3",
+     "cmd": "go run ./cmd/gwlint validate config/tenants/lumen-pay.yaml --json",
+     "exit": 0,
+     "kind": "command",
+     "absent": true
+    }
+   ],
+   "fix_kind": "auto",
+   "fixed_by": "line",
+   "location": {
+    "file": "config/tenants/lumen-pay.yaml",
+    "line": 7,
+    "line_from": "partner",
+    "target_line": null,
+    "partner_line": 7
+   },
+   "original": "  - path: /v1/payments",
+   "override": null,
+   "severity": "P1",
+   "native_severity": "error"
+  },
+  {
+   "id": "V-04",
+   "basis": "ruleset northgate v1",
+   "fixed": "    max_body_bytes: 1048576",
+   "title": "Every route must declare a request body size cap",
+   "change": "edited",
+   "source": {
+    "kind": "validator",
+    "name": "gwlint",
+    "rule_id": "request-size-capped",
+    "rule_doc": "rules/api-guidelines.yaml#request-size-capped"
+   },
+   "status": "fixed",
+   "hunk_id": "h-02",
+   "evidence": [
+    {
+     "id": "E-1",
+     "cmd": "go run ./cmd/gwlint validate .boss-validation/lumen-pay.yaml --json",
+     "exit": 1,
+     "kind": "command"
+    },
+    {
+     "id": "E-3",
+     "cmd": "go run ./cmd/gwlint validate config/tenants/lumen-pay.yaml --json",
+     "exit": 0,
+     "kind": "command",
+     "absent": true
+    }
+   ],
+   "fix_kind": "auto",
+   "fixed_by": "line",
+   "location": {
+    "file": "config/tenants/lumen-pay.yaml",
+    "line": 7,
+    "line_from": "partner",
+    "target_line": null,
+    "partner_line": 7
+   },
+   "original": "  - path: /v1/payments",
+   "override": null,
+   "severity": "P1",
+   "native_severity": "error"
+  },
+  {
+   "id": "V-05",
+   "held": {
+    "by": "ruleset",
+    "autofix": "never"
+   },
+   "basis": "ruleset northgate v1",
+   "fixed": null,
+   "title": "No API keys, tokens or passwords inlined in plaintext",
+   "change": "removed",
+   "source": {
+    "kind": "validator",
+    "name": "gwlint",
+    "rule_id": "no-inlined-secrets",
+    "rule_doc": "rules/api-guidelines.yaml#no-inlined-secrets"
+   },
+   "status": "open",
+   "hunk_id": "h-03",
+   "evidence": [
+    {
+     "id": "E-1",
+     "cmd": "go run ./cmd/gwlint validate .boss-validation/lumen-pay.yaml --json",
+     "exit": 1,
+     "kind": "command"
+    },
+    {
+     "id": "E-3",
+     "cmd": "go run ./cmd/gwlint validate config/tenants/lumen-pay.yaml --json",
+     "exit": 0,
+     "kind": "command",
+     "absent": true
+    }
+   ],
+   "fix_kind": "human",
+   "fixed_by": "line",
+   "location": {
+    "file": "config/tenants/lumen-pay.yaml",
+    "line": 17,
+    "line_from": "partner",
+    "target_line": null,
+    "partner_line": 17
+   },
+   "original": "      api_key: \"[SECRET]\"",
+   "override": null,
+   "severity": "P0",
+   "native_severity": "error",
+   "fixed_if_released": true
+  },
+  {
+   "id": "V-06",
+   "basis": "ruleset northgate v1",
+   "fixed": "      allow_credentials: false",
+   "title": "CORS must not combine a wildcard origin with credentials",
+   "change": "edited",
+   "source": {
+    "kind": "validator",
+    "name": "gwlint",
+    "rule_id": "cors-no-wildcard-with-credentials",
+    "rule_doc": "rules/api-guidelines.yaml#cors-no-wildcard-with-credentials"
+   },
+   "status": "fixed",
+   "hunk_id": "h-04",
+   "evidence": [
+    {
+     "id": "E-1",
+     "cmd": "go run ./cmd/gwlint validate .boss-validation/lumen-pay.yaml --json",
+     "exit": 1,
+     "kind": "command"
+    },
+    {
+     "id": "E-3",
+     "cmd": "go run ./cmd/gwlint validate config/tenants/lumen-pay.yaml --json",
+     "exit": 0,
+     "kind": "command",
+     "absent": true
+    }
+   ],
+   "fix_kind": "agent",
+   "fixed_by": "line",
+   "location": {
+    "file": "config/tenants/lumen-pay.yaml",
+    "line": 20,
+    "line_from": "partner",
+    "target_line": null,
+    "partner_line": 20
+   },
+   "original": "      allow_credentials: true",
+   "override": null,
+   "severity": "P0",
+   "native_severity": "error"
+  },
+  {
+   "id": "V-07",
+   "held": {
+    "by": "ruleset",
+    "autofix": "human"
+   },
+   "basis": "ruleset northgate v1",
+   "fixed": null,
+   "title": "Routes must not expose /admin, /internal or /debug paths",
+   "change": "removed",
+   "source": {
+    "kind": "validator",
+    "name": "gwlint",
+    "rule_id": "no-sensitive-paths-exposed",
+    "rule_doc": "rules/api-guidelines.yaml#no-sensitive-paths-exposed"
+   },
+   "status": "open",
+   "hunk_id": "h-04",
+   "evidence": [
+    {
+     "id": "E-1",
+     "cmd": "go run ./cmd/gwlint validate .boss-validation/lumen-pay.yaml --json",
+     "exit": 1,
+     "kind": "command"
+    },
+    {
+     "id": "E-3",
+     "cmd": "go run ./cmd/gwlint validate config/tenants/lumen-pay.yaml --json",
+     "exit": 0,
+     "kind": "command",
+     "absent": true
+    }
+   ],
+   "fix_kind": "human",
+   "fixed_by": "line",
+   "location": {
+    "file": "config/tenants/lumen-pay.yaml",
+    "line": 21,
+    "line_from": "partner",
+    "target_line": null,
+    "partner_line": 21
+   },
+   "original": "  - path: /v1/admin/accounts",
+   "override": null,
+   "severity": "P0",
+   "native_severity": "error",
+   "fixed_if_released": true
+  },
+  {
+   "id": "V-08",
+   "basis": "ruleset northgate v1",
+   "fixed": null,
+   "title": "Every route must declare a request body size cap",
+   "change": "removed",
+   "source": {
+    "kind": "validator",
+    "name": "gwlint",
+    "rule_id": "request-size-capped",
+    "rule_doc": "rules/api-guidelines.yaml#request-size-capped"
+   },
+   "status": "fixed",
+   "hunk_id": "h-04",
+   "evidence": [
+    {
+     "id": "E-1",
+     "cmd": "go run ./cmd/gwlint validate .boss-validation/lumen-pay.yaml --json",
+     "exit": 1,
+     "kind": "command"
+    },
+    {
+     "id": "E-3",
+     "cmd": "go run ./cmd/gwlint validate config/tenants/lumen-pay.yaml --json",
+     "exit": 0,
+     "kind": "command",
+     "absent": true
+    }
+   ],
+   "fix_kind": "human",
+   "fixed_by": "removed_with_block",
+   "location": {
+    "file": "config/tenants/lumen-pay.yaml",
+    "line": 21,
+    "line_from": "partner",
+    "target_line": null,
+    "partner_line": 21
+   },
+   "original": "  - path: /v1/admin/accounts",
+   "override": null,
+   "severity": "P1",
+   "native_severity": "error"
+  },
+  {
+   "id": "V-09",
+   "basis": "ruleset northgate v1",
+   "fixed": "    url: \"https://lumen-pay-core.internal.example\"",
+   "title": "Upstream URLs must use https://",
+   "change": "added",
+   "source": {
+    "kind": "validator",
+    "name": "gwlint",
+    "rule_id": "upstream-https-required",
+    "rule_doc": "rules/api-guidelines.yaml#upstream-https-required"
+   },
+   "status": "fixed",
+   "hunk_id": "h-05",
+   "evidence": [
+    {
+     "id": "E-1",
+     "cmd": "go run ./cmd/gwlint validate .boss-validation/lumen-pay.yaml --json",
+     "exit": 1,
+     "kind": "command"
+    },
+    {
+     "id": "E-3",
+     "cmd": "go run ./cmd/gwlint validate config/tenants/lumen-pay.yaml --json",
+     "exit": 0,
+     "kind": "command",
+     "absent": true
+    }
+   ],
+   "fix_kind": "auto",
+   "fixed_by": "line",
+   "location": {
+    "file": "config/tenants/lumen-pay.yaml",
+    "line": 35,
+    "target_line": 29,
+    "partner_line": 35
+   },
+   "original": "  lumen-pay-core:",
+   "override": null,
+   "severity": "P0",
+   "native_severity": "error"
+  }
+ ],
+ "validator": {
+  "id": "gwlint",
+  "fix": "go run ./cmd/gwlint --fix {file}",
+  "run": "go run ./cmd/gwlint validate {file} --json",
+  "adapter": "gwlint-json",
+  "version": "507519c",
+  "rules_doc": "rules/api-guidelines.yaml"
+ },
+ "comment_claims": []
+}

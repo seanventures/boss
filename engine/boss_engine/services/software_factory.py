@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import functools
 import json
+import logging
 import re
 from typing import Any, Optional
 
@@ -62,21 +65,142 @@ def _accepts_kwarg(func: Any, name: str) -> bool:
     return any(p.name == name or p.kind is inspect.Parameter.VAR_KEYWORD for p in params)
 
 
+def _without_lesson_ids(github: Any, branch: str, path: str, content: Any) -> Any:
+    """``content`` with lesson ids stripped from the comments of lines the branch does not
+    already hold (remediation_guards.strip_lesson_ids). The branch is read only when the
+    content carries an id at all. Never raises: on any error the content is kept as is."""
+    if not isinstance(content, str) or "kgn_" not in content:
+        return content
+    try:
+        from .remediation_guards import strip_lesson_ids
+
+        base = None
+        read = getattr(github, "read_text_file", None)
+        if callable(read):
+            try:
+                base = read(branch, path)
+            except Exception:  # noqa: BLE001 — a new file or a new branch: nothing to keep
+                base = None
+        cleaned = strip_lesson_ids(content, base if isinstance(base, str) else None)
+        if cleaned != content:
+            logging.getLogger(__name__).info("commit_change: lesson ids removed from %s", path)
+        return cleaned
+    except Exception:  # noqa: BLE001 — the guard never blocks a commit
+        return content
+
+
+#: THE BUILD'S COMMIT GUARD (governed_code_task_service): ``guard(branch, path, content)`` →
+#: the content to commit. Set for one build's scope (``commit_guard_scope``); every commit the
+#: build makes through ``commit_change`` — stage commits, checkpoints, the partial or final PR,
+#: a follow-up's — passes through it. A person's own commit (finding_overrides) never does.
+_COMMIT_GUARD: "contextvars.ContextVar[Optional[dict]]" = contextvars.ContextVar(
+    "boss_commit_guard", default=None)
+
+
+@contextlib.contextmanager
+def commit_guard_scope():
+    """One build's scope: yields a holder whose ``guard`` the build sets once it knows it."""
+    holder: dict = {"guard": None}
+    token = _COMMIT_GUARD.set(holder)
+    try:
+        yield holder
+    finally:
+        _COMMIT_GUARD.reset(token)
+
+
+def _guarded(branch: str, path: str, content: Any) -> Any:
+    holder = _COMMIT_GUARD.get()
+    guard = (holder or {}).get("guard")
+    if guard is None:
+        return content
+    try:
+        return guard(branch, path, content)
+    except Exception:  # noqa: BLE001 — the guard never blocks a commit; the checks still judge
+        logging.getLogger(__name__).info("commit_change: guard failed on %s", path,
+                                          exc_info=True)
+        return content
+
+
 def commit_change(github: Any, branch: str, files: list[tuple[str, Any]], message: str,
                   per_file: Optional[Any] = None) -> list[str]:
     """ONE COMMIT PER STAGE where the repo host can (BOSSAPP-946). A host with a batch commit
     (LocalGitAdapter.commit_files) writes every file of a stage as ONE commit with the stage's
     message; the local-first HelpDesk's change set had 52 commits, one per file, each named
     "BOSS proposal update: <file>". A host without one (GitHub's contents API) commits per file,
-    as before, with `per_file(path)` as each message when given. Returns the commit shas."""
+    as before, with `per_file(path)` as each message when given. Returns the commit shas.
+
+    A DELETION IS A CHANGE: content None deletes the path (the batch host's commit_files
+    already does; a per-file host through its `delete_file`). A host that cannot delete refuses
+    in words — never a "done" over a file that is still on the branch."""
     files = [(str(p), c) for p, c in files]
     if not files:
         return []
+    # LESSON IDS NEVER LAND IN CODE (remediation_guards): an id a builder copied from "Learned
+    # so far" into a comment is removed from the lines this commit adds.
+    files = [(p, _without_lesson_ids(github, branch, p, c)) for p, c in files]
+    # THE RULESET'S AUTOFIX POLICY HOLDS ON EVERY BUILD COMMIT (dry run 4): a `human` / `never`
+    # rule's lines are put back before they reach the branch.
+    files = [(p, _guarded(branch, p, c)) for p, c in files]
     batch = getattr(github, "commit_files", None)
     if callable(batch):
         return [batch(branch, dict(files), message)]
-    return [github.upsert_file(branch, path, content, per_file(path) if per_file else message)
-            for path, content in files]
+    shas: list[str] = []
+    for path, content in files:
+        msg = per_file(path) if per_file else message
+        if content is None:
+            delete = getattr(github, "delete_file", None)
+            if not callable(delete):
+                raise RuntimeError(f"This repository host cannot delete files, so {path} "
+                                   "would stay on the branch. Delete it by hand.")
+            sha = delete(branch, path, msg)
+            if sha:
+                shas.append(sha)
+            continue
+        shas.append(github.upsert_file(branch, path, content, msg))
+    return shas
+
+
+def with_deletions(files: Any, deleted: Any) -> list[tuple[str, Any]]:
+    """A stage's changes as commit_change takes them: each written file, then each deleted path
+    (content None) the run removed and did not write again."""
+    pairs = [(fc.path, fc.content) for fc in files or []]
+    written = {p for p, _ in pairs}
+    return pairs + [(str(p), None) for p in deleted or [] if str(p) not in written]
+
+
+def branch_mismatches(github: Any, branch: str, files: list[tuple[str, Any]], *,
+                      limit: int = 50) -> list[dict]:
+    """THE COMMITTED BRANCH, NOT THE SANDBOX TREE: read every path of a commit back from the
+    branch and list each one that does not hold what was judged (a deleted path still there, a
+    file with other content). Empty when the branch matches, or when the host cannot read files
+    (nothing to compare with). The acceptance and the gates judged the tree; this is what makes
+    their verdict true of the branch the person merges (dry run 2, gap 1)."""
+    read = getattr(github, "read_text_file", None)
+    if not callable(read):
+        return []
+    out: list[dict] = []
+    # Every deletion, and up to `limit` written files (a host read per file).
+    checked = ([x for x in files if x[1] is None]
+               + [x for x in files if x[1] is not None][:limit])
+    for path, content in checked:
+        try:
+            got = read(branch, path)
+        except Exception as exc:  # noqa: BLE001
+            # A deletion must be PROVEN gone; a written file the host cannot show (a symlink,
+            # a directory, a transient error) is not evidence of a difference.
+            if content is None:
+                out.append({"path": path, "why": f"unreadable: {type(exc).__name__}"})
+            continue
+        if content is None and got is not None:
+            out.append({"path": path, "why": "deleted in the build, still on the branch"})
+        elif content is not None and isinstance(content, str) and got != content:
+            if got == "" and content != "":
+                # GitHub's contents API returns NO body for a file over 1 MB (encoding
+                # "none"): a big lockfile reads back empty. Not a difference it can see.
+                continue
+            out.append({"path": path, "why": ("missing on the branch" if got is None
+                                              else "the branch holds other content")})
+    return out
 
 
 def review_packet_file_summaries(files: list[FileChange]) -> list[dict[str, Any]]:
@@ -453,6 +577,11 @@ class SoftwareFactoryService:
                 "Review the diff and approval context before merge.",
                 "Proceed to merge approval only if the review packet also looks correct.",
             ]
+        if status == "no_ci":
+            return [
+                "No hosted CI is configured for this repository; review the diff and BOSS sandbox checks before merge.",
+                "Proceed to merge approval only if the review packet and sandbox evidence look correct.",
+            ]
         if status == "failed":
             return [
                 "Fix the failing sandbox validation before merge approval.",
@@ -474,6 +603,8 @@ class SoftwareFactoryService:
     def _review_confidence_for_status(self, status: str) -> str:
         if status == "passed":
             return "ci-passed-manual-review-required"
+        if status == "no_ci":
+            return "ci-none-manual-review-required"
         if status == "failed":
             return "ci-failed-review-required"
         return "ci-incomplete-review-required"
@@ -484,6 +615,8 @@ class SoftwareFactoryService:
     def _review_recommendation_for_status(self, status: str) -> str:
         if status == "passed":
             return "Review the draft PR and merge manually after approval."
+        if status == "no_ci":
+            return "No hosted CI configured; review the diff and sandbox checks before approving merge."
         if status == "failed":
             return "Do not merge until the failing sandbox validation evidence is fixed."
         return "Do not merge until GitHub validation completes successfully."
@@ -929,7 +1062,7 @@ class SoftwareFactoryService:
     ) -> dict:
         blockers: list[str] = []
         warnings: list[str] = []
-        if validation_status != "passed":
+        if validation_status not in ("passed", "no_ci"):
             blockers.append("ci_or_sandbox_validation_not_passed")
         if security_dependency_review["status"] == "failed":
             blockers.append("security_dependency_review_failed")
@@ -1268,17 +1401,19 @@ class SoftwareFactoryService:
 
     def _after_merge_failure(self, connection: Any, project_id: str, decision_id: str,
                              pull_request_number: int, pull_request_url: str,
-                             branch_name: Optional[str], receipt_id: str, message: str) -> dict:
+                             branch_name: Optional[str], receipt_id: str, message: str,
+                             *, pinned: bool = False) -> dict:
         """A failed merge, classified and acted on in words (merge_failures)."""
         from . import merge_failures
 
         return merge_failures.handle(self, connection, project_id, decision_id,
                                      pull_request_number, pull_request_url, branch_name,
-                                     receipt_id, message)
+                                     receipt_id, message, pinned=pinned)
 
     def _merge_after_restack(self, connection: Any, project_id: str, pull_request_number: int,
                              title: str, branch_name: Optional[str], receipt_id: str,
-                             pull_request_url: str) -> Any:
+                             pull_request_url: str,
+                             *, approved_head: Optional[str] = None) -> Any:
         """Tier 1b of conflict recovery (pr_follow_up): the merge result, or None."""
         merged_of = getattr(self.github, "last_merged_pull_request", None)
         restack = getattr(self.github, "restack_after_merge", None)
@@ -1292,6 +1427,20 @@ class SoftwareFactoryService:
                            number=int(earlier["number"]))
             if not done.get("restacked"):
                 return None
+            restacked_head = str(done.get("head_sha") or "").strip()
+            if not restacked_head and callable(getattr(self.github, "pull_request_snapshot", None)):
+                restacked_head = str(
+                    (self.github.pull_request_snapshot(pull_request_number) or {}).get("head_sha")
+                    or ""
+                ).strip()
+            if approved_head and not restacked_head:
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "merge_after_restack: restacked head unreadable for %s; refusing unpinned merge",
+                    pull_request_url,
+                )
+                return None
             self.events.emit(
                 connection, project_id, "software_factory.pull_request_restacked",
                 "release_manager", "receipt", receipt_id,
@@ -1299,7 +1448,12 @@ class SoftwareFactoryService:
                  "paths": done.get("paths") or [],
                  "why": f"its branch still carried #{earlier['number']}'s merged commits; put "
                         "it back on its base with only the follow-up change, then merged"})
-            return self.github.merge_pull_request(pull_request_number, title)
+            restack_pin = (
+                {"head_sha": restacked_head}
+                if restacked_head and _accepts_kwarg(self.github.merge_pull_request, "head_sha")
+                else {}
+            )
+            return self.github.merge_pull_request(pull_request_number, title, **restack_pin)
         except Exception:  # noqa: BLE001 — falls through to the failure path, in words
             import logging
 
@@ -1362,6 +1516,39 @@ class SoftwareFactoryService:
                 decision_id,
                 {},
             )
+
+    @staticmethod
+    def _approved_head_sha(connection: Any, project_id: str, decision_id: str) -> Optional[str]:
+        """The head commit a merge decision was raised for (its recommendation's `head_sha`),
+        or None when it names none."""
+        try:
+            if hasattr(connection, "begin_nested"):
+                with connection.begin_nested():
+                    value = connection.execute(sql(
+                        "SELECT recommendation->>'head_sha' FROM decisions "
+                        "WHERE id = :d AND project_id = :p"),
+                        {"d": decision_id, "p": project_id}).scalar()
+            else:
+                value = connection.execute(sql(
+                    "SELECT recommendation->>'head_sha' FROM decisions "
+                    "WHERE id = :d AND project_id = :p"),
+                    {"d": decision_id, "p": project_id}).scalar()
+        except Exception:  # noqa: BLE001 — unread: caller logs/emits pin-drop event
+            return None
+        value = str(value or "").strip()
+        return value if re.fullmatch(r"[0-9a-f]{7,64}", value) else None
+
+    def _head_moved_past(self, pull_request_number: int, approved_head: Optional[str]) -> bool:
+        """Whether the pull request's head is no longer the approved commit. Unreadable counts
+        as moved: a recovery that merges the tip is only safe when it is the approved one."""
+        snap = getattr(self.github, "pull_request_snapshot", None)
+        if not approved_head or not callable(snap):
+            return bool(approved_head)
+        try:
+            head = str((snap(int(pull_request_number)) or {}).get("head_sha") or "")
+        except Exception:  # noqa: BLE001
+            return True
+        return not head.startswith(approved_head) and not approved_head.startswith(head or "-")
 
     def _require_approved_effect_decision(
         self,
@@ -1917,10 +2104,16 @@ class SoftwareFactoryService:
         checks_failing: Optional[dict] = None,
         pr_base: Optional[str] = None,
         monitoring_removals: Optional[list[str]] = None,
-        settle_run_id: Optional[str] = None,
+            settle_run_id: Optional[str] = None,
         rescue_of_run: Optional[str] = None,
+        deleted_paths: Optional[list[str]] = None,
+        parent_branch: Optional[str] = None,
     ) -> dict:
         """Open the change's pull request and its merge decision.
+
+        ``deleted_paths``: files the build deleted. They are deleted on the branch in the same
+        commit, and the branch is READ BACK after the commit (branch_mismatches): a branch that
+        does not hold what the gates and the acceptance judged opens no pull request.
 
         THE BUILD'S MONEY SETTLES HERE, ONCE. For a build (`run_id`, or `settle_run_id` for a
         caller that does not pass `run_id`), the reservation is settled with the build's
@@ -2120,14 +2313,22 @@ class SoftwareFactoryService:
 
         follow_up: Optional[dict] = None
         try:
-            self.github.ensure_branch(branch_name)
+            if parent_branch and parent_branch != branch_name:
+                self.github.ensure_branch(branch_name, parent_branch)
+                opened_fn = getattr(self.github, "open_pull_request_for", None)
+                if callable(opened_fn) and opened_fn(parent_branch):
+                    # Stacked PR while parent PR is still open: GitHub retargets when parent merges.
+                    pr_base = parent_branch
+            else:
+                self.github.ensure_branch(branch_name)
             # ONE PULL REQUEST PER PIECE OF WORK (pr_follow_up): an open PR on this branch is
             # updated in place; after an earlier PR from it merged, this is a named follow-up
             # on a branch put back on its base, so it shows only its own change.
             from . import pr_follow_up
 
             follow_up = pr_follow_up.prepare_branch(
-                self.github, branch_name, base=pr_base, paths=[f.path for f in files])
+                self.github, branch_name, base=pr_base, paths=[f.path for f in files],
+                parent_branch=parent_branch)
             if follow_up:
                 reason = pr_follow_up.follow_up_reason(title, follow_up["after"],
                                                        follow_up.get("paths") or [])
@@ -2155,10 +2356,22 @@ class SoftwareFactoryService:
                     connection, project_id, "software_factory.monitoring_kept",
                     "coding_worker", "receipt", pr_receipt["id"],
                     {"kept": monitoring_kept, "branch": branch_name})
+            # Guarded here too, so "the branch holds what was judged" compares the guarded text.
+            _changes = [(p, _guarded(branch_name, p, c))
+                        for p, c in with_deletions(files, deleted_paths)]
             commit_shas = commit_change(
-                self.github, branch_name, [(file.path, file.content) for file in files],
+                self.github, branch_name, _changes,
                 f"BOSS: {title}"[:200],
                 per_file=lambda path: f"BOSS proposal update: {path}")
+            # THE COMMITTED BRANCH IS WHAT WAS JUDGED (dry run 2, gap 1): the gates and the
+            # acceptance check ran on the sandbox tree; a branch that differs (a deletion that
+            # never landed) would make their "met" untrue of what a person merges.
+            _differs = branch_mismatches(self.github, branch_name, _changes)
+            if _differs:
+                raise IntegrationConfigurationError(
+                    "The change branch does not hold what BOSS checked: "
+                    + "; ".join(f"{d['path']} ({d['why']})" for d in _differs[:5])
+                    + ". BOSS did not open the pull request.")
             pr_body = "\n\n".join(
                 [
                     summary,
@@ -2249,7 +2462,9 @@ class SoftwareFactoryService:
         # PERSON's approval before merge or deploy (ci_gate.refuse_approval).
         from . import ci_gate
 
-        ci_changed = ci_gate.ci_changed_evidence(files)
+        # A DELETED workflow file is a CI change too: it needs the same person's approval.
+        ci_changed = ci_gate.ci_changed_evidence(
+            {**{f.path: f.content for f in files}, **{str(p): None for p in deleted_paths or []}})
         if ci_changed:
             ci_changed["head_sha"] = branch_head_sha
             self._flag_ci_changed(connection, project_id, pr.number, pr.url, ci_changed,
@@ -2507,104 +2722,213 @@ class SoftwareFactoryService:
         # A local change set is "change #N", never a PR (BOSSAPP-946).
         _local = getattr(self.github, "kind", "") == "local"
         _ref = f"change #{pr.number}" if _local else f"PR #{pr.number}"
-        decision_id = None if set_member else self.decisions.create_blocking(
-            connection,
-            project_id,
-            task_id,
-            (f"Checks failing — decide the merge: {title} ({_ref})"
-             if card_checks else
-             f"Approve follow-up fix after #{follow_up['after']}: "
-             f"{pr_follow_up.work_name(title)} ({_ref})" if follow_up else
-             f"Approve code change: {title} ({_ref})"),
-            {
-                # FIRST, so nothing it carries can replace the action below. Its keys are the
-                # sealed evidence keys (ui/ux/capability_evidence) and collide with none here;
-                # the decision-producer scan refuses a spread placed after "action".
-                **sealed_evidence,
-                "action": "review_pull_request",
-                "summary": (
-                    (_checks_failing.decision_summary(card_checks) + " "
-                     if card_checks else "")
-                    + f"BOSS built “{title}” in a sandbox and opened "
-                    + (f"change #{pr.number}. " if _local else f"pull request #{pr.number}. ")
-                    + (f"{_acceptance_gate.headline(acceptance)}. "
-                       if _acceptance_gate.headline(acceptance) else "")
-                    + _acceptance_gate.card_words(card_checks, acceptance, validation_status)
-                    + (f" — {validation_summary}" if validation_summary else "")
-                    + (". Review the change in BOSS (it is on this machine), then approve to merge "
-                       "into the default branch or reject to send back."
-                       if getattr(self.github, "kind", "") == "local" else
-                       ". Review the diff on GitHub, then approve to merge or reject to send back.")
-                    + (f" {ci_changed['ci_changed_note']}" if ci_changed else "")
-                ),
-                "head_sha": branch_head_sha,
-                # What ci_gate.refuse_approval reads: a CI change needs a PERSON's approval.
-                "ci_changed": bool(ci_changed),
-                "ci_changed_files": ci_changed.get("ci_changed_files") or [],
-                "ci_findings": ci_changed.get("ci_findings") or [],
-                "requires_person_approval": bool(ci_changed),
-                "artifact_id": artifact_id,
-                "diff_artifact_id": diff_artifact_id,
-                "test_report_artifact_id": test_report_artifact_id,
-                "security_review_artifact_id": security_review_artifact_id,
-                "release_go_no_go_artifact_id": release_go_no_go_artifact_id,
-                "receipt_id": pr_receipt["id"],
-                "pull_request_url": pr.url,
-                "branch_name": branch_name,
-                # The branch the PR merges INTO (None: the host's default). An approval delegate
-                # merges only into the project's bound release branch (approval_delegations).
-                "pr_base": pr_base,
-                "title": title,
-                "validation_status": validation_status,
-                "validation_summary": validation_summary,
-                "validation_sources": validation_sources,
-                "release_go_no_go_status": release_go_no_go["status"],
-                "local_validation_receipt_id": local_validation_receipt_id,
-                "agent_module_id": (
-                    module_spec.get("id") if isinstance(module_spec, dict) else None
-                ),
-                "quality_gate_id": quality_gate_id,
-                "run_id": run_id,
-                "no_auto_merge": True,
-                # What the merge card leads with, and what makes its approval a person's stated
-                # decision rather than a click (decisions.transition, checks_failing.py).
-                **({_checks_failing.KEY: {
-                    **card_checks,
-                    "draft": bool(checks_failing) and bool(
-                        getattr(self.github, "supports_draft_pull_requests", False)),
-                    "label": _checks_failing.LABEL}} if card_checks else {}),
-                # The must-have table (acceptance_gate.py): per item met/partial/missing with
-                # file evidence, from the latest acceptance check of this PR's lineage.
-                **({_acceptance_gate.KEY: {
-                    "verdict": acceptance.get("verdict"), "counts": acceptance.get("counts"),
-                    "items": [{k: i.get(k) for k in ("n", "text", "status", "evidence",
-                                                     "source", "judgement")}
-                              for i in acceptance.get("items") or []],
-                    # Judgement (taste) items answered PARTIAL: shown, never failing.
-                    "advisory": list(acceptance.get("advisory") or []),
-                    "stack": acceptance.get("stack") or {},
-                    "why": acceptance.get("why") or "",
-                    "items_dropped": int(acceptance.get("items_dropped") or 0),
-                    "table": _acceptance_gate.must_have_table(acceptance),
-                    # WORSE THAN ITS PARENT (BOSSAPP-1330): said, with the parent's verdict and
-                    # table beside this one — never quietly replaced by the worse check.
-                    **({"regressed_vs_parent": _acceptance_gate.regression_card(
-                        acceptance["regressed_vs_parent"])}
-                       if acceptance.get("regressed_vs_parent") else {})}}
-                   if isinstance(acceptance, dict) and acceptance.get("verdict")
-                   # Never checked against the root's must-haves: the card says so.
-                   else {_acceptance_gate.KEY: {"verdict": "not_checked", "items": []}}
-                   if run_id else {}),
-                # The knowledge the card is "based on": facts matched to this change's symbols
-                # (knowledge/runtime.remember_written_files). Empty when none matched.
-                "cited_fact_ids": citations,
-                # A follow-up after the merge of #N (pr_follow_up): named, with its reason.
-                **({"follow_up_of": follow_up["after"],
-                    "follow_up_reason": follow_up.get("reason")} if follow_up else {}),
-            },
-            {},
-            "merge_decision_required",
-        )
+        # FOLLOW-UPS ARE NOT A FAILURE (quality_bar.merge_followups, operator 2026-11-18): a
+        # build whose only open items are follow-ups — review findings below the bar's blocking
+        # severity, gates the bar let through — gets the normal ready-to-merge card, "Recipe box
+        # is ready — 1 follow-up queued, BOSS is fixing it", never "Checks failing — decide" and
+        # never a reason to type. BOSS's follow-up build fixes them; the PR lists them.
+        from . import quality_bar as _quality_bar
+
+        _followups = (None if card_checks else
+                      _quality_bar.merge_followups(evidence if isinstance(evidence, dict) else {}))
+        # THE REVIEW PACKET (review_packet.py, boss.review_packet/v2): typed findings, counts and
+        # a computed verdict from the step outputs, never prose. The card's title is the ROOT
+        # build's own name — never "Follow-up: … — Follow-up: … —" from the newest follow-up.
+        from . import review_packet as _review_packet
+
+        _packet = None
+        if run_id:
+            try:
+                with connection.begin_nested():
+                    # The build's validation ran on the tree this commit holds: its evidence head.
+                    _review_packet.stamp_evidence_head(connection, str(run_id), branch_head_sha)
+                    # A FOLLOW-UP BUILD'S COMMIT on a local change up for merge: when the change's
+                    # validation ran on an older head, it re-runs here ("stale → re-checking").
+                    from .local_repo_host import is_local_pr_url as _is_local_pr
+
+                    if _is_local_pr(getattr(pr, "url", None)) and branch_head_sha:
+                        from .finding_overrides import on_head_moved
+
+                        on_head_moved(connection, self.settings, project_id, int(pr.number),
+                                      branch_head_sha)
+                    _packet = _review_packet.for_run(
+                        connection, str(run_id), head_sha=branch_head_sha, change=pr.number,
+                        project_id=project_id,
+                        followups=_followups or (_quality_bar.merge_followups(
+                            evidence if isinstance(evidence, dict) else {})))
+            except Exception:  # noqa: BLE001 — the card stands without it (and says so: no packet)
+                import logging
+
+                logging.getLogger(__name__).warning("review packet not built for %s", run_id,
+                                                    exc_info=True)
+        _work_title = ((_packet or {}).get("work") or {}).get("title") \
+            or _review_packet.work_title(title)
+        _superseded_pending: list[str] = []
+        if not set_member and run_id and getattr(pr, "url", None) and hasattr(connection, "begin_nested"):
+            try:
+                from sqlalchemy import bindparam as _bindparam
+
+                from .run_decisions import normalize_pr_url as _norm_pr_url
+
+                _want_pr = _norm_pr_url(pr.url)
+                with connection.begin_nested():
+                    _cand = connection.execute(
+                        sql(
+                            "SELECT id, recommendation->>'pull_request_url' AS u "
+                            "FROM decisions "
+                            "WHERE project_id = :p "
+                            "AND recommendation->>'action' = 'review_pull_request' "
+                            "AND recommendation->>'run_id' IS DISTINCT FROM :r "
+                            "AND status = 'pending'"
+                        ),
+                        {"p": project_id, "r": run_id},
+                    ).mappings().all()
+                    _superseded_pending = [
+                        str(row["id"])
+                        for row in _cand
+                        if row["u"] and _norm_pr_url(row["u"]) == _want_pr
+                    ]
+                    if _superseded_pending:
+                        connection.execute(
+                            sql(
+                                "UPDATE decisions SET status = 'withdrawn' "
+                                "WHERE project_id = :p AND id IN :ids AND status = 'pending'"
+                            ).bindparams(_bindparam("ids", expanding=True)),
+                            {"p": project_id, "ids": _superseded_pending},
+                        )
+            except Exception:  # noqa: BLE001 — non-DB / fake connection test double
+                _superseded_pending = []
+        decision_id = None
+        try:
+            if not set_member:
+                decision_id = self.decisions.create_blocking(
+                    connection,
+                    project_id,
+                    task_id,
+                    (f"Checks failing — decide the merge: {_work_title} ({_ref})"
+                     if card_checks else
+                     f"Approve follow-up fix after #{follow_up['after']}: "
+                     f"{pr_follow_up.work_name(title)} ({_ref})" if follow_up else
+                     f"{_quality_bar.ready_words(_work_title, _followups)}"
+                     f" ({_ref})" if _followups else
+                     f"Approve code change: {_work_title} ({_ref})"),
+                    {
+                        # FIRST, so nothing it carries can replace the action below. Its keys are the
+                        # sealed evidence keys (ui/ux/capability_evidence) and collide with none here;
+                        # the decision-producer scan refuses a spread placed after "action".
+                        **sealed_evidence,
+                        "action": "review_pull_request",
+                        "summary": (
+                            (_checks_failing.decision_summary(card_checks) + " "
+                             if card_checks else "")
+                            + (f"Ready to merge — {_quality_bar.followup_words(_followups)}. "
+                               f"{'They' if _followups['count'] != 1 else 'It'} did not block at the "
+                               f"{_followups['bar']} quality bar and "
+                               f"{'are' if _followups['count'] != 1 else 'is'} listed on the "
+                               f"{'change' if _local else 'pull request'}. "
+                               if _followups else "")
+                            + f"BOSS built “{title}” in a sandbox and opened "
+                            + (f"change #{pr.number}. " if _local else f"pull request #{pr.number}. ")
+                            + (f"{_acceptance_gate.headline(acceptance)}. "
+                               if _acceptance_gate.headline(acceptance) else "")
+                            + _acceptance_gate.card_words(card_checks, acceptance, validation_status)
+                            + (f" — {validation_summary}" if validation_summary else "")
+                            + (". Review the change in BOSS (it is on this machine), then approve to merge "
+                               "into the default branch or reject to send back."
+                               if getattr(self.github, "kind", "") == "local" else
+                               ". Review the diff on GitHub, then approve to merge or reject to send back.")
+                            + (f" {ci_changed['ci_changed_note']}" if ci_changed else "")
+                        ),
+                        "head_sha": branch_head_sha,
+                        # What ci_gate.refuse_approval reads: a CI change needs a PERSON's approval.
+                        "ci_changed": bool(ci_changed),
+                        "ci_changed_files": ci_changed.get("ci_changed_files") or [],
+                        "ci_findings": ci_changed.get("ci_findings") or [],
+                        "requires_person_approval": bool(ci_changed),
+                        "artifact_id": artifact_id,
+                        "diff_artifact_id": diff_artifact_id,
+                        "test_report_artifact_id": test_report_artifact_id,
+                        "security_review_artifact_id": security_review_artifact_id,
+                        "release_go_no_go_artifact_id": release_go_no_go_artifact_id,
+                        "receipt_id": pr_receipt["id"],
+                        "pull_request_url": pr.url,
+                        "branch_name": branch_name,
+                        # The branch the PR merges INTO (None: the host's default). An approval delegate
+                        # merges only into the project's bound release branch (approval_delegations).
+                        "pr_base": pr_base,
+                        "title": _work_title,
+                        "validation_status": validation_status,
+                        "validation_summary": validation_summary,
+                        "validation_sources": validation_sources,
+                        "release_go_no_go_status": release_go_no_go["status"],
+                        "local_validation_receipt_id": local_validation_receipt_id,
+                        "agent_module_id": (
+                            module_spec.get("id") if isinstance(module_spec, dict) else None
+                        ),
+                        "quality_gate_id": quality_gate_id,
+                        "run_id": run_id,
+                        "no_auto_merge": True,
+                        # What the merge card leads with, and what makes its approval a person's stated
+                        # decision rather than a click (decisions.transition, checks_failing.py).
+                        **({_checks_failing.KEY: {
+                            **card_checks,
+                            "draft": bool(checks_failing) and bool(
+                                getattr(self.github, "supports_draft_pull_requests", False)),
+                            "label": _checks_failing.LABEL}} if card_checks else {}),
+                        # The must-have table (acceptance_gate.py): per item met/partial/missing with
+                        # file evidence, from the latest acceptance check of this PR's lineage.
+                        **({_acceptance_gate.KEY: {
+                            "verdict": acceptance.get("verdict"), "counts": acceptance.get("counts"),
+                            "items": [{k: i.get(k) for k in ("n", "text", "status", "evidence",
+                                                             "source", "judgement")}
+                                      for i in acceptance.get("items") or []],
+                            # Judgement (taste) items answered PARTIAL: shown, never failing.
+                            "advisory": list(acceptance.get("advisory") or []),
+                            "stack": acceptance.get("stack") or {},
+                            "why": acceptance.get("why") or "",
+                            "items_dropped": int(acceptance.get("items_dropped") or 0),
+                            "table": _acceptance_gate.must_have_table(acceptance),
+                            # WORSE THAN ITS PARENT (BOSSAPP-1330): said, with the parent's verdict and
+                            # table beside this one — never quietly replaced by the worse check.
+                            **({"regressed_vs_parent": _acceptance_gate.regression_card(
+                                acceptance["regressed_vs_parent"])}
+                               if acceptance.get("regressed_vs_parent") else {})}}
+                           if isinstance(acceptance, dict) and acceptance.get("verdict")
+                           # Never checked against the root's must-haves: the card says so.
+                           else {_acceptance_gate.KEY: {"verdict": "not_checked", "items": []}}
+                           if run_id else {}),
+                        # The knowledge the card is "based on": facts matched to this change's symbols
+                        # (knowledge/runtime.remember_written_files). Empty when none matched.
+                        "cited_fact_ids": citations,
+                        # THE FOLLOW-UPS (quality_bar.merge_followups): what the card lists under its
+                        # normal Merge, P1 first, and whether BOSS's follow-up build is fixing them.
+                        **({_quality_bar.CARD_KEY: _followups} if _followups else {}),
+                        # THE PACKET the card and the change page render (SPEC §1.4, §1.5).
+                        **({_review_packet.KEY: _packet} if _packet else {}),
+                        # A follow-up after the merge of #N (pr_follow_up): named, with its reason.
+                        **({"follow_up_of": follow_up["after"],
+                            "follow_up_reason": follow_up.get("reason")} if follow_up else {}),
+                    },
+                    {},
+                    "merge_decision_required",
+                )
+        finally:
+            if _superseded_pending and hasattr(connection, "begin_nested"):
+                try:
+                    from sqlalchemy import bindparam as _bindparam
+
+                    with connection.begin_nested():
+                        connection.execute(
+                            sql(
+                                "UPDATE decisions SET status = 'pending' "
+                                "WHERE project_id = :p AND id IN :ids AND status = 'withdrawn'"
+                                + (" AND id <> :d" if decision_id else "")
+                            ).bindparams(_bindparam("ids", expanding=True)),
+                            {"p": project_id, "ids": _superseded_pending,
+                             **({"d": decision_id} if decision_id else {})},
+                        )
+                except Exception:  # noqa: BLE001
+                    pass
         if decision_id:
             # THE NEWEST BUILD'S CARD IS THE PR'S ONE CARD (BOSSAPP-1320): the older cards for
             # this pull request are withdrawn, each with a note naming this one.
@@ -2943,6 +3267,35 @@ class SoftwareFactoryService:
                     "decision_id": decision_id, "pull_request_url": pull_request_url,
                     "message": f"PR #{pull_request_number} was closed without merging, so "
                                "there is nothing to merge."}
+        # MERGE WHAT WAS APPROVED (neighborhood-board change #1, 2026-11-19). The merge card
+        # names the head the person reviewed; a follow-up build kept committing to the same
+        # branch, and merging the branch TIP swept its unreviewed checkpoint into the base —
+        # the follow-up then finished with no change of its own. A host that can merge an exact
+        # commit (the local repo host) merges that head; later commits stay on the branch and
+        # open their own change (pr_follow_up.prepare_branch restacks them onto the base).
+        approved_head = self._approved_head_sha(connection, project_id, decision_id)
+        if approved_head is None and decision_id:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "software_factory: merge head pin dropped for decision %s (%s)",
+                decision_id, pull_request_url,
+            )
+            self.events.emit(
+                connection,
+                project_id,
+                "software_factory.merge_head_pin_dropped",
+                "release_manager",
+                "decision",
+                decision_id,
+                {
+                    "pull_request_url": pull_request_url,
+                    "reason": "head_sha_unreadable_or_missing",
+                },
+            )
+        pin = ({"head_sha": approved_head}
+               if approved_head and _accepts_kwarg(self.github.merge_pull_request, "head_sha")
+               else {})
         try:
             from .github_adapter import PullRequestMergeResult
 
@@ -2950,7 +3303,7 @@ class SoftwareFactoryService:
                 sha=settled["sha"], merged=True,
                 message=f"PR #{pull_request_number} is already merged")
                 if settled and settled.get("state") == "merged" else
-                self.github.merge_pull_request(pull_request_number, title))
+                self.github.merge_pull_request(pull_request_number, title, **pin))
         except IntegrationConfigurationError as error:
             self.receipts.mark_failed(
                 connection, merge_receipt["id"], {"message": str(error)}
@@ -2990,6 +3343,15 @@ class SoftwareFactoryService:
             # return after GitHub already merged left BOSS recording failure / skipping
             # deploy follow-on — merge succeeded on GitHub, BOSS said it failed.
             _msg = str(error)
+            if isinstance(error, httpx.HTTPStatusError) and error.response is not None and error.response.status_code == 409:
+                try:
+                    _body = error.response.json()
+                    if isinstance(_body, dict) and _body.get("message"):
+                        _detail = str(_body["message"]).strip()
+                        if _detail and _detail not in _msg:
+                            _msg = f"{_msg}: {_detail}"
+                except Exception:  # noqa: BLE001
+                    pass
             merge = None
             # ONE classifier decides what counts as a conflict (merge_failures.classify):
             # GitHub says "405"/"not mergeable", a LOCAL change set says "does not merge
@@ -2998,7 +3360,13 @@ class SoftwareFactoryService:
             # merge, and nothing here even tried).
             from . import merge_failures as _mf
 
-            if _mf.classify(_msg) == _mf.NOT_MERGEABLE and hasattr(
+            # A PINNED merge whose branch MOVED past the approval never recovers by merging
+            # the tip: both tiers below merge whatever the branch holds, which is exactly what
+            # the pin keeps out. Its conflict goes to the failure path (a new approval).
+            moved = bool(pin) and self._head_moved_past(pull_request_number, approved_head)
+            if moved:
+                _msg = "The change moved after approval; nothing was merged."
+            if not moved and _mf.classify(_msg) == _mf.NOT_MERGEABLE and hasattr(
                     self.github, "update_pull_request_branch"):
                 try:
                     if self.github.update_pull_request_branch(pull_request_number):
@@ -3009,18 +3377,51 @@ class SoftwareFactoryService:
                             {"pull_request_url": pull_request_url,
                              "why": "base branch had moved; merged base into head and retrying"},
                         )
-                        merge = self.github.merge_pull_request(pull_request_number, title)
-                        recovered_from_stale_base = True
+                        tier1_pin: dict[str, Any] = {}
+                        tier1_valid = True
+                        if pin:
+                            snap = (
+                                self.github.pull_request_snapshot(pull_request_number)
+                                if callable(getattr(self.github, "pull_request_snapshot", None))
+                                else None
+                            )
+                            updated_head = str((snap or {}).get("head_sha") or "").strip()
+                            tier1_valid = False
+                            if updated_head:
+                                if (updated_head.startswith(approved_head)
+                                        or approved_head.startswith(updated_head)):
+                                    tier1_valid = True
+                                elif callable(getattr(self.github, "commit_identity", None)):
+                                    ident = self.github.commit_identity(updated_head) or {}
+                                    parents = [str(p or "") for p in (ident.get("parents") or [])]
+                                    tier1_valid = any(
+                                        p and (p.startswith(approved_head)
+                                               or approved_head.startswith(p))
+                                        for p in parents
+                                    )
+                            if tier1_valid:
+                                tier1_pin = {"head_sha": updated_head}
+                            else:
+                                _msg = (
+                                    "The change moved after approval while updating the branch; "
+                                    "nothing was merged."
+                                )
+                        if tier1_valid:
+                            merge = self.github.merge_pull_request(
+                                pull_request_number, title, **tier1_pin
+                            )
+                            recovered_from_stale_base = True
                 except Exception as retry_error:  # noqa: BLE001
                     _msg = f"{_msg} | retry after branch update: {retry_error}"
                     merge = None
-            if merge is None and _mf.classify(_msg) == _mf.NOT_MERGEABLE:
+            if not moved and merge is None and _mf.classify(_msg) == _mf.NOT_MERGEABLE:
                 # TIER 1b: the branch still carries an EARLIER pull request's commits that a
                 # squash merge left off the base (PR #237 after #236). Put it back on the base
                 # holding only what changed after that merge, then merge once more.
                 merge = self._merge_after_restack(connection, project_id, pull_request_number,
                                                   title, branch_name, merge_receipt["id"],
-                                                  pull_request_url)
+                                                  pull_request_url,
+                                                  approved_head=approved_head)
                 if merge is not None:
                     recovered_from_stale_base = True
                 else:
@@ -3048,7 +3449,8 @@ class SoftwareFactoryService:
                 # conflict goes to the build agent, a moved head or a GitHub hiccup retries.
                 return self._after_merge_failure(
                     connection, project_id, decision_id, pull_request_number,
-                    pull_request_url, branch_name, merge_receipt["id"], _msg)
+                    pull_request_url, branch_name, merge_receipt["id"], _msg,
+                    pinned=bool(pin))
 
         artifact_id = create_artifact(
             connection,

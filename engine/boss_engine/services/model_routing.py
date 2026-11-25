@@ -408,6 +408,9 @@ def adapter_for(choice: ModelChoice, connection: Any, settings: Any,
         if model and engine in ("openrouter", "groq", "deepseek", "gemini", "xai", "vllm",
                                 "ollama"):
             lane = lane.model_copy(update={"openai_model": model})
+        elif engine == "openrouter":
+            # No model named: OpenRouter's own auto routing, never another lane's default.
+            lane = lane.model_copy(update={"openai_model": "openrouter/auto"})
         return OpenAIAdapter(lane, provider=engine)
     if model and engine == "native" and hasattr(bound, "model_copy"):
         bound = bound.model_copy(update={"openai_model": model})
@@ -774,7 +777,13 @@ class GovernedChatAdapter:
         sfx_3ae11453 / sfx_be271156). It reserves in place, as before, only when a fresh
         connection cannot see the project yet (a project created in the caller's own open
         transaction — its first turn, or a test) or the connection has no engine (a double).
+
+        A CHAT TURN COMMITS HERE FIRST (chat_turns.checkpoint): what the turn wrote so far is
+        committed and no transaction is held while the model answers. A no-op elsewhere.
         """
+        from .chat_turns import checkpoint
+
+        checkpoint()
         engine = getattr(self._connection, "engine", None)
         if engine is not None:
             from sqlalchemy import text as _sql

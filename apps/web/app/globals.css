@@ -2192,6 +2192,7 @@ tr[data-expanded] { background: var(--surface-2); }
   font-family: var(--mono, monospace); font-size: 0.62rem; letter-spacing: 0;
   color: var(--amber, var(--boss-c-d29922));
 }
+.bx-strip-alert[data-tone="bad"] { color: var(--red, var(--boss-c-f85149)); font-weight: 600; }
 .bx-strip-dot {
   width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto;
   background: var(--muted);
@@ -5718,6 +5719,11 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .dq-filter-btn.active .dq-filter-count {
   color: var(--ink); background: color-mix(in srgb, var(--accent, var(--boss-c-6ea8fe)) 26%, transparent);
 }
+/* "+N" in other projects: the rail's quiet badge, beside the tab's own count. */
+.dq-filter-count.dq-filter-elsewhere,
+.dq-filter-btn.active .dq-filter-count.dq-filter-elsewhere {
+  margin-left: -2px; color: var(--muted); background: transparent; border: 1px dashed var(--border);
+}
 
 /* Reference block at the foot of the decisions page: present, clearly secondary.
    These panels are worth keeping and cannot be acted on, so they read quieter than the queue
@@ -7299,7 +7305,7 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .bx-project-attention { color: var(--amber); }
 .bx-project-picker {
   position: absolute; top: 39px; left: 28px; z-index: 50;
-  width: min(520px, calc(100% - 40px)); max-height: min(70vh, 650px);
+  width: min(520px, calc(100vw - 40px)); max-height: min(70vh, 650px);
   display: flex; flex-direction: column; gap: 10px;
   padding: 16px; border: 1px solid var(--border-strong); border-radius: 8px;
   background: var(--surface); box-shadow: 0 18px 36px var(--boss-c-5c08c15447);
@@ -8667,11 +8673,46 @@ a.agent-chip-name:hover { text-decoration: underline; }
 }
 .agent-attached-drop:hover { color: var(--ink, var(--boss-c-eef3fb)); }
 .agent-attached-error { margin: 4px 0 0; font-size: .78rem; color: var(--amber, var(--boss-c-d29922)); }
+/* ATTACH IS AN ICON BUTTON (operator, 2026-11-19): a paperclip and a small label, the send
+   button's height, so the bar reads as controls and not as a word beside the field. */
 .agent-attach {
-  border: 1px solid var(--border, var(--boss-c-1c2740)); background: transparent; cursor: pointer;
-  border-radius: 8px; padding: 4px 8px; font-size: .9rem; line-height: 1;
+  display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto;
+  height: 32px; padding: 0 10px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--border); background: transparent; color: var(--muted);
+  font: inherit; font-size: var(--fs-tag); font-weight: 600; line-height: 1;
 }
-.agent-attach:hover { border-color: var(--accent, var(--boss-c-4c8df6)); }
+.agent-attach svg { flex: 0 0 auto; }
+.agent-attach:hover { color: var(--ink); border-color: var(--accent); }
+.agent-attach:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* AN ANSWER'S DETAILS, FOLDED (lib/answer-details.ts): the sentence and its button first. */
+.agent-answer-details { margin-top: 6px; }
+.agent-answer-details > summary {
+  cursor: pointer; font-size: var(--fs-tag); font-weight: 600; color: var(--muted); width: fit-content;
+}
+.agent-answer-details > summary:hover { color: var(--ink); }
+.agent-answer-details[open] > summary { margin-bottom: 4px; }
+
+/* CHAT FULL SCREEN (components/chat-fullscreen.tsx). The WINDOW goes full screen, header and
+   all; the transcript and the composer keep a readable measure in the middle. Important
+   because each window sizes itself inline or per surface (the dock's dragged width). */
+.chat-full-btn {
+  display: inline-grid; place-items: center; width: 28px; height: 28px; padding: 0; flex: 0 0 auto;
+  border-radius: 7px; border: 1px solid transparent; background: transparent; color: var(--muted); cursor: pointer;
+}
+.chat-full-btn:hover { color: var(--ink); border-color: var(--border-strong); }
+.chat-full-btn:focus-visible, .bx-dock-full:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+[data-chat-full="1"] {
+  position: fixed !important; inset: 0 !important;
+  width: auto !important; max-width: none !important; height: auto !important; max-height: none !important;
+  z-index: calc(var(--z-dialog) + 10) !important;
+  border-radius: 0 !important; animation: none !important; box-shadow: none !important;
+}
+[data-chat-full="1"] .agent-chat-main { width: 100%; max-width: 60rem; margin-inline: auto; }
+.agent-chat-shell[data-chat-full="1"] { background: var(--surface); border: 0; }
+.agent-chat-tools { display: flex; justify-content: flex-end; margin-bottom: 4px; }
+.bx-dock-full { margin-left: auto; }
+.bx-dock-head code ~ .bx-dock-full { margin-left: 0; }
 
 /* Setup wizard. Deliberately plain: the one screen a first-time operator sees should read like
    instructions, not like a product tour. */
@@ -9500,26 +9541,26 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
   gap: 4px 8px; min-width: 0;
 }
 .wm:not(:has(.wm-step)) { display: inline-flex; flex-wrap: wrap; }
-.wm-step { color: var(--muted); font-size: 0.8125rem; }
+.wm-step { color: var(--muted); font-size: var(--fs-ui); }
 .wm-main { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
 .wm-tier {
   display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 999px;
-  border: 1px solid var(--border-strong); color: var(--ink); font: 700 0.6875rem/1 var(--sans);
+  border: 1px solid var(--border-strong); color: var(--ink); font-family: var(--sans); font-weight: 700; font-size: var(--fs-tag); line-height: 1;
 }
 .wm-fast { border-color: var(--tier-fast); background: var(--tier-fast-soft); }
 .wm-balanced { border-color: var(--tier-balanced); background: var(--tier-balanced-soft); }
 .wm-frontier { border-color: var(--tier-frontier); background: var(--tier-frontier-soft); }
-.wm-label { font-size: 0.8125rem; color: var(--ink-soft); overflow-wrap: break-word; }
+.wm-label { font-size: var(--fs-ui); color: var(--ink-soft); overflow-wrap: break-word; }
 .wm-tier { justify-self: start; }
-.wm-flag { font-size: 0.75rem; color: var(--amber); cursor: help; }
+.wm-flag { font-size: var(--fs-meta); color: var(--amber); cursor: help; }
 .wm-why-btn {
   min-height: 24px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--r-sm);
-  background: transparent; color: var(--accent-text); font: 600 0.75rem var(--sans); cursor: pointer;
+  background: transparent; color: var(--accent-text); font-family: var(--sans); font-weight: 600; font-size: var(--fs-meta); cursor: pointer;
 }
 .wm-why-btn:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 1px; }
 .wm-why {
   grid-column: 1 / -1; flex-basis: 100%; margin: 4px 0 0; padding: 8px 10px 8px 26px; border: 1px solid var(--accent-line);
-  border-radius: var(--r); background: var(--surface-2); color: var(--ink-soft); font-size: 0.8125rem;
+  border-radius: var(--r); background: var(--surface-2); color: var(--ink-soft); font-size: var(--fs-ui);
 }
 .wm-why li + li { margin-top: 2px; }
 .wm-list { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
@@ -9570,7 +9611,7 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
 .bx-project-menu-panel .bx-project-type-option input { margin: 2px 0 0; padding: 0; accent-color: var(--accent); }
 .bx-project-type-text { display: grid; gap: 2px; min-width: 0; }
 .bx-project-type-text b { color: var(--ink); font-weight: 600; }
-.bx-project-type-text small { color: var(--ink-soft); font-size: 0.72rem; line-height: 1.35; }
+.bx-project-type-text small { color: var(--ink-soft); font-size: var(--fs-meta); line-height: 1.35; }
 .bx-project-menu-panel:has(.bx-project-type) { min-width: min(340px, calc(100% - 24px)); }
 
 /* NEW PROJECT, AS A SHEET (new-project-sheet.tsx): the console's look, outside the menu. Anchored
@@ -9585,7 +9626,7 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
   display: grid; gap: 14px; width: min(34rem, 100%); max-height: calc(100vh - clamp(12px, 4vh, 64px) - 12px); overflow-y: auto;
   padding: 20px 22px 18px; border: 1px solid var(--border-strong); border-radius: var(--r-xl, 12px);
   background: var(--surface); color: var(--ink); box-shadow: 0 32px 90px var(--boss-c-4c46ca1826);
-  font-size: 0.875rem; line-height: 1.45; box-sizing: border-box;
+  font-size: var(--fs-body); line-height: 1.45; box-sizing: border-box;
 }
 .bx-np-title { margin: 0; font-family: var(--display); font-size: var(--fs-page); font-weight: 600; }
 .bx-np-sub { margin: -6px 0 0; color: var(--ink-soft); }
@@ -9679,3 +9720,68 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
 .decision-inbox-section .dq-filter-count { font-size: var(--fs-tag); }
 .decision-inbox-section .dq-title { font-size: var(--fs-title); }
 .decision-inbox-section .dq-rationale { font-size: var(--fs-ui); }
+
+/* APPROVALS: THREE PLAIN LINES PER CARD (approvals wireframe B). The operator: "Do you think these
+   things are really readable?" Each card is: (1) what deciding does + when, (2) one status line,
+   green when ready and red when something must be fixed first, (3) the answer, primary + one
+   secondary with the rest behind "…", and where the work is on the right. The rest (severity
+   boxes, sha, build id, evidence) is folded behind Checks / Details. Shared type scale only. */
+.dq-card { display: grid; gap: 6px; padding: 12px 18px; min-width: 0; }
+.dq-card-bad { box-shadow: inset 3px 0 0 var(--red); }
+.dq-card-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; min-width: 0; }
+.dq-card .dq-title,
+.decision-inbox-section .dq-card .dq-title {
+  margin: 0; flex: 1 1 240px; min-width: 0; font-size: var(--fs-title); line-height: 1.35; overflow-wrap: anywhere;
+}
+.dq-when {
+  margin-left: auto; font-size: var(--fs-tag); color: var(--quiet, var(--muted));
+  white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+.dq-when.late { color: var(--amber); }
+.dq-status { margin: 0; font-size: var(--fs-ui); line-height: 1.5; color: var(--muted); overflow-wrap: anywhere; }
+.dq-status.ok { color: var(--green); }
+.dq-status.bad { color: var(--red); }
+.dq-phrase.bad { color: var(--red); }
+.dq-status a, .dq-status .linklike, .dq-links a, .dq-links .linklike, .dq-also .linklike {
+  color: var(--accent-text, var(--accent)); text-decoration: none; font: inherit;
+}
+.dq-status a:hover, .dq-status .linklike:hover, .dq-links a:hover, .dq-links .linklike:hover, .dq-also .linklike:hover { text-decoration: underline; }
+.dq-card-act { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; min-width: 0; }
+.dq-card-act .dq-actions { flex: 1 1 auto; gap: 8px; min-width: 0; }
+.dq-actions-compact > button, .dq-reasoned-fold > summary { padding: 6px 12px; font-size: var(--fs-ui); line-height: 1.3; }
+.dq-links { margin-left: auto; display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; font-size: var(--fs-meta); }
+.dq-card-resolved .dq-links { margin-left: 0; }
+/* "Merge anyway…" and "…" open in place: the reason box takes the whole row, never a popover. */
+.dq-reasoned-fold > summary, .dq-overflow > summary { list-style: none; cursor: pointer; display: inline-flex; align-items: center; }
+.dq-reasoned-fold > summary::-webkit-details-marker, .dq-overflow > summary::-webkit-details-marker { display: none; }
+.dq-reasoned-fold[open], .dq-overflow[open] { flex-basis: 100%; }
+.dq-reasoned.dq-reasoned-fold { display: block; width: auto; }
+.dq-reasoned.dq-reasoned-fold[open] { width: 100%; }
+.dq-reasoned-fold .dq-pop { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; }
+.dq-reasoned-fold .dq-pop .decision-note { flex: 1 1 260px; min-width: 0; }
+.dq-reasoned-fold .dq-pop .dq-blocked-rows { flex: 1 1 100%; }
+.dq-more.dq-overflow > summary {
+  font-family: inherit; font-size: var(--fs-ui); font-weight: 700; letter-spacing: .08em; color: var(--muted);
+  padding: 5px 10px; border-radius: 8px; border: 1px solid var(--panel-border);
+}
+.dq-more.dq-overflow > summary::before { content: none; }
+.dq-overflow[open] > summary { color: var(--ink); }
+.dq-pop { margin-top: 8px; min-width: 0; max-width: 560px; }
+.dq-details { border-top: 1px dashed var(--panel-border); padding-top: 10px; margin-top: 2px; min-width: 0; }
+.dq-details[hidden] { display: none; }
+.dq-details .dq-evidence { margin-top: 8px; }
+.dq-card-resolved .dq-card-head .dq-title { flex: 0 1 auto; font-size: var(--fs-row); }
+.dq-card-resolved .dq-note { font-size: var(--fs-meta); }
+.dq-also { margin: 10px 0 4px; font-size: var(--fs-meta); color: var(--muted); }
+.dq-also-list { list-style: none; margin: 6px 0 0; padding: 0 0 0 10px; border-left: 2px solid var(--panel-border); display: grid; gap: 3px; }
+.dq-also-list a { color: var(--accent-text, var(--accent)); text-decoration: none; }
+.dq-also-list a:hover { text-decoration: underline; }
+.dq-also-count { color: var(--muted); font-variant-numeric: tabular-nums; }
+/* The same card at the step that waits (Workflow run screen). */
+.dw-step-decision { border: 1px solid var(--panel-border); border-radius: 10px; }
+.dw-step-decision .dq-card { padding: 10px 14px; }
+@media (max-width: 639px) {
+  .dq-card { padding: 12px; }
+  .dq-actions-compact > button, .dq-overflow > summary, .dq-reasoned-fold > summary { min-height: 44px; }
+  .dq-links { margin-left: 0; }
+}

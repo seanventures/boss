@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The stop pill says why it is stopped, beside Stopped, not only in the title.
  * Not stopped says nothing. Blank or whitespace reason and who say nothing.

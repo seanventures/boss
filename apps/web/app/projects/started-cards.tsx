@@ -10,7 +10,7 @@
  *                   approval itself is the one in Approvals / Needs you
  *   What you started stack · workflow · connectors · staging · tell — changed in Settings,
  *                   never by going back
- *   Add a feature   lives here now: Project › New work (Workflows › New build has moved)
+ *   Add a feature   Project › New work: what it builds onto, one button
  *
  * One read: GET /v1/projects/{id}/add-project/started. A project made another way has no seed
  * and shows nothing here.
@@ -125,19 +125,18 @@ export function StartedCards({ ctx }: { ctx: PxCtx }) {
             <dt>Stack</dt><dd>{String(picks.stack || "BOSS picks at the plan")}</dd>
             <dt>Workflow</dt><dd>{v.workflow ? <>{v.workflow.name} · {v.workflow.steps} · {v.workflow.approvals} <Hand size={11} weight="fill" aria-label="you approve" /></> : String(picks.workflow_key || "the default")}</dd>
             <dt>Connectors</dt><dd>{connectors.join(" · ") || "none"}</dd>
-            <dt>Staging</dt><dd>{staging ? `${staging.host ?? staging.host_id}${staging.port ? ` · :${staging.port}` : ""}${staging.made ? "" : " · once it has a repo"}` : "preview only"}</dd>
+            <dt>Staging</dt><dd>{staging ? `${staging.host || (staging.host_id === "local" ? "this machine" : "configured host")}${staging.port ? ` · :${staging.port}` : ""}${staging.made ? "" : " · once it has a repo"}` : "preview only"}</dd>
             <dt>Tell</dt><dd>{notify ? notify.replace(/^email:/, "") : "you · email"}</dd>
           </dl>
           <button type="button" className="px-btn" data-kind="ghost" onClick={() => ctx.tab("settings")}>Change in Settings →</button>
         </section>
 
         <section className="px-card" aria-labelledby="px-st-add" data-testid="px-started-add">
-          <div className="px-card-h"><Ico icon={Plus} c="blue" /><h2 id="px-st-add">Add a feature lives here</h2></div>
-          <p className="px-row px-wrap" style={{ margin: "0 0 10px" }}>
-            <s className="px-faint">Workflows › New build › Add a feature</s> <span aria-hidden>→</span>
-            <button type="button" className="px-btn" data-kind="primary" data-testid="px-started-new-work" onClick={() => ctx.tab("work", addFeaturePatch({ projectId: ctx.projectId }))}><Rocket size={12} aria-hidden /> New work</button>
-          </p>
-          <p className="px-faint" style={{ margin: 0 }}>Builds onto the app’s branch · Feature · Bug · Ticket, with Helm’s plan before Start.</p>
+          <div className="px-card-h"><Ico icon={Plus} c="blue" /><h2 id="px-st-add">Add a feature</h2></div>
+          {/* Plain words at the card's own size (stranger test r2: a struck-through "Workflows ›
+              New build › Add a feature" and unstyled paragraphs rendered as large body text). */}
+          <p className="px-st-add-why" data-testid="px-started-add-why">Builds onto the app’s branch: a feature, a bug or a ticket, with Helm’s plan before Start.</p>
+          <button type="button" className="px-btn" data-kind="primary" data-testid="px-started-new-work" onClick={() => ctx.tab("work", addFeaturePatch({ projectId: ctx.projectId }))}><Rocket size={12} aria-hidden /> New work</button>
         </section>
       </div>
     </div>

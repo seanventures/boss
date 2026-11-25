@@ -58,7 +58,9 @@ SEAT_OF_GATE: dict[str, tuple[str, str]] = {
     "acceptance_met": ("acceptance_check", "acceptance_summary"),
 }
 #: The gates that never open a pull request past themselves (see the module docstring).
-HELD_GATES = frozenset({"template_tests", "no_committed_secrets"})
+#: `input_fidelity` (input_fidelity.py): a remediation whose output is a copied answer or adds
+#: what the input never had is not a draft to merge later — it is the wrong file.
+HELD_GATES = frozenset({"template_tests", "no_committed_secrets", "input_fidelity"})
 #: How much of one seat's prose is carried when it wrote no FINDING lines.
 MAX_SEAT_CHARS = 3_000
 MAX_FINDINGS = 40
@@ -301,6 +303,38 @@ def headline(record: Optional[Mapping[str, Any]]) -> str:
     return ", ".join(labels)
 
 
+def for_work(raw: Any) -> Optional[dict[str, Any]]:
+    """THE WORK ROW'S AND PANEL'S VIEW OF THE SAME RECORD THE MERGE CARD SHOWS (enterprise
+    install 2026-11-20: the Work panel said "Ready to merge. Change #3 is built, tested and
+    reviewed." over a pull request opened with its checks failing, while its merge card said
+    CHECKS FAILING). The merge decision's `checks_failing` (what the card leads with), else the
+    run's own: {gates: [gate keys], security: bool, words: 'security, tests'}, or None when
+    nothing is failing. `words` names each gate as the check it is (factory_view.gate_noun),
+    security first: its pass-label ("Review passed") beside "failing" read as a success. Accepts
+    the stored JSON as text. Never raises."""
+    import json
+
+    rec = raw
+    if isinstance(rec, (str, bytes)):
+        try:
+            rec = json.loads(rec)
+        except ValueError:
+            return None
+    if not isinstance(rec, Mapping):
+        return None
+    entries = [g if isinstance(g, Mapping) else {"gate": str(g)}
+               for g in rec.get("gates") or [] if g]
+    names = [str(g.get("gate")) for g in entries if g.get("gate")]
+    if not names:
+        return None
+    from .factory_view import gate_noun
+
+    ordered = sorted(dict.fromkeys(names), key=lambda n: 0 if n in SECURITY_GATES else 1)
+    return {"gates": ordered,
+            "security": bool(rec.get("security")) or any(n in SECURITY_GATES for n in names),
+            "words": ", ".join(gate_noun(n) for n in ordered)}
+
+
 def tip(record: Optional[Mapping[str, Any]]) -> Optional[str]:
     """The Factory row's tooltip: what is failing, security flagged."""
     if not record or not record.get("gates"):
@@ -381,19 +415,19 @@ def decision_summary(record: Optional[Mapping[str, Any]]) -> str:
     if stopped.get("no_followup"):
         return (f"CHECKS FAILING ({stopped.get('words')}).{sec} The pull request opened anyway; "
                 "no follow-up build is queued, since it would hit the same problem. Merging it "
-                "is your decision: say why when you merge.")
+                "is your decision: say why when you merge it on this card.")
     return (f"CHECKS FAILING: {headline(record)}.{sec} The pull request opened anyway after "
             "the repair rounds; the failing checks are queued as a follow-up build. Merging "
-            "it is your decision: say why when you merge.")
+            "it is your decision: say why when you merge it on this card.")
 
 
 def merge_refusal(record: Mapping[str, Any]) -> str:
     """Why an approval without a person's stated reason is refused."""
     return (f"Checks are failing on this pull request ({headline(record)})"
             + (", including a security finding" if record.get("security") else "")
-            + ". BOSS does not merge it silently: merge with checks failing and say why "
-              "(a forced merge with a note), or keep it blocked while the follow-up build "
-              "fixes them.")
+            + ". BOSS does not merge it silently: merge with checks failing on this card and "
+              "say why (a forced merge with a note), or keep it blocked while the follow-up "
+              "build fixes them.")
 
 
 def of_decision(row: Mapping[str, Any]) -> Optional[dict[str, Any]]:
@@ -432,7 +466,9 @@ def flag_existing_decision(connection: Any, project_id: str, pull_request_url: s
     found = str(row[0])
     flagged = {**dict(record), "draft": False, "label": LABEL}
     connection.execute(text(
-        "UPDATE decisions SET recommendation = COALESCE(recommendation, '{}'::jsonb) "
+        # A card that read "ready — N follow-ups" (quality_bar.merge_followups) now leads with
+        # its failing checks instead: its follow-ups record goes, so no surface says both.
+        "UPDATE decisions SET recommendation = (COALESCE(recommendation, '{}'::jsonb) - 'followups') "
         "|| jsonb_build_object(CAST(:k AS text), CAST(:r AS JSONB), 'summary', "
         "CAST(:lead AS text) || ' ' || COALESCE(recommendation->>'summary', '')), "
         "question = CASE WHEN question LIKE 'Checks failing%' THEN question "

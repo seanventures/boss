@@ -19,6 +19,8 @@ its output is narrative attached to a decision the code already made. That is wh
 """
 from __future__ import annotations
 
+from .production import is_production_environment
+
 import json
 import logging
 from typing import Any, Optional
@@ -228,12 +230,39 @@ def check_hypothesis(sig: dict[str, Any], failure_class: int) -> tuple[bool, str
 # Propose — one step of reasoning, persisted
 # --------------------------------------------------------------------------- #
 def _shepherd_minutes(connection, run_id: str) -> float:
-    """Minutes since this shepherd's FIRST reasoning step on this task. Zero if it has not
-    started, however old the underlying failure is."""
-    v = connection.execute(
-        sql("SELECT EXTRACT(EPOCH FROM (now() - MIN(created_at)))/60 "
-            "FROM shepherd_reasoning WHERE task_ref = :t"), {"t": run_id}).scalar()
-    return float(v or 0.0)
+    """Minutes this shepherd has WORKED this task: since its first reasoning step, less the time
+    the builds its remedies started sat in the job queue (BOSSAPP-1454). Zero if it has not
+    started, however old the underlying failure is.
+
+    A retry the shepherd starts is queued behind other work (JOB_PRIORITY_BACKGROUND, and on a
+    one-slot host for hours): that wait is not the shepherd's effort, and counting it ended
+    shepherds by "deadline" before their first remedy had run. The queue time is measured the
+    way step recovery measures its repair builds' (step_recovery.runs_queued_seconds)."""
+    first = connection.execute(
+        sql("SELECT MIN(created_at) FROM shepherd_reasoning WHERE task_ref = :t"),
+        {"t": run_id}).scalar()
+    if first is None:
+        return 0.0
+    age = float(connection.execute(
+        sql("SELECT EXTRACT(EPOCH FROM (now() - CAST(:f AS timestamptz)))"),
+        {"f": first}).scalar() or 0.0)
+    return max(0.0, age - remedies_queued_seconds(connection, run_id, since=first)) / 60.0
+
+
+def remedies_queued_seconds(connection, run_id: str, *, since: Any = "epoch") -> float:
+    """Seconds the builds this shepherd's remedies started for `run_id` waited in the queue
+    (shepherd.acted events name them as `successor_run`), never more than the shepherd's age."""
+    from .step_recovery import runs_queued_seconds
+
+    try:
+        with connection.begin_nested():
+            successors = [str(r) for r in connection.execute(sql(
+                "SELECT DISTINCT data->>'successor_run' FROM events "
+                "WHERE event_type = 'shepherd.acted' AND entity_id = :t "
+                "AND data->>'successor_run' IS NOT NULL"), {"t": run_id}).scalars() if r]
+    except Exception:  # noqa: BLE001 — an unread list subtracts nothing
+        return 0.0
+    return runs_queued_seconds(connection, successors, since=since)
 
 
 def propose(engine, settings: Settings, run_id: str, *,
@@ -668,9 +697,13 @@ def sweep_abandoned_runs(engine, settings: Settings, project_id: str, *,
                     _close_as_blocked(c, rid)
                 done_blocked = len(blocked)
                 if done:
-                    c.execute(
-                        sql(f"UPDATE {table} SET status = 'completed', updated_at = now() "
-                            f"WHERE {id_col} = ANY(:ids)"), {"ids": done})
+                    complete_fn = _COMPLETE_WITH_REASON.get(table)
+                    if complete_fn is not None:
+                        complete_fn(c, done)
+                    else:
+                        c.execute(
+                            sql(f"UPDATE {table} SET status = 'completed', updated_at = now() "
+                                f"WHERE {id_col} = ANY(:ids)"), {"ids": done})
                 if stalled:
                     c.execute(
                         sql(f"UPDATE {table} SET status = 'cancelled', "
@@ -732,6 +765,70 @@ def _close_as_blocked(connection, run_id: str) -> None:
 
 #: Per run table: is a run at its last phase nevertheless NOT passed (so it ends blocked)?
 _FINISHED_NOT_PASSED = {"code_task_runs": _code_task_not_passed}
+
+
+def _json_dict(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                return parsed
+        except ValueError:
+            pass
+    return {}
+
+
+def _complete_code_task_runs(connection, done_ids: list[str]) -> None:
+    """Close finished code_task_runs as completed with a real no_pull_request reason if no PR exists."""
+    from . import pull_request_owed
+
+    rows = connection.execute(
+        sql("SELECT id, spec, state, finalize_ctx, pull_request_url "
+            "FROM code_task_runs WHERE id = ANY(:ids)"),
+        {"ids": done_ids},
+    ).mappings().all()
+    by_id = {str(r["id"]): dict(r) for r in rows}
+    for run_id in done_ids:
+        row = by_id.get(str(run_id))
+        if not row:
+            continue
+        fctx = _json_dict(row.get("finalize_ctx"))
+        pr_url = str(row.get("pull_request_url") or "").strip()
+        existing_no_pr = fctx.get(pull_request_owed.KEY)
+        has_explicit = (
+            isinstance(existing_no_pr, dict)
+            and str(existing_no_pr.get("reason") or "") not in ("", "unexplained")
+        )
+        if pr_url or has_explicit:
+            connection.execute(
+                sql("UPDATE code_task_runs SET status = 'completed', updated_at = now() WHERE id = :id"),
+                {"id": run_id},
+            )
+            continue
+        spec = _json_dict(row.get("spec"))
+        state = _json_dict(row.get("state"))
+        branch = str(fctx.get("work_branch") or fctx.get("branch") or state.get("branch") or "")
+        why = pull_request_owed.owed(spec, fctx, branch=branch)
+        if why is None:
+            on = f" Its work is on branch {branch}." if branch else ""
+            why = {
+                "reason": "shepherd_completed",
+                "words": (
+                    "This build finished its stages without a live job to open its pull request, "
+                    f"so the shepherd closed it as completed.{on}"
+                ),
+            }
+        connection.execute(
+            sql(f"UPDATE code_task_runs SET status = 'completed', updated_at = now(), "
+                f"{pull_request_owed.record_clause()} WHERE id = :id"),
+            {"id": run_id, "no_pr": pull_request_owed.record_value(why)},
+        )
+
+
+#: Per run table: custom completion updater when finishing without a live job.
+_COMPLETE_WITH_REASON = {"code_task_runs": _complete_code_task_runs}
 
 
 def _quiet_minutes(engine, job_id: str) -> float:
@@ -950,6 +1047,9 @@ def autopilot(engine, settings: Settings, jobs, project_id: str, *,
                 "FROM app_previews p "
                 "JOIN code_task_runs r ON r.id = p.run_id "
                 "WHERE r.project_id = :p AND p.status = 'failed' "
+                "  AND NOT EXISTS (SELECT 1 FROM app_previews newer "
+                "                  WHERE newer.run_id = p.run_id AND newer.created_at > p.created_at "
+                "                  AND newer.status <> 'failed') "
                 "  AND NOT EXISTS (SELECT 1 FROM shepherd_escalations e "
                 "                  WHERE e.task_ref = p.run_id AND e.status = 'open') "
                 "GROUP BY p.run_id ORDER BY max(p.created_at) DESC LIMIT :l"),
@@ -957,7 +1057,7 @@ def autopilot(engine, settings: Settings, jobs, project_id: str, *,
 
         for row in rows:
             run_id = row["run_id"]
-            if not run_id:
+            if not run_id or run_liveness.superseded_by(c, run_id):
                 continue
             # A REPEATED FAILURE IS EVIDENCE, NOT A REASON TO TRY AGAIN.
             #
@@ -1058,6 +1158,10 @@ def autopilot(engine, settings: Settings, jobs, project_id: str, *,
             continue
         try:
             result = act(engine, settings, jobs, run_id, actor=actor)
+            if not result.get("acted"):
+                deferred.append({"run_id": run_id, "remedy": proposal.get("remedy"),
+                                 "reason": result.get("refused_because") or "recovery did not execute"})
+                continue
             applied.append({"run_id": run_id, "remedy": proposal.get("remedy"),
                             "outcome": result.get("outcome")})
         except Exception as exc:  # noqa: BLE001
@@ -1202,8 +1306,6 @@ def act(engine, settings: Settings, jobs, run_id: str, *,
     return p
 
 
-# Deployment environments a request for "live" could mean.
-LIVE_ENVIRONMENTS = ("production", "prod", "live")
 
 
 def describe_undeployable(*, status: str, repo: str, targets: list) -> str:
@@ -1220,7 +1322,7 @@ def describe_undeployable(*, status: str, repo: str, targets: list) -> str:
     completed. The agent's answer is only as good as the facts it is handed.
     """
     envs = [str(t.get("environment") or "?").lower() for t in targets]
-    live = [t for t in targets if str(t.get("environment") or "").lower() in LIVE_ENVIRONMENTS]
+    live = [t for t in targets if is_production_environment(t.get("environment"))]
 
     if not targets:
         where = "This app has NO deployment targets configured at all."

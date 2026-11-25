@@ -90,6 +90,8 @@ def captain_session_turn(payload: AgentChatRequest, request: Request) -> AgentCh
     from apps.api.app.main import agent_turn
 
     reply = agent_turn(payload, request, endpoint="/v1/metatron/session")
+    if payload.background:
+        return reply  # still running: there is no answer to remember yet
     _remember_turn(payload, reply)
     return reply
 
@@ -155,7 +157,10 @@ def captain_goals_create(payload: GoalCreateRequest, request: Request) -> dict[s
 def captain_watch(payload: WatchRequest, request: Request) -> dict[str, Any]:
     if not payload.project_id.strip():
         raise HTTPException(status_code=422, detail="project_id is required")
-    return _press(request, payload.project_id, payload.actor, "captain_watch", {})
+    from boss_engine.db import background
+
+    with background():
+        return _press(request, payload.project_id, payload.actor, "captain_watch", {})
 
 
 @router.get("/v1/metatron/watch/latest")

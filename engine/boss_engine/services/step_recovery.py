@@ -330,10 +330,60 @@ def budget_left(connection: Connection, state: Mapping[str, Any],
             age = (now_utc() - datetime.fromisoformat(started)).total_seconds()
         except ValueError:
             age = 0
+        # Recovering is working, not waiting in line: the time its repair builds sat queued
+        # for a worker is not recovery time (R3, BOSSAPP-1431; a one-slot host queues a repair
+        # build for hours behind other work, and the window ran out before it ever started).
+        age = max(0.0, age - builds_queued_seconds(connection, state))
         if age >= int(caps["max_seconds"]):
             return False, (f"BOSS has been recovering this step for {int(age // 60)} minutes "
                            f"(the most it does by itself is {int(caps['max_seconds']) // 60})")
     return True, ""
+
+
+#: The most queue time a recovery window excludes from its clock (R3).
+MAX_QUEUE_EXCLUDED_SECONDS = 12 * 3600
+
+
+def builds_queued_seconds(connection: Connection, state: Mapping[str, Any]) -> float:
+    """How long this window's repair builds waited in the job queue before a worker leased
+    them: from each build's creation (never before the window opened) to its job's first lease
+    (or to now, while still queued), at most MAX_QUEUE_EXCLUDED_SECONDS. 0 when unreadable: an
+    unknown wait is never subtracted. Builds of one window run one after another, so their
+    waits do not overlap; `budget_left` never lets the result exceed the window's age."""
+    return runs_queued_seconds(connection, state.get("build_ids") or [],
+                               since=str(state.get("started_at") or "epoch"))
+
+
+def runs_queued_seconds(connection: Connection, run_ids, *, since: Any = "epoch") -> float:
+    """How long these builds (code task runs) waited in the job queue before a worker leased
+    them, from each one's creation (never before `since`) to its job's first lease, or to now
+    while still queued; at most MAX_QUEUE_EXCLUDED_SECONDS, 0 when unreadable. The one
+    measure every clock that excludes its builds' queue time reads: step recovery's window
+    (builds_queued_seconds) and the Task Shepherd's deadline (shepherd_service, BOSSAPP-1454)."""
+    builds = [str(b) for b in run_ids or [] if b]
+    if not builds:
+        return 0.0
+    try:
+        with connection.begin_nested():
+            # Per build: its job's first lease, or now while the job is still queued. A build
+            # with no lease on record and no queued job (finished, its events pruned) counts
+            # nothing: an unknown wait is never subtracted.
+            waited = connection.execute(text(
+                "SELECT COALESCE(SUM(GREATEST(0, EXTRACT(EPOCH FROM (COALESCE("
+                "  (SELECT min(e.created_at) FROM jobs j JOIN events e "
+                "     ON e.project_id = j.project_id AND e.entity_id = j.id "
+                "    AND e.event_type = 'job.leased' "
+                "   WHERE j.kind = 'code.task' AND j.payload->>'run_id' = r.id), "
+                "  (SELECT now() FROM jobs j WHERE j.kind = 'code.task' "
+                "     AND j.payload->>'run_id' = r.id AND j.status = 'queued' LIMIT 1), "
+                "  r.created_at) - GREATEST(r.created_at, CAST(:since AS timestamptz)))))), 0) "
+                "FROM code_task_runs r WHERE r.id = ANY(:ids)"),
+                {"ids": builds, "since": str(since or "epoch")}).scalar()
+    except Exception:  # noqa: BLE001
+        return 0.0
+    # Never more than a ceiling: a repair build no worker ever takes must not hold the window
+    # open forever (its own job lifecycle ends it; this ends the window's patience).
+    return min(max(0.0, float(waited or 0.0)), MAX_QUEUE_EXCLUDED_SECONDS)
 
 
 def _money(micros: int) -> str:
@@ -944,7 +994,7 @@ def coded_decision(kind: str, evidence: Mapping[str, Any], *, signature: str,
         choice = {"action": ASK_PERSON,
                   "cause": "egress refused the clone with a rules 403",
                   "reasoning": "A rules 403 is not a 5xx or a timeout, so it is not retried.",
-                  "question": "Egress refused this clone (403, repo_not_allowed). A rules 403 "
+                  "question": "Egress refused this clone (403, `repo_not_allowed`). A rules 403 "
                               "is not a 5xx or a timeout, and BOSS will not retry it. Allow the "
                               "repository, or point the build at one egress will clone?",
                   "after": "BOSS stops. It will not start this build again for the same refusal."}
@@ -960,9 +1010,16 @@ def coded_decision(kind: str, evidence: Mapping[str, Any], *, signature: str,
         asked = waiver_ask(failure, repeated=repeated) if kind_of == "open_findings" else \
             _ask(failure, host, repeated=repeated, cause=choice.get("cause"))
         choice = {**asked, "evidence": choice["evidence"]}
-    if authority_message(said):
+    if authority_message(said) and evidence.get("authority_renewed") and RETRY in allowed:
+        # THE ORG DEFAULT RENEWED IT (identity/fix_authority): the run acts again with its
+        # person's own authority, so the work that died of the ended grant simply runs again.
+        choice = {"action": RETRY, "backoff_seconds": 0, "cause": AUTHORITY_ENDED,
+                  "reasoning": "the run's grant had ended; BOSS's agents continue it with its "
+                               "person's authority by the org default, so it runs again",
+                  "evidence": [AUTHORITY_ENDED]}
+    elif authority_message(said):
         # After every other rule, including "one fresh attempt" of a first build failure.
-        # Renewing the authority is a person's act; the same run then continues.
+        # The org default could not renew it (off, revoked, another org): a person's act.
         choice = {"action": ASK_PERSON, "cause": AUTHORITY_ENDED,
                   "reasoning": "only a person can renew the authority this run was started under",
                   "question": AUTHORITY_ENDED,
@@ -978,6 +1035,23 @@ def recovery_threshold(connection: Connection, settings: Any, project_id: str) -
     return decision_threshold(connection, settings, project_id)
 
 
+#: An error that says no model is connected at all (routing found nothing, no candidates).
+_NONE_CONNECTED = re.compile(r"no (?:connected |eligible )?models?\b|not connected|no_eligible|"
+                             r"no candidates|nothing (?:is )?connected|"
+                             r"openai_api_key is not configured", re.I)
+
+
+def _none_connected(error: str) -> bool:
+    from .model_failures import explain
+
+    if _NONE_CONNECTED.search(str(error or "")):
+        return True
+    try:
+        return explain(error)["kind"] in ("no_model", "provider_requirement")
+    except Exception:  # noqa: BLE001 — unclassified: treat it as a model that errored
+        return False
+
+
 def no_model_ask(failure: Mapping[str, Any], triage: Mapping[str, Any], *, refused: str = "",
                  error: str = "", provider: str = "") -> dict[str, Any]:
     """No model decided (none connected, it failed, or its answer was refused twice): ONE
@@ -988,10 +1062,32 @@ def no_model_ask(failure: Mapping[str, Any], triage: Mapping[str, Any], *, refus
                    or "the step failed").strip().rstrip(".")
     who = (provider or "its provider").strip() or "its provider"
     out_of_credit = credit_exhausted(error)
+    if refused and not (triage.get("action") == ASK_PERSON and triage.get("question")):
+        # (BOSS's own reading that already is a question is asked as it stands, below.)
+        # THE MODEL ANSWERED, BADLY: not a missing connection, so never "Connect a model". Say
+        # what happened, that nothing was changed, and the two things a person can do.
+        hint = (f" BOSS's own reading: {str(triage.get('cause') or headline)[:200]}."
+                if triage.get("cause") else "")
+        return {"action": ASK_PERSON, "cause": headline[:300],
+                "reasoning": f"The recovery model answered, but its answer was rejected: {refused}"[:600],
+                "question": (f"{headline}. The recovery model's answer was unusable, so BOSS "
+                             f"changed nothing.{hint} Fix the cause and press Retry on this "
+                             "step; if the model keeps answering badly, pick another in "
+                             "Setup › Models.")[:600],
+                "after": "Press Retry on this step once the cause is fixed; recovery starts again.",
+                "evidence": [headline[:300], str(refused)[:300]]}
+    from .failure_words import short
+
+    # A MODEL IS CONNECTED BUT ITS CALL ERRORED (enterprise RCA, BOSSAPP-1428): the person was
+    # told "Connect a model in Setup" about a model that was connected. Only an error that says
+    # nothing is connected (or no error at all) is a missing connection.
+    said_error = short(error, 160)
+    errored = bool(error) and not refused and not out_of_credit and not _none_connected(error)
     why = (f"the model's answer was refused ({refused})" if refused else
            f"credit balance too low on {who}" if out_of_credit else
+           f"the recovery model did not answer ({said_error})" if errored else
            "BOSS needs a connected model to decide how to recover this step, and none answered"
-           + (f" ({error[:160]})" if error else ""))
+           + (f" ({said_error})" if error else ""))
     suggests = str(triage.get("action") or "")
     if suggests == ASK_PERSON and triage.get("question"):
         # BOSS's own reading already is a question for a person: asking it does nothing to the
@@ -1000,10 +1096,19 @@ def no_model_ask(failure: Mapping[str, Any], triage: Mapping[str, Any], *, refus
                 "reasoning": f"{why}; {triage.get('reasoning') or ''}".strip("; ")[:600]}
     hint = (f" BOSS's own triage reads it as: {str(triage.get('cause') or headline)[:200]} → "
             f"{_DOING.get(suggests, suggests)}." if suggests and suggests != ASK_PERSON else "")
+    if errored:
+        return {"action": ASK_PERSON, "cause": str(triage.get("cause") or headline)[:300],
+                "reasoning": why[:600],
+                "question": (f"{headline}. The recovery model did not answer ({said_error}), so "
+                             f"BOSS changed nothing.{hint} Press Retry on this step to run "
+                             "recovery again, or pick a different model in Setup › Models.")[:600],
+                "after": "Press Retry on this step; the recovery starts again with the model "
+                         "Setup › Models routes to.",
+                "evidence": [headline[:300], said_error[:300]]}
     # Out of credit is not a missing connection: say the provider's cause, and where to add credit.
-    tail = ("Add credit there (or connect a different model in Setup) so BOSS's "
+    tail = ("Add credit there (or connect a different model in Setup › Models) so BOSS's "
             "agent can decide this itself." if out_of_credit else
-            "Connect a model in Setup so BOSS's agent can decide this itself.")
+            "Connect a model in Setup › Models so BOSS's agent can decide this itself.")
     lead = f" {why}." if out_of_credit else ""
     return {"action": ASK_PERSON, "cause": str(triage.get("cause") or headline)[:300],
             "reasoning": why,
@@ -1089,7 +1194,7 @@ def agent_of(connection: Connection, project_id: str, step: Mapping[str, Any]) -
     return {"role": role, "name": str(name or row["display_name"] or role)}
 
 
-def _read_tools(connection: Connection, settings: Any, project_id: str
+def _read_tools(connection: Connection, settings: Any, project_id: str, scope: Any = None
                 ) -> tuple[Optional[list[dict[str, Any]]], Optional[Callable[[str, dict], dict]]]:
     """BOSS's fundamentals READS every agent holds (logs, run history, diagnoses, config, code,
     the deployments and hosts) — the pre-check agent's set, read-only. None when unavailable:
@@ -1098,7 +1203,7 @@ def _read_tools(connection: Connection, settings: Any, project_id: str
         from ..context import EngineContext
         from .workflow_precheck_agent import read_tools
 
-        schemas, run = read_tools(settings)
+        schemas, run = read_tools(settings, scope=scope)
         ctx = EngineContext(settings=settings, engine=getattr(connection, "engine", None))
         return schemas, (lambda name, args: run(ctx, project_id, name, args))
     except Exception as error:  # noqa: BLE001
@@ -1118,8 +1223,14 @@ def _triage_hint(triage: Mapping[str, Any]) -> str:
 
 def decide(connection: Connection, settings: Any, *, project_id: str, run_id: str,
            step_id: str, kind: str, evidence: dict[str, Any], state: dict[str, Any],
-           agent: Mapping[str, str], adapter: Any = None) -> dict[str, Any]:
-    """One decision, recorded on `state`. Never raises."""
+           agent: Mapping[str, str], adapter: Any = None,
+           reads: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
+    """One decision, recorded on `state`. Never raises.
+
+    `reads` says what the agent may read with (the runner decides it under the run's authority,
+    `_recovery_authority`): {"tools": True, "as": <who>} for a read-only token, {"tools": False,
+    "why": <reason>} when nothing could be delegated — the agent then decides from the evidence
+    it was handed, and the entry records why. None (a direct caller): the read tools, as before."""
     allowed = KINDS[kind]
     signature, pattern = cause_signature(kind, evidence.get("failure") or {})
     evidence = {**evidence, "pattern": pattern}
@@ -1157,7 +1268,14 @@ def decide(connection: Connection, settings: Any, *, project_id: str, run_id: st
                                               ref=f"recovery:{run_id}:{step_id}")
             else:
                 raw = adapter
-            schemas, run_tool = _read_tools(connection, settings, project_id)
+            if reads is not None and not reads.get("tools"):
+                schemas, run_tool = None, None
+            else:
+                # Only the tools the read-only token can call (its own scope).
+                held = (reads or {}).get("scope")
+                schemas, run_tool = _read_tools(
+                    connection, settings, project_id,
+                    scope=frozenset(held) if held is not None else None)
             left = max(1, int(caps["budget_usd_micros"]) - spent(connection, state))
             result = ask_model(adapter, raw_adapter=raw, agent=agent.get("name") or "BOSS",
                                evidence=evidence, allowed=allowed, last=last,
@@ -1192,7 +1310,8 @@ def decide(connection: Connection, settings: Any, *, project_id: str, run_id: st
     decisions = list(state.get("decisions") or [])
     entry = {"n": len(decisions) + 1, "at": now_utc().isoformat(), "signature": signature,
              "pattern": pattern.get("pattern"), **decision, "by": by, "cost_usd_micros": cost,
-             "agent": agent.get("name")}
+             "agent": agent.get("name"),
+             **({"reads": dict(reads)} if reads is not None else {})}
     entry["sentence"] = sentence(agent.get("name") or "BOSS", entry)
     state.update({"spent_usd_micros": int(state.get("spent_usd_micros") or 0) + cost,
                   "decisions": (decisions + [entry])[-MAX_DECISIONS_KEPT:],
@@ -1203,7 +1322,7 @@ def decide(connection: Connection, settings: Any, *, project_id: str, run_id: st
                {"step_id": step_id, "action": entry["action"], "signature": signature,
                 "cause": entry.get("cause"), "reasoning": str(entry.get("reasoning") or "")[:500],
                 "by": by, "cost_usd_micros": cost, "sentence": entry["sentence"],
-                "decision": entry["n"]})
+                "decision": entry["n"], **({"reads": dict(reads)} if reads is not None else {})})
     return entry
 
 

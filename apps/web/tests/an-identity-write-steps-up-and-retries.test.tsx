@@ -87,11 +87,13 @@ describe("a 401 step_up_required on an identity write", () => {
     const reasons: string[] = [];
     installMirror(fakeMirror(true, reasons));
     let n = 0;
-    const fetchMock = vi.fn(async () => (++n === 1 ? json(401, { error: "step_up_required" }) : json(200, UNDERSTOOD)));
+    const fetchMock = vi.fn(async (url: string) => (String(url).endsWith("/v1/identity/me") ? json(200, { csrf_token: "" })
+      : ++n === 1 ? json(401, { error: "step_up_required" }) : json(200, UNDERSTOOD)));
     vi.stubGlobal("fetch", fetchMock);
     const got = await addProjectApi.understand("p1", { words: "A helpdesk for our support team" });
     expect(got.brief.title).toBe("HelpDesk AI");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    // The write twice; between them, one read of the rotated session's CSRF token.
+    expect(fetchMock.mock.calls.filter(([u]) => !String(u).endsWith("/v1/identity/me"))).toHaveLength(2);
     expect(reasons).toEqual(["Confirm it's you to continue."]);
   });
 

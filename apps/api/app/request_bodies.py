@@ -413,6 +413,7 @@ class SecretPutBody(OpenProjectBody):
     backend: SkipValidation[str | None] = None
     scope_type: SkipValidation[str | None] = None
     scope_id: SkipValidation[str | None] = None
+    http_auth: SkipValidation[bool | None] = None
 
 
 class SecretProposalStoreBody(OpenRequestBody):
@@ -840,6 +841,9 @@ class MemoryForgetBody(OpenRequestBody):
 
     project_id: SkipValidation[str | None] = None
     actor: SkipValidation[str | None] = None
+    #: Why it is wrong — required when the id is a knowledge-graph lesson (kgn_…), recorded
+    #: in kg_audit with the retirement.
+    reason: SkipValidation[str | None] = None
 
 class AgentThreadEnsureBody(OpenRequestBody):
     model_config = ConfigDict(json_schema_extra={"required": ['project_id', 'actor']})
@@ -1115,6 +1119,8 @@ class StackDeployPlanBody(OpenProjectBody):
     target_id: SkipValidation[str | None] = None
     repository: SkipValidation[str | None] = None
     ref: SkipValidation[str | None] = None
+    #: The build this release is of: a production target needs one that passes the production bar.
+    run_id: SkipValidation[str | None] = None
 
 
 class StackDeployRollbackBody(OpenRequestBody):
@@ -1148,6 +1154,41 @@ class WorkflowPublishBody(ProjectBody):
     spec: dict[str, Any] | None = None
     from_workflow_key: str | None = None
     update_copy_id: str | None = None
+    # With a standard's definition_id: make the operator's own copy instead of editing the
+    # standard in place.
+    as_copy: bool | None = None
+
+
+class WorkflowStandardActBody(ProjectBody):
+    model_config = ConfigDict(json_schema_extra={"required": ["project_id", "definition_id", "act"]})
+
+    definition_id: str | None = None
+    #: reset | take_new | take_new_keep | dismiss
+    act: str | None = None
+
+
+class WorkflowPackBody(ProjectBody):
+    """A Marketplace pack acted on in a project: install, uninstall, unpublish."""
+    model_config = ConfigDict(json_schema_extra={"required": ["project_id", "pack_id"]})
+
+    pack_id: str | None = None
+
+
+class WorkflowPackUpdateBody(ProjectBody):
+    model_config = ConfigDict(json_schema_extra={"required": ["project_id", "definition_id", "act"]})
+
+    definition_id: str | None = None
+    #: take | take_keep | dismiss
+    act: str | None = None
+
+
+class WorkflowPackPublishBody(ProjectBody):
+    model_config = ConfigDict(json_schema_extra={"required": ["project_id", "definition_id"]})
+
+    definition_id: str | None = None
+    name: str | None = None
+    summary: str | None = None
+    version: str | None = None
 
 
 class WorkflowRenameBody(ProjectBody):

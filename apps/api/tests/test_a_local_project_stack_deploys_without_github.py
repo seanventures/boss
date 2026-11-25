@@ -101,6 +101,7 @@ def local_stack(client, engine, monkeypatch, repo_root, github_off):
     target = client.post("/v1/deployments/stack/targets", json={
         "project_id": HOME, "host_id": host_id, "repository": f"{owner}/{repo}",
         "app_name": f"shop-{uuid4().hex[:6]}", "public_url": "https://shop.example.test",
+        "environment": "staging",     # a production stack target needs a judged build (quality bar)
         "actor": "ceo"})
     assert target.status_code == 201, target.text
     return {"host": host, "journal": journal, "target": target.json(), "bare": bare,

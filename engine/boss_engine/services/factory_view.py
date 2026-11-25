@@ -353,6 +353,7 @@ class Cockpit(TypedDict, total=False):
     summary: dict[str, Any]        # build_detail.now_summary: what it is doing now
     why: Optional[dict[str, Any]]  # stuck_work.wait_reason: what it waits for, in words
     diagnosis: Optional[dict[str, Any]]  # stuck_work.public_diagnosis: what the Shepherd found
+    continued: Optional[dict[str, Any]]  # continuation.continued_in: where its repair went
 
 
 # ── labels and sentences (§5.1) ─────────────────────────────────────────────────────────────
@@ -370,6 +371,7 @@ GATE_LABELS: dict[str, tuple[str, str]] = {
     "security_clean": ("Security clean", "review"),
     "consistent": ("Consistent", "review"),
     "acceptance_met": ("Must-haves met", "review"),
+    "input_fidelity": ("Derived from input", "build"),
     "nothing_broke": ("Nothing broke", "check"),
     "app_serves": ("App starts", "check"),
     "web_package_honest": ("Package honest", "build"),
@@ -396,6 +398,42 @@ def gate_label(name: str) -> str:
     if key.startswith("iac_"):
         return "Infra: " + key[4:].replace("_", " ")
     return key.replace("_", " ").capitalize()
+
+
+#: A failing gate named as the CHECK it is, never its pass-label: "Review passed" beside
+#: "failing" reads as a success (operator, 2026-11-21: "3 checks not met: review, consistency,
+#: must-haves"). The Work row and panel say these; the merge card keeps the labels.
+GATE_NOUNS: dict[str, str] = {
+    "code_written": "code",
+    "written_tests_pass": "new tests",
+    "existing_tests_intact": "old tests",
+    "tests_pass": "tests",
+    "tests_written_first": "tests first",
+    "coder_did_not_edit_tests": "untouched tests",
+    "brief_tests_written": "named tests",
+    "tests_strong_enough": "test strength",
+    "code_review_passed": "review",
+    "security_clean": "security",
+    "consistent": "consistency",
+    "acceptance_met": "must-haves",
+    "input_fidelity": "input fidelity",
+    "nothing_broke": "no regressions",
+    "app_serves": "app start",
+    "web_package_honest": "package",
+    "template_tests": "template tests",
+    "no_committed_secrets": "secrets",
+}
+def gate_noun(name: str) -> str:
+    """A failing gate in one or two lower-case words ("review", "must-haves", "infra: vpc")."""
+    key = str(name or "")
+    if key in GATE_NOUNS:
+        return GATE_NOUNS[key]
+    if key.startswith("iac_"):
+        return "infra: " + key[4:].replace("_", " ")
+    import re as _re
+
+    bare = _re.sub(r"\s+(?:pass(?:es|ed)?|met|clean|ok)$", "", key.replace("_", " "), flags=_re.I)
+    return bare.strip().lower() or key
 
 
 def gate_station(name: str) -> str:
@@ -865,7 +903,20 @@ def preview_flag(preview: Optional[Mapping[str, Any]], now: Optional[datetime] =
     if status == "running" and steps and any(
             x.get("status") not in ("ok", "skipped", "failed") for x in steps):
         status = "starting"
-    return {"status": status, "url": preview.get("url") if status == "running" else None}
+    return {"status": status,
+            "url": preview_open_href(preview.get("id")) if status == "running" else None}
+
+
+def preview_open_href(preview_id: Any) -> Optional[str]:
+    """Where a browser opens a preview: the gateway path the console's Preview button opens
+    (apps/web/lib/browser-links.ts previewWebHref), which sends it on to the preview's own
+    origin. NEVER app_previews.url: that is the app's loopback port inside the API container
+    (http://127.0.0.1:19862), reachable from no browser — the merged build's "App ↗" pointed
+    there (recipe-box, 2026-11-18)."""
+    from urllib.parse import quote
+
+    pid = str(preview_id or "").strip()
+    return f"/v1/previews/{quote(pid, safe='')}/web/" if pid else None
 
 
 def _who_stopped(fctx: Mapping[str, Any], viewer: Optional[str]) -> str:
@@ -933,6 +984,13 @@ def build_state(run: Mapping[str, Any], *, acts: Optional[list[Mapping[str, Any]
         # itself once the blocker clears.
         return out("needs_person", "Needs you · reply",
                    "Paused for a person's reply. Costs nothing meanwhile.", "Needs you")
+    from .continuation import handed_on as _handed_on
+
+    if _handed_on(run):
+        # ITS REPAIR CONTINUED IN THE NEXT ATTEMPT (continuation.py): history, not a failure
+        # and not a stall; the page says where it went and offers no Retry, Steer or Stop.
+        return out("blocked", "Continued", "Its repair continued in the next attempt",
+                   "Handed on")
     if status == "blocked":
         if phase == "awaiting_plan_approval":
             return out("needs_plan", "Needs you · plan", "Approve the plan to start building",
@@ -1441,6 +1499,7 @@ def build_attention_rows(connection: Any, project_id: str,
                 "role_key": None, "failing": [], "where": f"before {STATION_LABELS[nxt]}",
                 "at": _iso(b.get("updated_at")), "error": b.get("error"),
             })
+    rows += failed_build_rows(connection, project_id)
     by_decision: dict[str, dict[str, Any]] = {}
     ids = [str(d.get("id")) for d in decisions if d.get("id")]
     plan_runs = {str(_j(d.get("recommendation"), {}).get("run_id") or ""): str(d.get("id"))
@@ -1452,8 +1511,8 @@ def build_attention_rows(connection: Any, project_id: str,
         for r in connection.execute(
             text("SELECT r.id, r.title, r.spec, r.finalize_ctx, r.decision_id, r.pull_request_url, "
                  "r.pull_request_number, r.status, r.phase, "
-                 "(SELECT url FROM app_previews p WHERE p.run_id = r.id AND p.status = 'running' "
-                 " ORDER BY p.created_at DESC LIMIT 1) AS preview_url "
+                 "(SELECT id FROM app_previews p WHERE p.run_id = r.id AND p.status = 'running' "
+                 " ORDER BY p.created_at DESC LIMIT 1) AS preview_id "
                  "FROM code_task_runs r WHERE r.project_id = :p "
                  "AND (r.decision_id = ANY(:ids) OR r.id = ANY(:runs))"),
             {"p": project_id, "ids": ids, "runs": list(plan_runs)},
@@ -1469,8 +1528,29 @@ def build_attention_rows(connection: Any, project_id: str,
                 by_decision[str(row["decision_id"])] = {
                     "kind": "pr", "run_id": row["id"], "app": app_name(row), "where": "PR open",
                     "pr_number": _pr_number(row), "pr_url": row.get("pull_request_url"),
-                    "preview_url": row.get("preview_url")}
+                    "preview_url": preview_open_href(row.get("preview_id"))}
     return {"blocked": rows, "by_decision": by_decision}
+
+
+def failed_build_rows(connection: Any, project_id: str) -> list[dict[str, Any]]:
+    """THE PROJECT'S LATEST BUILD, WHEN IT FAILED (build_failure.latest_failure — the same answer
+    the project page and the projects list give), as the Command Center's card. Before this a
+    failed build reached no card: the Command Center, the bell and Live listed only builds
+    blocked at their checks or budget ("git add failed", recipe-box 2026-11-18). A workflow
+    run's failure is left to that run's failed-step card (its Retry moves the run)."""
+    from .build_failure import latest_failure
+
+    from .build_failure import is_failure
+
+    failed = latest_failure(connection, project_id)
+    # A build waiting on a merge is that merge's card (already listed), not a failure card.
+    if not is_failure(failed) or failed["source"] != "code_task":
+        return []
+    return [{"kind": "build_failed", "run_id": failed["build_id"], "app": failed["label"],
+             "role_key": None, "failing": [], "where": failed["word"], "word": failed["word"],
+             "at": failed.get("at"), "error": None, "reason": failed["reason"],
+             "retryable": failed.get("retry") is not None,
+             "retry_reason": failed.get("retry_reason"), "fix": failed.get("fix")}]
 
 
 def attention_build(info: Mapping[str, Any]) -> dict[str, Any]:
@@ -1481,8 +1561,13 @@ def attention_build(info: Mapping[str, Any]) -> dict[str, Any]:
                for g in info.get("failing") or []]
     out: dict[str, Any] = {"run_id": info.get("run_id"), "app": info.get("app") or "",
                            "where": info.get("where") or "", "failing": failing,
-                           "retryable": info.get("kind") in ("gate_override", "budget_refused"),
-                           "retry_reason": None}
+                           "retryable": (bool(info.get("retryable"))
+                                         if info.get("kind") == "build_failed"
+                                         else info.get("kind") in ("gate_override",
+                                                                   "budget_refused")),
+                           "retry_reason": info.get("retry_reason") or None}
+    if info.get("fix"):
+        out["fix"] = dict(info["fix"])
     for key in ("pr_url", "preview_url", "plan_url"):
         if info.get(key):
             out[key] = info[key]
@@ -2366,6 +2451,8 @@ def gate_reason(name: str, ok: bool, evidence: Mapping[str, Any],
         caught = ev.get("mutation_caught")
         return None if caught is None else ("mutation caught" if caught else "mutation missed")
     if name == "nothing_broke":
+        if (ev.get("old_tests") or {}).get("state") == "unknown":
+            return "unknown: no failing test named"
         good = ev.get("regressions_ok")
         return None if good is None else ("no regressions" if good else "a regression")
     if name == "existing_tests_intact":
@@ -2382,8 +2469,10 @@ def gate_reason(name: str, ok: bool, evidence: Mapping[str, Any],
         return None if ok else "coder edited tests"
     if name == "brief_tests_written":
         gone = list(((ev.get("brief_tests") or {}).get("missing")) or [])
+        left = list(((ev.get("brief_tests") or {}).get("items_uncovered")) or [])
         return None if ok else (f"missing: {', '.join(map(str, gone))}"[:60] if gone
-                                else "a named test is missing")
+                                else f"no test or reason for: {', '.join(map(str, left))}"[:60]
+                                if left else "a named test is missing")
     if name == "web_package_honest":
         contract = ev.get("web_package_contract") if isinstance(ev.get("web_package_contract"),
                                                                dict) else {}
@@ -2597,6 +2686,13 @@ def pr_review_line(fctx: Mapping[str, Any]) -> dict[str, Any]:
             "permission": bool(posted.get("permission")), "rounds": rounds}
 
 
+def _gate_failed(g: Mapping[str, Any]) -> bool:
+    """A check that FAILED: not passed, not skipped, not a follow-up, not waived. The one rule
+    the Checks row's word and the Outputs header's merge readiness both count by."""
+    return (not g.get("ok") and not g.get("skipped") and not g.get("followup")
+            and not g.get("waived_by"))
+
+
 def _outputs(connection: Any, run: Mapping[str, Any], facts: Facts, st: BuildState,
              stations: list[Station], comments: list[dict[str, Any]],
              decision: Optional[Mapping[str, Any]], now: datetime) -> dict[str, Any]:
@@ -2640,15 +2736,25 @@ def _outputs(connection: Any, run: Mapping[str, Any], facts: Facts, st: BuildSta
         # A gate whose check did not run is listed as SKIPPED with why, never as passed.
         skipped = {g: w for g, w in _seat_policy.skipped_gates(gate_evidence or evidence).items()
                    if g not in passed and g not in failed}
+        # A gate the quality bar let through is a FOLLOW-UP (quality_bar.py): not passed, not
+        # failed, never counted in "All N passed".
+        followups = {g: (lines or [None])[0] for g, lines in
+                     ((gate_evidence.get("quality_bar") or {}).get("followups") or {}).items()
+                     if g not in passed and g not in failed}
         for name, ok in ([(g, True) for g in passed] + [(g, False) for g in failed]
-                         + [(g, False) for g in skipped]):
-            ev = skipped.get(name) or gate_evidence.get(name)
+                         + [(g, False) for g in skipped] + [(g, False) for g in followups]):
+            ev = skipped.get(name) or followups.get(name) or gate_evidence.get(name)
+            if name in skipped:
+                from .plain_words import plain_skip
+
+                ev = plain_skip(ev)
             if not isinstance(ev, str) or not ev.strip():
                 # The row's evidence is keyed by evidence names, not gate names (gate_reason).
                 ev = gate_reason(name, ok, gate_evidence or evidence, run)
             gates.append({
                 "name": name, "label": gate_label(name), "ok": ok,
                 **({"skipped": True} if name in skipped else {}),
+                **({"followup": True} if name in followups else {}),
                 "waived_by": waived.get("by") if name in (waived.get("gates") or []) else None,
                 "role_key": gate_owner(name, acts), "station": gate_station(name),
                 "evidence": ev[:160] if isinstance(ev, str) else None,
@@ -2661,6 +2767,8 @@ def _outputs(connection: Any, run: Mapping[str, Any], facts: Facts, st: BuildSta
                 f"{len(failed)} failed" + (" · shipped anyway" if advisory else ""))
         if skipped:
             word += f" · {len(skipped)} skipped"
+        if followups:
+            word += f" · {len(followups)} follow-up{'s' if len(followups) != 1 else ''}"
         checks = {"word": word, "advisory": advisory, "gates": gates,
                   "tip": "First pass: checks advise, they don't block" if advisory else None}
     elif running:
@@ -2744,11 +2852,12 @@ def _outputs(connection: Any, run: Mapping[str, Any], facts: Facts, st: BuildSta
     if running:
         ready = {"ready": False, "word": "Building"}
     else:
-        failed_checks = bool(checks and any(not g["ok"] and not g.get("waived_by")
-                                            for g in checks["gates"]))
+        # ONE COUNT OF FAILED CHECKS, the Checks row's own (_gate_failed): a skipped gate and a
+        # quality-bar follow-up are not failures. The header said "Not ready · 3 checks failed"
+        # beside "All 9 passed · 2 skipped · 1 follow-up" (park-bench-map change #2, 2026-11-19).
+        n_failed = sum(1 for g in (checks or {}).get("gates") or [] if _gate_failed(g))
+        failed_checks = bool(n_failed)
         tests_ok = not commands or all(c["ok"] for c in commands)
-        n_failed = sum(1 for g in (checks or {}).get("gates") or []
-                       if not g["ok"] and not g.get("waived_by"))
         # MERGED ONLY WHEN IT WAS. A deployed build is not a merged one: the OUTPUTS header said
         # "Merged" while PR #223 was open, because the build had been deployed from its branch.
         if st["state"] == "merged" or (st["state"] == "deployed" and merge == pr_merge.MERGED):
@@ -2851,7 +2960,19 @@ def cockpit(connection: Any, settings: Any, project_id: str, run_id: str, *,
     agent_list = sorted(({"role_key": k, "state": v} for k, v in agents.items()),
                         key=lambda a: a["state"] != "working")
     ok, why = _retry_offer(run)
-    live = row["state"] in ("building", "queued", "quiet", "budget_wait", "needs_plan")
+    # HANDED ON (continuation.py): where its repair went, on the header, the wait line and the
+    # diagnosis — the stored "press Retry" diagnosis of the blocked attempt is not shown.
+    from .continuation import continued_in
+
+    try:
+        cont = continued_in(connection, run)
+    except Exception:  # noqa: BLE001 — the page still renders the attempt as it is
+        cont = None
+    if cont is not None:
+        st["word"], st["tip"], st["verb"] = "Continued", cont["words"], "Handed on"
+        ok, why = False, cont["words"]
+    live = row["state"] in ("building", "queued", "quiet", "budget_wait", "needs_plan") \
+        and cont is None
     fctx = run.get("finalize_ctx") or {}
     origin = row.get("origin") or lineage_origin(connection, project_id, run)
     out: Cockpit = {
@@ -2861,7 +2982,8 @@ def cockpit(connection: Any, settings: Any, project_id: str, run_id: str, *,
         "started_at": row.get("started_at"), "station_since": row.get("station_since"),
         "cost_usd": row["cost_usd"], "included_usd": row.get("included_usd") or 0,
         "metered": row["metered"], "live": live,
-        "stoppable": str(run.get("status")) in ("running", "repairing", "blocked"),
+        "stoppable": str(run.get("status")) in ("running", "repairing", "blocked")
+        and cont is None,
         "retryable": ok, "retry_reason": why,
         "failure": failure_line(fctx, run.get("error")) if row["state"] == "failed" else None,
         "lineage": _lineage(connection, project_id, run, now, viewer),
@@ -2879,8 +3001,20 @@ def cockpit(connection: Any, settings: Any, project_id: str, run_id: str, *,
         "routes": _routes(connection, run_id),
         # Why it waits, and what the Shepherd found when it stopped moving (stuck_work).
         "why": waiting,
-        "diagnosis": stuck_work.public_diagnosis(fctx, connection=connection, run=run),
+        "diagnosis": (None if cont is not None else
+                      stuck_work.public_diagnosis(fctx, connection=connection, run=run)),
+        "continued": cont,
     }
+    # THE ONE PLAIN-WORDS PASS (plain_words.py): the attempt counter, the raw repair prompt and
+    # gate keys never reach the page; the records keep them.
+    from .plain_words import plain_note, plain_title
+
+    out["run"]["title"] = plain_title(out["run"].get("title"))
+    for entry in out["lineage"] or []:
+        if isinstance(entry, dict) and entry.get("title"):
+            entry["title"] = plain_title(entry["title"])
+    if isinstance(out["summary"], dict) and out["summary"].get("note"):
+        out["summary"]["note"] = plain_note(out["summary"]["note"])
     for key in ("finalize_ctx", "spec", "state"):
         out["run"].pop(key, None)
     out["etag"] = _etag({k: v for k, v in out.items() if k != "etag"})

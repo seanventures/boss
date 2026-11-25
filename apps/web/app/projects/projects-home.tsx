@@ -13,6 +13,9 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Folders, Plus } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
+import { useGuardedCall } from "../../components/identity/identity-provider";
+import { enc, idPost, IdentityError, refusalSentence } from "../../lib/identity/api";
+import { withConsent } from "../../lib/identity/consent";
 import {
   PX_PATHS, costWords, navigateTo, parseSummary, projectHref, startOnboarding, usePageSearch, usePxRead, type Node, type ProjectCard, type ProjectsSummary,
 } from "../../lib/project-experience";
@@ -21,6 +24,7 @@ import { DemoBanner, Empty, Face, openAddProject, usePxUrl, HEALTH_WORD, Ico, Jo
 import { FirstRun } from "./first-run";
 import { StartProjectHost } from "../start-project/start-host";
 import "./px.css";
+import { OpenAppChip } from "./your-app";
 
 export type ProjectsHomeProps = {
   projectId: string; actor: string; orgId?: string | null;
@@ -84,7 +88,7 @@ function ProjectsSkeleton() {
 }
 
 const isWorking = (c: ProjectCard) => !c.archived && c.running > 0;
-const isOnboarding = (c: ProjectCard) => !c.archived && (c.onboarding_active || (c.stage === "onboarding" && c.status_label !== "Not onboarded"));
+const isOnboarding = (c: ProjectCard) => !c.archived && !c.awaiting_consent && (c.onboarding_active || (c.stage === "onboarding" && c.status_label !== "Not onboarded"));
 
 function ProjectsList({ cards, note, cap, onRetry, onChanged }: {
   cards: ProjectCard[]; note?: string | null; cap: number | null; onRetry?: () => void; onChanged?: () => void;
@@ -210,11 +214,21 @@ export function cardJourney(card: ProjectCard): Node[] {
 export function ProjectCardView({ card, onChanged }: { card: ProjectCard; onChanged?: () => void }) {
   const href = projectHref(card.id);
   const open = () => navigateTo(href);
+  const guarded = useGuardedCall();
   const [said, setSaid] = useState("");
+  const [consentBusy, setConsentBusy] = useState(false);
+  const awaitingConsent = Boolean(card.awaiting_consent || card.status_label === "Waiting for your consent");
   const deployed = card.journey.some((j) => (j.key === "staging" || j.key === "production") && j.state === "done");
   // THE CHIP SAYS THE REAL STATE: Needs you · Onboarding · Working (only while something
   // runs, teal and live) · Live · Idle — never "Working" over a card that says idle.
-  const pill = card.needs_you ? <Tag tone="amber">{card.needs_you} need you</Tag>
+  // A FAILED LATEST BUILD (engine overview.latest_failed) is said first, in red, with its reason.
+  // On a live project it sits BESIDE the stage pill (failedTag below), never in its place.
+  const failedTag = card.build_failed && !card.archived
+    ? <Tag tone="red" title={`${card.build_failed.label}: ${card.build_failed.reason}`}><span data-testid={`px-card-failed-${card.id}`}>{card.build_failed.word || "Build failed"}</span></Tag> : null;
+  const pill = failedTag && !card.build_failed!.beside && !card.running
+    ? failedTag
+    : card.needs_you ? <Tag tone="amber">{card.needs_you} need you</Tag>
+    : awaitingConsent ? <Tag tone="amber">Waiting for your consent</Tag>
     : card.onboarding_active ? <Tag tone="blue">Onboarding</Tag>
     : card.archived ? <Tag tone="idle">Archived</Tag>
     : card.running > 0 ? <Tag tone="teal"><span className="px-dot" data-s="now" data-round aria-hidden />Working</Tag>
@@ -226,6 +240,19 @@ export function ProjectCardView({ card, onChanged }: { card: ProjectCard; onChan
     const r = await startOnboarding(card.id);
     setSaid(r.ok ? (r.demo ? "Sample mode — nothing was sent." : "Helm is reading it now.") : (r.error ?? "It didn't start."));
     if (r.ok && !r.demo) onChanged?.();
+  };
+  const startConsent = async () => {
+    const target = card.awaiting_consent ?? { href: `/v1/projects/${enc(card.id)}/factory/resume`, method: "POST", body: {} };
+    setConsentBusy(true);
+    setSaid("");
+    try {
+      await guarded("Start the project.", () => withConsent(() => idPost(target.href, target.body)));
+      onChanged?.();
+    } catch (e) {
+      setSaid(e instanceof IdentityError && e.code === "step_up_cancelled" ? "Not started: you cancelled the check."
+        : e instanceof IdentityError && e.body.error === "consent_required" ? "Not started: the agents need your consent first."
+        : refusalSentence(e));
+    } finally { setConsentBusy(false); }
   };
   const progress = card.onboarding_progress;
   const lines = card.lines.length ? card.lines : [card.live_url ? "live" : "not deployed yet"];
@@ -240,7 +267,7 @@ export function ProjectCardView({ card, onChanged }: { card: ProjectCard; onChan
           <a className="px-pc-name px-ell" href={href} data-console-load data-testid={`px-card-open-${card.id}`} style={{ display: "block" }}>{card.name}</a>
           <div className="px-pc-repo px-ell">{card.repo || "no repo yet"}</div>
         </div>
-        {pill}
+        {pill}{failedTag && card.build_failed!.beside ? failedTag : null}
       </div>
       {card.journey.length ? <Journey nodes={cardJourney(card)} size="s" testid={`px-card-journey-${card.id}`} /> : null}
       <div className="px-row">
@@ -254,7 +281,13 @@ export function ProjectCardView({ card, onChanged }: { card: ProjectCard; onChan
           <span className="px-pc-line1" data-tone={card.line_tone || undefined}>
             <span className="px-dot" data-s={card.line_tone === "done" ? "done" : card.line_tone === "now" ? "now" : card.line_tone === "bad" ? "bad" : card.line_tone === "you" ? "you" : undefined} aria-hidden />
             {lines[0]}</span>
-          {card.status_label === "Not onboarded" && !card.archived ? (
+          {awaitingConsent && !card.archived ? (
+            <GatedButton permission="workflow_run:start" projectId={card.id} className="px-linkbtn" disabled={consentBusy}
+                         data-testid={`px-card-consent-start-${card.id}`}
+                         onClick={() => void startConsent()}>
+              {consentBusy ? "Starting…" : "Waiting for your consent — Start"}
+            </GatedButton>
+          ) : card.status_label === "Not onboarded" && !card.archived ? (
             <GatedButton permission="workflow_run:start" projectId={card.id} className="px-linkbtn" data-testid={`px-card-onboard-${card.id}`}
                          onClick={() => void startOnb()}>Not onboarded · Start onboarding</GatedButton>
           ) : lines[1] ? <span className="px-faint px-ell" style={{ display: "block" }}>{lines[1]}</span> : null}
@@ -268,6 +301,8 @@ export function ProjectCardView({ card, onChanged }: { card: ProjectCard; onChan
         {card.crew.length ? <span className="px-faces" title={card.crew.map((g) => `${g.name}${g.state === "working" ? " (working now)" : ""}`).join(", ")} data-testid={`px-card-crew-${card.id}`}>
           {card.crew.map((g) => <Face key={g.role_key} agent={g} size={20} state={g.state === "working" ? "working" : "idle"} />)}</span> : null}
         <span className="px-spacer" />
+        {/* YOUR APP: one press to the app, from the card (asleep wakes on Open app). */}
+        {card.app && !card.archived ? <OpenAppChip app={card.app} projectId={card.id} testid={`px-card-app-${card.id}`} /> : null}
         <Cost usd={card.cost_week} list={card.list_week} testid={`px-card-cost-${card.id}`} />
       </div>
     </article>

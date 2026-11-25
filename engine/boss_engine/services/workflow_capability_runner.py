@@ -23,6 +23,7 @@ import contextlib
 import contextvars
 import json
 import logging
+import re
 from datetime import timedelta
 from typing import Any, Callable, Optional
 
@@ -30,6 +31,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ..config import get_settings
+from ..db import TransactionLost, release_failed_savepoint, rollback_quietly, transaction_lost
 from . import (agent_acts, change_record, deploy_repair, step_agents,
                self_fix, step_recovery, workflows)
 from . import workflow_custom_steps as custom_steps
@@ -40,7 +42,9 @@ from .deploy_policy import promises_a_person
 from .decisions import SYSTEM_ACTOR as DECISION_SYSTEM_ACTOR
 from .run_decisions import open_step_decision
 from . import release_scope, security_review_steps, workflow_capabilities, workflow_outcomes
-from .workflow_capabilities import CAPABILITY_KEYS, get as get_capability
+from . import start_from_file
+from .workflow_capabilities import (CAPABILITY_KEYS, TARGET_GATED, approval_mode_for,
+                                     get as get_capability)
 
 log = logging.getLogger(__name__)
 
@@ -434,7 +438,7 @@ def _run_context(connection: Connection, run_id: str) -> dict[str, Any]:
     #   produced a value; a later step must not be told it was skipped. Ordered as
     #   `workflow_run_actions.latest_attempts` orders them: created, then iteration.
     #
-    # A FAILED STEP THAT TOOK ITS `on_error` PATH is read too (AMEX-G10, BOSSAPP-1168). Its
+    # A FAILED STEP THAT TOOK ITS `on_error` PATH is read too (BOSSAPP-1168). Its
     # evidence — a command's `exit_code`, `log_tail`, what it produced — is exactly what the
     # error path needs: the validator's report, the failing test's table. It is stamped
     # `step_status: failed`, so a reader can tell it from a result. Only a TERMINAL failure that
@@ -563,12 +567,43 @@ def _step_authority(ctx: Any, connection: Connection, project_id: str, context: 
             _IN_STEP_AUTHORITY.reset(marker)
 
 
+def _live_run_authority(connection: Connection, project_id: Optional[str], run_id: str) -> Any:
+    """The run's recorded authority while it is live — and, when its grant ended (a "this run
+    only" grant, an expiry), the ORG DEFAULT: its person's fixer authority
+    (identity/fix_authority.renew_run), so BOSS's agents keep fixing the run with that person's
+    own delegable authority instead of parking it for a renewal nobody asked them for. None:
+    nothing recorded, or the default does not apply (off, revoked by a person, another org).
+    Every call site that used to read "the authority has ended" asks this instead."""
+    from boss_engine.identity import consent as _consent
+
+    live = _consent.acting_for_workflow_run(connection, run_id)
+    if live is not None or not run_id:
+        return live
+    try:
+        with connection.begin_nested():
+            if project_id is None:
+                project_id = connection.execute(
+                    text("SELECT project_id FROM workflow_runs WHERE id = :r"),
+                    {"r": run_id}).scalar()
+            if not project_id:
+                return None
+            from boss_engine.identity import fix_authority
+
+            return fix_authority.renew_run(connection, project_id=str(project_id), run_id=run_id,
+                                           why="the run's grant ended; its agents keep fixing it")
+    except Exception as error:  # noqa: BLE001 — no renewal: the run parks as before
+        log.info("fix authority not applied to %s: %s", run_id, error)
+        return None
+
+
 def _run_authority(ctx: Any, connection: Connection, project_id: str, context: Optional[dict[str, Any]],
                    step: Optional[dict[str, Any]], role_key: Optional[str], scope: Optional[frozenset[str]] = None):
     """In-process step work under the workflow run's RECORDED authority (IDENTITY.md §7.14), not
     under whoever called in to advance the run (the worker). With an agent Passport for the step,
     a delegated run token (`run_wf:<run>/step:<step>`: person ∩ ceilings ∩ grant ∩ task); with
-    none, the person's own live principal. A run with no recorded authority runs as before."""
+    none, the person's own live principal. A run with no recorded authority runs as before.
+    Nested inside a delegated run, the block keeps that run's token (`runs.on_behalf`): it never
+    swaps an agent's narrower authority for the person's full rights."""
     import contextlib
     import re
 
@@ -577,7 +612,7 @@ def _run_authority(ctx: Any, connection: Connection, project_id: str, context: O
     from boss_engine.identity import runs as _runs
 
     run_id = str((context or {}).get("run_id") or "")
-    recorded = _consent.acting_for_workflow_run(connection, run_id) if run_id else None
+    recorded = _live_run_authority(connection, project_id, run_id) if run_id else None
     if recorded is None:
         if run_id and _consent.recorded_authority(connection, run_id) is not None:
             # The run HAS an authority and it is no longer live (grant revoked/expired, person
@@ -601,8 +636,10 @@ def _run_authority(ctx: Any, connection: Connection, project_id: str, context: O
                     decided = stack.enter_context(_runs.on_behalf(engine, recorded))
             except TokenError as lost:
                 # Fail closed: the person or grant this run acts for is no longer live.
+                # The exact sentence step_recovery.AUTHORITY_ENDED, so the step PARKS on it
+                # (authority_message) like the recorded-authority check above, never fails.
                 raise CapabilityExecutionError(
-                    f"this run's authority has ended ({lost.reason}); renew it to continue.") from lost
+                    f"{step_recovery.AUTHORITY_ENDED} ({lost.reason})") from lost
             yield decided
 
     return under()
@@ -900,8 +937,8 @@ def deploy_step_inputs(connection: Connection, spec_step: dict[str, Any],
         inputs = _resolve_inputs(binding.get("inputs") or {}, scratch,
                                  optional=frozenset(capability.optional_inputs or ()))
         inputs = _fill_optional_from_run_input(capability, inputs, scratch)
-    except Exception:  # noqa: BLE001 — unresolvable now
-        point.rollback()
+    except Exception as failed:  # noqa: BLE001 — unresolvable now
+        release_failed_savepoint(point, failed, connection=connection)
         return None
     point.commit()
     return inputs
@@ -937,8 +974,8 @@ def stack_target_for_step(
 
         target = stack_target_for_deploy(connection, project_id, inputs,
                                          default_owner=default_owner)
-    except Exception:  # noqa: BLE001 — unresolvable now means "not known to be a stack deploy"
-        point.rollback()
+    except Exception as failed:  # noqa: BLE001 — unresolvable now means "not known to be a stack deploy"
+        release_failed_savepoint(point, failed, connection=connection)
         return None
     point.commit()
     return target
@@ -978,8 +1015,8 @@ def stack_deploy_for_step(
         point = connection.begin_nested()
         try:
             deployment = get_stack_deployment(connection, deployment_id)
-        except Exception:  # noqa: BLE001 — a page must render without it
-            point.rollback()
+        except Exception as failed:  # noqa: BLE001 — a page must render without it
+            release_failed_savepoint(point, failed, connection=connection)
             deployment = None
         else:
             point.commit()
@@ -1213,7 +1250,7 @@ def _observed_monitoring(
             text(
                 """
                 SELECT ok, checked_at, status_code, latency_ms, error
-                FROM deployment_health_samples
+                FROM counted_health_samples
                 WHERE deployment_target_id = :t
                 ORDER BY checked_at DESC LIMIT 1
                 """
@@ -1323,6 +1360,26 @@ def _build_run_id(context: dict[str, Any]) -> Optional[str]:
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
+def _nearest_build_run_id(connection: Connection, context: dict[str, Any],
+                          step: Optional[dict[str, Any]]) -> Optional[str]:
+    """The build step NEAREST BEFORE `step` in the run's spec (a workflow may build twice); the
+    run-wide `_build_run_id` only when the spec cannot say."""
+    try:
+        steps = workflows._run_spec(connection, str(context.get("run_id") or "")).get("steps") or []
+        ids = [str(s.get("id")) for s in steps]
+        mine = str((step or {}).get("id") or "")
+        if mine in ids:
+            for before in reversed(ids[:ids.index(mine)]):
+                produced = (context.get("steps") or {}).get(before)
+                if isinstance(produced, dict):
+                    value = produced.get("code_task_run_id")
+                    if isinstance(value, str) and value.strip():
+                        return value.strip()
+    except Exception:  # noqa: BLE001
+        pass
+    return _build_run_id(context)
+
+
 def release_base_for(connection: Connection, context: dict[str, Any]) -> Optional[str]:
     """The serving commit a release-targeting build is cut from, or None for any other build:
     the run input's `release_base_sha`, else, for an incident's run, the commit its
@@ -1341,6 +1398,21 @@ def release_base_for(connection: Connection, context: dict[str, Any]) -> Optiona
         "SELECT finalize_ctx->'deploy'->>'commit_sha' FROM incidents WHERE id = :i"),
         {"i": incident_id}).scalar()
     return str(row).strip() if row else None
+
+
+def build_named_from_prd(context: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    """THE BUILD IS NAMED ONCE, FROM ITS PRD (titles.prd_title): the panel's heading ("Bench Name
+    Label on Map Bubble"), never the person's first words ("The bubble present") — the Work row,
+    its drawer and the build page then say the same short name. Only over the run's own title:
+    a step that names its build (an incident's "Fix …") keeps it."""
+    from .project_experience.titles import prd_title
+
+    run_title = str((context.get("input") or {}).get("title") or "").strip()
+    named = prd_title(_from_any_step(context, "prd_markdown"))
+    given = str(inputs.get("title") or "").strip()
+    if named and given in ("", run_title) and not given.startswith("Fix "):
+        return {**inputs, "title": named}
+    return inputs
 
 
 def _from_any_step(context: dict[str, Any], field: str) -> Any:
@@ -1676,6 +1748,9 @@ def _observed_from_the_build(
         "code_task_run_id": run_id,
         "gates_passed": passed,
         "gates_failed": failed,
+        # Let through by the quality bar (neither passed nor failed): reported, never "passed".
+        "gates_followup": [g for g in (((evidence.get("quality_bar") or {}).get("followups")) or {})
+                           if g in gate_names],
         "risk_tier": row["risk_tier"],
         "seats": evidence.get("steps_run") or [],
     }
@@ -1692,6 +1767,8 @@ def _observed_from_the_build(
         detail["note"] = (
             f"{', '.join(passed) if passed else 'nothing'} passed on the build "
             f"(risk tier {row['risk_tier']})."
+            + (f" Follow-ups (quality bar): {', '.join(detail['gates_followup'])}."
+               if detail["gates_followup"] else "")
         )
         return detail
 
@@ -2954,6 +3031,13 @@ def _execute_step(
     inputs = _resolve_inputs(binding.get("inputs") or {}, context,
                              optional=frozenset(capability.optional_inputs or ()))
     inputs = _fill_optional_from_run_input(capability, inputs, context)
+    amendment = None
+    if key == "contract_test":
+        if not inputs.get("cases"):
+            # CONTRACT TESTS AFTER STAGING: no cases on the step, so the project's own, from
+            # its repository at the build this run shipped (contract_tests.REPO_FILE).
+            inputs = _repo_contract_cases(connection, ctx, project_id, step, context, inputs)
+        inputs, amendment = _amended_inputs(connection, context, step, inputs)
 
     # EVERY CAPABILITY'S RESULT IS JUDGED BY ITS OWN VERDICT (services/workflow_outcomes.py).
     #
@@ -2962,12 +3046,71 @@ def _execute_step(
     # down went green because `http_probe` reports `{"status": 503}`, and a deploy went green on
     # `{"status": "planned"}` before anything had shipped. Each capability now says, in one
     # table beside the catalogue, what success, failure and "still going" look like for it.
-    return workflow_outcomes.apply(
-        key,
-        _perform_capability(connection, ctx, project_id=project_id, actor=actor, step=step,
-                            context=context, key=key, capability=capability, inputs=inputs),
-        inputs,
-    )
+    result = _perform_capability(connection, ctx, project_id=project_id, actor=actor, step=step,
+                                 context=context, key=key, capability=capability, inputs=inputs)
+    if amendment and isinstance(result, dict):
+        # THE AMENDMENT TRAVELS WITH THE RESULT: completing the step replaces its output, so
+        # what an agent dropped (and why) is carried on the result itself and said in its note.
+        result = {**result, "dropped_cases": list(amendment.get("drop") or []),
+                  "recovery_amendment": amendment}
+    return workflow_outcomes.apply(key, result, inputs)
+
+
+def _repo_contract_cases(connection: Connection, ctx: Any, project_id: str, step: Any,
+                         context: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    """A contract_test step's inputs with the PROJECT'S contract tests: the cases (and shared
+    headers) its repository declares in `.boss/contract_tests.yaml`, read at the commit of the
+    build this run shipped (the nearest build step before this one). A step that gave its own
+    headers keeps them. Settled when there is no build or the file is missing or malformed."""
+    from . import config_deploy, contract_tests
+
+    built = _nearest_build_run_id(connection, context, step if isinstance(step, dict) else None)
+    if not built:
+        raise SettledCapabilityError(
+            "This contract test has no cases and no build before it to read the project's "
+            f"contract tests ({contract_tests.REPO_FILE}) from.")
+    settings = getattr(ctx, "settings", None) or get_settings()
+    try:
+        with connection.begin_nested():
+            source = config_deploy.build_source(connection, settings, project_id, built)
+            text_ = (config_deploy.files_from_build(
+                connection, settings, project_id, source,
+                {"contract_tests.yaml": contract_tests.REPO_FILE})
+                .get("contract_tests.yaml") or {}).get("text")
+    except Exception:  # noqa: BLE001 — unreadable is the same as absent, said below
+        text_ = None
+    try:
+        declared = contract_tests.from_repo(text_)
+    except contract_tests.CaseError as error:
+        raise SettledCapabilityError(str(error)) from error
+    out = {**inputs, "cases": declared["cases"]}
+    if declared.get("headers") and not inputs.get("headers"):
+        out["headers"] = declared["headers"]
+    return out
+
+
+def _amended_inputs(connection: Connection, context: Optional[dict[str, Any]], step: Any,
+                    inputs: dict[str, Any]) -> tuple[dict[str, Any], Optional[dict[str, Any]]]:
+    """A step's inputs with the amendment an agent recorded on it (contract_remedy: an
+    unpassable case dropped, with why). The workflow's own definition is never edited."""
+    from . import contract_remedy
+
+    run_id = str((context or {}).get("run_id") or "")
+    step_id = str((step or {}).get("id") or "") if isinstance(step, dict) else ""
+    if not run_id or not step_id:
+        return inputs, None
+    try:
+        with connection.begin_nested():
+            amendment = connection.execute(text(
+                "SELECT output->'" + contract_remedy.AMENDMENT_KEY + "' FROM workflow_step_runs "
+                "WHERE workflow_run_id = :r AND step_id = :s ORDER BY updated_at DESC LIMIT 1"),
+                {"r": run_id, "s": step_id}).scalar()
+    except Exception:  # noqa: BLE001 — no amendment readable: the step as defined
+        return inputs, None
+    if isinstance(amendment, str):
+        amendment = json.loads(amendment or "null")
+    applied = contract_remedy.apply(inputs, amendment)
+    return applied, (amendment if applied is not inputs else None)
 
 
 #: What a multi-repo change set does itself, for every repository at once (multirepo/
@@ -3161,7 +3304,7 @@ def _look_at_ci(connection: Connection, project_id: str, wait_id: str) -> None:
         ci_gate.poll_wait(connection, wait_id, reader)
         point.commit()
     except Exception as error:  # noqa: BLE001 — looked at again next tick; the deadline holds
-        point.rollback()
+        release_failed_savepoint(point, error, connection=connection)
         log.warning("cannot look at CI wait %s: %s", wait_id, error)
 
 
@@ -3456,7 +3599,7 @@ def _look_at_recovery(connection: Connection, check_id: str) -> None:
         incident_response.look_at_recovery(connection, check_id)
         point.commit()
     except Exception as error:  # noqa: BLE001 — looked at again next tick; the deadline holds
-        point.rollback()
+        release_failed_savepoint(point, error, connection=connection)
         log.warning("cannot look at recovery check %s: %s", check_id, error)
 
 
@@ -3585,6 +3728,8 @@ def _perform_toolless(
         if started.get("status") == "not_applicable":
             return started
         return _settle_started_work(capability, key, started)
+    if key == "merge":
+        return _merge_step(connection, project_id, step, context, inputs)
     if key == "more_tests":
         return _more_tests_started(ctx, connection, project_id=project_id, actor=actor,
                                    context=context, step=step, capability=capability,
@@ -3701,6 +3846,53 @@ def with_run_profile(inputs: dict[str, Any], run_input: Any) -> dict[str, Any]:
     return inputs
 
 
+def _direct_change_ended(connection: Connection, key: str,
+                         context: dict[str, Any]) -> Optional[str]:
+    """Why step `key` does nothing on a DIRECT CHANGE's outer run (run input `direct_change`,
+    set by POST /v1/code-tasks when no workflow was picked) whose adopted change is already
+    merged or closed — from BOSS's record alone. None otherwise (the adopted build's own step,
+    any other run, a change still open, or a record that cannot be read)."""
+    run_input = context.get("input") or {}
+    if not isinstance(run_input, dict) or not run_input.get("direct_change"):
+        return None
+    if _adopted_handle(key, context) is not None or connection is None:
+        return None
+    build = run_input.get("adopt_code_task_run_id")
+    if not isinstance(build, str) or not build.strip():
+        return None
+    from . import pr_merge
+    from .repo_links import change_ref
+
+    try:
+        with connection.begin_nested():
+            run = connection.execute(
+                text("SELECT project_id, pull_request_number, pull_request_url, finalize_ctx, "
+                     "decision_id FROM code_task_runs WHERE id = :i"),
+                {"i": build.strip()}).mappings().first()
+            if not run:
+                return None
+            decision = None
+            if run["decision_id"]:
+                decision = connection.execute(
+                    text("SELECT id, status FROM decisions WHERE id = :d"),
+                    {"d": run["decision_id"]}).mappings().first()
+                decision = dict(decision) if decision else None
+                if decision is not None:
+                    sha = pr_merge.merged_shas(connection, str(run["project_id"]),
+                                               [str(decision["id"])]).get(str(decision["id"]))
+                    if sha:
+                        decision["merged_sha"] = sha
+            state = pr_merge.state(dict(run), decision)
+    except Exception:  # noqa: BLE001 — unread: the step runs as it would have
+        return None
+    if state not in (pr_merge.MERGED, pr_merge.CLOSED):
+        return None
+    ref = change_ref(run["pull_request_url"], run["pull_request_number"])
+    done = "merged" if state == pr_merge.MERGED else "closed without merging"
+    return (f"{ref} is {done}. This run was started for that one direct change, so it ends "
+            "with it: nothing more is built, opened or deployed.")
+
+
 def _perform_capability(
     connection: Connection,
     ctx: Any,
@@ -3720,6 +3912,38 @@ def _perform_capability(
     advisory_preview = key == "preview" and bool(inputs.pop("advisory", False))
     pass_2_of = str(inputs.pop("pass_2_of", "") or "") if key == "deploy" else ""
     monitoring_step = str(inputs.pop("monitoring_step", "") or "") if key == "deploy" else ""
+    skip_without_host = key == "deploy" and str(
+        inputs.pop("skip_without_host", "") or "").lower() in ("true", "1")
+    skip_without_deploy_ask = key == "deploy" and str(
+        inputs.pop("skip_without_deploy_ask", "") or "").lower() in ("true", "1")
+    # A DIRECT CHANGE'S WRAPPER ENDS WITH ITS CHANGE (dry run 2, gap 9): a code task started
+    # straight through POST /v1/code-tasks is one already-specified change. Once that change is
+    # merged or closed, no later step of its outer run builds, extends, deploys or opens anything
+    # (wfr_eaf335b4 ran "Production launch readiness" after #10 merged and opened #13).
+    ended = _direct_change_ended(connection, key, context)
+    if ended:
+        return {"capability": key, "tool": None, "status": "not_applicable",
+                "direct_change_ended": True, "note": ended}
+    if skip_without_deploy_ask and _should_skip_bug_deploy(context.get("input")):
+        emit_event(connection, project_id, "workflow.step_skipped", actor,
+                   "workflow_run", str(context.get("run_id") or ""),
+                   {"step_id": step.get("id") if isinstance(step, dict) else None,
+                    "capability": key, "reason": NO_DEPLOY_ASK_WORDS})
+        return {"capability": key, "tool": None, "status": "skipped", "skipped": "no_deploy_ask",
+                "reason": NO_DEPLOY_ASK_WORDS, "note": NO_DEPLOY_ASK_WORDS,
+                "summary": NO_DEPLOY_ASK_WORDS}
+    # EASY MODE'S OWN RULES apply only on a run of the catalogue's Easy Mode MVP workflow (never
+    # a copy, never a binding someone else wrote, never a caller's input).
+    easy_mode = key == "deploy" and _is_easy_mode_run(connection, str(context.get("run_id") or ""))
+    if skip_without_host and easy_mode and not _somewhere_to_deploy(connection, project_id):
+        # NO SERVER IS NOT A FAILURE (Easy Mode, 2026-11-19): most people start on a laptop with
+        # no host. The app already runs as its preview; the deploy step says so and the run ends.
+        emit_event(connection, project_id, "workflow.step_skipped", actor,
+                   "workflow_run", str(context.get("run_id") or ""),
+                   {"step_id": step.get("id") if isinstance(step, dict) else None,
+                    "capability": key, "reason": NO_HOST_WORDS})
+        return {"capability": key, "tool": None, "status": "skipped", "skipped": "no_host",
+                "reason": NO_HOST_WORDS, "note": NO_HOST_WORDS, "summary": NO_HOST_WORDS}
     extend = key == "build" and bool(inputs.pop("extend", False))
     increment = inputs.pop("increment", None) if key == "build" else None
     if increment:
@@ -3887,6 +4111,13 @@ def _perform_capability(
     # wfr_3ceaad94, 2026-11-07). It waits for that merge like every deploy.
     if key == "deploy":
         waiting = _merge_wait(connection, project_id, str(inputs.get("run_id") or ""))
+        if not waiting and easy_mode:
+            # EASY MODE SHIPS ONLY WHAT WAS MERGED (review of #233): its staging deploy needs no
+            # person, so a merge approval that chose a MANUAL merge (or a GitHub that could not
+            # be read) must not let it ship the pull request's head. It waits for a merge on
+            # record, which _follow_merge observes.
+            waiting = _merge_wait_on_record(connection, project_id,
+                                            str(inputs.get("run_id") or ""))
         if waiting:
             return waiting
     if key == "deploy":
@@ -3960,7 +4191,9 @@ def _perform_capability(
                 commit=(None if (pass_2_of or redeploy) else
                         (release_scope.approved_head(connection, run_id)
                          or pinned_pass_one_commit(connection, run_id))),
-                retire_projects=retire or None)
+                retire_projects=retire or None,
+                # THE FIX THIS SHIPS: its card says so in plain words (stack_deploy.fix_question).
+                fixed=(fixes[-1] if redeploy and fixes else None))
             if redeploy:
                 planned = {**planned, deploy_repair.FIXES_KEY: fixes,
                            deploy_repair.REDEPLOY_KEY: redeploy}
@@ -4068,6 +4301,9 @@ def _perform_capability(
         # starts it from the app's branch and lineage. Read from the run input, which the start
         # endpoint validated, rather than bound by each workflow — every build step honours it.
         extends = str((context.get("input") or {}).get("extends_run_id") or "").strip()
+        preview_anchor = str((context.get("input") or {}).get("preview_id") or "").strip()
+        if preview_anchor:
+            inputs = {**inputs, "preview_id": preview_anchor}
         if extends:
             inputs = {**inputs, "extends_run_id": extends}
             # The preview the operator was looking at (validated by the start endpoint).
@@ -4162,6 +4398,8 @@ def _perform_capability(
             if fixed_title.startswith("Fix "):
                 inputs = {**inputs, "title": fixed_title}
     if key == "build":
+        inputs = build_named_from_prd(context, inputs)
+    if key == "build":
         # THE TICKET IS THE BUILD'S BRIEF TOO (BOSSAPP-1047), the same way the incident's is:
         # before the directive, delimited as outside input, its acceptance criteria the build's
         # done-when list unless a person gave some.
@@ -4238,14 +4476,34 @@ def _perform_capability(
     # resume is started EXACTLY like this step's build: as `step_actor`, under the run's
     # recorded authority, through the same tool checks (_retried_build).
     retry_note = ""
+    if key == "build" and any(k in inputs for k in start_from_file.INPUTS):
+        # START FROM A FILE (start_from_file): the file the run was given becomes the build's
+        # remediation contract; the original is committed first, the fix made in place.
+        try:
+            inputs = start_from_file.apply(inputs)
+        except start_from_file.StartFromFileError as error:
+            raise SettledCapabilityError(str(error)) from error
     if key == "build":
         resumed, inputs, retry_note = _retried_build(
             connection, ctx, project_id, step, context, inputs,
             ran_as=ran_as, tool_name=capability.tool)
         if resumed is not None:
             return _settle_started_work(capability, key, resumed)
+    if key == "config_deploy" and "source_file" in inputs:
+        # ONE FILE, UNDER ITS OWN NAME: `config/tenants/lumen-pay.yaml` lands as `lumen-pay.yaml`
+        # in the target directory. Opt-in: a step that names `source_paths` is read as before.
+        one = str(inputs.pop("source_file") or "").strip()
+        if one and not inputs.get("source_paths"):
+            inputs = {**inputs, "source_paths": {one.rsplit("/", 1)[-1]: one}}
+    if key == "config_deploy" and inputs.get("source_paths") and not inputs.get("code_task_run_id") \
+            and not inputs.get("files") and not inputs.get("produced_artifacts"):
+        # A CONFIG DEPLOY AFTER A BUILD SHIPS THAT BUILD'S FILES (BOSSAPP-1377): with no explicit
+        # run, the step takes the preceding build step's, as a catalogue deploy does.
+        built = _nearest_build_run_id(connection, context, step)
+        if built:
+            inputs = {**inputs, "code_task_run_id": built}
     if key == "promote_config":
-        # PROMOTED IS WHAT THIS RUN STAGED (AMEX-G9, BOSSAPP-1167). Never "the latest staging
+        # PROMOTED IS WHAT THIS RUN STAGED (BOSSAPP-1167). Never "the latest staging
         # deploy for the app": with two tenants in flight that is the other tenant's bundle.
         inputs = _bound_promotion(connection, context, inputs)
     # Under the run's recorded authority (the step's agent for that person), never the worker's.
@@ -4269,6 +4527,8 @@ def _perform_capability(
                                   trusted=trusted_step)
         finally:
             WORKFLOW_RUN_ID.reset(run_token)
+        if key == "meeting":
+            _stamp_start_approval(connection, project_id, context, output)
     # The step's own facts are written AFTER the tool's output: a tool (or anything it relays)
     # cannot rename the capability a step ran (review of #125 — a forged `capability` field).
     result = {**output, "capability": key, "tool": capability.tool,
@@ -4304,7 +4564,9 @@ def _perform_capability(
         raise CapabilityExecutionError(failed)
 
     # STARTED IS NOT FINISHED. See `_settle_started_work`.
-    return _settle_started_work(capability, key, result)
+    settled = _settle_started_work(capability, key, result)
+    _record_launch(connection, context, step, key, settled)
+    return settled
 
 
 def prd_acceptance_inputs(inputs: dict[str, Any], spec_markdown: str) -> dict[str, Any]:
@@ -4581,7 +4843,7 @@ def _start_recovery_build(
     from . import code_task_service as cts
 
     if _consent.recorded_authority(connection, run_id) is not None \
-            and _consent.acting_for_workflow_run(connection, run_id) is None:
+            and _live_run_authority(connection, project_id, run_id) is None:
         # The grant is gone. A repair build would be this run starting itself again.
         return "", step_recovery.AUTHORITY_ENDED
     settings = getattr(ctx, "settings", None) or get_settings()
@@ -4691,10 +4953,111 @@ def _recovery_begin(connection: Connection, ctx: Any, *, project_id: str, run_id
             pass
     spec_step = workflows._step_map(workflows._run_spec(connection, run_id)).get(step_id) or {}
     agent = step_recovery.agent_of(connection, project_id, spec_step)
-    entry = step_recovery.decide(connection, settings, project_id=project_id, run_id=run_id,
-                                 step_id=step_id, kind=kind, evidence=evidence, state=state,
-                                 agent=agent)
+    with _recovery_authority(ctx, connection, project_id=project_id, run_id=run_id,
+                             step_id=step_id, spec_step=spec_step, agent=agent,
+                             settings=settings, output=output) as reads:
+        entry = step_recovery.decide(connection, settings, project_id=project_id, run_id=run_id,
+                                     step_id=step_id, kind=kind, evidence=evidence, state=state,
+                                     agent=agent, reads=reads)
     return entry, state, agent
+
+
+def _authority_ended(connection: Connection, run_id: str) -> bool:
+    """The run HAS a recorded authority and it is no longer live (grant revoked or expired,
+    person gone)."""
+    from boss_engine.identity import consent as _consent
+
+    return (_consent.recorded_authority(connection, run_id) is not None
+            and _live_run_authority(connection, None, run_id) is None)
+
+
+@contextlib.contextmanager
+def _recovery_authority(ctx: Any, connection: Connection, *, project_id: str, run_id: str,
+                        step_id: str, spec_step: dict[str, Any], agent: dict[str, str],
+                        settings: Any, output: Any = None):
+    """What the step-recovery agent READS with, under the run's recorded authority.
+
+    A model chooses these calls, so it never runs on the person's full principal (the
+    `on_behalf` fallback a built-in step gets): it gets a READ-ONLY run token for an agent of
+    the step — its own agent, else the agent it ran as, else the one it names — scoped to the
+    delegable keys of the read tools (person ∩ ceilings ∩ grant ∩ read keys), nested under the run
+    (`run_wf:<run>/step:<step>.recovery`), so revoking the run's grant halts it. When nothing
+    can be delegated (no agent with a Passport, the grant does not name one, or this code is
+    already inside another run) it gets NO tools and decides from the evidence it was handed;
+    the decision records why. Yields `reads` for step_recovery.decide.
+
+    A run whose authority has ENDED raises the exact parked-run sentence
+    (step_recovery.AUTHORITY_ENDED): the caller parks the step until a person renews it. A run
+    with no recorded authority (a legacy run) reads as before."""
+    from boss_engine.identity import consent as _consent
+    from boss_engine.identity import runs as _runs
+    from .workflow_precheck_agent import read_permissions
+
+    recorded = _live_run_authority(connection, project_id, run_id) if run_id else None
+    if recorded is None:
+        if run_id and _consent.recorded_authority(connection, run_id) is not None:
+            raise CapabilityExecutionError(step_recovery.AUTHORITY_ENDED)
+        yield None
+        return
+    engine = getattr(ctx, "engine", None) or connection.engine
+    entity = (re.sub(r"[^A-Za-z0-9_.-]", "", f"{step_id}.recovery")[:60] or "step.recovery")
+    try:
+        scope = read_permissions(settings)
+    except Exception as error:  # noqa: BLE001 — no scope, no token: evidence only
+        log.info("recovery read scope unavailable: %s", error)
+        scope = frozenset()
+    # Who may read: the step's own agent (agent_of: its approver, else its captain), then the
+    # agent the step RAN as (`ran_as`, recorded when it ran: resolved once, no second model
+    # pick here), then the agent it names. A step that ran as its PERSON (#256: a person-only
+    # built-in step, `run_actor`) gives no agent: the recovery agent then reads nothing rather
+    # than as that person.
+    ran = (output or {}).get("ran_as") if isinstance(output, dict) else None
+    ran = ran if isinstance(ran, dict) else {}
+    roles: list[str] = []
+    for role in (agent.get("role"),
+                 ran.get("agent") if ran.get("how") != "run_actor" else "",
+                 step_agents.named_agent(spec_step)):
+        role = str(role or "").strip().lower()
+        if role and role != step_agents.HUMAN and not role.startswith("usr_") and role not in roles:
+            roles.append(role)
+    from boss_engine.identity import lineage as _lineage
+
+    # Why nothing could be read with, said for THIS case (P3 review of #257): each refusal below
+    # replaces it with its own reason.
+    why = ("this step has no agent to read as (no approver, captain or named agent"
+           + (", and it ran as its person" if ran.get("how") == "run_actor" else "") + ")")
+    if not scope:
+        why = "none of the read tools' permissions can be delegated to an agent"
+        roles = []
+    ambient = _lineage.current()
+    if roles and ambient is not None and ambient.chain:
+        why = ("this recovery runs inside another delegated run, which it keeps; no separate "
+               "read-only token is minted inside a run")
+        roles = []
+    for role in roles:
+        held = contextlib.ExitStack()
+        try:
+            decided = held.enter_context(_runs.delegated(
+                engine, kind="step", entity_id=entity, project_id=project_id, role_key=role,
+                scope=scope, acting=recorded))
+        except Exception as refused:  # noqa: BLE001 — not delegable to this agent: next one
+            held.close()
+            why = f"a read-only token for {role} was refused ({getattr(refused, 'reason', None) or type(refused).__name__})"
+            continue
+        if decided is None or getattr(decided, "run_token", None) is None:
+            held.close()
+            try:
+                has_passport = bool(_runs.agent_for_role(connection, project_id, role))
+            except Exception:  # noqa: BLE001
+                has_passport = False
+            why = (f"{role} has no Passport in this project" if not has_passport else
+                   f"the run's grant gives {role} no read-only token")
+            continue
+        with held:
+            yield {"tools": True, "as": role, "agent_id": decided.principal.id,
+                   "scope": sorted(decided.run_token.scope)}
+        return
+    yield {"tools": False, "why": why}
 
 
 def _park_for_recovery(connection: Connection, project_id: str, step_run_id: str,
@@ -4873,9 +5236,9 @@ def _recover_awaited(
     step now waits on what was decided, or {"ask": the error's words, "output": …} for the
     caller to fail the step for a person, with the agent's one question."""
     step_id = str(step["step_id"])
-    if step_recovery.failure_authority(failure):
-        # The awaited work ended because the run's authority ended. Leave it parked on that
-        # sentence. A repair build is not a person renewing the grant.
+
+    def park() -> dict[str, Any]:
+        # Leave it parked on the sentence. A repair build is not a person renewing the grant.
         _park_for_recovery(connection, project_id, step["id"],
                            {"kind": "authority", "then": "renew"},
                            {"note": step_recovery.AUTHORITY_ENDED})
@@ -4888,8 +5251,22 @@ def _recover_awaited(
             {"m": step_recovery.AUTHORITY_ENDED, "id": run_id})
         return {"done": {"run_id": run_id, "step_id": step_id, "awaited": "authority",
                          "outcome": "parked", "error": step_recovery.AUTHORITY_ENDED}}
-    began = _recovery_begin(connection, ctx, project_id=project_id, run_id=run_id,
-                            step_id=step_id, kind=kind, output=output, evidence=evidence)
+
+    if _authority_ended(connection, run_id):
+        # The run's authority has ended and the org default could not renew it (turned off,
+        # revoked by its person, another org): nobody decides anything under it.
+        return park()
+    if step_recovery.failure_authority(failure):
+        # The awaited work died only because the authority ended, and the run is live again on
+        # its person's fixer authority (fix_authority): the agent runs it again, no person asked.
+        evidence = {**evidence, "authority_renewed": True}
+    try:
+        began = _recovery_begin(connection, ctx, project_id=project_id, run_id=run_id,
+                                step_id=step_id, kind=kind, output=output, evidence=evidence)
+    except CapabilityExecutionError as error:
+        if step_recovery.authority_message(str(error)):
+            return park()
+        raise
     if began is None:
         return None
     entry, state, agent = began
@@ -5229,7 +5606,7 @@ def _revive_after_boss_update(connection: Connection, *, project_id: str, run_id
             note="BOSS was updated since this step failed; trying it again by itself.")
         point.commit()
     except Exception as error:  # noqa: BLE001 — a person's Retry still works
-        point.rollback()
+        release_failed_savepoint(point, error, connection=connection)
         log.info("step %s/%s not revived after the update: %s", run_id, step["step_id"], error)
         return []
     emit_event(connection, project_id, step_recovery.RESUMED_EVENT, "boss", "workflow_run",
@@ -5296,7 +5673,7 @@ _AWAIT_KINDS: dict[str, tuple[str, tuple[str, ...]]] = {
     # on the deployment run, like a build waits on its code task.
     "deploy": ("deployment", ("deployment_id", "deployment_run_id", "id")),
     "redeploy": ("deployment", ("deployment_id", "deployment_run_id", "id")),
-    # A CONFIG deployment (config_deploy, AMEX-G4) is a deployment run too: planned is not
+    # A CONFIG deployment (config_deploy, BOSSAPP-1140) is a deployment run too: planned is not
     # shipped, and promoted is not live until production's health check passed.
     "config_deploy": ("deployment", ("deployment_id", "deployment_run_id", "id")),
     "promote_config": ("deployment", ("deployment_id", "deployment_run_id", "id")),
@@ -5348,6 +5725,32 @@ _CANONICAL_FIELD: dict[str, str] = {kind: fields[0] for kind, fields in _AWAIT_K
 #: A step that reports it did not do the thing must not be recorded as having done it. What
 #: happens next is a policy question; claiming success is not an answer to it.
 _DID_NOT_SHIP = workflow_outcomes.DID_NOT_SHIP
+
+
+def _record_launch(connection: Connection, context: dict[str, Any], step: dict[str, Any],
+                   key: str, result: dict[str, Any]) -> None:
+    """THE BUILD A STEP LAUNCHED, ON ITS STEP RUN, WHEN IT IS LAUNCHED (not when it finishes).
+
+    The build's pipeline reads its workflow's quality bar at plan sign-off and at the gates, long
+    before the step's output is final; `quality_bar.launched_by` believes a build's
+    `finalize_ctx.workflow_run_id` only when this record names it. Written in the launching
+    transaction, so it is visible to the worker as soon as the job is. Never fails the step."""
+    run_id = str(result.get("code_task_run_id") or result.get("run_id") or "").strip()
+    if key not in ("build", "more_tests", "plrr") or not run_id.startswith("crun_"):
+        return
+    # In the result itself, so the step's own output write carries it (that write replaces the
+    # row's output), and on the row now for anything that reads before that write.
+    result["launched_code_task_run_id"] = run_id
+    try:
+        with connection.begin_nested():
+            connection.execute(text(
+                "UPDATE workflow_step_runs SET output = COALESCE(output,'{}'::jsonb) || "
+                "jsonb_build_object('launched_code_task_run_id', CAST(:r AS text)) "
+                "WHERE workflow_run_id = :w AND step_id = :s"),
+                {"r": run_id, "w": str(context.get("run_id") or ""),
+                 "s": str(step.get("id") or "")})
+    except Exception:  # noqa: BLE001 — bookkeeping: the bar then falls back to the project's
+        log.warning("could not record the launched build on its step run", exc_info=True)
 
 
 def _settle_started_work(capability: Any, key: str, result: dict[str, Any]) -> dict[str, Any]:
@@ -5640,6 +6043,60 @@ _REASON_COLUMN: dict[str, str] = {"decisions": "resolution_note", "ci_waits": "s
                                   "security_scans": "counts->>'error'"}
 
 
+def deployed_url_of(domains: Any, target_kind: Any = None) -> str:
+    """Where a deployment is live, for a later step's base URL (contract_test, smoke_test).
+
+    A target's first domain — except a CONFIG DIRECTORY's: create_config_target records its
+    health URL there ("http://host:8080/readyz"), so the step after Deploy config got
+    `deployed_url` = the health path and a contract test hit /readyz/v1/payments (laptop
+    2026-11-21, Northgate API onboarding). A config deploy is live at the service that loads
+    the files: the health URL's origin."""
+    if isinstance(domains, str):
+        try:
+            domains = json.loads(domains)
+        except ValueError:
+            domains = [domains]
+    first = next((str(d).strip() for d in (domains or []) if str(d).strip()), "")
+    if not first:
+        return ""
+    url = first if "://" in first else f"http://{first}"
+    if str(target_kind or "").strip().lower() == "config_dir":
+        from urllib.parse import urlsplit
+
+        parts = urlsplit(url)
+        if parts.scheme and parts.netloc:
+            return f"{parts.scheme}://{parts.netloc}"
+    return url
+
+
+def _remediation_record(connection: Connection, code_task_run_id: str) -> dict[str, Any]:
+    """A remediation build's record for its step (input_fidelity): ``validation`` — the
+    validator's findings on the input, the fixes applied (line before/after, auto or manual), its
+    findings on the output — and ``input_fidelity`` — the verdict and its violations. Empty for
+    every other build. Never raises."""
+    from . import input_fidelity
+
+    try:
+        with connection.begin_nested():
+            row = connection.execute(
+                text("SELECT state->'validation' AS validation, "
+                     "state->'input_fidelity' AS fidelity FROM code_task_runs WHERE id = :r"),
+                {"r": code_task_run_id}).mappings().first()
+    except Exception:  # noqa: BLE001
+        log.info("remediation record not read for %s", code_task_run_id, exc_info=True)
+        return {}
+    if not row:
+        return {}
+    out: dict[str, Any] = {}
+    for key, col in ((input_fidelity.VALIDATION_KEY, "validation"),
+                     (input_fidelity.STATE_KEY, "fidelity")):
+        value = row[col]
+        value = json.loads(value) if isinstance(value, str) else value
+        if isinstance(value, dict):
+            out[key] = value
+    return out
+
+
 def _terminal_evidence(
     connection: Connection, kind: str, awaited_id: str
 ) -> dict[str, Any]:
@@ -5668,10 +6125,11 @@ def _terminal_evidence(
                      "WHERE id = :r"),
                 {"r": awaited_id},
             ).mappings().first()
+            remediation = _remediation_record(connection, awaited_id)
             if not row or not row["pull_request_url"]:
-                return {}
+                return remediation
             out = {"pull_request_url": row["pull_request_url"],
-                   "pull_request_number": row["pull_request_number"]}
+                   "pull_request_number": row["pull_request_number"], **remediation}
             checks = row["checks_failing"]
             checks = json.loads(checks) if isinstance(checks, str) else checks
             if isinstance(checks, dict) and checks.get("gates"):
@@ -5762,18 +6220,14 @@ def _terminal_evidence(
             if not row:
                 return {}
             evidence = {"deployment_id": awaited_id, "deployment_status": row["status"]}
-            domains = connection.execute(
-                text("SELECT domains FROM deployment_targets WHERE id = :t"),
+            target = connection.execute(
+                text("SELECT domains, target_kind FROM deployment_targets WHERE id = :t"),
                 {"t": row["deployment_target_id"]},
-            ).scalar()
-            if isinstance(domains, str):
-                try:
-                    domains = json.loads(domains)
-                except ValueError:
-                    domains = [domains]
-            first = next((str(d) for d in (domains or []) if str(d).strip()), "")
-            if first:
-                evidence["deployed_url"] = first if "://" in first else f"http://{first}"
+            ).mappings().first()
+            url = deployed_url_of(target["domains"] if target else None,
+                                  target["target_kind"] if target else None)
+            if url:
+                evidence["deployed_url"] = url
             return evidence
         if kind == "ci_wait":
             row = connection.execute(
@@ -6013,7 +6467,7 @@ def follow_authority_park(connection, *, project_id: str, run_id: str, step) -> 
     message = step_recovery.AUTHORITY_ENDED
     step_id = str(step["step_id"])
     recorded = _consent.recorded_authority(connection, run_id)
-    live = (_consent.acting_for_workflow_run(connection, run_id)
+    live = (_live_run_authority(connection, project_id, run_id)
             if recorded is not None else None)
     if recorded is None or live is None:
         return {"run_id": run_id, "step_id": step_id, "outcome": "parked", "error": message}
@@ -6263,6 +6717,16 @@ def resume_awaited(
             done.append({"run_id": run_id, "step_id": step["step_id"],
                          "outcome": "redeploying", "awaited": kind, "build": awaited_id})
             continue
+        if kind == "meeting":
+            # EASY MODE NEVER STOPS AT ITS PANEL (fallback_to_brief): a panel that failed, died
+            # or ran past its time budget is replaced by a build from the brief, with why.
+            fell_back = _panel_fallback(connection, project_id=project_id, run_id=run_id,
+                                        step=step, output=output, meeting_run_id=awaited_id,
+                                        status=status, ok_states=ok_states,
+                                        bad_states=bad_states)
+            if fell_back:
+                done.append(fell_back)
+                continue
         if kind == "meeting" and status in ok_states:
             held = _hold_for_spec(connection, project_id=project_id, run_id=run_id,
                                   step=step, output=output, meeting_run_id=awaited_id)
@@ -6446,6 +6910,9 @@ def resume_awaited(
                         **({REJECTED_BY_APPROVER: True}
                            if kind in ("stack_deployment", "architecture", SPEC_DECISION_KIND)
                            and status == "rejected" else {}),
+                        # A remediation that failed its fidelity check says why, on the step.
+                        **(_remediation_record(connection, awaited_id)
+                           if kind == "code_task" else {}),
                         **((recovered or {}).get("output") or {})},
             )
             done.append({"run_id": run_id, "step_id": step["step_id"],
@@ -6587,12 +7054,55 @@ def _closed_words(connection: Connection, build_run_id: str, number: Any) -> str
             "deploy. Reopen and merge it, then Try again.")
 
 
+def _merge_step(connection: Connection, project_id: str, step: Any, context: dict[str, Any],
+                inputs: dict[str, Any]) -> dict[str, Any]:
+    """MERGE, as a step: wait on the build's merge exactly as a deploy does (`_merge_wait`, then
+    BOSS's own record), and succeed once it is merged. The merge card holds the checks and the
+    approval; this step only makes the wait visible in the run and holds what follows it."""
+    built = str(inputs.get("run_id") or "") or _nearest_build_run_id(
+        connection, context, step if isinstance(step, dict) else None) or ""
+    if not built:
+        return {"capability": "merge", "tool": None, "status": "not_applicable",
+                "note": "No build before this step, so there is no change to merge."}
+    waiting = (_merge_wait(connection, project_id, built)
+               or _merge_wait_on_record(connection, project_id, built))
+    if waiting:
+        return {**waiting, "capability": "merge"}
+    has_pr = connection.execute(
+        text("SELECT pull_request_url FROM code_task_runs WHERE id = :i"), {"i": built}).scalar()
+    if not has_pr:
+        return {"capability": "merge", "tool": None, "status": "not_applicable",
+                "note": "The build opened no change, so there is nothing to merge."}
+    return {"capability": "merge", "tool": None, "status": "succeeded",
+            "merged_build_run_id": built, "note": "Merged."}
+
+
 def _merge_wait(connection: Connection, project_id: str,
                 build_run_id: str) -> Optional[dict[str, Any]]:
     """The deploy step's await on its build's merge, or None when it is merged (or has no PR)."""
     seen = _unmerged_build(connection, project_id, build_run_id)
     if not seen:
         return None
+    return _merge_await(connection, project_id, build_run_id, seen)
+
+
+def _merge_wait_on_record(connection: Connection, project_id: str,
+                          build_run_id: str) -> Optional[dict[str, Any]]:
+    """The same await, from BOSS's record alone: a build with a pull request and no merge on
+    record waits, whatever the merge approval said or GitHub could not tell."""
+    if not build_run_id or not _unmerged_on_record(connection, build_run_id):
+        return None
+    number = connection.execute(
+        text("SELECT pull_request_number FROM code_task_runs WHERE id = :i"),
+        {"i": build_run_id}).scalar()
+    from . import pr_merge
+
+    return _merge_await(connection, project_id, build_run_id,
+                        {"state": pr_merge.MERGE_PENDING, "number": number})
+
+
+def _merge_await(connection: Connection, project_id: str, build_run_id: str,
+                 seen: dict[str, Any]) -> dict[str, Any]:
     from . import pr_merge
 
     if seen.get("state") == pr_merge.CLOSED:
@@ -6665,6 +7175,261 @@ def _follow_merge(connection: Connection, *, project_id: str, run_id: str, step:
             "build": build_run_id}
 
 
+def _is_easy_mode_run(connection: Connection, run_id: str) -> bool:
+    """Is this workflow run one of the catalogue's Easy Mode MVP workflow?"""
+    if not run_id:
+        return False
+    from .workflow_catalogue import EASY_MODE_WORKFLOW
+
+    try:
+        with connection.begin_nested():
+            return bool(connection.execute(text(
+                "SELECT 1 FROM workflow_runs r "
+                "JOIN workflow_versions v ON v.id = r.workflow_version_id "
+                "JOIN workflow_definitions d ON d.id = v.workflow_definition_id "
+                "WHERE r.id = :r AND d.workflow_key = :k AND d.is_catalogue"),
+                {"r": run_id, "k": EASY_MODE_WORKFLOW}).first())
+    except Exception:  # noqa: BLE001 — unknown is not Easy Mode
+        return False
+
+
+def _stamp_start_approval(connection: Connection, project_id: str, context: dict[str, Any],
+                          output: dict[str, Any]) -> None:
+    """THE PERSON'S EASY MODE START APPROVES THIS PANEL'S PRD — and nothing else can say so.
+    `workflows.SPEC_BY_START_KEY` is a server-only run input that only factory_launch writes (with
+    the starting person's id, after it checked they may approve a PRD); it is honoured only on an
+    Easy Mode MVP run, and copied onto the panel the meeting step just convened."""
+    person = str((context.get("input") or {}).get(workflows.SPEC_BY_START_KEY) or "").strip()
+    meeting = (output or {}).get("meeting") if isinstance(output, dict) else None
+    meeting_run_id = str((meeting or {}).get("run_id") or "") if isinstance(meeting, dict) else ""
+    if not person or not meeting_run_id \
+            or not _is_easy_mode_run(connection, str(context.get("run_id") or "")):
+        return
+    connection.execute(
+        text("UPDATE meeting_runs SET constraints = COALESCE(constraints, '{}'::jsonb) || "
+             "jsonb_build_object('spec_approval', 'start', 'approved_by_start', CAST(:who AS text)) "
+             "WHERE id = :m AND project_id = :p AND status = 'running' "
+             "AND COALESCE(constraints->>'spec_approval', '') = ''"),
+        {"who": person, "m": meeting_run_id, "p": project_id})
+
+
+#: What an Easy Mode deploy step says when the project has nowhere to deploy.
+NO_HOST_WORDS = "Your app runs as a preview. Add a server in Infra to deploy it."
+#: What a Fast Fix deploy step says when a bug fix did not ask to deploy.
+NO_DEPLOY_ASK_WORDS = "No deploy was asked for on this bug fix."
+
+_NEGATED_DEPLOY_ASK_RE = re.compile(
+    r"\b(?:don't|do\s+not|never|not|no|skip|without)\s+(?:actually\s+)?"
+    r"(?:deploy(?:ing)?|ship(?:ping)?|releas(?:e|ing)|"
+    r"push(?:ing)?\s+to\s+(?:prod(?:uction)?|staging|live|server))\b",
+    re.I,
+)
+_DEPLOY_ASK_RE = re.compile(
+    r"(?:(?:^|(?:and|then|also|please|,|;)\s+)(?:please\s+)?(?:deploy|ship|release)\b)"
+    r"|\b(?:deploy|ship|release)\s+(?:it|this|that|the\s+fix|fix|changes?|"
+    r"to\s+(?:prod(?:uction)?|staging|live|server)|when\s+(?:ready|done))\b"
+    r"|\bpush\s+(?:it|this|the\s+fix)?\s*to\s+(?:prod(?:uction)?|staging|live)\b"
+    r"|\bneed(?:s)?\s+(?:this\s+|it\s+)?(?:deployed|shipped|released)\b",
+    re.I,
+)
+
+
+def _asks_to_deploy(run_input: Any) -> bool:
+    """True when a bug-fix request explicitly asks to deploy/ship/release (ignoring negations)."""
+    if not isinstance(run_input, dict):
+        return False
+    explicit = run_input.get("deploy")
+    if isinstance(explicit, bool):
+        return explicit
+    if isinstance(explicit, str) and explicit.strip():
+        low = explicit.strip().lower()
+        if low in ("true", "1", "yes"):
+            return True
+        if low in ("false", "0", "no"):
+            return False
+    parts = [
+        str(run_input.get(k) or "").strip()
+        for k in ("directive", "title", "instructions", "description")
+        if isinstance(run_input.get(k), str) and str(run_input.get(k) or "").strip()
+    ]
+    if not parts:
+        return False
+    cleaned = _NEGATED_DEPLOY_ASK_RE.sub(" ", " ".join(parts))
+    return bool(_DEPLOY_ASK_RE.search(cleaned))
+
+
+def _should_skip_bug_deploy(run_input: Any) -> bool:
+    return isinstance(run_input, dict) and str(run_input.get("work_kind") or "") == "bug" \
+        and not _asks_to_deploy(run_input)
+
+
+def _somewhere_to_deploy(connection: Connection, project_id: str) -> bool:
+    """A deployment target, or a verified host this project may use (the Kit's own rule:
+    kit_connections.deps `deploy_target`). Unknown counts as somewhere, so a deploy is tried."""
+    from . import kit_connections
+
+    try:
+        return bool(kit_connections.deploy_targets(connection, project_id)) \
+            or kit_connections.verified_hosts(connection, project_id) > 0
+    except Exception:  # noqa: BLE001
+        return True
+
+
+#: The event a panel step records when it gave way to a build from the brief.
+SPEC_FALLBACK_EVENT = "workflow.spec_fallback"
+
+
+def _panel_fallback(connection: Connection, *, project_id: str, run_id: str, step: Any,
+                    output: dict[str, Any], meeting_run_id: str, status: str,
+                    ok_states: frozenset[str], bad_states: frozenset[str]
+                    ) -> Optional[dict[str, Any]]:
+    """BUILD FROM THE BRIEF WHEN THE PANEL CANNOT GIVE A SPEC IN TIME (Easy Mode, 2026-11-19).
+
+    Only for a panel convened with `fallback_to_brief` (request_meeting's constraints). It failed
+    or was cancelled (and nobody retried it), its step job died, or it ran past its
+    `time_budget_seconds`: the panel is stopped, and the step SUCCEEDS with no PRD and a recorded
+    `spec_fallback` reason, so the build after it starts from the brief. Never a block, never a
+    bare failure. None when none of that applies."""
+    try:
+        row = connection.execute(
+            text("SELECT constraints, error, state, EXTRACT(EPOCH FROM (now() - GREATEST("
+                 "created_at, COALESCE(CAST(NULLIF(state->>'resumed_at', '') AS timestamptz), "
+                 "created_at)))) AS age "
+                 "FROM meeting_runs WHERE id = :m"), {"m": meeting_run_id}).mappings().first()
+    except Exception:  # noqa: BLE001 — an unreadable panel keeps the ordinary path
+        return None
+    if not row:
+        return None
+    constraints = row["constraints"] if isinstance(row["constraints"], dict) else \
+        json.loads(row["constraints"] or "{}")
+    if output.get("waiting_on_person") and status not in bad_states:
+        # THE PERSON'S RETRY RESUMED THE PANEL: the step no longer waits on them.
+        for key in ("waiting_on_person", "awaited_note"):
+            output.pop(key, None)
+        connection.execute(
+            text("UPDATE workflow_step_runs SET output = output - 'waiting_on_person' "
+                 "- 'awaited_note', updated_at = now() WHERE id = :i"), {"i": step["id"]})
+    if not constraints.get("fallback_to_brief") or status in ok_states:
+        return None
+    reason = ""
+    if status in bad_states:
+        if _meeting_successor(connection, project_id, meeting_run_id, run_id):
+            return None           # a person retried the panel: the ordinary path follows it
+        error = str(row["error"] or "").strip()
+        state = row["state"] if isinstance(row["state"], dict) else \
+            json.loads(row["state"] or "{}")
+        if state.get("failure_class") == "needs_human" or _person_side_words(error):
+            return _park_on_person(connection, project_id=project_id, run_id=run_id, step=step,
+                                   output=output, meeting_run_id=meeting_run_id,
+                                   words=_person_side_words(error) or error)
+        reason = f"the panel ended as '{status}'" + (f": {error[:200]}" if error else "")
+    else:
+        job = connection.execute(
+            text("SELECT status, last_error FROM jobs WHERE kind = 'meeting.step' "
+                 "AND payload->>'run_id' = :m ORDER BY created_at DESC LIMIT 1"),
+            {"m": meeting_run_id}).mappings().first() or {}
+        budget = int(constraints.get("time_budget_seconds") or 0)
+        if str(job.get("status") or "") in ("deadlettered", "failed_final"):
+            said = job.get("last_error")
+            if isinstance(said, str):
+                try:
+                    said = json.loads(said)
+                except ValueError:
+                    pass
+            said = said.get("message") if isinstance(said, dict) else said
+            person = _person_side_words(str(said or ""))
+            if person:
+                # THE MODEL ITSELF IS UNUSABLE: the panel is failed as the person's (never
+                # cancelled into a build that would fail the same way) and the step waits on it.
+                from .meeting_service import person_side_failure, release_meeting_hold
+
+                code = (person_side_failure(str(said)) or {}).get("reason_code") or "needs_human"
+                failed = connection.execute(text(
+                    "UPDATE meeting_runs SET status = 'failed', error = :e, updated_at = now(), "
+                    "state = COALESCE(state, '{}'::jsonb) || jsonb_build_object("
+                    "'failure_class', 'needs_human', 'reason_code', CAST(:rc AS text)) "
+                    "WHERE id = :m AND status = 'running'"),
+                    {"e": person[:500], "rc": code, "m": meeting_run_id})
+                if not failed.rowcount:
+                    return None       # the panel finished meanwhile: the ordinary path follows
+                release_meeting_hold(connection, get_settings(), meeting_run_id,
+                                     "panel stopped: " + person[:200])
+                return _park_on_person(connection, project_id=project_id, run_id=run_id,
+                                       step=step, output=output,
+                                       meeting_run_id=meeting_run_id, words=person)
+            reason = "the panel's step failed" + (f": {str(said)[:200]}" if said else "")
+        elif budget and float(row["age"] or 0) > budget:
+            reason = (f"the panel ran past its {max(1, budget // 60)}-minute budget")
+        if not reason:
+            return None
+        stopped = connection.execute(
+            text("UPDATE meeting_runs SET status = 'cancelled', error = :e, updated_at = now() "
+                 "WHERE id = :m AND status = 'running'"),
+            {"m": meeting_run_id, "e": f"Stopped: {reason}. BOSS built from the brief instead."})
+        if not stopped.rowcount:
+            # THE PANEL FINISHED MEANWHILE (its PRD may already be approved and building): the
+            # ordinary path follows it. Building from the brief too would be a second build.
+            return None
+    # THE PANEL HAS ENDED, SO ITS HOLD GOES (stranger test r8: a failed panel's $6 hold kept the
+    # build after it in budget_wait with $0 spent).
+    from .meeting_service import release_meeting_hold
+
+    release_meeting_hold(connection, get_settings(), meeting_run_id,
+                         f"panel ended: {reason[:200]}")
+    fallback = {"reason": reason, "meeting_run_id": meeting_run_id,
+                "at": now_utc().isoformat()}
+    workflows.force_complete_waiting_step(
+        connection, project_id=project_id, step_run_id=step["id"],
+        output={**output, "status": "succeeded", "meeting_run_id": meeting_run_id,
+                "prd_markdown": "", "spec_fallback": fallback,
+                "note": f"No spec this time — {reason}. BOSS builds from the brief instead."})
+    emit_event(connection, project_id, SPEC_FALLBACK_EVENT, "boss", "workflow_run", run_id,
+               {"step_id": step["step_id"], **fallback})
+    return {"run_id": run_id, "step_id": step["step_id"], "outcome": "spec_fallback",
+            "awaited": "meeting", "because": reason}
+
+
+def _person_side_words(error: str) -> str:
+    """Plain words when a panel's failure is the person's own model setup (meeting_service.
+    person_side_failure — the build's own classifier), else ""."""
+    from .meeting_service import person_side_failure
+
+    found = person_side_failure(error) if error else None
+    return found["words"] if found else ""
+
+
+#: The event a panel step records when it waits on the person instead of building from the brief.
+SPEC_WAITS_ON_PERSON_EVENT = "workflow.panel_waits_on_person"
+
+
+def _park_on_person(connection: Connection, *, project_id: str, run_id: str, step: Any,
+                    output: dict[str, Any], meeting_run_id: str, words: str) -> dict[str, Any]:
+    """THE PANEL FAILED BECAUSE THE MODEL ITSELF IS UNUSABLE (stranger test r8: a plain-http
+    model): building from the brief would fail the same way on the same model, so the workflow
+    does NOT go on to Build. The step keeps waiting on the panel, saying why in the person's
+    words; the panel's own failure item (failure_owner, "Done — retry") resumes it, and this step
+    follows it to its PRD. Only failures that are not the person's (a timeout, a transient
+    error) build from the brief."""
+    note = (f"Waiting on you: {words.rstrip('.')}. Press Done — retry on its item once it is "
+            "fixed; the panel resumes and nothing is built before it.")
+    if output.get("waiting_on_person") != words:
+        from .meeting_service import release_meeting_hold
+
+        release_meeting_hold(connection, get_settings(), meeting_run_id,
+                             f"panel failed: {words[:200]}")
+        connection.execute(
+            text("UPDATE workflow_step_runs SET output = COALESCE(output, '{}'::jsonb) "
+                 "|| CAST(:o AS JSONB), updated_at = now() WHERE id = :i AND status = 'waiting'"),
+            {"i": step["id"], "o": json.dumps({"waiting_on_person": words,
+                                               "awaited_note": note,
+                                               "meeting_run_id": meeting_run_id})})
+        emit_event(connection, project_id, SPEC_WAITS_ON_PERSON_EVENT, "boss", "workflow_run",
+                   run_id, {"step_id": step["step_id"], "meeting_run_id": meeting_run_id,
+                            "words": words[:300]})
+    return {"run_id": run_id, "step_id": step["step_id"], "outcome": "waiting_on_person",
+            "awaited": "meeting", "because": words}
+
+
 def _hold_for_spec(connection: Connection, *, project_id: str, run_id: str,
                    step: Any, output: dict[str, Any],
                    meeting_run_id: str) -> Optional[dict[str, Any]]:
@@ -6712,6 +7477,48 @@ def _hold_for_spec(connection: Connection, *, project_id: str, run_id: str,
             "meeting_run_id": meeting_run_id}
 
 
+def repoint_spec_decision(connection: Connection, old_decision_id: str,
+                          new_decision_id: str) -> int:
+    """Repoint waiting workflow_step_runs (SPEC_DECISION_KIND) from a revised PRD decision to
+    the new revised PRD decision so the workflow keeps holding on the new card."""
+    rows = connection.execute(
+        text("SELECT id, output FROM workflow_step_runs WHERE status = 'waiting'")
+    ).mappings().all()
+    updated = 0
+    for row in rows:
+        raw = row["output"]
+        output = raw if isinstance(raw, dict) else json.loads(raw or "{}")
+        if not isinstance(output, dict):
+            continue
+        await_val = output.get("await")
+        if not isinstance(await_val, dict):
+            continue
+        if await_val.get("kind") != SPEC_DECISION_KIND:
+            continue
+        matches_old = (
+            str(await_val.get("id") or "") == str(old_decision_id)
+            or str(output.get("spec_decision_id") or "") == str(old_decision_id)
+        )
+        if not matches_old:
+            continue
+        new_output = {
+            **output,
+            "await": {**await_val, "id": str(new_decision_id)},
+            "spec_decision_id": str(new_decision_id),
+            "awaited_note": (
+                f"The PRD was revised. Nothing is built until the revised spec is approved: "
+                f"decision {new_decision_id}."
+            ),
+        }
+        connection.execute(
+            text("UPDATE workflow_step_runs SET output = CAST(:o AS JSONB), updated_at = now() "
+                 "WHERE id = :i AND status = 'waiting'"),
+            {"o": json.dumps(new_output), "i": row["id"]},
+        )
+        updated += 1
+    return updated
+
+
 def _agent_runs_on_workers() -> bool:
     from .agent_loop import agent_runs_on_workers
 
@@ -6747,7 +7554,7 @@ def _evidence_quietly(connection: Connection, kind: str, awaited_id: str) -> dic
     try:
         evidence = _terminal_evidence(connection, kind, awaited_id)
     except Exception as error:  # noqa: BLE001
-        point.rollback()
+        release_failed_savepoint(point, error, connection=connection)
         log.warning("cannot read what %s %s reached: %s", kind, awaited_id, error)
         return {}
     point.commit()
@@ -6795,8 +7602,8 @@ def _why_it_ended(connection: Connection, table: str, awaited_id: str) -> str:
         ).mappings().first()
         reason = str((row or {}).get("error") or "").strip()
         point.commit()
-    except Exception:  # noqa: BLE001 — a table without an `error` column is not fatal
-        point.rollback()
+    except Exception as failed:  # noqa: BLE001 — a table without an `error` column is not fatal
+        release_failed_savepoint(point, failed, connection=connection)
         reason = ""
 
     # "No job remains" describes the SWEEP, not the failure. The job it is talking about
@@ -6823,9 +7630,19 @@ def _why_it_ended(connection: Connection, table: str, awaited_id: str) -> str:
                 if detail:
                     reason = f"{kind_of}: {detail}" if kind_of else detail
             point.commit()
-        except Exception:  # noqa: BLE001 — the status is still reportable without this
-            point.rollback()
-    return reason[:400]
+        except Exception as failed:  # noqa: BLE001 — the status is still reportable without this
+            release_failed_savepoint(point, failed, connection=connection)
+    return _without_internal_urls(reason)[:400]
+
+
+#: The HTTP client's own boilerplate around a worker's call to BOSS's API: "for url
+#: 'http://api:8000/v1/meetings/step'" and "For more information check: https://developer.
+#: mozilla.org/…" — internal addresses and a generic link, never words for a person.
+_CLIENT_NOISE = re.compile(r"\s*for url '[^']*'|\s*For more information check: \S+", re.I)
+
+
+def _without_internal_urls(reason: str) -> str:
+    return _CLIENT_NOISE.sub("", reason or "").strip()
 
 
 def _meeting_successor(
@@ -7234,6 +8051,11 @@ def _gate_subject(
         # plan, the host and the manifest — is the gate. Approving it releases the apply;
         # rejecting it rejects the step. Every other deploy keeps its gate exactly as before.
         return None
+    if key in TARGET_GATED and context is not None and _dev_deploy_needs_no_gate(
+            connection, project_id, spec_step, context, key):
+        # A DEPLOY TO A DEVELOPMENT TARGET ASKS NOBODY (dev autonomy, BOSSAPP-1441): the step
+        # runs and its deployment is decided by the agent, logged in "Decided for you".
+        return None
     if key == "deploy" and context is not None:
         # A DEPLOY THAT WILL BE REFUSED ASKS NOBODY: an app that was told to declare how it
         # runs and did not, or a Postgres app with no manifest to bring its database, is refused
@@ -7246,8 +8068,8 @@ def _gate_subject(
             point = connection.begin_nested()
             try:
                 undeclared = undeclared_deploy_refusal(connection, str(ready["run_id"]))
-            except Exception:  # noqa: BLE001 — unknown: the gate opens as it always did
-                point.rollback()
+            except Exception as failed:  # noqa: BLE001 — unknown: the gate opens as it always did
+                release_failed_savepoint(point, failed, connection=connection)
                 undeclared = None
             else:
                 point.commit()
@@ -7277,6 +8099,11 @@ def _gate_subject(
         # it was. A step that PROMISED a person (every other Deploy step) is asked, whatever
         # the policy says (D2, 2026-10-18: "Ships only when you say yes", shipped unasked).
         if policy_answers_for_step(connection, project_id, spec_step, context.get("input")):
+            return None
+        # A SMALL BUG FIX (fast_fix, BOSSAPP-1399) asks no deploy approval unless the request
+        # asked to deploy; `_perform_capability` skips the step in words.
+        if str(((binding.get("inputs") or {}).get("skip_without_deploy_ask")) or "").lower() in (
+                "true", "1") and _should_skip_bug_deploy(context.get("input")):
             return None
     capability = get_capability(key)
     if capability.is_gate:
@@ -7340,6 +8167,65 @@ def _gate_subject(
             "risk_tier": capability.risk_tier, "completes_step": False,
         }
     return None
+
+
+def _dev_deploy_needs_no_gate(connection: Connection, project_id: str, spec_step: dict[str, Any],
+                              context: dict[str, Any], key: str) -> bool:
+    """Whether this deploy-like step's gate is answered by dev autonomy: its resolved target is
+    not production and the project's policy acts in development. Writes the audit record (once
+    per run and step) when it is. Unknown, or anything unreadable, opens the gate as before."""
+    from . import autonomy_gate, autonomy_policy, production
+    from .deploy_policy import step_environment
+
+    point = connection.begin_nested()
+    try:
+        policy = autonomy_policy.load(connection, project_id)
+        ready = (deploy_step_inputs(connection, spec_step, context) or {}) if key == "deploy" \
+            else {}
+        target_id = ready.get("target_id") or ((spec_step.get("binding") or {}).get(
+            "inputs") or {}).get("target_id")
+        environment = step_environment(spec_step, context.get("input"))
+        if not (isinstance(target_id, str) and target_id.strip()) and key != "deploy":
+            # A redeploy re-ships wherever the run last deployed, and a config deploy picks its
+            # target itself: without the target named, the gate opens as before.
+            point.commit()
+            return False
+        verdict = (production.resolve_target(connection, target_id)
+                   if isinstance(target_id, str) and target_id.strip()
+                   else production.resolve_project_environment(connection, project_id,
+                                                                environment))
+        approval = spec_step.get("approval") or {}
+        mode = approval_mode_for(key, approval.get("requested_mode"),
+                                 target_prod=verdict.prod, autonomy_acts=policy.dev_acts)
+        if mode != "auto":
+            point.commit()
+            return False
+        run_id = str(context.get("run_id") or "")
+        step_id = str(spec_step.get("id") or "")
+        seen = connection.execute(text(
+            "SELECT 1 FROM decisions WHERE project_id = :p AND status = 'approved' "
+            "AND recommendation->>'workflow_run_id' = :r AND recommendation->>'step_id' = :s "
+            "AND approved_by LIKE :pre LIMIT 1"),
+            {"p": project_id, "r": run_id, "s": step_id,
+             "pre": autonomy_gate.ACTOR_PREFIX + "%"}).first()
+        if seen is None:
+            rule = autonomy_gate.GATES[key]
+            found = autonomy_gate.Route(
+                "act", rule.cls, verdict.words, rule.agent, rule.undo, verdict.as_dict(),
+                {"dev": policy.dev, "source": policy.source, "set_by": policy.set_by})
+            autonomy_gate.record_decided(
+                connection, project_id, task_id=None,
+                question=f"{_step_word(spec_step, get_capability(key).label)} · {environment}",
+                recommendation={"capability": key, "workflow_run_id": run_id,
+                                "step_id": step_id, "environment": environment,
+                                **({"target_id": target_id} if target_id else {})},
+                found=found)
+    except Exception as error:  # noqa: BLE001 — unknown: the gate opens as it always did
+        release_failed_savepoint(point, error, connection=connection)
+        log.warning("dev autonomy could not judge the %s gate: %s", key, error)
+        return False
+    point.commit()
+    return True
 
 
 def _assignment_refusal(
@@ -7545,6 +8431,14 @@ def _open_gate(
         # Whether answering this finishes the step or merely lets it run. The two have
         # different consequences and the page has never been able to tell them apart.
         "gate_completes_step": bool(subject["completes_step"]),
+        # What dev autonomy reads (autonomy_gate.route, BOSSAPP-1441): the step's author chose
+        # "manual" (a stop a person set), and why only a person may answer this gate.
+        **({"approval_mode_requested": "manual"}
+           if str(approval.get("requested_mode") or "").lower() == "manual"
+           or (str(approval.get("mode") or "").lower() == "manual"
+               and approval.get("forced_manual") is False)
+           else {}),
+        **({"requires_person": requires_person} if requires_person else {}),
         **recommendation_extra,
     }
     if capability_key == "rules_review":
@@ -7663,7 +8557,7 @@ def _release_card(connection: Connection, project_id: str, run_id: str,
             connection, _settings(), project_id, build_run_id=build, serving_sha=serving,
             workflow_run_id=run_id)
     except Exception as error:  # noqa: BLE001 — logged; the card then carries no list
-        point.rollback()
+        release_failed_savepoint(point, error, connection=connection)
         log.warning("release card for %s: %s", run_id, error)
         return None
     point.commit()
@@ -8000,10 +8894,7 @@ def tick(
                 connection, project_id=project_id, run_id=run["id"], worker_id=worker_id
             ))
         except Exception as error:  # noqa: BLE001 — a revival must never break the tick
-            try:
-                savepoint.rollback()
-            except Exception:  # noqa: BLE001
-                pass
+            release_failed_savepoint(savepoint, error, connection=connection)
             log.warning("could not revive %s: %s", run["id"], error)
         else:
             savepoint.commit()
@@ -8038,7 +8929,22 @@ def tick_per_step(
     messages, builds and PRs wherever they were not keyed. Here every run's share of the tick
     -- at most one claimed step and its recorded outcome -- is its own transaction, committed
     before the next run is touched. A step that dies rolls back alone; the steps before it
-    stay done and are never re-run. `begin` opens a transaction (default `engine.begin`)."""
+    stay done and are never re-run. `begin` opens a transaction (default `engine.begin`).
+
+    BACKGROUND WORK (db.background, BOSSAPP-1456): every transaction this tick opens — its own
+    and any a step opens on another connection — waits a bounded time for a lock, is ended by
+    Postgres when it idles past the background limit, and appends its audit events at its commit,
+    so a tick never holds the org's audit-chain lock that every sign-in takes. A run whose
+    transaction was lost is rolled back whole and its connection given back (db.TransactionLost)."""
+    from .. import db as _db
+
+    with _db.background():
+        return _tick_per_step(engine, ctx, project_id=project_id, worker_id=worker_id,
+                              limit=limit, begin=begin)
+
+
+def _tick_per_step(engine: Any, ctx: Any, *, project_id: str, worker_id: str, limit: int,
+                   begin: Optional[Callable[[], Any]]) -> dict[str, Any]:
     from . import projects_archive
 
     open_tx = begin or engine.begin
@@ -8067,10 +8973,21 @@ def tick_per_step(
         if len(performed) >= limit:
             break
         mine: list[dict[str, Any]] = []
+        trace: dict[str, Any] = {}
         try:
             with open_tx() as connection:
                 _advance_one_run(connection, ctx, run, project_id=project_id,
-                                 worker_id=worker_id, performed=mine)
+                                 worker_id=worker_id, performed=mine, trace=trace)
+        except TransactionLost as lost:
+            # The whole transaction is rolled back and its connection returned (the `with` above
+            # has ended it), so nothing this run did is left holding a lock. Said plainly, once.
+            log.warning("capability runner rolled back run %s: %s", run["id"], lost)
+            mine = [{"run_id": run["id"], "outcome": "rolled_back", "error": str(lost),
+                     "cause": f"{type(lost.cause).__name__}: {lost.cause}"}]
+            stopped = _count_lost_transaction(open_tx, project_id=project_id, worker_id=worker_id,
+                                              step_run_id=trace.get("step_run_id"), lost=lost)
+            if stopped:
+                mine[0].update(outcome="failed", error=stopped)
         except Exception as error:  # noqa: BLE001 — this run's step rolls back, alone
             log.warning("capability runner rolled back run %s (its step only): %s: %s",
                         run["id"], type(error).__name__, error)
@@ -8080,8 +8997,64 @@ def tick_per_step(
     return {"project_id": project_id, "performed": performed, "count": len(performed)}
 
 
+#: A step whose transaction is lost this many times in a row is not run again by itself: the
+#: cause repeats (it idles past the limit every time, it ends its own session), and running it
+#: again would repeat its messages, builds and model spend for ever, with nobody told.
+LOST_TRANSACTION_LIMIT = 3
+LOST_TRANSACTION_KEY = "transactions_lost"
+
+
+def lost_transaction_words(times: int) -> tuple[str, str]:
+    """(what, action) for a step stopped after its transaction was lost `times` times."""
+    return (f"This step's database transaction was lost {times} times in a row (its session was "
+            "ended while the step ran), so BOSS stopped running it again by itself.",
+            "Press Retry on this step once the step can finish its work in under five minutes; "
+            "Activity shows each attempt.")
+
+
+def _count_lost_transaction(open_tx: Callable[[], Any], *, project_id: str, worker_id: str,
+                            step_run_id: Optional[str], lost: TransactionLost) -> Optional[str]:
+    """Count one lost transaction against the step the run had claimed (its claim was rolled
+    back: it is `ready` again). At LOST_TRANSACTION_LIMIT the step fails, not retryable, with
+    words a person can act on; returns that sentence. Never raises."""
+    if not step_run_id:
+        return None
+    try:
+        with open_tx() as connection:
+            row = connection.execute(text(
+                "SELECT status, COALESCE((binding_snapshot->>:k)::int, 0) AS n "
+                "FROM workflow_step_runs WHERE id = :i AND project_id = :p FOR UPDATE"),
+                {"k": LOST_TRANSACTION_KEY, "i": step_run_id, "p": project_id}).mappings().first()
+            if row is None or row["status"] != "ready":
+                return None
+            times = int(row["n"]) + 1
+            connection.execute(text(
+                "UPDATE workflow_step_runs SET binding_snapshot = COALESCE(binding_snapshot, "
+                "'{}'::jsonb) || jsonb_build_object(CAST(:k AS text), :n) WHERE id = :i"),
+                {"k": LOST_TRANSACTION_KEY, "n": times, "i": step_run_id})
+            if times < LOST_TRANSACTION_LIMIT:
+                return None
+            what, action = lost_transaction_words(times)
+            sentence = f"{what} {action}"
+            # Failed the one way a step is failed (its record, its run, its card): leased to this
+            # worker for the instant fail_step needs, never executed.
+            connection.execute(text(
+                "UPDATE workflow_step_runs SET status = 'leased', lease_owner = :w, "
+                "lease_expires_at = now() + interval '1 minute', heartbeat_at = now(), "
+                "binding_snapshot = binding_snapshot - CAST(:k AS text) WHERE id = :i"),
+                {"w": worker_id, "i": step_run_id, "k": LOST_TRANSACTION_KEY})
+            workflows.fail_step(connection, project_id=project_id, step_run_id=step_run_id,
+                                worker_id=worker_id, error=sentence, retryable=False)
+            return sentence
+    except Exception:  # noqa: BLE001 — counting must never break the tick; the next loss counts
+        log.warning("BOSS could not count a lost transaction against step %s, so it runs again "
+                    "on the next tick. Nothing to do — the next loss is counted.", step_run_id,
+                    exc_info=True)
+        return None
+
+
 def _advance_one_run(connection: Connection, ctx: Any, run: Any, *, project_id: str,
-                     worker_id: str, performed: list) -> None:
+                     worker_id: str, performed: list, trace: Optional[dict] = None) -> None:
     """One run's share of a tick: resume finished work, release waits, open gates, then claim
     and execute at most ONE step and record its outcome. Its work is a SAVEPOINT of
     `connection`; `tick_per_step` gives each call a transaction of its own (AP-P0)."""
@@ -8200,10 +9173,7 @@ def _advance_one_run(connection: Connection, ctx: Any, run: Any, *, project_id: 
                          "capability": subject["key"], "outcome": "gate_opened"}
                     )
             except Exception as error:  # noqa: BLE001 — one gate must not stop the run
-                try:
-                    gate_point.rollback()
-                except Exception:  # noqa: BLE001
-                    pass
+                release_failed_savepoint(gate_point, error, connection=connection)
                 log.warning("could not %s: %s: %s",
                             phase, type(error).__name__, error)
                 performed.append({
@@ -8229,6 +9199,8 @@ def _advance_one_run(connection: Connection, ctx: Any, run: Any, *, project_id: 
         )
         if claimed is None:
             return
+        if trace is not None:
+            trace["step_run_id"] = claimed["id"]
         # `external_agent` (KG P6a) too: a bank's agent's step is an outbound call this
         # runner makes. Left out, it was leased, skipped "for another claimant" that does not
         # exist, and timed out on every run (2026-10-31).
@@ -8294,11 +9266,13 @@ def _advance_one_run(connection: Connection, ctx: Any, run: Any, *, project_id: 
                                 STACK_GATE_TARGET),
                         },
                     )
-            except BaseException:
-                try:
-                    step_point.rollback()
-                except Exception:  # noqa: BLE001 — already gone; the raise below matters
-                    pass
+            except BaseException as error:
+                if isinstance(error, Exception):
+                    # A step whose transaction is gone raises TransactionLost here: its run's
+                    # whole transaction rolls back (tick_per_step), never recorded on a dead one.
+                    release_failed_savepoint(step_point, error, connection=connection)
+                else:
+                    rollback_quietly(step_point)
                 raise
             else:
                 step_point.commit()
@@ -8394,6 +9368,8 @@ def _advance_one_run(connection: Connection, ctx: Any, run: Any, *, project_id: 
                     "run_id": run_id, "step_id": claimed["step_id"],
                     "capability": output.get("capability"), "outcome": "succeeded",
                 })
+        except TransactionLost:
+            raise                             # nothing can be recorded on it
         except CapabilityExecutionError as error:
             agent_acts.note_ran_as(claimed["id"], step_agents.last_resolved())
             if step_recovery.authority_message(str(error)):
@@ -8430,7 +9406,7 @@ def _advance_one_run(connection: Connection, ctx: Any, run: Any, *, project_id: 
                     # minutes to arrive at the same sentence.
                     retryable=not isinstance(error, SettledCapabilityError),
                     # What the work returned before it was judged (a command's exit_code and
-                    # log_tail, AMEX-G3), when the error carries it. None keeps the old path.
+                    # log_tail, BOSSAPP-1139), when the error carries it. None keeps the old path.
                     output=(getattr(error, "output", None)
                             if isinstance(getattr(error, "output", None), dict) else None),
                     exception=error,
@@ -8448,6 +9424,10 @@ def _advance_one_run(connection: Connection, ctx: Any, run: Any, *, project_id: 
                     "outcome": "failed", "error": str(error),
                 })
         except Exception as error:  # noqa: BLE001
+            if transaction_lost(connection, error):
+                # The step's own work ended the session (or it was ended under it): there is no
+                # transaction left to fail the step in. Its run rolls back whole (BOSSAPP-1456).
+                raise TransactionLost(error) from error
             # A CLAIMED STEP MUST NOT BE STRANDED BY A SURPRISE.
             #
             # Only CapabilityExecutionError released the lease. Anything else — a KeyError,
@@ -8481,10 +9461,7 @@ def _advance_one_run(connection: Connection, ctx: Any, run: Any, *, project_id: 
     except Exception as error:                 # noqa: BLE001 - one run must not stop the rest
         # ROLL BACK TO THE SAVEPOINT FIRST. Until that happens the connection is unusable,
         # so even the logging below would fail if it touched the database.
-        try:
-            savepoint.rollback()
-        except Exception:  # noqa: BLE001 — already rolled back, or the connection is gone
-            pass
+        release_failed_savepoint(savepoint, error, connection=connection)
         # The TYPE, always. `(non-fatal): 'deploy'` is a KeyError wearing a disguise: it
         # names neither what went wrong nor where, and it cost a day of guessing.
         log.warning(

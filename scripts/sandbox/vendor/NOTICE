@@ -1,0 +1,11 @@
+moby-seccomp-default.json
+  Source:  https://github.com/moby/profiles, seccomp/default.json
+  Commit:  2ab3e516a3b49550c35b5e4511a0a7d136a02c8d
+  SHA-256: 3320527d4568265ac97a077609b1bfd4cfd0d789eeb9239b7e094b1526675406
+  License: Apache License 2.0 (moby-profiles.LICENSE, copied from the same commit)
+  Copyright: The Moby Authors / Docker, Inc.
+
+The file is unmodified. scripts/sandbox/engine_seccomp.py reads it, checks the SHA-256 above
+and appends BOSS's rules to produce scripts/sandbox/engine-seccomp.json, a derivative work
+under the same license. scripts/sandbox/boss-engine.apparmor follows the structure of Docker's
+docker-default AppArmor template (moby/profiles apparmor/template.go, Apache-2.0).

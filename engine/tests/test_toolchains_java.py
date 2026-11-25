@@ -274,9 +274,9 @@ def _compose_services() -> dict:
     return compose["services"]
 
 
-def test_toolchains_are_opt_in_in_the_image_and_compose():
+def test_toolchains_default_to_java_and_go_in_the_image_and_compose():
     dockerfile = (ROOT / "Dockerfile.community").read_text()
-    assert "ARG BOSS_TOOLCHAINS=none" in dockerfile
+    assert "ARG BOSS_TOOLCHAINS=java,go" in dockerfile
     assert "AS toolchains-none" in dockerfile and "AS toolchains-java" in dockerfile
     assert "FROM toolchains-${TC_JAVA} AS tc-java" in dockerfile
     assert "COPY --from=toolchains /opt/toolchains /opt/toolchains" in dockerfile
@@ -286,7 +286,7 @@ def test_toolchains_are_opt_in_in_the_image_and_compose():
     services = _compose_services()
     for name in BUILT_FROM_PYTHON_RUNTIME:
         args = services[name]["build"]["args"]
-        assert args.get("BOSS_TOOLCHAINS") == "${BOSS_TOOLCHAINS:-none}", name
+        assert args.get("BOSS_TOOLCHAINS") == "${BOSS_TOOLCHAINS:-java,go}", name
     built = {n for n, svc in services.items() if (svc.get("build") or {}).get("dockerfile")
              == "Dockerfile.community" and (svc["build"].get("target") or "") != "web"}
     assert built == set(BUILT_FROM_PYTHON_RUNTIME), "a new python-runtime service: list it above"

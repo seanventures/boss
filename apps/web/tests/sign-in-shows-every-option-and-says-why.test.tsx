@@ -2,9 +2,9 @@
 /**
  * THE SIGN-IN PAGE HAS ITS WHOLE SHAPE, AND NO FAKE BUTTONS (operator, round 3 redesign).
  *
- * Every option remains available on the page: the four social providers, a passkey button, the three
- * email methods, "Forgot?" and "Create account". What /v1/auth/options says isn't set up is
- * disabled, and its tooltip (and, on a tap, a line of words) says exactly what turns it on.
+ * The page offers a passkey button, the three email methods, "Forgot?" and "Create account", and
+ * ONLY the SSO providers that are configured (stranger test r2: four disabled social tiles on a
+ * fresh install read as broken). What /v1/auth/options says isn't set up is disabled, and its tooltip (and, on a tap, a line of words) says exactly what turns it on.
  * Nothing disabled ever navigates or posts. No phone, no SMS.
  */
 import React, { act } from "react";
@@ -75,12 +75,12 @@ describe("all off: the page keeps its shape and says what turns each thing on", 
     const catalog = el.querySelector<HTMLDetailsElement>("[data-testid='other-signin-options']")!;
     expect(catalog.open).toBe(false);
     expect(catalog.querySelector("summary")?.textContent).toBe("Other sign-in options");
-    expect(catalog.querySelectorAll(".idn-idp").length).toBe(4);
+    expect(catalog.querySelectorAll(".idn-idp").length).toBe(0);
     expect(catalog.querySelector("[data-testid='passkey-sign-in']")?.getAttribute("aria-disabled")).toBe("true");
     expect(catalog.contains(el.querySelector("#email"))).toBe(false);
     expect(catalog.contains(el.querySelector("#password"))).toBe(false);
     expect(catalog.contains(el.querySelector("[data-testid='email-submit']"))).toBe(false);
-    expect(el.querySelectorAll("[role='tab']").length).toBe(3);
+    expect(el.querySelectorAll("[role='tab']").length).toBe(0);
     expect(calls).toEqual([]);
   });
 
@@ -93,17 +93,11 @@ describe("all off: the page keeps its shape and says what turns each thing on", 
     expect(how.textContent).not.toContain("boss identity setup-link");
   });
 
-  it("every provider square is there, disabled, naming where an Owner turns it on", async () => {
+  it("no provider square is shown when none is configured (a fresh install)", async () => {
     const el = await mount(OFF);
-    const squares = [...el.querySelectorAll(".idn-idp")];
-    expect(squares.map((s) => s.getAttribute("aria-label"))).toEqual(["Google, not set up", "GitHub, not set up", "Microsoft, not set up", "Apple, not set up"]);
-    for (const s of squares) {
-      expect(s.tagName).toBe("BUTTON");
-      expect(s.getAttribute("aria-disabled")).toBe("true");
-    }
-    expect(tipOf(el, squares[0])).toBe("Google sign-in isn't set up · an Owner turns it on in Identity › Sign-in & SSO");
-    await click(squares[1]);
-    expect(el.querySelector("[data-testid='why-idp']")?.textContent).toBe("GitHub sign-in isn't set up · an Owner turns it on in Identity › Sign-in & SSO");
+    expect(el.querySelectorAll(".idn-idp").length).toBe(0);
+    expect(el.querySelector("[role='group'][aria-label='Sign in with']")).toBeNull();
+    expect(el.textContent).not.toMatch(/Google|GitHub|Microsoft|Apple/);
     expect(calls).toEqual([]);
   });
 
@@ -117,15 +111,24 @@ describe("all off: the page keeps its shape and says what turns each thing on", 
     expect(calls).toEqual([]);
   });
 
-  it("magic link and email code stay visible, disabled, and need SMTP; password stays chosen", async () => {
+  it("with no email delivery, magic link and email code are hidden: Password alone, no tab bar (stranger test)", async () => {
     const el = await mount(OFF);
+    expect(el.querySelector("[role='tablist']")).toBeNull();
+    expect(el.querySelectorAll("[role='tab']").length).toBe(0);
+    expect(el.textContent).not.toContain("Magic link");
+    expect(el.textContent).not.toContain("Email code");
+    expect(el.querySelector("#email")).not.toBeNull();
+    expect(el.querySelector("#password")).not.toBeNull();
+    expect(el.querySelector("[data-testid='email-submit']")?.textContent).toBe("Sign in");
+  });
+
+  it("with email set up but no public address, the email methods show disabled and say why", async () => {
+    const el = await mount({ ...OFF, smtp: true, public_origin: null });
     const tabs = [...el.querySelectorAll("[role='tab']")];
     expect(tabs.map((t) => t.textContent)).toEqual(["Password", "Magic link", "Email code"]);
-    expect(tipOf(el, tabs[1])).toBe("Magic links need email (SMTP) set up");
-    expect(tipOf(el, tabs[2])).toBe("Email codes need email (SMTP) set up");
+    expect(tipOf(el, tabs[1])).toBe("Magic links need BOSS's public address set");
     await click(tabs[1]);
     expect(el.querySelector("[role='tab'][aria-selected='true']")?.textContent).toBe("Password");
-    expect(el.querySelector("[data-testid='why-tabs']")?.textContent).toBe("Magic links need email (SMTP) set up");
     // The arrows reach a method that's off (so its reason shows) but never choose it.
     await act(async () => { tabs[0].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })); });
     expect(el.querySelector("[role='tab'][aria-selected='true']")?.textContent).toBe("Password");
@@ -173,11 +176,12 @@ describe("all off: the page keeps its shape and says what turns each thing on", 
 });
 
 describe("all on: every option is live", () => {
-  it("keeps even one configured provider prominent without hiding the unavailable setup reasons", async () => {
+  it("keeps even one configured provider prominent, and shows only that one", async () => {
     const el = await mount({ ...OFF, providers: [ON.providers[0]] });
     expect(el.querySelector("[data-testid='other-signin-options']")).toBeNull();
     expect(el.querySelector("a.idn-idp")?.getAttribute("href")).toBe("/v1/auth/sso/g/start?next=%2Fprojects");
-    expect(el.querySelectorAll("button.idn-idp[aria-disabled='true']").length).toBe(3);
+    expect(el.querySelectorAll(".idn-idp").length).toBe(1);
+    expect(el.querySelectorAll("button.idn-idp[aria-disabled='true']").length).toBe(0);
   });
 
   it("keeps a usable passkey prominent when no social provider is configured", async () => {
@@ -226,13 +230,20 @@ describe("all on: every option is live", () => {
     host?.remove();
     const gone = await mount({ ...ON, shared_password: { until: new Date(Date.now() - 1000).toISOString() } });
     expect(gone.querySelector("[data-testid='shared-password-toggle']")).toBeNull();
+    act(() => root?.unmount());
+    host?.remove();
+    // A freshly claimed install: the API offers no shared password at all, so there is no link.
+    const fresh = await mount({ ...ON, shared_password: null });
+    expect(fresh.querySelector("[data-testid='shared-password-toggle']")).toBeNull();
+    expect(fresh.textContent).not.toContain("shared password");
   });
 });
 
 describe("the offers, as rules", () => {
   it("a second provider of a social preset, and every enterprise one, follow the four squares", () => {
     const offers = providerOffers([{ id: "s", name: "Corp SAML", preset: "generic" }, { id: "g1", name: "Google", preset: "google" }, { id: "g2", name: "Google (partners)", preset: "google" }], "/");
-    expect(offers.map((o) => o.key)).toEqual(["g1", "off-github", "off-microsoft", "off-apple", "s", "g2"]);
+    expect(offers.map((o) => o.key)).toEqual(["g1", "s", "g2"]);
+    expect(providerOffers([], "/")).toEqual([]);
   });
 
   it("passkeys: the API's reason first, then the page's own address, then the browser", () => {

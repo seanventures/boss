@@ -94,6 +94,7 @@ export const CONSOLE_PAGES: readonly IdentityPage[] = [
   { path: "/v2/settings", label: "Settings", tip: "Setup", access: area("setup") },
   { path: "/github-app", label: "GitHub App", tip: "Hands the App's manifest to GitHub", access: area("setup") },
   { path: "/connected-apps/device", label: "Device code", tip: "Approve the code a terminal is showing", access: { authenticated: true } },
+  { path: "/chat/link", label: "Chat link", tip: "Confirm linking a chat account to your user", access: { authenticated: true } },
   { path: "/changes/[id]/[id]", label: "Change", tip: "A change reviewed like a pull request: local, or a GitHub PR of the project", access: area("code_tasks") },
   { path: "/changes/github/[id]/[id]/[id]", label: "Change", tip: "A GitHub pull request, opened in its BOSS project", access: area("code_tasks") },
   { path: "/changes/[id]/[id]/commits/[id]", label: "Commit", tip: "One commit of a change", access: area("code_tasks") },

@@ -16,7 +16,7 @@ import { ArrowRight, Bell, Broom, Clock, Cpu, Database, HardDrives, Laptop, Shie
 import { GatedButton } from "../../components/gated";
 import {
   CLEAN_PERMISSION, RULES_PERMISSION, cleanNow, daysWord, fullInDays, gb, reportPatch, setRuleEnabled, storageTone, useInfraIncident, useStorageSummary, whenWord,
-  type HostStorageRow, type StorageSummary, type TelemetryShare,
+  type DiskBudget, type HostStorageRow, type StorageSummary, type TelemetryShare,
 } from "../../lib/infra-storage";
 import { showToast } from "../client-forms";
 import { StripLink } from "./infra-strip-banner";
@@ -117,6 +117,39 @@ function TelemetryRow({ t }: { t: TelemetryShare }) {
       <span>Telemetry <code>{w.share}</code></span>
       <span className="sc-spacer" />
       <span className="ia-chip" data-tone={t.lastSweep?.errors.length ? "amber" : "grey"} data-testid="sc-telemetry-sweep"><Broom size={11} aria-hidden />{w.sweep}</span>
+    </div>
+  );
+}
+
+/** BOSSAPP-1459: the one disk budget — each measured category against its line, the ones near
+ *  it (80 %) or past it first, each with what to do. Unmeasured categories are left out. */
+export function budgetRows(b: DiskBudget): DiskBudget["rows"] {
+  const rank = { over: 0, near: 1, ok: 2, unknown: 3 } as const;
+  return b.rows.filter((r) => r.gb !== null).sort((a, c) => rank[a.level] - rank[c.level] || (c.gb ?? 0) - (a.gb ?? 0));
+}
+
+function BudgetList({ b }: { b: DiskBudget }) {
+  const rows = budgetRows(b);
+  if (!rows.length) return null;
+  const loud = rows.filter((r) => r.level === "near" || r.level === "over").length;
+  return (
+    <div className="sc-budget" data-testid="sc-budget">
+      <div className="sc-telemetry">
+        <Shield size={13} aria-hidden />
+        <span>Budget <code>{gb(b.totalGb)} of {gb(b.budgetGb)}</code></span>
+        <span className="sc-spacer" />
+        <span className="ia-chip" data-tone={loud ? "amber" : "green"} data-testid="sc-budget-chip">
+          {loud ? `${loud} near or over` : "all within"}</span>
+      </div>
+      <ul className="sc-legend-types" data-testid="sc-budget-rows">
+        {rows.map((r) => (
+          <li key={r.key} data-level={r.level} data-testid="sc-budget-row" title={r.what ? `${r.what} ${r.action}` : r.boundedBy}>
+            <span className="sc-swatch" data-tone={r.level === "over" ? "red" : r.level === "near" ? "amber" : "green"} aria-hidden />
+            {r.label} <code>{gb(r.gb ?? 0)} / {gb(r.budgetGb)}</code>
+            {r.level === "over" || r.level === "near" ? <span className="sc-faint" data-testid="sc-budget-action"> {r.action}</span> : null}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -235,6 +268,7 @@ export function StorageCardView({ s, projectId, orgId, sample, pendingDecisionId
           {!segs.length ? <li className="sc-faint">No reading by type yet.</li> : null}
         </ul>
         {s.telemetry ? <TelemetryRow t={s.telemetry} /> : null}
+        {s.budget ? <BudgetList b={s.budget} /> : null}
         {s.volumes && s.volumes.needsRelabel > 0 ? (
           <div className="sc-telemetry" data-testid="sc-relabel">
             <span className="ia-chip" data-tone="amber" data-testid="sc-relabel-chip"

@@ -439,7 +439,7 @@ class CliChatBrain:
             for i, c in enumerate(raw_calls):
                 if not isinstance(c, dict) or not c.get("name"):
                     continue
-                args = c.get("arguments")
+                args = protocol_reply.call_arguments(c)
                 args_str = args if isinstance(args, str) else json.dumps(args or {})
                 cid = f"call_{i + 1}"
                 tool_calls.append({"id": cid, "name": c["name"], "arguments": args_str})
@@ -565,10 +565,11 @@ class ClaudeCliAdapter(CliChatBrain):
         return configured
 
     def _scratch_dir(self) -> str:
-        # run in an empty dir so the CLI doesn't load a project's CLAUDE.md
-        d = (self.settings.repo_root / ".local-logs" / "claude-scratch").resolve()
-        d.mkdir(parents=True, exist_ok=True)
-        return str(d)
+        # Run in an empty dir so the CLI doesn't load a project's CLAUDE.md: outside BOSS's own
+        # tree, which may be read-only (scratch.py, BOSSAPP-1449).
+        from .scratch import scratch_dir
+
+        return scratch_dir("claude")
 
     # NO BUILT-IN TOOLS, so Claude is a pure reasoning brain: BOSS, not Claude, controls all
     # data access and actions. `--tools ""` is the CLI's own switch for that (its --help: 'Use

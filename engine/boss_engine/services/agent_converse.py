@@ -62,7 +62,10 @@ TALK_CANNOT_ACT = (
     "push, deploy, approve or start anything. Never say or imply you are doing, have done or "
     "will now do something. If the operator asks for an action, say plainly that you cannot "
     "do it from here and name where it is done: the step's own button (for example Retry), or "
-    "Talk to BOSS, whose agent can act once the operator consents. [act:<id>] is ONLY for "
+    "the Investigate with BOSS button on a run-scoped conversation, or Talk to BOSS. "
+    "That agent can inspect current evidence and act within its permissions, requesting "
+    "approval or a human action item when necessary. Do not imply this advisory chat "
+    "automatically scheduled a repair or created an action item. [act:<id>] is ONLY for "
     "citing your own past work by its act id; never write it for an action.")
 
 KINDS = ("talk", "plan", "room")
@@ -1114,14 +1117,32 @@ def _reveal(text_value: str) -> Iterator[str]:
             time.sleep(pause)
 
 
+#: The way out when an agent replied without a plan.
+NO_PLAN_NEXT = "Try again, or rephrase what you want built."
+
+
+def no_plan_sentence(said: object = "", *, why: str = "") -> str:
+    """"The agent replied without a plan (it said: '…'). Try again, or rephrase what you want
+    built." — what it DID say (first 80 characters, redacted), never only "try again"."""
+    from .failure_words import short
+
+    quoted = short(said, 80).replace("'", "’")
+    if quoted:
+        return f"The agent replied without a plan (it said: '{quoted}'). {NO_PLAN_NEXT}"
+    return f"The agent replied without a plan ({why or 'it said nothing'}). {NO_PLAN_NEXT}"
+
+
 def _only_json(value: str) -> dict:
     trimmed = str(value or "").strip()
     start, end = trimmed.find("{"), trimmed.rfind("}")
     if start == -1 or end <= start:
-        raise ValueError("The agent did not answer with a plan. Try again.")
-    parsed = json.loads(trimmed[start:end + 1])
+        raise ValueError(no_plan_sentence(trimmed))
+    try:
+        parsed = json.loads(trimmed[start:end + 1])
+    except ValueError:
+        raise ValueError(no_plan_sentence(trimmed)) from None
     if not isinstance(parsed, dict):
-        raise ValueError("The agent did not answer with a plan. Try again.")
+        raise ValueError(no_plan_sentence(trimmed))
     return parsed
 
 
@@ -1214,7 +1235,7 @@ def _decide_card(engine, settings: Any, plan: _Plan, conv: dict, speaker: _Speak
                 "refused": ""}
     refused = decision.refused or decision.error or "no plan was decided"
     if refused == "not the JSON object asked for":
-        refused = "The agent did not answer with a plan. Try again."
+        refused = no_plan_sentence(why="it reached for a tool instead of choosing a workflow")
     return {"proposal": None, "message": "", "refused": refused}
 
 

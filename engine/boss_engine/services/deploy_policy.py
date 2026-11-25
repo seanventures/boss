@@ -46,6 +46,8 @@ FOLLOWS_POLICY = "follows_policy"
 
 #: What a surface says about a deploy a person approves.
 PERSON_SAYS = "Ships only when you say yes"
+#: What a surface says about a deploy dev autonomy ships (BOSSAPP-1441).
+AUTONOMY_SAYS = "Ships automatically: not production"
 
 
 def policy_says(environment: Any) -> str:
@@ -157,6 +159,23 @@ def promises_a_person(spec_step: Any) -> bool:
     return _is_deploy(spec_step) and not follows_policy(spec_step)
 
 
+def step_asks(spec_step: Any) -> bool:
+    """The step's author set it to ask a person ("manual"): a stop a person set."""
+    approval = spec_step.get("approval") if isinstance(spec_step, dict) else None
+    return isinstance(approval, dict) and str(approval.get("mode") or "").strip().lower() == "manual"
+
+
+def step_target_id(spec_step: Any, run_input: Any = None) -> str:
+    """The deployment target a deploy step names (its own literal `target_id`, else the run's)."""
+    binding = (spec_step.get("binding") if isinstance(spec_step, dict) else None) or {}
+    wired = (binding.get("inputs") or {}).get("target_id")
+    if isinstance(wired, str) and wired.strip():
+        return wired.strip()
+    if isinstance(run_input, dict) and str(run_input.get("target_id") or "").strip():
+        return str(run_input["target_id"]).strip()
+    return ""
+
+
 def step_environment(spec_step: Any, run_input: Any = None) -> str:
     """Where a deploy step ships: its own literal `environment`, the run's, else staging (the
     deploy tool's own default)."""
@@ -174,6 +193,22 @@ def step_answer(connection: Connection, project_id: str, spec_step: Any,
     """WHO ANSWERS FOR THIS DEPLOY STEP, and the words for it — the one answer the runner acts
     on and every surface shows. {who: "you" | "policy", environment, policy_id, says}."""
     env = step_environment(spec_step, run_input)
+    # DEV AUTONOMY FIRST (BOSSAPP-1441): a deploy whose target is resolved NOT production ships
+    # without asking when the project's policy acts in development — and every surface says so,
+    # so the words and the behaviour come from the same place (D2). Not when the step's author
+    # set it to ask (a stop a person set), and the step's own target wins over its environment.
+    try:
+        from . import autonomy_policy, production
+
+        target_id = step_target_id(spec_step, run_input)
+        verdict = (production.resolve_target(connection, target_id) if target_id
+                   else production.resolve_project_environment(connection, project_id, env))
+        if not verdict.prod and not step_asks(spec_step) \
+                and autonomy_policy.load(connection, project_id).dev_acts:
+            return {"who": "agent", "environment": _environment(env), "policy_id": None,
+                    "promised": False, "says": AUTONOMY_SAYS, "verdict": verdict.as_dict()}
+    except Exception:  # noqa: BLE001 — unknown: the person's answer, as before
+        pass
     policy: dict[str, Any] = {}
     if follows_policy(spec_step):
         try:

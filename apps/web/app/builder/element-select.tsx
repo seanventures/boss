@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useId, useState } from "react";
+import { apiWrite } from "../../lib/api-write";
 
 /**
  * Mark one piece of a generated proof. Edit, restyle, comment, or regenerate.
@@ -110,7 +111,7 @@ function detailOf(body: unknown): Failure & { code: string } {
 export async function postMark(mark: MarkRequest): Promise<MarkReceipt> {
   let response: Response;
   try {
-    response = await fetch("/v1/element-select/apply", {
+    response = await apiWrite("/v1/element-select/apply", {
       method: "POST",
       headers: { "content-type": "application/json", accept: "application/json" },
       body: JSON.stringify({

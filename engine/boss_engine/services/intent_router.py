@@ -12,7 +12,8 @@ from sqlalchemy.engine import Connection
 
 from ..config import Settings
 from .agent_process import AgentProcessService
-from .budget import BudgetGovernor
+from .process_compiler import ProcessVocabularyError
+from .budget import BudgetGovernor, reserve_apart
 from .canonical import CanonicalObjectService
 from .capability_manifest import CapabilityManifest
 from . import agent_decision, model_routing
@@ -20,6 +21,7 @@ from .code_task_service import start_code_task
 from .cli_chat_session import in_turn_scope
 from .core import stable_dedupe_key, emit_event, make_id
 from .offer_label import button_label as _offer_label
+from .reply_style import ACTION_REPLY_STYLE
 from .turn_budget import TurnBudget, continue_steps, for_turn as _budget_for_turn
 from .turn_subject import (
     cites_the_record, id_exists, parse_subject, resolve_subject, stays_on_subject,
@@ -131,8 +133,10 @@ _INITIATORS: dict[str, tuple[str, str]] = {
                                    "a NEW topic; never for looking into existing work"),
     "propose_command": ("multi_phase_command", "draft a multi-phase delivery plan for several "
                                                "dependent pieces of new work"),
-    "create_agent_process": ("agent_process", "author a role-handoff process or workflow "
-                                              "definition from their description"),
+    "create_agent_process": ("agent_process", "author a PRD role-handoff chain between BOSS's "
+                                              "review/build/QA roles; NOT a workflow with "
+                                              "deploy, approval, test or other steps "
+                                              "(that is author_workflow)"),
     "start_agent_process": ("agent_process", "run an existing agent process against a PRD "
                                              "(simulated)"),
 }
@@ -164,10 +168,29 @@ _DECIDED_MEANS = {
                        "knowledge_graph; then walk knowledge_project_setup's steps in it: "
                        "register_repository, set_project_team, and offer start_workflow "
                        "business_rules_scan on the area they named."),
+    "author_workflow": ("a request to AUTHOR, create, design or edit a WORKFLOW (a sequence of "
+                        "steps: validate, fix PR, deploy to staging, contract tests, a person "
+                        "approves, promote, smoke check). Never for DOING something now "
+                        "('deploy northgate to staging' is operate or new work). Nothing "
+                        "starts. Call "
+                        "list_capabilities for the real step kinds and list_skills, map each "
+                        "step the person described to a capability (config_deploy, "
+                        "promote_config, contract_test, release_approval, smoke_test, "
+                        "agent_work …); a step with no capability becomes a custom step "
+                        "(propose draft_custom_step / draft_skill first). Then OFFER the "
+                        "workflow as a button: propose_action tool=draft_workflow with "
+                        "workflow_key, name and steps [{id, capability}] — never write it "
+                        "yourself and never start it. Say in one line which step maps to "
+                        "which capability. If something truly has no capability, say 'BOSS "
+                        "has no step that does X; closest: …' and offer the custom step."),
     "new_code_change": ("a request for NEW work. Offer it: create_code_task for one scoped "
                         "change, start_workflow for a whole delivery — both come back as a "
                         "button the person presses; say it is offered, not started. Do not "
-                        "retry or redeploy existing work in its place."),
+                        "retry or redeploy existing work in its place. When they ask to run a "
+                        "workflow BY NAME (one this project has — describe_workflow lists them), "
+                        "offer start_workflow with THAT workflow_key and its declared inputs as "
+                        "`inputs` values; never substitute the default Build path for it, and "
+                        "if an input is missing say which."),
 }
 
 
@@ -189,7 +212,8 @@ def _decision_note(decision: Any) -> str:
 
 
 #: The decided actions the tool-holding agent carries out (the others start an initiator).
-_AGENT_ACTIONS = frozenset({"answer", "investigate", "operate", "new_code_change"})
+_AGENT_ACTIONS = frozenset({"answer", "investigate", "operate", "new_code_change",
+                            "author_workflow"})
 
 #: The decided actions that authorise the agent to change things this turn.
 _WRITE_ACTIONS = frozenset({"operate", "new_code_change", "create_project"})
@@ -779,6 +803,12 @@ def _progress_reporter(project_id: str, thread_id: Optional[str]):
         return None
 
     def report(label: str) -> None:
+        # A STEP IS A SAFE POINT (chat_turns.checkpoint): a durable chat turn commits what it
+        # has written and moves its heartbeat here, so it never holds one transaction for the
+        # whole turn. Outside one, nothing.
+        from .chat_turns import checkpoint
+
+        checkpoint()
         try:
             from ..db import get_engine
 
@@ -1947,6 +1977,22 @@ class IntentRouter:
             turn = self._start_initiator(connection, action, latest, manifest,
                                          project_id=project_id, actor=actor,
                                          external_ref=external_ref)
+            if turn is None:
+                # The role-handoff builder has no step for this prose (deploy, contract tests,
+                # an approval…). That is a WORKFLOW, authored from capabilities by the agent.
+                import dataclasses
+                import types
+                try:
+                    authoring = dataclasses.replace(decision, action="author_workflow")
+                except TypeError:
+                    authoring = types.SimpleNamespace(
+                        action="author_workflow", status=getattr(decision, "status", ""),
+                        reason=getattr(decision, "reason", ""))
+                self._turn_action, self._turn_verdict = "author_workflow", authoring
+                verdict = {**verdict, "action": "author_workflow", "rerouted_from": action}
+                turn = self._answer(connection, project_id, messages, actor=actor,
+                                    external_ref=external_ref, mode=mode, thread_id=thread_id,
+                                    role=role, depth=depth, writes=False)
             turn.decision = verdict
             return turn
         # answer / investigate / operate / new_code_change: the tool-holding agent, with the
@@ -1978,7 +2024,14 @@ class IntentRouter:
                          "change a setting, cancel, prioritise (expensive or destructive tools "
                          "still come back as buttons for them to press)"),
             C("new_code_change", "start NEW code work on an app: a new app, a feature or a "
-                                 "change to an app's code (offered as a button for them to start)"),
+                                 "change to an app's code, or running a NAMED project workflow with its "
+                                 "inputs (offered as a button for them to start)"),
+            C("author_workflow", "author, create, design or edit a WORKFLOW — a sequence of "
+                                 "steps such as validate, fix PR, deploy, test, approve, "
+                                 "promote — from capabilities BOSS has; staged as a draft the "
+                                 "person accepts, nothing runs; never for doing a deploy or other "
+                                 "task now", acts=False,
+              label="Draft the workflow"),
             C("create_project", "create a new BOSS PROJECT in this organization: a separate "
                                 "workspace with its own agents, budget, settings and work, set up "
                                 "like the first one (not a new app) — including a knowledge-graph "
@@ -2057,7 +2110,9 @@ class IntentRouter:
         latest = str(messages[-1].get("content") or "").strip() if messages else ""
         hints: list[str] = []
         guessed, _ = self._deterministic_intent(latest)
-        if guessed:
+        # The authoring/process keyword reading is not offered: whether this is a workflow to
+        # author or a role-handoff chain is the decision model's call, from the catalogue.
+        if guessed and guessed not in ("create_agent_process", "start_agent_process"):
             hints.append(f"a keyword reading of the words suggests '{guessed}'")
         hints.append("the wording reads as " + ("a question" if asked_only_to_look(latest)
                                                 else "an instruction or a report"))
@@ -2136,8 +2191,11 @@ class IntentRouter:
 
     def _start_initiator(self, connection, name: str, message: str,
                          manifest: CapabilityManifest, *, project_id: str, actor: str,
-                         external_ref: Optional[str]) -> RouterTurn:
-        """A governed initiator the decision model chose, started through `_dispatch`."""
+                         external_ref: Optional[str]) -> Optional[RouterTurn]:
+        """A governed initiator the decision model chose, started through `_dispatch`.
+
+        None means the role-handoff builder has no step for the prose; the caller authors it
+        as a workflow instead (BOSSAPP-1351)."""
         capability_id = _INITIATORS[name][0]
         capability = manifest.get(capability_id)
         if capability is None or not capability.enabled:
@@ -2148,6 +2206,8 @@ class IntentRouter:
                                   project_id=project_id, actor=actor, external_ref=external_ref)
         except (ProjectMemberNotFoundError, ProjectMemberPermissionError) as error:
             return RouterTurn(reply=f"I can’t start that work: {error}")
+        except ProcessVocabularyError:
+            return None
         except ValueError as error:
             return RouterTurn(reply=f"I couldn’t start that work: {error}")
 
@@ -2225,8 +2285,9 @@ class IntentRouter:
         """
         from .subject_answer import answer_first, answer_seconds
 
-        reservation = self.budget.reserve(
-            connection, project_id, "model", self.settings.agent_router_budget_usd_micros,
+        reservation = reserve_apart(
+            self.budget, connection, project_id, "model",
+            self.settings.agent_router_budget_usd_micros,
             "Orchestration first answer from a subject's record.", 10)
         if reservation.get("status") != "reserved":
             return None
@@ -2347,6 +2408,9 @@ class IntentRouter:
             "the first sentence names the cause. Evidence goes underneath. Do not deliver a "
             "standard tour of the subject when a specific thing was asked — and do not repeat "
             "anything you have already said in this conversation; build on it.\n\n"
+            # ONE SENTENCE AND A BUTTON for "do X" (reply_style, operator 2026-11-19): the
+            # captain answered a one-line change with file names, crun ids and a PR question.
+            + ACTION_REPLY_STYLE + "\n"
             "NEVER HAND THE PROBLEM BACK.\n"
             "NEVER ASK THE OPERATOR FOR AN IDENTIFIER. Every run, job, task and target id in "
             "this system is discoverable — list_code_tasks, list_running_work, get_code_task. If "
@@ -2793,8 +2857,8 @@ class IntentRouter:
         tool_calls: list[dict[str, Any]] = []
         proposed: list[dict[str, Any]] = []
         try:
-            reservation = self.budget.reserve(
-                connection, project_id, "model",
+            reservation = reserve_apart(
+                self.budget, connection, project_id, "model",
                 self.settings.agent_router_budget_usd_micros,
                 "Orchestration conversational answer.", 10)
             if reservation.get("status") == "reserved":
@@ -3440,28 +3504,69 @@ class IntentRouter:
             self._require(connection, project_id, actor, "task_create", "code_task:create")
             title = str(arguments.get("title") or "Code task")[:300]
             instructions = str(arguments.get("instructions") or title)
-            # BUILD-ON-EXISTING: if the chat is scoped to a task that already shipped an app, extend
-            # THAT app's branch (one lean web build on top) instead of a new task built on main.
-            base_branch, root = self._existing_app_for_task(connection, project_id, external_ref)
-            extend = base_branch is not None
-            if extend:
-                task = {"task_id": external_ref}
-                instructions = (
-                    "The repo ALREADY CONTAINS a working app on this branch — EXTEND it, do NOT "
-                    "re-scaffold or rebuild from scratch. Change only what the request needs and keep "
-                    "`npm run build` green.\n\nREQUEST:\n" + instructions)
-            else:
-                task = self.intake.create_task(
-                    connection,
-                    project_id=project_id,
-                    title=title,
-                    description=instructions,
-                    dedupe_key=stable_dedupe_key("agent-code", project_id, title, instructions),
-                    priority="p1",
-                    risk_tier=1,
-                    inputs={"source": "orchestration_agent", "instructions": instructions},
-                    required_artifacts=["pull_request"],
-                )
+            # BUILD-ON-EXISTING: if the chat is scoped to a task or run that already built an
+            # app, the request changes THAT app — through the one resolver every door asks
+            # (new_work.build_mode, BOSSAPP-1455): its open change continues on its branch, a
+            # MERGED change becomes a new change of the app from the default branch. The build
+            # is the app's follow-up (start_followup_task), as the agent's create_code_task and
+            # Change it make it: the app's repository, lineage and app id, never the
+            # environment's single repo.
+            _branch, root = self._existing_app_for_task(connection, project_id, external_ref)
+            from .project_experience import new_work
+
+            if root is not None:
+                from .code_task_service import start_followup_task
+
+                mode = new_work.build_mode(connection, project_id, root)
+                try:
+                    started = start_followup_task(
+                        connection, parent_run_id=str((mode or {}).get("run_id") or root),
+                        instructions=instructions, jobs=self.jobs, title=title, actor=actor,
+                        # The person's own words in chat: their request joins the contract,
+                        # as at every other door (New work, Change it, a panel's PRD).
+                        is_person_request=True,
+                        finalize_extra={"source": "orchestration_agent"},
+                        new_change=bool(mode and mode.get("mode") == "new_change"))
+                except ValueError as error:
+                    return RouterTurn(
+                        reply=f"I couldn’t start that change: {error}. Open the app's card and "
+                              "use Change it, or start it from New work on the Project page.",
+                        tool_calls=[{"name": name, "arguments": arguments}])
+                run_id = started["run_id"]
+                action = {"kind": "code_task_created", "task_id": external_ref,
+                          "run_id": run_id, "href": f"/?area=code_tasks&run={run_id}"}
+                new_change = bool(mode and mode.get("mode") == "new_change")
+                return RouterTurn(
+                    reply=("On it — this app's last change was merged, so this is a new change "
+                           "of the app, built from the default branch. I'll open a PR with just "
+                           "the change." if new_change else
+                           "On it — extending the existing app for this task (building on top of "
+                           "its current branch). I'll open a PR with just the change."),
+                    actions=[action], tool_calls=[{"name": name, "arguments": arguments}])
+            # NOTHING NAMED BESIDE SEVERAL APPS: ask which, never a quiet fresh build on the
+            # default branch beside them (RCA #9) — the same question New work and the agent's
+            # create_code_task ask.
+            try:
+                new_work.require_app_choice(connection, project_id, (
+                    "Which one should this change? Open that app's card and ask there, or use "
+                    "New work on the Project page to pick the app (or Create a new app)."))
+            except new_work.AppChoiceNeeded as asked:
+                return RouterTurn(
+                    reply=str(asked),
+                    actions=[{"kind": "app_choice_needed", "app_choices": asked.choices,
+                              "href": "/?area=projects"}],
+                    tool_calls=[{"name": name, "arguments": arguments}])
+            task = self.intake.create_task(
+                connection,
+                project_id=project_id,
+                title=title,
+                description=instructions,
+                dedupe_key=stable_dedupe_key("agent-code", project_id, title, instructions),
+                priority="p1",
+                risk_tier=1,
+                inputs={"source": "orchestration_agent", "instructions": instructions},
+                required_artifacts=["pull_request"],
+            )
             run_id = start_code_task(
                 connection,
                 project_id=project_id,
@@ -3469,14 +3574,12 @@ class IntentRouter:
                 title=title,
                 instructions=instructions,
                 acceptance_criteria=[],
-                test_commands=(["npm run build"] if extend else []),
+                test_commands=[],
                 owner=self.settings.target_github_owner,
                 repo=self.settings.target_github_repo,
-                base_branch=base_branch or None,
-                finalize_ctx=({"source": "orchestration_agent", "actor": actor,
-                               "web_app_build": True, "root_run_id": root} if extend
-                              else {"source": "orchestration_agent", "actor": actor}),
-                risk_tier=(0 if extend else None),
+                base_branch=None,
+                finalize_ctx={"source": "orchestration_agent", "actor": actor},
+                risk_tier=None,
                 jobs=self.jobs,
             )
             action = {
@@ -3486,9 +3589,7 @@ class IntentRouter:
                 "href": f"/?area=code_tasks&run={run_id}",
             }
             return RouterTurn(
-                reply=("On it — extending the existing app for this task (building on top of its "
-                       "current branch). I'll open a PR with just the change."
-                       if extend else f"Started the governed code task “{title}”."),
+                reply=f"Started the governed code task “{title}”.",
                 actions=[action],
                 tool_calls=[{"name": name, "arguments": arguments}],
             )
@@ -3714,6 +3815,8 @@ class IntentRouter:
             if not text_in:
                 raise ValueError("process text is required")
             given_name = str(arguments.get("name") or "").strip()
+            # TODO(BOSSAPP-1351 follow-up): this writes the template immediately on a successful
+            # compile; stage it as a propose_action offer like workflow authoring does.
             try:
                 spec = self._compile_agent_process(text_in, name=given_name or None)
                 template = AgentProcessService(self.settings).create_template(
@@ -3856,7 +3959,7 @@ class IntentRouter:
         legacy members table, which names no identity person (R2 #1)."""
         from ..identity import viewer as _viewer
 
-        decision = _viewer.decide(project_id, catalogue_permission)
+        decision = _viewer.decide(project_id, catalogue_permission, db=connection)
         if decision is not None:
             if not decision:
                 raise ProjectMemberPermissionError(
@@ -4204,7 +4307,8 @@ class IntentRouter:
             return (result["name"], result.get("arguments") or {}) if result.get("name") else None
         if existing:
             return None
-        reservation = self.budget.reserve(
+        reservation = reserve_apart(
+            self.budget,
             connection,
             project_id,
             "model",
@@ -4236,8 +4340,9 @@ class IntentRouter:
                 "Only when the user genuinely wants NEW WORK begun, pick exactly one enabled "
                 "initiator, and never a disabled one: code for a narrow change, meeting for an "
                 "open decision, PRD for a fuzzy feature, discovery for research, "
-                "create_agent_process when they are authoring a role-handoff process or "
-                "workflow, start_agent_process when they want to run a process against a PRD "
+                "create_agent_process only for a PRD role-handoff chain between BOSS's own "
+                "review/build/QA roles (a workflow of deploy, test, approval or other steps is "
+                "authored by the agent, not started here), start_agent_process when they want to run a process against a PRD "
                 "(simulated unless they say otherwise; never set auto_build), propose_command "
                 "for two or more dependent delivery phases that are not a process definition.\n\n"
                 "When it is unclear whether they want work started, select nothing. Answering a "

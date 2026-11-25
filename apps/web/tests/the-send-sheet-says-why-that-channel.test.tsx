@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The send sheet says why that channel, beside the channel line, not only
  * in the title. A blank or whitespace why says nothing. More than six words

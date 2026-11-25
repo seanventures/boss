@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The Agents card draws twelve faces. A longer directory says how many of those
  * agents are on this page and how many are not. Twelve or fewer stays quiet.

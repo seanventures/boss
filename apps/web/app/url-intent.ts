@@ -140,6 +140,16 @@ export function searchForNewProject(search: string): string {
 export const IDENTITY_PARAMS = ["org", "org_id"] as const;
 
 /**
+ * WHICH PROJECT YOU ARE IN rides along too (2026-11-19: "Build ↗" from Park bench map's activity
+ * opened `?org=org_boss&area=code_tasks&build=crun_…` — no project — and the build page loaded
+ * under the home project, "BOSS dogfood bootstrap", and said "Can't reach BOSS"). A link from a
+ * project's screen to another area is a link inside that project; one meant for another project
+ * names its own `project_id`, which wins. Kept apart from IDENTITY_PARAMS: the shell restores
+ * those onto EVERY link, and a link without `project_id` (the project menu's home) means home.
+ */
+export const PLACE_PARAMS = ["project_id"] as const;
+
+/**
  * A link to somewhere else in the console, keeping who you are.
  *
  * Every href built from scratch — `?area=code_tasks&run=…` — silently dropped `?org=`, and the
@@ -155,13 +165,51 @@ export function consoleHref(
 ): string {
   const next = new URLSearchParams();
   const now = new URLSearchParams(currentSearch);
-  for (const key of IDENTITY_PARAMS) {
+  for (const key of [...IDENTITY_PARAMS, ...PLACE_PARAMS]) {
     const value = now.get(key);
     if (value) next.set(key, value);
   }
   for (const [key, value] of Object.entries(params)) {
     if (value) next.set(key, value);
+    // An explicit null/"" for a kept key is "leave it": `project_id: null` is the home project.
+    else if ((PLACE_PARAMS as readonly string[]).includes(key)) next.delete(key);
   }
   const rest = next.toString();
   return rest ? `?${rest}` : "";
+}
+
+/**
+ * DEEP-LINK INSTRUCTIONS FOR ONE AREA: `focus=repository&open=add` says "on Setup, open Repos'
+ * add form". Moving to ANOTHER area must not carry them (stranger test r2: they rode along to
+ * Approvals and Projects), and a new project's page is a different place from the one that
+ * linked to it.
+ */
+export const AREA_ONE_SHOT_PARAMS = ["focus", "open"] as const;
+
+/** Set `area` on `params`; when it is a different area, drop the previous area's instructions. */
+export function moveToArea(params: URLSearchParams, area: string): URLSearchParams {
+  if (params.get("area") !== area) for (const key of AREA_ONE_SHOT_PARAMS) params.delete(key);
+  params.set("area", area);
+  return params;
+}
+
+/**
+ * Switch the console to `area` CARRYING instructions for it (`focus=repository&open=add`). The
+ * URL is written with the new area first, so the shell's switch (which drops the previous
+ * area's one-shot params, `moveToArea`) sees the same area and keeps them. Writing the params
+ * under the old area and then announcing the switch lost them (review of #204: Get started's
+ * Connect GitHub landed on Setup without its Add form).
+ */
+export function switchAreaWith(area: string, set: Record<string, string | null> = {}): void {
+  const url = new URL(window.location.href);
+  url.searchParams.set("area", area);
+  for (const [key, value] of Object.entries(set)) {
+    if (value === null) url.searchParams.delete(key); else url.searchParams.set(key, value);
+  }
+  // A new history entry (Back returns to where you were) and the popstate panels read the URL on.
+  if (url.toString() !== window.location.href) {
+    window.history.pushState(null, "", `${url.pathname}${url.search}${url.hash}`);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  }
+  window.dispatchEvent(new CustomEvent("boss:navigate", { detail: area }));
 }

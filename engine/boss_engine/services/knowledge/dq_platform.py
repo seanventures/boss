@@ -382,7 +382,7 @@ SAMPLE_GRANTS = (("dq_monitoring_agent", "dq-monitor", ["get_exception_group"]),
 def _install_workflows(connection: Connection, project_id: str, actor: str) -> list[dict]:
     from ..agents import grant_mcp
     from ..shipped_cast import install_roles
-    from ..workflow_catalogue import CATALOGUE, roles_needed, seed
+    from ..workflow_catalogue import CATALOGUE, roles_needed
 
     # The roles first, holding the sample's connectors, so each stage's contract (its `calls`)
     # is satisfied when the workflow is published. A grant a person removed stays removed.
@@ -407,14 +407,26 @@ def _install_workflows(connection: Connection, project_id: str, actor: str) -> l
         with connection.begin_nested():
             grant_mcp(connection, project_id, actor=actor, role_key=role, mcp_server_id=server,
                       tools=tools)
-    result = seed(connection, project_id, actor=actor, only=frozenset(WORKFLOW_KEYS))
+    # THE BANKING DATA QUALITY PACK, INSTALLED (workflow_marketplace): loading the DQ platform is
+    # the person asking for it, so its workflows land in the project's own, from the Marketplace.
+    # Already installed: brought to the pack's version (a modified copy is offered it).
+    from ..workflow_marketplace import install as install_pack
+
+    result = install_pack(connection, project_id, PACK_ID, actor)
+    # AN EARLIER SAMPLE'S WORKFLOWS GO (a standard the catalogue no longer ships), as the
+    # catalogue seed did before the pack was installed from the Marketplace.
+    from ..workflow_catalogue import retire_dropped
+
+    retire_dropped(connection, project_id)
     # And whatever else the banking-dq pack now completes with the project's other packs
     # (rulebook_extraction needs its kinds and a document pack's), so "Extract rules" works
     # the moment the rulebook is added.
     from ..workflow_catalogue import seed_now_unlocked
 
     seed_now_unlocked(connection, project_id, actor=actor)
-    return [i for i in result.get("installed") or [] if i.get("key") in WORKFLOW_KEYS]
+    return [{"key": i["key"], "version_id": i.get("version_id"), "version": i.get("version"),
+             **({"waiting": i["waiting"]} if i.get("waiting") else {})}
+            for i in result.get("installed") or [] if i.get("key") in WORKFLOW_KEYS]
 
 
 def _ensure_schedule(connection: Connection, project_id: str, actor: str, workflow_key: str,

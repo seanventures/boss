@@ -184,27 +184,36 @@ def test_starting_the_same_project_twice_does_not_race_itself():
     assert "dedupe_key=" in src
 
 
+def _start_src() -> str:
+    """The build's start, as it is split now: the rule for a new piece of work
+    (_will_start_outer_run), the start itself, and the outer run's start
+    (start_delivery_workflow, which every path calls)."""
+    return (inspect.getsource(code_task_service._will_start_outer_run)
+            + inspect.getsource(code_task_service.start_code_task)
+            + inspect.getsource(code_task_service.start_delivery_workflow))
+
+
 def test_a_project_without_a_workflow_still_starts():
     """A fleet that has not installed the catalogue must still be able to work. It gets the
     direct path and no outer run, rather than an error."""
     src = inspect.getsource(workflows.start_project_run)
     assert "return None" in src
 
-    src = inspect.getsource(code_task_service.start_code_task)
+    src = _start_src()
     block = src[src.index("start_project_run"):]
     assert "except Exception" in block, "a failed outer run would sink the project"
 
 
 def test_the_code_task_records_the_run_that_governs_it():
     """Otherwise the two halves of one project cannot be shown together."""
-    src = inspect.getsource(code_task_service.start_code_task)
+    src = _start_src()
     assert "'workflow_run_id'" in src
 
 
 def test_a_simulated_project_starts_no_pipeline():
     """A no-spend fixture must not convene a panel and open a pull request. The simulated path
     returns before the outer run is started, which is what makes that true."""
-    src = inspect.getsource(code_task_service.start_code_task)
+    src = _start_src()
     assert src.index("return run_id") < src.index("start_project_run")
 
 
@@ -212,7 +221,7 @@ def test_only_a_NEW_project_gets_an_outer_run():
     """A follow-up, a retry, a deferred-findings task or one slice of a decomposition is work
     INSIDE a project that already has a run. Giving each its own nine-step pipeline would
     convene a panel per retry and ask for an approval per slice."""
-    src = inspect.getsource(code_task_service.start_code_task)
+    src = _start_src()
     for marker in ("is_followup", "parent_run_id", "deferred_from_run", "qa_benchmark"):
         assert marker in src, marker
     # Slice 1 of a decomposition IS the project; 2..N are the rest of the same one.
@@ -224,7 +233,7 @@ def test_only_a_NEW_project_gets_an_outer_run():
 def test_a_project_born_from_a_panel_adopts_that_panel():
     """Otherwise the workflow convenes a SECOND panel and asks for a SECOND approval for work
     whose panel and approval just happened."""
-    src = inspect.getsource(code_task_service.start_code_task)
+    src = _start_src()
     assert '"adopt_meeting_run_id"' in src
     assert '"adopt_decision_id"' in src
     assert '"adopt_code_task_run_id"' in src
@@ -234,25 +243,27 @@ def test_a_scaffolded_web_app_is_still_a_new_project():
     """`root_run_id` names a branch lineage, not a parent task: a web-app build mints one for
     the scaffold (`root = make_id("crun")`) BEFORE any task exists. Counting it as a
     continuation skipped the outer run for the panel path — which is how most projects start."""
-    src = inspect.getsource(code_task_service.start_code_task)
-    guard = src[src.index("_continuation = ("):src.index("_is_new_project = ")]
-    assert "root_run_id" not in guard
+    src = _start_src()
+    rule = inspect.getsource(code_task_service._will_start_outer_run)
+    guard = rule[rule.index("_continuation = ("):]
+    assert "root_run_id" not in guard.split("\n", 1)[0]
 
 
 def test_the_run_follows_the_workflow_the_task_records():
     """The workflow was resolved once, honouring the form's picker and then any mapping. Letting
     start_project_run resolve it again lets the two disagree — the project page naming one
     workflow and the run that governs it following another."""
-    src = inspect.getsource(code_task_service.start_code_task)
-    call = src[src.index("return start_project_run("):]
-    assert 'workflow_version_id=(run_finalize.get("workflow") or {}).get("version_id")' in call
+    src = _start_src()
+    call = src[src.index("started = start_project_run("):]
+    assert 'workflow_version_id=(fctx.get("workflow") or {}).get("version_id")' in call
+    assert "finalize_ctx=run_finalize" in inspect.getsource(code_task_service.start_code_task)
 
 
 def test_choosing_a_workflow_makes_a_follow_up_its_own_piece_of_work():
     """"Add to this project" lets the operator pick the path a change should follow. A picker
     whose choice is then ignored is worse than no picker — so an explicit choice starts an
     outer run even for work that would otherwise be a continuation."""
-    src = inspect.getsource(code_task_service.start_code_task)
+    src = _start_src()
     assert "_chose_a_workflow" in src
     assert "_chose_a_workflow or (" in src
 
@@ -260,7 +271,7 @@ def test_choosing_a_workflow_makes_a_follow_up_its_own_piece_of_work():
 def test_choosing_nothing_leaves_a_follow_up_alone():
     """The default has to stay: a retry or a small follow-up is work inside the project's
     existing run, not a fresh nine-step pipeline per iteration."""
-    src = inspect.getsource(code_task_service.start_code_task)
+    src = _start_src()
     guard = src[src.index("_chose_a_workflow ="):src.index("try:", src.index("_chose_a_workflow ="))]
     for marker in ("is_followup", "parent_run_id", "deferred_from_run", "qa_benchmark"):
         assert marker in guard, marker
@@ -270,6 +281,6 @@ def test_a_task_a_workflow_step_created_does_not_start_another_run():
     """When Build kicks off the WORKFLOW, its `build` step creates the code task — and that
     task already belongs to the run that created it. Starting another would nest a nine-step
     pipeline inside a step of the pipeline that made it, each waiting on the other's build."""
-    src = inspect.getsource(code_task_service.start_code_task)
+    src = _start_src()
     assert "_already_governed" in src
     assert "_is_new_project = (not _already_governed)" in src

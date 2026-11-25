@@ -2,8 +2,7 @@
 
 /**
  * The drawers' bodies that read more than the page already holds:
- *   WorkStoryBody   screen 05b "How it went": each station in words with its proof link
- *                   (GET …/work/{id}/story), the Preview and Cost mini cards;
+ *   useWorkStory    the work panel's read (GET …/work/{id}/story; work-panel.tsx draws it);
  *   StageBody       a journey node's drawer (screen 04 note 1): what happened at that stage,
  *                   from the reads the page has (onboarding, work, roadmap, deployments);
  *   NeedsBody       a Needs-you item: why it waits, its path, the work and the PR.
@@ -23,31 +22,16 @@ import { isPxDemo, pxHref, workWhen } from "../../lib/project-experience";
 import { PrdRecordView } from "../prd-record";
 import { notifyChanged } from "../changed";
 import {
-  PX_PATHS, parseDeployments, parseWorkStory, startOnboarding, usePxRead, type Agent, type Deployments, type NeedsYou, type Node,
-  type WorkItem, type WorkStory,
+  PX_PATHS, parseDeployments, parseWorkStory, startOnboarding, usePxRead, type Deployments, type NeedsYou, type Node,
+  type WorkStory,
 } from "../../lib/project-experience";
 import { FX_DEPLOYMENTS } from "../../lib/project-experience-fixtures";
 import { whenLocal } from "../../lib/local-time";
 import { ActionPreview, actionPreviewOf } from "../action-preview";
-import { Empty, Face, Flow, HEALTH_TONE, HEALTH_WORD, PxLink, Ring, Said, Spark, STAGE_ICON, STATE_WORD, Stations, Tag, Cost } from "./kit";
+import { Empty, Flow, HEALTH_TONE, HEALTH_WORD, PxLink, Ring, Said, Spark, STAGE_ICON, STATE_WORD, Stations, Tag } from "./kit";
 import type { PxCtx } from "./project-page";
 
 // ── 05b ─────────────────────────────────────────────────────────────────────────────────────
-
-/** Who does each station (screen 05b's faces): the role, then its callsign from the crew. */
-const STATION_ROLES: Record<string, string[]> = {
-  plan: ["product_manager", "pm", "product_owner"], build: ["engineering_captain", "software_engineer", "engineer"],
-  review: ["qa_engineer", "qa", "adversarial_reviewer", "reviewer"], ship: ["sre", "site_reliability_engineer", "devops_engineer"],
-};
-const STATION_DEFAULT: Record<string, Agent> = {
-  plan: { name: "Juno", role_key: "product_manager", avatar: "" } as Agent, build: { name: "Forge", role_key: "software_engineer", avatar: "" } as Agent,
-  review: { name: "Vera", role_key: "qa_engineer", avatar: "" } as Agent, ship: { name: "Beacon", role_key: "sre", avatar: "" } as Agent,
-};
-export function stationAgent(key: string, crew: Agent[]): Agent | null {
-  const roles = STATION_ROLES[key];
-  if (!roles) return null;
-  return crew.find((a) => roles.includes(a.role_key)) ?? STATION_DEFAULT[key] ?? null;
-}
 
 const STEP_STYLE: Record<string, React.CSSProperties> = {
   done: { background: "var(--green)", borderColor: "var(--green)", color: "#032015" },
@@ -58,71 +42,6 @@ const STEP_STYLE: Record<string, React.CSSProperties> = {
 
 export function useWorkStory(ctx: PxCtx, id: string) {
   return usePxRead<WorkStory>(id && !ctx.demo ? PX_PATHS.workStory(ctx.projectId, id) : null, parseWorkStory, { everyMs: 20_000 });
-}
-
-/** "How it went", the Preview and Cost mini cards. Falls back to the row's stations while the
- *  story loads (or on an engine without it). */
-export function WorkStoryBody({ ctx, w, story }: { ctx: PxCtx; w: WorkItem; story: WorkStory | null }) {
-  const crew: Agent[] = [...w.agents, ...(ctx.overview.captain ? [ctx.overview.captain as unknown as Agent, ...ctx.overview.captain.squad] : [])];
-  const rows = story?.stages.length ? story.stages : w.stages.filter((st) => st.state !== "skipped").map((st) => ({
-    key: st.key, name: st.label, state: st.state, sub: "", at: "", person: st.key === "design" || st.key === "pr", link: null,
-  }));
-  const parts = story?.cost_parts ?? [];
-  const total = parts.reduce((x, p) => x + p.usd, 0) || 1;
-  const PART_TONE: Record<string, string> = { Plan: "var(--teal)", Build: "var(--accent)", Review: "var(--green)" };
-  const preview = story?.preview || w.links.preview;
-  return (
-    <>
-      {rows.length ? (
-        <div>
-          <span className="px-lbl">How it went</span>
-          <div className="px-steps" data-testid="px-drawer-work-steps">
-            {rows.map((st, i) => {
-              const who = st.person ? null : stationAgent(st.key, crew);
-              const mark = st.state === "done" ? <Check size={11} weight="bold" /> : st.state === "waiting" ? "!" : st.state === "failed" ? "✕" : "";
-              return (
-                <div key={`${st.key}-${i}`} className="px-step" data-testid={`px-drawer-step-${st.key}`}>
-                  <span className="px-ck-b" aria-label={STATE_WORD[st.state]} style={STEP_STYLE[st.state]}>{mark}</span>
-                  {who ? <Face agent={who} size={22} state={st.state === "now" ? "working" : "idle"} /> : <Face agent={{ name: "You" }} size={22} />}
-                  <span style={{ minWidth: 0 }}>
-                    <b style={{ fontSize: ".66rem" }}>{st.name}</b>
-                    <small className="px-faint" style={{ display: "block", fontSize: ".56rem" }}>
-                      {[st.sub, st.at ? whenLocal(st.at) : "", !st.sub && !st.at ? STATE_WORD[st.state] : ""].filter(Boolean).join(" · ")}</small>
-                  </span>
-                  {st.link ? (
-                    <PxLink href={st.link.external_url || st.link.href} testid={`px-drawer-step-link-${st.key}`} className="px-chip">{st.link.label}</PxLink>
-                  ) : <span />}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      ) : null}
-      {story?.prd ? <PrdRecordView prd={story.prd} link={(h) => pxHref(h)} testid="px-drawer-work-prd" /> : null}
-      {preview || parts.length ? (
-        <div className="px-grid px-g2 px-wk-minis" data-testid="px-drawer-work-minis">
-          <div className="px-card px-mini">
-            <span className="px-lbl">Preview</span>
-            {preview ? (
-              <a className="px-mono px-row" href={preview} target="_blank" rel="noreferrer noopener" data-testid="px-drawer-work-preview" style={{ gap: 6 }}>
-                <Globe size={13} aria-hidden />{preview.replace(/^https?:\/\/[^:/]+/, "") || preview.replace(/^https?:\/\//, "")}<Tag tone="green">Up</Tag></a>
-            ) : <span className="px-faint" style={{ fontSize: ".58rem" }}>No preview</span>}
-          </div>
-          <div className="px-card px-mini">
-            <span className="px-lbl">Cost</span>
-            {parts.length ? (
-              <>
-                <span className="px-bar" role="img" aria-label={parts.map((p) => `${p.label} $${p.usd.toFixed(2)}`).join(", ")} data-testid="px-drawer-work-cost">
-                  {parts.map((p) => <span key={p.label} style={{ width: `${(100 * p.usd) / total}%`, background: PART_TONE[p.label] ?? "var(--accent)" }} />)}
-                </span>
-                <small className="px-faint" style={{ fontSize: ".54rem" }}>{parts.map((p) => p.label).join(" · ")}</small>
-              </>
-            ) : <Cost usd={w.cost_usd} list={w.list_usd} empty="No spend yet" />}
-          </div>
-        </div>
-      ) : null}
-    </>
-  );
 }
 
 // ── journey nodes ───────────────────────────────────────────────────────────────────────────

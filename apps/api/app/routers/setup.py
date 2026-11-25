@@ -12,14 +12,23 @@ from boss_engine.identity import P, PublicReason, Scope, authenticated, permit, 
 from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel
 
-from boss_engine.db import begin
+from boss_engine.db import background, begin
 
 from ..schemas_setup import (
     BudgetBody, ChecksBody, ClaudeCredentialBody, JobBody, ModelConnectBody, ReleaseHoldBody, RepositoryAppBody, RepositorySelectBody, RepositorySigninBody,
     RepositoryTokenBody, RoutingBody, SetupView, SignInBody, SignInCodeBody, SignInSession,
     SourceModelBody, TryBody, dump,
 )
+
+
+class EngineCheckJobBody(BaseModel):
+    """The worker's leased `engine.check` job."""
+
+    job_id: str
+    worker_id: str
+    lease_token: str
 
 
 def build_setup_router(
@@ -109,15 +118,16 @@ def build_setup_router(
     def post_checks(body: ChecksBody) -> dict[str, Any]:
         """Prove things now and record when: GitHub's three probes, one question per model."""
         actor = actor_for(body.actor)
-        with begin(engine) as connection:
-            require_actor(connection, body.project_id, actor, "entitlement_manage")
-            if setup_actions.first_press(body.project_id, body.idempotency_key):
-                try:
-                    setup_actions.run_checks(connection, get_settings(), body.project_id,
-                                             body.target, actor=actor)
-                except setup_actions.SetupActionError as error:
-                    fail(error)
-        return fresh_view(body.project_id)
+        with background():
+            with begin(engine) as connection:
+                require_actor(connection, body.project_id, actor, "entitlement_manage")
+                if setup_actions.first_press(body.project_id, body.idempotency_key):
+                    try:
+                        setup_actions.run_checks(connection, get_settings(), body.project_id,
+                                                 body.target, actor=actor)
+                    except setup_actions.SetupActionError as error:
+                        fail(error)
+            return fresh_view(body.project_id)
 
     @router.post("/v1/setup/subscriptions/keep-alive")
     @permit(P.SETUP_MANAGE, scope=Scope.project(body="project_id"))
@@ -127,8 +137,9 @@ def build_setup_router(
         from boss_engine.services import subscription_keepalive
 
         actor = actor_for(body.actor)
-        with begin(engine) as connection:
-            require_actor(connection, body.project_id, actor, "entitlement_manage")
+        with background():
+            with begin(engine) as connection:
+                require_actor(connection, body.project_id, actor, "entitlement_manage")
             return subscription_keepalive.sweep(engine, get_settings(), body.project_id)
 
     @router.post("/v1/setup/repository/token")
@@ -275,6 +286,20 @@ def build_setup_router(
         mirror(target)
         return fresh_view(body.project_id)
 
+    @router.post("/v1/setup/engine-check/execute")
+    @permit(P.WORKER_LEASE)
+    def engine_check_execute(body: EngineCheckJobBody) -> dict[str, Any]:
+        """The worker hands its leased `engine.check` job here: the CLIs and the sandbox helper
+        are in this container. The check runs under a build's sandbox uid (engine_policy),
+        fenced by the lease; it holds no transaction while it runs."""
+        from apps.api.app.main import require_worker_principal
+        from boss_engine.services import engine_policy
+
+        require_worker_principal()
+        with background():
+            return engine_policy.execute_job(engine, get_settings(), job_id=body.job_id,
+                                             worker_id=body.worker_id, lease_token=body.lease_token)
+
     # ── Subscription sign-in inside the BOSS server (subscription_sign_in) ────────────────────
     # The ONE subscription route: the provider's own login runs here as the API process user;
     # the person opens the printed link and enters the printed code. Connect (POST
@@ -299,11 +324,11 @@ def build_setup_router(
         with begin(engine) as connection:
             require_actor(connection, body.project_id, actor, "entitlement_manage")
             # The org's model home holds the connection (read only: never sets a home).
-            try:
-                from boss_engine.services import org_models
+            from boss_engine.services import org_models
 
-                home = org_models.home_project(connection,
-                                               org_models.org_of(connection, body.project_id))
+            org_id = org_models.org_of(connection, body.project_id)
+            try:
+                home = org_models.home_project(connection, org_id)
             except Exception:  # noqa: BLE001
                 home = None
             rejected = sign_in.last_login_rejected(connection, [body.project_id, home or ""],
@@ -325,7 +350,7 @@ def build_setup_router(
                 store = sign_in_store(engine, get_settings(), home or body.project_id, actor)
         try:
             return sign_in.start(provider, project_id=body.project_id, actor=actor,
-                                 settings=get_settings(), login_rejected=rejected,
+                                 org_id=org_id, settings=get_settings(), login_rejected=rejected,
                                  fresh=bool(body.fresh), store=store)
         except sign_in.SignInError as error:
             sign_in_failed(error)
@@ -453,10 +478,10 @@ def build_setup_router(
                 connection, project_id,
                 identity_guard.named_other_actor() or actor_for(None), "entitlement_manage",
             )
-            names = setup_actions.model_catalogue(connection, get_settings(), project_id,
-                                                  provider, source_id=source_id,
-                                                  base_url=base_url)
-        return {"models": names}
+            names, prices = setup_actions.model_catalogue_with_prices(
+                connection, get_settings(), project_id, provider,
+                source_id=source_id, base_url=base_url)
+        return {"models": names, "prices": prices}
 
     @router.post("/v1/setup/models/{provider}/catalogue")
     @permit(P.MODEL_PROVIDER_MANAGE, scope=Scope.project(body="project_id"))
@@ -466,10 +491,10 @@ def build_setup_router(
         with begin(engine) as connection:
             require_actor(connection, body.project_id, actor_for(body.actor),
                           "entitlement_manage")
-            names = setup_actions.model_catalogue(
+            names, prices = setup_actions.model_catalogue_with_prices(
                 connection, get_settings(), body.project_id, provider,
                 api_key=body.api_key or "", base_url=body.base_url or "")
-        return {"models": names}
+        return {"models": names, "prices": prices}
 
     @router.put("/v1/setup/jobs/{job}", response_model=SetupView, response_model_by_alias=True)
     @permit(P.SETUP_MANAGE, scope=Scope.project(body="project_id"))

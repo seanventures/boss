@@ -77,6 +77,9 @@ EVENT_TYPES: frozenset[str] = frozenset({
     "agent.passport.flagged",
     "delegation.created", "delegation.used_first", "delegation.narrowed", "delegation.revoked",
     "delegation.expired", "delegation.suspended", "delegation.extended",
+    # fix_authority: the org default "agents fix failures with the starter's authority" widened
+    # a person's fixer grant or moved a run onto it
+    "delegation.org_default_applied",
     "token.issued", "token.exchanged", "token.denied", "credential.handed_out",
     "egress.denied",
     # vault
@@ -95,7 +98,7 @@ EVENT_TYPES: frozenset[str] = frozenset({
     # policy and system
     "policy.changed", "bootstrap.claimed", "identity.setup_link_issued", "owner.recovered_by_host", "banner.acknowledged", "legacy.password_used",
     "legacy.api_key_used", "legacy.network_used", "legacy.claimed_actor_ignored",
-    "legacy.path_retired", "catalogue.permission_removed", "audit.exported", "audit.verified",
+    "legacy.path_retired", "legacy.path_restored", "catalogue.permission_removed", "audit.exported", "audit.verified",
     "audit.checkpoint",
     # cross-app links (APP_TEMPLATES_AND_SECURITY_LOOP.md §5.6, D9; stream S5 of the app platform)
     "app_link.created", "app_link.revoked", "app_link.test_users_revealed",
@@ -194,9 +197,12 @@ class SecurityEvent:
 
 @dataclass(frozen=True)
 class RecordedEvent:
-    id: int
-    seq: int
-    hash: bytes
+    #: None while `deferred`: background work's event is appended at its transaction's commit,
+    #: so its id, seq and hash are not known when `record` returns (see `record`).
+    id: Optional[int]
+    seq: Optional[int]
+    hash: Optional[bytes]
+    deferred: bool = False
 
 
 @dataclass(frozen=True)
@@ -433,6 +439,37 @@ def record(event: SecurityEvent, *, db: Any) -> RecordedEvent:
     if db is None:
         raise AuditWriteRefused("audit.record writes in the caller's transaction: pass db=")
     clean = prepare(event)
+    if _deferred(db, clean):
+        # BACKGROUND WORK APPENDS AT ITS COMMIT (BOSSAPP-1456). The org's chain lock below is the
+        # one every sign-in takes to write its own event, and it is held until the writer's
+        # transaction ends. A tick that wrote an event and then asked a model for minutes, or
+        # waited on a row, held every sign-in of the org that long: on 2026-11-24 nobody could
+        # sign in until a session was killed by hand. In background work the event is appended
+        # in the same transaction, right before it commits (db.at_commit), so the lock is held
+        # for the instant of the commit only. Same transaction: still kept or rolled back with
+        # what it records (D22).
+        from .. import db as _db
+
+        _db.at_commit(db, lambda conn: _append(clean, db=conn))
+        return RecordedEvent(id=None, seq=None, hash=None, deferred=True)
+    return _append(clean, db=db)
+
+
+def _deferred(db: Any, clean: SecurityEvent) -> bool:
+    """Append at commit: background work, on a Connection in an open transaction. A checkpoint
+    (whose seq its caller needs at once) is never deferred."""
+    from sqlalchemy.engine import Connection
+    from sqlalchemy.engine.base import TwoPhaseTransaction
+
+    from .. import db as _db
+
+    return (_db.in_background() and isinstance(db, Connection) and db.in_transaction()
+            and not isinstance(db.get_transaction(), TwoPhaseTransaction)
+            and clean.event_type != "audit.checkpoint")
+
+
+def _append(clean: SecurityEvent, *, db: Any) -> RecordedEvent:
+    """Chain one prepared event onto its org's log, under the org's lock."""
     # The chain key BEFORE the org's lock: fetching it may itself write an event (a vault decrypt
     # failure, in a side transaction) that needs that lock.
     key = chain_key(clean.org_id, db=db)

@@ -18,7 +18,8 @@ import pytest
 from boss_engine.services import self_fix_upstream as up
 
 from ._self_fix_upstream_support import settings as _settings
-from ._self_fix_upstream_support import FakeGitHub, client_for, insert_verified
+from ._self_fix_upstream_support import (FakeGitHub, client_for, insert_verified,
+                                         pin_known_hosts)
 from ._self_fix_support import clean_project
 from .test_workflow_capability_runner import eng, project  # noqa: F401
 
@@ -30,6 +31,7 @@ def world(eng, project, monkeypatch):  # noqa: F811
     fake = FakeGitHub(fork="pat-example/boss")
     monkeypatch.setattr(up, "CLIENT", lambda c, actor: client_for(fake))
     monkeypatch.setattr(up, "_names", lambda c, p: [])
+    pin_known_hosts(monkeypatch)
     monkeypatch.setattr(up, "_fix_files", lambda s, sfx, b: [
         ("engine/boss_engine/services/stack_deploy.py", "def plan_stack_deploy(t):\n    return t\n")])
     sfx_id = insert_verified(eng, project)

@@ -37,6 +37,8 @@ offered: the agent runs its own commands inside BOSS's sandbox.
 """
 from __future__ import annotations
 
+from . import brief_items as _brief_items
+
 import logging
 import os
 import queue
@@ -47,7 +49,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from . import acp_protocol as acp
-from . import owned_process
+from . import harness_failures, owned_process
 from .cli_harness import CliHarnessUnavailable, GenericCliCodeAgent, _proxy_scoped
 from .engine_contract import WRITE_TOOLS, EngineCapabilities
 from .harness_delivery import current as current_kit, delivers_kit
@@ -145,6 +147,8 @@ class AcpConnection:
             return  # a response to nothing we are waiting on
         try:
             answer = self.handler(message)
+        except harness_failures.HarnessFailure:
+            raise                # the engine cannot run: the session ends, it is not a handler bug
         except Exception as exc:  # noqa: BLE001 — a handler bug answers the agent, never hangs it
             _log.warning("acp: handling %s failed: %s", message.get("method"), exc)
             answer = acp.error(message.get("id"), acp.INTERNAL_ERROR, str(exc)[:300])
@@ -247,11 +251,11 @@ class AcpCodeAgent(GenericCliCodeAgent):
             if state["replaying"]:
                 return
             state["turns"].append(row)
-            if on_turn:
-                try:
-                    on_turn(row)
-                except Exception:  # noqa: BLE001
-                    pass
+            # THE ONE SHARED TURN PATH (harness_failures.deliver_turns): a tool result that is
+            # the engine's sandbox (or its organisation's policy) answering in the command's
+            # place stops the session here. AcpConnection.serve lets it through.
+            harness_failures.deliver_turns([row], on_turn, engine=self.engine,
+                                           writer=not read_only)
 
         def _update(update: dict) -> None:
             kind = update.get("sessionUpdate")
@@ -436,11 +440,12 @@ class AcpCodeAgent(GenericCliCodeAgent):
             raise CliHarnessUnavailable(f"{self.spec.name} did not finish within {timeout}s")
         stderr = "".join(conn.stderr_tail)
         self._raise_harness_verdict(stdout=summary, stderr=stderr,
-                                    summary=summary or (error or ""), ok=ok)
+                                    summary=summary or (error or ""), ok=ok,
+                                    writer=not read_only)
         if error and not summary:
             raise CliHarnessUnavailable(f"{self.spec.name}: {error[:300]}")
         out: dict[str, Any] = {
-            "summary": summary[:8000] or f"({self.spec.name} produced no output)",
+            "summary": _brief_items.clip_summary(summary) or f"({self.spec.name} produced no output)",
             "usage": {"model": model or self.spec.name},
             "cost_usd_micros": 0,
             "cost_unreported": True,

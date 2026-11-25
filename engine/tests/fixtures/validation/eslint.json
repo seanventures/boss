@@ -1,0 +1,48 @@
+[
+  {
+    "filePath": "src/routes/payments.js",
+    "messages": [
+      {
+        "ruleId": "no-unused-vars",
+        "severity": 2,
+        "message": "'legacy' is defined but never used.",
+        "line": 3,
+        "column": 7,
+        "nodeType": "Identifier",
+        "messageId": "unusedVar",
+        "endLine": 3,
+        "endColumn": 13
+      },
+      {
+        "ruleId": "eqeqeq",
+        "severity": 1,
+        "message": "Expected '===' and instead saw '=='.",
+        "line": 9,
+        "column": 15,
+        "nodeType": "BinaryExpression",
+        "messageId": "unexpected",
+        "endLine": 9,
+        "endColumn": 17
+      },
+      {
+        "ruleId": "prefer-const",
+        "severity": 2,
+        "message": "'limit' is never reassigned. Use 'const' instead.",
+        "line": 12,
+        "column": 7,
+        "nodeType": "Identifier",
+        "messageId": "useConst",
+        "endLine": 12,
+        "endColumn": 12,
+        "fix": {"range": [210, 213], "text": "const"}
+      }
+    ],
+    "suppressedMessages": [],
+    "errorCount": 2,
+    "fatalErrorCount": 0,
+    "warningCount": 1,
+    "fixableErrorCount": 1,
+    "fixableWarningCount": 0,
+    "usedDeprecatedRules": []
+  }
+]

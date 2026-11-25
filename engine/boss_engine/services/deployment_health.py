@@ -192,14 +192,23 @@ def incidents(samples_newest_first: list[dict]) -> list[dict[str, Any]]:
 # --------------------------------------------------------------------------- #
 # Probe: ask the destination, through the connector the deploy gate already uses.
 # --------------------------------------------------------------------------- #
+def declares_checks(target: dict) -> bool:
+    """Did this target declare any health check at all?"""
+    return any(isinstance(c, dict) for c in (target.get("health_checks") or []))
+
+
 class StackHealthProbe:
-    """Health for a stack target: an HTTP GET of the address it serves on.
+    """Health for a stack target: its DECLARED checks, else an HTTP GET of the address it serves on.
 
     A stack target has no deployment connector — it is deployed by stack_deploy over SSH with
     an approval — but once it is up it is just a web app at its public URL (or the URL its
     newest healthy deploy opened). The probe never SSHes: it asks the app, from outside, the
     way a visitor would. Kept out of the connector table on purpose, so deploy routing for
     stack targets is unchanged.
+
+    DECLARED CHECKS FIRST. This GET'd "/" and ignored the target's own `health_checks`, so an
+    API gateway with no page at "/" (404) and a 200 on its declared /healthz read "Down" for as
+    long as it ran. "/" is only the fallback for a target that declared nothing.
     """
 
     kind = "stack"
@@ -207,6 +216,11 @@ class StackHealthProbe:
     def observe(self, target: dict, settings: Settings) -> dict:
         import urllib.error
         import urllib.request
+
+        if declares_checks(target):
+            from .deployment_connectors import observe_declared
+
+            return observe_declared(target, timeout=5)
 
         url = str(target.get("public_url") or target.get("stack_open_url")
                   or (target.get("domains") or [""])[0] or "").strip()
@@ -226,10 +240,121 @@ class StackHealthProbe:
         return {"healthy": 200 <= status < 400, "checks": [{**check, "status": status}]}
 
 
+class DeclaredChecksProbe:
+    """Health for a target kind with NO deployment connector (config_dir, and any kind added
+    to the schema before its connector): the checks it declared, asked from outside.
+
+    "No connector for target_kind 'config_dir'" was recorded as a FAILED sample on every sweep,
+    so a target whose /readyz answered 200 read "Down" forever and paged its owner. Having no
+    connector says nothing about whether the app serves; its declared checks do. A target with
+    no connector AND no declared check is unknown — never a failure.
+    """
+
+    kind = "declared"
+
+    def observe(self, target: dict, settings: Settings) -> dict:
+        if not declares_checks(target):
+            return {"healthy": None,
+                    "reason": (f"no health check declared and no connector for target_kind "
+                               f"{target.get('target_kind')!r}")}
+        from .deployment_connectors import observe_declared
+
+        return observe_declared(target, timeout=5)
+
+
 #: A stack target's newest healthy deploy URL, for StackHealthProbe when no public_url is set.
 STACK_OPEN_URL_COLUMN = (
     "(SELECT sd.open_url FROM stack_deployments sd WHERE sd.target_id = {alias}.id "
     " AND sd.status = 'healthy' ORDER BY sd.created_at DESC LIMIT 1) AS stack_open_url")
+
+
+#: Where every reader of availability, SLO, incidents and alerts reads samples: only those
+#: taken by the target's CURRENT probe (db/schema.sql). A probe bug's history — "/" on an API
+#: that declared /healthz, "no connector for target_kind" — was never downtime, and must not be
+#: read as such once the probe is fixed. Writers, retention and the due-check use the table.
+COUNTED_SAMPLES = "counted_health_samples"
+
+
+def probe_signature(checks: list[dict]) -> Optional[str]:
+    """What a probe ASKED, as one comparable string: each check's method, URL and expected
+    status (or its socket). Two samples with the same signature measured the same thing; a
+    changed declared check, port or fallback is a different signature, and starts a new record."""
+    import hashlib
+
+    parts = []
+    for c in checks:
+        if c.get("skipped"):
+            continue
+        if c.get("url"):
+            parts.append(f"GET {c['url']} expect {c.get('expected')}")
+        elif c.get("socket"):
+            parts.append(f"TCP {c['socket']}")
+    if not parts:
+        return None
+    sig = " | ".join(sorted(parts))
+    return sig if len(sig) <= 400 else "sha1:" + hashlib.sha1(sig.encode()).hexdigest()
+
+
+#: The audit event a probe change writes (and health_view reads back).
+PROBE_CHANGED_EVENT = "health.probe_changed"
+
+
+def _audit_probe_change(connection, target: dict, current: dict, new_sig: str,
+                        at: datetime) -> None:
+    """Record that the target's probe changed and what availability stops counting. Reads the
+    counted samples BEFORE the switch: exactly what SLO was built from until now."""
+    from .core import emit_event
+
+    row = connection.execute(
+        sql("SELECT count(*) AS n, count(*) FILTER (WHERE ok) AS okn, min(checked_at) AS first "
+            "FROM " + COUNTED_SAMPLES + " WHERE deployment_target_id = :t AND checked_at >= :cut"),
+        {"t": target["id"], "cut": at - timedelta(hours=24)}).mappings().first() or {}
+    n, okn = int(row.get("n") or 0), int(row.get("okn") or 0)
+    if not current.get("probe_signature") and not n:
+        return                                   # a brand-new target: nothing was discarded
+    since = current.get("probe_signature_since")
+    emit_event(connection, target["project_id"], PROBE_CHANGED_EVENT, "boss:health-probe",
+               "deployment_target", target["id"], {
+                   "old_signature": current.get("probe_signature"),
+                   "new_signature": new_sig,
+                   # Who changed what the probe asks: the target's declared checks (edited by a
+                   # person or an agent) or its address/port; the probe only noticed.
+                   "changed_by": target.get("updated_by") or target.get("created_by"),
+                   "measured_since_before": since.isoformat() if since else None,
+                   "discarded": {"window": "24h", "samples": n, "ok": okn,
+                                 "uptime_pct": round(okn * 100.0 / n, 2) if n else None,
+                                 "first": row["first"].isoformat() if row.get("first") else None},
+                   "at": at.isoformat()})
+
+
+def record_sample(connection, target: dict, sample: dict, at: datetime) -> None:
+    """Write one sample, with the probe that took it, and move the target's current probe
+    signature (and "measured since") when the probe changed. The ONE writer of a sample, so the
+    sweep and "Probe now" cannot record differently.
+
+    A CHANGED PROBE IS AUDITED. Changing the probe starts a new record, which discards the old
+    one's availability from SLO — so editing a check must never silently erase a breach. The
+    change is an event (health.probe_changed: old → new signature, who, and the availability
+    that stopped counting), shown in the target's health history (health_view)."""
+    sig = sample.get("probe_signature")
+    current = connection.execute(
+        sql("SELECT probe_signature, probe_signature_since FROM deployment_targets WHERE id = :t"),
+        {"t": target["id"]}).mappings().first() or {}
+    if sig and current.get("probe_signature") != sig:
+        _audit_probe_change(connection, target, current, sig, at)
+    connection.execute(
+        sql("INSERT INTO deployment_health_samples "
+            "(id, project_id, deployment_target_id, checked_at, ok, status_code, "
+            " latency_ms, error, probe_signature) "
+            "VALUES (:id,:p,:t,:at,:ok,:sc,:ms,:err,:sig)"),
+        {"id": make_id("dhs"), "p": target["project_id"], "t": target["id"], "at": at,
+         "ok": sample["ok"], "sc": sample["status_code"], "ms": sample["latency_ms"],
+         "err": sample["error"], "sig": sig})
+    if sig:
+        connection.execute(
+            sql("UPDATE deployment_targets SET probe_signature = :sig, probe_signature_since = :at "
+                "WHERE id = :t AND probe_signature IS DISTINCT FROM :sig"),
+            {"sig": sig, "at": at, "t": target["id"]})
 
 
 def probe(target: dict, settings: Settings) -> dict[str, Any]:
@@ -237,25 +362,33 @@ def probe(target: dict, settings: Settings) -> dict[str, Any]:
     from .deployment_connectors import connector_for
 
     conn = StackHealthProbe() if str(target.get("target_kind") or "").lower() == "stack" \
-        else connector_for(target)
-    if conn is None:
-        return {"ok": False, "status_code": None, "latency_ms": None,
-                "error": f"no connector for target_kind {target.get('target_kind')!r}"}
+        else (connector_for(target) or DeclaredChecksProbe())
 
     started = time.monotonic()
     try:
         health = conn.observe(target, settings)
     except Exception as exc:  # noqa: BLE001 — a probe that throws is a failed probe
-        return {"ok": False, "status_code": None,
+        # Counted against the probe the target is measured with: a throwing probe is still
+        # that probe failing, not a different one.
+        return {"probe_signature": target.get("probe_signature"),
+                "ok": False, "status_code": None,
                 "latency_ms": int((time.monotonic() - started) * 1000),
                 "error": f"{type(exc).__name__}: {exc}"[:200]}
 
     latency_ms = int((time.monotonic() - started) * 1000)
-    checks = health.get("checks") or []
-    first = checks[0] if checks else {}
-    # `healthy` is None when the target declares no check — unknown, not healthy.
+    checks = [c for c in (health.get("checks") or []) if not c.get("skipped")]
+    # The check that FAILED explains the sample; the first one may well have passed.
+    first = next((c for c in checks if c.get("ok") is False or c.get("error")),
+                 checks[0] if checks else {})
+    # `healthy` is None when nothing could be asked — UNKNOWN, not healthy and not a failure.
+    # `ok: None` tells the sweep to record nothing: an unknown target must never accumulate
+    # failure samples, read "Down", fire a health alert or start a recovery agent.
+    if health.get("healthy") is None:
+        return {"ok": None, "status_code": None, "latency_ms": None,
+                "error": str(health.get("reason") or "nothing was probed")[:200]}
     ok = bool(health.get("healthy"))
     return {
+        "probe_signature": probe_signature(checks),
         "ok": ok,
         "status_code": first.get("status"),
         "latency_ms": latency_ms,
@@ -285,7 +418,7 @@ def sweep(engine, settings: Settings, *, project_id: Optional[str] = None,
     from ..db import begin
 
     now = now or datetime.now(timezone.utc)
-    probed, skipped, failed = 0, 0, 0
+    probed, skipped, failed, unknown = 0, 0, 0, 0
     try:
         with begin(engine) as c:
             from . import projects_archive    # an archived project's apps are not probed
@@ -304,15 +437,20 @@ def sweep(engine, settings: Settings, *, project_id: Optional[str] = None,
                     skipped += 1
                     continue
             sample = probe(t, settings)          # outside the transaction: it does network I/O
+            if sample["ok"] is None:
+                # UNKNOWN IS NOT A FAILURE. Nothing could be asked (no connector, no declared
+                # check), so no sample is written — and the failure samples an older probe wrote
+                # for the same non-reason ("no connector for target_kind …") are withdrawn: they
+                # were never observations of the app, yet they kept it "Down".
+                unknown += 1
+                with begin(engine) as c:
+                    c.execute(sql("DELETE FROM deployment_health_samples "
+                                  "WHERE deployment_target_id = :t AND NOT ok "
+                                  "AND error LIKE 'no connector for target_kind%'"),
+                              {"t": t["id"]})
+                continue
             with begin(engine) as c:
-                c.execute(
-                    sql("INSERT INTO deployment_health_samples "
-                        "(id, project_id, deployment_target_id, checked_at, ok, status_code, "
-                        " latency_ms, error) "
-                        "VALUES (:id,:p,:t,:at,:ok,:sc,:ms,:err)"),
-                    {"id": make_id("dhs"), "p": t["project_id"], "t": t["id"], "at": now,
-                     "ok": sample["ok"], "sc": sample["status_code"],
-                     "ms": sample["latency_ms"], "err": sample["error"]})
+                record_sample(c, t, sample, now)
             probed += 1
             if not sample["ok"]:
                 failed += 1
@@ -325,7 +463,7 @@ def sweep(engine, settings: Settings, *, project_id: Optional[str] = None,
                 c.execute(sql("DELETE FROM deployment_health_samples WHERE checked_at < :cut"),
                           {"cut": now - timedelta(days=RETENTION_DAYS)})
     except Exception as exc:  # noqa: BLE001
-        return {"probed": probed, "skipped": skipped, "failed": failed,
+        return {"probed": probed, "skipped": skipped, "failed": failed, "unknown": unknown,
                 "error": f"{type(exc).__name__}: {exc}"[:200]}
     # The app's OWN metrics ride the same cadence and the same deployed-target list: an app
     # that declares `metrics:` in boss.deploy.yaml is scraped when due (app_metrics.sweep never
@@ -340,7 +478,8 @@ def sweep(engine, settings: Settings, *, project_id: Optional[str] = None,
     # ALERT RULES ARE NOT EVALUATED HERE ANY MORE (BOSSAPP-598, R1.9): the monitor scheduler
     # (monitor_scheduler.tick, on its own clock and leases) evaluates every rule group. This
     # sweep only probes and scrapes, so a slow probe never delays an alert and vice versa.
-    return {"probed": probed, "skipped": skipped, "failed": failed, **scraped, **signals}
+    return {"probed": probed, "skipped": skipped, "failed": failed, "unknown": unknown,
+            **scraped, **signals}
 
 
 # --------------------------------------------------------------------------- #
@@ -355,7 +494,8 @@ def health_view(connection, project_id: str, *, now: Optional[datetime] = None,
     """
     now = now or datetime.now(timezone.utc)
     targets = [dict(r) for r in connection.execute(
-        sql("SELECT id, app_name, environment, repo, target_kind, target_ref, domains, status "
+        sql("SELECT id, app_name, environment, repo, target_kind, target_ref, domains, status, "
+            "       probe_signature, probe_signature_since "
             "FROM deployment_targets WHERE project_id = :p AND status = 'active' "
             "ORDER BY app_name"), {"p": project_id}).mappings().all()]
 
@@ -363,7 +503,7 @@ def health_view(connection, project_id: str, *, now: Optional[datetime] = None,
     for t in targets:
         samples = [dict(r) for r in connection.execute(
             sql("SELECT checked_at, ok, status_code, latency_ms, error "
-                "FROM deployment_health_samples WHERE deployment_target_id = :t "
+                "FROM " + COUNTED_SAMPLES + " WHERE deployment_target_id = :t "
                 "AND checked_at >= :cut ORDER BY checked_at DESC LIMIT 2000"),
             {"t": t["id"], "cut": now - timedelta(days=7)}).mappings().all()]
 
@@ -390,6 +530,19 @@ def health_view(connection, project_id: str, *, now: Optional[datetime] = None,
             "last_latency_ms": latest["latency_ms"] if latest else None,
             "last_error": latest["error"] if latest else None,
             "sample_count": len(samples),
+            # Uptime and SLO are measured with the target's CURRENT probe only; this is when
+            # that began (None = since before probes were recorded).
+            "measured_with": t.get("probe_signature"),
+            "measured_since": (t["probe_signature_since"].isoformat()
+                               if t.get("probe_signature_since") else None),
+            # Every time the probe changed and what availability stopped counting (audit).
+            "probe_changes": [
+                {"at": r["created_at"].isoformat(), **(r["data"] or {})}
+                for r in connection.execute(
+                    sql("SELECT created_at, data FROM events WHERE project_id = :p "
+                        "AND event_type = :e AND entity_type = 'deployment_target' "
+                        "AND entity_id = :t ORDER BY created_at DESC LIMIT 10"),
+                    {"p": project_id, "e": PROBE_CHANGED_EVENT, "t": t["id"]}).mappings()],
             # Oldest-first so the graph reads left to right like time does.
             "series": [{"at": s["checked_at"].isoformat(), "ok": s["ok"],
                         "ms": s["latency_ms"]} for s in reversed(samples[:points])],

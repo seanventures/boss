@@ -181,9 +181,22 @@ def _docker_command(environment: dict[str, str], key: str) -> list[str]:
     raise MCPSetupError("Docker access or approved sudo environment forwarding is required")
 
 
+def _compose_files(env_path: Path) -> list[str]:
+    """THE ONE RESOLVER (compose_files.sh): the base file, plus the engine inner-sandbox overlay
+    when .env opts in, so recreating the API never drops it."""
+    resolver = ROOT / "scripts/install/compose_files.sh"
+    if not resolver.exists():
+        return ["-f", str(COMPOSE)]
+    done = subprocess.run(["bash", str(resolver), str(ROOT), str(env_path)], capture_output=True,
+                          text=True, check=False, timeout=30)
+    if done.returncode != 0:
+        raise SystemExit((done.stderr or "compose_files.sh failed").strip())
+    return done.stdout.splitlines()
+
+
 def _restart_api(env_path: Path) -> None:
     prefix = _docker_prefix()
-    command = [*prefix, "compose", "-f", str(COMPOSE), "--env-file", str(env_path),
+    command = [*prefix, "compose", *_compose_files(env_path), "--env-file", str(env_path),
                "up", "-d", "--wait", "--no-deps", "--force-recreate", "api"]
     result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True,
                             check=False, timeout=240)

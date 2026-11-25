@@ -407,6 +407,26 @@ class LocalGitAdapter:
                 "url": change_set_url(self.repository_full_name, row["number"]),
                 "title": str(row["title"] or "")}
 
+    def open_pull_request_with_prefix(self, prefix: str,
+                                      rest: Optional[str] = None) -> Optional[dict]:
+        """The newest open change set whose head branch starts with ``prefix`` (and, given
+        ``rest``, whose remainder fully matches that regex), or None."""
+        import re as _re
+
+        like = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        with self._tx("open_pull_request_with_prefix", read=True) as c:
+            rows = c.execute(text(
+                "SELECT number, title, branch FROM local_change_sets WHERE repository = :r "
+                "AND branch LIKE :b AND state = 'open' ORDER BY number DESC"),
+                {"r": self.repository_full_name, "b": like}).mappings().all()
+        row = next((r for r in rows if rest is None
+                    or _re.fullmatch(rest, str(r["branch"])[len(prefix):])), None)
+        if row is None:
+            return None
+        return {"number": int(row["number"]),
+                "url": change_set_url(self.repository_full_name, row["number"]),
+                "title": str(row["title"] or "")}
+
     def last_merged_pull_request(self, branch_name: str) -> Optional[dict]:
         """The newest MERGED change set from this branch, or None. A work branch outlives its
         first change set — the lineage's follow-ups keep committing to it — and the install's
@@ -437,6 +457,15 @@ class LocalGitAdapter:
             return {"restacked": False, "paths": [], "why": "no merged head on record"}
         return local_repo.restack(self._require(), branch_name, merged_head_sha,
                                   base or self.default_branch())
+
+    def commit_identity(self, commit_sha: str) -> dict:
+        """Return the commit SHA and parent SHAs for an immutable local Git commit."""
+        git_dir = self._require()
+        sha = local_repo.rev_parse(git_dir, commit_sha) or commit_sha
+        return {
+            "commit_sha": sha,
+            "parents": local_repo.commit_parents(git_dir, sha),
+        }
 
     def pull_request_snapshot(self, pull_number: int) -> dict:
         row = self.change_set(pull_number)
@@ -477,10 +506,15 @@ class LocalGitAdapter:
         return local_repo.diff(self.git_dir, base, head)
 
     def merge_pull_request(self, pull_request_number: int, commit_title: str,
-                           *, merged_by: str = "boss") -> PullRequestMergeResult:
+                           *, merged_by: str = "boss",
+                           head_sha: Optional[str] = None) -> PullRequestMergeResult:
         """Merge the change set's branch into its base: a fast-forward when the base has not
         moved, else a merge commit (`squash` when the install's merge method says so). Only a
-        person's approved decision reaches this (software_factory.merge_pull_request)."""
+        person's approved decision reaches this (software_factory.merge_pull_request).
+
+        `head_sha`: the commit that decision approved. Exactly that is merged and recorded as
+        the change set's head, so commits a follow-up pushed to the branch since stay off the
+        base and become their own change (pr_follow_up.prepare_branch restacks from it)."""
         git_dir = self._require()
         with self._tx("merge_pull_request") as c:
             row = self._row(c, pull_request_number, lock=True)
@@ -490,13 +524,16 @@ class LocalGitAdapter:
             if row["state"] != "open":
                 raise local_repo.LocalRepoError(f"Change #{pull_request_number} is {row['state']}.")
             method = str(getattr(self.settings, "sandbox_merge_method", "merge") or "merge")
+            pinned = (local_repo.rev_parse(git_dir, head_sha) or head_sha) if head_sha else None
             sha = local_repo.merge(git_dir, row["branch"], row["base_branch"],
                                    commit_title or f"Merge change #{pull_request_number}",
-                                   method="squash" if method == "squash" else "merge")
+                                   method="squash" if method == "squash" else "merge",
+                                   at=pinned)
             c.execute(text(
                 "UPDATE local_change_sets SET state = 'merged', merged_sha = :s, merged_by = :by, "
                 "merged_at = now(), head_sha = :h, updated_at = now() WHERE id = :id"),
-                {"s": sha, "by": merged_by, "h": local_repo.branch_sha(git_dir, row["branch"]),
+                {"s": sha, "by": merged_by,
+                 "h": pinned or local_repo.branch_sha(git_dir, row["branch"]),
                  "id": row["id"]})
         return PullRequestMergeResult(sha=sha, merged=True,
                                       message=f"Merged into {row['base_branch']} on this machine.")
@@ -509,15 +546,71 @@ class LocalGitAdapter:
 
         current = self.pull_request_snapshot(pull_number)
         if current["state"] != "open":
+            if current.get("merged") and current.get("head_sha") == expected_head_sha:
+                row = self.change_set(pull_number)
+                return {"pull_request_number": pull_number,
+                        "commit_sha": str(row.get("merged_sha") or current["base_sha"]),
+                        "merged": True, "message": "Already merged.",
+                        "merge_method": merge_method,
+                        "previous_target_sha": expected_base_sha,
+                        "authorized_head_sha": expected_head_sha}
             raise GitHubMergeRejectedError("The change is not open.")
+        git_dir = self._require()
+        already_landed = False
         for field, value in {"head_sha": expected_head_sha, "base_sha": expected_base_sha,
                              "head_ref": expected_head_ref, "base_ref": expected_base_ref}.items():
             if current[field] != value:
+                if field == "base_sha" and self._already_landed_on_base(
+                        git_dir, expected_head_ref, expected_head_sha,
+                        expected_base_sha, current["base_sha"], expected_base_ref):
+                    already_landed = True
+                    continue
                 raise GitHubMergeRejectedError("The change moved after it was approved.")
-        merged = self.merge_pull_request(pull_number, commit_title)
+        if already_landed:
+            with self._tx("merge_pull_request") as c:
+                row = self._row(c, pull_number, lock=True)
+                if row["state"] == "merged":
+                    return {"pull_request_number": pull_number,
+                            "commit_sha": str(row.get("merged_sha") or current["base_sha"]),
+                            "merged": True, "message": "Already merged.",
+                            "merge_method": merge_method,
+                            "previous_target_sha": expected_base_sha,
+                            "authorized_head_sha": expected_head_sha}
+                if row["state"] != "open":
+                    raise GitHubMergeRejectedError("The change is not open.")
+                base_now = local_repo.branch_sha(git_dir, row["base_branch"]) or ""
+                if not base_now or (base_now != current["base_sha"]
+                                    and not self._already_landed_on_base(
+                                        git_dir, expected_head_ref, expected_head_sha,
+                                        expected_base_sha, base_now, expected_base_ref)):
+                    raise GitHubMergeRejectedError("The change moved after it was approved.")
+                c.execute(text(
+                    "UPDATE local_change_sets SET state = 'merged', merged_sha = :s, "
+                    "merged_by = 'boss', merged_at = now(), head_sha = :h, "
+                    "updated_at = now() WHERE id = :id"),
+                    {"s": base_now, "h": expected_head_sha, "id": row["id"]})
+            return {"pull_request_number": pull_number, "commit_sha": base_now, "merged": True,
+                    "message": f"Merged into {expected_base_ref} on this machine.",
+                    "merge_method": merge_method,
+                    "previous_target_sha": expected_base_sha,
+                    "authorized_head_sha": expected_head_sha}
+        merged = self.merge_pull_request(pull_number, commit_title, head_sha=expected_head_sha)
         return {"pull_request_number": pull_number, "commit_sha": merged.sha, "merged": True,
                 "message": merged.message, "merge_method": merge_method,
                 "previous_target_sha": expected_base_sha, "authorized_head_sha": expected_head_sha}
+
+    @staticmethod
+    def _already_landed_on_base(git_dir: Path, head_ref: str, head_sha: str,
+                                expected_base_sha: str, current_base_sha: str,
+                                base_ref: str) -> bool:
+        if not (head_sha and expected_base_sha and current_base_sha):
+            return False
+        if local_repo.merge_base(git_dir, expected_base_sha, current_base_sha) != expected_base_sha:
+            return False
+        if local_repo.merge_base(git_dir, head_sha, current_base_sha) == head_sha:
+            return True
+        return local_repo.already_squashed_into(
+            git_dir, head_ref, head_sha, expected_base_sha, current_base_sha, base_ref)
 
     def close_change_set(self, pull_number: int) -> None:
         """Close the open change: pin its sha and record who (the same close the route uses).

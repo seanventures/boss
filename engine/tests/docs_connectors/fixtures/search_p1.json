@@ -1,0 +1,43 @@
+{
+  "results": [
+    {
+      "content": {
+        "id": "101",
+        "type": "page",
+        "status": "current",
+        "title": "Deploy Runbook"
+      },
+      "title": "Deploy Runbook",
+      "excerpt": "how to @@@hl@@@deploy@@@endhl@@@ safely",
+      "url": "/spaces/ENG/pages/101/Deploy+Runbook",
+      "lastModified": "2026-11-10T09:00:00.000Z",
+      "resultGlobalContainer": {
+        "title": "Engineering",
+        "displayUrl": "/spaces/ENG"
+      }
+    },
+    {
+      "content": {
+        "id": "102",
+        "type": "page",
+        "status": "current",
+        "title": "Release Checklist"
+      },
+      "title": "Release Checklist",
+      "excerpt": "how to @@@hl@@@deploy@@@endhl@@@ safely",
+      "url": "/spaces/ENG/pages/102/Release+Checklist",
+      "lastModified": "2026-11-10T09:00:00.000Z",
+      "resultGlobalContainer": {
+        "title": "Engineering",
+        "displayUrl": "/spaces/ENG"
+      }
+    }
+  ],
+  "start": 0,
+  "limit": 2,
+  "size": 2,
+  "totalSize": 3,
+  "_links": {
+    "next": "/rest/api/search?cql=x&start=2&limit=2"
+  }
+}

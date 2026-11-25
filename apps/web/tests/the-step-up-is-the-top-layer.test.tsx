@@ -131,8 +131,8 @@ describe("New project › Create and set up, with a step-up", () => {
     await act(async () => host!.querySelector<HTMLButtonElement>('[data-testid="new-project"]')!.click());
     // BOSSAPP-810: New project opens its three doors first; this form is New app from an idea ›
     // "Knowledge graph or blank project".
-    await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="start-idea"]')!.click());
-    await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="idea-form"]')!.click());
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="ap-more-ways"]')!.click());
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="ap-way-kg"]')!.click());
     const name = document.querySelector<HTMLInputElement>('[data-testid="new-project-form"] input[name="name"]')!;
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(name, "kg-tester-r4");

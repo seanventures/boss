@@ -141,7 +141,7 @@ def project_work(project_id: str, state: Optional[str] = None, q: Optional[str] 
 @permit(P.PROJECT_READ, scope=Scope.project(path="project_id"))
 def project_work_plan(project_id: str, kind: str = "feature",
                       workflow_key: Optional[str] = None, detail: bool = False,
-                      app: Optional[str] = None) -> dict[str, Any]:
+                      app: Optional[str] = None, new_app: bool = False) -> dict[str, Any]:
     """Helm's plan for new work (screen 05): the workflow Start would run for this kind (or the
     one picked with "change"), its real steps as a strip, time and cost from this project's own
     history, and the workflows "change" offers. `detail` (the New work modal): the workflow's
@@ -162,12 +162,12 @@ def project_work_plan(project_id: str, kind: str = "feature",
         except LookupError as error:
             raise HTTPException(status_code=422, detail={
                 "error": "unknown_workflow", "message": str(error)}) from None
-        if (app or "").strip():
-            try:
-                out["anchor"] = new_work.app_anchor(connection, project_id, app)
-            except LookupError as error:
-                out["anchor"] = None
-                out["anchor_error"] = str(error)
+        out["app_choices"] = new_work.app_choices(connection, project_id)
+        try:
+            out["anchor"] = new_work.work_anchor(connection, project_id, app, new_app=new_app)
+        except (LookupError, ValueError) as error:
+            out["anchor"] = None
+            out["anchor_error"] = str(error)
         return out
 
 
@@ -182,6 +182,21 @@ def project_work_story(project_id: str, work_id: str) -> dict[str, Any]:
         _require_project(connection, project_id)
         try:
             return work_story.story(connection, project_id, work_id)
+        except LookupError as error:
+            raise _missing(error) from None
+
+
+@router.get("/v1/projects/{project_id}/builds/{run_id}/explained")
+@permit(P.PROJECT_READ, scope=Scope.project(path="project_id"))
+def project_build_explained(project_id: str, run_id: str) -> dict[str, Any]:
+    """The build page's "What was discussed / What was built": the panel's decisions and the
+    build's outputs in a few bullets (explained.for_build), stored once the build completed."""
+    from boss_engine.services.project_experience import explained
+
+    with begin(_engine) as connection:
+        _require_project(connection, project_id)
+        try:
+            return explained.for_build(connection, project_id, run_id)
         except LookupError as error:
             raise _missing(error) from None
 
@@ -239,6 +254,11 @@ class NewWorkBody(BaseModel):
     #: the app's key). Start then continues that app's lineage — its branch, its open PR — as
     #: the start door's `extends_run_id`; a name that is no app of this project is refused.
     app: Optional[str] = None
+    #: "Create a new app": never built onto an existing one.
+    new_app: bool = False
+    #: Nothing named: build onto the project's only app, or ask which (the New work modal
+    #: sends it). Unset, nothing named stays a fresh build, as it always was for every caller.
+    infer_app: bool = False
     #: THE PROFILE THE PERSON PICKED (BOSSAPP-1334): lean | balanced | strict, the build runs on
     #: it (run input `profile`, bound to the build step). Empty: the project's default.
     profile: Optional[str] = None
@@ -249,6 +269,10 @@ class NewWorkBody(BaseModel):
     source_url: Optional[str] = None
     #: "change" on Helm's plan: another active product workflow of this project.
     workflow_key: Optional[str] = None
+    #: The named workflow's own declared inputs, as values (a card for "run api_onboarding" sends
+    #: them here rather than burying them in the words). Used only with `workflow_key`; the run's
+    #: own title / directive / repository are never replaced by them.
+    inputs: Optional[dict[str, Any]] = None
     #: The console's readiness sheet: start although these are missing (the start door's own).
     start_anyway: Optional[list[str]] = None
     accept: Optional[list[str]] = None
@@ -361,7 +385,11 @@ def project_new_work(project_id: str, payload: NewWorkBody, request: Request) ->
         # THE APP NAMED BY THE DOOR (AR-20): built onto, or refused — never a fresh build on
         # the default branch under a modal that said it was adding to the app.
         try:
-            anchor = new_work.app_anchor(connection, project_id, payload.app)
+            anchor = new_work.work_anchor(connection, project_id, payload.app,
+                                          new_app=payload.new_app, infer=payload.infer_app)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail={
+                "error": "app_selection_required", "message": str(error)}) from None
         except new_work.AnchorClosed as error:
             raise HTTPException(status_code=409, detail={
                 "error": "change_closed", "message": str(error)}) from None
@@ -410,6 +438,28 @@ def project_new_work(project_id: str, payload: NewWorkBody, request: Request) ->
         if issue:
             link = issue["external_url"]
     run_input: dict[str, Any] = {"title": title, "work_kind": kind, **briefed}
+    if payload.workflow_key and isinstance(payload.inputs, dict) and payload.inputs:
+        # ONLY WHAT THE WORKFLOW DECLARES. A card's inputs are a caller's words: one the
+        # version's input_schema does not list (ticket, repository, source_ref, profile,
+        # extends_run_id …) would be carried into the run as if BOSS had set it.
+        from boss_engine.services.workflows import declared_input_names
+
+        spec = (chosen.get("resolved") or {}).get("spec") or {}
+        if isinstance(spec, str):
+            import json as _json
+
+            spec = _json.loads(spec or "{}")
+        schema = spec.get("input_schema") if isinstance(spec, dict) else {}
+        props = schema.get("properties") if isinstance(schema, dict) else None
+        allowed = {str(n) for n in props} if isinstance(props, dict) \
+            else set(declared_input_names(schema))
+        stray = sorted(str(k) for k in payload.inputs if str(k) not in allowed)
+        if stray:
+            raise HTTPException(status_code=422, detail={
+                "error": "undeclared_inputs",
+                "message": f"{payload.workflow_key} does not declare: {', '.join(stray)}. "
+                           f"It takes: {', '.join(sorted(allowed)) or 'no inputs'}."})
+        run_input = {**{str(k): v for k, v in payload.inputs.items()}, **run_input}
     if repo:
         run_input["repository"] = repo
     if anchor:
@@ -748,11 +798,13 @@ def project_onboarding_execute(body: LeasedJobBody) -> dict[str, Any]:
     """The worker hands its leased `project.onboarding` job here: GitHub's credentials, the
     code graph and the dossier are in this container. Fenced by the lease; no model call."""
     from apps.api.app.main import require_worker_principal
+    from boss_engine.db import background
     from boss_engine.services.project_experience import onboarding
 
     require_worker_principal()
-    return onboarding.execute_job(_engine, _settings, job_id=body.job_id,
-                                  worker_id=body.worker_id, lease_token=body.lease_token)
+    with background():
+        return onboarding.execute_job(_engine, _settings, job_id=body.job_id,
+                                      worker_id=body.worker_id, lease_token=body.lease_token)
 
 
 # ── §9 jump ─────────────────────────────────────────────────────────────────────────────────

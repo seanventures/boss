@@ -170,6 +170,29 @@ if [ "${BOSS_API_BIND+x}" = x ]; then
   API_BIND="${BOSS_API_BIND}"
   API_BIND_EXPLICIT=1
 fi
+# DEV AUTONOMY (BOSSAPP-1441): dev | prod. In development BOSS answers its own approval cards and
+# logs them; in production it asks a person before it deploys or merges. Unset here, a laptop
+# (macOS, Colima) is dev and everything else is prod (default_install_tier). A rerun keeps the
+# previous tier unless this run passed --install-tier or BOSS_INSTALL_TIER.
+# THE DEFAULT TIER, never blank (#307 review): a public console origin is prod; on macOS (a laptop,
+# Colima, Docker Desktop) a loopback or empty origin is dev; any other host is prod — a Linux
+# server reached through an SSH tunnel has a localhost origin too, so loopback proves nothing
+# there. A Linux laptop passes --install-tier dev. Usage: default_install_tier ORIGIN UNAME
+default_install_tier() {
+  case "$1" in
+    "" | http://localhost | http://localhost:* | http://localhost/* \
+      | https://localhost | https://localhost:* | https://localhost/* \
+      | http://127.0.0.1 | http://127.0.0.1:* | http://127.0.0.1/* \
+      | http://\[::1\] | http://\[::1\]:* | http://\[::1\]/*)
+      if [ "$2" = Darwin ]; then echo dev; else echo prod; fi ;;
+    *) echo prod ;;
+  esac
+}
+INSTALL_TIER="${BOSS_INSTALL_TIER:-}"
+INSTALL_TIER_EXPLICIT=0
+if [ -n "${BOSS_INSTALL_TIER:-}" ]; then
+  INSTALL_TIER_EXPLICIT=1
+fi
 _INSTALLER_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONSOLE_ORIGIN_PY="${_INSTALLER_ROOT}/scripts/install/console_origin.py"
 WEB_PORT="${BOSS_WEB_PORT:-3000}"
@@ -233,6 +256,9 @@ Options:
   --public-url URL        Browser-reachable API URL when using a reverse proxy
   --console-origin URL    HTTPS origin for Mission Control (DNS hostname, no path).
                           The web listener stays on 127.0.0.1. See docs/community/hostname.md
+  --install-tier dev|prod Development (BOSS acts and logs) or production (BOSS asks before it
+                          deploys or merges). Default: dev on macOS with no public
+                          --console-origin, prod everywhere else
   --api-bind ADDRESS      Address that accepts API connections (default 127.0.0.1).
                           127.0.0.1, 0.0.0.0, or one IPv4/IPv6 address. See docs/community/hostname.md
   --api-port N            Host port for API (default 8000)
@@ -261,6 +287,8 @@ Options:
                           127.0.0.1 to the Docker bridge address (Linux). Without it an
                           unattended run leaves an existing Ollama alone and says how
   --no-discover           Do not look for model keys and subscriptions on this machine
+  --use-shell-proxy       Save this shell's HTTPS_PROXY / NO_PROXY as BOSS's outbound proxy
+                          (BOSS_UPSTREAM_PROXY). Without it, the shell's proxy is never used
   --no-boss-command       Do not install the \`boss\` command on PATH
   --discover-subscriptions  Check Claude, Codex and Grok CLIs on this VM (no credential transfer)
   --install-coding-clis  Install missing official Claude, Codex and Grok coding CLIs on this VM
@@ -322,6 +350,7 @@ while [[ $# -gt 0 ]]; do
     --no-local-model) NO_LOCAL_MODEL=1; shift ;;
     --rebind-ollama) REBIND_OLLAMA=1; shift ;;
     --no-discover) AUTO_DISCOVER=0; shift ;;
+    --use-shell-proxy) BOSS_USE_SHELL_PROXY=1; shift ;;
     --no-boss-command) INSTALL_BOSS_COMMAND=0; shift ;;
     --openai-key|--anthropic-key|--github-token|--openai-key=*|--anthropic-key=*|--github-token=*)
       die "Refusing a secret on the command line. It would be saved in shell history and process listings. Export OPENAI_API_KEY, ANTHROPIC_API_KEY, or BOSS_GITHUB_TOKEN, or paste the OpenAI key at the hidden prompt." ;;
@@ -339,6 +368,11 @@ while [[ $# -gt 0 ]]; do
       CONSOLE_ORIGIN_EXPLICIT=1
       CONSOLE_ORIGIN_FROM_FLAG=1
       shift 2 ;;
+    --install-tier)
+      case "${2:-}" in
+        dev|prod) INSTALL_TIER="$2"; INSTALL_TIER_EXPLICIT=1; shift 2 ;;
+        *) echo "--install-tier takes dev or prod" >&2; exit 2 ;;
+      esac ;;
     --api-bind)
       if [[ $# -lt 2 ]]; then
         echo "API bind must be 127.0.0.1, 0.0.0.0, or a single IPv4 or IPv6 address" >&2
@@ -484,13 +518,18 @@ ARCH="$(uname -m 2>/dev/null || echo unknown)"
 ui_info "OS: $OS  arch: $ARCH"
 
 install_vm_deps() {
-  [[ "$INSTALL_DEPS" -eq 1 ]] || die "Missing dependencies. Remove --no-install-deps to install them."
   if [[ "$OS" == Darwin ]]; then
     need_cmd git || ui_err "git is missing. Install Apple's command line tools: xcode-select --install"
-    need_cmd docker || ui_err "Docker is missing. Install Docker Desktop: https://docs.docker.com/desktop/setup/install/mac-install/"
+    need_cmd docker || ui_err "Docker CLI is missing. For Colima: brew install colima docker docker-compose docker-buildx"
+    if need_cmd docker && ! docker compose version >/dev/null 2>&1; then
+      ui_err "Docker Compose plugin is missing. Install docker-compose and follow Homebrew's CLI plugin instructions."
+    fi
     need_cmd python3 || ui_err "Python 3 is missing. xcode-select --install provides it."
-    die "Install the items above, start Docker Desktop, then run the same install command again."
+    need_cmd curl || ui_err "curl is missing. Install curl before continuing."
+    need_cmd openssl || ui_err "OpenSSL is missing. Install openssl before continuing."
+    die "Install the missing tools and start your Docker runtime (Colima or Docker Desktop), then rerun. See docs/community/COLIMA.md."
   fi
+  [[ "$INSTALL_DEPS" -eq 1 ]] || die "Missing dependencies. Remove --no-install-deps to install them."
   [[ "$OS" == Linux && -f /etc/os-release ]] || die "Automatic dependencies require Ubuntu or Debian Linux. Install git, curl, Docker Engine and Compose manually."
   # shellcheck disable=SC1091
   . /etc/os-release
@@ -554,6 +593,15 @@ fi
 
 # Adding the current user to the docker group would grant root-equivalent access and does
 # not take effect in this shell. Use sudo for this install when the socket requires it.
+# The Docker context this install was made with (BOSS_DOCKER_CONTEXT in .env), when this shell
+# names none: a rerun or upgrade reaches the same daemon (Colima beside Docker Desktop).
+if [ -z "${DOCKER_CONTEXT:-}${DOCKER_HOST:-}" ] && [ -f "$INSTALL_DIR/.env" ]; then
+  _saved_context="$(grep -E '^BOSS_DOCKER_CONTEXT=' "$INSTALL_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2- || true)"
+  if [ -n "$_saved_context" ]; then
+    export DOCKER_CONTEXT="$_saved_context"
+    ui_info "Docker context: $_saved_context (saved in .env as BOSS_DOCKER_CONTEXT)"
+  fi
+fi
 # ---- scoped sudo Docker fallback ------------------------------------------
 # Keep this small boundary identical in the installer and lifecycle helpers.
 # sudo resets selection variables and uses root's Docker configuration.
@@ -580,9 +628,19 @@ boss_sudo_scope_safe() {
   _boss_docker_endpoint="$(docker context inspect default --format '{{.Endpoints.docker.Host}}' 2>/dev/null)" || return 1
   [ "$_boss_docker_endpoint" = unix:///var/run/docker.sock ]
 }
+# A Mac has no sudo fallback: there, "Docker is unavailable" means Docker Desktop or the Colima
+# profile is not running (or DOCKER_CONTEXT names another daemon). Say that, not the sudo text.
+# Prints the guidance and returns 0 on macOS; returns 1 elsewhere (the caller then goes on).
+boss_docker_unavailable_hint() {
+  [ "$(uname -s 2>/dev/null)" = Darwin ] || return 1
+  _boss_docker_context="$(docker context show 2>/dev/null || true)"
+  echo "Docker is not running for the selected context${_boss_docker_context:+ ($_boss_docker_context)}. Start Docker Desktop, or your Colima profile (colima start <profile>), check 'docker context ls' and 'docker info', then run this again. See docs/community/COLIMA.md." >&2
+  return 0
+}
 # ---- end scoped sudo Docker fallback --------------------------------------
 
 if ! docker info >/dev/null 2>&1; then
+  if boss_docker_unavailable_hint; then exit 1; fi
   boss_sudo_scope_safe "$INSTALL_DIR/.env" || { echo "Cannot safely use sudo for this Docker selection. Use direct Docker access for custom projects, contexts or connection settings." >&2; exit 1; }
   if [[ "$OS" == Linux && "$(id -u)" -ne 0 ]] && need_cmd sudo && sudo -n docker --host unix:///var/run/docker.sock info >/dev/null 2>&1; then
     DOCKER=(sudo -n docker --host unix:///var/run/docker.sock)
@@ -633,11 +691,13 @@ ui_ok "Install dir: $INSTALL_DIR"
 # These are planning measurements, not an installation admission threshold.
 report_disk_space() {
   local label="$1" path="$2" free_kb
+  _last_free_kb=""
   if ! need_cmd df || ! free_kb="$(df -Pk "$path" 2>/dev/null | awk 'NR==2{print $4}')" ||
      [[ ! "$free_kb" =~ ^[0-9]+$ ]]; then
     ui_warn "$label: free space could not be measured."
     return
   fi
+  _last_free_kb="$free_kb"
   ui_info "$label ($path): $(awk -v kb="$free_kb" 'BEGIN {printf "%.1f", kb/1048576}') GiB free."
   if [[ "$free_kb" -lt 80000000 ]]; then
     ui_warn "$label has less than about 80 GB free; builds and agent work may need more space. This is advisory."
@@ -666,7 +726,20 @@ if [[ "$_docker_root" == /* && -d "$_docker_root" && -n "$_docker_os" && "$_dock
 else
   ui_warn "Docker image-store free space is unknown here. Check the selected Docker host or Docker Desktop disk settings; install filesystem space is not Docker-store headroom."
 fi
-ui_info "About 100 GB of working capacity is recommended for images, cache and agent work; actual needs vary."
+ui_info "About 100 GB of working capacity is recommended for images, cache and agent work (the images include Java and Go by default); actual needs vary."
+# WHAT THE FIRST BUILD NEEDS (BOSSAPP-1447): the images and the build cache while building, then
+# room to work. Said as a number before the build, not found out as "no space left" during it.
+BOSS_INSTALL_NEEDS_GB="${BOSS_INSTALL_NEEDS_GB:-21}"
+if [[ "$_docker_root" == /* && -d "$_docker_root" && -n "$_docker_os" && "$_docker_os" != *"Docker Desktop"* ]]; then
+  _docker_free_gb=""
+  [[ ! "${_last_free_kb:-}" =~ ^[0-9]+$ ]] || _docker_free_gb=$(( _last_free_kb / 1048576 ))
+  if [[ "$_docker_free_gb" =~ ^[0-9]+$ && "$_docker_free_gb" -lt "$BOSS_INSTALL_NEEDS_GB" ]]; then
+    ui_warn "Docker's disk has ${_docker_free_gb} GB free; a first install needs about ${BOSS_INSTALL_NEEDS_GB} GB (the images, plus the build cache while building; it is trimmed afterwards). Free space or grow the disk first, or the build may stop with \"no space left on device\"."
+  fi
+  unset _docker_free_gb
+else
+  ui_info "A first install needs about ${BOSS_INSTALL_NEEDS_GB} GB free on Docker's disk (the images, plus the build cache while building; it is trimmed afterwards)."
+fi
 # ---- end storage advice ---------------------------------------------------
 
 # A noninteractive reinstall or upgrade must retain the service profile chosen on the
@@ -1228,12 +1301,92 @@ else
   PUBLIC_API_URL="http://127.0.0.1:${API_PORT}"
 fi
 
+# THIS INSTALL'S COMPOSE PROJECT AND boss COMMAND DIRECTORY, KEPT IN ITS OWN .env (stranger test,
+# rc10.27). A side-by-side install sets COMPOSE_PROJECT_NAME (and BOSS_BIN_DIR) once, when it is
+# installed; `boss`, upgrades and reruns then read them from here. Before, nothing saved the
+# name, so any later `boss` command run without exporting it acted on the FIRST install
+# (boss-community): its containers, its volumes, its database. Order: what this run was given,
+# then what this install already recorded, then the default.
+_saved_project=""; _saved_bin_dir=""
+if [ -f "$ENV_FILE" ]; then
+  _saved_project="$(grep -E '^COMPOSE_PROJECT_NAME=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)"
+  _saved_bin_dir="$(grep -E '^BOSS_BIN_DIR=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)"
+fi
+COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-${_saved_project:-boss-community}}"
+[[ "$COMPOSE_PROJECT_NAME" =~ ^[a-z0-9][a-z0-9_-]{0,62}$ ]] ||
+  die "COMPOSE_PROJECT_NAME must be lowercase letters, digits, '-' or '_' (got: $COMPOSE_PROJECT_NAME)"
+BOSS_BIN_DIR="${BOSS_BIN_DIR:-$_saved_bin_dir}"
+# The previews port too (a second install must not collide with the first one's 3001): kept
+# when given once, so a later `boss update` does not fall back to the default.
+_saved_preview_port=""
+[ ! -f "$ENV_FILE" ] || _saved_preview_port="$(grep -E '^BOSS_PREVIEW_PORT=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true)"
+PREVIEW_PORT="${BOSS_PREVIEW_PORT:-$_saved_preview_port}"
+[[ -z "$PREVIEW_PORT" || "$PREVIEW_PORT" =~ ^[0-9]{1,5}$ ]] || die "BOSS_PREVIEW_PORT must be a port number"
+case "$BOSS_BIN_DIR" in *$'\n'*|*' '*) die "BOSS_BIN_DIR must be a path without spaces" ;; esac
+
+# THE OUTBOUND PROXY is BOSS_UPSTREAM_PROXY, set explicitly. The shell's HTTPS_PROXY is used only
+# when the operator asks (--use-shell-proxy, or BOSS_USE_SHELL_PROXY=1): a developer's or VPN's
+# proxy in the shell must never be written over a saved company proxy on upgrade, or route a
+# stock install's containers through it. One with a login in it is never saved: a credential in
+# .env would reach every container's environment. A loopback proxy is refused later (finalize):
+# no container can reach the host's 127.0.0.1.
+if [ -z "${BOSS_UPSTREAM_PROXY:-}" ] && [ "${BOSS_USE_SHELL_PROXY:-0}" = 1 ]; then
+  _shell_proxy="${HTTPS_PROXY:-${https_proxy:-}}"
+  if [ -z "$_shell_proxy" ]; then
+    ui_warn "--use-shell-proxy: this shell exports no HTTPS_PROXY; nothing to save."
+  else
+    case "$_shell_proxy" in
+      *@*) ui_warn "Your shell's HTTPS_PROXY holds a user name or password; BOSS will not save it. Run a local authenticating proxy (cntlm, px) and set BOSS_UPSTREAM_PROXY to it. See docs/community/ENTERPRISE_NETWORK.md." ;;
+      *) BOSS_UPSTREAM_PROXY="$_shell_proxy"
+         BOSS_UPSTREAM_NO_PROXY="${BOSS_UPSTREAM_NO_PROXY:-${NO_PROXY:-${no_proxy:-}}}"
+         ui_info "Using this shell's HTTPS_PROXY for BOSS's containers (BOSS_UPSTREAM_PROXY)" ;;
+    esac
+  fi
+fi
+# The Docker context is remembered so `boss` reaches the same daemon later (Colima beside Docker
+# Desktop: without it, a lifecycle command run without DOCKER_CONTEXT acts on the other one).
+BOSS_DOCKER_CONTEXT="${BOSS_DOCKER_CONTEXT:-${DOCKER_CONTEXT:-}}"
+# BOSS_EGRESS_CONNECT_ALLOW used to REPLACE the fence's built-in host list; it now adds to it. An
+# install that set it to narrow the fence keeps that fence: enterprise_network.py finalize (below,
+# and in remote.sh update) writes BOSS_EGRESS_CONNECT_DEFAULTS=off from the previous .env.
+
 _new_env="$INSTALL_DIR/.env.writing.$$"
+if [ "$INSTALL_TIER_EXPLICIT" != "1" ] && [ -z "$INSTALL_TIER" ]; then
+  INSTALL_TIER="$(default_install_tier "$CONSOLE_ORIGIN" "$(uname -s 2>/dev/null || echo unknown)")"
+fi
 cat > "$_new_env" <<EOF
 # BOSS Community — generated by install.sh $(date -u +%Y-%m-%dT%H:%MZ)
 # Keep this file private. Do not commit.
 
 BOSS_EDITION=community
+# ---- Enterprise network (docs/community/ENTERPRISE_NETWORK.md). All optional; empty keeps the
+# public registries, no proxy and the system CAs. A value exported when the installer runs
+# replaces the saved one; a run that exports nothing keeps it. Never a credential in a URL.
+# The company's root CA (PEM, absolute path): trusted by image builds and by every container.
+BOSS_EXTRA_CA_FILE=${BOSS_EXTRA_CA_FILE:-${BOSS_BUILD_CA_FILE:-}}
+BOSS_NPM_REGISTRY=${BOSS_NPM_REGISTRY:-}
+BOSS_PIP_INDEX_URL=${BOSS_PIP_INDEX_URL:-}
+BOSS_GOPROXY=${BOSS_GOPROXY:-}
+BOSS_GOSUMDB=${BOSS_GOSUMDB:-}
+BOSS_GONOSUMDB=${BOSS_GONOSUMDB:-}
+BOSS_MAVEN_MIRROR=${BOSS_MAVEN_MIRROR:-}
+BOSS_PLAYWRIGHT_DOWNLOAD_HOST=${BOSS_PLAYWRIGHT_DOWNLOAD_HOST:-}
+BOSS_UPSTREAM_PROXY=${BOSS_UPSTREAM_PROXY:-}
+BOSS_UPSTREAM_HTTP_PROXY=${BOSS_UPSTREAM_HTTP_PROXY:-}
+BOSS_UPSTREAM_NO_PROXY=${BOSS_UPSTREAM_NO_PROXY:-}
+# The sandbox fence: hosts ADDED to its built-in list (host, *.suffix, host:port); on/off for
+# that built-in list; internal registries allowed on a private address (exact host[:port]).
+BOSS_EGRESS_CONNECT_ALLOW=${BOSS_EGRESS_CONNECT_ALLOW:-}
+BOSS_EGRESS_CONNECT_DEFAULTS=${BOSS_EGRESS_CONNECT_DEFAULTS:-}
+BOSS_EGRESS_PRIVATE_ALLOW=${BOSS_EGRESS_PRIVATE_ALLOW:-}
+# The Docker context this install was made with (Colima, a remote engine); \`boss\` uses it.
+BOSS_DOCKER_CONTEXT=${BOSS_DOCKER_CONTEXT:-}
+# ---- end enterprise network
+# This install's Compose project: boss, upgrades and reruns act on it (a second install on this
+# machine has its own name, so it never touches this one's containers or volumes).
+COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME}
+# Where this install's \`boss\` command lives; empty means the default (~/.local/bin).
+BOSS_BIN_DIR=${BOSS_BIN_DIR}
 BOSS_REQUIRE_API_AUTH=true
 BOSS_API_KEY=${BOSS_API_KEY}
 BOSS_WORKER_API_KEY=${BOSS_WORKER_API_KEY}
@@ -1252,6 +1405,8 @@ BOSS_DEFAULT_PROJECT_ID=boss-dogfood
 BOSS_API_PORT=${API_PORT}
 BOSS_API_BIND=${API_BIND}
 BOSS_WEB_PORT=${WEB_PORT}
+# Where previews open; empty means 3001.
+BOSS_PREVIEW_PORT=${PREVIEW_PORT}
 BOSS_POSTGRES_PORT=${PG_PORT}
 BOSS_COMMUNITY_WEB_ENABLED=${WITH_WEB}
 # The bundled Prometheus and Grafana (with Mission Control); empty when it is skipped.
@@ -1270,6 +1425,8 @@ BOSS_EMAIL_DEV_INBOX_URL=${MAIL_DEV_INBOX_URL}
 BOSS_COMMUNITY_SECRET_STORE=${SECRET_STORE}
 BOSS_BIND_ADDRESS=${BIND_ADDRESS}
 BOSS_CONSOLE_PUBLIC_ORIGIN=${CONSOLE_ORIGIN}
+# dev | prod (BOSSAPP-1441): development acts and logs; production asks before deploys and merges.
+BOSS_INSTALL_TIER=${INSTALL_TIER}
 NEXT_PUBLIC_BOSS_API_URL=${PUBLIC_API_URL}
 NEXT_PUBLIC_BOSS_PROJECT_ID=boss-dogfood
 
@@ -1299,6 +1456,7 @@ if [ -n "${_ENV_SNAPSHOT:-}" ]; then
   if ! BOSS_PUBLIC_URL_EXPLICIT="$PUBLIC_URL_EXPLICIT" \
       BOSS_CONSOLE_ORIGIN_EXPLICIT="$CONSOLE_ORIGIN_EXPLICIT" \
       BOSS_API_BIND_EXPLICIT="$API_BIND_EXPLICIT" \
+      BOSS_INSTALL_TIER_EXPLICIT="$INSTALL_TIER_EXPLICIT" \
       BOSS_API_PORT_EXPLICIT="$API_PORT_EXPLICIT" \
       BOSS_WEB_PORT_EXPLICIT="$WEB_PORT_EXPLICIT" \
       BOSS_POSTGRES_PORT_EXPLICIT="$PG_PORT_EXPLICIT" \
@@ -1317,6 +1475,29 @@ fi
 if ! python3 "$INSTALL_DIR/scripts/install/reconcile_api_credentials.py" "$_new_env" </dev/null; then
   rm -f "$_new_env"
   die "could not bind separate owner and worker keys — left the existing $ENV_FILE unchanged"
+fi
+# THE ENTERPRISE NETWORK BLOCK IS CHECKED BEFORE IT IS SAVED (engine/boss_engine/services/
+# enterprise_network.py, run by path: standard library only). A registry URL carrying a
+# credential would otherwise be baked into every image's history; a CA file holding a private key
+# is refused. It also writes the containers' copy of the CA. Messages name the setting, never
+# the value.
+if [ ! -f "$INSTALL_DIR/engine/boss_engine/services/enterprise_network.py" ]; then
+  rm -f "$_new_env"
+  die "engine/boss_engine/services/enterprise_network.py is missing — left the existing $ENV_FILE unchanged"
+fi
+# One finalize for every lifecycle path (remote.sh update runs the same): it also keeps a narrowed
+# sandbox fence narrow (--previous: the live .env, not yet replaced) and writes .boss/extra-ca.pem,
+# which compose mounts with create_host_path: false. "recreate-ca-mount" means it replaced a
+# directory Docker had made there: those containers are force-recreated after the start below.
+if ! _finalize_out="$(python3 "$INSTALL_DIR/engine/boss_engine/services/enterprise_network.py" finalize "$_new_env" --previous "$ENV_FILE" </dev/null)"; then
+  rm -f "$_new_env"
+  die "stopped on the enterprise network problem above — fix it (export the corrected value, edit $ENV_FILE, or run the command it names) and run this again. Nothing was changed."
+fi
+_RECREATE_CA_MOUNT=0
+case "$_finalize_out" in *recreate-ca-mount*) _RECREATE_CA_MOUNT=1 ;; esac
+if [ -f "$ENV_FILE" ] && ! grep -qE '^BOSS_EGRESS_CONNECT_DEFAULTS=.+' "$ENV_FILE" &&
+   grep -qE '^BOSS_EGRESS_CONNECT_DEFAULTS=off$' "$_new_env"; then
+  ui_info "Kept your sandbox fence list as it was (BOSS_EGRESS_CONNECT_DEFAULTS=off). BOSS_EGRESS_CONNECT_ALLOW now ADDS to the built-in hosts; set BOSS_EGRESS_CONNECT_DEFAULTS=on in $ENV_FILE to use that."
 fi
 mv "$_new_env" "$ENV_FILE"
 chmod 600 "$ENV_FILE"
@@ -1367,6 +1548,60 @@ if ! grep -qs '^INFISICAL_ENCRYPTION_KEY=' "$ENV_FILE"; then
   fi
 fi
 
+# ---- network preflight ----------------------------------------------------
+# Two failures that otherwise surface only deep into the image build: a TLS-intercepting gateway
+# BOSS has no CA for, and a Docker credential helper that is configured but missing.
+[ -f "$INSTALL_DIR/scripts/install/network_preflight.sh" ] ||
+  die "scripts/install/network_preflight.sh is missing from $INSTALL_DIR; fetch the source again"
+# shellcheck disable=SC1091
+. "$INSTALL_DIR/scripts/install/network_preflight.sh"
+CURRENT_STEP="Checking the network for the image build"
+boss_docker_credential_helper_check || die "Fix the Docker credential helper above, then run the same command again."
+_tls_targets=()
+while IFS= read -r _t; do [ -z "$_t" ] || _tls_targets+=("$_t"); done < <(python3 - "$ENV_FILE" <<'PY'
+import sys
+from urllib.parse import urlsplit
+env = {}
+for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
+    if "=" in line and not line.lstrip().startswith("#"):
+        k, v = line.rstrip("\n").split("=", 1)
+        env.setdefault(k.strip(), v.strip())
+hosts = []
+for key, default in (("BOSS_NPM_REGISTRY", "registry.npmjs.org"), ("BOSS_PIP_INDEX_URL", "pypi.org")):
+    value = env.get(key, "")
+    parts = urlsplit(value) if value else None
+    hosts.append(f"{parts.hostname}:{parts.port or 443}" if parts and parts.hostname else default)
+hosts.append("registry-1.docker.io")
+print("\n".join(dict.fromkeys(hosts)))
+PY
+)
+if ! NO_PROXY="$(env_value BOSS_UPSTREAM_NO_PROXY)" boss_tls_diagnose "$(env_value BOSS_EXTRA_CA_FILE)" \
+     "$(env_value BOSS_UPSTREAM_PROXY)" "${_tls_targets[@]}"; then
+  if [ "${BOSS_TLS_PREFLIGHT:-}" = warn ]; then
+    ui_warn "Continuing (BOSS_TLS_PREFLIGHT=warn): the image build will fail at its first download unless something else trusts this gateway."
+  else
+    die "Image builds cannot verify these downloads. Set BOSS_EXTRA_CA_FILE as shown above (or BOSS_TLS_PREFLIGHT=warn to try anyway)."
+  fi
+fi
+ui_ok "Network: TLS to the package registries verifies"
+# Debian's mirror is plain http: it goes through a proxy only when BOSS_UPSTREAM_HTTP_PROXY
+# names one, so a proxy-only network passed the TLS check and then failed the build with
+# "Unable to locate package gcc" (BOSSAPP-1446).
+if ! boss_apt_diagnose "$(env_value BOSS_UPSTREAM_HTTP_PROXY)" "$(env_value BOSS_UPSTREAM_PROXY)"; then
+  # A proxy set in Docker's own daemon (Docker Desktop's settings) may carry the build where
+  # this machine's direct probe cannot: say so, do not stop.
+  _daemon_proxy="$("${DOCKER[@]}" info --format '{{.HTTPProxy}}' 2>/dev/null || true)"
+  if [ -n "$_daemon_proxy" ] && [ "${BOSS_APT_PREFLIGHT:-}" != strict ]; then
+    ui_warn "Continuing: Docker has its own http proxy configured, which the build may use. If it stops at \"Unable to locate package\", set BOSS_UPSTREAM_HTTP_PROXY as shown above."
+  elif [ "${BOSS_APT_PREFLIGHT:-}" = warn ]; then
+    ui_warn "Continuing (BOSS_APT_PREFLIGHT=warn): the image build will fail at its first apt-get unless something else reaches Debian's mirror."
+  else
+    die "Image builds cannot reach Debian's package mirror. Set what is shown above (or BOSS_APT_PREFLIGHT=warn to try anyway)."
+  fi
+fi
+unset _daemon_proxy
+ui_ok "Network: Debian's package mirror checked"
+
 ui_step "Building and starting Community stack (this can take several minutes the first time)"
 ui_info "Services: Postgres · API · worker$( [[ $WITH_WEB -eq 1 ]] && echo ' · Mission Control' )"
 
@@ -1411,38 +1646,85 @@ set_build_metadata
 # parallel limit alone does not prevent a single multi-service build from
 # exporting several large images at once. Keep normal cache/platform behavior.
 # Parse config in memory only: it contains resolved credentials, never log it.
+# ---- compose files ---------------------------------------------------------
+# THE ONE COMPOSE-FILE RESOLVER (scripts/install/compose_files.sh), shared with boss, upgrade,
+# rollback, restore, remote update and the self-fix installer: the base file, plus the engine
+# inner-sandbox overlay when .env opts in (BOSS_ENGINE_INNER_SANDBOX; off by default). Relative
+# paths: this runs in the install directory. Every compose call below reads it as
+# ${COMPOSE_FILES:--f scripts/install/community-compose.yml}, so a block run on its own (tests)
+# still has the base file.
+_compose_files="-f scripts/install/community-compose.yml"
+if [[ -f scripts/install/compose_files.sh ]]; then
+  _compose_files="$(bash scripts/install/compose_files.sh . "$ENV_FILE")" ||
+    die "BOSS_ENGINE_INNER_SANDBOX in .env is not valid (above); fix it and run the installer again."
+fi
+COMPOSE_FILES="$(printf '%s' "$_compose_files" | tr '\n' ' ')"
+unset _compose_files
+# ---- end compose files -----------------------------------------------------
 # ---- serial image builds --------------------------------------------------
 # shellcheck disable=SC2086
 if ! BUILD_SERVICES="$("${COMPOSE[@]}" \
-  -f scripts/install/community-compose.yml \
+  ${COMPOSE_FILES:--f scripts/install/community-compose.yml} \
   --env-file "$ENV_FILE" \
   $COMPOSE_PROFILES \
-  config --format json </dev/null 2>/dev/null | python3 -c '
-import argparse, json, re, sys
-parser = argparse.ArgumentParser()
-parser.add_argument("--profile", action="append", default=[])
-active = set(parser.parse_args().profile)
-services = json.load(sys.stdin)["services"]
-for name, service in services.items():
-    profiles = set(service.get("profiles", []))
-    if "build" not in service or (profiles and not active.intersection(profiles) and "*" not in active):
-        continue
-    if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*", name):
-        raise SystemExit("Invalid build service name in Compose configuration")
-    print(name)
-' $COMPOSE_PROFILES 2>/dev/null)"; then
+  config --format json </dev/null 2>/dev/null | python3 scripts/install/build_order.py $COMPOSE_PROFILES 2>/dev/null)"; then
   die "Could not resolve the selected Compose build services; stopping before image builds. Check the Compose configuration and .env."
 fi
-while IFS= read -r _build_service; do
+# THE BUILD CLIENT GOES THROUGH THE PROXY TOO. BuildKit fetches registry tokens (the
+# `# syntax=` frontend, base images) through the CLIENT's session, so the Docker daemon's own
+# proxy settings are not enough: on a box whose only way out is BOSS_UPSTREAM_PROXY, the build
+# failed at "failed to fetch anonymous token" (enterprise lane, BOSSAPP-1430). Give the build
+# command the proxy explicitly; sudo resets the environment, so it goes after sudo.
+_BUILD_CMD=("${COMPOSE[@]}")
+_up_proxy="" _up_extra=""
+if declare -F env_value >/dev/null; then
+  _up_proxy="$(env_value BOSS_UPSTREAM_PROXY || true)"
+  _up_extra="$(env_value BOSS_UPSTREAM_NO_PROXY || true)"
+fi
+if [[ -n "$_up_proxy" ]]; then
+  _up_no_proxy="localhost,127.0.0.1"
+  [[ -z "$_up_extra" ]] || _up_no_proxy="$_up_no_proxy,$_up_extra"
+  _proxy_env=(env "HTTPS_PROXY=$_up_proxy" "https_proxy=$_up_proxy" "NO_PROXY=$_up_no_proxy" "no_proxy=$_up_no_proxy")
+  if [[ "${COMPOSE[0]}" == sudo ]]; then
+    # sudo and its own options (the scoped fallback passes -n), then env, then docker.
+    _i=1
+    while [[ $_i -lt ${#COMPOSE[@]} && "${COMPOSE[$_i]}" == -* ]]; do _i=$((_i + 1)); done
+    _BUILD_CMD=("${COMPOSE[@]:0:$_i}" "${_proxy_env[@]}" "${COMPOSE[@]:$_i}")
+    unset _i
+  else
+    _BUILD_CMD=("${_proxy_env[@]}" "${COMPOSE[@]}")
+  fi
+  unset _proxy_env _up_no_proxy
+fi
+unset _up_proxy _up_extra
+# IMAGES OF ONE FAMILY BUILD TOGETHER (BOSSAPP-1458). The list above is grouped by the stage the
+# images grow from (the Python services share python-base; the console is its own), so each family
+# builds while its cache is warm. Between families, on a disk under BOSS_DISK_FLOOR_GB free, the
+# finished family's build cache is dropped (prune.sh --room --cache-only): a fresh 30 GB box ran out
+# of disk with the Python family's cache still held while the console built.
+_build_family=""
+while IFS=' ' read -r _build_service _next_family; do
   [[ -n "$_build_service" ]] || continue
+  if [[ -n "$_build_family" && "$_next_family" != "$_build_family" && -f scripts/install/prune.sh ]]; then
+    if _prune_out="$(bash scripts/install/prune.sh --dir "${INSTALL_DIR:-.}" --room --cache-only </dev/null 2>&1)"; then
+      while IFS= read -r _l; do
+        case "$_l" in *"under the"*"floor"*) ui_info "$_l" ;; esac
+      done <<< "$_prune_out"
+    else
+      ui_warn "The build cache could not be trimmed between images; the build continues. If it stops with \"no space left on device\", run: boss prune, then run the installer again."
+    fi
+    unset _prune_out _l
+  fi
+  _build_family="$_next_family"
   ui_info "Building $_build_service (one image at a time)"
   # Pass observed metadata as build arguments: sudo may reset exported variables.
   # shellcheck disable=SC2086
-  "${COMPOSE[@]}" -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
+  "${_BUILD_CMD[@]}" ${COMPOSE_FILES:--f scripts/install/community-compose.yml} --env-file "$ENV_FILE" \
     $COMPOSE_PROFILES build \
     --build-arg "BOSS_SOURCE_SHA=$BOSS_SOURCE_SHA" \
     --build-arg "BOSS_BUILT_AT=$BOSS_BUILT_AT" "$_build_service" </dev/null
 done <<< "$BUILD_SERVICES"
+unset _build_family _next_family
 # ---- end serial image builds ----------------------------------------------
 
 # A rerun/upgrade may already have a worker polling the old API. Keep it up
@@ -1450,14 +1732,14 @@ done <<< "$BUILD_SERVICES"
 # On a first install there is no worker to stop.
 # shellcheck disable=SC2086
 RUNNING_SERVICES="$(${COMPOSE[@]} \
-  -f scripts/install/community-compose.yml \
+  ${COMPOSE_FILES:--f scripts/install/community-compose.yml} \
   --env-file "$ENV_FILE" \
   $COMPOSE_PROFILES \
   ps --status running --services </dev/null)"
 if printf '%s\n' "$RUNNING_SERVICES" | grep -qx worker; then
   ui_info "Pausing the existing worker until the project is seeded"
   # shellcheck disable=SC2086
-  ${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
+  ${COMPOSE[@]} ${COMPOSE_FILES:--f scripts/install/community-compose.yml} --env-file "$ENV_FILE" \
     $COMPOSE_PROFILES stop worker </dev/null
 fi
 
@@ -1467,6 +1749,10 @@ fi
 if [[ -d scripts/install/initdb ]]; then
   chmod 755 scripts/install/initdb
   find scripts/install/initdb -type f -name '*.sql' -exec chmod 644 {} +
+fi
+if [[ -d scripts/install/monitoring ]]; then
+  find scripts/install/monitoring -type d -exec chmod 755 {} +
+  find scripts/install/monitoring -type f -exec chmod 644 {} +
 fi
 
 # BOSS's own source mirror for self-fixes (docs/product/BOSS_FIXES_ITSELF.md §6.1): the
@@ -1493,12 +1779,12 @@ fi
 # Start only the database and API for bootstrap. A fresh worker cannot poll
 # before the default project and its actor memberships exist.
 # shellcheck disable=SC2086
-if ! ${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
+if ! ${COMPOSE[@]} ${COMPOSE_FILES:--f scripts/install/community-compose.yml} --env-file "$ENV_FILE" \
   $COMPOSE_PROFILES up -d --no-build db api </dev/null; then
   ui_err "Database or API did not start."
   ui_info "Recent database and API logs:"
   # shellcheck disable=SC2086
-  ${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
+  ${COMPOSE[@]} ${COMPOSE_FILES:--f scripts/install/community-compose.yml} --env-file "$ENV_FILE" \
     $COMPOSE_PROFILES logs --tail 40 db api </dev/null || true
   die "The stack did not start. On Docker Desktop the virtual disk can be full while the host still has free space; the log above names the cause."
 fi
@@ -1512,7 +1798,7 @@ if [[ "$SECRET_STORE" == "infisical" ]]; then
   # Infisical needs its own services before bootstrap, but the worker must
   # remain stopped until the project seed below has succeeded.
   # shellcheck disable=SC2086
-  ${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
+  ${COMPOSE[@]} ${COMPOSE_FILES:--f scripts/install/community-compose.yml} --env-file "$ENV_FILE" \
     $COMPOSE_PROFILES up -d --no-build infisical-redis infisical </dev/null
   if [[ -f "$INSTALL_DIR/scripts/install/bootstrap_infisical.sh" ]]; then
     if COMPOSE_FILE=scripts/install/community-compose.yml \
@@ -1524,7 +1810,7 @@ if [[ "$SECRET_STORE" == "infisical" ]]; then
       # .env when it CREATES a container. API was created before those values existed, so
       # recreate it. The worker has not started yet and will read them after seeding.
       # shellcheck disable=SC2086
-      ${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
+      ${COMPOSE[@]} ${COMPOSE_FILES:--f scripts/install/community-compose.yml} --env-file "$ENV_FILE" \
         $COMPOSE_PROFILES up -d --no-deps --no-build --force-recreate api </dev/null >/dev/null 2>&1 \
         || die "could not restart API with the provisioned secret store; installation is incomplete"
       ui_ok "Secret store provisioned — BOSS will reference credentials rather than hold them"
@@ -1570,7 +1856,7 @@ wait_for_api_health() {
 if ! wait_for_api_health; then
   ui_info "Recent API and database logs:"
   # shellcheck disable=SC2086
-  ${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
+  ${COMPOSE[@]} ${COMPOSE_FILES:--f scripts/install/community-compose.yml} --env-file "$ENV_FILE" \
     $COMPOSE_PROFILES logs --tail 40 api db </dev/null || true
   exit 1
 fi
@@ -1580,13 +1866,13 @@ ui_ok "API healthy at ${API_URL}/health"
 ui_step "Seeding Community project (roles, packs, demo project)"
 SEED_ERR="$(mktemp)"
 set +e
-${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" exec -T api \
+${COMPOSE[@]} ${COMPOSE_FILES:--f scripts/install/community-compose.yml} --env-file "$ENV_FILE" exec -T api \
   python -c "from boss_engine.bootstrap import seed; seed()" </dev/null 2>"$SEED_ERR"
 SEED_RC=$?
 set -e
 if [[ "$SEED_RC" -ne 0 ]]; then
   ui_warn "Seed returned $SEED_RC — trying alternate entrypoint"
-  ${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" exec -T api \
+  ${COMPOSE[@]} ${COMPOSE_FILES:--f scripts/install/community-compose.yml} --env-file "$ENV_FILE" exec -T api \
     python -m boss_engine.bootstrap </dev/null 2>>"$SEED_ERR" ||
     die "Seed failed. API may be up but the project is not ready; see $SEED_ERR."
 else
@@ -1619,7 +1905,7 @@ if [[ -n "${_place_project}" && "${_place_agent_state}" == "installed" ]]; then
   _place_host="$(hostname 2>/dev/null || printf '%s' localhost)"
   _place_arch="$(uname -m 2>/dev/null || printf '%s' unknown)"
   _place_os="$(uname -s 2>/dev/null || printf '%s' unknown)"
-  ${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" exec -T \
+  ${COMPOSE[@]} ${COMPOSE_FILES:--f scripts/install/community-compose.yml} --env-file "$ENV_FILE" exec -T \
     -e "BOSS_PLACE_PROJECT_ID=${_place_project}" \
     -e "BOSS_PLACE_HOSTNAME=${_place_host}" \
     -e "BOSS_PLACE_ARCH=${_place_arch}" \
@@ -1633,12 +1919,24 @@ fi
 # Start the worker and optional console only after the project and actors are
 # available. The same order applies to a first install, rerun, and upgrade.
 # shellcheck disable=SC2086
-${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
+${COMPOSE[@]} ${COMPOSE_FILES:--f scripts/install/community-compose.yml} --env-file "$ENV_FILE" \
   $COMPOSE_PROFILES up -d --no-build </dev/null
+# The CA mount source was a directory and is now a file: a container created over the directory
+# fails its next restart, so recreate the running ones that mount it, now.
+if [[ "${_RECREATE_CA_MOUNT:-0}" -eq 1 ]]; then
+  # shellcheck disable=SC2086
+  _ca_running="$(${COMPOSE[@]} ${COMPOSE_FILES:--f scripts/install/community-compose.yml} --env-file "$ENV_FILE" \
+    $COMPOSE_PROFILES ps --status running --services </dev/null | grep -xE 'api|worker|runner|egress|model-gateway|mcp-tools|kg-mcp' | tr '\n' ' ' || true)"
+  if [[ -n "$_ca_running" ]]; then
+    # shellcheck disable=SC2086
+    ${COMPOSE[@]} ${COMPOSE_FILES:--f scripts/install/community-compose.yml} --env-file "$ENV_FILE" \
+      $COMPOSE_PROFILES up -d --no-deps --no-build --force-recreate $_ca_running </dev/null
+  fi
+fi
 if [[ "$WITH_WEB" -eq 0 ]]; then
   # Switching an existing install to headless must stop a previously running
   # console. Compose does not stop services omitted from the active profile.
-  ${COMPOSE[@]} -f scripts/install/community-compose.yml --env-file "$ENV_FILE" \
+  ${COMPOSE[@]} ${COMPOSE_FILES:--f scripts/install/community-compose.yml} --env-file "$ENV_FILE" \
     --profile web stop web </dev/null
 fi
 ui_ok "Containers started"
@@ -1665,11 +1963,37 @@ export BOSS_EDITION="community"
 EOF
 chmod 600 "$INSTALL_DIR/boss-community.env.sh"
 
+# ---- room to work after the build (BOSSAPP-1447) -------------------------
+# The image build leaves its cache behind: on a 30 GB box a first install kept ~4 GB of it and
+# left 5 GB free. The same retention every upgrade runs (prune.sh): old BOSS tags go, the cache is
+# capped, and on a small Docker disk it is trimmed to keep BOSS_DISK_FLOOR_GB free. Best effort.
+if [[ -f "$INSTALL_DIR/scripts/install/prune.sh" ]]; then
+  if _prune_out="$(bash "$INSTALL_DIR/scripts/install/prune.sh" --dir "$INSTALL_DIR" --room </dev/null 2>&1)"; then
+    while IFS= read -r _l; do
+      case "$_l" in *"build cache"*|*"could not be measured"*) ui_info "$_l" ;; esac
+    done <<< "$_prune_out"
+    ui_ok "Old images and build cache pruned"
+  else
+    ui_warn "The build cache was not trimmed; run: boss prune"
+  fi
+  unset _prune_out _l
+fi
+
 # ---- models and subscriptions already on this machine ----------------------
 # Finding is read only and prints found / not found, never a value. Exported API keys were
 # already saved above. Nothing is copied from a login found here: Codex, Claude Code and Grok
 # Build sign in inside the BOSS container, Ollama is connected, and the offers when no model
 # is usable are made, all by the Models step below, which is this install's own `boss connect`.
+# THE COMMAND EVERY MODEL HINT NAMES. The boss command is installed later; hints name the one
+# this install will get: a chosen BOSS_BIN_DIR's launcher (a second install), the helper's path
+# when plain boss runs another install, else plain boss (stranger test r3).
+_hint_boss="boss"
+[[ -z "${BOSS_BIN_DIR:-}" ]] || _hint_boss="${BOSS_BIN_DIR%/}/boss"
+_other_boss="$(command -v boss 2>/dev/null || true)"
+if [[ "$INSTALL_BOSS_COMMAND" -ne 1 ]] || { [[ -z "${BOSS_BIN_DIR:-}" && -n "$_other_boss" ]] &&
+     ! grep -qsF "BOSS_INSTALL_DIR_DEFAULT=$(printf '%q' "$(cd "$INSTALL_DIR" && pwd -P)")" "$_other_boss"; }; then
+  _hint_boss="bash $INSTALL_DIR/scripts/install/boss.sh"
+fi
 MODEL_NOTES=()
 _found=""
 if [[ "$AUTO_DISCOVER" -eq 1 && -f scripts/install/discover_models.py ]]; then
@@ -1686,7 +2010,7 @@ if [[ "$AUTO_DISCOVER" -eq 1 && -f scripts/install/discover_models.py ]]; then
   if BOSS_OLLAMA_URL="${_ollama_url:-${BOSS_OLLAMA_URL:-}}" python3 scripts/install/discover_models.py --summary "$_found" </dev/null; then
     :
   else
-    ui_warn "Model discovery did not finish; nothing was connected. Retry later: boss connect"
+    ui_warn "Model discovery did not finish; nothing was connected. Retry later: $_hint_boss connect"
     rm -f "$_found"
     _found=""
   fi
@@ -1702,12 +2026,12 @@ if [[ "$DISCOVER_SUBSCRIPTIONS" -eq 1 ]]; then
   _claude_ok=1
   if [[ "$CONNECT_CLAUDE" -eq 1 || "$CONNECT_CLAUDE_LOCAL" -eq 1 ]]; then
     if [[ -n "$(env_value ANTHROPIC_API_KEY)" ]]; then
-      ui_err "Claude Code not connected: .env holds ANTHROPIC_API_KEY, which headless work would use instead of the subscription. Remove it from .env, then: boss connect claude"
-      MODEL_NOTES+=("✗ Claude Code not connected: remove ANTHROPIC_API_KEY from .env, then boss connect claude")
+      ui_err "Claude Code not connected: .env holds ANTHROPIC_API_KEY, which headless work would use instead of the subscription. Remove it from .env, then: $_hint_boss connect claude"
+      MODEL_NOTES+=("✗ Claude Code not connected: remove ANTHROPIC_API_KEY from .env, then $_hint_boss connect claude")
       _claude_ok=0
     elif [[ -n "$(env_value CLAUDE_CODE_OAUTH_TOKEN)" ]]; then
-      ui_err "Claude Code not connected: .env holds a legacy CLAUDE_CODE_OAUTH_TOKEN. Remove it from .env, then: boss connect claude"
-      MODEL_NOTES+=("✗ Claude Code not connected: remove CLAUDE_CODE_OAUTH_TOKEN from .env, then boss connect claude")
+      ui_err "Claude Code not connected: .env holds a legacy CLAUDE_CODE_OAUTH_TOKEN. Remove it from .env, then: $_hint_boss connect claude"
+      MODEL_NOTES+=("✗ Claude Code not connected: remove CLAUDE_CODE_OAUTH_TOKEN from .env, then $_hint_boss connect claude")
       _claude_ok=0
     fi
   fi
@@ -1716,11 +2040,11 @@ if [[ "$DISCOVER_SUBSCRIPTIONS" -eq 1 ]]; then
   fi
   if [[ "$CONNECT_CLAUDE_LOCAL" -eq 1 && "$_claude_ok" -eq 1 ]]; then
     if _subscriptions --connect-claude-local; then MODEL_NOTES+=("✓ Claude Code connected")
-    else MODEL_NOTES+=("✗ Claude Code not connected: boss connect claude"); fi
+    else MODEL_NOTES+=("✗ Claude Code not connected: $_hint_boss connect claude"); fi
   fi
   if [[ "$CONNECT_GROK_LOCAL" -eq 1 ]]; then
     if _subscriptions --connect-grok-local; then MODEL_NOTES+=("✓ Grok Build connected")
-    else MODEL_NOTES+=("✗ Grok Build not connected: boss connect grok"); fi
+    else MODEL_NOTES+=("✗ Grok Build not connected: $_hint_boss connect grok"); fi
   fi
   # --connect-codex / --connect-claude: the provider's own login inside BOSS, then the proof.
   # The flag is the consent. The link needs a person, so without a terminal the installer
@@ -1731,17 +2055,17 @@ if [[ "$DISCOVER_SUBSCRIPTIONS" -eq 1 ]]; then
       claude) [[ "$CONNECT_CLAUDE" -eq 1 && "$_claude_ok" -eq 1 ]] || continue; _label="Claude Code" ;;
     esac
     if ! (: </dev/tty) 2>/dev/null; then
-      ui_info "$_label signs in inside BOSS through its own login, which needs a person at a terminal. Next: boss connect $_sub"
-      MODEL_NOTES+=("… $_label not signed in yet: boss connect $_sub")
+      ui_info "$_label signs in inside BOSS through its own login, which needs a person at a terminal. Next: $_hint_boss connect $_sub"
+      MODEL_NOTES+=("… $_label not signed in yet: $_hint_boss connect $_sub")
       continue
     fi
     _rc=0
     _subscriptions --sign-in "$_sub" || _rc=$?
     case "$_rc" in
       0) MODEL_NOTES+=("✓ $_label signed in inside BOSS and connected") ;;
-      2) MODEL_NOTES+=("… $_label not signed in yet: boss connect $_sub") ;;
-      *) ui_err "$_label was not connected; the reason is above. BOSS is running. Retry: boss connect $_sub"
-         MODEL_NOTES+=("✗ $_label not connected: boss connect $_sub") ;;
+      2) MODEL_NOTES+=("… $_label not signed in yet: $_hint_boss connect $_sub") ;;
+      *) ui_err "$_label was not connected; the reason is above. BOSS is running. Retry: $_hint_boss connect $_sub"
+         MODEL_NOTES+=("✗ $_label not connected: $_hint_boss connect $_sub") ;;
     esac
   done
 fi
@@ -1762,8 +2086,8 @@ if [[ -f "$INSTALL_DIR/scripts/install/boss.sh" ]] &&
   [[ -z "$LOCAL_MODEL" ]] || _models_args+=(--local-model "$LOCAL_MODEL")
   [[ "$NO_LOCAL_MODEL" -eq 0 ]] || _models_args+=(--no-local-model)
   [[ "$REBIND_OLLAMA" -eq 0 ]] || _models_args+=(--rebind-ollama)
-  bash "$INSTALL_DIR/scripts/install/boss.sh" "${_models_args[@]}" ||
-    ui_warn "The Models step did not finish; BOSS is running. Retry: boss connect"
+  BOSS_HINT_COMMAND="$_hint_boss" bash "$INSTALL_DIR/scripts/install/boss.sh" "${_models_args[@]}" ||
+    ui_warn "The Models step did not finish; BOSS is running. Retry: $_hint_boss connect"
 fi
 [[ -z "$_found" ]] || rm -f "$_found"
 
@@ -1785,7 +2109,7 @@ fi
 BOSS_COMMAND=""
 BOSS_COMMAND_MARKER="# BOSS Community command (generated by install.sh)"
 install_boss_command() {
-  local bin_dir="${BOSS_BIN_DIR:-}" target tmp previous resolved
+  local bin_dir="${BOSS_BIN_DIR:-}" target tmp previous resolved _bin_dir_given="${BOSS_BIN_DIR:-}"
   if [[ ! -f "$INSTALL_DIR/scripts/install/boss.sh" ]]; then
     ui_info "This release has no boss command; use the scripts in $INSTALL_DIR/scripts/install."
     return 0
@@ -1806,13 +2130,30 @@ install_boss_command() {
   previous="$(grep -m 1 '^BOSS_INSTALL_DIR_DEFAULT=' "$target" 2>/dev/null | cut -d= -f2- || true)"
   # The resolved path, so `boss uninstall --purge` can tell this launcher belongs to its install.
   resolved="$(cd "$INSTALL_DIR" && pwd -P)"
+  # A SECOND INSTALL NEVER TAKES OVER THE FIRST ONE'S `boss`: while that launcher points at
+  # another install that still exists, it is left alone unless BOSS_BIN_DIR was chosen for this
+  # one (scripts/install/README.md, "Two installs on one machine").
+  local previous_dir=""
+  # The launcher stores the path %q-quoted; a plain path reads back as itself (anything with
+  # quoting in it is simply not compared, never evaluated).
+  [[ "$previous" == *[\\\'\"\$\`]* ]] || previous_dir="$previous"
+  if [[ -z "$_bin_dir_given" && -n "$previous_dir" && "$previous_dir" != "$resolved" &&
+        "$previous_dir" != "$INSTALL_DIR" && -f "$previous_dir/scripts/install/boss.sh" ]]; then
+    ui_warn "$target runs the install at $previous_dir; left it alone. For this install use: bash $INSTALL_DIR/scripts/install/boss.sh (or rerun with BOSS_BIN_DIR=<dir> for its own boss command)"
+    BOSS_COMMAND="bash $INSTALL_DIR/scripts/install/boss.sh"
+    return 0
+  fi
   mkdir -p "$bin_dir" || { ui_warn "Could not create $bin_dir; the boss command was not installed."; return 0; }
   tmp="$bin_dir/.boss.writing.$$"
   {
     printf '%s\n' '#!/usr/bin/env bash' "$BOSS_COMMAND_MARKER"
     printf '%s\n' '# Runs the lifecycle helper of one install. Rerunning the installer rewrites this file.'
     printf 'BOSS_INSTALL_DIR_DEFAULT=%q\n' "$resolved"
-    printf '%s\n' 'export BOSS_INSTALL_DIR="${BOSS_INSTALL_DIR:-$BOSS_INSTALL_DIR_DEFAULT}"' \
+    # THIS LAUNCHER RUNS ITS OWN INSTALL (stranger test r2): an exported BOSS_INSTALL_DIR, set
+    # for another install on the same machine, made a second install's `boss` act on the first.
+    # Another install is picked only explicitly: `boss --dir PATH`.
+    printf '%s\n' '# Always this install; `boss --dir PATH` picks another one explicitly.' \
+      'export BOSS_INSTALL_DIR="$BOSS_INSTALL_DIR_DEFAULT"' \
       'export BOSS_LAUNCHER="${BASH_SOURCE[0]}"' \
       'helper="$BOSS_INSTALL_DIR/scripts/install/boss.sh"' \
       '[[ -f "$helper" ]] || { echo "boss: no BOSS install at $BOSS_INSTALL_DIR" >&2; exit 1; }' \
@@ -1830,7 +2171,17 @@ install_boss_command() {
   else
     BOSS_COMMAND="$target"
     ui_ok "Installed the boss command: $target"
-    ui_info "Add it to PATH for new shells: echo 'export PATH=\"$bin_dir:\$PATH\"' >> ~/.profile"
+    # A SECOND INSTALL'S bin dir never goes on PATH for every shell: plain `boss` would then run
+    # this install in every later shell and no longer the first one (stranger test r2,
+    # 2026-11-17). It is run by its full path; only a lone install is offered the PATH line.
+    local other_boss=""
+    other_boss="$(command -v boss 2>/dev/null || true)"
+    [[ -n "$other_boss" ]] || { [[ -f "$HOME/.local/bin/boss" ]] && other_boss="$HOME/.local/bin/boss"; }
+    if [[ -n "$other_boss" && "$other_boss" != "$target" ]] && grep -qsF "$BOSS_COMMAND_MARKER" "$other_boss"; then
+      ui_info "Run this install by its full path: $target. Plain boss ($other_boss) keeps running your other install."
+    else
+      ui_info "Add it to PATH for new shells: echo 'export PATH=\"$bin_dir:\$PATH\"' >> ~/.profile"
+    fi
   fi
 }
 if [[ "$INSTALL_BOSS_COMMAND" -eq 1 ]]; then
@@ -1847,26 +2198,45 @@ echo -e "${GREEN}${BOLD}──────────────────�
 echo -e "${GREEN}${BOLD}  ✓ BOSS Community is running.${NC}"
 echo -e "${GREEN}${BOLD}────────────────────────────────────────────────────────${NC}"
 echo ""
+# THE CLAIM COMES FIRST (stranger test, rc10.27): a fresh BOSS has no Owner, and the console
+# only says "run boss identity setup-link" until someone claims it. So the card leads with that
+# step, then Setup (paste a GitHub token, connect a model, open a first pull request). The words
+# come from scripts/install/next_step.sh, which `boss open` and `boss doctor` print too.
+CLAIM_STATUS=""
+if [[ -f "$INSTALL_DIR/scripts/install/boss.sh" ]]; then
+  CLAIM_STATUS="$(bash "$INSTALL_DIR/scripts/install/boss.sh" --dir "$INSTALL_DIR" identity claim-status \
+    2>/dev/null </dev/null | tail -n 1 || true)"
+fi
 if [[ "$WITH_WEB" -eq 1 ]]; then
-  # THE ADDRESS IS WHERE SETUP FINISHES: Setup — paste a GitHub token, connect a
-  # model, open a first pull request. The public origin when there is one.
   if [[ -n "$CONSOLE_ORIGIN" ]]; then
-    echo -e "  ${BOLD}Finish setup${NC}     ${CONSOLE_ORIGIN%/}/?area=setup"
+    _setup_url="${CONSOLE_ORIGIN%/}/?area=setup"
   else
-    echo -e "  ${BOLD}Finish setup${NC}     http://127.0.0.1:${WEB_PORT}/?area=setup"
+    # The install's bound origin (a rerun of an install claimed on 127.0.0.1 stays there), else
+    # localhost, the host the claim link prints: a passkey and a session made on one do not exist
+    # on the other (stranger test r3). One rule, in boss.sh console_base.
+    _console_base=""
+    if [[ -f "$INSTALL_DIR/scripts/install/boss.sh" ]]; then
+      _console_base="$(bash "$INSTALL_DIR/scripts/install/boss.sh" --dir "$INSTALL_DIR" identity console-url \
+        2>/dev/null </dev/null | tail -n 1 || true)"
+    fi
+    [[ "$_console_base" =~ ^https?://[^[:space:]/]+$ ]] || _console_base="http://localhost:${WEB_PORT}"
+    _setup_url="${_console_base}/?area=setup"
   fi
-  if [[ -n "$B" ]]; then
-    echo -e "  ${BOLD}Password${NC}         $B password   (shown in a terminal only)"
+  if [[ -f "$INSTALL_DIR/scripts/install/next_step.sh" ]]; then
+    bash "$INSTALL_DIR/scripts/install/next_step.sh" --claim "$CLAIM_STATUS" --setup-url "$_setup_url" \
+      --boss "${B:-boss}" --origin "$CONSOLE_ORIGIN"
   else
-    echo -e "  ${BOLD}Password${NC}         python3 \"$INSTALL_DIR/scripts/install/console_password.py\" show --env-file \"$ENV_FILE\""
+    echo -e "  ${BOLD}Finish setup${NC}     ${_setup_url}"
   fi
+  echo ""
 fi
 [[ -z "$INSTALLED_REF" ]] || echo -e "  ${BOLD}Release${NC}          ${INSTALLED_REF} (${INSTALLED_CHANNEL}; reruns and upgrades stay on it)"
 # One row per model source: connected, found but not connected, or not found, with the command
 # that fixes it. Read from BOSS and this machine now, not from what this run happened to do.
 _model_rows=""
 if [[ -f "$INSTALL_DIR/scripts/install/boss.sh" ]]; then
-  _model_rows="$(bash "$INSTALL_DIR/scripts/install/boss.sh" --dir "$INSTALL_DIR" connect --summary 2>/dev/null </dev/null || true)"
+  # Each row's fix names THIS install's command ($B), never plain boss on a second install.
+  _model_rows="$(BOSS_HINT_COMMAND="${B:-}" bash "$INSTALL_DIR/scripts/install/boss.sh" --dir "$INSTALL_DIR" connect --summary 2>/dev/null </dev/null || true)"
 fi
 if [[ -n "$_model_rows" || "${#MODEL_NOTES[@]}" -gt 0 ]]; then
   echo -e "  ${BOLD}Models${NC}"
@@ -1905,6 +2275,8 @@ echo ""
 if [[ -n "$B" ]]; then
   echo -e "${BOLD}Next${NC}"
   echo ""
+  [[ "$WITH_WEB" -ne 1 || "$CLAIM_STATUS" == claimed* ]] ||
+    echo "  $B identity setup-link   # first: a one-hour link to claim this BOSS"
   echo "  $B open        # finish setup in the console"
   echo "  $B doctor      # check the install can do its job"
   echo "  $B status      # release, services, health"
@@ -1938,5 +2310,5 @@ echo ""
 echo -e "${MUTED}Docs: https://github.com/seanventures/boss#readme${NC}"
 echo -e "${MUTED}Features: docs/community/FEATURES.md${NC}"
 echo -e "${MUTED}Model paths: docs/community/MODEL_CONNECTIONS.md${NC}"
-echo -e "${MUTED}Cloud is optional — Easy Connect later via Mission Control Editions.${NC}"
+echo -e "${MUTED}Everything runs on this machine. No cloud account is needed.${NC}"
 echo ""

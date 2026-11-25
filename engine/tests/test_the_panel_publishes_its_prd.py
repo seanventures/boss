@@ -82,3 +82,23 @@ def test_an_unbounded_prd_is_still_bounded(connection):
 
 def test_a_missing_meeting_is_not_an_error(connection):
     assert runner._terminal_evidence(connection, "meeting", "gone") == {}
+
+
+def test_prd_publish_card_allows_revise_and_consumes_revision():
+    from boss_engine.services import decision_actions as da
+
+    card = {
+        "status": "pending",
+        "recommendation": {
+            "action": "execute_agent_tool",
+            "tool": "publish_document",
+            "start_code_task": True,
+            "args": {"title": "PRD: Demo", "markdown": PRD},
+        },
+    }
+    assert da.is_prd_publish(card) is True
+    assert da.consumes_revision(card) is True
+    actions = {a["action"]: a for a in da.allowed_actions(card)}
+    assert "revise" in actions
+    assert actions["revise"]["label"] == "Request changes"
+    assert actions["revise"]["needs"] == "note"

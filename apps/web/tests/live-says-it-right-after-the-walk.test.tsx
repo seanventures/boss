@@ -119,13 +119,12 @@ describe("D1 Skip asks why, and sends it", () => {
     expect(toasts).toEqual(["Retrying step 3"]);
   });
 
-  it("a refusal is a short sentence of ours; the server's words are only the tooltip", async () => {
+  it("a refusal says what the button did and the server's reason, on screen (BOSSAPP-1428)", async () => {
     post.mockResolvedValue({ ok: false, error: "reason is required" });
     await mount(view(board({ attention: [skippable()] })));
     await click($('[data-testid="ag-att-answer-retry_step"]'));
     const err = $('[data-testid="ag-att-error"]')!;
-    expect(err.textContent).toBe("Couldn't retry step 3");
-    expect(err.title).toBe("reason is required");
+    expect(err.textContent).toBe("Couldn't retry step 3: reason is required.");
     expect(toasts).toEqual([]);
   });
 });

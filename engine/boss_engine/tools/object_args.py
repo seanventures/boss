@@ -25,13 +25,15 @@ CONFINED: dict[str, dict[str, str | tuple[str, ...]]] = {
     "apply_template": {"extends_run_id": CODE_TASK},
     "cancel_code_task": {"run_id": CODE_TASK},
     "cancel_job": {"job_id": "job"},
+    "collect_diagnostics": {"task_id": "task"},
     "create_code_task": {"task_id": "task", "workflow_run_id": "workflow_run",
                          "extends_run_id": CODE_TASK, "preview_id": "app_preview"},
     "create_deployment_target": {"host_id": "deployment_host"},
     "decide": {"decision_id": "decision"},
     "deploy_app": {"run_id": CODE_TASK, "target_id": "deployment_target", "host_id": "deployment_host",
                    "approval_decision_id": "decision"},
-    "deploy_config": {"target_id": "deployment_target", "approval_decision_id": "decision"},
+    "deploy_config": {"target_id": "deployment_target", "approval_decision_id": "decision",
+                      "code_task_run_id": CODE_TASK},
     "promote_config": {"deployment_run_id": "deployment_run", "deployment_id": "deployment_run",
                        "target_id": "deployment_target",
                        "approval_decision_id": "decision"},
@@ -42,7 +44,7 @@ CONFINED: dict[str, dict[str, str | tuple[str, ...]]] = {
     "diagnose_run": {"run_id": CODE_TASK},
     "explain_run": {"run_id": CODE_TASK},
     "extend_code_task": {"run_id": CODE_TASK},
-    "forget": {"memory_id": "agent_memory"},
+    "forget": {"memory_id": ("agent_memory", "kg_node")},
     "get_code_task": {"run_id": CODE_TASK},
     "get_investigation": {"investigation_id": "investigation"},
     "get_meeting": {"meeting_id": "meeting"},
@@ -71,6 +73,7 @@ CONFINED: dict[str, dict[str, str | tuple[str, ...]]] = {
     "review_pull_request_again": {"run_id": CODE_TASK},
     "recheck_change": {"run_id": CODE_TASK},
     "retarget_app": {"target_id": "deployment_target", "host_id": "deployment_host"},
+    "update_deployment_target": {"target_id": "deployment_target", "host_id": "deployment_host"},
     "retry_code_task": {"run_id": CODE_TASK},
     "retry_workflow_step": {"run_id": "workflow_run"},
     "search_code": {"run_id": CODE_TASK},
@@ -94,7 +97,31 @@ CONFINED: dict[str, dict[str, str | tuple[str, ...]]] = {
     "create_work_item": {"parent_id": "work_item"},
     "link_work_items": {"item_id": "work_item", "other_id": "work_item"},
     "list_work_items": {"item_id": "work_item"},
+    "offer_options": {"work_item_id": "work_item"},
+    "watch_work_item": {"work_item_id": "work_item"},
+    # X2 (2026-11-21): ids that reached a handler with no central check. Each handler also
+    # filters by project today; confined here so the gate answers first, the same way for all.
+    "autonomy_report": {"run_id": "workflow_run"},
+    "file_platform_gap": {"run_id": (CODE_TASK, "workflow_run", "meeting_run", "discovery_run")},
+    "get_self_fix": {"self_fix_id": "self_fix"},
+    "request_self_fix": {"recommendation_id": "boss_recommendation"},
+    "request_budget_override": {"run_id": CODE_TASK},
+    "list_deployments": {"deployment_id": "stack_deployment"},
+    "kg_why": {"node_id": "kg_node"},
+    "kg_callers": {"node_id": "kg_node"},
+    "kg_blast_radius": {"node_id": "kg_node"},
 }
+
+_SUBAGENT = ("a Task id this kernel run started: refused unless it is in the run's own "
+             "`subagents` state (kernel/subagents.py), so it never names another run's child")
+_CONFLUENCE = ("a page id in the external Confluence, read and written only through the call's "
+               "project's own docs connection (docs_connections.client_for(project))")
+_TICKETS = ("a ticket connection, org-shared by design: ticket_reach.reachable_row/lookup accept "
+            "only the call's project's own connection or one shared with its org; an unshared "
+            "one of another project is refused not_shared, another org's is not found")
+_STORAGE = ("an install-wide storage incident on a BOSS machine's own disk (its project_id is "
+            "only where its events are written); every storage tool is decided org-wide "
+            "(org_scope) on system:read / system:operate")
 
 #: tool -> {argument: why it cannot reach another project}. `project_id` is never listed: the
 #: identity gate checks the tool's permission AT the project_id argument when one is given.
@@ -118,6 +145,23 @@ UNCONFINED: dict[str, dict[str, str]] = {
                                 "graph (typed_neighbors(project_id=...))"},
     "create_work_item": {"goal_id": "read only WHERE project_id = the call's project "
                                     "(work_items._check_goal): another project's goal is not found"},
+    # X2 (2026-11-21): every remaining id argument, each with why it cannot reach another project.
+    **{t: {"task_id": _SUBAGENT} for t in ("check_subagent", "update_subagent", "cancel_subagent")},
+    "confluence_read_page": {"page_id": _CONFLUENCE},
+    "confluence_publish_page": {"page_id": _CONFLUENCE, "parent_id": _CONFLUENCE},
+    "set_ontology_pack": {"pack_id": "a key into the install's shipped ontology-pack catalogue "
+                                     "(ontology_packs.shipped_packs); added to the call's project"},
+    "update_ledger": {"session_id": "a caller-chosen label, keyed as session:<the call's "
+                                    "project>:<id> (_ledger_thread): never another project's"},
+    **{t: {"connection_id": _TICKETS} for t in ("ticket_browse", "ticket_comment", "ticket_get",
+                                                "ticket_import", "ticket_search",
+                                                "ticket_transition")},
+    "storage_inspect": {"host_id": "a BOSS machine's own host id (BOSS_HOST_ID / storage "
+                                   "samples), not a deployment_hosts row; install-wide",
+                        "incident_id": _STORAGE},
+    **{t: {"incident_id": _STORAGE} for t in ("storage_plan", "storage_run_step",
+                                              "storage_propose_rule", "storage_report",
+                                              "work_hold_set", "work_hold_release")},
 }
 
 #: Deploying tools: where the target comes from (the same rule the deploy routes declare).
@@ -125,7 +169,10 @@ PRODUCTION: dict[str, Production] = {
     "deploy_app": Production(target="args:target_id", environment="args:environment",
                              environment_default="staging"),
     "redeploy": Production(code_task="args:run_id"),
-    # Configuration deploys (config_deploy, AMEX-G4): the target names the environment; a
+    # Changing a target's host, port, health check or env changes what a production deploy does.
+    "update_deployment_target": Production(target="args:target_id"),
+    "retarget_app": Production(target="args:target_id"),
+    # Configuration deploys (config_deploy, BOSSAPP-1140): the target names the environment; a
     # promotion defaults to production, so it needs deployment:production unless told otherwise.
     "deploy_config": Production(target="args:target_id", environment="args:environment",
                                 environment_default="staging"),

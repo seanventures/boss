@@ -246,3 +246,98 @@ def test_a_decision_that_is_not_a_prd_carries_no_record(world, client, engine):
                    {"i": did, "p": pid, "r": json.dumps({"action": "review_pull_request"})})
     items = _inbox(client, pid)
     assert next(i for i in items if i["id"] == did)["prd"] is None
+
+
+def test_prd_publish_card_request_changes_creates_revised_decision_and_updates_meeting_and_workflow(
+        world, client, engine, monkeypatch):
+    """BOSSAPP-1235: Request changes (revise + note) on a PRD publish card must be allowed,
+    create a new pending PRD decision with explicit_stop (never auto-approved), and repoint
+    meeting_runs.decision_id and waiting SPEC_DECISION_KIND workflow_step_runs."""
+    from boss_engine.services import workflow_capability_runner as wcr
+    from boss_engine.services import workflows
+
+    pid = _project(world, client)
+    run_id, decision_id = _panel(engine, pid, monkeypatch)
+    with engine.begin() as db:
+        defn = workflows.create_definition(
+            db, project_id=pid, workflow_key=f"spec_{uuid.uuid4().hex[:6]}",
+            name="Spec", description=None, actor="test", namespace="product",
+        )
+        ver = workflows.publish_version(
+            db, project_id=pid, definition_id=defn["id"],
+            spec={
+                "entry_step": "meeting",
+                "steps": [
+                    {"id": "meeting", "kind": "capability",
+                     "binding": {"capability": "meeting", "inputs": {"directive": "Build it"}},
+                     "next": []},
+                ],
+            },
+            actor="test",
+        )
+        started = workflows.start_run(
+            db, project_id=pid, actor="test", input_data={},
+            dedupe_key=f"dk_{uuid.uuid4().hex[:10]}", workflow_version_id=ver["id"],
+        )
+        wfr_id = started["id"]
+        step_run_id = db.execute(
+            text("SELECT id FROM workflow_step_runs WHERE workflow_run_id = :r "
+                 "AND step_id = 'meeting'"),
+            {"r": wfr_id},
+        ).scalar()
+        db.execute(
+            text("UPDATE workflow_runs SET status = 'waiting' WHERE id = :r"),
+            {"r": wfr_id},
+        )
+        db.execute(
+            text("UPDATE workflow_step_runs SET status = 'waiting', output = CAST(:o AS JSONB) "
+                 "WHERE id = :s"),
+            {"s": step_run_id, "o": json.dumps({
+                "await": {"kind": wcr.SPEC_DECISION_KIND, "id": decision_id,
+                          "meeting_run_id": run_id},
+                "meeting_run_id": run_id,
+                "spec_decision_id": decision_id,
+            })},
+        )
+
+    card = _get(world, client, f"/v1/decisions/{decision_id}")
+    assert "revise" in {a["action"] for a in card["allowed_actions"]}
+    assert card["recommendation"].get("meeting_run_id") == run_id
+
+    with world.acting_as(world.ctx(world.owner)):
+        resp = client.post(f"/v1/decisions/{decision_id}/revise", json={
+            "actor": world.owner.id,
+            "note": "Add rate limiting section and 429 behavior.",
+        })
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "revision_requested"
+
+    with engine.connect() as db:
+        m_row = db.execute(
+            text("SELECT decision_id, state FROM meeting_runs WHERE id = :m"),
+            {"m": run_id},
+        ).mappings().one()
+        new_decision_id = str(m_row["decision_id"])
+        assert new_decision_id != decision_id
+        d_row = db.execute(
+            text("SELECT status, recommendation FROM decisions WHERE id = :d"),
+            {"d": new_decision_id},
+        ).mappings().one()
+        wsr = db.execute(
+            text("SELECT output FROM workflow_step_runs WHERE id = :s"),
+            {"s": step_run_id},
+        ).mappings().one()
+
+    assert d_row["status"] == "pending"
+    rec = d_row["recommendation"]
+    rec = json.loads(rec) if isinstance(rec, str) else rec
+    assert rec.get("explicit_stop")
+    assert rec.get("revised_from_decision_id") == decision_id
+    assert rec.get("revision_note") == "Add rate limiting section and 429 behavior."
+    assert rec.get("meeting_run_id") == run_id
+    assert "Add rate limiting section and 429 behavior." in (rec.get("args") or {}).get("markdown", "")
+
+    out = wsr["output"]
+    out = json.loads(out) if isinstance(out, str) else out
+    assert out["await"]["id"] == new_decision_id
+    assert out["spec_decision_id"] == new_decision_id

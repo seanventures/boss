@@ -23,7 +23,7 @@ from typing import Callable, Optional
 from sqlalchemy import text
 
 from ..config import Settings
-from ..db import begin, get_engine
+from ..db import begin, get_engine, map_in_context, spawn_thread
 from .code_agent import make_code_agent
 from .core import create_blocking_decision, emit_event, make_id
 from .discovery_spend import DiscoveryStopped
@@ -200,11 +200,12 @@ def start_discovery(*, project_id: str, title: str, seed: str, context: str,
         emit_event(c, project_id, "discovery.started", "boss", "discovery_run", run_id,
                    {"title": title[:300], "deep": deep, "governed_job": as_job})
     if not as_job:
-        threading.Thread(
-            target=_run_discovery,
+        spawn_thread(
+            _run_discovery,
             args=(run_id, project_id, seed, context, settings, deep, governance),
             daemon=True,
-        ).start()
+            as_background=True,
+        )
     return run_id
 
 
@@ -509,12 +510,13 @@ def resume_interrupted(settings: Settings) -> dict:
                 emit_event(conn, row["project_id"], "discovery.resumed", "boss",
                            "discovery_run", row["id"],
                            {"reason": "the process running it restarted"})
-            threading.Thread(
-                target=_run_discovery,
+            spawn_thread(
+                _run_discovery,
                 args=(row["id"], row["project_id"], row["seed"] or "", row["context"] or "",
                       settings, bool(state.get("deep")), state.get("governance")),
                 daemon=True,
-            ).start()
+                as_background=True,
+            )
             resumed.append(row["id"])
         except Exception:  # noqa: BLE001 — one unresumable run must not stop the rest
             continue
@@ -801,8 +803,8 @@ def _run_discovery(run_id: str, project_id: str, seed: str, context: str,
     decides between a retry and a failed run, instead of recording it here."""
     engine = get_engine()
     _hb_stop = threading.Event()
-    threading.Thread(target=_still_working, args=(run_id, engine, _hb_stop),
-                     name=f"drun-hb-{run_id}", daemon=True).start()
+    spawn_thread(_still_working, args=(run_id, engine, _hb_stop),
+                 name=f"drun-hb-{run_id}", daemon=True)
     try:
         if research is None:
             agent = make_code_agent(settings, engine="claude_code")
@@ -1154,7 +1156,7 @@ def _deep_sweep(research, seed: str, context: str, *, sequential: bool = False):
     cost = 0
     model = None
     with ThreadPoolExecutor(max_workers=1 if sequential else len(_SCOUTS)) as pool:
-        for r, fs in pool.map(run_scout, _SCOUTS.items()):
+        for r, fs in map_in_context(pool, run_scout, _SCOUTS.items()):
             cost += r.get("cost_usd_micros", 0)
             model = model or r.get("model")
             findings.extend(fs)

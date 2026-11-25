@@ -32,6 +32,7 @@ import {
 import { SubmitButton } from "./submit-button";
 
 import { callAction } from "../lib/call-action";
+import { couldNot } from "../lib/action-result";
 const DEFAULT_PROCESS_KEY = "prd_to_accepted_work";
 
 function labelize(value: string): string {
@@ -246,7 +247,7 @@ export function AgentProcesses({
             saveData.set("spec", specJson);
             const saved = await callAction(saveAgentProcessTemplateAction, undefined, "autopilot:configure")(saveData);
             if (!saved.ok) {
-              setError(saved.error ?? "Save failed.");
+              setError(couldNot("save the process", saved.error));
               return;
             }
             await reload();
@@ -350,7 +351,7 @@ export function AgentProcesses({
             saveData.set("spec", JSON.stringify(spec));
             const saved = await callAction(saveAgentProcessTemplateAction, undefined, "autopilot:configure")(saveData);
             if (!saved.ok) {
-              setError(saved.error ?? "Save failed.");
+              setError(couldNot("save the process", saved.error));
               return;
             }
             await reload();

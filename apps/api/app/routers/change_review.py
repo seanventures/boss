@@ -31,6 +31,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from boss_engine.config import get_settings
 from boss_engine.db import begin, get_engine
 from boss_engine.identity import P, Scope, permit
+from boss_engine.services.redaction import mask_content
 
 from .local_projects import (
     CommentBody, MergeBody, ReplyBody, RequestChangesBody, ResolveBody, _actor, _author,
@@ -89,7 +90,8 @@ def _run(project_id: str, number: int, owner: Optional[str], repo: Optional[str]
         try:
             src = change_review.source_for(connection, _settings, project_id, number, owner=owner,
                                            repo=repo, engine=_engine)
-            return fn(connection, src)
+            # NEVER SHOW A SECRET: file content and diffs leave masked (redaction.mask_content).
+            return mask_content(fn(connection, src))
         except change_review.ChangeReviewError as error:
             return _refused(error)
 
@@ -486,8 +488,8 @@ def project_history(project_id: str, repo: Optional[str] = None, branch: Optiona
     with begin(_engine) as connection:
         _require(connection, project_id)
         try:
-            return change_review.history(connection, _settings, project_id, repo=repo,
-                                         branch=branch, limit=limit)
+            return mask_content(change_review.history(connection, _settings, project_id, repo=repo,
+                                                      branch=branch, limit=limit))
         except change_review.ChangeReviewError as error:
             return _refused(error)
         except Exception as error:  # noqa: BLE001 — GitHub did not answer: said, not a 500
@@ -505,7 +507,8 @@ def project_history_commit(project_id: str, sha: str, repo: Optional[str] = None
     with begin(_engine) as connection:
         _require(connection, project_id)
         try:
-            return change_review.history_commit(connection, _settings, project_id, sha, repo=repo)
+            return mask_content(change_review.history_commit(connection, _settings, project_id,
+                                                             sha, repo=repo))
         except change_review.ChangeReviewError as error:
             return _refused(error)
         except Exception as error:  # noqa: BLE001

@@ -44,6 +44,7 @@ def _run(code: str) -> None:
     environment = os.environ.copy()
     environment["BOSS_EDITION"] = "community"
     environment["BOSS_REQUIRE_API_AUTH"] = "false"
+    environment["BOSS_AUTHZ_MODE"] = "off"
     environment["PYTHONPATH"] = os.pathsep.join(
         (str(ROOT), str(ROOT / "apps/api"), str(ROOT / "engine"))
     )
@@ -118,11 +119,13 @@ def fake_begin(engine):
 main.begin = fake_begin
 main.require_project_actor = lambda *args: None
 seen = {}
-def fake_set_one(connection, project_id, key, value, actor):
+def fake_set_one(connection, project_id, key, value, actor, **_kw):
     seen.update(project_id=project_id, key=key, value=value, actor=actor)
     return value
 ps.set_one = fake_set_one
 ps.get_all = lambda connection, project_id: {}
+ps.version_of = lambda connection, project_id, key: (0, None)
+ps.source_of = lambda connection, project_id, key: "project"
 response = client.put('/v1/settings/codex_cli_model', json={
     'project_id': 'p', 'actor': 'ceo', 'value': 'gpt-6-sol',
     'client_extension': {'source': 'tui'},

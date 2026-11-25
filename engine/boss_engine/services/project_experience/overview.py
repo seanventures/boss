@@ -9,12 +9,15 @@ onboarding agent's "only you can do this" items.
 """
 from __future__ import annotations
 
+from ..production import is_production_environment
+
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping, Optional
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from .. import build_failure
 from . import captain as captain_service
 from . import demo_logins as demo
 from . import onboarding as onboarding_service
@@ -26,7 +29,6 @@ from .common import (LIVE_RUN, web_url, STAGE_LABELS, STAGES, STATUS_LABELS, age
 from .health import environments as health_environments
 from .health import worst
 
-PRODUCTION = ("production", "prod")
 
 
 # ── the journey ─────────────────────────────────────────────────────────────────────────────
@@ -123,7 +125,7 @@ def journey_subs(connection: Connection, project: Mapping[str, Any], items: list
     people = [n for n in waiting if n.get("work_id") and not str(n.get("id", "")).startswith("onb:")]
 
     def newest(prod: bool) -> Optional[datetime]:
-        at = [e.get("deployed_at") for e in envs if (str(e["key"]).lower() in PRODUCTION) == prod
+        at = [e.get("deployed_at") for e in envs if (is_production_environment(e["key"])) == prod
               and e.get("deployed_at")]
         if not at:
             return None
@@ -280,6 +282,18 @@ def _cost_week(connection: Connection, project_id: str, now: datetime) -> dict[s
             "href": href(project_id, area="budget", tab="limits")}
 
 
+POLISHING_WORDS = "BOSS is polishing (follow-up)"
+
+
+def polishing(item: dict[str, Any]) -> bool:
+    """The work's running attempt is BOSS's automatic follow-up (its own attempts list, newest
+    first: a "Follow-up N · …" label, project_experience.work.label_attempts)."""
+    attempts = item.get("attempts") or []
+    newest = attempts[0] if attempts and isinstance(attempts[0], dict) else None
+    return bool(newest) and (newest.get("kind") == "followup"
+                             or str(newest.get("label") or "").startswith("Follow-up"))
+
+
 def tiles(project_id: str, items: list[dict[str, Any]], envs: list[dict[str, Any]],
           cost: dict[str, Any]) -> dict[str, Any]:
     by_state = work_service.counts(items)
@@ -296,11 +310,16 @@ def tiles(project_id: str, items: list[dict[str, Any]], envs: list[dict[str, Any
         doing = {"plan": "Planning", "design": "Designing", "build": "Building",
                  "review": "Reviewing", "pr": "Opening PR", "ship": "Shipping"}.get(
             str((now_stage or {}).get("key")), "Working")
+        if polishing(w):
+            # ONLY BOSS'S OWN FOLLOW-UP IS RUNNING (e2e recipe-box): the change is in; BOSS is
+            # tidying what review left — never "Building" as if the work were not done.
+            doing = POLISHING_WORDS
         current = {"id": w["id"], "label": w["label"], "progress": [done, len(live)],
                    "sub": f"{doing} · {w['age']}" if w.get("age") else doing,
+                   "polishing": polishing(w),
                    "agent": (w.get("agents") or [None])[0], "href": w["href"]}
     staging = next((e for e in envs if str(e["key"]).lower() in ("staging", "stage")), None) or \
-        next((e for e in envs if str(e["key"]).lower() not in PRODUCTION), None)
+        next((e for e in envs if not is_production_environment(e["key"])), None)
     return {
         "open_work": {"count": open_count, "by_state": by_state,
                       "href": project_href(project_id, tab="work")},
@@ -467,9 +486,9 @@ def week(connection: Connection, project_id: str, now: datetime, limit: int = 6
 
 def _facts(connection: Connection, project_id: str, items: list[dict[str, Any]],
            envs: list[dict[str, Any]], onboarding: Mapping[str, Any]) -> dict[str, Any]:
-    healthy_non_prod = any(str(e["key"]).lower() not in PRODUCTION and e.get("deployed_at")
+    healthy_non_prod = any(not is_production_environment(e["key"]) and e.get("deployed_at")
                            for e in envs)
-    healthy_prod = any(str(e["key"]).lower() in PRODUCTION and e.get("deployed_at") for e in envs)
+    healthy_prod = any(is_production_environment(e["key"]) and e.get("deployed_at") for e in envs)
     has_recs = bool(connection.execute(text(
         "SELECT 1 FROM ambient_recommendations WHERE project_id = :p LIMIT 1"),
         {"p": project_id}).first())
@@ -491,7 +510,7 @@ def _facts(connection: Connection, project_id: str, items: list[dict[str, Any]],
 
 #: The Overview's cards, each of which loads or fails on its own (04 "Couldn't load · Retry").
 CARDS = ("journey", "tile_work", "tile_running", "tile_staging", "tile_cost", "needs_you",
-         "recent_work", "week", "captain", "next", "try_it")
+         "recent_work", "week", "captain", "next", "try_it", "app", "about")
 
 
 def _chip(told: Optional[Mapping[str, Any]]) -> Optional[dict[str, Any]]:
@@ -540,6 +559,14 @@ def view(connection: Connection, project_id: str, *, now: Optional[datetime] = N
     facts = part(("journey",), lambda: _facts(connection, project_id, items, envs, onboarding),
                  {"got": {}, "active": False})
     stage = stage_of(facts["got"], active=facts["active"])
+    awaiting_consent: Optional[dict[str, Any]] = None
+    if not facts["got"].get("worked"):
+        from .. import factory_launch
+
+        kept_launch = part(("journey",), lambda: factory_launch.kept_for_project(connection, project_id), None)
+        if kept_launch is not None:
+            stage = "ready"
+            awaiting_consent = {"href": f"/v1/projects/{project_id}/factory/resume", "method": "POST", "body": {}}
     waiting = part(("needs_you",), lambda: needs_you(connection, project_id, items, onboarding),
                    [])
     the_repos = part(("journey",), lambda: repos(connection, project_id), [])
@@ -561,18 +588,59 @@ def view(connection: Connection, project_id: str, *, now: Optional[datetime] = N
     prod_waits = any(n.get("id") == "prod:host" for n in waiting)
     cost = part(("tile_cost",), lambda: _cost_week(connection, project_id, now), None)
     the_tiles = tiles(project_id, items, envs, cost)   # cost None → the tile's "Couldn't load"
+    # THE LATEST BUILD FAILED (build_failure.latest_failure, the one rule the projects list
+    # and the Command Center read too): the header says so, the Working node is red, the
+    # Running tile names it, and Needs you leads with it — its fix, Retry only when it helps.
+    # ON A LIVE PROJECT (deployed to staging or production) the failure sits BESIDE the stage.
+    failed = part(("needs_you",), lambda: build_failure.latest_failure(connection, project_id,
+                                                                      now=now), None)
+    if failed is not None and not build_failure.is_failure(failed):
+        # NOT A FAILURE: a refused build waiting on a person's merge (build_failure.waits_on) is
+        # that merge — "Merge change #1 first", linked to the merge card — never red. When the
+        # merge's own card is already listed, that card is the one answer.
+        w = failed["waits_on"]
+        if not any((n.get("action") or {}).get("decision_id") == w.get("decision_id")
+                   and w.get("decision_id") for n in waiting):
+            waiting = [{"id": f"waits:{failed['id']}", "kind": "merge", "label": w["label"],
+                        "detail": w["detail"], "mini": [], "work_id": failed["id"],
+                        "action": {"label": w["label"], "href": w["href"],
+                                   "decision_id": w.get("decision_id")}}] + waiting
+        failed = None
+    if failed is not None:
+        failed = {**failed, "beside": bool(facts["got"].get("staging")
+                                            or facts["got"].get("production"))}
+        # Its owner's action item, when it is already listed, is the one card (failure_owner).
+        card_id = (failed.get("owner") or {}).get("decision_id")
+        if not (card_id and any((n.get("action") or {}).get("decision_id") == card_id
+                                or n.get("decision_id") == card_id or n.get("id") == card_id
+                                for n in waiting)):
+            waiting = [build_failure.needs_card(failed)] + waiting
+        subs = {**subs, "working": failed["word"]}
+        details = {**details, "working": f"{failed['word']}: {failed['reason']}"}
+        # Beside whatever else moves (an onboarding pass): the tile shows it when nothing does.
+        the_tiles["running"]["failed"] = {"id": failed["id"], "label": failed["label"],
+                                          "reason": failed["reason"], "word": failed["word"],
+                                          "href": failed.get("work_href")}
+    the_journey = journey(project_id, facts["got"], stage,
+                          needs_you=len(waiting), subs=subs, details=details,
+                          prod_waits=prod_waits, ats=ats,
+                          active=facts["active"] or bool(facts["got"].get("_onboarding_running")))
+    if failed is not None and not failed["beside"]:
+        the_journey = [{**j, "state": "failed"} if j["key"] == "working" else j
+                       for j in the_journey]
     return {
         "project": {"id": project["id"], "name": project["name"], "initials":
                     initials(project["name"]), "description": project["description"],
                     "stage": stage, "repos": the_repos, "live_url": url,
                     "deploy": _chip(moving),
                     "health": worst(envs)[0], "health_reason": worst(envs)[1],
-                    "status_label": STATUS_LABELS[stage],
+                    "status_label": (failed["word"] if failed is not None and not failed["beside"]
+                                     else "Waiting for your consent" if awaiting_consent is not None
+                                     else STATUS_LABELS[stage]),
+                    "awaiting_consent": awaiting_consent,
+                    "build_failed": failed,
                     "archived": project["archived_at"] is not None},
-        "journey": journey(project_id, facts["got"], stage,
-                           needs_you=len(waiting), subs=subs, details=details,
-                           prod_waits=prod_waits, ats=ats,
-                           active=facts["active"] or bool(facts["got"].get("_onboarding_running"))),
+        "journey": the_journey,
         "needs_you": waiting,
         # Questions that expired off the compliance boundary and can still be answered: one
         # line under Needs you (never counted as waiting, never hidden) — needs.still_answerable.
@@ -598,6 +666,12 @@ def view(connection: Connection, project_id: str, *, now: Optional[datetime] = N
         "recent_work": ([w for w in items if w["state"] != "planned"]
                         + [w for w in items if w["state"] == "planned"])[:5],
         "next": part(("next",), lambda: next_items(connection, project_id, onboarding), []),
+        # YOUR APP (your_app.py): the app, always one press away — which version it shows and
+        # whether its preview runs; asleep wakes on Open app. Beside Try it, never instead of it.
+        "app": part(("app",), lambda: _your_app(connection, project_id, url), None),
+        # ABOUT THIS APP (explained.about): what the project is — the founding PRD's summary,
+        # its acceptance criteria with the latest check's verdicts, who approved it, the spec.
+        "about": part(("about",), lambda: _about(connection, project_id), None),
         "try_it": {"url": url, "env": try_env["key"] if try_env else None,
                    "demo_logins": try_env["logins"] if try_env else [],
                    "users_from": logins["source"]},
@@ -608,6 +682,20 @@ def view(connection: Connection, project_id: str, *, now: Optional[datetime] = N
         # Cards that could not load this time, in words: each shows "Couldn't load · Retry".
         "errors": errors,
     }
+
+
+def _about(connection: Connection, project_id: str) -> dict[str, Any]:
+    from . import explained
+
+    return explained.about(connection, project_id)
+
+
+def _your_app(connection: Connection, project_id: str, live_url: Optional[str]
+              ) -> Optional[dict[str, Any]]:
+    from . import your_app
+
+    found = your_app.card(connection, project_id)
+    return {**found, "live_url": live_url or None} if found else None
 
 
 # ── the projects list (§1), batched across projects ─────────────────────────────────────────
@@ -670,7 +758,7 @@ def summary(connection: Connection, project_ids: Iterable[str], *,
     targets: dict[str, list[dict[str, Any]]] = {}
     for r in connection.execute(text(
             "SELECT t.project_id, t.id, t.environment, t.domains, t.public_url, "
-            "(SELECT ok FROM deployment_health_samples s WHERE s.deployment_target_id = t.id "
+            "(SELECT ok FROM counted_health_samples s WHERE s.deployment_target_id = t.id "
             " ORDER BY checked_at DESC LIMIT 1) AS ok, "
             "(SELECT open_url FROM stack_deployments s WHERE s.target_id = t.id "
             " AND s.status = 'healthy' ORDER BY created_at DESC LIMIT 1) AS open_url, "
@@ -708,6 +796,16 @@ def summary(connection: Connection, project_ids: Iterable[str], *,
     from .cards import live_work
 
     moving_now = live_work(connection, ids)
+    failed_now = build_failure.latest_failures(connection, ids, now=now)
+    from . import your_app
+    from .. import factory_launch
+
+    apps = your_app.cards(connection, ids)   # never raises: a card shows no app, not an error
+    try:
+        with connection.begin_nested():
+            kept_launches = factory_launch.kept_for_projects(connection, ids)
+    except Exception:  # noqa: BLE001 — missing receipts table or read error never breaks summary
+        kept_launches = {}
     out = []
     for pid in ids:
         p = projects.get(pid)
@@ -726,14 +824,19 @@ def summary(connection: Connection, project_ids: Iterable[str], *,
         except Exception:  # noqa: BLE001 — a card never fails over its setup line
             setup_n = 0
         decided = count_waiting_on_operator(connection, pid, now=now)
-        waiting = decided + setup_n
+        failed = failed_now.get(pid) if build_failure.is_failure(failed_now.get(pid)) else None
+        # The project page's Needs you leads with a failed latest build (build_failure.needs_card): the
+        # card counts it too, so the two numbers agree.
+        # A failure BOSS is fixing does not wait on anyone; one whose action item is a decision
+        # is already counted in `decided` (failure_owner).
+        waiting = decided + setup_n + (1 if failed and not failed.get("owner") else 0)
         # THE ONE COUNT of what moves now (cards.live_work): the Running tile, this card's
         # Working pill and its "N building" line read the same pieces of work.
         live = int((moving_now.get(pid) or {}).get("count") or 0)
         worked = int(run.get("total") or 0) + int(build.get("total") or 0) > 0
-        non_prod = any(t["deployed"] and str(t["environment"]).lower() not in PRODUCTION
+        non_prod = any(t["deployed"] and not is_production_environment(t["environment"])
                        for t in tgs)
-        prod = any(t["deployed"] and str(t["environment"]).lower() in PRODUCTION for t in tgs)
+        prod = any(t["deployed"] and is_production_environment(t["environment"]) for t in tgs)
         got = reached(onboarded=onb.get("state") in ("ready", "needs_you") or worked,
                       backlog=bool(onb.get("backlog")) or pid in recs or worked, worked=worked,
                       staging=non_prod, production=prod,
@@ -748,7 +851,7 @@ def summary(connection: Connection, project_ids: Iterable[str], *,
                                        for t in tgs if t["deployed"] and str(t["id"]) in states])
         ordered = sorted(tgs, key=lambda t: (str(t["environment"]).lower() not in ("staging",
                                                                                   "stage"),
-                                             str(t["environment"]).lower() in PRODUCTION))
+                                             is_production_environment(t["environment"])))
         url = web_url(next((t["open_url"] or t["public_url"] or ((t["domains"] or [None])[0]
                                                                  if isinstance(t["domains"], list)
                                                                  else None)
@@ -760,22 +863,40 @@ def summary(connection: Connection, project_ids: Iterable[str], *,
                        if v is not None])
         # "Onboarding · Helm is reading it" only while an onboarding job is MOVING; a project
         # that never ran one (or whose run ended) is "Not onboarded", with Start onboarding.
-        onboarding_active = onb.get("state") == "running"
+        awaiting_consent = (
+            {"href": f"/v1/projects/{pid}/factory/resume", "method": "POST", "body": {}}
+            if (not worked and pid in kept_launches)
+            else None
+        )
+        onboarding_active = (onb.get("state") == "running") and awaiting_consent is None
+        if awaiting_consent is not None:
+            stage = "ready"
         status = STATUS_LABELS[stage]
         if stage == "working" and not moving:
             status = "Idle"
+        if awaiting_consent is not None:
+            status = "Waiting for your consent"
         if stage == "onboarding" and not onboarding_active:
             status = "Not onboarded" if onb.get("state") in (None, "not_started", "failed") \
                 else "Ready for work"
+        if failed:
+            # Beside the stage on a live project (deployed anywhere), in its place otherwise.
+            failed = {**failed, "beside": bool(non_prod or prod)}
+            if not failed["beside"]:
+                status = failed["word"]
         out.append({"id": pid, "name": p["name"], "initials": initials(p["name"]),
                     "repo": primary.get(pid), "stage": stage,
                     "status_label": status, "onboarding_active": onboarding_active,
-                    "start_onboarding": (None if onboarding_active else
+                    "awaiting_consent": awaiting_consent,
+                    "start_onboarding": (None if (onboarding_active or awaiting_consent is not None) else
                                          {"href": f"/v1/projects/{pid}/onboarding/start",
                                           "method": "POST"}),
                     "journey": [{"key": j["key"], "label": j["label"], "state": j["state"]}
                                 for j in journey(pid, got, stage, needs_you=waiting,
                                                  active=moving or onboarding_active)],
+                    "build_failed": failed,
+                    # YOUR APP's small "Open app" (your_app.py), on the card and Command Center.
+                    "app": ({**apps[pid], "live_url": url or None} if pid in apps else None),
                     "needs_you": waiting, "running": live, "health": health,
                     "health_reason": health_reason, "live_url": url,
                     "captain": ({"name": f["name"], "role_key": f["role_key"],
@@ -788,6 +909,8 @@ def summary(connection: Connection, project_ids: Iterable[str], *,
                     "placeholder": is_placeholder(pid, repo=primary.get(pid), worked=worked,
                                                   targets=bool(tgs), onboarded=bool(onb)),
                     **_card_cost(connection, pid, now),
+                    # The rail keeps the person's newest project in view (apps/web projects/nav.tsx).
+                    "created_at": iso(p["created_at"]),
                     "updated_at": iso(updated), "href": project_href(pid)})
     return out
 

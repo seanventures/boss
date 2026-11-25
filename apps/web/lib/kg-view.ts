@@ -14,7 +14,7 @@ import { apiErrorText } from "./api-error";
 import { apiWrite } from "./api-write";
 import { API_URL } from "./client";
 import { repoUrl } from "./github-urls";
-import { localWith } from "./local-time";
+import { localWith } from "./hydration-state";
 import type { Permission } from "./identity/permissions.gen";
 import type {
   KgLiveResponse, KgNeighbourhoodResponse, KgNodeDetailResponse, KgOverviewResponse, KgRuleActionRequest,

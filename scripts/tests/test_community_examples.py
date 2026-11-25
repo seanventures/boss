@@ -195,7 +195,7 @@ def test_all_five_dry_runs_make_only_reads() -> None:
                       "UTC", "--newsletter-sectors", "healthcare, energy",
                       "--newsletter-to", "reader@example.test")
         assert result.returncode == 0, result.stdout + result.stderr
-        assert result.stdout.count("would create") == 5
+        assert result.stdout.count("would create") == 15
         assert "would schedule it Monday 08:00 UTC" in result.stdout
         assert _Api.requests and all(method == "GET" for method, _ in _Api.requests)
     finally:
@@ -333,12 +333,12 @@ def test_every_example_says_what_will_not_work_yet() -> None:
         }]
         result = _run(server, ROOT / "examples" / "setup_all.py")
         assert result.returncode == 0, result.stdout + result.stderr
-        assert result.stdout.count("not ready yet: Outgoing email (SMTP)") == 5
+        assert result.stdout.count("not ready yet: Outgoing email (SMTP)") == 10
         assert "fix: Configure SMTP" in result.stdout
         assert "Installed, but will not run here yet:" in result.stdout
         reads = [path for method, path in _Api.requests
                  if method == "GET" and "/readiness?" in path]
-        assert len(reads) == 5
+        assert len(reads) == 10
     finally:
         server.shutdown()
         thread.join()

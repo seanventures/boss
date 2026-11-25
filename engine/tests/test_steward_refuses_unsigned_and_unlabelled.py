@@ -30,6 +30,40 @@ def _load():
 steward = _load()
 
 
+def test_colima_trim_uses_selected_profile_and_measures_reclaimed_bytes(env, monkeypatch):
+    env.is_mac = True
+    env.docker = ["docker", "--context", "colima-example"]
+    monkeypatch.setattr(steward, "docker_raw", lambda _: (8_000_000_000, 20_000_000_000))
+    monkeypatch.setattr(steward, "docker_df", lambda *_: dict(images=1, cache=0, volumes=0, containers=0))
+    calls = []
+    def runner(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+    assert steward.verb_docker_trim(env, {}, dry_run=True, runner=runner)[0] == ["colima:example"]
+    assert calls == []
+    sizes = iter([(8_000_000_000, 20_000_000_000), (6_000_000_000, 20_000_000_000)])
+    monkeypatch.setattr(steward, "docker_raw", lambda _: next(sizes))
+    monkeypatch.setattr(steward.time, "sleep", lambda _: None)
+    assert steward.verb_docker_trim(env, {}, dry_run=False, runner=runner)[1] == 2_000_000_000
+    assert calls == [["colima", "--profile", "example", "ssh", "--", "sudo", "fstrim", "-a"]]
+
+
+def test_colima_missing_disk_never_falls_back_to_desktop(env, monkeypatch, tmp_path):
+    env.is_mac = True
+    env.docker = ["docker", "--context", "colima-example"]
+    monkeypatch.setenv("COLIMA_HOME", str(tmp_path))
+    assert steward.docker_raw(env) == (None, None)
+
+
+def test_steward_pins_configured_context_without_requiring_shell_profile(tmp_path, monkeypatch):
+    monkeypatch.delenv("BOSS_DOCKER_CONTEXT", raising=False)
+    (tmp_path / ".env").write_text("BOSS_DOCKER_CONTEXT=colima-example\n")
+    assert steward.Env(str(tmp_path)).docker == ["docker", "--context", "colima-example"]
+    assert steward.Env(str(tmp_path), docker=["fake-docker"]).docker == ["fake-docker"]
+    (tmp_path / ".env").write_text("")
+    assert steward.Env(str(tmp_path)).docker == ["docker"]
+
+
 @pytest.fixture()
 def keypair():
     from cryptography.hazmat.primitives import serialization

@@ -30,6 +30,16 @@ _CLOSED_MARKERS = (
 )
 _DROP_KEYS = frozenset({"token", "secret", "password", "api_key", "authorization"})
 _SPLIT = re.compile(r"[._\-]+")
+_PLAIN_LABELS: dict[str, str] = {
+    "workflow.panel_waits_on_person": "Panel waiting on you",
+    "workflow.spec_fallback": "Built from brief after panel stopped",
+    "workflow.step_skipped": "Step skipped",
+    "governed_code_task_service": "Build runner",
+    "code_task_service": "Build runner",
+    "meeting_service": "Agent panel",
+    "workflow_capability_runner": "Workflow runner",
+    "failure_owner": "Failure tracker",
+}
 
 
 def classify_activity(row: Optional[Mapping[str, Any]] = None) -> dict[str, str]:
@@ -96,7 +106,11 @@ def _still_open(status_value: str) -> bool:
 
 
 def _humanize(value: str) -> str:
-    words = _SPLIT.sub(" ", value).split()
+    raw = str(value or "").strip()
+    mapped = _PLAIN_LABELS.get(raw.lower())
+    if mapped:
+        return mapped
+    words = _SPLIT.sub(" ", raw).split()
     return " ".join(word.capitalize() for word in words)
 
 

@@ -42,6 +42,7 @@ from typing import Any, Optional
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from . import production as _production
 from ..config import Settings
 from .core import create_blocking_decision, emit_event, make_id
 
@@ -440,7 +441,7 @@ def plan_host_deployment(rp, connection: Connection, *, project_id: str, target:
     refs = _secret_ref_names(target, host)
     deployment_run_id = make_id("deprun")
     short = commit_ref[:12] if commit_ref else "default branch"
-    risk_tier = 3 if environment == "production" else 2
+    risk_tier = _production.risk_tier_for(target={**target, "environment": environment})
 
     reservation = BudgetGovernor(rp.settings).reserve(
         connection, project_id, "provider", 0,
@@ -477,7 +478,7 @@ def plan_host_deployment(rp, connection: Connection, *, project_id: str, target:
                      "resource_type": "ssh_host.app",
                      "resource_ref": f"{target['id']}:{app}",
                      "desired_state": desired, "risk_tier": 1,
-                     "production_affecting": environment == "production"}],
+                     "production_affecting": _production.production_affecting(target={**target, "environment": environment})}],
         expected_cost_usd_micros=0, reservation_id=reservation_id,
         rollback_plan=rollback_plan, risk_tier=1, approval_required=False, actor=actor)
     # The ChangeSet waits on THIS decision, the one whose approval queues the apply — not on
@@ -828,7 +829,7 @@ def apply_on_host(engine, settings: Settings, *, row: dict, governance: dict,
     with pinned(engine, host_id) as pin:
         # A REMOVAL (app_removal) is a deployment run of kind `remove`: same lease, ChangeSet,
         # pinned host key and receipt, a different phase two. A CONFIG deployment
-        # (config_deploy, AMEX-G4) is one of kind `config`: files into a directory, kept
+        # (config_deploy, BOSSAPP-1140) is one of kind `config`: files into a directory, kept
         # previous versions, reload, health check, restore on failure — the same governance.
         if is_removal(row):
             outcome = remove_on_host(engine, settings, row=row, governance=governance)

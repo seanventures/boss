@@ -20,8 +20,8 @@
 import { GatedButton } from "../../components/gated";
 import React, { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
-  CalendarBlank, Check, Clock, CornersOut, DotsThree, ListNumbers, LockSimple, MagnifyingGlass, PencilSimple,
-  Play, Plus, PuzzlePiece, Sparkle, Trash, Warning,
+  CalendarBlank, CaretRight, Check, Clock, CornersOut, DotsThree, ListNumbers, LockSimple, MagnifyingGlass,
+  PencilSimple, Play, Plus, PuzzlePiece, Sparkle, Trash, Warning,
 } from "@phosphor-icons/react";
 
 import { AgentAvatar } from "../agent-avatar";
@@ -38,7 +38,13 @@ import {
 } from "./studio-parts";
 import type { CustomStep } from "../delivery-workflows-ui";
 import { useAreaKeydown } from "../../lib/area-keys";
+import { useCan } from "../../components/identity/identity-provider";
+import { uninstallPack } from "../../lib/workflow-api";
+import { couldNot, reasonOf } from "../../lib/action-result";
 import { WorkflowWizard } from "./wizard/workflow-wizard";
+import { Marketplace } from "./marketplace";
+import { PublishForm } from "./publish-form";
+import { UpdateReview } from "./update-review";
 
 /* ── Schedules (moved here with the Yours tab they lived on) ─────────────────────── */
 
@@ -299,11 +305,13 @@ export type LibraryProps = {
   onScheduleShown?: () => void;
 };
 
-type LibView = "workflows" | "steps";
+/** `market`: the Marketplace, where packs of workflows are installed into Yours. */
+type LibView = "workflows" | "steps" | "market";
 
 function readLibView(): LibView {
   try {
-    return new URLSearchParams(window.location.search).get("lib") === "steps" ? "steps" : "workflows";
+    const lib = new URLSearchParams(window.location.search).get("lib");
+    return lib === "steps" || lib === "market" ? lib : "workflows";
   } catch { return "workflows"; }
 }
 
@@ -334,7 +342,7 @@ export function Library(props: LibraryProps) {
       setItems(await fetchLibrary(projectId));
       setFailed("");
     } catch (e) {
-      setFailed(String((e as Error)?.message ?? e));
+      setFailed(couldNot("load your workflows", reasonOf(e)));
     }
   }, [projectId]);
   useEffect(() => { void load(); }, [load]);
@@ -351,7 +359,7 @@ export function Library(props: LibraryProps) {
     setViewState(next);
     try {
       const url = new URL(window.location.href);
-      if (next === "steps") url.searchParams.set("lib", "steps"); else url.searchParams.delete("lib");
+      if (next !== "workflows") url.searchParams.set("lib", next); else url.searchParams.delete("lib");
       window.history.replaceState(null, "", `${url.pathname}${url.search}`);
     } catch { /* non-browser */ }
   };
@@ -390,14 +398,15 @@ export function Library(props: LibraryProps) {
       return true;
     } catch (e) {
       if (isLiveRunsRefusal(e)) setLiveRuns((cur) => new Set(cur).add(w.definition_id));
-      else setFailed(String((e as Error)?.message ?? e));
+      else setFailed(couldNot(`delete ${w.name || "the workflow"}`, reasonOf(e)));
       return false;
     }
   };
 
   const bulkDelete = async () => {
     setBulkBusy(true);
-    const doomed = (items ?? []).filter((w) => selected.has(w.definition_id) && !w.is_catalogue);
+    const doomed = (items ?? []).filter((w) => selected.has(w.definition_id) && !w.is_catalogue
+                                         && !w.marketplace);
     const left = new Set<string>();
     for (const w of doomed) if (!(await removeOne(w))) left.add(w.definition_id);
     setSelected(left);
@@ -417,6 +426,7 @@ export function Library(props: LibraryProps) {
       <header className="wf-lib-head">
         {tabs}
         <span className="wf-lib-spacer" />
+        {view === "market" ? null : <>
         {view === "workflows" ? (
           <label className="wf-lib-search">
             <MagnifyingGlass size={14} aria-hidden />
@@ -450,20 +460,28 @@ export function Library(props: LibraryProps) {
                 onClick={() => setBuilding(true)}>
           Build a workflow
         </button>
+        <button type="button" className="wf-btn" data-testid="wf-lib-market"
+                title="Packs of workflows to install into Yours" onClick={() => setView("market")}>
+          Marketplace <CaretRight size={12} weight="bold" aria-hidden />
+        </button>
         <button type="button" className="wf-btn wf-btn-primary" data-testid="wf-lib-new"
                 title="New workflow (N)" onClick={onNew}>
           <Plus size={14} aria-hidden /> New workflow
         </button>
+        </>}
       </header>
 
       {failed ? (
         <p className="wf-lib-error" role="alert" data-testid="wf-lib-error">
-          <Warning size={14} aria-hidden /> <span title={failed}>Could not load</span>
+          <Warning size={14} aria-hidden /> <span data-user-text>{failed}</span>
           <button type="button" className="wf-link" onClick={() => void load()}>Retry</button>
         </p>
       ) : null}
 
-      {view === "steps" ? (
+      {view === "market" ? (
+        <Marketplace projectId={projectId} onBack={() => { setView("workflows"); void load(); }}
+                     onOpen={props.onOpen} />
+      ) : view === "steps" ? (
         <StepsTable {...props} usedIn={usedIn} />
       ) : items === null && !failed ? (
         <p className="wf-lib-muted" data-testid="wf-lib-loading">Loading…</p>
@@ -558,13 +576,18 @@ type CardProps = LibraryProps & {
   nested?: boolean;
 };
 
-type CardPop = "menu" | "delete" | "schedule" | "usefor";
+type CardPop = "menu" | "delete" | "schedule" | "usefor" | "uninstall" | "update" | "publish";
 
 function LibraryCard(p: CardProps) {
   const { entry, nested } = p;
   const w = entry.item;
   const mine = !w.is_catalogue;
+  /** Installed from the Marketplace: Yours, with the pack it came from. */
+  const installed = w.marketplace ?? null;
   const pop = usePopover<CardPop>();
+  const installGate = useCan("workflow:install");
+  const [uninstalling, setUninstalling] = useState(false);
+  const [uninstallSaid, setUninstallSaid] = useState("");
   const [renaming, setRenaming] = useState(false);
   const [name, setName] = useState(w.name);
   const [nameError, setNameError] = useState("");
@@ -615,7 +638,7 @@ function LibraryCard(p: CardProps) {
                pressDismisses.current = false;
                if (!dismissing && !renaming && !pop.open) p.onOpen(w.workflow_key);
              }}>
-      {mine ? (
+      {mine && !installed ? (
         <label className="wf-card-check" title="Select" onClick={stop}>
           <input type="checkbox" checked={p.selected.has(w.definition_id)}
                  aria-label={`Select ${w.name}`} data-testid={`wf-card-select-${w.workflow_key}`}
@@ -639,16 +662,31 @@ function LibraryCard(p: CardProps) {
           <h4 className="wf-card-name" title={w.name} data-user-text>{w.name}</h4>
         )}
         <span className="wf-card-chips">
-          {mine ? <span className="wf-tag" data-kind="yours">Yours</span> : (
+          {mine ? <span className="wf-tag" data-kind="yours">Yours</span> : w.modified ? (
+            <span className="wf-tag" data-kind="modified" data-testid={`wf-card-modified-${w.workflow_key}`}
+                  title="You changed this standard. Open it to see the changes or reset it.">Modified</span>
+          ) : (
             <span className="wf-tag" data-kind="standard"
-                  title="Shipped with BOSS. Saving makes your own copy.">Standard</span>
+                  title="Shipped with BOSS. Open it to edit it in place.">Standard</span>
           )}
-          {w.version ? (
+          {!mine && w.new_standard_available ? (
+            <span className="wf-tag" data-kind="new-standard" data-testid={`wf-card-new-standard-${w.workflow_key}`}
+                  title="BOSS shipped a newer version of this standard. Open it to review.">New standard</span>
+          ) : null}
+          {installed ? null : w.version ? (
             <span className="wf-tag" title="Each save is a new version. Running work keeps its version.">
               v{w.version}
             </span>
           ) : null}
-          {w.forked_from_workflow_key && mine ? (
+          {installed?.waiting ? (
+            <span className="wf-tag" data-kind="modified" data-testid={`wf-card-waiting-${w.workflow_key}`}
+                  title={installed.waiting}>Waiting</span>
+          ) : null}
+          {mine && !installed && w.published?.status === "published" ? (
+            <span className="wf-tag" data-kind="from" data-testid={`wf-card-published-${w.workflow_key}`}
+                  title={`In your org's Marketplace as ${w.published.name}`}>Published v{w.published.version}</span>
+          ) : null}
+          {w.forked_from_workflow_key && mine && !installed ? (
             <span className="wf-tag" data-kind="from" data-user-text
                   title={w.forked_from_name ?? w.forked_from_workflow_key}>
               from {w.forked_from_name ?? w.forked_from_workflow_key}
@@ -657,6 +695,12 @@ function LibraryCard(p: CardProps) {
         </span>
       </header>
 
+      {installed ? (
+        <p className="wf-card-from" data-testid={`wf-card-from-market-${w.workflow_key}`}
+           title={`${installed.pack_name}${installed.modified ? ". You changed it: updates wait for you." : ". Updates by itself."}`}>
+          from Marketplace · v{installed.version ?? "?"}{installed.modified ? " · Modified" : ""}
+        </p>
+      ) : null}
       <p className="wf-card-desc" title={w.description || undefined} data-user-text>
         {w.description || "\u00a0"}
       </p>
@@ -705,6 +749,17 @@ function LibraryCard(p: CardProps) {
         ) : null}
       </footer>
 
+      {installed?.update ? (
+        // ALWAYS VISIBLE, not behind hover: the one thing on this card that needs a person.
+        <div className="wf-card-update-row" onClick={stop}>
+          <button type="button" className="wf-btn wf-btn-sm wf-btn-amber" data-testid={`wf-card-update-${w.workflow_key}`}
+                  title="A newer version waits for you" aria-expanded={pop.open === "update"}
+                  onClick={() => pop.setOpen("update")}>
+            Review update v{installed.update.version ?? "?"}
+          </button>
+        </div>
+      ) : null}
+
       <div className="wf-card-actions" onClick={stop} ref={pop.ref} data-open={pop.open ?? undefined}>
         <button type="button" className="wf-btn wf-btn-sm" data-testid={`wf-card-start-${w.workflow_key}`}
                 disabled={!w.version} title={w.version ? "Start a run" : "Save a version first"}
@@ -729,13 +784,34 @@ function LibraryCard(p: CardProps) {
 
         {pop.open === "menu" ? (
           <div className="wf-pop wf-menu" role="menu" data-testid={`wf-card-menu-${w.workflow_key}`}>
-            {mine ? (
+            {mine && installed ? (
+              <>
+                <button type="button" role="menuitem" onClick={() => { pop.setOpen(null); p.onDuplicate(w.workflow_key); }}>
+                  Duplicate
+                </button>
+                <button type="button" role="menuitem" disabled={!w.version}
+                        title={w.version ? undefined : "Not runnable yet"}
+                        onClick={() => pop.setOpen("schedule")}>Schedule…</button>
+                <button type="button" role="menuitem" onClick={() => pop.setOpen("usefor")}>Use for…</button>
+                <button type="button" role="menuitem" data-tone="danger"
+                        data-testid={`wf-card-uninstall-${w.workflow_key}`}
+                        disabled={!installGate.allowed} title={installGate.allowed ? `Removes the ${installed.pack_name} pack` : installGate.reason}
+                        onClick={() => { setUninstallSaid(""); pop.setOpen("uninstall"); }}>
+                  Uninstall…
+                </button>
+              </>
+            ) : mine ? (
               <>
                 <button type="button" role="menuitem" onClick={() => { pop.setOpen(null); p.onDuplicate(w.workflow_key); }}>
                   Duplicate
                 </button>
                 <button type="button" role="menuitem" onClick={() => { pop.setOpen(null); setRenaming(true); }}>
                   Rename
+                </button>
+                <button type="button" role="menuitem" data-testid={`wf-card-publish-${w.workflow_key}`}
+                        disabled={!w.version} title={w.version ? "Every project in your org can install it" : "Save a version first"}
+                        onClick={() => pop.setOpen("publish")}>
+                  {w.published?.status === "published" ? "Publish again…" : "Publish to Marketplace…"}
                 </button>
                 <button type="button" role="menuitem" disabled={!w.version}
                         title={w.version ? undefined : "Save a version first"}
@@ -784,6 +860,50 @@ function LibraryCard(p: CardProps) {
                     }}>
               {retire ? "Retire" : "Delete"}
             </button>
+          </div>
+        ) : null}
+
+        {pop.open === "uninstall" && installed ? (
+          <div className="wf-pop wf-card-confirm wf-card-uninstall" role="dialog" aria-label="Confirm uninstall"
+               data-testid={`wf-card-uninstall-confirm-${w.workflow_key}`}>
+            <span>Uninstall <span data-user-text>{installed.pack_name}</span>?</span>
+            <button type="button" className="wf-btn wf-btn-danger wf-btn-sm" disabled={uninstalling || !installGate.allowed}
+                    data-testid={`wf-card-uninstall-go-${w.workflow_key}`}
+                    title={installGate.allowed ? "Its workflows leave Yours. Ones that ran keep their history." : installGate.reason}
+                    onClick={async () => {
+                      setUninstalling(true);
+                      try {
+                        await uninstallPack(p.projectId, installed.pack_id);
+                        pop.setOpen(null);
+                        p.onRenamed();
+                      } catch (e) {
+                        setUninstallSaid(String((e as Error)?.message ?? e));
+                      } finally {
+                        setUninstalling(false);
+                      }
+                    }}>
+              {uninstalling ? "Uninstalling…" : "Uninstall"}
+            </button>
+            {uninstallSaid ? (
+              <p className="wf-card-said" role="alert" data-testid={`wf-card-uninstall-said-${w.workflow_key}`}>{uninstallSaid}</p>
+            ) : null}
+          </div>
+        ) : null}
+
+        {pop.open === "update" && installed ? (
+          <div className="wf-pop wf-card-update">
+            <UpdateReview projectId={p.projectId} workflowKey={w.workflow_key} definitionId={w.definition_id}
+                          onClose={() => pop.setOpen(null)}
+                          onDone={() => { pop.setOpen(null); p.onRenamed(); }} />
+          </div>
+        ) : null}
+
+        {pop.open === "publish" ? (
+          <div className="wf-pop wf-card-publish">
+            <PublishForm projectId={p.projectId} definitionId={w.definition_id} workflowName={w.name}
+                         description={w.description} published={w.published}
+                         onCancel={() => pop.setOpen(null)}
+                         onDone={() => { pop.setOpen(null); p.onRenamed(); }} />
           </div>
         ) : null}
 
@@ -866,7 +986,12 @@ function SchedulePopover({ workflow, schedules, projectId, busy, inputSchema, on
                 const said = scheduleMissSentence(s);
                 if (!said) return null;
                 // A sentence longer than six words is a paragraph; shorter stays a text node.
-                return said.trim().split(/\s+/).filter(Boolean).length > 6 ? <p>{said}</p> : said;
+                // Dynamic failure/missing text is marked data-user-text (copy-budget skips it).
+                return (
+                  <span data-user-text>
+                    {said.trim().split(/\s+/).filter(Boolean).length > 6 ? <p>{said}</p> : said}
+                  </span>
+                );
               })()}
               <GatedButton permission="workflow_schedule:manage" type="button" className="wf-link" disabled={!!busy}
                       data-testid={`wf-schedule-toggle-${s.id}`}

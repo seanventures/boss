@@ -845,6 +845,8 @@
 .ag-tagline { color: var(--muted); font-size: 0.68421rem; font-style: italic; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ag-about { align-self: flex-start; }
 .ag-head-acts { display: inline-flex; gap: 4px; align-items: center; }
+/* Full screen (components/chat-fullscreen): the conversation keeps a readable measure. */
+.ag-talk[data-chat-full="1"] .ag-talk-body, .ag-talk[data-chat-full="1"] .ag-composer { padding-inline: max(16px, calc((100% - 60rem) / 2)); }
 .ag-talk-body { overflow-y: auto; overscroll-behavior: contain; padding: 16px; display: flex; flex-direction: column; gap: 16px; min-height: 0; }
 
 /* Start card */

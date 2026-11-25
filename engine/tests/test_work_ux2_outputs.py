@@ -77,6 +77,8 @@ def test_a_completed_run_fills_the_outputs_and_status_is_read_live(eng, project)
         assert kinds["pull_request"]["title"] == "PR #9 · Wallet button"
         assert kinds["pull_request"]["status"] == "completed"
         assert kinds["preview"]["status"] == "running"
+        # The address a browser opens (the Preview button's), never the app's loopback port.
+        assert kinds["preview"]["ref"] == f"/v1/previews/{pid}/web/"
         # The preview stops: the list says so without collecting again.
         c.execute(text("UPDATE app_previews SET status = 'stopped' WHERE id = :i"), {"i": pid})
         assert {o["kind"]: o["status"] for o in work_outputs.outputs_of(c, item["id"])}[

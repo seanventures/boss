@@ -203,9 +203,9 @@ describe("DecisionInbox (W1.6 actionable default)", () => {
 
     expect(markup).toContain('data-empty-state="queue-clear"');
     expect(markup).toContain("Queue is clear");
-    expect(markup).toContain("Budget reservations");
-    expect(markup).toContain("Pull-request");
-    expect(markup).toContain("TPM");
+    expect(markup).toContain("Spending that needs your OK");
+    expect(markup).toContain("Pull requests waiting");
+    expect(markup).toContain("rate limit");
     expect(markup).not.toContain("Old rejection");
     expect(markup).not.toContain("No active decisions");
   });
@@ -215,8 +215,10 @@ describe("DecisionInbox (W1.6 actionable default)", () => {
       <DecisionInboxEmpty filter="needs_action" orgId="org_1" />,
     );
     expect(markup).toContain("Queue is clear");
-    expect(markup).toContain("Budget reservations or spend that need a human gate");
-    expect(markup).toContain("TPM / credit / model-limit escalations");
+    expect(markup).toContain("Spending that needs your OK");
+    expect(markup).toContain("ran out of credit or hit its rate limit");
+    // Plain words (stranger test r2): no insider jargon on a first-run screen.
+    for (const insider of ["TPM", "deadletter", "software factory", "governance ceiling"]) expect(markup).not.toContain(insider);
     expect(markup).toContain("View resolved history");
   });
 
@@ -253,7 +255,8 @@ describe("DecisionInbox (W1.6 actionable default)", () => {
     expect(markup).toContain("default hold");
     expect(markup).toContain('data-testid="decision-reason"');
     // The reason in words, never the raw code.
-    expect(markup).toMatch(/Why<\/span> (<!-- -->)?merge decision required/);
+    expect(markup).toMatch(/Why<\/span> (<!-- -->)?merging needs a person&#x27;s decision/);
+    expect(markup).not.toContain("merge decision required");
     expect(markup).not.toContain("merge_decision_required<");
   });
 

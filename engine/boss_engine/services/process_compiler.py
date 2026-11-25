@@ -13,6 +13,35 @@ from typing import Any
 from .agent_process import PRD_TO_ACCEPTED_SPEC, validate_process_spec
 
 
+class ProcessVocabularyError(ValueError):
+    """The prose uses a role or an action the role-handoff builder has no step for.
+
+    Never a bare "unknown action 'deploy'": the message says what BOSS can do instead, and
+    the router reads the type to hand the ask to workflow authoring (capabilities, custom
+    steps) rather than leave the operator at a refusal (BOSSAPP-1351)."""
+
+
+#: The words a closed vocabulary used to refuse, and the real capability each one names.
+#: Used only to SAY what BOSS can do in a refusal — nothing is decided from it.
+CAPABILITY_HINTS: tuple[tuple[str, str], ...] = (
+    (r"\b(deploy|ship|launch|publish|release)\w*\b", "config_deploy / deploy"),
+    (r"\bpromot", "promote_config"),
+    (r"\bcontract", "contract_test"),
+    (r"\bsmoke", "smoke_test"),
+    (r"\bapprov", "release_approval"),
+)
+
+
+def _unsupported(kind: str, word: str, text: str) -> ProcessVocabularyError:
+    closest = [cap for pattern, cap in CAPABILITY_HINTS
+               if re.search(pattern, f"{word} {text}")]
+    near = (f" Closest BOSS steps: {', '.join(dict.fromkeys(closest))}." if closest else "")
+    return ProcessVocabularyError(
+        f"BOSS's role-handoff builder has no step that does {word!r} (it knows review, "
+        f"improve, build, test, verify, certify, accept).{near} Describe it as a workflow "
+        "instead and BOSS drafts it from real capabilities, or add a custom step for it.")
+
+
 DEFAULT_PANEL_ROLES = ["chief_architect", "cto", "qa", "ux_engineer"]
 
 # Longest phrases first so "chief architect" wins over "architect".
@@ -177,7 +206,10 @@ def compile_process_from_text(text: str, name: str | None = None) -> dict[str, A
     else:
         stages = _parse_stages(normalized)
         if not stages:
-            raise ValueError("no process steps found")
+            raise ProcessVocabularyError(
+                "BOSS's role-handoff builder found no review/build/test/accept steps in that. "
+                "Describe it as a workflow instead and BOSS drafts it from real capabilities, "
+                "or add a custom step for what it should do.")
         spec = validate_process_spec(_stages_to_spec(stages, text))
     if name and str(name).strip():
         spec["name"] = str(name).strip()[:160]
@@ -224,18 +256,18 @@ def _replace_phrases(text: str, phrases: tuple[tuple[str, str], ...], token: str
 def _assert_known_vocabulary(normalized: str) -> None:
     unknown_action = UNKNOWN_ACTION_RE.search(normalized)
     if unknown_action:
-        raise ValueError(f"unknown action {unknown_action.group(1)!r}")
+        raise _unsupported("action", unknown_action.group(1), normalized)
     scrubbed = _replace_phrases(normalized, KNOWN_ACTOR_PHRASES, "ROLE")
     for match in _ACTOR_BEFORE_ACTION.finditer(scrubbed):
         actor = match.group(1)
         if actor in FILLER or actor == "role":
             continue
-        raise ValueError(f"unknown role {actor!r}")
+        raise _unsupported("role", actor, normalized)
     for match in re.finditer(r"\bROLE\s+([a-z][a-z-]*)\b", scrubbed):
         verb = match.group(1)
         if verb in KNOWN_ACTION_STEMS or verb in FILLER:
             continue
-        raise ValueError(f"unknown action {verb!r}")
+        raise _unsupported("action", verb, normalized)
 
 
 def _find_phrases(text: str, phrases: tuple[tuple[str, str], ...]) -> list[tuple[int, int, str]]:

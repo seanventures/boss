@@ -81,6 +81,8 @@ def test_the_projects_list_shows_the_project_with_its_stage_crew_and_what_waits(
                                                    "staging", "production"]
     assert {j["key"]: j["state"] for j in card["journey"]}["working"] in ("now", "waiting")
     assert card["href"] == f"?project_id={helpdesk['id']}&area=project"
+    # When it was made: the rail keeps the newest project in view past its five-row cap.
+    assert card["created_at"] and card["created_at"] <= card["updated_at"]
     assert r.json()["first_run"] is False
 
 

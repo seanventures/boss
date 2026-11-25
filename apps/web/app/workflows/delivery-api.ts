@@ -8,9 +8,10 @@ import { apiWrite } from "../../lib/api-write";
 import { askConsent, consentFromBody } from "../../lib/identity/consent";
 import type { Readiness } from "../workflow-readiness-ui";
 
-export async function get<T>(view: string, projectId: string): Promise<T | { error: string }> {
+export async function get<T>(view: string, projectId: string, extra?: Record<string, string>): Promise<T | { error: string }> {
   const params = new URLSearchParams({ view });
   if (projectId) params.set("project_id", projectId);
+  if (extra) for (const [k, v] of Object.entries(extra)) if (v) params.set(k, v);
   try {
     const r = await fetch(`/api/delivery-workflows?${params}`, { cache: "no-store" });
     const body = await r.json();

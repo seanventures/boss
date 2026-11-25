@@ -175,10 +175,14 @@ def install_pair(tmp_path: Path) -> tuple[Path, str, str, dict[str, str], Path]:
     (source / "scripts/install/community-compose.yml").write_text("services: {}\n")
     (source / "install.sh").write_bytes((REPO / "install.sh").read_bytes())
     (source / "install.sh").chmod(0o755)
-    for helper in ("restore_preserved_env.sh", "reconcile_api_credentials.py", "backup_archive.py"):
+    for helper in ("restore_preserved_env.sh", "reconcile_api_credentials.py", "backup_archive.py",
+                   "network_preflight.sh", "build_order.py"):
         (source / "scripts/install" / helper).write_bytes(
             (REPO / "scripts/install" / helper).read_bytes()
         )
+    enterprise = "engine/boss_engine/services/enterprise_network.py"
+    (source / enterprise).parent.mkdir(parents=True)
+    (source / enterprise).write_bytes((REPO / enterprise).read_bytes())
     (source / "version").write_text("old\n")
     backup = source / "scripts/install/backup.sh"
     backup.write_text(

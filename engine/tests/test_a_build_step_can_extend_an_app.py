@@ -43,6 +43,12 @@ def started(monkeypatch):
                         lambda _c, run_id, pid: {"id": run_id} if run_id == "crun_app" else None)
     monkeypatch.setattr(builtin, "_building_agent", lambda *_a: None)
     monkeypatch.setattr(builtin, "_app_build_in_flight", lambda *_a: None)
+    # The resolvers read the DB, which this unit harness has none of (the DB fixture is
+    # test_a_multi_app_project_never_builds_on_main): one open change, one app.
+    from boss_engine.services.project_experience import new_work
+
+    monkeypatch.setattr(new_work, "build_mode", lambda *_a: {"mode": "continue"})
+    monkeypatch.setattr(new_work, "app_choices", lambda *_a: [])
 
     def fail_fresh(*_a, **_k):
         raise AssertionError("a fresh build was started for an existing app")
@@ -85,6 +91,39 @@ def test_the_composers_own_words_count_as_that_promise():
     assert cts.with_existing_tests_criterion(["A snoozed lead comes back"])[-1] == cts.EXISTING_TESTS_CRITERION
 
 
+def test_preview_only_repair_uses_the_previews_build(started, monkeypatch):
+    monkeypatch.setattr(builtin, "_preview_in_project", lambda *_: {"id": "prev_app", "run_id": "crun_app"})
+    out = _call({"title": "Repair preview", "instructions": "Serve the existing report.",
+                 "preview_id": "prev_app", "workflow_run_id": "wfr_1"})
+    assert started["parent_run_id"] == "crun_app"
+    assert started["workflow_run_id"] == "wfr_1"
+    assert out["base_branch"] == "boss/code/crun_app"
+
+
+def test_preview_without_a_project_build_does_not_start_fresh(started, monkeypatch):
+    monkeypatch.setattr(builtin, "_preview_in_project", lambda *_: None)
+    out = _call({"preview_id": "prev_elsewhere", "instructions": "Repair preview"})
+    assert out["ok"] is False
+    assert not started
+
+
+def test_a_preview_with_no_build_starts_as_before(started, monkeypatch):
+    """Review of PR #300: a preview started from a branch has no lineage; not refused."""
+    monkeypatch.setattr(builtin, "_preview_in_project", lambda *_: {"id": "prev_branch", "run_id": None})
+    seen = []
+    monkeypatch.setattr(builtin, "_multirepo_change",
+                        lambda _ctx, _pid, _actor, _args, extends, _fctx: seen.append(extends) or {"ok": True})
+    out = _call({"title": "Repair preview", "instructions": "Repair preview", "preview_id": "prev_branch"})
+    assert out == {"ok": True} and seen == [""]
+
+
+def test_preview_repair_does_not_override_an_explicit_base(started, monkeypatch):
+    monkeypatch.setattr(builtin, "_preview_in_project", lambda *_: {"run_id": "crun_app"})
+    out = _call({"preview_id": "prev_app", "instructions": "Repair preview", "base_branch": "release"})
+    assert out["ok"] is False
+    assert not started
+
+
 def test_a_build_of_the_app_still_on_the_line_is_waited_for_not_adopted(started, monkeypatch):
     """Found walking it: the app's launch-check repair was still building its branch, and
     start_code_task's same-app guard handed THAT run back — the step waited on someone else's
@@ -110,3 +149,23 @@ def test_an_app_from_another_project_starts_nothing(started):
 def test_the_tool_tells_the_model_the_field_exists():
     params = build_default_registry().get("create_code_task").parameters
     assert "extends_run_id" in params["properties"]
+
+
+def test_a_release_fix_stays_the_lineages_follow_up_even_of_a_merged_app(started, monkeypatch):
+    """Review of R4: an incident's fix carries release_base_sha; a merged app must not turn it
+    into a new lineage (it is cut from the serving commit, as the lineage's follow-up)."""
+    from boss_engine.services.project_experience import new_work
+
+    monkeypatch.setattr(new_work, "build_mode", lambda *_a: {"mode": "new_change"})
+    _call({"title": "Fix", "instructions": "Fix the outage.", "extends_run_id": "crun_app",
+           "release_base_sha": "c0ffee", "extends_from_default": True, "workflow_run_id": "wfr_1"})
+    assert started["release_base_sha"] == "c0ffee" and started["new_change"] is False
+
+
+def test_a_merged_app_gets_a_new_change_from_any_door(started, monkeypatch):
+    from boss_engine.services.project_experience import new_work
+
+    monkeypatch.setattr(new_work, "build_mode", lambda *_a: {"mode": "new_change"})
+    _call({"title": "Fix", "instructions": "Fix it.", "extends_run_id": "crun_app",
+           "workflow_run_id": "wfr_1"})
+    assert started["new_change"] is True

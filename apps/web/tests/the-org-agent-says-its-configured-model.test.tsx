@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The org agent says its configured model, beside the models it called, not only in the title.
  * A blank model says nothing. A sentence over six words is a paragraph.

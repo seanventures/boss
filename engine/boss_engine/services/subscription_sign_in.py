@@ -35,9 +35,12 @@ after 15 minutes, and on API shutdown.
 """
 from __future__ import annotations
 
+import hashlib
+import inspect
 import json
 import os
 import re
+from pathlib import Path
 import secrets
 import shutil
 import signal
@@ -82,16 +85,21 @@ class _Login:
     #: The login PRINTS a long-lived token instead of writing a session: BOSS takes it from the
     #: output and hands it to the session's `store`. Success is "stored", not "exit 0".
     captures_token: bool = False
+    #: Per-org CLI home env var + default base dir (for CLI-file sessions like Codex / Grok).
+    home_env: Optional[str] = None
+    default_home: Optional[str] = None
 
 
 LOGINS: dict[str, _Login] = {
     "codex": _Login("Codex", ("codex", "login", "--device-auth"),
                     ("auth.openai.com", "chatgpt.com", "openai.com"), True,
-                    ("OPENAI_API_KEY", "CODEX_ACCESS_TOKEN"), ("codex", "logout")),
+                    ("OPENAI_API_KEY", "CODEX_ACCESS_TOKEN"), ("codex", "logout"),
+                    home_env="CODEX_HOME", default_home="~/.codex"),
     "grok": _Login("Grok Build", ("grok", "login", "--device-auth"),
                    ("accounts.x.ai", "x.ai", "grok.com"), True,
                    ("XAI_API_KEY", "GROK_MODELS_BASE_URL", "GROK_CLI_CHAT_PROXY_BASE_URL"),
-                   ("grok", "logout")),
+                   ("grok", "logout"),
+                   home_env="GROK_HOME", default_home="~/.grok"),
     # No sign-out: setup-token never touches the CLI's own login (the fallback), and the token
     # it prints replaces the stored one.
     "claude_code": _Login("Claude Code", ("claude", "setup-token"),
@@ -177,6 +185,10 @@ class _Session:
     #: returned; dropped when the session ends.
     screen: Any = field(default=None, repr=False)
     code_sent_at: Optional[float] = None
+    #: The organisation the sign-in is for: its token lands in that org's model home, so only
+    #: that org's projects may see, answer or cancel it (identity.object_kinds), and a start from
+    #: another org is refused while it is live (start).
+    org_id: Optional[str] = None
 
 
 class _Screen:
@@ -405,8 +417,37 @@ def view(session: _Session) -> dict[str, Any]:
 
 # ---- the provider's own login, as the API process user --------------------------------------
 
-def _login_env(login: _Login) -> dict[str, str]:
+def _safe_org_segment(org_id: str) -> str:
+    raw = str(org_id or "").strip()
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", raw)
+    if not raw or not safe or safe in (".", "..") or safe != raw:
+        digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+        safe = f"{safe[:40].strip('.') or 'org'}-{digest}"
+    return safe
+
+
+def _cli_home(login: _Login, org_id: Optional[str]) -> Optional[str]:
+    if not login.home_env or not org_id:
+        return None
+    base = os.path.expanduser(os.environ.get(login.home_env) or login.default_home or "")
+    if not base:
+        return None
+    return os.path.join(base, "orgs", _safe_org_segment(org_id))
+
+
+def _ensure_cli_home(path: Optional[str]) -> None:
+    if not path:
+        return
+    os.makedirs(path, mode=0o700, exist_ok=True)
+    os.chmod(path, 0o700)
+
+
+def _login_env(login: _Login, org_id: Optional[str] = None) -> dict[str, str]:
     env = {k: v for k, v in os.environ.items() if k not in login.drop_env}
+    home = _cli_home(login, org_id)
+    if home and login.home_env:
+        _ensure_cli_home(home)
+        env[login.home_env] = home
     # No colours, no pager, no attempt to open a browser on a server that has none.
     env.update(NO_COLOR="1", TERM="dumb", BROWSER="true", CI="1")
     if login.pty:
@@ -668,12 +709,12 @@ def _sweep(now: float) -> None:
             _SESSIONS.pop(key, None)
 
 
-def _signed_in_check(provider: str, settings: Any) -> Callable[[], bool]:
-    """Is the CLI's OWN login signed in, in this process's CLI home? Never a stored token —
-    except Claude Code's: its sign-in OBTAINS a long-lived token, so "signed in" is "BOSS holds
-    the token its own sign-in obtained" (the CLI's own login alone still gets a fresh sign-in,
-    which is how an install on the short-lived login moves to the long-lived token)."""
-    if LOGINS.get(provider) is not None and LOGINS[provider].captures_token:
+def _signed_in_check(provider: str, settings: Any, org_id: Optional[str] = None) -> Callable[[], bool]:
+    """Is the CLI's OWN login signed in, in this org's (or process's) CLI home? Never a stored
+    token — except Claude Code's: its sign-in OBTAINS a long-lived token, so "signed in" is
+    "BOSS holds the token its own sign-in obtained"."""
+    login = LOGINS.get(provider)
+    if login is not None and login.captures_token:
         def has_token() -> bool:
             from .claude_credential import boss_obtained_token_stored
 
@@ -681,17 +722,66 @@ def _signed_in_check(provider: str, settings: Any) -> Callable[[], bool]:
         return has_token
 
     def check() -> bool:
-        from .cli_harness import detect, load_specs
+        from .cli_harness import _grok_subscription_config_problem, detect, load_specs
 
         spec = load_specs(settings).get(provider)
         if spec is None:
             return False
-        # No settings: a credential held in BOSS's secret store is not the CLI's own login.
+        if org_id and login is not None and login.home_env:
+            home = _cli_home(login, org_id)
+            if not home or not os.path.isdir(home):
+                return False
+            if spec.require_local_session_file:
+                session_file = os.path.join(home, spec.auth_file_name)
+                try:
+                    st = os.stat(session_file)
+                    ok_file = (os.path.isfile(session_file)
+                               and st.st_uid == os.geteuid()
+                               and st.st_mode & 0o077 == 0
+                               and os.access(session_file, os.R_OK))
+                except OSError:
+                    ok_file = False
+                if not ok_file:
+                    return False
+                if spec.name == "grok" and _grok_subscription_config_problem(Path(home)):
+                    return False
+            if not spec.auth_check_args:
+                return bool(shutil.which(spec.binary))
+            found = shutil.which(spec.binary)
+            if not found:
+                return False
+            probe_env = _login_env(login, org_id=org_id)
+            for k in spec.env_exclude:
+                probe_env.pop(k, None)
+            try:
+                proc = subprocess.run([found, *spec.auth_check_args], capture_output=True, text=True,
+                                      timeout=15, env=probe_env, check=False)
+            except (OSError, subprocess.TimeoutExpired):
+                return False
+            out = (proc.stdout or "") + (proc.stderr or "")
+            denied = bool(spec.auth_fail_pattern) and bool(re.search(spec.auth_fail_pattern, out))
+            ok = bool(spec.auth_ok_pattern) and bool(re.search(spec.auth_ok_pattern, out))
+            return proc.returncode == 0 and not denied and ok
+        # No org_id or no per-org home: fall back to process-wide CLI detection.
         return bool(detect(spec).get("ready"))
     return check
 
 
-def _sign_out(login: _Login, argv: Optional[tuple[str, ...]] = None) -> None:
+def _call_signed_in_check(provider: str, settings: Any, org_id: Optional[str]) -> Callable[[], bool]:
+    fn = _signed_in_check
+    try:
+        sig = inspect.signature(fn)
+        if "org_id" in sig.parameters or any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+        ):
+            return fn(provider, settings, org_id=org_id)
+    except (TypeError, ValueError):
+        pass
+    return fn(provider, settings)
+
+
+def _sign_out(login: _Login, argv: Optional[tuple[str, ...]] = None,
+              org_id: Optional[str] = None) -> None:
     """THE REFUSED SESSION GOES FIRST: the CLI's own sign-out, so the fresh login replaces it and
     nothing reads the dead one in between. Its output is never kept; failing is harmless (the
     login that follows writes a new session either way)."""
@@ -702,7 +792,7 @@ def _sign_out(login: _Login, argv: Optional[tuple[str, ...]] = None) -> None:
     try:
         subprocess.run((binary, *command[1:]), stdin=subprocess.DEVNULL,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                       env=_login_env(login), timeout=30, check=False)
+                       env=_login_env(login, org_id=org_id), timeout=30, check=False)
     except (OSError, subprocess.TimeoutExpired):
         pass
 
@@ -746,6 +836,7 @@ def _cannot_keep_token(provider: str, settings: Any) -> Optional[str]:
 
 
 def start(provider: str, *, project_id: str, actor: str, settings: Any = None,
+          org_id: Optional[str] = None,
           login_rejected: bool = False, fresh: bool = False,
           signed_in: Optional[Callable[[], bool]] = None,
           argv: Optional[tuple[str, ...]] = None,
@@ -766,13 +857,21 @@ def start(provider: str, *, project_id: str, actor: str, settings: Any = None,
     replace = login_rejected or fresh
     name = normalize_provider(provider)
     login = LOGINS[name]
-    check = signed_in or _signed_in_check(name, settings)
+    check = signed_in or _call_signed_in_check(name, settings, org_id)
     command = tuple(argv or login.argv)
     now = time.time()
     with _LOCK:
         _sweep(now)
         live = next((s for s in _SESSIONS.values() if s.provider == name and s.state in LIVE),
                     None)
+        if live is not None and live.org_id != org_id:
+            # ONE CLI LOGIN PER PROVIDER PER INSTALL, AND IT IS ANOTHER ORG'S. Never handed over
+            # (its link and code would sign this org in under the other org's model home) and
+            # never replaced from here (that would kill their sign-in). Neutral wording reveals
+            # nothing about another tenant.
+            raise SignInError(
+                409, f"{login.label} sign-in is busy right now",
+                f"A {login.label} sign-in is already in progress. Try again in a few minutes.")
         if live is not None:
             with live.lock:
                 # NEVER HAND BACK A STUCK SESSION. A code that went in and got no answer, or an
@@ -787,7 +886,7 @@ def start(provider: str, *, project_id: str, actor: str, settings: Any = None,
             _kill(old)
         session = _Session(sign_in_id=f"si_{secrets.token_hex(10)}", provider=name,
                            project_id=project_id, actor=actor, started=now,
-                           expires=now + SESSION_TTL_SECONDS)
+                           expires=now + SESSION_TTL_SECONDS, org_id=org_id)
         if not replace and _safe(check):
             session.state = "signed_in"
             session.expires = None
@@ -814,22 +913,30 @@ def start(provider: str, *, project_id: str, actor: str, settings: Any = None,
             _SESSIONS[session.sign_in_id] = session
             return view(session)
         if replace and (logout_argv or login.logout):
-            _sign_out(login, logout_argv)
+            _sign_out(login, logout_argv, org_id=org_id)
         session.store = store
         if login.captures_token:
             session.screen = _Screen(_PTY_COLS)
         try:
+            env = _login_env(login, org_id=org_id)
             if login.pty:
-                process, terminal = _spawn_on_terminal((binary, *command[1:]), _login_env(login))
+                process, terminal = _spawn_on_terminal((binary, *command[1:]), env)
                 session.terminal = terminal
             else:
                 process = subprocess.Popen(
                     (binary, *command[1:]), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT, env=_login_env(login), start_new_session=True,
+                    stderr=subprocess.STDOUT, env=env, start_new_session=True,
                     close_fds=True)
-        except OSError:
+        except OSError as error:
+            # Name the step and the operating system's cause (BOSSAPP-1428): a host cause
+            # (no free terminals, a missing binary, permissions) is fixed on the host.
+            import errno as _errno
+
+            cause = (_errno.errorcode.get(error.errno or 0) or type(error).__name__)
             session.state = "failed"
-            session.reason = f"{login.label}'s login could not start inside BOSS. Try again."
+            session.reason = (f"{login.label}'s login could not start inside BOSS: starting its "
+                              f"CLI failed ({error.strerror or 'no reason given'}, {cause}). "
+                              "Run `boss doctor` on the BOSS host, then press Sign in again.")
             session.finished = now
             _SESSIONS[session.sign_in_id] = session
             return view(session)
@@ -862,6 +969,14 @@ def _get(sign_in_id: str) -> _Session:
                           "It finished more than an hour ago or BOSS restarted. Start the "
                           "sign-in again.")
     return session
+
+
+def owner_of(sign_in_id: str) -> Optional[tuple[Optional[str], str]]:
+    """(org, project) a sign-in was started for (None: no such sign-in). status / submit_code /
+    cancel take only the id, so the central confinement (identity.object_kinds) asks this first."""
+    with _LOCK:
+        session = _SESSIONS.get(str(sign_in_id or ""))
+    return (session.org_id, session.project_id) if session else None
 
 
 def status(sign_in_id: str) -> dict[str, Any]:

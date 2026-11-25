@@ -1,0 +1,16 @@
+{
+  "results": [
+    {
+      "id": "att1",
+      "title": "diagram.png",
+      "mediaType": "image/png",
+      "fileSize": 2048,
+      "downloadLink": "/download/attachments/101/diagram.png",
+      "version": {
+        "number": 1,
+        "createdAt": "2026-11-01T00:00:00.000Z"
+      }
+    }
+  ],
+  "_links": {}
+}

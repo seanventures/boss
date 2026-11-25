@@ -15,6 +15,7 @@ Design (architecture doc §3, "Own Layer 2"):
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import contextlib
 import contextvars
 import json
 import os
@@ -194,11 +195,17 @@ def _stage_deadline() -> Optional[float]:
         deadline = float(raw) if raw else None
     except (TypeError, ValueError):
         return None
-    # THE CLOCK STOPS WHILE THE RUN WAITS FOR A PERSON (stage_clock, BOSSAPP-814): a call parked
-    # at the MCP gateway moves the stage's deadline out by the time it waited.
+    # THE CLOCK STOPS WHILE THE RUN WAITS FOR A PERSON (stage_clock, BOSSAPP-814) OR FOR A MODEL
+    # SLOT (BOSSAPP-1450): a call parked at the MCP gateway, or queued behind another on the
+    # provider's lane, moves the stage's deadline out by the time it waited — counted from when
+    # the stage set its deadline, so the wait before the first session counts too.
     from . import stage_clock
 
-    return stage_clock.extended(ctx.get("run_id"), deadline)
+    try:
+        since = float(ctx["stage_deadline_since"]) if ctx.get("stage_deadline_since") else None
+    except (TypeError, ValueError):
+        since = None
+    return stage_clock.extended(ctx.get("run_id"), deadline, since=since)
 
 
 def _cap_to_deadline(timeout: int, *, read_only: bool) -> int:
@@ -670,6 +677,9 @@ class CodeAgentResult:
     transcript: str
     turns: int
     engine: str
+    #: Paths the stage deleted (tracked at its base, gone from its tree): a micro-VM guest's
+    #: `deleted`. The control plane deletes them on the work branch too.
+    deleted: list[str] = field(default_factory=list)
 
     def to_metadata(self) -> dict:
         """Governance metadata only — the summary BOSS keeps (never the patch)."""
@@ -795,8 +805,8 @@ def sandbox_facts() -> str:
                  else "- curl is NOT installed: probe HTTP with node (fetch) instead.")
     browsers = os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or ""
     if browsers and Path(browsers).is_dir():
-        lines.append(f"- A Chromium for Playwright is preinstalled at {browsers} "
-                     "(PLAYWRIGHT_BROWSERS_PATH is set); do not download browsers.")
+        lines.append(f"- A headless Chromium shell for Playwright is preinstalled at {browsers} "
+                     "(PLAYWRIGHT_BROWSERS_PATH is set); do not download browsers for headless runs.")
     arch = {"aarch64": "arm64", "x86_64": "x64"}.get(platform.machine(), platform.machine())
     lines.append(f"- {platform.system().lower()}-{arch}: a native npm module with no prebuilt binary for it fails to "
                  "build here (argon2 does). Use pure-JS packages: bcryptjs for password hashing.")
@@ -1380,16 +1390,11 @@ class ClaudeCodeAgent:
                 # which is the specific impression this whole effort is trying to remove.
                 # Best-effort by construction: a progress indicator that can fail the work it
                 # is reporting on is worse than no indicator.
-                for turn in produced:
-                    try:
-                        if on_turn:
-                            on_turn(turn)
-                    except Exception:  # noqa: BLE001
-                        pass
                 # THE HARNESS ANSWERING IN THE COMMAND'S PLACE (a sandbox that did not start)
-                # stops the session here — raised through _drain, which ends the child.
-                for turn in produced:
-                    harness_failures.check_turn(turn, engine=self.engine)
+                # stops the session here — raised through _drain, which ends the child. The one
+                # shared turn path (harness_failures.deliver_turns) checks each turn once.
+                harness_failures.deliver_turns(produced, on_turn, engine=self.engine,
+                                               writer=not read_only)
 
             return _on_line, parser, written
 
@@ -2529,10 +2534,22 @@ class PacedCodeAgent:
         started = time.monotonic()
         acquired_at: Optional[float] = None
         watchdog = _SlotWatchdog(self._limiter, self._provider)
+        # WAITING FOR A SLOT IS QUEUE TIME (stage_clock, BOSSAPP-1450): the implement budget and
+        # a review seat's deadline start when the model call starts, not while it queues behind
+        # another on a one-slot lane. Closed the moment the slot is held (or the wait fails).
+        waiting = contextlib.ExitStack()
+        try:
+            from . import stage_clock
+            from .llm_telemetry import get_llm_context
+
+            waiting.enter_context(stage_clock.waiting_for_a_slot(get_llm_context().get("run_id")))
+        except Exception:  # noqa: BLE001 — metering never blocks a dispatch
+            pass
         try:
             watchdog.start()
             with self._limiter.slot(self._provider) as slot:
                 acquired_at = time.monotonic()
+                waiting.close()
                 watchdog.stop()
                 try:
                     out = fn(*args, **kwargs)
@@ -2549,6 +2566,7 @@ class PacedCodeAgent:
                 self._record_never_dispatched(exc, time.monotonic() - started)
             raise
         finally:
+            waiting.close()
             watchdog.stop()
 
     def _record_never_dispatched(self, exc: Exception, waited: float) -> None:
@@ -2799,16 +2817,17 @@ def _project_api_model_binding(
     providers = ("openai", "custom") if lane == "native" else (lane,)
     # Every connection of the lane's provider (`setup-<p>` and `setup-<p>-<n>`): one source per
     # connection. Newest first, but a connection whose last check was refused never wins over
-    # one that works.
-    rows = [row for row in connection.execute(text(
+    # one that works. Include connected keyless local models (vllm, ollama).
+    mappings_res = connection.execute(text(
         "SELECT source_id, credential_secret_ref_id, supported_models, connection_metadata, "
         "observed_capacity "
         "FROM entitlement_sources WHERE project_id=:project_id "
         "AND source_id LIKE 'setup-%' "
-        "AND credential_secret_ref_id IS NOT NULL "
+        "AND (credential_secret_ref_id IS NOT NULL OR connection_status = 'connected') "
         "ORDER BY updated_at DESC NULLS LAST, source_id"
-    ), {"project_id": project_id}).mappings().all()
-        if api_source_provider(row["source_id"]) in providers]
+    ), {"project_id": project_id}).mappings()
+    raw_rows = mappings_res.all() if hasattr(mappings_res, "all") else []
+    rows = [row for row in raw_rows if api_source_provider(row["source_id"]) in providers]
     rows.sort(key=lambda row: last_check_broken(row["connection_metadata"],
                                                 row["observed_capacity"]))
 
@@ -2830,8 +2849,27 @@ def _project_api_model_binding(
     metadata = object_value(row["connection_metadata"], dict)
     model = next((item.strip() for item in models if isinstance(item, str) and item.strip()), "")
     base_url = metadata.get("base_url")
-    return (resolve_secret_ref(connection, row["credential_secret_ref_id"], settings),
-            model, base_url.strip() if isinstance(base_url, str) else "")
+    cred_ref_id = row.get("credential_secret_ref_id")
+    if cred_ref_id:
+        key = resolve_secret_ref(connection, cred_ref_id, settings)
+    else:
+        from .credential_resolve import resolve_project_credential
+        from .model_rate_limiter import provider_of
+
+        key_field = _PROVIDER_LANES[lane][0] if lane in _PROVIDER_LANES else "openai_api_key"
+        prov = api_source_provider(row["source_id"]) or provider_of(lane)
+        key = (
+            resolve_project_credential(
+                connection,
+                settings,
+                project_id=project_id,
+                provider=prov,
+                env_fallback_attr=key_field,
+            )
+            or str(getattr(settings, key_field, "") or "")
+            or (prov if prov in ("vllm", "ollama") else "")
+        )
+    return (key, model, base_url.strip() if isinstance(base_url, str) else "")
 
 
 def _build_azure_agent(settings: Settings) -> CodeAgent:

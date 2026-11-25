@@ -165,10 +165,12 @@ def ingest_tick(body: Optional[IngestTickBody] = None) -> dict[str, Any]:
     """The worker's loop: capture the runs and incidents that just finished (event-driven ingest,
     services/knowledge/ingest.py). No model is called."""
     from apps.api.app.main import require_worker_principal
+    from boss_engine.db import background
     from boss_engine.services.knowledge.ingest import tick
 
     require_worker_principal()
-    return tick(_engine, sweep=bool(body and body.sweep))
+    with background():
+        return tick(_engine, sweep=bool(body and body.sweep))
 
 
 class CypherBody(BaseModel):
@@ -249,8 +251,10 @@ def execute_repository_index(body: RepositoryIndexExecuteBody) -> dict[str, Any]
     """The worker hands its leased `knowledge.repository.index` job here: the GitHub credential
     and the graph are in this container. Fenced by the lease; parsing only, no model."""
     from apps.api.app.main import require_worker_principal
+    from boss_engine.db import background
     from boss_engine.services.knowledge.repo_index import execute_job
 
     require_worker_principal()
-    return execute_job(_engine, _settings, job_id=body.job_id, worker_id=body.worker_id,
-                       lease_token=body.lease_token)
+    with background():
+        return execute_job(_engine, _settings, job_id=body.job_id, worker_id=body.worker_id,
+                           lease_token=body.lease_token)

@@ -1,8 +1,8 @@
 /**
  * WHAT THE SIGN-IN PAGE OFFERS, AND WHY NOT (no fake buttons).
  *
- * The page always has its full shape: the four social providers, a passkey button and the three
- * email methods. Each one is live only when `/v1/auth/options` (and, for passkeys, this browser's
+ * The page offers a passkey button and Password, plus only the SSO providers that are configured.
+ * The two emailed methods (magic link, email code) appear only when email delivery is set up. Each one is live only when `/v1/auth/options` (and, for passkeys, this browser's
  * own address) says it can work; otherwise it is shown disabled with the exact words that turn it
  * on. A plain module so the page and its tests read the same rules.
  */
@@ -34,17 +34,19 @@ export function ssoStartHref(id: string, next: string): string {
 }
 
 /**
- * The four social squares in a fixed order (the first configured provider of each preset makes
- * it live), then every other configured provider — OIDC or SAML — in the API's order.
+ * Only the providers this BOSS has configured: the four social presets first in a fixed order
+ * (the first configured provider of each preset), then every other configured provider — OIDC or
+ * SAML — in the API's order. A provider that is not set up is not shown at all: a fresh install
+ * showed four disabled Google/GitHub/Microsoft/Apple tiles nobody could use (stranger test r2,
+ * 2026-11-17). An Owner turns them on in Identity › Sign-in & SSO.
  */
 export function providerOffers(providers: AuthOptions["providers"], next: string): ProviderOffer[] {
   const used = new Set<string>();
-  const social = SOCIAL.map(({ preset, name }): ProviderOffer => {
+  const social = SOCIAL.flatMap(({ preset, name }): ProviderOffer[] => {
     const p = providers.find((x) => x.preset === preset);
-    if (p) used.add(p.id);
-    return p
-      ? { key: p.id, name: p.name || name, preset, href: ssoStartHref(p.id, next), why: null }
-      : { key: `off-${preset}`, name, preset, href: null, why: `${name} sign-in isn't set up · ${WHERE_SSO_IS_SET}` };
+    if (!p) return [];
+    used.add(p.id);
+    return [{ key: p.id, name: p.name || name, preset, href: ssoStartHref(p.id, next), why: null }];
   });
   const rest = providers.filter((p) => !used.has(p.id))
     .map((p): ProviderOffer => ({ key: p.id, name: p.name, preset: p.preset, href: ssoStartHref(p.id, next), why: null }));
@@ -55,9 +57,9 @@ export function providerOffers(providers: AuthOptions["providers"], next: string
  * Why "Sign in with a passkey" can't work here, or null when it can. `where` is the page's own
  * address (null on the server); `webauthn` is whether this browser has passkeys at all.
  */
-export function passkeyWhyNot(options: Pick<AuthOptions, "passkey" | "passkey_reason">,
+export function passkeyWhyNot(options: Pick<AuthOptions, "passkey" | "passkey_reason" | "public_origin">,
   where: { hostname?: string; protocol?: string; secure?: boolean } | null, webauthn: boolean): string | null {
-  const blocked = passkeyBlockWords(options.passkey_reason, where);
+  const blocked = passkeyBlockWords(options.passkey_reason, where, options.public_origin);
   if (blocked) return blocked;
   if (options.passkey_reason === "public_origin_unset") return "Passkeys need BOSS's public address. It's set when an Owner claims BOSS.";
   if (options.passkey === false) return "Passkeys aren't set up on this BOSS yet";
@@ -66,6 +68,12 @@ export function passkeyWhyNot(options: Pick<AuthOptions, "passkey" | "passkey_re
 }
 
 export type Method = "password" | "magic" | "code";
+
+/** Whether the Magic link and Email code tabs appear at all: only when this BOSS can deliver
+ *  email. Without it they could never work, so a fresh install shows Password alone. */
+export function emailMethodsShown(options: Pick<AuthOptions, "smtp">): boolean {
+  return options.smtp === true;
+}
 
 /** Why an email method is off, or null when it is offered. Password always is. */
 export function methodWhyNot(method: Method, options: Pick<AuthOptions, "smtp" | "public_origin">): string | null {

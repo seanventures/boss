@@ -1,0 +1,39 @@
+# Remediated per gwlint's never-fixable findings against examples/lumen-pay.bad.yaml:
+#   - no-inlined-secrets: removed the inlined auth.api_key live-secret value entirely
+#     (the /v1/payments route already authenticates via JWT).
+#   - cors-no-wildcard-with-credentials: allow_credentials set to false; allow_origins
+#     left as ["*"] since no exact origin was named in the brief.
+#   - pii-fields-declared: pii_fields lists this tenant's exposed personal-data fields.
+#   - tenant-rate-limit-required: top-level rate_limit added at tenant scope.
+#   - no-sensitive-paths-exposed: the sensitive accounts-admin route was removed, not secured.
+tenant: lumen-pay
+owner: "Lumen Pay Platform Team"
+contact: "platform@lumenpay.example"
+tier: standard
+data_classification: pii
+pii_fields: ["merchant_id", "customer_email"]
+rate_limit:
+  rps: 50
+  burst: 50
+routes:
+  - path: /v1/payments
+    description: "List recent payments for the authenticated merchant."
+    methods: ["GET"]
+    upstream: lumen-pay-core
+    max_body_bytes: 1048576
+    auth:
+      type: jwt
+      issuer: "https://issuer.lumenpay.example"
+      audience: "northgate"
+      scopes: ["payments.read"]
+      jwks_url: "https://mock-upstream-staging:9001/.well-known/jwks.json"
+    rate_limit:
+      rps: 10
+      burst: 10
+    cors:
+      allow_origins: ["*"]
+      allow_credentials: false
+upstreams:
+  lumen-pay-core:
+    url: "https://mock-upstream-staging:9001"
+    timeout_ms: 2000

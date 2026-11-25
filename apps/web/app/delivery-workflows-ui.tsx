@@ -11,6 +11,8 @@ import { ShareRunButton } from "./improve/share-run";
 import { OPEN_GATE, needsYou as gateNeedsYou, personWait, stepClock, waitsForMerge as mergeWait } from "../lib/step-timing";
 
 import { ActionPreview, actionPreviewOf } from "./action-preview";
+import { DecisionCard } from "./decision-inbox-ui";
+import { isAnswerableDecision, mapDecision, type DecisionFeedItem } from "../lib/decisions";
 import { appIdentity, identityKey, type AppRun } from "./app-identity";
 import { notifyChanged, onChanged } from "./changed";
 import { Markdown } from "./markdown";
@@ -23,7 +25,7 @@ import { StepIcon, hasStepIcon } from "./step-icons";
 import { isLoopbackPreviewUrl, operatorPreviewOpenHref } from "../lib/code-tasks";
 import { previewRecordFromStepOutput } from "../lib/previews";
 import { openDockAbout, type DockSubject } from "../lib/dock-subject";
-import { missingRequired, suppliedInputs, workflowInputFields } from "../lib/workflow-inputs";
+import { missingRequired, startParam, suppliedInputs, workflowInputFields } from "../lib/workflow-inputs";
 import { HostAdviceBanner, useHostAdvice } from "./host-advice";
 import { StartRefusal, asReadiness, type PendingRefusal } from "./workflow-readiness-ui";
 import { RunReportPanel, OpenRunReportButton, runHasReport } from "./run-report-ui";
@@ -69,6 +71,8 @@ import { useOnScreen } from "../lib/area-shown";
 import { forEachProgress } from "../lib/workflow-for-each";
 import { LearnedStrip } from "./knowledge/learned-strip";
 import { FULL_PAGE, PAGE_PARAM, readFullPage } from "./workflows/full-page";
+import { RunWorkLine } from "./workflows/run-work-line";
+import { projectHref } from "../lib/project-experience";
 
 // Moved to app/workflows/ (Workflow Studio, phase 0); re-exported so existing imports hold.
 export { CaptainCanRunIt, DefineStepForm };
@@ -146,6 +150,8 @@ export type CatalogueEntry = {
   key: string;
   name: string;
   description: string;
+  /** In a Marketplace pack (engine workflow_marketplace): installed from there, not a standard. */
+  pack?: string | null;
   work_class: string;
   step_count: number;
   steps: { id: string; capability: string }[];
@@ -241,6 +247,8 @@ export type RunStep = {
 
 type Run = {
   id: string;
+  project_id?: string | null;
+  project_name?: string | null;
   status: string;
   /** "test" for a test run (#512): pinned steps did not run; it is left out of the list unless
    *  "Show test runs" is on. */
@@ -335,6 +343,12 @@ export function stoppedAnswers(actions: { retry?: RunAction; skip?: RunAction })
   if (retry) return " Try it again.";
   if (skip) return " Skip it and carry on.";
   return "";
+}
+
+/** The agent's brief this run was started with (its directive), trimmed; "" when none. */
+export function runBrief(run: { input?: Record<string, unknown> | null }): string {
+  const d = (run.input ?? {})["directive"];
+  return typeof d === "string" ? d.trim() : "";
 }
 
 /** The project this run is delivering. Five runs of "Standard Product Delivery" are five
@@ -672,7 +686,7 @@ function setAreaUrl(patch: Record<string, string | null>, mode: "push" | "replac
  *  leaving the editor, or switching tab, leaves the full page too. */
 const EDITOR_PARAMS = { wf: null, step: null, view: null, v: null, from: null, [PAGE_PARAM]: null } as const;
 
-export function DeliveryWorkflows({ projectId, actor }: { projectId: string; actor: string }) {
+export function DeliveryWorkflows({ projectId, actor, homeProjectId }: { projectId: string; actor: string; homeProjectId?: string | null }) {
   const [tab, setTabState] = useState<AreaTab>("runs");
   const [editing, setEditing] = useState<string | null>(null);
   /** `page=full`: the workflow, or the run, the URL names, with the whole window. */
@@ -829,17 +843,30 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
     setStartWith(key);
     setStartExample(example ?? null);
   }, []);
+  // `start=<key>` (New work's link to a workflow a brief cannot start): open its Start form, once.
+  useEffect(() => {
+    const read = () => {
+      const key = startParam(window.location.search);
+      if (!key) return;
+      openComposerOn(key);
+      setAreaUrl({ start: null }, "replace");
+    };
+    read();
+    window.addEventListener("popstate", read);
+    return () => window.removeEventListener("popstate", read);
+  }, [openComposerOn]);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   // TEST RUNS ARE LEFT OUT OF THE LIST unless asked for (#512): a test is not production work.
   const [showTests, setShowTests] = useState(false);
 
+  const orgScope = Boolean(homeProjectId && projectId === homeProjectId);
   const load = useCallback(async () => {
     const [caps, cat, inst, live, mine, sched] = await Promise.all([
       get<{ capabilities: Capability[]; manual_approval_risk_floor: number }>(
         "capabilities", projectId),
       get<{ items: CatalogueEntry[] }>("catalogue", projectId),
       get<{ items: Installed[] }>("installed", projectId),
-      get<{ runs: Run[] }>(showTests ? "runs_with_tests" : "runs", projectId),
+      get<{ runs: Run[] }>(showTests ? "runs_with_tests" : "runs", projectId, orgScope ? { scope: "org" } : undefined),
       get<{ steps: CustomStep[] }>("custom_steps", projectId),
       get<{ schedules: Schedule[] }>("schedules", projectId),
     ]);
@@ -1069,7 +1096,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
       setOpenRun(runId);
       setAreaUrl({ ...EDITOR_PARAMS, tab: "runs", wfr: runId, [PAGE_PARAM]: FULL_PAGE });
     } else {
-      setAreaUrl({ [PAGE_PARAM]: null, step: null });
+      setAreaUrl({ [PAGE_PARAM]: null, step: null, from: null });
     }
   }, []);
 
@@ -1171,7 +1198,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
           ])}
           examples={Object.fromEntries(catalogue.map((c) => [c.key, c.example ?? null]))}
           workClasses={[...new Set(catalogue.map((c) => c.work_class).filter(Boolean))].sort()}
-          uninstalledStandards={catalogue.filter((c) => !installedStandards.has(c.key)).length}
+          uninstalledStandards={catalogue.filter((c) => !c.pack && !installedStandards.has(c.key)).length}
           onInstallStandards={() => void act("Install the standards", "install", {})}
           customSteps={customSteps} riskFloor={riskFloor}
           onStart={(key, example) => openComposerOn(key, example)}
@@ -1756,7 +1783,14 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
   // same notice and path the row has, the lane left to right at the page's width.
   const fullRun = fullPageRun ? runs.find((r) => r.id === fullPageRun) : undefined;
   if (fullPageRun) {
-    const back = (
+    // OPENED FROM A WORK ROW (`from=work`, design #287): the way back is to Work.
+    const fromWork = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("from") === "work";
+    const back = fromWork ? (
+      <a className="wf-btn wf-btn-ghost wf-back" data-testid="run-full-back-work"
+         href={projectHref(projectId, { tab: "work" })}>
+        <ArrowLeft size={14} weight="bold" aria-hidden />Work
+      </a>
+    ) : (
       <button type="button" className="wf-btn wf-btn-ghost wf-back" data-testid="run-full-back"
               onClick={() => onFullPage?.(null)}>
         <ArrowLeft size={14} weight="bold" aria-hidden />Back to runs
@@ -1778,10 +1812,7 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
         <header className="dw-full-head">
           {back}
           <span className="dw-badge" data-tone={tone(fullRun.status)}>{fullRun.status}</span>
-          <h2 className="dw-full-title" data-testid="run-full-title">
-            {runSubject(fullRun) ?? fullRun.workflow_name}
-            {fullRun.workflow_name} v{fullRun.version}
-          </h2>
+          <RunFullTitle subject={runSubject(fullRun)} workflow={fullRun.workflow_name} version={fullRun.version} />
           <span className="dw-run-progress">
             {fullRun.steps_done} of {fullRun.step_count}
             <i className="dw-bar" aria-hidden>
@@ -1796,6 +1827,8 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
               waiting on {/^[a-z0-9_]+$/.test(fullRun.waiting_on) ? roleLabel(fullRun.waiting_on) : fullRun.waiting_on}
             </span>
           ) : null}
+          {/* THE HEADER LINE: Change #N · Preview · Staging · Prod · "Your move: <button>". */}
+          <div className="dw-full-work"><RunWorkLine projectId={projectId} runId={fullRun.id} actor={actor} /></div>
           <button type="button" className="wf-btn wf-btn-ghost dw-full-exit" data-testid="exit-full-page"
                   title="Back to the list, with this run open"
                   onClick={() => onFullPage?.(null)}>
@@ -1803,7 +1836,7 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
           </button>
         </header>
         {noticeFor(fullRun)}
-        <LearnedStrip projectId={projectId} actor={actor} runId={fullRun.id}
+        <LearnedStrip people projectId={projectId} actor={actor} runId={fullRun.id}
                       live={!/^(succeeded|completed|failed|cancelled|canceled|deadlettered)$/.test(fullRun.status)} />
         {pathFor(fullRun, true)}
       </div>
@@ -1889,7 +1922,12 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
                 {runSubject(run) ?? run.workflow_name}
                 {runSubject(run) ? (
                   <em className="dw-run-wf" data-testid="dw-run-workflow">
+                    {run.project_id && run.project_id !== projectId && run.project_name ? `${run.project_name} · ` : ""}
                     {run.workflow_name} v{run.version}
+                  </em>
+                ) : run.project_id && run.project_id !== projectId && run.project_name ? (
+                  <em className="dw-run-wf" data-testid="dw-run-workflow">
+                    {run.project_name}
                   </em>
                 ) : null}
               </span>
@@ -1921,7 +1959,7 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
               ) : null}
             </button>
             {noticeFor(run)}
-            {open ? <LearnedStrip projectId={projectId} actor={actor} runId={run.id} live={!/^(succeeded|completed|failed|cancelled|canceled|deadlettered)$/.test(run.status)} /> : null}
+            {open ? <LearnedStrip people projectId={projectId} actor={actor} runId={run.id} live={!/^(succeeded|completed|failed|cancelled|canceled|deadlettered)$/.test(run.status)} /> : null}
             {open ? pathFor(run) : null}
           </article>
         );
@@ -1941,7 +1979,7 @@ function hasFindings(step: RunStep): boolean {
 }
 
 export function phaseOf(step: RunStep):
-    "done" | "now" | "ahead" | "skipped" | "failed" | "findings" | "failed_on" | "nothing" {
+    "done" | "now" | "wait" | "ahead" | "skipped" | "failed" | "findings" | "failed_on" | "nothing" {
   // FAILED, AND THE WORK WENT ON. Research that died is not "not run", that hides something
   // worth fixing, and it is not a stopped run either, because the project carried on without
   // it. Its own state, so neither reading is offered.
@@ -1952,6 +1990,7 @@ export function phaseOf(step: RunStep):
   }
   if (didNothing(step)) return "nothing";
   if (step.status === "succeeded") return hasFindings(step) ? "findings" : "done";
+  if (gateNeedsYou(step) || personWait(step)) return "wait";
   if (["running", "leased", "ready", "waiting", "queued"].includes(step.status)) return "now";
   return "ahead";
 }
@@ -2163,6 +2202,10 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
     return () => window.removeEventListener("popstate", onPop);
   }, [steps, run.id]);
   const current = steps.find((s) => s.step_id === picked) ?? initial;
+  // The brief the build agent worked from (the run's directive), and the step that built.
+  const brief = runBrief(run);
+  const briefStep = steps.find((s) => typeof (s.output ?? {}).code_task_run_id === "string")?.step_id
+    ?? steps.find((s) => /build/i.test(`${s.capability ?? ""} ${s.step_id}`))?.step_id ?? null;
   // A LINK TO ONE STEP LANDS ON THAT STEP (`?wfr=<this run>&step=<id>`, the Log's Step , a
   // step panel's link). It opened on the run's own choice above, so every such link showed
   // the first step that wanted attention instead. Read after mount (the URL is the client's).
@@ -2258,6 +2301,8 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
 
   return (
     <div className="dw-path" data-testid="dw-path" data-full-page={fullPage ? "true" : undefined}>
+      {/* On the full page the line sits in the run's header (RunFullPage). */}
+      {fullPage ? null : <RunWorkLine projectId={projectId} runId={run.id} actor={actor} />}
       <div className="wf-run-bar">
         {/* A FINISHED RUN IS READ FOR WHAT WAS DONE: its report, every section open, is the
             first thing on its bar, not a collapsed panel below the lane. */}
@@ -2353,6 +2398,14 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onSkipStep, 
             return Array.isArray(spec?.next) ? spec.next.map(String) : [];
           })}
         />
+        {/* THE AGENT'S BRIEF, BEHIND ONE TOGGLE (design #287): the run's directive on its build
+            step, never a wall of text above the work. */}
+        {brief && current.step_id === briefStep ? (
+          <details className="dw-brief" data-testid="dw-full-brief">
+            <summary>Full brief</summary>
+            <p>{brief}</p>
+          </details>
+        ) : null}
         {pinnedOutput(current.output) ? (
           <p className="detail" data-testid="dw-step-pinned">
             Pinned: this step did not run; it returned the output it was given.
@@ -2855,7 +2908,31 @@ export function stepQuestion(step: Pick<RunStep, "step_id" | "status">, label?: 
  *  same call. Approving a deployment off a step badge is a decision made blind. The Approvals
  *  page is where that context lives, so this goes there with the decision already selected.
  */
-function ReviewAndDecide({ step }: { step: RunStep }) {
+/** THE WAITING DECISION, AS APPROVALS DRAWS IT (approvals wireframe B): the same three-line card,
+ *  read live from the decision itself; null until it loads or once it is no longer answerable. */
+function useStepDecision(decisionId: string | null | undefined, projectId: string): DecisionFeedItem | null {
+  const [decision, setDecision] = useState<DecisionFeedItem | null>(null);
+  useEffect(() => {
+    if (!decisionId || !projectId) { setDecision(null); return undefined; }
+    let alive = true;
+    const load = async () => {
+      try {
+        const r = await fetch(`/v1/decisions/${encodeURIComponent(decisionId)}?project_id=${encodeURIComponent(projectId)}`,
+                              { cache: "no-store" });
+        if (!r.ok) { if (alive) setDecision(null); return; }
+        const item = mapDecision(await r.json());
+        if (alive) setDecision(isAnswerableDecision(item) ? item : null);
+      } catch { if (alive) setDecision(null); }
+    };
+    void load();
+    const off = onChanged(() => { void load(); });
+    return () => { alive = false; off(); };
+  }, [decisionId, projectId]);
+  return decision;
+}
+
+export function ReviewAndDecide({ step, projectId = "", actor = "" }: { step: RunStep; projectId?: string; actor?: string }) {
+  const decision = useStepDecision(step.decision_id, projectId);
   const role = (step.approval as { approver_role?: string })?.approver_role;
   const merge = (step.output as { merge?: { pull_request_number?: number;
                                             pull_request_url?: string } } | undefined)?.merge;
@@ -2873,9 +2950,20 @@ function ReviewAndDecide({ step }: { step: RunStep }) {
       </div>
     );
   }
+  if (!step.decision_id) return null;
   // WHAT IT WILL DO, ON THE STEP TOO. The decision card has the buttons; the step at least
   // shows what is waiting on them, so "Email the newsletter, needs you" says which email.
   const preview = actionPreviewOf(step.action_preview);
+  if (decision) {
+    // THE SAME CARD AS APPROVALS: title, one status line, the answers and the links; the
+    // preview, the effect and the evidence behind its Details.
+    const orgId = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("org") ?? undefined : undefined;
+    return (
+      <div className="dw-step-decision" data-testid="dw-step-decision">
+        <DecisionCard decision={decision} projectId={projectId} actorId={actor} orgId={orgId} hideRunLink />
+      </div>
+    );
+  }
   return (
     <>
     {preview ? <ActionPreview preview={preview} /> : null}
@@ -3454,7 +3542,7 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
                     run: appIdentity(runInput as AppRun).name || runAppTitle })
     : "";
   const facts = stepFacts(step);
-  const finished = !["now", "ahead"].includes(phase);
+  const finished = !["now", "wait", "ahead"].includes(phase);
   const question = stepQuestion(step, capability?.label);
   const ask = () => {
     if (act?.roleKey) { askAboutAct(act, question); return; }
@@ -3701,14 +3789,14 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
           {/* A gate opened before stack deploys stopped being gated (a run already waiting at
               it when BOSS was upgraded) is still answerable, through the Approvals page, the
               way it was raised. New runs never have one. */}
-          {needsYou(step) ? <ReviewAndDecide step={step} /> : null}
+          {needsYou(step) ? <ReviewAndDecide step={step} projectId={projectId} actor={actor} /> : null}
         </>
       ) : isDeployStep(step, capability) && shippedTo ? (
         <div className="dw-ship-single" data-testid="dw-ship-single">
           {targetControl}
           {needsYou(step) ? (
             <div className="dw-ship-single-act">
-              <ReviewAndDecide step={step} />
+              <ReviewAndDecide step={step} projectId={projectId} actor={actor} />
               <Explain label="What approving does">
                 The press that ships it: BOSS builds a container from this app and runs it on{" "}
                 {boundHostName || "the bound host"} at{" "}
@@ -3801,7 +3889,7 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
               {/* THE BUTTON, INSIDE THE THING IT DOES. It used to sit three blocks further
                   down, past "Ask BOSS about this step", which is how it came to look like a
                   peer of "Set target" rather than the step after it. */}
-              {needsYou(step) && shippedTo ? <ReviewAndDecide step={step} /> : null}
+              {needsYou(step) && shippedTo ? <ReviewAndDecide step={step} projectId={projectId} actor={actor} /> : null}
             </div>
           </li>
         </ol>
@@ -3822,7 +3910,7 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
       {/* ANSWER THE APPROVAL WHERE IT IS SEEN. A gate answerable only in another area makes the
           operator leave the screen that told them it was waiting. */}
       {/* On a deploy this is rendered inside step 2 above, where it belongs in the sequence. */}
-      {needsYou(step) && !isDeployStep(step, capability) ? <ReviewAndDecide step={step} /> : null}
+      {needsYou(step) && !isDeployStep(step, capability) ? <ReviewAndDecide step={step} projectId={projectId} actor={actor} /> : null}
 
       {/* THE CLICK LANDED. SAY SO.
           An operator approved a deploy, came back here, and saw the identical "waiting, gate ·
@@ -4033,5 +4121,20 @@ function ChangeRecord({ documentId }: { documentId: string }) {
         </>
       ) : null}
     </details>
+  );
+}
+
+/** THE FULL-PAGE RUN TITLE: "Lumen Pay tenant onboarding · Onboard a config file v1" — the
+ *  run's subject, a separator, then its workflow; the workflow alone when there is no subject. */
+export function RunFullTitle({ subject, workflow, version }: { subject: string | null | undefined; workflow: string; version: number | string }) {
+  return (
+    <h2 className="dw-full-title" data-testid="run-full-title">
+      {subject ? (
+        <>
+          <span className="dw-full-subject">{subject}</span>
+          <em className="dw-run-wf" data-testid="run-full-workflow"><span className="dw-sep" aria-hidden> · </span>{workflow} v{version}</em>
+        </>
+      ) : <span className="dw-full-subject">{workflow} v{version}</span>}
+    </h2>
   );
 }

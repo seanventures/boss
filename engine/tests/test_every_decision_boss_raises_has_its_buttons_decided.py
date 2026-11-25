@@ -81,6 +81,9 @@ DIRECT_INSERTS = {
     ("engine/boss_engine/services/self_fix_install.py", "_incident"),
     # Taking an installed self-fix back out asks a person first (self_fix.remove).
     ("engine/boss_engine/services/self_fix_install.py", "request_removal"),
+    # Dev autonomy's audit row for an act that opens no card (a Deploy step to a development
+    # target): written already APPROVED by the agent, so it never waits and offers no button.
+    ("engine/boss_engine/services/autonomy_gate.py", "record_decided"),
 }
 #: The Postgres body of create_blocking_decision: its callers are the producers scanned above.
 SINK_INSERTS = {("engine/boss_engine/services/core.py", "_create_blocking_decision_postgres")}
@@ -261,7 +264,37 @@ def _resolve_action(module: Module, expr: ast.expr, func: Optional[ast.FunctionD
         constant = _module_constant(module, expr.id)
         if constant is not None:
             return [Found(where, action=constant)]
+    # Another module's constant through its import alias (config_deploy writes
+    # `governed.DECISION_ACTION` after `from . import governed_host_deploy as governed`).
+    if isinstance(expr, ast.Attribute) and isinstance(expr.value, ast.Name):
+        constant = _imported_constant(module, func, expr.value.id, expr.attr)
+        if constant is not None:
+            return [Found(where, action=constant)]
     return [Found(where, unresolved=f"action is {ast.unparse(expr)}")]
+
+
+def _imported_constant(module: Module, func: Optional[ast.FunctionDef], alias: str,
+                       name: str) -> Optional[str]:
+    """The string `alias.NAME` binds, where `alias` is a scanned module imported by a relative
+    `from . import x [as alias]` in the function or at the top of the module; else None."""
+    nodes = [*(ast.walk(func) if func is not None else ()), *module.tree.body]
+    package = Path(module.rel).parent
+    for node in nodes:
+        if not (isinstance(node, ast.ImportFrom) and node.level >= 1):
+            continue
+        for imported in node.names:
+            if (imported.asname or imported.name) != alias:
+                continue
+            base = package
+            for _ in range(node.level - 1):
+                base = base.parent
+            if node.module:
+                base = base.joinpath(*node.module.split("."))
+            target = next((m for m in MODULES if m.rel == str(base / f"{imported.name}.py")),
+                          None)
+            if target is not None:
+                return _module_constant(target, name)
+    return None
 
 
 def _class_constant_fstring(module: Module, expr: ast.JoinedStr) -> Optional[str]:
@@ -558,16 +591,32 @@ def _compared_actions(method: str, variable: str) -> set[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"))
     func = next(n for n in ast.walk(tree)
                 if isinstance(n, ast.FunctionDef) and n.name == method)
+    parents = {child: parent for parent in ast.walk(func) for child in ast.iter_child_nodes(parent)}
     seen: set[str] = set()
     for node in ast.walk(func):
         if not (isinstance(node, ast.Compare) and isinstance(node.left, ast.Name)
                 and node.left.id == variable):
+            continue
+        if _pinned_to_reject(node, parents):
+            # `recommendation_action == "storage_delete" and action == "reject"` handles a
+            # rejection ("Not now"); it reads no revise note, so it is not Request changes.
             continue
         for comparator in node.comparators:
             for leaf in ast.walk(comparator):
                 if isinstance(leaf, ast.Constant) and isinstance(leaf.value, str):
                     seen.add(leaf.value)
     return seen
+
+
+def _pinned_to_reject(compare: ast.Compare, parents: dict) -> bool:
+    """Whether the `and` this comparison sits in also requires `action == "reject"`."""
+    parent = parents.get(compare)
+    if not (isinstance(parent, ast.BoolOp) and isinstance(parent.op, ast.And)):
+        return False
+    return any(isinstance(v, ast.Compare) and isinstance(v.left, ast.Name)
+               and v.left.id == "action" and len(v.ops) == 1 and isinstance(v.ops[0], ast.Eq)
+               and isinstance(v.comparators[0], ast.Constant) and v.comparators[0].value == "reject"
+               for v in parent.values)
 
 
 def test_approve_says_it_carries_out_exactly_what_the_follow_on_carries_out():

@@ -170,6 +170,9 @@
 .lr-btn[data-kind="primary"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 .lr-btn[data-kind="primary"]:hover { background: var(--accent-press); }
 .lr-btn[data-kind="ghost"] { background: transparent; }
+.lr-btn[data-kind="danger"] { color: var(--red); background: var(--red-soft); border-color: transparent; }
+.lr-btn[data-kind="danger"]:disabled { opacity: .55; cursor: not-allowed; }
+.cs-blocked-rows { margin: 0; padding-left: 1.1rem; display: grid; gap: 2px; color: var(--red); }
 .lr-btn[data-kind="amber"] { width: 100%; color: var(--amber); background: var(--amber-soft); border-color: transparent; }
 .lr-btn:disabled, .lr-btn[aria-disabled="true"] { opacity: .55; cursor: not-allowed; }
 .lr-btn kbd { font-family: var(--mono); font-size: var(--fs-tag); opacity: .75; }
@@ -337,6 +340,7 @@
    2.25rem rail, 0 on a phone); the code takes the rest. Never a cap on the page. */
 .gr-layout { --gr-tree-col: 264px; --gr-agent-col: 340px; min-width: 0; }
 .gr-body { display: grid; grid-template-columns: minmax(0, 1fr) var(--gr-agent-col); gap: 12px; align-items: start; min-width: 0; }
+.gr-body[data-full] { grid-template-columns: minmax(0, 1fr); }
 .gr-tab { min-width: 0; }
 .gr-files, .lr-code { display: grid; grid-template-columns: var(--gr-tree-col) minmax(0, 1fr); gap: 12px; align-items: start; min-width: 0; padding: 0; }
 .gr-dock { position: sticky; top: 8px; min-width: 0; align-self: start; }

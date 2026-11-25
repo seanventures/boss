@@ -308,8 +308,11 @@ def advance_run(run_id: str, payload: ProcessActorRequest) -> dict[str, Any]:
 @router.post("/v1/agent-processes/tick-all")
 @permit(P.AUTOPILOT_OPERATE, scope=Scope.project(body="project_id"))
 def tick_all(payload: ProcessActorRequest) -> dict[str, Any]:
-    with begin(get_engine()) as connection:
-        _require(connection, payload.project_id, payload.actor)
-        return _service().tick_due(
-            connection, project_id=payload.project_id, actor=payload.actor
-        )
+    from boss_engine.db import background
+
+    with background():
+        with begin(get_engine()) as connection:
+            _require(connection, payload.project_id, payload.actor)
+            return _service().tick_due(
+                connection, project_id=payload.project_id, actor=payload.actor
+            )

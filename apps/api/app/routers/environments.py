@@ -61,13 +61,22 @@ def _require_operator(connection: Any, project_id: str, actor: str,
         require_project_actor(connection, project_id, actor, "workflow_execute")
 
 
-def _own_row(connection, environment_id: str, project_id: str) -> dict:
-    """The row, only when this project may see it: its own, or an org-wide one."""
+def _org_of(connection: Any, project_id: str) -> Optional[str]:
+    return envs._org_of_project(connection, project_id)  # noqa: SLF001
+
+
+def _own_row(connection, environment_id: str, project_id: str,
+             *, org_id: Optional[str] = None) -> dict:
+    """The row, only when this project may see it: its own, or its org's org-wide row."""
+    resolved_org = org_id if org_id is not None else _org_of(connection, project_id)
     try:
-        row = envs.get_environment(connection, environment_id)
+        row = envs.get_environment(connection, environment_id, org_id=resolved_org)
     except envs.EnvironmentNotFound as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     if row.get("project_id") not in (None, project_id):
+        raise HTTPException(status_code=404,
+                            detail=f"no execution environment {environment_id!r}.")
+    if row.get("project_id") is None and resolved_org is not None and str(row.get("org_id") or "") != str(resolved_org):
         raise HTTPException(status_code=404,
                             detail=f"no execution environment {environment_id!r}.")
     return row
@@ -84,8 +93,9 @@ def list_environments(
     """The project's execution environments, plus the org-wide rows it may use."""
     with begin(get_engine()) as connection:
         _require_operator(connection, project_id, actor)
+        org_id = _org_of(connection, project_id)
         items = [envs.public_view(r) for r in envs.list_environments(
-            connection, project_id, include_org_wide=include_org_wide)]
+            connection, project_id, org_id=org_id, include_org_wide=include_org_wide)]
     return {"project_id": project_id, "items": items, "count": len(items)}
 
 
@@ -97,9 +107,11 @@ def create_environment(payload: CreateRequest) -> dict[str, Any]:
         with begin(get_engine()) as connection:
             _require_operator(connection, payload.project_id, payload.actor,
                               mutating=True)
+            org_id = _org_of(connection, payload.project_id)
             row = envs.create_environment(
                 connection,
                 project_id=payload.project_id,
+                org_id=org_id,
                 name=payload.name,
                 driver=payload.driver,
                 config=payload.config,
@@ -119,10 +131,12 @@ def update_environment(environment_id: str, payload: UpdateRequest) -> dict[str,
         with begin(get_engine()) as connection:
             _require_operator(connection, payload.project_id, payload.actor,
                               mutating=True)
-            _own_row(connection, environment_id, payload.project_id)
+            org_id = _org_of(connection, payload.project_id)
+            _own_row(connection, environment_id, payload.project_id, org_id=org_id)
             row = envs.update_environment(
                 connection,
                 environment_id,
+                org_id=org_id,
                 name=payload.name,
                 config=payload.config,
                 secret_refs=payload.secret_refs,
@@ -139,14 +153,15 @@ def delete_environment(environment_id: str, payload: ActorRequest) -> dict[str, 
     with begin(get_engine()) as connection:
         _require_operator(connection, payload.project_id, payload.actor,
                           mutating=True)
-        row = _own_row(connection, environment_id, payload.project_id)
+        org_id = _org_of(connection, payload.project_id)
+        row = _own_row(connection, environment_id, payload.project_id, org_id=org_id)
         if row.get("project_id") is None:
             # An org-wide row is shared; a project may not delete it from here.
             raise HTTPException(
                 status_code=409,
                 detail="this environment is org-wide; retire it instead "
                        "(PATCH status=retired) or delete it at the org level.")
-        envs.delete_environment(connection, environment_id)
+        envs.delete_environment(connection, environment_id, org_id=org_id)
     return {"id": environment_id, "deleted": True}
 
 
@@ -158,7 +173,8 @@ def probe_environment(environment_id: str, payload: ActorRequest) -> dict[str, A
     with begin(get_engine()) as connection:
         _require_operator(connection, payload.project_id, payload.actor,
                           mutating=True)
-        row = _own_row(connection, environment_id, payload.project_id)
+        org_id = _org_of(connection, payload.project_id)
+        row = _own_row(connection, environment_id, payload.project_id, org_id=org_id)
         result = envs.probe_environment(connection, get_settings(), row)
-        envs.record_probe(connection, environment_id, result)
+        envs.record_probe(connection, environment_id, result, org_id=org_id)
     return {"id": environment_id, "probe": result}

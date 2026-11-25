@@ -79,6 +79,14 @@ def test_the_registered_specs_carry_their_rules():
         assert "run_id" in {c.name for c in reg.get(tool).confine}, tool
 
 
+#: The ids X2 (2026-11-21) confined: each reached its handler with no central check.
+X2_CONFINED = (("offer_options", "work_item_id"), ("watch_work_item", "work_item_id"),
+               ("autonomy_report", "run_id"), ("file_platform_gap", "run_id"),
+               ("get_self_fix", "self_fix_id"), ("request_self_fix", "recommendation_id"),
+               ("request_budget_override", "run_id"), ("list_deployments", "deployment_id"),
+               ("kg_why", "node_id"), ("kg_callers", "node_id"), ("kg_blast_radius", "node_id"))
+
+
 # ---- the gate -------------------------------------------------------------------------------------
 
 @pytest.fixture
@@ -89,7 +97,8 @@ def gate(monkeypatch):
     real = build_default_registry()
     reg = ToolRegistry()
     for name in ("extend_code_task", "redeploy", "preflight_deployment_target", "investigate",
-                 "deploy_app", "decide", "get_code_task", "list_code_tasks"):
+                 "deploy_app", "decide", "get_code_task", "list_code_tasks",
+                 *(tool for tool, _arg in X2_CONFINED)):
         spec = real.get(name)
         reg.register(replace(spec, handler=lambda ctx, n=name, **kw: calls.append((n, kw)) or {"ran": n},
                              reversibility="safe"))
@@ -163,3 +172,23 @@ def test_deploy_app_to_a_production_environment_needs_deployment_production(gate
                                       ("preview", False), ("productionish", True)])
 def test_what_counts_as_production(env, prod):
     assert object_rules.is_production_environment(env) is prod
+
+
+@pytest.mark.parametrize("tool,arg", X2_CONFINED)
+def test_an_x2_id_of_another_project_is_not_found_before_the_handler(gate, monkeypatch, tool, arg):
+    """X2: every id argument that used to reach its handler unchecked is now refused centrally
+    when it names another project's object, and passes in the call's own project."""
+    reg, calls, _held, _seen = gate
+    monkeypatch.setattr(object_rules, "production_projects", lambda *a, **k: [])
+    params = reg.get(tool).parameters or {}
+    sample = {"string": "x", "number": 1, "integer": 1, "array": ["x"], "boolean": True,
+              "object": {}}
+    base = {name: sample.get((params.get("properties", {}).get(name) or {}).get("type"), "x")
+            for name in params.get("required") or ()}
+    out = reg.invoke(tool, None, project_id="pa", actor="x", args={**base, arg: "b_obj"},
+                     auth=ALICE, operator_confirmed=True)
+    assert out["ok"] is False and out["error"] == "not_found", out
+    assert calls == []
+    ok = reg.invoke(tool, None, project_id="pa", actor="x", args={**base, arg: "a_obj"},
+                    auth=ALICE, operator_confirmed=True)
+    assert ok.get("ran") == tool, ok

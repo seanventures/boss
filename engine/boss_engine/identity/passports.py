@@ -514,6 +514,40 @@ def _grow_to_preset(db: Any, passport: "Passport") -> bool:
     return True
 
 
+def _is_preset(key: Optional[str]) -> bool:
+    try:
+        _preset(key or "")
+        return True
+    except PassportError:
+        return False
+
+
+def _move_to_preset(db: Any, passport: "Passport", preset_key: str) -> bool:
+    """A Passport on a preset that the catalogue has since moved its agent OFF (quill: `writer` ->
+    `documentation`, BOSSAPP-1384) is relabelled to the agent's current preset and gains what that
+    preset holds. Additive and audited, like `_grow_to_preset`; a `custom` ceiling is never touched
+    (the caller only passes a Passport whose ceiling IS some other named preset)."""
+    import json
+
+    from sqlalchemy import text
+
+    p = _preset(preset_key)
+    missing = sorted(frozenset(p.permissions) - frozenset(passport.ceiling))
+    _require_delegable(frozenset(missing))
+    for key in missing:
+        db.execute(text("INSERT INTO identity_agent_ceilings (agent_id, permission_key) VALUES (:a, :k) "
+                        "ON CONFLICT DO NOTHING"), {"a": passport.agent_id, "k": key})
+    db.execute(text("UPDATE identity_agent_passports SET ceiling_preset = :p, external_ceiling = CAST(:e AS JSONB), "
+                    "version = version + 1, updated_at = now() WHERE agent_id = :a"),
+               {"p": preset_key, "e": json.dumps(dict(p.external_ceiling)), "a": passport.agent_id})
+    from . import lineage
+    lineage.passport_event(db, get(passport.agent_id, db=db), "agent.passport.ceiling_changed",
+                           actor_id="sys_migration",
+                           details={"from_preset": passport.ceiling_preset, "preset": preset_key,
+                                    "added": missing})
+    return True
+
+
 #: Baseline reads a hand-set (`custom`) ceiling is given ONCE, by name (operator decision
 #: 2026-10-22). The baseline reads go to every agent, and `_grow_to_preset` never touches a ceiling
 #: a person set, so an agent with a custom ceiling made before knowledge:read existed never gained
@@ -649,6 +683,10 @@ def upgrade_from_roles(*, org_id: str, db: Any, default_sponsor: Optional[str] =
                 out[r["agent_id"]] = f"ceiling repaired: {preset}"
             elif existing.ceiling_preset and existing.ceiling_preset == preset and _grow_to_preset(db, existing):
                 out[r["agent_id"]] = f"ceiling grew to its preset: {preset}"
+            elif (existing.ceiling_preset and existing.ceiling_preset != preset
+                  and _is_preset(existing.ceiling_preset) and preset != BASELINE_PRESET
+                  and existing.ceiling_preset != BASELINE_PRESET and _move_to_preset(db, existing, preset)):
+                out[r["agent_id"]] = f"moved to its preset: {existing.ceiling_preset} -> {preset}"
             else:
                 out[r["agent_id"]] = "exists"
             continue

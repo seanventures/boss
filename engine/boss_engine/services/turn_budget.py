@@ -114,7 +114,8 @@ class TurnBudget:
 LIGHT = "light"
 DEEP = "deep"
 #: The decided actions that look into or act on the work, and so need a chain of reads.
-DEEP_ACTIONS = frozenset({"investigate", "operate", "new_code_change", "create_project"})
+DEEP_ACTIONS = frozenset({"investigate", "operate", "new_code_change", "create_project",
+                          "author_workflow"})
 
 
 def turn_depth(action: str | None, depth: str | None) -> str:

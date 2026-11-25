@@ -16,12 +16,13 @@ import { plural } from "../../lib/factory-floor";
 import React, { useEffect, useState } from "react";
 
 import type { CodeTaskRun, PreviewRec } from "@boss/api-client";
-import type { Cockpit, CockpitOutputs, PreviewOutput, ReviewComment } from "../../lib/cockpit";
+import type { Cockpit, CockpitOutputs, PreviewOutput } from "../../lib/cockpit";
 import { previewWebHref } from "../../lib/browser-links";
 import { isGitHubUrl, repoUrl } from "../../lib/github-urls";
 import { callAction } from "../../lib/call-action";
 import { GatedButton } from "../../components/gated";
-import { startPreviewAction } from "../actions";
+import { followUpCodeTaskAction, startPreviewAction } from "../actions";
+import { commentsWord, fixFindingsInstructions, foldComments, type FoldedComment } from "../../lib/review-comments";
 import { showToast } from "../client-forms";
 import { notifyChanged } from "../changed";
 import { DeploymentLine, QaBenchmarkEvidence } from "./legacy-build-parts";
@@ -36,6 +37,7 @@ import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { missingWord } from "../../lib/build-detail";
 import { failedTestName } from "../../lib/failed-test-name";
 import { nowInput } from "./now-band";
+import { WorkPreviewButton, buildPreviewApp } from "../projects/work-preview";
 
 export type OutputKey = "brief" | "pr" | "checks" | "tests" | "changes" | "comments" | "preview" | "deploy" | "cost";
 
@@ -49,7 +51,7 @@ const STATUS_WORD: Record<string, string> = { open: "Open", addressed: "Fixed", 
 
 /** Which row opens by itself: failed checks, or the PR when it is waiting on you (§4.7). */
 export function defaultOpen(c: Pick<Cockpit, "state" | "outputs">): OutputKey | null {
-  const failed = c.outputs.checks?.gates.some((g) => !g.ok && !g.skipped && !g.waivedBy) && !c.outputs.checks?.advisory;
+  const failed = c.outputs.checks?.gates.some((g) => !g.ok && !g.skipped && !g.followup && !g.waivedBy) && !c.outputs.checks?.advisory;
   if (c.state.state === "needs_waiver" || (failed && c.state.state !== "pr_open")) return "checks";
   if (c.state.state === "pr_open") return "pr";
   return null;
@@ -97,7 +99,8 @@ function valueOf(key: OutputKey, o: CockpitOutputs, c: Cockpit): string {
     case "checks": return o.checks?.word || "Not yet";
     case "tests": return o.tests?.word || "Not run";
     case "changes": return o.changes?.word || "Not yet";
-    case "comments": return o.comments.word || "None";
+    // One finding once: review rounds re-raise the same one (lib/review-comments.ts).
+    case "comments": return o.comments.items.length ? commentsWord(o.comments.items) : o.comments.word || "None";
     case "preview": return o.preview?.word || "Not running";
     case "deploy": return o.deploy.word || "Not set up";
     case "cost": return o.cost.word || "—";
@@ -144,6 +147,7 @@ export function Outputs({ projectId, actor, cockpit: c, open, onOpen, onLogs, on
           const isOpen = open === k;
           return (
             <li key={k} className="fx-out" data-key={k} data-open={isOpen || undefined} data-testid={`fx-out-${k}`}>
+              <div className="fx-out-row">
               <button type="button" className="fx-out-head" aria-expanded={isOpen} data-testid={`fx-out-head-${k}`}
                       title={k === "changes" ? "Files only. Open the PR for the diff." : undefined}
                       onClick={() => onOpen(isOpen ? null : k)}>
@@ -157,6 +161,16 @@ export function Outputs({ projectId, actor, cockpit: c, open, onOpen, onLogs, on
                 <span className="fx-out-maker">{makers[k]}</span>
                 {isOpen ? <CaretDown size={10} weight="bold" aria-hidden /> : <CaretRight size={10} weight="bold" aria-hidden />}
               </button>
+              {/* THE PREVIEW, ONE PRESS FROM THE ROW (operator, 2026-11-19): Start preview (never
+                  had one), Recreate preview (stopped or expired), Open preview (running) — the
+                  Your app card's one open. Only once there is a branch to preview. */}
+              {k === "preview" && previewCanRun(c) ? (
+                <span className="fx-out-inline">
+                  <WorkPreviewButton app={buildPreviewApp(c.run.id, o.preview)} projectId={projectId} actor={actor}
+                                     testid="fx-out-preview-act" onStarted={onRefresh} className="ag-btn" />
+                </span>
+              ) : null}
+              </div>
               {isOpen ? (
                 <div className="fx-out-body" data-testid={`fx-out-body-${k}`}>
                   {k === "brief" ? <BriefBody c={c} /> : null}
@@ -289,17 +303,18 @@ function ChecksBody({ c, projectId, actor, onRefresh }: { c: Cockpit; projectId:
   }
   // WAIVE FROM WHERE THE FAILURES ARE LISTED (the old Iterate block's override), for any
   // stopped build with a failing check, not only one whose card is on the Floor.
-  const failing = checks.gates.filter((g) => !g.ok && !g.skipped && !g.waivedBy);
+  const failing = checks.gates.filter((g) => !g.ok && !g.skipped && !g.followup && !g.waivedBy);
   const canWaive = failing.some((g) => g.waivable) && ["needs_waiver", "failed", "blocked"].includes(c.state.state);
   return (
     <span className="fx-out-col">
       <ul className="fx-gates">
         {checks.gates.map((g) => (
-          <li key={g.name} className="fx-gate" data-ok={g.skipped ? "skipped" : g.ok} data-testid={`fx-gate-${g.name}`} title={g.evidence || undefined}>
-            {g.skipped ? <Minus size={12} weight="bold" aria-hidden /> : g.ok ? <Check size={12} weight="bold" aria-hidden /> : <X size={12} weight="bold" aria-hidden />}
-            <span className="ag-sr">{g.skipped ? "skipped" : g.ok ? "passed" : "failed"}</span>
+          <li key={g.name} className="fx-gate" data-ok={g.skipped ? "skipped" : g.followup ? "followup" : g.ok} data-testid={`fx-gate-${g.name}`} title={g.evidence || undefined}>
+            {g.skipped || g.followup ? <Minus size={12} weight="bold" aria-hidden /> : g.ok ? <Check size={12} weight="bold" aria-hidden /> : <X size={12} weight="bold" aria-hidden />}
+            <span className="ag-sr">{g.skipped ? "skipped" : g.followup ? "follow-up" : g.ok ? "passed" : "failed"}</span>
             <span>{g.label}</span>
             {g.skipped ? <span className="fx-muted">Skipped</span> : null}
+            {g.followup ? <span className="fx-muted">Follow-up</span> : null}
             {g.evidence ? <span className="fx-muted fx-trunc" data-user-text data-testid={`fx-gate-why-${g.name}`}>{g.evidence}</span> : null}
             {g.waivedBy ? <span className="fx-muted">Waived by {g.waivedBy}</span> : null}
             <Maker roleKey={g.roleKey} boss={!g.roleKey} />
@@ -493,22 +508,65 @@ function ChangesBody({ c }: { c: Cockpit }) {
   );
 }
 
+/** The follow-up "Let BOSS fix these" started, per build, for the findings it was given. Kept
+ *  across a refresh or remount of the page in this tab. */
+const fixStarted = new Map<string, { instructions: string; runId: string }>();
+
 function CommentsBody({ c, actor, onRefresh }: { c: Cockpit; actor: string; onRefresh: () => void }) {
-  const items = c.outputs.comments.items;
+  const items: FoldedComment[] = foldComments(c.outputs.comments.items);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
   if (!items.length) return <span className="fx-muted">None</span>;
-  const act = async (cm: ReviewComment, status: "addressed" | "dismissed") => {
+  const act = async (cm: FoldedComment, status: "addressed" | "dismissed") => {
     setBusy(cm.id);
     setError("");
-    const r = await resolveComment(c.run.id, cm.id, actor, status);
+    // A folded row settles every repeat it stands for.
+    let failed = "";
+    for (const id of cm.ids) {
+      const r = await resolveComment(c.run.id, id, actor, status);
+      if (!r.ok) { failed = r.error ?? ""; break; }
+    }
     setBusy(null);
-    if (r.ok) { showToast("success", "Comment resolved"); notifyChanged("code-tasks"); onRefresh(); }
-    else setError(r.error ?? "");
+    if (!failed) { showToast("success", "Comment resolved"); notifyChanged("code-tasks"); onRefresh(); }
+    else setError(failed);
+  };
+  // LET BOSS FIX THESE: a follow-up build on this app with every open finding as its brief
+  // (the same follow-up a person asks for in Add a feature; code task followUp).
+  const instructions = fixFindingsInstructions(c.outputs.comments.items);
+  // ONCE PER SET OF FINDINGS (review #224): after it started, the findings stay open until the
+  // follow-up fixes them, so the button would offer the same paid build again. It waits until
+  // the findings change; the API also joins an identical follow-up already in flight.
+  const started = fixStarted.get(c.run.id);
+  const already = started && started.instructions === instructions ? started : null;
+  const fixAll = async () => {
+    setBusy("fix-all");
+    setError("");
+    const form = new FormData();
+    form.set("run_id", c.run.id);
+    form.set("instructions", instructions);
+    form.set("actor", actor);
+    const res = await callAction(followUpCodeTaskAction, undefined, "code_task:steer")(form);
+    setBusy(null);
+    if (res?.error) { setError(res.error); return; }
+    if (res?.run_id) fixStarted.set(c.run.id, { instructions, runId: res.run_id });
+    showToast("success", res?.existing ? "BOSS is already fixing them" : "BOSS started a follow-up to fix them");
+    notifyChanged("code-tasks"); onRefresh();
   };
   return (
     <span className="fx-out-col">
       {error ? <span className="fx-err" role="alert" data-user-text>{error}</span> : null}
+      {instructions && already ? (
+        <span className="fx-out-links" data-testid="fx-fix-comments-started">
+          <span className="fx-muted">BOSS is fixing these</span>
+          <a href={areaHref({ area: "code_tasks", build: already.runId })} data-testid="fx-fix-comments-open">Open the follow-up</a>
+        </span>
+      ) : instructions ? (
+        <span className="fx-out-links">
+          <GatedButton permission="code_task:steer" type="button" className="ag-btn" disabled={busy !== null}
+                       data-testid="fx-fix-comments" title="Start a follow-up build that fixes every open comment"
+                       onClick={() => void fixAll()}>Let BOSS fix these</GatedButton>
+        </span>
+      ) : null}
       {SEVERITY_ORDER.map((sev) => {
         const group = items.filter((x) => x.severity === sev);
         if (!group.length) return null;
@@ -521,6 +579,7 @@ function CommentsBody({ c, actor, onRefresh }: { c: Cockpit; actor: string; onRe
                   <Maker roleKey={cm.authorRoleKey} />
                   {cm.path ? <span className="fx-mono fx-trunc" title={cm.path} data-user-text>{cm.path}{cm.line ? `:${cm.line}` : ""}</span> : null}
                   <span className="fx-muted">{STATUS_WORD[cm.status] ?? cm.status}</span>
+                  {cm.repeats ? <span className="fx-muted" title="Raised again in later review rounds">· raised {cm.repeats + 1}×</span> : null}
                 </span>
                 <span className="fx-clamp" title={cm.body} data-user-text>{cm.body}</span>
                 {cm.status === "open" ? (
@@ -555,7 +614,8 @@ export function isPassedOver(p: Pick<PreviewOutput, "status" | "steps">, i: numb
 /** The preview's error, visible. Blank is nothing. */
 export function previewErrorSentence(error: string | null | undefined): string | null {
   const trimmed = error?.trim() ?? "";
-  return trimmed ? trimmed : null;
+  // Why BOSS stopped it, said plainly: "Stopped to free memory (nobody opened it for 20 min)."
+  return trimmed ? trimmed.replace(/^Stopped by BOSS: to /, "Stopped to ") : null;
 }
 
 /** Stopped or Failed, with the error beside it. More than six words is a paragraph. */
@@ -589,6 +649,15 @@ export function stepsWord(p: Pick<PreviewOutput, "status" | "steps" | "stepsDone
   return `${Math.min(finished || p.stepsDone || 0, total)} of ${plural(total, "step")}`;
 }
 
+/** What happens to an app's data in its previews (preview_data.py), said where it matters. */
+export const PREVIEW_DATA_TIP = "What this app saves (its SQLite files and data folder) is kept when the preview stops, idles out or restarts, for every build of this app. Fresh data deletes it and starts the app empty.";
+export const FRESH_DATA_CONFIRM = "Delete the data this app saved in its previews and start it empty? This cannot be undone.";
+
+/** A preview runs a branch: only once the build opened its PR (or GitHub waits on it). */
+export function previewCanRun(c: Pick<Cockpit, "state">): boolean {
+  return ["pr_open", "merged", "deployed", "github_wait"].includes(c.state.state);
+}
+
 function PreviewBody({ c, actor, onLogs, onRefresh }: { c: Cockpit; actor: string; onLogs: () => void; onRefresh: () => void }) {
   const p = c.outputs.preview;
   const [busy, setBusy] = useState(false);
@@ -600,15 +669,16 @@ function PreviewBody({ c, actor, onLogs, onRefresh }: { c: Cockpit; actor: strin
   const [note, setNote] = useState("");
   const [showNote, setShowNote] = useState(false);
   const [showSteps, setShowSteps] = useState(false);
-  const start = async () => {
+  const start = async (freshData = false) => {
     setBusy(true);
     setError("");
     setNote("");
     setStarting(true);
-    showToast("success", "Preview starting");
+    showToast("success", freshData ? "Preview starting with fresh data" : "Preview starting");
     const form = new FormData();
     form.set("run_id", c.run.id);
     form.set("actor", actor);
+    if (freshData) form.set("fresh_data", "true");
     const res = await callAction(startPreviewAction, undefined, "preview:manage")(null, form);
     setBusy(false);
     // A CLIENT TIMEOUT IS NOT A VERDICT: the preview builds on after the console stops waiting.
@@ -630,7 +700,7 @@ function PreviewBody({ c, actor, onLogs, onRefresh }: { c: Cockpit; actor: strin
   // A PREVIEW RUNS A BRANCH: a build that opened no PR has none, and the press answered with an
   // internal error (tester P2). Disabled, and it says why.
   // A build waiting for GitHub previews from this machine's copy (BOSSAPP-922).
-  const canRun = ["pr_open", "merged", "deployed", "github_wait"].includes(c.state.state);
+  const canRun = previewCanRun(c);
   const cannotRun = canRun ? undefined : c.state.state === "done_no_pr"
     ? "This build opened no PR, so there is no branch to preview"
     : "Runs once the build has opened its PR";
@@ -661,10 +731,19 @@ function PreviewBody({ c, actor, onLogs, onRefresh }: { c: Cockpit; actor: strin
     <span className="fx-out-links">
       {booting ? <span className="fx-muted" data-testid="fx-preview-starting">Starting…</span> : null}
       {running ? <a className="ag-link" href={previewWebHref(p.id)} target="_blank" rel="noreferrer" data-testid="fx-preview-open">Open ↗</a> : null}
-      <GatedButton permission="preview:manage" type="button" className="ag-btn" disabled={busy} data-testid="fx-preview-restart" onClick={() => void start()}>Restart</GatedButton>
+      {/* RECREATE PREVIEW (operator, 2026-11-19): a preview that is not running starts again
+          from the same build, its kept data restored. A running one restarts. */}
+      <GatedButton permission="preview:manage" type="button" className="ag-btn" disabled={busy} data-testid="fx-preview-restart"
+                   title={running || p.status === "starting" ? "Start it again" : "Start it again from the same build. What the app saved is kept."}
+                   onClick={() => void start()}>{running || p.status === "starting" ? "Restart" : "Recreate preview"}</GatedButton>
       {running ? <GatedButton permission="preview:manage" type="button" className="ag-link" disabled={busy} data-testid="fx-preview-stop" onClick={() => void stop()}>Stop</GatedButton> : null}
       <button type="button" className="ag-link" onClick={onLogs} data-testid="fx-preview-logs">Logs ▾</button>
-      {p.expiresAt ? <span className="fx-muted" title={p.expiresAt}>Expires {localWith(p.expiresAt, { hour: "numeric", minute: "2-digit" })}</span> : null}
+      {/* A stopped preview expires at nothing: its time limit is only news while it runs. */}
+      {running && p.expiresAt ? <span className="fx-muted" title={p.expiresAt} data-testid="fx-preview-expires">Expires {localWith(p.expiresAt, { hour: "numeric", minute: "2-digit" })}</span> : null}
+      <span className="fx-muted" data-testid="fx-preview-data" title={PREVIEW_DATA_TIP}>Data kept</span>
+      <GatedButton permission="preview:manage" type="button" className="ag-link" disabled={busy} data-testid="fx-preview-fresh"
+                   title="Delete the data this app saved in its previews, then start it empty"
+                   onClick={() => { if (window.confirm(FRESH_DATA_CONFIRM)) void start(true); }}>Fresh data</GatedButton>
       {p.substrate ? <span className="fx-muted" title="Where the preview runs">{p.substrate}</span> : null}
       {typeof p.stepsDone === "number" && p.stepsTotal ? (
         <button type="button" className="ag-link" aria-expanded={showSteps} data-testid="fx-preview-steps"

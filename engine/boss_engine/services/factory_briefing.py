@@ -239,14 +239,27 @@ def _stuck_steps(connection, project_id: str) -> list[dict[str, Any]]:
     return out
 
 
+def _probe_url(target: dict, where: str) -> str:
+    """What "Probe now" asks: the target's DECLARED health check (declared_health_probes, the
+    same resolution the sweep uses), else its address's "/". Asking "/" of an API that declared
+    /healthz would re-report the outage the sweep no longer sees."""
+    from .deployment_connectors import _app_port, declared_health_probes
+
+    for p in declared_health_probes(target, app_port=_app_port(target, default=0) or None):
+        if p.get("url"):
+            return p["url"]
+    return where if where.startswith(("http://", "https://")) else f"http://{where}/"
+
+
 def _unhealthy(connection, project_id: str) -> list[dict[str, Any]]:
     """Apps that are deployed and not answering. The only item here an outage looks like."""
     rows = connection.execute(
-        sql("SELECT t.id, t.app_name, t.environment, t.domains, "
-            "       (SELECT s.ok FROM deployment_health_samples s "
+        sql("SELECT t.id, t.app_name, t.environment, t.domains, t.health_checks, "
+            "       t.target_ref, t.public_url, t.required_resources, "
+            "       (SELECT s.ok FROM counted_health_samples s "
             "         WHERE s.deployment_target_id = t.id "
             "         ORDER BY s.checked_at DESC LIMIT 1) AS last_ok, "
-            "       (SELECT s.error FROM deployment_health_samples s "
+            "       (SELECT s.error FROM counted_health_samples s "
             "         WHERE s.deployment_target_id = t.id "
             "         ORDER BY s.checked_at DESC LIMIT 1) AS last_error "
             "FROM deployment_targets t "
@@ -261,7 +274,7 @@ def _unhealthy(connection, project_id: str) -> list[dict[str, Any]]:
             "kind": "unhealthy_app", "id": row["id"],
             "app": row["app_name"], "environment": row["environment"], "at": where,
             "error": str(row["last_error"] or "")[:300],
-            "actions": [{"tool": "http_probe", "args": {"url": f"http://{where}/"},
+            "actions": [{"tool": "http_probe", "args": {"url": _probe_url(dict(row), where)},
                          "label": f"Probe {row['app_name']} now"}],
         }
         diagnosis = _diagnosis(str(row["last_error"] or ""))

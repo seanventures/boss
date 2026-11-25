@@ -46,6 +46,9 @@ UNIQUE_SHARED_INDEX = (
 def _service() -> AgentService:
     return object.__new__(AgentService)  # the thread lookup needs no router
 
+#: The thread lookup prefers the conversation with messages (agent_service._find_role_thread).
+MESSAGES = "CREATE TABLE agent_messages (id TEXT PRIMARY KEY, thread_id TEXT NOT NULL)"
+
 
 @pytest.fixture()
 def engine(monkeypatch):
@@ -53,6 +56,7 @@ def engine(monkeypatch):
     eng = create_engine("sqlite+pysqlite:///:memory:")
     with eng.begin() as c:
         c.execute(text(TABLE))
+        c.execute(text(MESSAGES))
         c.execute(text(UNIQUE_SHARED_INDEX))
     return eng
 

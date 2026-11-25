@@ -23,16 +23,21 @@ import { P95_SOURCE } from "./tab-deployments";
 import { closeWatch, useWatchParam, WatchDoor, WatchedCard, WatchSheet } from "./watch-app";
 import { parseLanding, type Landing } from "../../lib/watch-app";
 import { notifyChanged } from "../changed";
+import { isHydrated, localWith } from "../../lib/local-time";
+import { useNow } from "../agents/live-util";
 import type { PxCtx } from "./project-page";
 
 type Env = HealthView["environments"][number];
 type Incident = HealthView["incidents"][number];
 
 /** "Today 09:12", "Wed 09:12", "Nov 2 09:12": when something happened, in the viewer's zone. */
-export function dayTime(iso: string, now: Date = new Date()): string {
+export function dayTime(iso: string, now: Date | null = isHydrated() ? new Date() : null): string {
   if (!/^\d{4}-\d{2}-\d{2}T/.test(iso)) return iso;
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
+  if (!now) {
+    return localWith(iso, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
+  }
   const hm = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
   const same = (x: Date, y: Date) => x.toDateString() === y.toDateString();
   if (same(d, now)) return `Today ${hm}`;
@@ -45,9 +50,10 @@ export function dayTime(iso: string, now: Date = new Date()): string {
 /** "09:52" when it is today, else as dayTime ("Wed", "Nov 2"): THE ONE CLOCK of this tab, the same
  *  24-hour local text as the incidents ("Today 09:38") and the parity component's history
  *  ("Resolved 09:52"), never "9:52 AM" beside "09:52" (12-09). */
-export function clockTime(iso: string, now: Date = new Date()): string {
+export function clockTime(iso: string, now: Date | null = isHydrated() ? new Date() : null): string {
   const d = new Date(iso);
   if (!/^\d{4}-\d{2}-\d{2}T/.test(iso) || Number.isNaN(d.getTime())) return iso;
+  if (!now) return localWith(iso, { hour: "2-digit", minute: "2-digit", hour12: false });
   return d.toDateString() === now.toDateString()
     ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false }) : dayTime(iso, now);
 }
@@ -212,20 +218,22 @@ function EnvCard({ e, ctx }: { e: Env; ctx: PxCtx }) {
 
 /** One incident as its story: the signal → SRE squad → root cause → fix → recovered. */
 function IncidentRow({ i }: { i: Incident }) {
+  const nowMs = useNow(60_000);
+  const nowDate = nowMs === null ? null : new Date(nowMs);
   const resolved = i.state === "resolved";
   return (
     <div className="px-h-inc" data-testid={`px-h-inc-${i.id}`} data-s={i.state}>
       <span className="px-h-inc-ico" data-s={i.state} aria-hidden>{resolved ? <Check size={12} weight="bold" /> : "!"}</span>
       <div className="px-h-inc-b">
         <b>{i.label}</b>
-        <small className="px-faint" data-testid={`px-h-inc-word-${i.id}`}>{[i.since ? dayTime(i.since) : "", spanWords(i.duration_s), i.outcome].filter(Boolean).join(" · ")}
-          {i.closes_at ? ` — by ${clockTime(i.closes_at)}` : ""}</small>
+        <small className="px-faint" data-testid={`px-h-inc-word-${i.id}`}>{[i.since ? dayTime(i.since, nowDate) : "", spanWords(i.duration_s), i.outcome].filter(Boolean).join(" · ")}
+          {i.closes_at ? ` — by ${clockTime(i.closes_at, nowDate)}` : ""}</small>
         <Flow testid={`px-h-inc-flow-${i.id}`} nodes={i.mini.map((m) => {
           const look = NODE_LOOK[m.type] ?? NODE_LOOK[m.state];
           const I = look?.icon;
           return {
             // THE REAL TIME of each step (fired, mitigation live, recovery verified) on hover.
-            label: m.label, state: m.state, title: m.at ? `${m.label} · ${dayTime(m.at)}` : m.label,
+            label: m.label, state: m.state, title: m.at ? `${m.label} · ${dayTime(m.at, nowDate)}` : m.label,
             type: m.type === "agent" ? "agent" : look?.t ?? (m.state === "done" ? "done" : m.state),
             icon: m.type === "agent" ? <Face agent={{ name: "Beacon", role_key: "sre" }} size={16} />
               : I ? <I size={11} aria-hidden /> : m.state === "done" ? <Check size={11} weight="bold" aria-hidden /> : undefined,

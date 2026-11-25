@@ -22,6 +22,8 @@ Where each reads (the shapes are the writers'; see the notes at each detector):
 """
 from __future__ import annotations
 
+from ..production import is_production_environment
+
 import re
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -663,7 +665,7 @@ def alert_gap(connection: Connection, project_id: str, *, since: datetime, now: 
     out: list[Finding] = []
     for r in rows:
         env = str(r["environment"] or "").lower()
-        prod = env in ("production", "prod")
+        prod = is_production_environment(env)
         incidents = int(connection.execute(text(
             "SELECT count(*) FROM incidents WHERE project_id = :p AND first_seen > :s "
             "AND (CAST(:t AS TEXT) IS NULL OR COALESCE(target_id, '') = :t)"),

@@ -69,6 +69,20 @@ def test_the_time_cap_refuses_it(harness):
     assert out["refusal"] == "time"
 
 
+def test_initial_queue_wait_does_not_consume_the_execution_limit(harness):
+    harness.script("good_fix")
+    sfx = harness.propose()["self_fix"]
+    assert sfx.get("started_at") is None
+    with harness.eng.begin() as connection:
+        connection.execute(text("UPDATE self_fixes SET created_at = now() - interval '5 hours' "
+                                "WHERE id = :id"), {"id": sfx["id"]})
+    out = self_fix_build.Build(engine=harness.eng, settings=harness.settings, sfx_id=sfx["id"],
+                              source=harness.mirror).run()
+    assert out.get("refusal") != "time"
+    with harness.eng.begin() as connection:
+        assert sf.get(connection, sfx["id"])["started_at"] is not None
+
+
 def test_a_finished_fix_holds_what_it_cost_not_its_reservation(harness):
     """Live install, 2026-10-24: three refused fixes that cost $15.47 held $30 of a $50 month,
     so a fourth fix found 'no room'. A finished fix spends nothing more: it counts its cost."""

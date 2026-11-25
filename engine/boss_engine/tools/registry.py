@@ -18,6 +18,7 @@ require confirmation before invoking them.
 """
 from __future__ import annotations
 
+import json
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Literal, Optional
@@ -537,6 +538,14 @@ class ToolRegistry:
         refused = identity_gate(spec, effective_auth, project_id, safe_args)
         if refused is not None:
             return refused
+        # A REQUIRED ARGUMENT THE CALL LEFT OUT IS REFUSED, NEVER RUN EMPTY. find_tools called
+        # with `{}` searched for nothing, returned no tools, and the agent reported that no
+        # deploy tool existed (2026-11-20). Every tool, one rule, checked after
+        # every gate (a refusal there says more) and before the handler: the model is told which
+        # argument is missing and what the tool takes, so it can call again.
+        missing = missing_required(spec, safe_args)
+        if missing:
+            return missing_args_result(spec, missing, ignored)
         # The handler sees the identity the gate decided: an explicit `auth` is this call's
         # caller for the handler too (one that records who acted reads CURRENT_TOOL_AUTH).
         auth_token = CURRENT_TOOL_AUTH.set(auth) if auth is not None else None
@@ -564,6 +573,13 @@ class ToolRegistry:
             result = {"result": result}
         result.setdefault("ok", True)
         result.setdefault("tool", name)
+        if spec.kind == "write" and result.get("ok") is not False \
+                and result.get("status") != "confirmation_required":
+            # A WRITE INSIDE A CHAT TURN IS RECORDED ON THE TURN AT ONCE (chat_turns): if the
+            # turn fails later, its failure line names this as done rather than "ask again".
+            from ..services.chat_turns import note_action
+
+            note_action(name, result)
         if ignored or result.get("ignored_args") == []:
             # A handler that checks its own extra args names what IT dropped; both lists show.
             own = result.get("ignored_args") if isinstance(result.get("ignored_args"), list) else []
@@ -706,6 +722,45 @@ CURRENT_TOOL_AUTH: ContextVar[Any] = ContextVar("boss_tool_auth", default=None)
 TRANSPORT_ARGS = frozenset({"project_id", PROJECT_ARG})
 
 
+def missing_required(spec: "ToolSpec", args: dict) -> list[str]:
+    """The schema's `required` arguments `args` does not carry: absent, null, or (for a string
+    argument) blank. Blank text is no query, no path, no name. `project_id` and the named-
+    project argument are never missing: the call acts in the session's project without them
+    (`acting_project`)."""
+    schema = spec.parameters or {}
+    props = schema.get("properties") or {}
+    out = []
+    for key in schema.get("required") or []:
+        if key in ("project_id", PROJECT_ARG):
+            continue
+        value = args.get(key)
+        declared = (props.get(key) or {}).get("type")
+        is_string = declared == "string" or (isinstance(declared, list) and "string" in declared)
+        if value is None or (is_string and isinstance(value, str) and not value.strip()):
+            out.append(str(key))
+    return out
+
+
+def missing_args_result(spec: "ToolSpec", missing: list[str], ignored: list[str]) -> dict:
+    """The refusal for a call missing required arguments: what is missing, what the tool
+    takes, and that the call can be made again — a result the model reads and acts on."""
+    props = (spec.parameters or {}).get("properties") or {}
+    takes = {k: str((v or {}).get("description") or (v or {}).get("type") or "")
+             for k, v in props.items()}
+    example = json.dumps({"name": spec.name, "arguments": {m: "..." for m in missing}})
+    out = {
+        "ok": False, "tool": spec.name, "error": "missing_required_arguments",
+        "missing": list(missing), "takes": takes,
+        "message": (f"'{spec.name}' was called without its required argument(s) "
+                    + ", ".join(repr(m) for m in missing)
+                    + ", so nothing ran. Call it again with them inside \"arguments\", e.g. "
+                    + example + "."),
+    }
+    if ignored:
+        out["ignored_args"] = list(ignored)
+    return out
+
+
 def schema_args(spec: "ToolSpec", args: Optional[dict]) -> tuple[dict, list[str]]:
     """(the caller's args the tool's schema lists, the keys dropped). Underscore keys are
     BOSS's (an agent turn's ambient context, the operator's confirmation) and never come from
@@ -737,6 +792,25 @@ def trusted_step_arg(name: str, default: Any = None) -> Any:
 
 #: The router key tool calls use for BOSS_AUTHZ_MODE / BOSS_AUTHZ_ROUTER_MODES ("mcp=enforce").
 TOOL_ROUTER_KEY = "mcp"
+
+
+#: The detail of a refusal made because the call carried NO verified identity at all.
+NO_IDENTITY_DETAIL = "no verified identity on this tool call"
+
+
+def not_evaluated_words(tool: str, detail: Any) -> str:
+    """What a NOT_EVALUATED refusal says. Never "permission missing": nothing was decided.
+
+    Only a call with truly no verified identity is told its identity is unavailable. Anything
+    else that left the permission undecided (the permission check itself raised) is BOSS's own
+    failure, said as such, so nobody goes looking for a grant that was never the problem."""
+    if str(detail or "") == NO_IDENTITY_DETAIL:
+        return (f"Cannot authorize '{tool}': verified identity is unavailable. Restore the "
+                "caller's scoped run identity before retrying; this does not establish that a "
+                "Passport permission is missing.")
+    return (f"Cannot authorize '{tool}': BOSS could not evaluate this permission (an internal "
+            "error in BOSS's permission check). This is BOSS's failure, not a missing grant; "
+            "nothing needs to be granted.")
 
 
 def identity_gate(spec: "ToolSpec", auth: Any, project_id: Optional[str],
@@ -774,13 +848,13 @@ def identity_gate(spec: "ToolSpec", auth: Any, project_id: Optional[str],
             return None
         outcome = Outcome(False, DenyReason.NOT_EVALUATED, permission or "route",
                           f"tool:{getattr(spec, 'name', '?')}",
-                          detail="no verified identity on this tool call")
+                          detail=NO_IDENTITY_DETAIL)
     elif permission not in PERMISSION_META:
         outcome = Outcome(False, DenyReason.UNDECLARED_ROUTE, permission, "undeclared",
                           detail="tool declares no catalogue permission")
     elif auth is None:
         outcome = Outcome(False, DenyReason.NOT_EVALUATED, permission, f"tool:{permission}",
-                          detail="no verified identity on this tool call")
+                          detail=NO_IDENTITY_DETAIL)
     else:
         meta = PERMISSION_META[permission]
         org = auth.principal.org_id
@@ -832,7 +906,9 @@ def identity_gate(spec: "ToolSpec", auth: Any, project_id: Optional[str],
         return None
     body = outcome.error_body()
     needs = outcome.permission or permission
-    if outcome.reason == DenyReason.NOT_FOUND:
+    if outcome.reason == DenyReason.NOT_EVALUATED:
+        message = not_evaluated_words(getattr(spec, "name", "?"), getattr(outcome, "detail", ""))
+    elif outcome.reason == DenyReason.NOT_FOUND:
         message = (f"'{getattr(spec, 'name', '?')}': an id in the arguments names nothing in this "
                    "project.")
     else:

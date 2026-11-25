@@ -99,7 +99,7 @@ def reject_link(
     if actor_kind != "person":
         raise TraceRefused("only a person may reject a proposed trace link.")
     _edge_in_project(connection, project_id, edge_id)
-    STORE.close_validity(connection, project_id=project_id, valid_to=now_utc(),
+    STORE.close_validity(connection, project_id=project_id, valid_to=None,
                          actor_kind="person", edge_id=edge_id)
     connection.execute(
         text("UPDATE kg_edges SET attrs = attrs || CAST(:extra AS JSONB) WHERE id = :id"),

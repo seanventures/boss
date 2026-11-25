@@ -20,8 +20,16 @@ and nothing the agent does can fix them. This module is the one place that tells
   * `classify(text, engine=…, where=…)` — the generic words every engine's harness uses, plus
     the words each engine DECLARED for itself (harness_registry.FailurePattern, registered with
     the engine, the same idiom as its RuntimeBinary).
-  * `check_turn` — every engine's turn stream goes through it: a tool result that is the harness
+  * `check_turn` — every STREAMING engine's turns go through it (Claude Code CLI, Agent SDK,
+    Codex, the ACP engines; the native, azure and scripted engines stream no turns and run no
+    inner sandbox): a tool result that is the harness
     answering in the command's place stops the session at its FIRST occurrence (HarnessFailure).
+    BY CONSTRUCTION, not by each driver remembering to: the engine contract hands every session
+    a checked turn sink (`TurnSink`, engine_contract.ContractedAgent.run_role) and every driver
+    hands its turns over through `deliver_turns`, which checks each turn exactly once. A driver
+    that swallows the sink's error still stops: the contract re-raises what the sink saw. Codex
+    was the one driver not wired (a bwrap failure on every command read as "no test files"), and
+    the ACP engines (gemini_cli, opencode) were not wired either.
   * `note_engine_error` — an engine's own final error (its stderr, its session error) is read
     the same way before the engine raises it.
   * the latch — inside a governed build (`run_scope`), a harness failure is remembered for the
@@ -36,7 +44,7 @@ import contextvars
 import json
 import re
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Iterator, Mapping, Optional
 
 from .harness_registry import FailurePattern
@@ -50,6 +58,22 @@ WHERE = ("tool_result", "stream", "engine")
 #: Every engine's harness, in the words harnesses use. An engine adds its own through the
 #: registry (`register_harness(failure_patterns=…)`).
 GENERIC_PATTERNS: tuple[FailurePattern, ...] = (
+    # bubblewrap could not create its user namespace: Docker's default seccomp profile, or a
+    # kernel that restricts unprivileged user namespaces (Ubuntu 24.04's AppArmor
+    # `apparmor_restrict_unprivileged_userns`, which a Colima VM runs). Every command the engine's
+    # own sandbox runs answers with this line instead of its output.
+    # ANCHORED: bubblewrap opens its own line with `bwrap:`, and only a FAILED tool result counts
+    # — a grep of this file, a sed of a test that quotes it, or a test log that mentions it
+    # succeeded or starts with its own words (review of #258).
+    FailurePattern("sandbox_unavailable",
+                   r"(?m)^[ \t]*bwrap: (?:No permissions to create a new namespace"
+                   r"|Creating new namespace failed: (?:Operation not permitted|Permission denied))",
+                   "have the BOSS host administrator enable the engine's required nested "
+                   "user namespaces in the container seccomp and AppArmor policies (see "
+                   "docs/community/ENGINE_SANDBOX.md, \"Agent commands fail with a namespace "
+                   "error\"); verify sandbox startup before retrying (changing the task or "
+                   "connecting a GitHub repository will not fix this)",
+                   failed_results_only=True),
     FailurePattern("sandbox_unavailable",
                    r"failed to (?:initiali[sz]e|start|create) (?:the |its )?sandbox"
                    r"|sandbox (?:failed to (?:initiali[sz]e|start)|initiali[sz]ation failed)",
@@ -91,6 +115,12 @@ class HarnessVerdict:
     message: str
     fix: str
     where: str
+    #: Which account was refused, when the run knows ("pool:<member id>" for a pool account);
+    #: empty = the engine's one default login. Keyed by account so several accounts compose.
+    source_id: str = ""
+    #: The CLI's OWN stderr (never the agent's summary), read only to tell a provider-transport
+    #: refusal from an app's 401. Never persisted, never in as_dict()/repr.
+    transport_text: str = field(default="", repr=False, compare=False)
 
     def sentence(self) -> str:
         return f"BOSS could not run {self.engine}: {self.message}; fix: {self.fix}."
@@ -211,12 +241,31 @@ def _harness_said(stream: str) -> str:
     return "\n".join(kept)
 
 
+#: Lines that carry a 401 that is NOT the engine's own login: an MCP server the session reaches
+#: (BOSS's own, with an expired run token, or a connector), a package registry (npm E401,
+#: pnpm ERR_PNPM_FETCH_401, Artifactory/Nexus), a proxy asking for its own credentials (407).
+#: Read as the engine's login refused, they marked a working subscription "Sign-in expired" and
+#: stopped the build with "reconnect in Setup".
+_NOT_THE_LOGIN = re.compile(
+    r"\bmcp\b|\bmcp_|rmcp|mcp[_ ]?server|model context protocol"
+    r"|\bregistry\b|\bnpm (?:error|ERR!)|\bE40[13]\b|ERR_PNPM_|\byarn\b|artifactory|nexus"
+    r"|\bpip\b|pypi|maven|\.m2/|proxy\.golang|goproxy|\b407\b|proxy authentication", re.I)
+
+
+def _login_words(raw: str) -> str:
+    """The engine's final error without the lines that name someone else's 401."""
+    return "\n".join(ln for ln in raw.splitlines() if not _NOT_THE_LOGIN.search(ln))
+
+
 def classify(text: object, *, engine: Optional[str] = None, where: str = "engine",
-             ok: Optional[bool] = None) -> Optional[HarnessVerdict]:
+             ok: Optional[bool] = None, writer: Optional[bool] = None
+             ) -> Optional[HarnessVerdict]:
     """The harness failure `text` reports, or None when it is ordinary output (a failing test,
     a compiler error, a 404 — the agent's work, which the agent can fix).
 
-    `where` ∈ WHERE. `ok`: for a tool result, whether the tool reported success."""
+    `where` ∈ WHERE. `ok`: for a tool result, whether the tool reported success. `writer`: the
+    session must write (a writer, not a review seat); `writer_only` patterns (an organisation's
+    policy holding the engine to read-only) count only then."""
     raw = str(text or "")
     if where == "stream":
         raw = _harness_said(raw)
@@ -230,11 +279,21 @@ def classify(text: object, *, engine: Optional[str] = None, where: str = "engine
         scan = raw
     lowered = scan.lower()
     for pattern in patterns_for(engine):
-        if where != "engine" and not pattern.in_tool_results:
+        if where == "tool_result" and not pattern.in_tool_results:
+            continue
+        if where == "stream" and not (pattern.in_tool_results if pattern.in_stream is None
+                                      else pattern.in_stream):
+            continue
+        if pattern.writer_only and writer is not True:
+            continue
+        if where == "tool_result" and pattern.failed_results_only and ok is not False:
             continue
         hit = re.search(pattern.pattern, scan, re.I)
         if hit is None:
             continue
+        if where == "tool_result" and pattern.failed_results_only and hit.start() != len(
+                scan) - len(scan.lstrip()):
+            continue                     # the words must OPEN the result: nothing printed before
         if where == "tool_result" and ok is not False:
             body = re.sub(r"^error:?\s*", "", lowered.lstrip())
             if body.find(hit.group(0).lower()) not in range(0, _LEADING_SLACK + 1):
@@ -251,7 +310,7 @@ def classify(text: object, *, engine: Optional[str] = None, where: str = "engine
     if where == "engine":
         from .model_failures import is_login_rejected, provider_name
 
-        if is_login_rejected(raw):
+        if is_login_rejected(_login_words(raw)):
             who = provider_name(engine)
             whose = f"the {who}" if who != "the model" else name
             return HarnessVerdict(name, "auth_refused", _clean(raw),
@@ -317,6 +376,15 @@ def trip(verdict: HarnessVerdict) -> HarnessFailure:
             _TRIPPED.setdefault(run_id, verdict)
             while len(_TRIPPED) > _KEEP:
                 _TRIPPED.pop(next(iter(_TRIPPED)))
+    if verdict.kind == "auth_refused":
+        # THE ONE PLACE every harness refusal passes (a build, a review seat, a workflow step, a
+        # discovery): Setup learns of a refused login wherever it was seen (BOSSAPP-1347).
+        try:
+            from .harness_refusal import note
+
+            note(verdict, run_id)
+        except Exception:  # noqa: BLE001 — recording never masks the failure itself
+            pass
     return HarnessFailure(verdict)
 
 
@@ -356,7 +424,8 @@ def failure_of(exc: Optional[BaseException], run_id: Optional[str] = None
 
 # ── What the engines call ────────────────────────────────────────────────────────────────────
 
-def check_turn(turn: Mapping[str, Any], *, engine: Optional[str]) -> None:
+def check_turn(turn: Mapping[str, Any], *, engine: Optional[str],
+               writer: Optional[bool] = None) -> None:
     """Raise HarnessFailure when a captured turn is the harness answering in a tool's place."""
     from .knowledge.learning_writeback import observe_turn  # learning while executing (BOSSAPP-768)
 
@@ -369,16 +438,32 @@ def check_turn(turn: Mapping[str, Any], *, engine: Optional[str]) -> None:
         return
     ok = turn.get("ok")
     verdict = classify(_tool_result_text(turn.get("content")), engine=engine,
-                       where="tool_result", ok=(None if ok is None else bool(ok)))
+                       where="tool_result", ok=(None if ok is None else bool(ok)),
+                       writer=writer)
     if verdict is not None:
         raise trip(verdict)
 
 
-def check_stream(text: object, *, engine: Optional[str]) -> None:
-    """Raise HarnessFailure when the engine CLI's own output (stderr, live) says it cannot run."""
-    verdict = classify(text, engine=engine, where="stream")
+def _with_transport(verdict: HarnessVerdict, text: object) -> HarnessVerdict:
+    """Attach the CLI/engine's OWN output (stderr line, engine error) as the verdict's transport
+    text, for harness_refusal to tell a provider refusal from an app's words. Not for tool
+    results: those are the agent's output."""
+    import dataclasses
+
+    if verdict.kind != "auth_refused":
+        return verdict
+    return dataclasses.replace(verdict, transport_text=str(text or "")[-4000:])
+
+
+def check_stream(text: object, *, engine: Optional[str], writer: Optional[bool] = None) -> None:
+    """Raise HarnessFailure when the engine CLI's own output (stderr, live) says it cannot run.
+
+    Never a refused login: the stream carries diagnostics (an MCP server's 401, a retried
+    request) that are not the engine's login. That is read only from the engine's final error
+    (`note_engine_error`, `where="engine"`)."""
+    verdict = classify(text, engine=engine, where="stream", writer=writer)
     if verdict is not None:
-        raise trip(verdict)
+        raise trip(_with_transport(verdict, text))
 
 
 def note_engine_error(text: object, *, engine: Optional[str]) -> Optional[HarnessVerdict]:
@@ -390,10 +475,69 @@ def note_engine_error(text: object, *, engine: Optional[str]) -> Optional[Harnes
     except Exception:  # noqa: BLE001 — a reading of an error never replaces the error
         return None
     if verdict is not None:
-        trip(verdict)
+        trip(_with_transport(verdict, text))
     return verdict
 
 
-__all__ = ["GENERIC_PATTERNS", "HarnessFailure", "HarnessVerdict", "check_stream", "check_turn",
-           "classify", "current_run", "failure_of", "note_engine_error", "parse_sentence",
-           "patterns_for", "raise_if_tripped", "reset", "run_scope", "trip", "tripped"]
+# ── The one turn path every engine shares ────────────────────────────────────────────────────
+
+class TurnSink:
+    """The `on_turn` the engine contract hands every session: each turn is checked
+    (`check_turn`) BEFORE the caller's own callback sees it, and the first harness failure is
+    kept, so the contract can raise it even from a driver that swallowed it.
+
+    The caller's callback is best-effort (a progress indicator never fails the work); the check
+    is not."""
+
+    boss_harness_checked = True
+
+    def __init__(self, inner: Optional[Any], *, engine: Optional[str],
+                 writer: Optional[bool] = None) -> None:
+        if isinstance(inner, TurnSink):        # already checked: keep the innermost caller
+            inner = inner.inner
+        self.inner = inner
+        self.engine = engine
+        self.writer = writer
+        self.failure: Optional[HarnessFailure] = None
+
+    def __call__(self, turn: Mapping[str, Any]) -> None:
+        if self.failure is not None:
+            raise self.failure
+        # The caller sees the turn first (the operator watching the session sees the harness's
+        # own words), then the check stops the session on it.
+        _best_effort(self.inner, turn)
+        try:
+            check_turn(turn, engine=self.engine, writer=self.writer)
+        except HarnessFailure as failure:
+            self.failure = failure
+            raise
+
+
+def _best_effort(callback: Optional[Any], turn: Mapping[str, Any]) -> None:
+    if callback is None:
+        return
+    try:
+        callback(turn)
+    except HarnessFailure:
+        raise
+    except Exception:  # noqa: BLE001 — a progress callback never fails the session
+        pass
+
+
+def deliver_turns(produced: Any, on_turn: Optional[Any], *, engine: Optional[str],
+                  writer: Optional[bool] = None) -> None:
+    """How every driver hands its turns over. A contract-held session's sink checks each turn
+    once; a driver run without the contract (a direct call, a probe) is checked here. Raises
+    HarnessFailure at the first turn that is the harness answering in a tool's place."""
+    for turn in produced or ():
+        if getattr(on_turn, "boss_harness_checked", False):
+            on_turn(turn)
+            continue
+        _best_effort(on_turn, turn)
+        check_turn(turn, engine=engine, writer=writer)
+
+
+__all__ = ["GENERIC_PATTERNS", "HarnessFailure", "HarnessVerdict", "TurnSink", "check_stream",
+           "check_turn", "classify", "current_run", "deliver_turns", "failure_of",
+           "note_engine_error", "parse_sentence", "patterns_for", "raise_if_tripped", "reset",
+           "run_scope", "trip", "tripped"]

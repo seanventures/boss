@@ -749,10 +749,12 @@ def _prune_activity_log(client: ControlPlaneClient) -> None:
 #: Never more lease threads than this, whatever admission measures: the control plane runs
 #: every build in its own process and is the thing being protected.
 MAX_WORKER_SLOTS = 4
+#: How often an extra lease slot re-reads the saved job slots (Setup › Agent capacity).
+SLOTS_RECHECK_SECONDS = 60.0
 
 
 def worker_slots(client, settings) -> int:
-    """`BOSS_WORKER_SLOTS`: a number, or `auto` — the control plane's "Builds at once"."""
+    """Job slots, independently of heavy-build admission; older APIs use their build limit."""
     raw = str(getattr(settings, "worker_slots", "1") or "1").strip().lower()
     if raw != "auto":
         try:
@@ -762,8 +764,9 @@ def worker_slots(client, settings) -> int:
     try:
         response = client._client.get("/v1/system/health", timeout=10.0)
         response.raise_for_status()
-        value = int(((response.json() or {}).get("admission") or {})
-                    .get("builds_at_once", {}).get("value") or 1)
+        admission = (response.json() or {}).get("admission") or {}
+        value = int(admission.get("worker_slots") or
+                    admission.get("builds_at_once", {}).get("value") or 1)
     except Exception:  # noqa: BLE001 — an older API, or none yet: one slot, as before
         return 1
     return max(1, min(MAX_WORKER_SLOTS, value))
@@ -775,7 +778,15 @@ def _extra_lease_loop(settings, index: int) -> None:
     slot_settings = settings.model_copy(update={"worker_id": f"{settings.worker_id}-s{index}"})
     client = ControlPlaneClient(slot_settings.control_plane_url, api_key=slot_settings.api_key)
     try:
+        checked_at, desired_slots = 0.0, 1
         while not _STOPPING:
+            # The saved slots, read at most once a minute: each read samples the host.
+            if time.monotonic() - checked_at >= SLOTS_RECHECK_SECONDS:
+                desired_slots, checked_at = worker_slots(client, settings), time.monotonic()
+                _SLOTS["total"] = desired_slots
+            if index >= desired_slots:
+                time.sleep(10)
+                continue
             try:
                 ran = run_worker_cycle(client, slot_settings)
             except Exception:  # noqa: BLE001
@@ -906,7 +917,7 @@ def main() -> None:
         extra_slots = [
             threading.Thread(target=_extra_lease_loop, args=(settings, i),
                              name=f"boss-worker-slot-{i}", daemon=True)
-            for i in range(1, total_slots)
+            for i in range(1, MAX_WORKER_SLOTS)
         ]
         for t in extra_slots:
             t.start()

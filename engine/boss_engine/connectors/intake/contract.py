@@ -156,6 +156,7 @@ KEPT_HEADERS = frozenset({
     "x-boss-timestamp", "x-github-delivery", "x-github-event", "x-github-hook-id",
     "x-github-hook-installation-target-id", "x-github-hook-installation-target-type",
     "x-slack-retry-num", "x-slack-retry-reason", "x-slack-request-timestamp",
+    "x-atlassian-webhook-identifier", "x-plane-delivery", "x-plane-event",
     "x-request-id", "traceparent", "ce-id", "ce-type", "ce-source", "ce-specversion",
 })
 
@@ -334,7 +335,7 @@ class Cursor:
 class PollResult:
     """What one poll found. `deliveries` are the source-shaped bodies the events were parsed
     from: the poller stores THOSE in the inbox, so a polled change is processed, replayed and
-    deduplicated exactly as a pushed one is (GitHub, AMEX-G1)."""
+    deduplicated exactly as a pushed one is (GitHub, BOSSAPP-1175)."""
 
     events: tuple[IntakeEvent, ...]
     next_cursor: Cursor

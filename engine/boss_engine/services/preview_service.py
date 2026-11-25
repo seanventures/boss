@@ -20,19 +20,18 @@ import shutil
 import socket
 import subprocess
 import tempfile
-import threading
 import time
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any, Callable, Iterable, Optional
 
 from sqlalchemy import text
 
 from ..config import Settings
 from . import owned_process
-from ..db import begin
+from ..db import begin, spawn_thread
 from .code_task_service import load_code_task_run
 from .core import emit_event, make_id
 from .verification_target import NPM_INSTALL_CMD
@@ -157,6 +156,55 @@ def provision_preview_database(engine, run: Optional[dict], preview_id: str,
                    {"run_id": (run or {}).get("id"), "database": lease.name, "host": lease.host,
                     "port": lease.port, "env": list(build_services.ENV_NAMES), "why": why})
     return None
+
+
+def keep_preview_data(engine, preview_id: str, workdir: Path, *, project_id: Optional[str],
+                      repo: Optional[str], ident=None) -> list[str]:
+    """THE APP'S DATA, BACK BEFORE IT STARTS (preview_data): what an earlier preview of this app
+    saved is written into this tree (as the preview's uid when it has one), and this tree is
+    noted so its data is kept when it ends."""
+    from . import preview_data
+
+    try:
+        return preview_data.mark_restored(preview_id, workdir, preview_data.app_key(project_id, repo),
+                                          uid=ident.uid if ident is not None else None)
+    except Exception as exc:  # noqa: BLE001 — a preview without its old data still runs
+        logger.warning("preview %s: kept data not restored (%s)", preview_id, type(exc).__name__)
+        return []
+
+
+def _end_and_keep_data(preview_id: Optional[str]) -> None:
+    """STOP THE PREVIEW'S UID, THEN keep what its app wrote (preview_data.capture), before its
+    tree is removed. Whichever process holds the lease — this one, or none after an API restart
+    (sandbox_identity.stop_owner finds the uid from the run directory). A uid that could not be
+    stopped is never read: a live app could swap a link under BOSS's read (review of #223, B2)."""
+    if not preview_id:
+        return
+    from . import preview_data, sandbox_identity
+
+    try:
+        ident = sandbox_identity.stop_owner(str(preview_id))
+    except Exception as exc:  # noqa: BLE001 — not stopped: not read
+        logger.warning("preview %s: data not kept, its processes could not be stopped (%s)",
+                       preview_id, type(exc).__name__)
+        preview_data.forget(str(preview_id))
+        return
+    preview_data.capture(str(preview_id), owner_uid=ident.uid if ident is not None else None)
+
+
+def reset_preview_data(engine, settings: Settings, run_id: str) -> bool:
+    """"Fresh data": delete what is kept for the app this build previews (every branch and every
+    preview of it share it). True when there was something to delete."""
+    from . import preview_data
+
+    with begin(engine) as c:
+        run = load_code_task_run(c, run_id)
+    if run is None:
+        raise ValueError(f"code task run not found: {run_id}")
+    spec = run.get("spec") or {}
+    owner = spec.get("owner") or settings.target_github_owner
+    repo = spec.get("repo") or settings.target_github_repo
+    return preview_data.reset(preview_data.app_key(run.get("project_id"), f"{owner}/{repo}"))
 
 
 def _preview_workdir(preview_id: str, ident) -> Path:
@@ -1000,6 +1048,24 @@ def _strip_cd_into_itself(directory: Path, command: str) -> str:
 
 def _declared_command_in(directory: Path) -> Optional[str]:
     """The run command declared in ONE directory, from either form, or None."""
+    report = directory / "boss.preview.report"
+    if report.is_file():
+        from .report_preview import report_path
+
+        example = ('write it as {"path": "report.html", "prepare": "<command that writes '
+                   'report.html>"}')
+        try:
+            config = json.loads(report.read_text(errors="replace"))
+        except ValueError as error:
+            raise ValueError(f"boss.preview.report is not valid JSON ({error}); {example}") from None
+        if not isinstance(config, dict) or not isinstance(config.get("path"), str):
+            raise ValueError(f"boss.preview.report has no HTML path; {example}")
+        prepare = config.get("prepare", "")
+        if not isinstance(prepare, str):
+            raise ValueError(f"boss.preview.report's prepare must be one shell command; {example}")
+        report_path(directory, config["path"])
+        source = Path(__file__).with_name("report_preview.py").read_text()
+        return shlex.join(["python3", "-c", source, config["path"], "--prepare", prepare])
     hint = directory / RUN_DECLARATION_FILE
     if hint.is_file():
         command = hint.read_text(errors="ignore").strip()
@@ -1037,7 +1103,7 @@ def find_run_declaration(workdir: Path, changed: Optional[list[str]] = None
     owned = [str(c).strip() for c in (changed or []) if str(c).strip()]
     for rel in owned:
         name = rel.rsplit("/", 1)[-1]
-        if name not in (RUN_DECLARATION_FILE, "package.json"):
+        if name not in (RUN_DECLARATION_FILE, "boss.preview.report", "package.json"):
             continue
         rel_dir = rel.rsplit("/", 1)[0] if "/" in rel else "."
         directory = workdir if rel_dir == "." else workdir / rel_dir
@@ -2244,12 +2310,22 @@ def _diagnose_listening_port(log_path: str, port_hint: int,
         try:
             response = urllib.request.urlopen(
                 f"http://127.0.0.1:{port}{path if path != '/' else ''}", timeout=2)
-            status, body = int(response.status), response.read(4096)
+            status, body = int(response.status), response.read(65536)
             if not body.strip():
                 return (f"the app IS listening on port {port}, but GET {path} returned {status} "
                         f"with an empty body, so there is no page to preview.")
-            return (f"the app IS listening on port {port} and GET {path} returned {status}, but "
-                    f"the health check rejected the page it served.")
+            from .visual_gate import error_page_marker
+
+            # THE REASON, never "the health check rejected the page": _url_ok rejects a 2xx
+            # body only when it renders an error page, so name the words it rendered.
+            marker = error_page_marker(body.decode("utf-8", "ignore"))
+            if marker:
+                return (f"the app IS listening on port {port} and GET {path} returned {status}, "
+                        f"but the page it rendered is an error page (it shows "
+                        f"\"{marker.strip()}\").")
+            # It answers with a real page NOW: it was slow, not broken.
+            return (f"the app IS listening on port {port} and GET {path} now returns {status} "
+                    f"with a page, but it did not answer within the start window.")
         except urllib.error.HTTPError as http_error:
             if path != "/":
                 return (f"the app IS listening on port {port}, but GET {path} returned "
@@ -2556,6 +2632,12 @@ def _serve_failure(log_path: str, port_hint: int, health_path: str = "/") -> str
 # What the implement stage is told to produce. Kept here, beside the reader, so the prompt and
 # find_run_declaration cannot describe two different files.
 RUN_DECLARATION_INSTRUCTION = (
+    "- GENERATED HTML REPORTS: a CLI can provide a browser preview without becoming a web app. "
+    "Write boss.preview.report in its app directory: a JSON object with path (a relative HTML "
+    "file) and prepare (a command that generates it from checked-in demo fixtures in a fresh clone). "
+    "BOSS runs prepare and serves only that HTML file over HTTP; use self-contained HTML. "
+    "Do not use xdg-open/open or boss.preview.command for this report mode. "
+    "Generating a preview is not proof that functional acceptance tests pass.\n"
     "- HOW TO RUN IT (required if what you built serves HTTP — a web app, API or service): "
     "write a `boss.preview.command` file containing ONE shell command that starts the app "
     "and serves HTTP on the port in the `PORT` environment variable (bind 0.0.0.0). Put it in "
@@ -2616,7 +2698,7 @@ def _proof_tree(workdir: Path) -> Path:
 # them (docs, tests, fixtures) changed nothing the serve proof could catch.
 _RUNNABLE_SUFFIXES = (".py", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".html", ".vue",
                       ".svelte")
-_RUNNABLE_NAMES = frozenset({"package.json", RUN_DECLARATION_FILE, DECLARED_APP_FILE,
+_RUNNABLE_NAMES = frozenset({"package.json", RUN_DECLARATION_FILE, "boss.preview.report", DECLARED_APP_FILE,
                              "Procfile", "requirements.txt", "pyproject.toml"})
 
 
@@ -2703,6 +2785,7 @@ def app_serves_headline(record: Optional[dict]) -> str:
         # it crashed without — never only the crash.
         return error.split(". ", 1)[0][:300]
     verb = ("the app did not start" if rec.get("exit_code") is not None or "exited" in error
+            else "the app did not serve a usable page" if "is listening on port" in error.lower()
             else "the app did not serve HTTP")
     line = ""
     if "error: " in error:
@@ -2861,12 +2944,16 @@ def prove_app_serves(workdir: Path, changed: Optional[list[str]], *,
         # an undeclared build is never launched — and never failed for what the repository
         # holds — on the strength of a guess. how_app_runs asks find_run_declaration the same
         # question with the same files first, so a declaration here is the command run below.
-        if not known_service and find_run_declaration(tree, files or None) is None:
-            return _not_a_service(
-                "the build wrote no boss.preview.command, so its tests are its proof")
-
         try:
+            # A MALFORMED boss.preview.report fails the proof with its own sentence (how to
+            # write it), never as an exception out of the build step.
+            if not known_service and find_run_declaration(tree, files or None) is None:
+                return _not_a_service(
+                    "the build wrote no boss.preview.command, so its tests are its proof")
             plan = how_app_runs(tree, files or None)
+        except ValueError as exc:
+            record.update(ok=False, source="declared", error=str(exc))
+            return record
         except AmbiguousAppError as exc:
             record.update(ok=False, source="ambiguous", error=(
                 f"this build serves HTTP but did not declare how to run it, and the "
@@ -2931,10 +3018,14 @@ def prove_app_serves(workdir: Path, changed: Optional[list[str]], *,
                     record["error"] = f"the app {run_env.explain_crash(log_text)}. {record['error']}"
             else:
                 listening = _diagnose_listening_port(log_path, port_hint, health)
-                record.update(ok=False, error=(
-                    f"the app started and kept running but did not answer HTTP within "
-                    f"{timeout:g}s. " + (listening + " " if listening else "")
-                    + why_it_failed_text(_app_text())))
+                # ONE STORY. "did not answer HTTP" followed by "GET / returned 200" contradicted
+                # itself (crun_33379dfc): an app that is listening DID answer, so say what it
+                # answered instead of claiming it never did.
+                head = (f"the app started and kept running but did not serve a usable page "
+                        f"within {timeout:g}s: {listening}" if listening else
+                        f"the app started and kept running but did not answer HTTP within "
+                        f"{timeout:g}s.")
+                record.update(ok=False, error=head + " " + why_it_failed_text(_app_text()))
         finally:
             _kill(proc.pid)
             # THE START'S RECORD, on every outcome (app_start): command, cwd, the variables by
@@ -3146,6 +3237,9 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
         # needed to reproduce it by hand.
         failure_kind, suggested_action = _classify_start_failure(msg, exited=exited)
         _release_preview_sandbox(preview_id)
+        from . import preview_data as _preview_data
+
+        _preview_data.forget(preview_id)   # it never served: its kept data stays as it was
         with begin(engine) as c:
             c.execute(text(
                 "INSERT INTO app_previews (id,project_id,run_id,repo,branch,command,substrate,"
@@ -3316,6 +3410,8 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
     if app_env.needs:
         return _fail(f"the app {app_env.verdict()} (environment preview), then start the preview again",
                      command=" ".join(command))
+    keep_preview_data(engine, preview_id, workdir, project_id=project_id, repo=f"{owner}/{repo}",
+                      ident=ident)
     proc, port_hint = launch_app(
         workdir, command, log_path,
         owner=owned_process.Owner("preview", preview_id, project_id),
@@ -3787,6 +3883,9 @@ def _respawn_process_preview(engine, settings: Settings, preview_id: str) -> Non
         branch = row["branch"]
         if not owner or not repo or not branch:
             return
+        # The tree the restart left behind still holds what the app wrote: kept before the
+        # lease is taken again (acquire empties the directory).
+        _end_and_keep_data(preview_id)
         ident = _preview_sandbox(preview_id)       # SandboxUnavailable: stays stopped (below)
         workdir = _preview_workdir(preview_id, ident)
         log_path = preview_log_path(preview_id)
@@ -3832,6 +3931,8 @@ def _respawn_process_preview(engine, settings: Settings, preview_id: str) -> Non
             _release_preview_sandbox(preview_id)
             return
         record_demo_logins(engine, preview_id, app_env)
+        keep_preview_data(engine, preview_id, workdir, project_id=project_id, repo=repo_full,
+                          ident=ident)
         proc, port_hint = launch_app(
             workdir, command, log_path,
             owner=owned_process.Owner("preview", preview_id, row.get("project_id")),
@@ -3853,7 +3954,7 @@ def _respawn_process_preview(engine, settings: Settings, preview_id: str) -> Non
         with begin(engine) as c:
             c.execute(text(
                 "UPDATE app_previews SET status='running', pid=:pid, port=:port, url=:url, "
-                "log_path=:lg WHERE id=:id"),
+                "log_path=:lg, error=NULL WHERE id=:id"),
                 {"pid": proc.pid, "port": port, "url": url, "lg": log_path, "id": preview_id})
     except Exception:  # noqa: BLE001 — best-effort; a failed respawn just leaves it 'stopped'
         _release_preview_sandbox(preview_id)
@@ -3905,8 +4006,11 @@ def reconcile_previews(engine, settings: Settings) -> dict[str, int]:
             _teardown(row, settings)
         with begin(engine) as c:
             c.execute(
-                text("UPDATE app_previews SET status=:status WHERE id=:id AND status='running'"),
-                {"status": target_status, "id": row["id"]},
+                text("UPDATE app_previews SET status=:status, error=COALESCE(error, :why) "
+                     "WHERE id=:id AND status='running'"),
+                {"status": target_status, "id": row["id"],
+                 "why": ("Stopped by BOSS: past its time limit." if target_status == "expired"
+                         else "Stopped by BOSS: it stopped answering.")},
             )
         if target_status == "expired":
             expired += 1
@@ -3929,8 +4033,8 @@ def reconcile_previews(engine, settings: Settings) -> dict[str, int]:
         if ordered and not _respawn_allowed(engine, settings):
             ordered = []
         for pid in ordered:
-            threading.Thread(target=_respawn_process_preview, args=(engine, settings, pid),
-                             daemon=True).start()
+            spawn_thread(_respawn_process_preview, args=(engine, settings, pid),
+                         daemon=True, as_background=True)
             respawned += 1
     return {"checked": len(rows), "running": alive, "stopped": stopped, "expired": expired,
             "respawning": respawned}
@@ -3947,51 +4051,85 @@ def _respawn_allowed(engine, settings: Settings) -> bool:
         return False
 
 
-def reap_previews(engine, settings: Settings, *, idle_minutes: Optional[int] = None,
-                  now: Optional[datetime] = None) -> dict[str, int]:
-    """THE PERIODIC PREVIEW REAPER (stability spec §4a.6). Expiry used to happen only when
-    somebody listed previews or the API booted, so an unlisted 60-minute preview ran forever.
+#: PREVIEWS ARE KEPT WHILE THERE IS ROOM (operator, 2026-11-19: "the preview is very important —
+#: retain it if there's enough memory"). An idle or past-its-time preview is stopped only when the
+#: host is under pressure or more previews run than the cap; otherwise it keeps running and its
+#: time limit is renewed. Both thresholds are settings:
+#:   BOSS_PREVIEW_MAX_RUNNING      previews that may run at once (default 6)
+#:   BOSS_PREVIEW_MEMORY_FLOOR_PCT the host is "under pressure" below this much free memory
+#:                                 (default 20, the admission ladder's L1), or with memory PSI
+#:                                 full avg60 >= 2, or load per core >= 1.5
+DEFAULT_PREVIEW_MAX_RUNNING = 6
+DEFAULT_PREVIEW_MEMORY_FLOOR_PCT = 20.0
+#: A kept preview's time limit is renewed when it has less than this left.
+_RENEW_WITHIN = timedelta(minutes=10)
 
-    * past its TTL → torn down, `expired`;
-    * its process or container is gone → `stopped`;
-    * nobody has opened it (no proxied request) for `idle_minutes` → torn down, `stopped`.
+
+def preview_max_running() -> int:
+    try:
+        return max(1, int(os.environ.get("BOSS_PREVIEW_MAX_RUNNING") or DEFAULT_PREVIEW_MAX_RUNNING))
+    except ValueError:
+        return DEFAULT_PREVIEW_MAX_RUNNING
+
+
+def preview_memory_floor_pct() -> float:
+    try:
+        return float(os.environ.get("BOSS_PREVIEW_MEMORY_FLOOR_PCT") or DEFAULT_PREVIEW_MEMORY_FLOOR_PCT)
+    except ValueError:
+        return DEFAULT_PREVIEW_MEMORY_FLOOR_PCT
+
+
+def host_under_pressure(engine=None) -> bool:
+    """Is the host short of memory or CPU right now (the admission sample)? Unknown is no."""
+    try:
+        from .admission import MAX_LOAD_PER_CORE, sample
+
+        cap = sample()
+    except Exception:  # noqa: BLE001 — no reading is not pressure
+        return False
+    if cap.total_mb > 0 and 100.0 * cap.available_mb / cap.total_mb < preview_memory_floor_pct():
+        return True
+    return cap.psi_full_avg60 >= 2 or cap.load_per_core >= MAX_LOAD_PER_CORE
+
+
+def reap_previews(engine, settings: Settings, *, idle_minutes: Optional[int] = None,
+                  now: Optional[datetime] = None,
+                  pressure: Optional[Callable[[], bool]] = None,
+                  max_running: Optional[int] = None) -> dict[str, int]:
+    """THE PERIODIC PREVIEW REAPER (stability spec §4a.6), MEMORY-AWARE (2026-11-19).
+
+    * its process or container is gone → `stopped` (always: there is nothing to keep);
+    * idle (nobody opened it for `idle_minutes`) or past its time limit → a CANDIDATE. A candidate
+      is stopped only when the host is under pressure (`pressure()`, default host_under_pressure)
+      or more than `max_running` previews run; older previews of the same app go first, and an
+      app's latest preview goes only if the pressure is still there after them. A candidate that
+      is kept has its time limit renewed. The reason is on the row: "to free memory" / "to make
+      room", so the console can say why.
     """
     now = now or datetime.now(timezone.utc)
     if idle_minutes is None:
         idle_minutes = int(os.environ.get("BOSS_PREVIEW_IDLE_MINUTES") or 20)
+    pressure = pressure or (lambda: host_under_pressure(engine))
+    cap_n = max_running if max_running is not None else preview_max_running()
     with begin(engine) as c:
         rows = [dict(r) for r in c.execute(text(
-            "SELECT id, project_id, pid, mode, container_id, sandbox_task_id, expires_at, "
-            "created_at, last_seen_at FROM app_previews WHERE status = 'running'"
+            "SELECT id, project_id, run_id, repo, pid, mode, container_id, sandbox_task_id, "
+            "expires_at, created_at, last_seen_at FROM app_previews WHERE status = 'running'"
         )).mappings().all()]
-    out = {"checked": len(rows), "expired": 0, "dead": 0, "idle": 0}
-    for row in rows:
-        mode = row.get("mode") or "process"
-        if mode == FIXTURE_MODE:
-            continue
-        expires = row.get("expires_at")
-        if expires is not None and expires.tzinfo is None:
-            expires = expires.replace(tzinfo=timezone.utc)
-        seen = row.get("last_seen_at") or row.get("created_at")
-        if seen is not None and getattr(seen, "tzinfo", None) is None:
-            seen = seen.replace(tzinfo=timezone.utc)
-        if expires is not None and expires <= now:
-            status, why, key = "expired", "past its time limit", "expired"
-        elif mode == "process" and not _process_alive(row.get("pid")):
-            status, why, key = "stopped", "its process exited", "dead"
-        elif mode == "docker" and not _docker_alive(row.get("container_id")):
-            status, why, key = "stopped", "its container exited", "dead"
-        elif idle_minutes and seen is not None and now - seen > timedelta(minutes=idle_minutes):
-            status, why, key = "stopped", f"nobody opened it for {idle_minutes} min", "idle"
-        else:
-            continue
+    out = {"checked": len(rows), "expired": 0, "dead": 0, "idle": 0, "memory": 0, "room": 0,
+           "kept": 0}
+
+    def aware(v):
+        return v.replace(tzinfo=timezone.utc) if v is not None and v.tzinfo is None else v
+
+    def stop(row: dict, status: str, why: str, key: str) -> None:
         try:
             _teardown(row, settings)
         except Exception:  # noqa: BLE001 — mark it anyway; the substrate sweep follows up
             pass
         with begin(engine) as c:
             changed = c.execute(text(
-                "UPDATE app_previews SET status = :s, error = COALESCE(error, :e) "
+                "UPDATE app_previews SET status = :s, error = :e "
                 "WHERE id = :id AND status = 'running'"),
                 {"s": status, "e": f"Stopped by BOSS: {why}.", "id": row["id"]}).rowcount
             if changed:
@@ -4003,6 +4141,80 @@ def reap_previews(engine, settings: Settings, *, idle_minutes: Optional[int] = N
                 except Exception:  # noqa: BLE001 — the stop stands without its log line
                     pass
         out[key] += 1
+
+    alive: list[dict] = []
+    candidates: list[dict] = []
+    for row in rows:
+        mode = row.get("mode") or "process"
+        if mode == FIXTURE_MODE:
+            continue
+        if mode == "process" and not _process_alive(row.get("pid")):
+            stop(row, "stopped", "its process exited", "dead")
+            continue
+        if mode == "docker" and not _docker_alive(row.get("container_id")):
+            stop(row, "stopped", "its container exited", "dead")
+            continue
+        alive.append(row)
+        expires = aware(row.get("expires_at"))
+        seen = aware(row.get("last_seen_at") or row.get("created_at"))
+        row["_expired"] = expires is not None and expires <= now
+        row["_idle"] = bool(idle_minutes and seen is not None
+                            and now - seen > timedelta(minutes=idle_minutes))
+        row["_seen"] = seen or now
+        if row["_expired"] or row["_idle"]:
+            candidates.append(row)
+
+    # EACH APP'S LATEST PREVIEW (same project and repository, else the same build) is the one
+    # kept longest.
+    newest: dict[tuple, str] = {}
+    for row in sorted(alive, key=lambda r: aware(r.get("created_at")) or now):
+        newest[(row.get("project_id"), row.get("repo") or row.get("run_id") or row["id"])] = row["id"]
+    latest_ids = set(newest.values())
+    older = sorted((r for r in candidates if r["id"] not in latest_ids), key=lambda r: r["_seen"])
+    latest = sorted((r for r in candidates if r["id"] in latest_ids), key=lambda r: r["_seen"])
+
+    def why_of(row: dict, cause: str) -> str:
+        quiet = (f"nobody opened it for {idle_minutes} min" if row["_idle"]
+                 else "past its time limit")
+        return f"{cause} ({quiet})"
+
+    def ended(row: dict) -> str:
+        return "expired" if row["_expired"] and not row["_idle"] else "stopped"
+
+    stopped: set[str] = set()
+    if candidates and pressure():
+        for row in older:
+            stop(row, ended(row), why_of(row, "to free memory"), "memory")
+            stopped.add(row["id"])
+        if latest and (not older or pressure()):
+            for row in latest:
+                stop(row, ended(row), why_of(row, "to free memory"), "memory")
+                stopped.add(row["id"])
+    running = len(alive) - len(stopped)
+    for row in older + latest:
+        if running <= cap_n:
+            break
+        if row["id"] in stopped:
+            continue
+        stop(row, ended(row), why_of(row, f"to make room (more than {cap_n} previews were running)"),
+             "room")
+        stopped.add(row["id"])
+        running -= 1
+    # KEPT: renew a kept preview's time limit before it runs out (list_previews would expire it).
+    for row in alive:
+        if row["id"] in stopped:
+            continue
+        expires = aware(row.get("expires_at"))
+        if expires is not None and expires - now < _RENEW_WITHIN:
+            with begin(engine) as c:
+                c.execute(text("UPDATE app_previews SET expires_at = :e WHERE id = :id "
+                               "AND status = 'running'"),
+                          {"e": now + timedelta(minutes=60), "id": row["id"]})
+        if row in candidates:
+            out["kept"] += 1
+    # The old counters: what ended idle or past its limit, whatever made room for it.
+    out["idle"] += sum(1 for r in candidates if r["id"] in stopped and r["_idle"])
+    out["expired"] += sum(1 for r in candidates if r["id"] in stopped and not r["_idle"])
     return out
 
 
@@ -4050,7 +4262,7 @@ def stream_preview_logs(engine, preview_id: str):
 def _docker_rm(container_id: Optional[str]) -> None:
     if container_id:
         try:
-            owned_process.boss_run(["docker", "rm", "-f", container_id], capture_output=True,
+            owned_process.boss_run(["docker", "rm", "-f", "-v", container_id], capture_output=True,
                               timeout=60)
         except Exception:  # noqa: BLE001 — the reaper's substrate sweep is the backstop
             pass
@@ -4291,6 +4503,9 @@ _PREVIEW_BLOCKED_HEADER_NAMES = frozenset({
     # be told the wrong Host and a Content-Length that no longer matches the body we send.
     "host", "content-length", "connection", "keep-alive", "proxy-connection",
     "transfer-encoding", "te", "trailer", "upgrade", "expect",
+    # What THIS hop can read: the proxy edits HTML, so it asks the app for identity itself
+    # (proxy_preview) and the API compresses what it sends on (_plain_body).
+    "accept-encoding",
 })
 
 
@@ -4318,6 +4533,83 @@ def forwarded_preview_headers(
     return out
 
 
+#: Opt-in: send the preview origin's public Host to the app for EVERY preview host, not only
+#: `<label>.localhost` ones (preview_public_host_headers). For a custom BOSS_PREVIEW_ORIGIN whose
+#: apps check Origin against Host and accept that hostname.
+PREVIEW_FORWARD_HOST_ENV = "BOSS_PREVIEW_FORWARD_HOST"
+_PUBLIC_HOST = re.compile(r"[a-z0-9-]+(?:\.[a-z0-9-]+)*(?::\d{1,5})?", re.I)
+
+
+def _preview_parents() -> dict[str, str]:
+    """The hosts BOSS serves previews under (`<label>.<parent>`), each with the scheme a browser
+    reaches it by ("" when the request's own scheme says): localhost always; BOSS_PREVIEW_ORIGIN's
+    host; and BOSS_PUBLIC_URL's host (no preview origin set: previews are on the console's host,
+    on the preview port). Anything else is not BOSS's to vouch for."""
+    out: dict[str, str] = {"localhost": ""}
+    configured = configured_preview_origin()
+    candidates = [configured]
+    try:
+        from ..config import get_settings
+
+        candidates.append(str(get_settings().public_url or ""))
+    except Exception:  # noqa: BLE001 — no settings: localhost and the configured origin stand
+        pass
+    for raw in candidates:
+        parts = urllib.parse.urlsplit(raw or "")
+        name = (parts.hostname or "").lower()
+        if name and parts.scheme in ("http", "https") and not _ipv4(name) and ":" not in name:
+            out.setdefault(name, parts.scheme)
+    return out
+
+
+def preview_public_host_headers(incoming: Optional[dict], preview_id: str, *,
+                                scheme: str = "http") -> dict[str, str]:
+    """WHAT THE APP IS TOLD ABOUT WHERE THE BROWSER IS, on the preview origin (contributed from
+    an enterprise install, 2026-11-20).
+
+    The browser sends `Origin: http://prev-abc.localhost:3001`; the app was reached with
+    `Host: 127.0.0.1:<port>` (urllib's default: `host` is never forwarded). An app that checks a
+    write as same-origin by comparing Origin with Host (CSRF origin checks, SvelteKit form
+    actions, Rails, Express middleware) refused every POST with 403.
+
+    But many dev servers allowlist Host (Vite's `allowedHosts`, webpack-dev-server
+    `allowedHosts: "auto"`, Angular, Django `ALLOWED_HOSTS`, Rails `config.hosts`) and accept
+    localhost, `*.localhost` and IPs only. Sending a hostname they do not know (a preview origin
+    on `prev-abc.boss.example.com`) would 403 every request instead. So:
+
+      - X-Forwarded-Host and X-Forwarded-Proto always (the preview origin strips any a client
+        sent: preview_origin.stripped_headers), which most frameworks honour;
+      - Host itself only for a `<label>.localhost` host, which every such allowlist accepts, or
+        when BOSS_PREVIEW_FORWARD_HOST=1 opts in for a custom preview origin;
+      - nothing at all unless the WHOLE host is this preview's own: a plain hostname[:port]
+        whose first label is THIS preview's and whose parent is one BOSS serves previews under
+        (`_preview_parents`: localhost, BOSS_PREVIEW_ORIGIN's host, BOSS_PUBLIC_URL's host).
+        `prev-abc.attacker.example` passes the preview origin's first-label check, and an app
+        that honours X-Forwarded-Host would build its links on it: it gets neither header.
+
+    X-Forwarded-Proto is the configured origin's scheme when the host is under it (a TLS proxy
+    in front of the preview port), else `scheme`."""
+    host = next((str(v).strip() for k, v in (incoming or {}).items()
+                 if str(k).lower() == "host" and v is not None), "")
+    label = preview_host_label(preview_id)
+    if not host or not label or not _PUBLIC_HOST.fullmatch(host):
+        return {}
+    name = host.rsplit(":", 1)[0].lower()
+    first, dot, parent = name.partition(".")
+    if first != label or not dot:
+        return {}
+    parents = _preview_parents()
+    if parent not in parents:
+        return {}
+    proto = parents[parent] or (scheme if scheme in ("http", "https") else "http")
+    out = {"X-Forwarded-Host": host, "X-Forwarded-Proto": proto}
+    opted_in = (os.environ.get(PREVIEW_FORWARD_HOST_ENV) or "").strip().lower() in (
+        "1", "true", "yes", "on")
+    if parent == "localhost" or opted_in:
+        out["Host"] = host
+    return out
+
+
 #: preview id → when its last_seen_at was last written. Idle-stop needs "seen in the last N
 #: minutes", not every request: one UPDATE a minute per preview at most.
 _SEEN_WRITTEN: dict[str, float] = {}
@@ -4342,7 +4634,10 @@ def proxy_preview(engine, preview_id: str, subpath: str, method: str,
                   sandbox_token: str = "",
                   incoming_headers: Optional[dict] = None,
                   app_cookie_header: Optional[str] = None,
-                  serve_at_root: bool = False):
+                  serve_at_root: bool = False,
+                  public_scheme: str = "http",
+                  timeout: float = 25,
+                  self_heal: bool = True):
     """Reverse-proxy a request to a running preview's loopback port → (status, content_type, bytes,
     headers). Only the api can reach the preview's 127.0.0.1 port, so this exposes it via the api's
     own (tailnet-routed) URL. HTML responses get the root-relative path-rewrite shim.
@@ -4353,7 +4648,8 @@ def proxy_preview(engine, preview_id: str, subpath: str, method: str,
     preview's path, the ones naming a BOSS cookie or another path dropped.
 
     `serve_at_root`: the request came through the preview origin, so the app is shown at its own
-    paths (see `_inject_shim`)."""
+    paths (see `_inject_shim`), and is told the public host it was reached at
+    (preview_public_host_headers; `public_scheme` is the browser's scheme)."""
     from .preview_cookies import outbound_set_cookie
     import urllib.error
     with begin(engine) as c:
@@ -4378,8 +4674,16 @@ def proxy_preview(engine, preview_id: str, subpath: str, method: str,
         incoming_headers, content_type=content_type
     ).items():
         req.add_header(header_name, header_value)
+    if serve_at_root:
+        # WHERE THE BROWSER IS, told to the app (preview_public_host_headers).
+        for header_name, header_value in preview_public_host_headers(
+                incoming_headers, preview_id, scheme=public_scheme).items():
+            req.add_header(header_name, header_value)
     if app_cookie_header:
         req.add_header("Cookie", app_cookie_header)
+    # THE APP ANSWERS UNCOMPRESSED (see _plain_body): the browser's Accept-Encoding is not ours
+    # to forward, because this hop edits HTML and the API compresses what it sends on.
+    req.add_header("Accept-Encoding", "identity")
     if row["mode"] == "rootfs" and sandbox_token:
         req.add_header("X-Sandbox-Token", sandbox_token)
     response_headers: dict = {}
@@ -4390,23 +4694,43 @@ def proxy_preview(engine, preview_id: str, subpath: str, method: str,
         if made:
             response_headers["Set-Cookie"] = made
 
+    too_large = (502, "text/plain; charset=utf-8",
+                 b"This preview's answer is too large to show (over BOSS_PREVIEW_MAX_BODY_MB "
+                 b"once decoded).", {})
+    body_limit = preview_max_body_bytes()
     try:
-        resp = urllib.request.build_opener(_NoRedirect()).open(req, timeout=25)
+        resp = urllib.request.build_opener(_NoRedirect()).open(req, timeout=timeout)
         status = resp.status
         ctype = resp.headers.get("Content-Type", "application/octet-stream")
-        data = resp.read()
+        data, encoding = _plain_body(_read_bounded(resp, body_limit), resp.headers.get("Content-Encoding"))
         if resp.headers.get("Location"):
             response_headers["Location"] = resp.headers["Location"]
         _cookies_of(resp.headers)
+    except PreviewBodyTooLarge:
+        return too_large
     except urllib.error.HTTPError as e:
-        status, ctype, data = e.code, e.headers.get("Content-Type", "text/plain"), e.read()
+        status, ctype = e.code, e.headers.get("Content-Type", "text/plain")
+        try:
+            data, encoding = _plain_body(_read_bounded(e, body_limit), e.headers.get("Content-Encoding"))
+        except PreviewBodyTooLarge:
+            return too_large
         if e.headers.get("Location"):
             response_headers["Location"] = e.headers["Location"]
         _cookies_of(e.headers)
     except Exception as e:  # noqa: BLE001 — process gone (e.g. after an api restart): self-heal
+        # A TIMEOUT IS NEVER PROOF THE PROCESS DIED. A slow route (/metrics, /docs) under a short
+        # probe timeout raised here and the preview was marked stopped while healthy. 504, and
+        # the row is not touched. Nor is it when the caller only probes (self_heal=False).
+        if _is_timeout(e):
+            return 504, "text/plain; charset=utf-8", (
+                b"The preview did not answer in time. It is still running; try again."), {}
+        if not self_heal:
+            return 502, "text/plain; charset=utf-8", f"preview did not answer: {e}"[:300].encode(), {}
         try:
             with begin(engine) as c2:
-                c2.execute(text("UPDATE app_previews SET status='stopped' WHERE id=:id AND status='running'"),
+                c2.execute(text("UPDATE app_previews SET status='stopped', error=COALESCE(error, "
+                                "'Stopped by BOSS: its process ended.') "
+                                "WHERE id=:id AND status='running'"),
                            {"id": preview_id})
         except Exception:
             pass
@@ -4420,9 +4744,137 @@ def proxy_preview(engine, preview_id: str, subpath: str, method: str,
     location = response_headers.get("Location")
     if location:
         response_headers["Location"] = _gateway_location(preview_id, location)
-    if "text/html" in (ctype or ""):
+    if encoding:
+        # Still encoded (an encoding this host cannot decode): passed on byte for byte, labelled
+        # as it came, and never edited — splicing text into compressed bytes is what garbled it.
+        response_headers["Content-Encoding"] = encoding
+    elif "text/html" in (ctype or ""):
         data = _inject_shim(data, f"/v1/previews/{preview_id}/web", at_root=serve_at_root)
     return status, ctype, data, response_headers
+
+
+def _is_timeout(exc: BaseException) -> bool:
+    """A read or connect that ran out of time (TimeoutError / socket.timeout, or a URLError whose
+    reason is one) — never evidence that the previewed process ended."""
+    import socket
+    import urllib.error
+
+    if isinstance(exc, (TimeoutError, socket.timeout)):
+        return True
+    if isinstance(exc, urllib.error.URLError):
+        reason = exc.reason
+        return isinstance(reason, (TimeoutError, socket.timeout)) or "timed out" in str(reason)
+    return False
+
+
+class PreviewBodyTooLarge(Exception):
+    """An upstream body that decodes past BOSS_PREVIEW_MAX_BODY_MB."""
+
+
+#: Encodings stacked deeper than this are passed on undecoded (each layer multiplies a bomb).
+_MAX_STACKED_ENCODINGS = 2
+
+
+def preview_max_body_bytes() -> int:
+    try:
+        return max(1, int(float(os.environ.get("BOSS_PREVIEW_MAX_BODY_MB") or 32) * 1024 * 1024))
+    except ValueError:
+        return 32 * 1024 * 1024
+
+
+def _read_bounded(stream: Any, limit: int) -> bytes:
+    """Read upstream response bytes in 1 MiB chunks, raising PreviewBodyTooLarge past `limit`."""
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = stream.read(1 << 20)
+        if not chunk:
+            return b"".join(chunks)
+        total += len(chunk)
+        if total > limit:
+            raise PreviewBodyTooLarge()
+        chunks.append(chunk)
+
+
+def _inflate(raw: bytes, wbits: int, limit: int) -> bytes:
+    """zlib-decode `raw` (every gzip member) without ever holding more than `limit` + 1 bytes of
+    output: decompressobj with max_length, fed its unconsumed tail. PreviewBodyTooLarge past it."""
+    import zlib
+
+    out = bytearray()
+    data = raw
+    while data:
+        d = zlib.decompressobj(wbits)
+        while data and not d.eof:
+            out += d.decompress(data, limit + 1 - len(out))
+            if len(out) > limit:
+                raise PreviewBodyTooLarge()
+            data = d.unconsumed_tail
+        if not d.eof:
+            out += d.flush(limit + 1 - len(out))
+            if len(out) > limit:
+                raise PreviewBodyTooLarge()
+            if not d.eof:
+                raise zlib.error("truncated stream")
+        # Another gzip member follows (gzip.decompress reads them all); anything else ends it.
+        data = d.unused_data if wbits == 31 and d.unused_data[:2] == b"\x1f\x8b" else b""
+    return bytes(out)
+
+
+def _decode_one(coding: str, data: bytes, limit: int) -> Optional[bytes]:
+    """`data` without one layer of `coding`, bounded by `limit`; None for an encoding this host
+    does not decode. br is never decoded here: the brotli module cannot bound its output."""
+    import zlib
+
+    if coding in ("gzip", "x-gzip"):
+        return _inflate(data, 31, limit)
+    if coding == "deflate":
+        try:
+            return _inflate(data, 15, limit)        # RFC 1950 (zlib-wrapped), what the RFC says
+        except zlib.error:
+            return _inflate(data, -15, limit)       # raw deflate, what some servers send
+    return None
+
+
+def _plain_body(raw: bytes, content_encoding: Optional[str]) -> tuple[bytes, str]:
+    """An upstream body without its Content-Encoding → (bytes, "") — or, when it is not undone
+    here, (the bytes as they came, the encoding they still carry).
+
+    A PREVIEW OPENED AS BINARY GARBAGE (recipe-box, 2026-11-18). The browser's
+    `Accept-Encoding: gzip, br` was forwarded, Next.js gzipped its HTML, and the shim was
+    spliced into the COMPRESSED bytes: `_inject_shim` decoded them as UTF-8 (dropping every
+    invalid byte, 0x8b first), found no <head>, prepended itself, and the API's GZip middleware
+    compressed the result once more. The browser undid one layer and showed the other as text;
+    every Next chunk was a gzip stream served as JavaScript. The proxy now asks for identity,
+    and an app that compresses anyway (gzip, deflate) is decoded here before anything reads or
+    edits the body.
+
+    AND NEVER INTO A BOMB (review of #223): a preview app is untrusted and may ignore the
+    identity request — 0.5 MB of gzip is 512 MB decoded, in the API process. Decoding is
+    bounded (BOSS_PREVIEW_MAX_BODY_MB, default 32; PreviewBodyTooLarge past it), at most two
+    stacked encodings are undone, and br (unboundable here) is passed on undecoded."""
+    codings = [c.strip().lower() for c in (content_encoding or "").split(",") if c.strip()]
+    codings = [c for c in codings if c != "identity"]
+    limit = preview_max_body_bytes()
+    if not codings:
+        if len(raw) > limit:
+            raise PreviewBodyTooLarge()
+        return raw, ""
+    if len(codings) > _MAX_STACKED_ENCODINGS:
+        return raw, ", ".join(codings)
+    data = raw
+    for i in range(len(codings) - 1, -1, -1):
+        try:
+            decoded = _decode_one(codings[i], data, limit)
+        except PreviewBodyTooLarge:
+            raise
+        except Exception:  # noqa: BLE001 — a body that lies about its encoding is sent as it is
+            logger.debug("preview body did not decode as %s", codings[i], exc_info=True)
+            return data, ", ".join(codings[: i + 1])
+        if decoded is None:
+            return data, ", ".join(codings[: i + 1])
+        data = decoded
+    return data, ""
 
 
 def _is_boss_oidc(parsed: urllib.parse.SplitResult) -> bool:
@@ -4575,6 +5027,8 @@ def _teardown(row, settings: Optional[Settings] = None) -> None:
             MicroVMProvider(settings).release(sandbox_id)
     else:
         _kill(row.get("pid"))
+        # What the app saved is the app's, not this preview's: kept before the tree goes.
+        _end_and_keep_data(row.get("id"))
         # The preview's uid: every process it left is killed, its tree removed, the uid freed.
         _release_preview_sandbox(row.get("id"))
 
@@ -4785,7 +5239,7 @@ def start_preview_async(engine, settings: Settings, run_id: str, *,
         except Exception:  # noqa: BLE001 — never let log capture break the preview
             logger.debug("preview %s: log ingest failed", preview_id, exc_info=True)
 
-    threading.Thread(target=_finish, name=f"preview-{preview_id}", daemon=True).start()
+    spawn_thread(_finish, name=f"preview-{preview_id}", daemon=True, as_background=True)
     return {"id": preview_id, "status": "starting", "run_id": run_id,
             "message": "Preview is building. It appears in the previews list as it progresses."}
 
@@ -4888,6 +5342,9 @@ def reclaim_preview_workdir(preview_id: str) -> int:
     else, and a directory that has already gone is a success, not an error.
     """
     freed = 0
+    # A tree nobody tore down (its process died with an old container) still holds what the
+    # app wrote: its uid stopped and its data kept first. A no-op once a teardown has kept it.
+    _end_and_keep_data(preview_id)
     try:
         if not PREVIEW_ROOT.exists():
             return 0

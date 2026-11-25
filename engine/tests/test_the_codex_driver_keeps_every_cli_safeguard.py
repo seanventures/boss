@@ -53,6 +53,10 @@ FAKE_CODEX = textwrap.dedent('''\
     if behaviour == "sandbox_broken":
         print("Error: Landlock ruleset is not supported by this kernel", flush=True)
         sys.exit(1)
+    if behaviour == "namespace_denied":
+        out({{"type": "item.completed", "item": {{"type": "command_execution",
+            "command": "pwd", "status": "failed", "exit_code": 1,
+            "aggregated_output": "bwrap: No permissions to create a new namespace"}}}})
     final = argv[argv.index("--output-last-message") + 1]
     out({{"type": "item.completed", "item": {{"type": "agent_message", "text": "done"}}}})
     out({{"type": "turn.completed", "usage": {{"input_tokens": 10, "output_tokens": 2}}}})
@@ -143,9 +147,10 @@ def test_codex_on_a_chatgpt_login_is_a_subscription_and_on_a_key_is_metered(code
     assert agent.run_role("Implement it.", tree)["usage"]["billing"] == BILLING_METERED
 
 
-def test_a_codex_whose_sandbox_cannot_start_stops_the_run(codex):
+@pytest.mark.parametrize("failure", ["sandbox_broken", "namespace_denied"])
+def test_a_codex_whose_sandbox_cannot_start_stops_the_run(codex, failure):
     agent, tree, behaviour, calls = codex
-    behaviour.write_text("sandbox_broken")
+    behaviour.write_text(failure)
     with hf.run_scope("crun_codex_driver"):
         with pytest.raises(hf.HarnessFailure) as stopped:
             agent.run_role("Implement it.", tree)

@@ -819,6 +819,50 @@ def _lifecycle_of(connection: Connection, project_id: str,
             str(persona.get("callsign") or row["display_name"] or role_key))
 
 
+_PERSON_ONLY_CACHE: dict[str, Optional[tuple[str, str]]] = {}
+
+
+def person_only_permission(step: dict[str, Any]) -> Optional[tuple[str, str]]:
+    """(title, key) of the permission a BUILT-IN capability step's tool needs when no agent can
+    ever hold it (PermissionMeta.delegable False — e.g. contract_test and smoke_test need
+    observability:manage), else None. Agent, custom and gate steps are never person-only here."""
+    binding = step.get("binding") if isinstance(step.get("binding"), dict) else {}
+    if str(step.get("kind") or "capability") != "capability":
+        return None
+    if binding.get("agent_work") or binding.get("custom_step"):
+        return None
+    capability = str(binding.get("capability") or "").strip()
+    if not capability:
+        return None
+    if capability not in _PERSON_ONLY_CACHE:
+        found: Optional[tuple[str, str]] = None
+        try:
+            from . import workflow_capabilities
+            from ..identity.permissions_gen import PERMISSION_META
+            from ..tools.builtin import build_default_registry
+
+            tool = getattr(workflow_capabilities.get(capability), "tool", None)
+            if tool:
+                permission = build_default_registry().get(str(tool)).permission
+                meta = PERMISSION_META.get(permission) if permission else None
+                if meta is not None and not meta.delegable:
+                    found = (str(meta.title), str(permission))
+        except Exception:  # noqa: BLE001 — an unknown capability or tool: not person-only
+            found = None
+        _PERSON_ONLY_CACHE[capability] = found
+    return _PERSON_ONLY_CACHE[capability]
+
+
+def _step_label(step: dict[str, Any]) -> str:
+    binding = step.get("binding") if isinstance(step.get("binding"), dict) else {}
+    try:
+        from . import workflow_capabilities
+
+        return workflow_capabilities.get(str(binding.get("capability"))).label
+    except Exception:  # noqa: BLE001
+        return str(step.get("id") or "this step")
+
+
 def resolve(
     connection: Connection,
     settings: Any,
@@ -835,6 +879,21 @@ def resolve(
     """
     binding = step.get("binding") if isinstance(step.get("binding"), dict) else {}
     named = named_agent(step)
+    person_only = person_only_permission(step)
+    if named and named != HUMAN and person_only:
+        # A BUILT-IN STEP NO AGENT MAY EVER RUN runs as the person who started the run (laptop
+        # 2026-11-21: Northgate's Contract test named integration_validator — the catalogue's
+        # own captain for it — and every attempt was refused "it needs Manage observability,
+        # which only a person can hold, never an agent"; Shepherd retried it twice and filed a
+        # self-fix). Its tool needs a permission no agent can hold, so naming an agent can only
+        # fail it; the person who started the run and consented to it runs it, as a built-in step
+        # with no agent always has, and the named agent is said, not silently dropped.
+        title, key = person_only
+        return _record(
+            actor, "run_actor",
+            f"{_step_label(step)} needs \u201c{title}\u201d ({key}), which only a person can "
+            f"hold, never an agent, so it runs as {actor}, who started the run; {named} is "
+            "named on the step", [actor])
     if named:
         off = _lifecycle_of(connection, project_id, named)
         # A CATALOGUE DEFAULT THAT IS OFF DUTY OR GONE HANDS THE STEP BACK TO AUTO (§0.1.4:

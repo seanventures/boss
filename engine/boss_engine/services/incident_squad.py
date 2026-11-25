@@ -69,6 +69,7 @@ from typing import Any, Iterable, Mapping, Optional, Protocol
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from . import production as _production_names
 from .ambient import board, collab, ledger, policy, signals
 from .ambient._common import clean_text, party_id, person, short_label
 
@@ -438,7 +439,8 @@ class Ctx:
 
     @property
     def is_prod(self) -> bool:
-        return self.environment not in NON_PROD_ENVS
+        # The one resolver (services/production.py): a name it cannot place is production.
+        return _production_names.resolve_environment(self.environment).prod
 
     @property
     def failing_route(self) -> Optional[str]:
@@ -1237,6 +1239,8 @@ class _Pass:
             self.c, self.item_id, actor=self.squad.lead, token=self.token,
             question=f"{proposal['body']['summary']}?",
             recommendation={"action": NEEDS_YOU_ACTION, "mitigation": proposal["body"]["action"],
+                            # Where it runs: dev autonomy asks for production (autonomy_gate).
+                            "environment": self.ctx.environment,
                             "proposal_id": proposal["id"], "squad_act_id": rec["act_id"],
                             "votes": f"{approve}/{voted}",
                             "dissent": [d.get("reason") for d in dissent][:3],

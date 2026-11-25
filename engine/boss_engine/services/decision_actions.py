@@ -68,6 +68,8 @@ REFUSALS: dict[str, str] = {
     # jobs: the budget state deferred a job; it is re-queued and runs later by itself.
     "review_budget_policy": "deferred",
     "budget_state_deferred_job": "deferred",
+    # confluence_publish: an approved page did not land (the write is never re-sent blindly).
+    "confluence_publish_failed": "confluence",
 }
 #: Kept under their old names; both now cover every refusal, by action or by reason.
 REFUSAL_REASONS = frozenset(REFUSALS)
@@ -81,6 +83,8 @@ CARRIED_OUT_ON_APPROVAL = frozenset({
     "retry_when_secret_set",
     # Fix these (change_recheck): the follow-up for a re-check's findings starts.
     "start_recheck_followup",
+    # A P0 waive (finding_overrides): the named approver's approval waives the finding.
+    "waive_finding",
     "resume_agent_run",
     "resume_code_task",
     "review_plan_draft",
@@ -125,6 +129,9 @@ CARRIED_OUT_ON_APPROVAL = frozenset({
     # Approving an agent's (or the maintainer's) wiki change writes exactly that page onto the
     # revision it was proposed against (wiki.apply_for_decision, BOSSAPP-891).
     "apply_wiki_patch",
+    # Approving an agent's Confluence page writes exactly that page, as a versioned update
+    # (confluence_publish.apply_for_decision, BOSSAPP-1384).
+    "apply_confluence_publish",
     # Approving a "Tool changed" card clears the MCP tool's quarantine and accepts the new
     # definition (mcp_registry.accept_tool_change); rejecting turns it Off (BOSSAPP-818).
     "review_tool_change",
@@ -163,6 +170,18 @@ CARRIED_OUT_ON_APPROVAL = frozenset({
     # ticket's changed acceptance criteria.
     "ticket_pickup",
     "ticket_changed_mid_run",
+    # EVERY FAILURE HAS AN OWNER (failure_owner.on_answered): "Done — retry" runs each failure on
+    # the card again as the person; "Leave it" ends BOSS's ownership, saying who decided.
+    "failure_owner.retry",
+    # A build's delivery workflow did not start (code_task_service.start_delivery_workflow):
+    # approving starts it now, adopting the running build (attach_delivery_workflow).
+    "start_delivery_workflow",
+    # THE INFRA AGENT'S CARDS (BOSSAPP-1157). Approving a tier-3 storage deletion runs exactly
+    # the dry run's plan (storage_cleanup.on_delete_decision); approving a proposed retention
+    # rule writes it (storage_incidents.on_rule_decision). They were KINDS but not classified,
+    # so Approve said "BOSS starts nothing" and an approved card offered "Mark executed".
+    "storage_delete",
+    "storage_rule",
 })
 
 #: "Request changes" DOES SOMETHING ONLY FOR THESE: DecisionService._handle_non_approved_follow_on
@@ -398,10 +417,17 @@ def is_local_review(decision: Mapping[str, Any]) -> bool:
             and is_local_pr_url(_rec(decision).get("pull_request_url")))
 
 
+def is_prd_publish(decision: Mapping[str, Any]) -> bool:
+    """A PRD publish card (meeting_service._finalize_meeting): Request changes revises the PRD
+    from the person's note and opens a new PRD publish decision for approval."""
+    return (_action_of(decision) == "execute_agent_tool"
+            and _rec(decision).get("tool") == "publish_document")
+
+
 def consumes_revision(decision: Mapping[str, Any]) -> bool:
     """True when something reads `revision_requested` for this decision and acts on the note."""
     return (_action_of(decision) in REVISE_CONSUMED or is_ambient_card(decision)
-            or is_local_review(decision))
+            or is_local_review(decision) or is_prd_publish(decision))
 
 
 def _action(action: str, label: str, tone: str, effect: str,
@@ -437,10 +463,20 @@ def _delegate() -> dict[str, Any]:
     )
 
 
-_RETRY = ("Then retry the work: Retry on the failed step in Workflow, or on the build in "
-          "Factory. Approving this card would not retry anything.")
+_RETRY = ("Then retry the work: Retry on the failed step in Workflows, or on the build in "
+          "Code Tasks. Approving this card would not retry anything.")
 
 _REFUSAL_GUIDANCE: dict[str, dict[str, str]] = {
+    "confluence": {
+        "what_happened": (
+            "A Confluence page you approved could not be published, so nothing was written "
+            "(or Confluence already has a different version of the page)."),
+        "what_to_do": (
+            "Read the reason on the card. If the page moved, ask the agent for a new proposal; "
+            "if the sign-in failed, reconnect Confluence in Setup."),
+        "area": "setup",
+        "link_label": "Open Setup",
+    },
     "capacity": {
         "what_happened": (
             "BOSS tried to call a model and it had no capacity or credit left (a rate limit, "
@@ -777,6 +813,17 @@ def allowed_actions(decision: Mapping[str, Any]) -> list[dict[str, Any]]:
                     "The build stops waiting; its draft pull request stays open."),
             _delegate(),
         ]
+    if _action_of(decision) == "failure_owner.retry":
+        # A FAILURE BOSS COULD NOT FIX ITSELF (failure_owner): the card says what to do and why
+        # BOSS could not; the person does it, then says so here.
+        return [
+            _action("approve", "Done — retry", "approve",
+                    "Runs it again now, as you. BOSS keeps owning it: if it fails again, BOSS "
+                    "tries its fixes once more before it asks you."),
+            _action("reject", "Leave it", "reject",
+                    "BOSS stops trying. The failure stays on its page, marked as your call."),
+            _delegate(),
+        ]
     if _action_of(decision) == "answer_form":
         # A TYPED QUESTION (typed_forms, BOSSAPP-832): the answer is the form.
         return [
@@ -865,6 +912,23 @@ def allowed_actions(decision: Mapping[str, Any]) -> list[dict[str, Any]]:
         # ONE DECISION FOR EVERY PR OF A MULTI-REPO CHANGE: no per-PR approval exists, so there
         # is no Delegate either — the set is approved as one by someone who may approve it.
         n = len(_rec(decision).get("pull_requests") or [])
+        from .checks_failing import of_decision
+
+        if of_decision(decision) is not None:
+            # CHECKS FAILING ON A PR OF THE SET (change_sets.set_checks_failing): the merge is a
+            # person's stated decision, sent as a forced merge with their reason
+            # (ci_gate.refuse_approval refuses anything else); keeping it blocked is the other.
+            return [
+                _action("approve", f"Merge all {n} with checks failing" if n else
+                        "Merge with checks failing", "reject",
+                        "Merges every pull request of the set although BOSS's checks are failing on "
+                        "some of them. Say why: your reason is recorded with the merge.", needs="note"),
+                _action("revise", "Send back", "neutral",
+                        "Every pull request gets a fix build from your note; the set is reviewed and "
+                        "asked again.", needs="note"),
+                _action("reject", "Keep blocked", "reject",
+                        "Nothing is merged or deployed. The pull requests stay open."),
+            ]
         return [
             _action("approve", f"Approve and ship all {n}" if n else "Approve and ship", "approve",
                     "Merges every pull request of the set at the reviewed commits, in dependency order, "
@@ -944,7 +1008,10 @@ def allowed_actions(decision: Mapping[str, Any]) -> list[dict[str, Any]]:
     if consumes_revision(decision):
         actions.append(_action(
             "revise", "Request changes", "neutral",
-            ("BOSS plans again from your note, checks the new plan against the brief, and asks "
+            ("BOSS revises the PRD with your note and asks for approval again; nothing is "
+             "published until you approve."
+             if is_prd_publish(decision) else
+             "BOSS plans again from your note, checks the new plan against the brief, and asks "
              "you again; no code is written until then."
              if _action_of(decision) == "resume_code_task" else
              "Sends the proposal back with your note; nothing is applied until it returns."),
@@ -1113,7 +1180,13 @@ def waiting_on_operator(connection, project_id: str, *, now: Optional[datetime] 
     ).bindparams(*binds)
     wanted = {"needs_action", "expired"} if include_expired else {"needs_action"}
     rows = [dict(r) for r in connection.execute(statement, params).mappings().all()]
-    return sorted(one_question_per_pull_request(r for r in rows if attention(r, now) in wanted),
+    # A STUCK CARD WHOSE CAUSE BOSS CAN RE-CHECK LIVE ("no worker is taking work") is shown only
+    # while that cause still holds now (cleared_causes.stale_now); the sweep withdraws the rest.
+    from .cleared_causes import stale_now
+
+    stale = stale_now(connection, rows)
+    return sorted(one_question_per_pull_request(r for r in rows if attention(r, now) in wanted
+                                                and str(r.get("id")) not in stale),
                   key=_sort_key)
 
 

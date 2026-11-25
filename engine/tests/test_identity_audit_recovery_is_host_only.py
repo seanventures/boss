@@ -102,4 +102,4 @@ def test_claim_status_is_the_one_line_boss_doctor_prints(db):
         f"{(NOW + timedelta(days=30)).date().isoformat()}"
     doctor = (REPO / "scripts/install/checkup.sh").read_text()
     assert "boss_engine.identity.cli claim-status" in doctor and "/claim" in doctor \
-        and "boss identity setup-link" in doctor
+        and "${BOSS_COMMAND:-boss} identity setup-link" in doctor  # this install's own command

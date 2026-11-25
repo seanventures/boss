@@ -117,6 +117,12 @@ class Settings(BaseSettings):
     backup_keep_daily: int = Field(default=7, alias="BOSS_BACKUP_KEEP_DAILY", ge=0)
     backup_keep_weekly: int = Field(default=4, alias="BOSS_BACKUP_KEEP_WEEKLY", ge=0)
     backup_keep_monthly: int = Field(default=6, alias="BOSS_BACKUP_KEEP_MONTHLY", ge=0)
+    # THE CAP OVER THE TIERS (BOSSAPP-1459): the tiers alone keep up to 23 dumps, unbounded in
+    # bytes (6.4 GB on the operator's laptop). Past either number the oldest go — automatically
+    # once a `backups` retention rule is approved (or on a dev install, whose autonomy answers the
+    # card), else through ONE storage decision. The newest three always stay.
+    backup_max_count: int = Field(default=12, alias="BOSS_BACKUP_MAX_COUNT", ge=3)
+    backup_cap_gb: float = Field(default=5.0, alias="BOSS_BACKUP_SCHEDULED_CAP_GB", gt=0)
     # Upload each verified dump to S3_BUCKET (S3_ENDPOINT for MinIO) under this prefix.
     backup_s3_upload: bool = Field(default=False, alias="BOSS_BACKUP_S3_UPLOAD")
     backup_s3_prefix: str = Field(default="boss-backups", alias="BOSS_BACKUP_S3_PREFIX")
@@ -1067,10 +1073,14 @@ class Settings(BaseSettings):
         default=None, alias="BOSS_MEETING_PRD_AUTO_APPROVE"
     )
 
+    # DEV AUTONOMY (BOSSAPP-1441) REPLACES "FOLLOWS ENFORCEMENT": unset, the PRD gate follows the
+    # project's autonomy policy (services/autonomy_policy.py: development acts by default), not
+    # BOSS_AUTHZ_MODE. The policy is set by an Owner/Admin with step-up, which is the seat's
+    # standing word for non-production work. Setting it false is a stop a person set: honoured.
     @model_validator(mode="after")
-    def _prd_auto_approve_follows_enforcement(self):
+    def _prd_auto_approve_follows_autonomy(self):
         if self.meeting_prd_auto_approve is None:
-            self.meeting_prd_auto_approve = (self.authz_mode or "").strip().lower() != "enforce"
+            self.meeting_prd_auto_approve = True
         return self
     # Cost/rigor dial for the governed pipeline: lean | balanced | strict (or a custom profile
     # name once the profiles API lands). Scales which steps run and which models run them.
@@ -1228,6 +1238,8 @@ class Settings(BaseSettings):
     # on a person's stated reason. The build is never parked waiting for a waiver. 0 restores the
     # waiver stop (awaiting_gate_override). Govern/Settings sets it per project.
     open_pr_when_checks_fail: int = Field(default=1, alias="BOSS_OPEN_PR_WHEN_CHECKS_FAIL")
+    # THE QUALITY BAR (services/quality_bar.py): prototype | standard | production.
+    quality_bar: str = Field(default="standard", alias="BOSS_QUALITY_BAR")
     # THE RUN SUPERVISOR (L2a, services/run_supervisor.py) — three independently toggle-able
     # flags, each read at the point it would act, so flipping one takes effect on a project's
     # very next repair round with no restart. 1 on, 0 off; all default on.
@@ -1335,6 +1347,19 @@ class Settings(BaseSettings):
     # spent: a cost ceiling in cents (its model turns plus the repair builds it starts) and a
     # wall-time ceiling in minutes. 0 turns the agent off (failures go to a person as before).
     step_recovery: int = Field(default=1, alias="BOSS_STEP_RECOVERY")
+    # AGENTS FIX FAILURES WITH THE STARTER'S AUTHORITY (identity/fix_authority.py): BOSS's
+    # recovery agents continue a person's failing work with that person's own delegable
+    # authority (an org default, recorded in the audit log). 1 on (the default), 0 off: the work
+    # then stops on a card asking that person for a grant, as before.
+    agents_fix_failures: int = Field(default=1, alias="BOSS_AGENTS_FIX_FAILURES")
+    # BUILDS RECOVER THEMSELVES (governed_code_task_service._retry_after_infra_failure): a build
+    # that stops on BOSS's own platform error (failure_class `infra`, never a needs_human one: a
+    # login, a toolchain, a budget) is retried by BOSS, resuming its saved work, up to this many
+    # times, each after a backoff (base seconds, doubled per try). ON by default for every
+    # install; 0 turns it off (the build then stays failed with Retry for a person).
+    build_auto_retries: int = Field(default=2, alias="BOSS_BUILD_AUTO_RETRIES", ge=0, le=5)
+    build_auto_retry_backoff_seconds: int = Field(
+        default=30, alias="BOSS_BUILD_AUTO_RETRY_BACKOFF_SECONDS", ge=0, le=3600)
     recovery_budget_cents: int = Field(default=500, alias="BOSS_RECOVERY_BUDGET_CENTS", ge=0)
     recovery_max_minutes: int = Field(default=120, alias="BOSS_RECOVERY_MAX_MINUTES", ge=1)
     # BOSS FIXES ITSELF (services/self_fix.py, docs/product/BOSS_FIXES_ITSELF.md §8.4, §11.5). A
@@ -1726,7 +1751,7 @@ class Settings(BaseSettings):
     #             sandbox-service; the control plane commits each stage's diff to the
     #             work branch (git is the state carrier) and keeps ALL judgment —
     #             design, review panel, gates, Decision, PR — host-side.
-    #   local_fenced = OPT-IN for a `runtime: local` install (AMEX-G2, BOSSAPP-1138): the
+    #   local_fenced = OPT-IN for a `runtime: local` install (BOSSAPP-1138): the
     #             build stages run exactly as `local`, and an authored `sandboxed_command`
     #             skill runs in the worker's own per-run fence (sandbox_identity: a pool uid,
     #             deny-by-default egress except the loopback relays, a per-run directory).
@@ -1736,14 +1761,14 @@ class Settings(BaseSettings):
     governed_sandbox_provider: str = Field(
         default="local", alias="BOSS_GOVERNED_SANDBOX_PROVIDER"
     )
-    # LOCAL CLIs UNDER local_fenced (AMEX-G12, BOSSAPP-1170): `local_fenced` runs a skill's command
+    # LOCAL CLIs UNDER local_fenced (BOSSAPP-1170): `local_fenced` runs a skill's command
     # on the worker's own filesystem, so the skill's pinned `image` is NOT what runs. A skill
     # declares the worker paths it runs (`local_binaries`, e.g. /opt/northgate/gwlint), and each
     # must sit under one of these operator-set roots (comma-, colon- or newline-separated
     # absolute paths; typically a read-only mount). Empty (the default): a skill that declares
     # local binaries is refused under local_fenced.
     local_fenced_binaries: str = Field(default="", alias="BOSS_LOCAL_FENCED_BINARIES")
-    # CONFIG DEPLOYS (config_deploy, AMEX-G4): the directory roots a config_dir target may write
+    # CONFIG DEPLOYS (config_deploy, BOSSAPP-1140): the directory roots a config_dir target may write
     # under, comma-separated absolute paths. Empty (the default): no config target can be made.
     config_deploy_roots: str = Field(default="", alias="BOSS_CONFIG_DEPLOY_ROOTS")
     # The exact reload commands a config_dir target may run after writing its files, one per
@@ -1781,6 +1806,10 @@ class Settings(BaseSettings):
     # The Sandbox Agent (host service) the microvm provider dispatches tasks to.
     sandbox_agent_url: str = Field(default="http://127.0.0.1:8088", alias="BOSS_SANDBOX_AGENT_URL")
     sandbox_agent_timeout_seconds: int = Field(default=1500, alias="BOSS_SANDBOX_AGENT_TIMEOUT_SECONDS")
+    #: How long the sandbox-service may keep a task queued before it starts (R3): the agent
+    #: timeout above counts only from when the task runs. Capped so queue + run fit the guest's
+    #: handle lifetime (sandbox_provider.run_code_task).
+    sandbox_queue_timeout_seconds: int = Field(default=2700, alias="BOSS_SANDBOX_QUEUE_TIMEOUT_SECONDS")
     # Shared bearer for the sandbox-service (sent as X-Sandbox-Token). Empty => no auth header.
     sandbox_token: str = Field(default="", alias="BOSS_SANDBOX_TOKEN")
     # Poll cadence while waiting on an async micro-VM task (§2 submit -> poll -> release).

@@ -11,6 +11,8 @@
  */
 import React, { useEffect, useRef, useState } from "react";
 
+import { writeAwareFetch } from "../../lib/api-write";
+
 export type TurnCheckin = {
   id: string;
   request_key: string;
@@ -73,7 +75,7 @@ function statusWord(status: string): string {
 }
 
 async function pull(url: string, init?: RequestInit): Promise<TurnMeterView> {
-  const res = await fetch(url, init);
+  const res = await writeAwareFetch(url, init);
   const data = await res.json();
   if (data && typeof data.turn_id === "string") return data as TurnMeterView;
   const detail = typeof data?.detail === "string" ? data.detail : "Meter unavailable";

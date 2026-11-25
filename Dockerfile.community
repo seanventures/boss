@@ -3,18 +3,26 @@
 # Build only from a reviewed Community tree. The source export gate verifies
 # that every copied path belongs in that tree before publication.
 # Pin the multi-architecture base indexes reviewed for this release candidate.
-# OPT-IN TOOLCHAINS (docs/community/TOOLCHAINS.md). Python and Node are always in the image; any
-# other stack is chosen per install: BOSS_TOOLCHAINS in .env (compose passes it here) is "none" or a
-# comma-separated list of toolchains — java, go, security — e.g. "java,go". Each toolchain's
+# BUILD TOOLCHAINS (docs/community/TOOLCHAINS.md). Python and Node are always in the image; the
+# other stacks are chosen per install: BOSS_TOOLCHAINS in .env (compose passes it here) is "none" or
+# a comma-separated list of toolchains — java, go, security. The default is "java,go" (the stacks
+# most people build); "none" turns both off and "security" stays opt-in. Each toolchain's
 # selector below is its own stage name when the list holds it and "none" otherwise, so each
 # tc-<name> stage is either that toolchain or the empty one, and BuildKit never builds a stage
-# nothing uses: a default install downloads no JDK and no Go at all.
+# nothing uses: an install with BOSS_TOOLCHAINS=none downloads no JDK and no Go at all.
 #   _TC_LIST     ",java,go,"  (commas around every name, so ",go," never matches "golang")
 #   _TC_<X>_HIT  the whole list replaced by "<x>" when it holds ",<x>,", else unchanged
 #   TC_<X>       "<x>", or "none" when _TC_<X>_HIT is still the list (it starts with a comma)
 # String replacement in ARG values needs the dockerfile:1.7 frontend this file pins (line 1).
 # An unknown name fails the build in the `toolchains` stage, in words.
-ARG BOSS_TOOLCHAINS=none
+ARG BOSS_TOOLCHAINS=java,go
+# THE ENTERPRISE NETWORK (docs/community/ENTERPRISE_NETWORK.md). Every RUN that reaches the
+# network sources scripts/install/build-network.sh (bind-mounted, never copied into an image) with
+# the extra CA as the BuildKit secret `boss_build_ca` (never a layer, never `docker history`) and
+# a tmpfs for the combined trust bundle. The registry mirrors and the outbound proxy are ARGs
+# declared just before the step that uses them (so a change rebuilds only from there); the
+# wrapper refuses one carrying a credential, because an ARG value is kept in the image history.
+# There is no option to turn TLS verification off.
 ARG _TC_LIST=",${BOSS_TOOLCHAINS},"
 ARG _TC_JAVA_HIT=${_TC_LIST/*,java,*/java}
 ARG TC_JAVA=${_TC_JAVA_HIT/,*/none}
@@ -26,7 +34,13 @@ ARG TC_SECURITY=${_TC_SECURITY_HIT/,*/none}
 # THE SANDBOX HELPER (IDENTITY.md §7.6): the one privileged binary, built here so the runtime image
 # carries no compiler. scripts/sandbox/boss-sandbox-exec.c says what it may do (and nothing more).
 FROM python:3.11-slim-bookworm@sha256:a36c24f9cbdf4fd0f52d67f0823eeac19c2028c637cecc392d97f980d4fec56b AS sandbox-helper
-RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev && rm -rf /var/lib/apt/lists/*
+ARG BOSS_UPSTREAM_PROXY=
+ARG BOSS_UPSTREAM_HTTP_PROXY=
+ARG BOSS_UPSTREAM_NO_PROXY=
+RUN --mount=type=secret,id=boss_build_ca \
+    --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
+    --mount=type=tmpfs,target=/run/boss-build-network \
+    . /usr/local/libexec/boss-build-network && apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev && rm -rf /var/lib/apt/lists/*
 COPY scripts/sandbox/boss-sandbox-exec.c /tmp/boss-sandbox-exec.c
 RUN gcc -O2 -Wall -Wextra -Werror -D_FORTIFY_SOURCE=2 -fstack-protector-strong -fPIE -pie \
       -o /tmp/boss-sandbox-exec /tmp/boss-sandbox-exec.c
@@ -47,7 +61,13 @@ ARG MAVEN_VERSION=3.9.16
 ARG MAVEN_SHA512=831a8591fe20c8243b1dbe7d71e3244f31d1665b0804b2e825e38cbbe5ce0cafb8338851f90780735568773e0a6cd07bbec107cda0b896b008b861075358b6f6
 ARG GRADLE_VERSION=8.14.6
 ARG GRADLE_SHA256=7988ed071b2a07900e2ec715fca15c6ab72bce6db433af301fa7fa7e9407bd24
-RUN set -eu; \
+ARG BOSS_UPSTREAM_PROXY=
+ARG BOSS_UPSTREAM_HTTP_PROXY=
+ARG BOSS_UPSTREAM_NO_PROXY=
+RUN --mount=type=secret,id=boss_build_ca \
+    --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
+    --mount=type=tmpfs,target=/run/boss-build-network \
+    . /usr/local/libexec/boss-build-network && set -eu; \
     case "${TARGETARCH:-amd64}" in \
       amd64) arch=x64; jdk_sum="$JDK_SHA256_AMD64" ;; \
       arm64) arch=aarch64; jdk_sum="$JDK_SHA256_ARM64" ;; \
@@ -96,7 +116,14 @@ ARG ZAP_VERSION=2.17.0
 ARG ZAP_SHA256=efe799aaa3627db683b43f00c9c210aea0b75c00cc8f0a0f0434d12bb3ddde5a
 COPY engine/boss_engine/security_scan/semgrep-requirements.lock /tmp/semgrep.lock
 COPY engine/boss_engine/security_scan/rulepack.py /tmp/rulepack.py
-RUN set -eu; \
+ARG BOSS_UPSTREAM_PROXY=
+ARG BOSS_UPSTREAM_HTTP_PROXY=
+ARG BOSS_UPSTREAM_NO_PROXY=
+ARG BOSS_PIP_INDEX_URL=
+RUN --mount=type=secret,id=boss_build_ca \
+    --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
+    --mount=type=tmpfs,target=/run/boss-build-network \
+    . /usr/local/libexec/boss-build-network && set -eu; \
     case "${TARGETARCH:-amd64}" in \
       amd64) osv_arch=amd64; osv_sum="$OSV_SCANNER_SHA256_AMD64" ;; \
       arm64) osv_arch=arm64; osv_sum="$OSV_SCANNER_SHA256_ARM64" ;; \
@@ -144,7 +171,13 @@ ARG TARGETARCH
 ARG GO_VERSION=1.27.4
 ARG GO_SHA256_AMD64=7226736c2339719cda28fbf3a54d71aa63bcefe376e98cef00034268dab24840
 ARG GO_SHA256_ARM64=3392582988a273a87ab5043ee1b2c9c17a2c3c00580bf9326c47a2e0aaaeac92
-RUN set -eu; \
+ARG BOSS_UPSTREAM_PROXY=
+ARG BOSS_UPSTREAM_HTTP_PROXY=
+ARG BOSS_UPSTREAM_NO_PROXY=
+RUN --mount=type=secret,id=boss_build_ca \
+    --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
+    --mount=type=tmpfs,target=/run/boss-build-network \
+    . /usr/local/libexec/boss-build-network && set -eu; \
     case "${TARGETARCH:-amd64}" in \
       amd64) go_sum="$GO_SHA256_AMD64" ;; \
       arm64) go_sum="$GO_SHA256_ARM64" ;; \
@@ -197,7 +230,25 @@ pathlib.Path("/opt/toolchains/manifest.json").write_text(json.dumps(merged, sort
 print("toolchains:", ", ".join(sorted(merged)) or "none")
 PY
 
-FROM python:3.11-slim-bookworm@sha256:a36c24f9cbdf4fd0f52d67f0823eeac19c2028c637cecc392d97f980d4fec56b AS python-runtime
+# THE IMAGE FAMILY (BOSSAPP-1458). Every BOSS Python service is built from ONE chain of stages,
+# each adding only what the next needs, so a layer two images share is the same layer (stored
+# once) and an image that needs less carries less:
+#
+#   python-base     Python, the runtime user, the recovery guard
+#     ├─ egress           the credential proxy and the model gateway                   (slim)
+#     └─ python-browser   + Playwright's headless Chromium shell (web-intel renders pages)
+#          ├─ mcp-tools   the MCP servers BOSS ships                                    (slim)
+#          └─ python-runtime  + Node, the coding CLIs, the C toolchain, ffmpeg, pg_dump, the
+#               │              build toolchains (java,go): everything an agent run needs
+#               └─ python-app -> api, worker, runner (and kg-mcp, from the worker image)
+#
+# Each image then takes, LAST, what changes most: BOSS's Python dependencies (`pydeps`, built in a
+# stage of their own and copied in whole, so a requirements change rebuilds only that layer and the
+# code, never the browser, the CLIs or the toolchains below it), the Agent SDK (`pydeps-agent`, the
+# agent images only), and the code (`app-src`, assembled once). A fresh 30 GB enterprise box ran
+# out of disk building the old single fat stage under every service (6.84 GB each on disk);
+# scripts/install/image_budget.py holds each image to a budget.
+FROM python:3.11-slim-bookworm@sha256:a36c24f9cbdf4fd0f52d67f0823eeac19c2028c637cecc392d97f980d4fec56b AS python-base
 
 COPY EXPORT_CANDIDATE_STATUS.json /tmp/community-export-status.json
 RUN python -c 'import json; assert json.load(open("/tmp/community-export-status.json"))["mechanically_complete"], "Community source export is blocked"'
@@ -209,6 +260,98 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HOME=/home/boss \
     BOSS_RUNTIME_USER=boss
 WORKDIR /app
+
+# THE RUNTIME USER, with the uid/gid every install has had (100/102): volumes made by an earlier
+# release stay readable after an upgrade. /app is boss-owned, as before; the code under it is not
+# group/other-writable (app-src).
+RUN addgroup --system --gid 102 boss \
+    && adduser --system --uid 100 --ingroup boss --home /home/boss boss \
+    && mkdir -p /home/boss/.codex /home/boss/.claude /var/lib/boss/artifacts /var/lib/boss/identity \
+       /var/lib/boss/sandboxes /run/boss-shim /var/lib/boss/trust /var/lib/boss/grafana-dashboards \
+    && chown -R boss:boss /home/boss /var/lib/boss/artifacts /var/lib/boss/identity /var/lib/boss/sandboxes /run/boss-shim \
+       /var/lib/boss/trust /var/lib/boss/grafana-dashboards /app \
+    && chmod 700 /var/lib/boss/identity /home/boss && chmod 750 /var/lib/boss/artifacts \
+    && chmod 711 /var/lib/boss/sandboxes /run/boss-shim && chmod 755 /var/lib/boss/trust \
+    && chmod 755 /var/lib/boss/grafana-dashboards /app \
+    && chmod 700 /home/boss/.codex /home/boss/.claude \
+    && mkdir -p /var/lib/boss/recovery && chmod 0755 /var/lib/boss/recovery
+
+# Non-API roles check the common hold before importing any application code. The guard (and the
+# API's boss-entrypoint) then start the role through /usr/local/libexec/boss/with-extra-ca: the
+# install's enterprise network (extra CA, outbound proxy) for everything the role runs.
+COPY scripts/install/recovery_guard.py /usr/local/libexec/boss/recovery_guard.py
+COPY scripts/install/with-extra-ca.sh /usr/local/libexec/boss/with-extra-ca
+RUN chmod 0755 /usr/local/libexec/boss/recovery_guard.py /usr/local/libexec/boss/with-extra-ca
+ENTRYPOINT ["python3", "/usr/local/libexec/boss/recovery_guard.py"]
+
+# THE PINS: the requirements split three ways, each its own small file, so a stage that uses one
+# rebuilds only when THAT part changes (a COPY is cached by content): the Playwright pin (the
+# browser's version), the Agent SDK (the agent images only; it bundles a 250 MB Claude binary), and
+# everything else (every image).
+FROM python-base AS pins
+# One COPY per file, each to its own name: both are called requirements.txt, and a single
+# COPY of both into /tmp/req/ keeps only the last (the api's playwright pin was lost).
+COPY apps/api/requirements.txt /tmp/req/api.txt
+COPY apps/worker/requirements.txt /tmp/req/worker.txt
+# sort -u: a pin listed in both files counts once.
+RUN mkdir /pins && cat /tmp/req/*.txt | sed 's/[[:space:]]*#.*//' | grep -v '^[[:space:]]*$' | sed 's/[[:space:]]*$//' | sort -u > /tmp/all.txt \
+    && grep -E '^playwright==' /tmp/all.txt > /pins/playwright.txt \
+    && grep -E '^claude-agent-sdk==' /tmp/all.txt > /pins/agent.txt \
+    && grep -vE '^claude-agent-sdk==' /tmp/all.txt > /pins/core.txt \
+    && test "$(grep -c . /pins/playwright.txt)" = 1 && test "$(grep -c . /pins/agent.txt)" = 1
+
+# BOSS's Python dependencies, installed under /opt/pydeps (as if it were /), copied into each image.
+FROM python-base AS pydeps
+COPY --from=pins /pins/core.txt /tmp/core.txt
+ARG BOSS_UPSTREAM_PROXY=
+ARG BOSS_UPSTREAM_HTTP_PROXY=
+ARG BOSS_UPSTREAM_NO_PROXY=
+ARG BOSS_PIP_INDEX_URL=
+RUN --mount=type=secret,id=boss_build_ca \
+    --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
+    --mount=type=tmpfs,target=/run/boss-build-network \
+    . /usr/local/libexec/boss-build-network && pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir --root /opt/pydeps -r /tmp/core.txt
+
+# The Agent SDK on top of them: pip sees the core already installed and puts only what is new
+# under /opt/pydeps-agent. The core is a CONSTRAINT: the SDK's dependencies resolve to the
+# versions the core holds (or the build stops), never a second copy of one beside the core's.
+FROM python-base AS pydeps-agent
+COPY --from=pydeps /opt/pydeps/usr/local /usr/local
+COPY --from=pins /pins/agent.txt /tmp/agent.txt
+ARG BOSS_UPSTREAM_PROXY=
+ARG BOSS_UPSTREAM_HTTP_PROXY=
+ARG BOSS_UPSTREAM_NO_PROXY=
+ARG BOSS_PIP_INDEX_URL=
+RUN --mount=type=secret,id=boss_build_ca \
+    --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
+    --mount=type=tmpfs,target=/run/boss-build-network \
+    . /usr/local/libexec/boss-build-network && pip freeze > /tmp/core.lock \
+    && pip install --no-cache-dir --root /opt/pydeps-agent -c /tmp/core.lock -r /tmp/agent.txt \
+    && test -d /opt/pydeps-agent/usr/local/lib/python3.11/site-packages/claude_agent_sdk
+
+# THE BROWSER: the headless shell matched to the pinned Playwright, with its system libraries.
+# Only the shell: BOSS launches Chromium headless (web-intel, the console driver), and a built
+# app's own Playwright tests download their browsers into the per-project cache
+# (services/playwright_cache.py), never this one. The full Chromium was another 620 MB. The
+# Playwright package used for the download is a throwaway venv: the image's own comes with pydeps.
+FROM python-base AS python-browser
+COPY --from=pins /pins/playwright.txt /tmp/playwright.txt
+ARG BOSS_UPSTREAM_PROXY=
+ARG BOSS_UPSTREAM_HTTP_PROXY=
+ARG BOSS_UPSTREAM_NO_PROXY=
+ARG BOSS_PIP_INDEX_URL=
+ARG BOSS_PLAYWRIGHT_DOWNLOAD_HOST=
+RUN --mount=type=secret,id=boss_build_ca \
+    --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
+    --mount=type=tmpfs,target=/run/boss-build-network \
+    . /usr/local/libexec/boss-build-network && python -m venv /tmp/pw \
+    && /tmp/pw/bin/pip install --no-cache-dir -r /tmp/playwright.txt \
+    && /tmp/pw/bin/python -m playwright install --with-deps --only-shell chromium \
+    && chmod -R a+rX /opt/pw-browsers \
+    && rm -rf /tmp/pw /var/lib/apt/lists/*
+
+FROM python-browser AS python-runtime
 
 # The official Node image supplies Node 22 and npm for coding CLIs and project
 # verification. Debian's nodejs package can lag the CLI minimum Node version. 22, not 20: a
@@ -226,40 +369,56 @@ COPY --from=node:22-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e3395
 # build-essential: a C/C++ toolchain for npm packages that compile on install (better-sqlite3,
 # bcrypt: node-gyp needs make and g++). About 300 MB; agents had been told to avoid such packages
 # (BOSSAPP-515, test_the_build_image_can_compile_native_modules).
-RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+ARG BOSS_UPSTREAM_PROXY=
+ARG BOSS_UPSTREAM_HTTP_PROXY=
+ARG BOSS_UPSTREAM_NO_PROXY=
+RUN --mount=type=secret,id=boss_build_ca \
+    --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
+    --mount=type=tmpfs,target=/run/boss-build-network \
+    . /usr/local/libexec/boss-build-network && ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
        ca-certificates git openssh-client ffmpeg libavfilter-extra fonts-dejavu-core \
        iptables libcap2-bin curl build-essential \
-    && addgroup --system boss \
-    && adduser --system --ingroup boss --home /home/boss boss \
-    && mkdir -p /home/boss/.codex /home/boss/.claude /var/lib/boss/artifacts /var/lib/boss/identity \
-       /var/lib/boss/sandboxes /run/boss-shim \
-    && chown -R boss:boss /home/boss /var/lib/boss/artifacts /var/lib/boss/identity /var/lib/boss/sandboxes /run/boss-shim \
-    && chmod 700 /var/lib/boss/identity /home/boss && chmod 750 /var/lib/boss/artifacts \
-    && chmod 711 /var/lib/boss/sandboxes /run/boss-shim \
-    && chmod 700 /home/boss/.codex /home/boss/.claude \
-    && npm install -g @anthropic-ai/claude-code@2.1.197 @openai/codex@0.158.0 @xai-official/grok@1.0.41 \
-       pnpm@9.15.0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# THE CODING CLIS AND pnpm, FROM A LOCKFILE (scripts/install/cli-lock): every package, the
+# platform binaries included, is checked against the sha512 integrity committed there, so a
+# registry mirror or an intercepting gateway cannot substitute a CLI that runs with model
+# credentials. To change a version: edit cli-lock/package.json, then
+# `npm install --package-lock-only` in that directory, and review the lockfile diff.
+# npm installs the musl build of the Claude CLI beside the glibc one (the lock names no libc);
+# this image is Debian (glibc), so the musl copy (about 225 MB) is removed and `claude --version`
+# proves the one left runs.
+COPY scripts/install/cli-lock/package.json scripts/install/cli-lock/package-lock.json /opt/boss-clis/
+ARG BOSS_NPM_REGISTRY=
+RUN --mount=type=secret,id=boss_build_ca \
+    --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
+    --mount=type=tmpfs,target=/run/boss-build-network \
+    . /usr/local/libexec/boss-build-network && npm ci --prefix /opt/boss-clis --omit=dev --no-audit --no-fund \
+    && rm -rf /opt/boss-clis/node_modules/@anthropic-ai/claude-code-linux-*-musl \
+    && for b in claude codex grok pnpm pnpx; do ln -s "/opt/boss-clis/node_modules/.bin/$b" "/usr/local/bin/$b"; done \
+    && for b in claude codex grok pnpm; do test -x "$(readlink -f "/usr/local/bin/$b")"; done \
+    && HOME=/tmp/claude-probe claude --version >/dev/null && rm -rf /tmp/claude-probe \
     && npm cache clean --force \
-    && rm -rf /home/boss/.npm /home/boss/.cache /var/lib/apt/lists/*
+    && rm -rf /root/.npm /home/boss/.npm /home/boss/.cache
 
 # The sandbox helper: executable by the boss group only, with exactly the capabilities it needs.
 # A sandbox uid (61000-61999) is never in the boss group, so it cannot run it.
 COPY --from=sandbox-helper /tmp/boss-sandbox-exec /usr/local/libexec/boss/boss-sandbox-exec
 COPY scripts/sandbox/entrypoint.sh /usr/local/bin/boss-entrypoint
-COPY scripts/install/recovery_guard.py /usr/local/libexec/boss/recovery_guard.py
 RUN chown root:boss /usr/local/libexec/boss/boss-sandbox-exec \
     && chmod 0750 /usr/local/libexec/boss/boss-sandbox-exec \
     && setcap cap_setuid,cap_setgid,cap_chown,cap_fowner+ep /usr/local/libexec/boss/boss-sandbox-exec \
-    && chmod 0755 /usr/local/bin/boss-entrypoint /usr/local/libexec/boss/recovery_guard.py
-# Separate from identity/key state; Compose mounts this root read-only in every backend role.
-RUN mkdir -p /var/lib/boss/recovery && chmod 0755 /var/lib/boss/recovery
+    && chmod 0755 /usr/local/bin/boss-entrypoint
 # SCHEDULED SELF-BACKUPS (BOSSAPP-838, services/backup_scheduler.py): pg_dump/pg_restore of the
 # SAME major version as BOSS's Postgres 16 (Debian bookworm ships 15, which refuses a 16 server),
 # from the PostgreSQL project's apt repository; and the backups volume's mount point, boss-owned.
-RUN curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors https://www.postgresql.org/media/keys/ACCC4CF8.asc -o /usr/share/keyrings/pgdg.asc \
+RUN --mount=type=secret,id=boss_build_ca \
+    --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
+    --mount=type=tmpfs,target=/run/boss-build-network \
+    . /usr/local/libexec/boss-build-network && curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors https://www.postgresql.org/media/keys/ACCC4CF8.asc -o /usr/share/keyrings/pgdg.asc \
     && echo "deb [signed-by=/usr/share/keyrings/pgdg.asc] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
        > /etc/apt/sources.list.d/pgdg.list \
     && apt-get -o Acquire::Retries=5 update \
@@ -268,18 +427,9 @@ RUN curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors https://www.postgres
     && mkdir -p /var/lib/boss/backups && chown boss:boss /var/lib/boss/backups \
     && chmod 700 /var/lib/boss/backups
 
-COPY apps/api/requirements.txt /tmp/api-requirements.txt
-COPY apps/worker/requirements.txt /tmp/worker-requirements.txt
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r /tmp/api-requirements.txt -r /tmp/worker-requirements.txt
-
-# Download the browser revision matched to the pinned Python Playwright package.
-RUN python -m playwright install --with-deps chromium \
-    && chmod -R a+rX /opt/pw-browsers \
-    && rm -rf /var/lib/apt/lists/*
-
-# The install's opt-in toolchains (empty unless BOSS_TOOLCHAINS names one), on every process's
-# PATH, and the per-project dependency cache the build sandbox keeps between runs (boss-only).
+# The install's build toolchains (java,go by default; empty with BOSS_TOOLCHAINS=none), on every
+# process's PATH, and the per-project dependency cache the build sandbox keeps between runs
+# (boss-only).
 COPY --from=toolchains /opt/toolchains /opt/toolchains
 ENV PATH=$PATH:/opt/toolchains/bin
 # A login shell (`sh -lc`, how previews start) resets PATH from /etc/profile: put it back there too.
@@ -293,9 +443,10 @@ RUN mkdir -p /var/lib/boss/toolchain-cache && chown boss:boss /var/lib/boss/tool
     && chown -R boss:boss /var/lib/boss/private && chmod 700 /var/lib/boss/private \
     && printf 'PATH="$PATH:/opt/toolchains/bin"\nexport PATH\n' > /etc/profile.d/boss-toolchains.sh
 
-# These are the Community runtime directories. The reviewed export tree omits
-# private modules inside shared directories; the dedicated ignore file also
-# keeps known private paths out of local build contexts.
+# THE CODE, assembled once. These are the Community runtime directories. The reviewed export tree
+# omits private modules inside shared directories; the dedicated ignore file also keeps known
+# private paths out of local build contexts. Each image copies this /app whole (one layer).
+FROM python-base AS app-src
 COPY apps/__init__.py ./apps/__init__.py
 COPY LICENSE ./LICENSE
 COPY THIRD-PARTY-NOTICES.md ./THIRD-PARTY-NOTICES.md
@@ -342,29 +493,28 @@ RUN python -m compileall -q -j 0 apps engine/boss_engine tools scripts > /tmp/co
     || (grep -E "Error|\*\*\*" /tmp/compileall.log | head -20; exit 1)
 COPY docs/product/V1_FEATURE_LOCK.md ./docs/product/V1_FEATURE_LOCK.md
 COPY docs/product/TRACEABILITY.md ./docs/product/TRACEABILITY.md
+# The code a sandboxed build reads (it runs BOSS's own verify on BOSS's tree) but never writes.
+RUN chown -R boss:boss /app && chmod -R go-w /app
 
+# THE FULL IMAGE: the runtime and the code.
+FROM python-runtime AS python-app
+COPY --from=pydeps /opt/pydeps/usr/local /usr/local
+COPY --from=pydeps-agent /opt/pydeps-agent/usr/local /usr/local
+RUN pip check
+COPY --from=app-src /app /app
 ARG BOSS_SOURCE_SHA=unknown
 ARG BOSS_BUILT_AT=unknown
 LABEL io.boss.recovery-guard="boss-recovery-hold/v1" \
     org.opencontainers.image.revision=$BOSS_SOURCE_SHA
 ENV BOSS_SOURCE_SHA=$BOSS_SOURCE_SHA \
     BOSS_BUILT_AT=$BOSS_BUILT_AT
-# The bundled Grafana's per-app dashboards: BOSS writes them, Grafana reads them (a volume).
-RUN mkdir -p /var/lib/boss/grafana-dashboards \
-    && chown -R boss:boss /app /var/lib/boss/artifacts /var/lib/boss/identity \
-       /var/lib/boss/grafana-dashboards \
-    && chmod 755 /var/lib/boss/grafana-dashboards
-# The code a sandboxed build reads (it runs BOSS's own verify on BOSS's tree) but never writes.
-RUN chmod -R go-w /app
 USER boss
 # Fail the build if the installed browser cannot launch as the runtime user.
 RUN python -c 'from playwright.sync_api import sync_playwright; p = sync_playwright().start(); b = p.chromium.launch(headless=True); b.close(); p.stop()'
 RUN grok --version >/dev/null
-
-# Non-API roles check the common hold before importing any application code.
 ENTRYPOINT ["python3", "/usr/local/libexec/boss/recovery_guard.py"]
 
-FROM python-runtime AS api
+FROM python-app AS api
 EXPOSE 8000
 # Compose runs this as root with NET_ADMIN only long enough to fence the sandbox uids' network,
 # then it becomes boss for good (scripts/sandbox/entrypoint.sh). Run as boss, it just execs.
@@ -372,27 +522,54 @@ ENTRYPOINT ["/usr/local/bin/boss-entrypoint"]
 # apps/api/serve.py: uvicorn, trusting forwarded headers only from BOSS_TRUSTED_PROXIES.
 CMD ["python", "-m", "apps.api.serve", "--host", "0.0.0.0", "--port", "8000"]
 
-FROM python-runtime AS worker
+FROM python-app AS worker
 CMD ["python", "-m", "apps.worker.boss_worker.main"]
-
-# boss-egress (IDENTITY.md §7.10): the reverse proxy that injects per-run GitHub credentials, so a
-# sandbox never holds one. Runs next to the API and as a sidecar on remote worker hosts. Needs
-# DATABASE_URL, BOSS_MASTER_KEY(_FILE) and BOSS_EGRESS_SERVICE_KEY; the API sets BOSS_EGRESS_URL.
-FROM python-runtime AS egress
-EXPOSE 8090
-CMD ["python", "-m", "apps.egress.boss_egress"]
 
 # boss-runner (BOSSAPP-828): owns coding-agent processes so a turn survives an API restart. Same
 # entrypoint as the API (it fences the sandbox uids' network before becoming boss), since the
 # workloads it runs are the API's sandboxed workloads. The API uses it when BOSS_RUNNER_URL is set.
-FROM python-runtime AS runner
+FROM python-app AS runner
 EXPOSE 8095
 ENTRYPOINT ["/usr/local/bin/boss-entrypoint"]
 CMD ["python", "-m", "apps.runner.boss_runner"]
 
+# boss-egress (IDENTITY.md §7.10): the reverse proxy that injects per-run GitHub credentials, so a
+# sandbox never holds one. Runs next to the API and as a sidecar on remote worker hosts. Needs
+# DATABASE_URL, BOSS_MASTER_KEY(_FILE) and BOSS_EGRESS_SERVICE_KEY; the API sets BOSS_EGRESS_URL.
+# The model gateway runs from this image too. Neither runs an agent, a build or a browser, so it
+# is python-base and the code: no Node, CLIs, compilers or toolchains. It carries the install's
+# toolchain MANIFEST only: egress opens a toolchain's package hosts when the install has that
+# toolchain (boss_egress/connect.py toolchain_hosts), and the manifest is how it knows.
+FROM python-base AS egress
+COPY --from=toolchains /opt/toolchains/manifest.json /opt/toolchains/manifest.json
+COPY --from=pydeps /opt/pydeps/usr/local /usr/local
+COPY --from=app-src /app /app
+ARG BOSS_SOURCE_SHA=unknown
+ARG BOSS_BUILT_AT=unknown
+LABEL io.boss.recovery-guard="boss-recovery-hold/v1" \
+    org.opencontainers.image.revision=$BOSS_SOURCE_SHA
+ENV BOSS_SOURCE_SHA=$BOSS_SOURCE_SHA \
+    BOSS_BUILT_AT=$BOSS_BUILT_AT
+USER boss
+EXPOSE 8090
+CMD ["python", "-m", "apps.egress.boss_egress"]
+
 # THE MCP SERVERS BOSS SHIPS (devops-reference, web-intel, doc-render), one process, three ports.
 # Every install seeds them and the cast holds them; without this service they were unreachable.
-FROM python-runtime AS mcp-tools
+# web-intel renders pages in headless Chromium, so this is python-browser, BOSS's Python
+# dependencies and the code: no Node, CLIs, compilers, toolchains or Agent SDK.
+FROM python-browser AS mcp-tools
+COPY --from=pydeps /opt/pydeps/usr/local /usr/local
+COPY --from=app-src /app /app
+ARG BOSS_SOURCE_SHA=unknown
+ARG BOSS_BUILT_AT=unknown
+LABEL io.boss.recovery-guard="boss-recovery-hold/v1" \
+    org.opencontainers.image.revision=$BOSS_SOURCE_SHA
+ENV BOSS_SOURCE_SHA=$BOSS_SOURCE_SHA \
+    BOSS_BUILT_AT=$BOSS_BUILT_AT
+USER boss
+# Fail the build if the browser cannot launch as the runtime user.
+RUN python -c 'from playwright.sync_api import sync_playwright; p = sync_playwright().start(); b = p.chromium.launch(headless=True); b.close(); p.stop()'
 EXPOSE 8765 8770 8771
 CMD ["python", "-m", "tools.mcp_tools_mux"]
 
@@ -400,11 +577,23 @@ FROM node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d
 WORKDIR /app
 COPY EXPORT_CANDIDATE_STATUS.json /tmp/community-export-status.json
 RUN node -e 'if (!require("/tmp/community-export-status.json").mechanically_complete) throw Error("Community source export is blocked")'
-RUN npm install --global pnpm@9.15.0
+ARG BOSS_UPSTREAM_PROXY=
+ARG BOSS_UPSTREAM_HTTP_PROXY=
+ARG BOSS_UPSTREAM_NO_PROXY=
+ARG BOSS_NPM_REGISTRY=
+COPY scripts/install/cli-lock/pnpm/package.json scripts/install/cli-lock/pnpm/package-lock.json /opt/boss-pnpm/
+RUN --mount=type=secret,id=boss_build_ca \
+    --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
+    --mount=type=tmpfs,target=/run/boss-build-network \
+    . /usr/local/libexec/boss-build-network && npm ci --prefix /opt/boss-pnpm --omit=dev --no-audit --no-fund \
+    && ln -s /opt/boss-pnpm/node_modules/.bin/pnpm /usr/local/bin/pnpm && pnpm --version
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/web/package.json ./apps/web/package.json
 COPY packages/api-client/package.json ./packages/api-client/package.json
-RUN pnpm install --frozen-lockfile
+RUN --mount=type=secret,id=boss_build_ca \
+    --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
+    --mount=type=tmpfs,target=/run/boss-build-network \
+    . /usr/local/libexec/boss-build-network && pnpm install --frozen-lockfile
 
 ARG NEXT_PUBLIC_BOSS_API_URL=
 ARG NEXT_PUBLIC_BOSS_PROJECT_ID=boss-dogfood
@@ -414,7 +603,10 @@ COPY apps/web ./apps/web
 COPY packages/api-client ./packages/api-client
 RUN test -n "$NEXT_PUBLIC_BOSS_API_URL" \
     || { echo 'NEXT_PUBLIC_BOSS_API_URL is required for the Community web build' >&2; exit 1; }
-RUN pnpm --filter boss-web build
+RUN --mount=type=secret,id=boss_build_ca \
+    --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
+    --mount=type=tmpfs,target=/run/boss-build-network \
+    . /usr/local/libexec/boss-build-network && pnpm --filter boss-web build
 
 FROM node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS web
 ARG NEXT_PUBLIC_BOSS_API_URL=
@@ -428,7 +620,17 @@ ENV NODE_ENV=production \
     NEXT_PUBLIC_BOSS_API_URL=$NEXT_PUBLIC_BOSS_API_URL \
     NEXT_PUBLIC_BOSS_PROJECT_ID=$NEXT_PUBLIC_BOSS_PROJECT_ID
 WORKDIR /app
-RUN npm install --global pnpm@9.15.0 \
+ARG BOSS_UPSTREAM_PROXY=
+ARG BOSS_UPSTREAM_HTTP_PROXY=
+ARG BOSS_UPSTREAM_NO_PROXY=
+ARG BOSS_NPM_REGISTRY=
+COPY scripts/install/cli-lock/pnpm/package.json scripts/install/cli-lock/pnpm/package-lock.json /opt/boss-pnpm/
+RUN --mount=type=secret,id=boss_build_ca \
+    --mount=type=bind,source=scripts/install/build-network.sh,target=/usr/local/libexec/boss-build-network \
+    --mount=type=tmpfs,target=/run/boss-build-network \
+    . /usr/local/libexec/boss-build-network && npm ci --prefix /opt/boss-pnpm --omit=dev --no-audit --no-fund \
+    && ln -s /opt/boss-pnpm/node_modules/.bin/pnpm /usr/local/bin/pnpm && pnpm --version \
+    && npm cache clean --force && rm -rf /root/.npm \
     && addgroup --system boss \
     && adduser --system --ingroup boss boss
 COPY --chown=boss:boss LICENSE ./LICENSE

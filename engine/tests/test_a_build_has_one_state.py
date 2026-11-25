@@ -160,22 +160,23 @@ def test_a_job_the_budget_holds_is_waiting_on_budget_not_a_worker():
 
 def test_a_preview_is_live_only_when_it_has_finished_booting():
     """D10: a preview row says `running` while its steps still boot the app."""
-    booting = {"status": "running", "url": "http://x", "steps": [
+    booting = {"id": "prev_x", "status": "running", "url": "http://127.0.0.1:19862", "steps": [
         {"name": "install", "status": "ok"}, {"name": "start", "status": "running"}]}
     assert fv.preview_flag(booting, NOW) == {"status": "starting", "url": None}
     up = {**booting, "steps": [{"name": "install", "status": "ok"}, {"name": "start", "status": "ok"}]}
-    assert fv.preview_flag(up, NOW) == {"status": "running", "url": "http://x"}
+    # The browser's address (the Preview button's), never the app's loopback port.
+    assert fv.preview_flag(up, NOW) == {"status": "running", "url": "/v1/previews/prev_x/web/"}
 
 
 def test_a_passed_over_fallback_does_not_hold_a_running_preview_at_starting():
     """Tester P1-4: `auto` records a substrate that could not serve as `failed`, then the next one
     serves. The preview runs (health 200) and must read as running with its link, not
     "Starting… 1 of 3" forever."""
-    java = {"status": "running", "url": "http://x", "steps": [
+    java = {"id": "prev_x", "status": "running", "url": "http://127.0.0.1:19862", "steps": [
         {"step": "start_rootfs_preview", "status": "failed"},
         {"step": "start_container_preview", "status": "failed"},
         {"step": "start_preview", "status": "ok"}]}
-    assert fv.preview_flag(java, NOW) == {"status": "running", "url": "http://x"}
+    assert fv.preview_flag(java, NOW) == {"status": "running", "url": "/v1/previews/prev_x/web/"}
     still = {**java, "steps": [*java["steps"][:2], {"step": "start_preview", "status": "running"}]}
     assert fv.preview_flag(still, NOW) == {"status": "starting", "url": None}
 

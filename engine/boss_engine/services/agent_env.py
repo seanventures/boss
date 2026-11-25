@@ -38,7 +38,11 @@ ALLOW_EXACT: frozenset[str] = frozenset({
     "LANG", "LC_ALL", "LC_CTYPE",
     # TLS trust. Without these, every https call from the sandbox fails.
     "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS",
-    "CURL_CA_BUNDLE",
+    "CURL_CA_BUNDLE", "GIT_SSL_CAINFO",
+    # The install's outbound proxy (docs/community/ENTERPRISE_NETWORK.md). The installer refuses
+    # one with a user name or password in it, so these never carry a credential; a sandboxed
+    # run's proxy is replaced by boss-egress (sandbox_identity.env).
+    "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy",
     # The agent's own model access. The subscription login is a credential, and it is the one a
     # Claude CLI on a subscription cannot work without — it buys model turns, not access to
     # customer data. An Anthropic API KEY is NOT inherited (it is credential-shaped, so it is
@@ -99,6 +103,21 @@ SECRET_SHAPED: tuple[str, ...] = (
 EXTRA_ALLOW_VAR = "BOSS_AGENT_ENV_ALLOW"
 
 
+def npm_registry_environment(source: Mapping[str, str]) -> dict[str, str]:
+    """The npm part of the enterprise package settings (kept for callers that ask for npm only)."""
+    env = enterprise_package_environment(source)
+    return {k: v for k, v in env.items() if k.startswith("npm_config_")}
+
+
+def enterprise_package_environment(source: Mapping[str, str]) -> dict[str, str]:
+    """The operator's registry mirrors (docs/community/ENTERPRISE_NETWORK.md) for this run:
+    npm, pip and the Playwright download host. Raises ValueError on a refused value — failing
+    closed, never falling back to a public registry the operator's policy forbids."""
+    from .enterprise_network import package_environment
+
+    return package_environment(source)
+
+
 def _extra_allowed(source: Mapping[str, str]) -> set[str]:
     raw = (source.get(EXTRA_ALLOW_VAR) or "").strip()
     return {n.strip() for n in raw.split(",") if n.strip()} if raw else set()
@@ -139,6 +158,15 @@ def agent_environment(
     for key, value in (overrides or {}).items():
         if is_allowed(key, extra):
             kept[key] = value
+    # The enterprise package settings replace whatever the inherited env said, in any spelling:
+    # an inherited npm_config_strict_ssl=false or a PIP_TRUSTED_HOST must not survive beside them.
+    from .enterprise_network import PACKAGE_OVERRIDES
+
+    registry_env = enterprise_package_environment(source)
+    for key in registry_env:
+        for other in PACKAGE_OVERRIDES.get(key, ()):
+            kept.pop(other, None)
+    kept.update(registry_env)
 
     # A BUILD's cross-app links (app_links.run_env, F5 §5.3): BOSS_LINK_<ALIAS>_* computed for
     # THIS run when it started, added after the filter on purpose (they are values BOSS minted

@@ -100,17 +100,6 @@ describe("rows and the drawer link the run's log", () => {
     return parseWorkItem({ id: "wfr_1", label: "Bump esbuild", kind: "fix", state, age: "2h", stages: [], agents: [], links, attempts: [] });
   };
 
-  it("a running row's Live log is links.log", async () => {
-    const { WorkRow } = await import("../app/projects/tab-work");
-    const w = await item({ build: "?project_id=p1&area=code_tasks&view=apps&build=crun_inv2", log: LOG });
-    const ctx = { projectId: "p1", refreshWork: () => {}, open: () => {} } as unknown as Parameters<typeof WorkRow>[0]["ctx"];
-    await mount(<WorkRow w={w} ctx={ctx} />);
-    const q = new URLSearchParams(($('[data-testid="px-work-log-wfr_1"]') as HTMLAnchorElement).getAttribute("href")!.split("?")[1]);
-    expect(q.get("build")).toBe("crun_inv2");
-    expect(q.get("logs")).toBe("build");
-    expect(q.get("view")).toBeNull();
-  });
-
   it("an older engine's row (no links.log) still gets a working log link from its build", async () => {
     const w = await item({ build: "?project_id=p1&area=code_tasks&view=apps&build=crun_inv2" });
     expect(new URLSearchParams(w.links.log!.split("?")[1]).get("logs")).toBe("build");

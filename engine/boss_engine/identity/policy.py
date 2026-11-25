@@ -40,6 +40,10 @@ class IdentityPolicy:
     delegation_allow_until_revoked: bool = False
     org_max_depth: int = 3
     github_jit_credentials: bool = False
+    # AGENTS FIX FAILURES WITH THE STARTER'S AUTHORITY (identity/fix_authority.py, 2026-11-21):
+    # BOSS's recovery agents continue a person's failing work with that person's own delegable
+    # authority, without asking again. Default ON; a missing key (an existing install) reads ON.
+    agents_fix_failures: bool = True
     # "Builds may change CI workflows" (services/ci_gate.py) raises a build's grant and its
     # builder's ceiling to workflows: write for that repository. Off: the opt-in raises nothing.
     github_ci_opt_in_grants_workflows: bool = True

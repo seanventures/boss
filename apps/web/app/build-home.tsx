@@ -11,26 +11,67 @@
  * empty sentence is allowed — the server invents the spec. A refused launch never
  * shows a project or a run.
  */
-import React, { useEffect, useId, useRef, useState } from "react";
+import {
+  Camera,
+  ArrowRight,
+  CaretDown,
+  Cube,
+  Flask,
+  GameController,
+  GithubLogo,
+  Globe,
+  GoogleDriveLogo,
+  Hammer,
+  MagicWand,
+  MapTrifold,
+  Microphone,
+  Paperclip,
+  RocketLaunch,
+  Stop,
+  UploadSimple,
+  VirtualReality,
+  type Icon,
+} from "@phosphor-icons/react";
+import React, { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 
+import { apiWrite, stepUpNotConfirmedSentence } from "../lib/api-write";
+import { askConsent, consentFromBody } from "../lib/identity/consent";
+import { SETUP_MODEL_READY_EVENT } from "../lib/setup-stepper";
+import { consoleHref } from "./console-href";
 import { openStartSheet } from "./start-project/start-host";
+
+import { TemplatePreview } from "../components/v2/templates/template-previews";
 
 import "./build-home.css";
 
 const PLACEHOLDER = "Describe an app and let BOSS do the rest";
 
 const CHIPS = [
-  "Build an Android app",
+  "Build a web app",
   "Maps",
   "Create a game",
   "Three.js 3D scenes",
   "Build an XR app",
 ] as const;
 
+/** Each chip's gallery category (web, maps, game, 3d, xr): its icon and its tint. */
+const CHIP_KIND: Record<(typeof CHIPS)[number], { kind: string; icon: Icon }> = {
+  "Build a web app": { kind: "web", icon: Globe },
+  Maps: { kind: "maps", icon: MapTrifold },
+  "Create a game": { kind: "game", icon: GameController },
+  "Three.js 3D scenes": { kind: "3d", icon: Cube },
+  "Build an XR app": { kind: "xr", icon: VirtualReality },
+};
+
 const MODES = [
   { id: "build", label: "Build" },
   { id: "prototype", label: "Prototype" },
 ] as const;
+
+const MODE_ICON: Record<(typeof MODES)[number]["id"], Icon> = { build: Hammer, prototype: Flask };
+
+/** Icons sit beside their words, never instead of them, so every one is decorative. */
+const ICON = { size: "1.15em", weight: "bold", "aria-hidden": true, focusable: false } as const;
 
 type Phase = "ready" | "starting" | "started" | "error";
 
@@ -40,11 +81,28 @@ type TemplateCard = {
   category: string;
   blurb: string;
   prompt: string;
+  /** Null when this install builds it; else what it needs ("Needs Go") and the command. */
+  needs: { label: string; enable: string; message: string } | null;
 };
+
+/** `available: false` with `needs` (GET /v1/factory/templates): an opt-in toolchain is off. */
+function needsOf(record: Record<string, unknown>): TemplateCard["needs"] {
+  if (record.available !== false) return null;
+  const needs = record.needs && typeof record.needs === "object" ? (record.needs as Record<string, unknown>) : {};
+  const enable = str(needs.enable);
+  return {
+    label: str(needs.label) || "Not on this install",
+    enable,
+    message: str(needs.message) || "This install cannot build this template yet.",
+  };
+}
 
 type Attachment = { id: string; name: string };
 
-type LaunchIds = { projectId: string; runId: string };
+/** `workflowRunId`: a spec-first launch's Easy Mode MVP workflow run (the panel writes the spec,
+ *  then BOSS builds it); `stage` "spec" while that is the next thing that happens. */
+type LaunchIds = { projectId: string; runId: string; title: string; reused: boolean;
+                   workflowRunId?: string; stage?: string };
 
 type Gallery =
   | { state: "loading" }
@@ -93,15 +151,56 @@ async function readBody(res: Response): Promise<unknown> {
   }
 }
 
+/** The launch button's own words: a refusal that names the press says this. */
+const EASY_MODE = "Easy Mode";
+
+/** What a refusal's machine code means, in words. A bare code is never shown to a person. */
+const CODE_WORDS: Record<string, string> = {
+  consent_required: "Not started: the agents need your consent first. Press Easy Mode to give it.",
+  personal_data_blocked: "Not started: the description holds a card number or a national id. Take it out and press Easy Mode again.",
+  personal_data_ask: "Not started: the description holds an email or a phone number. Take it out and press Easy Mode again.",
+  budget_refused: "Not started: the budget refused this build.",
+  launch_incomplete: "The build did not start: BOSS did not name a project and a run.",
+  project_exists: "Not started: a project with this name already exists.",
+  agent_without_passport: "Not started: an agent of this project has no Passport yet.",
+  github_not_connected: "Not started: connect GitHub first (Setup › GitHub).",
+  drive_not_connected: "Not started: that Drive source is not connected.",
+  unknown_template: "Not started: that template is no longer in the gallery.",
+  toolchain_not_enabled: "Not started: this template needs a toolchain this BOSS has not turned on.",
+  unknown_attachment: "Not started: an attachment is no longer there. Attach it again.",
+  step_up_required: stepUpNotConfirmedSentence(EASY_MODE),
+  step_up_not_confirmed: stepUpNotConfirmedSentence(EASY_MODE),
+  needs_model: "No model is connected, so nothing was started or reserved. Add one in Setup › Models, then press Easy Mode again.",
+};
+
+/** Where a refusal is fixed, when the API names it (`fix_href`: Setup › Models for no model). */
+function fixHrefOf(data: unknown): string | null {
+  if (!data || typeof data !== "object") return null;
+  const href = str((data as Record<string, unknown>).fix_href);
+  return href.startsWith("?") || href.startsWith("/") ? href : null;
+}
+
+/** A sentence, not a code: a word with no space in it is looked up, never printed as it is. */
+function sentence(value: string): string {
+  if (!value) return "";
+  if (/\s/.test(value)) return value;
+  return CODE_WORDS[value] ?? "";
+}
+
 function messageOf(data: unknown, fallback: string): string {
   if (!data || typeof data !== "object") return fallback;
   const record = data as Record<string, unknown>;
   for (const key of ["message", "error", "detail"]) {
-    const value = str(record[key]);
+    const value = sentence(str(record[key]));
     if (value) return value;
   }
-  return fallback;
+  const code = str(record.error);
+  return (code && CODE_WORDS[code]) || fallback;
 }
+
+/** The consent sheet was closed: the project is made, idle, and waits for this consent. */
+const CONSENT_DECLINED =
+  "Not started: the agents need your consent to build. The project is made and waits, idle. Press Easy Mode again to give consent and start it.";
 
 function templatesFrom(data: unknown): TemplateCard[] {
   const list = Array.isArray(data)
@@ -123,6 +222,7 @@ function templatesFrom(data: unknown): TemplateCard[] {
       category: first(record, ["category", "kind"]),
       blurb: first(record, ["blurb", "summary", "description"]),
       prompt: first(record, ["prompt"]),
+      needs: needsOf(record),
     });
   }
   if (list.length > 0 && cards.length === 0) throw new Error("Templates did not load.");
@@ -147,7 +247,10 @@ function launchIds(data: unknown): LaunchIds | null {
   const projectId = first(record, ["project_id", "projectId"]);
   const runId = first(record, ["run_id", "runId"]);
   if (!projectId && !runId) return null;
-  return { projectId, runId };
+  const spec = record.spec && typeof record.spec === "object" ? record.spec as Record<string, unknown> : {};
+  const workflowRunId = first(record, ["workflow_run_id", "workflowRunId"]);
+  return { projectId, runId, title: first(spec, ["title"]), reused: record.reused === true,
+           ...(workflowRunId ? { workflowRunId } : {}), stage: first(record, ["stage"]) || undefined };
 }
 
 function rowsFor(files: File[], ids: string[]): Attachment[] {
@@ -158,6 +261,70 @@ function rowsFor(files: File[], ids: string[]): Attachment[] {
   return ids.map((id) => ({ id, name: id }));
 }
 
+/** Where a started build is watched: its build page in Code Tasks (the Work tab's Build link,
+ *  services/stuck_work.py), else the project's page. Through consoleHref, so org= is kept. */
+export function watchBuildHref(launch: { projectId: string; runId: string; workflowRunId?: string }): string {
+  // A SPEC-FIRST LAUNCH is watched as its workflow run: the panel, its spec, then the build.
+  if (launch.workflowRunId) {
+    return consoleHref({ ...(launch.projectId ? { project_id: launch.projectId } : {}),
+                         area: "delivery_workflows", wfr: launch.workflowRunId, tab: undefined, build: undefined });
+  }
+  if (launch.runId) {
+    return consoleHref({ ...(launch.projectId ? { project_id: launch.projectId } : {}),
+                         area: "code_tasks", build: launch.runId, tab: undefined });
+  }
+  return projectHref(launch.projectId);
+}
+
+/** The project's page, as the sidebar opens it (`?org=…&project_id=…&area=project`). */
+export function projectHref(projectId: string): string {
+  return consoleHref({ project_id: projectId, area: "project", tab: undefined, build: undefined });
+}
+
+/** WHAT HAPPENS NEXT, not two ids. A newcomer read "Project recipe-box-fd3ab4a3 · Run crun_…"
+ *  and had no idea where to go (2026-11-18): the card names the build, says what BOSS does now,
+ *  and links to where it is watched. The ids stay, faint, for whoever needs them. */
+function StartedCard({ launch, fallbackTitle }: { launch: LaunchIds; fallbackTitle: string }) {
+  const title = launch.title || fallbackTitle || "Your app";
+  // THE SAME LAUNCH, STILL GOING (`reused`: the server handed back the run already under way —
+  // a double press, or this build pressed again while it runs): it is not "building, 15–25 min"
+  // from now, it is the one already started.
+  // THE SPEC COMES FIRST (operator, 2026-11-19): a normal launch convenes the panel, which
+  // writes the spec the build then follows — the card says so, and how long the whole takes.
+  const specFirst = launch.stage === "spec" || !!launch.workflowRunId;
+  const said = launch.reused ? `${title} already started`
+    : specFirst ? `${title}: the team is writing the spec, then building (about 20–30 min)`
+    : `${title} is building`;
+  const next = launch.reused
+    ? "This build was started earlier and is still going. Watch it to see where it is."
+    : specFirst
+      ? "A short agent panel agrees what the app must do and writes it down; BOSS then builds it, opens a pull request and starts a preview. Read the spec under Meetings."
+      : "BOSS writes tests, builds, reviews and opens a pull request — about 15–25 min.";
+  return (
+    <section className="bh-started" data-testid="build-launch" data-reused={launch.reused ? "true" : "false"}
+             aria-labelledby="bh-started-h">
+      <RocketLaunch {...ICON} className="bh-started-icon" />
+      <div className="bh-started-body">
+        <h2 id="bh-started-h" className="bh-started-title" role="status" data-testid="build-started-title">{said}</h2>
+        <p className="bh-started-next" data-testid="build-started-next">{next}</p>
+        <div className="bh-started-actions">
+          <a className="bh-started-go" href={watchBuildHref(launch)} data-testid="build-watch">
+            {specFirst ? "Watch it" : "Watch the build"} <ArrowRight {...ICON} />
+          </a>
+          {launch.projectId ? (
+            <a className="bh-started-open" href={projectHref(launch.projectId)} data-testid="build-open-project">Open project</a>
+          ) : null}
+        </div>
+        <p className="bh-started-ids" aria-hidden="true">
+          {launch.projectId ? <>Project <span data-testid="build-project-id">{launch.projectId}</span></> : null}
+          {launch.projectId && launch.runId ? <span> · </span> : null}
+          {launch.runId ? <>Run <span data-testid="build-run-id">{launch.runId}</span></> : null}
+        </p>
+      </div>
+    </section>
+  );
+}
+
 const STATUS: Record<Phase, string> = {
   ready: "Ready to build",
   starting: "Starting",
@@ -165,7 +332,17 @@ const STATUS: Record<Phase, string> = {
   error: "Not started",
 };
 
-export function BuildHome() {
+export function BuildHome({ modelReady }: { modelReady?: boolean } = {}) {
+  const [knownModelReady, setKnownModelReady] = useState<boolean | undefined>(modelReady);
+  useEffect(() => { setKnownModelReady(modelReady); }, [modelReady]);
+  useEffect(() => {
+    const onModelReady = (e: Event) => {
+      const detail = (e as CustomEvent<boolean>).detail;
+      if (typeof detail === "boolean") setKnownModelReady(detail);
+    };
+    window.addEventListener(SETUP_MODEL_READY_EVENT, onModelReady);
+    return () => window.removeEventListener(SETUP_MODEL_READY_EVENT, onModelReady);
+  }, []);
   const promptId = useId();
   const menuId = useId();
   const promptRef = useRef<HTMLTextAreaElement>(null);
@@ -178,6 +355,9 @@ export function BuildHome() {
 
   const [prompt, setPrompt] = useState("");
   const [mode, setMode] = useState<(typeof MODES)[number]["id"]>("build");
+  /** "Review the plan first": the panel's spec waits for you instead of being approved by this
+   *  start (the light lane's default). */
+  const [reviewPlan, setReviewPlan] = useState(false);
   const [templateId, setTemplateId] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [phase, setPhase] = useState<Phase>("ready");
@@ -185,6 +365,7 @@ export function BuildHome() {
   const [uploading, setUploading] = useState(false);
   const [launch, setLaunch] = useState<LaunchIds | null>(null);
   const [launchError, setLaunchError] = useState<string | null>(null);
+  const [launchFix, setLaunchFix] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [driveNote, setDriveNote] = useState(false);
@@ -198,6 +379,7 @@ export function BuildHome() {
     generation.current += 1;
     setLaunch(null);
     setLaunchError(null);
+    setLaunchFix(null);
     setPhase("ready");
   };
 
@@ -252,7 +434,8 @@ export function BuildHome() {
     try {
       const body = new FormData();
       for (const file of files) body.append("file", file);
-      const res = await fetch("/api/factory/attachments", { method: "POST", body });
+      const res = await apiWrite("/api/factory/attachments", { method: "POST", body },
+        { press: { scope: "build-home:attach", label: "Attach" } });
       const data = await readBody(res);
       if (!res.ok) {
         setUploadError(messageOf(data, "The file did not upload."));
@@ -280,28 +463,60 @@ export function BuildHome() {
 
   const lucky = async () => {
     if (busy || uploading) return;
+    if (knownModelReady === false) {
+      setLaunch(null);
+      setLaunchError(CODE_WORDS.needs_model);
+      setLaunchFix("?area=setup&focus=models");
+      setPhase("error");
+      return;
+    }
     const mine = generation.current;
     const body = {
       prompt,
       mode,
+      ...(reviewPlan ? { review_plan: true } : {}),
       template_id: templateId,
       attachment_ids: [...new Set(attachments.map((item) => item.id))],
     };
     setBusy(true);
     setLaunch(null);
     setLaunchError(null);
+    setLaunchFix(null);
     setPhase("starting");
-    try {
-      const res = await fetch("/api/factory/launch", {
+    const send = async () => {
+      // THE CONSOLE'S ONE WRITE PATH (lib/api-write.ts): a fresh Idempotency-Key per send, and a
+      // 401 step_up_required opens "Confirm it's you" and resends this same launch. A raw fetch
+      // here showed "The build did not start." to a person whose second factor was only stale.
+      const res = await apiWrite("/api/factory/launch", {
         method: "POST",
         headers: { "content-type": "application/json", accept: "application/json" },
         body: JSON.stringify(body),
-      });
-      const data = await readBody(res);
+      }, { press: { scope: "build-home:launch", label: EASY_MODE } });
+      return { res, data: await readBody(res) };
+    };
+    try {
+      let { res, data } = await send();
       if (generation.current !== mine) return;
+      // CONSENT, THE CONSOLE'S ONE WAY (lib/identity/consent.ts): the build start needs the
+      // person's grant for the project's agents. The API kept the project; the sheet creates the
+      // grant and the same launch is sent again unchanged, so it builds in that same project.
+      const asked = res.status === 409 ? consentFromBody(data) : null;
+      if (asked) {
+        const granted = await askConsent(asked);
+        if (generation.current !== mine) return;
+        if (!granted) {
+          setPhase("error");
+          setLaunch(null);
+          setLaunchError(CONSENT_DECLINED);
+          return;
+        }
+        ({ res, data } = await send());
+        if (generation.current !== mine) return;
+      }
       if (!res.ok) {
         setPhase("error");
         setLaunchError(messageOf(data, "The build did not start."));
+        setLaunchFix(fixHrefOf(data));
         setLaunch(null);
         return;
       }
@@ -359,21 +574,29 @@ export function BuildHome() {
   };
 
   const choose = (card: TemplateCard) => {
+    if (card.needs) return;
     setTemplateId(card.id);
     if (card.prompt) setPrompt(card.prompt);
     touch();
     promptRef.current?.focus();
   };
 
+  const ModeIcon = MODE_ICON[mode];
+
+  const startedTitle = (gallery.state === "ready"
+    && gallery.templates.find((card) => card.id === templateId)?.title) || "";
+
   return (
     <div className="bh" data-testid="build-home" data-template-id={templateId ?? ""}>
       <div className="bh-bench">
-        <p className="bh-status" data-state={phase} data-testid="build-status">
-          <span className="bh-dot" aria-hidden="true" />
-          {STATUS[phase]}
-        </p>
-        <h1 className="bh-title">Build with BOSS</h1>
-        <p className="bh-lede">Describe the app. BOSS builds it.</p>
+        <div className="bh-head">
+          <p className="bh-status" data-state={phase} data-testid="build-status">
+            <span className="bh-dot" aria-hidden="true" />
+            {STATUS[phase]}
+          </p>
+          <h1 className="bh-title">Build with BOSS</h1>
+          <p className="bh-lede">Describe the app. BOSS builds it.</p>
+        </div>
 
         <div className="bh-ticket">
           <label className="bh-prompt-wrap" htmlFor={promptId}>
@@ -405,6 +628,7 @@ export function BuildHome() {
                 aria-controls={menuOpen ? menuId : undefined}
                 onClick={() => setMenuOpen((open) => !open)}
               >
+                <Paperclip {...ICON} data-testid="build-add-icon" />
                 Add
               </button>
               {menuOpen ? (
@@ -420,7 +644,7 @@ export function BuildHome() {
                         openStartSheet("import");
                       }}
                     >
-                      Import from GitHub
+                      <span className="bh-menu-row"><GithubLogo {...ICON} />Import from GitHub</span>
                     </button>
                   </li>
                   <li role="none">
@@ -434,7 +658,7 @@ export function BuildHome() {
                         addRef.current?.focus();
                       }}
                     >
-                      Drive
+                      <span className="bh-menu-row"><GoogleDriveLogo {...ICON} />Drive</span>
                       <span className="bh-menu-note">Drive is not connected</span>
                     </button>
                   </li>
@@ -448,7 +672,7 @@ export function BuildHome() {
                         uploadRef.current?.click();
                       }}
                     >
-                      Upload files
+                      <span className="bh-menu-row"><UploadSimple {...ICON} />Upload files</span>
                     </button>
                   </li>
                   <li role="none">
@@ -461,26 +685,35 @@ export function BuildHome() {
                         cameraRef.current?.click();
                       }}
                     >
-                      Camera
+                      <span className="bh-menu-row"><Camera {...ICON} />Camera</span>
                     </button>
                   </li>
                 </ul>
               ) : null}
             </div>
-            <label className="bh-mode">
+            <label className="bh-mode" data-mode={mode}>
               <span>Mode</span>
-              <select
-                aria-label="Mode"
-                data-testid="build-mode"
-                value={mode}
-                onChange={(event) => {
-                  const next = event.target.value;
-                  if (next === "build" || next === "prototype") setMode(next);
-                  touch();
-                }}
-              >
-                {MODES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
-              </select>
+              <span className="bh-mode-pill">
+                <ModeIcon {...ICON} className="bh-mode-icon" data-testid="build-mode-icon" />
+                <select
+                  aria-label="Mode"
+                  data-testid="build-mode"
+                  value={mode}
+                  onChange={(event) => {
+                    const next = event.target.value;
+                    if (next === "build" || next === "prototype") setMode(next);
+                    touch();
+                  }}
+                >
+                  {MODES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+                </select>
+                <CaretDown {...ICON} className="bh-mode-caret" />
+              </span>
+            </label>
+            <label className="bh-mode bh-review" title="The agent panel writes a spec before anything is built. Tick this to read and approve it yourself; otherwise your start approves it.">
+              <input type="checkbox" data-testid="build-review-plan" checked={reviewPlan}
+                     onChange={(event) => { setReviewPlan(event.target.checked); touch(); }} />
+              <span>Review the plan first</span>
             </label>
             {canDictate ? (
               <button
@@ -491,6 +724,7 @@ export function BuildHome() {
                 aria-label="Dictate"
                 onClick={dictate}
               >
+                {listening ? <Stop {...ICON} weight="fill" data-testid="build-mic-icon" /> : <Microphone {...ICON} data-testid="build-mic-icon" />}
                 {listening ? "Stop" : "Mic"}
               </button>
             ) : null}
@@ -502,6 +736,7 @@ export function BuildHome() {
               aria-busy={busy || uploading}
               onClick={() => void lucky()}
             >
+              <MagicWand {...ICON} className="bh-lucky-icon" data-testid="build-lucky-icon" />
               Easy Mode
             </button>
           </div>
@@ -529,32 +764,36 @@ export function BuildHome() {
         </div>
 
         <ul className="bh-chips" aria-label="Suggestions">
-          {CHIPS.map((chip) => (
-            <li key={chip}>
-              <button
-                type="button"
-                className="bh-chip"
-                data-testid="build-chip"
-                onClick={() => {
-                  setPrompt(chip);
-                  touch();
-                  promptRef.current?.focus();
-                }}
-              >
-                {chip}
-              </button>
-            </li>
-          ))}
+          {CHIPS.map((chip) => {
+            const { kind, icon: ChipIcon } = CHIP_KIND[chip];
+            return (
+              <li key={chip}>
+                <button
+                  type="button"
+                  className="bh-chip"
+                  data-testid="build-chip"
+                  data-kind={kind}
+                  onClick={() => {
+                    setPrompt(chip);
+                    touch();
+                    promptRef.current?.focus();
+                  }}
+                >
+                  <ChipIcon {...ICON} className="bh-chip-icon" />
+                  {chip}
+                </button>
+              </li>
+            );
+          })}
         </ul>
 
-        {launch ? (
-          <p className="bh-ids" role="status" data-testid="build-launch">
-            {launch.projectId ? <>Project <span data-testid="build-project-id">{launch.projectId}</span></> : null}
-            {launch.projectId && launch.runId ? <span aria-hidden="true"> · </span> : null}
-            {launch.runId ? <>Run <span data-testid="build-run-id">{launch.runId}</span></> : null}
+        {launch ? <StartedCard launch={launch} fallbackTitle={startedTitle} /> : null}
+        {launchError ? (
+          <p className="bh-error" role="alert" data-testid="build-launch-error">
+            {launchError}
+            {launchFix ? <> <a href={launchFix} data-testid="build-launch-fix">{/models/.test(launchFix) ? "Add a model" : "Fix it"}</a></> : null}
           </p>
         ) : null}
-        {launchError ? <p className="bh-error" role="alert" data-testid="build-launch-error">{launchError}</p> : null}
         {driveNote ? <p className="bh-note" role="status" data-testid="build-drive-note">Drive is not connected</p> : null}
         {micError ? <p className="bh-error" role="alert">{micError}</p> : null}
 
@@ -587,26 +826,116 @@ export function BuildHome() {
           <p className="bh-note" data-testid="build-templates-empty">No templates yet. The bench still builds from the sentence.</p>
         ) : null}
         {gallery.state === "ready" && gallery.templates.length > 0 ? (
-          <ul className="bh-cards">
-            {gallery.templates.map((card) => (
-              <li key={card.id}>
-                <button
-                  type="button"
-                  className="bh-card"
-                  data-testid="build-template"
-                  data-template-id={card.id}
-                  aria-pressed={templateId === card.id}
-                  onClick={() => choose(card)}
-                >
-                  {card.category ? <span className="bh-cat">{card.category}</span> : null}
-                  <span className="bh-card-title">{card.title}</span>
-                  {card.blurb ? <span className="bh-blurb">{card.blurb}</span> : null}
-                </button>
-              </li>
-            ))}
-          </ul>
+          <TemplateCards templates={gallery.templates} selected={templateId} onChoose={choose} />
         ) : null}
       </section>
     </div>
+  );
+}
+
+/** Two rows of cards by default; the rest behind "Show all". Rows are counted from the grid's
+ *  own resolved columns, so two rows stay two rows at every width. Without a layout (a test DOM)
+ *  it counts three columns. */
+export const COLLAPSED_ROWS = 2;
+const FALLBACK_COLUMNS = 3;
+
+function useGridColumns(ref: React.RefObject<HTMLElement | null>): number {
+  const [cols, setCols] = useState(FALLBACK_COLUMNS);
+  // Measured before paint, so the first frame already shows two rows at this width (no 6→8 jump).
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || typeof window === "undefined") return;
+    const read = () => {
+      const tracks = window.getComputedStyle(el).gridTemplateColumns || "";
+      // Resolved tracks read "224px 224px …"; anything else (no layout) keeps the fallback.
+      const n = /\dpx/.test(tracks) ? tracks.trim().split(/\s+/).length : 0;
+      if (n > 0) setCols((prev) => (prev === n ? prev : n));
+    };
+    read();
+    // The list's own size covers a window resize; the window listener is only for browsers without it.
+    if (typeof ResizeObserver !== "undefined") {
+      const ro = new ResizeObserver(read);
+      ro.observe(el);
+      return () => ro.disconnect();
+    }
+    window.addEventListener("resize", read);
+    return () => window.removeEventListener("resize", read);
+  }, [ref]);
+  return cols;
+}
+
+/** The server's reason, with its `command` spans shown as code. */
+function withCode(text: string): React.ReactNode {
+  return text.split("`").map((part, i) => (i % 2 ? <code key={i}>{part}</code> : part));
+}
+
+/** Two rows' worth, and never without the selected card: a pick past the fold takes the last
+ *  slot, so the highlighted choice stays on screen after "Show fewer" or a narrower window. */
+export function foldedCards<T extends { id: string }>(cards: T[], limit: number, selected: string | null): T[] {
+  const head = cards.slice(0, limit);
+  if (!selected || head.some((card) => card.id === selected)) return head;
+  const pick = cards.find((card) => card.id === selected);
+  return pick ? [...head.slice(0, Math.max(0, limit - 1)), pick] : head;
+}
+
+function TemplateCards({ templates, selected, onChoose }: {
+  templates: TemplateCard[];
+  selected: string | null;
+  onChoose: (card: TemplateCard) => void;
+}) {
+  const listRef = useRef<HTMLUListElement>(null);
+  const cols = useGridColumns(listRef);
+  const [all, setAll] = useState(false);
+  const listId = useId();
+  const limit = Math.max(1, cols) * COLLAPSED_ROWS;
+  const folds = templates.length > limit;
+  const shown = all || !folds ? templates : foldedCards(templates, limit, selected);
+  return (
+    <>
+      <ul className="bh-cards" id={listId} ref={listRef} data-testid="build-template-list"
+          data-columns={cols} data-expanded={all || !folds ? "true" : "false"}>
+        {shown.map((card) => {
+          const whyId = `${listId}-${card.id}-needs`;
+          const showCommand = !!card.needs?.enable && !card.needs.message.includes(card.needs.enable);
+          return (
+            <li key={card.id}>
+              <button
+                type="button"
+                className="bh-card"
+                data-testid="build-template"
+                data-template-id={card.id}
+                aria-pressed={card.needs ? undefined : selected === card.id}
+                aria-disabled={card.needs ? "true" : undefined}
+                aria-describedby={card.needs ? whyId : undefined}
+                data-unavailable={card.needs ? "true" : undefined}
+                onClick={() => onChoose(card)}
+              >
+                <span className="bh-card-art">
+                  <TemplatePreview id={card.id} category={card.category} />
+                </span>
+                <span className="bh-card-text">
+                  {card.category ? <span className="bh-cat">{card.category}</span> : null}
+                  <span className="bh-card-title">{card.title}</span>
+                  {card.blurb ? <span className="bh-blurb">{card.blurb}</span> : null}
+                  {card.needs ? (
+                    <span className="bh-needs" id={whyId} data-testid="build-template-needs">
+                      <span className="bh-needs-label">{card.needs.label}</span>
+                      <span className="bh-needs-why">{withCode(card.needs.message)}</span>
+                      {showCommand ? <span className="bh-needs-how">Turn on: <code>{card.needs.enable}</code></span> : null}
+                    </span>
+                  ) : null}
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+      {folds ? (
+        <button type="button" className="bh-more" data-testid="build-templates-more"
+                aria-expanded={all} aria-controls={listId} onClick={() => setAll((v) => !v)}>
+          {all ? "Show fewer" : `Show all ${templates.length} templates`}
+        </button>
+      ) : null}
+    </>
   );
 }

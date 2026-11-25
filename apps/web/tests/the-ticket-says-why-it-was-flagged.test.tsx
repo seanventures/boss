@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The ticket says why it was flagged. The flag sentence stays. The reasons
  * that were only on the untrusted note title are visible beside it. Blank

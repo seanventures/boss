@@ -1091,6 +1091,74 @@ def receive(engine: Any, kind: str, path_token: str, request: RawRequest, *,
     return accept(engine, adapter, row, request, verified, settings=settings, now=now_s)
 
 
+def accept_in_tx(connection: Connection, adapter: Any, row: Mapping[str, Any],
+                 request: RawRequest, verified: Any, *, settings: Any = None,
+                 now: Optional[float] = None, handshake: bool = True) -> dict:
+    """In-transaction step 2 of the front door: handshake / paused check / deduped insert into
+    `intake_events`. Callers already holding a transaction (`ticket_sync.ingest_webhook`,
+    `/v1/webhooks/github`) invoke this directly without opening a second transaction."""
+    now_s = time.time() if now is None else now
+    settings = settings or _settings()
+    conn = to_intake_connection(connection, settings, row)
+    if handshake and adapter.can("handshake"):
+        shake = adapter.handshake(conn, request)
+        if shake is not None:
+            return {"outcome": ACK_HANDSHAKE, "http_status": shake.status,
+                    "body": shake.body, "headers": dict(shake.headers)}
+    if row["status"] != "active":
+        key = "dropped_while_" + str(row["status"])
+        connection.execute(text("""
+            UPDATE intake_connections SET health = health || CAST(:h AS JSONB)
+             WHERE id = :id"""),
+            {"h": json.dumps({key: int((_json(row.get("health"), {}) or {}).get(key)
+                                        or 0) + 1}), "id": row["id"]})
+        return _ack(adapter, conn, request, ACK_PAUSED)
+    dedupe_key = str(adapter.dedupe_key(conn, request))[:500]
+    limits = _limits(row.get("limits"))
+    over_rate, shed = BUCKETS.admit(str(row["id"]), limits, now_s)
+    if over_rate and not shed:
+        backlog = int(connection.execute(text(
+            "SELECT count(*) FROM intake_events WHERE connection_id = :c "
+            "AND status IN ('received', 'processing', 'failed')"),
+            {"c": row["id"]}).scalar() or 0)
+        shed = backlog >= int(limits["max_backlog"])
+    retry = verified.retry or _retry_signal(adapter, request)
+    event_id = make_id("iev")
+    received = _now()
+    inserted = connection.execute(text("""
+        INSERT INTO intake_events (id, connection_id, project_id, dedupe_key,
+               source_event_id, status, raw, raw_sha256, headers, retry_count_seen,
+               trace_id, verify_scheme, received_at, raw_expires_at, expires_at)
+        VALUES (:id, :c, :p, :dk, :sid, :st, :raw, :sha, CAST(:h AS JSONB), :retry, :tr,
+                :vs, :at, :rexp, :exp)
+        ON CONFLICT (connection_id, dedupe_key) DO NOTHING RETURNING id"""),
+        {"id": event_id, "c": row["id"], "p": row.get("project_id"), "dk": dedupe_key,
+         "sid": dedupe_key.split(":", 1)[-1][:200],
+         "st": ACK_SHED if shed else ACK_RECEIVED,
+         "raw": request.body if len(request.body) <= (SHED_RAW_BYTES if shed
+                                                      else MAX_RAW_BYTES) else None,
+         "sha": request.body_sha256(), "h": json.dumps(kept_headers(request.headers)),
+         "retry": int((retry or {}).get("num") or 0),
+         "tr": (lower_headers(request.headers).get("traceparent") or make_id("itr"))[:120],
+         "vs": verified.scheme, "at": received,
+         "rexp": received + timedelta(days=RAW_RETENTION_DAYS),
+         "exp": received + timedelta(days=ENVELOPE_RETENTION_DAYS)}).scalar()
+    if inserted is None:
+        connection.execute(text("""
+            UPDATE intake_events SET duplicates = duplicates + 1,
+                   retry_count_seen = GREATEST(retry_count_seen, :retry)
+             WHERE connection_id = :c AND dedupe_key = :dk"""),
+            {"retry": int((retry or {}).get("num") or 0), "c": row["id"], "dk": dedupe_key})
+        return _ack(adapter, conn, request, ACK_DUPLICATE, dedupe_key=dedupe_key)
+    if _BEFORE_COMMIT is not None:
+        _BEFORE_COMMIT(event_id)
+    outcome = ACK_SHED if shed else ACK_RECEIVED
+    ack = _ack(adapter, conn, request, outcome, event_id=event_id)
+    ack["event_id"] = event_id
+    ack["shed"] = shed
+    return ack
+
+
 def accept(engine: Any, adapter: Any, row: Mapping[str, Any], request: RawRequest, verified: Any,
            *, settings: Any = None, now: Optional[float] = None, handshake: bool = True) -> dict:
     """Step 2 of the front door, for a delivery whose proof was already accepted (the push route
@@ -1100,68 +1168,10 @@ def accept(engine: Any, adapter: Any, row: Mapping[str, Any], request: RawReques
     answer."""
     from ..db import begin
 
-    now_s = time.time() if now is None else now
-    settings = settings or _settings()
     try:
         with begin(engine) as c:
-            conn = to_intake_connection(c, settings, row)
-            if handshake and adapter.can("handshake"):
-                shake = adapter.handshake(conn, request)
-                if shake is not None:
-                    return {"outcome": ACK_HANDSHAKE, "http_status": shake.status,
-                            "body": shake.body, "headers": dict(shake.headers)}
-            if row["status"] != "active":
-                key = "dropped_while_" + str(row["status"])
-                c.execute(text("""
-                    UPDATE intake_connections SET health = health || CAST(:h AS JSONB)
-                     WHERE id = :id"""),
-                    {"h": json.dumps({key: int((_json(row.get("health"), {}) or {}).get(key)
-                                                or 0) + 1}), "id": row["id"]})
-                return _ack(adapter, conn, request, ACK_PAUSED)
-            dedupe_key = str(adapter.dedupe_key(conn, request))[:500]
-            limits = _limits(row.get("limits"))
-            over_rate, shed = BUCKETS.admit(str(row["id"]), limits, now_s)
-            if over_rate and not shed:
-                backlog = int(c.execute(text(
-                    "SELECT count(*) FROM intake_events WHERE connection_id = :c "
-                    "AND status IN ('received', 'processing', 'failed')"),
-                    {"c": row["id"]}).scalar() or 0)
-                shed = backlog >= int(limits["max_backlog"])
-            retry = verified.retry or _retry_signal(adapter, request)
-            event_id = make_id("iev")
-            received = _now()
-            inserted = c.execute(text("""
-                INSERT INTO intake_events (id, connection_id, project_id, dedupe_key,
-                       source_event_id, status, raw, raw_sha256, headers, retry_count_seen,
-                       trace_id, verify_scheme, received_at, raw_expires_at, expires_at)
-                VALUES (:id, :c, :p, :dk, :sid, :st, :raw, :sha, CAST(:h AS JSONB), :retry, :tr,
-                        :vs, :at, :rexp, :exp)
-                ON CONFLICT (connection_id, dedupe_key) DO NOTHING RETURNING id"""),
-                {"id": event_id, "c": row["id"], "p": row.get("project_id"), "dk": dedupe_key,
-                 "sid": dedupe_key.split(":", 1)[-1][:200],
-                 "st": ACK_SHED if shed else ACK_RECEIVED,
-                 "raw": request.body if len(request.body) <= (SHED_RAW_BYTES if shed
-                                                             else MAX_RAW_BYTES) else None,
-                 "sha": request.body_sha256(), "h": json.dumps(kept_headers(request.headers)),
-                 "retry": int((retry or {}).get("num") or 0),
-                 "tr": (lower_headers(request.headers).get("traceparent") or make_id("itr"))[:120],
-                 "vs": verified.scheme, "at": received,
-                 "rexp": received + timedelta(days=RAW_RETENTION_DAYS),
-                 "exp": received + timedelta(days=ENVELOPE_RETENTION_DAYS)}).scalar()
-            if inserted is None:
-                c.execute(text("""
-                    UPDATE intake_events SET duplicates = duplicates + 1,
-                           retry_count_seen = GREATEST(retry_count_seen, :retry)
-                     WHERE connection_id = :c AND dedupe_key = :dk"""),
-                    {"retry": int((retry or {}).get("num") or 0), "c": row["id"], "dk": dedupe_key})
-                return _ack(adapter, conn, request, ACK_DUPLICATE, dedupe_key=dedupe_key)
-            if _BEFORE_COMMIT is not None:
-                _BEFORE_COMMIT(event_id)
-            outcome = ACK_SHED if shed else ACK_RECEIVED
-            ack = _ack(adapter, conn, request, outcome, event_id=event_id)
-        ack["event_id"] = event_id
-        ack["shed"] = shed
-        return ack
+            return accept_in_tx(c, adapter, row, request, verified, settings=settings,
+                                now=now, handshake=handshake)
     except Exception as error:  # noqa: BLE001
         if _db_down(error):
             logger.warning("intake: database unavailable at insert", exc_info=True)
@@ -1346,6 +1356,20 @@ def process_one(engine: Any, settings: Any, row: Mapping[str, Any], *,
             replay_mode, replay_n = _replay_mode(row)
             force_n = replay_n if replay_mode == "force" else 0
             all_outcomes: list[dict] = []
+            crow_config = _json(crow.get("config"), {}) or {}
+            ticket_provider_id = str(crow_config.get("work_tracker_provider_id") or "").strip()
+            ticket_outcome: Optional[dict[str, Any]] = None
+            if ticket_provider_id:
+                from . import ticket_sync
+
+                ticket_outcome = ticket_sync.process_intake_event(
+                    c, settings, provider_id=ticket_provider_id, raw_body=stored.body
+                )
+                if ticket_outcome.get("status") == "dead":
+                    reason = str(ticket_outcome.get("reason") or "ticket connection deleted")
+                    _finish(c, event_id, "dead", error=reason, now=now)
+                    return {"id": event_id, "status": "dead", "reason": reason}
+                all_outcomes.append({"ticket_pickup": ticket_outcome})
             primary: Optional[IntakeEvent] = None
             primary_conversation: Optional[str] = None
             filtered_reason = ""
@@ -1407,7 +1431,7 @@ def process_one(engine: Any, settings: Any, row: Mapping[str, Any], *,
                                        "WHERE id = :id AND attempts > 0"), {"id": event_id})
                         return {"id": event_id, "status": "received",
                                 "reason": f"deferred behind {earlier['id']}"}
-                # THE SAME COMMIT BY WEBHOOK AND BY POLL is one event (AMEX-G1). The source
+                # THE SAME COMMIT BY WEBHOOK AND BY POLL is one event (BOSSAPP-1175). The source
                 # names the commit (`data.head_key`); a copy that arrived the OTHER way and was
                 # already processed wins. Same-way copies are the inbox's dedupe key's job, and
                 # a forced replay always runs.
@@ -1494,6 +1518,11 @@ def process_one(engine: Any, settings: Any, row: Mapping[str, Any], *,
                 status = "refused"
             elif words or filtered_reason:
                 status = "filtered"
+            elif ticket_outcome is not None:
+                if ticket_outcome.get("status") in ("waiting", "started", "imported"):
+                    status = "routed"
+                else:
+                    status = "ignored"
             else:
                 status = "ignored"
                 all_outcomes.append({"reason": "no route on this connection"})
@@ -1547,23 +1576,24 @@ def process_due(engine: Any, settings: Any = None, *, limit: int = PROCESSOR_BAT
                 project_id: Optional[str] = None) -> dict:
     """One pass: claim what is due (in `project_id` only, when given), process each row in its
     own transaction."""
-    from ..db import begin
+    from ..db import background, begin
 
-    settings = settings or _settings()
-    with begin(engine) as c:
-        # One clock for the claim and for the backoff written on the rows it takes.
-        now = _due_now(c, now)
-        rows = claim(c, limit=limit, holder=holder, now=now, project_id=project_id)
-    out = {"claimed": len(rows), "routed": 0, "ignored": 0, "filtered": 0, "refused": 0,
-           "failed": 0, "dead": 0, "received": 0, "deferred": 0, "digest": 0}
-    for row in rows:
-        got = process_one(engine, settings, row, now=now)
-        out[got["status"]] = out.get(got["status"], 0) + 1
-    return out
+    with background():
+        settings = settings or _settings()
+        with begin(engine) as c:
+            # One clock for the claim and for the backoff written on the rows it takes.
+            now = _due_now(c, now)
+            rows = claim(c, limit=limit, holder=holder, now=now, project_id=project_id)
+        out = {"claimed": len(rows), "routed": 0, "ignored": 0, "filtered": 0, "refused": 0,
+               "failed": 0, "dead": 0, "received": 0, "deferred": 0, "digest": 0}
+        for row in rows:
+            got = process_one(engine, settings, row, now=now)
+            out[got["status"]] = out.get(got["status"], 0) + 1
+        return out
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
-# The poller (AMEX-G1, BOSSAPP-1175): sources BOSS reads, for an install nobody can reach
+# The poller (BOSSAPP-1175): sources BOSS reads, for an install nobody can reach
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
 
 #: `poll_seconds` on a connection: how often it is polled (GitHub: 2-4 conditional requests a
@@ -2306,7 +2336,7 @@ def start(engine: Any, settings: Any) -> bool:
             logger.warning("intake: NOTIFY listener not started; ticking only", exc_info=True)
 
     def loop() -> None:
-        from ..db import begin
+        from ..db import background, begin
         from . import system_services
 
         listen()
@@ -2318,30 +2348,32 @@ def start(engine: Any, settings: Any) -> bool:
             wake.wait(tick)
             wake.clear()
             try:
-                try:
-                    poll_due(engine, settings)
-                except Exception:  # noqa: BLE001 — a failed poll never stops processing
-                    logger.warning("intake poll failed", exc_info=True)
-                got = process_due(engine, settings)
-                while got["claimed"] >= PROCESSOR_BATCH and not _STOP.is_set():
+                with background():
+                    try:
+                        poll_due(engine, settings)
+                    except Exception:  # noqa: BLE001 — a failed poll never stops processing
+                        logger.warning("intake poll failed", exc_info=True)
                     got = process_due(engine, settings)
-                flush_refusals(engine)
-                try:
-                    from . import intake_guards
+                    while got["claimed"] >= PROCESSOR_BATCH and not _STOP.is_set():
+                        got = process_due(engine, settings)
+                    flush_refusals(engine)
+                    try:
+                        from . import intake_guards
 
-                    intake_guards.sweep_digests(engine)
-                except Exception:  # noqa: BLE001 — the next tick tries again
-                    logger.debug("intake digest sweep failed", exc_info=True)
-                if time.monotonic() - last_sweep > 60:
-                    last_sweep = time.monotonic()
-                    with begin(engine) as c:
-                        sweep_retention(c)
-                system_services.beat(engine, SERVICE_KEY, ok=True)
+                        intake_guards.sweep_digests(engine)
+                    except Exception:  # noqa: BLE001 — the next tick tries again
+                        logger.debug("intake digest sweep failed", exc_info=True)
+                    if time.monotonic() - last_sweep > 60:
+                        last_sweep = time.monotonic()
+                        with begin(engine) as c:
+                            sweep_retention(c)
+                    system_services.beat(engine, SERVICE_KEY, ok=True)
             except Exception as error:  # noqa: BLE001 — the next tick tries again
                 logger.warning("intake processor tick failed", exc_info=True)
                 try:
-                    system_services.beat(engine, SERVICE_KEY, ok=False,
-                                         error=f"{type(error).__name__}: {error}"[:300])
+                    with background():
+                        system_services.beat(engine, SERVICE_KEY, ok=False,
+                                             error=f"{type(error).__name__}: {error}"[:300])
                 except Exception:  # noqa: BLE001
                     pass
 

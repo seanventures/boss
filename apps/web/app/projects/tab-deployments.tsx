@@ -10,7 +10,7 @@
 import React, { useState } from "react";
 import {
   ArrowCounterClockwise, ArrowSquareOut, ArrowsClockwise, Buildings, Check, CheckCircle, ClockCounterClockwise, Cloud, Flask, GearSix, GitMerge, Globe,
-  HardDrives, Key, LockSimple, Package, RocketLaunch, TerminalWindow, X,
+  HardDrives, Key, LockSimple, Package, RocketLaunch, TerminalWindow, Wrench, X,
 } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
@@ -24,14 +24,15 @@ import { DemoLoginRow } from "./tab-settings";
 import { ConfirmSheet } from "./confirm-sheet";
 import { DeployLive, DeployStepFailed } from "./deploy-live";
 import { ItemAction } from "./staging-target-sheet";
-import { whenLocal } from "../../lib/local-time";
+import { isHydrated, localWith, whenLocal } from "../../lib/local-time";
+import { useNow } from "../agents/live-util";
 import { changeHref, isLocalChangeUrl, linkTarget } from "../../lib/repo-links";
 import type { PxCtx } from "./project-page";
 
 const BEACON = { name: "Beacon", role_key: "sre" };
 /** A target's deploy state as a tag tone (engine deploy_truth): only a success is green. */
 const DEPLOY_TONE: Record<string, "green" | "amber" | "red" | "teal" | "idle"> = {
-  live: "green", deploying: "teal", waiting: "amber", setting_up: "teal", failed: "red", not_deployed: "idle" };
+  live: "green", deploying: "teal", waiting: "amber", setting_up: "teal", failed: "red", fixing: "amber", not_deployed: "idle" };
 /** A history row's state in a word, when the engine sent none (X-77: badge + colour + word). */
 const HIST_WORD: Record<string, string> = { failed: "Failed", waiting: "Needs you", now: "Deploying", skipped: "Not approved", todo: "Queued" };
 /** Where every p95 on the project pages comes from (one source, obs_view.probe_window), in words. */
@@ -84,15 +85,19 @@ export function DeployStateWhy({ sentence, envKey }: { sentence: string | null; 
 }
 
 /** "14:00" in the viewer's zone. */
-const hourLocal = (iso: string) => { try { return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); } catch { return iso; } };
+const hourLocal = (iso: string) => localWith(iso, { hour: "2-digit", minute: "2-digit" }) || iso;
 
 /** "Wed 16:40" in the viewer's zone (a week's history reads by weekday), else "Nov 2". */
-export function dayTime(at: string): string {
+export function dayTime(at: string, nowMs?: number | null): string {
   const d = new Date(at);
   if (Number.isNaN(d.getTime())) return "";
-  const week = Date.now() - d.getTime() < 6 * 86_400_000;
-  return week ? d.toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false })
-    : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  if (nowMs === null || (nowMs === undefined && !isHydrated())) {
+    return localWith(at, { month: "short", day: "numeric" });
+  }
+  const refMs = nowMs ?? Date.now();
+  const week = refMs - d.getTime() < 6 * 86_400_000;
+  return week ? localWith(at, { weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false })
+    : localWith(at, { month: "short", day: "numeric" });
 }
 
 /** Who a history row names. `by_agent` only picks the face. Blank when the engine sent none. */
@@ -101,10 +106,12 @@ export function historyWho(h: { by: string | null; by_agent: boolean }): string 
 }
 
 /** "2h ago", "3d ago": how long since, in one short token. */
-export function agoWords(at: string): string {
+export function agoWords(at: string, nowMs?: number | null): string {
   const t = new Date(at).getTime();
   if (!Number.isFinite(t)) return "";
-  const s = Math.max(0, Math.round((Date.now() - t) / 1000));
+  if (nowMs === null || (nowMs === undefined && !isHydrated())) return "";
+  const refMs = nowMs ?? Date.now();
+  const s = Math.max(0, Math.round((refMs - t) / 1000));
   if (s < 60) return "just now";
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
@@ -121,6 +128,7 @@ function shipIcon(label: string, state: string): React.ReactNode {
 }
 
 export function DeploymentsTab({ ctx }: { ctx: PxCtx }) {
+  const nowMs = useNow(60_000);
   const read = usePxRead<Deployments>(PX_PATHS.deployments(ctx.projectId), parseDeployments, { everyMs: 20_000, demo: () => parseDeployments(FX_DEPLOYMENTS) });
   const infra = `?area=infra&view=deploys&project_id=${encodeURIComponent(ctx.projectId)}`;
   return (
@@ -175,12 +183,12 @@ export function DeploymentsTab({ ctx }: { ctx: PxCtx }) {
                   <a key={h.id} className="px-li px-hist" data-s={h.recovered ? "recovered" : h.state} data-testid={`px-dep-h-${h.id}`} href={pxHref(h.href)}
                      title={`${h.word} — opens this deploy in Infra`}>
                     <span className="px-ck-b" aria-hidden>
-                      {h.recovered ? <ArrowCounterClockwise size={11} weight="bold" /> : h.state === "done" ? <Check size={11} weight="bold" /> : h.state === "failed" ? <X size={11} weight="bold" />
+                      {h.recovered ? <ArrowCounterClockwise size={11} weight="bold" /> : h.repaired ? <Wrench size={11} weight="bold" /> : h.state === "done" ? <Check size={11} weight="bold" /> : h.state === "failed" ? <X size={11} weight="bold" />
                         : h.state === "waiting" ? <LockSimple size={10} weight="fill" /> : h.state === "skipped" ? <X size={10} /> : <ArrowsClockwise size={11} />}</span>
                     <span style={{ minWidth: 0 }}><b className="px-ell" style={{ display: "block" }}>{h.label}
-                      {h.state !== "done" ? <> <Tag tone={h.recovered || h.state === "waiting" || h.state === "now" ? "amber" : h.state === "failed" ? "red" : undefined}>
+                      {h.state !== "done" ? <> <Tag tone={h.recovered || h.repaired || h.state === "waiting" || h.state === "now" ? "amber" : h.state === "failed" ? "red" : undefined}>
                         {h.recovered ? "Recovered" : h.word || HIST_WORD[h.state] || h.state}</Tag></> : null}</b>
-                      <small>{[h.at ? dayTime(h.at) : "", h.sub, h.state === "waiting" ? "needs your approval" : ""].filter(Boolean).join(" · ")}</small>
+                      <small>{[h.at ? dayTime(h.at, nowMs) : "", h.sub, h.state === "waiting" ? "needs your approval" : ""].filter(Boolean).join(" · ")}</small>
                       {historyWho(h) ? ` ${historyWho(h)}` : null}</span>
                     {h.by && !h.by_agent ? <span title={`by ${h.by}`}><Face agent={{ name: h.by }} size={20} /></span> : <Face agent={BEACON} size={20} />}
                   </a>
@@ -248,6 +256,7 @@ function EnvCard({ e, ctx }: { e: Environment; ctx: PxCtx }) {
     setSaid({ text: "Promotion started.", ok: true });
     ctx.refreshWork();
   };
+  const nowMs = useNow(60_000);
   const host = e.host_name || e.host;
   const url = e.url ? (/^https?:/.test(e.url) ? e.url : `http://${e.url}`) : "";
   const p95From = envP95SourceSentence(e.p95_source);
@@ -291,7 +300,7 @@ function EnvCard({ e, ctx }: { e: Environment; ctx: PxCtx }) {
         <Globe size={12} aria-hidden />{url}<ArrowSquareOut size={10} aria-label="opens in a new tab" /></a>
         : e.address ? <span className="px-env-address" data-testid={`px-env-address-${e.key}`}
                             title="Not live yet: this address answers once a deploy here succeeds">
-          <Globe size={12} aria-hidden />{e.deploy?.state === "failed" ? "Not live" : e.deploy?.state === "not_deployed" || !e.deploy ? "Not deployed yet" : "Setting up"} · will answer at {e.address.replace(/^https?:\/\//, "")}</span> : null}
+          <Globe size={12} aria-hidden />{e.deploy?.state === "failed" || e.deploy?.state === "fixing" ? "Not live" : e.deploy?.state === "not_deployed" || !e.deploy ? "Not deployed yet" : "Setting up"} · will answer at {e.address.replace(/^https?:\/\//, "")}</span> : null}
       <DeployLive e={e} projectId={ctx.projectId} actor={ctx.actor} onFix={(q) => ctx.ask(q)} onChanged={() => ctx.refreshWork()} />
       {e.deploy?.state === "failed" && e.deploy.attempt?.kind === "step" ? (
         <DeployStepFailed projectId={ctx.projectId} actor={ctx.actor} where={`${e.app || "the app"} on ${e.label}`} reason={e.deploy.reason}
@@ -326,7 +335,7 @@ function EnvCard({ e, ctx }: { e: Environment; ctx: PxCtx }) {
         <Face agent={BEACON} size={20} />
         {e.last_deploy ? <span>{e.deploy?.state === "failed" ? "Failed deploy" : e.deploy && !e.deploy.live ? "Deploy" : "Last deploy"} {e.last_deploy.pr_url
                   ? <a href={changeHref(e.last_deploy.pr_url)} {...linkTarget(changeHref(e.last_deploy.pr_url))} title={isLocalChangeUrl(e.last_deploy.pr_url) ? "Opens the change set" : "Opens the pull request"}><b>{e.last_deploy.label}</b></a>
-                  : <b>{e.last_deploy.label}</b>} · {agoWords(e.last_deploy.at) || whenLocal(e.last_deploy.at)}</span> : <span className="px-faint">{e.deploy?.word || "Not deployed yet"}</span>}
+                  : <b>{e.last_deploy.label}</b>} · {agoWords(e.last_deploy.at, nowMs) || whenLocal(e.last_deploy.at, nowMs ?? 0)}</span> : <span className="px-faint">{e.deploy?.word || "Not deployed yet"}</span>}
         {e.last_deploy?.commit ? <span className="px-mono px-faint">{e.last_deploy.commit}</span> : null}
         <span className="px-spacer" />
         {e.last_deploy?.href ? <PxLink href={e.last_deploy.href} testid={`px-env-logs-${e.key}`} title="This deploy and its log, in Infra"><TerminalWindow size={11} aria-hidden /> Logs</PxLink> : null}

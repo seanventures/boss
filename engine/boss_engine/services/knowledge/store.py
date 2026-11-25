@@ -548,12 +548,17 @@ class PostgresKnowledgeStore:
         connection: Connection,
         *,
         project_id: str,
-        valid_to,
         actor_kind: str,
+        valid_to=None,
         node_id: Optional[str] = None,
         edge_id: Optional[str] = None,
         superseded_by: Optional[str] = None,
     ) -> None:
+        """Close a node or an edge at `valid_to` — by default NOW ON THE DATABASE'S CLOCK
+        (clock_timestamp()), the clock the AGE projection reads validity with (age.py). An
+        application-clock "now" written inside a long transaction read as still valid to a
+        sync filtering on the transaction's own now(), and a retired lesson was mirrored back
+        into the graph (2026-11-21)."""
         self.ensure_schema(connection)
         if (node_id is None) == (edge_id is None):
             raise ValueError("close either a node or an edge")
@@ -573,14 +578,16 @@ class PostgresKnowledgeStore:
                 raise PermissionError(f"edge {edge_id} is not in project {project_id}")
             _assert_can_close(actor_kind, edge["trust_tier"])
             connection.execute(
-                text("UPDATE kg_edges SET valid_to = :valid_to WHERE id = :id"),
+                text("UPDATE kg_edges SET valid_to = "
+                     "COALESCE(CAST(:valid_to AS TIMESTAMPTZ), clock_timestamp()) WHERE id = :id"),
                 {"valid_to": valid_to, "id": edge_id},
             )
             return
         node = self._node_in_project(connection, project_id, node_id)
         _assert_can_close(actor_kind, node["trust_tier"])
         connection.execute(
-            text("UPDATE kg_nodes SET valid_to = :valid_to WHERE id = :id"),
+            text("UPDATE kg_nodes SET valid_to = "
+                 "COALESCE(CAST(:valid_to AS TIMESTAMPTZ), clock_timestamp()) WHERE id = :id"),
             {"valid_to": valid_to, "id": node_id},
         )
         if superseded_by is not None:
@@ -1150,7 +1157,9 @@ class PostgresKnowledgeStore:
     def _copy_embedding_to_index(self, connection: Connection, *, embedding_id: str, dimensions: int) -> None:
         """ONE ROW into kg_vec_<dim>: the row just written, never the whole kg_embeddings table
         (that copy, once per embedding, rewrote every vector of every project inside the sync's
-        transaction and held 14-16 searches waiting on it)."""
+        transaction and held 14-16 searches waiting on it). An unchanged vector (same node, model
+        and content hash) is not rewritten: every rewrite leaves a dead 6 KB vector behind, and
+        the churn grew the table to 924 MB for 1,599 rows (BOSSAPP-1459)."""
         table = _vec_table(dimensions)
         connection.execute(
             text(
@@ -1168,6 +1177,9 @@ class PostgresKnowledgeStore:
                   model_id = EXCLUDED.model_id,
                   content_hash = EXCLUDED.content_hash,
                   embedding = EXCLUDED.embedding
+                WHERE ({table}.project_id, {table}.node_id, {table}.model_id, {table}.content_hash)
+                      IS DISTINCT FROM
+                      (EXCLUDED.project_id, EXCLUDED.node_id, EXCLUDED.model_id, EXCLUDED.content_hash)
                 """
             ),
             {"id": embedding_id},
@@ -1220,6 +1232,9 @@ class PostgresKnowledgeStore:
                   model_id = EXCLUDED.model_id,
                   content_hash = EXCLUDED.content_hash,
                   embedding = EXCLUDED.embedding
+                WHERE ({table}.project_id, {table}.node_id, {table}.model_id, {table}.content_hash)
+                      IS DISTINCT FROM
+                      (EXCLUDED.project_id, EXCLUDED.node_id, EXCLUDED.model_id, EXCLUDED.content_hash)
                 """
             ),
             {"dim": dimensions},

@@ -18,6 +18,11 @@ Usage: rollback.sh [--dir INSTALL_DIR] [--restore-backup BACKUP_DIR] [--dry-run]
 previous commit, the image tags point at the kept images again, and the running services are
 recreated from them. Nothing is built or pulled.
 
+The kept images have a window: once the upgrade has run BOSS_ROLLBACK_KEEP_HOURS (72) with a
+healthy API, the next prune (`boss prune`, an upgrade or update, a storage cleanup) drops them
+and records BOSS_PREV_EXPIRED_AT here. After that this refuses and names `boss upgrade --to REF`,
+which rebuilds the previous release instead.
+
 The new release may have changed the database schema. When db/schema.sql differs from the
 one the previous images were built with, this refuses, because the previous release would run
 against a schema it does not know. Pass --restore-backup with the backup the upgrade made
@@ -57,6 +62,17 @@ TAG="$(marker_value BOSS_IMAGE_TAG)"
 PREV_TAG="$(marker_value BOSS_PREV_IMAGE_TAG)"
 PREV_IMAGES="$(marker_value BOSS_PREV_IMAGES)"
 PREV_SCHEMA="$(marker_value BOSS_PREV_SCHEMA_SHA256)"
+# THE ROLLBACK POINT HAS A WINDOW (BOSSAPP-1459): prune.sh drops the kept images once the upgrade
+# has run BOSS_ROLLBACK_KEEP_HOURS (72) healthy, and marks the record. Say so, and what still works.
+PREV_EXPIRED="$(marker_value BOSS_PREV_EXPIRED_AT)"
+if [[ -n "$PREV_EXPIRED" ]]; then
+  {
+    echo "The rollback images of $PREV_REF were dropped at $PREV_EXPIRED, after the upgrade had run healthy"
+    echo "for its window (BOSS_ROLLBACK_KEEP_HOURS in .env, 72 hours by default)."
+    echo "Go back with \`boss upgrade --to $PREV_REF\` instead: it rebuilds that release. Nothing changed."
+  } >&2
+  exit 1
+fi
 [[ "$PREV_COMMIT" =~ ^[0-9a-f]{40}$ && -n "$TAG" && "$PREV_TAG" == "prev-$TAG" && -n "$PREV_IMAGES" ]] ||
   { echo '.boss-rollback is incomplete; nothing changed.' >&2; exit 1; }
 [[ "$TAG" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || { echo '.boss-rollback names an invalid image tag; nothing changed.' >&2; exit 1; }
@@ -112,7 +128,15 @@ if [[ -n "$RESTORE_BACKUP" ]]; then
 fi
 
 export BOSS_COMMUNITY_IMAGE_TAG="$TAG"
-COMPOSE=("${DOCKER[@]}" compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE")
+# The one compose-file resolver (compose_files.sh): adds the engine inner-sandbox overlay when
+# .env opts in, so this path never recreates containers without it.
+BOSS_COMPOSE_FILES=(-f "$COMPOSE_FILE")
+if [[ -f "$INSTALL_DIR/scripts/install/compose_files.sh" ]]; then
+  # shellcheck source=compose_files.sh
+  source "$INSTALL_DIR/scripts/install/compose_files.sh"
+  boss_compose_files "$INSTALL_DIR" "$ENV_FILE" || exit 1
+fi
+COMPOSE=("${DOCKER[@]}" compose "${BOSS_COMPOSE_FILES[@]}" --env-file "$ENV_FILE")
 RUNNING="$("${COMPOSE[@]}" --profile web --profile secrets --profile mail ps --status running --services 2>/dev/null || true)"
 # The test Postgres (db-test, label kind=test) holds no BOSS data: a rollback never stops or
 # recreates it, so agents' bench-DB test runs are not killed mid-suite (BOSSAPP-1335).

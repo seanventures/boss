@@ -55,6 +55,56 @@ def docs_update_dedupe_key(
     return f"docs.update:{project_id}:{entity_type}:{entity_id}:{bucket}"
 
 
+#: Why a docs update does nothing for a project, in words (recorded, never a person's item).
+DOCS_LOCAL_REPO = ("Docs publishing opens a draft documentation pull request on a git host; this "
+                   "project's code lives in a repository on this machine, so there is nothing to "
+                   "publish and no GitHub to ask.")
+DOCS_NO_REPOSITORY = ("Docs publishing needs the project's repository, and this project has none "
+                      "BOSS can name (no primary repository), so no docs update was made.")
+
+
+class DocsNotApplicable(ValueError):
+    """This project has no repository a docs update publishes to (see docs_repository)."""
+
+
+def docs_repository(connection: Connection, settings: Settings,
+                    project_id: str) -> tuple[Optional[dict[str, Any]], str]:
+    """THE PROJECT'S OWN REPOSITORY for a docs update, or (None, why it does not apply).
+
+    THE CASE (laptop, 2026-11-18): the docs updater wrote to the install-wide
+    BOSS_TARGET_GITHUB_* repository, empty on an Easy Mode install, so every docs update after a
+    merge died "No GitHub credentials for /" — 202 dead letters, 72 of them on projects whose code
+    lives on this machine and needs no GitHub at all — and the failure-owner loop asked a person
+    to connect a repository. The repository is the project's (the registry: its primary binding,
+    a lone binding, then the legacy setting); a repository on this machine, or none, means the
+    update does not apply: it is never queued, and a queued one is skipped with this note."""
+    from . import local_repo
+    from .repo_registry import RepositoryResolutionError, resolve_repository_target
+
+    try:
+        target = resolve_repository_target(connection, settings, project_id,
+                                           allow_legacy_fallback=True)
+    except RepositoryResolutionError:
+        return None, DOCS_NO_REPOSITORY
+    owner = str(target.get("owner") or "").strip()
+    repo = str(target.get("repo") or "").strip()
+    if local_repo.is_local_owner(owner) or _binding_host(connection, target) == "local":
+        return None, DOCS_LOCAL_REPO
+    if not owner or not repo:
+        return None, DOCS_NO_REPOSITORY
+    return target, ""
+
+
+def _binding_host(connection: Connection, target: dict[str, Any]) -> str:
+    if not target.get("binding_id"):
+        return ""
+    host = connection.execute(
+        text("SELECT host FROM github_repository_bindings WHERE id = :b"),
+        {"b": target["binding_id"]},
+    ).scalar()
+    return str(host or "").lower()
+
+
 def enqueue_docs_update_job(
     connection: Connection,
     settings: Settings,
@@ -71,9 +121,15 @@ def enqueue_docs_update_job(
     priority: int = 100,
     max_attempts: int = 3,
 ) -> dict[str, Any]:
-    """Enqueue or coalesce the newest event into one entity/window job."""
+    """Enqueue or coalesce the newest event into one entity/window job.
+
+    Raises DocsNotApplicable (a ValueError) when the project has no repository a docs update
+    could publish to — a repository on this machine, or none: never a job bound to "/"."""
     if event_type not in docs_trigger_events(settings):
         raise ValueError("event_type is not enabled for documentation updates.")
+    _target, why_not = docs_repository(connection, settings, project_id)
+    if why_not:
+        raise DocsNotApplicable(why_not)
     payload = {
         "event_id": event_id,
         "event_type": event_type,
@@ -275,7 +331,9 @@ class DocsUpdateService:
         self.settings = settings
         self.catalog = FeatureCatalog(settings)
         self.agent = agent
-        self.github = github or GitHubAdapter(settings)
+        #: A fixed adapter when a caller (a test) supplies one; otherwise each update binds to
+        #: the PROJECT's repository (docs_repository), never the install-wide default.
+        self.github = github
         self.budget = BudgetGovernor(settings)
         self.receipts = ReceiptService()
 
@@ -355,6 +413,14 @@ class DocsUpdateService:
                 "message": f"{data_boundary} data cannot be sent to GitHub.",
             }
 
+        target, why_not = docs_repository(connection, self.settings, project_id)
+        if why_not and self.github is None:
+            emit_event(connection, project_id, "docs.update_skipped", "docs-agent",
+                       entity_type, entity_id,
+                       {"event_id": event_id, "event_type": event_type, "reason": why_not})
+            return {"status": "skipped", "retryable": False, "message": why_not}
+        github = self.github or self._adapter(connection, project_id, target or {})
+
         feature = self.catalog.resolve(
             connection,
             project_id,
@@ -398,7 +464,7 @@ class DocsUpdateService:
             f"docs.update:{event_id}",
             "github.docs_pull_request.create",
             {
-                "repository": self.github.repository_full_name,
+                "repository": github.repository_full_name,
                 "branch_name": branch_name,
             },
             {
@@ -435,7 +501,7 @@ class DocsUpdateService:
                 connection, project_id, entity_type, entity_id, event_id, event_type
             )
             prior_markdown = self._read_local_markdown(doc_path)
-            remote_prior = self.github.read_text_file(branch_name, doc_path)
+            remote_prior = github.read_text_file(branch_name, doc_path)
             if remote_prior is not None:
                 prior_markdown = remote_prior
             agent = self.agent or DocsAgent(self.settings)
@@ -455,9 +521,9 @@ class DocsUpdateService:
                         ),
                     )
                 )
-            self.github.ensure_branch(branch_name)
+            github.ensure_branch(branch_name)
             commit_shas = [
-                self.github.upsert_file(
+                github.upsert_file(
                     branch_name,
                     path,
                     content,
@@ -465,7 +531,7 @@ class DocsUpdateService:
                 )
                 for path, content in files
             ]
-            pull_request = self.github.create_pull_request(
+            pull_request = github.create_pull_request(
                 branch_name,
                 f"docs: update {feature['title']}",
                 self._pull_request_body(feature, context, event_id, event_type),
@@ -639,6 +705,19 @@ class DocsUpdateService:
             "source_entity": source,
             "spec_artifacts": artifacts,
         }
+
+    def _adapter(self, connection: Connection, project_id: str,
+                 target: dict[str, Any]) -> GitHubAdapter:
+        """The project's GitHub repository, with the credential it is connected with."""
+        owner, repo = str(target["owner"]), str(target["repo"])
+        token = None
+        try:
+            from .github_connections import github_token_for
+
+            token = github_token_for(connection, self.settings, project_id, owner, repo) or None
+        except Exception:  # noqa: BLE001 - the adapter's own resolver still runs
+            token = None
+        return GitHubAdapter(self.settings, owner=owner, repo=repo, token=token)
 
     def _scope(self, connection: Connection, project_id: str) -> dict[str, Any]:
         row = connection.execute(

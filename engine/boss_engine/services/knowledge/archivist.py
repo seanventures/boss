@@ -126,7 +126,7 @@ def distil(
                 connection,
                 project_id=project_id,
                 node_id=previous,
-                valid_to=datetime.now(timezone.utc),
+                valid_to=None,
                 actor_kind="agent",
                 superseded_by=fact_id,
             )

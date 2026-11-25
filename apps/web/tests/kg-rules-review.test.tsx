@@ -151,6 +151,25 @@ describe("Learned so far", () => {
     expect($('[data-testid="kg-learned-strip"]')).toBeNull();
   });
 
+  it("dry run 5: a workflow screen (people) leaves out the build's test failures, workarounds and fixes", async () => {
+    const base = FX.live.learnings[0];
+    const note = (id: string, kind: string, title: string) => ({ ...base, node: { ...base.node, id }, learning_kind: kind, title });
+    const learnings = [note("kgn_tf", "test_failure", "FAIL gwlint fails"), note("kgn_wa", "workaround", "what worked after it failed"),
+      note("kgn_fx", "fix", "What made FAIL pass"), note("kgn_dc", "decision", "Admin routes are never exposed to tenants")];
+    mockKgFetch({ "/view/live$": { body: { ...FX.live, learnings, rules: [], edges: [], active_runs: 1 } } });
+    await mount(<LearnedStrip people projectId="p" actor="ceo" runId="r1" live />);
+    expect($$('[data-testid="kg-learned-item"]').map((e) => e.textContent)).toEqual([expect.stringContaining("Admin routes are never exposed")]);
+    expect($('[data-testid="kg-learned-count"]')?.textContent).toBe("1 learned");
+    unmount();
+    mockKgFetch({ "/view/live$": { body: { ...FX.live, learnings: learnings.slice(0, 3), rules: [], edges: [], active_runs: 1 } } });
+    await mount(<LearnedStrip people projectId="p" actor="ceo" runId="r1" live />);
+    expect($('[data-testid="kg-learned-strip"]')).toBeNull();
+    unmount();
+    mockKgFetch({ "/view/live$": { body: { ...FX.live, learnings, rules: [], edges: [], active_runs: 1 } } });
+    await mount(<LearnedStrip projectId="p" actor="ceo" runId="r1" live />);
+    expect($$('[data-testid="kg-learned-item"]')).toHaveLength(4);
+  });
+
   it("a live run that has learned nothing yet says so", async () => {
     mockKgFetch({ "/view/live$": { body: { ...FX.live, learnings: [], rules: [], edges: [], active_runs: 1 } } });
     await mount(<LearnedStrip projectId="p" actor="ceo" runId="r1" live />);

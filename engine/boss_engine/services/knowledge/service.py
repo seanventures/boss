@@ -5,6 +5,7 @@ forget a fact require a person. `kg_propose_fact` always stores `inferred`.
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -16,6 +17,7 @@ from .age import projection_counts
 from .archivist import distil, forget_source as forget_source_lineage
 from .capture import capture_lifecycle as capture_lifecycle_record
 from .find import find_written, pinned
+from .sources import OUTSIDE_SOURCES
 from .learning import apply_learning
 from .retrieval import blast_radius, fuse_lists, knowledge_pack, precedent_section, rank_hits
 from .scopes import KEYWORD_EXCLUDED_LAYERS, keyword_policy
@@ -23,6 +25,20 @@ from .store import PostgresKnowledgeStore
 
 READ = "knowledge:read"
 MANAGE = "knowledge:manage"
+
+
+def _outside_mark(node: dict[str, Any]) -> dict[str, Any]:
+    """A node whose text came from outside BOSS (a synced Confluence page) is returned marked
+    untrusted, so the low-trust ledger treats it as it does the live read of the same page."""
+    attrs = node.get("attrs") or {}
+    if isinstance(attrs, str):
+        try:
+            attrs = json.loads(attrs)
+        except ValueError:
+            attrs = {}
+    if str(attrs.get("source") or node.get("source") or "") in OUTSIDE_SOURCES:
+        return {"untrusted": True, "trust_origin": "document"}
+    return {}
 
 
 class KnowledgeService:
@@ -102,6 +118,7 @@ class KnowledgeService:
                 "name": node["name"],
                 "trust_tier": node["trust_tier"],
                 "body": node["body"],
+                **_outside_mark(node),
                 **({"match": by_written[hit["node_id"]]} if hit["node_id"] in by_written else {}),
             })
         # An exact id the caller named (INC-2041, kgn_…) leads: the nodes that carry it, then what
@@ -144,7 +161,8 @@ class KnowledgeService:
                 continue
             hits.append({"node_id": hit["node_id"], "node_key": hit.get("node_key"),
                          "score": float(hit.get("rank") or 0), "via": ["text"],
-                         "name": node["name"], "trust_tier": node["trust_tier"], "body": node["body"]})
+                         "name": node["name"], "trust_tier": node["trust_tier"], "body": node["body"],
+                         **_outside_mark(node)})
         return {"hits": hits[:limit], "retrieval": {"mode": "keyword", "lists": {"text": len(text_hits)}}}
 
     def why(
@@ -359,7 +377,7 @@ class KnowledgeService:
             connection,
             project_id=project_id,
             node_id=fact_id,
-            valid_to=datetime.now(timezone.utc),
+            valid_to=None,
             actor_kind=actor_kind,
         )
         self.store.audit(
@@ -375,6 +393,51 @@ class KnowledgeService:
 
         after_write(connection, project_id)
         return {"id": fact_id, "closed": True}
+
+    def retire(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        node_id: str,
+        reason: str,
+        actor_kind: str,
+        actor_ref: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """RETIRE A LESSON THAT IS WRONG — the knowledge graph's own `forget`.
+
+        `forget` retired only recall memory (agent_memory); a lesson in the graph (a bad
+        "workaround" an agent recorded) could not be retired at all, and Helm had to supersede
+        it with another learning to stop it being served. This closes the node on the
+        database's clock (close_validity), says why on the node and in kg_audit, and drops it
+        from the AGE projection at once — kept, never deleted, so what it shaped stays
+        auditable. Scoped to the node's own project; an agent may retire only what agents
+        inferred, a person anything (store._assert_can_close)."""
+        reason = (reason or "").strip()
+        if not reason:
+            raise ValueError("say why this is being retired (reason)")
+        node = self.store._node_in_project(connection, project_id, node_id)
+        still_valid = connection.execute(
+            text("SELECT valid_to IS NULL OR valid_to > clock_timestamp() FROM kg_nodes "
+                 "WHERE id = :id"), {"id": node_id}).scalar()
+        if not still_valid:
+            raise LookupError(f"{node_id} is already retired")
+        self.store.close_validity(connection, project_id=project_id, node_id=node_id,
+                                  actor_kind=actor_kind)
+        connection.execute(
+            text("UPDATE kg_nodes SET attrs = attrs || CAST(:a AS JSONB) WHERE id = :id"),
+            {"id": node_id, "a": json.dumps({"retired_reason": reason[:1000],
+                                             "retired_by": actor_ref or actor_kind})})
+        audit_id = self.store.audit(
+            connection, project_id=project_id, action="knowledge.retire", entity_id=node_id,
+            actor_kind=actor_kind, actor_ref=actor_ref,
+            detail={"reason": reason[:1000], "kind": node["kind"], "name": node["name"],
+                    "trust_tier": node["trust_tier"]})
+        from .age import forget_vertex
+
+        forget_vertex(connection, project_id, node_id)
+        return {"id": node_id, "retired": True, "kind": node["kind"], "name": node["name"],
+                "reason": reason[:1000], "audit_id": audit_id}
 
     def forget(
         self,

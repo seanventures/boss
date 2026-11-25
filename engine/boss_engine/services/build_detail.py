@@ -135,6 +135,26 @@ _UNITTEST_RAN = re.compile(r"^Ran (\d+) tests? in", re.M)
 _UNITTEST_FAILED = re.compile(r"^FAILED \((.*)\)\s*$", re.M)
 _ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 _DURATION = re.compile(r"\s*\(\s*\d+(?:\.\d+)?\s*m?s\s*\)\s*$")
+#: A TEST SUITE THAT NEVER LOADED (e2e recipe-box: "Tests 9/9 passed" beside a must-have that
+#: said the suite fails with MODULE_NOT_FOUND). A file that could not be imported runs none of
+#: its tests, so the counts the runner printed describe the OTHER files: never "passed".
+#: Said by the runner itself: a suite did not load, whatever the test counts say.
+_NOT_LOADED = (
+    re.compile(r"ImportError while importing test module '([^']+)'"),    # pytest
+    re.compile(r"Test suite failed to run()"),                          # jest
+    # vitest: a file whose environment or import failed still counts its file as passed and
+    # says it only here ("Errors  1 error" after "Test Files  4 passed (4)").
+    re.compile(r"^\s*Errors\s+([1-9]\d*) errors?\s*$", re.M),
+    re.compile(r"\bFailed to load (?:url|test file)\s+(\S+)", re.I),     # vite / vitest
+)
+#: A missing module is a suite that did not load only when the runner failed the FILE itself:
+#: node:test reports a file it could not import as `not ok N - path/to/file.test.js`; pytest says
+#: "ERROR collecting". A traceback of an ordinary failing test that mentions a missing optional
+#: module is a test failure, not a load failure (review #224).
+_NODE_MISSING = re.compile(r"Cannot find (?:module|package) '([^']+)'")
+_PY_MISSING = re.compile(r"ModuleNotFoundError: No module named '([^']+)'")
+_PY_COLLECTING = re.compile(r"ERROR collecting|errors? during collection", re.I)
+_TEST_FILE = re.compile(r"\.(?:test|spec)\.[cm]?[jt]sx?$|\.[cm]?[jt]sx?$")
 _FAILING = (
     re.compile(r"^FAILED\s+(\S+::\S+?)(?:\s+-\s.*)?$"),               # pytest short summary
     re.compile(r"^(?:FAIL|ERROR):\s+(\S+\s+\(.+\))"),                  # unittest
@@ -192,7 +212,21 @@ def verify_counts(output: str) -> dict[str, Any]:
                 break
         if len(failing) >= FAILING_CAP:
             break
-    return {"passed": passed, "failed": failed, "total": total, "failing": failing}
+    load_error = None
+    said = next((m for m in (p.search(clean) for p in _NOT_LOADED) if m), None)
+    missing = None
+    if any(_TEST_FILE.search(name) for name in failing):
+        missing = _NODE_MISSING.search(clean)
+    if missing is None and _PY_COLLECTING.search(clean):
+        missing = _PY_MISSING.search(clean)
+    if said is not None or missing is not None:
+        what = (said.group(1) or "").strip() if said is not None else ""
+        if missing is not None and (not what or what.isdigit()):
+            what = f"missing {missing.group(1)}"
+        load_error = ("A test suite did not load" + (f" ({what[:120]})"
+                      if what and not what.isdigit() else ""))
+    return {"passed": passed, "failed": failed, "total": total, "failing": failing,
+            "load_error": load_error}
 
 
 # ── the Now summary ──────────────────────────────────────────────────────────────────────────
@@ -235,7 +269,7 @@ def _attempt_n(run: Mapping[str, Any]) -> int:
 
 def _gate_row(connection: Any, run_id: str) -> Optional[Mapping[str, Any]]:
     return connection.execute(
-        text("SELECT gates_passed, gates_failed, created_at FROM quality_gates "
+        text("SELECT gates_passed, gates_failed, evidence, created_at FROM quality_gates "
              "WHERE code_task_run_id = :r ORDER BY created_at DESC LIMIT 1"),
         {"r": run_id},
     ).mappings().first()
@@ -263,6 +297,8 @@ def now_summary(connection: Any, settings: Any, project_id: str, run: Mapping[st
                 acts: list[Mapping[str, Any]], gate_labels: Any) -> dict[str, Any]:
     """The cockpit's `summary` (see the module doc). `gate_labels` maps a gate name to words."""
     from . import agent_acts
+
+    from .plain_words import gate_failed_words as _failed_words
 
     rid = str(run["id"])
     fctx = _j(run.get("finalize_ctx"), {}) or {}
@@ -331,6 +367,8 @@ def now_summary(connection: Any, settings: Any, project_id: str, run: Mapping[st
             counts = verify_counts(output)
             ok = all(bool(t.get("ok", t.get("exit_code") == 0)) for t in commands) \
                 if commands else (counts["failed"] == 0 if counts["failed"] is not None else None)
+            if counts.get("load_error"):
+                ok = False   # a suite that never loaded ran none of its tests
             verify = {"run_id": str(r["id"]), "attempt": _attempt_n(r), "own": r["id"] == rid,
                       "at": _iso(r.get("updated_at")), "ok": ok, **counts}
         if gates is None:
@@ -341,7 +379,12 @@ def now_summary(connection: Any, settings: Any, project_id: str, run: Mapping[st
                 gates = {"run_id": str(r["id"]), "attempt": _attempt_n(r), "own": r["id"] == rid,
                          "at": _iso(g.get("created_at")),
                          "passed": [gate_labels(x) for x in passed],
-                         "failed": [gate_labels(x) for x in failed]}
+                         # A failed gate says what went wrong (plain_words.FAILED_WORDS).
+                         "failed": [_failed_words(x) for x in failed],
+                         # Let through by the quality bar: neither passed nor failed.
+                         "followups": [gate_labels(x) for x in (
+                             (_j(g.get("evidence"), {}) or {}).get("quality_bar") or {}
+                         ).get("followups") or {}]}
         if verify is not None and gates is not None:
             break
 

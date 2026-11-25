@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The plan row's button shows the short label and keeps the full title in its
  * title attribute. When that title says more than the label, the row shows it.

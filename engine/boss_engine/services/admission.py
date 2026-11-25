@@ -217,6 +217,9 @@ def decide(cap: Capacity, profile: Profile, *, in_flight: int, slots: int,
     # chose "one at a time" / "build anyway" on the card (force_one); sustained critical (L3)
     # holds even that. A DISK BELOW THE FLOOR ALWAYS HOLDS: memory pressure slows a build, a
     # full disk breaks the database every build stands on (BOSSAPP-1150).
+    # (Review of PR #300: holding the idle probe on CPU load or memory pressure alone left
+    # queued builds waiting for a person on any busy host. Sustained pressure is the system
+    # doctor's L2, which still holds it, as on main.)
     if problems and not disk_low and in_flight == 0 and (
             level < L2 or (force_one and level < L3)):
         problems = []
@@ -280,7 +283,7 @@ def builds_at_once(connection: Any, cap: Capacity, request_mb: float) -> dict[st
     derived = derived_slots(cap, request_mb, previews_mb=running_previews_mb(connection))
     pinned = _state(connection, "builds_at_once").get("value")
     if isinstance(pinned, int) and pinned >= 1:
-        value = min(pinned, derived * 2, MAX_SLOTS)
+        value = min(pinned, derived, MAX_SLOTS)
         warning = (f"Pinned at {pinned}; this machine measures room for {derived}."
                    if pinned > derived else None)
         return {"value": value, "auto": False, "derived": derived, "pinned": pinned,
@@ -337,7 +340,12 @@ def snapshot(connection: Any, *, cap: Optional[Capacity] = None) -> dict[str, An
     label = f"Builds at once: {bao['value']} ({'auto' if bao['auto'] else 'pinned'})"
     waiting = f" · {queued} queued, waiting for {probe.shortfall}" if queued and probe.shortfall \
         else (f" · {queued} queued" if queued else "")
-    return {"builds_at_once": bao, "running": in_flight, "queued_for_capacity": queued,
+    # JOB SLOTS: what the operator saved in Setup › Agent capacity; until then the old rule,
+    # one job slot per build at once, so an upgrade never raises concurrency by itself.
+    configured_workers = _state(connection, "agent_capacity").get("worker_slots")
+    workers = (max(1, min(4, configured_workers)) if type(configured_workers) is int
+               else max(1, min(4, int(bao["value"] or 1))))
+    return {"worker_slots": workers, "builds_at_once": bao, "running": in_flight, "queued_for_capacity": queued,
             "next_build": probe.as_dict(), "label": label + waiting,
             "level": current_level(connection, cap)}
 

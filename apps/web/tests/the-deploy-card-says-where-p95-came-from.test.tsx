@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The deploy card says where p95 came from, in words next to the number.
  * The label's title can keep the long note. App and probe each have one sentence.

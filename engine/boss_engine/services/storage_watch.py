@@ -344,15 +344,29 @@ def latest(connection: Any, host_id: str, *, within: timedelta = timedelta(minut
     for k in _SAMPLE_FIELDS:
         if merged.get(k) is not None:
             merged[k] = float(merged[k]) if k != "backups_n" else int(merged[k])
+    helper = next((row for row in rows if row["source"] in ("steward", "hostd")
+                   and row.get("free_gb") is not None and row.get("total_gb") is not None
+                   and row["at"] >= _now() - STALE_AFTER), None)
+    if helper:
+        for key in ("total_gb", "free_gb", "used_pct", "source", "at", "host_label"):
+            merged[key] = helper[key]
     merged["sources"] = sorted(seen)
     return merged
+
+
+def disk_source(connection: Any, host_id: str) -> str:
+    source = connection.execute(text(
+        "SELECT source FROM storage_samples WHERE host_id = :h AND free_gb IS NOT NULL "
+        "AND at >= :since ORDER BY CASE WHEN source IN ('steward', 'hostd') THEN 0 ELSE 1 END, "
+        "at DESC LIMIT 1"), {"h": host_id, "since": _now() - STALE_AFTER}).scalar()
+    return str(source or "api")
 
 
 def last_two(connection: Any, host_id: str) -> list[dict[str, Any]]:
     """The two newest DISK readings (rows that carry free_gb), oldest first."""
     rows = connection.execute(text(
-        "SELECT * FROM storage_samples WHERE host_id = :h AND free_gb IS NOT NULL "
-        "ORDER BY at DESC LIMIT 2"), {"h": host_id}).mappings().all()
+        "SELECT * FROM storage_samples WHERE host_id = :h AND free_gb IS NOT NULL AND source = :source "
+        "ORDER BY at DESC LIMIT 2"), {"h": host_id, "source": disk_source(connection, host_id)}).mappings().all()
     return [dict(r) for r in reversed(rows)]
 
 
@@ -361,8 +375,8 @@ def used_series(connection: Any, host_id: str, *, days: int = KEEP_DAYS,
     """(at, used_gb, free_gb), oldest first, downsampled to ≤ max_points."""
     rows = connection.execute(text(
         "SELECT at, total_gb, free_gb FROM storage_samples WHERE host_id = :h "
-        "AND free_gb IS NOT NULL AND total_gb IS NOT NULL AND at >= :since ORDER BY at"),
-        {"h": host_id, "since": _now() - timedelta(days=days)}).all()
+        "AND free_gb IS NOT NULL AND total_gb IS NOT NULL AND source = :source AND at >= :since ORDER BY at"),
+        {"h": host_id, "source": disk_source(connection, host_id), "since": _now() - timedelta(days=days)}).all()
     pts = [(r[0] if r[0].tzinfo else r[0].replace(tzinfo=timezone.utc),
             float(r[1]) - float(r[2]), float(r[2])) for r in rows]
     if len(pts) > max_points:
@@ -437,6 +451,67 @@ def rules_reclaim_gb(sample: Mapping[str, Any], rules: Sequence[Mapping[str, Any
     return round(gain, 2)
 
 
+#: The sandbox tree is walked at most this often for the budget (it can hold GBs of files).
+_SANDBOX_DU_EVERY = 600.0
+_SANDBOX_DU: dict[str, Any] = {"at": 0.0, "gb": None}
+
+
+def _sandboxes_gb() -> Optional[float]:
+    import time
+
+    if time.monotonic() - _SANDBOX_DU["at"] < _SANDBOX_DU_EVERY and _SANDBOX_DU["at"]:
+        return _SANDBOX_DU["gb"]
+    try:
+        from .resource_reaper import _du
+        from .sandbox_identity import run_root
+
+        root = run_root()
+        gb = round(_du(root) / 1e9, 3) if root.is_dir() else None
+    except Exception:  # noqa: BLE001 — unknown, not zero
+        gb = None
+    _SANDBOX_DU.update({"at": time.monotonic(), "gb": gb})
+    return gb
+
+
+def budget(connection: Any, sample: Mapping[str, Any]) -> dict[str, Any]:
+    """THE ONE DISK BUDGET (disk_budget.CATEGORIES, BOSSAPP-1459) as the Storage card shows it:
+    what the API measures itself (the database split, test databases, scheduled backups, the
+    sandboxes) and what the host helper's last reading says (images, build cache, logs). A
+    category nobody measured is `unknown`, never zero. `boss doctor` shows the full host split."""
+    from . import disk_budget
+    from .resource_reaper import test_server_present
+
+    raw: dict[str, Optional[float]] = {}
+    for key, sql in disk_budget.DB_SQL.items():
+        try:
+            with connection.begin_nested():
+                raw[key] = float(connection.execute(text(sql)).scalar() or 0)
+        except Exception:  # noqa: BLE001 — a role without the right is an unknown reading
+            raw[key] = None
+    db = disk_budget.split_db(raw)
+    try:
+        with connection.begin_nested():
+            app_backups = float(connection.execute(text(
+                "SELECT COALESCE(sum(bytes), 0) FROM backups WHERE status = 'verified'")).scalar() or 0)
+    except Exception:  # noqa: BLE001
+        app_backups = None
+    host_backups = _f(sample.get("backups_gb")) if sample.get("source") == "steward" else None
+    measured: dict[str, Optional[float]] = {
+        "images": _f(sample.get("images_gb")),
+        "build_cache": _f(sample.get("cache_gb")),
+        "logs": _f(sample.get("logs_gb")),
+        "db_records": db["db_records"], "db_knowledge": db["db_knowledge"],
+        "db_telemetry": db["db_telemetry"], "test_data": db["test_databases"],
+        "backups": (None if app_backups is None and host_backups is None
+                    else (app_backups or 0.0) / 1e9 + (host_backups or 0.0)),
+        "sandboxes": _sandboxes_gb(),
+    }
+    test_server = test_server_present()
+    rows = disk_budget.evaluate(measured, test_server=test_server)
+    return {"rows": rows, "total": disk_budget.total(rows), "test_server": test_server,
+            "warn_at_pct": round(100 * disk_budget.WARN_AT)}
+
+
 def summary(connection: Any, host_id: Optional[str] = None) -> dict[str, Any]:
     """`GET /v1/infra/storage/summary` (docs/infra/INFRA_AGENT_API.md §4)."""
     from . import storage_incidents
@@ -463,6 +538,11 @@ def summary(connection: Any, host_id: Optional[str] = None) -> dict[str, Any]:
             telemetry = telemetry_retention.share(connection)
     except Exception:  # noqa: BLE001 — the card renders without it
         telemetry = None
+    try:
+        disk_budget = budget(connection, sample)
+    except Exception:  # noqa: BLE001 — the card renders without it
+        _log.info("disk budget not read", exc_info=True)
+        disk_budget = None
     host_rows = []
     for h in hosts(connection):
         s = latest(connection, h, within=timedelta(days=2)) or {}
@@ -490,6 +570,8 @@ def summary(connection: Any, host_id: Optional[str] = None) -> dict[str, Any]:
             # BOSSAPP-1193: what the orphan-volume job could really free, and how many BOSS
             # volumes it cannot judge until `--relabel-volumes` has removed them.
             "volumes": volume_reading(sample),
+            # BOSSAPP-1459: where the space goes by category, against the one budget.
+            "budget": disk_budget,
             "hosts": host_rows}
 
 
@@ -526,54 +608,57 @@ def evaluate_host(connection: Any, host_id: str) -> dict[str, Any]:
 
 
 def tick(engine: Any, settings: Any = None, *, sample_api: bool = True) -> dict[str, Any]:
+    from ..db import background
     from . import storage_cleanup, storage_incidents, system_services, work_hold
 
     report: dict[str, Any] = {"at": _now().isoformat(), "hosts": []}
     try:
-        with engine.begin() as c:
-            storage_rules.ensure_defaults(c)
-            if sample_api:
-                record_sample(c, clean_sample(collect_api_sample(c), source="api"))
-            for host_id in hosts(c, within=timedelta(minutes=10)):
-                try:
-                    with c.begin_nested():
-                        report["hosts"].append(evaluate_host(c, host_id))
-                except Exception as exc:  # noqa: BLE001 — one host never stops the others
-                    _log.warning("storage watch: host %s not evaluated", host_id, exc_info=True)
-                    report["hosts"].append({"host_id": host_id, "error": f"{type(exc).__name__}"})
-            # A stuck hold: incident gone, or the host silent for 15 min with a good last reading,
-            # or the hold older than the maximum (BOSS_STORAGE_MAX_HOLD_SECONDS, 2 h): released,
-            # the incident kept open, an alert raised.
-            hold = work_hold.state(c, fresh=True)
-            if hold.get("active"):
-                inc = storage_incidents.get(c, str(hold.get("incident_id") or ""))
-                max_seconds = int(getattr(settings, "storage_max_hold_seconds", 7200) or 7200)
-                if inc is None or inc["status"] == "resolved":
-                    work_hold.release(c, actor="boss", reason="its incident is resolved")
-                elif work_hold.expired(hold, max_seconds):
-                    storage_incidents.expire_hold(c, inc, max_seconds=max_seconds)
-                else:
-                    s = latest(c, str(hold.get("host_id") or ""), within=timedelta(days=2)) or {}
-                    at = s.get("at")
-                    th = storage_rules.thresholds(c, str(hold.get("host_id") or ""))
-                    fp = free_pct_of(s)
-                    if at is not None and (_now() - (at if at.tzinfo else at.replace(
-                            tzinfo=timezone.utc))) > STUCK_HOLD_AFTER and fp is not None \
-                            and fp >= th["target_free_pct"]:
-                        storage_incidents.resolve(c, inc["id"], reason="no reading for 15 min; "
-                                                  "the last one was above target")
-            if int(time.time()) % 600 < INTERVAL_SECONDS:
-                report["pruned"] = prune(c)
-        # Plans advance outside the sampling transaction: host jobs, receipts, cards.
-        report["advanced"] = storage_cleanup.advance_all(engine)
-        system_services.beat(engine, "storage_watch",
-                             details={"hosts": len(report["hosts"]),
-                                      "levels": {h["host_id"]: h.get("level") for h in report["hosts"]}})
+        with background():
+            with engine.begin() as c:
+                storage_rules.ensure_defaults(c)
+                if sample_api:
+                    record_sample(c, clean_sample(collect_api_sample(c), source="api"))
+                for host_id in hosts(c, within=timedelta(minutes=10)):
+                    try:
+                        with c.begin_nested():
+                            report["hosts"].append(evaluate_host(c, host_id))
+                    except Exception as exc:  # noqa: BLE001 — one host never stops the others
+                        _log.warning("storage watch: host %s not evaluated", host_id, exc_info=True)
+                        report["hosts"].append({"host_id": host_id, "error": f"{type(exc).__name__}"})
+                # A stuck hold: incident gone, or the host silent for 15 min with a good last reading,
+                # or the hold older than the maximum (BOSS_STORAGE_MAX_HOLD_SECONDS, 2 h): released,
+                # the incident kept open, an alert raised.
+                hold = work_hold.state(c, fresh=True)
+                if hold.get("active"):
+                    inc = storage_incidents.get(c, str(hold.get("incident_id") or ""))
+                    max_seconds = int(getattr(settings, "storage_max_hold_seconds", 7200) or 7200)
+                    if inc is None or inc["status"] == "resolved":
+                        work_hold.release(c, actor="boss", reason="its incident is resolved")
+                    elif work_hold.expired(hold, max_seconds):
+                        storage_incidents.expire_hold(c, inc, max_seconds=max_seconds)
+                    else:
+                        s = latest(c, str(hold.get("host_id") or ""), within=timedelta(days=2)) or {}
+                        at = s.get("at")
+                        th = storage_rules.thresholds(c, str(hold.get("host_id") or ""))
+                        fp = free_pct_of(s)
+                        if at is not None and (_now() - (at if at.tzinfo else at.replace(
+                                tzinfo=timezone.utc))) > STUCK_HOLD_AFTER and fp is not None \
+                                and fp >= th["target_free_pct"]:
+                            storage_incidents.resolve(c, inc["id"], reason="no reading for 15 min; "
+                                                      "the last one was above target")
+                if int(time.time()) % 600 < INTERVAL_SECONDS:
+                    report["pruned"] = prune(c)
+            # Plans advance outside the sampling transaction: host jobs, receipts, cards.
+            report["advanced"] = storage_cleanup.advance_all(engine)
+            system_services.beat(engine, "storage_watch",
+                                 details={"hosts": len(report["hosts"]),
+                                          "levels": {h["host_id"]: h.get("level") for h in report["hosts"]}})
     except Exception as exc:  # noqa: BLE001 — the watch keeps watching
         _log.warning("storage watch tick failed", exc_info=True)
         report["error"] = f"{type(exc).__name__}: {exc}"[:200]
         try:
-            system_services.beat(engine, "storage_watch", ok=False, error=report["error"])
+            with background():
+                system_services.beat(engine, "storage_watch", ok=False, error=report["error"])
         except Exception:  # noqa: BLE001
             pass
     _LAST.clear()

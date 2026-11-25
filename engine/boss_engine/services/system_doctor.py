@@ -748,7 +748,8 @@ def _auto(engine: Any, settings: Any, action: str, sig: Signals, target: str = "
     if action == "reap_previews":
         return json.dumps(preview_service.reap_previews(engine, settings))
     if action == "stop_idle_previews":
-        return json.dumps(preview_service.reap_previews(engine, settings, idle_minutes=5))
+        return json.dumps(preview_service.reap_previews(engine, settings, idle_minutes=5,
+                                                         pressure=lambda: True))
     if action == "end_orphaned_processes":
         return json.dumps(owned_process.sweep_orphans())
     if action == "remove_orphan_containers":
@@ -787,50 +788,53 @@ _LAST: dict[str, Any] = {}
 
 
 def tick(engine: Any, settings: Any = None, *, sig: Optional[Signals] = None) -> dict[str, Any]:
-    sig = sig or collect(engine)
-    found = diagnose(sig)
-    now = datetime.now(timezone.utc)
-    level = target_level(sig, _LEVEL_STATE, time.time())
-    _LEVEL_STATE.update(level)
-    acted: list[dict[str, Any]] = []
-    with engine.begin() as c:
-        ids = _upsert_findings(c, found, now)
-        prev = admission._state(c, "degradation")
-        if prev.get("level") != level["level"]:
-            admission.set_state(c, "degradation", {"level": level["level"],
-                                                   "words": level["words"],
-                                                   "since": now.isoformat()})
-            record_action(c, finding_id=None, kind="degradation", action="set_degradation_level",
-                          target=f"L{level['level']}", actor="boss", automatic=True,
-                          before=_metrics(sig), outcome=f"level {prev.get('level', 0)} → "
-                          f"{level['level']} ({level['words']})")
-        verify_actions(c, sig)
-    for f in found:
-        for action in f.get("auto") or []:
-            if action == "set_degradation_level":
-                continue
-            target = str(f.get("target") or f["kind"])
-            with engine.begin() as c:
-                ok, why = allowed_auto(c, action, target)
-            if not ok:
-                continue
-            try:
-                outcome = _auto(engine, settings, action, sig, target)
-            except Exception as exc:  # noqa: BLE001 — one remedy failing never stops the tick
-                outcome = f"failed: {type(exc).__name__}: {exc}"
-            with engine.begin() as c:
-                record_action(c, finding_id=ids.get(f["kind"]), kind=f["kind"], action=action,
-                              target=target, actor="boss", automatic=True,
-                              before=_metrics(sig), outcome=outcome[:200], detail=outcome)
-            acted.append({"action": action, "outcome": outcome[:200]})
-    report = {"at": now.isoformat(), "level": level["level"],
-              "findings": [f["kind"] for f in found], "acted": acted}
-    from . import system_services
+    from ..db import background
 
-    system_services.beat(engine, "system_doctor", details={"findings": len(found)})
-    _LAST.clear()
-    _LAST.update(report)
-    return report
+    with background():
+        sig = sig or collect(engine)
+        found = diagnose(sig)
+        now = datetime.now(timezone.utc)
+        level = target_level(sig, _LEVEL_STATE, time.time())
+        _LEVEL_STATE.update(level)
+        acted: list[dict[str, Any]] = []
+        with engine.begin() as c:
+            ids = _upsert_findings(c, found, now)
+            prev = admission._state(c, "degradation")
+            if prev.get("level") != level["level"]:
+                admission.set_state(c, "degradation", {"level": level["level"],
+                                                       "words": level["words"],
+                                                       "since": now.isoformat()})
+                record_action(c, finding_id=None, kind="degradation", action="set_degradation_level",
+                              target=f"L{level['level']}", actor="boss", automatic=True,
+                              before=_metrics(sig), outcome=f"level {prev.get('level', 0)} → "
+                              f"{level['level']} ({level['words']})")
+            verify_actions(c, sig)
+        for f in found:
+            for action in f.get("auto") or []:
+                if action == "set_degradation_level":
+                    continue
+                target = str(f.get("target") or f["kind"])
+                with engine.begin() as c:
+                    ok, why = allowed_auto(c, action, target)
+                if not ok:
+                    continue
+                try:
+                    outcome = _auto(engine, settings, action, sig, target)
+                except Exception as exc:  # noqa: BLE001 — one remedy failing never stops the tick
+                    outcome = f"failed: {type(exc).__name__}: {exc}"
+                with engine.begin() as c:
+                    record_action(c, finding_id=ids.get(f["kind"]), kind=f["kind"], action=action,
+                                  target=target, actor="boss", automatic=True,
+                                  before=_metrics(sig), outcome=outcome[:200], detail=outcome)
+                acted.append({"action": action, "outcome": outcome[:200]})
+        report = {"at": now.isoformat(), "level": level["level"],
+                  "findings": [f["kind"] for f in found], "acted": acted}
+        from . import system_services
+
+        system_services.beat(engine, "system_doctor", details={"findings": len(found)})
+        _LAST.clear()
+        _LAST.update(report)
+        return report
 
 
 # ------------------------------------------------------------------------------------------ #
@@ -948,6 +952,13 @@ def shepherd_escalation_cards(connection: Any, project_id: str) -> list[dict[str
         return []
     out = []
     for r in rows:
+        build = builds.get(str(r["task_ref"] or ""))
+        if build is not None and str(build.get("status") or "") in _ENDED_BUILD:
+            # A QUESTION ABOUT A BUILD THAT HAS ENDED IS HISTORY (stranger test r6: "retry 11:
+            # the platform is holding this job … Let it continue, or cancel it?" stayed on the
+            # Command Center after that attempt had failed and the work was done). The build's
+            # own card says how it ended; there is nothing left to continue or cancel.
+            continue
         options = r["options"] if isinstance(r["options"], list) else json.loads(
             r["options"] or "[]")
         title, detail = escalation_words(str(r["question"] or ""), str(r["task_ref"] or ""),

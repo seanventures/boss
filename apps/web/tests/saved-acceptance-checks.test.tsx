@@ -125,7 +125,7 @@ it("mounts on actual ResultReview and only the latest current accepted snapshot 
   unmount(); data.history[0].snapshot_hash = data.snapshot_hash;
   await mount(<ResultReview runId="run_owned" onChangeRequested={vi.fn()} />);
   expect(button("Save accepted checks")!.disabled).toBe(false);
-  expect(document.body.textContent).toContain("Checks: failed");
+  expect(document.body.textContent).toContain("Checks: tests failed");
 });
 
 it("an older successful list request cannot erase a failed save", async () => {

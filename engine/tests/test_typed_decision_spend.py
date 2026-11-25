@@ -254,7 +254,7 @@ class Gateway:
     def acquire(self, connection, project_id, *, job_id, worker_id, job_lease_token,
                 agent_id, skill_id, preferred_capabilities, risk_tier, consumer_owner_id,
                 estimated_cost_usd_micros, max_usage, dedupe_key, ttl_seconds,
-                existing_reservation_id=None, source_id=None):
+                existing_reservation_id=None, source_id=None, stage=None):
         self.acquire_calls += 1
         self.acquired_for = getattr(self, "acquired_for", []) + [(source_id, consumer_owner_id)]
         self.jobs.require_active_lease(connection, worker_id, job_id, job_lease_token)

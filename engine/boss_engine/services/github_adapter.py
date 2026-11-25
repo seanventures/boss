@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import base64
 import logging
+import re
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -373,6 +374,7 @@ class GitHubAdapter:
         return {
             "commit_sha": str(payload.get("sha") or commit_sha),
             "tree_sha": str((payload.get("tree") or {}).get("sha") or ""),
+            "parents": [str(p.get("sha") or "") for p in (payload.get("parents") or [])],
         }
 
     def compare_changed_files(
@@ -583,56 +585,64 @@ class GitHubAdapter:
         )
         return default_branch, ref["object"]["sha"]
 
-    def branch_exists(self, branch_name: str) -> bool:
+    def branch_exists(self, branch_name: str) -> Optional[bool]:
         """True if the branch already exists on the remote (used to clone prior work
-        when a feedback-iteration reuses an existing task branch)."""
+        when a feedback-iteration reuses an existing task branch). False only when GitHub
+        says it is not there (404); None when GitHub could not answer (403, 429, 5xx), so an
+        outage is never read as a deleted branch (build_base_branch, BOSSAPP-1439)."""
         try:
             self._request(
                 "GET", f"/repos/{self.repository_full_name}/git/ref/heads/{branch_name}"
             )
             return True
-        except httpx.HTTPStatusError:
-            return False
+        except httpx.HTTPStatusError as error:
+            return False if error.response is not None and error.response.status_code == 404 \
+                else None
 
-    def ensure_branch(self, branch_name: str, base_branch: Optional[str] = None) -> str:
-        """Return the branch's sha, creating it from `base_branch` if it does not exist.
-
-        This always cut new branches from the DEFAULT branch, whatever the task said its base
-        was. Continuing work on an app therefore silently restarted it: the sandbox checked out
-        the app's branch, but the branch the commits landed on began at main, so the existing
-        application was not there and the agent wrote it again from nothing. The run reported
-        success and the PR looked plausible -- it was simply a different app.
-
-        It went unnoticed because the common case hides it. A follow-up that carries its
-        lineage targets a branch that ALREADY exists, so this returns early and never reaches
-        the creation path. Only a task with a fresh root and an explicit base_branch fell
-        through to it, which is exactly the "change this existing app" case.
-        """
+    def ensure_branch(
+        self,
+        branch_name: str,
+        base_branch: Optional[str] = None,
+        *,
+        base_sha: Optional[str] = None,
+    ) -> str:
+        """Return the branch's sha, creating it from `base_sha` / `base_branch` if it does not exist."""
         try:
             ref = self._request(
                 "GET", f"/repos/{self.repository_full_name}/git/ref/heads/{branch_name}"
             )
             return ref["object"]["sha"]
         except httpx.HTTPStatusError:
-            base_sha = None
+            resolved_sha = None
+            candidate_sha = str(base_sha or "").strip()
+            if candidate_sha and re.fullmatch(r"[0-9a-f]{7,64}", candidate_sha):
+                try:
+                    ref = self._request(
+                        "POST",
+                        f"/repos/{self.repository_full_name}/git/refs",
+                        {"ref": f"refs/heads/{branch_name}", "sha": candidate_sha},
+                    )
+                    return ref["object"]["sha"]
+                except httpx.HTTPStatusError:
+                    resolved_sha = None
             if base_branch and base_branch != branch_name:
                 try:
                     base_ref = self._request(
                         "GET",
                         f"/repos/{self.repository_full_name}/git/ref/heads/{base_branch}")
-                    base_sha = base_ref["object"]["sha"]
+                    resolved_sha = base_ref["object"]["sha"]
                 except httpx.HTTPStatusError:
                     # A base that does not exist is a caller error, but failing the run over it
                     # is worse than starting from the default branch and saying so.
                     logger.warning(
                         "github: base branch %s not found in %s; creating %s from the default "
                         "branch instead", base_branch, self.repository_full_name, branch_name)
-            if base_sha is None:
-                _, base_sha = self.default_branch_sha()
+            if resolved_sha is None:
+                _, resolved_sha = self.default_branch_sha()
             ref = self._request(
                 "POST",
                 f"/repos/{self.repository_full_name}/git/refs",
-                {"ref": f"refs/heads/{branch_name}", "sha": base_sha},
+                {"ref": f"refs/heads/{branch_name}", "sha": resolved_sha},
             )
             return ref["object"]["sha"]
 
@@ -642,12 +652,40 @@ class GitHubAdapter:
             branch_name, path, content.encode("utf-8"), message
         )
 
+    def delete_file(self, branch_name: str, path: str, message: str) -> Optional[str]:
+        """Delete a file on a branch (the contents API's DELETE, with the blob sha it needs).
+        A path the branch does not have is already deleted: None, no commit."""
+        from .agent_acts import sign_commit_message
+
+        try:
+            existing = self._request(
+                "GET",
+                f"/repos/{self.repository_full_name}/contents/{quote(path, safe='/')}"
+                f"?ref={quote(branch_name, safe='')}",
+            )
+        except httpx.HTTPStatusError as error:
+            if error.response.status_code == 404:
+                return None
+            raise
+        if not isinstance(existing, dict) or not existing.get("sha"):
+            return None
+        response = self._send(
+            "DELETE",
+            f"{self.api_base_url}/repos/{self.repository_full_name}/contents/"
+            f"{quote(path, safe='/')}",
+            headers=self._headers(),
+            json={"message": sign_commit_message(message), "sha": existing["sha"],
+                  "branch": branch_name},
+        )
+        return (response.json().get("commit") or {}).get("sha")
+
     def read_text_file(self, branch_name: str, path: str) -> Optional[str]:
         """Read a UTF-8 repository file from a branch, returning ``None`` on 404."""
         try:
             payload = self._request(
                 "GET",
-                f"/repos/{self.repository_full_name}/contents/{path}?ref={branch_name}",
+                f"/repos/{self.repository_full_name}/contents/{quote(path, safe='/')}"
+                f"?ref={quote(branch_name, safe='')}",
             )
         except httpx.HTTPStatusError as error:
             if error.response.status_code == 404:
@@ -876,7 +914,8 @@ class GitHubAdapter:
             "PATCH",
             f"{repo}/git/refs/heads/{quote(branch_name, safe='')}",
             {"sha": commit["sha"], "force": True})
-        return {"restacked": True, "paths": sorted(contents), "base": base_name}
+        return {"restacked": True, "paths": sorted(contents), "base": base_name,
+                "head_sha": str(commit.get("sha") or "")}
 
     def add_labels(self, pull_request_number: int, labels: list[str]) -> None:
         """Add labels to a pull request (GitHub creates a label it does not have yet)."""
@@ -937,16 +976,38 @@ class GitHubAdapter:
             return False
 
     def merge_pull_request(
-        self, pull_request_number: int, commit_title: str
+        self,
+        pull_request_number: int,
+        commit_title: str,
+        *,
+        head_sha: Optional[str] = None,
     ) -> PullRequestMergeResult:
-        response = self._request(
-            "PUT",
-            f"/repos/{self.repository_full_name}/pulls/{pull_request_number}/merge",
-            {
-                "commit_title": commit_title,
-                "merge_method": self.settings.sandbox_merge_method,
-            },
-        )
+        payload: dict[str, Any] = {
+            "commit_title": commit_title,
+            "merge_method": self.settings.sandbox_merge_method,
+        }
+        if head_sha:
+            payload["sha"] = str(head_sha).strip()
+        try:
+            response = self._request(
+                "PUT",
+                f"/repos/{self.repository_full_name}/pulls/{pull_request_number}/merge",
+                payload,
+            )
+        except httpx.HTTPStatusError as error:
+            if error.response is not None and error.response.status_code == 409:
+                detail = ""
+                try:
+                    body = error.response.json()
+                    if isinstance(body, dict):
+                        detail = str(body.get("message") or "").strip()
+                except Exception:  # noqa: BLE001
+                    detail = ""
+                if head_sha or "head branch was modified" in detail.lower():
+                    raise RuntimeError(
+                        f"409 Conflict: {detail or 'Head branch was modified.'}"
+                    ) from error
+            raise
         return PullRequestMergeResult(
             sha=response["sha"],
             merged=bool(response["merged"]),

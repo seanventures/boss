@@ -148,8 +148,10 @@ def _env_key(word: str) -> str:
         "dev" if w.startswith("dev") else w
 
 
-def _is_prod(env: Any) -> bool:
-    return bool(re.match(r"^(prod|production|live)$", str(env or ""), re.I))
+def _production_named(env: Any) -> bool:
+    from .production import is_production_environment
+
+    return is_production_environment(env)
 
 
 # ── the app it means ──────────────────────────────────────────────────────────────────────
@@ -219,7 +221,7 @@ def signals(connection, target: dict) -> dict[str, Any]:
     except Exception:  # noqa: BLE001 — no monitored service yet
         fams = []
     probes = connection.execute(sql(
-        "SELECT count(*) FROM deployment_health_samples WHERE deployment_target_id = :t AND "
+        "SELECT count(*) FROM counted_health_samples WHERE deployment_target_id = :t AND "
         "checked_at > now() - interval '7 days'"), {"t": target["id"]}).scalar() or 0
     logs = str(target.get("target_kind") or "") in ("ssh", "docker", "local", "compose")
     found = bool(fams)
@@ -371,7 +373,7 @@ def boundary(target: Optional[Mapping[str, Any]]) -> dict[str, Any]:
     approval and a production deploy wait for a person; so does anything sent outside."""
     from .decide_list import BY_KEY
 
-    prod = _is_prod((target or {}).get("environment"))
+    prod = _production_named((target or {}).get("environment"))
     alone = [{"key": "triage", "label": "triage", "icon": "magnifying-glass"},
              {"key": "investigate", "label": "find the cause", "icon": "graph"},
              {"key": "fix_pr", "label": "open a fix PR", "icon": "git-pull-request"},
@@ -524,16 +526,16 @@ def start(connection, settings: Any, project_id: str, *, actor: str,
     night = str(spec.get("night") or "wake")
     if night not in NIGHT:
         raise WatchRefused("At night is Wake me, Wait till 08:00, or Fix alone, tell me")
-    prod = _is_prod(t["environment"])
+    prod = _production_named(t["environment"])
     alone = bool(spec.get("alone", True)) and not prod
     words = str(spec.get("words") or "")[:2000]
     reason = (str(spec.get("reason") or "").strip() or f"Watch this app: {words}".strip())[:500]
     if alone:
-        # FIXING ALONE IS THE incident_response WORKFLOW (app_alerts._respond starts it): it is
-        # installed from the catalogue when it is not here yet, as a boot's seed would.
-        from .workflow_catalogue import seed as seed_catalogue
+        # FIXING ALONE IS THE incident_response WORKFLOW (app_alerts._respond starts it): asking
+        # for it installs the SRE / Helpdesk pack when it is not here yet (workflow_marketplace).
+        from .workflow_marketplace import ensure_installed
 
-        seed_catalogue(connection, project_id, actor=actor, only=frozenset({aa.RESPONSE_WORKFLOW}))
+        ensure_installed(connection, project_id, "sre-helpdesk", actor)
     rules = {r["kind"]: r for r in aa.ensure_rules(connection, t) if r["kind"] != "custom"}
     wanted: dict[str, Mapping[str, Any]] = {}
     for w in watches:

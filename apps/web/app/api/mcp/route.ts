@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { describeApiError } from "../../../lib/api-error";
+import { describeApiError, stepUpCode } from "../../../lib/api-error";
 import { API_URL, authHeaders } from "../../../lib/client";
 import { apiWrite, type WriteMethod } from "../../../lib/api-write";
 import { loadPath } from "../../../lib/writing-get";
@@ -32,7 +32,7 @@ async function forward(path: string, init: { method: "GET" | WriteMethod; body?:
       const field = detail && typeof detail === "object" ? (detail as { field?: string }).field ?? null : null;
       const message = detail && typeof detail === "object" && "message" in (detail as object)
         ? String((detail as { message?: string }).message) : describeApiError(data, r.status);
-      return NextResponse.json({ error: message, field }, { status: r.status });
+      return NextResponse.json({ error: message, field, ...stepUpCode(data) }, { status: r.status });
     }
     return NextResponse.json(data);
   } catch (e) {

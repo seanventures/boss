@@ -14,6 +14,10 @@ import sys
 
 INTERFACE = "boss-recovery-hold/v1"
 RECOVERY_ROOT = Path("/var/lib/boss/recovery")
+#: Started between this guard and the role (fixed path, in the same image): it adds the install's
+#: extra CA and outbound proxy to the environment, then execs the role (with-extra-ca.sh). It
+#: imports no application code; an image without it starts the role directly.
+NETWORK_WRAPPER = "/usr/local/libexec/boss/with-extra-ca"
 MARKER = "hold.json"
 MAX_MARKER_BYTES = 4096
 
@@ -86,7 +90,10 @@ def main() -> int:
     if not sys.argv[1:]:
         print("boss: recovery guard needs a child command.", file=sys.stderr)
         return 64
-    os.execvpe(sys.argv[1], sys.argv[1:], os.environ)
+    child = sys.argv[1:]
+    if os.path.isfile(NETWORK_WRAPPER) and os.access(NETWORK_WRAPPER, os.X_OK):
+        child = [NETWORK_WRAPPER, *child]
+    os.execvpe(child[0], child, os.environ)
     return 70
 
 

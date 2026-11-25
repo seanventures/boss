@@ -376,9 +376,6 @@ class MicroVMProvider:
 
         import httpx
 
-        from ..schemas import FileChange
-        from .code_agent import CodeAgentResult
-        from .sandbox import CommandResult, DiffSummary
         from .sandbox_contract import is_terminal
 
         # Community GA honesty: never claim microVM execution while frozen.
@@ -409,7 +406,20 @@ class MicroVMProvider:
                     "sandbox-service did not return a sandbox_task_id"
                 )
             self.last_sandbox_task_id = sid  # expose so the control plane can retain/inspect
-            deadline = time.monotonic() + timeout_s
+            # THE TIMEOUT COUNTS FROM WHEN THE TASK STARTS RUNNING (R3, BOSSAPP-1431). Time
+            # the sandbox-service keeps it `queued` (a busy small host) is waiting, bounded on
+            # its own and said as such: "did not finish within 1500s (last status=queued)"
+            # blamed a task that never ran.
+            # The guest's model and tool handles are minted with the submit body and live
+            # HANDLE_TTL_SECONDS, so queue + run must fit inside them (review of R3): a longer
+            # queue allowance would trade "timed out in the queue" for "handle_expired" mid-run.
+            from .streaming_model_gateway import HANDLE_TTL_SECONDS
+
+            queue_s = int(getattr(self.settings, "sandbox_queue_timeout_seconds", 0) or 2700)
+            queue_s = max(60, min(queue_s, HANDLE_TTL_SECONDS - timeout_s - 300))
+            submitted = time.monotonic()
+            deadline = submitted + queue_s
+            running_since = None
             while time.monotonic() < deadline:
                 time.sleep(poll)
                 try:
@@ -421,6 +431,9 @@ class MicroVMProvider:
                     ) from exc
                 pdata = pr.json()
                 last_status = pdata.get("status")
+                if running_since is None and str(last_status or "queued").lower() != "queued":
+                    running_since = time.monotonic()
+                    deadline = running_since + timeout_s
                 # EVERY terminal status ends the poll — the §2 contract's set
                 # (sandbox_contract.is_terminal), not a private subset of it.
                 # "cancelled" was missing here, so a cancelled task was polled
@@ -433,8 +446,17 @@ class MicroVMProvider:
             # keeps the rootfs (~2h) for inspection. See code_task_service.
 
         if data is None:
+            if running_since is None:
+                # Withdrawn, so it never starts later as a ghost run on the only slot.
+                self.release(sid)
+                raise RuntimeError(
+                    f"sandbox task {sid} never started: the sandbox-service kept it queued for "
+                    f"{queue_s}s (BOSS_SANDBOX_QUEUE_TIMEOUT_SECONDS) and BOSS withdrew it. The host "
+                    "has no free sandbox; free one, then retry the step (press Retry on this step)"
+                )
             raise RuntimeError(
-                f"sandbox task {sid} did not finish within {timeout_s}s (last status={last_status})"
+                f"sandbox task {sid} did not finish within {timeout_s}s of starting "
+                f"(last status={last_status})"
             )
         if data.get("status") != "done":
             raise RuntimeError(data.get("error") or f"sandbox task {data.get('status')}")
@@ -444,27 +466,42 @@ class MicroVMProvider:
         if result.get("status") not in (None, "ok"):
             raise RuntimeError(result.get("error") or "guest agent reported failure")
 
-        diff = [FileChange(path=f["path"], content=f["content"]) for f in result.get("diff", [])]
-        ds = result.get("diff_summary") or {}
-        diff_summary = DiffSummary(
-            files_changed=ds.get("files_changed", 0), additions=ds.get("additions", 0),
-            deletions=ds.get("deletions", 0), paths=ds.get("paths", []),
-        )
-        tests = [
-            CommandResult(command=t.get("command", ""), argv=[], exit_code=t.get("exit_code"),
-                          duration_ms=t.get("duration_ms", 0), timed_out=t.get("timed_out", False),
-                          # The guest's captured test output IS the repair-loop evidence —
-                          # concrete failures fed back to the implementer on retry.
-                          stdout=(t.get("output") or "")[-4000:], stderr="")
-            for t in result.get("tests", [])
-        ]
-        return CodeAgentResult(
-            summary=result.get("summary", ""), diff=diff, diff_summary=diff_summary,
-            tests=tests, tests_passed=bool(result.get("tests_passed")),
-            cost_usd_micros=int(result.get("cost_usd_micros", 0)), usage=result.get("usage") or {},
-            transcript=result.get("summary", ""), turns=int(result.get("turns", 0)),
-            engine=result.get("engine", "openai"),
-        )
+        return code_agent_result(result)
+
+
+def code_agent_result(result: dict):
+    """The guest's /work/result.json as a CodeAgentResult: its text files, its DELETED paths
+    (dry run 2, gap 1: a deletion crosses back and is deleted on the branch), its tests."""
+    from ..schemas import FileChange
+    from .code_agent import CodeAgentResult
+    from .governed_code_task_service import workspace_keepable
+    from .sandbox import CommandResult, DiffSummary
+
+    diff = [FileChange(path=f["path"], content=f["content"]) for f in result.get("diff", [])]
+    ds = result.get("diff_summary") or {}
+    diff_summary = DiffSummary(
+        files_changed=ds.get("files_changed", 0), additions=ds.get("additions", 0),
+        deletions=ds.get("deletions", 0), paths=ds.get("paths", []),
+    )
+    tests = [
+        CommandResult(command=t.get("command", ""), argv=[], exit_code=t.get("exit_code"),
+                      duration_ms=t.get("duration_ms", 0), timed_out=t.get("timed_out", False),
+                      # The guest's captured test output IS the repair-loop evidence —
+                      # concrete failures fed back to the implementer on retry.
+                      stdout=(t.get("output") or "")[-4000:], stderr="")
+        for t in result.get("tests", [])
+    ]
+    return CodeAgentResult(
+        summary=result.get("summary", ""), diff=diff, diff_summary=diff_summary,
+        tests=tests, tests_passed=bool(result.get("tests_passed")),
+        cost_usd_micros=int(result.get("cost_usd_micros", 0)), usage=result.get("usage") or {},
+        transcript=result.get("summary", ""), turns=int(result.get("turns", 0)),
+        engine=result.get("engine", "openai"),
+        # A DELETION CROSSES BACK TOO (dry run 2, gap 1): the guest's removed paths.
+        # Dependencies and build output are never the work, deleted or not (as sandbox.py).
+        deleted=[str(p) for p in result.get("deleted") or []
+                 if isinstance(p, str) and p and workspace_keepable(p)],
+    )
 
 
 def build_echo_submit_body(*, task_id: str = ECHO_EXERCISE_TASK_ID) -> dict:

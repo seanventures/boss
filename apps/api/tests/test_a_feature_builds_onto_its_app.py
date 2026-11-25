@@ -73,9 +73,9 @@ def panel(monkeypatch, engine):
     real = runner._invoke_tool
     asked: list[dict] = []
 
-    def invoke(ctx, tool_name, project_id, actor, args):
+    def invoke(ctx, tool_name, project_id, actor, args, *rest, **kwargs):
         if tool_name != "request_meeting":
-            return real(ctx, tool_name, project_id, actor, args)
+            return real(ctx, tool_name, project_id, actor, args, *rest, **kwargs)
         asked.append(dict(args))
         meeting_id = f"mrun_{uuid4().hex[:10]}"
         with engine.begin() as connection:

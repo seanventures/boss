@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The profile checks say what failed, beside Passed or Pending, not only on the title.
  * Blank or whitespace issues say nothing. Errors come first, then warnings. Each one is

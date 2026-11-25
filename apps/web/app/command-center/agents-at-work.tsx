@@ -16,6 +16,7 @@ import { useConsoleLive } from "../../lib/console-live";
 import { usePolledRead } from "../../lib/log-stream";
 import { flowHref, listPath, parseList, polled, roleOfParty, type ListItem, type ListView } from "../../lib/ambient";
 import { AgentAvatar } from "../agent-avatar";
+import { useNow } from "../agents/live-util";
 import { FlowThumb } from "../agent-ops/flow-thumb";
 import "../agent-ops/agent-ops.css";
 
@@ -30,11 +31,11 @@ export function useAmbientToday(projectId: string): ListView | null {
 
 const sameDay = (iso: string | null, now: Date) => !!iso && new Date(iso).toDateString() === now.toDateString();
 
-export function todayBuckets(view: ListView | null, now = new Date()) {
+export function todayBuckets(view: ListView | null, now: Date | null = new Date()) {
   const items = view?.items ?? [];
   const needs = items.filter((i) => i.badges.outcome === "needs_you");
   const running = items.filter((i) => i.badges.outcome === "running");
-  const resolved = items.filter((i) => i.badges.outcome === "resolved_by_agents" && sameDay(i.resolved_at ?? i.updated_at, now));
+  const resolved = now ? items.filter((i) => i.badges.outcome === "resolved_by_agents" && sameDay(i.resolved_at ?? i.updated_at, now)) : [];
   return {
     needs: { n: view?.counts.needs_you ?? needs.length, top: needs[0] ?? null },
     running: { n: view?.counts.running ?? running.length, top: running[0] ?? null },
@@ -53,8 +54,9 @@ function Cell({ k, n, label, top, href }: { k: string; n: number; label: string;
 }
 
 export function AgentsAtWorkCard({ view, orgId }: { view: ListView | null; orgId?: string | null }) {
+  const nowMs = useNow(60_000);
   if (!view || !Object.values(view.counts).some(Boolean)) return null;
-  const b = todayBuckets(view);
+  const b = todayBuckets(view, nowMs === null ? null : new Date(nowMs));
   const base = (tab: string | null, item?: string) => {
     const u = new URLSearchParams();
     if (orgId) u.set("org", orgId);

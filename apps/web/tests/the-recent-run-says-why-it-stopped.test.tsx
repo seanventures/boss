@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * A recent Studio run says why it stopped, in the row, not only on the title.
  * A blank reason says nothing. A sentence over six words is a paragraph.

@@ -18,7 +18,6 @@ import { DesignSystemScreen } from "./design-system/screen";
 import { ResidencyPin } from "./settings/residency-pin";
 import { CveSbomScreen } from "./security/cve-sbom";
 import { TenantHandoff } from "./builder/tenant-handoff";
-import { EmulatorFrame } from "./builder/emulator-frame";
 import { PlaygroundScreen } from "./playground/screen";
 import { ModelCompare } from "./models/compare";
 import { PromptPromote } from "./prompts/promote";
@@ -29,6 +28,8 @@ import { FieldAcl } from "./builder/field-acl";
 import { FreezePaths } from "./builder/freeze-paths";
 import { LiveRules } from "./builder/live-rules";
 
+// No "Preview frame" (1260, builder/emulator-frame): it painted an iOS/Android phone preview and
+// a store upload, and no BOSS image carries an Android SDK, an emulator or Xcode (2026-11-18).
 export const MOUNTED_NAV: { id: string; label: string }[] = [
   { id: "1241", label: "Live frame" },
   { id: "1242", label: "Proof marks" },
@@ -43,7 +44,6 @@ export const MOUNTED_NAV: { id: string; label: string }[] = [
   { id: "1255", label: "Residency" },
   { id: "1257", label: "CVE & SBOM" },
   { id: "1259", label: "Tenant handoff" },
-  { id: "1260", label: "Preview frame" },
   { id: "1261", label: "Playground" },
   { id: "1262", label: "Compare" },
   { id: "1263", label: "Prompts" },
@@ -97,8 +97,6 @@ export function MountedSlice({
       return <CveSbomScreen projectId={pid} actor={actor} />;
     case "1259":
       return <TenantHandoff publish={{ app: "app", imageReference: "app:local" }} />;
-    case "1260":
-      return <EmulatorFrame />;
     case "1261":
       return <PlaygroundScreen projectId={pid} actor={actor} />;
     case "1262":

@@ -202,7 +202,7 @@ class TestTheEndpointAndTheServiceAgree:
 
         main = pathlib.Path(__file__).resolve().parents[2] / "apps/api/app/main.py"
         source = main.read_text()
-        call = source[source.index("result = orchestration_agent.chat("):][:900]
+        call = source[source.index("result = orchestration_agent.chat_durably("):][:900]
         passed = set(re.findall(r"^\s+(\w+)=", call, re.M))
         assert self.ENDPOINT_KWARGS <= passed | {"project_id"}, (
             f"endpoint passes {sorted(passed)}")

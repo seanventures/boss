@@ -42,7 +42,7 @@ describe("nothing else points at the step that cannot run", () => {
     // First it was made secondary; the layout pass went further, because a step that cannot run
     // does not need a button OR the paragraph and role note that came with it — four lines with
     // the same footprint as the step that actually wanted doing.
-    expect(UI).toContain("{needsYou(step) && shippedTo ? <ReviewAndDecide step={step} /> : null}");
+    expect(UI).toContain("{needsYou(step) && shippedTo ? <ReviewAndDecide step={step} projectId={projectId} actor={actor} /> : null}");
   });
 
   it("and it does not claim to be waiting on the operator", () => {

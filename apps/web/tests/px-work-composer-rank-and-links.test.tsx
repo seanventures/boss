@@ -105,10 +105,12 @@ function engine(over: (c: Call) => { status?: number; body: unknown } | undefine
   });
 }
 
-async function openWork(role: "owner" | "viewer" = "owner") {
+async function openWork(role: "owner" | "viewer" = "owner", tab = "") {
   at(`project_id=${P}&area=project&tab=work`);
   await mountAs(<ProjectPage projectId={P} actor="ceo" orgId="org_1" />, role);
   await settle(10);
+  // The Work list's tabs (Work panel v2): Needs you · BOSS working · Done · Stopped · Planned.
+  if (tab) await press(tid(`px-work-f-${tab}`));
 }
 /** The Work tab's bar opens the New work modal (it replaced the one-line composer). */
 async function openNewWork() {
@@ -165,7 +167,7 @@ describe("New work (05-01..07, 05-31)", () => {
     await type(tid("px-compose-text"), "Let agents tag tickets by product");
     await press(tid("px-compose-start"));
     const sent = calls.find((c) => c.method === "POST" && c.path === `/v1/projects/${P}/work`);
-    expect(sent?.body).toEqual({ kind: "feature", text: "Let agents tag tickets by product", workflow_key: "major_feature" });
+    expect(sent?.body).toEqual({ kind: "feature", text: "Let agents tag tickets by product", workflow_key: "major_feature", infer_app: true });
     expect(tid("px-said")!.textContent).toMatch(/Started — Juno is planning it/);
     expect(tid("px-composer")).toBeNull(); // the modal closes on Start
     // A kind change goes back to that kind's own workflow.
@@ -183,33 +185,32 @@ describe("New work (05-01..07, 05-31)", () => {
     await type(tid("px-compose-text"), "https://github.com/paramg/helpdesk-ai-demo/issues/31");
     await press(tid("px-compose-start"));
     expect(calls.find((c) => c.method === "POST" && c.path === `/v1/projects/${P}/work`)?.body)
-      .toEqual({ kind: "ticket", text: "https://github.com/paramg/helpdesk-ai-demo/issues/31" });
+      .toEqual({ kind: "ticket", text: "https://github.com/paramg/helpdesk-ai-demo/issues/31", infer_app: true });
   });
 });
 
 describe("Planned, in Marshal's rank (05-18..23, 05-33)", () => {
   it("shows Next up with the planner's face, the #12 issue chip, CI with its file, and From Roadmap", async () => {
     engine();
-    await openWork();
+    await openWork("owner", "planned");
     expect(planned()).toEqual(["wi_email", "wi_sla", "wi_tests", "wi_index"]);
-    expect(tid("px-work-next-wi_email")!.textContent).toBe("Next up");
-    expect(tid("px-work-next-wi_sla")).toBeNull();
-    expect(tid("px-work-wi_email")!.querySelectorAll(".px-faces > *").length).toBe(1);
+    // One status chip says what each is (the plain list, design #287); the file is its title.
+    expect(tid("px-work-status-wi_email")!.textContent).toBe("Next up");
     const chip = tid("px-work-issue-wi_sla")!;
     expect(chip.textContent).toBe("#12");
     expect(chip.getAttribute("href")).toBe("https://github.com/paramg/helpdesk-ai-demo/issues/12");
     expect(chip.getAttribute("target")).toBe("_blank");
-    expect(tid("px-work-tag-wi_sla")!.textContent).toBe("Bug");
-    expect(tid("px-work-tag-wi_tests")!.textContent).toBe("CI");
-    expect(tid("px-work-where-wi_tests")!.textContent).toBe("tests/test_notify.py");
-    expect(tid("px-work-tag-wi_index")!.textContent).toBe("from Roadmap");
-    expect(tid("px-work-wi_index")!.querySelector(".px-wk-ico")!.getAttribute("data-c")).toBe("violet");
-    expect(tid("px-work-wi_tests")!.querySelector(".px-wk-ico")!.getAttribute("data-c")).toBe("red");
+    expect(tid("px-work-status-wi_sla")!.textContent).toBe("Bug");
+    expect(tid("px-work-status-wi_tests")!.textContent).toBe("CI");
+    expect(tid("px-work-status-wi_tests")!.getAttribute("title")).toBe("tests/test_notify.py");
+    expect(tid("px-work-status-wi_index")!.textContent).toBe("from Roadmap");
+    expect(tid("px-work-status-wi_index")!.getAttribute("data-tone")).toBe("violet");
+    expect(tid("px-work-status-wi_tests")!.getAttribute("data-tone")).toBe("red");
   });
 
   it("Start now sends the item's own body, with its issue link", async () => {
     const calls = engine();
-    await openWork();
+    await openWork("owner", "planned");
     await press(tid("px-work-start-wi_sla"));
     expect(calls.find((c) => c.method === "POST" && c.path === `/v1/projects/${P}/work`)?.body).toEqual({
       kind: "bug", text: "SLA timer ignores weekends. SLA timers keep counting through the weekend.", title: "SLA timer ignores weekends",
@@ -218,7 +219,7 @@ describe("Planned, in Marshal's rank (05-18..23, 05-33)", () => {
 
   it("a drag re-ranks at once and saves through the plan route", async () => {
     const calls = engine();
-    await openWork();
+    await openWork("owner", "planned");
     const from = tid("px-rank-wi_tests")!;
     const to = tid("px-rank-wi_email")!;
     const data = new Map<string, string>();
@@ -240,7 +241,7 @@ describe("Planned, in Marshal's rank (05-18..23, 05-33)", () => {
 
   it("the board's Planned column re-ranks by drag too", async () => {
     const calls = engine();
-    await openWork();
+    await openWork("owner", "planned");
     await press(tid("px-work-board"));
     const data = new Map<string, string>();
     const dt = { setData: (k: string, v: string) => data.set(k, v), getData: (k: string) => data.get(k) ?? "", effectAllowed: "" };
@@ -260,7 +261,7 @@ describe("Planned, in Marshal's rank (05-18..23, 05-33)", () => {
 
   it("the keyboard does the same: ↓ and Alt+↑ move a row, across into Later and back", async () => {
     const calls = engine();
-    await openWork();
+    await openWork("owner", "planned");
     expect((tid("px-rank-up-wi_email") as HTMLButtonElement).disabled).toBe(true);
     await press(tid("px-rank-down-wi_tests"));
     expect(calls.filter((c) => c.method === "POST").at(-1)).toMatchObject({ path: `/v1/projects/${P}/plan/wi_tests`, body: { lane: "later" } });
@@ -278,7 +279,7 @@ describe("Planned, in Marshal's rank (05-18..23, 05-33)", () => {
 
   it("a refused move puts the order back and says why", async () => {
     engine((c) => (c.method === "POST" && c.path.startsWith(`/v1/projects/${P}/plan/`) ? { status: 404, body: { detail: { error: "not_found", message: "Only an accepted roadmap item can move between Next and Later." } } } : undefined));
-    await openWork();
+    await openWork("owner", "planned");
     await press(tid("px-rank-up-wi_sla"));
     await settle(4);
     expect(planned()).toEqual(["wi_email", "wi_sla", "wi_tests", "wi_index"]);
@@ -287,7 +288,7 @@ describe("Planned, in Marshal's rank (05-18..23, 05-33)", () => {
 
   it("a viewer sees the rank but cannot change it", async () => {
     engine();
-    await openWork("viewer");
+    await openWork("viewer", "planned");
     expect(planned()).toEqual(["wi_email", "wi_sla", "wi_tests", "wi_index"]);
     expect(tid("px-rank-up-wi_sla")).toBeNull();
     expect(tid("px-rank-wi_sla")!.getAttribute("draggable")).toBe("false");
@@ -305,26 +306,26 @@ describe("Planned, in Marshal's rank (05-18..23, 05-33)", () => {
 });
 
 describe("Onboarding is a row (05-27)", () => {
-  it("Setup, its mini flow, Helm and Marshal, its cost, and it opens the onboarding page", async () => {
+  it("is a plain row, and it opens the onboarding page", async () => {
     engine();
-    await openWork();
+    await openWork("owner", "done");
     const row = tid("px-work-onb_36")!;
-    expect(tid("px-work-tag-onb_36")!.textContent).toBe("Setup");
-    expect(row.textContent).toContain("$1.20");
-    expect($$("[data-testid='px-work-flow-onb_36'] .px-fl-n").map((n) => n.textContent)).toEqual(["Discover", "Ready", "Backlog"]);
-    expect(row.querySelectorAll(".px-faces > *").length).toBe(2);
-    expect(row.querySelector(".px-wk-ico")!.getAttribute("data-c")).toBe("green");
-    await press(tid("px-work-onb-onb_36"));
+    // A clean row; the cost and the faces are on the onboarding page it opens.
+    expect(row.textContent).not.toContain("$1.20");
+    await press(tid("px-work-open-onb_36"));
     expect(new URLSearchParams(window.location.search).get("tab")).toBe("onboarding");
   });
 });
 
-describe("Needs you is one list (header bar = Work tab)", () => {
-  it("the Work tab's Needs-you count is the bar's, and Pick a prod host is in both", async () => {
+describe("Needs you is one list (the Work tab's count = its group)", () => {
+  it("the Work tab's amber count is its Needs-you filter's, there is no bar above the tabs, and Pick a prod host is in the group", async () => {
     engine();
     await openWork();
-    expect(tid("px-needs-bar")!.textContent).toContain("2 need you");
-    expect(tid("px-work-f-needs_you")!.textContent).toContain("2");
+    expect(tid("px-needs-bar")).toBeNull();
+    // One source: the project's Work-tab badge is the Needs you tab's count (the merge and Pick
+    // a prod host; the build stalled since Nov 4 waited more than 7 days and is under Stopped).
+    expect(tid("px-tab-work-needs")!.textContent).toBe("2");
+    expect(tid("px-work-n-needs_you")!.textContent).toBe("2");
     expect(tid("px-work-wi_visual")).not.toBeNull();
     expect(tid("px-work-needs-dec_prodhost")!.textContent).toContain("Pick a prod host");
     expect(tid("px-work-needs-dec_merge3")).toBeNull();

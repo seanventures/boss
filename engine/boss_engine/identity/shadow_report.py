@@ -296,16 +296,17 @@ _flusher_stop = threading.Event()
 
 def run_once(*, settings: Any = None) -> None:
     """One tick: flush the ledger and legacy counters, retire due bridges, anchor the chain."""
-    from ..db import begin
+    from ..db import background, begin
     from . import audit, migration
 
-    with begin() as db:
-        flush(db, settings=settings)
-    with begin() as db:
-        org_id = migration.ensure_seeded(db, settings=settings)
-        if org_id:
-            migration.retire_due(org_id, db=db)
-            audit.daily_anchor(org_id, db=db)
+    with background():
+        with begin() as db:
+            flush(db, settings=settings)
+        with begin() as db:
+            org_id = migration.ensure_seeded(db, settings=settings)
+            if org_id:
+                migration.retire_due(org_id, db=db)
+                audit.daily_anchor(org_id, db=db)
 
 
 def start_flusher(*, interval: Optional[float] = None) -> bool:

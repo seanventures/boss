@@ -21,9 +21,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ..platform.contract import HookContext, OperationResult, OperationStatus, PlannedChange
+from ..services.production import is_production_environment as _is_production_environment
 from ._runtime import HookFailure, OfficialPlugin, Session, evidence, new_password
 
-PRODUCTION = {"production", "prod"}
 
 
 def _fingerprint(conn: sqlite3.Connection) -> dict:
@@ -55,7 +55,7 @@ class SqlitePlugin(OfficialPlugin):
         return p
 
     def _validate(self, ctx: HookContext) -> list[str]:
-        if ctx.resource.environment in PRODUCTION:
+        if _is_production_environment(ctx.resource.environment):
             return ["official.sqlite is for local and development use; use official.postgres in production"]
         if ".." in Path(self.rel(ctx)).parts or Path(self.rel(ctx)).is_absolute():
             return ["config.path must be a relative path"]

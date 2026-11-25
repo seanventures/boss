@@ -69,7 +69,7 @@ from .acceptance.verdict import (  # noqa: E402,F401 — re-exported (#136's nam
     _DECL_PATH, _DOC_PATH, _KEYWORDS, _LOADED_BY, _PATHISH, _SKIP_DIRS, _STRING, _SUMMARY,
     _TEST_PATH, _advisory, _code_lines, _defines, _extensionless, _item_data_files, _refers_to,
     _resolve, _walk, batch_summary, clip, evidence_paths, findings_summary, judge,
-    parse_acceptance, passed, wiring_problem)
+    parse_acceptance, passed, pin_met_items, wiring_problem)
 
 
 def items_spec(connection: Any, *, run_id: str, fctx: Mapping[str, Any],
@@ -419,7 +419,10 @@ def keep_history(history: list, record: dict,
 def run_check(items: list[dict], *, ask: Any, title: str, stack: Mapping[str, Any], root: Any,
               source: Optional[Mapping[str, Any]] = None, dropped: int = 0,
               batch_size: Optional[int] = None,
-              checks: Any = None) -> tuple[dict[str, Any], int]:
+              checks: Any = None,
+              prior: Optional[Mapping[str, Any]] = None,
+              head_sha: Optional[str] = None,
+              prior_head_sha: Optional[str] = None) -> tuple[dict[str, Any], int]:
     """Judge EVERY item: one reviewer pass per `batch_size` (default MAX_ITEMS) batch
     (`ask(prompt) -> run_role result`), the item numbers global across passes. A pass that fails
     leaves its items unjudged, so the check is not_run — never met. A pass stopped short (its
@@ -433,6 +436,7 @@ def run_check(items: list[dict], *, ask: Any, title: str, stack: Mapping[str, An
 
     tree = tree_listing(root)
     replies: list[Optional[str]] = []
+    blocked: list[Optional[str]] = []
     stops: list[dict[str, Any]] = []
     cost = 0
     model = None
@@ -460,10 +464,23 @@ def run_check(items: list[dict], *, ask: Any, title: str, stack: Mapping[str, An
             stops.append({"pass": n, "stop": str(rr.get("stop_reason")), "items": len(batch),
                           "ceiling_usd": rr.get("budget_ceiling_usd"), "words": words})
         replies.append(str(rr.get("summary") or ""))
+        blocked.append(rr.get("tools_blocked"))
     rec = judge(items, "\n".join(r or "" for r in replies), stack, root=root, source=source,
                 dropped=dropped, summary_line=batch_summary(replies), over_cap=over,
-                checks=checks)
+                checks=checks, prior=prior, head_sha=head_sha, prior_head_sha=prior_head_sha)
     refused = refusal(rec, root) if items else None
+    if items and not refused:
+        # THE JUDGE'S TOOLS COULD NOT RUN (BOSSAPP-1350: bwrap, 30 items "could not be
+        # verified"): nothing was read, so the items are unjudged, never partial. The engine's
+        # own report of blocked tools decides (`tools_blocked`), or a judge that cited no file
+        # and claimed nothing missing; never a MISSING item, and never the model's prose.
+        from . import review_tools
+
+        blind = next((b for b in blocked if b), None) or (
+            "the judge cited no file and line for any item"
+            if review_tools.reads_nothing(rec.get("items") or [], root) else None)
+        if blind:
+            refused = review_tools.not_run(blind)
     if refused:
         # NOT A VERDICT ON THE CODE: not run (re-asked, never met), its items unjudged so no
         # "missing" reaches the card, the ledger or a follow-up's brief.
@@ -730,6 +747,7 @@ def lineage_failures(connection: Any, *, run_id: str, pr_url: Optional[str] = No
     except Exception:  # noqa: BLE001 — no contract: nothing was removed
         removed = set()
     open_failures = _unresolved(checks, removed)
+    bar_followups = _unresolved(checks, removed, bar_accepted=True)
     if open_failures:
         runs = gates.setdefault(GATE, [])
         for rid, _ in open_failures:
@@ -747,6 +765,7 @@ def lineage_failures(connection: Any, *, run_id: str, pr_url: Optional[str] = No
             latest = {**latest, "verdict": "not_checked",
                       "why": f"not checked since {checks[-1][0]}"}
     return {"gates": gates, "acceptance": latest,
+            "followups": [rid for rid, _ in bar_followups],
             "regressed": regressed_vs_parent(checks, run_id=run_id, parent_run_id=parent_run)}
 
 
@@ -788,17 +807,22 @@ def regression_card(reg: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _unresolved(checks: list[tuple[str, dict]],
-                removed: Iterable[str] = ()) -> list[tuple[str, dict]]:
+                removed: Iterable[str] = (), *,
+                bar_accepted: bool = False) -> list[tuple[str, dict]]:
     """The not_met checks no LATER met check covered: a met clears a failure only when it
     judged at least the failed check's items (`source.item_keys`). Slice 3 meeting its own
     items never clears slice 2's gaps; a follow-up held to the union of every slice clears all.
     `removed`: item keys a person has since replaced or removed from the contract — a later
-    check need not judge those to clear the failure (PR #161 review C3)."""
+    check need not judge those to clear the failure (PR #161 review C3).
+    `bar_accepted`: the OTHER list — the unmet checks the quality bar let through (their gaps are
+    follow-ups, shown as such on the card, never hidden and never counted as failures)."""
     out = []
     gone = set(removed or ())
     for i, (rid, acc) in enumerate(checks):
         if acc.get("verdict") != "not_met":
             continue
+        if bool((acc.get("bar") or {}).get("nonblocking")) != bar_accepted:
+            continue          # the quality bar let this record through (follow-ups, not a failure)
         keys = set((acc.get("source") or {}).get("item_keys") or []) - gone
         cleared = any(later.get("verdict") == "met"
                       and keys <= set((later.get("source") or {}).get("item_keys") or [])
@@ -858,6 +882,8 @@ def merge_card_checks(connection: Any, *, run_id: Optional[str], evidence: Any,
         acceptance = lineage.get("acceptance") or (
             acceptance if isinstance(acceptance, Mapping) else None)
         reg = lineage.get("regressed")
+        if lineage.get("followups") and isinstance(acceptance, Mapping):
+            acceptance = {**acceptance, "bar_followups": list(lineage["followups"])}
         if reg and isinstance(acceptance, Mapping):
             # BOTH VERDICTS ON THE CARD (BOSSAPP-1330): the worse one leads, said as a
             # regression, and the parent's better one stays beside it.
@@ -879,11 +905,23 @@ def card_words(card: Optional[Mapping[str, Any]], acceptance: Optional[Mapping[s
 
     if card:
         return f"Automated checks: failing ({cf.headline(card)}); CI {validation_status}"
+    if (acceptance or {}).get("verdict") == "not_met" and (
+            (acceptance or {}).get("bar") or {}).get("nonblocking"):
+        gaps = len([i for i in acceptance.get("items") or []
+                    if isinstance(i, Mapping) and i.get("status") != "met"])
+        return (f"Automated checks: {validation_status}; must-haves: {gaps} gap"
+                f"{'s' if gaps != 1 else ''} are follow-ups at the "
+                f"{acceptance['bar'].get('bar') or 'standard'} quality bar (not blocking)")
     if not acceptance or acceptance.get("verdict") not in ("met", "no_items"):
         why = headline(acceptance) if acceptance else "Must-haves: not checked"
         return f"Automated checks: CI {validation_status}; {why}"
     n = len((acceptance or {}).get("advisory") or [])
-    return f"Automated checks: {validation_status}" + (f", {n} advisory" if n else "")
+    gaps = len([i for i in (acceptance or {}).get("items") or []
+                if isinstance(i, Mapping) and i.get("status") != "met"]) if (
+        (acceptance or {}).get("bar") or {}).get("nonblocking") else 0
+    return (f"Automated checks: {validation_status}" + (f", {n} advisory" if n else "")
+            + (f", {gaps} must-have follow-up{'s' if gaps != 1 else ''} (quality bar)"
+               if gaps else ""))
 
 
 __all__ = [

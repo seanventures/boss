@@ -10,6 +10,7 @@ import React, { useEffect, useRef } from "react";
 
 import type { AgentIdentity } from "../../lib/agent-world-types";
 import { bornDate } from "../../lib/agent-world";
+import { useNow } from "./live-util";
 import { AgFace, AiBadge } from "./agent-face";
 
 export const BIRTH_MS = 900;
@@ -18,6 +19,7 @@ const HOLD_MS = 1100;
 export function AgentBirth({ identity, agentId, onDone }: {
   identity: AgentIdentity; agentId: string; onDone: () => void;
 }) {
+  const nowMs = useNow(60_000);
   const done = useRef(false);
   const finish = () => { if (!done.current) { done.current = true; onDone(); } };
   useEffect(() => {
@@ -35,7 +37,7 @@ export function AgentBirth({ identity, agentId, onDone }: {
         <AiBadge long />
         <dl className="ag-birth-facts">
           <div><dt>ID</dt><dd><code>{agentId || "—"}</code></dd></div>
-          <div><dt>Born</dt><dd>{bornDate(new Date().toISOString())}</dd></div>
+          <div><dt>Born</dt><dd>{nowMs ? bornDate(new Date(nowMs).toISOString()) : ""}</dd></div>
           <div><dt>By</dt><dd>You</dd></div>
         </dl>
         <span className="ag-birth-stamp" aria-hidden>BORN</span>

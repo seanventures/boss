@@ -62,6 +62,8 @@ def test_any_other_failure_is_a_sentence_too(client, monkeypatch):
         "project_id": PROJECT, "actor": "executive_console", "message": "Hello?"})
     assert said.status_code == 500
     body = said.json()
-    assert body["detail"].startswith("BOSS couldn't finish this turn."), body
-    assert "KeyError" not in body["detail"] and "pending_plan_summary" not in body["detail"]
+    # The one-line cause is said, quoted as the error's own words (BOSSAPP-1428) — never SQL.
+    assert body["detail"].startswith(
+        "BOSS couldn't finish this turn: `KeyError: 'pending_plan_summary'`."), body
+    assert "Details shows the error" in body["detail"]
     assert body["failure"]["technical"] == "KeyError: 'pending_plan_summary'"

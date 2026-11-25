@@ -103,6 +103,14 @@ export async function GET(req: Request) {
       `/v1/agent/threads/${encodeURIComponent(thread)}/progress?since=${since}`);
   }
 
+  if (view === "turn") {
+    // ONE CHAT TURN (lib/chat-turn.ts): running, done with its response, or failed in words.
+    const turn = (params.get("turn_id") ?? "").trim();
+    if (!turn) return NextResponse.json({ error: "missing turn_id" }, { status: 400 });
+    return upstream(
+      `/v1/agent/turns/${encodeURIComponent(turn)}?project_id=${p}&actor=${a}`);
+  }
+
   if (view === "task-context") {
     const task = (params.get("task_id") ?? "").trim();
     if (!task) return NextResponse.json({ error: "missing task_id" }, { status: 400 });
@@ -123,7 +131,7 @@ export async function GET(req: Request) {
 
   return NextResponse.json(
     { error: `unknown view '${view}'. Known: workspace, messages, starters, progress, `
-             + `task-context` },
+             + `turn, task-context` },
     { status: 400 },
   );
 }

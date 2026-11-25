@@ -229,3 +229,22 @@ def test_a_loader_is_found_in_the_evidence_or_the_tree_without_the_words_loaded_
     (root / "rules/loader.go").write_text("package rules\n\nfunc Load() ([]Rule, error) "
                                           "{ return builtin, nil }\n")
     assert "loader not named" in ag.wiring_problem(root, why, item_text=item, needs_loader=True)
+
+
+@pytest.mark.parametrize("ends", [".", ". (more text)", ".\n", ";", ","])
+def test_a_citation_that_ends_the_sentence_still_names_its_symbol(tmp_path, ends):
+    """THE CASE (Northgate, crun_29e17494ab1b43adafed, 2026-11-18): the reviewer wrote
+    "LOADED BY internal/config/loader.go:Load." and BOSS read the full stop as part of the name,
+    so every such item fell to PARTIAL with "the loader it names, '', is not a function or
+    variable name" (15 partials). Punctuation after a citation is prose, never the symbol."""
+    root = _tree(tmp_path)
+    item = "Editing `config/tenants/lumen-pay.yaml` is picked up without restart."
+    why = f"internal/config/watcher.go:Watch; LOADED BY internal/config/loader.go:Load{ends}"
+    assert ag.wiring_problem(root, why, item_text=item, needs_loader=True) is None
+
+
+def test_a_qualified_symbol_keeps_its_dots_but_not_a_trailing_one(tmp_path):
+    root = _tree(tmp_path)
+    item = "Editing `config/tenants/lumen-pay.yaml` is picked up without restart."
+    why = "LOADED BY internal/config/loader.go:config.Load."
+    assert ag.wiring_problem(root, why, item_text=item, needs_loader=True) is None

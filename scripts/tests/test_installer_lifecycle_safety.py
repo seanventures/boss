@@ -72,11 +72,14 @@ else:
         "ENV_FILE='private path/.env'\n"
         # What the build-metadata block (just above in install.sh) exports.
         "BOSS_SOURCE_SHA=0123456789abcdef0123456789abcdef01234567 BOSS_BUILT_AT=2026-10-15T00:00:00Z\n"
+        # The one compose-file resolver (scripts/install/compose_files.sh) sets COMPOSE_FILES.
+        + _installer_block("compose files")
         + _installer_block("serial image builds")
         + "\nprintf 'reached start phase\\n'\n"
     )
     trace = tmp_path / "trace"
     result = subprocess.run(["bash", str(script)], text=True, capture_output=True, timeout=10,
+                            cwd=ROOT,
                             env={**os.environ, "TRACE": str(trace), "CONFIG": str(config_path),
                                  "FAIL_SERVICE": fail, "CONFIG_FAIL": str(int(config_fail))})
     return result, [json.loads(line) for line in trace.read_text().splitlines()]
@@ -196,7 +199,10 @@ def test_checkup_treats_private_env_as_data(tmp_path: Path) -> None:
     )
     result = subprocess.run(
         ["bash", str(ROOT / "scripts/install/checkup.sh")],
-        env={**os.environ, "BOSS_ENV_FILE": str(env_file)},
+        # A stack name no install has: the checkup must never exec into this machine's own
+        # running BOSS (its claim-status call there took longer than the timeout).
+        env={**os.environ, "BOSS_ENV_FILE": str(env_file),
+             "COMPOSE_PROJECT_NAME": "boss-checkup-test-no-such-stack"},
         cwd=tmp_path,
         capture_output=True,
         text=True,
@@ -322,8 +328,12 @@ def test_installer_rerun_keeps_headless_choice_and_credentials(tmp_path: Path) -
     checkout = tmp_path / "checkout"
     helpers = checkout / "scripts/install"
     helpers.mkdir(parents=True)
-    for name in ("restore_preserved_env.sh", "reconcile_api_credentials.py", "post_check.sh"):
+    for name in ("restore_preserved_env.sh", "reconcile_api_credentials.py", "post_check.sh",
+                 "network_preflight.sh", "build_order.py"):
         shutil.copy2(ROOT / "scripts/install" / name, helpers / name)
+    enterprise = checkout / "engine/boss_engine/services"
+    enterprise.mkdir(parents=True)
+    shutil.copy2(ROOT / "engine/boss_engine/services/enterprise_network.py", enterprise / "enterprise_network.py")
     (helpers / "community-compose.yml").write_text("name: boss-community\n")
     subprocess.run(["git", "init", "-q", str(checkout)], check=True)
     subprocess.run(["git", "-C", str(checkout), "add", "."], check=True)
@@ -373,6 +383,9 @@ def test_installer_rerun_keeps_headless_choice_and_credentials(tmp_path: Path) -
         "elif '/v1/providers' in ' '.join(args):\n"
         "    print('200',end='')\n"
         "elif '/health' in ' '.join(args):\n"
+        "    print('200',end='')\n"
+        # The apt preflight's probe of Debian's mirror (BOSSAPP-1446): it answers.
+        "elif 'deb.debian.org' in ' '.join(args):\n"
         "    print('200',end='')\n"
     )
     curl.chmod(0o700)
@@ -475,12 +488,16 @@ def test_installer_sources_do_not_name_private_hosts_or_registries() -> None:
         line.strip() for line in compose.splitlines()
         if re.search(r'- "[^"]+:\d+"\s*$', line)
     ]
-    assert published == [
-        '- "127.0.0.1:${BOSS_POSTGRES_PORT:-5432}:5432"',
-        '- "127.0.0.1:${INFISICAL_PORT:-8080}:8080"',
-        '- "${BOSS_API_BIND:-127.0.0.1}:${BOSS_API_PORT:-8000}:8000"',
-        '- "127.0.0.1:${BOSS_WEB_PORT:-3000}:3000"',
-    ]
+    # Every published port binds the loopback address (the API's bind is a setting whose default
+    # is loopback). The list of services grew (db-test, Grafana, Mailpit, the toolchain
+    # registry), and an exact list went red on main for a reason that was not a leak; the
+    # property is what a stranger's install needs (BOSSAPP-1429).
+    assert published, "the compose file publishes no port: the parse is wrong"
+    exposed = [line for line in published
+               if not (line.startswith('- "127.0.0.1:')
+                       or line.startswith('- "${BOSS_API_BIND:-127.0.0.1}:'))]
+    assert exposed == [], "a published port must bind 127.0.0.1"
+    assert '- "${BOSS_API_BIND:-127.0.0.1}:${BOSS_API_PORT:-8000}:8000"' in published
     assert all("0.0.0.0" not in line for line in published)
     installer = (ROOT / "install.sh").read_text(encoding="utf-8")
     assert 'BIND_ADDRESS="127.0.0.1"' in installer
@@ -522,9 +539,13 @@ def test_installer_makes_initdb_readable_before_the_database_starts() -> None:
     text = (ROOT / "install.sh").read_text(encoding="utf-8")
     assert "umask 077" in text
     fix = text.index("chmod 755 scripts/install/initdb")
+    mon_fix = text.index("find scripts/install/monitoring -type f -exec chmod 644")
     first_up = text.index("up -d --no-build db api")
-    assert fix < first_up
+    assert fix < first_up and mon_fix < first_up
     assert "-name '*.sql' -exec chmod 644" in text
+    assert "find scripts/install/monitoring -type d -exec chmod 755" in text
     compose = (ROOT / "scripts/install/community-compose.yml").read_text(encoding="utf-8")
     mounts = re.findall(r"^\s+- (\./[^:]+):", compose, re.MULTILINE)
-    assert mounts == ["./initdb"], "a new bind mount needs the same readable-permissions step"
+    assert mounts == ["./initdb", "./monitoring/prometheus.yml", "./monitoring/grafana/provisioning"], (
+        "a new bind mount needs the same readable-permissions step"
+    )

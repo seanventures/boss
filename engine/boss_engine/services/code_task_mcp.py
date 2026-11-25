@@ -63,13 +63,17 @@ class HarnessMcp:
     def bind_session(self) -> None:
         """Bind the gateway token to the run whose session is starting (the llm context names
         it), so its asks, receipts, events and stage-clock pauses are that run's. The token is
-        written before the run is known on the governed path; the first session binds it."""
+        written before the run is known on the governed path; the first session binds it.
+
+        Each session start also renews the token's lifetime from now (BOSSAPP-1451): it was
+        issued when the build attempt began, and a build that queued before its session would
+        otherwise start with a token already near its end."""
         if not self.gateway_token:
             return
         from . import mcp_gateway
         from .llm_telemetry import get_llm_context
 
-        mcp_gateway.get().bind_run(self.gateway_token, get_llm_context().get("run_id"))
+        mcp_gateway.get().session_started(self.gateway_token, get_llm_context().get("run_id"))
 
     def env(self) -> dict[str, str]:
         """What the harness's environment needs for this file: with the gateway, an MCP tool

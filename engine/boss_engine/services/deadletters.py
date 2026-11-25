@@ -18,6 +18,12 @@ from .core import (
 from .jobs import JobLeaseService, job_run_id
 
 
+def is_boss_principal(principal_id: Any) -> bool:
+    """True when a job's principal is BOSS itself (a `sys_` system principal), not a person,
+    a service account or an agent acting for someone."""
+    return str(principal_id or "").startswith("sys_")
+
+
 class DeadletterRemediationBlocked(ValueError):
     """Expected operator-visible block (non-job source, not requeueable). Not a silent drop."""
 
@@ -828,7 +834,18 @@ class DeadletterRemediationService:
         actor: str,
         reason: str = "operator_requested_requeue",
         run_after_seconds: int = 0,
+        as_boss: bool = False,
+        for_its_person: bool = False,
     ) -> dict[str, Any]:
+        """Re-create a dead-lettered job. A person's (or an API caller's) requeue is authorized as
+        that caller (require_job_kind). `as_boss=True` is BOSS's own failure owner
+        (failure_owner.Jobs) re-running ITS OWN background work — a kind that acts on nobody's
+        behalf (not in lineage.DELEGATED_JOB_KINDS): no caller chose the kind, so the new job
+        carries exactly the identity the dead job had (lineage.acting_for_job), never wider. A
+        job that acts for a person is never re-run this way: that stays the person's — unless
+        `for_its_person` (the org default "agents fix failures with the starter's authority",
+        identity/fix_authority.py): the new job then carries exactly the dead job's own person,
+        grant and chain (lineage.acting_for_job), never wider and never BOSS's own identity."""
         deadletter = self._get_deadletter_for_update(connection, deadletter_id)
         if deadletter.get("requeued_job_id"):
             return self._serialize_deadletter(deadletter)
@@ -838,7 +855,8 @@ class DeadletterRemediationService:
             text(
                 """
                 SELECT id, project_id, task_id, kind, priority, status, payload,
-                       data_boundary, max_attempts, workload_class
+                       data_boundary, max_attempts, workload_class,
+                       on_behalf_of, grant_id, chain, on_behalf_system
                 FROM jobs
                 WHERE id = :job_id AND project_id = :project_id
                 FOR UPDATE
@@ -854,9 +872,37 @@ class DeadletterRemediationService:
         # C-2: re-creating a job is queuing that kind of work: the same job-kind authorization
         # (and step-up) as POST /v1/jobs, at the job's project, as the verified caller — never
         # `deadletter:manage` alone. A refusal raises (nothing is queued or marked).
+        import contextlib
+
+        from ..identity import lineage
         from ..identity.job_permissions import require_job_kind
 
-        require_job_kind(job["kind"], job["project_id"], db=connection)
+        acting_as: Any = contextlib.nullcontext()
+        if as_boss:
+            # ONLY BOSS'S OWN WORK: the dead job's principal must be BOSS itself (a `sys_`
+            # principal — sys_worker, the legacy system stamp). `on_behalf_system` is false on
+            # every laptop row, so it is not the test. A job run for a person or a service
+            # account is theirs to re-run, never BOSS's.
+            if for_its_person:
+                # Defence in depth: whatever the caller decided, a kind whose effect no agent
+                # may cause, or that cannot be undone (a merge), is never re-run by BOSS.
+                from ..identity import fix_authority
+
+                ok, why_not = fix_authority.may_rerun_job(job["kind"])
+                if not ok:
+                    raise DeadletterRemediationBlocked(
+                        f"This job ran for a person and {why_not}.")
+            elif not is_boss_principal(job.get("on_behalf_of")) or \
+                    job["kind"] in lineage.DELEGATED_JOB_KINDS:
+                raise DeadletterRemediationBlocked(
+                    "This job ran for a person; BOSS re-runs it only when that person asks.")
+            try:
+                who = lineage.acting_for_job(dict(job)) or lineage.SYSTEM_ACTING
+            except lineage.PrincipalRequired:
+                who = lineage.SYSTEM_ACTING
+            acting_as = lineage.acting(who)
+        else:
+            require_job_kind(job["kind"], job["project_id"], db=connection)
         payload = dict(job["payload"] or {})
         payload["requeue"] = {
             "source_job_id": job["id"],
@@ -885,20 +931,21 @@ class DeadletterRemediationService:
                      "WHERE id=:id AND project_id=:p"),
                 {"id": discovery_run_id, "p": job["project_id"]},
             )
-        new_job = self.jobs.create_job(
-            connection,
-            job["project_id"],
-            job["kind"],
-            payload=payload,
-            task_id=job["task_id"],
-            priority=job["priority"],
-            max_attempts=job["max_attempts"],
-            run_after_seconds=run_after_seconds,
-            data_boundary=job["data_boundary"],
-            # THE SAME KIND OF WORK. Left out, a requeued job became `general`, and model work
-            # whose source only serves owner_sandbox found no eligible model on its retry.
-            workload_class=job["workload_class"] or "general",
-        )
+        with acting_as:
+            new_job = self.jobs.create_job(
+                connection,
+                job["project_id"],
+                job["kind"],
+                payload=payload,
+                task_id=job["task_id"],
+                priority=job["priority"],
+                max_attempts=job["max_attempts"],
+                run_after_seconds=run_after_seconds,
+                data_boundary=job["data_boundary"],
+                # THE SAME KIND OF WORK. Left out, a requeued job became `general`, and model
+                # work whose source only serves owner_sandbox found no eligible model on its retry.
+                workload_class=job["workload_class"] or "general",
+            )
         if discovery_run_id:
             if not new_job.get("id"):
                 raise DeadletterRemediationBlocked("Discovery retry did not create a job.")

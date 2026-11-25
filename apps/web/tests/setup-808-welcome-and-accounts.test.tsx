@@ -82,7 +82,8 @@ describe("Screen 1 — Get started is its own place", () => {
     expect(q(container, "su-wl-idea")!.getAttribute("href")).toBe("/?new_project=idea");
     const flow = [...container.querySelectorAll(".su-wl-flow > li.su-chip")].map((li) => li.textContent);
     expect(flow).toEqual(["Idea", "Plan (you approve)", "Build", "Review", "Pull request", "Live preview"]);
-    expect(container.textContent).toContain("About 8 minutes, included in your subscription");
+    // No model yet: never "included in your subscription" (stranger test).
+    expect(q(container, "su-wl-sample-cost")!.textContent).toBe("About 8 minutes, once a model is connected");
     expect(q(container, "su-accounts")).toBeNull();
     expect(q(container, "su-row-repository")).toBeNull();
   });
@@ -135,6 +136,15 @@ describe("Setup never shows the Welcome", () => {
     fakeApi(done);
     const again = await mount(done);
     expect(q(again.container, "su-open-welcome")).toBeNull();
+  });
+
+  it("the board shows the one-line Autonomy row (BOSSAPP-1441), not only the classic layout", async () => {
+    const view = withAccounts(board());
+    fakeApi(view);
+    const { container } = await mount(view);
+    expect(q(container, "su-advanced-all")).not.toBeNull();
+    expect(q(container, "su-row-autonomy")).not.toBeNull();
+    expect(q(container, "su-autonomy-change")!.getAttribute("href")).toContain("tab=autonomy");
   });
 
   it("Welcome's Add another account lands on the board's Add GitHub account", async () => {
@@ -207,6 +217,18 @@ describe("Welcome is honest", () => {
     expect(q(container, "su-wl-github")!.querySelector(".su-wl-circle")!.getAttribute("data-done")).toBe("true");
   });
 
+  it("once the sample exists it offers Open the sample, never Start the sample (stranger test r2)", async () => {
+    const view = { ...withAccounts(tryStep()),
+                   try: { workflow_key: "setup_first_pr", last_run: null, sample: { project_id: "hello-world", name: "Hello World" } } };
+    fakeApi(view);
+    const { container } = await mount(view, "?area=welcome&focus=repository&open=add", "welcome");
+    expect(q(container, "su-wl-sample-go")).toBeNull();
+    const open = q(container, "su-wl-sample-open")!;
+    expect(open.textContent).toBe("Open the sample");
+    expect(open.getAttribute("href")).toBe("/?project_id=hello-world&area=project");
+    expect(container.textContent).not.toContain("Start the sample");
+  });
+
   it("the rail's Get started shows until GitHub, a model and a first PR exist", async () => {
     const { summarize } = await import("../lib/setup-stepper");
     expect(summarize(firstRun()).get_started).toBe(true);
@@ -268,10 +290,12 @@ describe("Screen 2 — Setup on one page", () => {
     const claude = block.querySelector('[data-testid="su-model-anthropic_claude_code"]')!;
     expect(claude.textContent).toContain("Claude Code");
     expect(block.querySelector('[data-testid="su-model-setup-openrouter"]')).not.toBeNull();
-    expect(q(container, "su-who-build")!.textContent).toBe("Build: Auto · Claude Code");
-    expect(q(container, "su-who-review")!.textContent).toBe("Review: OpenRouter · openai/gpt-5");
-    await click(q(container, "su-who-change"));
-    expect((q(container, "su-advanced-all") as HTMLDetailsElement).open).toBe(true);
+    expect(q(container, "su-who-build")!.textContent).toBe("Claude Code");
+    expect(q(container, "su-who-review")!.textContent).toBe("OpenRouter · openai/gpt-5");
+    // Change edits right beneath the summary; it does not send anyone to Advanced.
+    await click(q(container, "su-who-change-review"));
+    expect(q(container, "su-who-edit-review")!.querySelector("select")).not.toBeNull();
+    expect((q(container, "su-advanced-all") as HTMLDetailsElement).open).toBe(false);
   });
 
   it("shows each thing once: one Add model, one repo list, nothing repeated under Advanced settings", async () => {

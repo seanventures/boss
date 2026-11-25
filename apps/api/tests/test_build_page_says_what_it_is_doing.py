@@ -118,7 +118,7 @@ def test_a_seeded_attempt_says_what_it_is_doing_now(client, engine):
                                 "tests/test_auth.py::test_github_login_redirect",
                                 "tests/test_auth.py::test_boss_login"]
     g = s["gates"]
-    assert g["attempt"] == 4 and g["failed"] == ["New tests pass"] and len(g["passed"]) == 2
+    assert g["attempt"] == 4 and g["failed"] == ["New tests fail"] and len(g["passed"]) == 2
     assert "SECRET BODY" not in json.dumps(s)
 
 

@@ -69,10 +69,12 @@ def follow_up_reason(title: Any, merged_number: int, paths: Iterable[str] = ()) 
 
 
 def prepare_branch(github: Any, branch_name: str, *, base: Optional[str] = None,
-                   paths: Iterable[str] = ()) -> Optional[dict[str, Any]]:
+                   paths: Iterable[str] = (),
+                   parent_branch: Optional[str] = None) -> Optional[dict[str, Any]]:
     """Before a pull request is opened from `branch_name`: None when it continues an OPEN pull
     request (or the host cannot tell), else, when an earlier pull request from this branch
-    merged, {"after": its number, "restacked", "paths", ...} — the branch put back on its base.
+    (or `parent_branch` for an isolated follow-up) merged, {"after": its number, "restacked",
+    "paths", ...} — the branch put back on its base.
     Never raises: a host that cannot answer leaves the pull request as it would have been."""
     opened = getattr(github, "open_pull_request_for", None)
     merged_of = getattr(github, "last_merged_pull_request", None)
@@ -81,7 +83,9 @@ def prepare_branch(github: Any, branch_name: str, *, base: Optional[str] = None,
     try:
         if opened(branch_name):
             return None
-        merged = merged_of(branch_name)
+        if parent_branch and parent_branch != branch_name and opened(parent_branch):
+            return None
+        merged = merged_of(parent_branch or branch_name)
     except Exception:  # noqa: BLE001 — unread: the pull request opens as before
         log.debug("pr_follow_up_unread", exc_info=True)
         return None

@@ -2,28 +2,29 @@
 
 /**
  * SIDE DRAWERS (screen 5b, contract §10): `&drawer=<kind>:<id>`, deep-linkable, Back closes.
- *   work:<id>     how the work went, step by step, its one action and every link (5b)
+ *   work:<id>     (also run:, build:) the Work panel: one task's stages, what next and its links
+ *                 (`&wp=full` lays it over the whole screen)
  *   needs:<id>    what waits on you and why, with its action
  *   stage:<key>   a journey stage (and stage:how — how the journey reads)
  *   env:<key>     an environment's full picture;  deploy:<id>  one deploy
  * Prose lives here, never on the page.
  */
-import { changeHref, changeRef, isLocalChangeUrl, linkTarget, reviewChangeWords } from "../../lib/repo-links";
-import { ChangeLink } from "../change-link";
-import { DiagnosisFlow, WhyLine } from "../../components/stuck-work";
-import React, { useEffect, useState } from "react";
+import { FailedActions } from "./build-failed";
+import React, { useEffect, useMemo, useState } from "react";
 import {
-  ArrowsOut, ChatCircleDots, Code, FileText, FlowArrow, GitMerge, GitPullRequest, Globe, Graph, ListChecks, PaperPlaneRight, Path, PauseCircle, Question,
-  RocketLaunch, Terminal, User, Warning, Wrench,
+  ChatCircleDots, GitMerge, Globe, Graph, ListChecks, PaperPlaneRight, Path, Question,
+  RocketLaunch, Warning, Wrench,
 } from "@phosphor-icons/react";
 
-import { ATTEMPT_WORDS, KIND_WORDS, PX_PATHS, findWork, nodeWords, parseDeployments, pxHref, toTab, usePxRead, writePxUrl, type Deployments, type WorkItem } from "../../lib/project-experience";
+import { PX_PATHS, findWork, nodeWords, parseDeployments, pxHref, toTab, usePxRead, writePxUrl, type Deployments, type WorkItem } from "../../lib/project-experience";
+import { tidyIds } from "../../lib/work-links";
 import { FX_DEPLOYMENTS } from "../../lib/project-experience-fixtures";
-import { Drawer, Empty, Face, Flow, HEALTH_WORD, Ico, PxLink, STATE_WORD, Spark, Tag, Cost } from "./kit";
+import { groupTasks, taskOf } from "../../lib/work-tasks";
+import { FullToggle, WorkPanel } from "./work-panel";
+import { Drawer, Empty, Face, Flow, HEALTH_WORD, Ico, PxLink, STATE_WORD, Spark, Tag } from "./kit";
 import { ActionButton } from "./tab-overview";
-import { DrawerAttempts } from "./tab-work";
 import { CaptainDrawer } from "./captain-drawer";
-import { DecisionActs, NeedsBody, StageBody, WorkStoryBody, stageIcon, useWorkStory } from "./drawers-more";
+import { DecisionActs, NeedsBody, StageBody, stageIcon } from "./drawers-more";
 
 /** Each Needs-you item's icon, by what it asks (as on Overview). */
 const NEED_ICON: Record<string, typeof GitMerge> = { merge: GitMerge, deploy: RocketLaunch, plan: ListChecks, setup: Wrench, question: Question };
@@ -33,9 +34,6 @@ import { RecDrawer } from "./tab-roadmap";
 import { LOCAL, whenLocal } from "../../lib/local-time";
 import type { PxCtx } from "./project-page";
 import { LearnedStrip } from "../knowledge/learned-strip";
-import { LinkedTicket } from "./linked-ticket";
-
-const STEP_WORDS: Record<string, string> = { plan: "Plan", design: "You approved", decide: "You approved", build: "Build", review: "Review & test", pr: "Merge", ship: "Staging" };
 
 /** Drawer links that name a PLACE on this page rather than a drawer (the engine's hrefs, §10):
  *  `section:<key>` is Settings at that section; `dossier` and `doc:<path>` are Repo & knowledge;
@@ -79,6 +77,22 @@ export function DrawerHost({ ctx, drawer, onClose }: { ctx: PxCtx; drawer: { kin
   if (drawer.kind === "needs") {
     const n = ctx.overview.needs_you.find((x) => x.id === drawer.id);
     if (!n) return <Missing what="This item" onClose={onClose} />;
+    // A FAILED BUILD's card has its own answers (Retry is a POST, only when it helps), never a
+    // generic action that would navigate to an API URL (review #218 L4).
+    if (n.kind === "failed") {
+      const norm = (s?: string | null) => tidyIds(s ?? "").trim().replace(/[.?!\s]+$/g, "").replace(/\s+/g, " ").toLowerCase();
+      const showFixDetail = Boolean(n.fix?.detail && norm(n.fix.detail) !== norm(n.detail));
+      const safeSee = n.see_href && !/(?:^|[?&])area=setup(?:&|$)/i.test(n.see_href) ? n.see_href : undefined;
+      return (
+        <Drawer title={n.label} icon={<Ico icon={Warning} c="red" />} onClose={onClose} testid="px-drawer-needs" sub={<Tag tone="red">failed</Tag>}
+                footer={<><FailedActions retry={n.retry} fix={n.fix} retryReason={n.retry_reason} seeHref={safeSee} projectId={ctx.projectId}
+                                         actor={ctx.actor} testid="px-drawer-failed" onDone={() => { ctx.refreshWork(); ctx.refreshOverview?.(); }} />
+                          <AskBox ctx={ctx} about={n.label} /></>}>
+          <p style={{ margin: 0 }} data-testid="px-drawer-failed-why">{n.detail}</p>
+          {showFixDetail ? <p className="px-faint" style={{ margin: 0 }}>{n.fix!.detail}</p> : null}
+        </Drawer>
+      );
+    }
     return (
       <Drawer title={n.label} icon={<Ico icon={NEED_ICON[n.kind] ?? Warning} c="amber" />} onClose={onClose} testid="px-drawer-needs" sub={<Tag tone="amber">needs you</Tag>}
               footer={<>{n.action?.decision_id ? <DecisionActs ctx={ctx} n={n} />
@@ -147,75 +161,29 @@ function AskBox({ ctx, about, placeholder }: { ctx: PxCtx; about: string; placeh
   );
 }
 
+/** Is the panel laid over the whole screen (`&wp=full`, the rc10.32 panel's own links)? */
+function useWholePage(): [boolean, (on: boolean) => void] {
+  const read = () => { try { return new URLSearchParams(window.location.search).get("wp") === "full"; } catch { return false; } };
+  const [full, setFull] = useState(read);
+  useEffect(() => {
+    const on = () => setFull(read());
+    window.addEventListener("popstate", on);
+    return () => window.removeEventListener("popstate", on);
+  }, []);
+  return [full, (v: boolean) => { writePxUrl({ wp: v ? "full" : null }, "replace"); setFull(v); }];
+}
+
+/** THE WORK PANEL (v2, work-panel.tsx) in the drawer: a Work row's click, `drawer=work:<id>`,
+ *  `run:` and `build:` links, and ⤢ (`wp=full`) for the whole screen. */
 function WorkDrawer({ ctx, w, onClose }: { ctx: PxCtx; w: WorkItem; onClose: () => void }) {
-  const l = w.links;
-  // The PR a merge waits on: the engine's merge_pr; an older payload's "Merge" row its pr.
-  // A pull request already merged is not that wait (merged_pr), even when the row still says Merge.
-  const mp = l.merge_pr ?? (w.action_label === "Merge" && l.pr && !l.merged_pr
-    ? { ...l.pr, follow_up_of: null, failed: "" } : null);
-  const story = useWorkStory(ctx, w.id).data;
-  const full = l.build || l.workflow_run;
+  const [full, setFull] = useWholePage();
+  const task = useMemo(() => taskOf(groupTasks((ctx.work?.items ?? []).filter((x) => x.origin !== "ticket_import")), w.id), [ctx.work, w.id]);
+  const close = () => { if (full) writePxUrl({ wp: null }, "replace"); onClose(); };
   return (
-    <Drawer title={w.label} icon={<Ico icon={w.state === "needs_you" ? GitPullRequest : w.state === "stalled" ? PauseCircle : FlowArrow} c={w.state === "needs_you" || w.state === "stalled" ? "amber" : "teal"} />} onClose={onClose} testid="px-drawer-work"
-            sub={<><Tag>{KIND_WORDS[w.kind] ?? w.kind}</Tag>{w.state === "stalled" ? <Tag tone="amber">Stalled</Tag> : null}
-              {story?.number ? <span className="px-mono" data-testid="px-drawer-work-number">Run #{story.number}</span> : null}
-              <Cost usd={w.cost_usd} list={w.list_usd} testid="px-drawer-work-usd" />
-              {story?.minutes !== null && story?.minutes !== undefined ? <span className="px-mono">{story.minutes} min</span> : w.age ? <span className="px-mono">{w.age}</span> : null}</>}
-            actions={full ? <a className="px-icon-btn" href={pxHref(full)} title={l.build ? "Open full page in Code Tasks" : "Open the workflow run"} aria-label="Open full page" data-testid="px-drawer-work-expand"><ArrowsOut size={15} /></a> : null}
-            footer={<AskBox ctx={ctx} about={w.label} placeholder={`Ask ${ctx.overview.captain?.name ?? "BOSS"} about this work…`} />}>
-      {w.state === "needs_you" ? (
-        <div className="px-ny" data-testid="px-drawer-work-needs">
-          <span className="px-ny-ico" aria-hidden>!</span>
-          {/* "Ready to merge" only for a merge question, about ITS pull request (merge_pr):
-              never a merged PR, never a deploy gate's wait (pr_follow_up). */}
-          <b style={{ flex: 1 }} data-testid="px-drawer-work-needs-words">{mp ? (mp.failed ? `Merge failed: ${mp.failed}` : mp.follow_up_of ? `Follow-up fix after #${mp.follow_up_of} · ready to merge` : "Ready to merge") : w.why?.who === "you" ? w.why.words : "Waiting on you"}</b>
-          {/* ONE ACTION (screen 05b): merging is approving the build's merge question in BOSS;
-              with no question on record it opens the PR on GitHub. */}
-          {mp ? (l.decision
-            ? <a className="px-btn" data-kind="amber" data-size="s" href={pxHref(l.decision)} data-testid="px-drawer-work-merge"><GitMerge size={12} aria-hidden /> Merge {changeRef(mp.external_url, mp.number, true)}</a>
-            : <a className="px-btn" data-kind="amber" data-size="s" href={changeHref(mp.external_url) ?? undefined} {...linkTarget(mp.external_url)} data-testid="px-drawer-work-merge"><GitMerge size={12} aria-hidden /> {isLocalChangeUrl(mp.external_url) ? `Open ${changeRef(mp.external_url, mp.number, true)}` : `Merge ${changeRef(mp.external_url, mp.number)} ↗`}</a>)
-            : l.decision ? <PxLink href={l.decision} className="px-btn" testid="px-drawer-work-decide">Decide</PxLink>
-            : l.workflow_run ? <PxLink href={l.workflow_run} className="px-btn">Decide</PxLink> : null}
-        </div>
-      ) : null}
-      {w.state === "stalled" ? (
-        <div className="px-ny" data-testid="px-drawer-work-stalled">
-          <span className="px-ny-ico" aria-hidden>‖</span>
-          <span style={{ flex: 1 }}><b>Stalled{w.stalled_since ? ` since ${whenLocal(w.stalled_since)}` : ""}</b>
-            <small className="px-faint" style={{ display: "block" }}>{w.why?.words || "Nothing is working on it. Open the build to retry or stop it."}</small></span>
-          {l.build ? <PxLink href={l.build} className="px-btn" testid="px-drawer-work-stalled-open">Open build</PxLink> : null}
-        </div>
-      ) : null}
-      {l.merged_pr && w.state !== "needs_you" ? (
-        <p className="px-faint" data-testid="px-drawer-work-merged" style={{ margin: 0 }}>
-          Merged · {changeRef(l.merged_pr.external_url, l.merged_pr.number)}
-        </p>
-      ) : null}
-      {/* What its build waits for, and what the Shepherd found when it stopped (stuck_work). */}
-      {w.why && w.state !== "stalled" && !(w.state === "needs_you" && w.why.who === "you") ? (
-        <div data-testid="px-drawer-work-why"><WhyLine why={w.why} testId="px-drawer-why" /></div>
-      ) : null}
-      <DiagnosisFlow d={w.diagnosis} testId="px-drawer-diagnosis" />
-      {/* T6 (BOSSAPP-1047): the ticket this work came from — its status steps, a mid-run change
-          to decide, and what BOSS wrote back. Nothing for work that did not come from a ticket. */}
-      {w.source === "workflow_run" && !ctx.demo ? <LinkedTicket projectId={ctx.projectId} runId={w.id} /> : null}
-      <WorkStoryBody ctx={ctx} w={w} story={story} />
-      <DrawerAttempts w={w} ctx={ctx} />
-      {w.detail && !story ? <p style={{ margin: 0, lineHeight: 1.5 }} className="px-muted">{w.detail}</p> : null}
-      <div>
-        <span className="px-lbl">Links</span>
-        <div className="px-row px-wrap" style={{ marginTop: 6 }} data-testid="px-drawer-work-links">
-          {l.workflow_run ? <PxLink href={l.workflow_run} testid="px-drawer-link-run"><FlowArrow size={11} aria-hidden /> Workflow run</PxLink> : null}
-          {l.build ? <PxLink href={l.build} testid="px-drawer-link-build"><Code size={11} aria-hidden /> Build in Code Tasks</PxLink> : null}
-          {l.pr ? <ChangeLink url={l.pr.external_url} number={l.pr.number} className="px-chip" testid="px-drawer-link-pr" /> : null}
-          {l.deploy ? <PxLink href={l.deploy}><RocketLaunch size={11} aria-hidden /> Deploy</PxLink> : null}
-          {l.log ? <PxLink href={l.log} testid="px-drawer-link-log"><Terminal size={11} aria-hidden /> Live log</PxLink> : null}
-          {/* THIS RUN'S OWN LESSONS (05b-16): what its agents learned, consulted and reused —
-              the run's learned feed, not the whole graph. */}
-          <button type="button" className="px-chip" data-testid="px-drawer-link-learned" onClick={() => ctx.open("learned", w.id)}><Graph size={11} aria-hidden /> What it learned</button>
-          {w.href && !w.href.includes("drawer=") ? <PxLink href={w.href}><FileText size={11} aria-hidden /> Open</PxLink> : null}
-        </div>
-      </div>
+    <Drawer title={full ? <span className="px-faint" style={{ fontWeight: 500 }}>{ctx.overview.project.name} / Work / <span style={{ color: "var(--ink)" }}>{w.label}</span></span> : "Work"}
+            onClose={close} testid="px-drawer-work" wide full={full} bodyClass="wp2-body"
+            actions={<FullToggle full={full} onToggle={() => setFull(!full)} testid="px-drawer-work-full" />}>
+      <WorkPanel ctx={ctx} w={w} task={task} />
     </Drawer>
   );
 }

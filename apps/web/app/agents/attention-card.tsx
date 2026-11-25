@@ -21,6 +21,7 @@ import React, { useEffect, useId, useRef, useState } from "react";
 
 import { resolveDecisionAction } from "../actions";
 import { callAction } from "../../lib/call-action";
+import { couldNot, reasonOf } from "../../lib/action-result";
 import { GatedButton, useGate } from "../../components/gated";
 import { retryBuildAction } from "../factory/floor-actions";
 import { WaiveSheet } from "../factory/waive-sheet";
@@ -51,6 +52,7 @@ export function kindWord(item: Pick<AttentionItem, "kind" | "decisionKind"> & { 
   if (item.kind === "failed_step") return "Failed";
   if (item.kind === "gate_override") return "Checks";
   if (item.kind === "budget_refused") return "Budget";
+  if (item.kind === "build_failed") return "Failed";
   if (item.kind === "system_health") return "System";
   if (item.kind === "infra") {
     // What the card is about, not which screen raised it: on Observability an app that is down
@@ -77,10 +79,19 @@ export function whyOf(item: Pick<AttentionItem, "detail" | "actions">): string {
   return item.actions.some((a) => (a.effect ?? "").trim() === detail) ? "" : detail;
 }
 
-/** A run answer refused: a short sentence of ours; the server's words go in the tooltip. */
-export function answerRefusal(key: string, k?: number): string {
-  const step = k ? ` step ${k}` : " the step";
-  return key === "skip_step" ? `Couldn't skip${step}` : key === "retry_step" ? `Couldn't retry${step}` : "Couldn't do that";
+/** What a button does, as the verb of "Couldn't …": "Free space" → "free space". */
+function buttonVerb(label: string): string {
+  const t = (label ?? "").trim();
+  if (!t) return "do that";
+  return /^[A-Z][^A-Z]/.test(t) ? t.charAt(0).toLowerCase() + t.slice(1) : t;
+}
+
+/** An answer refused: what the button does AND the server's reason, on screen (BOSSAPP-1428).
+ *  The reason used to live only in a tooltip, so the card read "Couldn't do that". */
+export function answerRefusal(key: string, k?: number, reason?: string | null, label?: string): string {
+  const step = k ? `step ${k}` : "the step";
+  const what = key === "skip_step" ? `skip ${step}` : key === "retry_step" ? `retry ${step}` : buttonVerb(label ?? "");
+  return couldNot(what, reason);
 }
 
 export type AttentionCardProps = {
@@ -111,7 +122,7 @@ export const buildPatch = (runId: string) => ({ area: "code_tasks", build: runId
 /** Cards for work that stopped, and the face each wears: a failed step or failed checks FAILED,
  *  a budget refusal STOPPED the build. None is "stuck" (live work gone quiet). */
 const STUCK_KINDS = new Map<string, "failed" | "stopped">([
-  ["failed_step", "failed"], ["gate_override", "failed"], ["budget_refused", "stopped"]]);
+  ["failed_step", "failed"], ["gate_override", "failed"], ["budget_refused", "stopped"], ["build_failed", "failed"]]);
 
 /** Where a system-health option's "open" answer goes: a guide in a new tab, an area in place. */
 function openTarget(target: string) {
@@ -144,7 +155,6 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
   // STOPPING A RUN ENDS IT: asked once, like Reject (a refused gate offers Stop, never Skip).
   const [stopping, setStopping] = useState<AttentionAnswer | null>(null);
   const [skipWhy, setSkipWhy] = useState("");
-  const [errorTip, setErrorTip] = useState("");
   const [leaving, setLeaving] = useState(false);
   const [pulse, setPulse] = useState(false);
   const [waiving, setWaiving] = useState(false);
@@ -203,7 +213,7 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
           ? (run ? `Approved, ${subject} continues` : "Approved")
           : (run ? "Rejected, step failed" : "Rejected"));
       } else {
-        setError(result.error ?? "");
+        setError(result.error || couldNot(action.action === "reject" ? "reject" : "approve"));
         onRefresh?.();
       }
     } catch (e) {
@@ -221,7 +231,7 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
     if (a.key === "skip_step" && !(why ?? "").trim()) { setSkipping(a); return; }
     setSkipping(null);
     setBusy(a.key);
-    setError(""); setErrorTip("");
+    setError("");
     try {
       const r = await sendRunAnswer(projectId, actor, run.id,
         { key: a.key, label: a.label, enabled: a.enabled, reason: null,
@@ -233,11 +243,11 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
           : a.key === "skip_step" ? `Skipped step ${k ?? ""}`.trim()
           : a.key === "stop" ? "Run stopped" : a.label);
       } else {
-        setError(answerRefusal(a.key, k)); setErrorTip(r.error ?? "");
+        setError(answerRefusal(a.key, k, r.error, a.label));
         onRefresh?.();
       }
     } catch (e) {
-      setError(answerRefusal(a.key, k)); setErrorTip(e instanceof Error ? e.message : String(e));
+      setError(answerRefusal(a.key, k, reasonOf(e), a.label));
     } finally {
       setBusy(null);
     }
@@ -255,7 +265,7 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
     try {
       const r = await callAction(retryBuildAction, undefined, "code_task:retry")(form);
       if (r.ok) finish(r.attempt ? `Attempt ${r.attempt} started` : "Retrying");
-      else { setError(r.error ?? ""); onRefresh?.(); }
+      else { setError(r.error || couldNot("retry the build")); onRefresh?.(); }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -268,7 +278,7 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
     if (a.confirm && !sure) { setConfirmingOpt(a); return; }
     setConfirmingOpt(null);
     setBusy(a.key);
-    setError(""); setErrorTip("");
+    setError("");
     const form = new FormData();
     form.set("finding_id", item.findingId);
     form.set("option", a.key);
@@ -282,11 +292,11 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
         notifyChanged("decisions");
         onRefresh?.();
       } else {
-        setError("Couldn't do that"); setErrorTip(r.error ?? "");
+        setError(answerRefusal(a.key, undefined, r.error, a.label));
         onRefresh?.();
       }
     } catch (e) {
-      setError("Couldn't do that"); setErrorTip(e instanceof Error ? e.message : String(e));
+      setError(answerRefusal(a.key, undefined, reasonOf(e), a.label));
     } finally {
       setBusy(null);
     }
@@ -295,7 +305,7 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
   async function chooseInfra(a: AttentionAnswer) {
     if (busy || !a.enabled) return;
     setBusy(a.key);
-    setError(""); setErrorTip("");
+    setError("");
     const form = new FormData();
     form.set("id", item.id);
     form.set("option", a.key);
@@ -310,11 +320,11 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
         notifyChanged("infra");
         onRefresh?.();
       } else {
-        setError("Couldn't do that"); setErrorTip(r.error ?? "");
+        setError(answerRefusal(a.key, undefined, r.error, a.label));
         onRefresh?.();
       }
     } catch (e) {
-      setError("Couldn't do that"); setErrorTip(e instanceof Error ? e.message : String(e));
+      setError(answerRefusal(a.key, undefined, reasonOf(e), a.label));
     } finally {
       setBusy(null);
     }
@@ -386,8 +396,7 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
       ) : null}
 
       {error ? (
-        <span className="ag-att-error" role="alert" data-testid="ag-att-error" title={errorTip || undefined}
-              {...(errorTip ? {} : { "data-user-text": true })}>{error}</span>
+        <span className="ag-att-error" role="alert" data-testid="ag-att-error" data-user-text>{error}</span>
       ) : null}
 
       <div className="ag-att-actions">
@@ -419,13 +428,30 @@ export function AttentionCard({ item, projectId, actor, density = "card", focusK
         {item.kind === "approval" && build?.previewUrl ? (
           <a className="ag-btn" href={build.previewUrl} target="_blank" rel="noreferrer" data-testid="ag-att-open-preview">Open preview ↗</a>
         ) : null}
-        {(item.kind === "gate_override" || item.kind === "budget_refused") && build ? (
+        {/* A failed build's fix first (it says "then retry"), Retry beside it. */}
+        {item.kind === "build_failed" && build?.fix ? (
+          build.fix.href ? (
+            <a className="ag-btn" data-tone="primary" href={linkTo(Object.fromEntries(new URLSearchParams(build.fix.href.replace(/^[^?]*\?/, ""))), orgId)}
+               data-testid="ag-att-fix" title={build.fix.detail}
+               onClick={(e) => { if (plainClick(e)) { e.preventDefault(); navigate(Object.fromEntries(new URLSearchParams(build.fix!.href.replace(/^[^?]*\?/, "")))); } }}>
+              {build.fix.label}
+            </a>
+          ) : <span className="ag-att-kind" data-testid="ag-att-fix" title={build.fix.detail}>{build.fix.label}{build.fix.command ? <>: <code>{build.fix.command}</code></> : null}</span>
+        ) : null}
+        {(item.kind === "gate_override" || item.kind === "budget_refused" || item.kind === "build_failed") && build ? (
           <GatedButton permission="code_task:retry" type="button" className="ag-btn" data-testid="ag-att-retry"
                   disabled={!build.retryable || busy !== null} title={!build.retryable ? build.retryReason : undefined}
                   aria-busy={busy === "retry" || undefined} onClick={() => void retryBuild()}>
             {busy === "retry" ? <SpinnerGap size={12} className="ag-spin" aria-hidden /> : null}
             Retry
           </GatedButton>
+        ) : null}
+        {item.kind === "build_failed" && build ? (
+          <a className="ag-btn" href={buildHref} data-testid="ag-att-see"
+             title="Open the build: its steps, its log and the error in full"
+             onClick={(e) => { if (plainClick(e)) { e.preventDefault(); navigate(buildPatch(build.runId)); } }}>
+            See what happened
+          </a>
         ) : null}
         {item.kind === "gate_override" && build ? (
           <GatedButton permission="code_task:override" type="button" className="ag-btn" data-testid="ag-att-waive" disabled={busy !== null}

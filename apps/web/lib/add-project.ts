@@ -84,6 +84,22 @@ export function hostPort(host: string, port: number | null | undefined): string 
   return `${host.includes(":") && !host.startsWith("[") ? `[${host}]` : host}:${port}`;
 }
 export type Dot = { key: string; label: string; ok: boolean; detail: string; href: string | null };
+
+/** The readiness dots for a NEW app. The server reads them for the project that is open, so its
+ *  repository dot named THAT project's repo ("keeps its code locally in local_hello-world/…")
+ *  while the new app got its own (stranger test r2). A new app on this machine gets a fresh
+ *  local repository: nothing to connect. */
+export function newAppDots(dots: Dot[], where: string | null | undefined): Dot[] {
+  return dots.map((d) => {
+    if (d.key !== "repository") return d;
+    if (where === "local") {
+      return { ...d, label: "Local repo", ok: true, href: null,
+               detail: "BOSS makes this app its own repository on this machine" };
+    }
+    if (where === "github_new") return { ...d, label: "GitHub" };
+    return d;
+  });
+}
 export type Preview = {
   mode: Kind; workflows: Workflow[]; default_workflow: string | null;
   captain: { role_key: string | null; name: string | null; role?: string | null; squad: { role_key: string; name: string; role?: string }[]; candidates: Candidate[] };

@@ -14,6 +14,7 @@ import React, { useEffect, useState } from "react";
 import { ClockCounterClockwise, Coins, Folders, MapTrifold, Question, Sparkle } from "@phosphor-icons/react";
 
 import { AgentChat } from "../agent-ui";
+import { ChatFullscreenButton, useChatFullscreen } from "../../components/chat-fullscreen";
 import { subjectRef } from "../../lib/dock-subject";
 import { PX_PATHS, parseCaptainDetail, pxHref, usePxRead, writePxUrl, type CaptainDetail } from "../../lib/project-experience";
 import { whenLocal } from "../../lib/local-time";
@@ -49,21 +50,26 @@ export function CaptainDrawer({ ctx, onClose }: { ctx: PxCtx; onClose: () => voi
   const asked = useAsked();
   const draft = useDraft();
   const [history, setHistory] = useState(false);
+  // `&cap_full=1` (the Work panel's Ask Helm ⤢): open full screen, taken once.
+  const [askedFull] = useState(() => { try { return new URLSearchParams(window.location.search).get("cap_full") === "1"; } catch { return false; } });
+  useEffect(() => { if (askedFull) writePxUrl({ cap_full: null }, "replace"); }, [askedFull]);
+  const fs = useChatFullscreen(askedFull);
   const base = ctx.overview.captain;
   const c = read.data;
   const name = c?.name || base?.name || "BOSS";
   const roleKey = c?.role_key || base?.role_key || "";
   const scope = c?.scope || `${ctx.overview.project.name} only`;
   return (
-    <Drawer testid="px-drawer-captain" onClose={onClose} bodyClass="px-capd-b"
+    <Drawer testid="px-drawer-captain" onClose={onClose} bodyClass="px-capd-b" full={fs.full}
             icon={base || c ? <Face agent={{ name, role_key: roleKey }} size={34} state={c?.status.startsWith("Watching") ? "working" : "idle"} standalone /> : <Sparkle size={20} aria-hidden />}
             title={<span className="px-row" style={{ gap: 8 }}>{name}<Tag tone="blue">Captain</Tag></span>}
             sub={<span className="px-row px-capd-scope" data-testid="px-capd-scope">
               <Folders size={12} aria-hidden /> {scope}
               {c ? <><span aria-hidden>·</span><span className="px-dot" data-s="done" data-round aria-hidden /> knows {c.facts.toLocaleString()} facts</> : null}
             </span>}
-            actions={<button type="button" className="px-icon-btn" aria-pressed={history} title="Past conversations" aria-label="Past conversations"
-                             data-testid="px-capd-history" onClick={() => setHistory((v) => !v)}><ClockCounterClockwise size={15} /></button>}>
+            actions={<><ChatFullscreenButton full={fs.full} onToggle={fs.toggle} className="px-icon-btn" testid="px-capd-fullscreen" />
+                     <button type="button" className="px-icon-btn" aria-pressed={history} title="Past conversations" aria-label="Past conversations"
+                             data-testid="px-capd-history" onClick={() => setHistory((v) => !v)}><ClockCounterClockwise size={15} /></button></>}>
       {history ? (
         <div className="px-capd-hist" data-testid="px-capd-history-panel">
           <span className="px-lbl">Lately</span>

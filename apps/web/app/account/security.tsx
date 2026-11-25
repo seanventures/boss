@@ -96,9 +96,11 @@ function ProfileSheet({ profile, id, onClose, onSaved }: { profile: MyProfile; i
   );
 }
 
-export function AccountSecurity({ me, factors: initialFactors, identities: initialIdentities, host, linked = false, providers = [], passwordMin = 12, profile: initialProfile = null, passkeyReason = null }: {
+export function AccountSecurity({ me, factors: initialFactors, identities: initialIdentities, host, linked = false, providers = [], passwordMin = 12, profile: initialProfile = null, passkeyReason = null, publicOrigin = null }: {
   /** /v1/auth/options passkey_reason (passkey-support): no "Add a passkey" where none can be made. */
   passkeyReason?: string | null;
+  /** The bound public origin: a passkey works only there (passkeyOtherLoopbackWords). */
+  publicOrigin?: string | null;
   me: MeResponse | null; factors: Factor[]; identities: LinkedIdentity[]; host: string;
   /** The security policy's password minimum (GET /v1/auth/options). */
   passwordMin?: number;
@@ -109,13 +111,13 @@ export function AccountSecurity({ me, factors: initialFactors, identities: initi
   /** Back from linking a single sign-on account (`/account?linked=1`). */
   linked?: boolean;
 }) {
-  const { refresh } = useIdentity();
+  const { refresh, stepUp } = useIdentity();
   const [profile, setProfile] = useState<MyProfile | null>(initialProfile ?? (me ? { display_name: me.display_name, email: me.email, avatar_seed: null } : null));
   const [editingProfile, setEditingProfile] = useState(false);
   const guarded = useGuardedCall();
   const [factors, setFactors] = useState(initialFactors);
   const [identities, setIdentities] = useState(initialIdentities);
-  const [sheet, setSheet] = useState<null | "totp" | "codes" | { rename: Factor } | { remove: Factor } | "totp-off">(null);
+  const [sheet, setSheet] = useState<null | "totp" | "codes" | "regen" | { rename: Factor } | { remove: Factor } | "totp-off">(null);
   const [codes, setCodes] = useState<string[] | null>(null);
   const [rename, setRename] = useState("");
   const [busy, setBusy] = useState(false);
@@ -129,10 +131,10 @@ export function AccountSecurity({ me, factors: initialFactors, identities: initi
   const [canPasskey, setCanPasskey] = useState(false);
   const [noPasskey, setNoPasskey] = useState<string | null>(null);
   useEffect(() => {
-    const blocked = passkeyBlockWords(passkeyReason, passkeyPlace());
+    const blocked = passkeyBlockWords(passkeyReason, passkeyPlace(), publicOrigin);
     setNoPasskey(blocked);
     setCanPasskey(webauthnAvailable() && !blocked);
-  }, [passkeyReason]);
+  }, [passkeyReason, publicOrigin]);
   useEffect(() => {
     if (!linked) return;
     showToast("success", "Single sign-on linked");
@@ -218,10 +220,7 @@ export function AccountSecurity({ me, factors: initialFactors, identities: initi
               <span className="idn-d" data-kind="recovery">{FACTOR_ICON.recovery}</span>
               <span><b>Recovery codes</b><small>{left ? `${left} of 10 left` : left === 0 ? "None to use, make a set" : recovery?.detail ?? "None to use, make a set"}</small></span>
               <button type="button" className="idn-btn sm" data-testid="regen-codes"
-                onClick={() => act("New recovery codes replace the old ones.", async () => {
-                  const r = await idPost<RecoveryCodes>("/v1/identity/me/recovery-codes", {});
-                  setCodes(codesOf(r));
-                }, "New codes made", () => setSheet("codes"))}>{left !== null && left < 3 ? "Make new codes" : "Regenerate"}</button>
+                onClick={() => { setError(null); setSheet("regen"); }}>{left !== null && left < 3 ? "Make new codes" : "Regenerate"}</button>
             </div>
           </div>
           <ErrorLine error={error} />
@@ -337,6 +336,22 @@ export function AccountSecurity({ me, factors: initialFactors, identities: initi
             reload().catch(() => undefined); showToast("success", "Authenticator on");
             if (issued.length) { setCodes(issued); setSheet("codes"); } else setSheet(null);
           }} />
+        </Sheet>
+      ) : null}
+      {sheet === "regen" ? (
+        // Making new codes ends the old ones at once: confirm first, then prove it's you (step-up)
+        // even when this session signed in a minute ago (stranger test r2: one click killed them).
+        <Sheet title="Make new recovery codes?" icon={<LockSimple size={18} aria-hidden />} onClose={() => setSheet(null)} testId="regen-confirm">
+          <p className="idn-lede2" data-copy="prose">Your current codes stop working right away. You confirm it&apos;s you first.</p>
+          <div className="idn-mf"><span className="idn-spacer" /><button type="button" className="idn-btn ghost" data-testid="regen-cancel" onClick={() => setSheet(null)}>Cancel</button>
+            <button type="button" className="idn-btn danger" disabled={busy} data-testid="regen-confirm-go" onClick={() => {
+              const reason = "New recovery codes replace the old ones.";
+              void act(reason, async () => {
+                if (!(await stepUp(reason))) throw new IdentityError(401, "step_up_cancelled");
+                const r = await idPost<RecoveryCodes>("/v1/identity/me/recovery-codes", {});
+                setCodes(codesOf(r));
+              }, "New codes made", () => setSheet("codes"));
+            }}>Make new codes</button></div>
         </Sheet>
       ) : null}
       {sheet === "codes" && codes ? (

@@ -217,6 +217,8 @@ describe("a refusal reaches the operator as a sentence", () => {
       .toBe("name: Field required");
     expect(errorSentence({ detail: "an agent 'qa' already exists" }, 409))
       .toBe("an agent 'qa' already exists");
-    expect(errorSentence({}, 403)).toContain("role_review");
+    // Plain words, never the internal permission ids (BOSSAPP-1428).
+    expect(errorSentence({}, 403)).toContain("Ask an Admin");
+    expect(errorSentence({}, 403)).not.toMatch(/role_review|workflow_manage/);
   });
 });

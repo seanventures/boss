@@ -19,7 +19,6 @@ from .contract import ResourceMode, ResourcePlan, ResourceRequest
 #: Capabilities whose ports are never public unless the request says `public: true` (and a person
 #: approves it).
 DATA_CAPABILITIES = ("database", "cache", "object-storage", "vector", "search", "queue")
-PRODUCTION_ENVIRONMENTS = frozenset({"production", "prod"})
 
 
 @dataclass(frozen=True)
@@ -67,7 +66,9 @@ def evaluate(pairs: Iterable[tuple[ResourceRequest | None, ResourcePlan]], *, en
                                    f"{env_name} is bound by both {bound[env_name]} and {name}; "
                                    "rename one with bindings:"))
             bound.setdefault(env_name, name)
-    if environment in PRODUCTION_ENVIRONMENTS:
+    from ..services.production import is_production_environment
+
+    if is_production_environment(environment):
         out.append(Finding("production", "*", "approval",
                            f"{environment} infrastructure changes always need a person's approval"))
     return out

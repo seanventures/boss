@@ -88,6 +88,30 @@ describe("the New work card", () => {
     expect(tid("agent-proposal-open")!.getAttribute("href")).toContain("drawer=run%3Awfr_9");
   });
 
+  it("a NAMED workflow's card names it, shows its own steps and Start sends its key and inputs", async () => {
+    const named = { ...PROPOSAL, title: "API onboarding", workflow: "API onboarding", workflow_key: "api_onboarding",
+      steps: [{ key: "validate", label: "Validate", type: "agent" }, { key: "smoke", label: "Smoke test", type: "todo" }],
+      inputs: { tenant_name: "Lumen Pay" },
+      start: { href: "/v1/projects/helpdesk/work", method: "POST",
+               body: { kind: "feature", text: "Onboard Lumen Pay", title: "API onboarding", workflow_key: "api_onboarding", inputs: { tenant_name: "Lumen Pay" } } } };
+    const calls = stubFetch((c) => c.path === "/v1/projects/helpdesk/work" ? { body: { run_id: "wfr_9", href: "?tab=work" } } : { body: {} });
+    await mountAs(<ProposalCard projectId="helpdesk" threadId="t" messageId="m" proposal={proposalOf(named)!} />);
+    expect(tid("agent-proposal-card")!.textContent).toContain("Run · API onboarding");
+    expect(tid("agent-proposal-card")!.textContent).not.toContain("You approve");
+    await press(tid("agent-proposal-start"));
+    expect(calls.find((c) => c.path === "/v1/projects/helpdesk/work")!.body)
+      .toMatchObject({ workflow_key: "api_onboarding", inputs: { tenant_name: "Lumen Pay" } });
+  });
+
+  it("a named workflow missing inputs holds Start and says which", async () => {
+    const held = { ...PROPOSAL, workflow_key: "api_onboarding", missing_inputs: { names: ["tenant_yaml_path"], message: "API onboarding needs tenant_yaml_path before it can start." } };
+    const calls = stubFetch(() => ({ body: {} }));
+    await mountAs(<ProposalCard projectId="helpdesk" threadId="t" messageId="m" proposal={proposalOf(held)!} />);
+    expect((tid("agent-proposal-start") as HTMLButtonElement).disabled).toBe(true);
+    expect(tid("agent-proposal-said")!.textContent).toContain("tenant_yaml_path");
+    expect(calls.find((c) => c.path === "/v1/projects/helpdesk/work")).toBeUndefined();
+  });
+
   it("a start the project isn't ready for says why and keeps the card", async () => {
     stubFetch((c) => c.path === "/v1/projects/helpdesk/work"
       ? { status: 409, body: { detail: { message: "This project has no deploy target yet.", readiness: {} } } } : { body: {} });

@@ -74,6 +74,11 @@ def on_status_written(connection: Any, run_id: str) -> None:
             from .work_items import on_run_completed
 
             on_run_completed(connection, kind="code_task", run_id=run_id)
+            # WHAT WAS BUILT, WORKED OUT ONCE (project_experience.explained): the work drawer
+            # and the build page read the stored words, so a page view never pays for them.
+            from .project_experience.explained import store_build
+
+            store_build(connection, run_id)
     except Exception:  # noqa: BLE001
         log.warning("run terminal: could not settle %s", run_id, exc_info=True)
 

@@ -15,7 +15,7 @@ import json
 import math
 from contextlib import contextmanager
 from dataclasses import dataclass
-from threading import Event, Thread
+from threading import Event
 from typing import Any, Callable, Optional
 
 from sqlalchemy import text
@@ -750,7 +750,9 @@ class TypedDecisionSpend:
                     errors.append(error)
                     return
 
-        thread = Thread(target=beat, name=f"{self.stage}-lease-heartbeat", daemon=True)
+        from ..db import spawn_thread
+
+        thread = spawn_thread(beat, name=f"{self.stage}-lease-heartbeat", daemon=True, start=False)
         thread.start()
         try:
             yield errors

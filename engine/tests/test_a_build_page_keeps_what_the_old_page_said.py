@@ -301,3 +301,18 @@ def test_the_preview_says_where_it_runs_and_each_step_of_starting_it():
         {"label": "Install", "status": "ok", "duration_ms": 41000, "log": None},
         {"label": "Build", "status": "failed", "duration_ms": None, "log": "sh: vite: not found"},
     ]
+
+
+def test_the_outputs_header_counts_failed_checks_as_the_checks_row_does():
+    """park-bench-map change #2 (2026-11-19): Checks read "All 9 passed · … · 1 follow-up" and
+    the OUTPUTS header "Not ready · N checks failed" — it counted every gate that was not `ok`,
+    follow-ups and skipped gates included. One rule now (factory_view._gate_failed)."""
+    gate_row = {"gates_passed": GATES_PASSED, "gates_failed": [],
+                "evidence": {"quality_bar": {"followups": {"consistent": ["one naming nit"]}}}}
+    out = _outputs(_run(), gate_row=gate_row)
+    assert "1 follow-up" in out["checks"]["word"] and out["checks"]["word"].startswith("All ")
+    assert "checks failed" not in out["merge_ready"]["word"]
+    assert "check failed" not in out["merge_ready"]["word"]
+    assert fv._gate_failed({"ok": False}) and not fv._gate_failed({"ok": False, "skipped": True})
+    assert not fv._gate_failed({"ok": False, "followup": True})
+    assert not fv._gate_failed({"ok": False, "waived_by": "ceo"})

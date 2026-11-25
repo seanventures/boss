@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import traceback
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping, Optional
@@ -47,6 +48,7 @@ MAX_FIXES_PER_ITEM = 3
 #: Why BOSS does not fix it itself, per cause: the one line a person reads under "what to do".
 WHY_NOT: dict[str, str] = {
     "no_grant": "Only a person can let an agent act for them.",
+    "needs_model": "Only a person can connect a model (a subscription sign-in or an API key).",
     "review": "You asked to review always-on builds before they start.",
     "crash_loop": "It is BOSS's own bug: another attempt runs the same code.",
     "budget": "Raising a budget is a person's call.",
@@ -116,8 +118,12 @@ def span_words(minutes: int) -> str:
 def _clip(value: Any, n: int = 160) -> str:
     from .redaction import redact_secrets
 
-    s = " ".join(str(value or "").split())
+    # The sandbox tag is BOSS's bookkeeping, never words for a person (stranger test r6).
+    s = " ".join(re.sub(r"\s*\[substrate=[^\]]*\]", "", str(value or "")).split())
     s = redact_secrets(s)
+    from ..identity.redaction import redact_text
+
+    s = redact_text(s, public=True)          # a secret's id is not words for a person either
     return s if len(s) <= n else s[: n - 1].rstrip() + "…"
 
 
@@ -133,7 +139,9 @@ def _names(titles: list[str]) -> str:
 
 
 def _short_title(title: Any) -> str:
-    first = (str(title or "").splitlines() or [""])[0].strip()
+    from .plain_words import plain_title
+
+    first = plain_title((str(title or "").splitlines() or [""])[0].strip())
     return first if len(first) <= 40 else first[:39].rstrip() + "…"
 
 
@@ -195,9 +203,15 @@ def _job(connection: Any, run_id: str) -> Optional[dict[str, Any]]:
     return dict(row) if row else None
 
 
+def _lineage_root(ctx: Mapping[str, Any], run_id: str) -> str:
+    """The build a lineage of attempts started from (finalize_ctx.root_run_id), else itself."""
+    return str(ctx.get("root_run_id") or run_id)
+
+
 def _running_builds(connection: Any, project_id: Optional[str], exclude: str) -> list[dict[str, Any]]:
     rows = connection.execute(text(
-        "SELECT r.id, r.title, r.project_id, j.created_at AS job_at, j.heartbeat_at "
+        "SELECT r.id, r.title, r.project_id, j.created_at AS job_at, j.heartbeat_at, "
+        "r.finalize_ctx->>'root_run_id' AS root "
         "FROM jobs j JOIN code_task_runs r ON r.id = j.payload->>'run_id' "
         "WHERE j.kind = 'code.task' AND j.status IN ('leased', 'running') "
         "AND j.lease_expires_at > now() AND r.id <> :x ORDER BY j.created_at LIMIT 20"),
@@ -246,6 +260,23 @@ def _decision(connection: Any, decision_id: Optional[str]) -> Optional[dict[str,
 
 
 # ───────────────────────────── 1. waiting for what ─────────────────────────────
+
+
+def _needs_model(connection: Any, project_id: Any, since: Any = None
+                 ) -> Optional[dict[str, Any]]:
+    """The wait reason of work in a project with no usable model (model_readiness), or None.
+    A person's move, with where to fix it (`href`)."""
+    if not project_id:
+        return None
+    from . import model_readiness
+    from ..config import get_settings
+
+    if model_readiness.usable_model(connection, get_settings(), str(project_id)):
+        return None
+    s = _aware(since)
+    return {"code": "needs_model", "who": "you", "words": model_readiness.WAITING_FOR_MODEL,
+            "detail": "", "since": s.isoformat() if s else None, "eta_minutes": None,
+            "href": model_readiness.SETUP_MODELS_HREF}
 
 
 def wait_reason(connection: Any, run: Mapping[str, Any], *, job: Any = "load",
@@ -319,14 +350,30 @@ def wait_reason(connection: Any, run: Mapping[str, Any], *, job: Any = "load",
         return out("person", "you", f"Waiting for you: {asked}",
                    _clip((dec or {}).get("question") or "", 300), run.get("updated_at"))
 
+    # HANDED ON, NOT FAILED (continuation.py): an attempt whose repair continued elsewhere says
+    # where it went and how that ended — never "Blocked: … press Retry" on it.
+    from .continuation import continued_in
+
+    cont = continued_in(connection, run)
+    if cont is not None:
+        said = out("continued", "boss", cont["words"], "Open that attempt for its outcome.",
+                   run.get("updated_at"))
+        from .project_experience.common import href as _href
+
+        said["run_id"] = cont["run_id"]
+        said["href"] = _href(run.get("project_id"), area="code_tasks", build=cont["run_id"])
+        return said
+
     if status in ENDED_STATUSES:
         diag = _as_dict(ctx.get("diagnosis"))
         # The Shepherd's words only when they are about THIS ending (not an earlier one).
         fresh = _aware(diag.get("at")) and _aware(run.get("updated_at")) and \
             _aware(diag.get("at")) >= _aware(run.get("updated_at")) - timedelta(minutes=5)
-        words = ("Blocked: " if status == "blocked" else "Failed: ") + _clip(
+        from .plain_words import plain_sentence
+
+        words = ("Blocked: " if status == "blocked" else "Failed: ") + _clip(plain_sentence(
             (diag.get("cause") if fresh else None) or run.get("error") or diag.get("cause")
-            or "no reason was recorded", 140)
+            or "no reason was recorded"), 140)
         return out(status, "you" if diag.get("needs_person") or status == "blocked" else "boss",
                    words, _clip(run.get("error") or "", 300), run.get("updated_at"))
 
@@ -371,11 +418,28 @@ def wait_reason(connection: Any, run: Mapping[str, Any], *, job: Any = "load",
                    f"Retrying{' in about ' + span_words(eta_retry) if eta_retry else ' now'} "
                    f"after: {_clip(err.get('message') or 'an error', 90)}",
                    _clip(err.get("message") or "", 300), job.get("updated_at"), eta_retry)
+    # NO MODEL, SAID AS THAT (stranger test r3, 2026-11-18): a queued build with no model to run
+    # on read as "Waiting for budget" or as next in line. It waits for a person to add a model.
+    # After the job's own verdicts (a crash loop, a lost worker, a retry) and before every wait.
+    needs = _needs_model(connection, run.get("project_id"), job.get("updated_at"))
+    if needs is not None:
+        return needs
     if code == "budget_hold" or ctx.get("budget_wait_since"):
         return out("budget", "you", "Waiting for budget: the project's cap is reached",
                    _clip(err.get("message") or "Raise the cap or wait for spend to free up.", 300),
                    ctx.get("budget_wait_since") or job.get("updated_at"))
     running = _running_builds(connection, run.get("project_id"), run_id)
+    # ITS OWN REPAIR IS NOT A QUEUE (e2e recipe-box): a slot held by an attempt of this same
+    # build is this build moving, never "Waiting for a build slot … next in about 1h 17m".
+    mine = _lineage_root(ctx, run_id)
+    own = [r for r in running if mine in (str(r.get("root") or ""), str(r["id"]))
+           or str(r.get("root") or "") == run_id]
+    if own and len(own) == len(running):
+        return out("own_repair", "boss",
+                   f"Its repair is running: {_short_title(own[0]['title'])}",
+                   "This build's own next attempt holds the slot; nothing else is ahead of it.",
+                   job.get("updated_at"))
+    running = [r for r in running if r not in own]
     names = _names([_short_title(r["title"]) for r in running[:2]])
     typical = _typical_minutes(connection, run.get("project_id"))
     eta_slot: Optional[int] = None
@@ -612,6 +676,11 @@ def triage(ev: Mapping[str, Any]) -> dict[str, Any]:
                  "person is asked (BOSSAPP-885).", ["wait"], "wait",
                  "BOSS asks the next manager, then a person, if nobody takes it over in time.",
                  "boss")
+    if code == "needs_model":
+        return t("needs_model", "No model is connected",
+                 "Setup › Models has no usable model for this project, so nothing can run it.",
+                 ["ask_person"], "ask_person",
+                 "Add a model in Setup › Models, then press Retry.", "you")
     if code == "person_grant" or pw.get("blocker_type") == "authority_no_grant":
         return t("no_grant", f"No person's grant lets {pw.get('builder') or 'its builder'} act",
                  "Started by an always-on agent, not a person; the build refused to run without "
@@ -668,8 +737,21 @@ def triage(ev: Mapping[str, Any]) -> dict[str, Any]:
                  ["retry_on_this_version", "ask_person"], "retry_on_this_version",
                  "BOSS tries it once on this version; if it stops again, the reason is shown "
                  "here.", "boss")
+    if code == "continued":
+        return t("continued", reason.get("words") or "Its repair continued in the next attempt",
+                 reason.get("detail") or "", ["wait"], "wait",
+                 "Open the next attempt for its outcome; nothing is needed on this one.", "boss")
+    if code == "own_repair":
+        return t("own_repair", reason.get("words") or "Its repair is running",
+                 reason.get("detail") or "", ["wait"], "wait",
+                 "Nothing: its own next attempt is working on it.", "boss")
     if run.get("status") in ENDED_STATUSES:
-        return t("failed", "It failed: " + _clip(run.get("error") or "no reason recorded", 120),
+        raw_err = str(run.get("error") or "no reason recorded").strip()
+        for prefix in ("It failed: ", "Failed: "):
+            if raw_err.startswith(prefix):
+                raw_err = raw_err[len(prefix):].strip()
+                break
+        return t("failed", _clip(raw_err or "no reason recorded", 120),
                  _clip(run.get("error") or "", 300), ["ask_person"], "ask_person",
                  "Read the failure and press Retry, or change the request.", "you")
     # NO RULE MATCHED. Never "no recorded cause": investigate what the run, its job, its job
@@ -945,6 +1027,46 @@ def _act(connection: Any, settings: Any, run_id: str, move: str,
 
 CARD_ACTION = "stuck_work_needs_person"
 
+#: How long a queued job may wait with no worker activity anywhere before "no worker is taking
+#: work from the queue" is TRUE (the precheck's sandbox.worker uses the same 10/15 minutes).
+STARVED_QUEUED_MINUTES = 10
+STARVED_IDLE_MINUTES = 15
+
+
+def queue_starved(connection: Any, *, now: Optional[datetime] = None) -> Optional[dict[str, Any]]:
+    """IS THE QUEUE STARVED RIGHT NOW? BOSS checks this itself instead of asking a person to
+    restart a worker (Recipe box, 2026-11-19: "No worker is taking work from the queue. Restart
+    BOSS's worker" sat in Needs you while the worker was healthy and the queue empty).
+
+    Starved = a job has waited queued and unleased for STARVED_QUEUED_MINUTES AND no worker has
+    shown a sign of life (a heartbeat, a live lease, or a job it finished) for
+    STARVED_IDLE_MINUTES, install-wide (the worker is not project-scoped). Returns the evidence
+    ({"queued": n, "last_activity": at}) when starved, else None. Never raises: a queue BOSS cannot
+    read is not proof of a dead worker."""
+    now = now or _now()
+    try:
+        with connection.begin_nested():
+            row = connection.execute(text(
+                "SELECT (SELECT count(*) FROM jobs WHERE status = 'queued' AND lease_owner IS NULL "
+                "        AND COALESCE(run_after, created_at) < :queued_before) AS queued, "
+                "       GREATEST((SELECT max(heartbeat_at) FROM jobs), "
+                "                (SELECT max(updated_at) FROM jobs WHERE status IN "
+                "                 ('succeeded', 'completed', 'failed', 'deadlettered')), "
+                "                (SELECT max(lease_expires_at) FROM jobs WHERE lease_owner IS NOT NULL "
+                "                 AND lease_expires_at > :now)) AS last_activity"),
+                {"queued_before": now - timedelta(minutes=STARVED_QUEUED_MINUTES),
+                 "now": now}).mappings().first()
+    except Exception:  # noqa: BLE001 — unreadable is "not proven starved"
+        log.debug("queue_starved: could not read the queue", exc_info=True)
+        return None
+    queued = int((row or {}).get("queued") or 0)
+    last = _aware((row or {}).get("last_activity"))
+    if not queued:
+        return None
+    if last is not None and now - last <= timedelta(minutes=STARVED_IDLE_MINUTES):
+        return None
+    return {"queued": queued, "last_activity": last.isoformat() if last else None}
+
 
 #: BOSSAPP-885: the causes a manager AGENT can act on — the build itself stopped moving (BOSS's
 #: bounded fixes did not get it going). Platform causes (a crash loop, no worker, a budget cap, a
@@ -970,6 +1092,10 @@ def _raise_card(connection: Any, run_id: str, ev: Mapping[str, Any], tri: Mappin
     run = ev.get("run") or {}
     project = run.get("project_id")
     cause_code = str(tri.get("cause_code") or "")
+    if cause_code == "no_worker" and queue_starved(connection) is None:
+        # BOSS CAN CHECK THIS ITSELF: a worker is taking work (or nothing waits in the queue),
+        # so a person is never told to restart one.
+        return None
     if chain:
         if org_chain.open_for_run(connection, run_id) is not None:
             return None
@@ -1450,6 +1576,11 @@ def workflow_wait_reason(connection: Any, wfr_id: str, *,
                        f"{span_words(_mins((now - lease).total_seconds()))} ago", "", lease)
         if s["status"] in ("running", "leased"):
             return None
+    project = connection.execute(text("SELECT project_id FROM workflow_runs WHERE id = :w"),
+                                 {"w": wfr_id}).scalar()
+    needs = _needs_model(connection, project, run["updated_at"])
+    if needs is not None:
+        return needs                      # not "Waiting at meeting": waiting for a model
     quiet = _mins((now - (_aware(run["updated_at"]) or now)).total_seconds())
     waiting = [s["step_id"] for s in steps if s["status"] == "waiting"]
     if quiet >= STUCK_MINUTES * 4:

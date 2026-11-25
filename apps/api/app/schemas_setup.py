@@ -77,6 +77,9 @@ class ModelEntry(_Open):
     retry_at: Optional[str] = None
     # Claude Code only: {kind: long_lived_token | cli_login, label, expires_at}. Never a secret.
     credential: Optional[dict[str, Any]] = None
+    # Setup's write check (engine_policy.summary): {state: checking | ok | unproven |
+    # cannot_write | not_checked, label, tone, tip, checked_at, writer_mode}.
+    write_check: Optional[dict[str, Any]] = None
 
 
 class Detected(_Open):
@@ -97,6 +100,9 @@ class CatalogueEntry(_Open):
     kind: Literal["subscription", "api_key", "local"]
     key_url: Optional[str] = None
     example_model: Optional[str] = None
+    # OpenRouter: the model is optional; empty means the provider's own routing (default_model).
+    model_optional: Optional[bool] = None
+    default_model: Optional[str] = None
     # Local › Ollama: where this BOSS looks when the URL is left empty (OLLAMA_BASE_URL).
     example_base_url: Optional[str] = None
     fields: list[Literal["api_key", "token", "file", "base_url", "model"]]

@@ -26,6 +26,7 @@ when present; otherwise a small pure-Python Ed25519 verifier). Every run appends
 from __future__ import annotations
 
 import argparse
+import contextlib
 import base64
 import datetime as _dt
 import hashlib
@@ -240,7 +241,8 @@ class Env:
         self.backup_root = Path(backup_root or self._env("BOSS_BACKUP_DIR", "") or "~/boss-backups").expanduser()
         self.state_dir = Path(state_dir or self._env("BOSS_STEWARD_STATE", "") or "~/.boss").expanduser()
         self.log_path = Path(log_path or self._env("BOSS_STEWARD_LOG", "") or (self.state_dir / "steward.log"))
-        self.docker = docker or ["docker"]
+        docker_context = self._env("BOSS_DOCKER_CONTEXT", "")
+        self.docker = docker or (["docker", "--context", docker_context] if docker_context else ["docker"])
         self.image_tag = self._env("BOSS_COMMUNITY_IMAGE_TAG", "") or self._env("COMPOSE_PROJECT_NAME", "boss-community")
         self.compose_project = self._env("COMPOSE_PROJECT_NAME", "boss-community")
         #: Build cache is Docker-wide. It is pruned only through a BOSS-owned buildx builder
@@ -392,10 +394,34 @@ def docker_df(env: Env, runner: Callable = run_cmd) -> dict[str, float]:
     return out
 
 
+def colima_profile(env: Env) -> Optional[str]:
+    import re
+
+    if "--context" not in env.docker:
+        return None
+    context = env.docker[env.docker.index("--context") + 1]
+    if context == "colima":
+        return "default"
+    if context.startswith("colima-") and re.fullmatch(r"[a-zA-Z0-9_-]+", context[7:]):
+        return context[7:]
+    return None
+
+
 def docker_raw(env: Env) -> tuple[Optional[float], Optional[float]]:
-    """(allocated bytes on APFS, apparent size) of Docker Desktop's disk image; (None, None) elsewhere."""
+    """Allocated and apparent disk bytes for the selected local macOS container runtime."""
     if not env.is_mac:
         return None, None
+    profile = colima_profile(env)
+    if profile:
+        name = "colima" if profile == "default" else f"colima-{profile}"
+        root = Path(env._env("COLIMA_HOME", "~/.colima")).expanduser() / "_lima"
+        paths = [root / name / "diffdisk", root / name / "disk",
+                 root / "_disks" / name / "datadisk"]
+        disks = {path.resolve() for path in paths if path.is_file()}
+        if not disks:
+            return None, None
+        return (float(sum(path.stat().st_blocks * 512 for path in disks)),
+                float(sum(path.stat().st_size for path in disks)))
     for cand in DOCKER_RAW_CANDIDATES:
         p = Path(cand).expanduser()
         if p.exists():
@@ -625,18 +651,59 @@ def verb_prune_build_cache(env: Env, args: dict, *, dry_run: bool, runner: Calla
     return items, max(0.0, df["cache"] - after["cache"])
 
 
+#: How long `boss rollback`'s images stay after a healthy upgrade (prune.sh, disk_budget; BOSSAPP-1459).
+ROLLBACK_KEEP_HOURS = 72.0
+
+
+def rollback_expired(env: Env, runner: Callable, now: Optional[_dt.datetime] = None) -> bool:
+    """The prev-<tag> rollback point is past its window: .boss-rollback was written more than
+    BOSS_ROLLBACK_KEEP_HOURS ago, was not already dropped, and the API is healthy now (an
+    unhealthy release keeps its way back)."""
+    record: dict[str, str] = {}
+    try:
+        for line in (env.install_dir / ".boss-rollback").read_text().splitlines():
+            k, sep, v = line.partition("=")
+            if sep and not k.startswith("#"):
+                record[k.strip()] = v.strip()
+    except OSError:
+        return False
+    if record.get("BOSS_PREV_EXPIRED_AT") or record.get("BOSS_PREV_IMAGE_TAG") != f"prev-{env.image_tag}":
+        return False
+    try:
+        keep = float(env._env("BOSS_ROLLBACK_KEEP_HOURS", "") or ROLLBACK_KEEP_HOURS)
+        saved = parse_iso(record.get("BOSS_PREV_SAVED_AT", ""))
+    except ValueError:
+        return False
+    age_h = ((now or _dt.datetime.now(_dt.timezone.utc)) - saved).total_seconds() / 3600
+    if age_h < max(1.0, keep):
+        return False
+    res = runner([*env.docker, "ps", "-q", "--filter", f"label={COMPOSE_PROJECT_LABEL}={env.compose_project}",
+                  "--filter", "label=com.docker.compose.service=api", "--filter", "health=healthy"])
+    return bool((res.stdout or "").strip())
+
+
+def _mark_rollback_expired(env: Env) -> None:
+    with contextlib.suppress(OSError):
+        with open(env.install_dir / ".boss-rollback", "a", encoding="utf-8") as fh:
+            fh.write(f"BOSS_PREV_EXPIRED_AT={_dt.datetime.now(_dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}\n")
+
+
 def verb_remove_images(env: Env, args: dict, *, dry_run: bool, runner: Callable) -> tuple[list[str], float]:
-    """Labelled images other than the current tag, the prev-<tag> rollback point and any in use."""
+    """Labelled images other than the current tag, the prev-<tag> rollback point and any in use.
+    The rollback point too once it is past its window (`rollback_expired`)."""
     in_use = set()
     ps = runner([*env.docker, "ps", "-a", "--format", "{{.Image}}"])
     for line in (ps.stdout or "").splitlines():
         in_use.add(line.strip())
-    keep_tags = {env.image_tag, f"prev-{env.image_tag}"}
+    prev = f"prev-{env.image_tag}"
+    expired = rollback_expired(env, runner)
+    keep_tags = {env.image_tag} | (set() if expired else {prev})
     items, size = [], 0.0
     for row in _labelled(env, runner, "image"):
         repo, tag = str(row.get("Repository") or ""), str(row.get("Tag") or "")
         ref = f"{repo}:{tag}" if tag and tag != "<none>" else str(row.get("ID") or "")
-        if tag in keep_tags or tag.startswith("prev-") or ref in in_use or f"{repo}:{tag}" in in_use:
+        if tag in keep_tags or (tag.startswith("prev-") and not (expired and tag == prev)) \
+                or ref in in_use or f"{repo}:{tag}" in in_use:
             continue
         if not ref:
             continue
@@ -652,6 +719,11 @@ def verb_remove_images(env: Env, args: dict, *, dry_run: bool, runner: Callable)
         res = runner([*env.docker, "rmi", ref], timeout=300)
         if res.returncode == 0:
             done.append(ref)
+    if expired and any(r.endswith(f":{prev}") for r in done):
+        still = [r for r in items if r.endswith(f":{prev}") and runner(
+            [*env.docker, "image", "inspect", r]).returncode == 0]
+        if not still:            # only when every kept image is really gone
+            _mark_rollback_expired(env)
     after = docker_df(env, runner)
     freed = size if done else 0.0
     return done, freed if after else freed
@@ -752,6 +824,39 @@ def relabel_volumes(env: Env, runner: Callable = run_cmd, *, apply: bool = True)
     return out
 
 
+def remove_test_leftovers(env: Env, runner: Callable = run_cmd, *, apply: bool = True) -> list[dict[str, str]]:
+    """TEST DATA ONLY WITH A TEST POSTGRES (BOSSAPP-1459; upgrade.sh and `boss prune` run it). Only
+    `boss dev up` makes the test Postgres, yet its volume (4.8 GB on the operator's laptop) was
+    found on installs that run no tests. Its volume is removed when NO container — running or
+    stopped — uses it: a db-test container means someone runs tests here, and its data stays. Only
+    this install's Compose test volumes (REBUILDABLE/RETIRED keys of kind `test`), checked against
+    the volume's own Compose labels at the moment of removal. Never stops anything; never raises."""
+    out: list[dict[str, str]] = []
+    keys = [k for k, kind in {**REBUILDABLE_COMPOSE_VOLUMES, **RETIRED_COMPOSE_VOLUMES}.items() if kind == "test"]
+    for key in keys:
+        name = f"{env.compose_project}_{key}"
+        try:
+            if _inspect_label(env, runner, "volume", name, COMPOSE_PROJECT_LABEL) != env.compose_project \
+                    or _inspect_label(env, runner, "volume", name, COMPOSE_VOLUME_LABEL) != key:
+                continue            # absent, or not this project's: never ours to touch
+            users = _containers_using(env, runner, name)
+            if users:
+                out.append({"volume": name, "action": "kept",
+                            "reason": "a test Postgres uses it (boss dev up): test data stays"})
+                continue
+            if not apply:
+                out.append({"volume": name, "action": "would_remove",
+                            "reason": "test data with no test Postgres: would be removed"})
+                continue
+            res = runner([*env.docker, "volume", "rm", name], timeout=120)
+            out.append({"volume": name, "action": "removed" if res.returncode == 0 else "skipped",
+                        "reason": "test data with no test Postgres; `boss dev up` makes a new one"
+                        if res.returncode == 0 else f"docker volume rm: {(res.stderr or '').strip()[:120]}"})
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            out.append({"volume": name, "action": "skipped", "reason": f"docker unavailable: {type(exc).__name__}"})
+    return out
+
+
 def verb_cap_logs(env: Env, args: dict, *, dry_run: bool, runner: Callable) -> tuple[list[str], float]:
     """Truncate json logs above the cap for labelled containers (Linux, when the file is ours to
     write). On macOS the files live inside Docker Desktop's VM: nothing to do here (the compose
@@ -789,7 +894,7 @@ def verb_cap_logs(env: Env, args: dict, *, dry_run: bool, runner: Callable) -> t
 
 
 def verb_docker_trim(env: Env, args: dict, *, dry_run: bool, runner: Callable) -> tuple[list[str], float]:
-    """Docker Desktop: fstrim inside the VM so Docker.raw hands blocks back to APFS. Linux: no-op."""
+    """Discard unused VM blocks for the selected Colima or Docker Desktop runtime."""
     if not env.is_mac:
         return [], 0.0
     alloc, _ = docker_raw(env)
@@ -798,11 +903,15 @@ def verb_docker_trim(env: Env, args: dict, *, dry_run: bool, runner: Callable) -
     df = docker_df(env, runner)
     used = df["images"] + df["cache"] + df["volumes"] + df["containers"]
     reclaim = max(0.0, alloc - used)
-    items = ["Docker.raw"] if reclaim > 0 else []
+    profile = colima_profile(env)
+    items = [f"colima:{profile}" if profile else "Docker.raw"] if reclaim > 0 else []
     if dry_run or not items:
         return items, reclaim
-    res = runner([*env.docker, "run", "--rm", "--privileged", "--pid=host", TRIM_IMAGE,
-                  "nsenter", "-t", "1", "-m", "-u", "-n", "-i", "fstrim", "/var/lib/docker"], timeout=900)
+    command = (["colima", "--profile", profile, "ssh", "--", "sudo", "fstrim", "-a"]
+               if profile else
+               [*env.docker, "run", "--rm", "--privileged", "--pid=host", TRIM_IMAGE,
+                "nsenter", "-t", "1", "-m", "-u", "-n", "-i", "fstrim", "/var/lib/docker"])
+    res = runner(command, timeout=900)
     if res.returncode != 0:
         raise Refused(f"fstrim inside the Docker VM failed: {(res.stderr or '').strip()[:160]}")
     time.sleep(2)
@@ -1003,7 +1112,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--relabel-volumes", action="store_true",
                     help="recreate BOSS's rebuildable volumes that predate their labels, when unused "
                          "(the upgrade step; data volumes are never touched)")
-    ap.add_argument("--dry-run", action="store_true", help="with --relabel-volumes: say what would change")
+    ap.add_argument("--test-leftovers", action="store_true",
+                    help="remove the test Postgres volume when no container uses it (BOSSAPP-1459)")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="with --relabel-volumes or --test-leftovers: say what would change")
     ap.add_argument("--version", action="store_true")
     ns = ap.parse_args(argv)
     if ns.version:
@@ -1022,6 +1134,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     if ns.relabel_volumes:
         done = relabel_volumes(env, run_cmd, apply=not ns.dry_run)
         log_line(env, {"host_id": env.host_id, "relabel_volumes": done})
+        for row in done:
+            print(f"{row['volume']}: {row['action']} — {row['reason']}")
+        return 0
+    if ns.test_leftovers:
+        done = remove_test_leftovers(env, run_cmd, apply=not ns.dry_run)
+        log_line(env, {"host_id": env.host_id, "test_leftovers": done})
         for row in done:
             print(f"{row['volume']}: {row['action']} — {row['reason']}")
         return 0

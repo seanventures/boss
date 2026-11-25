@@ -1,4 +1,4 @@
-"""The web unit suite's quarantine (tests/web-quarantine.txt) hides nothing and only shrinks.
+"""The web unit suite's quarantine (tests/known-failures/web.txt) hides nothing and only shrinks.
 
 CI's web job (scripts/web-unit-ci.py) fails on any failing file not listed and on any listed file
 that passes. Here: every line is well formed, names a test file that exists, and carries a ticket
@@ -38,10 +38,12 @@ def test_every_line_names_an_existing_test_with_a_ticket_and_a_reason():
 
 def test_a_malformed_line_is_refused(tmp_path):
     mod = _module()
-    bad = tmp_path / "q.txt"
-    bad.write_text("tests/a.test.ts | BOSSAPP-1\n")
+    (tmp_path / "tests" / "known-failures").mkdir(parents=True)
+    (tmp_path / "tests" / "tiers.yaml").write_text("security: []\n")
+    (tmp_path / "tests" / "known-failures" / "web.txt").write_text(
+        "apps/web/tests/a.test.ts | BOSSAPP-1\n")
     with pytest.raises(ValueError, match="expected"):
-        mod.read_quarantine(bad)
+        mod.read_quarantine(tmp_path)
 
 
 def test_the_judge_fails_new_failures_and_fixed_or_missing_quarantined_files(tmp_path):
@@ -53,10 +55,13 @@ def test_the_judge_fails_new_failures_and_fixed_or_missing_quarantined_files(tmp
     try:
         mod.WEB = tmp_path
         assert mod.judge({"tests/old.test.ts": "failed", "tests/ok.test.ts": "passed"},
-                         quarantine) == []
+                         quarantine, set()) == []
         problems = mod.judge({"tests/new.test.ts": "failed", "tests/old.test.ts": "failed"},
-                             quarantine)
-        assert problems == ["NEW FAILURE: tests/new.test.ts (not in tests/web-quarantine.txt)"]
+                             quarantine, set())
+        assert problems == ["NEW FAILURE: tests/new.test.ts (not in tests/known-failures/web.txt)"]
+        # A red security guard fails the run, listed or not.
+        assert any(p.startswith("SECURITY GUARD RED: tests/old.test.ts") for p in mod.judge(
+            {"tests/old.test.ts": "failed"}, quarantine, {"tests/old.test.ts"}))
         assert any("NOW PASSES" in p for p in mod.judge({"tests/old.test.ts": "passed"}, quarantine))
         assert any("DID NOT RUN" in p for p in mod.judge({"tests/x.test.ts": "passed"}, quarantine))
         (tmp_path / "tests" / "old.test.ts").unlink()

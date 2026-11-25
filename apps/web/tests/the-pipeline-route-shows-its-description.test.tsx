@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * A pipeline route shows its description when that line is not just the title.
  * A blank description, or one that only repeats the title, says nothing.

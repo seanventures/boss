@@ -15,6 +15,9 @@
  */
 import { parsePrdRecord, type PrdRecord } from "./prd-record";
 import { parseCiHold, type CiHold } from "./ci-hold";
+import { parseYourApp, type YourApp } from "./your-app";
+import { parseAbout, parseExplained, type About, type Explained } from "./explained";
+import { parseValidation, type Validation } from "./validation-review";
 import { parseDiagnosis, parseWaitReason, type Diagnosis, type WaitReason } from "./stuck-work";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
@@ -23,7 +26,7 @@ import { onChanged } from "../app/changed";
 import { obsWrite } from "../app/observability/obs-write";
 import { useAreaShown } from "./area-shown";
 import { isConsoleLive, subscribeConsoleLive } from "./console-live";
-import { isHydrated, localWith, markHydrated } from "./local-time";
+import { isHydrated, localWith, markHydrated } from "./hydration-state";
 import { changeRef, isLocalRepo, repoHref } from "./repo-links";
 import { parseMachine, type MachineChecks } from "./machine-checks";
 
@@ -77,23 +80,65 @@ export type Node = { key: string; label: string; state: StepState; sub: string; 
   /** When a done node happened (ISO): its sub is that day in the VIEWER's zone, and "{day}" in
    *  its detail is replaced by it (04-02 — the server never writes a day). */
   at?: string };
+/** THE PROJECT'S LATEST BUILD, WHEN IT FAILED (engine work.failed_build): what every surface that
+ *  summarises the project's builds says instead of "Working" — the reason in words, Retry (the
+ *  build's own resume, POST /v1/code-tasks/{id}/retry) and the build's page. */
+export type BuildFailed = {
+  id: string; label: string; build_id: string | null; reason: string; at?: string;
+  /** "Build failed" · "Deploy failed" · "Follow-up failed" (engine build_failure). */
+  word: string;
+  /** Retry only when retrying can help; otherwise `fix` names what a person does and
+   *  `retry_reason` says why there is no Retry. */
+  retry: { run_id: string; href: string } | null; fix: FailureFix | null; retry_reason?: string;
+  see_href: string; work_href?: string;
+  /** On a live project the failure sits beside the stage chip, never in its place. */
+  beside?: boolean;
+};
+/** What a person does about a failure Retry can't fix: words, and where (a console link, or a
+ *  command to run on the BOSS host). */
+export type FailureFix = { label: string; detail: string; href: string; command?: string };
+export const parseFailureFix = (v: unknown): FailureFix | null => {
+  const x = o(v);
+  return s(x.label) ? { label: s(x.label), detail: s(x.detail), href: s(x.href), ...(s(x.command) ? { command: s(x.command) } : {}) } : null;
+};
+export const parseBuildFailed = (v: unknown): BuildFailed | null => {
+  const x = o(v);
+  if (!s(x.id)) return null;
+  const r = o(x.retry);
+  return { id: s(x.id), label: s(x.label, "Build"), build_id: s(x.build_id) || null, reason: s(x.reason, "BOSS didn't record why it stopped."),
+           word: s(x.word, "Build failed"), at: s(x.at) || undefined, retry: s(r.run_id) ? { run_id: s(r.run_id), href: s(r.href) } : null,
+           fix: parseFailureFix(x.fix), ...(s(x.retry_reason) ? { retry_reason: s(x.retry_reason) } : {}),
+           see_href: s(x.see_href), work_href: s(x.work_href) || undefined, beside: x.beside === true };
+};
 export type ProjectCard = {
   id: string; name: string; initials: string; repo: string; stage: Stage; journey: Node[];
   needs_you: number; running: number; health: Health; live_url: string; captain: Agent | null;
   updated_at: string; href: string; cost_week: number | null; series: number[];
+  /** When the project was made (the rail keeps the newest in view). */
+  created_at?: string;
   /** On a subscription: the week at list price (cost_words), never a bare $0.00. */
   on_subscription?: boolean; list_week?: number | null;
   /** Screen 02 (cards.extras): the ring's number, the two status lines, the live crew. */
-  status_label: string; onboarding_active: boolean; start_onboarding: Accept | null; archived: boolean;
+  status_label: string; onboarding_active: boolean; start_onboarding: Accept | null; awaiting_consent?: Accept | null; archived: boolean;
+  /** Its latest build failed (engine overview.latest_failed): the card says so in red. */
+  build_failed?: BuildFailed | null;
   uptime_pct: number | null; onboarding_progress: [number, number] | null; lines: string[]; line_tone: string;
   crew: Agent[]; merged: number; building: number; week_cap_usd: number | null;
   /** 02-05 the agents acting right now (the Running tile's working faces). */
   live_agents: Agent[];
+  /** YOUR APP (engine your_app.py): its small "Open app", when the project has one. */
+  app?: YourApp | null;
 };
 export type ProjectsSummary = { items: ProjectCard[]; week_cap_usd: number | null };
 export type Repo = { full_name: string; branch: string; access: { read: boolean; write: boolean; pr: boolean }; external_url: string };
 export type NeedsYou = {
-  id: string; kind: "merge" | "deploy" | "plan" | "question" | "setup"; label: string; detail: string; icon?: string;
+  /** `failed`: the latest build failed (work.failed_card) — red, Retry and See what happened. */
+  id: string; kind: "merge" | "deploy" | "plan" | "question" | "setup" | "failed"; label: string; detail: string; icon?: string;
+  /** A `failed` card's resume (the build's own retry, only when it can help), its fix when
+   *  Retry can't, why there is no Retry, and the build's page. */
+  retry?: { run_id: string; href: string } | null; see_href?: string; fix?: FailureFix | null; retry_reason?: string;
+  /** "info": a BOSS bug fixed since stopped it (build_restart_recovery) — said plainly, not red. */
+  tone?: "info";
   mini: { label: string; state: StepState }[]; action: { label: string; href: string; decision_id: string } | null;
   /** The piece of work it belongs to (a merge's build; the Onboarding row for its "only you"
    *  items), the PR on GitHub, and when it was asked (the drawer). */
@@ -147,19 +192,35 @@ function parseRelease(v: unknown): NeedsRelease | null {
  *  drawers): a finished item (done / failed) is placed by WHEN IT FINISHED (`updated_at`):
  *  "12h" within a day, "Sat" this week, else "Nov 2", in the viewer's zone; anything still
  *  open by how long since it started (`age`). Never "Sat" on one screen and "12h" on another. */
-export function workWhen(w: { state: string; age?: string; updated_at?: string | null; created_at?: string | null }, nowMs: number = Date.now()): string {
+export function workWhen(w: { state: string; age?: string; updated_at?: string | null; created_at?: string | null }, nowMs?: number): string {
   if (w.state !== "done" && w.state !== "failed") return w.age || "";
   const at = Date.parse(w.updated_at || w.created_at || "");
   if (!Number.isFinite(at)) return w.age || "";
-  const ago = Math.max(0, nowMs - at);
+  if (nowMs === undefined && !isHydrated()) {
+    return localWith(at, { month: "short", day: "numeric" });
+  }
+  const refMs = nowMs ?? Date.now();
+  const ago = Math.max(0, refMs - at);
   if (ago < 3_600_000) return `${Math.max(1, Math.floor(ago / 60_000))}m`;
   if (ago < 86_400_000) return `${Math.floor(ago / 3_600_000)}h`;
   return ago < 6 * 86_400_000 ? localWith(at, { weekday: "short" }) : localWith(at, { month: "short", day: "numeric" });
 }
 
+export type WorkStage = { key: string; label: string; state: StepState; agent?: Agent | null; started_at?: string; duration_s?: number | null };
+export type MergeFixing = { attempt: string; label: string; state: string; since: string; findings: number | null };
+
 export type WorkItem = {
   id: string; label: string; kind: string; state: WorkState; age: string;
-  stages: { key: string; label: string; state: StepState }[]; agents: Agent[]; cost_usd: number | null;
+  /** The run's or build's own status ("cancelled", "completed"): a cancelled `done` reads Cancelled. */
+  status?: string;
+  /** A failed build a later build of the same app replaced (engine work._replaced): history,
+   *  said "Replaced by a later build", never a red Failed. */
+  replaced_by?: { id: string; label: string; href: string } | null;
+  /** A refused build whose stated cause is gone (engine build_failure.waits_on): said faint. */
+  resolved?: { words: string } | null;
+  /** The stations. `agent` / `started_at` / `duration_s` (engine work._with_station_facts): who
+   *  did it and how long it took — the Work panel's "Who did what"; absent on an older engine. */
+  stages: WorkStage[]; agents: Agent[]; cost_usd: number | null;
   /** What the subscription calls would have cost at list price (costWords). */
   list_usd?: number | null;
   links: { workflow_run: string; build: string; pr: { number: number; external_url: string } | null; deploy: string; preview: string; decision: string;
@@ -167,7 +228,18 @@ export type WorkItem = {
     log?: string;
     /** The pull request the open merge question is about; `follow_up_of`: the merged PR it
      *  follows. Null when nothing waits on a merge (a merged PR never asks again). */
-    merge_pr?: { number: number; external_url: string; follow_up_of?: number | null; failed?: string } | null;
+    merge_pr?: { number: number; external_url: string; follow_up_of?: number | null; failed?: string;
+      /** Ready WITH follow-ups (engine quality_bar.merge_followups): BOSS fixes them after; never a failure. */
+      followups?: { count: number; queued: boolean; words: string } | null;
+      /** The build that opened this change (What was built reads it). */
+      build_id?: string;
+      /** A later attempt still fixing this same change (engine work._fixing): merge now or wait. */
+      fixing?: MergeFixing | null;
+      /** Its acceptance check's counts: never "Ready to merge" over 0 met. */
+      acceptance?: { met: number; partial: number; missing: number; total: number } | null;
+      /** Opened with its checks failing (engine checks_failing.for_work, the record its merge
+       *  card shows): never "Ready to merge"; the merge is still the person's, with a reason. */
+      checks_failing?: ChecksFailingWork | null } | null;
     /** The newest pull request merged on record. */
     merged_pr?: { number: number; external_url: string } | null };
   detail: string; href: string; source: string;
@@ -191,8 +263,9 @@ export type WorkItem = {
   where: string;
   /** Planned work: THE start door with its body (Start now), and the re-rank route (drag). */
   start: Accept | null; move: { href: string; method: string } | null;
-  /** The onboarding row: its mini flow (Discover → Ready → Backlog), what waits on you, its drawer. */
-  flow: { key: string; label: string; state: StepState }[]; waiting: { key: string; label: string }[]; onboarding: string;
+  /** The onboarding row: its mini flow (Discover → Ready → Backlog), what waits on you, its drawer.
+   *  A workflow run that changes no app: ITS OWN steps, condensed (engine work_outcome.step_flow). */
+  flow: WorkFlowNode[]; waiting: { key: string; label: string }[]; onboarding: string;
   /** The ticket it came from or works on (BOSSAPP-1047): the binding's provider, key, link,
    *  status and sync state; null when it is no ticket's. */
   ticket?: WorkTicket | null;
@@ -201,6 +274,56 @@ export type WorkItem = {
   work_item_id?: string; parent_work_item_id?: string | null; ticket_type?: string;
   /** The FULL title (`label` is a short name of a few words): a ticket's own title is shown whole. */
   title?: string;
+  /** The workflow it runs ("Minor Feature"), said beside its run number. */
+  workflow?: string;
+  /** The change's own preview (the build whose merge is open), shaped as the Your app card's:
+   *  Open preview / Recreate preview beside the merge. null when no attempt has one to show. */
+  preview_app?: YourApp | null;
+  /** What the work is (engine work_outcome): `code` changes an app (Spec → … → Production);
+   *  `investigation` / `job` run a workflow drawn as its own steps. Absent → code. */
+  shape?: WorkShape;
+  /** What an investigation found or a job produced, from the run's step outputs. */
+  outcome?: WorkOutcome | null;
+  /** THE WORKFLOW'S OWN STEPS, each with its stage (engine work_stages.step_list): the Work
+   *  panel's Plan · Build · Ship · Live. Absent on a build with no workflow and on an older engine. */
+  steps?: WorkStep[];
+  /** The file the run started from (an onboarded config): Plan's "taken in". */
+  input_file?: string | null;
+  /** The run this one re-ran: the same task, an earlier attempt. */
+  rerun_of?: string | null;
+};
+export type StageKey = "plan" | "build" | "ship" | "live";
+export type WorkStep = {
+  id: string; name: string; kind: string; capability: string | null; stage: StageKey; state: StepState;
+  started_at: string; completed_at: string; sub: string;
+  waiting_on_person?: boolean;
+  /** The screens the step's own record opens: its panel meeting, its build, its deploy. */
+  refs: { meeting?: string; build?: string; deploy?: string };
+};
+export type WorkShape = "code" | "investigation" | "job";
+/** One node of a workflow's own steps (several steps merge into one when there are many). */
+export type WorkFlowNode = {
+  key: string; label: string; state: StepState;
+  agent?: Agent | null; you?: boolean; duration_s?: number | null; started_at?: string;
+  /** The lead step's own sentence; every step name in the node. */
+  sub?: string; steps?: string[];
+  /** A person's decision: what they said, who, when. */
+  decided?: string; decided_by?: string; decided_at?: string;
+};
+export type OutcomeEntry = { step: string; text: string; state: string; person: boolean; who: string; at: string };
+export type WorkOutcome = {
+  shape: "investigation" | "job";
+  asked: { text: string; trigger: string; trigger_step: string; facts: { label: string; value: string }[] };
+  found: { step: string; text: string; short: string; confidence: number | null; rationale: string; refs: string[]; cited: number;
+           others: { text: string; confidence: number | null }[] } | null;
+  evidence: { step: string; text: string }[];
+  remediation: OutcomeEntry[];
+  produced: { step: string; text: string }[];
+  counts: { label: string; value: number }[];
+  links: { label: string; href: string }[];
+  run_href: string;
+  /** The one-line outcome the header and the row say. */
+  line: string;
 };
 export type WorkTicket = {
   provider: string; key: string; url: string; status: string; status_category: string; sync_status: string; connection_id: string;
@@ -209,7 +332,7 @@ export type WorkIssue = { provider: string; number: number | null; label: string
 /** One attempt of a piece of work: the build, a retry, or a follow-up (§3 `attempts[]`). */
 export type Attempt = {
   id: string; label: string; kind: "build" | "retry" | "followup"; title: string;
-  state: AttemptState; status: string; created_at: string; stalled_since: string;
+  state: AttemptState; status: string; created_at: string; updated_at?: string; stalled_since: string;
   cost_usd: number | null; list_usd?: number | null; pr: { number: number; external_url: string } | null; build: string; href: string;
 };
 export type AttemptState = (typeof ATTEMPT_STATES)[number];
@@ -236,8 +359,8 @@ export function parseStillAnswerable(raw: unknown): StillAnswerable | null {
 }
 /** "waiting since Nov 7": when the oldest still-answerable question was asked. */
 export function waitingSinceWords(since: string): string {
-  const d = new Date(since);
-  return Number.isFinite(d.getTime()) ? `waiting since ${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })}` : "waiting";
+  const formatted = localWith(since, { month: "short", day: "numeric" });
+  return formatted ? `waiting since ${formatted}` : "waiting";
 }
 export type DemoLogin = { user: string; label: string; reveal: { href: string; requires: string } | null };
 export type Overview = {
@@ -245,7 +368,11 @@ export type Overview = {
     /** Why it is not healthy, in words (health.state_of): "SLO breached: 98.13% up, target 99.5%". */
     health_reason?: string;
     /** The deploy moving now, or the last one that failed ("Deploying · 2/7"). */
-    deploy?: DeployChip | null };
+    deploy?: DeployChip | null;
+    /** The latest build failed: the header chip is red "Build failed" with its reason. */
+    build_failed?: BuildFailed | null;
+    /** Kept Easy Mode launch awaiting consent to resume. */
+    awaiting_consent?: Accept | null };
   journey: Node[]; needs_you: NeedsYou[];
   /** Work waiting for GitHub (BOSSAPP-922): an FYI under Needs you, never a card to act on and
    *  never counted as one — BOSS pushes it on its own. */
@@ -259,7 +386,9 @@ export type Overview = {
   still_answerable?: StillAnswerable | null;
   tiles: {
     open_work: { count: number; by_state: Record<string, number>; href: string } | null;
-    running: { count: number; current: { label: string; progress: [number, number]; agent: Agent | null; sub?: string; id?: string } | null; href: string } | null;
+    running: { count: number; current: { label: string; progress: [number, number]; agent: Agent | null; sub?: string; id?: string } | null; href: string;
+      /** Nothing running and the latest build failed: the tile names it, never "Nothing running". */
+      failed?: { id: string; label: string; reason: string; href: string; word?: string } | null } | null;
     staging: { health: Health; uptime_pct: number | null; p95_ms: number | null; series: number[]; href: string; p95_source?: string; label?: string;
                health_reason?: string; window?: string } | null;
     cost_week: { usd: number; delta_pct: number | null; cap_usd: number | null; series: number[]; href: string;
@@ -272,6 +401,10 @@ export type Overview = {
   /** The Backlog stage's list: the items its count is made of (open + accepted on the Roadmap). */
   backlog?: NextItem[];
   try_it: { url: string; demo_logins: DemoLogin[] } | null;
+  /** YOUR APP (engine your_app.py): the app, which version it shows, its preview's state. */
+  app?: YourApp | null;
+  /** ABOUT THIS APP (engine explained.about): the PRD's summary, criteria, approval, spec link. */
+  about?: About | null;
   week: { at: string; label: string; kind: string; href: string; detail?: string; sha7?: string }[];
 };
 export type Captain = { agent_id: string; name: string; role_key: string; avatar: string; status: string; squad: Agent[]; last_said: string;
@@ -335,7 +468,9 @@ export type Environment = {
 export type DeployPhaseRow = { key: string; label: string; status: "done" | "running" | "failed" | "pending" | "skipped";
   started_at: string; ended_at: string; elapsed_s: number | null; log: string };
 export type DeployProgress = { phases: DeployPhaseRow[]; index: number; total: number; current: string; failed_phase: string };
-export type TargetDeployState = "not_deployed" | "setting_up" | "deploying" | "waiting" | "live" | "failed";
+/** `fixing`: the newest deploy failed and BOSS is acting on it (engine deploy_repair.underway): a
+ *  repair build, a retry after a backoff, or the deploy's agent reading the log. */
+export type TargetDeployState = "not_deployed" | "setting_up" | "deploying" | "waiting" | "live" | "failed" | "fixing";
 export type TargetDeploy = {
   state: TargetDeployState; word: string; live: boolean; reason: string;
   attempt: DeployAttempt | null;
@@ -346,7 +481,7 @@ export type TargetDeploy = {
  *  Retry puts back in the queue, and `run_href` opens that run. */
 export type DeployAttempt = { id: string; kind: string; status: string; commit: string; at: string;
   workflow_run_id: string; step_id: string; run_href: string };
-const DEPLOY_STATES = ["not_deployed", "setting_up", "deploying", "waiting", "live", "failed"] as const;
+const DEPLOY_STATES = ["not_deployed", "setting_up", "deploying", "waiting", "live", "failed", "fixing"] as const;
 const PHASE_STATES = ["done", "running", "failed", "pending", "skipped"] as const;
 export const parseDeployProgress = (v: unknown): DeployProgress | null => {
   const x = o(v);
@@ -383,7 +518,9 @@ export type Deployments = {
   add_server_href: string;
   history: { id: string; label: string; sub: string; at: string; state: StepState; href: string; word: string; by: string; by_agent: boolean;
     /** A deploy that failed and an agent recovered (a later deploy went live): amber ↺. */
-    recovered: boolean }[];
+    recovered: boolean;
+    /** A failed deploy BOSS is fixing or fixed (engine deploy_repair.underway): amber, in its words. */
+    repaired?: boolean }[];
   /** No environment yet. `failed`: the first deploy failed before it had a target or a record —
    *  "Last deploy failed: <reason>" with the run whose step a Retry puts back. */
   empty: { label: string; detail: string; href: string; failed: boolean; workflow_run_id: string; step_id: string } | null;
@@ -496,12 +633,14 @@ export const parseCard = (v: unknown): ProjectCard => {
   return {
     id: s(x.id), name, initials: s(x.initials) || initialsOf(name), repo: s(x.repo), stage: oneOf(x.stage, STAGES, "onboarding"),
     journey: a(x.journey).map(parseNode), needs_you: n(x.needs_you), running: n(x.running), health: oneOf(x.health, HEALTHS, "unknown"),
-    live_url: s(x.live_url), captain: parseAgent(x.captain), updated_at: s(x.updated_at), href: s(x.href),
+    live_url: s(x.live_url), captain: parseAgent(x.captain), updated_at: s(x.updated_at), created_at: s(x.created_at), href: s(x.href),
     // `cost_week` is the week's dollars (a number); an object {usd} is read the same way.
     cost_week: nn(x.cost_week) ?? nn(o(x.cost_week).usd), series: nums(x.series).length ? nums(x.series) : nums(o(x.cost_week).series),
     on_subscription: x.on_subscription === true, list_week: nn(x.list_week),
     status_label: s(x.status_label), onboarding_active: x.onboarding_active === true, archived: x.archived === true,
+    build_failed: parseBuildFailed(x.build_failed),
     start_onboarding: parseAccept(x.start_onboarding),
+    awaiting_consent: parseAccept(x.awaiting_consent),
     uptime_pct: nn(x.uptime_pct),
     onboarding_progress: Array.isArray(x.onboarding_progress) && x.onboarding_progress.length === 2
       ? [n(x.onboarding_progress[0]), n(x.onboarding_progress[1])] : null,
@@ -509,6 +648,7 @@ export const parseCard = (v: unknown): ProjectCard => {
     crew: a(x.crew).map(parseAgent).filter((g): g is Agent => g !== null),
     live_agents: a(x.live_agents).map(parseAgent).filter((g): g is Agent => g !== null),
     merged: n(x.merged), building: n(x.building), week_cap_usd: nn(x.week_cap_usd),
+    app: parseYourApp(x.app),
   };
 };
 export const parseSummary = (v: unknown): ProjectsSummary => ({ items: a(o(v).items).map(parseCard).filter((c) => c.id), week_cap_usd: nn(o(v).week_cap_usd) });
@@ -523,16 +663,37 @@ export function logOfBuild(build: string): string {
   q.set("logs", "build");
   return `${path}?${q.toString()}`;
 }
+/** A change opened with its checks failing, as the Work row reads it: the gate keys, whether a
+ *  security gate is among them, and each named as the check it is ("security, review": engine
+ *  factory_view.gate_noun, never the pass-label "Review passed", which reads as a success). */
+export type ChecksFailingWork = { gates: string[]; security: boolean; words: string };
+export function parseChecksFailingWork(v: unknown): ChecksFailingWork | null {
+  const c = o(v);
+  const gates = a(c.gates).map((g) => (typeof g === "string" ? g : s(o(g).gate))).filter(Boolean);
+  if (!gates.length) return null;
+  return { gates, security: c.security === true, words: s(c.words) || gates.map((g) => g.replace(/_/g, " ")).join(", ") };
+}
 export const parseWorkItem = (v: unknown): WorkItem => {
   const x = o(v); const l = o(x.links); const pr = o(l.pr); const mp = o(l.merge_pr); const md = o(l.merged_pr);
   return {
     id: s(x.id), label: s(x.label), kind: s(x.kind, "feature"), state: oneOf(x.state, WORK_STATES, "planned"), age: s(x.age),
-    stages: a(x.stages).map((st) => ({ key: s(o(st).key), label: s(o(st).label), state: oneOf(o(st).state, STEP_STATES, "todo") })),
+    ...(s(x.status) ? { status: s(x.status) } : {}),
+    resolved: s(o(x.resolved).words) ? { words: s(o(x.resolved).words) } : null,
+    replaced_by: s(o(x.replaced_by).id) ? { id: s(o(x.replaced_by).id), label: s(o(x.replaced_by).label), href: s(o(x.replaced_by).href) } : null,
+    stages: a(x.stages).map((st) => ({ key: s(o(st).key), label: s(o(st).label), state: oneOf(o(st).state, STEP_STATES, "todo"),
+                                       agent: parseAgent(o(st).agent), started_at: s(o(st).started_at), duration_s: nn(o(st).duration_s) })),
     agents: agents(x.agents), cost_usd: nn(x.cost_usd), list_usd: nn(x.list_usd),
     links: { workflow_run: s(l.workflow_run), build: s(l.build), deploy: s(l.deploy), preview: s(l.preview), decision: s(l.decision),
              log: s(l.log) || (s(l.build) ? logOfBuild(s(l.build)) : ""),
              pr: pr.number || pr.external_url ? { number: n(pr.number), external_url: s(pr.external_url) } : null,
-             merge_pr: mp.number || mp.external_url ? { number: n(mp.number), external_url: s(mp.external_url), follow_up_of: nn(mp.follow_up_of), failed: s(mp.failed) } : null,
+             merge_pr: mp.number || mp.external_url ? { number: n(mp.number), external_url: s(mp.external_url), follow_up_of: nn(mp.follow_up_of), failed: s(mp.failed),
+                                                                     followups: n(o(mp.followups).count) ? { count: n(o(mp.followups).count), queued: o(mp.followups).queued === true, words: s(o(mp.followups).words) } : null,
+                                                                     build_id: s(mp.build_id),
+                                                                     fixing: s(o(mp.fixing).attempt) ? { attempt: s(o(mp.fixing).attempt), label: s(o(mp.fixing).label, "Follow-up"), state: s(o(mp.fixing).state),
+                                                                                                         since: s(o(mp.fixing).since), findings: nn(o(mp.fixing).findings) } : null,
+                                                                     acceptance: n(o(mp.acceptance).total) ? { met: n(o(mp.acceptance).met), partial: n(o(mp.acceptance).partial),
+                                                                                                               missing: n(o(mp.acceptance).missing), total: n(o(mp.acceptance).total) } : null,
+                                                                     checks_failing: parseChecksFailingWork(mp.checks_failing) } : null,
              merged_pr: md.number || md.external_url ? { number: n(md.number), external_url: s(md.external_url) } : null },
     detail: s(x.detail), href: s(x.href), source: s(x.source),
     why: parseWaitReason(x.why), diagnosis: parseDiagnosis(x.diagnosis),
@@ -546,13 +707,67 @@ export const parseWorkItem = (v: unknown): WorkItem => {
     origin: s(x.origin), origin_label: s(x.origin_label), next_up: x.next_up === true,
     lane: x.lane === "next" || x.lane === "later" ? x.lane : "", rank: nn(x.rank), where: s(x.where),
     start: parseAccept(x.start), move: o(x.move).href ? { href: s(o(x.move).href), method: s(o(x.move).method, "POST") } : null,
-    flow: a(x.flow).map((f) => ({ key: s(o(f).key), label: s(o(f).label), state: oneOf(o(f).state, STEP_STATES, "todo") })),
+    flow: a(x.flow).map(parseFlowNode),
+    ...(x.shape === "investigation" || x.shape === "job" || x.shape === "code" ? { shape: x.shape } : {}),
+    ...(o(x.outcome).shape ? { outcome: parseOutcome(x.outcome) } : {}),
     waiting: a(x.waiting).map((z) => ({ key: s(o(z).key), label: s(o(z).label) })).filter((z) => z.label),
     onboarding: s(l.onboarding),
     ticket: parseWorkTicket(x.ticket),
     ...(s(x.work_item_id) ? { work_item_id: s(x.work_item_id) } : {}),
     ...(x.origin === "ticket_import" ? { parent_work_item_id: s(x.parent_work_item_id) || null, ticket_type: s(x.ticket_type, "other") } : {}),
     ...(s(x.title) ? { title: s(x.title) } : {}),
+    ...(s(x.workflow) ? { workflow: s(x.workflow) } : {}),
+    preview_app: parseYourApp(x.preview_app ? { ...o(x.preview_app), name: s(x.label) } : null),
+    ...(Array.isArray(x.steps) ? { steps: a(x.steps).map(parseWorkStep).filter((z) => z.id) } : {}),
+    ...(s(x.input_file) ? { input_file: s(x.input_file) } : {}),
+    ...(s(x.rerun_of) ? { rerun_of: s(x.rerun_of) } : {}),
+  };
+};
+const STAGE_KEYS = ["plan", "build", "ship", "live"] as const;
+const parseWorkStep = (v: unknown): WorkStep => {
+  const x = o(v); const r = o(x.refs);
+  return {
+    id: s(x.id), name: s(x.name, s(x.id)), kind: s(x.kind, "capability"), capability: s(x.capability) || null,
+    stage: oneOf(x.stage, STAGE_KEYS, "build"), state: oneOf(x.state, STEP_STATES, "todo"),
+    started_at: s(x.started_at), completed_at: s(x.completed_at), sub: s(x.sub),
+    ...(x.waiting_on_person === true ? { waiting_on_person: true } : {}),
+    refs: { ...(s(r.meeting) ? { meeting: s(r.meeting) } : {}), ...(s(r.build) ? { build: s(r.build) } : {}), ...(s(r.deploy) ? { deploy: s(r.deploy) } : {}) },
+  };
+};
+const parseFlowNode = (v: unknown): WorkFlowNode => {
+  const f = o(v);
+  return {
+    key: s(f.key), label: s(f.label), state: oneOf(f.state, STEP_STATES, "todo"),
+    ...(f.agent !== undefined ? { agent: parseAgent(f.agent) } : {}),
+    ...(f.you === true ? { you: true } : {}),
+    ...(f.duration_s !== undefined ? { duration_s: nn(f.duration_s) } : {}),
+    ...(s(f.started_at) ? { started_at: s(f.started_at) } : {}),
+    ...(s(f.sub) ? { sub: s(f.sub) } : {}),
+    ...(Array.isArray(f.steps) ? { steps: a(f.steps).map((z) => s(z)).filter(Boolean) } : {}),
+    ...(s(f.decided) ? { decided: s(f.decided) } : {}), ...(s(f.decided_by) ? { decided_by: s(f.decided_by) } : {}),
+    ...(s(f.decided_at) ? { decided_at: s(f.decided_at) } : {}),
+  };
+};
+const parseEntry = (v: unknown): OutcomeEntry => {
+  const e = o(v);
+  return { step: s(e.step), text: s(e.text), state: s(e.state), person: e.person === true, who: s(e.who), at: s(e.at) };
+};
+export const parseOutcome = (v: unknown): WorkOutcome | null => {
+  const x = o(v); const ask = o(x.asked); const f = o(x.found);
+  if (x.shape !== "investigation" && x.shape !== "job") return null;
+  return {
+    shape: x.shape,
+    asked: { text: s(ask.text), trigger: s(ask.trigger), trigger_step: s(ask.trigger_step),
+             facts: a(ask.facts).map((z) => ({ label: s(o(z).label), value: s(o(z).value) })).filter((z) => z.value) },
+    found: s(f.text) ? { step: s(f.step), text: s(f.text), short: s(f.short), confidence: nn(f.confidence), rationale: s(f.rationale),
+                         refs: a(f.refs).map((z) => s(z)).filter(Boolean), cited: n(f.cited),
+                         others: a(f.others).map((z) => ({ text: s(o(z).text), confidence: nn(o(z).confidence) })).filter((z) => z.text) } : null,
+    evidence: a(x.evidence).map((z) => ({ step: s(o(z).step), text: s(o(z).text) })).filter((z) => z.text),
+    remediation: a(x.remediation).map(parseEntry).filter((z) => z.text),
+    produced: a(x.produced).map((z) => ({ step: s(o(z).step), text: s(o(z).text) })).filter((z) => z.text),
+    counts: a(x.counts).map((z) => ({ label: s(o(z).label), value: n(o(z).value) })).filter((z) => z.label),
+    links: a(x.links).map((z) => ({ label: s(o(z).label), href: s(o(z).href) })).filter((z) => z.href),
+    run_href: s(x.run_href), line: s(x.line),
   };
 };
 const parseWorkTicket = (v: unknown): WorkTicket | null => {
@@ -577,7 +792,7 @@ const parseAttempt = (v: unknown): Attempt => {
   const x = o(v); const pr = o(x.pr);
   return {
     id: s(x.id), label: s(x.label, "Build"), kind: oneOf(x.kind, ["build", "retry", "followup"] as const, "build"), title: s(x.title),
-    state: oneOf(x.state, ATTEMPT_STATES, "done"), status: s(x.status), created_at: s(x.created_at), stalled_since: s(x.stalled_since),
+    state: oneOf(x.state, ATTEMPT_STATES, "done"), status: s(x.status), created_at: s(x.created_at), updated_at: s(x.updated_at), stalled_since: s(x.stalled_since),
     cost_usd: nn(x.cost_usd), list_usd: nn(x.list_usd), pr: pr.number || pr.external_url ? { number: n(pr.number), external_url: s(pr.external_url) } : null,
     build: s(x.build), href: s(x.href),
   };
@@ -585,7 +800,7 @@ const parseAttempt = (v: unknown): Attempt => {
 /** The work item an attempt opens in the drawer: the group's row, seen as that one attempt. */
 export function attemptAsItem(w: WorkItem, t: Attempt): WorkItem {
   return {
-    ...w, id: t.id, label: t.label, run_number: null, created_at: t.created_at, state: t.state === "handed_on" ? "failed" : t.state, cost_usd: t.cost_usd, list_usd: t.list_usd ?? null,
+    ...w, id: t.id, label: t.label, run_number: null, created_at: t.created_at, state: t.state === "handed_on" ? "failed" : t.state, status: t.status, cost_usd: t.cost_usd, list_usd: t.list_usd ?? null,
     stalled_since: t.stalled_since, detail: t.title || w.detail, attempts: [], attempt_count: 1, followups: 0, retries: 0,
     links: { ...w.links, build: t.build, pr: t.pr, preview: "", decision: t.state === "needs_you" ? w.links.decision : "" },
     href: t.href,
@@ -607,9 +822,9 @@ export function attemptsPill(w: Pick<WorkItem, "attempt_count" | "followups" | "
   if (w.followups && !w.retries) return `↻ ${w.followups} follow-up${w.followups === 1 ? "" : "s"}`;
   return `${w.attempt_count} attempts`;
 }
-export const KIND_WORDS: Record<string, string> = { feature: "Feature", bug: "Bug", fix: "Fix", ticket: "Ticket", chore: "Chore", incident: "Incident", setup: "Setup" };
+export const KIND_WORDS: Record<string, string> = { feature: "Feature", bug: "Bug", fix: "Fix", ticket: "Ticket", chore: "Chore", incident: "Incident", setup: "Setup", job: "Job" };
 export const ATTEMPT_WORDS: Record<AttemptState, string> = {
-  planned: "Queued", running: "Running", stalled: "Stalled", handed_on: "Handed on", needs_you: "Needs you", done: "Done", failed: "Failed",
+  planned: "Queued", running: "Running", stalled: "Stalled", handed_on: "Earlier attempt", needs_you: "Needs you", done: "Done", failed: "Failed",
 };
 export const parseAccept = (v: unknown): Accept | null => {
   const x = o(v);
@@ -659,6 +874,22 @@ export type WorkStory = {
             link: { label: string; href: string; external_url: string } | null }[];
   /** The PRD this work was built from (BOSSAPP-929), with its meeting and repo file. */
   prd?: PrdRecord | null;
+  /** What was discussed / What was built (engine explained.for_work): decisions + bullets. */
+  explained?: Explained | null;
+  /** The review's comments, once each (engine explained.review_comments); `raw` before dedupe. */
+  review_comments?: { items: ReviewComment[]; raw: number };
+  /** The change's validation (boss.validation/v1, validation-review SPEC §1.3), when the engine
+   *  puts it on the story; the Work panel's Built column reads it instead of prose. */
+  validation?: Validation | null;
+};
+export type ReviewComment = { key: string; text: string; severity: "gate" | "P0" | "P1" | "P2" | "P3"; source: string; path: string; line: number | null; merged: number;
+  /** A finding BOSS moved to a follow-up (SPEC §5.4): "Deferred → follow-up #n". */
+  deferred?: { number: number | null; href: string } | null };
+const parseComment = (v: unknown): ReviewComment => {
+  const x = o(v); const d = o(x.deferred_to);
+  return { key: s(x.key), text: s(x.text), severity: oneOf(x.severity, ["gate", "P0", "P1", "P2", "P3"] as const, "P2"), source: s(x.source),
+           path: s(x.path), line: nn(x.line), merged: n(x.merged) || 1,
+           deferred: x.deferred_to ? { number: nn(d.number), href: s(d.href) } : null };
 };
 export const parseWorkStory = (v: unknown): WorkStory => {
   const x = o(v); const pr = o(x.pr);
@@ -672,6 +903,9 @@ export const parseWorkStory = (v: unknown): WorkStory => {
                link: s(l.label) ? { label: s(l.label), href: s(l.href), external_url: s(l.external_url) } : null };
     }),
     prd: parsePrdRecord(x.prd),
+    explained: parseExplained(x.explained),
+    review_comments: { items: a(o(x.review_comments).items).map(parseComment).filter((c) => c.text), raw: n(o(x.review_comments).raw) },
+    validation: x.validation ? parseValidation(x.validation) : null,
   };
 };
 
@@ -688,7 +922,8 @@ export const parseOverview = (v: unknown): Overview => {
     project: { id: s(p.id), name, initials: s(p.initials) || initialsOf(name), stage: oneOf(p.stage, STAGES, "onboarding"),
                repos: a(p.repos).map(parseRepo), live_url: s(p.live_url), status_label: s(p.status_label),
                health: oneOf(p.health ?? st.health, HEALTHS, "unknown"), health_reason: s(p.health_reason),
-               deploy: parseDeployChip(p.deploy) },
+               deploy: parseDeployChip(p.deploy), build_failed: parseBuildFailed(p.build_failed),
+               awaiting_consent: parseAccept(p.awaiting_consent) },
     journey: a(x.journey).map(parseNode),
     roadmap_count: nn(x.roadmap_count),
     still_answerable: parseStillAnswerable(x.still_answerable),
@@ -698,7 +933,11 @@ export const parseOverview = (v: unknown): Overview => {
     }).filter((g) => g.id),
     needs_you: a(x.needs_you).map((it) => {
       const y = o(it); const act = o(y.action);
-      return { id: s(y.id), kind: oneOf(y.kind, ["merge", "deploy", "plan", "question", "setup"] as const, "question"), label: s(y.label),
+      const rt = o(y.retry);
+      return { id: s(y.id), kind: oneOf(y.kind, ["merge", "deploy", "plan", "question", "setup", "failed"] as const, "question"), label: s(y.label),
+               ...(s(rt.run_id) ? { retry: { run_id: s(rt.run_id), href: s(rt.href) } } : {}), ...(s(y.see_href) ? { see_href: s(y.see_href) } : {}),
+               ...(parseFailureFix(y.fix) ? { fix: parseFailureFix(y.fix) } : {}), ...(s(y.retry_reason) ? { retry_reason: s(y.retry_reason) } : {}),
+               ...(s(y.tone) === "info" ? { tone: "info" as const } : {}),
                icon: s(y.icon), work_id: s(y.work_id), work_label: s(y.work_label), external_url: s(y.external_url), created_at: s(y.created_at),
                detail: s(y.detail), mini: mini(y.mini), release: parseRelease(y.release),
                diagnosis: parseDiagnosis(y.diagnosis),
@@ -710,6 +949,7 @@ export const parseOverview = (v: unknown): Overview => {
     tiles: {
       open_work: Object.keys(ow).length ? { count: n(ow.count), by_state: byState, href: s(ow.href) } : null,
       running: Object.keys(rn).length ? { count: n(rn.count), href: s(rn.href),
+        failed: s(o(rn.failed).id) ? { id: s(o(rn.failed).id), label: s(o(rn.failed).label), reason: s(o(rn.failed).reason), href: s(o(rn.failed).href), word: s(o(rn.failed).word) || undefined } : null,
         current: Object.keys(cur).length ? { label: s(cur.label), progress: [prog[0] ?? 0, prog[1] ?? 0], agent: parseAgent(cur.agent), sub: s(cur.sub), id: s(cur.id) } : null } : null,
       staging: Object.keys(st).length ? { health: oneOf(st.health, HEALTHS, "unknown"), uptime_pct: nn(st.uptime_pct), p95_ms: nn(st.p95_ms), p95_source: s(st.p95_source), label: s(st.label),
                                           health_reason: s(st.health_reason), window: s(st.window),
@@ -722,8 +962,10 @@ export const parseOverview = (v: unknown): Overview => {
     recent_work: a(x.recent_work).map(parseWorkItem).slice(0, 5),
     next: a(x.next).map(parseNext),
     backlog: a(x.backlog).map(parseNext),
-    errors: Object.fromEntries(Object.entries(o(x.errors)).map(([k, v]) => [k, s(v, "Couldn't load")])),
+    errors: Object.fromEntries(Object.entries(o(x.errors)).map(([k, v]) => [k, s(v, "BOSS gave no reason")])),
     try_it: Object.keys(ti).length ? { url: s(ti.url), demo_logins: a(ti.demo_logins).map(parseLogin) } : null,
+    app: parseYourApp(x.app),
+    about: parseAbout(x.about),
     // A week's event opens its record in the console (a PR's build, a deploy), else where it lives.
     // sha7 is the deploy's short commit when the engine sent one. Never derived from another field.
     week: a(x.week).map((w) => {
@@ -843,7 +1085,10 @@ export const parseDeployments = (v: unknown): Deployments => {
       const sub = s(y.sub) || [s(y.duration), s(y.smoke), s(y.reason)].filter(Boolean).join(" · ");
       const recovered = y.recovered === true || y.state === "recovered";
       return { id: s(y.id), label: s(y.label), sub, at: s(y.at), state: recovered ? "failed" : deployState(y.status, y.state), href: s(y.href),
-               word: s(y.state_word), by: s(y.by), by_agent: y.by_agent === true, recovered };
+               word: s(y.state_word), by: s(y.by), by_agent: y.by_agent === true, recovered,
+               // BOSS is acting on this failed deploy (engine deploy_repair.underway): amber, its words.
+               // A repair that stopped ("stuck") is not BOSS acting: it stays red.
+               repaired: !!s(o(y.repair).state) && s(o(y.repair).state) !== "stuck" };
     }),
     empty: s(o(x.empty).label) ? { label: s(o(x.empty).label), detail: s(o(x.empty).detail), href: s(o(x.empty).href),
                                    failed: o(x.empty).failed === true, workflow_run_id: s(o(x.empty).workflow_run_id),
@@ -1049,6 +1294,8 @@ export function pxHref(href: string, search = isHydrated() ? window.location.sea
   // shell's link handler restores the org on any in-console link that lacks it.
   if (!href) return "";
   if (/^(https?:)?\/\//.test(href) || href.startsWith("/v1/")) return href;
+  // A console page of its own (`/changes/p/24?tab=checks`): its path is the place, never dropped.
+  if (href.startsWith("/") && !href.startsWith("/?")) return href;
   const q = href.slice(href.indexOf("?") + 1);
   if (!href.includes("?") && !href.includes("=")) return href;
   const cur = new URLSearchParams(search);
@@ -1177,7 +1424,9 @@ export function usePxRead<T>(url: string | null, parse: (raw: unknown) => T, opt
 
 export type PxWrite = { ok: boolean; status: number; body: R | null; error: string | null; demo?: boolean;
   /** A start the project isn't ready for (409 from THE start door): its checklist, for "Start anyway". */
-  readiness?: unknown };
+  readiness?: unknown;
+  /** The refusal's own body (e.g. a ruleset proposal's 409 `already_open` {change, url}). */
+  refusal?: unknown };
 
 /** One write. Sample mode sends nothing and says so. */
 export async function pxWrite(path: string, body: R, label: string): Promise<PxWrite> {
@@ -1187,7 +1436,8 @@ export async function pxWrite(path: string, body: R, label: string): Promise<PxW
   // A refusal's own sentence (`message` beside an `error` code) reads better than the code.
   const sentence = r.status === 401 || r.status === 403 ? "" : s(o(r.refusal).message) || s(refused.message);
   return { ok: r.ok, status: r.status, body: r.body, error: !r.ok && sentence ? sentence : r.error,
-           ...(!r.ok && refused.readiness ? { readiness: refused.readiness } : {}) };
+           ...(!r.ok && refused.readiness ? { readiness: refused.readiness } : {}),
+           ...(!r.ok && r.refusal ? { refusal: r.refusal } : {}) };
 }
 export type WorkKind = "feature" | "bug" | "ticket";
 export const toWorkKind = (v: unknown): WorkKind => (v === "bug" || v === "ticket" ? v : "feature");
@@ -1333,7 +1583,9 @@ export function navigateTo(href: string): void {
 
 // ── Helm's plan for new work (screen 05: GET /v1/projects/{id}/work/plan) ─────────────────────
 export type PlanNode = { key: string; label: string; type: "agent" | "you" | "todo"; agent: Agent | null };
-export type WorkflowOption = { key: string; name: string; detail: string; work_class: string; fits: boolean };
+export type WorkflowOption = { key: string; name: string; detail: string; work_class: string; fits: boolean;
+  /** Starts from a file (engine new_work.starts_from_file): picked, New work opens its own Start form. */
+  starts_from_file?: boolean };
 export type WorkPlan = {
   kind: WorkKind; planner: Agent | null;
   workflow: { key: string; name: string; chosen: "mapped" | "default" | "picked"; why: string; href: string } | null;
@@ -1353,7 +1605,7 @@ export const parseWorkPlan = (v: unknown): WorkPlan => {
     estimate: x.estimate ? { minutes: nn(e.minutes), minutes_basis: e.minutes_basis === "history" || e.minutes_basis === "typical" ? e.minutes_basis : null,
                              minutes_runs: n(e.minutes_runs), usd: nn(e.usd), usd_runs: n(e.usd_runs) } : null,
     options: a(x.options).map((z) => ({ key: s(o(z).key), name: s(o(z).name), detail: s(o(z).detail), work_class: s(o(z).work_class),
-                                        fits: o(z).fits === true })).filter((z) => z.key),
+                                        fits: o(z).fits === true, starts_from_file: o(z).starts_from_file === true })).filter((z) => z.key),
   };
 };
 /** "≈ $3" for a run of a few dollars, "≈ $0.90" under one. */
@@ -1439,6 +1691,36 @@ export function nodeWords(n: Node, day: (ms: number) => string): { sub: string; 
 export function orgNeedsOf(summary: ProjectsSummary | null): number | null {
   if (!summary) return null;
   return summary.items.filter((c) => !c.archived).reduce((t, c) => t + (c.needs_you || 0), 0);
+}
+
+/** ONE SET, THREE PLACES (stranger test r3, 2026-11-18): the Approvals page said "Needs action 0 /
+ *  All 0", the rail "+8" and the bell "8". The 8 were set-up asks (add a model, pick a host) on
+ *  the projects a fresh install had just started, none on the open one, and the page never put the
+ *  8 next to its own tabs. Worse, the rail and bell took "elsewhere" as org total − this project's
+ *  live count while the page summed the OTHER projects' own counts, so whenever the summary's row
+ *  for the open project differed from its live count the two "elsewhere" numbers disagreed. Now the
+ *  bell, the rail badge, the tab title and the Approvals tabs all read this: `here` is the open
+ *  project's live count (the summary's own row until that answers), `elsewhere` the other open
+ *  projects' counts, `total` their sum. No project open: everything is elsewhere. */
+export type ApprovalCounts = { here: number | null; elsewhere: number; total: number | null };
+
+export function approvalCountsOf(here: number | null | undefined, summary: ProjectsSummary | null,
+                                 projectId?: string | null): ApprovalCounts {
+  if (!summary) return { here: here ?? null, elsewhere: 0, total: here ?? null };
+  const open = summary.items.filter((c) => !c.archived);
+  if (!projectId) {
+    const all = open.reduce((t, c) => t + (c.needs_you || 0), 0);
+    return { here: null, elsewhere: all, total: all };
+  }
+  const elsewhere = open.filter((c) => c.id !== projectId).reduce((t, c) => t + (c.needs_you || 0), 0);
+  const own = here ?? (open.find((c) => c.id === projectId)?.needs_you || 0);
+  return { here: own, elsewhere, total: own + elsewhere };
+}
+
+/** The counts for the open project; `here` is its live count (useAttention), when known. */
+export function useApprovalCounts(projectId: string | null | undefined, here: number | null | undefined): ApprovalCounts {
+  const read = usePxRead<ProjectsSummary>(PX_PATHS.summary(), parseSummary, { everyMs: 30_000 });
+  return approvalCountsOf(here, read.state === "ready" ? read.data : null, projectId);
 }
 
 export function useOrgNeeds(): number | null {

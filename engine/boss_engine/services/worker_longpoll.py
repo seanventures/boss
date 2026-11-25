@@ -120,17 +120,20 @@ class _LocalWaiters:
 
     # the one sweep per process
     def sweep(self, engine: Any) -> list:
+        from ..db import background
+
         kinds = self.wanted()
         if not kinds:
             return []
-        with engine.connect() as c:
-            found = [str(r[0]) for r in c.execute(text("""
-                SELECT DISTINCT kind FROM jobs
-                 WHERE (target IS NULL OR target = 'local') AND kind = ANY(:k)
-                   AND run_after <= now()
-                   AND (status IN ('queued', 'failed_retryable')
-                        OR (status IN ('leased', 'running') AND lease_expires_at <= now()))"""),
-                {"k": kinds}).all()]
+        with background():
+            with engine.connect() as c:
+                found = [str(r[0]) for r in c.execute(text("""
+                    SELECT DISTINCT kind FROM jobs
+                     WHERE (target IS NULL OR target = 'local') AND kind = ANY(:k)
+                       AND run_after <= now()
+                       AND (status IN ('queued', 'failed_retryable')
+                            OR (status IN ('leased', 'running') AND lease_expires_at <= now()))"""),
+                    {"k": kinds}).all()]
         self.sweeps += 1
         if found:
             self.wake(set(found))

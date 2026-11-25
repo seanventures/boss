@@ -414,6 +414,111 @@ def _steps_of(connection: Connection, project_id: str, start: Mapping[str, Any]
     return out
 
 
+def _named_key(connection: Connection, project_id: str, offer: Optional[Mapping[str, Any]]
+               ) -> Optional[str]:
+    """The key a `start_workflow` offer names, when it is one of THIS PROJECT'S OWN workflows.
+    BOSS's catalogue workflows (minor_feature, fast_fix …) keep the estimate-and-kind card; a
+    named card is for a workflow the project authored. Only the offer decides: nothing is
+    inferred from the person's prose."""
+    args = (offer or {}).get("args") if isinstance((offer or {}).get("args"), Mapping) else {}
+    if not offer or str(offer.get("tool") or "") != "start_workflow":
+        return None
+    key = str((args or {}).get("workflow_key") or "").strip()
+    if not key:
+        return None
+    own = connection.execute(text(
+        "SELECT 1 FROM workflow_definitions WHERE project_id = :p AND workflow_key = :k "
+        "AND status = 'active' AND namespace = 'product' "
+        "AND COALESCE(is_catalogue, false) = false AND active_version_id IS NOT NULL"),
+        {"p": project_id, "k": key}).first()
+    return key if own else None
+
+
+def _named_card(connection: Connection, project_id: str, key: str,
+                offer: Optional[Mapping[str, Any]], said: str, title: str,
+                message_id: Optional[str]) -> Optional[dict[str, Any]]:
+    """THE CARD FOR A NAMED WORKFLOW: its name, its own steps, its declared inputs as values.
+
+    A card for "run api_onboarding" showed the generic Build path (Plan, You approve, Build,
+    Review, PR) and Start made a Minor Feature run with the inputs only in prose. The workflow
+    the person named is the workflow that runs; if it cannot start yet the card says which
+    inputs it still needs rather than starting something else."""
+    try:
+        return _named_card_body(connection, project_id, key, offer, said, title, message_id)
+    except Exception:  # noqa: BLE001 — the card is a convenience; the generic one still shows
+        log.exception("turn_cards: named card for %s failed", key)
+        return None
+
+
+def _named_card_body(connection: Connection, project_id: str, key: str,
+                     offer: Optional[Mapping[str, Any]], said: str, title: str,
+                     message_id: Optional[str]) -> Optional[dict[str, Any]]:
+    import json
+
+    from .project_experience import new_work
+    from .workflows import missing_required_inputs
+
+    with connection.begin_nested():
+        got = new_work.plan(connection, project_id, "feature", key)
+        row = connection.execute(text(
+            "SELECT v.version, v.spec FROM workflow_definitions d JOIN workflow_versions v "
+            "ON v.id = d.active_version_id WHERE d.project_id = :p AND d.workflow_key = :k"),
+            {"p": project_id, "k": key}).mappings().first()
+    spec = row["spec"] if row else {}
+    if isinstance(spec, str):
+        spec = json.loads(spec or "{}")
+    args = (offer or {}).get("args") if isinstance((offer or {}).get("args"), Mapping) else {}
+    supplied = args.get("inputs") if isinstance(args.get("inputs"), Mapping) else {}
+    from .workflows import declared_input_names
+
+    schema = (spec or {}).get("input_schema")
+    properties = schema.get("properties") if isinstance(schema, Mapping) else None
+    declared = ({str(n) for n in properties} if isinstance(properties, Mapping)
+                else set(declared_input_names(schema)))
+    # ONLY WHAT THE WORKFLOW DECLARES: Start would be refused (422) for an undeclared one, so
+    # the card drops it and says so rather than offering a button that cannot work.
+    inputs = {str(k): v for k, v in supplied.items() if str(k) in declared}
+    ignored = sorted(str(k) for k in supplied if str(k) not in declared)
+    for name in (properties if isinstance(properties, Mapping) else {}):
+        if name in args and name not in inputs and name not in ("directive", "title", "inputs",
+                                                                   "workflow_key"):
+            inputs[str(name)] = args[name]
+    missing = missing_required_inputs(spec or {}, inputs)
+    flow = got.get("workflow") or {}
+    name = str(flow.get("name") or key)
+    steps = [{"key": st.get("id"), "label": st.get("label"),
+              "type": "you" if st.get("you") else "agent" if st.get("agent") else "todo",
+              **({"role_key": st["agent"].get("role_key")} if isinstance(st.get("agent"), Mapping)
+                 and st["agent"].get("role_key") else {}),
+              **({"agent": st["agent"]} if st.get("agent") else {})}
+             for st in got.get("steps") or []]
+    from .project_experience.titles import shorten
+
+    short = shorten(title, 6) if title else name
+    body: dict[str, Any] = {"kind": "feature", "text": said or name, "title": short,
+                            "workflow_key": key, "inputs": inputs}
+    if message_id:
+        body["source_ref"] = f"chat:{message_id}"
+    card: dict[str, Any] = {
+        "kind": "new_work", "work_kind": "feature", "title": short, "text": said or name,
+        "estimate": None, "steps": steps, "workflow": name, "workflow_key": key,
+        "workflow_version": row["version"] if row else None, "inputs": inputs,
+        "offer_id": str((offer or {}).get("id") or "") or None, "state": "open",
+        "start": {"href": f"/v1/projects/{project_id}/work", "method": "POST", "body": body},
+        "edit_href": _edit_href(project_id, "feature", said or name)}
+    if ignored:
+        card["ignored_inputs"] = {
+            "names": ignored,
+            "message": f"ignored: {', '.join(ignored)} ({name} does not take "
+                       f"{'it' if len(ignored) == 1 else 'them'})"}
+    if missing:
+        card["missing_inputs"] = {
+            "names": missing,
+            "message": f"{name} needs {', '.join(missing)} before it can start. Say "
+                       f"{'it' if len(missing) == 1 else 'them'} and I will set the card up again."}
+    return card
+
+
 def proposal(connection: Connection, project_id: str, *, offers: Iterable[Mapping[str, Any]],
              decision: Optional[Mapping[str, Any]], message: str,
              message_id: Optional[str] = None) -> Optional[dict[str, Any]]:
@@ -421,6 +526,14 @@ def proposal(connection: Connection, project_id: str, *, offers: Iterable[Mappin
     from .project_experience.titles import shorten
 
     offer = next((o for o in offers or [] if str(o.get("tool") or "") in _WORK_TOOLS), None)
+    named = _named_key(connection, project_id, offer) if offer else None
+    if named:
+        title0, said0 = _offer_words(offer)
+        card = _named_card(connection, project_id, named, offer,
+                           said0 or str((offer or {}).get("label") or "").strip(), title0,
+                           message_id)
+        if card:
+            return card
     title, said = _offer_words(offer) if offer else ("", "")
     if not offer:
         if str((decision or {}).get("action") or "") != "new_code_change":

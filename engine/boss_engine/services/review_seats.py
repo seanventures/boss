@@ -8,6 +8,10 @@ both come here, so neither can be left without a deadline or run a seat it said 
 - A seat's deadline starts when THAT seat starts, not when the panel does: a seat queued
   behind a slow one is not charged for the wait (review_code alone took 336-348 s on
   HelpDesk, so a single 420 s budget for the whole panel starved whoever went last).
+- Nor is a seat charged for the time its model calls wait for a slot on the provider's lane
+  (BOSSAPP-1450): on a one-slot host the seats take turns at the model, and that queue is not
+  the seat's work. Each seat runs under its own stage_clock.WaitMeter; its deadline counts
+  elapsed time minus what the meter saw it wait. The hard cap moves out by the same waits.
 - A seat past its deadline has its owned processes ended (owned_process.terminate_owner on
   the seat's owner id) and its slot freed, so the seats queued behind it still run. Its
   thread is abandoned, never waited on.
@@ -35,6 +39,8 @@ class SeatRun:
     timed_out: list[str] = field(default_factory=list)
     killed: int = 0
     started: dict[str, float] = field(default_factory=dict)
+    #: Seconds each seat waited for a model slot (not counted against its deadline).
+    slot_waits: dict[str, float] = field(default_factory=dict)
 
     def finished(self, label: str) -> bool:
         return label in self.results and label not in self.timed_out
@@ -50,6 +56,7 @@ def run_seats(seats: list[tuple[str, Callable[[], Any]]], *, max_workers: int,
     and that is what a deadline ends. `kill_strays`, when given, runs once after the panel when a
     seat timed out, at a moment no other seat is running any more."""
     from . import owned_process as _op
+    from . import stage_clock
 
     out = SeatRun()
     if not seats:
@@ -58,6 +65,7 @@ def run_seats(seats: list[tuple[str, Callable[[], Any]]], *, max_workers: int,
     lock = threading.Lock()
     state = {label: {"start": None, "done": False, "released": False, "abandoned": False}
              for label, _ in seats}
+    meters = {label: stage_clock.WaitMeter(clock) for label, _ in seats}
 
     def _free(st):
         # Called with `lock` held. Idempotent: a seat's slot is given back exactly once,
@@ -77,7 +85,8 @@ def run_seats(seats: list[tuple[str, Callable[[], Any]]], *, max_workers: int,
             st["start"] = clock()
             out.started[label] = st["start"]
         try:
-            with _op.owner_scope(SEAT_OWNER_KIND, owner_id(label)):
+            with _op.owner_scope(SEAT_OWNER_KIND, owner_id(label)), \
+                    stage_clock.metering(meters[label]):
                 value = fn()
             with lock:
                 if not st["abandoned"]:
@@ -101,6 +110,9 @@ def run_seats(seats: list[tuple[str, Callable[[], Any]]], *, max_workers: int,
         t.start()
 
     hard_cap = clock() + float(seat_deadline_s) * len(seats) + 60.0
+    # The hard cap moves out by the seats' slot waits, but never past a second panel's length:
+    # it is the backstop for a seat that ignores its kill, not a deadline of its own.
+    most_extra = float(seat_deadline_s) * len(seats)
     while True:
         to_kill: list[str] = []
         with lock:
@@ -108,10 +120,13 @@ def run_seats(seats: list[tuple[str, Callable[[], Any]]], *, max_workers: int,
             pending = [lb for lb, st in state.items() if not st["done"] and not st["abandoned"]]
             if not pending:
                 break
+            waited = {lb: meters[lb].waited(now) for lb in state}
+            cap = hard_cap + min(most_extra, sum(waited.values()))
             for lb in pending:
                 st = state[lb]
-                overdue = st["start"] is not None and now - st["start"] > seat_deadline_s
-                if overdue or now > hard_cap:
+                overdue = (st["start"] is not None
+                           and now - st["start"] - waited[lb] > seat_deadline_s)
+                if overdue or now > cap:
                     st["abandoned"] = True
                     out.timed_out.append(lb)
                     if st["start"] is not None:
@@ -124,6 +139,7 @@ def run_seats(seats: list[tuple[str, Callable[[], Any]]], *, max_workers: int,
             except Exception:  # noqa: BLE001 — a failed kill never sinks the panel
                 pass
         time.sleep(poll_s)
+    out.slot_waits = {lb: round(m.waited(), 1) for lb, m in meters.items() if m.waited() > 0}
     if out.timed_out and kill_strays is not None:
         try:
             out.killed += int(kill_strays() or 0)

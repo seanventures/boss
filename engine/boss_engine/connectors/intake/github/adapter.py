@@ -12,12 +12,12 @@ self       sender.login == our bot login (connection `bot_login`, else the insta
 push       `data.changed_files` is built from the commits in the payload when GitHub sent them
            all; a truncated payload (> 20 commits) fetches the compare lazily in `enrich`, in
            the processor, never in the request — and only when the connection holds a token.
-pull_request  `data.changed_files` is fetched LAZILY (AMEX-G11, BOSSAPP-1169): `enrich` marks it
+pull_request  `data.changed_files` is fetched LAZILY (BOSSAPP-1169): `enrich` marks it
            pending, and the router asks `load_lazy` for it only when a route's filter reads it —
            GET /pulls/{n}/files, paginated, capped at MAX_CHANGED_FILES, with the connection's
            API token or the project's binding of that repository — so a route can filter
            `{"field": "data.changed_files", "op": "glob", "value": "tenants/*.yaml"}`.
-poll       (AMEX-G1, BOSSAPP-1175) for an install GitHub cannot reach: `poll` lists the
+poll       (BOSSAPP-1175) for an install GitHub cannot reach: `poll` lists the
            repository's open pull requests and branch heads since the cursor and turns each new
            head commit into a delivery IDENTICAL in shape to the webhook's (`pull_request`
            opened / synchronize, `push`), so parse, enrich, loop prevention and every route
@@ -29,6 +29,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import os
 import re
 from typing import Any, Callable, Mapping, Optional
 from urllib.parse import quote
@@ -84,6 +85,16 @@ _FIELD_WHITELIST = {
 
 def github_signature(secret: str, body: bytes) -> str:
     return "sha256=" + hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+
+
+def _api_base(conn: IntakeConnection) -> str:
+    raw = (
+        str(conn.get("api_base_url") or "").strip()
+        or str(getattr(conn.app_settings, "github_api_base_url", "") or "").strip()
+        or str(os.environ.get("BOSS_GITHUB_API_URL") or "").strip()
+        or API_BASE
+    )
+    return raw.rstrip("/") or API_BASE
 
 
 def _default_transport(method: str, url: str, headers: Mapping[str, str],
@@ -286,7 +297,8 @@ class GitHubIntakeAdapter(IntakeAdapterBase):
             ev.data["changed_files_source"] = "unavailable"
             return ev
         headers = _headers(conn, str(repo))
-        url = f"{API_BASE}/repos/{repo}/compare/{quote(str(before), safe='')}...{quote(str(after), safe='')}"
+        base = _api_base(conn)
+        url = f"{base}/repos/{repo}/compare/{quote(str(before), safe='')}...{quote(str(after), safe='')}"
         try:
             status, payload, _ = _transport_with_headers("GET", url, headers,
                                                          "intake.github.compare")
@@ -325,10 +337,11 @@ class GitHubIntakeAdapter(IntakeAdapterBase):
             ev.data["changed_files_source"] = "unavailable"
             return ev
         headers = _headers(conn, str(repo))
+        base = _api_base(conn)
         files: list[dict[str, Any]] = []
         page = 1
         while len(files) < MAX_CHANGED_FILES:
-            url = (f"{API_BASE}/repos/{repo}/pulls/{number}/files"
+            url = (f"{base}/repos/{repo}/pulls/{number}/files"
                    f"?per_page={PAGE_SIZE}&page={page}")
             try:
                 status, payload, _ = _transport_with_headers("GET", url, headers,
@@ -359,7 +372,7 @@ class GitHubIntakeAdapter(IntakeAdapterBase):
         ev.data["changed_files_source"] = "pulls_api"
         return ev
 
-    # -- PULL (AMEX-G1) ---------------------------------------------------------------------------
+    # -- PULL (BOSSAPP-1175) ---------------------------------------------------------------------------
 
     def poll(self, conn: IntakeConnection, cursor: Cursor, limit: int) -> PollResult:
         """New head commits since `cursor`, as webhook-shaped deliveries.
@@ -383,9 +396,10 @@ class GitHubIntakeAdapter(IntakeAdapterBase):
         since = str(state.get("since") or cursor.cursor_time or "")
         etags: dict[str, str] = dict(state.get("etags") or {})
         headers = _headers(conn, repo)
+        base = _api_base(conn)
         deliveries: list[StoredRaw] = []
 
-        pulls_url = (f"{API_BASE}/repos/{repo}/pulls?state=open&sort=updated&direction=desc"
+        pulls_url = (f"{base}/repos/{repo}/pulls?state=open&sort=updated&direction=desc"
                      f"&per_page={min(PAGE_SIZE, MAX_POLLED_PULLS)}")
         status, pulls = self._get(pulls_url, headers, etags, "pulls")
         heads: dict[str, str] = dict(state.get("pulls") or {})
@@ -409,7 +423,7 @@ class GitHubIntakeAdapter(IntakeAdapterBase):
                     "repository": (pr.get("base") or {}).get("repo") or {"full_name": repo},
                     "sender": pr.get("user") or {}}, f"pr:{repo}#{number}@{sha}"))
             heads = seen                         # a closed PR leaves the cursor
-        branches_url = f"{API_BASE}/repos/{repo}/branches?per_page={PAGE_SIZE}"
+        branches_url = f"{base}/repos/{repo}/branches?per_page={PAGE_SIZE}"
         status_b, listed = self._get(branches_url, headers, etags, "branches")
         tips: dict[str, str] = dict(state.get("branches") or {})
         pushes = str(conn.get("poll_pushes", "true")).strip().lower() not in (
@@ -482,7 +496,10 @@ class GitHubIntakeAdapter(IntakeAdapterBase):
                 ours = ""
         if login and ours and login == ours:
             return True
-        if ev.bossactor.kind == "bot" and login not in _csv(conn.get("allow_bots")):
+        allow = conn.get("allow_bots")
+        if allow is True:
+            return False
+        if ev.bossactor.kind == "bot" and login not in _csv(allow):
             return True
         return False
 

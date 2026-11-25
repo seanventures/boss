@@ -6,7 +6,8 @@ start_delivery_workflow). Which workflow that is:
 
   feature, ticket  the project's mapped small-feature workflow, else Minor Feature
                    (start_project.how_to_start — exactly what the old "What should we add?" ran);
-  bug              the project's `bugfix` mapping when it has one, else the feature path;
+  bug              the project's `bugfix` mapping when it has one, else its Fast Fix (the
+                   small path: one build, no PRD panel), else the feature path;
   picked           any active product workflow of this project, when the person used "change".
 
 HELM'S PLAN is that workflow's REAL steps as a strip, in the order its version lists them:
@@ -28,6 +29,8 @@ and `source_url` on the run, so the Work row shows the issue chip (#12) linking 
 """
 from __future__ import annotations
 
+from ..production import is_production_environment
+
 import re
 from statistics import median
 from typing import Any, Mapping, Optional
@@ -39,6 +42,8 @@ from .common import agents, as_json, face, href
 
 KINDS = ("feature", "bug", "ticket")
 BUG_CLASS = "bugfix"
+#: A Bug's workflow when the project maps none to `bugfix`: one build, no PRD panel.
+SMALL_BUG_WORKFLOW = "fast_fix"
 #: How many completed runs the time estimate reads (the newest).
 HISTORY_RUNS = 20
 #: Steps from the deploy on wait on a person's release: not "how long it takes".
@@ -188,6 +193,14 @@ def choose(connection: Connection, project_id: str, kind: str,
         if mapped:
             return {"workflow_key": None, "work_class": BUG_CLASS, "chosen": "mapped",
                     "resolved": mapped}
+        # THE SMALL PATH FOR A BUG (the light lane, 2026-11-18): with no bugfix mapping, a Bug
+        # runs the project's Fast Fix — one build, no research, no PRD panel — never the
+        # feature path. Recipe box's one-test Bug ran Minor Feature: a panel, a PRD to
+        # approve, two deploy approvals, four builds and ~1h45m.
+        small = _definition(connection, project_id, SMALL_BUG_WORKFLOW)
+        if small is not None:
+            return {"workflow_key": SMALL_BUG_WORKFLOW, "work_class": None, "chosen": "small",
+                    "resolved": small}
     start = how_to_start(connection, project_id, has_repo=_has_repo(connection, project_id))
     resolved = None
     if start.get("resolved_key"):
@@ -413,13 +426,14 @@ def steps(connection: Connection, project_id: str, spec: Mapping[str, Any],
     """The workflow's REAL steps, in its own order, for the Workflow chip's numbered strip and
     its Steps list: {id, label, you (a person approves here), agent?}. Fan-out and join markers
     are not steps anyone does."""
+    from ..command_center import is_marker_step
     from ..workflow_capabilities import CAPABILITIES, prd_auto_approved
 
     prd_auto = prd_auto_approved()
     roster = roster if roster is not None else agents(connection, project_id)
     out = []
     for step in spec.get("steps") or []:
-        if not isinstance(step, dict) or str(step.get("kind") or "") in ("parallel", "join"):
+        if not isinstance(step, dict) or is_marker_step(step):
             continue
         cap = _cap(step)
         found = CAPABILITIES.get(cap)
@@ -439,6 +453,13 @@ def steps(connection: Connection, project_id: str, spec: Mapping[str, Any],
 _APPROVES = {"meeting": "the PRD", "spec_review": "the spec", "ux_review": "how it looks",
              "deploy": "the deploy", "redeploy": "the deploy", "release_approval": "the release",
              "merge": "merge PR"}
+
+
+def starts_from_file(spec: Mapping[str, Any]) -> bool:
+    """The workflow's start form asks for a file (input type "Start from a file")."""
+    schema = (spec or {}).get("input_schema") or {}
+    props = schema.get("properties") if isinstance(schema, dict) else None
+    return isinstance(props, dict) and "start_from" in props
 
 
 def options(connection: Connection, project_id: str, kind: str,
@@ -463,11 +484,14 @@ def options(connection: Connection, project_id: str, kind: str,
         work_class = classes.get(str(r["workflow_key"]))
         if work_class == "project.new":
             continue  # a new app is not work on this one
+        spec = as_json(r["spec"], {}) or {}
         one = {"key": r["workflow_key"], "name": r["name"],
                "detail": r["description"] or "", "work_class": work_class,
-               "fits": work_class in fits}
+               "fits": work_class in fits,
+               # STARTS FROM A FILE ("Onboard a config file"): a brief cannot start it; New work
+               # opens its own Start form (Original file · Target path · Title) instead.
+               "starts_from_file": starts_from_file(spec)}
         if with_steps:
-            spec = as_json(r["spec"], {}) or {}
             listed = steps(connection, project_id, spec, roster)
             est = estimate(connection, project_id, str(r["workflow_key"]), spec)
             one.update({"steps": len(listed),
@@ -565,7 +589,7 @@ def targets(connection: Connection, project_id: str) -> list[dict[str, Any]]:
         out.append({"id": r["id"], "label": env_label(r["environment"]),
                     "environment": r["environment"], "app": r["app_name"], "url": url,
                     "port": int(port.group(1)) if port else None,
-                    "prod": str(r["environment"] or "").lower() in ("production", "prod")})
+                    "prod": is_production_environment(r["environment"])})
     return out
 
 
@@ -624,6 +648,8 @@ def plan(connection: Connection, project_id: str, kind: str = "feature",
                        "chosen": chosen["chosen"],
                        "work_class": chosen.get("work_class"),
                        "why": ("you picked it" if chosen["chosen"] == "picked" else
+                               "the small path for a bug: one build, no PRD panel"
+                               if chosen["chosen"] == "small" else
                                f"this project's workflow for {work_class_label(chosen['work_class'])}"
                                if chosen.get("work_class") else "the default for a change"),
                        "href": href(project_id, area="delivery_workflows", tab="library", wf=key)}
@@ -681,6 +707,83 @@ def _change_state(connection: Connection, run: Mapping[str, Any]) -> Optional[st
     if state is None:
         return None
     return state if state in (pr_merge.MERGED, pr_merge.CLOSED) else "open"
+
+
+def app_choices(connection: Connection, project_id: str) -> list[dict[str, str]]:
+    """The project's apps with a finished build, grouped the way every app view groups runs
+    (factory_view.group_into_apps over the non-internal window), newest first: {run_id, app},
+    run_id being the app's newest completed build."""
+    from ..code_task_service import is_internal_run, list_code_task_runs
+    from ..factory_view import FLOOR_RUNS, app_name, group_into_apps
+
+    runs = [r for r in list_code_task_runs(connection, project_id, FLOOR_RUNS,
+                                           exclude_internal=True) if not is_internal_run(r)]
+    out: list[dict[str, str]] = []
+    for group in group_into_apps(runs):
+        built = [r for r in group if str(r.get("status") or "") in ("completed", "succeeded")]
+        if built:
+            out.append({"run_id": str(built[0]["id"]), "app": app_name(built[0])})
+    return out
+
+
+def work_anchor(connection: Connection, project_id: str, app: Optional[str],
+                *, new_app: bool = False, infer: bool = True) -> Optional[dict[str, Any]]:
+    """The app New work builds onto: the named app (app_anchor), none for an explicit new app,
+    and with nothing named, when `infer` (the New work modal, its plan): the project's only
+    app, else a ValueError asking which — never a silent fresh build beside the app it was
+    meant to change. Without `infer` nothing named stays a fresh build, as every other caller
+    of POST …/work (chat cards, roadmap, onboarding, agents) has always had it."""
+    if new_app:
+        if (app or "").strip():
+            raise ValueError("Choose an existing app or create a new app, not both.")
+        return None
+    handle = (app or "").strip()
+    if not handle and not infer:
+        return None
+    if not handle:
+        choices = app_choices(connection, project_id)
+        if len(choices) > 1:
+            raise AppChoiceNeeded(choices, "Pick one under Application in New work, or pick "
+                                           "Create a new app.")
+        if not choices:
+            return None
+        handle = choices[0]["run_id"]
+    return app_anchor(connection, project_id, handle)
+
+
+class AppChoiceNeeded(ValueError):
+    """Nothing named the app and the project has several: BOSS asks (Choose an application /
+    Create a new app) — never a quiet fresh build on the default branch beside them (RCA #9)."""
+
+    def __init__(self, choices: list[dict[str, str]], ask: str) -> None:
+        self.choices = choices
+        names = ", ".join(choice.get("app") or choice["run_id"] for choice in choices[:3])
+        more = f" and {len(choices) - 3} more" if len(choices) > 3 else ""
+        super().__init__(f"This project has {len(choices)} apps ({names}{more}). {ask}")
+
+
+def require_app_choice(connection: Connection, project_id: str, ask: str) -> None:
+    """Raise AppChoiceNeeded when a build that names no app would start beside SEVERAL apps.
+    The agent's create_code_task (MCP, Ask BOSS) asks this, with its own words for how to name
+    the app; New work asks it through work_anchor."""
+    choices = app_choices(connection, project_id)
+    if len(choices) > 1:
+        raise AppChoiceNeeded(choices, ask)
+
+
+def build_mode(connection: Connection, project_id: str, run_id: str) -> Optional[dict[str, Any]]:
+    """WHICH CHANGE a build onto an existing app's build continues — the one answer every door
+    that names a build asks (New work's app, Repair from preview's build, the agent's
+    extends_run_id / preview_id / task): app_anchor's `mode` — `continue` the lineage's open
+    change on its branch, `new_change` from the default branch when that change was merged.
+    None (the build continues the lineage's branch, as before) when the change was closed
+    without merging — only New work's modal refuses that, offering Create a new app — or the
+    run is not this project's. Only the mode and branch are read; the build continues the run
+    the door named."""
+    try:
+        return app_anchor(connection, project_id, run_id)
+    except LookupError:      # AnchorClosed included
+        return None
 
 
 def app_anchor(connection: Connection, project_id: str, app: Optional[str]
@@ -756,6 +859,7 @@ def app_anchor(connection: Connection, project_id: str, app: Optional[str]
             "pr_state": state, "mode": mode}
 
 
-__all__ = ["CHOOSABLE_PROFILES", "KINDS", "WAS_SIZE", "AnchorClosed", "app_anchor", "chosen_profile", "choose", "create_issue", "defaults", "estimate",
-           "issue_of", "options", "plan", "round_minutes", "steps", "strip", "targets", "tell",
+__all__ = ["CHOOSABLE_PROFILES", "KINDS", "WAS_SIZE", "AnchorClosed", "AppChoiceNeeded", "app_anchor",
+           "build_mode", "require_app_choice", "chosen_profile", "choose", "create_issue", "defaults", "estimate",
+           "issue_of", "options", "plan", "round_minutes", "starts_from_file", "steps", "strip", "targets", "tell",
            "ticket_link", "ticket_title", "tracker"]

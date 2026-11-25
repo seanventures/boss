@@ -7,6 +7,8 @@ listing (names only). Production is never automatic: a target in production is `
 """
 from __future__ import annotations
 
+from ..production import is_production_environment
+
 from typing import Any, Optional
 
 from sqlalchemy import text
@@ -16,7 +18,6 @@ from . import demo_logins as demo
 from .common import href, iso, project_href
 from .health import env_label, health_word
 
-PRODUCTION = ("production", "prod")
 
 
 def _last_deploys(connection: Connection, target_ids: list[str]) -> dict[str, dict[str, Any]]:
@@ -67,7 +68,7 @@ def hourly(connection: Connection, target_ids: list[str], now: Any = None
     for r in connection.execute(text(
             "SELECT deployment_target_id AS t, floor(extract(epoch FROM (checked_at - :s)) / 3600) "
             "AS h, count(*) AS n, sum(CASE WHEN ok THEN 1 ELSE 0 END) AS okn "
-            "FROM deployment_health_samples WHERE deployment_target_id = ANY(:ids) "
+            "FROM counted_health_samples WHERE deployment_target_id = ANY(:ids) "
             "AND checked_at >= :s AND checked_at < :e GROUP BY 1, 2"),
             {"ids": target_ids, "s": start, "e": end}).mappings():
         i = int(r["h"])
@@ -136,6 +137,7 @@ def _history(connection: Connection, project_id: str, limit: int = 10) -> list[d
     rows = connection.execute(text(
         "SELECT s.id, s.target_id, s.commit_sha, s.status, s.created_by, s.created_at, "
         "s.apply_started_at, s.finished_at, s.failure_reason, s.rollback_of, "
+        "s.workflow_run_id, s.error, s.log_tail, "
         "t.environment, t.app_name, d.status AS decision_status, d.approved_by "
         "FROM stack_deployments s JOIN deployment_targets t ON t.id = s.target_id "
         "LEFT JOIN decisions d ON d.id = s.decision_id "
@@ -148,6 +150,15 @@ def _history(connection: Connection, project_id: str, limit: int = 10) -> list[d
     firsts = {str(t): at for t, at in connection.execute(text(
         "SELECT target_id, min(created_at) FROM stack_deployments WHERE project_id = :p "
         "GROUP BY target_id"), {"p": project_id}).all()}
+    # WHAT BOSS IS DOING ABOUT A FAILED DEPLOY (deploy_repair.underway): "BOSS is fixing the
+    # deploy" / "Fixed by BOSS", amber, never a bare red "Failed" over a repair under way.
+    from ..deploy_repair import underway
+
+    try:
+        with connection.begin_nested():
+            acting = underway(connection, rows)
+    except Exception:  # noqa: BLE001 — words are a nicety; the raw state still shows
+        acting = {}
     for r in rows:
         if r["status"] == "healthy":
             t = str(r["target_id"])
@@ -173,11 +184,21 @@ def _history(connection: Connection, project_id: str, limit: int = 10) -> list[d
                      and live_after[str(r["target_id"])] > r["created_at"])
         if recovered:
             state = "recovered"
+        doing = acting.get(str(r["id"]))
+        if doing and not recovered and doing["state"] != "stuck":
+            # Still failed in the record; in words, what BOSS is doing about it. A repair in
+            # flight reads as moving ("now"); one BOSS finished stays this row's past. A repair
+            # that stopped (stuck) stays red "Failed", with the build's reason below.
+            word, tone = doing["word"], "amber"
+            if r["status"] == "failed" and doing["state"] != "fixed":
+                state = "now"
         took = _duration(r["apply_started_at"], r["finished_at"])
         smoke = ("smoke ✓" if r["status"] == "healthy" else
                  "smoke ✗" if r["status"] == "failed" and r["apply_started_at"] else None)
         reason = None if r["status"] in ("healthy", "awaiting_approval") else \
             (" ".join(str(r["failure_reason"] or "").split())[:110].rstrip(".") or None)
+        if doing and not recovered:
+            reason = doing["reason"][:200].rstrip(".")
         out.append({"id": r["id"], "label": f"{env_label(r['environment'])} · {what}".strip(" ·"),
                     "env": r["environment"], "app": r["app_name"], "status": r["status"],
                     "state": state, "state_word": word, "tone": tone,
@@ -185,6 +206,9 @@ def _history(connection: Connection, project_id: str, limit: int = 10) -> list[d
                     "commit": (r["commit_sha"] or "")[:7] or None,
                     "duration": None if recovered else took, "smoke": None if recovered else smoke,
                     "reason": reason, "recovered": recovered,
+                    "repair": ({k: doing[k] for k in ("state", "build_run_id",
+                                                     "next_deployment_id") if doing.get(k)}
+                               if doing and not recovered else None),
                     "by": who(actor, connection) if actor else None,
                     "by_agent": str(actor or "") in ("boss", "auto_approval") or
                     str(actor or "").startswith(("agt_", "policy:")),
@@ -255,7 +279,7 @@ def view(connection: Connection, project_id: str) -> dict[str, Any]:
         h = hosts_by_id.get(str(t.get("host_id") or "")) or {}
         t.update(host_name=h.get("name"), host_address=h.get("address"),
                  host_status=h.get("status"))
-    targets.sort(key=lambda t: (str(t["environment"] or "").lower() in PRODUCTION,
+    targets.sort(key=lambda t: (is_production_environment(t["environment"]),
                                 str(t["environment"] or ""), str(t["app_name"] or "")))
     told = truth(connection, targets)
     health = {t["target_id"]: t for t in health_view(connection, project_id).get("targets") or []}
@@ -288,7 +312,7 @@ def view(connection: Connection, project_id: str) -> dict[str, Any]:
         label = env_label(t["environment"])
         if len(apps) > 1:
             label = f"{t['app_name']} {label}"
-        is_prod = str(t["environment"] or "").lower() in PRODUCTION
+        is_prod = is_production_environment(t["environment"])
         envs.append({
             "key": t["environment"], "label": label, "app": t["app_name"], "target_id": t["id"],
             "url": url, "address": said["address"],
@@ -328,7 +352,7 @@ def view(connection: Connection, project_id: str) -> dict[str, Any]:
             "href": project_href(project_id, tab="deployments", drawer=f"env:{t['id']}"),
             "manage_href": href(project_id, area="infra", target=t["id"]),
         })
-    has_prod = any(str(e["key"] or "").lower() in PRODUCTION for e in envs)
+    has_prod = any(is_production_environment(e["key"]) for e in envs)
     if has_prod:
         production: dict[str, Any] = {"state": "ready", "action": None}
     else:
@@ -352,7 +376,7 @@ def view(connection: Connection, project_id: str) -> dict[str, Any]:
     # project may use, with its role. The app picks one here; production stays a person's choice.
     from ..add_server import servers_for_project
 
-    has_staging = any(str(e["key"] or "").lower() not in PRODUCTION for e in envs)
+    has_staging = any(not is_production_environment(e["key"]) for e in envs)
     servers = []
     for sv in servers_for_project(connection, project_id):
         if sv["role"] == "prod":
@@ -402,8 +426,8 @@ def ship_path(envs: list[dict[str, Any]]) -> list[dict[str, str]]:
     """How code ships, as a strip (screen 8): merge → build → the first non-production
     environment (auto or a person, from its target's policy) → its health check → production,
     always a person's approval. States come from what the environments show today."""
-    pre = next((e for e in envs if str(e["key"] or "").lower() not in PRODUCTION), None)
-    prod = next((e for e in envs if str(e["key"] or "").lower() in PRODUCTION), None)
+    pre = next((e for e in envs if not is_production_environment(e["key"])), None)
+    prod = next((e for e in envs if is_production_environment(e["key"])), None)
     shipped = _went_live(pre)
     nodes = [{"label": "PR merged", "state": "done" if shipped else "todo"},
              {"label": "Image built", "state": "done" if shipped else "todo"}]
@@ -424,8 +448,8 @@ def ship_path(envs: list[dict[str, Any]]) -> list[dict[str, str]]:
 def live_url(envs: list[dict[str, Any]]) -> Optional[str]:
     """The URL the header chip opens: staging first, then any non-production, then prod."""
     ordered = sorted(envs, key=lambda e: (str(e["key"]).lower() not in ("staging", "stage"),
-                                          str(e["key"]).lower() in PRODUCTION))
+                                          is_production_environment(e["key"])))
     return next((e["url"] for e in ordered if e.get("url")), None)
 
 
-__all__ = ["PRODUCTION", "host_label", "live_url", "ship_path", "view"]
+__all__ = ["host_label", "live_url", "ship_path", "view"]

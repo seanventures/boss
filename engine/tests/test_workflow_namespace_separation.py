@@ -177,24 +177,23 @@ def test_an_unknown_namespace_is_rejected_rather_than_stored(eng, project):
             workflows.list_definitions(c, project, namespace="whatever")
 
 
-# ── Catalogue workflows are read-only ──────────────────────────────────────────
+# ── Catalogue workflows: edited in place, never deleted or renamed ─────────────
 
-def test_a_catalogue_workflow_cannot_be_edited_in_place(eng, project):
-    """Editing in place would quietly make every fleet's "Standard Product Delivery" a
-    different thing, and there would be nothing left to reset to."""
+def test_a_catalogue_workflow_cannot_be_deleted_or_renamed(eng, project):
+    """REWRITTEN: standards are edited in place now (workflow_standards keeps the shipped spec
+    as the baseline Reset goes back to). What stays BOSS's is that one exists and its name."""
     with eng.begin() as c:
         standard = _make(c, project, "standard_delivery", namespace="product", catalogue=True)
         with pytest.raises(workflows.WorkflowNamespaceError) as caught:
-            workflows.require_editable(standard)
-    # REWRITTEN: this pinned "Fork it". The editor saves a standard as the operator's copy, and
-    # the refusal names that act — the one the console offers.
-    assert "save it as your copy" in str(caught.value).lower()
+            workflows.require_own(standard, "deleted")
+    assert "reset to standard" in str(caught.value).lower()
+    assert "save as your copy" in str(caught.value).lower()
 
 
 def test_a_customers_own_workflow_is_editable(eng, project):
     with eng.begin() as c:
         mine = _make(c, project, "my_delivery", namespace="product")
-        workflows.require_editable(mine)          # does not raise
+        workflows.require_own(mine, "deleted")    # does not raise
 
 
 def test_a_fork_records_what_it_came_from(eng, project):
