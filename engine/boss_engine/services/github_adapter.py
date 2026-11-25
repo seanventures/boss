@@ -86,6 +86,25 @@ class PullRequestValidationResult:
     checks: list[PullRequestValidationCheck]
 
 
+
+#: The prefix a rescue PR is opened with (governed_code_task_service._rescue_pr).
+PARTIAL_PREFIX = "[partial]"
+
+
+def retitle_for(current: Any, new: Any) -> Optional[str]:
+    """The title an already-open PR takes when a later build lands on it, or None to keep it.
+
+    A FULL BUILD ON A [partial] PR DROPS THE MARK (BOSSAPP-1309): the rescue opened the PR as
+    "[partial] <title>", a later attempt pushed the finished change to the same branch, and the
+    refresh only rewrote the body — the PR kept saying "[partial]" over complete, reviewed work.
+    Only that mark is cleared: a title a person edited, or a later partial, is left alone."""
+    cur, nxt = str(current or "").strip(), str(new or "").strip()
+    if cur.startswith(PARTIAL_PREFIX) and nxt and not nxt.startswith(PARTIAL_PREFIX) \
+            and cur != nxt:
+        return nxt
+    return None
+
+
 class GitHubAdapter:
     kind = "github"  # RepoHost conformance (BOSS-267) — the reference plugin
 
@@ -755,11 +774,12 @@ class GitHubAdapter:
             existing = []
         if existing:
             pr = existing[0]
+            retitle = retitle_for(pr.get("title"), title)
             try:
                 self._request(
                     "PATCH",
                     f"/repos/{self.repository_full_name}/pulls/{pr['number']}",
-                    {"body": body},
+                    {"body": body, **({"title": retitle} if retitle else {})},
                 )
             except httpx.HTTPStatusError:
                 pass
@@ -1213,6 +1233,12 @@ class GitHubAdapter:
     def update_pull_request_body(self, pull_number: int, body: str) -> None:
         self._request("PATCH", f"/repos/{self.repository_full_name}/pulls/{pull_number}",
                       {"body": body})
+
+    def update_pull_request_title(self, pull_number: int, title: str) -> None:
+        from .run_secret_redaction import scrub as _scrub_known
+
+        self._request("PATCH", f"/repos/{self.repository_full_name}/pulls/{pull_number}",
+                      {"title": _scrub_known(title)})
 
     def review_comments_of(self, pull_number: int, review_id: int) -> list[dict]:
         """The inline comments one review left: {id, path, line, body}."""

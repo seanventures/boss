@@ -270,3 +270,76 @@ def test_normalize_pr_url():
     n = run_decisions.normalize_pr_url
     assert n("http://www.GitHub.com/Acme/GW.git/pull/7/?x=1#c") == "https://github.com/acme/gw/pull/7"
     assert n("https://github.com/acme/gw/pull/7") != n("https://github.com/acme/gw/pull/70")
+
+
+class _FakeGitHub:
+    """One open pull request on GitHub, as the adapter's REST calls see it."""
+
+    def __init__(self):
+        self.pr = None
+
+    def request(self, method, path, payload=None):
+        if method == "GET" and "/pulls?state=open" in path:
+            return [self.pr] if self.pr else []
+        if method == "POST" and path.endswith("/pulls"):
+            self.pr = {"number": 9, "html_url": PR, "title": payload["title"],
+                       "body": payload["body"]}
+            return self.pr
+        if method == "PATCH" and "/pulls/" in path:
+            self.pr.update(payload)
+            return self.pr
+        raise AssertionError(f"unexpected {method} {path}")
+
+
+def _adapter(fake):
+    from boss_engine.config import get_settings
+    from boss_engine.services.github_adapter import GitHubAdapter
+
+    gh = object.__new__(GitHubAdapter)
+    gh.settings = get_settings()
+    gh.owner, gh.repo = "acme", "shop"
+    gh._request = fake.request
+    gh.default_branch_sha = lambda: ("main", "abc")
+    return gh
+
+
+def test_a_three_attempt_lineage_leaves_one_live_card_and_a_clean_title(eng, project):  # noqa: F811
+    """BOSSAPP-1309: partial -> checks-failing -> full on ONE pull request. After every attempt
+    exactly one merge card is live, and once the full build lands the PR says nothing about
+    "[partial]" (the rescue's title used to stay for ever: only the body was refreshed)."""
+    fake = _FakeGitHub()
+    gh = _adapter(fake)
+    with eng.begin() as c:
+        root, early, _follow, latest = _lineage(c, project, latest_passed=EVERYTHING)
+    try:
+        for run_id, title in ((root, "[partial] Checkout page"), (early, "Checkout page"),
+                              (latest, "Checkout page")):
+            gh.create_pull_request("boss/code/x", title, f"body from {run_id}")
+            with eng.begin() as c:
+                new = _card(c, project, run_id=run_id)
+                run_decisions.withdraw_superseded_merge_cards(c, project, PR, new,
+                                                              run_id=run_id)
+                live = c.execute(text(
+                    "SELECT id FROM decisions WHERE project_id = :p AND status = 'pending' "
+                    "AND recommendation->>'action' = 'review_pull_request'"),
+                    {"p": project}).scalars().all()
+            assert live == [new], f"after {run_id}: {len(live)} live merge cards"
+        assert fake.pr["title"] == "Checkout page"
+        assert fake.pr["body"] == f"body from {latest}"
+        # A later partial rescue never re-marks a finished PR, and a person's own title stays.
+        gh.create_pull_request("boss/code/x", "[partial] Checkout page", "rescue")
+        assert fake.pr["title"] == "Checkout page"
+    finally:
+        with eng.begin() as c:
+            c.execute(text("DELETE FROM decisions WHERE project_id = :p"), {"p": project})
+        _cleanup(eng, project)
+
+
+def test_only_the_partial_mark_is_ever_cleared():
+    from boss_engine.services.github_adapter import retitle_for
+
+    assert retitle_for("[partial] Checkout", "Checkout") == "Checkout"
+    assert retitle_for("Checkout", "[partial] Checkout") is None
+    assert retitle_for("My own title", "Checkout") is None
+    assert retitle_for("[partial] Checkout", "[partial] Checkout") is None
+    assert retitle_for("[partial] Checkout", "") is None

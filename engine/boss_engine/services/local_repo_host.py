@@ -42,6 +42,7 @@ from .github_adapter import (
     PullRequestReviewResult,
     PullRequestValidationCheck,
     PullRequestValidationResult,
+    retitle_for,
 )
 
 log = logging.getLogger(__name__)
@@ -335,15 +336,20 @@ class LocalGitAdapter:
         with self._tx("create_pull_request", independent=True) as c:
             c.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"),
                       {"k": f"local_change_sets:{self.repository_full_name}"})
-            open_row = c.execute(text(
-                "SELECT number FROM local_change_sets WHERE repository = :r AND branch = :b "
+            open_cs = c.execute(text(
+                "SELECT number, title FROM local_change_sets WHERE repository = :r AND branch = :b "
                 "AND state = 'open' ORDER BY number DESC LIMIT 1"),
-                {"r": self.repository_full_name, "b": branch_name}).scalar()
+                {"r": self.repository_full_name, "b": branch_name}).first()
+            open_row = open_cs[0] if open_cs is not None else None
             if open_row is not None:
+                # A full build on a [partial] change set drops the mark (BOSSAPP-1309).
+                retitle = retitle_for(open_cs[1], title)
                 c.execute(text(
-                    "UPDATE local_change_sets SET body = :body, head_sha = :h, updated_at = now() "
+                    "UPDATE local_change_sets SET body = :body, head_sha = :h, "
+                    "title = COALESCE(:t, title), updated_at = now() "
                     "WHERE repository = :r AND number = :n"),
-                    {"body": body, "h": head_sha, "r": self.repository_full_name, "n": int(open_row)})
+                    {"body": body, "h": head_sha, "r": self.repository_full_name, "n": int(open_row),
+                     "t": retitle[:500] if retitle else None})
                 return PullRequestResult(url=change_set_url(self.repository_full_name, open_row),
                                          number=int(open_row))
             number = int(c.execute(text(
@@ -381,6 +387,13 @@ class LocalGitAdapter:
             c.execute(text("UPDATE local_change_sets SET body = :b, updated_at = now() "
                            "WHERE repository = :r AND number = :n"),
                       {"b": body, "r": self.repository_full_name, "n": int(pull_number)})
+
+    def update_pull_request_title(self, pull_number: int, title: str) -> None:
+        with self._tx("update_pull_request_title") as c:
+            c.execute(text("UPDATE local_change_sets SET title = :t, updated_at = now() "
+                           "WHERE repository = :r AND number = :n"),
+                      {"t": (title or "")[:500], "r": self.repository_full_name,
+                       "n": int(pull_number)})
 
     def update_pull_request_branch(self, pull_request_number: int) -> bool:
         """Merge the base INTO the change set's branch (GitHub's "Update branch"). False on a
