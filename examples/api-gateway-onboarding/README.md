@@ -45,7 +45,9 @@ Both give `main` (the gateway team's repo) and a branch `onboard/lumen-pay` that
 at `config/tenants/lumen-pay.yaml`. With `--github`, the branch is pushed and a pull request is
 opened, which is the event BOSS's GitHub intake receives (filter `data.changed_files` glob
 `config/tenants/*.yaml`, `engine/boss_engine/connectors/intake/github/adapter.py`). The script
-refuses a directory or repository that is not already a demo repo (no `.northgate-demo` marker).
+refuses a directory or repository that is not already a demo repo (no `.northgate-demo` marker on
+`main`), a directory inside this example, and any GitHub answer it cannot confirm. `--github`
+always talks to github.com, whatever `GH_HOST` says.
 
 ## Running the chain on it
 
