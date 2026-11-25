@@ -101,25 +101,76 @@ def _host_of(url: str) -> str:
     return (urllib.parse.urlsplit(url or "").hostname or "").lower().rstrip(".")
 
 
-def _loopback(host: str) -> bool:
-    """A host that is not on the public internet: loopback, a private/link-local address, a
-    single-label name (a compose service such as ``plane-api``) or a ``.local``/``.internal``/
-    ``.lan`` name. Self-hosted Jira or Plane over plain http on such a host keeps working; plain
-    http to a PUBLIC host with a credential is refused."""
-    if host == "localhost" or "." not in host or host.endswith((".local", ".internal", ".lan", ".localhost")):
-        return True
+#: Addresses that are not on the public internet, as an EXPLICIT list. ``ipaddress.is_private``
+#: changed between Python 3.11 (the images) and 3.13 (a laptop), so the same host could be allowed
+#: on one and refused on the other; this list answers the same on every version. 100.64.0.0/10 is
+#: the shared/CGNAT range a tailnet (Tailscale) hands out — that traffic is already encrypted.
+_NON_PUBLIC_NETWORKS = tuple(ipaddress.ip_network(n) for n in (
+    "127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10",
+    "169.254.0.0/16", "::1/128", "fc00::/7", "fe80::/10",
+))
+_LINK_LOCAL_NETWORKS = tuple(ipaddress.ip_network(n) for n in ("169.254.0.0/16", "fe80::/10"))
+
+#: Name suffixes that never resolve on the public internet (or, for ``.ts.net``, only inside a
+#: tailnet whose traffic WireGuard already encrypts).
+_NON_PUBLIC_SUFFIXES = (".local", ".internal", ".lan", ".localhost", ".ts.net")
+
+
+def _ipv4_part(text: str) -> Optional[int]:
+    """One dotted part as inet_aton reads it: decimal, 0x-hex or 0-led octal."""
+    try:
+        if text[:2].lower() == "0x":
+            return int(text[2:] or "0", 16)
+        if len(text) > 1 and text.startswith("0"):
+            return int(text[1:], 8)
+        return int(text, 10) if text.isdigit() else None
+    except ValueError:
+        return None
+
+
+def ip_literal(host: str) -> Optional[ipaddress._BaseAddress]:  # noqa: SLF001
+    """The address a host string denotes when it is an IP LITERAL in any form a resolver accepts
+    — IPv6 (with or without brackets, IPv4-mapped unwrapped), dotted IPv4, and the shorthand
+    forms ``134744072`` / ``0x08080808`` / ``010.0.0.1`` / ``10.1`` — else None (a name)."""
+    host = (host or "").strip().lower().rstrip(".")
+    if host.startswith("[") and host.endswith("]"):
+        host = host[1:-1]
+    host = host.split("%", 1)[0]  # an IPv6 zone id
     try:
         address = ipaddress.ip_address(host)
     except ValueError:
-        return False
-    return address.is_loopback or address.is_private or address.is_link_local
+        address = None
+        parts = host.split(".")
+        if host and 1 <= len(parts) <= 4 and all(parts):
+            values = [_ipv4_part(part) for part in parts]
+            if all(v is not None for v in values):
+                *head, last = values
+                if all(v <= 255 for v in head) and last < 256 ** (4 - len(head)):
+                    number = 0
+                    for v in head:
+                        number = number * 256 + v
+                    number = number * 256 ** (4 - len(head)) + last
+                    address = ipaddress.IPv4Address(number)
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+        address = address.ipv4_mapped
+    return address
+
+
+def _loopback(host: str) -> bool:
+    """A host that is not on the public internet. IP literals (every form) are judged by address
+    FIRST, against an explicit range list; only a NAME gets the name rules — ``localhost``, a
+    single-label name (a compose service such as ``plane-api``), or a ``.local``/``.internal``/
+    ``.lan``/``.ts.net`` name. Self-hosted Jira or Plane over plain http on such a host keeps
+    working; plain http to a PUBLIC host with a credential is refused."""
+    address = ip_literal(host)
+    if address is not None:
+        return any(address in network for network in _NON_PUBLIC_NETWORKS)
+    return host == "localhost" or "." not in host or host.endswith(_NON_PUBLIC_SUFFIXES)
 
 
 def _link_local(host: str) -> bool:
-    try:
-        return ipaddress.ip_address(host).is_link_local
-    except ValueError:
-        return False
+    address = ip_literal(host)
+    return address is not None and any(address in network for network in _LINK_LOCAL_NETWORKS)
 
 
 def allowed_hosts(conn: TicketConnection, default_hosts: tuple[str, ...] = (),
@@ -144,7 +195,9 @@ def check_host(url: str, official: tuple[str, ...], configured: tuple[str, ...],
     scheme = (parts.scheme or "").lower()
     if not host or scheme not in ("http", "https"):
         raise HostNotAllowed(f"{provider}: not an http(s) URL", provider=provider)
-    if host in _BLOCKED_HOSTS or _link_local(host):
+    literal = ip_literal(host)
+    if host in _BLOCKED_HOSTS or (literal is not None and str(literal) in _BLOCKED_HOSTS) \
+            or _link_local(host):
         raise HostNotAllowed(f"{provider}: {host} is never a ticket system", provider=provider)
     if scheme == "http" and not _loopback(host):
         raise HostNotAllowed(f"{provider}: refusing a plain-http request to {host}; a credential "

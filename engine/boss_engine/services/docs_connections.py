@@ -39,6 +39,10 @@ from .core import emit_event, make_id
 PROVIDER = "confluence"
 PROVIDERS = (PROVIDER,)
 TOKEN_KEYS = ("api_token", "access_token", "token", "pat", "password")
+#: The configuration keys a (re)connect writes. Everything else on the row (spaces, sync state,
+#: sync jobs) belongs to other writers and a reconnect leaves it as it is in the database.
+CONNECT_OWNED_KEYS = ("base_url", "deployment", "auth_method", "email", "credential_from",
+                      "secret_ref_id", "last4", "fingerprint", "acts_as")
 MAX_SPACES = 20
 
 
@@ -298,11 +302,17 @@ def store(db: Connection, app_settings: Any, *, project_id: str, config: dict[st
                   fingerprint=_fingerprint(token),
                   acts_as=outcome.get("account") or previous.get("acts_as"))
     if existing:
+        # Merge ONLY the fields connect owns into the row as it is NOW (jsonb ``-`` then ``||``),
+        # never write back the whole configuration read earlier: a sync that saved its progress
+        # (sync_states / sync_jobs) or a settings change between our read and this write survives.
+        owned = {k: v for k, v in merged.items()
+                 if k in CONNECT_OWNED_KEYS or (k == "default_spaces" and default_spaces is not None)}
+        dropped = [k for k in CONNECT_OWNED_KEYS if k not in owned] + list(TOKEN_KEYS)
         db.execute(text(
             "UPDATE docs_connections SET status = 'active', home_project_id = :h, "
-            "configuration = CAST(:c AS JSONB), last_tested_at = now(), last_test_ok = true, "
-            "updated_at = now() WHERE id = :i"),
-            {"h": project_id, "c": json.dumps(merged), "i": existing["id"]})
+            "configuration = (configuration - CAST(:d AS TEXT[])) || CAST(:c AS JSONB), "
+            "last_tested_at = now(), last_test_ok = true, updated_at = now() WHERE id = :i"),
+            {"h": project_id, "c": json.dumps(owned), "d": dropped, "i": existing["id"]})
         row_id = existing["id"]
     else:
         row_id = make_id("dcn")

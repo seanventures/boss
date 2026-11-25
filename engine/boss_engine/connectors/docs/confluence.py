@@ -21,6 +21,7 @@ The credential is passed as a resolver and never stored on the client or logged.
 from __future__ import annotations
 
 import base64
+import hashlib
 import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
@@ -104,6 +105,9 @@ class Page:
     truncated: bool = False
     body_chars: int = 0
     status: str = "current"
+    #: sha256 of the FULL body (as markdown), however much of it ``body_markdown`` carries — the
+    #: read-back after a timed-out write compares this, so a page over the read cap still matches.
+    body_sha256: str = ""
 
     def as_dict(self, *, body: bool = True) -> dict[str, Any]:
         out = {"id": self.id, "title": self.title, "space": self.space_key, "version": self.version,
@@ -368,7 +372,8 @@ class ConfluenceClient:
             parent_id=str(data["parentId"]) if data.get("parentId") else None,
             last_modified=version.get("createdAt"), author_id=version.get("authorId"),
             body_markdown=markdown[:cap], truncated=total > cap, body_chars=total,
-            status=str(data.get("status") or "current"))
+            status=str(data.get("status") or "current"),
+            body_sha256=body_digest(markdown) if with_body else "")
 
     def get_page(self, page_id: str, *, max_chars: int = MAX_BODY_CHARS,
                  labels: bool = False, body: bool = True) -> Page:
@@ -484,10 +489,10 @@ class ConfluenceClient:
         try:
             if op == "update":
                 page = self.get_page(page_id)
-                ok = page.version > int(base_version) and same_body(markdown, page.body_markdown)
+                ok = page.version > int(base_version) and same_full_body(markdown, page)
             else:
                 page = self.find_page(title, space)
-                ok = same_body(markdown, page.body_markdown)
+                ok = same_full_body(markdown, page)
         except TicketSystemError:
             return None
         return page if ok else None
@@ -539,6 +544,20 @@ def same_body(markdown_written: str, page_markdown: str) -> bool:
     Confluence's own normalisation does not matter."""
     expected = storage_to_markdown(markdown_to_storage(markdown_written))
     return expected.strip() == (page_markdown or "").strip()
+
+
+def body_digest(page_markdown: str) -> str:
+    return hashlib.sha256((page_markdown or "").strip().encode("utf-8")).hexdigest()
+
+
+def same_full_body(markdown_written: str, page: Page) -> bool:
+    """Is the WHOLE page body what we wrote? By a hash of the full body (after the storage
+    round trip), never by the first ``MAX_BODY_CHARS`` a read returns — a 200k proposal that
+    landed must read back as landed."""
+    expected = storage_to_markdown(markdown_to_storage(markdown_written))
+    if page.body_sha256:
+        return body_digest(expected) == page.body_sha256
+    return not page.truncated and same_body(markdown_written, page.body_markdown)
 
 
 def _plain(excerpt: str) -> str:
