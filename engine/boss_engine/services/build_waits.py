@@ -28,6 +28,13 @@ def waits_on_person(status: Any, phase: Any, decision_status: Any) -> bool:
     return str(decision_status or "") in OPEN_DECISION
 
 
+def approved_at_gate(phase: Any, decision_status: Any) -> bool:
+    """A build still at a person's gate whose decision that person already APPROVED: neither
+    waiting on them nor abandoned — its resume is BOSS's move (the Shepherd re-queues it,
+    shepherd_service._resume_approved). Nothing may cancel it as stale. Pure."""
+    return str(phase or "").startswith("awaiting_") and str(decision_status or "") in _ANSWERED_YES
+
+
 def build_waits_on_person(connection: Any, run_id: str) -> bool:
     """`waits_on_person` for one build, read with its decision. False for a build not found."""
     row = connection.execute(text(

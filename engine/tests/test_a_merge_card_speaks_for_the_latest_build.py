@@ -329,6 +329,9 @@ def test_a_three_attempt_lineage_leaves_one_live_card_and_a_clean_title(eng, pro
         # A later partial rescue never re-marks a finished PR, and a person's own title stays.
         gh.create_pull_request("boss/code/x", "[partial] Checkout page", "rescue")
         assert fake.pr["title"] == "Checkout page"
+        fake.pr["title"] = "[partial] Checkout page (WIP, do not merge)"   # a person's edit
+        gh.create_pull_request("boss/code/x", "Checkout page", "full again")
+        assert fake.pr["title"] == "[partial] Checkout page (WIP, do not merge)"
     finally:
         with eng.begin() as c:
             c.execute(text("DELETE FROM decisions WHERE project_id = :p"), {"p": project})
@@ -342,4 +345,5 @@ def test_only_the_partial_mark_is_ever_cleared():
     assert retitle_for("Checkout", "[partial] Checkout") is None
     assert retitle_for("My own title", "Checkout") is None
     assert retitle_for("[partial] Checkout", "[partial] Checkout") is None
+    assert retitle_for("[partial] Checkout (edited)", "Checkout") is None
     assert retitle_for("[partial] Checkout", "") is None

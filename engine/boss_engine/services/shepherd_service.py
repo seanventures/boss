@@ -759,36 +759,91 @@ def _approved_but_not_resumed(connection, run_ids: list[str]) -> set[str]:
     return {str(r[0]) for r in rows}
 
 
-def _resume_approved(connection, project_id: str, run_id: str) -> int:
-    """Queue an approved run's resume again (1), or ask a person once when it keeps failing to
-    take (0). Never cancels it: a person said Yes to this work."""
+#: What the Shepherd's one question about an approved plan that would not resume is keyed by.
+APPROVED_RESUME_ASK = "approved_resume_did_not_take"
+
+
+def _queue_approved_resume(connection, project_id: str, run_id: str, task_id: Any,
+                           tries: int) -> None:
+    """Queue an approved plan's resume as the approval itself does (decisions.resume_code_task)."""
     from .jobs import JOB_PRIORITY_INTERACTIVE, enqueue_job
 
+    connection.execute(sql(
+        "UPDATE code_task_runs SET status = 'running', "
+        "finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb) "
+        "|| jsonb_build_object('approved_resume_requeues', CAST(:n AS INT)), "
+        "updated_at = now() WHERE id = :i"), {"i": run_id, "n": tries})
+    enqueue_job(connection, project_id, "code.task", {"run_id": run_id},
+                task_id=task_id, priority=JOB_PRIORITY_INTERACTIVE)
+
+
+def _resume_approved(connection, project_id: str, run_id: str) -> int:
+    """Queue an approved run's resume again (1), or ask a person ONCE when it keeps failing to
+    take (0). Never cancels it: a person said Yes to this work. Once the question is answered
+    (answer_approved_resume) it is never asked again."""
     row = connection.execute(sql(
-        "SELECT task_id, COALESCE((finalize_ctx->>'approved_resume_requeues')::int, 0) AS n "
+        "SELECT task_id, COALESCE((finalize_ctx->>'approved_resume_requeues')::int, 0) AS n, "
+        "finalize_ctx->'approved_resume_asked' AS asked "
         "FROM code_task_runs WHERE id = :i"), {"i": run_id}).mappings().first()
     if row is None:
         return 0
     tries = int(row["n"] or 0)
     if tries >= APPROVED_RESUME_MAX_REQUEUES:
-        open_question(
-            connection, project_id=project_id, task_ref=run_id,
-            question=(f"This build's plan was approved, but it could not resume after {tries} "
-                      "tries. Retry it, or leave it?"),
-            options=["retry", "leave"],
-            evidence={"reason": "approved_resume_did_not_take", "requeues": tries})
+        if row["asked"] is None:
+            esc = open_question(
+                connection, project_id=project_id, task_ref=run_id,
+                question=(f"This build's plan was approved, but it could not resume after "
+                          f"{tries} tries. Retry it, or leave it?"),
+                options=["retry", "leave"],
+                evidence={"reason": APPROVED_RESUME_ASK, "requeues": tries})
+            # Asked: recorded on the run, and its clock moves, so no sweep re-reads it as
+            # silent work and nothing asks a second time.
+            connection.execute(sql(
+                "UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb) "
+                "|| jsonb_build_object('approved_resume_asked', jsonb_build_object("
+                "'escalation', CAST(:e AS TEXT), 'answer', NULL)), updated_at = now() "
+                "WHERE id = :i"), {"i": run_id, "e": esc})
         return 0
-    connection.execute(sql(
-        "UPDATE code_task_runs SET status = 'running', owner_token = NULL, "
-        "finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb) "
-        "|| jsonb_build_object('approved_resume_requeues', CAST(:n AS INT)), "
-        "updated_at = now() WHERE id = :i"), {"i": run_id, "n": tries + 1})
-    enqueue_job(connection, project_id, "code.task", {"run_id": run_id},
-                task_id=row["task_id"], priority=JOB_PRIORITY_INTERACTIVE)
+    _queue_approved_resume(connection, project_id, run_id, row["task_id"], tries + 1)
     emit_event(connection, project_id, "shepherd.approved_run_resumed", SHEPHERD_ACTOR,
                "code_task_run", run_id,
                {"why": "the plan was approved but its resume never took", "try": tries + 1})
     return 1
+
+
+def answer_approved_resume(connection, escalation_id: str, answer: str, *, actor: str) -> bool:
+    """A person answered the Shepherd's question about an approved plan that would not resume.
+    "retry" starts over (the count resets, the resume is queued now); anything else ("leave")
+    ends the build at rest, saying so. Either way the answer is kept on the run and the
+    question is never asked again. False when the escalation is not that question."""
+    esc = connection.execute(sql(
+        "SELECT project_id, task_ref, evidence FROM shepherd_escalations WHERE id = :e"),
+        {"e": escalation_id}).mappings().first()
+    evidence = _json_dict((esc or {}).get("evidence"))
+    if esc is None or evidence.get("reason") != APPROVED_RESUME_ASK:
+        return False
+    run_id, project_id = str(esc["task_ref"]), str(esc["project_id"])
+    row = connection.execute(sql("SELECT task_id FROM code_task_runs WHERE id = :i"),
+                             {"i": run_id}).mappings().first()
+    if row is None:
+        return False
+    connection.execute(sql(
+        "UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb) "
+        "|| jsonb_build_object('approved_resume_asked', jsonb_build_object("
+        "'escalation', CAST(:e AS TEXT), 'answer', CAST(:a AS TEXT), 'by', CAST(:by AS TEXT))) "
+        "WHERE id = :i"), {"i": run_id, "e": escalation_id, "a": answer, "by": actor})
+    if answer == "retry":
+        _queue_approved_resume(connection, project_id, run_id, row["task_id"], 0)
+        emit_event(connection, project_id, "shepherd.approved_run_resumed", actor,
+                   "code_task_run", run_id, {"why": "a person chose Retry", "try": 0})
+    else:
+        connection.execute(sql(
+            "UPDATE code_task_runs SET status = 'blocked', phase = 'done', error = :e, "
+            "updated_at = now() WHERE id = :i"),
+            {"i": run_id, "e": "Left by a person: the approved plan could not resume, and "
+                                "they chose to leave it. Retry it to build from the plan."})
+        on_status_written(connection, run_id)
+    return True
 
 
 def _code_task_not_passed(connection, row: dict) -> bool:

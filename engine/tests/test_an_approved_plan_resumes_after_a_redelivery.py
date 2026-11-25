@@ -24,7 +24,8 @@ from sqlalchemy import text
 from boss_engine.config import get_settings
 from boss_engine.services.core import now_utc
 from boss_engine.services.jobs import JobLeaseService, enqueue_job
-from boss_engine.services.run_fencing import RunFenced, claim_run, hash_token, release_run
+from boss_engine.services.run_fencing import (
+    RELEASED, RunFenced, claim_run, guarded_update, hash_token, is_owner, release_run)
 
 from ._ambient_support import eng, project, purge  # noqa: F401
 
@@ -70,7 +71,7 @@ def _reclaim(eng, jid, worker):  # noqa: F811
     raise AssertionError("the expired job was never reclaimed")
 
 
-def _park_on_plan(eng, pid, rid) -> str:  # noqa: F811
+def _park_on_plan(eng, pid, rid, token=None) -> str:  # noqa: F811
     """What _block_for_plan_approval writes: the plan card, the parked run, ownership released."""
     dec = f"dec_rs_{uuid4().hex[:12]}"
     with eng.begin() as c:
@@ -81,7 +82,7 @@ def _park_on_plan(eng, pid, rid) -> str:  # noqa: F811
         c.execute(text("UPDATE code_task_runs SET status = 'blocked', "
                        "phase = 'awaiting_plan_approval', decision_id = :d WHERE id = :r"),
                   {"d": dec, "r": rid})
-        release_run(c, rid)
+        release_run(c, rid, token)
     return dec
 
 
@@ -121,14 +122,22 @@ def test_park_approve_redelivery_the_resume_claims_the_run(eng, project):  # noq
         _expire(eng, j1)                      # the laptop slept
         redelivered = _reclaim(eng, j1, "worker-b")
         assert redelivered["fence_epoch"] == 2
+        owner = hash_token(redelivered["lease_token"])
         with eng.begin() as c:
-            assert claim_run(c, rid, hash_token(redelivered["lease_token"])) is True
+            assert claim_run(c, rid, owner) is True
+            # Only the owner releases: a straggler with another token cannot.
+            release_run(c, rid, hash_token("lease_someone_else"))
+            assert is_owner(c, rid, owner)
 
-        dec = _park_on_plan(eng, project, rid)
+        dec = _park_on_plan(eng, project, rid, owner)
         with eng.begin() as c:            # the parked job ends done
             c.execute(text("UPDATE jobs SET status = 'completed' WHERE id = :j"), {"j": j1})
             assert c.execute(text("SELECT owner_token FROM code_task_runs WHERE id = :r"),
-                             {"r": rid}).scalar() is None, "a parked run is owned by nobody"
+                             {"r": rid}).scalar() == RELEASED, "a parked run is owned by nobody"
+            # The parked execution is not the owner any more: no check passes, no write lands.
+            assert not is_owner(c, rid, owner)
+            with pytest.raises(RunFenced):
+                guarded_update(c, rid, owner, "phase = :ph", {"ph": "implementing"})
 
         _approve(eng, dec)
         j2 = _resume_job(eng, project, rid)
@@ -173,7 +182,11 @@ def test_a_stale_owner_whose_lease_expired_is_taken_over(eng, project):  # noqa:
                 "SELECT owner_token, fence_epoch FROM code_task_runs WHERE id = :r"),
                 {"r": rid}).one()
         assert owner == token
-        assert int(epoch) == 9, "a takeover never moves the run's epoch backwards"
+        with eng.begin() as c:
+            job_epoch = c.execute(text("SELECT fence_epoch FROM jobs WHERE id = :j"),
+                                  {"j": fresh}).scalar()
+        assert int(epoch) == 10 and int(job_epoch) == 10, (
+            "a takeover is a handover: the epoch moves strictly forward on the lease and the run")
     finally:
         _cleanup(eng, project)
 
@@ -221,5 +234,76 @@ def test_the_shepherd_resumes_an_approved_run_instead_of_cancelling_it(eng, proj
                 "AND status = 'open'"), {"r": rid}).scalar()
         assert status != "cancelled"
         assert asked == 1
+
+        # ONE question: the next sweep asks nothing more.
+        with eng.begin() as c:
+            c.execute(text("UPDATE code_task_runs SET updated_at = now() - interval '1 hour' "
+                           "WHERE id = :r"), {"r": rid})
+            esc = c.execute(text("SELECT id FROM shepherd_escalations WHERE task_ref = :r"),
+                            {"r": rid}).scalar()
+        sweep_abandoned_runs(eng, get_settings(), project)
+        with eng.begin() as c:
+            assert c.execute(text("SELECT count(*) FROM shepherd_escalations WHERE task_ref = :r"),
+                             {"r": rid}).scalar() == 1
+
+        # "Retry" does what it says: the count starts over and the resume is queued.
+        from boss_engine.services.system_doctor import act
+
+        act(eng, get_settings(), f"shepherd:{esc}", "retry", actor="ceo")
+        with eng.begin() as c:
+            row = c.execute(text(
+                "SELECT status, finalize_ctx FROM code_task_runs WHERE id = :r"),
+                {"r": rid}).mappings().one()
+            queued = c.execute(text(
+                "SELECT count(*) FROM jobs WHERE project_id = :p AND kind = 'code.task' "
+                "AND payload->>'run_id' = :r AND status = 'queued'"),
+                {"p": project, "r": rid}).scalar()
+        assert row["status"] == "running" and queued == 1
+        assert row["finalize_ctx"]["approved_resume_requeues"] == 0
+        assert row["finalize_ctx"]["approved_resume_asked"]["answer"] == "retry"
+
+        # Answered once, never asked again — even at the cap.
+        with eng.begin() as c:
+            c.execute(text("DELETE FROM jobs WHERE project_id = :p"), {"p": project})
+            c.execute(text(
+                "UPDATE code_task_runs SET updated_at = now() - interval '1 hour', "
+                "finalize_ctx = finalize_ctx || jsonb_build_object("
+                "'approved_resume_requeues', CAST(:n AS INT)) WHERE id = :r"),
+                {"r": rid, "n": APPROVED_RESUME_MAX_REQUEUES})
+        sweep_abandoned_runs(eng, get_settings(), project)
+        with eng.begin() as c:
+            assert c.execute(text(
+                "SELECT count(*) FROM shepherd_escalations WHERE task_ref = :r AND "
+                "status = 'open'"), {"r": rid}).scalar() == 0
+            assert c.execute(text("SELECT status FROM code_task_runs WHERE id = :r"),
+                             {"r": rid}).scalar() != "cancelled"
+    finally:
+        _cleanup(eng, project)
+
+
+def test_clean_up_never_cancels_an_approved_plan(eng, project):  # noqa: F811
+    """Clean up's stale pass cancels a live build nobody waits on. An approved plan still at its
+    gate is not that: a person said Yes, and the Shepherd resumes it."""
+    from boss_engine.services.system_doctor import clean_up_old
+
+    with eng.begin() as c:
+        _ceo(c, project)
+        rid = _run(c, project)
+    try:
+        dec = _park_on_plan(eng, project, rid)
+        _approve(eng, dec)
+        with eng.begin() as c:
+            c.execute(text("UPDATE code_task_runs SET updated_at = now() - interval '30 days' "
+                           "WHERE id = :r"), {"r": rid})
+            c.execute(text(
+                "INSERT INTO shepherd_escalations (id, project_id, task_ref, question, options, "
+                "evidence, created_at) VALUES (:i, :p, :r, 'Stuck?', '[]'::jsonb, '{}'::jsonb, "
+                "now() - interval '30 days')"),
+                {"i": f"shesc_{uuid4().hex[:10]}", "p": project, "r": rid})
+        clean_up_old(eng, get_settings(), project, actor="ceo")
+        with eng.begin() as c:
+            status = c.execute(text("SELECT status FROM code_task_runs WHERE id = :r"),
+                               {"r": rid}).scalar()
+        assert status == "running"
     finally:
         _cleanup(eng, project)

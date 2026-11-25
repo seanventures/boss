@@ -388,13 +388,6 @@ class LocalGitAdapter:
                            "WHERE repository = :r AND number = :n"),
                       {"b": body, "r": self.repository_full_name, "n": int(pull_number)})
 
-    def update_pull_request_title(self, pull_number: int, title: str) -> None:
-        with self._tx("update_pull_request_title") as c:
-            c.execute(text("UPDATE local_change_sets SET title = :t, updated_at = now() "
-                           "WHERE repository = :r AND number = :n"),
-                      {"t": (title or "")[:500], "r": self.repository_full_name,
-                       "n": int(pull_number)})
-
     def update_pull_request_branch(self, pull_request_number: int) -> bool:
         """Merge the base INTO the change set's branch (GitHub's "Update branch"). False on a
         real conflict, which needs an agent."""
