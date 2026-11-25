@@ -169,7 +169,8 @@ async def git_info_refs(project_id: str, request: Request) -> Any:
 
 
 @router.post("/git/{project_id}.git/git-upload-pack")
-@permit(P.REPOSITORY_READ, scope=Scope.project(path="project_id"))
+# A fetch: POST by the git smart-HTTP protocol, and it writes nothing.
+@permit(P.REPOSITORY_READ, scope=Scope.project(path="project_id"), readonly_post=True)
 async def git_upload_pack(project_id: str, request: Request) -> Any:
     return await _serve(request, project_id, None, "/git-upload-pack")
 
@@ -189,7 +190,8 @@ async def git_info_refs_repo(project_id: str, repo: str, request: Request) -> An
 
 
 @router.post("/git/{project_id}/{repo}.git/git-upload-pack")
-@permit(P.REPOSITORY_READ, scope=Scope.project(path="project_id"))
+# A fetch: POST by the git smart-HTTP protocol, and it writes nothing.
+@permit(P.REPOSITORY_READ, scope=Scope.project(path="project_id"), readonly_post=True)
 async def git_upload_pack_repo(project_id: str, repo: str, request: Request) -> Any:
     return await _serve(request, project_id, repo, "/git-upload-pack")
 

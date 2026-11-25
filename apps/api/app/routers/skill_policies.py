@@ -91,7 +91,7 @@ def build_skill_policies_router(*, engine, require_reader: Callable[..., None],
                 "default": "allow (no rule matches)"}
 
     @router.post("/v1/skill-policies/simulate")
-    @permit(P.SKILL_READ, scope=Scope.project(body="project_id"))
+    @permit(P.SKILL_READ, scope=Scope.project(body="project_id"), readonly_post=True)  # a dry run
     def simulate(payload: SimulateBody) -> dict:
         body = payload.model_dump(exclude={"project_id", "actor"})
         with begin(engine) as c:

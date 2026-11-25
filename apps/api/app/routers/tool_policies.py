@@ -109,7 +109,7 @@ def build_tool_policies_router(*, engine, require_reader: Callable[..., None],
                     "buckets": list(tpe.RATE_BUCKETS)}
 
     @router.post("/v1/tool-policies/simulate")
-    @permit(P.MCP_SERVER_READ, scope=Scope.project(body="project_id"))
+    @permit(P.MCP_SERVER_READ, scope=Scope.project(body="project_id"), readonly_post=True)  # a dry run
     def simulate(payload: SimulateBody) -> dict:
         body = payload.model_dump(exclude={"project_id", "actor"})
         with begin(engine) as c:

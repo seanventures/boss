@@ -271,7 +271,7 @@ def build_multirepo_router() -> APIRouter:
             return _refuse(exc)
 
     @router.post("/v1/projects/{project_id}/suggest-components")
-    @permit(P.REPOSITORY_READ, scope=Scope.project(path="project_id"))
+    @permit(P.REPOSITORY_READ, scope=Scope.project(path="project_id"), readonly_post=True)
     def suggest_components(project_id: str, payload: dict = Body(...)) -> Any:
         ids = payload.get("binding_ids") or payload.get("repo_ids") or []
         if not isinstance(ids, list):

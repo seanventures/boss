@@ -32484,7 +32484,8 @@ class RecheckBody(BaseModel):
 
 
 @app.get("/v1/code-tasks/{run_id}/recheck")
-@permit(P.CODE_TASK_STEER, scope=Scope.of("code_task", path="run_id"))
+# Whether it can be re-checked and what that costs is a read; the POST below is the steer.
+@permit(P.CODE_TASK_READ, scope=Scope.of("code_task", path="run_id"))
 def code_task_recheck_preview_endpoint(run_id: str) -> dict:
     """Can this change be re-checked, and what it costs (services/change_recheck.py)."""
     from boss_engine.services import change_recheck
