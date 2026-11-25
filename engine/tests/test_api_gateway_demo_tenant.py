@@ -88,3 +88,104 @@ def test_reset_builds_the_same_fresh_state_and_refuses_a_foreign_directory(tmp_p
     done = subprocess.run(["bash", str(DEMO / "reset.sh"), "--local", str(foreign)],
                           capture_output=True, text=True)
     assert done.returncode == 1 and (foreign / "keep.txt").exists()
+
+
+# ── reset.sh --github fails closed and talks to one host (review of PR #326) ─────────────────
+
+FAKE_GH = r"""#!/usr/bin/env bash
+# Records every call, then answers from $FAKE_GH_MODE.
+printf 'GH_HOST=%s | %s\n' "${GH_HOST:-}" "$*" >> "$FAKE_LOG"
+case "$*" in
+  *"/commits?"*)
+    case "$FAKE_GH_MODE" in
+      error)  echo "gh: Bad credentials (HTTP 401)" >&2; exit 1 ;;
+      empty)  echo "gh: Git Repository is empty. (HTTP 409)" >&2; exit 1 ;;
+      *)      echo '[{"sha": "abc"}]' ;;
+    esac ;;
+  *".northgate-demo"*)
+    [ "$FAKE_GH_MODE" = "demo" ] && echo '{}' && exit 0
+    echo "gh: Not Found (HTTP 404)" >&2; exit 1 ;;
+  "pr list"*) echo "7" ;;
+esac
+exit 0
+"""
+
+FAKE_GIT = r"""#!/usr/bin/env bash
+# Records pushes and remote reads instead of making them; everything else is real git.
+for a in "$@"; do
+  case "$a" in
+    push) printf 'git %s\n' "$*" >> "$FAKE_LOG"; exit 0 ;;
+    ls-remote) printf 'git %s\n' "$*" >> "$FAKE_LOG"
+               printf 'a\trefs/heads/main\nb\trefs/heads/old-demo\n'; exit 0 ;;
+    remote) printf 'git %s\n' "$*" >> "$FAKE_LOG" ;;
+  esac
+done
+exec "$REAL_GIT" "$@"
+"""
+
+
+def _github_reset(tmp_path, mode: str, repo: str = "northgate-demo/tenants", gh_host: str = ""):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    for name, body in (("gh", FAKE_GH), ("git", FAKE_GIT)):
+        (bin_dir / name).write_text(body)
+        (bin_dir / name).chmod(0o755)
+    log = tmp_path / "calls.log"
+    log.write_text("")
+    env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "HOME": str(tmp_path), "FAKE_LOG": str(log),
+           "FAKE_GH_MODE": mode, "REAL_GIT": shutil.which("git"), "TMPDIR": str(tmp_path)}
+    if gh_host:
+        env["GH_HOST"] = gh_host
+    done = subprocess.run(["bash", str(DEMO / "reset.sh"), "--github", repo, "--yes"],
+                          capture_output=True, text=True, env=env)
+    return done, log.read_text()
+
+
+def _changed_anything(calls: str) -> bool:
+    return any(w in calls for w in ("git push", "pr close", "pr create", "remote add"))
+
+
+needs_git = pytest.mark.skipif(shutil.which("git") is None or shutil.which("bash") is None,
+                               reason="needs git and bash")
+
+
+@needs_git
+@pytest.mark.parametrize("mode", ["error", "no-marker"])
+def test_github_reset_stops_before_any_change_when_it_cannot_confirm_a_demo_repo(tmp_path, mode):
+    done, calls = _github_reset(tmp_path, mode)
+    assert done.returncode == 1, done.stderr
+    assert "Refusing" in done.stderr
+    assert not _changed_anything(calls), calls
+
+
+@needs_git
+def test_github_reset_refuses_a_repo_name_that_is_not_owner_slash_repo(tmp_path):
+    done, calls = _github_reset(tmp_path, "demo", repo="evil.example/org/repo")
+    assert done.returncode == 1 and calls == ""
+
+
+@needs_git
+@pytest.mark.parametrize("mode", ["demo", "empty"])
+def test_github_reset_pins_github_com_for_every_check_and_the_push(tmp_path, mode):
+    done, calls = _github_reset(tmp_path, mode, gh_host="ghes.example.internal")
+    assert done.returncode == 0, done.stderr
+    lines = calls.splitlines()
+    gh_calls = [line for line in lines if not line.startswith("git ")]
+    assert gh_calls and all(line.startswith("GH_HOST= |") for line in gh_calls), gh_calls
+    assert all("--hostname github.com" in line for line in gh_calls if " api " in f" {line}")
+    assert all("--repo github.com/northgate-demo/tenants" in line
+               for line in gh_calls if " pr " in f" {line}")
+    assert any("remote add origin https://github.com/northgate-demo/tenants.git" in line
+               for line in lines)
+    assert "ghes.example.internal" not in calls
+    assert any("push" in line and "--delete old-demo" in line for line in lines)
+    assert not any("--delete main" in line for line in lines)
+
+
+@needs_git
+def test_local_reset_refuses_the_example_itself():
+    for inside in (DEMO / "tenant-repo", DEMO, DEMO / "tenant-repo" / "config"):
+        done = subprocess.run(["bash", str(DEMO / "reset.sh"), "--local", str(inside)],
+                              capture_output=True, text=True)
+        assert done.returncode == 1, inside
+    assert (REPO / "tools" / "tenantlint.py").is_file()
