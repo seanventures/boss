@@ -903,3 +903,54 @@ def test_flipping_a_stored_mappings_default_needs_manage_on_its_project(world, c
         stored = ticket_intake._stored_settings(ticket_intake.get_row(db, cid)["configuration"])["mappings"]
     assert sorted((m["external_project"], m["boss_project_id"], m["default"]) for m in stored) == [
         ("KAN", world.project_b, True), ("OPS", project_c, False)]
+
+
+def test_unknown_actor_and_agent_redact_hidden_projects_when_claimed(world, client, engine, jira):
+    """BOSSAPP-1239: outside an enforced HTTP request, an unknown actor or agt_* principal on a
+    claimed org must fail closed in ticket_reach.may_see_project, while an OBO agent context
+    resolves on_behalf_of via lineage.current_context()."""
+    from types import SimpleNamespace
+
+    from boss_engine.config import get_settings
+    from boss_engine.identity import lineage
+    from boss_engine.services import ticket_reach
+    from boss_engine.tools import ticket_tools
+
+    world.claimed()
+    member_b = world.person("tk-redacted-member-b")
+    world.bind(member_b, "operator", project=world.project_b)
+    agent = world.agent("tk-helper", ceiling=("ticket:read", "project:read"), sponsor=world.owner)
+    with world.acting_as(world.ctx(world.owner)):
+        cid = _connect(client, world.project_a, jira).json()["connection"]["id"]
+        assert client.patch(f"/v1/ticket-systems/{cid}", json={"share_with_org": True}).status_code == 200
+    ticket_reach.clear_cache()
+
+    with engine.connect() as db:
+        a_name = db.execute(text("SELECT name FROM projects WHERE id = :p"),
+                            {"p": world.project_a}).scalar()
+        assert ticket_reach.may_see_project(world.project_a, person_id=None, db=db) is False
+        assert ticket_reach.may_see_project(world.project_a, person_id="agt_unknown", db=db) is False
+        assert ticket_reach.may_see_project(world.project_a, person_id=world.owner.id, db=db) is True
+
+    ctx_obj = SimpleNamespace(begin=engine.begin, settings=get_settings())
+    # 1) Unknown / autonomous agent actor with no OBO context -> hidden ("another project").
+    anon = ticket_tools._get(ctx_obj, project_id=world.project_b, actor="agt_unknown",
+                            args={"ref": f"KAN-{D.STORY}"})
+    assert anon["ok"] and anon["maps_to"] == {"project_id": "", "name": "another project", "by": "home"}
+    assert a_name not in str(anon.get("note") or "")
+
+    # 2) Agent actor carrying OBO context for member_b (cannot read project A) -> still hidden.
+    obo_b = world.run_ctx(member_b, (agent,), grant_permissions=("ticket:read",),
+                          token_scope=("ticket:read",), project_id=world.project_b)
+    with lineage.acting(obo_b):
+        for_b = ticket_tools._get(ctx_obj, project_id=world.project_b, actor=agent.id,
+                                 args={"ref": f"KAN-{D.STORY}"})
+    assert for_b["ok"] and for_b["maps_to"]["name"] == "another project"
+
+    # 3) Agent actor carrying OBO context for owner (can read project A) -> resolves real project.
+    obo_owner = world.run_ctx(world.owner, (agent,), grant_permissions=("ticket:read",),
+                              token_scope=("ticket:read",), project_id=world.project_b)
+    with lineage.acting(obo_owner):
+        for_owner = ticket_tools._get(ctx_obj, project_id=world.project_b, actor=agent.id,
+                                      args={"ref": f"KAN-{D.STORY}"})
+    assert for_owner["ok"] and for_owner["maps_to"]["project_id"] == world.project_a

@@ -537,15 +537,41 @@ class LocalGitAdapter:
 
         current = self.pull_request_snapshot(pull_number)
         if current["state"] != "open":
+            if current.get("merged") and current.get("head_sha") == expected_head_sha:
+                row = self.change_set(pull_number)
+                return {"pull_request_number": pull_number,
+                        "commit_sha": str(row.get("merged_sha") or current["base_sha"]),
+                        "merged": True, "message": "Already merged.",
+                        "merge_method": merge_method,
+                        "previous_target_sha": expected_base_sha,
+                        "authorized_head_sha": expected_head_sha}
             raise GitHubMergeRejectedError("The change is not open.")
+        git_dir = self._require()
         for field, value in {"head_sha": expected_head_sha, "base_sha": expected_base_sha,
                              "head_ref": expected_head_ref, "base_ref": expected_base_ref}.items():
             if current[field] != value:
+                if field == "base_sha" and self._already_landed_on_base(
+                        git_dir, expected_head_ref, expected_head_sha,
+                        expected_base_sha, current["base_sha"], expected_base_ref):
+                    continue
                 raise GitHubMergeRejectedError("The change moved after it was approved.")
         merged = self.merge_pull_request(pull_number, commit_title, head_sha=expected_head_sha)
         return {"pull_request_number": pull_number, "commit_sha": merged.sha, "merged": True,
                 "message": merged.message, "merge_method": merge_method,
                 "previous_target_sha": expected_base_sha, "authorized_head_sha": expected_head_sha}
+
+    @staticmethod
+    def _already_landed_on_base(git_dir: Path, head_ref: str, head_sha: str,
+                                expected_base_sha: str, current_base_sha: str,
+                                base_ref: str) -> bool:
+        if not (head_sha and expected_base_sha and current_base_sha):
+            return False
+        if local_repo.merge_base(git_dir, expected_base_sha, current_base_sha) != expected_base_sha:
+            return False
+        if local_repo.merge_base(git_dir, head_sha, current_base_sha) == head_sha:
+            return True
+        return local_repo.already_squashed_into(
+            git_dir, head_ref, head_sha, expected_base_sha, current_base_sha, base_ref)
 
     def close_change_set(self, pull_number: int) -> None:
         """Close the open change: pin its sha and record who (the same close the route uses).

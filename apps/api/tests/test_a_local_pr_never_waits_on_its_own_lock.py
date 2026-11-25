@@ -364,3 +364,72 @@ def test_rescue_pr_passes_the_runs_hold_and_records_a_failure_as_an_event():
     assert "reservation_id=None" not in rescue
     assert "reservation_id=reservation_id" in rescue and "rescue_of_run=run_id" in rescue
     assert "code_task.partial_pr_failed" in rescue and "create_blocking" not in rescue
+
+
+@pytest.mark.parametrize("method", ["merge", "squash"])
+def test_a_rolled_back_caller_leaves_merge_and_guarded_retry_idempotent(
+        engine, world, repo_root, method):
+    """BOSSAPP-1239: if a caller's DB transaction rolls back after local_repo.merge mutated git
+    on disk, local_change_sets stays 'open' while main already holds the merge/squash. A retry
+    (both merge_pull_request and merge_pull_request_guarded) must record 'merged' idempotently."""
+    from boss_engine.services.github_adapter import GitHubMergeRejectedError
+
+    pid, bound, branch, run_id = _project(engine, world)
+    settings = get_settings().model_copy(update={"sandbox_merge_method": method})
+    adapter = LocalGitAdapter(settings, owner=bound["owner"], repo=bound["repo"],
+                              project_id=pid, engine=engine)
+    pr = adapter.create_pull_request(branch, f"Desk timer ({method})", "", run_id=run_id)
+    snap_before = adapter.pull_request_snapshot(pr.number)
+
+    with pytest.raises(RuntimeError, match="forced caller rollback"):
+        with boss_db.begin(engine) as c:
+            with local_repo_host.writes_on(c):
+                adapter.merge_pull_request(pr.number, f"Merge ({method})",
+                                           head_sha=snap_before["head_sha"])
+                raise RuntimeError("forced caller rollback")
+
+    assert _change(engine, bound, pr.number)["state"] == "open"
+    assert adapter.read_text_file("main", "src/app.js") == "two\n"
+
+    # Retrying via merge_pull_request_guarded with the pre-rollback expected_base_sha must succeed.
+    res = adapter.merge_pull_request_guarded(
+        pull_number=pr.number,
+        expected_head_sha=snap_before["head_sha"],
+        expected_base_sha=snap_before["base_sha"],
+        expected_head_ref=snap_before["head_ref"],
+        expected_base_ref=snap_before["base_ref"],
+        merge_method=method,
+        commit_title=f"Merge ({method})",
+    )
+    assert res["merged"] is True
+    assert _change(engine, bound, pr.number)["state"] == "merged"
+
+    # Re-calling merge_pull_request_guarded on the now-merged PR stays idempotent.
+    again = adapter.merge_pull_request_guarded(
+        pull_number=pr.number,
+        expected_head_sha=snap_before["head_sha"],
+        expected_base_sha=snap_before["base_sha"],
+        expected_head_ref=snap_before["head_ref"],
+        expected_base_ref=snap_before["base_ref"],
+        merge_method=method,
+        commit_title=f"Merge ({method})",
+    )
+    assert again["merged"] is True
+
+    # Moving base via an UNRELATED commit must still reject guarded merge.
+    pid2, bound2, branch2, run2 = _project(engine, world)
+    adapter2 = LocalGitAdapter(settings, owner=bound2["owner"], repo=bound2["repo"],
+                               project_id=pid2, engine=engine)
+    pr2 = adapter2.create_pull_request(branch2, "Other", "", run_id=run2)
+    snap2 = adapter2.pull_request_snapshot(pr2.number)
+    local_repo.commit_files(adapter2.git_dir, "main", {"other.txt": "moved\n"}, "unrelated")
+    with pytest.raises(GitHubMergeRejectedError, match="moved after it was approved"):
+        adapter2.merge_pull_request_guarded(
+            pull_number=pr2.number,
+            expected_head_sha=snap2["head_sha"],
+            expected_base_sha=snap2["base_sha"],
+            expected_head_ref=snap2["head_ref"],
+            expected_base_ref=snap2["base_ref"],
+            merge_method=method,
+            commit_title="Other",
+        )
