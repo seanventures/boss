@@ -1023,10 +1023,17 @@ def act(engine: Any, settings: Any, finding_id: str, option: str, *, actor: str)
                 {"a": answer, "by": actor, "id": esc}).rowcount
             if not n:
                 raise ActRefused("that question was already answered")
+            # AN ANSWER THAT DOES SOMETHING (BOSSAPP-1364): "Retry" on an approved plan that
+            # would not resume queues it; "Leave" ends it at rest. Other questions only record.
+            from .shepherd_service import answer_approved_resume
+
+            acted = answer_approved_resume(c, esc, answer, actor=actor)
             record_action(c, finding_id=finding_id, kind="shepherd_escalation",
                           action="answer_escalation", target=esc, actor=actor, automatic=False,
                           before={}, outcome=f"answered: {answer}")
-        return {"ok": True, "result": f"Answered: {answer}", "resolved": True}
+        result = (f"Answered: {answer}" + (" — the resume is queued" if acted and answer == "retry"
+                                            else ""))
+        return {"ok": True, "result": result, "resolved": True}
 
     with engine.begin() as c:
         row = c.execute(text("SELECT * FROM system_findings WHERE id = :id"),
@@ -1079,7 +1086,7 @@ _ENDED_BUILD = frozenset({"completed", "failed", "cancelled", "simulated"})
 CLEAN_UP_PAGE = 200
 
 
-from .build_waits import waits_on_person, why_waiting  # noqa: E402
+from .build_waits import approved_at_gate, waits_on_person, why_waiting  # noqa: E402
 
 
 def clean_up_old(engine: Any, settings: Any, project_id: str, *, actor: str,
@@ -1129,6 +1136,11 @@ def clean_up_old(engine: Any, settings: Any, project_id: str, *, actor: str,
         waiting = waits_on_person(status, row["phase"], row["decision_status"])
         if waiting:
             answer = "cleared: the build waits on a person"
+        # AN APPROVED PLAN IS NEVER CLEANED UP AS STALE (BOSSAPP-1364): a person said Yes; the
+        # Shepherd resumes it or asks. The old question closes, the build is left alone.
+        elif approved_at_gate(row["phase"], row["decision_status"]):
+            waiting = True
+            answer = "cleared: the approved plan is resumed by BOSS"
         with engine.begin() as c:
             if live and not waiting and (updated is None or updated < cutoff):
                 try:

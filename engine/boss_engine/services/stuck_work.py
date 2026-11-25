@@ -1220,7 +1220,12 @@ def diagnose(connection: Any, settings: Any, run_id: str, *, adapter: Any = None
     # A card only when work is HALTED on a person: an ended build is over (its page and this
     # diagnosis say why); a card for each of 150 old failures would bury the ones that matter.
     ended = (ev.get("run") or {}).get("status") in ENDED_STATUSES
-    halted = needs_person and (not ended or tri.get("cause_code") in ("crash_loop", "no_grant", "review"))
+    # THE SHEPHERD GIVING UP IS ALWAYS A CARD (BOSSAPP-1309): it fixed this build, the build
+    # still ended, and its ask_person ("retry it or cancel it") was written with card_id null —
+    # an ask nobody was shown. An old failure it never touched stays card-free.
+    gave_up = chosen == "ask_person" and (fixes > 0 or tri.get("cause_code") == "capped")
+    halted = needs_person and (not ended or gave_up or tri.get("cause_code") in (
+        "crash_loop", "no_grant", "review"))
     card = _raise_card(connection, run_id, ev, tri, nxt, headline) if halted else None
     project = (ev.get("run") or {}).get("project_id")
     from .project_experience.common import href as _href
