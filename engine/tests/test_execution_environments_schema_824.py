@@ -24,8 +24,9 @@ DB_NAME = "boss_test_824"
 START = "-- EXECUTION ENVIRONMENTS (BOSSAPP-824 phase 1)"
 END = "-- ================================ end EXECUTION ENVIRONMENTS (BOSSAPP-824)"
 
-#: The one table the block's foreign keys reach outside itself.
-STUBS = "CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY)"
+#: The tables the block's foreign keys reach outside itself.
+STUBS = ("CREATE TABLE IF NOT EXISTS orgs (id TEXT PRIMARY KEY); "
+         "CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY);")
 
 
 def admin_url() -> str:
@@ -96,6 +97,18 @@ def test_the_block_applies_twice_without_error_or_drift():
                 c.execute(
                     "INSERT INTO execution_environments (id, name, driver) "
                     "VALUES ('env_5', 'org-box', 'local')")
+            # distinct orgs may each have an org-wide row with the same name
+            c.execute("INSERT INTO orgs (id) VALUES ('org_a'), ('org_b') ON CONFLICT DO NOTHING")
+            c.execute(
+                "INSERT INTO execution_environments (id, org_id, name, driver) "
+                "VALUES ('env_oa', 'org_a', 'shared-box', 'local')")
+            c.execute(
+                "INSERT INTO execution_environments (id, org_id, name, driver) "
+                "VALUES ('env_ob', 'org_b', 'shared-box', 'local')")
+            with pytest.raises(psycopg.errors.UniqueViolation):
+                c.execute(
+                    "INSERT INTO execution_environments (id, org_id, name, driver) "
+                    "VALUES ('env_oa2', 'org_a', 'shared-box', 'local')")
     finally:
         with psycopg.connect(admin, autocommit=True) as c:
             c.execute(f'DROP DATABASE IF EXISTS "{DB_NAME}" WITH (FORCE)')

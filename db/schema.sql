@@ -12591,6 +12591,7 @@ ALTER TABLE tool_call_audit ADD COLUMN IF NOT EXISTS screen JSONB;
 CREATE TABLE IF NOT EXISTS execution_environments (
   id          TEXT PRIMARY KEY,
   project_id  TEXT REFERENCES projects(id) ON DELETE CASCADE,  -- NULL: org-wide
+  org_id      TEXT REFERENCES orgs(id),
   name        TEXT NOT NULL,
   driver      TEXT NOT NULL
     CHECK (driver IN ('local', 'ssh', 'kubernetes', 'microvm', 'e2b', 'daytona')),
@@ -12608,9 +12609,11 @@ CREATE TABLE IF NOT EXISTS execution_environments (
 CREATE UNIQUE INDEX IF NOT EXISTS uq_execution_environments_project_name
   ON execution_environments (project_id, name) WHERE project_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_execution_environments_org_name
-  ON execution_environments (name) WHERE project_id IS NULL;
+  ON execution_environments (COALESCE(org_id, ''), name) WHERE project_id IS NULL;
 CREATE INDEX IF NOT EXISTS idx_execution_environments_project
   ON execution_environments (project_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_execution_environments_org
+  ON execution_environments (org_id, project_id, status, created_at DESC);
 
 -- One build's hold on an environment (the shape preview_sandboxes proved: a
 -- durable reservation with a TTL and one reaper). acquire() writes a row,
@@ -15908,6 +15911,7 @@ CREATE TABLE IF NOT EXISTS factory_launch_attachments (
   byte_size INTEGER NOT NULL DEFAULT 0,
   text_extract TEXT NOT NULL DEFAULT '',
   drive_source_id TEXT,
+  uploaded_by TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_factory_launch_attachments_org
@@ -16585,6 +16589,11 @@ BEGIN
                  || 'finished it did not say why. Its work is on its branch; open the run to '
                  || 'see its last step, or retry it to open the pull request.'));
   END IF;
+  IF NEW.status = 'completed'
+     AND COALESCE(NEW.pull_request_url, '') <> ''
+     AND (COALESCE(NEW.finalize_ctx, '{}'::jsonb) -> 'no_pull_request' ->> 'reason') = 'unexplained' THEN
+    NEW.finalize_ctx := NEW.finalize_ctx - 'no_pull_request';
+  END IF;
   RETURN NEW;
 END $$;
 DO $$ BEGIN
@@ -16757,3 +16766,23 @@ CREATE TABLE IF NOT EXISTS autonomy_policies (
 -- Dev autonomy decides only cards written from here on (or stamped by the sink): a card pending
 -- before this install had none of the markers a person's stop is written with.
 INSERT INTO schema_once (key) VALUES ('dev_autonomy_started') ON CONFLICT (key) DO NOTHING;
+
+-- Backfill execution_environments.org_id once for rows created before org_id existed.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM schema_once WHERE key = 'execution_environments_org_id_backfill') THEN
+    UPDATE execution_environments e
+    SET org_id = w.org_id
+    FROM projects p
+    JOIN workspaces w ON w.id = p.workspace_id
+    WHERE e.project_id = p.id
+      AND e.org_id IS NULL;
+    UPDATE execution_environments
+    SET org_id = (SELECT id FROM orgs ORDER BY created_at, id LIMIT 1)
+    WHERE project_id IS NULL
+      AND org_id IS NULL
+      AND EXISTS (SELECT 1 FROM orgs);
+    INSERT INTO schema_once (key) VALUES ('execution_environments_org_id_backfill')
+      ON CONFLICT (key) DO NOTHING;
+  END IF;
+END $$;

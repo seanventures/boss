@@ -71,7 +71,7 @@ def engine():
     with eng.begin() as c:
         c.exec_driver_sql(
             "CREATE TABLE execution_environments ("
-            " id TEXT PRIMARY KEY, project_id TEXT, name TEXT NOT NULL,"
+            " id TEXT PRIMARY KEY, project_id TEXT, org_id TEXT, name TEXT NOT NULL,"
             " driver TEXT NOT NULL, config TEXT NOT NULL DEFAULT '{}',"
             " secret_refs TEXT NOT NULL DEFAULT '{}',"
             " status TEXT NOT NULL DEFAULT 'registered', created_by TEXT,"
@@ -621,3 +621,27 @@ class TestCancelledMicroVMTaskIsTerminal:
         # contract's own set (sandbox_contract.is_terminal), not a private
         # subset — so the loop ends the moment the host says it.
         assert FakeSandboxHost.instances[-1].polls == 1
+
+
+class TestOrgConfinement:
+    def test_cross_org_environments_are_isolated(self, engine):
+        with engine.begin() as c:
+            env_a = envs.create_environment(
+                c, name="org-a-ssh", driver="ssh", org_id="org_a",
+                config={"host": "a.example", "default": True}, actor="ceo")
+            env_b = envs.create_environment(
+                c, name="org-b-ssh", driver="ssh", org_id="org_b",
+                config={"host": "b.example", "default": True}, actor="ceo")
+            assert [r["id"] for r in envs.list_environments(c, org_id="org_a")] == [env_a["id"]]
+            assert [r["id"] for r in envs.list_environments(c, org_id="org_b")] == [env_b["id"]]
+            with pytest.raises(envs.EnvironmentNotFound):
+                envs.get_environment(c, env_a["id"], org_id="org_b")
+            with pytest.raises(envs.EnvironmentNotFound):
+                envs.update_environment(c, env_a["id"], org_id="org_b", name="hijack")
+            assert envs.delete_environment(c, env_a["id"], org_id="org_b") is False
+            resolved_a = envs.resolve_environment(
+                c, org_id="org_a", spec={"environment_id": env_a["id"]})
+            assert resolved_a is not None and resolved_a["id"] == env_a["id"]
+            with pytest.raises(envs.EnvironmentNotFound):
+                envs.resolve_environment(
+                    c, org_id="org_b", spec={"environment_id": env_a["id"]})

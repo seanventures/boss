@@ -896,3 +896,96 @@ def test_a_run_that_failed_fast_is_relaunched_within_the_window(
     assert len(calls) == 2
     receipt = _one(engine, "SELECT project_id FROM receipts WHERE id = :r", r=again["receipt_id"])
     assert receipt["project_id"] == again["project_id"]
+
+
+def test_kept_for_consent_project_surfaces_and_resumes_with_same_dedupe_key(
+        client, engine, monkeypatch, tmp_path):
+    from boss_engine.identity.consent import ConsentRequired
+
+    monkeypatch.setattr("boss_engine.services.factory_launch.TEMPLATE_DIR", tmp_path / "absent")
+    state = {"allow": False}
+    calls: list = []
+
+    def build(connection, *, project_id, spec, actor, settings, jobs, reservation_id):
+        if not state["allow"]:
+            raise ConsentRequired({
+                "error": "consent_required",
+                "message": "Consent is required.",
+                "agents": [{"id": "agt_forge", "name": "Forge"}],
+                "permissions": ["code_task:run"],
+                "task": "Easy Mode build",
+                "task_run_id": "pending_1",
+                "projects": [project_id],
+            })
+        run_id = "crun_resumed_1"
+        calls.append({"project_id": project_id, "run_id": run_id})
+        connection.execute(text(
+            "INSERT INTO code_task_runs (id, project_id, title, status) "
+            "VALUES (:id, :p, 'Resumed', 'running')"), {"id": run_id, "p": project_id})
+        return {"project_id": project_id, "run_id": run_id}
+
+    monkeypatch.setattr("boss_engine.services.factory_launch.build_run", build)
+
+    asked = client.post("/v1/factory/launch", json={"prompt": "Build a consent resume test app.", "mode": "fix"})
+    assert asked.status_code == 409, asked.text
+    asked_body = asked.json()
+    pid = asked_body["project_id"]
+    dedupe_key = asked_body["dedupe_key"]
+
+    # Summary and Overview both surface the kept project as ready & waiting for consent.
+    summary = client.get("/v1/projects/summary")
+    assert summary.status_code == 200, summary.text
+    card = next(item for item in summary.json()["items"] if item["id"] == pid)
+    assert card["stage"] == "ready"
+    assert card["status_label"] == "Waiting for your consent"
+    assert card["onboarding_active"] is False
+    assert card["start_onboarding"] is None
+    assert card["awaiting_consent"] == {"href": f"/v1/projects/{pid}/factory/resume", "method": "POST", "body": {}}
+
+    overview = client.get(f"/v1/projects/{pid}/overview")
+    assert overview.status_code == 200, overview.text
+    ov_proj = overview.json()["project"]
+    assert ov_proj["stage"] == "ready"
+    assert ov_proj["status_label"] == "Waiting for your consent"
+    assert ov_proj["awaiting_consent"] == {"href": f"/v1/projects/{pid}/factory/resume", "method": "POST", "body": {}}
+
+    # Resuming before consent re-asks 409 with the same project_id and dedupe_key.
+    still_asked = client.post(f"/v1/projects/{pid}/factory/resume", json={})
+    assert still_asked.status_code == 409, still_asked.text
+    assert still_asked.json()["project_id"] == pid
+    assert still_asked.json()["dedupe_key"] == dedupe_key
+
+    # After consent is granted, resuming launches in the same project with the same dedupe_key.
+    state["allow"] = True
+    resumed = client.post(f"/v1/projects/{pid}/factory/resume", json={})
+    assert resumed.status_code == 201, resumed.text
+    resumed_body = resumed.json()
+    assert resumed_body["project_id"] == pid
+    assert resumed_body["dedupe_key"] == dedupe_key
+    assert resumed_body["run_id"] == "crun_resumed_1"
+    assert resumed_body["reused"] is False
+    assert len(calls) == 1
+
+    # Second resume while live is idempotent.
+    again = client.post(f"/v1/projects/{pid}/factory/resume", json={})
+    assert again.status_code == 201, again.text
+    assert again.json()["reused"] is True
+    assert again.json()["run_id"] == "crun_resumed_1"
+    assert len(calls) == 1
+
+    # Ordinary project with no kept launch gets 409 nothing_to_start.
+    other = client.post("/v1/projects/default/factory/resume", json={})
+    assert other.status_code == 409
+    assert other.json()["error"] == "nothing_to_start"
+
+
+def test_attachment_upload_records_uploaded_by(client, engine):
+    response = client.post(
+        "/v1/factory/attachments",
+        files=[("file", ("brief.txt", b"hello brief", "text/plain"))],
+    )
+    assert response.status_code == 201, response.text
+    att_id = response.json()["attachments"][0]["id"]
+    row = _one(engine, "SELECT uploaded_by FROM factory_launch_attachments WHERE id = :id",
+               id=att_id)
+    assert row is not None and row["uploaded_by"]

@@ -4698,11 +4698,12 @@ def proxy_preview(engine, preview_id: str, subpath: str, method: str,
     too_large = (502, "text/plain; charset=utf-8",
                  b"This preview's answer is too large to show (over BOSS_PREVIEW_MAX_BODY_MB "
                  b"once decoded).", {})
+    body_limit = preview_max_body_bytes()
     try:
         resp = urllib.request.build_opener(_NoRedirect()).open(req, timeout=timeout)
         status = resp.status
         ctype = resp.headers.get("Content-Type", "application/octet-stream")
-        data, encoding = _plain_body(resp.read(), resp.headers.get("Content-Encoding"))
+        data, encoding = _plain_body(_read_bounded(resp, body_limit), resp.headers.get("Content-Encoding"))
         if resp.headers.get("Location"):
             response_headers["Location"] = resp.headers["Location"]
         _cookies_of(resp.headers)
@@ -4711,7 +4712,7 @@ def proxy_preview(engine, preview_id: str, subpath: str, method: str,
     except urllib.error.HTTPError as e:
         status, ctype = e.code, e.headers.get("Content-Type", "text/plain")
         try:
-            data, encoding = _plain_body(e.read(), e.headers.get("Content-Encoding"))
+            data, encoding = _plain_body(_read_bounded(e, body_limit), e.headers.get("Content-Encoding"))
         except PreviewBodyTooLarge:
             return too_large
         if e.headers.get("Location"):
@@ -4782,6 +4783,20 @@ def preview_max_body_bytes() -> int:
         return 32 * 1024 * 1024
 
 
+def _read_bounded(stream: Any, limit: int) -> bytes:
+    """Read upstream response bytes in 1 MiB chunks, raising PreviewBodyTooLarge past `limit`."""
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = stream.read(1 << 20)
+        if not chunk:
+            return b"".join(chunks)
+        total += len(chunk)
+        if total > limit:
+            raise PreviewBodyTooLarge()
+        chunks.append(chunk)
+
+
 def _inflate(raw: bytes, wbits: int, limit: int) -> bytes:
     """zlib-decode `raw` (every gzip member) without ever holding more than `limit` + 1 bytes of
     output: decompressobj with max_length, fed its unconsumed tail. PreviewBodyTooLarge past it."""
@@ -4841,11 +4856,13 @@ def _plain_body(raw: bytes, content_encoding: Optional[str]) -> tuple[bytes, str
     stacked encodings are undone, and br (unboundable here) is passed on undecoded."""
     codings = [c.strip().lower() for c in (content_encoding or "").split(",") if c.strip()]
     codings = [c for c in codings if c != "identity"]
+    limit = preview_max_body_bytes()
     if not codings:
+        if len(raw) > limit:
+            raise PreviewBodyTooLarge()
         return raw, ""
     if len(codings) > _MAX_STACKED_ENCODINGS:
         return raw, ", ".join(codings)
-    limit = preview_max_body_bytes()
     data = raw
     for i in range(len(codings) - 1, -1, -1):
         try:

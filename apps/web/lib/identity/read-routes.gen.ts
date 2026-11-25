@@ -148,7 +148,6 @@ export const READ_ROUTES: ReadonlyArray<readonly [string, Permission]> = [
   ["budget/forecast", "budget:read"],
   ["budget/insights", "budget:read"],
   ["budget/status", "budget:read"],
-  ["builder/emulator-frame", "preview:read"],
   ["builder/threads/{}", "project:read"],
   ["builder/turns/{}", "budget:read"],
   ["canaries", "observability:read"],

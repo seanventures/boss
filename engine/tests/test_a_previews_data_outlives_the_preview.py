@@ -410,3 +410,94 @@ def test_an_orphaned_lease_is_found_from_its_run_directory_and_killed(tmp_path, 
     monkeypatch.setenv("FAIL", "1")
     with pytest.raises(sandbox_identity.SandboxUnavailable):
         sandbox_identity.stop_owner("prev_orphan")
+
+
+def test_0700_app_dir_uses_uid_walk_and_store_permissions_are_private(tmp_path, monkeypatch, caplog):
+    import stat as _stat
+
+    tree = _checkout(tmp_path, "prev_0700-1")
+    preview_data.mark_restored("prev_0700", tree, KEY)
+    root = preview_data.data_root()
+    trees_dir = root / preview_data._TREES
+    note = preview_data._tree_note("prev_0700")
+    assert _stat.S_IMODE(root.stat().st_mode) == 0o700
+    assert _stat.S_IMODE(trees_dir.stat().st_mode) == 0o700
+    assert _stat.S_IMODE(note.stat().st_mode) == 0o600
+
+    secret_dir = tree / "data" / "nested"
+    secret_dir.mkdir(parents=True)
+    db_file = secret_dir / "app.db"
+    db_file.write_bytes(b"SQLite format 3\x00secret")
+
+    if os.geteuid() != 0:
+        os.chmod(secret_dir, 0o700)
+        # Simulate unreadable dir for BOSS (`0o000`) while uid fallback lists & reads it.
+        os.chmod(secret_dir, 0o000)
+        try:
+            with caplog.at_level("WARNING"):
+                # With uid=None, unreadable dir logs a warning instead of silently vanishing.
+                assert "data/nested/app.db" not in preview_data._candidates(tree, uid=None)
+            assert any("skipped unreadable directory" in r.message for r in caplog.records)
+
+            calls: list = []
+
+            def run_as(uid, script, *args, data=None, timeout=120):
+                calls.append((uid, script, args))
+                if script == preview_data._LIST_AS_UID:
+                    return f"{db_file}\0".encode("utf-8")
+                return b"SQLite format 3\x00secret"
+
+            monkeypatch.setattr(preview_data, "_run_as", run_as)
+            kept = preview_data.capture("prev_0700", owner_uid=61011)
+        finally:
+            os.chmod(secret_dir, 0o700)
+    else:
+        kept = preview_data.capture("prev_0700", owner_uid=61011)
+
+    assert kept["kept"] is True
+    assert kept["files"] == ["data/nested/app.db"]
+    store = preview_data._store(KEY)
+    assert _stat.S_IMODE(store.stat().st_mode) == 0o700
+    assert _stat.S_IMODE((store / "files").stat().st_mode) == 0o700
+    assert _stat.S_IMODE((store / "files" / "data").stat().st_mode) == 0o700
+    assert _stat.S_IMODE((store / "files" / "data" / "nested").stat().st_mode) == 0o700
+    assert _stat.S_IMODE((store / "files" / "data" / "nested" / "app.db").stat().st_mode) == 0o600
+    assert _stat.S_IMODE((store / "manifest.json").stat().st_mode) == 0o600
+
+
+def test_orphaned_uid_reuse_never_kills_new_preview_owner(tmp_path, monkeypatch):
+    import fcntl
+
+    from boss_engine.services import sandbox_identity
+
+    shim_root = tmp_path / "shim"
+    shim_root.mkdir()
+    monkeypatch.setattr(sandbox_identity, "SHIM_ROOT", str(shim_root))
+    monkeypatch.setenv(sandbox_identity.RUN_ROOT_ENV, str(tmp_path / "runs"))
+
+    old_dir = tmp_path / "runs" / sandbox_identity.owner_key("prev_A")
+    old_dir.mkdir(parents=True)
+    me = os.lstat(old_dir).st_uid
+    monkeypatch.setattr(sandbox_identity, "UID_BASE", me)
+    monkeypatch.setattr(sandbox_identity, "UID_COUNT", sandbox_identity.SEALED_COUNT + 1)
+
+    log = tmp_path / "helper.log"
+    helper = tmp_path / "boss-sandbox-exec"
+    helper.write_text(f'#!/bin/sh\necho "$@" >> {log}\nexit 0\n')
+    helper.chmod(0o755)
+    monkeypatch.setattr(sandbox_identity, "helper_path", lambda: str(helper))
+
+    # Lease uid to new owner prev_B: lockfile holds prev_B's key + active flock.
+    uid, lock_fd = sandbox_identity._lease_uid(sandbox_identity.owner_key("prev_B"))
+    try:
+        assert uid == me
+        lock_file = shim_root / f"uid-{me}.lock"
+        assert lock_file.read_text() == sandbox_identity.owner_key("prev_B")
+        # Stale stop_owner / release for prev_A must return None and NEVER kill prev_B's uid.
+        assert sandbox_identity.held_identity("prev_A") is None
+        assert sandbox_identity.stop_owner("prev_A") is None
+        sandbox_identity.release("prev_A")
+        assert not log.exists()
+    finally:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        os.close(lock_fd)

@@ -119,7 +119,7 @@ export type ProjectCard = {
   /** On a subscription: the week at list price (cost_words), never a bare $0.00. */
   on_subscription?: boolean; list_week?: number | null;
   /** Screen 02 (cards.extras): the ring's number, the two status lines, the live crew. */
-  status_label: string; onboarding_active: boolean; start_onboarding: Accept | null; archived: boolean;
+  status_label: string; onboarding_active: boolean; start_onboarding: Accept | null; awaiting_consent?: Accept | null; archived: boolean;
   /** Its latest build failed (engine overview.latest_failed): the card says so in red. */
   build_failed?: BuildFailed | null;
   uptime_pct: number | null; onboarding_progress: [number, number] | null; lines: string[]; line_tone: string;
@@ -365,7 +365,9 @@ export type Overview = {
     /** The deploy moving now, or the last one that failed ("Deploying · 2/7"). */
     deploy?: DeployChip | null;
     /** The latest build failed: the header chip is red "Build failed" with its reason. */
-    build_failed?: BuildFailed | null };
+    build_failed?: BuildFailed | null;
+    /** Kept Easy Mode launch awaiting consent to resume. */
+    awaiting_consent?: Accept | null };
   journey: Node[]; needs_you: NeedsYou[];
   /** Work waiting for GitHub (BOSSAPP-922): an FYI under Needs you, never a card to act on and
    *  never counted as one — BOSS pushes it on its own. */
@@ -633,6 +635,7 @@ export const parseCard = (v: unknown): ProjectCard => {
     status_label: s(x.status_label), onboarding_active: x.onboarding_active === true, archived: x.archived === true,
     build_failed: parseBuildFailed(x.build_failed),
     start_onboarding: parseAccept(x.start_onboarding),
+    awaiting_consent: parseAccept(x.awaiting_consent),
     uptime_pct: nn(x.uptime_pct),
     onboarding_progress: Array.isArray(x.onboarding_progress) && x.onboarding_progress.length === 2
       ? [n(x.onboarding_progress[0]), n(x.onboarding_progress[1])] : null,
@@ -913,7 +916,8 @@ export const parseOverview = (v: unknown): Overview => {
     project: { id: s(p.id), name, initials: s(p.initials) || initialsOf(name), stage: oneOf(p.stage, STAGES, "onboarding"),
                repos: a(p.repos).map(parseRepo), live_url: s(p.live_url), status_label: s(p.status_label),
                health: oneOf(p.health ?? st.health, HEALTHS, "unknown"), health_reason: s(p.health_reason),
-               deploy: parseDeployChip(p.deploy), build_failed: parseBuildFailed(p.build_failed) },
+               deploy: parseDeployChip(p.deploy), build_failed: parseBuildFailed(p.build_failed),
+               awaiting_consent: parseAccept(p.awaiting_consent) },
     journey: a(x.journey).map(parseNode),
     roadmap_count: nn(x.roadmap_count),
     still_answerable: parseStillAnswerable(x.still_answerable),

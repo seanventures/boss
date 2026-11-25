@@ -559,6 +559,14 @@ def view(connection: Connection, project_id: str, *, now: Optional[datetime] = N
     facts = part(("journey",), lambda: _facts(connection, project_id, items, envs, onboarding),
                  {"got": {}, "active": False})
     stage = stage_of(facts["got"], active=facts["active"])
+    awaiting_consent: Optional[dict[str, Any]] = None
+    if not facts["got"].get("worked"):
+        from .. import factory_launch
+
+        kept_launch = part(("journey",), lambda: factory_launch.kept_for_project(connection, project_id), None)
+        if kept_launch is not None:
+            stage = "ready"
+            awaiting_consent = {"href": f"/v1/projects/{project_id}/factory/resume", "method": "POST", "body": {}}
     waiting = part(("needs_you",), lambda: needs_you(connection, project_id, items, onboarding),
                    [])
     the_repos = part(("journey",), lambda: repos(connection, project_id), [])
@@ -627,7 +635,9 @@ def view(connection: Connection, project_id: str, *, now: Optional[datetime] = N
                     "deploy": _chip(moving),
                     "health": worst(envs)[0], "health_reason": worst(envs)[1],
                     "status_label": (failed["word"] if failed is not None and not failed["beside"]
+                                     else "Waiting for your consent" if awaiting_consent is not None
                                      else STATUS_LABELS[stage]),
+                    "awaiting_consent": awaiting_consent,
                     "build_failed": failed,
                     "archived": project["archived_at"] is not None},
         "journey": the_journey,
@@ -788,8 +798,14 @@ def summary(connection: Connection, project_ids: Iterable[str], *,
     moving_now = live_work(connection, ids)
     failed_now = build_failure.latest_failures(connection, ids, now=now)
     from . import your_app
+    from .. import factory_launch
 
     apps = your_app.cards(connection, ids)   # never raises: a card shows no app, not an error
+    try:
+        with connection.begin_nested():
+            kept_launches = factory_launch.kept_for_projects(connection, ids)
+    except Exception:  # noqa: BLE001 — missing receipts table or read error never breaks summary
+        kept_launches = {}
     out = []
     for pid in ids:
         p = projects.get(pid)
@@ -847,10 +863,19 @@ def summary(connection: Connection, project_ids: Iterable[str], *,
                        if v is not None])
         # "Onboarding · Helm is reading it" only while an onboarding job is MOVING; a project
         # that never ran one (or whose run ended) is "Not onboarded", with Start onboarding.
-        onboarding_active = onb.get("state") == "running"
+        awaiting_consent = (
+            {"href": f"/v1/projects/{pid}/factory/resume", "method": "POST", "body": {}}
+            if (not worked and pid in kept_launches)
+            else None
+        )
+        onboarding_active = (onb.get("state") == "running") and awaiting_consent is None
+        if awaiting_consent is not None:
+            stage = "ready"
         status = STATUS_LABELS[stage]
         if stage == "working" and not moving:
             status = "Idle"
+        if awaiting_consent is not None:
+            status = "Waiting for your consent"
         if stage == "onboarding" and not onboarding_active:
             status = "Not onboarded" if onb.get("state") in (None, "not_started", "failed") \
                 else "Ready for work"
@@ -862,7 +887,8 @@ def summary(connection: Connection, project_ids: Iterable[str], *,
         out.append({"id": pid, "name": p["name"], "initials": initials(p["name"]),
                     "repo": primary.get(pid), "stage": stage,
                     "status_label": status, "onboarding_active": onboarding_active,
-                    "start_onboarding": (None if onboarding_active else
+                    "awaiting_consent": awaiting_consent,
+                    "start_onboarding": (None if (onboarding_active or awaiting_consent is not None) else
                                          {"href": f"/v1/projects/{pid}/onboarding/start",
                                           "method": "POST"}),
                     "journey": [{"key": j["key"], "label": j["label"], "state": j["state"]}

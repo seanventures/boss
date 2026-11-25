@@ -296,3 +296,52 @@ def test_a_second_org_cannot_be_created_under_enforce(client, orgs):
         out = client.post("/v1/orgs", json={"name": "Shadow Org"},
                           headers={"sec-fetch-site": "same-origin"})
     assert out.status_code == 409, out.text
+
+
+def test_another_orgs_execution_environment_is_404_and_unlisted(client, engine, orgs):
+    a, b, owner_a = orgs
+    owner_b = b.person("f2-B-owner")
+    b.bind(owner_b, "owner")
+    env_a_org = f"env_{uuid.uuid4().hex[:10]}"
+    env_a_proj = f"env_{uuid.uuid4().hex[:10]}"
+    _seed(engine,
+          "INSERT INTO execution_environments (id, project_id, org_id, name, driver) "
+          "VALUES (:i, NULL, :o, :n, 'local')",
+          i=env_a_org, o=a.org, n=f"org-wide-{env_a_org}")
+    _seed(engine,
+          "INSERT INTO execution_environments (id, project_id, org_id, name, driver) "
+          "VALUES (:i, :p, :o, :n, 'local')",
+          i=env_a_proj, o=a.org, p=a.project_a, n=f"proj-{env_a_proj}")
+
+    headers = {"sec-fetch-site": "same-origin"}
+    with b.acting_as(b.ctx(owner_b)):
+        listed = client.get("/v1/environments",
+                            params={"project_id": b.project_a, "actor": owner_b.id},
+                            headers=headers)
+        assert listed.status_code == 200, listed.text
+        ids = {item["id"] for item in listed.json()["items"]}
+        assert env_a_org not in ids
+        assert env_a_proj not in ids
+
+        for env_id in (env_a_org, env_a_proj):
+            put = client.put(f"/v1/environments/{env_id}",
+                             json={"project_id": b.project_a, "actor": owner_b.id, "name": "x"},
+                             headers=headers)
+            assert put.status_code == 404, put.text
+            dele = client.request(
+                "DELETE", f"/v1/environments/{env_id}",
+                json={"project_id": b.project_a, "actor": owner_b.id},
+                headers=headers)
+            assert dele.status_code == 404, dele.text
+            probe = client.post(f"/v1/environments/{env_id}/probe",
+                                json={"project_id": b.project_a, "actor": owner_b.id},
+                                headers=headers)
+            assert probe.status_code == 404, probe.text
+
+    with a.acting_as(a.ctx(owner_a)):
+        listed_a = client.get("/v1/environments",
+                              params={"project_id": a.project_a, "actor": owner_a.id},
+                              headers=headers)
+        assert listed_a.status_code == 200, listed_a.text
+        ids_a = {item["id"] for item in listed_a.json()["items"]}
+        assert {env_a_org, env_a_proj} <= ids_a

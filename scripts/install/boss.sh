@@ -670,8 +670,8 @@ toolchains_without() {
 # proxy open after Go is gone). The runner builds too, when it runs. A toolchain change rebuilds
 # and recreates all of them, never api and worker alone.
 toolchain_services() {
-  local s="api worker egress"
-  compose ps --services --status running </dev/null 2>/dev/null | grep -qx runner && s="$s runner"
+  local s="api worker kg-mcp egress"
+  compose --profile runner ps --services --status running </dev/null 2>/dev/null | grep -qx runner && s="$s runner"
   printf '%s\n' "$s"
 }
 
@@ -685,8 +685,13 @@ toolchain_drift() {
   [[ -n "$ref" ]] || return 0
   for svc in $(toolchain_services); do
     [[ "$svc" == api ]] && continue
-    m="$(compose exec -T "$svc" cat /opt/toolchains/manifest.json </dev/null 2>/dev/null | tr -d ' \n')" \
-      || continue
+    if [[ "$svc" == runner ]]; then
+      m="$(compose --profile runner exec -T "$svc" cat /opt/toolchains/manifest.json </dev/null 2>/dev/null | tr -d ' \n')" \
+        || continue
+    else
+      m="$(compose exec -T "$svc" cat /opt/toolchains/manifest.json </dev/null 2>/dev/null | tr -d ' \n')" \
+        || continue
+    fi
     [[ -z "$m" || "$m" == "$ref" ]] || printf '%s: %s\n' "$svc" "$m"
   done
 }
@@ -750,8 +755,10 @@ cmd_toolchains() {
   fi
   # apply_env recreates api and worker; the other toolchain services are recreated here.
   extra="${services#api worker}"
+  local -a profile_flags=()
+  [[ " $services " == *" runner "* ]] && profile_flags=(--profile runner)
   # shellcheck disable=SC2086
-  if [[ -n "${extra// /}" ]] && ! compose up -d --no-deps --no-build --force-recreate $extra </dev/null; then
+  if [[ -n "${extra// /}" ]] && ! compose "${profile_flags[@]}" up -d --no-deps --no-build --force-recreate $extra </dev/null; then
     printf '  ✗ %s were not restarted, so they still run the old toolchains; apply it with: '"$(hint_command)"' update\n' "${extra# }"
     return 1
   fi
