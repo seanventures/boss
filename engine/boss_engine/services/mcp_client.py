@@ -98,6 +98,120 @@ class MCPTimeout(MCPError):
         self.seconds = seconds
 
 
+class MCPCallFailed(MCPError):
+    """A call that failed on the way (the network, TLS, the proxy, an HTTP status), said in
+    plain words with the next step (:func:`describe_failure`). `retryable` is False when the
+    same call would fail the same way (a 4xx, a TLS or name failure), so the skill runtime does
+    not spend a second attempt on it."""
+
+    def __init__(self, message: str, *, status: Optional[int] = None, retryable: bool = True):
+        super().__init__(message)
+        self.status = status
+        self.retryable = retryable
+
+
+def _where(url: str) -> tuple[str, str]:
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(str(url or ""))
+    host = parts.hostname or "the server"
+    try:
+        port = parts.port
+    except ValueError:
+        port = None
+    return host, (f"{host}:{port}" if port else host)
+
+
+def describe_failure(error: BaseException, url: str = "") -> str:
+    """An MCP failure as an operator or an agent reads it: what happened, in words, and the next
+    step. The words keep the marks other code reads (the HTTP status first; "timed out",
+    "connection refused", "could not connect"), so nothing that classifies failures changes."""
+    if isinstance(error, MCPError):
+        return str(error)
+    request_url = url
+    try:
+        request_url = url or str(error.request.url)  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001
+        pass
+    host, hostport = _where(request_url)
+    detail = str(error)
+    lowered = detail.lower()
+    if isinstance(error, httpx.HTTPStatusError):
+        code = error.response.status_code
+        status = f"{code} {error.response.reason_phrase}".strip()
+        if code == 401:
+            return (f"{status}: {host} refused BOSS's sign-in. Next: check the server's token in "
+                    "Skills & MCP (or sign in again if it uses OAuth).")
+        if code == 403:
+            return (f"{status}: {host} accepted the sign-in but does not allow this. Next: give "
+                    "the token the scope or permission this tool needs.")
+        if code in (404, 405):
+            from urllib.parse import urlsplit
+
+            path = urlsplit(request_url).path or "/"
+            return (f"{status}: nothing at {hostport}{path} answers MCP. Next: check the URL; "
+                    "servers usually answer at /mcp (Streamable HTTP) or /sse (HTTP+SSE).")
+        if code == 407:
+            return (f"{status}: the company proxy wants a login. Next: run a local "
+                    "authenticating proxy (cntlm, px) and point BOSS_UPSTREAM_PROXY at it "
+                    "(docs/community/ENTERPRISE_NETWORK.md).")
+        if code == 429:
+            return f"{status}: {host} is rate limiting BOSS. Next: try again later."
+        if code >= 500:
+            return (f"{status}: {host} failed while answering. Next: check the server's own "
+                    "logs.")
+        return f"{status}: {host} refused the request."
+    from .mcp_stdio_supervisor import StdioUnavailable
+
+    if isinstance(error, StdioUnavailable):
+        return detail
+    if isinstance(error, httpx.ProxyError):
+        return (f"The company proxy would not connect BOSS to {hostport} ({detail}; could not "
+                f"connect). Next: if {host} is internal, add it to BOSS_UPSTREAM_NO_PROXY; "
+                "otherwise ask IT to allow it through the proxy.")
+    if isinstance(error, httpx.ConnectTimeout):
+        return (f"{hostport} did not accept a connection in time (could not connect). Next: "
+                "check that it is up and that no firewall or egress rule blocks BOSS.")
+    if isinstance(error, httpx.ConnectError):
+        if "certificate" in lowered or "ssl" in lowered or "tls" in lowered:
+            return (f"BOSS does not trust the TLS certificate {host} presented (could not "
+                    "connect). Next: behind a TLS-inspecting gateway, or for a server with its "
+                    "own CA, set BOSS_EXTRA_CA_FILE to that root CA "
+                    "(docs/community/ENTERPRISE_NETWORK.md).")
+        if any(mark in lowered for mark in ("nodename", "name or service", "name resolution",
+                                            "getaddrinfo", "no address associated")):
+            return (f"BOSS cannot resolve the name {host} (could not connect). Next: check the "
+                    "spelling; an internal name needs the company DNS, and BOSS_UPSTREAM_NO_PROXY "
+                    "if it must not go through the proxy.")
+        if "refused" in lowered:
+            return (f"Nothing is listening at {hostport} (connection refused). Next: start the "
+                    "server; inside BOSS's containers localhost is the container itself, so use "
+                    "host.docker.internal or the machine's address.")
+        return f"BOSS could not connect to {hostport} ({detail})."
+    if isinstance(error, httpx.TimeoutException):
+        return f"{hostport} did not answer in time (timed out)."
+    if isinstance(error, (httpx.RemoteProtocolError, httpx.ReadError)):
+        return (f"{hostport} dropped the connection before it answered (connection reset). "
+                "Next: check the server's logs; a proxy that does not pass streams can do this.")
+    return f"{type(error).__name__}: {detail}"
+
+
+def failed_call(error: BaseException, url: str = "") -> BaseException:
+    """`error` as the MCPError a caller raises: an MCPError as it is, anything from the way
+    (httpx) as MCPCallFailed in words. A timeout is never retried blind (unknown outcome)."""
+    if isinstance(error, MCPTimeout):
+        error.retryable = False  # type: ignore[attr-defined]
+        return error
+    if isinstance(error, MCPError) or not isinstance(error, httpx.HTTPError):
+        return error  # already words (a refusal, a sign-in to reconnect) or not from the way
+    status = error.response.status_code if isinstance(error, httpx.HTTPStatusError) else None
+    words = describe_failure(error, url)
+    deterministic = (status is not None and 400 <= status < 500 and status != 429) or (
+        "could not connect" in words and "connection refused" not in words
+        and not isinstance(error, httpx.ConnectTimeout))
+    return MCPCallFailed(words, status=status, retryable=not deterministic)
+
+
 def default_call_timeout() -> float:
     """BOSS_MCP_CALL_TIMEOUT (seconds), default 120 — the stdio bridge's own call timeout."""
     import os

@@ -18,7 +18,7 @@ import pytest
 from boss_engine.services import mcp_client, outbound_proxy
 from boss_engine.services.mcp_client import MCPClient, MCPTimeout, MCPToolError
 
-from ._mcp_fakes import FakeMcp, FakeProxy
+from ._mcp_fakes import FakeMcp, FakeProxy, make_tls
 
 _PROXY_ENV = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
               "http_proxy", "https_proxy", "all_proxy", "no_proxy")
@@ -151,6 +151,81 @@ def test_the_proxy_decision(url, no_proxy, direct):
     env = {"HTTPS_PROXY": "http://proxy.corp.example:8080",
            "HTTP_PROXY": "http://proxy.corp.example:8080", "NO_PROXY": no_proxy}
     assert (outbound_proxy.proxy_for(url, env) is None) is direct
+
+
+def test_an_extra_ca_lets_boss_trust_an_internal_https_server(fake, monkeypatch, tmp_path):
+    """Row: an HTTPS server whose certificate only the company's CA vouches for. with-extra-ca
+    exports the combined bundle as SSL_CERT_FILE; both roads (httpx's own, and outbound_proxy's
+    when a proxy is configured) must honour it. Without it, the words name BOSS_EXTRA_CA_FILE."""
+    tls, ca = make_tls(tmp_path)
+    server = fake("streamable", tls=tls)
+    with pytest.raises(Exception) as untrusted:
+        MCPClient(None).list_tools(server.url)
+    words = mcp_client.describe_failure(untrusted.value, server.url)
+    assert "BOSS_EXTRA_CA_FILE" in words and "could not connect" in words
+    monkeypatch.setenv("SSL_CERT_FILE", ca)
+    _connect_list_call(server.url)
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.corp.example:8080")
+    mcp_client.forget_sessions()
+    _connect_list_call(server.url)
+
+
+# --------------------------------------------------------------------------- plain words
+
+def _probe_error(url: str, headers=None) -> str:
+    from boss_engine.services import mcp_registry
+
+    found = mcp_registry.probe(None, url, timeout=3, headers=headers)
+    assert found["reachable"] is False
+    return found["error"]
+
+
+def test_failures_read_as_words_with_the_next_step(fake, monkeypatch):
+    """Row: every failure an operator meets on Save & test, in words and with what to do.
+
+    FAILED BEFORE: "401 Unauthorized" (no next step), "405 Method Not Allowed",
+    "ConnectError: [Errno 61] Connection refused", "ConnectError: [Errno 8] nodename nor
+    servname provided", "Timed out" - and a failed CALL reached the agent as httpx's own text
+    ("Client error '401 Unauthorized' for url ... developer.mozilla.org ...")."""
+    server = fake("streamable", auth=("bearer", "right"))
+    said = _probe_error(server.url, {"Authorization": "Bearer wrong"})
+    assert said.startswith("401") and "Next:" in said and "token" in said
+    wrong_path = server.url.replace("/mcp", "/nope")
+    said = _probe_error(wrong_path, {"Authorization": "Bearer right"})
+    assert said.startswith("404") and "/mcp" in said and "/sse" in said
+    import socket
+
+    with socket.socket() as spare:
+        spare.bind(("127.0.0.1", 0))
+        free = spare.getsockname()[1]
+    said = _probe_error(f"http://127.0.0.1:{free}/mcp")
+    assert "connection refused" in said and "host.docker.internal" in said
+    said = _probe_error("http://no-such-host.invalid/mcp")
+    assert "cannot resolve" in said and "no-such-host.invalid" in said
+    proxy = FakeProxy(refuse=True)
+    try:
+        monkeypatch.setenv("HTTP_PROXY", proxy.url)
+        said = _probe_error(server.url_on("mcp.partner.example"))
+        assert said.startswith("403")
+    finally:
+        proxy.close()
+
+
+def test_a_failed_call_is_raised_in_words_and_not_retried_blind():
+    import httpx
+
+    request = httpx.Request("POST", "https://mcp.vendor.example/mcp")
+    refused = httpx.HTTPStatusError("x", request=request,
+                                    response=httpx.Response(401, request=request))
+    plain = mcp_client.failed_call(refused)
+    assert isinstance(plain, mcp_client.MCPCallFailed) and plain.retryable is False
+    assert "developer.mozilla.org" not in str(plain) and "Next:" in str(plain)
+    timeout = MCPTimeout("slow", 1)
+    assert mcp_client.failed_call(timeout) is timeout and timeout.retryable is False
+    from boss_engine.services.durable_operations import ambiguous_outcome
+
+    assert ambiguous_outcome({"type": "MCPTimeout", "message": str(timeout)})
+    assert not ambiguous_outcome({"type": "MCPCallFailed", "message": str(plain)})
 
 
 # --------------------------------------------------------------------------- long calls

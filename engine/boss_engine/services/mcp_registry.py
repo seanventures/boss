@@ -1460,23 +1460,16 @@ def probe(settings: Any, url: str, *, timeout: float = PROBE_TIMEOUT_SECONDS,
     except Exception as error:  # noqa: BLE001 — the reason IS the result
         return {"reachable": False, "tools": [], "latency_ms":
                 int((_time.monotonic() - started) * 1000),
-                "error": _said(error)[:500]}
+                "error": _said(error, url)[:500]}
 
 
-def _said(error: BaseException) -> str:
-    """An error as an operator reads it: an HTTP status with its reason, not a traceback name."""
-    try:
-        import httpx
+def _said(error: BaseException, url: str = "") -> str:
+    """An error as an operator reads it: what happened in plain words and the next step
+    (mcp_client.describe_failure), the HTTP status first when there is one — never a traceback
+    name like "ConnectError: [Errno 61]" or "ReadTimeout"."""
+    from .mcp_client import describe_failure
 
-        if isinstance(error, httpx.HTTPStatusError):
-            return f"{error.response.status_code} {error.response.reason_phrase}".strip()
-        if isinstance(error, httpx.ConnectError):
-            return f"ConnectError: {error}"
-        if isinstance(error, httpx.TimeoutException):
-            return "Timed out"
-    except Exception:  # noqa: BLE001
-        pass
-    return f"{type(error).__name__}: {error}"
+    return describe_failure(error, url)
 
 
 #: Save & test and the register that follows it are two requests. The probe stays in this
@@ -2094,11 +2087,19 @@ def call_tool_with_receipt(
         )
         if _is_transport_failure(exc):
             record_reachability_quietly(connection, project_id, server, reachable=False,
-                                        error=f"{type(exc).__name__}: {exc}")
+                                        error=_said(exc, str(server.get("url") or ""))[:500])
         _audit_tool_call(
             "failed", policy, latency_ms=max(0, int((time.monotonic() - started) * 1000))
         )
-        raise
+        # IN WORDS, WITH THE NEXT STEP (BOSSAPP-1476): the agent, the run and the gateway all
+        # read str(exc). It used to be httpx's own text ("Client error '401 Unauthorized' for
+        # url ... For more information check: https://developer.mozilla.org/...").
+        from .mcp_client import failed_call
+
+        plain = failed_call(exc, str(server.get("url") or ""))
+        if plain is exc:
+            raise
+        raise plain from exc
     elapsed_ms = max(0, int((time.monotonic() - started) * 1000))
     receipts.mark_succeeded(
         connection,

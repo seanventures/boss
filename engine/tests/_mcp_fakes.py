@@ -37,7 +37,8 @@ DEFAULT_TOOLS = [
 
 class FakeMcp:
     def __init__(self, mode: str = "streamable", *, auth: Optional[tuple] = None,
-                 tools: Optional[list[dict]] = None, path: str = "/mcp") -> None:
+                 tools: Optional[list[dict]] = None, path: str = "/mcp",
+                 tls: Optional[Any] = None) -> None:
         assert mode in ("streamable", "streamable_sse", "sse")
         self.mode = mode
         self.auth = auth
@@ -50,6 +51,11 @@ class FakeMcp:
         self._streams: dict[str, "queue.Queue[Optional[dict]]"] = {}
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), _handler(self))
         self._server.daemon_threads = True
+        self.scheme = "http"
+        if tls is not None:
+            # An HTTPS server (tls: an ssl.SSLContext with its certificate loaded).
+            self._server.socket = tls.wrap_socket(self._server.socket, server_side=True)
+            self.scheme = "https"
         threading.Thread(target=self._server.serve_forever, daemon=True).start()
 
     # ------------------------------------------------------------------ plumbing
@@ -59,10 +65,10 @@ class FakeMcp:
 
     @property
     def url(self) -> str:
-        return f"http://127.0.0.1:{self.port}{self.path}"
+        return f"{self.scheme}://127.0.0.1:{self.port}{self.path}"
 
     def url_on(self, host: str) -> str:
-        return f"http://{host}:{self.port}{self.path}"
+        return f"{self.scheme}://{host}:{self.port}{self.path}"
 
     def close(self) -> None:
         for stream in list(self._streams.values()):
@@ -302,3 +308,61 @@ class FakeProxy:
     def close(self) -> None:
         self._server.shutdown()
         self._server.server_close()
+
+
+def make_tls(directory: Any) -> tuple[Any, str]:
+    """A private CA and a certificate for 127.0.0.1 it signed: (server SSLContext, CA PEM path).
+    The CA plays the company's root (a TLS-inspecting gateway, an internal server)."""
+    import datetime
+    import ipaddress
+    import ssl
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    ca_key = ec.generate_private_key(ec.SECP256R1())
+    ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Example Corp Root CA")])
+    ca = (x509.CertificateBuilder().subject_name(ca_name).issuer_name(ca_name)
+          .public_key(ca_key.public_key()).serial_number(x509.random_serial_number())
+          .not_valid_before(now - datetime.timedelta(days=1))
+          .not_valid_after(now + datetime.timedelta(days=30))
+          .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+          .add_extension(x509.KeyUsage(digital_signature=True, key_cert_sign=True,
+                                       crl_sign=True, content_commitment=False,
+                                       key_encipherment=False, data_encipherment=False,
+                                       key_agreement=False, encipher_only=False,
+                                       decipher_only=False), critical=True)
+          .add_extension(x509.SubjectKeyIdentifier.from_public_key(ca_key.public_key()),
+                         critical=False)
+          .sign(ca_key, hashes.SHA256()))
+    key = ec.generate_private_key(ec.SECP256R1())
+    leaf = (x509.CertificateBuilder()
+            .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")]))
+            .issuer_name(ca_name).public_key(key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now - datetime.timedelta(days=1))
+            .not_valid_after(now + datetime.timedelta(days=30))
+            .add_extension(x509.SubjectAlternativeName(
+                [x509.IPAddress(ipaddress.ip_address("127.0.0.1")),
+                 x509.DNSName("localhost")]), critical=False)
+            .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(
+                ca_key.public_key()), critical=False)
+            .add_extension(x509.ExtendedKeyUsage([x509.oid.ExtendedKeyUsageOID.SERVER_AUTH]),
+                           critical=False)
+            .sign(ca_key, hashes.SHA256()))
+    pem = serialization.Encoding.PEM
+    ca_path = f"{directory}/extra-ca.pem"
+    with open(ca_path, "wb") as fh:
+        fh.write(ca.public_bytes(pem))
+    cert_path, key_path = f"{directory}/leaf.pem", f"{directory}/leaf.key"
+    with open(cert_path, "wb") as fh:
+        fh.write(leaf.public_bytes(pem))
+    with open(key_path, "wb") as fh:
+        fh.write(key.private_bytes(pem, serialization.PrivateFormat.PKCS8,
+                                   serialization.NoEncryption()))
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(cert_path, key_path)
+    return context, ca_path
