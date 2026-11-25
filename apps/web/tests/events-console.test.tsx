@@ -215,7 +215,8 @@ describe("E1 Connections", () => {
     expect($('[data-testid="ev-src-state-icn_s"]')?.textContent).toBe("Live");
     expect($('[data-testid="ev-src-icn_s"]')?.textContent).toContain("14/min");
     expect($('[data-testid="ev-src-rules-icn_s"]')?.textContent).toContain("2 rules");
-    expect($('[data-testid="ev-coming-teams"]')).not.toBeNull();
+    expect($('[data-testid="ev-coming-salesforce"]')).not.toBeNull();
+    expect($('[data-testid="ev-coming-teams"]')).toBeNull();
     await click($('[data-testid="ev-src-menu-icn_s"]'));
     await click($('[data-testid="ev-src-test-icn_s"]'));
     expect(calls.some((c) => c.method === "POST" && c.url === "/v1/intake/connections/icn_s/test")).toBe(true);
@@ -523,5 +524,97 @@ describe("E7 People", () => {
     await mount(<EventsHome projectId={PID} place={place("people", { conn: "icn_s" })} />);
     expect($('[data-testid="ev-att-off"]')).toBeNull();
     expect($('[data-testid="ev-revoke-U0PRIYA"]')?.getAttribute("aria-disabled")).toBe("true");
+  });
+});
+
+describe("E3 Connect Microsoft Teams & ServiceNow Business Rule snippet", () => {
+  it("creates Teams endpoint + connection, offers manifest.json download, and handles /chat/link label", async () => {
+    at("/?area=setup&events=connect&kind=teams");
+    const calls = api((url, method) => {
+      if (url.startsWith("/v1/intake/connections?")) return json({ connections: [] });
+      if (method === "POST" && url === "/v1/chat/endpoints") return json({ id: "che_teams", kind: "teams", name: "Microsoft Teams", status: "active", app_id: "11111111-2222-3333-4444-555555555555", config: {}, secrets_set: ["app_password"], urls: { webhook: "https://boss.example/v1/intake/teams/tok" } }, 201);
+      if (method === "POST" && url === "/v1/intake/connections") return json({ ...SLACK, id: "icn_teams", kind: "teams", label: "Microsoft Teams", url_path: "/v1/intake/teams/tok", config: { chat_endpoint_id: "che_teams", app_id: "11111111-2222-3333-4444-555555555555", tenant_id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" } }, 201);
+      if (url === "/v1/intake/connections/icn_teams/test-message") return json({ ok: true, posted: true, channel: "19:chan@thread.tacv2", checks: { "secret:app_password": "ok" } });
+      return undefined;
+    });
+    await mount(<EventsHome projectId={PID} place={place("connect", { kind: "teams" })} />);
+    expect($('[data-testid="ev-teams-manifest"]')?.getAttribute("download")).toBe("boss-teams-manifest.json");
+    const save = $('[data-testid="ev-teams-save"]') as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    await type('[data-testid="ev-teams-appid"]', "11111111-2222-3333-4444-555555555555");
+    await type('[data-testid="ev-teams-tenantid"]', "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
+    await type('[data-testid="ev-teams-secret"]', "teams-app-pw");
+    await type('[data-testid="ev-teams-channel"]', "19:chan@thread.tacv2");
+    expect(save.disabled).toBe(false);
+    await click(save);
+    expect(calls.some((c) => c.method === "POST" && c.url === "/v1/chat/endpoints" && c.body.kind === "teams")).toBe(true);
+    expect(calls.some((c) => c.method === "POST" && c.url === "/v1/intake/connections" && c.body.kind === "teams")).toBe(true);
+    expect(calls.some((c) => c.url === "/v1/intake/connections/icn_teams/test-message")).toBe(true);
+
+    const { toMatch: toM, fromMatch: fromM } = await import("../lib/intake-rules");
+    const m = toM({ ...emptyDraft(true), when: "mention", channels: ["19:general"], followups: true }, true, "teams");
+    expect(m.match).toMatchObject({ all: expect.arrayContaining([{ field: "type", op: "in", value: ["com.microsoft.teams.message.mention", "com.microsoft.teams.message.thread_reply"] }]) });
+    expect(fromM(m.match, "mention_or_dm", true).when).toBe("mention");
+  });
+
+  it("Connect a source → ServiceNow shows config fields and copyable Business Rule snippet on connect", async () => {
+    const calls = api((url, method) => {
+      if (url.startsWith("/v1/intake/catalog")) {
+        return json({
+          sources: [{
+            key: "servicenow", label: "ServiceNow", modes: ["push", "poll"],
+            description: "Incidents and changes.",
+            auth_fields: [
+              { name: "instance_url", label: "Instance URL", required: false },
+              { name: "signing_secret", label: "Signing secret", secret: true, required: false },
+            ],
+            event_types: ["com.servicenow.incident.created"],
+          }],
+        });
+      }
+      if (method === "POST" && url === "/v1/intake/connections") {
+        return json({
+          ...HOOK, id: "icn_sn", kind: "servicenow", label: "ServiceNow",
+          url: "https://boss.example/v1/intake/servicenow/sntok",
+          secret: "whsec_SNONCE",
+        }, 201);
+      }
+      return undefined;
+    });
+    await mount(<EventsHome projectId={PID} place={place("connections")} />);
+    await click($('[data-testid="ev-connect"]'));
+    await click($('[data-testid="ev-pick-servicenow"]'));
+    await click($('[data-testid="ev-connect-save"]'));
+    expect(calls.some((c) => c.method === "POST" && c.url === "/v1/intake/connections" && c.body.kind === "servicenow")).toBe(true);
+    expect($('[data-testid="ev-connect-url"]')?.textContent).toBe("https://boss.example/v1/intake/servicenow/sntok");
+    expect($('[data-testid="ev-servicenow-snippet"]')?.textContent).toContain("webhook-signature");
+  });
+});
+
+describe("E8 My chat links in Account", () => {
+  it("lists linked chat accounts and revokes one via POST /v1/chat/links/{id}/revoke", async () => {
+    const { MyChatLinks } = await import("../app/account/security");
+    const calls: Call[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (u: string, init?: RequestInit) => {
+      const url = String(u);
+      const method = String(init?.method ?? "GET");
+      calls.push({ url, method, body: init?.body ? JSON.parse(String(init.body)) : {} });
+      if (url === "/v1/chat/links") {
+        return json({
+          links: [{
+            id: "chl_t1", endpoint_id: "che_teams", kind: "teams", endpoint_name: "Microsoft Teams",
+            external_user_id: "29:u1", external_name: "priya.teams", method: "aad_oid", verified_at: iso(60_000),
+          }],
+        });
+      }
+      if (url === "/v1/chat/links/chl_t1/revoke" && method === "POST") return json({ ok: true, id: "chl_t1" });
+      return json({});
+    }));
+    await mount(<MyChatLinks />);
+    expect($('[data-testid="my-chat-links"]')?.textContent).toContain("Microsoft Teams");
+    expect($('[data-testid="my-chat-links"]')?.textContent).toContain("@priya.teams");
+    await click($('[data-testid="my-chat-link-revoke-chl_t1"]'));
+    expect(calls.some((c) => c.method === "POST" && c.url === "/v1/chat/links/chl_t1/revoke")).toBe(true);
+    expect($('[data-testid="my-chat-link-chl_t1"]')).toBeNull();
   });
 });

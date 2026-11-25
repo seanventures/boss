@@ -214,6 +214,8 @@ export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permiss
   "lib/intake.ts#attestConnection": "identity_provider:manage",   // PUT /v1/intake/connections/{id}/sso-attestation
   "lib/intake.ts#clearAttestation": "identity_provider:manage",   // DELETE /v1/intake/connections/{id}/sso-attestation
   "lib/intake.ts#createSlackEndpoint": "integration:manage",      // POST /v1/chat/endpoints (kind slack)
+  "lib/intake.ts#createTeamsEndpoint": "integration:manage",      // POST /v1/chat/endpoints (kind teams)
+  "lib/intake.ts#revokeMyChatLink": "self",                       // POST /v1/chat/links/{id}/revoke (own link)
   "lib/intake.ts#replayEvents": "integration:manage",             // POST /v1/intake/events/replay (reprocess | force)
   "lib/intake.ts#previewMatch": "integration:read",               // POST /v1/agents/{role}/triggers/preview-match (a read-only dry run)
   "lib/intake.ts#createRule": "agent:deploy",                     // POST /v1/agents/{role}/triggers (kind intake)
@@ -224,6 +226,26 @@ export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permiss
   "lib/intake.ts#removeRuleBudget": "budget:manage",              // DELETE /v1/budget-policies/scoped/{id}
   "lib/intake.ts#revokePerson": "integration:manage",             // POST /v1/intake/connections/{id}/people/{link}/revoke
   "lib/intake.ts#promptPeople": "integration:manage",             // POST /v1/intake/connections/{id}/people/prompts
+
+  // lib/agent-platform.ts — Agents › Deployments, Triggers, Health, Endpoints & A2A (AP-P3, BOSSAPP-1054)
+  "lib/agent-platform.ts#deployVersion": "agent:deploy",          // POST /v1/agents/{role}/deployments
+  "lib/agent-platform.ts#promoteVersion": "agent:deploy",         // POST /v1/agents/{role}/promote
+  "lib/agent-platform.ts#rollbackDeployment": "agent:deploy",     // POST /v1/agents/{role}/rollback
+  "lib/agent-platform.ts#createTrigger": "agent:deploy",          // POST /v1/agents/{role}/triggers
+  "lib/agent-platform.ts#previewTriggerMatch": "integration:read",// POST /v1/agents/{role}/triggers/preview-match
+  "lib/agent-platform.ts#updateTrigger": "agent:deploy",          // PATCH /v1/agent-triggers/{id}
+  "lib/agent-platform.ts#deleteTrigger": "agent:deploy",          // DELETE /v1/agent-triggers/{id}
+  "lib/agent-platform.ts#setTriggerPaused": "agent:lifecycle",    // POST /v1/agent-triggers/{id}/pause|resume
+  "lib/agent-platform.ts#rotateTriggerSecret": "agent:deploy",    // POST /v1/agent-triggers/{id}/rotate-secret
+  "lib/agent-platform.ts#setDeploymentPaused": "agent:lifecycle", // POST /v1/agents/{role}/deployments/{env}/pause|resume
+  "lib/agent-platform.ts#tickBots": "system:operate",             // POST /v1/bots/tick
+  "lib/agent-platform.ts#createProtocolThread": "agent:invoke",   // POST /v1/agents/{role}/threads
+  "lib/agent-platform.ts#startProtocolRun": "agent:invoke",       // POST /v1/threads/{tid}/runs
+  "lib/agent-platform.ts#streamProtocolRun": "agent:invoke",      // POST .../runs/stream
+  "lib/agent-platform.ts#waitProtocolRun": "agent:invoke",        // POST .../runs/wait
+  "lib/agent-platform.ts#cancelProtocolRun": "agent:invoke",      // POST /v1/threads/{tid}/runs/{rid}/cancel
+  "lib/agent-platform.ts#forkProtocolRun": "agent:invoke",        // POST /v1/threads/{tid}/runs/{rid}/fork
+  "lib/agent-platform.ts#setA2AExposure": "agent:deploy",         // PUT /v1/agents/{role}/deployments/{env}/a2a
 
   // lib/llm-gateways.ts — Setup › Advanced › Gateways (BOSSAPP-887)
   "lib/llm-gateways.ts#createGateway": "model_provider:manage",   // POST /v1/llm-gateways
@@ -395,6 +417,7 @@ export const WRITE_OPS: Readonly<Record<string, Readonly<Record<string, WriteGat
     "/v1/intake/connections": "integration:manage",
     "/v1/intake/events/replay": "integration:manage",
     "/v1/chat/endpoints": "integration:manage",
+    "/v1/chat/links/": "self",
     // Setup › Advanced › Gateways (lib/llm-gateways.ts, BOSSAPP-887).
     "/v1/llm-gateways": "model_provider:manage",
     // Activity › Feedback › Reflection (lib/reflection.ts, BOSSAPP-888).

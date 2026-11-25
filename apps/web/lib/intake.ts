@@ -292,7 +292,7 @@ export function eventFlow(e: EventDetail, ruleName: (id: string) => string, runD
   const run = main.run_id || e.runs[0] || "";
   nodes.push({ key: "run", label: run ? `Run ${run.slice(-4)}` : "Run", detail: main.fire_outcome === "duplicate" ? "already ran" : rule,
                tip: run ? `Run ${run} · ${main.fire_outcome}` : main.fire_outcome, state: run ? "done" : "waiting" });
-  if (e.kind === "slack") {
+  if (e.kind === "slack" || e.kind === "teams") {
     nodes.push({ key: "reply", label: "Reply", detail: "in thread",
                  tip: runDone ? "The run finished and answered in the thread" : runDone === false ? "The run is still working" : "Sent by the run through the reply outbox",
                  state: runDone ? "done" : runDone === false ? "active" : "waiting" });
@@ -400,13 +400,25 @@ export function parsePeople(v: unknown): People {
 }
 
 // ── the chat endpoint Slack rides on, and the org's sign-in providers (E2) ───────────────────
-export type ChatEndpoint = { id: string; kind: string; name: string; status: string; channel: string; secrets_set: string[]; url: string };
+export type ChatEndpoint = { id: string; kind: string; name: string; status: string; channel: string; app_id: string; tenant_id: string; secrets_set: string[]; url: string };
 export const parseEndpoint = (e: unknown): ChatEndpoint => {
   const x = o(e);
   const u = o(x.urls);
-  return { id: s(x.id), kind: s(x.kind), name: s(x.name), status: s(x.status), channel: s(o(x.config).channel), secrets_set: strs(x.secrets_set),
-           url: s(u.event_subscriptions_request_url) || s(u.webhook_url) };
+  const cfg = o(x.config);
+  return { id: s(x.id), kind: s(x.kind), name: s(x.name), status: s(x.status), channel: s(cfg.channel),
+           app_id: s(cfg.app_id), tenant_id: s(cfg.tenant_id), secrets_set: strs(x.secrets_set),
+           url: s(u.event_subscriptions_request_url) || s(u.messaging_endpoint_url) || s(u.webhook_url) };
 };
+export type MyChatLink = {
+  id: string; endpoint_id: string; kind: string; endpoint_name: string; project_id: string;
+  external_user_id: string; external_name: string; verified_at: string;
+};
+export const parseMyChatLinks = (v: unknown): MyChatLink[] => a(o(v).links).map((x) => {
+  const y = o(x);
+  return { id: s(y.id), endpoint_id: s(y.endpoint_id), kind: s(y.kind), endpoint_name: s(y.endpoint_name),
+           project_id: s(y.project_id), external_user_id: s(y.external_user_id),
+           external_name: s(y.external_name), verified_at: s(y.verified_at) };
+}).filter((l) => l.id);
 export const parseEndpoints = (v: unknown): ChatEndpoint[] => a(o(v).endpoints).map(parseEndpoint).filter((e) => e.id);
 export type Idp = { id: string; name: string; domains: string[]; status: string };
 export const parseIdps = (v: unknown): Idp[] => a(o(v).providers).map((p) => {
@@ -439,6 +451,7 @@ export function readRules(projectId: string, filter: RuleFilter = {}): Promise<R
 }
 export const readPeople = (connectionId: string) => evRead(`${conn(connectionId)}/people`, parsePeople);
 export const readChatEndpoints = (projectId: string) => evRead(`/v1/chat/endpoints?project_id=${enc(projectId)}`, parseEndpoints);
+export const readMyChatLinks = () => evRead("/v1/chat/links", parseMyChatLinks);
 export const readIdps = () => evRead("/v1/identity/providers", parseIdps);
 export const readRouteBudgets = (projectId: string) => evRead(`/v1/budget-policies/scoped?project_id=${enc(projectId)}`, parseBudgets);
 export const readRunStatus = (threadId: string, runId: string, projectId: string) =>
@@ -472,6 +485,12 @@ export const clearAttestation = (id: string): Promise<WriteResult> => obsWrite(`
 export const createSlackEndpoint = (projectId: string, input: { name: string; channel: string; signing_secret: string; bot_token: string }): Promise<WriteResult> =>
   obsWrite("/v1/chat/endpoints", { project_id: projectId, kind: "slack", name: input.name, config: { channel: input.channel },
     secrets: { signing_secret: input.signing_secret, bot_token: input.bot_token } }, press("slack", "Save"));
+export const createTeamsEndpoint = (projectId: string, input: { name: string; app_id: string; tenant_id: string; app_password: string; channel?: string }): Promise<WriteResult> =>
+  obsWrite("/v1/chat/endpoints", { project_id: projectId, kind: "teams", name: input.name,
+    config: { app_id: input.app_id, tenant_id: input.tenant_id, ...(input.channel ? { channel: input.channel } : {}) },
+    secrets: { app_password: input.app_password } }, press("teams", "Save"));
+export const revokeMyChatLink = (linkId: string): Promise<WriteResult> =>
+  obsWrite(`/v1/chat/links/${enc(linkId)}/revoke`, {}, press(`my-chat-link:${linkId}`, "Revoke"));
 export const replayEvents = (projectId: string, ids: string[], mode: "reprocess" | "force", reason = ""): Promise<WriteResult> =>
   obsWrite("/v1/intake/events/replay", { project_id: projectId, intake_event_ids: ids, mode, reason }, press(`replay:${mode}`, mode === "force" ? "Force run" : "Reprocess"));
 /** "Would match": a read-only dry run over the connection's last 50 events (integration:read). */

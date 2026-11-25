@@ -496,15 +496,7 @@ def build_intake_router(*, engine, settings: Callable[[], Any],
 
     # ── the front door ───────────────────────────────────────────────────────────────────────
 
-    @router.api_route("/v1/intake/{kind}/{connection}", methods=["POST", "OPTIONS"],
-                      status_code=202)
-    @public(reason=PublicReason.HMAC_SIGNED_WEBHOOK, verifier=event_intake.receive)
-    async def receive_intake(kind: str, connection: str, request: Request):
-        """A source's delivery. Public by necessity; nothing is stored unless the adapter's own
-        verification (Standard Webhooks / BOSS v1 / X-Hub-Signature-256, on the raw bytes) accepts
-        it under this connection's secret. Answers the source's success code once the row is
-        committed; a duplicate, a paused connection and a storm are 2xx too; 401 a bad signature;
-        404 an unknown URL; 413 too large; 503 only when the database is down."""
+    async def _handle_intake(kind: str, connection: str, request: Request):
         raw, too_large = await _read_bounded(request)
         if too_large:
             return JSONResponse(status_code=413, content={"status": "too_large"})
@@ -518,5 +510,24 @@ def build_intake_router(*, engine, settings: Callable[[], Any],
             return Response(status_code=int(result["http_status"]), headers=headers)
         return JSONResponse(status_code=int(result["http_status"]), content=result["body"],
                             headers=headers)
+
+    @router.api_route("/v1/intake/teams/{connection}", methods=["POST", "OPTIONS"],
+                      status_code=202)
+    @public(reason=PublicReason.SIGNED_JWT_WEBHOOK, verifier=event_intake.receive)
+    async def receive_teams_intake(connection: str, request: Request):
+        """Microsoft Teams Bot Framework Activity delivery. Public; verified via RS256 OIDC
+        JWT (issuer, audience == app_id, nbf/exp, serviceUrl) before storing."""
+        return await _handle_intake("teams", connection, request)
+
+    @router.api_route("/v1/intake/{kind}/{connection}", methods=["POST", "OPTIONS"],
+                      status_code=202)
+    @public(reason=PublicReason.HMAC_SIGNED_WEBHOOK, verifier=event_intake.receive)
+    async def receive_intake(kind: str, connection: str, request: Request):
+        """A source's delivery. Public by necessity; nothing is stored unless the adapter's own
+        verification (Standard Webhooks / BOSS v1 / X-Hub-Signature-256, on the raw bytes) accepts
+        it under this connection's secret. Answers the source's success code once the row is
+        committed; a duplicate, a paused connection and a storm are 2xx too; 401 a bad signature;
+        404 an unknown URL; 413 too large; 503 only when the database is down."""
+        return await _handle_intake(kind, connection, request)
 
     return router

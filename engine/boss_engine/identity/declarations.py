@@ -66,6 +66,8 @@ class PublicReason(StrEnum):
                                                             # revocable join token a person issued in the
                                                             # console; it can only enrol one agent host
                                                             # (P8a, BOSSAPP-1063 amendment)
+    SIGNED_JWT_WEBHOOK = "signed_jwt_webhook"               # /v1/intake/teams/{connection}: RS256 OIDC JWT
+                                                            # signed by Bot Framework / Entra (P9b-1)
 
 
 #: Reasons whose route has nothing to verify, so `verifier` may be None.

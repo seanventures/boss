@@ -76,8 +76,11 @@ export function PeopleTab() {
   return (
     <EvFrame tab="people" title="People links" sub="Who each Slack or Teams user is in BOSS.">
       {conns?.ok && !list.length ? (
-        <Empty icon={<UsersThree size={30} aria-hidden />} title="No chat connection yet" line="Connect Slack first; people link the first time they talk to BOSS." testId="ev-people-none">
-          <button type="button" className="ev-btn" data-kind="primary" onClick={() => goEvents({ events: "connect", kind: "slack" })}>Connect Slack</button>
+        <Empty icon={<UsersThree size={30} aria-hidden />} title="No chat connection yet" line="Connect Slack or Microsoft Teams first; people link the first time they talk to BOSS." testId="ev-people-none">
+          <div className="ev-row-line">
+            <button type="button" className="ev-btn" data-kind="primary" onClick={() => goEvents({ events: "connect", kind: "slack" })}>Connect Slack</button>
+            <button type="button" className="ev-btn" onClick={() => goEvents({ events: "connect", kind: "teams" })}>Connect Teams</button>
+          </div>
         </Empty>
       ) : null}
       {list.length > 1 ? (

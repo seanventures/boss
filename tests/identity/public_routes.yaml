@@ -111,6 +111,9 @@ GET /v1/previews/{preview_id}/web/{path:path}:
 GET /v1/ticket-systems/oauth/callback:
   reason: oauth_state_bound_callback
   verifier: boss_engine.connectors.tickets.auth:complete_oauth
+OPTIONS /v1/intake/teams/{connection}:
+  reason: signed_jwt_webhook
+  verifier: boss_engine.services.event_intake:receive
 OPTIONS /v1/intake/{kind}/{connection}:
   reason: hmac_signed_webhook
   verifier: boss_engine.services.event_intake:receive
@@ -243,6 +246,9 @@ POST /v1/ingest/prom/remote_write:
 POST /v1/ingest/{source_id}/{kind}:
   reason: hmac_signed_webhook
   verifier: boss_engine.services.monitoring:authenticate
+POST /v1/intake/teams/{connection}:
+  reason: signed_jwt_webhook
+  verifier: boss_engine.services.event_intake:receive
 POST /v1/intake/{kind}/{connection}:
   reason: hmac_signed_webhook
   verifier: boss_engine.services.event_intake:receive
