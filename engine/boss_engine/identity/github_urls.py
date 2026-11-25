@@ -121,6 +121,102 @@ def github_hosts(api: object = None) -> tuple[str, ...]:
     return PUBLIC_HOSTS + tuple(dict.fromkeys(extra))
 
 
+# ---- a credential knows its host; a send to another host is refused (BOSSAPP-1286) ---------------
+
+class GitHubCredential(str):
+    """A GitHub token that KNOWS THE HOST it belongs to.
+
+    Every token source returns one (the one resolver, a connection's token, the App's, the
+    install's): ``api_base`` is the REST base of the GitHub it was issued by (api.github.com, or
+    a GHES ``https://<host>/api/v3``). It is a ``str`` so every existing consumer keeps working;
+    the SEND points (HTTP transports, git credential injection) call :func:`check_send` and refuse
+    to put it on the wire to any other host. ``repr`` never shows the token."""
+
+    api_base: str
+
+    def __new__(cls, token: object, api_base: object):
+        obj = super().__new__(cls, str(token or ""))
+        obj.api_base = api_base_of(api_base)
+        return obj
+
+    @property
+    def web_base(self) -> str:
+        return web_base_for(self.api_base)
+
+    def __repr__(self) -> str:
+        return f"GitHubCredential(<{len(self)} chars>, api_base={self.api_base!r})"
+
+    def __reduce__(self):
+        return (GitHubCredential, (str(self), self.api_base))
+
+
+def api_base_of(value: object) -> str:
+    value = str(value or "").strip()
+    return value.rstrip("/") if value else install_api_base()
+
+
+def tag(token: object, api_base: object) -> "GitHubCredential | str":
+    """``token`` tagged with its host ("" stays ""). A token already tagged for ANOTHER host is
+    refused: re-tagging must never launder a credential onto a new host."""
+    if not token:
+        return ""
+    base = api_base_of(api_base)
+    if isinstance(token, GitHubCredential) and token.api_base != base:
+        _refuse(token, base, "re-tag")
+    return GitHubCredential(token, base)
+
+
+def credential_api_base(token: object) -> str:
+    """The REST base a token belongs to: its tag, else the INSTALL's (an untagged token is an
+    install/env token by construction; it never belongs to another host)."""
+    return token.api_base if isinstance(token, GitHubCredential) else install_api_base()
+
+
+def _netloc(url: str) -> str:
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(url if "://" in url else f"https://{url}")
+    host = (parts.hostname or "").lower().rstrip(".")
+    return f"{host}:{parts.port}" if parts.port else host
+
+
+def credential_hosts(api: object) -> frozenset[str]:
+    """The hosts a credential of REST base ``api`` may be sent to: github.com's own hosts for the
+    public API, else exactly the GHES API host and its web host (with their ports)."""
+    base = api_base_of(api)
+    if base == PUBLIC_API:
+        return frozenset(PUBLIC_HOSTS)
+    return frozenset({_netloc(base), _netloc(web_base_for(base))})
+
+
+class CrossHostCredential(PermissionError):
+    """A GitHub credential was about to be sent to a host it does not belong to."""
+
+
+def _refuse(token: object, target: str, where: str) -> None:
+    import logging
+
+    logging.getLogger("boss.github.credentials").warning(
+        "github.cross_host_refused where=%s token_host=%s target=%s", where,
+        _netloc(credential_api_base(token)), target)
+    # The warning IS the audit record (logger boss.github.credentials, collected with the API's
+    # logs); it names both hosts and never the token.
+    raise CrossHostCredential(
+        f"refused to send a GitHub credential for {_netloc(credential_api_base(token))} to "
+        f"{target} ({where})")
+
+
+def check_send(token: object, url: object, *, where: str = "http") -> None:
+    """THE send-point check. Call it wherever a GitHub token is put on the wire (an HTTP request,
+    a git credential header): raises :class:`CrossHostCredential` (and logs/audits it) when the
+    target host is not one the token belongs to. An empty token passes."""
+    if not token:
+        return
+    target = _netloc(str(url or ""))
+    if target not in credential_hosts(credential_api_base(token)):
+        _refuse(token, target, where)
+
+
 def account_type(raw: object) -> Optional[str]:
     """GitHub's `type` field, normalised: "User", "Organization", or None (unknown). A Bot or an
     Enterprise owns no settings tree BOSS links to."""
