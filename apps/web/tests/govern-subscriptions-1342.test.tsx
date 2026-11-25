@@ -42,6 +42,7 @@ describe("Govern › Subscriptions", () => {
     await mount(<GovernHome projectId="p1" actor="ceo" />);
     expect($("[data-testid=gv-sub-banner]")!.textContent).toMatch(/Claude Code.*limit reached.*Moves work to Codex/);
     expect(g.calls.some((c) => /subscri/.test(c.url))).toBe(false);   // it rides on the one Govern read
+    expect($("[data-testid=gv-sub-banner-open] svg")).not.toBeNull();       // the icon beside its label
     await click($("[data-testid=gv-sub-banner-open]"));
     expect($("[data-testid=gv-sub-state-claude_code]")!.textContent).toBe("Limit reached");
     expect($("[data-testid=gv-sub-window-claude_code-five_hour]")!.textContent).toMatch(/62% left/);

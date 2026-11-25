@@ -9,7 +9,7 @@
  * shows each account under its pool, the primary marked and the one taking new work named.
  */
 import React from "react";
-import { ArrowRight, Crown, UsersThree } from "@phosphor-icons/react";
+import { ArrowRight, Crown, Gauge, UsersThree } from "@phosphor-icons/react";
 
 import { consoleHref } from "../url-intent";
 import { localWith } from "../../lib/local-time";
@@ -37,7 +37,8 @@ export function SubscriptionBanner({ view, onOpen }: { view: SubscriptionsView |
         {worst.state === "exhausted" ? worst.at_limit.words
           : `${worst.left_pct ?? "?"}% of the week left${worst.resets_at ? `, resets ${reset(worst.resets_at)}` : ""}.`}
         {hot.length > 1 ? ` ${hot.length - 1} more account${hot.length > 2 ? "s" : ""} need attention.` : ""}</span>
-      <button type="button" className="ag-btn" data-testid="gv-sub-banner-open" onClick={onOpen}>See subscriptions</button>
+      <button type="button" className="ag-btn" data-testid="gv-sub-banner-open" onClick={onOpen}>
+        <Gauge size={14} aria-hidden />See subscriptions</button>
     </div>
   );
 }
