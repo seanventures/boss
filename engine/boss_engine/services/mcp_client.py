@@ -83,6 +83,31 @@ class MCPInputRequired(MCPError):
         self.task_id = task_id
 
 
+class MCPTimeout(MCPError):
+    """tools/call did not answer within the client's call timeout. The server was reached, so
+    this is not an unreachable server; the call was cancelled (notifications/cancelled). The
+    words keep "timed out": durable_operations reads that as an unknown outcome, never retried
+    blind."""
+
+    def __init__(self, tool: str, seconds: float):
+        super().__init__(
+            f"{tool} did not answer within {int(seconds)}s (timed out); BOSS cancelled the call. "
+            "The server is reachable: if this tool is slow by design, raise "
+            "BOSS_MCP_CALL_TIMEOUT (seconds) on the install, otherwise check the server's logs.")
+        self.tool = tool
+        self.seconds = seconds
+
+
+def default_call_timeout() -> float:
+    """BOSS_MCP_CALL_TIMEOUT (seconds), default 120 — the stdio bridge's own call timeout."""
+    import os
+
+    try:
+        return max(1.0, float(os.environ.get("BOSS_MCP_CALL_TIMEOUT") or 120))
+    except ValueError:
+        return 120.0
+
+
 class MCPTaskPending(MCPError):
     """A task did not reach a terminal status within the client's wait. `task_id` is the durable
     handle: `MCPClient.get_task` / `cancel_task` reach it later."""
@@ -228,11 +253,19 @@ class MCPClient:
     """
 
     def __init__(self, settings: Settings, timeout: float = 20.0,
-                 task_timeout: Optional[float] = None):
+                 task_timeout: Optional[float] = None, call_timeout: Optional[float] = None):
         self.settings = settings
         self.timeout = timeout
         #: How long call_tool waits for a task to finish before raising MCPTaskPending.
         self.task_timeout = float(task_timeout if task_timeout is not None else timeout)
+        #: How long one tools/call may run before BOSS gives up and cancels it. A tool call is
+        #: real work (a query, a build, a crawl), not a handshake: `timeout` stays for connect,
+        #: initialize and tools/list.
+        self.call_timeout = float(call_timeout if call_timeout is not None
+                                  else default_call_timeout())
+        #: The tools/call in flight on this thread: its read timeout and JSON-RPC id, so a call
+        #: that times out can be cancelled by id.
+        self._calling = threading.local()
 
     # ------------------------------------------------------------------ transport
     def _post(self, url: str, payload: dict, headers: Optional[dict],
@@ -267,8 +300,12 @@ class MCPClient:
             sent.update(protocol)
         # THE PROXY DECISION (outbound_proxy): NO_PROXY read with its CIDR ranges, which httpx
         # ignores, so an internal server on 10.x is not sent to the company proxy.
-        return httpx.post(url, json=payload, headers=sent, timeout=self.timeout,
+        read = self._call_slot("timeout") if payload.get("method") == "tools/call" else None
+        return httpx.post(url, json=payload, headers=sent, timeout=read or self.timeout,
                           **outbound_proxy.httpx_options(url))
+
+    def _call_slot(self, name: str) -> Any:
+        return getattr(self._calling, name, None)
 
     @staticmethod
     def _answer(resp: httpx.Response, rid: Any) -> Any:
@@ -287,6 +324,8 @@ class MCPClient:
     def _rpc(self, url: str, method: str, params: Optional[dict] = None, rid: Optional[int] = None,
              headers: Optional[dict] = None, session: Optional[_Session] = None,
              extra: Optional[dict] = None) -> Any:
+        if rid is None and method == "tools/call":
+            rid = self._call_slot("rid")
         rid = _next_id() if rid is None else rid
         resp = self._post(url, {"jsonrpc": "2.0", "id": rid, "method": method,
                                 "params": params or {}}, headers, session, extra)
@@ -369,7 +408,7 @@ class MCPClient:
         if trace:
             meta.setdefault("traceparent", trace)   # SEP-414: trace context rides in _meta
         params["_meta"] = meta
-        rid = _next_id()
+        rid = (self._call_slot("rid") if method == "tools/call" else None) or _next_id()
         resp = self._post(url, {"jsonrpc": "2.0", "id": rid, "method": method, "params": params},
                           headers, None, extra,
                           protocol=self._protocol_headers(version, method, params))
@@ -498,7 +537,8 @@ class MCPClient:
         A session per call: nothing is held open between calls."""
         from urllib.parse import urljoin, urlsplit
 
-        read = float(timeout or self.timeout)
+        read = float(timeout or (self._call_slot("timeout") if method == "tools/call" else None)
+                     or self.timeout)
         upstream = self._upstream(url, headers)
         options = outbound_proxy.httpx_options(url)
         with httpx.stream("GET", url, headers={**upstream, "Accept": "text/event-stream"},
@@ -556,7 +596,7 @@ class MCPClient:
                 raise MCPError(error.get("message") or "the server refused to initialize",
                                code=error.get("code"))
             post({"jsonrpc": "2.0", "method": "notifications/initialized"})
-            rid = _next_id()
+            rid = (self._call_slot("rid") if method == "tools/call" else None) or _next_id()
             post({"jsonrpc": "2.0", "id": rid, "method": method, "params": params or {}}, extra)
             try:
                 message = answer(rid)
@@ -686,7 +726,23 @@ class MCPClient:
                   headers: Optional[dict] = None, call_headers: Optional[dict] = None) -> Any:
         """``call_headers``: per-call metadata (BOSSAPP-873) sent on this tools/call only."""
         params = {"name": name, "arguments": args or {}}
-        result = self._call(url, "tools/call", params, headers, call_headers) or {}
+        rid = _next_id()
+        self._calling.timeout, self._calling.rid = self.call_timeout, rid
+        try:
+            result = self._call(url, "tools/call", params, headers, call_headers) or {}
+        except httpx.ReadTimeout:
+            # A SLOW TOOL IS NOT A DEAD SERVER. The connection worked; the answer did not come
+            # in time. Say so in words (not "ReadTimeout"), and tell the server BOSS stopped
+            # waiting so it can stop the work (MCP notifications/cancelled). Raised as an
+            # MCPError, so the registry does not record the server as unreachable.
+            era = self._era(url, headers)
+            if not era.sse:   # the SSE session cancelled on its own stream
+                session = None if era.modern else self._session(url, headers)
+                self._cancel_quietly(
+                    lambda note: self._post(url, note, headers, session), rid)
+            raise MCPTimeout(name, self.call_timeout) from None
+        finally:
+            self._calling.timeout = self._calling.rid = None
         result = self._resolved(url, "tools/call", params, result, headers, call_headers) or {}
         content = result.get("content") if isinstance(result, dict) else None
         texts = [

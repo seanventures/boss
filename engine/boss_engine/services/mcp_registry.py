@@ -2167,7 +2167,8 @@ def call_tool_unattended(
     if tool_policy(server, tool_name, _declared_tier(server, tool_name)) != "allow":
         # Nobody is present on this road to ask, so Ask is refused like Off.
         raise McpToolOff(f"Did not call {tool_name}: it is not set to run without asking.")
-    client = MCPClient(settings) if timeout is None else MCPClient(settings, timeout=timeout)
+    client = MCPClient(settings) if timeout is None else MCPClient(
+        settings, timeout=timeout, call_timeout=timeout)
     return client.call_tool(server["url"], tool_name, inputs, headers=headers or {})
 
 
