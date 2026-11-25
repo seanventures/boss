@@ -5,19 +5,22 @@ import { codeOnly } from "./_helpers/source";
 /**
  * Skills are described, not specified: the way in is a conversation, not a 13-field form.
  *
- * REWRITTEN for the Kit (skills-mcp spec §5.5): the conversation is the Library's `Describe`
- * button, beside `+ New skill`, and it opens the dock to the Program Manager with the same
- * prompt as before. The form survives as the skill drawer, progressive rather than folded.
+ * REWRITTEN for the one home (docs/design/SKILLS_AND_MCP_HOME.md): the conversation is Add
+ * skill's `Describe`, beside `Write one`, and it opens the dock to the Program Manager with the
+ * same prompt as before. The form survives as the skill drawer, progressive rather than folded.
  * (The render test is tests/library.test.tsx.)
  */
 const LIBRARY = codeOnly("app/skills/library.tsx");
+const ADD_SKILL = codeOnly("app/skills/add-skill-sheet.tsx");
+const HOME = codeOnly("app/skills/kit-home.tsx");
 
 describe("skills are authored by conversation", () => {
-  it("Describe sits beside + New skill, with its tooltip", () => {
-    const at = LIBRARY.indexOf('data-testid="kit-lib-describe"');
-    expect(at).toBeGreaterThan(0);
-    expect(LIBRARY.slice(at - 120, at)).toContain("data-tip={TIP.describe}");
-    expect(LIBRARY.indexOf('data-testid="kit-lib-new-skill"')).toBeGreaterThan(at);
+  it("Describe sits beside Write one in Add skill, and asks BOSS", () => {
+    const write = ADD_SKILL.indexOf('way: "write"');
+    const describe = ADD_SKILL.indexOf('way: "describe"');
+    expect(write).toBeGreaterThan(0);
+    expect(describe).toBeGreaterThan(write);
+    expect(HOME).toContain('if (way === "describe") { askBossAboutSkills(projectId); return; }');
   });
 
   it("the door is addressed to the role whose remit this is", () => {

@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 /**
- * Library (skills-mcp spec §5.5): one list of skills — Built in and Yours — with the skills BOSS
- * uses itself behind `Show internal`; Describe opens the dock with the same prompt as before; the
- * MCP list; Import and Export all under ⋯.
+ * All skills (docs/design/SKILLS_AND_MCP_HOME.md): one list of skills — Built in and Yours — with
+ * the skills BOSS uses itself behind `Show internal`; Add skill › Describe opens the dock with the
+ * same prompt as before; Write one opens the drawer; Import and Export all under ⋯.
  */
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -15,14 +15,16 @@ vi.mock("../lib/dock-subject", () => ({ openDockAbout: (x: unknown) => dock(x) }
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }) }));
 const { Library } = await import("../app/skills/library");
 const { readKitParams } = await import("../app/skills/kit-url");
+const { KitHome } = await import("../app/skills/kit-home");
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); dock.mockReset(); });
 
-async function mount(search = "/?area=skills&tab=library") {
+async function mount(search = "/?area=skills&tab=library", request: "write" | "import" | "built_in" | null = null) {
   window.history.replaceState(null, "", search);
   const kit = clone(KITS.fresh);
   const calls = installKitApi(kit);
-  await render(<Library projectId="p1" actor="ceo" kit={kit} crew={kit.crew ?? []} initial={readKitParams()} onKitChanged={() => {}} />);
+  await render(<Library projectId="p1" actor="ceo" kit={kit} crew={kit.crew ?? []} initial={readKitParams()} onKitChanged={() => {}}
+                        request={request} />);
   return calls;
 }
 
@@ -37,9 +39,12 @@ describe("the Library", () => {
     expect($('[data-testid="kit-skill-model.route_via_entitlement_broker"]')).not.toBeNull();
   });
 
-  it("Describe opens the dock to the Program Manager with the same prompt", async () => {
-    await mount();
-    await click('[data-testid="kit-lib-describe"]');
+  it("Add skill › Describe opens the dock to the Program Manager with the same prompt", async () => {
+    installKitApi(clone(KITS.fresh));
+    window.history.replaceState(null, "", "/?area=skills");
+    await render(<KitHome projectId="p1" actor="ceo" />);
+    await click('[data-testid="kit-add-skill-btn"]');
+    await click('[data-testid="kit-add-skill-describe"]');
     expect(dock).toHaveBeenCalledTimes(1);
     const arg = dock.mock.calls[0][0] as { role: string; question: string };
     expect(arg.role).toBe("Program Manager");
@@ -47,18 +52,22 @@ describe("the Library", () => {
     expect(arg.question).toContain("which skills p1 already has");
   });
 
-  it("+ New skill opens the skill drawer with the three things a skill needs first", async () => {
-    await mount();
-    await click('[data-testid="kit-lib-new-skill"]');
+  it("Write one opens the skill drawer with the three things a skill needs first", async () => {
+    await mount(undefined, "write");
     expect($('[data-testid="kit-skill-drawer"]')).not.toBeNull();
     for (const id of ["skill-label", "skill-summary", "skill-behaviour"]) expect($(`[data-testid="${id}"]`)).not.toBeNull();
     expect($$('[data-testid^="skill-how-"]').map((b) => b.textContent)).toEqual(["Command", "MCP tool", "Built-in", "Program", "Guide"]);
   });
 
-  it("the MCP list, and Import / Export all under ⋯", async () => {
-    await mount("/?area=skills&tab=library&lib=mcp");
-    expect($('[data-testid="kit-mcp-web-intel"]')!.textContent).toContain("Built in");
-    expect($('[data-testid="kit-mcp-context7"]')!.textContent).toContain("Official");
+  it("Built in shows only built-in skills", async () => {
+    await mount(undefined, "built_in");
+    const rows = $$('li[data-testid^="kit-skill-"]');
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((r) => r.textContent?.includes("Built in"))).toBe(true);
+  });
+
+  it("Import / Export all under ⋯", async () => {
+    await mount();
     await click('[data-testid="kit-lib-more"]');
     expect($('[data-testid="kit-lib-menu"]')!.textContent).toBe("ImportExport all");
     await click('[data-testid="kit-lib-import"]');
