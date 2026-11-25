@@ -125,10 +125,13 @@ describe("Screen A — Govern › Spend is the landing", () => {
     expect($("[data-testid=gv-hero-fill]")!.getAttribute("style")).toContain("41.20%");
     expect($("[data-testid=gv-hero-forecast]")).not.toBeNull();
     expect(t("[data-testid=gv-hero-sub]")).toBe("$38.00 today of $100" + "1,240 subscription calls, included, $0" + "Resets Dec 1");
-    // Three reads open it — the limits view, this month's spend and (BOSSAPP-864) the month
-    // reconciled against invoices and seat fees — and nothing is written.
+    // The reads that open it — the limits view, this month's spend, (BOSSAPP-1295) the month's
+    // forecast with the teams it can be read for, and (BOSSAPP-864) the month reconciled against
+    // invoices and seat fees — and nothing is written.
     expect(g.calls.map((c) => `${c.method} ${c.url}`)).toEqual([
       "GET /api/govern?project_id=p1&view=limits", "GET /api/govern?project_id=p1&view=spend&window=month",
+      "GET /v1/budget-policies/scoped/teams?project_id=p1",
+      "GET /v1/budget-policies/scoped/forecast?project_id=p1&scope_type=org&scope_id=",
       "GET /v1/spend/reconciliation?project_id=p1"]);
   });
 

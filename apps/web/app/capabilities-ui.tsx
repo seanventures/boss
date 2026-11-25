@@ -150,13 +150,13 @@ export function CapabilitiesView({
           edit a server and removed one with no question asked while steps still used it. */}
       <div className="cap-section-head">
         <h3>MCP servers</h3>
-        <span className="cap-section-sub">Pluggable tool backends, JSON-RPC over HTTP, plug in external &amp; org-specific servers</span>
+        <span className="cap-section-sub">Tools agents call</span>
       </div>
       {!apiReachable ? (
         <p className="detail">Capabilities API unreachable.</p>
       ) : (
-        // ONE HOME FOR MCP SERVERS: Skills & MCP › Library manages them; this links there.
-        <a className="kit-link" href="?area=skills&tab=library&lib=mcp" data-testid="capabilities-mcp-link">
+        // ONE HOME FOR MCP SERVERS: Skills & MCP manages them; this links to its MCP servers section.
+        <a className="kit-link" href="?area=skills&section=mcp" data-testid="capabilities-mcp-link">
           MCP servers, {(mcpServers as Array<{ enabled?: boolean; reachable?: boolean | null; trusted?: boolean }>)
             .filter((s) => s.enabled !== false && s.reachable === true && s.trusted).length} ready ↗
         </a>

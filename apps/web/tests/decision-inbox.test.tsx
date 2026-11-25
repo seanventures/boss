@@ -145,6 +145,43 @@ describe("DecisionInbox (W1.6 actionable default)", () => {
     expect(markup).not.toContain("no automated follow-on");
   });
 
+  it("a re-check's Fix card says the follow-up build it starts, never 'no follow-on'", () => {
+    // BOSSAPP-1354: "Fix these" started a build while the card said nothing would follow.
+    const effect = "Starts a follow-up build of 26 items on this change's branch, about $5.54, "
+      + "that fixes the re-check's findings. Needs the Steer builds permission.";
+    const markup = html(
+      <DecisionInbox
+        feed={feed([item({
+          id: "dec_fix", status: "pending", question: "Fix these (about $5.54)",
+          recommendation: { action: "start_recheck_followup", run_id: "crun_1" },
+          allowedActions: [
+            { action: "approve", label: "Fix these (about $5.54)", tone: "approve", effect },
+            { action: "reject", label: "Not now", tone: "reject", effect: "Nothing is built." },
+          ],
+        })])}
+        tasks={[]} roles={[]} projectId="p" actorId="ceo" orgId="org_1"
+      />,
+    );
+    expect(markup).toContain("follow-up build of 26 items");
+    expect(markup).not.toContain("no automated follow-on");
+  });
+
+  it("any card whose Approve the engine describes shows those words, not 'no follow-on'", () => {
+    const markup = html(
+      <DecisionInbox
+        feed={feed([item({
+          id: "dec_new", status: "pending", question: "Something new?",
+          recommendation: { action: "an_action_this_console_never_heard_of" },
+          allowedActions: [{ action: "approve", label: "Go", tone: "approve",
+                             effect: "Starts the new thing now." }],
+        })])}
+        tasks={[]} roles={[]} projectId="p" actorId="ceo" orgId="org_1"
+      />,
+    );
+    expect(markup).toContain("Starts the new thing now.");
+    expect(markup).not.toContain("no automated follow-on");
+  });
+
   it("a budget or capacity refusal is a notice with the fix, and only Dismiss", () => {
     // boss-1: model_capacity_denied showed Approve/Reject that did nothing and an internal
     // question string as its title.

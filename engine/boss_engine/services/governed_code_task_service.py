@@ -5345,7 +5345,8 @@ def _requires_plan_approval(risk_tier: int) -> bool:
 
 
 def _block_for_plan_approval(engine, budget, *, run_id, project_id, task_id, reservation_id,
-                             design, risk_tier, title="", sensitive_markers=None):
+                             design, risk_tier, title="", sensitive_markers=None,
+                             fence_token=None):
     """Wire-Phase 2b: pause the run after the design phase, persist the design so the resumed run
     reuses it, release budget + sandbox during the wait, and raise a Decision whose approval
     re-enqueues the code.task job (decisions._handle_approved_follow_on → resume_code_task).
@@ -5425,6 +5426,11 @@ def _block_for_plan_approval(engine, budget, *, run_id, project_id, task_id, res
         c.execute(sql("UPDATE code_task_runs SET status='blocked', phase='awaiting_plan_approval', "
                        "decision_id=:d, updated_at=now() WHERE id=:id"),
                   {"d": dec_id, "id": run_id})
+        # PARKED ON A PERSON, OWNED BY NOBODY (BOSSAPP-1364): this execution ends here, so the
+        # approval's resume claims a free run instead of being fenced by this one's token.
+        from .run_fencing import release_run
+
+        release_run(c, run_id, fence_token)
         on_status_written(c, run_id)
     return {"status": "blocked", "done": True, "awaiting_plan_approval": True, "decision_id": dec_id}
 
@@ -5677,6 +5683,14 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 # reclaimed — is refused HERE, before it does any work; its late writes match
                 # 0 rows at the database boundary either way.
                 claim_run(c, run_id, _fence)
+            if run is not None and run.get("phase") == "awaiting_plan_approval" \
+                    and run.get("status") == "running":
+                # THE APPROVED RESUME TOOK (BOSSAPP-1364): the Shepherd's re-queue count and its
+                # question start over, should this build ever park and stall again.
+                c.execute(sql(
+                    "UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb) "
+                    "- 'approved_resume_requeues' - 'approved_resume_asked' WHERE id = :id"),
+                    {"id": run_id})
     except RunFenced as exc:
         # A duplicate execution stands down without touching the run: the owner continues.
         try:
@@ -6985,6 +6999,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             return 0
 
     def _rescue_pr(reason: str) -> Optional[str]:
+
         """Open a [partial] PR for whatever this run built. Safe to call from ANY exit.
 
         THE DELIVERABLE IS THE PR. This was first written inline in the `except Exception`
@@ -6996,6 +7011,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         Idempotent: propose_pull_request dedupes on code:task:<run_id>, so calling it here and
         again later cannot open two PRs. Returns the url or None; never raises.
         """
+        from .github_adapter import partial_title as _partial_title
+
         # EVERY EXIT KEEPS THE WORK LOCALLY FIRST, held or not, so a retry can continue from it.
         _save_workspace(f"exit: {reason}")
         try:
@@ -7014,7 +7031,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 pr = sf.propose_pull_request(
                     c, project_id, task_id, reservation_id=reservation_id,
                     rescue_of_run=run_id, run_id=run_id,
-                    dedupe_key=f"code:task:{run_id}", title=f"[partial] {title}",
+                    dedupe_key=f"code:task:{run_id}", title=_partial_title(title),
                     branch_name=work_branch,
                     summary=("INCOMPLETE — this run did not finish.\n\n"
                              f"It stopped because: {reason}\n\n"
@@ -8610,7 +8627,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     engine, budget, run_id=run_id, project_id=project_id, task_id=task_id,
                     reservation_id=reservation_id, design=design, risk_tier=max(risk_tier, 2),
                     title=title,
-                    sensitive_markers=sensitive_markers_in({**spec, "title": title}))
+                    sensitive_markers=sensitive_markers_in({**spec, "title": title}),
+                    fence_token=_fence)
 
         r1 = {"cost_usd_micros": 0, "summary": "", "usage": {}, "model": None}
         test_files: list[str] = []

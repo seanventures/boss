@@ -197,6 +197,23 @@ def test_a75_verification_survives_the_database_round_trip_of_every_column(db):
     assert result.ok and result.checked == 1
 
 
+def test_a75_a_test_judges_only_the_chain_it_writes_not_what_other_suites_left(db):
+    """The shared test database collects org_boss rows other suites commit under other master
+    keys (or none). The fixture hides them inside the rolled-back transaction, so a security
+    guard is red only for the chain its own test wrote (2026-11-25: A80 red on main by order)."""
+    from engine.tests.identity_s5_support import hide_committed_chains
+
+    community_install(db)
+    for i in range(3):
+        audit.record(ev(target_id=f"usr_{i}"), db=db)
+    _tamper(db, "UPDATE identity_security_events SET hash = prev_hash WHERE org_id = :o", o=ORG)
+    assert not audit.verify_chain(ORG, db=db).ok          # a foreign chain, as another suite left it
+    hide_committed_chains(db)
+    audit.record(ev(target_id="usr_mine"), db=db)
+    result = audit.verify_chain(ORG, db=db)
+    assert result.ok and result.checked == 1
+
+
 # ---- A76 -----------------------------------------------------------------------------------------
 
 def test_a76_a_failed_event_write_rolls_the_change_back(db, monkeypatch):

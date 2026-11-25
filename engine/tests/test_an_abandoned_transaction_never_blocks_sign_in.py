@@ -274,7 +274,60 @@ def test_a_refused_event_is_refused_at_once_not_at_commit(eng, org):  # noqa: F8
                                            outcome=Outcome.SUCCESS), db=c)
 
 
-# ── 4. the safety net on every background transaction ────────────────────────────────────────
+def test_deferred_and_inline_events_from_many_writers_and_orgs_keep_every_chain_whole(eng):  # noqa: F811
+    """The chain under load: background transactions (appended at commit) interleaved with
+    inline sign-ins, in two orgs at once, with details that redaction and JSON normalisation
+    rewrite (unsorted keys, non-ASCII, a credential in free text). Every chain verifies: each
+    hash covers exactly the stored row, and prev_hash is read under the same per-org lock that
+    assigns seq, whether the event was written inline or at commit."""
+    if not _audit_ready(eng):
+        pytest.skip("boss_test has no identity tables")
+    orgs = [f"org_1456_{uuid.uuid4().hex[:10]}" for _ in range(2)]
+    errors: list[BaseException] = []
+
+    def event(org_id: str, i: int) -> SecurityEvent:
+        return SecurityEvent(
+            org_id=org_id, event_type="delegation.used_first", outcome=Outcome.SUCCESS,
+            stream=Stream.LINEAGE, target_type="delegation_grant", target_id=f"dlg_{i}",
+            user_agent=f"curl/8 Bearer boss_pat_{'Ab3' * 14}x{i}",
+            details={"z": i, "a": {"ü": "naïve – ✓", "b": [3, 1]}, "note": f"step {i}"})
+
+    def background_writer(org_id: str, n: int) -> None:
+        try:
+            for i in range(n):
+                with boss_db.background():
+                    with eng.begin() as c:
+                        assert audit.record(event(org_id, i), db=c).deferred
+                        audit.record(event(org_id, 100 + i), db=c)
+                        time.sleep(0.005)            # work after the event, before the commit
+        except BaseException as error:  # noqa: BLE001 — surfaced by the test
+            errors.append(error)
+
+    def inline_writer(org_id: str, n: int) -> None:
+        try:
+            for _ in range(n):
+                _sign_in(eng, org_id)
+        except BaseException as error:  # noqa: BLE001
+            errors.append(error)
+
+    threads = [threading.Thread(target=fn, args=(org_id, 6), daemon=True)
+               for org_id in orgs for fn in (background_writer, background_writer, inline_writer)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(60)
+    assert not errors, errors
+    for org_id in orgs:
+        chain = _chain(eng, org_id)
+        assert [r["seq"] for r in chain] == list(range(1, 6 * 2 * 2 + 6 + 1))
+        kinds = {r["event_type"] for r in chain}
+        assert kinds == {"delegation.used_first", "auth.mfa.succeeded"}
+        with eng.connect() as c:
+            verdict = audit.verify_chain(org_id, db=c)
+        assert verdict.ok, verdict
+
+
+# ── 4.the safety net on every background transaction ────────────────────────────────────────
 
 def _limits(c) -> tuple[str, str]:
     return (str(c.execute(text("SHOW lock_timeout")).scalar()),

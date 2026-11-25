@@ -15,6 +15,17 @@ or calendar month):
 * ``trigger``  — every run one trigger / intake route starts (scope_id = agent_triggers.id;
                  P9a-2, boss-eventing-lld.md §7.4: a spent cap pauses the route with the reason)
 * ``deployment`` — every run of one deployed agent (scope_id = agent_deployments.id)
+* ``team``     — one team (scope_id = identity_groups.id, BOSSAPP-1295): the projects its people
+                 work in — every project the group, or any member of it, holds a project-scope
+                 role binding on (``team_projects_sql``). Members' runs roll up through their
+                 projects; nothing new is recorded about who started what.
+
+PRESETS name a ready policy (``pilot_2000``: a team's $2,000 a month, warn at 80 %, hard stop) so
+a preview team gets a predictable cap in one press.
+
+A hard stop never asks anyone: it warns at warn_pct (an event, no card), refuses NEW work once
+the cap would be passed, and a running build past it stops at its next turn with the reason. No
+decision card is raised and no build waits on a person for money.
 
 with a warn threshold (``warn_pct``: an event, once per period) and ``hard_stop`` (refuse and stop).
 
@@ -45,9 +56,65 @@ from sqlalchemy import text
 
 from .core import make_id
 
-SCOPES = ("org", "project", "role", "workflow", "trigger", "deployment")
+SCOPES = ("org", "project", "role", "workflow", "trigger", "deployment", "team")
 PERIODS = ("day", "month")
 CACHE_SECONDS = 30.0
+
+#: Ready-made policies (BOSSAPP-1295). A preset fills what the caller left out; what it names
+#: explicitly wins.
+PRESETS: dict[str, dict[str, Any]] = {
+    "pilot_2000": {"label": "$2,000 pilot", "scope_type": "team", "cap_usd_micros": 2_000_000_000,
+                   "period": "month", "warn_pct": 0.8, "hard_stop": True},
+}
+
+
+def team_projects_sql(group: str) -> str:
+    """SQL selecting the project ids a team (identity group `group`, an SQL expression) works
+    in: every live project-scope binding of the group itself or of any member."""
+    return ("SELECT b.scope_id FROM identity_role_bindings b WHERE b.scope_type = 'project' "
+            "AND (b.expires_at IS NULL OR b.expires_at > now()) AND ("
+            f"(b.subject_type = 'group' AND b.subject_id = {group}) OR "
+            "(b.subject_type = 'principal' AND b.subject_id IN ("
+            f"SELECT m.principal_id FROM identity_group_members m WHERE m.group_id = {group})))")
+
+
+def team_projects(connection: Any, group_id: str) -> list[str]:
+    rows = connection.execute(text(
+        f"SELECT DISTINCT x.scope_id FROM ({team_projects_sql(':g')}) x ORDER BY 1"),
+        {"g": group_id}).scalars().all()
+    return [str(r) for r in rows]
+
+
+def list_teams(connection: Any, org_id: str) -> list[dict[str, Any]]:
+    """The org's teams (identity groups), each with its member count and the projects of the org
+    its spend rolls up from — one query, however many teams."""
+    rows = connection.execute(text(
+        "SELECT g.id, g.key, g.name, "
+        " (SELECT COUNT(*) FROM identity_group_members m WHERE m.group_id = g.id) AS members, "
+        " COALESCE((SELECT array_agg(DISTINCT x.scope_id ORDER BY x.scope_id) FROM ("
+        f"   {team_projects_sql('g.id')}) x "
+        "   JOIN projects p ON p.id = x.scope_id JOIN workspaces w ON w.id = p.workspace_id "
+        "   WHERE w.org_id = g.org_id), ARRAY[]::text[]) AS projects "
+        "FROM identity_groups g WHERE g.org_id = :o ORDER BY lower(g.name), g.id"),
+        {"o": org_id}).mappings().all()
+    return [{"id": r["id"], "key": r["key"], "name": r["name"], "members": int(r["members"] or 0),
+             "projects": [str(p) for p in (r["projects"] or [])]} for r in rows]
+
+
+def apply_preset(body: dict[str, Any]) -> dict[str, Any]:
+    """`body` with its named preset's defaults filled in (an unknown preset is refused)."""
+    key = str(body.get("preset") or "").strip()
+    if not key:
+        return dict(body)
+    preset = PRESETS.get(key)
+    if preset is None:
+        raise ScopedBudgetError(f"preset is one of {', '.join(PRESETS)}")
+    out = dict(body)
+    for field, value in preset.items():
+        # A value the caller named wins, False and 0 included (hard_stop: false is a choice).
+        if field != "label" and (field not in out or out[field] is None or out[field] == ""):
+            out[field] = value
+    return out
 
 _LOCK = threading.Lock()
 _ANY: dict[str, Any] = {"at": 0.0, "value": None}
@@ -142,6 +209,14 @@ def set_policy(connection: Any, *, org_id: str, scope_type: str, scope_id: str,
             "SELECT project_id FROM agent_deployments WHERE id = :d"), {"d": scope_id}).scalar()
         if not found or _org_of_project(connection, str(found)) != org_id:
             raise ScopedBudgetError("No such deployment in this org.")
+    elif scope_type == "team":
+        if not scope_id:
+            raise ScopedBudgetError("Pick a team.")
+        found = connection.execute(text(
+            "SELECT 1 FROM identity_groups WHERE id = :g AND org_id = :o"),
+            {"g": scope_id, "o": org_id}).first()
+        if not found:
+            raise ScopedBudgetError("No such team in this org.")
     connection.execute(text(
         "UPDATE scoped_budget_policies SET status = 'removed', updated_at = now() "
         "WHERE org_id = :o AND scope_type = :t AND scope_id = :s AND period = :per "
@@ -185,6 +260,9 @@ def _public(connection: Any, row: dict[str, Any], *, with_spend: bool = True) ->
     out = {k: row.get(k) for k in ("id", "org_id", "scope_type", "scope_id", "project_id", "period",
                                    "cap_usd_micros", "hard_stop", "status", "created_by")}
     out["cap_usd_micros"] = int(out["cap_usd_micros"] or 0)
+    if out.get("scope_type") == "team":
+        out["scope_name"] = connection.execute(text(
+            "SELECT name FROM identity_groups WHERE id = :g"), {"g": out["scope_id"]}).scalar()
     out["warn_pct"] = float(row.get("warn_pct") or 0)
     for k in ("created_at", "updated_at"):
         out[k] = row[k].isoformat() if isinstance(row.get(k), datetime) else None
@@ -215,6 +293,8 @@ def spent(connection: Any, policy: dict[str, Any], now: Optional[datetime] = Non
         # and its deployment (agent_runs.trigger_id / deployment_id).
         "trigger": "l.run_id IN (SELECT r.id FROM agent_runs r WHERE r.trigger_id = :s)",
         "deployment": "l.run_id IN (SELECT r.id FROM agent_runs r WHERE r.deployment_id = :s)",
+        # Only the org's own projects: the same set the forecast reads (spend_forecast).
+        "team": f"l.project_id IN ({team_projects_sql(':s')}) AND {in_org}",
     }[str(policy["scope_type"])]
     money = LLM_MONEY_SQL.replace("included_in_subscription", "l.included_in_subscription") \
         .replace("cost_usd_micros", "l.cost_usd_micros")
@@ -241,13 +321,16 @@ def matching(connection: Any, project_id: str, *, role: Optional[str] = None,
         return []
     workflow = _workflow_of(connection, workflow_run_id)
     rows = connection.execute(text(
-        "SELECT * FROM scoped_budget_policies WHERE org_id = :o AND status = 'active' AND ("
+        "SELECT sbp.*, CASE WHEN sbp.scope_type = 'team' THEN (SELECT g.name FROM identity_groups g "
+        " WHERE g.id = sbp.scope_id) END AS scope_name "
+        "FROM scoped_budget_policies sbp WHERE org_id = :o AND status = 'active' AND ("
         " scope_type = 'org'"
         " OR (scope_type = 'project' AND scope_id = :p)"
         " OR (scope_type = 'role' AND scope_id = :r AND (project_id IS NULL OR project_id = :p))"
         " OR (scope_type = 'workflow' AND scope_id = :w)"
         " OR (scope_type = 'trigger' AND scope_id = :t)"
-        " OR (scope_type = 'deployment' AND scope_id = :d))"),
+        " OR (scope_type = 'deployment' AND scope_id = :d)"
+        f" OR (scope_type = 'team' AND :p IN ({team_projects_sql('sbp.scope_id')})))"),
         {"o": org_id, "p": project_id, "r": str(role or ""), "w": str(workflow or ""),
          "t": str(trigger_id or ""), "d": str(deployment_id or "")}
     ).mappings().all()
@@ -293,7 +376,8 @@ def _label(policy: dict[str, Any]) -> str:
     noun = {"org": "the org", "project": "the project", "role": f"agent {policy['scope_id']}",
             "workflow": f"workflow {policy['scope_id']}",
             "trigger": f"route {policy['scope_id']}",
-            "deployment": f"deployment {policy['scope_id']}"}[str(policy["scope_type"])]
+            "deployment": f"deployment {policy['scope_id']}",
+            "team": f"team {policy.get('scope_name') or policy['scope_id']}"}[str(policy["scope_type"])]
     return f"{noun}'s {policy.get('period') or 'month'}ly budget"
 
 

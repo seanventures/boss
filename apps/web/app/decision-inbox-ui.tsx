@@ -413,7 +413,17 @@ export function specGateSkipped(recommendation: Record<string, unknown>): string
   return skipped && typeof skipped.said === "string" ? skipped.said : "";
 }
 
-function approvalEffectLabel(recommendation: Record<string, unknown>): string {
+/** What the engine says its Approve button does (services/decision_actions.py), or "". The
+ *  engine names every follow-on it starts there; this card used to keep its own per-action list
+ *  and fell to "no automated follow-on" for any action that list had not heard of, above a
+ *  "Fix these" that starts a build (BOSSAPP-1354). */
+export function serverApproveEffect(offers: { action: string; effect?: string }[] | undefined): string {
+  const approve = (offers ?? []).find((o) => o.action === "approve");
+  return approve && typeof approve.effect === "string" ? approve.effect.trim() : "";
+}
+
+export function approvalEffectLabel(recommendation: Record<string, unknown>,
+                                    offers?: { action: string; effect?: string }[]): string {
   const action = typeof recommendation.action === "string" ? recommendation.action : "";
   // A SPEC THE WORKFLOW DID NOT WAIT FOR: "starts a governed project" would promise a second
   // build of work already building.
@@ -448,7 +458,17 @@ function approvalEffectLabel(recommendation: Record<string, unknown>): string {
     case "github.community.merge_authorization": return "Approving records merge authorization (maintainer still merges).";
     case "self_improvement.begin_canary":
     case "self_improvement.rollout": return "Approving proceeds with the self-improvement rollout.";
-    default: return "Approving records your decision, this type has no automated follow-on (no project is started).";
+    // A re-check's Fix card (engine change_recheck): pressing it starts the follow-up build.
+    case "start_recheck_followup":
+      return serverApproveEffect(offers)
+        || "Approving starts a follow-up build that fixes the re-check's findings.";
+    default: {
+      // THE ENGINE'S OWN WORDS FOR ITS BUTTON before any claim that nothing follows: only an
+      // action whose Approve the engine describes with nothing may say so.
+      const said = serverApproveEffect(offers);
+      if (said) return said;
+      return "Approving records your decision, this type has no automated follow-on (no project is started).";
+    }
   }
 }
 
@@ -1822,7 +1842,7 @@ function DecisionCardDetails({
       ) : null}
       {isPending && !refusal && !preview ? (
         <>
-          <p className="dq-effect">{approvalEffectLabel(decision.recommendation)}</p>
+          <p className="dq-effect">{approvalEffectLabel(decision.recommendation, offeredActions(decision))}</p>
           <LocalChangeLink recommendation={decision.recommendation} />
           <DeployDestination recommendation={decision.recommendation}
                              projectId={projectId} />

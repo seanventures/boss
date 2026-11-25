@@ -3911,6 +3911,130 @@ def _graph_node_words(connection: Connection, project_id: str, node_id: str,
     return None
 
 
+class TemplateError(ValueError):
+    """A step's text could not be filled. The message names the placeholder (BOSSAPP-1171)."""
+
+
+#: The roots a step's text may read: what the run was started with and what its steps produced.
+STEP_TEXT_ROOTS = frozenset({"input", "steps"})
+#: Namespaces that only ever hold credentials: a placeholder reading one is refused outright.
+_SECRET_ROOTS = frozenset({"secret", "secrets", "env", "vault", "credentials", "credential"})
+#: A path segment NAMING a credential (`github_token`, `api_key`, `secret_ref`), not one that
+#: merely contains the word (`tokens_used`).
+_SECRET_SEGMENT = re.compile(
+    r"(?i)(?:^|_)(?:secret|password|passwd|token|credential|api_?key|private_?key|ssh_?key)s?"
+    r"(?:_?(?:ref|refs|ref_id|id|value))?$")
+#: A VALUE that is a reference to a stored secret (secret_refs, app secrets, backend refs).
+_SECRET_REF_VALUE = re.compile(
+    r"^\s*(?:(?:sref|sec|secret)_[A-Za-z0-9]{8,128}|app_secret://\S+|"
+    r"(?:env|vault|local_vault|platform_secret_store|infisical|secret):[A-Za-z0-9_./:@+-]{1,200})\s*$",
+    re.M)
+#: An app secret reference anywhere in a value: masked whole, never half-shown.
+_APP_SECRET_REF = re.compile(r"app_secret://\S+")
+#: An @-mention in a value: a filled comment must not ping people a partner's file names.
+_MENTION = re.compile(r"(?<![\w.])@(?=[A-Za-z0-9_-])")
+
+
+def neutralised(value: str) -> str:
+    """A VALUE put into a step's text is data, never markup (BOSSAPP-1171 review): `<` cannot
+    open an HTML comment or tag, `[` `]` cannot make a link (a `javascript:` one included), an
+    `@name` does not mention anybody. The template's own words are the workflow author's and
+    stay as written."""
+    out = value.replace("<", "&lt;").replace("[", "\\[").replace("]", "\\]")
+    return _MENTION.sub("@\u200b", out)
+#: What a step-text placeholder looks like: a dotted path. `{X-Probe: boss}` in a YAML snippet
+#: is text, not a placeholder.
+_STEP_TEXT_PATH = re.compile(r"[A-Za-z_][\w-]*(?:\.[\w-]+)+")
+
+
+def fill_template(template: Any, context: Any, *,
+                  words: Optional[Callable[[str, Optional[str]], Optional[str]]] = None,
+                  roots: Optional[frozenset[str]] = None,
+                  value: Optional[Callable[[str, Any], str]] = None) -> tuple[str, list[str]]:
+    """THE ONE PLACEHOLDER RULE, for a gate's card and for a step's text (BOSSAPP-1171).
+
+    `{input.alert_id}`, `{steps.alert_intake.output.rule}` read the run's context as an
+    expression does (`_lookup_path`); `{…|name}` / `{…|attr:x}` say a graph node id as words
+    through `words`. Returns the filled text and the placeholders that did not resolve — absent,
+    empty, or not text (an object or a list) — so a caller never shows a template with a hole.
+
+    `roots` (a step's text): only a dotted path under one of them is a placeholder; any other
+    brace pair is literal text. `value(path, found)` sees each value before it is written (and
+    may refuse it by raising)."""
+    missing: list[str] = []
+
+    def fill(match: "re.Match[str]") -> str:
+        path = match.group(1).strip()
+        if roots is not None and not (_STEP_TEXT_PATH.fullmatch(path)
+                                      and path.split(".", 1)[0] in roots):
+            return match.group(0)
+        found, got = _lookup_path(context, path)
+        if not found or got in (None, "", [], {}) or isinstance(got, (dict, list)):
+            missing.append(match.group(0))
+            return ""
+        said: Optional[str] = str(got)
+        if match.group(2) in ("name", "attr"):
+            said = words(str(got), match.group(3) if match.group(2) == "attr" else None) \
+                if words else None
+        if not said:
+            missing.append(match.group(0))
+            return ""
+        return value(path, said) if value else said
+
+    return _GATE_PLACEHOLDER.sub(fill, str(template)), missing
+
+
+def _refuse_secret_paths(template: str) -> None:
+    """A placeholder that names a credential is refused before anything is read."""
+    for match in _GATE_PLACEHOLDER.finditer(template):
+        path = match.group(1).strip()
+        if not _STEP_TEXT_PATH.fullmatch(path):
+            continue
+        parts = path.split(".")
+        if parts[0].lower() in _SECRET_ROOTS or any(_SECRET_SEGMENT.search(p) for p in parts[1:]):
+            raise TemplateError(
+                f"{match.group(0)} names a secret. A step's text never carries a credential or "
+                "a reference to one; say what the secret is for instead.")
+
+
+def render_step_text(template: Any, context: Mapping[str, Any]) -> str:
+    """A capability's TEXT INPUT with other steps' results in it (BOSSAPP-1171): a comment
+    body with `{steps.validate.output.validation_report}`, a notification with the staging URL.
+
+    The same rule as a gate's card (`fill_template`), with three differences a step's text
+    needs: only `{input.…}` and `{steps.<id>.output.…}` are placeholders (other braces are text);
+    a list is alternatives, the first that fills completely wins; and when none does, the step
+    FAILS naming the placeholder — never posted half-filled, never silently empty. A placeholder
+    that names a secret, or a value that is a secret reference, is refused; a credential-shaped
+    value is masked."""
+    from .redaction import redact_secrets
+
+    candidates = template if isinstance(template, list) else [template]
+    candidates = [str(c) for c in candidates if isinstance(c, str)]
+    if not candidates:
+        return template
+    for candidate in candidates:
+        _refuse_secret_paths(candidate)
+
+    def checked(path: str, said: str) -> str:
+        # ANY LINE that is a secret reference refuses the text (a report's cell included).
+        if _SECRET_REF_VALUE.search(said):
+            raise TemplateError(
+                f"{{{path}}} is a reference to a stored secret. A step's text never carries one.")
+        return neutralised(redact_secrets(_APP_SECRET_REF.sub("[SECRET REF]", said)))
+
+    unresolved: list[str] = []
+    for candidate in candidates:
+        filled, missing = fill_template(candidate, context, roots=STEP_TEXT_ROOTS, value=checked)
+        if not missing:
+            return filled
+        unresolved = missing
+    names = ", ".join(dict.fromkeys(unresolved))
+    raise TemplateError(
+        f"{names} has no value in this run (the step it reads did not produce it, or produced "
+        "nothing). Nothing was sent: fix the step's text or the step it reads, then retry.")
+
+
 def _gate_text(connection: Connection, project_id: str, templates: Any,
                context: dict[str, Any]) -> Optional[str]:
     """The first of a gate's `subject`/`summary` templates whose every `{path}` resolves.
@@ -3921,25 +4045,12 @@ def _gate_text(connection: Connection, project_id: str, templates: Any,
     """
     if isinstance(templates, str):
         templates = [templates]
+
+    def words(node_id: str, attr: Optional[str]) -> Optional[str]:
+        return _graph_node_words(connection, project_id, node_id, attr)
+
     for template in templates if isinstance(templates, list) else []:
-        missing = False
-
-        def fill(match: "re.Match[str]") -> str:
-            nonlocal missing
-            found, value = _lookup_path(context, match.group(1))
-            if not found or value in (None, "", [], {}) or isinstance(value, (dict, list)):
-                missing = True
-                return ""
-            words: Optional[str] = str(value)
-            if match.group(2) in ("name", "attr"):
-                words = _graph_node_words(connection, project_id, str(value),
-                                          match.group(3) if match.group(2) == "attr" else None)
-            if not words:
-                missing = True
-                return ""
-            return words
-
-        rendered = _GATE_PLACEHOLDER.sub(fill, str(template))
+        rendered, missing = fill_template(template, context, words=words)
         if not missing and rendered.strip():
             return " ".join(rendered.split())
     return None

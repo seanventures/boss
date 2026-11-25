@@ -10,6 +10,7 @@ from typing import Any, Optional
 import httpx
 
 from ..config import Settings
+from . import outbound_proxy
 
 #: MCP REVISIONS BOSS's client speaks (AP-P5, D10: all three for twelve months).
 #:   2026-07-28  MODERN: stateless. No initialize, no session; every request carries its version,
@@ -44,6 +45,8 @@ SESSION_TTL_SECONDS = 600
 #: How long a server's probed era is trusted before BOSS probes again.
 ERA_TTL_SECONDS = 3600
 
+#: How long a TCP/TLS connect may take, whatever the read budget (a dead host fails fast).
+CONNECT_TIMEOUT_SECONDS = 10.0
 #: tools/list pages followed before BOSS stops asking (a server that paginates forever).
 MAX_TOOL_PAGES = 10
 #: A task's suggested polling interval is honoured within these bounds (seconds).
@@ -82,6 +85,157 @@ class MCPInputRequired(MCPError):
         self.task_id = task_id
 
 
+class MCPTimeout(MCPError):
+    """tools/call did not answer within the client's call timeout. The server was reached, so
+    this is not an unreachable server; the call was cancelled (notifications/cancelled). The
+    words keep "timed out": durable_operations reads that as an unknown outcome. NEVER RETRIED
+    (`retryable` False on the class, read by skill_runtime): the call may have run. The message
+    names no tool or host, so nothing in it can read as a "did not run" mark; `outcome` says
+    the same thing structurally."""
+
+    retryable = False
+    outcome = "unknown_outcome"
+
+    def __init__(self, tool: str, seconds: float):
+        super().__init__(
+            f"The tool did not answer within {int(seconds)}s (timed out); BOSS cancelled the "
+            "call and does not know whether it ran. The server is reachable: if this tool is "
+            "slow by design, raise BOSS_MCP_CALL_TIMEOUT (seconds) on the install, otherwise "
+            "check the server's logs.")
+        self.tool = tool
+        self.seconds = seconds
+
+
+class MCPCallFailed(MCPError):
+    """A call that failed on the way (the network, TLS, the proxy, an HTTP status), said in
+    plain words with the next step (:func:`describe_failure`). `retryable` is False when the
+    same call would fail the same way (a 4xx, a TLS or name failure), so the skill runtime does
+    not spend a second attempt on it."""
+
+    def __init__(self, message: str, *, status: Optional[int] = None, retryable: bool = True):
+        super().__init__(message)
+        self.status = status
+        self.retryable = retryable
+
+
+def _where(url: str) -> tuple[str, str]:
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(str(url or ""))
+    host = parts.hostname or "the server"
+    try:
+        port = parts.port
+    except ValueError:
+        port = None
+    return host, (f"{host}:{port}" if port else host)
+
+
+def describe_failure(error: BaseException, url: str = "") -> str:
+    """An MCP failure as an operator or an agent reads it: what happened, in words, and the next
+    step. The words keep the marks other code reads (the HTTP status first; "timed out",
+    "connection refused", "could not connect"), so nothing that classifies failures changes."""
+    if isinstance(error, MCPError):
+        return str(error)
+    request_url = url
+    try:
+        request_url = url or str(error.request.url)  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001
+        pass
+    host, hostport = _where(request_url)
+    detail = str(error)
+    lowered = detail.lower()
+    if isinstance(error, httpx.HTTPStatusError):
+        code = error.response.status_code
+        status = f"{code} {error.response.reason_phrase}".strip()
+        if code == 401:
+            return (f"{status}: {host} refused BOSS's sign-in. Next: check the server's token in "
+                    "Skills & MCP (or sign in again if it uses OAuth).")
+        if code == 403:
+            return (f"{status}: {host} accepted the sign-in but does not allow this. Next: give "
+                    "the token the scope or permission this tool needs.")
+        if code in (404, 405):
+            from urllib.parse import urlsplit
+
+            path = urlsplit(request_url).path or "/"
+            return (f"{status}: nothing at {hostport}{path} answers MCP. Next: check the URL; "
+                    "servers usually answer at /mcp (Streamable HTTP) or /sse (HTTP+SSE).")
+        if code == 407:
+            return (f"{status}: the company proxy wants a login. Next: run a local "
+                    "authenticating proxy (cntlm, px) and point BOSS_UPSTREAM_PROXY at it "
+                    "(docs/community/ENTERPRISE_NETWORK.md).")
+        if code == 429:
+            return f"{status}: {host} is rate limiting BOSS. Next: try again later."
+        if code >= 500:
+            # No host or path here: an ambiguous failure's words must not carry anything that
+            # reads as a "did not run" mark (durable_operations).
+            return f"{status}: the server failed while answering. Next: check its own logs."
+        return f"{status}: {host} refused the request."
+    from .mcp_stdio_supervisor import StdioUnavailable
+
+    if isinstance(error, StdioUnavailable):
+        return detail
+    if isinstance(error, httpx.ProxyError):
+        return (f"The company proxy would not connect BOSS to {hostport} ({detail}; could not "
+                f"connect). Next: if {host} is internal, add it to BOSS_UPSTREAM_NO_PROXY; "
+                "otherwise ask IT to allow it through the proxy.")
+    if isinstance(error, httpx.ConnectTimeout):
+        return (f"{hostport} did not accept a connection in time (could not connect). Next: "
+                "check that it is up and that no firewall or egress rule blocks BOSS.")
+    if isinstance(error, httpx.ConnectError):
+        if "certificate" in lowered or "ssl" in lowered or "tls" in lowered:
+            return (f"BOSS does not trust the TLS certificate {host} presented (could not "
+                    "connect). Next: behind a TLS-inspecting gateway, or for a server with its "
+                    "own CA, set BOSS_EXTRA_CA_FILE to that root CA "
+                    "(docs/community/ENTERPRISE_NETWORK.md).")
+        if any(mark in lowered for mark in ("nodename", "name or service", "name resolution",
+                                            "getaddrinfo", "no address associated")):
+            return (f"BOSS cannot resolve the name {host} (could not connect). Next: check the "
+                    "spelling; an internal name needs the company DNS, and BOSS_UPSTREAM_NO_PROXY "
+                    "if it must not go through the proxy.")
+        if "refused" in lowered:
+            return (f"Nothing is listening at {hostport} (connection refused). Next: start the "
+                    "server; inside BOSS's containers localhost is the container itself, so use "
+                    "host.docker.internal or the machine's address.")
+        return f"BOSS could not connect to {hostport} ({detail})."
+    if isinstance(error, httpx.TimeoutException):
+        return "The server did not answer in time (timed out)."
+    if isinstance(error, (httpx.RemoteProtocolError, httpx.ReadError, httpx.WriteError)):
+        return ("The server dropped the connection before it answered (connection reset). "
+                "Next: check the server's logs; a proxy that does not pass streams can do this.")
+    return f"{type(error).__name__}: {detail}"
+
+
+def failed_call(error: BaseException, url: str = "") -> BaseException:
+    """`error` as the MCPError a caller raises: an MCPError as it is, anything from the way
+    (httpx) as MCPCallFailed in words. A timeout is never retried blind (unknown outcome)."""
+    if isinstance(error, MCPError) or not isinstance(error, httpx.HTTPError):
+        return error  # already words (a refusal, a sign-in to reconnect) or not from the way
+    status = error.response.status_code if isinstance(error, httpx.HTTPStatusError) else None
+    words = describe_failure(error, url)
+    # RETRIED ONLY WHEN THE CALL CERTAINLY DID NOT RUN AND MAY WORK NEXT TIME: nothing was
+    # listening or the connect timed out, or the server said 429/503. A 4xx, TLS or name
+    # failure fails the same way again; a timeout, a reset or another 5xx may have run.
+    transient = (isinstance(error, httpx.ConnectTimeout)
+                 or (isinstance(error, httpx.ConnectError) and "connection refused" in words)
+                 or status in (429, 503))
+    failed = MCPCallFailed(words, status=status, retryable=transient)
+    if (isinstance(error, (httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout,
+                           httpx.RemoteProtocolError, httpx.ReadError, httpx.WriteError))
+            or (status is not None and status >= 500 and status != 503)):
+        failed.outcome = "unknown_outcome"  # type: ignore[attr-defined]
+    return failed
+
+
+def default_call_timeout() -> float:
+    """BOSS_MCP_CALL_TIMEOUT (seconds), default 120 — the stdio bridge's own call timeout."""
+    import os
+
+    try:
+        return max(1.0, float(os.environ.get("BOSS_MCP_CALL_TIMEOUT") or 120))
+    except ValueError:
+        return 120.0
+
+
 class MCPTaskPending(MCPError):
     """A task did not reach a terminal status within the client's wait. `task_id` is the durable
     handle: `MCPClient.get_task` / `cancel_task` reach it later."""
@@ -102,12 +256,14 @@ class _Session:
 
 
 class _Era:
-    """What a server speaks: modern (stateless, `version`) or legacy (initialize)."""
-    __slots__ = ("modern", "version", "expires")
+    """What a server speaks: modern (stateless, `version`), legacy (initialize), or the
+    2024-11-05 HTTP+SSE transport (`sse`: a GET stream that names where to POST)."""
+    __slots__ = ("modern", "version", "expires", "sse")
 
-    def __init__(self, modern: bool, version: Optional[str]):
+    def __init__(self, modern: bool, version: Optional[str], sse: bool = False):
         self.modern = modern
         self.version = version
+        self.sse = sse
         self.expires = time.monotonic() + ERA_TTL_SECONDS
 
 
@@ -159,6 +315,28 @@ def _sse_messages(body: str) -> list[Any]:
     return out
 
 
+def _sse_events(lines: Any) -> Any:
+    """(event, data) for each event of a live SSE stream, as its lines arrive."""
+    event, data = "message", []
+    for raw in lines:
+        line = str(raw).rstrip("\r")
+        if not line:
+            if data:
+                yield event, "\n".join(data)
+            event, data = "message", []
+            continue
+        if line.startswith(":"):
+            continue
+        field, _, value = line.partition(":")
+        value = value[1:] if value.startswith(" ") else value
+        if field == "event":
+            event = value or "message"
+        elif field == "data":
+            data.append(value)
+    if data:
+        yield event, "\n".join(data)
+
+
 def _message_for(resp: httpx.Response, rid: Any) -> Any:
     """The JSON-RPC message answering `rid` (plain JSON or an SSE stream), or None."""
     kind = (resp.headers.get("content-type") or "").split(";")[0].strip().lower()
@@ -203,11 +381,19 @@ class MCPClient:
     """
 
     def __init__(self, settings: Settings, timeout: float = 20.0,
-                 task_timeout: Optional[float] = None):
+                 task_timeout: Optional[float] = None, call_timeout: Optional[float] = None):
         self.settings = settings
         self.timeout = timeout
         #: How long call_tool waits for a task to finish before raising MCPTaskPending.
         self.task_timeout = float(task_timeout if task_timeout is not None else timeout)
+        #: How long one tools/call may run before BOSS gives up and cancels it. A tool call is
+        #: real work (a query, a build, a crawl), not a handshake: `timeout` stays for connect,
+        #: initialize and tools/list.
+        self.call_timeout = float(call_timeout if call_timeout is not None
+                                  else default_call_timeout())
+        #: The tools/call in flight on this thread: its read timeout and JSON-RPC id, so a call
+        #: that times out can be cancelled by id.
+        self._calling = threading.local()
 
     # ------------------------------------------------------------------ transport
     def _post(self, url: str, payload: dict, headers: Optional[dict],
@@ -240,7 +426,16 @@ class MCPClient:
             # The modern request headers (MCP-Protocol-Version, Mcp-Method, Mcp-Name): BOSS's
             # own, set last so no stored or per-call header can impersonate them.
             sent.update(protocol)
-        return httpx.post(url, json=payload, headers=sent, timeout=self.timeout)
+        # THE PROXY DECISION (outbound_proxy): NO_PROXY read with its CIDR ranges, which httpx
+        # ignores, so an internal server on 10.x is not sent to the company proxy.
+        read = self._call_slot("timeout") if payload.get("method") == "tools/call" else None
+        wait = float(read or self.timeout)
+        return httpx.post(url, json=payload, headers=sent,
+                          timeout=httpx.Timeout(wait, connect=min(wait, CONNECT_TIMEOUT_SECONDS)),
+                          **outbound_proxy.httpx_options(url))
+
+    def _call_slot(self, name: str) -> Any:
+        return getattr(self._calling, name, None)
 
     @staticmethod
     def _answer(resp: httpx.Response, rid: Any) -> Any:
@@ -259,6 +454,8 @@ class MCPClient:
     def _rpc(self, url: str, method: str, params: Optional[dict] = None, rid: Optional[int] = None,
              headers: Optional[dict] = None, session: Optional[_Session] = None,
              extra: Optional[dict] = None) -> Any:
+        if rid is None and method == "tools/call":
+            rid = self._call_slot("rid")
         rid = _next_id() if rid is None else rid
         resp = self._post(url, {"jsonrpc": "2.0", "id": rid, "method": method,
                                 "params": params or {}}, headers, session, extra)
@@ -295,6 +492,11 @@ class MCPClient:
             return _Era(False, None), False
         if resp.status_code in (401, 403):
             resp.raise_for_status()
+        if resp.status_code in (400, 404, 405) and self._speaks_sse(url, headers):
+            # THE HTTP+SSE TRANSPORT (2024-11-05), the spec's backwards-compatibility probe: a
+            # POST to the URL fails with a 4xx and a GET opens a stream whose first event names
+            # the message endpoint. Many servers still ship only this (`.../sse` URLs).
+            return _Era(False, None, sse=True), True
         try:
             data = _message_for(resp, rid)
         except ValueError:
@@ -336,7 +538,7 @@ class MCPClient:
         if trace:
             meta.setdefault("traceparent", trace)   # SEP-414: trace context rides in _meta
         params["_meta"] = meta
-        rid = _next_id()
+        rid = (self._call_slot("rid") if method == "tools/call" else None) or _next_id()
         resp = self._post(url, {"jsonrpc": "2.0", "id": rid, "method": method, "params": params},
                           headers, None, extra,
                           protocol=self._protocol_headers(version, method, params))
@@ -406,6 +608,8 @@ class MCPClient:
     def _call(self, url: str, method: str, params: dict, headers: Optional[dict],
               extra: Optional[dict] = None) -> Any:
         era = self._era(url, headers)
+        if era.sse:
+            return self._sse_call(url, method, params, headers, extra)
         if not era.modern:
             return self._legacy(url, method, params, headers, extra)
         try:
@@ -423,6 +627,129 @@ class MCPClient:
             if version is not None:
                 return self._modern(url, version, method, params, headers, extra)
             return self._legacy(url, method, params, headers, extra)
+
+    # ------------------------------------------------------------------ HTTP+SSE (2024-11-05)
+    def _upstream(self, url: str, headers: Optional[dict], extra: Optional[dict] = None
+                  ) -> dict:
+        from boss_engine.identity.tokens import refuse_passthrough
+
+        upstream = refuse_passthrough(headers or {})
+        if extra:
+            upstream = {**upstream, **refuse_passthrough(extra)}
+        return upstream
+
+    def _speaks_sse(self, url: str, headers: Optional[dict]) -> bool:
+        """Whether a GET on `url` opens an SSE stream whose first event is `endpoint`."""
+        if url.startswith("stdio://"):
+            return False
+        sent = {**self._upstream(url, headers), "Accept": "text/event-stream"}
+        try:
+            with httpx.stream("GET", url, headers=sent,
+                              timeout=httpx.Timeout(min(self.timeout, 10.0)),
+                              **outbound_proxy.httpx_options(url)) as resp:
+                if resp.status_code in (401, 403):
+                    resp.raise_for_status()
+                kind = (resp.headers.get("content-type") or "").split(";")[0].strip().lower()
+                if resp.status_code != 200 or kind != "text/event-stream":
+                    return False
+                for event, _data in _sse_events(resp.iter_lines()):
+                    return event == "endpoint"
+        except httpx.HTTPStatusError:
+            raise
+        except (httpx.HTTPError, ValueError):
+            return False
+        return False
+
+    def _sse_call(self, url: str, method: str, params: dict, headers: Optional[dict],
+                  extra: Optional[dict] = None, *, timeout: Optional[float] = None) -> Any:
+        """One request over the HTTP+SSE transport: open the stream, read the endpoint, POST
+        initialize / initialized / the request there, and read each answer from the stream.
+        A session per call: nothing is held open between calls."""
+        from urllib.parse import urljoin, urlsplit
+
+        read = float(timeout or (self._call_slot("timeout") if method == "tools/call" else None)
+                     or self.timeout)
+        upstream = self._upstream(url, headers)
+        options = outbound_proxy.httpx_options(url)
+        with httpx.stream("GET", url, headers={**upstream, "Accept": "text/event-stream"},
+                          timeout=httpx.Timeout(read, connect=min(read, 10.0)),
+                          **options) as stream:
+            stream.raise_for_status()
+            events = _sse_events(stream.iter_lines())
+            endpoint = None
+            for event, data in events:
+                if event == "endpoint":
+                    endpoint = urljoin(url, data.strip())
+                    break
+            if not endpoint:
+                raise MCPError("the server's SSE stream never named its message endpoint")
+            here, there = urlsplit(url), urlsplit(endpoint)
+            if (here.scheme, here.netloc) != (there.scheme, there.netloc):
+                # The server's sign-in must not follow a message endpoint to another origin.
+                raise MCPError("the server's SSE stream named a message endpoint on another "
+                               "host; BOSS sends its sign-in only to the server it registered")
+
+            def post(message: dict, more: Optional[dict] = None) -> None:
+                resp = httpx.post(endpoint, json=message,
+                                  headers={**upstream, **(more or {}),
+                                           "Content-Type": "application/json"},
+                                  timeout=min(read, self.timeout), **options)
+                resp.raise_for_status()
+
+            def answer(rid: int) -> dict:
+                for event, data in events:
+                    if event != "message":
+                        continue
+                    try:
+                        message = json.loads(data)
+                    except ValueError:
+                        continue
+                    if not isinstance(message, dict):
+                        continue
+                    if message.get("id") == rid and ("result" in message or "error" in message):
+                        return message
+                    if "method" in message and "id" in message:
+                        # A request FROM the server: ping is answered, nothing else is offered.
+                        reply = ({"result": {}} if message["method"] == "ping" else
+                                 {"error": {"code": -32601, "message":
+                                            f"{message['method']} is not supported by BOSS"}})
+                        post({"jsonrpc": "2.0", "id": message["id"], **reply})
+                raise MCPError("the server closed its SSE stream before it answered")
+
+            init_id = _next_id()
+            post({"jsonrpc": "2.0", "id": init_id, "method": "initialize",
+                  "params": {"protocolVersion": FALLBACK_PROTOCOL_VERSION, "capabilities": {},
+                             "clientInfo": dict(CLIENT_INFO)}})
+            initialized = answer(init_id)
+            if initialized.get("error"):
+                error = initialized["error"] if isinstance(initialized["error"], dict) else {}
+                raise MCPError(error.get("message") or "the server refused to initialize",
+                               code=error.get("code"))
+            post({"jsonrpc": "2.0", "method": "notifications/initialized"})
+            rid = (self._call_slot("rid") if method == "tools/call" else None) or _next_id()
+            post({"jsonrpc": "2.0", "id": rid, "method": method, "params": params or {}}, extra)
+            try:
+                message = answer(rid)
+            except (httpx.ReadTimeout, httpx.WriteTimeout):
+                if method == "tools/call":
+                    self._cancel_quietly(lambda note: post(note), rid)
+                raise
+        error = message.get("error")
+        if error:
+            if isinstance(error, dict):
+                raise MCPError(error.get("message") or "MCP error", code=error.get("code"),
+                               data=error.get("data"))
+            raise MCPError(str(error))
+        return message.get("result")
+
+    @staticmethod
+    def _cancel_quietly(send: Any, rid: Any) -> None:
+        """Tell the server BOSS stopped waiting for request `rid` (notifications/cancelled)."""
+        try:
+            send({"jsonrpc": "2.0", "method": "notifications/cancelled",
+                  "params": {"requestId": rid, "reason": "BOSS stopped waiting (timeout)"}})
+        except Exception:  # noqa: BLE001 — best effort: the server may be gone
+            pass
 
     def era(self, url: str, headers: Optional[dict] = None) -> dict:
         """What the server speaks, as {"modern": bool, "version": str|None} (probed once)."""
@@ -529,7 +856,23 @@ class MCPClient:
                   headers: Optional[dict] = None, call_headers: Optional[dict] = None) -> Any:
         """``call_headers``: per-call metadata (BOSSAPP-873) sent on this tools/call only."""
         params = {"name": name, "arguments": args or {}}
-        result = self._call(url, "tools/call", params, headers, call_headers) or {}
+        rid = _next_id()
+        self._calling.timeout, self._calling.rid = self.call_timeout, rid
+        try:
+            result = self._call(url, "tools/call", params, headers, call_headers) or {}
+        except (httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout):
+            # A SLOW TOOL IS NOT A DEAD SERVER. The connection worked; the answer did not come
+            # in time. Say so in words (not "ReadTimeout"), and tell the server BOSS stopped
+            # waiting so it can stop the work (MCP notifications/cancelled). Raised as an
+            # MCPError, so the registry does not record the server as unreachable.
+            era = self._era(url, headers)
+            if not era.sse:   # the SSE session cancelled on its own stream
+                session = None if era.modern else self._session(url, headers)
+                self._cancel_quietly(
+                    lambda note: self._post(url, note, headers, session), rid)
+            raise MCPTimeout(name, self.call_timeout) from None
+        finally:
+            self._calling.timeout = self._calling.rid = None
         result = self._resolved(url, "tools/call", params, result, headers, call_headers) or {}
         content = result.get("content") if isinstance(result, dict) else None
         texts = [

@@ -127,6 +127,24 @@ def _substitute(argv: list[str], values: dict[str, str]) -> list[str]:
     return out
 
 
+def network_environment(env: Any) -> dict[str, str]:
+    """The proxy and package-mirror variables a networked stdio server is started with. An
+    invalid mirror raises (fail closed, as for a sandboxed run): a server that silently used the
+    public registry would breach the policy the mirror exists for."""
+    from .enterprise_network import PROXY_ENV_KEYS, package_environment
+
+    out = {k: str(env[k]) for k in PROXY_ENV_KEYS if env.get(k)}
+    try:
+        out.update(package_environment(env))
+    except Exception as exc:  # noqa: BLE001
+        raise StdioUnavailable(f"the install's package mirror settings are invalid: {exc}") \
+            from exc
+    if out.get("PIP_INDEX_URL"):
+        out.setdefault("UV_INDEX_URL", out["PIP_INDEX_URL"])        # uvx reads uv's own name
+        out.setdefault("UV_DEFAULT_INDEX", out["PIP_INDEX_URL"])
+    return out
+
+
 def launch_plan(template: dict[str, Any], secret: Optional[str], *, mode: str,
                 docker: str = "docker", name: str = "") -> tuple[list[str], dict[str, str]]:
     """(argv, env) for one instance. The env is what the spawned CLI process gets; in docker
@@ -141,6 +159,13 @@ def launch_plan(template: dict[str, Any], secret: Optional[str], *, mode: str,
     base_env = {k: os.environ[k] for k in ("PATH", "SYSTEMROOT", "LANG", "TZ") if k in os.environ}
     if mode == "subprocess":
         return argv, {**base_env, "HOME": tempfile.gettempdir(), **values}
+    # THE COMPANY NETWORK (BOSSAPP-1476). A template that declares a network (an `npx -y` /
+    # `uvx` server that downloads itself, or calls an outside API) got none of the install's
+    # enterprise settings, so behind a proxy-only network with an internal mirror it could not
+    # even start. It now gets the proxy variables and the package mirrors, by name, exactly as
+    # sandboxed runs do (enterprise_network); a server on `none` gets nothing.
+    if str(template.get("network") or "none") != "none":
+        values = {**network_environment(os.environ), **values}
     from .resource_ledger import node_id
 
     docker_env = {k: os.environ[k] for k in os.environ
@@ -186,6 +211,9 @@ class StdioInstance:
         self.init_result: Optional[dict[str, Any]] = None
         self.stderr_tail: deque[str] = deque(maxlen=40)
         self._pending: dict[int, dict[str, Any]] = {}
+        #: The caller's request id -> the id this bridge sent the server, while in flight: a
+        #: caller's notifications/cancelled names ITS id, and the server only knows ours.
+        self._outer: dict[Any, int] = {}
         self._pending_lock = threading.Lock()
         self._write_lock = threading.Lock()
         self._next_id = 1000
@@ -279,8 +307,8 @@ class StdioInstance:
             except (BrokenPipeError, ValueError, OSError) as exc:
                 raise StdioUnavailable(f"the stdio server stopped reading: {exc}") from exc
 
-    def request(self, method: str, params: Any, *, timeout: float = CALL_TIMEOUT_SECONDS
-                ) -> dict[str, Any]:
+    def request(self, method: str, params: Any, *, timeout: float = CALL_TIMEOUT_SECONDS,
+                outer_id: Any = None) -> dict[str, Any]:
         """Send one request with a fresh internal id; the server's whole answer message."""
         if not self.alive():
             raise StdioUnavailable("the stdio server is not running" + self._said())
@@ -289,12 +317,16 @@ class StdioInstance:
             rid = self._next_id
             slot: dict[str, Any] = {"event": threading.Event()}
             self._pending[rid] = slot
+            if outer_id is not None:
+                self._outer[outer_id] = rid
         try:
             message: dict[str, Any] = {"jsonrpc": "2.0", "id": rid, "method": method}
             if params is not None:
                 message["params"] = params
             self._write(message)
             if not slot["event"].wait(timeout):
+                # Nobody waits for this answer any more: tell the server to stop the work.
+                self.cancel(rid, f"no answer within {int(timeout)}s")
                 return {"jsonrpc": "2.0", "error": {
                     "code": -32001, "message": f"the stdio server did not answer {method} "
                                                f"within {int(timeout)}s"}}
@@ -302,7 +334,25 @@ class StdioInstance:
         finally:
             with self._pending_lock:
                 self._pending.pop(rid, None)
+                if outer_id is not None and self._outer.get(outer_id) == rid:
+                    self._outer.pop(outer_id, None)
             self.touch()
+
+    def cancel(self, rid: int, reason: str) -> None:
+        try:
+            self.notify("notifications/cancelled", {"requestId": rid, "reason": reason})
+        except StdioUnavailable:
+            pass
+
+    def cancel_outer(self, outer_id: Any, reason: str) -> bool:
+        """A caller's notifications/cancelled, by the caller's id. False when it is not in
+        flight (already answered): nothing is sent."""
+        with self._pending_lock:
+            rid = self._outer.get(outer_id)
+        if rid is None:
+            return False
+        self.cancel(rid, reason)
+        return True
 
     def notify(self, method: str, params: Any = None) -> None:
         message: dict[str, Any] = {"jsonrpc": "2.0", "method": method}
@@ -443,7 +493,11 @@ class _BridgeHandler(BaseHTTPRequestHandler):
         method, rid = message["method"], message.get("id")
         if rid is None:
             # The client's own `initialized` was already sent once, at spawn.
-            if method != "notifications/initialized":
+            if method == "notifications/cancelled":
+                params = message.get("params") if isinstance(message.get("params"), dict) else {}
+                instance.cancel_outer(params.get("requestId"),
+                                      str(params.get("reason") or "cancelled by the caller"))
+            elif method != "notifications/initialized":
                 try:
                     instance.notify(method, message.get("params"))
                 except StdioUnavailable:
@@ -453,7 +507,7 @@ class _BridgeHandler(BaseHTTPRequestHandler):
             return {"jsonrpc": "2.0", "id": rid, "result": instance.init_result or {}}
         instance.calls += 1
         try:
-            answer = instance.request(method, message.get("params"))
+            answer = instance.request(method, message.get("params"), outer_id=rid)
         except StdioUnavailable as exc:
             answer = {"jsonrpc": "2.0", "error": {"code": -32000, "message": str(exc)}}
         answer["id"] = rid

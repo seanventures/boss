@@ -1327,6 +1327,18 @@ class DecisionService:
                 text("UPDATE code_task_runs SET status='running', updated_at=now() WHERE id=:id"),
                 {"id": run_id},
             )
+            # THE APPROVAL'S RESUME IS THE RUN'S ONLY EXECUTION (BOSSAPP-1364): a job from
+            # before the run parked (a redelivery left live, its lease lapsing) is superseded
+            # here, so it can neither claim the run nor fence the resume.
+            connection.execute(
+                text("UPDATE jobs SET status = 'cancelled', lease_owner = NULL, "
+                     "lease_token_hash = NULL, lease_expires_at = NULL, updated_at = now(), "
+                     "last_error = CAST(:why AS JSONB) WHERE kind = 'code.task' "
+                     "AND payload->>'run_id' = :id "
+                     "AND status IN ('queued', 'leased', 'running', 'failed_retryable')"),
+                {"id": run_id, "why": json.dumps(
+                    {"reason": "superseded", "by": "the approved plan's resume"})},
+            )
             self.jobs.create_job(
                 connection,
                 project_id=row["project_id"],
