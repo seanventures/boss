@@ -129,44 +129,46 @@ def finish(connection: Any, extension_id: str, job: str, holder: str, *, next_ru
 def run_due(engine: Any, *, holder: str = HOLDER, now: Optional[datetime] = None,
             event_grace_seconds: float = 2.0) -> list[dict[str, Any]]:
     """One tick: every due job (and event pump) this process wins, run. Returns what ran."""
+    from ..db import background
     from . import broker, events
     from .registry import list_installed
 
     now = now or datetime.now(timezone.utc)
     ran: list[dict[str, Any]] = []
-    with engine.begin() as c:
-        installs = [e for e in list_installed(c) if e.enabled_anywhere]
-    for ext in installs:
-        if not ext.trusted:
-            continue
-        manifest = ext.manifest
-        ttl = timedelta(seconds=manifest.spec.runtime.timeoutSeconds + 60)
-        for job in manifest.spec.jobs if manifest.has("jobs.schedule") else []:
-            with engine.begin() as c:
-                ensure_row(c, ext.extension_id, job.name, next_fire(job.schedule, now))
-                won = claim(c, ext.extension_id, job.name, holder, now, ttl)
-            if not won:
+    with background():
+        with engine.begin() as c:
+            installs = [e for e in list_installed(c) if e.enabled_anywhere]
+        for ext in installs:
+            if not ext.trusted:
                 continue
-            outcome = broker.call(engine, ext, "job.run", {"name": job.name})
-            with engine.begin() as c:
-                finish(c, ext.extension_id, job.name, holder, next_run_at=next_fire(job.schedule, now),
-                       status="ok" if outcome.ok else "failed", error=outcome.error, now=now)
-            ran.append({"extension": ext.extension_id, "job": job.name, "ok": outcome.ok,
-                        "error": outcome.error})
-        if manifest.has("events.subscribe"):
-            for project_id in sorted(p for p, row in ext.projects.items() if row.get("enabled")):
-                key = f"events:{project_id}"
+            manifest = ext.manifest
+            ttl = timedelta(seconds=manifest.spec.runtime.timeoutSeconds + 60)
+            for job in manifest.spec.jobs if manifest.has("jobs.schedule") else []:
                 with engine.begin() as c:
-                    ensure_row(c, ext.extension_id, key, now)
-                    won = claim(c, ext.extension_id, key, holder, now, ttl)
+                    ensure_row(c, ext.extension_id, job.name, next_fire(job.schedule, now))
+                    won = claim(c, ext.extension_id, job.name, holder, now, ttl)
                 if not won:
                     continue
-                result = events.pump(engine, ext, project_id, grace_seconds=event_grace_seconds)
+                outcome = broker.call(engine, ext, "job.run", {"name": job.name})
                 with engine.begin() as c:
-                    finish(c, ext.extension_id, key, holder, next_run_at=now + EVENT_POLL,
-                           status="ok" if result["ok"] else "failed", error=result.get("error"),
-                           now=now)
-                ran.append({"extension": ext.extension_id, "job": key, **result})
+                    finish(c, ext.extension_id, job.name, holder, next_run_at=next_fire(job.schedule, now),
+                           status="ok" if outcome.ok else "failed", error=outcome.error, now=now)
+                ran.append({"extension": ext.extension_id, "job": job.name, "ok": outcome.ok,
+                            "error": outcome.error})
+            if manifest.has("events.subscribe"):
+                for project_id in sorted(p for p, row in ext.projects.items() if row.get("enabled")):
+                    key = f"events:{project_id}"
+                    with engine.begin() as c:
+                        ensure_row(c, ext.extension_id, key, now)
+                        won = claim(c, ext.extension_id, key, holder, now, ttl)
+                    if not won:
+                        continue
+                    result = events.pump(engine, ext, project_id, grace_seconds=event_grace_seconds)
+                    with engine.begin() as c:
+                        finish(c, ext.extension_id, key, holder, next_run_at=now + EVENT_POLL,
+                               status="ok" if result["ok"] else "failed", error=result.get("error"),
+                               now=now)
+                    ran.append({"extension": ext.extension_id, "job": key, **result})
     return ran
 
 

@@ -13,7 +13,7 @@ from typing import Optional, Union
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
-from boss_engine.db import begin, get_engine
+from boss_engine.db import background, begin, get_engine
 
 router = APIRouter(tags=["system-health"])
 
@@ -47,8 +47,9 @@ def get_system_health() -> dict[str, Any]:
     from boss_engine.services.obs_view import health_body
 
     cap = admission.sample()
-    with begin(get_engine()) as connection:
-        state = admission.snapshot(connection, cap=cap)
+    with background():
+        with begin(get_engine()) as connection:
+            state = admission.snapshot(connection, cap=cap)
     # One derivation: Observability › System shows this same body (obs_view.system).
     return health_body(cap, state)
 

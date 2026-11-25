@@ -106,26 +106,29 @@ def ensure_process_manager(payload: ProcessManagerActorRequest) -> dict[str, Any
 @permit(P.AUTOPILOT_OPERATE, scope=Scope.project(body="project_id"))
 def tick_process_manager(payload: ProcessManagerActorRequest) -> dict[str, Any]:
     project_id = _require_project(payload.project_id)
-    with begin(get_engine()) as connection:
-        _require(connection, project_id, payload.actor)
-        try:
-            return _invoke(
-                _service(),
-                ("tick",),
-                connection,
-                project_id=project_id,
-                actor=payload.actor,
-            )
-        except TypeError:
-            return _invoke(
-                _service(),
-                ("tick",),
-                connection,
-                project_id,
-                payload.actor,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    from boss_engine.db import background
+
+    with background():
+        with begin(get_engine()) as connection:
+            _require(connection, project_id, payload.actor)
+            try:
+                return _invoke(
+                    _service(),
+                    ("tick",),
+                    connection,
+                    project_id=project_id,
+                    actor=payload.actor,
+                )
+            except TypeError:
+                return _invoke(
+                    _service(),
+                    ("tick",),
+                    connection,
+                    project_id,
+                    payload.actor,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/v1/process-manager/metrics")

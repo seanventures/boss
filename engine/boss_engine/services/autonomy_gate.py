@@ -695,9 +695,9 @@ def _decide_after_commit(decision_id: str, *, wait_s: float = 30.0) -> threading
         except Exception as error:  # noqa: BLE001 — the sweep decides it later
             log.info("autonomy decide of %s deferred to the sweep: %s", decision_id, error)
 
-    thread = threading.Thread(target=run, name=f"autonomy-{decision_id}", daemon=True)
-    thread.start()
-    return thread
+    from ..db import spawn_thread
+
+    return spawn_thread(run, name=f"autonomy-{decision_id}", daemon=True, as_background=True)
 
 
 # ---- deciding -----------------------------------------------------------------------------------

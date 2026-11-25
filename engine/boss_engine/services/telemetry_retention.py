@@ -1197,34 +1197,33 @@ def sweep_locked(engine: Any, **kwargs: Any) -> Optional[dict[str, Any]]:
 def run_once(engine: Any, *, now: Optional[datetime] = None, convert: bool = True) -> dict[str, Any]:
     """Indexes → partitions → sweep, under the leader lock (a session advisory lock on its own
     connection). A second process gets {"skipped": "busy"} at once."""
+    from ..db import background
     from . import system_services
 
     with leader_lock(engine) as held:
         if not held:
             return {"skipped": "busy"}
-        report: dict[str, Any] = {"indexes": ensure_indexes(engine, now=now)}
-        if convert:
-            report["partitioning"] = ensure_partitioned(engine, now=now)
-        report["sweep"] = sweep(engine, now=now)
-        try:
-            from ..db import background
-
-            with background():
+        with background():
+            report: dict[str, Any] = {"indexes": ensure_indexes(engine, now=now)}
+            if convert:
+                report["partitioning"] = ensure_partitioned(engine, now=now)
+            report["sweep"] = sweep(engine, now=now)
+            try:
                 report["compacted"] = compact(engine)
-        except Exception:  # noqa: BLE001 — compaction never fails the sweep
-            _log.info("compaction pass skipped", exc_info=True)
-            report["compacted"] = []
-        last = {k: report["sweep"][k] for k in ("at", "rows", "bytes", "partitions", "archived",
-                                                 "errors", "receipt_id")}
-        last["tables"] = [{k: t[k] for k in ("policy", "rows", "bytes", "days")}
-                          for t in report["sweep"]["tables"]]
-        last["compacted"] = [{k: t.get(k) for k in ("table", "bytes", "after")}
-                             for t in report["compacted"] if not t.get("error")]
-        ok = not report["sweep"]["errors"] and not report.get("partitioning", {}).get("error")
-        system_services.beat(engine, SERVICE_KEY, ok=ok,
-                             error=None if ok else "; ".join(report["sweep"]["errors"])[:400]
-                             or report.get("partitioning", {}).get("error"),
-                             details={"last_sweep": last})
+            except Exception:  # noqa: BLE001 — compaction never fails the sweep
+                _log.info("compaction pass skipped", exc_info=True)
+                report["compacted"] = []
+            last = {k: report["sweep"][k] for k in ("at", "rows", "bytes", "partitions", "archived",
+                                                     "errors", "receipt_id")}
+            last["tables"] = [{k: t[k] for k in ("policy", "rows", "bytes", "days")}
+                              for t in report["sweep"]["tables"]]
+            last["compacted"] = [{k: t.get(k) for k in ("table", "bytes", "after")}
+                                 for t in report["compacted"] if not t.get("error")]
+            ok = not report["sweep"]["errors"] and not report.get("partitioning", {}).get("error")
+            system_services.beat(engine, SERVICE_KEY, ok=ok,
+                                 error=None if ok else "; ".join(report["sweep"]["errors"])[:400]
+                                 or report.get("partitioning", {}).get("error"),
+                                 details={"last_sweep": last})
     _LAST.clear()
     _LAST.update(report)
     return report

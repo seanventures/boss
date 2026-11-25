@@ -1157,27 +1157,28 @@ def _execute_agent_run_here(job: LeasedJob, client: ControlPlaneClient) -> dict[
     lease, drained at a step boundary when this worker is told to stop. None: not a worker-
     admitted run (an `agent.resume` of a run from before AP-P2) — the API resumes it."""
     from boss_engine.config import get_settings
-    from boss_engine.db import get_engine
+    from boss_engine.db import background, get_engine
     from boss_engine.services import agent_run_worker
 
-    engine = get_engine(get_settings())
-    run_id = str(job.payload.get("run_id") or "")
-    if job.kind == "agent.resume":
-        with engine.connect() as connection:
-            if not agent_run_worker.on_worker(connection, run_id):
-                return None
-    flag = HANDED_BACK.setdefault(job.id, threading.Event())
-    try:
-        result = agent_run_worker.execute(
-            engine, get_settings(), kind=job.kind, job_id=job.id, run_id=run_id,
-            worker_id=client.worker_id, lease_token=job.lease_token,
-            drain=SHUTDOWN.is_set, handed_back=flag.is_set)
-    finally:
-        HANDED_BACK.pop(job.id, None)
-    if result.get("status") == "failed" and not (result.get("job_deferred")
-                                                  or result.get("clean_failure")):
-        raise RuntimeError(result.get("message") or "Agent run failed.")
-    return result
+    with background():
+        engine = get_engine(get_settings())
+        run_id = str(job.payload.get("run_id") or "")
+        if job.kind == "agent.resume":
+            with engine.connect() as connection:
+                if not agent_run_worker.on_worker(connection, run_id):
+                    return None
+        flag = HANDED_BACK.setdefault(job.id, threading.Event())
+        try:
+            result = agent_run_worker.execute(
+                engine, get_settings(), kind=job.kind, job_id=job.id, run_id=run_id,
+                worker_id=client.worker_id, lease_token=job.lease_token,
+                drain=SHUTDOWN.is_set, handed_back=flag.is_set)
+        finally:
+            HANDED_BACK.pop(job.id, None)
+        if result.get("status") == "failed" and not (result.get("job_deferred")
+                                                      or result.get("clean_failure")):
+            raise RuntimeError(result.get("message") or "Agent run failed.")
+        return result
 
 
 def _tick_ai_sre_overwatch(settings: WorkerSettings) -> None:
@@ -1188,7 +1189,7 @@ def _tick_ai_sre_overwatch(settings: WorkerSettings) -> None:
         return
     try:
         from boss_engine.config import get_settings
-        from boss_engine.db import get_engine
+        from boss_engine.db import background, get_engine
         from boss_engine.services.ai_sre_overwatch import safe_tick
 
         engine_settings = get_settings()
@@ -1198,12 +1199,13 @@ def _tick_ai_sre_overwatch(settings: WorkerSettings) -> None:
             or getattr(settings, "project_id", None)
             or "boss-dogfood"
         )
-        result = safe_tick(
-            get_engine(engine_settings),
-            engine_settings,
-            project_id=str(project_id),
-            actor="metatron",
-        )
+        with background():
+            result = safe_tick(
+                get_engine(engine_settings),
+                engine_settings,
+                project_id=str(project_id),
+                actor="metatron",
+            )
         _last_ai_sre_overwatch_monotonic = now
         if isinstance(result, dict) and result.get("status") not in {"empty", "observed", "in_progress"}:
             LOGGER.info(

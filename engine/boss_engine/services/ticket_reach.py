@@ -494,9 +494,11 @@ def _read_many(db: Connection, owners: list[tuple[dict[str, Any], TicketRef]],
         with engine.begin() as own:
             return _read_one(own, row, tref, person_id)
 
+    from ..db import submit_in_context
+
     pool = ThreadPoolExecutor(max_workers=min(len(owners), MAX_FAN_OUT))
     try:
-        futures = [pool.submit(one, row, tref) for row, tref in owners]
+        futures = [submit_in_context(pool, one, row, tref) for row, tref in owners]
         wait(futures, timeout=PER_CONNECTION_SECONDS)
         out = []
         for future in futures:

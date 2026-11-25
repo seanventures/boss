@@ -439,8 +439,18 @@ def _signed(body: bytes, secret=SECRET) -> dict:
             .hexdigest()}
 
 
+def _intake_row(eng, event_id: str) -> dict:
+    with eng.connect() as c:
+        return dict(c.execute(
+            text("SELECT id, status, outcome FROM intake_events WHERE id = :id"),
+            {"id": event_id},
+        ).mappings().one())
+
+
 def test_a_webhook_is_verified_by_its_connector_and_ask_raises_one_card(
         eng, fake, world, monkeypatch):
+    from boss_engine.services import event_intake
+
     monkeypatch.setenv("BOSS_JIRA_WEBHOOK_SECRET", SECRET)
     body = _delivery()
     assert ticket_sync.ingest_webhook(eng, SETTINGS, world["conn_id"],
@@ -449,13 +459,36 @@ def test_a_webhook_is_verified_by_its_connector_and_ask_raises_one_card(
         "rejected"
     assert ticket_sync.ingest_webhook(eng, SETTINGS, "trk_nope", _signed(body), body)["status"] \
         == "not_found"
-    waiting = ticket_sync.ingest_webhook(eng, SETTINGS, world["conn_id"], _signed(body), body)
-    assert waiting["status"] == "waiting" and waiting["decision_id"]
+
+    real_transport = ticket_http.TRANSPORT
+
+    def no_outbound(*_args, **_kwargs):
+        raise AssertionError("ingest_webhook must make zero outbound HTTP calls (F9)")
+
+    monkeypatch.setattr(ticket_http, "TRANSPORT", no_outbound)
+    enqueued = ticket_sync.ingest_webhook(eng, SETTINGS, world["conn_id"], _signed(body), body)
+    assert enqueued["status"] == "received" and enqueued["event_id"]
     assert ticket_sync.ingest_webhook(eng, SETTINGS, world["conn_id"], _signed(body),
-                                      body)["status"] == "already_asked"
+                                      body)["status"] == "duplicate"
     unlabelled = _delivery(f"KAN-{D.INJECTED}")
-    assert ticket_sync.ingest_webhook(eng, SETTINGS, world["conn_id"], _signed(unlabelled),
-                                      unlabelled)["status"] == "ignored"
+    enq_unlabelled = ticket_sync.ingest_webhook(eng, SETTINGS, world["conn_id"],
+                                                _signed(unlabelled), unlabelled)
+    assert enq_unlabelled["status"] == "received"
+
+    monkeypatch.setattr(ticket_http, "TRANSPORT", real_transport)
+    processed = event_intake.process_due(eng, SETTINGS)
+    assert processed["claimed"] >= 2
+    waiting = _intake_row(eng, enqueued["event_id"])["outcome"][0]["ticket_pickup"]
+    assert waiting["status"] == "waiting" and waiting["decision_id"]
+    assert _intake_row(eng, enq_unlabelled["event_id"])["outcome"][0]["ticket_pickup"]["status"] == "ignored"
+    # A second distinct delivery for the same ticket hits already_asked in processor
+    body2 = json.dumps({
+        **json.loads(body),
+        "changelog": {"items": [{"field": "labels"}, {"field": "summary"}]},
+    }).encode()
+    enq2 = ticket_sync.ingest_webhook(eng, SETTINGS, world["conn_id"], _signed(body2), body2)
+    event_intake.process_due(eng, SETTINGS)
+    assert _intake_row(eng, enq2["event_id"])["outcome"][0]["ticket_pickup"]["status"] == "already_asked"
     with eng.begin() as c:
         row = dict(c.execute(text("SELECT id, project_id, recommendation FROM decisions "
                                   "WHERE id = :d"), {"d": waiting["decision_id"]})
@@ -468,14 +501,52 @@ def test_a_webhook_is_verified_by_its_connector_and_ask_raises_one_card(
 
 
 def test_auto_start_imports_and_starts_and_dedupes_on_the_binding(eng, fake, world, monkeypatch):
+    from boss_engine.services import event_intake
+
     monkeypatch.setenv("BOSS_JIRA_WEBHOOK_SECRET", SECRET)
     _settings(eng, world, pickup={"label": "boss", "mode": "auto_start"})
     body = _delivery()
-    first = ticket_sync.ingest_webhook(eng, SETTINGS, world["conn_id"], _signed(body), body)
+    enq1 = ticket_sync.ingest_webhook(eng, SETTINGS, world["conn_id"], _signed(body), body)
+    assert enq1["status"] == "received"
+    event_intake.process_due(eng, SETTINGS)
+    first = _intake_row(eng, enq1["event_id"])["outcome"][0]["ticket_pickup"]
     assert first["status"] in ("started", "imported"), first
-    second = ticket_sync.ingest_webhook(eng, SETTINGS, world["conn_id"], _signed(body), body)
+    body2 = json.dumps({
+        **json.loads(body),
+        "changelog": {"items": [{"field": "labels"}, {"field": "priority"}]},
+    }).encode()
+    enq2 = ticket_sync.ingest_webhook(eng, SETTINGS, world["conn_id"], _signed(body2), body2)
+    event_intake.process_due(eng, SETTINGS)
+    second = _intake_row(eng, enq2["event_id"])["outcome"][0]["ticket_pickup"]
     assert second["status"] == "already_in_boss"
     assert second["work_item_id"] == first["work_item_id"]
+
+
+def test_ticket_webhook_processor_retries_transient_provider_errors(eng, fake, world, monkeypatch):
+    from boss_engine.connectors.tickets.contract import RateLimited
+    from boss_engine.services import event_intake
+
+    monkeypatch.setenv("BOSS_JIRA_WEBHOOK_SECRET", SECRET)
+    body = _delivery()
+    enq = ticket_sync.ingest_webhook(eng, SETTINGS, world["conn_id"], _signed(body), body)
+    assert enq["status"] == "received"
+    real_transport = ticket_http.TRANSPORT
+
+    def rate_limit(*_args, **_kwargs):
+        raise RateLimited("429 from Jira", provider="jira")
+
+    monkeypatch.setattr(ticket_http, "TRANSPORT", rate_limit)
+    event_intake.process_due(eng, SETTINGS)
+    assert _intake_row(eng, enq["event_id"])["status"] == "failed"
+
+    with eng.begin() as c:
+        c.execute(text("UPDATE intake_events SET next_attempt_at = now() - interval '1 second' "
+                       "WHERE id = :id"), {"id": enq["event_id"]})
+    monkeypatch.setattr(ticket_http, "TRANSPORT", real_transport)
+    event_intake.process_due(eng, SETTINGS)
+    res = _intake_row(eng, enq["event_id"])
+    assert res["status"] == "routed"
+    assert res["outcome"][0]["ticket_pickup"]["status"] == "waiting"
 
 
 def test_two_pollers_one_firing(eng, fake, world):
@@ -541,10 +612,15 @@ def test_a_mirror_reads_its_homes_settings_and_is_never_a_second_connection(
                                now=datetime.now(timezone.utc))
         assert f"poll:{mirror_id}" not in {r["job"] for r in ran}
         body = _delivery()
-        asked = ticket_sync.ingest_webhook(eng, SETTINGS, mirror_id, _signed(body), body)
+        enq1 = ticket_sync.ingest_webhook(eng, SETTINGS, mirror_id, _signed(body), body)
+        assert enq1["status"] == "received"
+        from boss_engine.services import event_intake
+
+        event_intake.process_due(eng, SETTINGS)
+        asked = _intake_row(eng, enq1["event_id"])["outcome"][0]["ticket_pickup"]
         assert asked["status"] in ("waiting", "already_asked"), asked
         again = ticket_sync.ingest_webhook(eng, SETTINGS, world["conn_id"], _signed(body), body)
-        assert again["status"] == "already_asked"
+        assert again["status"] == "duplicate"
         with eng.begin() as c:
             assert c.execute(text("SELECT count(*) FROM decisions WHERE project_id = :p"),
                              {"p": pid2}).scalar() == 0

@@ -24,7 +24,6 @@ import hashlib
 import json
 import logging
 import signal
-import threading
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -110,8 +109,10 @@ def install_sigterm_drain(engine: Any, settings: Any = None) -> bool:
         return False
 
     def _on_term(signum: int, frame: Any) -> None:
-        threading.Thread(target=drain, args=(engine, settings), name="boss-drain",
-                         daemon=True).start()
+        from ..db import spawn_thread
+
+        spawn_thread(drain, args=(engine, settings), name="boss-drain",
+                     daemon=True, as_background=True)
         if callable(previous):
             previous(signum, frame)
         elif previous == signal.SIG_DFL:

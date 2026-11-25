@@ -451,7 +451,10 @@ _THREAD: Optional[threading.Thread] = None
 
 def tick() -> dict[str, Any]:
     try:
-        return refresh_if_due(REFRESH_WINDOW_SECONDS)
+        from ..db import background
+
+        with background():
+            return refresh_if_due(REFRESH_WINDOW_SECONDS)
     except Exception as exc:  # noqa: BLE001 — the thread must keep running
         _log.warning("Codex login refresh tick failed: %s", type(exc).__name__)
         return {"result": "error", "error": type(exc).__name__}

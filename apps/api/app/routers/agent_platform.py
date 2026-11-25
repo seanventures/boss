@@ -658,9 +658,11 @@ def build_agent_platform_router(*, engine, require_write_actor: Callable[..., st
     def bots_tick(body: BotsTickBody) -> dict[str, Any]:
         """THE BOT CLOCK (the worker's _tick_bots): mirror the migrated mechanisms whose flag is
         on, then fire every due clocked trigger; the runs execute on worker slots."""
+        from boss_engine.db import background
         from boss_engine.services import bots
 
-        return bots.tick(engine, project_id=body.project_id, limit=body.limit)
+        with background():
+            return bots.tick(engine, project_id=body.project_id, limit=body.limit)
 
     @router.get("/v1/workers/scaling")
     @permit(P.INFRA_READ, scope=Scope.project(query="project_id"))

@@ -1,0 +1,40 @@
+key: plane
+label: Plane
+icon: plane
+description: Plane — issue created, updated, commented, and deleted webhook events; delegates verification, parsing, and optional enrichment to the Plane ticket connector.
+docs_url: https://developers.plane.so/api-reference/webhooks/introduction
+adapter: PlaneIntakeAdapter
+order: 46
+modes: [push]
+capabilities:
+  verify: true
+  handshake: false
+  parse: true
+  poll: false
+  subscribe: false
+  stream: false
+  reply: false
+  stream_reply: false
+  identity: true
+  conversation: true
+  health: false
+ack:
+  deadline_ms: 10000
+  success_status: 202
+  retry_signal_headers: []
+dedupe: [delivery_id, body_sha256]
+auth_fields:
+  - {name: webhook_secret, label: Webhook secret, secret: true, help: "Secret for X-Plane-Signature HMAC-SHA256 verification."}
+  - {name: api_base_url, label: API base URL, required: false, placeholder: "https://api.plane.so", help: "Optional Plane API base URL for ticket enrichment."}
+  - {name: workspace_slug, label: Workspace slug, required: false}
+  - {name: project_id, label: Plane project ID, required: false}
+  - {name: api_token, label: API key, secret: true, required: false, help: "Optional X-API-Key for ticket enrichment."}
+default_hosts: [api.plane.so, app.plane.so]
+guard_provider: plane
+operator_base_url_env: [PLANE_BASE_URL, PLANE_API_URL, PLANE_PROJECT_URL]
+event_types:
+  - so.plane.issue.created
+  - so.plane.issue.updated
+  - so.plane.issue.commented
+  - so.plane.issue.deleted
+  - so.plane.issue.other

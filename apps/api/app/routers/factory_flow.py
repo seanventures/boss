@@ -61,7 +61,10 @@ def factory_flow_tick(payload: FlowTickRequest) -> dict[str, Any]:
     """Observe stalls, record findings, attach missing official swarms. No code edits."""
     if not payload.project_id.strip():
         raise HTTPException(status_code=422, detail="project_id is required")
-    with begin(get_engine()) as connection:
-        return _service().tick(
-            connection, payload.project_id, actor=payload.actor or "factory_flow",
-        )
+    from boss_engine.db import background
+
+    with background():
+        with begin(get_engine()) as connection:
+            return _service().tick(
+                connection, payload.project_id, actor=payload.actor or "factory_flow",
+            )

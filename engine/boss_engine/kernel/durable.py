@@ -259,10 +259,10 @@ class PgCheckpointStore:
     # ── the async writer ──────────────────────────────────────────────────────────────────
     def _enqueue(self, item: tuple) -> None:
         if self._queue is None:
+            from ..db import spawn_thread
+
             self._queue = queue.Queue()
-            self._writer = threading.Thread(target=self._drain_queue, name="ckpt-writer",
-                                            daemon=True)
-            self._writer.start()
+            self._writer = spawn_thread(self._drain_queue, name="ckpt-writer", daemon=True)
         self._queue.put(item)
 
     def _drain_queue(self) -> None:

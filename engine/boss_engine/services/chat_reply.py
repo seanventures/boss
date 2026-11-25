@@ -683,16 +683,18 @@ class _AnyInterest:
 
 def drain(engine: Any, settings: Any, *, rounds: int = 20) -> dict:
     """Send what is due until nothing more is (a run's rows go one after another)."""
+    from ..db import background
     from .notify import deliver_chat_due
 
-    total = {"sent": 0, "failed": 0, "dead": 0, "waiting": 0}
-    for _ in range(rounds):
-        got = deliver_chat_due(engine, settings)
-        for key in total:
-            total[key] += int(got.get(key) or 0)
-        if not got.get("sent") and not got.get("skipped"):
-            break
-    return total
+    with background():
+        total = {"sent": 0, "failed": 0, "dead": 0, "waiting": 0}
+        for _ in range(rounds):
+            got = deliver_chat_due(engine, settings)
+            for key in total:
+                total[key] += int(got.get(key) or 0)
+            if not got.get("sent") and not got.get("skipped"):
+                break
+        return total
 
 
 def start(engine: Any, settings: Any) -> bool:
@@ -722,7 +724,10 @@ def start(engine: Any, settings: Any) -> bool:
             _WAKE.wait(TICK_SECONDS)
             _WAKE.clear()
             try:
-                drain(engine, settings)
+                from ..db import background
+
+                with background():
+                    drain(engine, settings)
             except Exception:  # noqa: BLE001 — the next tick tries again
                 log.warning("chat outbox send failed", exc_info=True)
 

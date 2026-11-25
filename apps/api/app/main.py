@@ -56,7 +56,7 @@ from boss_engine.services.env_refs import HostCredentialAuthorityRequired
 from .bootstrap import seed
 from .bootstrap_ports import build_ports
 from .config import get_settings
-from .db import begin, database_is_reachable, ensure_schema, get_engine
+from .db import background, begin, database_is_reachable, ensure_schema, get_engine, spawn_thread
 from .routers import mount_edition_routers
 from .routers.governance import build_governance_router
 from .routers.platform import mount_platform_routers
@@ -1271,7 +1271,7 @@ def _warm_read_paths() -> None:
         print(f"[lifespan] read paths warmed in {time.monotonic() - started:.1f}s")
 
     try:
-        threading.Thread(target=_warm, name="boss-warm-read-paths", daemon=True).start()
+        spawn_thread(_warm, name="boss-warm-read-paths", daemon=True, as_background=True)
     except Exception as exc:  # noqa: BLE001
         print(f"[lifespan] warm-up not started: {exc}")
 
@@ -1650,7 +1650,7 @@ async def lifespan(_: FastAPI):
             if any(written.values()):
                 print(f"[lifespan] signed work reconstructed: {written}")
 
-        threading.Thread(target=_backfill_acts, name="boss-acts-backfill", daemon=True).start()
+        spawn_thread(_backfill_acts, name="boss-acts-backfill", daemon=True, as_background=True)
     except Exception as exc:  # noqa: BLE001 — never block boot on a backfill
         print(f"[lifespan] signed-work backfill not started: {exc}")
     # FLOWS THE OLDER STUDIO FILED UNDER THE SYSTEM NAMESPACE come back where the customer's
@@ -1721,9 +1721,7 @@ async def lifespan(_: FastAPI):
         except Exception as exc:  # noqa: BLE001 — names are a nicety
             print(f"[lifespan] demo-user backfill skipped: {exc}")
 
-    import threading as _threading
-
-    _threading.Thread(target=_name_demo_users, name="demo-user-backfill", daemon=True).start()
+    spawn_thread(_name_demo_users, name="demo-user-backfill", daemon=True, as_background=True)
     # Preview lifecycle is independent from the API. Reconcile the durable rows against
     # live processes/containers/rootfs services; never blanket-kill healthy previews.
     try:
@@ -6687,24 +6685,25 @@ def resume_agent_run_endpoint(run_id: str, payload: open_bodies.ResumeAgentRunBo
     lease_token = str(payload.get("lease_token") or "").strip()
     if not worker_id or not job_id or not lease_token:
         raise HTTPException(status_code=422, detail="active agent resume lease required")
-    with begin(engine) as connection:
-        project_id = connection.execute(
-            text("SELECT project_id FROM agent_runs WHERE id = :run_id"),
-            {"run_id": run_id},
-        ).scalar_one_or_none()
-        if project_id is None:
-            raise HTTPException(status_code=404, detail="agent run not found")
-        try:
-            lease = jobs.require_active_lease(connection, worker_id, job_id, lease_token)
-        except LeaseNotFoundError as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        if (
-            lease["kind"] != "agent.resume"
-            or lease["project_id"] != project_id
-            or (lease.get("payload") or {}).get("run_id") != run_id
-        ):
-            raise HTTPException(status_code=409, detail="lease does not match agent run")
-        return software_factory.resume_plan_run(connection, run_id)
+    with background():
+        with begin(engine) as connection:
+            project_id = connection.execute(
+                text("SELECT project_id FROM agent_runs WHERE id = :run_id"),
+                {"run_id": run_id},
+            ).scalar_one_or_none()
+            if project_id is None:
+                raise HTTPException(status_code=404, detail="agent run not found")
+            try:
+                lease = jobs.require_active_lease(connection, worker_id, job_id, lease_token)
+            except LeaseNotFoundError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            if (
+                lease["kind"] != "agent.resume"
+                or lease["project_id"] != project_id
+                or (lease.get("payload") or {}).get("run_id") != run_id
+            ):
+                raise HTTPException(status_code=409, detail="lease does not match agent run")
+            return software_factory.resume_plan_run(connection, run_id)
 
 
 @app.get(
@@ -6962,21 +6961,22 @@ def execute_webhook_delivery(
     payload: WebhookDeliveryExecuteRequest,
 ) -> WebhookDeliverySummary:
     require_worker_principal()
-    with begin(engine) as connection:
-        try:
-            item = webhooks.deliver(
-                connection,
-                payload.project_id,
-                delivery_id,
-                payload.created_by_job_id,
-                payload.worker_id,
-                payload.lease_token,
-            )
-        except WebhookDeliveryNotFoundError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
-        return WebhookDeliverySummary(**item)
+    with background():
+        with begin(engine) as connection:
+            try:
+                item = webhooks.deliver(
+                    connection,
+                    payload.project_id,
+                    delivery_id,
+                    payload.created_by_job_id,
+                    payload.worker_id,
+                    payload.lease_token,
+                )
+            except WebhookDeliveryNotFoundError as error:
+                raise HTTPException(status_code=404, detail=str(error)) from error
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+            return WebhookDeliverySummary(**item)
 
 
 @app.post(
@@ -7019,22 +7019,27 @@ async def receive_inbound_webhook(
 @app.post("/v1/webhooks/github", status_code=202)
 @public(reason=PublicReason.HMAC_SIGNED_WEBHOOK, verifier=_identity_verifiers.inbound_webhook_hmac)
 async def receive_github_webhook(request: Request):
-    """Compatibility GitHub ingress with the community event allowlist."""
+    """Compatibility GitHub ingress routed through GitHubIntakeAdapter with the community allowlist."""
     raw_body = await request.body()
     headers = {key.lower(): value for key, value in request.headers.items()}
-    with begin(engine) as connection:
-        result = inbound_webhooks.ingest(
-            connection,
-            "github",
-            raw_body,
-            headers,
-            github_community_only=True,
-        )
-        if result["status"] == "accepted" and result.get("inbound_webhook_id"):
-            github_reconciler.ingest_inbound_webhook(
+
+    def _ingest() -> dict[str, Any]:
+        with begin(engine) as connection:
+            result = inbound_webhooks.ingest(
                 connection,
-                inbound_webhook_id=result["inbound_webhook_id"],
+                "github",
+                raw_body,
+                headers,
+                github_community_only=True,
             )
+            if result["status"] == "accepted" and result.get("inbound_webhook_id"):
+                github_reconciler.ingest_inbound_webhook(
+                    connection,
+                    inbound_webhook_id=result["inbound_webhook_id"],
+                )
+            return result
+
+    result = await run_in_threadpool(_ingest)
     if result["status"] == "rejected":
         raise HTTPException(status_code=401, detail="Invalid webhook signature.")
     if result["status"] == "not_configured":
@@ -7162,19 +7167,20 @@ def execute_github_community_job(
     job_id: str, payload: GitHubCommunityJobExecuteRequest
 ):
     require_worker_principal()
-    with begin(engine) as connection:
-        try:
-            return github_community.execute_job(
-                connection,
-                job_id=job_id,
-                project_id=payload.project_id,
-                worker_id=payload.worker_id,
-                lease_token=payload.lease_token,
-            )
-        except LeaseNotFoundError as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
+    with background():
+        with begin(engine) as connection:
+            try:
+                return github_community.execute_job(
+                    connection,
+                    job_id=job_id,
+                    project_id=payload.project_id,
+                    worker_id=payload.worker_id,
+                    lease_token=payload.lease_token,
+                )
+            except LeaseNotFoundError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @writing_get(app, "/v1/mcp/servers")
@@ -7523,18 +7529,19 @@ def run_meeting_step_endpoint(payload: open_bodies.MeetingStepBody):
     run_id = str(payload.get("run_id") or "").strip()
     if not run_id:
         raise HTTPException(status_code=422, detail="run_id is required.")
-    with begin(engine) as connection:
-        run = connection.execute(
-            text("SELECT project_id FROM meeting_runs WHERE id = :run_id"),
-            {"run_id": run_id},
-        ).mappings().first()
-        if run:
-            actor = str(payload.get("actor") or current_api_principal.get() or "system")
-            require_project_actor(
-                connection, run["project_id"], actor, "workflow_execute"
-            )
-    from .services.meeting_service import advance_meeting_run
-    return advance_meeting_run(engine, settings, jobs, run_id)
+    with background():
+        with begin(engine) as connection:
+            run = connection.execute(
+                text("SELECT project_id FROM meeting_runs WHERE id = :run_id"),
+                {"run_id": run_id},
+            ).mappings().first()
+            if run:
+                actor = str(payload.get("actor") or current_api_principal.get() or "system")
+                require_project_actor(
+                    connection, run["project_id"], actor, "workflow_execute"
+                )
+        from .services.meeting_service import advance_meeting_run
+        return advance_meeting_run(engine, settings, jobs, run_id)
 
 
 @app.post("/v1/code-tasks")
@@ -8107,20 +8114,21 @@ def sweep_qa_benchmark_evaluations(payload: dict | None = None):
     from boss_engine.services.improvement_programs import reconcile_program_baselines
 
     try:
-        with begin(engine) as connection:
-            result = sweep_terminal_benchmarks(
-                connection,
-                project_id=project_id,
-                actor=actor,
-                limit=limit,
-            )
-            result["baseline_reconciliation"] = reconcile_program_baselines(
-                connection,
-                project_id=project_id,
-                actor="improvement_program_scheduler",
-                limit=limit,
-            )
-            return result
+        with background():
+            with begin(engine) as connection:
+                result = sweep_terminal_benchmarks(
+                    connection,
+                    project_id=project_id,
+                    actor=actor,
+                    limit=limit,
+                )
+                result["baseline_reconciliation"] = reconcile_program_baselines(
+                    connection,
+                    project_id=project_id,
+                    actor="improvement_program_scheduler",
+                    limit=limit,
+                )
+                return result
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
 
@@ -8488,31 +8496,32 @@ def run_code_task_step_endpoint(payload: open_bodies.CodeTaskStepBody):
     run_id = str(payload.get("run_id") or "").strip()
     if not run_id:
         raise HTTPException(status_code=422, detail="run_id is required.")
-    with begin(engine) as connection:
-        run = connection.execute(
-            text("SELECT project_id FROM code_task_runs WHERE id = :run_id"),
-            {"run_id": run_id},
-        ).mappings().first()
-        if run:
-            actor = str(payload.get("actor") or current_api_principal.get() or "system")
-            require_project_actor(
-                connection, run["project_id"], actor, "workflow_execute"
-            )
-    from .services.code_task_service import run_code_task
-    try:
-        return run_code_task(engine, settings, jobs, run_id,
-                             fencing_token=payload.get("fencing_token"))
-    except HTTPException:
-        raise
-    except Exception as exc:  # noqa: BLE001
-        # A crash is recorded ON THE RUN (what, where) and answered in words, so the build's own
-        # page, the worker's error and the stuck-work diagnosis all say what broke -- not a bare
-        # 500 the worker could not even report (crun_de5396b5: 30 silent crashes, 2026-11-07).
-        from boss_engine.services import stuck_work
+    with background():
+        with begin(engine) as connection:
+            run = connection.execute(
+                text("SELECT project_id FROM code_task_runs WHERE id = :run_id"),
+                {"run_id": run_id},
+            ).mappings().first()
+            if run:
+                actor = str(payload.get("actor") or current_api_principal.get() or "system")
+                require_project_actor(
+                    connection, run["project_id"], actor, "workflow_execute"
+                )
+        from .services.code_task_service import run_code_task
+        try:
+            return run_code_task(engine, settings, jobs, run_id,
+                                 fencing_token=payload.get("fencing_token"))
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            # A crash is recorded ON THE RUN (what, where) and answered in words, so the build's own
+            # page, the worker's error and the stuck-work diagnosis all say what broke -- not a bare
+            # 500 the worker could not even report (crun_de5396b5: 30 silent crashes, 2026-11-07).
+            from boss_engine.services import stuck_work
 
-        said = stuck_work.record_step_crash(engine, run_id, exc)
-        LOGGER.exception("code_task_step_crashed run_id=%s", run_id)
-        raise HTTPException(status_code=500, detail=said) from exc
+            said = stuck_work.record_step_crash(engine, run_id, exc)
+            LOGGER.exception("code_task_step_crashed run_id=%s", run_id)
+            raise HTTPException(status_code=500, detail=said) from exc
 
 
 class InvestigationRunBody(BaseModel):
@@ -8540,25 +8549,26 @@ def run_investigation_endpoint(investigation_id: str,
         block_community_investigation, run_investigation,
     )
 
-    with begin(engine) as connection:
-        project_id = connection.execute(
-            text("SELECT project_id FROM investigations WHERE id = :investigation_id"),
-            {"investigation_id": investigation_id},
-        ).scalar_one_or_none()
-        if project_id is None:
-            return {"ok": False, "error": f"no such investigation: {investigation_id}"}
-        actor = current_api_principal.get() or "system"
-        require_project_actor(connection, project_id, actor, "workflow_execute")
-        lease = ({"job_id": payload.job_id, "worker_id": payload.worker_id,
-                  "lease_token": payload.lease_token}
-                 if payload is not None and payload.job_id and payload.worker_id
-                 and payload.lease_token else None)
-        blocked = block_community_investigation(connection, settings, investigation_id,
-                                                lease=lease)
-        if blocked is not None:
-            return blocked
+    with background():
+        with begin(engine) as connection:
+            project_id = connection.execute(
+                text("SELECT project_id FROM investigations WHERE id = :investigation_id"),
+                {"investigation_id": investigation_id},
+            ).scalar_one_or_none()
+            if project_id is None:
+                return {"ok": False, "error": f"no such investigation: {investigation_id}"}
+            actor = current_api_principal.get() or "system"
+            require_project_actor(connection, project_id, actor, "workflow_execute")
+            lease = ({"job_id": payload.job_id, "worker_id": payload.worker_id,
+                      "lease_token": payload.lease_token}
+                     if payload is not None and payload.job_id and payload.worker_id
+                     and payload.lease_token else None)
+            blocked = block_community_investigation(connection, settings, investigation_id,
+                                                    lease=lease)
+            if blocked is not None:
+                return blocked
 
-    return run_investigation(engine, settings, investigation_id=investigation_id, lease=lease)
+        return run_investigation(engine, settings, investigation_id=investigation_id, lease=lease)
 
 
 def _investigation_caller(investigation_id: str, request: Request) -> dict:
@@ -8893,13 +8903,14 @@ def record_host_stall_endpoint(payload: open_bodies.HostStallBody) -> dict:
     stalled = float(payload.get("stalled_seconds") or 0.0)
     if stalled <= 0:
         return {"recorded": False, "reason": "not a stall"}
-    with begin(engine) as connection:
-        # `source` marks a stall measured over the worker's IDLE WAIT only. Rows without one
-        # were written by the old poll clock, which counted every job's duration as a host
-        # stall (stability spec C5); readers ignore them.
-        emit_event(connection, settings.default_project_id, "host.stalled", "boss",
-                   "host", "self", {"stalled_seconds": round(stalled, 2),
-                                    "source": "worker.idle_wait"})
+    with background():
+        with begin(engine) as connection:
+            # `source` marks a stall measured over the worker's IDLE WAIT only. Rows without one
+            # were written by the old poll clock, which counted every job's duration as a host
+            # stall (stability spec C5); readers ignore them.
+            emit_event(connection, settings.default_project_id, "host.stalled", "boss",
+                       "host", "self", {"stalled_seconds": round(stalled, 2),
+                                        "source": "worker.idle_wait"})
     return {"recorded": True, "stalled_seconds": round(stalled, 2)}
 
 
@@ -8922,38 +8933,39 @@ def code_task_redelivered_endpoint(run_id: str, payload: open_bodies.CodeTaskRed
     attempt = int(payload.get("attempt") or 0)
     if not worker_id or not job_id or not lease_token or attempt < 2:
         raise HTTPException(status_code=422, detail="active replay lease and attempt >= 2 required")
-    with begin(engine) as connection:
-        try:
-            lease = jobs.require_active_lease(connection, worker_id, job_id, lease_token)
-        except LeaseNotFoundError as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        run_project = connection.execute(
-            text("SELECT project_id FROM code_task_runs WHERE id = :run_id"),
-            {"run_id": run_id},
-        ).scalar_one_or_none()
-        if run_project is None:
-            raise HTTPException(status_code=404, detail="code task not found")
-        lease_payload = lease.get("payload") or {}
-        if (
-            lease["project_id"] != run_project
-            or (lease_payload.get("run_id") or lease_payload.get("code_task_run_id")) != run_id
-            or lease["attempt"] != attempt
-        ):
-            raise HTTPException(status_code=409, detail="replay lease does not match code task")
-        connection.execute(
-            text(
-                """
-                UPDATE code_task_runs
-                SET finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb)
-                                   || jsonb_build_object('redelivered_attempts',
-                                        COALESCE(finalize_ctx->'redelivered_attempts', '[]'::jsonb)
-                                        || to_jsonb(CAST(:attempt AS int))),
-                    updated_at = now()
-                WHERE id = :run_id
-                """
-            ),
-            {"run_id": run_id, "attempt": attempt},
-        )
+    with background():
+        with begin(engine) as connection:
+            try:
+                lease = jobs.require_active_lease(connection, worker_id, job_id, lease_token)
+            except LeaseNotFoundError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            run_project = connection.execute(
+                text("SELECT project_id FROM code_task_runs WHERE id = :run_id"),
+                {"run_id": run_id},
+            ).scalar_one_or_none()
+            if run_project is None:
+                raise HTTPException(status_code=404, detail="code task not found")
+            lease_payload = lease.get("payload") or {}
+            if (
+                lease["project_id"] != run_project
+                or (lease_payload.get("run_id") or lease_payload.get("code_task_run_id")) != run_id
+                or lease["attempt"] != attempt
+            ):
+                raise HTTPException(status_code=409, detail="replay lease does not match code task")
+            connection.execute(
+                text(
+                    """
+                    UPDATE code_task_runs
+                    SET finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb)
+                                       || jsonb_build_object('redelivered_attempts',
+                                            COALESCE(finalize_ctx->'redelivered_attempts', '[]'::jsonb)
+                                            || to_jsonb(CAST(:attempt AS int))),
+                        updated_at = now()
+                    WHERE id = :run_id
+                    """
+                ),
+                {"run_id": run_id, "attempt": attempt},
+            )
     return {"run_id": run_id, "attempt": attempt, "recorded": True}
 
 
@@ -10073,10 +10085,11 @@ def shepherd_watch_endpoint(project_id: Optional[str] = None, dry_run: bool = Fa
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.shepherd_service import watch, watch_all
-    if project_id:
-        return watch(engine, settings, project_id, dry_run=dry_run, jobs=jobs)
-    # No project named: watch everything with work in flight. Neglect is not project-scoped.
-    return watch_all(engine, settings, dry_run=dry_run, jobs=jobs)
+    with background():
+        if project_id:
+            return watch(engine, settings, project_id, dry_run=dry_run, jobs=jobs)
+        # No project named: watch everything with work in flight. Neglect is not project-scoped.
+        return watch_all(engine, settings, dry_run=dry_run, jobs=jobs)
 
 
 @app.post("/v1/delivery/health/sweep")
@@ -10096,8 +10109,9 @@ def delivery_health_sweep_endpoint(project_id: Optional[str] = None):
     # a deployment that hangs while the API stays up was previously reconciled by nothing —
     # `fail_orphaned_deployments` only runs at startup, which assumes the failure mode is a
     # restart when the observed one is a hang.
-    hung = fail_hung_deployments(engine)
-    result = sweep(engine, settings, project_id=project_id)
+    with background():
+        hung = fail_hung_deployments(engine)
+        result = sweep(engine, settings, project_id=project_id)
     if hung.get("failed"):
         result = {**result, "hung_deployments_failed": hung["failed"]}
     if hung.get("never_started"):
@@ -10116,8 +10130,6 @@ def _start_deployment_in_background(run_id: str, actor: str, *, trigger: str) ->
     made only `deploy` asynchronous, so pressing Redeploy still blocked for a minute and showed
     nothing — the same bug, on the button next to the fixed one.
     """
-    import threading
-
     from .services.delivery_pipeline import execute_deployment
 
     def _run() -> None:
@@ -10143,7 +10155,7 @@ def _start_deployment_in_background(run_id: str, actor: str, *, trigger: str) ->
             except Exception:  # noqa: BLE001 — the DB may be the thing that failed
                 pass
 
-    threading.Thread(target=_run, name=f"deploy-{run_id}", daemon=True).start()
+    spawn_thread(_run, name=f"deploy-{run_id}", daemon=True, as_background=True)
     return {"deployment_run_id": run_id, "status": "started", "trigger": trigger,
             "poll": f"/v1/delivery/deployments/{run_id}"}
 
@@ -10972,9 +10984,10 @@ def execute_stack_deployment_endpoint(deployment_id: str,
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from boss_engine.services.stack_deploy import execute_stack_job
 
-    return execute_stack_job(engine, settings, deployment_id=deployment_id,
-                             job_id=payload.job_id, worker_id=payload.worker_id,
-                             lease_token=payload.lease_token)
+    with background():
+        return execute_stack_job(engine, settings, deployment_id=deployment_id,
+                                 job_id=payload.job_id, worker_id=payload.worker_id,
+                                 lease_token=payload.lease_token)
 
 
 @app.post("/v1/delivery/deployments/{deployment_run_id}/apply")
@@ -10988,9 +11001,10 @@ def apply_host_deployment_endpoint(deployment_run_id: str,
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from boss_engine.services.governed_host_deploy import execute_host_job
 
-    result = execute_host_job(engine, settings, deployment_run_id=deployment_run_id,
-                              job_id=payload.job_id, worker_id=payload.worker_id,
-                              lease_token=payload.lease_token)
+    with background():
+        result = execute_host_job(engine, settings, deployment_run_id=deployment_run_id,
+                                  job_id=payload.job_id, worker_id=payload.worker_id,
+                                  lease_token=payload.lease_token)
     if result.get("http_status"):
         # A lease that is not this job's, or a run that does not exist: 4xx, never a 200.
         raise HTTPException(status_code=int(result["http_status"]),
@@ -11450,9 +11464,10 @@ def shepherd_autopilot_endpoint(payload: open_bodies.ShepherdAutopilotBody):
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.shepherd_service import autopilot
-    return autopilot(engine, settings, jobs, payload["project_id"],
-                     limit=int(payload.get("limit") or 10),
-                     actor=str(payload.get("actor") or "shepherd"))
+    with background():
+        return autopilot(engine, settings, jobs, payload["project_id"],
+                         limit=int(payload.get("limit") or 10),
+                         actor=str(payload.get("actor") or "shepherd"))
 
 
 @app.post("/v1/shepherd/escalations/{escalation_id}/answer")
@@ -13198,10 +13213,11 @@ def execute_discovery_endpoint(run_id: str, payload: open_bodies.DiscoveryExecut
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.discovery_service import execute_discovery_job
 
-    return execute_discovery_job(
-        settings, run_id=run_id, job_id=payload.job_id,
-        worker_id=payload.worker_id, lease_token=payload.lease_token,
-    )
+    with background():
+        return execute_discovery_job(
+            settings, run_id=run_id, job_id=payload.job_id,
+            worker_id=payload.worker_id, lease_token=payload.lease_token,
+        )
 
 
 @app.get("/v1/discoveries")
@@ -14286,9 +14302,10 @@ def agent_wakeups_tick(payload: open_bodies.AgentWakeupsTickBody) -> dict:
     payload = payload.payload()
     from boss_engine.services.agent_wakeups import run_due
 
-    return run_due(settings, engine,
-                   limit=int(payload.get("limit") or 5),
-                   project_id=str(payload.get("project_id") or "").strip() or None)
+    with background():
+        return run_due(settings, engine,
+                       limit=int(payload.get("limit") or 5),
+                       project_id=str(payload.get("project_id") or "").strip() or None)
 
 
 @app.get("/v1/agent/wakeups")
@@ -15012,34 +15029,35 @@ def execute_orchestrator_next_move(
         raise HTTPException(status_code=422,
                             detail="an active next_move job lease is required "
                                    "(worker_id, created_by_job_id, lease_token)")
-    with begin(engine) as connection:
-        try:
-            lease = jobs.require_active_lease(connection, worker_id, job_id, lease_token)
-        except LeaseNotFoundError as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        if lease["kind"] != "agent.orchestrator.next_move" or lease["project_id"] != payload.project_id:
-            raise HTTPException(status_code=409, detail="lease does not match this next_move")
-        try:
-            return orchestrator_next_move.execute(
-                connection,
-                project_id=payload.project_id,
-                event_id=payload.event_id,
-                event_type=payload.event_type,
-                entity_type=payload.entity_type,
-                entity_id=payload.entity_id,
-                event_data=payload.event_data,
-                task_id=payload.task_id,
-                data_boundary=payload.data_boundary,
-                created_by_job_id=payload.created_by_job_id,
-                worker_id=payload.worker_id,
-                lease_token=payload.lease_token,
-            )
-        except ValueError as error:
-            return {
-                "status": "failed",
-                "retryable": False,
-                "message": str(error),
-            }
+    with background():
+        with begin(engine) as connection:
+            try:
+                lease = jobs.require_active_lease(connection, worker_id, job_id, lease_token)
+            except LeaseNotFoundError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            if lease["kind"] != "agent.orchestrator.next_move" or lease["project_id"] != payload.project_id:
+                raise HTTPException(status_code=409, detail="lease does not match this next_move")
+            try:
+                return orchestrator_next_move.execute(
+                    connection,
+                    project_id=payload.project_id,
+                    event_id=payload.event_id,
+                    event_type=payload.event_type,
+                    entity_type=payload.entity_type,
+                    entity_id=payload.entity_id,
+                    event_data=payload.event_data,
+                    task_id=payload.task_id,
+                    data_boundary=payload.data_boundary,
+                    created_by_job_id=payload.created_by_job_id,
+                    worker_id=payload.worker_id,
+                    lease_token=payload.lease_token,
+                )
+            except ValueError as error:
+                return {
+                    "status": "failed",
+                    "retryable": False,
+                    "message": str(error),
+                }
 
 
 class AgentStudioRunExecuteRequest(BaseModel):
@@ -15059,20 +15077,21 @@ def execute_agent_studio_run(payload: AgentStudioRunExecuteRequest) -> dict[str,
     that called no model. It now runs here, through the governed agent-step pipeline, under the
     worker's LIVE lease on that very job."""
     require_worker_principal()
-    with begin(engine) as connection:
-        try:
-            lease = jobs.require_active_lease(connection, payload.worker_id, payload.created_by_job_id,
-                                              payload.lease_token)
-        except LeaseNotFoundError as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        if lease["kind"] != "agent.studio.execute" or lease["project_id"] != payload.project_id:
-            raise HTTPException(status_code=409, detail="lease does not match this Agent Studio run")
-        try:
-            return {"status": "succeeded", **agent_studio.execute_run(
-                connection, project_id=payload.project_id, run_id=payload.agent_studio_run_id,
-                actor="worker")}
-        except ValueError as error:
-            return {"status": "failed", "retryable": False, "message": str(error)}
+    with background():
+        with begin(engine) as connection:
+            try:
+                lease = jobs.require_active_lease(connection, payload.worker_id, payload.created_by_job_id,
+                                                  payload.lease_token)
+            except LeaseNotFoundError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            if lease["kind"] != "agent.studio.execute" or lease["project_id"] != payload.project_id:
+                raise HTTPException(status_code=409, detail="lease does not match this Agent Studio run")
+            try:
+                return {"status": "succeeded", **agent_studio.execute_run(
+                    connection, project_id=payload.project_id, run_id=payload.agent_studio_run_id,
+                    actor="worker")}
+            except ValueError as error:
+                return {"status": "failed", "retryable": False, "message": str(error)}
 
 
 @app.get("/v1/meetings", response_model=MeetingListResponse)
@@ -17896,72 +17915,73 @@ def disable_project_skill(skill_id: str, payload: SkillToggleRequest) -> dict:
 @permit(P.SKILL_INVOKE, scope=Scope.project(body="project_id"))
 def invoke_skill(skill_id: str, payload: SkillInvokeRequest) -> dict:
     """Run API mock mode or lease-owned worker real mode through one governance gauntlet."""
-    with begin(engine) as connection:
-        try:
-            executor_context = None
-            if not payload.mock:
-                if not (
-                    payload.created_by_job_id
-                    and payload.worker_id
-                    and payload.lease_token
-                ):
-                    raise HTTPException(
-                        status_code=400,
-                        detail=(
-                            "Real skill invocation requires an active worker lease. "
-                            "Use mock=true for a side-effect-free invocation."
-                        ),
+    with background():
+        with begin(engine) as connection:
+            try:
+                executor_context = None
+                if not payload.mock:
+                    if not (
+                        payload.created_by_job_id
+                        and payload.worker_id
+                        and payload.lease_token
+                    ):
+                        raise HTTPException(
+                            status_code=400,
+                            detail=(
+                                "Real skill invocation requires an active worker lease. "
+                                "Use mock=true for a side-effect-free invocation."
+                            ),
+                        )
+                    leased_job = jobs.require_active_lease(
+                        connection,
+                        payload.worker_id,
+                        payload.created_by_job_id,
+                        payload.lease_token,
                     )
-                leased_job = jobs.require_active_lease(
+                    job_payload = leased_job.get("payload") or {}
+                    if (
+                        leased_job["project_id"] != payload.project_id
+                        or leased_job["kind"] != "skill.execute"
+                        or job_payload.get("skill_id") != skill_id
+                        or (job_payload.get("caller") or "worker") != payload.caller
+                        or (job_payload.get("inputs") or {}) != payload.inputs
+                    ):
+                        raise HTTPException(
+                            status_code=409,
+                            detail=(
+                                "Skill invocation does not match the active leased job "
+                                "scope."
+                            ),
+                        )
+                    executor_context = SkillExecutorContext(
+                        settings=settings,
+                        connection=connection,
+                        project_id=payload.project_id,
+                        actor=payload.worker_id,
+                        created_by_job_id=payload.created_by_job_id,
+                    )
+                return skill_runtime.invoke(
                     connection,
-                    payload.worker_id,
-                    payload.created_by_job_id,
-                    payload.lease_token,
+                    payload.project_id,
+                    skill_id,
+                    payload.caller,
+                    payload.inputs,
+                    mock=payload.mock,
+                    executor_context=executor_context,
+                    actor=(
+                        payload.worker_id
+                        if not payload.mock
+                        else payload.actor or payload.caller
+                    ),
                 )
-                job_payload = leased_job.get("payload") or {}
-                if (
-                    leased_job["project_id"] != payload.project_id
-                    or leased_job["kind"] != "skill.execute"
-                    or job_payload.get("skill_id") != skill_id
-                    or (job_payload.get("caller") or "worker") != payload.caller
-                    or (job_payload.get("inputs") or {}) != payload.inputs
-                ):
-                    raise HTTPException(
-                        status_code=409,
-                        detail=(
-                            "Skill invocation does not match the active leased job "
-                            "scope."
-                        ),
-                    )
-                executor_context = SkillExecutorContext(
-                    settings=settings,
-                    connection=connection,
-                    project_id=payload.project_id,
-                    actor=payload.worker_id,
-                    created_by_job_id=payload.created_by_job_id,
-                )
-            return skill_runtime.invoke(
-                connection,
-                payload.project_id,
-                skill_id,
-                payload.caller,
-                payload.inputs,
-                mock=payload.mock,
-                executor_context=executor_context,
-                actor=(
-                    payload.worker_id
-                    if not payload.mock
-                    else payload.actor or payload.caller
-                ),
-            )
-        except LeaseNotFoundError as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        except SkillNotFoundError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
-        except SkillPermissionError as error:
-            raise HTTPException(status_code=403, detail=str(error)) from error
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
+            except LeaseNotFoundError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            except SkillNotFoundError as error:
+                raise HTTPException(status_code=404, detail=str(error)) from error
+            except SkillPermissionError as error:
+                raise HTTPException(status_code=403, detail=str(error)) from error
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @app.get("/v1/model-adapters", response_model=ModelAdapterListResponse)
@@ -18187,22 +18207,23 @@ def acquire_model_gateway_lease(
     payload: ModelGatewayLeaseAcquireRequest,
 ) -> ModelGatewayLeaseAcquireResponse:
     require_worker_principal()
-    with begin(engine) as connection:
-        try:
-            result = model_gateway.acquire(
-                connection,
-                payload.project_id,
-                **payload.model_dump(exclude={"project_id"}),
-            )
-        except LeaseNotFoundError as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        except ModelCapacityDeniedError as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        except ModelGatewayLeaseError as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
-        return ModelGatewayLeaseAcquireResponse(**result)
+    with background():
+        with begin(engine) as connection:
+            try:
+                result = model_gateway.acquire(
+                    connection,
+                    payload.project_id,
+                    **payload.model_dump(exclude={"project_id"}),
+                )
+            except LeaseNotFoundError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            except ModelCapacityDeniedError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            except ModelGatewayLeaseError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+            return ModelGatewayLeaseAcquireResponse(**result)
 
 
 @app.get(
@@ -18314,17 +18335,18 @@ def heartbeat_model_gateway_lease(
     lease_id: str, payload: ModelGatewayLeaseHeartbeatRequest
 ) -> ModelGatewayLeaseSummary:
     require_worker_principal()
-    with begin(engine) as connection:
-        try:
-            lease = model_gateway.heartbeat(
-                connection,
-                payload.project_id,
-                lease_id,
-                **payload.model_dump(exclude={"project_id"}),
-            )
-        except (LeaseNotFoundError, ModelGatewayLeaseError) as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        return ModelGatewayLeaseSummary(**lease)
+    with background():
+        with begin(engine) as connection:
+            try:
+                lease = model_gateway.heartbeat(
+                    connection,
+                    payload.project_id,
+                    lease_id,
+                    **payload.model_dump(exclude={"project_id"}),
+                )
+            except (LeaseNotFoundError, ModelGatewayLeaseError) as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            return ModelGatewayLeaseSummary(**lease)
 
 
 @app.post(
@@ -18337,19 +18359,20 @@ def start_model_gateway_invocation(
     lease_id: str, payload: ModelGatewayInvocationStartRequest
 ) -> ModelGatewayInvocationStartResponse:
     require_worker_principal()
-    with begin(engine) as connection:
-        try:
-            result = model_gateway.start_invocation(
-                connection,
-                payload.project_id,
-                lease_id,
-                **payload.model_dump(exclude={"project_id"}),
-            )
-        except (LeaseNotFoundError, ModelGatewayLeaseError) as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
-        return ModelGatewayInvocationStartResponse(**result)
+    with background():
+        with begin(engine) as connection:
+            try:
+                result = model_gateway.start_invocation(
+                    connection,
+                    payload.project_id,
+                    lease_id,
+                    **payload.model_dump(exclude={"project_id"}),
+                )
+            except (LeaseNotFoundError, ModelGatewayLeaseError) as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+            return ModelGatewayInvocationStartResponse(**result)
 
 
 @app.post(
@@ -18363,20 +18386,21 @@ def settle_model_gateway_invocation(
     payload: ModelGatewayInvocationSettleRequest,
 ) -> ModelGatewayInvocationSummary:
     require_worker_principal()
-    with begin(engine) as connection:
-        try:
-            invocation = model_gateway.settle_invocation(
-                connection,
-                payload.project_id,
-                lease_id,
-                invocation_id,
-                **payload.model_dump(exclude={"project_id"}),
-            )
-        except (LeaseNotFoundError, ModelGatewayLeaseError) as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        except ModelGatewayInvocationError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
-        return ModelGatewayInvocationSummary(**invocation)
+    with background():
+        with begin(engine) as connection:
+            try:
+                invocation = model_gateway.settle_invocation(
+                    connection,
+                    payload.project_id,
+                    lease_id,
+                    invocation_id,
+                    **payload.model_dump(exclude={"project_id"}),
+                )
+            except (LeaseNotFoundError, ModelGatewayLeaseError) as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            except ModelGatewayInvocationError as error:
+                raise HTTPException(status_code=404, detail=str(error)) from error
+            return ModelGatewayInvocationSummary(**invocation)
 
 
 @app.post(
@@ -18388,17 +18412,18 @@ def release_model_gateway_lease(
     lease_id: str, payload: ModelGatewayLeaseReleaseRequest
 ) -> ModelGatewayLeaseSummary:
     require_worker_principal()
-    with begin(engine) as connection:
-        try:
-            lease = model_gateway.release(
-                connection,
-                payload.project_id,
-                lease_id,
-                **payload.model_dump(exclude={"project_id"}),
-            )
-        except (LeaseNotFoundError, ModelGatewayLeaseError) as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        return ModelGatewayLeaseSummary(**lease)
+    with background():
+        with begin(engine) as connection:
+            try:
+                lease = model_gateway.release(
+                    connection,
+                    payload.project_id,
+                    lease_id,
+                    **payload.model_dump(exclude={"project_id"}),
+                )
+            except (LeaseNotFoundError, ModelGatewayLeaseError) as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            return ModelGatewayLeaseSummary(**lease)
 
 
 # --------------------------------------------------------------------------- #
@@ -21101,31 +21126,32 @@ def execute_github_reconciliation_run(
     payload: GitHubReconciliationExecuteRequest,
 ) -> GitHubReconciliationExecuteResponse:
     require_worker_principal()
-    with begin(engine) as connection:
-        try:
-            result = github_reconciler.execute(
-                connection,
-                project_id=payload.project_id,
-                run_id=run_id,
-                job_id=payload.job_id,
-                worker_id=payload.worker_id,
-                lease_token=payload.lease_token,
+    with background():
+        with begin(engine) as connection:
+            try:
+                result = github_reconciler.execute(
+                    connection,
+                    project_id=payload.project_id,
+                    run_id=run_id,
+                    job_id=payload.job_id,
+                    worker_id=payload.worker_id,
+                    lease_token=payload.lease_token,
+                )
+            except GitHubReconciliationNotFoundError as error:
+                raise HTTPException(status_code=404, detail=str(error)) from error
+            except (
+                LeaseNotFoundError,
+                GitHubReconciliationStateError,
+                GitHubReconciliationProviderError,
+                GitHubConnectionStateError,
+                GitHubRepositoryBindingNotFoundError,
+                ValueError,
+            ) as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            return GitHubReconciliationExecuteResponse(
+                run=GitHubReconciliationRunSummary(**result["run"]),
+                job=result["job"],
             )
-        except GitHubReconciliationNotFoundError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
-        except (
-            LeaseNotFoundError,
-            GitHubReconciliationStateError,
-            GitHubReconciliationProviderError,
-            GitHubConnectionStateError,
-            GitHubRepositoryBindingNotFoundError,
-            ValueError,
-        ) as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        return GitHubReconciliationExecuteResponse(
-            run=GitHubReconciliationRunSummary(**result["run"]),
-            job=result["job"],
-        )
 
 
 @app.post(
@@ -21634,29 +21660,30 @@ def sync_external_resources(payload: ResourceSyncRequest, request: Request) -> R
     _enforce_high_cost_rate_limit(
         request, payload.project_id, payload.actor, endpoint="/v1/resources/sync"
     )
-    with begin(engine) as connection:
-        require_project_actor(
-            connection,
-            payload.project_id,
-            payload.actor,
-            "providerops_manage",
-        )
-        try:
-            result = resource_plane.sync_resources(
+    with background():
+        with begin(engine) as connection:
+            require_project_actor(
                 connection,
-                project_id=payload.project_id,
-                provider_account_id=payload.provider_account_id,
-                actor=payload.actor,
+                payload.project_id,
+                payload.actor,
+                "providerops_manage",
             )
-        except ProviderAccountNotFoundError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
-        return ResourceSyncResponse(
-            project_id=result["project_id"],
-            runs=[ResourceSyncRunSummary(**item) for item in result["runs"]],
-            resources_seen=result["resources_seen"],
-            resources_changed=result["resources_changed"],
-            costs_seen=result["costs_seen"],
-        )
+            try:
+                result = resource_plane.sync_resources(
+                    connection,
+                    project_id=payload.project_id,
+                    provider_account_id=payload.provider_account_id,
+                    actor=payload.actor,
+                )
+            except ProviderAccountNotFoundError as error:
+                raise HTTPException(status_code=404, detail=str(error)) from error
+            return ResourceSyncResponse(
+                project_id=result["project_id"],
+                runs=[ResourceSyncRunSummary(**item) for item in result["runs"]],
+                resources_seen=result["resources_seen"],
+                resources_changed=result["resources_changed"],
+                costs_seen=result["costs_seen"],
+            )
 
 
 @app.get("/v1/costs", response_model=CostEventListResponse)
@@ -23431,27 +23458,28 @@ def deliver_outbox_message(
 ) -> OutboxDeliveryResponse:
     if not payload.reservation_id:
         raise HTTPException(status_code=422, detail="reservation_id is required to deliver")
-    with begin(engine) as connection:
-        try:
-            require_project_actor(
-                connection,
-                payload.project_id,
-                payload.actor,
-                "comms_manage",
-            )
-            result = comms.deliver_outbox_message(
-                connection,
-                payload.project_id,
-                message_id,
-                payload.reservation_id,
-                payload.dedupe_key,
-                payload.created_by_job_id,
-            )
-        except OutboxMessageNotFoundError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
-        except InvalidCreatedByJobError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
-        return OutboxDeliveryResponse(**result)
+    with background():
+        with begin(engine) as connection:
+            try:
+                require_project_actor(
+                    connection,
+                    payload.project_id,
+                    payload.actor,
+                    "comms_manage",
+                )
+                result = comms.deliver_outbox_message(
+                    connection,
+                    payload.project_id,
+                    message_id,
+                    payload.reservation_id,
+                    payload.dedupe_key,
+                    payload.created_by_job_id,
+                )
+            except OutboxMessageNotFoundError as error:
+                raise HTTPException(status_code=404, detail=str(error)) from error
+            except InvalidCreatedByJobError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            return OutboxDeliveryResponse(**result)
 
 
 @app.get("/v1/comms/inbox", response_model=InboxMessageListResponse)
@@ -23669,30 +23697,31 @@ def enqueue_docs_update(payload: DocsUpdateRequest) -> JobSummary:
 def execute_docs_update(payload: DocsUpdateExecuteRequest) -> dict[str, Any]:
     """Worker-only execution boundary for a leased ``docs.update`` job."""
     require_worker_principal()
-    with begin(engine) as connection:
-        actor = (
-            payload.actor if payload.actor != "manual"
-            else current_api_principal.get() or "system"
-        )
-        require_project_actor(connection, payload.project_id, actor, "github_manage")
-        try:
-            return docs_updates.run_update(
-                connection,
-                project_id=payload.project_id,
-                event_id=payload.event_id,
-                event_type=payload.event_type,
-                entity_type=payload.entity_type,
-                entity_id=payload.entity_id,
-                task_id=payload.task_id,
-                data_boundary=payload.data_boundary,
-                created_by_job_id=payload.created_by_job_id,
+    with background():
+        with begin(engine) as connection:
+            actor = (
+                payload.actor if payload.actor != "manual"
+                else current_api_principal.get() or "system"
             )
-        except ValueError as error:
-            return {
-                "status": "failed",
-                "retryable": False,
-                "message": str(error),
-            }
+            require_project_actor(connection, payload.project_id, actor, "github_manage")
+            try:
+                return docs_updates.run_update(
+                    connection,
+                    project_id=payload.project_id,
+                    event_id=payload.event_id,
+                    event_type=payload.event_type,
+                    entity_type=payload.entity_type,
+                    entity_id=payload.entity_id,
+                    task_id=payload.task_id,
+                    data_boundary=payload.data_boundary,
+                    created_by_job_id=payload.created_by_job_id,
+                )
+            except ValueError as error:
+                return {
+                    "status": "failed",
+                    "retryable": False,
+                    "message": str(error),
+                }
 
 
 def _job_effect_permission(kind: str) -> Optional[str]:
@@ -24483,16 +24512,18 @@ async def worker_poll(payload: WorkerPollRequest) -> WorkerPollResponse:
     from boss_engine.services import worker_longpoll
 
     def claim() -> Optional[dict[str, Any]]:
-        with begin(engine) as connection:
-            return jobs.claim_job(
-                connection,
-                payload.worker_id,
-                payload.capabilities,
-                payload.lease_ttl_seconds,
-            )
+        with background():
+            with begin(engine) as connection:
+                return jobs.claim_job(
+                    connection,
+                    payload.worker_id,
+                    payload.capabilities,
+                    payload.lease_ttl_seconds,
+                )
 
-    got = await worker_longpoll.poll(engine, claim=claim, capabilities=payload.capabilities,
-                                     wait_ms=payload.wait_ms)
+    with background():
+        got = await worker_longpoll.poll(engine, claim=claim, capabilities=payload.capabilities,
+                                         wait_ms=payload.wait_ms)
     return WorkerPollResponse(status=got["status"],
                               job=LeasedJob(**got["job"]) if got.get("job") else None,
                               long_poll=bool(got.get("long_poll")),
@@ -24503,12 +24534,13 @@ async def worker_poll(payload: WorkerPollRequest) -> WorkerPollResponse:
 @permit(P.WORKER_LEASE)
 def register_worker(payload: WorkerRegistrationRequest) -> dict[str, Any]:
     require_worker_principal()
-    with begin(engine) as connection:
-        require_project_actor(connection, payload.project_id, payload.actor, "command_submit")
-        try:
-            return worker_registry.register(connection, project_id=payload.project_id, worker_id=payload.worker_id, capabilities=payload.capabilities, metadata=payload.metadata, actor=payload.actor)
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
+    with background():
+        with begin(engine) as connection:
+            require_project_actor(connection, payload.project_id, payload.actor, "command_submit")
+            try:
+                return worker_registry.register(connection, project_id=payload.project_id, worker_id=payload.worker_id, capabilities=payload.capabilities, metadata=payload.metadata, actor=payload.actor)
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @app.get("/v1/workers")
@@ -24523,21 +24555,22 @@ def list_workers(project_id: str) -> dict[str, Any]:
 @permit(P.WORKER_LEASE)
 def worker_heartbeat(payload: WorkerHeartbeatRequest) -> WorkerHeartbeatResponse:
     require_worker_principal()
-    with begin(engine) as connection:
-        try:
-            result = jobs.heartbeat(
-                connection,
-                payload.worker_id,
-                payload.job_id,
-                payload.lease_token,
-                payload.lease_ttl_seconds,
-                handing_back=payload.handing_back,
-            )
-        except LeaseNotFoundError as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        result = dict(result)
-        result["progressing"] = _code_task_job_progressing(connection, payload.job_id)
-        return WorkerHeartbeatResponse(**result)
+    with background():
+        with begin(engine) as connection:
+            try:
+                result = jobs.heartbeat(
+                    connection,
+                    payload.worker_id,
+                    payload.job_id,
+                    payload.lease_token,
+                    payload.lease_ttl_seconds,
+                    handing_back=payload.handing_back,
+                )
+            except LeaseNotFoundError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            result = dict(result)
+            result["progressing"] = _code_task_job_progressing(connection, payload.job_id)
+            return WorkerHeartbeatResponse(**result)
 
 
 def _code_task_job_progressing(connection, job_id: str) -> Optional[bool]:
@@ -24559,38 +24592,40 @@ def _code_task_job_progressing(connection, job_id: str) -> Optional[bool]:
 @permit(P.WORKER_LEASE)
 def worker_complete(payload: WorkerCompleteRequest) -> WorkerCompleteResponse:
     require_worker_principal()
-    with begin(engine) as connection:
-        try:
-            result = jobs.complete(
-                connection,
-                payload.worker_id,
-                payload.job_id,
-                payload.lease_token,
-                payload.result,
-            )
-        except LeaseNotFoundError as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        return WorkerCompleteResponse(**result)
+    with background():
+        with begin(engine) as connection:
+            try:
+                result = jobs.complete(
+                    connection,
+                    payload.worker_id,
+                    payload.job_id,
+                    payload.lease_token,
+                    payload.result,
+                )
+            except LeaseNotFoundError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            return WorkerCompleteResponse(**result)
 
 
 @app.post("/v1/worker/fail", response_model=WorkerFailResponse)
 @permit(P.WORKER_LEASE)
 def worker_fail(payload: WorkerFailRequest) -> WorkerFailResponse:
     require_worker_principal()
-    with begin(engine) as connection:
-        try:
-            result = jobs.fail(
-                connection,
-                payload.worker_id,
-                payload.job_id,
-                payload.lease_token,
-                payload.error,
-                payload.retryable,
-                payload.retry_delay_seconds,
-            )
-        except LeaseNotFoundError as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        return WorkerFailResponse(**result)
+    with background():
+        with begin(engine) as connection:
+            try:
+                result = jobs.fail(
+                    connection,
+                    payload.worker_id,
+                    payload.job_id,
+                    payload.lease_token,
+                    payload.error,
+                    payload.retryable,
+                    payload.retry_delay_seconds,
+                )
+            except LeaseNotFoundError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            return WorkerFailResponse(**result)
 
 
 @writing_get(app, "/v1/decisions/inbox", response_model=DecisionInboxResponse)
@@ -24969,22 +25004,23 @@ def settle_decision(
 @app.post("/v1/openai/plans", response_model=OpenAIPlanResponse)
 @permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"))
 def create_openai_plan(payload: OpenAIPlanRequest) -> OpenAIPlanResponse:
-    with begin(engine) as connection:
-        try:
-            result = software_factory.create_plan_artifact(
-                connection,
-                payload.project_id,
-                payload.reservation_id,
-                payload.dedupe_key,
-                payload.prompt,
-                payload.system_prompt,
-                payload.created_by_job_id,
-                payload.agent_module_id,
-                payload.task_id,
-            )
-        except AgentModuleNotFoundError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
-        return OpenAIPlanResponse(**result)
+    with background():
+        with begin(engine) as connection:
+            try:
+                result = software_factory.create_plan_artifact(
+                    connection,
+                    payload.project_id,
+                    payload.reservation_id,
+                    payload.dedupe_key,
+                    payload.prompt,
+                    payload.system_prompt,
+                    payload.created_by_job_id,
+                    payload.agent_module_id,
+                    payload.task_id,
+                )
+            except AgentModuleNotFoundError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+            return OpenAIPlanResponse(**result)
 
 
 @app.post("/v1/software-factory/proposals", response_model=PullRequestProposalResponse)
@@ -24992,28 +25028,29 @@ def create_openai_plan(payload: OpenAIPlanRequest) -> OpenAIPlanResponse:
 def create_pull_request_proposal(
     payload: PullRequestProposalRequest,
 ) -> PullRequestProposalResponse:
-    with begin(engine) as connection:
-        require_project_actor(
-            connection, payload.project_id, current_api_principal.get() or "ceo",
-            "github_manage",
-        )
-        try:
-            result = software_factory.propose_pull_request(
-                connection,
-                payload.project_id,
-                payload.task_id,
-                payload.reservation_id,
-                payload.dedupe_key,
-                payload.title,
-                payload.branch_name,
-                payload.summary,
-                payload.files,
-                payload.created_by_job_id,
-                payload.agent_module_id,
+    with background():
+        with begin(engine) as connection:
+            require_project_actor(
+                connection, payload.project_id, current_api_principal.get() or "ceo",
+                "github_manage",
             )
-        except AgentModuleNotFoundError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
-        return PullRequestProposalResponse(**result)
+            try:
+                result = software_factory.propose_pull_request(
+                    connection,
+                    payload.project_id,
+                    payload.task_id,
+                    payload.reservation_id,
+                    payload.dedupe_key,
+                    payload.title,
+                    payload.branch_name,
+                    payload.summary,
+                    payload.files,
+                    payload.created_by_job_id,
+                    payload.agent_module_id,
+                )
+            except AgentModuleNotFoundError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+            return PullRequestProposalResponse(**result)
 
 
 @app.post(
@@ -25083,27 +25120,28 @@ def propose_ci_config(
 @app.post("/v1/software-factory/merges", response_model=PullRequestMergeResponse)
 @permit(P.GITHUB_MERGE, scope=Scope.project(body="project_id"))
 def merge_pull_request(payload: PullRequestMergeRequest) -> PullRequestMergeResponse:
-    with begin(engine) as connection:
-        require_project_actor(
-            connection, payload.project_id, current_api_principal.get() or "ceo",
-            "github_manage",
-        )
-        try:
-            result = software_factory.merge_pull_request(
-                connection,
-                payload.project_id,
-                None,
-                payload.decision_id,
-                payload.dedupe_key,
-                payload.pull_request_number,
-                payload.pull_request_url,
-                payload.title,
-                payload.branch_name,
-                payload.created_by_job_id,
+    with background():
+        with begin(engine) as connection:
+            require_project_actor(
+                connection, payload.project_id, current_api_principal.get() or "ceo",
+                "github_manage",
             )
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
-        return PullRequestMergeResponse(**result)
+            try:
+                result = software_factory.merge_pull_request(
+                    connection,
+                    payload.project_id,
+                    None,
+                    payload.decision_id,
+                    payload.dedupe_key,
+                    payload.pull_request_number,
+                    payload.pull_request_url,
+                    payload.title,
+                    payload.branch_name,
+                    payload.created_by_job_id,
+                )
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+            return PullRequestMergeResponse(**result)
 
 
 @app.post(
@@ -25115,28 +25153,29 @@ def merge_pull_request(payload: PullRequestMergeRequest) -> PullRequestMergeResp
 def create_sandbox_deployment(
     payload: SandboxDeploymentRequest,
 ) -> SandboxDeploymentResponse:
-    with begin(engine) as connection:
-        require_project_actor(
-            connection, payload.project_id, current_api_principal.get() or "ceo",
-            "github_manage",
-        )
-        try:
-            result = software_factory.create_deployment(
-                connection,
-                payload.project_id,
-                None,
-                payload.decision_id,
-                payload.dedupe_key,
-                payload.merged_sha,
-                payload.pull_request_url,
-                payload.title,
-                payload.branch_name,
-                payload.environment,
-                payload.created_by_job_id,
+    with background():
+        with begin(engine) as connection:
+            require_project_actor(
+                connection, payload.project_id, current_api_principal.get() or "ceo",
+                "github_manage",
             )
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
-        return SandboxDeploymentResponse(**result)
+            try:
+                result = software_factory.create_deployment(
+                    connection,
+                    payload.project_id,
+                    None,
+                    payload.decision_id,
+                    payload.dedupe_key,
+                    payload.merged_sha,
+                    payload.pull_request_url,
+                    payload.title,
+                    payload.branch_name,
+                    payload.environment,
+                    payload.created_by_job_id,
+                )
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+            return SandboxDeploymentResponse(**result)
 
 
 @app.get(
@@ -25194,30 +25233,31 @@ def request_infra_provision_review(
 @app.post("/v1/infra/droplets", response_model=InfraProvisionResponse)
 @permit(P.INFRA_PROVISION, scope=Scope.project(body="project_id"))
 def create_infra_droplet(payload: InfraProvisionRequest) -> InfraProvisionResponse:
-    with begin(engine) as connection:
-        require_project_actor(
-            connection, payload.project_id, current_api_principal.get() or "ceo",
-            "infra_provision",
-        )
-        try:
-            result = infrastructure.create_droplet(
-                connection,
-                project_id=payload.project_id,
-                task_id=payload.task_id,
-                decision_id=payload.decision_id,
-                reservation_id=payload.reservation_id,
-                dedupe_key=payload.dedupe_key,
-                title=payload.title,
-                region=payload.region,
-                size=payload.size,
-                ttl_minutes=payload.ttl_minutes,
-                tags=payload.tags,
-                created_by_job_id=payload.created_by_job_id,
-                data_boundary=payload.data_boundary,
+    with background():
+        with begin(engine) as connection:
+            require_project_actor(
+                connection, payload.project_id, current_api_principal.get() or "ceo",
+                "infra_provision",
             )
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
-        return InfraProvisionResponse(**result)
+            try:
+                result = infrastructure.create_droplet(
+                    connection,
+                    project_id=payload.project_id,
+                    task_id=payload.task_id,
+                    decision_id=payload.decision_id,
+                    reservation_id=payload.reservation_id,
+                    dedupe_key=payload.dedupe_key,
+                    title=payload.title,
+                    region=payload.region,
+                    size=payload.size,
+                    ttl_minutes=payload.ttl_minutes,
+                    tags=payload.tags,
+                    created_by_job_id=payload.created_by_job_id,
+                    data_boundary=payload.data_boundary,
+                )
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+            return InfraProvisionResponse(**result)
 
 
 @app.post("/v1/infra/droplets/queue", response_model=JobSummary, status_code=201)
@@ -25275,27 +25315,28 @@ def list_infra_resources(
 def terminate_infra_resource(
     resource_id: str, payload: InfraTerminationRequest
 ) -> InfraTerminationResponse:
-    with begin(engine) as connection:
-        try:
-            require_project_actor(
-                connection,
-                payload.project_id,
-                payload.actor,
-                "infra_provision",
-            )
-            result = infrastructure.terminate_droplet(
-                connection,
-                project_id=payload.project_id,
-                resource_id=resource_id,
-                dedupe_key=payload.dedupe_key,
-                reason=payload.reason,
-                created_by_job_id=payload.created_by_job_id,
-            )
-        except InfraResourceNotFoundError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
-        return InfraTerminationResponse(**result)
+    with background():
+        with begin(engine) as connection:
+            try:
+                require_project_actor(
+                    connection,
+                    payload.project_id,
+                    payload.actor,
+                    "infra_provision",
+                )
+                result = infrastructure.terminate_droplet(
+                    connection,
+                    project_id=payload.project_id,
+                    resource_id=resource_id,
+                    dedupe_key=payload.dedupe_key,
+                    reason=payload.reason,
+                    created_by_job_id=payload.created_by_job_id,
+                )
+            except InfraResourceNotFoundError as error:
+                raise HTTPException(status_code=404, detail=str(error)) from error
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+            return InfraTerminationResponse(**result)
 
 
 @app.post(
@@ -26215,9 +26256,10 @@ def tick_workflow_schedules(payload: open_bodies.WorkflowSchedulesTickBody) -> d
     # The worker may share a principal-bound API key with an operator in a local install.
     # Use that authenticated identity for authorization rather than trusting a claimed actor.
     actor = current_api_principal.get() or str(payload.get("actor") or "system").strip()
-    with begin(engine) as connection:
-        require_project_actor(connection, project_id, actor, "workflow_execute")
-        started = schedules.run_due(connection, project_id=project_id)
+    with background():
+        with begin(engine) as connection:
+            require_project_actor(connection, project_id, actor, "workflow_execute")
+            started = schedules.run_due(connection, project_id=project_id)
     return {"started": started, "count": len(started)}
 
 
@@ -28823,8 +28865,6 @@ def run_delivery_capabilities(payload: open_bodies.DeliveryCapabilitiesRunBody) 
     # BACKGROUND WORK (boss_engine.db.background, BOSSAPP-1456): every transaction the tick and
     # its sweeps open waits a bounded time for a lock, is ended when it idles past the background
     # limit, and appends its audit events at its commit — so no tick can hold up a sign-in.
-    from boss_engine.db import background
-
     with background():
         return _advance_delivery_capabilities(ctx, project_id, worker_id)
 
@@ -29884,129 +29924,130 @@ def execute_work_tracker_sync(
 ) -> dict[str, Any]:
     """Execute a tracker write only inside a fenced, receipt-producing job."""
     require_worker_principal()
-    with begin(engine) as connection:
-        try:
-            leased_job = jobs.require_active_lease(
-                connection,
-                payload.worker_id,
-                payload.created_by_job_id,
-                payload.lease_token,
-            )
-            if (
-                leased_job["project_id"] != payload.project_id
-                or leased_job["kind"] != "work_tracker.issue.sync"
-                or (leased_job["payload"] or {}).get("binding_id")
-                != payload.binding_id
-            ):
-                raise ValueError(
-                    "Active lease does not authorize this work-tracker sync."
+    with background():
+        with begin(engine) as connection:
+            try:
+                leased_job = jobs.require_active_lease(
+                    connection,
+                    payload.worker_id,
+                    payload.created_by_job_id,
+                    payload.lease_token,
                 )
-            context = work_orchestration.tracker_sync_context(
-                connection,
-                project_id=payload.project_id,
-                binding_id=payload.binding_id,
-            )
-            provider_key = context["provider"]["provider_key"]
-            tenant = connection.execute(
-                text(
-                    """
-                    SELECT w.org_id, p.workspace_id
-                    FROM projects p
-                    JOIN workspaces w ON w.id=p.workspace_id
-                    WHERE p.id=:project_id
-                    """
-                ),
-                {"project_id": payload.project_id},
-            ).mappings().one()
-            effect_payload = {
-                "binding_id": payload.binding_id,
-                "provider": provider_key,
-                "title": context["work_item"]["title"],
-                "description_html": context["description_html"],
-            }
-            receipt, created = receipts.create_or_reuse(
-                connection,
-                tenant["org_id"],
-                tenant["workspace_id"],
-                payload.project_id,
-                f"work-tracker-sync:{provider_key}:{payload.binding_id}",
-                f"{provider_key}.issue.ensure",
-                {
-                    "binding_id": payload.binding_id,
-                    "work_item_id": context["work_item"]["id"],
-                    "provider": provider_key,
-                },
-                effect_payload,
-                created_by_job_id=payload.created_by_job_id,
-                data_boundary=leased_job["data_boundary"],
-            )
-            if not created and receipt["status"] == "succeeded":
-                return {
-                    "status": "succeeded",
-                    "receipt_id": receipt["id"],
-                    "binding": context["binding"],
-                    "reused": True,
-                }
-            # Multi-provider create via work_tracker_adapters (Plane default).
-            created_issue = work_orchestration.execute_tracker_issue_create(
-                connection,
-                project_id=payload.project_id,
-                binding_id=payload.binding_id,
-            )
-            if not created_issue.get("ok"):
-                failure_reason = str(
-                    created_issue.get("reason") or f"{provider_key}_issue_create_failed"
-                )
-                error = {
-                    "reason": failure_reason,
-                    "provider": provider_key,
-                }
-                receipts.mark_failed(connection, receipt["id"], error)
-                work_orchestration.mark_tracker_sync_failed(
+                if (
+                    leased_job["project_id"] != payload.project_id
+                    or leased_job["kind"] != "work_tracker.issue.sync"
+                    or (leased_job["payload"] or {}).get("binding_id")
+                    != payload.binding_id
+                ):
+                    raise ValueError(
+                        "Active lease does not authorize this work-tracker sync."
+                    )
+                context = work_orchestration.tracker_sync_context(
                     connection,
                     project_id=payload.project_id,
                     binding_id=payload.binding_id,
-                    error=error,
+                )
+                provider_key = context["provider"]["provider_key"]
+                tenant = connection.execute(
+                    text(
+                        """
+                        SELECT w.org_id, p.workspace_id
+                        FROM projects p
+                        JOIN workspaces w ON w.id=p.workspace_id
+                        WHERE p.id=:project_id
+                        """
+                    ),
+                    {"project_id": payload.project_id},
+                ).mappings().one()
+                effect_payload = {
+                    "binding_id": payload.binding_id,
+                    "provider": provider_key,
+                    "title": context["work_item"]["title"],
+                    "description_html": context["description_html"],
+                }
+                receipt, created = receipts.create_or_reuse(
+                    connection,
+                    tenant["org_id"],
+                    tenant["workspace_id"],
+                    payload.project_id,
+                    f"work-tracker-sync:{provider_key}:{payload.binding_id}",
+                    f"{provider_key}.issue.ensure",
+                    {
+                        "binding_id": payload.binding_id,
+                        "work_item_id": context["work_item"]["id"],
+                        "provider": provider_key,
+                    },
+                    effect_payload,
+                    created_by_job_id=payload.created_by_job_id,
+                    data_boundary=leased_job["data_boundary"],
+                )
+                if not created and receipt["status"] == "succeeded":
+                    return {
+                        "status": "succeeded",
+                        "receipt_id": receipt["id"],
+                        "binding": context["binding"],
+                        "reused": True,
+                    }
+                # Multi-provider create via work_tracker_adapters (Plane default).
+                created_issue = work_orchestration.execute_tracker_issue_create(
+                    connection,
+                    project_id=payload.project_id,
+                    binding_id=payload.binding_id,
+                )
+                if not created_issue.get("ok"):
+                    failure_reason = str(
+                        created_issue.get("reason") or f"{provider_key}_issue_create_failed"
+                    )
+                    error = {
+                        "reason": failure_reason,
+                        "provider": provider_key,
+                    }
+                    receipts.mark_failed(connection, receipt["id"], error)
+                    work_orchestration.mark_tracker_sync_failed(
+                        connection,
+                        project_id=payload.project_id,
+                        binding_id=payload.binding_id,
+                        error=error,
+                        actor=payload.worker_id,
+                    )
+                    return {
+                        "status": "failed",
+                        "receipt_id": receipt["id"],
+                        "reason": failure_reason,
+                    }
+                external_issue_id = str(created_issue["external_issue_id"])
+                external_key = created_issue.get("external_key")
+                binding = work_orchestration.mark_tracker_synced(
+                    connection,
+                    project_id=payload.project_id,
+                    binding_id=payload.binding_id,
+                    external_issue_id=external_issue_id,
+                    external_key=external_key,
+                    external_url=created_issue.get("external_url"),
+                    external_state=str(created_issue.get("external_state") or "open"),
                     actor=payload.worker_id,
                 )
-                return {
-                    "status": "failed",
-                    "receipt_id": receipt["id"],
-                    "reason": failure_reason,
+                result = {
+                    "binding_id": payload.binding_id,
+                    "external_issue_id": external_issue_id,
+                    "external_key": external_key,
+                    "external_url": binding.get("external_url"),
+                    "provider": provider_key,
                 }
-            external_issue_id = str(created_issue["external_issue_id"])
-            external_key = created_issue.get("external_key")
-            binding = work_orchestration.mark_tracker_synced(
-                connection,
-                project_id=payload.project_id,
-                binding_id=payload.binding_id,
-                external_issue_id=external_issue_id,
-                external_key=external_key,
-                external_url=created_issue.get("external_url"),
-                external_state=str(created_issue.get("external_state") or "open"),
-                actor=payload.worker_id,
-            )
-            result = {
-                "binding_id": payload.binding_id,
-                "external_issue_id": external_issue_id,
-                "external_key": external_key,
-                "external_url": binding.get("external_url"),
-                "provider": provider_key,
-            }
-            receipts.mark_succeeded(
-                connection,
-                receipt["id"],
-                external_issue_id,
-                result,
-            )
-            return {
-                "status": "succeeded",
-                "receipt_id": receipt["id"],
-                "binding": binding,
-                "reused": False,
-            }
-        except (LeaseNotFoundError, ValueError) as error:
-            _raise_work_orchestration_error(error)
+                receipts.mark_succeeded(
+                    connection,
+                    receipt["id"],
+                    external_issue_id,
+                    result,
+                )
+                return {
+                    "status": "succeeded",
+                    "receipt_id": receipt["id"],
+                    "binding": binding,
+                    "reused": False,
+                }
+            except (LeaseNotFoundError, ValueError) as error:
+                _raise_work_orchestration_error(error)
 
 
 @app.post("/v1/work-orchestration/bot-identities")
@@ -30676,30 +30717,31 @@ def dispatch_a2a_message(
     message_id: str, payload: A2ADispatchRequest
 ) -> dict[str, Any]:
     require_worker_principal()
-    with begin(engine) as connection:
-        try:
-            job = jobs.require_active_lease(
-                connection,
-                payload.worker_id,
-                payload.created_by_job_id,
-                payload.lease_token,
-            )
-            if (
-                job["kind"] != "a2a.dispatch"
-                or (job["payload"] or {}).get("message_id") != message_id
-            ):
-                raise A2AStateError(
-                    "Active lease does not authorize this A2A message."
+    with background():
+        with begin(engine) as connection:
+            try:
+                job = jobs.require_active_lease(
+                    connection,
+                    payload.worker_id,
+                    payload.created_by_job_id,
+                    payload.lease_token,
                 )
-            return a2a.dispatch(
-                connection,
-                project_id=payload.project_id,
-                message_id=message_id,
-                created_by_job_id=payload.created_by_job_id,
-                actor=payload.worker_id,
-            )
-        except Exception as error:  # noqa: BLE001
-            _raise_agent_studio_error(error)
+                if (
+                    job["kind"] != "a2a.dispatch"
+                    or (job["payload"] or {}).get("message_id") != message_id
+                ):
+                    raise A2AStateError(
+                        "Active lease does not authorize this A2A message."
+                    )
+                return a2a.dispatch(
+                    connection,
+                    project_id=payload.project_id,
+                    message_id=message_id,
+                    created_by_job_id=payload.created_by_job_id,
+                    actor=payload.worker_id,
+                )
+            except Exception as error:  # noqa: BLE001
+                _raise_agent_studio_error(error)
 
 
 @app.post("/v1/a2a/poll")
@@ -32451,7 +32493,8 @@ def code_task_review_pr_again_run_endpoint(run_id: str, payload: dict) -> dict:
     require_worker_principal()
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
-    return pr_review_again.execute(engine, get_settings(), {**(payload or {}), "run_id": run_id})
+    with background():
+        return pr_review_again.execute(engine, get_settings(), {**(payload or {}), "run_id": run_id})
 
 
 class CodeTaskCancelBody(BaseModel):

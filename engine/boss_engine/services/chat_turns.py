@@ -112,7 +112,7 @@ def committing_between_calls(engine: Any, turn_id: str) -> Iterator[Any]:
             except Exception:  # noqa: BLE001 — the next beat tries again
                 LOGGER.info("chat turn %s: heartbeat skipped", turn_id, exc_info=True)
 
-    threading.Thread(target=beat, daemon=True, name=f"chat-turn-beat-{turn_id}").start()
+    _db.spawn_thread(beat, daemon=True, name=f"chat-turn-beat-{turn_id}")
     with engine.connect() as connection:
         def hook() -> None:
             # Only on the turn's own thread: a tool fanned out to a worker thread (with this

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import contextvars
 import re
+import threading
 import weakref
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Optional
+from typing import Any, Callable, Iterable, Optional
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
@@ -931,6 +933,56 @@ def background():
 
 def in_background() -> bool:
     return _BACKGROUND.get()
+
+
+def _run_in_child_context(ctx: contextvars.Context, fn: Callable[..., Any],
+                          args: tuple[Any, ...], kwargs: dict[str, Any],
+                          *, as_background: bool) -> Any:
+    def _call() -> Any:
+        # Never leak parent open Connection objects into a child thread (`local_repo_host` runs
+        # SQL against `open_transactions()`).
+        _OPEN_TRANSACTIONS.set(())
+        if as_background:
+            with background():
+                return fn(*args, **kwargs)
+        return fn(*args, **kwargs)
+
+    return ctx.run(_call)
+
+
+def spawn_thread(target: Callable[..., Any], args: tuple[Any, ...] = (),
+                 kwargs: Optional[dict[str, Any]] = None, *, name: Optional[str] = None,
+                 daemon: bool = True, as_background: bool = False,
+                 start: bool = True, ctx: Optional[contextvars.Context] = None) -> threading.Thread:
+    """Start a Thread that inherits the caller's ContextVars (including `db.background()`)
+    without leaking the caller's open DB connections."""
+    captured = ctx if ctx is not None else contextvars.copy_context()
+    thread = threading.Thread(
+        target=_run_in_child_context,
+        args=(captured, target, args, dict(kwargs or {})),
+        kwargs={"as_background": as_background},
+        name=name,
+        daemon=daemon,
+    )
+    if start:
+        thread.start()
+    return thread
+
+
+def submit_in_context(pool: Any, fn: Callable[..., Any], *args: Any,
+                      as_background: bool = False, **kwargs: Any) -> Any:
+    """Submit `fn(*args, **kwargs)` to a ThreadPoolExecutor with a fresh copy of the caller's
+    ContextVars per task and `_OPEN_TRANSACTIONS` reset in the worker thread."""
+    captured = contextvars.copy_context()
+    return pool.submit(_run_in_child_context, captured, fn, args, kwargs,
+                       as_background=as_background)
+
+
+def map_in_context(pool: Any, fn: Callable[..., Any], items: Iterable[Any], *,
+                   as_background: bool = False) -> list[Any]:
+    """`pool.map(fn, items)` with a fresh Context copy per item."""
+    futures = [submit_in_context(pool, fn, item, as_background=as_background) for item in items]
+    return [future.result() for future in futures]
 
 
 def _idle_seconds() -> int:

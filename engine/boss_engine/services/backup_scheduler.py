@@ -348,22 +348,22 @@ def prune(engine: Any, settings: Any = None, *,
     """Apply the tiers to verified backups: remove the rest (file + object), mark them pruned.
     Then the cap (BOSSAPP-1459): past the count or the size the oldest go — at once when a
     `backups` rule is approved, else through one storage decision (`ask_over_cap`)."""
-    settings = _settings(settings)
-    with engine.begin() as c:
-        rows = [dict(r) for r in c.execute(text(
-            "SELECT id, path, object_key, started_at, bytes FROM backups WHERE status = 'verified'"
-        )).mappings()]
-    keep = retention_keep(rows, Policy.from_settings(settings))
-    pruned: list[str] = []
-    for row in rows:
-        if str(row["id"]) in keep:
-            continue
-        if _remove(engine, row, remover):
-            pruned.append(str(row["id"]))
-    kept = [r for r in rows if str(r["id"]) in keep]
     from ..db import background
 
+    settings = _settings(settings)
     with background():
+        with engine.begin() as c:
+            rows = [dict(r) for r in c.execute(text(
+                "SELECT id, path, object_key, started_at, bytes FROM backups WHERE status = 'verified'"
+            )).mappings()]
+        keep = retention_keep(rows, Policy.from_settings(settings))
+        pruned: list[str] = []
+        for row in rows:
+            if str(row["id"]) in keep:
+                continue
+            if _remove(engine, row, remover):
+                pruned.append(str(row["id"]))
+        kept = [r for r in rows if str(r["id"]) in keep]
         with engine.begin() as c:
             max_count, cap_gb, approved = cap_policy(c, settings)
         over = over_cap(kept, max_count=max_count, cap_gb=cap_gb)
@@ -374,7 +374,7 @@ def prune(engine: Any, settings: Any = None, *,
         elif over:
             ask_over_cap(engine, over, max_count=max_count, cap_gb=cap_gb,
                          kept_n=len(kept) - len(over))
-    return pruned
+        return pruned
 
 
 # ------------------------------------------------------------------------------------------ #
@@ -602,22 +602,25 @@ def tick(engine: Any, settings: Any = None, *, now: Optional[datetime] = None,
          holder: str = HOLDER, runner: Runner = subprocess.run,
          uploader: Optional[Callable[[Path, str], None]] = None,
          remover: Optional[Callable[[str], None]] = None) -> dict[str, Any]:
+    from ..db import background
+
     settings = _settings(settings)
     now = now or datetime.now(timezone.utc)
     if not getattr(settings, "backup_schedule_enabled", False):
         return {"ran": False, "reason": "disabled"}
-    with engine.begin() as c:
-        if not acquire_lease(c, holder, now):
-            return {"ran": False, "reason": "another process holds the lease"}
-        mark_interrupted(c, now)
-        due = is_due(c, settings, now)
-    if not due:
-        return {"ran": False, "reason": "not due"}
-    row = run_backup(engine, settings, now=now, runner=runner,
-                     uploader=uploader if uploader is not None else s3_uploader(settings))
-    pruned = prune(engine, settings,
-                   remover=remover if remover is not None else s3_remover(settings))
-    return {"ran": True, "backup": row, "pruned": pruned}
+    with background():
+        with engine.begin() as c:
+            if not acquire_lease(c, holder, now):
+                return {"ran": False, "reason": "another process holds the lease"}
+            mark_interrupted(c, now)
+            due = is_due(c, settings, now)
+        if not due:
+            return {"ran": False, "reason": "not due"}
+        row = run_backup(engine, settings, now=now, runner=runner,
+                         uploader=uploader if uploader is not None else s3_uploader(settings))
+        pruned = prune(engine, settings,
+                       remover=remover if remover is not None else s3_remover(settings))
+        return {"ran": True, "backup": row, "pruned": pruned}
 
 
 _THREAD: Optional[threading.Thread] = None

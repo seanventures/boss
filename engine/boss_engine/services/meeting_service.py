@@ -27,7 +27,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ..config import Settings
-from ..db import begin
+from ..db import begin, map_in_context
 from .jobs import JOB_PRIORITY_INTERACTIVE
 from .core import stable_dedupe_key, create_artifact, create_blocking_decision, emit_event, make_id
 from .mcp_registry import (
@@ -559,7 +559,7 @@ def _ask_panel(adapter, personas: list[dict], make_prompt, seats: Optional[dict]
         return p["title"], txt
 
     with ThreadPoolExecutor(max_workers=max(1, len(personas))) as pool:
-        for title, txt in pool.map(one, personas):
+        for title, txt in map_in_context(pool, one, personas):
             out[title] = txt
     return out, cost, model
 
