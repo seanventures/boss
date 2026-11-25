@@ -117,6 +117,9 @@ from .streaming_model_gateway import (  # noqa: E402
 _SUB_MODEL_ID = r"[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}"
 #: The Claude subscription (long-lived token or CLI login): the Anthropic API with an OAuth
 #: bearer. The CLI adds its own `anthropic-beta: oauth-…` header; the proxy only swaps the bearer.
+#: Like ANTHROPIC, it follows an ANTHROPIC_BASE_URL set in the INSTALL's environment (an
+#: operator's corporate gateway): that gateway then receives the subscription token, exactly as
+#: the CLI sent it there before the proxy existed. Unset, it is api.anthropic.com.
 CLAUDE_SUBSCRIPTION = ProviderAdapter(
     name="claude_subscription", upstream=ANTHROPIC.upstream, paths=ANTHROPIC.paths,
     header="authorization", header_format="Bearer {}",
@@ -387,6 +390,19 @@ def _refusal(provider: str, status: int, reason: str) -> bytes:
         "type": kind, "message": f"boss model proxy: {_say(reason)}"}}).encode()
 
 
+_SUBSCRIPTION_NAMES = {"claude_subscription": "Claude Code", "codex_subscription": "Codex",
+                       "grok_subscription": "Grok Build"}
+
+
+def _subscription_refused(provider: str) -> bytes:
+    name = _SUBSCRIPTION_NAMES.get(provider, "subscription")
+    return json.dumps({"type": "error", "error": {
+        "type": "authentication_error", "code": "subscription_login_refused",
+        "message": (f"boss model proxy: the {name} subscription login was refused by the "
+                    "provider (expired, revoked, or mid-refresh). BOSS refreshes it on its own; "
+                    f"if this repeats, sign {name} in again in Setup > Models.")}}).encode()
+
+
 def _say(reason: str) -> str:
     from .lapsed import say
 
@@ -451,6 +467,13 @@ def _handler_for(proxy: ModelProxy):
             try:
                 with proxy.upstream(self.command, url, out_headers, body) as (code, resp_headers,
                                                                                chunks):
+                    if int(code) == 401 and grant.provider in SUBSCRIPTION_ADAPTERS:
+                        # The LOGIN was refused, not the run token. Say so in BOSS's words: the
+                        # CLI's own reaction (Codex tries its dummy refresh token) would
+                        # otherwise be the error a person reads.
+                        log.warning("model proxy: the %s login was refused upstream (401)",
+                                    grant.provider)
+                        return self._send(401, _subscription_refused(grant.provider))
                     reader = _UsageReader(str({k.lower(): v for k, v in resp_headers.items()}
                                               .get("content-type", "")))
                     self.send_response(int(code))

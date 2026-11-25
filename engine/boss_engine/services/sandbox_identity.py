@@ -556,12 +556,14 @@ def _seed_cli_logins(ident: SandboxIdentity) -> None:
             if os.path.isfile(path):
                 shutil.copyfile(path, dst / name)
                 os.chmod(dst / name, 0o644)
-    # Codex's state home (its sessions, so `codex exec resume` finds a thread across sessions):
-    # created empty; each session links to it from its own home (subscription_shield.codex).
-    codex = ident.home / ".codex"
-    codex.mkdir(exist_ok=True)
-    with contextlib.suppress(OSError):
-        os.chmod(codex, 0o2777)
+    # The CLIs' state homes (Codex's sessions, so `codex exec resume` finds a thread across
+    # sessions), made HERE, before any agent code runs, and never chmod-ed or created again: a
+    # session links to them by name from its own home (subscription_shield._session_home), after
+    # checking they are still real directories BOSS owns — never following what a run planted.
+    for path in (ident.home / ".codex", ident.home / ".codex" / "sessions", ident.home / ".grok"):
+        path.mkdir(exist_ok=True)
+        with contextlib.suppress(OSError):
+            os.chmod(path, 0o2777)
     _refresh_logins_ahead(ident)
 
 

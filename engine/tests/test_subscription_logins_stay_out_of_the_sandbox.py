@@ -348,3 +348,100 @@ def test_every_engine_is_shielded_the_same_way(upstream, control_plane):
     assert env["CLAUDE_CODE_OAUTH_TOKEN"].startswith(mp.TOKEN_PREFIX)
     assert "CODEX_ACCESS_TOKEN" not in env
     assert mp.holds_subscription_login(env) == []
+
+
+# ── what a run plants in its own HOME between sessions (security review of #338) ──────────────
+
+def _secret_dir(tmp_path: Path) -> Path:
+    """Something only the control plane may touch: 0700, a TOML with a secret in it."""
+    secret = tmp_path / "control-plane-private"
+    secret.mkdir(mode=0o700)
+    (secret / "config.toml").write_text('token = "PLANTED_SECRET_VALUE"\n')
+    os.chmod(secret, 0o700)
+    return secret
+
+
+def _start_within(seconds: float, fn):
+    import threading
+
+    out: dict = {}
+    t = threading.Thread(target=lambda: out.setdefault("v", fn()), daemon=True)
+    t.start()
+    t.join(seconds)
+    assert not t.is_alive(), "a session start hung on something the run planted"
+    return out["v"]
+
+
+@pytest.mark.parametrize("engine", ["codex", "grok"])
+def test_a_state_home_swapped_for_a_link_is_never_followed(engine, upstream, sandbox, tmp_path):
+    import stat as _stat
+
+    secret = _secret_dir(tmp_path)
+    state = sandbox.home / f".{engine}"
+    import shutil as _shutil
+
+    _shutil.rmtree(state)
+    state.symlink_to(secret)                       # the agent, between two sessions
+    env = _start_within(10, lambda: sandbox.env(
+        GenericCliCodeAgent(_settings(), BUILTIN_CLI_HARNESSES[engine])._env()))
+    assert _stat.S_IMODE(secret.stat().st_mode) == 0o700          # never chmod-ed
+    home = Path(env[f"{engine.upper()}_HOME"])
+    for entry in home.iterdir():                                   # nothing linked to it
+        assert not (entry.is_symlink() and str(secret) in os.path.realpath(entry))
+        if entry.is_file() and not entry.is_symlink():
+            assert "PLANTED_SECRET_VALUE" not in entry.read_text()
+
+
+def test_a_planted_fifo_or_link_inside_the_state_home_is_not_read_or_chmod_ed(upstream, sandbox,
+                                                                            tmp_path):
+    import stat as _stat
+
+    secret = _secret_dir(tmp_path)
+    state = sandbox.home / ".codex"
+    os.mkfifo(state / "config.toml")              # would block an open()
+    (state / "sessions").rmdir()
+    (state / "sessions").symlink_to(secret)       # would be chmod-ed 2777 by a re-create
+    (state / "auth.json").symlink_to(secret / "config.toml")
+    env = _start_within(10, lambda: sandbox.env(_codex_env(_settings())))
+    assert _stat.S_IMODE(secret.stat().st_mode) == 0o700
+    home = Path(env["CODEX_HOME"])
+    config = home / "config.toml"
+    assert not config.is_symlink() and "PLANTED_SECRET_VALUE" not in config.read_text()
+    assert "boss_chatgpt" in config.read_text()
+    login = home / "auth.json"
+    assert not login.is_symlink()
+    assert json.loads(login.read_text())["tokens"]["access_token"].startswith(mp.TOKEN_PREFIX)
+
+
+def test_a_refused_login_answers_in_boss_words(upstream, control_plane):
+    stub, proxy = upstream
+
+    @contextlib.contextmanager
+    def refused(method, url, headers, body):
+        stub.calls.append({"url": url})
+        yield 401, {"content-type": "application/json"}, iter([b'{"error":"expired"}'])
+
+    proxy.upstream = refused
+    issued = proxy.issue("codex_subscription", CODEX_ACCESS, ttl=60)
+    conn = http.client.HTTPConnection(proxy.host, proxy.port, timeout=10)
+    conn.request("POST", "/codex_subscription/responses", body=b"{}",
+                 headers={"authorization": f"Bearer {issued.token}"})
+    resp = conn.getresponse()
+    body = json.loads(resp.read())
+    conn.close()
+    assert resp.status == 401 and body["error"]["code"] == "subscription_login_refused"
+    assert "Codex" in body["error"]["message"] and "Setup" in body["error"]["message"]
+
+
+def test_stale_session_homes_are_swept(monkeypatch, tmp_path):
+    monkeypatch.setattr(subscription_shield.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(subscription_shield, "_SWEPT", False)
+    old, fresh = tmp_path / "codex-session-old", tmp_path / "grok-session-new"
+    other = tmp_path / "unrelated-old"
+    for p in (old, fresh, other):
+        p.mkdir()
+    long_ago = time.time() - subscription_shield._STALE_SECONDS - 60
+    os.utime(old, (long_ago, long_ago))
+    os.utime(other, (long_ago, long_ago))
+    subscription_shield._sweep_stale_session_homes()
+    assert not old.exists() and fresh.exists() and other.exists()

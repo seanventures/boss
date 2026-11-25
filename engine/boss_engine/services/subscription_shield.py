@@ -37,6 +37,7 @@ import logging
 import os
 import shlex
 import shutil
+import stat
 import tempfile
 import time
 from datetime import datetime, timezone
@@ -94,45 +95,96 @@ def _is_login_file(name: str) -> bool:
     return any(name == f or name.startswith(f + ".") for f in _LOGIN_FILES)
 
 
+#: A session home older than this is a dead session's (its token expired long ago): swept.
+_STALE_SECONDS = 2 * (model_proxy.MIN_TTL_SECONDS + model_proxy.TTL_GRACE_SECONDS)
+_SESSION_PREFIXES = ("codex-session-", "grok-session-")
+_SWEPT = False
+
+
+def _sweep_stale_session_homes() -> None:
+    """Once per process: remove control-plane session homes a killed process left behind (a
+    sandbox's die with its run directory). Never follows a link; never fails a session."""
+    global _SWEPT
+    if _SWEPT:
+        return
+    _SWEPT = True
+    root = tempfile.gettempdir()
+    cutoff = time.time() - _STALE_SECONDS
+    try:
+        names = os.listdir(root)
+    except OSError:
+        return
+    for name in names:
+        if not name.startswith(_SESSION_PREFIXES):
+            continue
+        path = os.path.join(root, name)
+        with contextlib.suppress(OSError):
+            st = os.lstat(path)
+            if (stat.S_ISDIR(st.st_mode) and st.st_uid == os.geteuid()
+                    and st.st_mtime < cutoff):
+                shutil.rmtree(path, ignore_errors=True)
+
+
+def _run_dir_of(sandbox: Any) -> Path:
+    return Path(getattr(sandbox, "run_dir", None) or Path(sandbox.home).parent)
+
+
+def _trusted_dir(path: str, sandbox: Any) -> bool:
+    """Is `path` (in a tree the run's uid writes) a REAL directory BOSS owns, inside the run?
+    Checked with lstat and never followed: an agent can plant a link or a FIFO in its own HOME
+    between sessions, and BOSS acting on it as boss would act on the link's target."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid():
+        return False
+    run = os.path.realpath(str(_run_dir_of(sandbox)))
+    real = os.path.realpath(path)
+    return real == os.path.abspath(path) and (real + os.sep).startswith(run + os.sep)
+
+
 def _session_home(prefix: str, state_home: str, sandbox: Any, *,
-                  keep_dirs: tuple[str, ...] = (), skip: tuple[str, ...] = ()) -> str:
-    """A fresh home for one session: links to every entry of `state_home` (the CLI's own state)
-    except login files and `skip`, and nothing else. In a sandbox it lives in the run's HOME,
-    writable by the run's uid; otherwise in the control plane's temp dir, 0700. Removed when the
-    session ends (model_proxy.on_session_end); a sandbox's is also removed with its run."""
+                  skip: tuple[str, ...] = (),
+                  files: Optional[dict[str, str]] = None) -> str:
+    """A fresh home for one session: `files` (written here, by name), and links to every entry
+    of `state_home` (the CLI's own state) except login files, `skip` and `files`.
+
+    In a sandbox the session home lives in the run's HOME. NOTHING in the run's tree is chmod-ed,
+    created, opened or read here: those dirs were made at acquire, before any agent code ran
+    (sandbox_identity._seed_cli_logins), and an agent may since have planted links or FIFOs. So
+    `state_home` is used only if it is still a real directory BOSS owns inside the run (lstat),
+    and its entries are linked BY NAME, never followed. The session home is made 0700, filled,
+    and only then opened to the run's uid (2777), so nothing can be planted in it first.
+    Removed when the session ends (model_proxy.on_session_end); a sandbox's also with its run."""
+    files = files or {}
     if sandbox is not None:
-        os.makedirs(state_home, exist_ok=True)
-        with contextlib.suppress(OSError):
-            os.chmod(state_home, 0o2777)
         home = tempfile.mkdtemp(prefix=prefix, dir=str(sandbox.home))
-        os.chmod(home, 0o2777)
+        use_state = _trusted_dir(state_home, sandbox)
     else:
+        _sweep_stale_session_homes()
         home = tempfile.mkdtemp(prefix=prefix)
-        os.chmod(home, 0o700)
-    for name in keep_dirs:
-        # State a CLI creates on first use (Codex's `sessions`) is made in the persistent home
-        # first, so a session's thread outlives its session home and can be resumed.
-        path = os.path.join(state_home, name)
-        with contextlib.suppress(OSError):
-            os.makedirs(path, exist_ok=True)
-            if sandbox is not None:
-                os.chmod(path, 0o2777)
-    if os.path.isdir(state_home):
+        use_state = os.path.isdir(state_home)
+    os.chmod(home, 0o700)
+    for name, text in files.items():
+        _write(os.path.join(home, name), text, sandbox=sandbox)
+    if use_state:
         for entry in os.listdir(state_home):
-            if _is_login_file(entry) or entry in skip:
+            if _is_login_file(entry) or entry in skip or entry in files:
                 continue
             with contextlib.suppress(OSError):
                 os.symlink(os.path.join(state_home, entry), os.path.join(home, entry))
+    if sandbox is not None:
+        os.chmod(home, 0o2777)
     if not model_proxy.on_session_end(lambda: shutil.rmtree(home, ignore_errors=True)):
         log.debug("subscription shield: no session scope; %s is removed with its run", home)
     return home
 
 
 def _write(path: str, text: str, *, sandbox: Any) -> None:
-    """A run-token file: 0644 in a sandbox (the run's uid reads what BOSS wrote; it holds no
-    secret), 0600 otherwise. Never follows a link planted in its place."""
-    with contextlib.suppress(FileNotFoundError):
-        os.unlink(path)
+    """A run-token file in a session home BOSS just made (0700 while it is written): 0644 in a
+    sandbox (the run's uid reads it; it holds no secret), 0600 otherwise. Created exclusively,
+    never through a link."""
     mode = 0o644 if sandbox is not None else 0o600
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -256,31 +308,27 @@ def codex(env: dict, *, settings: Any = None, default_home: str = "~/.codex",
             real.get("OPENAI_API_KEY"), str) else ""
         if not key:
             return env
-        env["CODEX_HOME"] = _session_home("codex-session-", state_home, sandbox,
-                                          keep_dirs=("sessions",))
+        env["CODEX_HOME"] = _session_home("codex-session-", state_home, sandbox)
         env["OPENAI_API_KEY"] = key
         return env
-    config = _load_toml(os.path.join(source_home if sandbox is None else state_home,
-                                     "config.toml"))
+    # The control plane's own config (never the run's: an agent can plant anything there), and
+    # in a sandbox nothing at all — the operator's config may name MCP servers with headers.
+    config = {} if sandbox is not None else _load_toml(os.path.join(source_home, "config.toml"))
     chosen = config.get("model_provider")
     if chosen not in (None, "openai", CODEX_PROVIDER):
         log.info("codex: the configured model provider %r is kept; no login is placed", chosen)
-        env["CODEX_HOME"] = _session_home("codex-session-", state_home, sandbox,
-                                          keep_dirs=("sessions",))
+        env["CODEX_HOME"] = _session_home("codex-session-", state_home, sandbox)
         return env
     if os.path.realpath(_default_codex_login()) == login_path:
         if _codex_login_dead():
             # A login flagged dead (codex_login.mark_revoked) is not handed to a run, not even
             # by proxy: the session starts with no login and Codex says it is not signed in.
             log.warning("codex: the login is marked revoked; the session gets no login")
-            env["CODEX_HOME"] = _session_home("codex-session-", state_home, sandbox,
-                                              keep_dirs=("sessions",))
+            env["CODEX_HOME"] = _session_home("codex-session-", state_home, sandbox)
             return env
         _codex_before_start()
     issued = _issue("codex_subscription", settings=settings, proxy=proxy,
                     source=_codex_source(login_path))
-    home = _session_home("codex-session-", state_home, sandbox, keep_dirs=("sessions",),
-                         skip=("config.toml",))
     config["model_provider"] = CODEX_PROVIDER
     providers = dict(config.get("model_providers") or {})
     providers[CODEX_PROVIDER] = {"name": "ChatGPT via BOSS", "base_url": issued.base_url,
@@ -288,11 +336,10 @@ def codex(env: dict, *, settings: Any = None, default_home: str = "~/.codex",
     config["model_providers"] = providers
     from .harness_delivery import toml_dumps
 
-    _write(os.path.join(home, "config.toml"), toml_dumps(config), sandbox=sandbox)
-    _write(os.path.join(home, "auth.json"),
-           json.dumps(codex_run_login(real, issued.token,
-                                      ttl=model_proxy.session_ttl(settings))), sandbox=sandbox)
-    env["CODEX_HOME"] = home
+    env["CODEX_HOME"] = _session_home("codex-session-", state_home, sandbox, files={
+        "config.toml": toml_dumps(config),
+        "auth.json": json.dumps(codex_run_login(real, issued.token,
+                                                ttl=model_proxy.session_ttl(settings)))})
     return env
 
 

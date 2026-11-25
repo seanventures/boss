@@ -93,6 +93,8 @@ A coding agent runs commands, and those commands can read the agent's environmen
 
 No login file is copied into a build's sandbox any more, and the sandbox drops any raw subscription login a step would otherwise inherit. The proxy forwards only each provider's model paths (for a Claude subscription `/v1/messages` and the model list; for Codex `/responses`, `/responses/compact` and `/models` on ChatGPT's Codex backend; for Grok the chat proxy's `/v1` completions, responses, messages and model list), never an account, settings or token endpoint.
 
+If the install's own environment sets `ANTHROPIC_BASE_URL` (a corporate gateway), the proxy sends Claude subscription calls there too, so that gateway receives the subscription token, as the CLI's calls did before. When a provider refuses a subscription login, the session gets BOSS's own message (expired, revoked or mid-refresh; sign in again in **Setup › Models** if it repeats) instead of the CLI's reaction to it.
+
 No setting turns the proxy off. If it cannot start, the session does not start, and the engine pre-check reports the proxy's own error. It never falls back to handing over the key.
 
 ## Verification and live checks
