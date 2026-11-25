@@ -127,6 +127,24 @@ def _substitute(argv: list[str], values: dict[str, str]) -> list[str]:
     return out
 
 
+def network_environment(env: Any) -> dict[str, str]:
+    """The proxy and package-mirror variables a networked stdio server is started with. An
+    invalid mirror raises (fail closed, as for a sandboxed run): a server that silently used the
+    public registry would breach the policy the mirror exists for."""
+    from .enterprise_network import PROXY_ENV_KEYS, package_environment
+
+    out = {k: str(env[k]) for k in PROXY_ENV_KEYS if env.get(k)}
+    try:
+        out.update(package_environment(env))
+    except Exception as exc:  # noqa: BLE001
+        raise StdioUnavailable(f"the install's package mirror settings are invalid: {exc}") \
+            from exc
+    if out.get("PIP_INDEX_URL"):
+        out.setdefault("UV_INDEX_URL", out["PIP_INDEX_URL"])        # uvx reads uv's own name
+        out.setdefault("UV_DEFAULT_INDEX", out["PIP_INDEX_URL"])
+    return out
+
+
 def launch_plan(template: dict[str, Any], secret: Optional[str], *, mode: str,
                 docker: str = "docker", name: str = "") -> tuple[list[str], dict[str, str]]:
     """(argv, env) for one instance. The env is what the spawned CLI process gets; in docker
@@ -141,6 +159,13 @@ def launch_plan(template: dict[str, Any], secret: Optional[str], *, mode: str,
     base_env = {k: os.environ[k] for k in ("PATH", "SYSTEMROOT", "LANG", "TZ") if k in os.environ}
     if mode == "subprocess":
         return argv, {**base_env, "HOME": tempfile.gettempdir(), **values}
+    # THE COMPANY NETWORK (BOSSAPP-1476). A template that declares a network (an `npx -y` /
+    # `uvx` server that downloads itself, or calls an outside API) got none of the install's
+    # enterprise settings, so behind a proxy-only network with an internal mirror it could not
+    # even start. It now gets the proxy variables and the package mirrors, by name, exactly as
+    # sandboxed runs do (enterprise_network); a server on `none` gets nothing.
+    if str(template.get("network") or "none") != "none":
+        values = {**network_environment(os.environ), **values}
     from .resource_ledger import node_id
 
     docker_env = {k: os.environ[k] for k in os.environ

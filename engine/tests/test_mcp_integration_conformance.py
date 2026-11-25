@@ -486,3 +486,29 @@ def test_a_slow_tool_through_the_registry_does_not_mark_the_server_down(db, sett
     with db.begin() as c:
         after = mcp_registry.get_mcp_server(c, PROJECT, server["id"])
     assert after.get("reachable") is not False
+
+
+def test_a_networked_stdio_server_starts_with_the_company_proxy_and_mirrors(monkeypatch):
+    """Row: stdio via npx/uvx/docker behind the company network.
+
+    FAILED BEFORE: a template with a network got only its own allowlisted variables, so an
+    `npx -y` or `uvx` server behind a proxy-only network with an internal mirror could not
+    download itself. Now the proxy and mirror settings travel by name (never in argv)."""
+    from boss_engine.services import mcp_stdio_supervisor as sup
+
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.corp.example:8080")
+    monkeypatch.setenv("NO_PROXY", "localhost,10.0.0.0/8")
+    monkeypatch.setenv("BOSS_NPM_REGISTRY", "https://artifacts.corp.example/api/npm/npm/")
+    monkeypatch.setenv("BOSS_PIP_INDEX_URL", "https://artifacts.corp.example/api/pypi/simple")
+    template = {"id": "t1", "name": "fetch", "image": "node:22", "network": "bridge",
+                "argv": ["npx", "-y", "@acme/mcp-server"], "env_allowlist": ["API_TOKEN"],
+                "env_from_auth": "API_TOKEN"}
+    argv, env = sup.launch_plan(template, "s3cret-token", mode="docker", name="c1")
+    passed = {argv[i + 1] for i, a in enumerate(argv) if a == "--env"}
+    assert {"HTTPS_PROXY", "NO_PROXY", "npm_config_registry", "PIP_INDEX_URL",
+            "UV_INDEX_URL", "API_TOKEN"} <= passed
+    assert env["npm_config_registry"].startswith("https://artifacts.corp.example")
+    assert not any("s3cret" in a or "proxy.corp" in a for a in argv), "values never in argv"
+    offline = {**template, "network": "none"}
+    argv, _ = sup.launch_plan(offline, None, mode="docker", name="c2")
+    assert "HTTPS_PROXY" not in argv and "npm_config_registry" not in argv
