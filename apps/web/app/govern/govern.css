@@ -217,6 +217,40 @@
 .gv-skel-short { height: 44px; }
 
 /* 1024-1279: the meter's meta moves into its tooltip. */
+/* THIS MONTH (forecast-card.tsx, BOSSAPP-1295) and PILOT METRICS (pilot-metrics.tsx, BOSSAPP-1292). */
+.gv-sec-head svg { flex: 0 0 auto; color: var(--muted); }
+.gv-fc-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.gv-fc-head .gv-input { max-width: 100%; }
+.gv-fc-stats { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 8px 22px; }
+.gv-fc-stat { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.gv-fc-k { font-size: 0.74rem; color: var(--faint); font-weight: 650; }
+.gv-fc-stat b, .gv-pm-value b { font-family: var(--display); font-size: 1.35rem; font-weight: 700; line-height: 1.15; color: var(--ink); font-variant-numeric: tabular-nums; }
+.gv-fc-badge { margin-left: auto; align-self: center; }
+.gv-fc-sub { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 0.8rem; color: var(--muted); }
+.gv-fc-runs, .gv-pm-items, .gv-pm-base-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.gv-fc-runs li, .gv-pm-items li, .gv-pm-base-list li { display: flex; align-items: center; gap: 8px; min-height: 28px; font-size: 0.84rem; min-width: 0; }
+.gv-fc-runs li > svg { flex: 0 0 auto; color: var(--muted); }
+.gv-fc-run-name, .gv-pm-items li > :first-child { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gv-fc-runs .gv-hbar-value, .gv-pm-items .gv-hbar-value { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; font-variant-numeric: tabular-nums; }
+.gv-fc-more, .gv-pm-sources { align-self: flex-start; }
+.gv-preset-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
+.gv-pm { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.gv-pm-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.gv-pm-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: 14px; }
+.gv-pm-metric { min-width: 0; }
+.gv-pm-value { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; }
+.gv-pm-value .gv-state::before { display: none; }
+.gv-pm-chart { height: 48px; }
+.gv-pm-share { display: flex; flex-direction: column; gap: 4px; }
+.gv-pm-base-list li { justify-content: space-between; }
+.gv-pm-base-list b { font-variant-numeric: tabular-nums; }
+.gv-pm-note { color: var(--muted); font-style: italic; }
+.gv-pm-base-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: 10px 14px; }
+.gv-pm-field { display: flex; flex-direction: column; gap: 4px; font-size: 0.8rem; color: var(--muted); min-width: 0; }
+.gv-pm-field .gv-input { width: 100%; }
+.gv-pm-field-wide, .gv-pm-actions, .gv-pm-base-form .gv-field-error { grid-column: 1 / -1; }
+.gv-pm-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
 @media (max-width: 1279px) { .gv-meta { display: none; } }
 /* 720-1023: Evidence stacks under Enforced (D10: it was dropped — what a limit stopped is the
    point of the row), Source is a word. */
@@ -247,6 +281,10 @@
   .gv-limit-hint { grid-column: 1 / -1; }
   .gv-hbars li { grid-template-columns: minmax(0, 7rem) minmax(0, 1fr) auto; }
   .gv-hero-amount { font-size: 1.7rem; }
+  /* This month and Pilot metrics (BOSSAPP-1295/1292). */
+  .gv-fc-badge { margin-left: 0; }
+  .gv-pm-bar .gv-spacer { display: none; }
+  .gv-pm-grid { grid-template-columns: minmax(0, 1fr); }
 }
 
 @media (prefers-reduced-motion: reduce) {

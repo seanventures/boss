@@ -369,6 +369,9 @@ export const WRITE_OPS: Readonly<Record<string, Readonly<Record<string, WriteGat
     // add and remove a scoped budget (budget:manage at org).
     "/v1/budget-policies/scoped": "budget:manage",
     "/v1/budget-policies/scoped/": "budget:manage",
+    // Govern › More › Pilot metrics (app/govern/pilot-metrics.tsx, BOSSAPP-1292): the typed-in
+    // before-numbers (budget:manage at org).
+    "/v1/pilot-metrics/baseline": "budget:manage",
     // Skills & MCP › Rules (lib/tool-policies.ts, BOSSAPP-815): the simulate box is a read.
     "/v1/tool-policies/simulate": "mcp_server:read",
     "/v1/tool-policies": "mcp_server:review",
