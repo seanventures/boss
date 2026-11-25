@@ -13,7 +13,7 @@
  *
  * The tab counts are the lengths of these same lists: one source.
  */
-import { isHydrated } from "./local-time";
+import { isHydrated } from "./hydration-state";
 import type { NeedsYou, WorkItem } from "./project-experience";
 import { readyAt, waitsOnPerson } from "./work-stages";
 

@@ -4,7 +4,7 @@
  * render agree, and an elapsed time moves without a poll).
  */
 import { useEffect, useState, type MouseEvent as ReactMouseEvent } from "react";
-import { localFull, markHydrated } from "../../lib/local-time";
+import { localFull, markHydrated } from "../../lib/hydration-state";
 
 /** The current URL with `patch` applied (null deletes). Keeps the org and everything else. */
 export function hrefWith(patch: Record<string, string | null>): string {

@@ -9,7 +9,7 @@
  * state, a compact flow, ONE action"); they come back as compact chips with short labels — a
  * raw `crun_…` id is never the words, only the tooltip.
  */
-import { isHydrated } from "./local-time";
+import { isHydrated } from "./hydration-state";
 import type { Attempt, WorkItem, WorkState } from "./project-experience";
 import { changeHref, changeRef, isLocalChangeUrl } from "./repo-links";
 import { mergeWaitOf } from "./work-next-step";

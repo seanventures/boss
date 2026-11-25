@@ -16,7 +16,7 @@
  * else in the workflow view.
  */
 import { humanDuration } from "./datetime";
-import { isHydrated, sinceLocal, stampLocal } from "./local-time";
+import { sinceLocal, stampLocal } from "./hydration-state";
 
 /** The minimal step shape the clock reads (delivery-workflows-ui's RunStep satisfies it). */
 export type ClockStep = {
@@ -27,7 +27,7 @@ export type ClockStep = {
   decision_id?: string | null;
   decision_status?: string | null;
   decision_approved_at?: string | null;
-  waiting_on_person?: boolean;
+  waiting_on_person?: boolean | string | null;
   stack_deploy?: { deployment?: Record<string, unknown> | null } | null;
 };
 
@@ -59,18 +59,24 @@ export function waitsForMerge(step: ClockStep): boolean {
  *  stays `waiting` until a worker picks the answer up. Unknown (an older API, or a decision row
  *  that has gone) keeps the old behaviour: offering an answerable gate is recoverable, hiding
  *  one is not. */
+function hasPersonWaitFlag(value: unknown): boolean {
+  return value === true || (typeof value === "string" && value.trim().length > 0);
+}
+
 export function waitsOnPersonOutput(step: ClockStep): boolean {
-  return Boolean(step.waiting_on_person || (step.output && step.output.waiting_on_person === true));
+  return (
+    step.status === "waiting" &&
+    (hasPersonWaitFlag(step.waiting_on_person) || hasPersonWaitFlag(step.output?.waiting_on_person))
+  );
 }
 
 export function needsYou(step: ClockStep): boolean {
   if (waitsForMerge(step)) return true;
   if (step.status !== "waiting") return false;
-  if (step.waiting_on_person === true) return true;
   if (step.decision_id) {
     return !step.decision_status || OPEN_GATE.has(step.decision_status);
   }
-  return Boolean(step.output && step.output.waiting_on_person === true);
+  return waitsOnPersonOutput(step);
 }
 
 function stackDeployment(step: ClockStep): Record<string, unknown> | null {

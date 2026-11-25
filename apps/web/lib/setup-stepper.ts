@@ -5,7 +5,7 @@
  * with only the current row open; after the first pull request it is a board with no numbers.
  * The server says which step is next (`view.next`); this only turns that into row modes.
  */
-import { isHydrated } from "./local-time";
+import { isHydrated } from "./hydration-state";
 import type { RowKey, SetupView } from "./setup-types";
 
 export type RowMode = "current" | "done" | "waiting" | "collapsed" | "open";

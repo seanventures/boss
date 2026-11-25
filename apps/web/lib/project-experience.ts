@@ -26,7 +26,7 @@ import { onChanged } from "../app/changed";
 import { obsWrite } from "../app/observability/obs-write";
 import { useAreaShown } from "./area-shown";
 import { isConsoleLive, subscribeConsoleLive } from "./console-live";
-import { isHydrated, localWith, markHydrated } from "./local-time";
+import { isHydrated, localWith, markHydrated } from "./hydration-state";
 import { changeRef, isLocalRepo, repoHref } from "./repo-links";
 import { parseMachine, type MachineChecks } from "./machine-checks";
 

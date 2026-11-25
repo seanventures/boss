@@ -2950,6 +2950,7 @@ export function ReviewAndDecide({ step, projectId = "", actor = "" }: { step: Ru
       </div>
     );
   }
+  if (!step.decision_id) return null;
   // WHAT IT WILL DO, ON THE STEP TOO. The decision card has the buttons; the step at least
   // shows what is waiting on them, so "Email the newsletter, needs you" says which email.
   const preview = actionPreviewOf(step.action_preview);

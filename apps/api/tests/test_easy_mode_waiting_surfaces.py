@@ -111,28 +111,34 @@ def test_easy_mode_suppresses_prod_waits_and_surfaces_waiting_on_person(world, c
         assert px_needs.prod_waits(c, pid) is False
         assert not any(card["id"] == "prod:host" for card in px_needs.setup_cards(c, pid))
 
-        # Work tab: waiting_on_person marks the run needs_you and its Plan stage waiting.
+        # Work tab: waiting_on_person marks the run needs_you, its Plan stage waiting,
+        # and its meeting step state='waiting' with waiting_on_person=True.
         items = px_work.everything(c, pid)
         run_item = next(i for i in items if i["id"] == rid)
         assert run_item["state"] == "needs_you"
         assert run_item["action_label"] == "Fix model"
         plan_stage = next(s for s in run_item["stages"] if s["key"] == "plan")
         assert plan_stage["state"] == "waiting"
+        meeting_step = next(s for s in run_item["steps"] if s["id"] == "meeting")
+        assert meeting_step["state"] == "waiting"
+        assert meeting_step["waiting_on_person"] is True
 
         # Project live_work: does NOT count waiting_on_person as live/Working.
         lw = px_cards.live_work(c, [pid])[pid]
         assert lw["count"] == 0 and lw["agents"] == []
 
-        # Live board & Command Center: state is waiting_you, not running / quiet.
+        # Live board & Command Center: state is waiting_you, running counts are 0, not running / quiet.
         board = agents_live_board.build(c, get_settings(), pid)
         mission = next(m for m in board["missions"] if m["run_id"] == rid)
         assert mission["state"] == "waiting_you"
         assert mission["verb"] == "Needs you"
+        assert board["counts"]["running"] == 0
 
         cc = command_center.build(c, get_settings(), pid)
         assert cc["running"] == []
 
         ccv = command_center_view.build(c, get_settings(), pid)
+        assert ccv["counts"]["running"] == 0
         assert ccv["status"]["key"] == "needs_you"
         assert ccv["status"]["text"] == "1 needs you"
 
@@ -156,6 +162,30 @@ def test_org_scope_delivery_workflows_runs_returns_sibling_project_runs(world, c
     assert found["project_id"] == pid
     assert found["project_name"] == "Sibling Easy App"
     assert found["waiting_on"] == "you"
+
+
+def test_org_scope_delivery_workflows_runs_archived_project_does_not_leak_other_org(world, client, engine):
+    # Create an archived project in Org 1 and an active project with a run in Org 2 (where
+    # world.owner also holds owner); querying ?scope=org on the archived Org 1 project must
+    # stay confined to [archived_pid] and never leak Org 2's run.
+    archived_pid, archived_rid, _ = _easy_project(world, client, engine, name="Archived Org1 App")
+    with engine.begin() as c:
+        c.execute(text("UPDATE projects SET archived_at = NOW() WHERE id = :p"), {"p": archived_pid})
+
+    org2 = IdentityWorld.create(engine)
+    org2.owner = org2.person("em-wait-org2-owner")
+    org2.bind(org2.owner, "owner")
+    org2.bind(world.owner, "owner")
+    org2_pid, org2_rid, _ = _easy_project(org2, client, engine, name="Active Org2 App")
+    assert org2_pid != archived_pid
+
+    with world.acting_as(world.ctx(world.owner)):
+        res = client.get("/v1/delivery-workflows/runs",
+                         params={"project_id": archived_pid, "scope": "org"})
+    assert res.status_code == 200, res.text
+    ids = {r["id"] for r in res.json()["runs"]}
+    assert archived_rid in ids
+    assert org2_rid not in ids
 
 
 def test_activity_classify_renders_plain_words():

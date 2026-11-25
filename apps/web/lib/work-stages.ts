@@ -14,7 +14,7 @@
  * started has no link. One "what next" line carries only the buttons that apply, amber only when
  * it is the person's move. Pure functions: the component draws, these decide.
  */
-import { isHydrated } from "./local-time";
+import { isHydrated } from "./hydration-state";
 import type { StageKey, StepState, WorkItem, WorkStep } from "./project-experience";
 import { changeHref, changeRef, isLocalChangeUrl } from "./repo-links";
 import { mergeWaitOf, workNextStep, type NextStep } from "./work-next-step";

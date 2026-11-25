@@ -26863,14 +26863,17 @@ def list_delivery_runs(
             (str(r.get("org_id") or "") for r in visible if str(r["id"]) == project_id),
             None,
         )
-        scoped_ids = [
-            str(r["id"])
-            for r in visible
-            if (not target_org or str(r.get("org_id") or "") == target_org)
-            and _viewer.may(str(r["id"]), P.WORKFLOW_READ.value) is not False
-        ]
-        if project_id not in scoped_ids:
-            scoped_ids.insert(0, project_id)
+        if target_org:
+            scoped_ids = [
+                str(r["id"])
+                for r in visible
+                if str(r.get("org_id") or "") == target_org
+                and _viewer.may(str(r["id"]), P.WORKFLOW_READ.value) is not False
+            ]
+            if project_id not in scoped_ids:
+                scoped_ids.insert(0, project_id)
+        else:
+            scoped_ids = [project_id]
         project_ids = scoped_ids
 
     with begin(engine) as connection:

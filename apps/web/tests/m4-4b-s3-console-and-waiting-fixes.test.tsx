@@ -6,7 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { missingWord } from "../lib/build-detail";
 import { parseWorkItem, waitingSinceWords, workWhen } from "../lib/project-experience";
 import { whenLocal } from "../lib/local-time";
-import { needsYou, personWait, stepClock } from "../lib/step-timing";
+import { needsYou, personWait, stepClock, waitsOnPersonOutput } from "../lib/step-timing";
 import { toAvatarState } from "../lib/agent-world";
 import { summarize, SETUP_MODEL_READY_EVENT } from "../lib/setup-stepper";
 import { repoSummary } from "../app/setup/setup-board";
@@ -20,17 +20,18 @@ import { InfraCriticalCardView } from "../app/infra/infra-critical-card";
 import { openIncident } from "../lib/infra-storage";
 import { demoIncident } from "../lib/infra-storage-demo";
 import { actorVerb, stepLogSentence } from "../app/workflows/step-run";
-import { phaseOf } from "../app/delivery-workflows-ui";
+import { bucketOf, laneStateOf, phaseOf, ReviewAndDecide, runNeedsYou } from "../app/delivery-workflows-ui";
 import { StartRefusal, type PendingRefusal, type ReadinessNeed } from "../app/workflow-readiness-ui";
 import { Enrol } from "../app/(auth)/enrol/enrol";
 import { ConsentSheet, type ConsentRequest } from "../components/identity/consent-sheet";
 import { BoardContext, type SetupCtx } from "../app/setup/parts";
 import { Welcome } from "../app/setup/welcome";
 import type { SetupView } from "../lib/setup-types";
+import { primeCsrf } from "../app/(auth)/auth-flow";
 import { $, click, mount, settle, unmount } from "./_helpers/live-render";
 
 vi.mock("../app/(auth)/auth-flow", () => ({
-  primeCsrf: vi.fn(async () => null),
+  primeCsrf: vi.fn(async () => ({ csrf_token: "t", sign_in: { password: true } })),
   registerPasskey: vi.fn(async () => []),
   sayAuth: vi.fn((e: unknown) => String(e)),
 }));
@@ -200,6 +201,164 @@ describe("BOSSAPP-1406: waiting on person, phaseOf, step logs, and presence", ()
     expect(actorVerb("wait", "waiting")).toBe("Waiting on");
   });
 
+  it("handles real /v1/delivery-workflows/runs string output.waiting_on_person without top-level waiting_on_person", () => {
+    const now = Date.parse("2026-11-06T16:00:00Z");
+    const step = {
+      step_id: "meeting",
+      kind: "capability",
+      capability: "meeting",
+      status: "waiting",
+      started_at: "2026-11-06T15:20:00Z",
+      completed_at: null,
+      decision_id: null,
+      output: {
+        waiting_on_person: "Your model at http://10.0.0.7:8080 is plain http; BOSS only sends keys over https.",
+        meeting_run_id: "mrun_1",
+      },
+      evidence: [],
+      error: null,
+      approval: {},
+      due_at: null,
+      timeout_applied: null,
+      attempt: 1,
+    } as unknown as Parameters<typeof phaseOf>[0];
+
+    expect(waitsOnPersonOutput(step)).toBe(true);
+    expect(needsYou(step)).toBe(true);
+    expect(personWait(step)).not.toBeNull();
+    expect(stepClock(step, now)?.kind).toBe("waiting");
+    expect(phaseOf(step)).toBe("wait");
+    expect(laneStateOf(step).phase).toBe("needs_you");
+    expect(runNeedsYou({ status: "running", steps: [step] })).toBe(true);
+    expect(bucketOf({ status: "running", standing: "active", steps: [step] })).toBe("needs_you");
+  });
+
+  it("resolved decision_status takes precedence over output.waiting_on_person and waiting_on_person", () => {
+    const now = Date.parse("2026-11-06T16:00:00Z");
+    const makeStep = (decision_status: string | null | undefined, topLevel?: boolean) => ({
+      step_id: "meeting",
+      kind: "capability",
+      capability: "meeting",
+      status: "waiting",
+      started_at: "2026-11-06T15:20:00Z",
+      completed_at: null,
+      decision_id: "dec_1",
+      decision_status,
+      ...(topLevel !== undefined ? { waiting_on_person: topLevel } : {}),
+      output: { waiting_on_person: "Your model at http://10.0.0.7:8080 is plain http; BOSS only sends keys over https." },
+      evidence: [],
+      error: null,
+      approval: {},
+      due_at: null,
+      timeout_applied: null,
+      attempt: 1,
+    }) as unknown as Parameters<typeof phaseOf>[0];
+
+    for (const resolved of ["approved", "rejected", "resolved", "expired"]) {
+      for (const s of [makeStep(resolved), makeStep(resolved, true)]) {
+        expect(needsYou(s)).toBe(false);
+        expect(personWait(s)).toBeNull();
+        expect(stepClock(s, now)?.kind).toBe("working");
+        expect(phaseOf(s)).toBe("now");
+      }
+    }
+
+    for (const open of ["pending", "delegated", null, undefined]) {
+      const s = makeStep(open);
+      expect(needsYou(s)).toBe(true);
+      expect(phaseOf(s)).toBe("wait");
+    }
+  });
+
+  it("ignores blank/false/null waiting_on_person and non-waiting step statuses", () => {
+    for (const badVal of ["", "   ", null, false]) {
+      const s = {
+        step_id: "meeting",
+        kind: "capability",
+        capability: "meeting",
+        status: "waiting",
+        started_at: "2026-11-06T15:20:00Z",
+        completed_at: null,
+        decision_id: null,
+        output: { waiting_on_person: badVal },
+        evidence: [],
+        error: null,
+        approval: {},
+        due_at: null,
+        timeout_applied: null,
+        attempt: 1,
+      } as unknown as Parameters<typeof phaseOf>[0];
+      expect(waitsOnPersonOutput(s)).toBe(false);
+      expect(needsYou(s)).toBe(false);
+      expect(personWait(s)).toBeNull();
+      expect(phaseOf(s)).toBe("now");
+    }
+
+    for (const status of ["succeeded", "failed", "running", "skipped"]) {
+      const s = {
+        step_id: "meeting",
+        kind: "capability",
+        capability: "meeting",
+        status,
+        started_at: "2026-11-06T15:20:00Z",
+        completed_at: status === "succeeded" ? "2026-11-06T15:25:00Z" : null,
+        decision_id: null,
+        output: { waiting_on_person: "stale" },
+        evidence: [],
+        error: null,
+        approval: {},
+        due_at: null,
+        timeout_applied: null,
+        attempt: 1,
+      } as unknown as Parameters<typeof phaseOf>[0];
+      expect(waitsOnPersonOutput(s)).toBe(false);
+      expect(needsYou(s)).toBe(false);
+      expect(personWait(s)).toBeNull();
+      expect(phaseOf(s)).not.toBe("wait");
+    }
+  });
+
+  it("ReviewAndDecide does not render dw-step-review when decision_id is null even with string output.waiting_on_person", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({}), { status: 404 }),
+    );
+    try {
+      const waitingNoDecision = {
+        step_id: "meeting",
+        kind: "capability",
+        capability: "meeting",
+        status: "waiting",
+        started_at: "2026-11-06T15:20:00Z",
+        completed_at: null,
+        decision_id: null,
+        output: { waiting_on_person: "Your model at http://10.0.0.7:8080 is plain http; BOSS only sends keys over https." },
+        evidence: [],
+        error: null,
+        approval: {},
+        due_at: null,
+        timeout_applied: null,
+        attempt: 1,
+      } as unknown as Parameters<typeof ReviewAndDecide>[0]["step"];
+
+      await mount(<ReviewAndDecide step={waitingNoDecision} projectId="p1" actor="alice" />);
+      expect($('[data-testid="dw-step-review"]')).toBeNull();
+      expect($('[data-testid="dw-step-decide"]')).toBeNull();
+      unmount();
+
+      await mount(
+        <ReviewAndDecide
+          step={{ ...waitingNoDecision, decision_id: "dec_1", decision_status: "pending" }}
+          projectId="p1"
+          actor="alice"
+        />,
+      );
+      await settle();
+      expect($('[data-testid="dw-step-review"]')).not.toBeNull();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
   it("statusChip marks a work item with waiting step as Needs you rather than Running", () => {
     const item = parseWorkItem({
       id: "w1",
@@ -319,6 +478,24 @@ describe("BOSSAPP-1392: Setup welcome scope, readiness later split, Enrol reload
     await mount(<Enrol host="boss.acme.dev" next="/identity" who={null} alreadyEnrolled />);
     expect(document.body.textContent).toContain("Save your recovery codes");
     expect(document.body.textContent).toContain("AAA-BBB");
+    unmount();
+
+    window.sessionStorage.clear();
+    vi.mocked(primeCsrf).mockResolvedValueOnce({ csrf_token: "t", sign_in: { password: false } } as never);
+    await mount(<Enrol host="boss.acme.dev" next="/identity" who={null} alreadyEnrolled initialNeedsPassword />);
+    await settle();
+    expect(document.body.textContent).toContain("Choose a password");
+    unmount();
+
+    window.sessionStorage.setItem("boss.enrol.state", JSON.stringify({ stage: "password" }));
+    await mount(<Enrol host="boss.acme.dev" next="/identity" who={null} alreadyEnrolled />);
+    expect(document.body.textContent).toContain("Choose a password");
+    unmount();
+
+    window.sessionStorage.setItem("boss.enrol.state", JSON.stringify({ stage: "codes", codes: ["STALE-CODE"] }));
+    await mount(<Enrol host="boss.acme.dev" next="/identity" who={null} alreadyEnrolled={false} />);
+    expect(document.body.textContent).toContain("Protect your account");
+    expect(document.body.textContent).not.toContain("STALE-CODE");
   });
 
   it("BuildHome fails fast with needs_model when modelReady is false without calling launch", async () => {
