@@ -50,9 +50,9 @@ def origin(tmp_path: Path) -> Path:
 @pytest.fixture(autouse=True)
 def _clone_from_local(origin, monkeypatch):
     monkeypatch.setattr(sandbox_module, "clone_url_for",
-                        lambda host, owner, repo, token: str(origin), raising=False)
+                        lambda host, owner, repo, token, **_kw: str(origin), raising=False)
     monkeypatch.setattr("boss_engine.services.repo_host.clone_url_for",
-                        lambda host, owner, repo, token: str(origin))
+                        lambda host, owner, repo, token, **_kw: str(origin))
 
 
 def _provision(work_branch: str) -> EphemeralSandbox:
