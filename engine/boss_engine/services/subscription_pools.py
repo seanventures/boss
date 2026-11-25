@@ -59,6 +59,17 @@ class PoolExhausted(RuntimeError):
         self.retry_at = retry_at
 
 
+def exhausted_words(pool_name: str, retry_at: Optional[datetime]) -> str:
+    """Every seat at its limit, in the words provider_limits.classify_limit reads as a capacity
+    limit ("usage limit", "try again at <ISO>"), so the run takes the ordinary at-limit path
+    (wait for the reset or move to another source) with the reset time — never a person's
+    question (BOSSAPP-1343 review)."""
+    when = (f" Try again at {retry_at.astimezone(timezone.utc):%Y-%m-%d %H:%M:%S} UTC."
+            if retry_at else "")
+    return (f"You've hit your usage limit on every account in the {pool_name} pool.{when} "
+            "Add an account to the pool, or wait for the reset.")
+
+
 @dataclass(frozen=True)
 class Assignment:
     """Which member a run spends on. Never carries a credential."""
@@ -188,6 +199,21 @@ def describe(connection: Connection, project_id: str) -> list[dict[str, Any]]:
             m.pop("secret_name", None)
         out.append(pool)
     return out
+
+
+def scope_of(connection: Connection, *, pool_id: Optional[str] = None,
+             member_id: Optional[str] = None) -> Optional[str]:
+    """'org' or 'project' for a pool (or a member's pool), None when there is none. The API asks
+    it first: a change to the ORG's pool needs the permission at org level (BOSSAPP-1343
+    review), not only a project binding."""
+    if member_id:
+        return connection.execute(text(
+            "SELECT s.scope FROM subscription_pool_members m JOIN subscription_pools s "
+            "ON s.id = m.pool_id WHERE m.id = :i"), {"i": member_id}).scalar()
+    if pool_id:
+        return connection.execute(text("SELECT scope FROM subscription_pools WHERE id = :i"),
+                                  {"i": pool_id}).scalar()
+    return None
 
 
 # ── writing ──────────────────────────────────────────────────────────────────────────────────
@@ -500,6 +526,11 @@ def update_member(connection: Connection, settings: Any, project_id: str, member
     if status is not None and status not in MEMBER_STATUSES:
         raise PoolError(f"status must be one of: {', '.join(MEMBER_STATUSES)}")
     if credential is not None:
+        if row["secret_name"] == BASE_SECRET[row["engine"]]:
+            # THE INSTALL'S OWN LOGIN (adopted as account 1) is replaced only through Setup's
+            # Sign in, which keeps its origin and references — never silently from a pool row.
+            raise PoolError("this account is the install's own login: replace it with Sign in "
+                            "in Setup › Models")
         # A fresh login for this seat: through the same store key the runs read and sync.
         _store(settings).put(_store_key(row["secret_name"]),
                              _validate_credential(row["engine"], credential))
@@ -534,7 +565,7 @@ def update_member(connection: Connection, settings: Any, project_id: str, member
 def remove_member(connection: Connection, settings: Any, project_id: str, member_id: str, *,
                   actor: str) -> dict[str, Any]:
     row = connection.execute(text(
-        "SELECT m.id, m.pool_id, m.secret_name FROM subscription_pool_members m JOIN "
+        "SELECT m.id, m.pool_id, m.secret_name, s.engine FROM subscription_pool_members m JOIN "
         "subscription_pools s ON s.id = m.pool_id WHERE m.id = :i AND "
         + _owns(connection, project_id)[0]),
         {**_owns(connection, project_id)[1], "i": member_id}).mappings().first()
@@ -542,12 +573,18 @@ def remove_member(connection: Connection, settings: Any, project_id: str, member
         raise LookupError(f"no pool account {member_id!r} in this project")
     connection.execute(text("DELETE FROM subscription_pool_members WHERE id = :i"),
                        {"i": member_id})
-    try:
-        _store(settings).delete(_store_key(row["secret_name"]))
-    except Exception:  # noqa: BLE001 — the account is gone either way; say so in the log
-        _log.warning("could not delete the stored login of pool account %s", member_id)
+    adopted = row["secret_name"] == BASE_SECRET.get(row["engine"])
+    if not adopted:
+        # THE INSTALL'S LOGIN STAYS: an adopted account 1 points at the install-wide login,
+        # which every project and the single-login path use; leaving the pool never deletes it
+        # (disconnecting it is Setup's). Only a seat's own login is deleted with the seat.
+        try:
+            _store(settings).delete(_store_key(row["secret_name"]))
+        except Exception:  # noqa: BLE001 — the account is gone either way; say so in the log
+            _log.warning("could not delete the stored login of pool account %s", member_id)
     emit_event(connection, project_id, "subscription_pool.member_removed", actor,
-               "subscription_pool", row["pool_id"], {"member_id": member_id})
+               "subscription_pool", row["pool_id"],
+               {"member_id": member_id, "install_login_kept": adopted})
     return {"removed": member_id}
 
 
@@ -582,12 +619,108 @@ def delete_pool(connection: Connection, project_id: str, pool_id: str, *,
     return {"deleted": pool_id}
 
 
+def before_project_purge(connection: Connection, settings: Any, project_id: str) -> dict[str, int]:
+    """A project is about to be deleted (projects_delete.purge), and its pools would go with it
+    by cascade, leaving their seats' stored logins behind with nothing pointing at them.
+    The ORG's pool anchored here moves to another project of the org (the org keeps its seats);
+    every pool that goes deletes its seats' own logins first. An adopted install login is never
+    deleted (it is the install's, see remove_member)."""
+    out = {"moved": 0, "logins_deleted": 0}
+    pools = connection.execute(text(
+        "SELECT id, engine, scope, org_id FROM subscription_pools WHERE project_id = :p"),
+        {"p": project_id}).mappings().all()
+    for pool in pools:
+        if pool["scope"] == "org" and pool["org_id"]:
+            other = connection.execute(text(
+                "SELECT p.id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+                "WHERE w.org_id = :o AND p.id <> :p ORDER BY p.created_at, p.id LIMIT 1"),
+                {"o": pool["org_id"], "p": project_id}).scalar()
+            if other:
+                connection.execute(text(
+                    "UPDATE subscription_pools SET project_id = :n, updated_at = now() "
+                    "WHERE id = :i"), {"n": other, "i": pool["id"]})
+                out["moved"] += 1
+                continue
+        for name in connection.execute(text(
+                "SELECT secret_name FROM subscription_pool_members WHERE pool_id = :i"),
+                {"i": pool["id"]}).scalars():
+            if name == BASE_SECRET.get(pool["engine"]):
+                continue
+            try:
+                _store(settings).delete(_store_key(name))
+                out["logins_deleted"] += 1
+            except Exception:  # noqa: BLE001 — the purge goes on; the log says which one
+                _log.warning("could not delete a pool login while deleting project %s", project_id)
+    return out
+
+
 # ── choosing ─────────────────────────────────────────────────────────────────────────────────
 
+def install_login_refused(connection: Connection, settings: Any, project_id: str,
+                          engine: str) -> bool:
+    """Is the install's own login for `engine` refused (expired / revoked)? Setup's one status
+    function (subscription_sign_in.last_login_rejected) over the project and its org's model
+    home. An adopted account 1 IS that login, so it cannot take work while this holds.
+    Never raises: anything unreadable is "not refused"."""
+    try:
+        from . import org_models
+        from .subscription_sign_in import last_login_rejected
+
+        with connection.begin_nested():
+            home = org_models.home_project(connection, org_models.org_of(connection, project_id))
+            return bool(last_login_rejected(connection, [project_id, home or ""], engine,
+                                            settings))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def routable(connection: Connection, settings: Any, project_id: str, engine: str,
+             members: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The members that may take work: active, and — for the adopted install login — only while
+    the install's login is not refused (the engine-wide login state, BOSSAPP-1343 review)."""
+    live = [m for m in members if m["status"] == "active"]
+    if settings is not None and any(m.get("secret_name") == BASE_SECRET[engine] for m in live) \
+            and install_login_refused(connection, settings, project_id, engine):
+        live = [m for m in live if m.get("secret_name") != BASE_SECRET[engine]]
+    return live
+
+
+def router_account(connection: Connection, settings: Any, project_id: Optional[str],
+                   engine: str, now: Optional[datetime] = None) -> Optional[str]:
+    """The account the model router reads for `engine` when the project routes through a pool:
+    the seat a new build would be given (the primary with plenty of room, else the most room);
+    with every seat at its limit, the one that resets first — so the router's headroom is the
+    POOL's, not the install login's (BOSSAPP-1343 review). None without an active pool."""
+    from .model_router.headroom import EXHAUSTED, PLENTY
+
+    if not project_id or engine not in ENGINES:
+        return None
+    pool = None
+    for scope in ("project", "org"):
+        candidate = get_pool(connection, project_id, engine, scope=scope)
+        if candidate is not None and candidate["status"] == "active":
+            pool = candidate
+            break
+    live = routable(connection, settings, project_id, engine, pool["members"]) if pool else []
+    if not live:
+        return None
+    rooms = headroom_of(connection, live, engine, now=now)
+    usable = [m for m in live if rooms[m["id"]].state != EXHAUSTED]
+    if not usable:
+        far = datetime.max.replace(tzinfo=timezone.utc)
+        return min(live, key=lambda m: rooms[m["id"]].resets_at or far)["account_key"]
+    primary = next((m for m in usable if m.get("primary") and rooms[m["id"]].state == PLENTY),
+                   None)
+    best = primary or max(usable, key=lambda m: (rooms[m["id"]].left
+                                                 if rooms[m["id"]].left is not None else 1.0))
+    return best["account_key"]
+
+
 def assign(connection: Connection, project_id: str, engine: str, task_ref: Optional[str], *,
-           now: Optional[datetime] = None) -> Optional[Assignment]:
+           now: Optional[datetime] = None, settings: Any = None) -> Optional[Assignment]:
     """The member this run spends on, or None when the project has no active pool for `engine`.
-    Raises PoolExhausted when every active member is at its limit."""
+    Raises PoolExhausted when every active member is at its limit. With `settings`, an adopted
+    install login whose login is refused is skipped (`routable`)."""
     from .model_router.headroom import EXHAUSTED, PLENTY
 
     # PROJECT POOL -> ORG POOL -> (None: the single install login). A project's own pool
@@ -600,7 +733,7 @@ def assign(connection: Connection, project_id: str, engine: str, task_ref: Optio
             break
     if pool is None:
         return None
-    live = [m for m in pool["members"] if m["status"] == "active"]
+    live = routable(connection, settings, project_id, engine, pool["members"])
     if not live:
         return None
     rooms = headroom_of(connection, live, engine, now=now)
@@ -608,10 +741,7 @@ def assign(connection: Connection, project_id: str, engine: str, task_ref: Optio
     if not usable:
         resets = [rooms[m["id"]].resets_at for m in live if rooms[m["id"]].resets_at]
         earliest = min(resets) if resets else None
-        raise PoolExhausted(
-            f"every account in the {pool['name']} pool is at its limit"
-            + (f"; the first resets at {earliest.isoformat()}" if earliest else "")
-            + ". Add an account to the pool, or wait.", earliest)
+        raise PoolExhausted(exhausted_words(pool["name"], earliest), earliest)
     ref = str(task_ref or "").strip()
     pinned = None
     pin = None
@@ -680,7 +810,7 @@ def assignment_for(engine: str, settings: Any = None) -> Optional[Assignment]:
                     "AND s.status = 'active'"), {**args, "e": engine}).first()
             if not exists:
                 return None
-            chosen = assign(c, project_id, engine, task_ref)
+            chosen = assign(c, project_id, engine, task_ref, settings=settings)
     except PoolExhausted:
         raise
     except Exception:  # noqa: BLE001 — no table, no database: the single login, as before
