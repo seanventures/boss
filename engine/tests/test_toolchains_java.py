@@ -194,15 +194,48 @@ def test_maven_hosts_are_closed_on_an_install_without_java(monkeypatch, java_off
     assert connect.host_allowed("registry.npmjs.org")
 
 
-def test_maven_and_gradle_get_the_egress_proxy_in_their_own_config(tmp_path, java_on):
+def test_maven_and_gradle_get_the_egress_proxy_in_their_own_config(tmp_path, java_on, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
+    monkeypatch.delenv("BOSS_MAVEN_MIRROR", raising=False)
+    monkeypatch.delenv("BOSS_MAVEN_CREDENTIAL_REF", raising=False)
     assert toolchains.write_proxy_config(home, "http://egress:8091")
     settings = (home / ".m2" / "settings.xml").read_text()
     assert "<host>egress</host><port>8091</port>" in settings and "<active>true</active>" in settings
     props = (home / ".gradle" / "gradle.properties").read_text()
     assert "systemProp.https.proxyHost=egress" in props and "systemProp.https.proxyPort=8091" in props
     assert (home / ".m2").stat().st_mode & 0o7777 == 0o2777
+    assert not (home / ".gradle" / "init.d" / "boss-mirror.gradle").exists()
+
+
+def test_gradle_init_script_redirects_repositories_and_clears_when_unset(tmp_path, java_on, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    mirror = "https://artifacts.example.com/maven/repo'1"
+    monkeypatch.setenv("BOSS_MAVEN_MIRROR", mirror)
+    monkeypatch.delenv("BOSS_MAVEN_CREDENTIAL_REF", raising=False)
+    assert toolchains.write_proxy_config(home, "http://egress:8091")
+    init_file = home / ".gradle" / "init.d" / "boss-mirror.gradle"
+    assert init_file.is_file()
+    script = init_file.read_text()
+    assert "allprojects" in script
+    assert "settings.pluginManagement.repositories" in script
+    assert "settings.dependencyResolutionManagement.repositories" in script
+    assert "https://artifacts.example.com/maven/repo\\'1" in script
+    assert "allowInsecureProtocol" not in script
+
+    # When authenticated via egress proxy (http://egress:8090/maven/), Gradle 8 needs allowInsecureProtocol.
+    monkeypatch.setenv("BOSS_EGRESS_URL", "http://egress:8090")
+    monkeypatch.setenv("BOSS_MAVEN_CREDENTIAL_REF", "env")
+    assert toolchains.write_proxy_config(home, "http://egress:8091")
+    proxy_script = init_file.read_text()
+    assert "http://egress:8090/maven/" in proxy_script
+    assert "allowInsecureProtocol = true" in proxy_script
+
+    # Clearing BOSS_MAVEN_MIRROR removes any stale init script on the next run.
+    monkeypatch.delenv("BOSS_MAVEN_MIRROR")
+    assert toolchains.write_proxy_config(home, "http://egress:8091")
+    assert not init_file.exists()
 
 
 def test_no_proxy_config_without_java(tmp_path, java_off):

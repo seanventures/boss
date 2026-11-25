@@ -237,7 +237,8 @@ def test_finalize_refuses_without_echoing_and_the_cli_exits_non_zero(tmp_path):
 
 def test_a_run_gets_every_mirror_and_nothing_inherited_contradicts_it():
     source = {"BOSS_NPM_REGISTRY": "https://npm.example.com/r/", "NPM_CONFIG_REGISTRY": "https://old.example.com/",
-              "NPM_CONFIG_STRICT_SSL": "false", "BOSS_PIP_INDEX_URL": "https://pypi.example.com/simple",
+              "NPM_CONFIG_STRICT_SSL": "false", "yarn_npm_registry_server": "https://old-yarn.example.com/",
+              "BOSS_PIP_INDEX_URL": "https://pypi.example.com/simple",
               "PIP_EXTRA_INDEX_URL": "https://pypi.org/simple", "PIP_TRUSTED_HOST": "pypi.example.com",
               "BOSS_PLAYWRIGHT_DOWNLOAD_HOST": "https://pw.example.com/",
               "HTTPS_PROXY": "http://proxy.example.com:8080", "NO_PROXY": ".example.com",
@@ -245,10 +246,11 @@ def test_a_run_gets_every_mirror_and_nothing_inherited_contradicts_it():
     env = agent_environment(source)
     assert env["npm_config_registry"] == "https://npm.example.com/r/"
     assert env["npm_config_strict_ssl"] == "true"
+    assert env["YARN_NPM_REGISTRY_SERVER"] == "https://npm.example.com/r/"
     assert env["PIP_INDEX_URL"] == "https://pypi.example.com/simple"
     assert env["PLAYWRIGHT_DOWNLOAD_HOST"] == "https://pw.example.com"
-    for gone in ("NPM_CONFIG_REGISTRY", "NPM_CONFIG_STRICT_SSL", "PIP_EXTRA_INDEX_URL", "PIP_TRUSTED_HOST",
-                 "DATABASE_URL", "BOSS_NPM_REGISTRY"):
+    for gone in ("NPM_CONFIG_REGISTRY", "NPM_CONFIG_STRICT_SSL", "yarn_npm_registry_server",
+                 "PIP_EXTRA_INDEX_URL", "PIP_TRUSTED_HOST", "DATABASE_URL", "BOSS_NPM_REGISTRY"):
         assert gone not in env, gone
     assert env["GIT_SSL_CAINFO"] and env["HTTPS_PROXY"] and env["NO_PROXY"]
 
@@ -323,7 +325,8 @@ def _compose() -> dict:
 
 def test_every_boss_container_built_from_the_api_image_sees_the_whole_block():
     services = _compose()["services"]
-    runtime = set(en.SETTINGS) - {"BOSS_EXTRA_CA_FILE"}      # the host path; containers get the file
+    # Host file paths are mounted as secrets/files, never passed as container env vars.
+    runtime = set(en.SETTINGS) - {"BOSS_EXTRA_CA_FILE", "BOSS_BUILD_NPMRC_FILE", "BOSS_BUILD_PIP_CONF_FILE"}
     for name in PYTHON_RUNTIME_SERVICES:
         missing = runtime - set(services[name]["environment"])
         assert not missing, f"{name} does not get {sorted(missing)}"
@@ -338,16 +341,58 @@ def test_every_boss_container_built_from_the_api_image_sees_the_whole_block():
 def test_every_image_build_gets_the_build_settings_and_the_ca_secret_never_a_credential():
     compose = _compose()
     build_settings = {"BOSS_NPM_REGISTRY", "BOSS_PIP_INDEX_URL", "BOSS_PLAYWRIGHT_DOWNLOAD_HOST",
-                      "BOSS_UPSTREAM_PROXY", "BOSS_UPSTREAM_NO_PROXY"}
+                      "BOSS_TOOLCHAIN_MIRROR_URL", "BOSS_UPSTREAM_PROXY", "BOSS_UPSTREAM_NO_PROXY"}
     targets = {n: s["build"] for n, s in compose["services"].items()
                if isinstance(s.get("build"), dict) and s["build"].get("dockerfile") == "Dockerfile.community"}
     assert len(targets) >= 7
     for name, build in targets.items():
-        assert "boss_build_ca" in build.get("secrets", []), name
+        for sec in ("boss_build_ca", "boss_build_npmrc", "boss_build_pip_conf"):
+            assert sec in build.get("secrets", []), (name, sec)
         assert build_settings <= set(build["args"]), name
         for arg in build["args"]:
             assert not re.search(r"TOKEN|PASSWORD|SECRET|_KEY|CA_PEM|CA_FILE", arg), (name, arg)
     assert "BOSS_EXTRA_CA_FILE" in compose["secrets"]["boss_build_ca"]["file"]
+    assert "BOSS_BUILD_NPMRC_FILE" in compose["secrets"]["boss_build_npmrc"]["file"]
+    assert "BOSS_BUILD_PIP_CONF_FILE" in compose["secrets"]["boss_build_pip_conf"]["file"]
+
+
+@pytest.mark.parametrize("name", sorted(en.GIT_URL_SETTINGS))
+def test_git_url_settings_enforce_url_rules_and_never_enter_connect_registry_endpoints(name):
+    bad = en.problems({name: f"https://u:{SECRET}@git.example.com/"})
+    assert bad and name in bad[0] and SECRET not in " ".join(bad)
+    assert en.problems({name: "http://git.example.com/"})
+    assert en.problems({name: "https://127.0.0.1/"})
+    url = "https://git.example.com:8443"
+    assert en.problems({name: url}) == []
+    assert ("git.example.com", 8443) not in en.registry_endpoints({name: url})
+
+
+@pytest.mark.parametrize("name", sorted(en.CREDENTIAL_REF_SETTINGS))
+def test_credential_ref_settings_reject_raw_tokens_and_urls(name):
+    assert en.problems({name: "secret_ref:sref_123"}) == []
+    assert en.problems({name: "store:boss/registry/npm"}) == []
+    assert en.problems({name: "env"}) == []
+    for bad_val in (f"npm_{SECRET}", f"https://u:{SECRET}@reg.example.com", "secret_ref:", "store:"):
+        found = en.problems({name: bad_val})
+        assert found and name in found[0] and SECRET not in " ".join(found)
+
+
+def test_build_secret_file_and_gitlab_repos_validation(tmp_path):
+    npmrc = tmp_path / ".npmrc"
+    npmrc.write_text("//registry.example.com/:_authToken=tok\n")
+    assert en.problems({"BOSS_BUILD_NPMRC_FILE": str(npmrc)}) == []
+    assert en.problems({"BOSS_BUILD_NPMRC_FILE": "relative/.npmrc"})
+    assert en.problems({"BOSS_BUILD_NPMRC_FILE": str(tmp_path / "missing")})
+    dotenv = tmp_path / ".env"
+    dotenv.write_text("SECRET=1\n")
+    assert en.problems({"BOSS_BUILD_PIP_CONF_FILE": str(dotenv)})
+    big = tmp_path / "big.conf"
+    big.write_bytes(b"x" * (en.CA_MAX_BYTES + 1))
+    assert en.problems({"BOSS_BUILD_PIP_CONF_FILE": str(big)})
+
+    assert en.problems({"BOSS_GITLAB_REPOS": "acme/web,platform/sub/api"}) == []
+    assert en.problems({"BOSS_GITLAB_REPOS": "https://gitlab.example.com/acme/web"})
+    assert en.problems({"BOSS_GITLAB_REPOS": "acme/../secret"})
 
 
 def test_the_installer_writes_and_the_upgrade_carries_every_setting_with_a_new_value_winning():

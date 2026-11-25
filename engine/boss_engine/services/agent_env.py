@@ -63,7 +63,7 @@ ALLOW_EXACT: frozenset[str] = frozenset({
 #: Prefixes for toolchain configuration. Deliberately narrow: these configure npm, pip and
 #: Playwright, and none of them is where anybody keeps a database password.
 ALLOW_PREFIXES: tuple[str, ...] = (
-    "NPM_CONFIG_", "npm_config_", "PLAYWRIGHT_", "PIP_", "PYTHONDONTWRITE", "PYTHONUNBUFFERED",
+    "NPM_CONFIG_", "npm_config_", "YARN_", "PLAYWRIGHT_", "PIP_", "PYTHONDONTWRITE", "PYTHONUNBUFFERED",
     "NODE_OPTIONS",
 )
 

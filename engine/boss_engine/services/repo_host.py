@@ -18,7 +18,9 @@ Adding a host = one adapter module conforming to ``RepoHost`` + one line in ``_H
 """
 from __future__ import annotations
 
+import os
 from typing import Any, Optional, Protocol, runtime_checkable
+from urllib.parse import urlsplit
 
 from .github_adapter import (
     GitHubAdapter,
@@ -64,6 +66,24 @@ def _github_web(web_base: str) -> str:
     return web
 
 
+def _gitlab_origin() -> Optional[str]:
+    raw = (os.environ.get("BOSS_GITLAB_BASE_URL") or "").strip()
+    if not raw:
+        return None
+    parts = urlsplit(raw)
+    if not (parts.scheme and parts.netloc):
+        return None
+    host = (parts.hostname or "").lower()
+    has_cfg = bool(
+        (os.environ.get("BOSS_GITLAB_TOKEN") or "").strip()
+        or (os.environ.get("BOSS_GITLAB_PASSWORD") or "").strip()
+        or (os.environ.get("BOSS_GITLAB_REPOS") or "").strip()
+    )
+    if host != "gitlab.com" or has_cfg:
+        return f"{parts.scheme}://{parts.netloc}"
+    return None
+
+
 def clone_url_for(host: str, owner: str, repo: str, token: str = "", *, web_base: str) -> str:
     """The authenticated HTTPS clone URL for a host — the ONE place that knows each host's
     credential form (previously duplicated, GitHub-only, across 4+ call sites). ``web_base`` is
@@ -85,6 +105,13 @@ def clone_url_for(host: str, owner: str, repo: str, token: str = "", *, web_base
         if token:
             return f"https://x-token-auth:{token}@bitbucket.org/{owner}/{repo}.git"
         return f"https://bitbucket.org/{owner}/{repo}.git"
+    if kind == "gitlab":
+        origin = _gitlab_origin()
+        if origin is not None:
+            if token:
+                parts = urlsplit(origin)
+                return f"{parts.scheme}://oauth2:{token}@{parts.netloc}/{owner}/{repo}.git"
+            return f"{origin}/{owner}/{repo}.git"
     if kind == "local":
         # BOSSAPP-918: a bare repository BOSS keeps on this machine; no credential exists.
         from . import local_repo
@@ -104,7 +131,7 @@ def clone_url_for(host: str, owner: str, repo: str, token: str = "", *, web_base
 # principal in context, `identity.runs.repo_access` routes the clone through boss-egress instead
 # and no GitHub token exists on this side at all.
 
-_BASIC_USER = {"github": "x-access-token", "bitbucket": "x-token-auth"}
+_BASIC_USER = {"github": "x-access-token", "bitbucket": "x-token-auth", "gitlab": "oauth2"}
 _HOST_ORIGIN = {"bitbucket": "https://bitbucket.org/"}   # GitHub's comes from github_urls
 
 
@@ -194,7 +221,11 @@ def git_access(host: str, owner: str, repo: str, token: str = "", *, web_base: s
 
         github_urls.check_send(token, _github_web(web_base), where="git")
     basic = base64.b64encode(f"{_BASIC_USER.get(kind, 'x-access-token')}:{token}".encode()).decode()
-    origin = _HOST_ORIGIN.get(kind) or _github_web(web_base) + "/"
+    if kind == "gitlab":
+        gl = _gitlab_origin()
+        origin = f"{gl}/" if gl else "https://gitlab.com/"
+    else:
+        origin = _HOST_ORIGIN.get(kind) or _github_web(web_base) + "/"
     return GitAccess(url, git_config_env([(f"http.{origin}.extraheader", f"AUTHORIZATION: basic {basic}")]),
                      via="token")
 

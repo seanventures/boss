@@ -34,11 +34,27 @@ from urllib.parse import urlsplit
 
 #: setting -> what it is (used in messages; never the value).
 URL_SETTINGS: dict[str, str] = {
-    "BOSS_NPM_REGISTRY": "the npm registry (also pnpm and yarn v1)",
+    "BOSS_NPM_REGISTRY": "the npm registry (npm, pnpm, yarn v1, yarn berry)",
     "BOSS_PIP_INDEX_URL": "the Python package index",
     "BOSS_GOPROXY": "the Go module proxy",
     "BOSS_MAVEN_MIRROR": "the Maven repository mirror",
     "BOSS_PLAYWRIGHT_DOWNLOAD_HOST": "the Playwright browser download host",
+    "BOSS_TOOLCHAIN_MIRROR_URL": "the toolchain archive mirror (JDK, Maven, Gradle, Go)",
+}
+GIT_URL_SETTINGS: dict[str, str] = {
+    "BOSS_GITHUB_WEB_URL": "the GitHub Enterprise Server web base URL",
+    "BOSS_GITHUB_API_URL": "the GitHub Enterprise Server API base URL",
+    "BOSS_GITHUB_GIT_URL": "the GitHub Enterprise Server git base URL",
+    "BOSS_GITLAB_BASE_URL": "the self-hosted GitLab base URL",
+}
+CREDENTIAL_REF_SETTINGS: dict[str, str] = {
+    "BOSS_NPM_CREDENTIAL_REF": "the secret reference for the npm registry credential",
+    "BOSS_PIP_CREDENTIAL_REF": "the secret reference for the Python package index credential",
+    "BOSS_MAVEN_CREDENTIAL_REF": "the secret reference for the Maven mirror credential",
+}
+BUILD_FILE_SETTINGS: dict[str, str] = {
+    "BOSS_BUILD_NPMRC_FILE": "an .npmrc file passed as a BuildKit secret during image builds",
+    "BOSS_BUILD_PIP_CONF_FILE": "a pip.conf file passed as a BuildKit secret during image builds",
 }
 PROXY_SETTINGS: dict[str, str] = {
     "BOSS_UPSTREAM_PROXY": "the outbound proxy for HTTPS that BOSS's containers and boss-egress use",
@@ -52,6 +68,7 @@ LIST_SETTINGS: dict[str, str] = {
     "BOSS_EGRESS_CONNECT_ALLOW": "extra hosts the sandbox fence allows (host, *.suffix, host:port)",
     "BOSS_EGRESS_PRIVATE_ALLOW": "internal hosts the fence may reach on a private address",
     "BOSS_GONOSUMDB": "Go module path patterns not checked against the checksum database",
+    "BOSS_GITLAB_REPOS": "self-hosted GitLab repositories the install allows (group/repo)",
 }
 OTHER_SETTINGS: dict[str, str] = {
     "BOSS_EXTRA_CA_FILE": "a PEM file of extra CA certificates (the company's root)",
@@ -61,8 +78,13 @@ OTHER_SETTINGS: dict[str, str] = {
 #: Every setting of the block, in the order .env.example and the installer write them.
 SETTINGS: tuple[str, ...] = (
     "BOSS_EXTRA_CA_FILE",
-    "BOSS_NPM_REGISTRY", "BOSS_PIP_INDEX_URL", "BOSS_GOPROXY", "BOSS_GOSUMDB", "BOSS_GONOSUMDB",
-    "BOSS_MAVEN_MIRROR", "BOSS_PLAYWRIGHT_DOWNLOAD_HOST",
+    "BOSS_NPM_REGISTRY", "BOSS_NPM_CREDENTIAL_REF", "BOSS_BUILD_NPMRC_FILE",
+    "BOSS_PIP_INDEX_URL", "BOSS_PIP_CREDENTIAL_REF", "BOSS_BUILD_PIP_CONF_FILE",
+    "BOSS_GOPROXY", "BOSS_GOSUMDB", "BOSS_GONOSUMDB",
+    "BOSS_MAVEN_MIRROR", "BOSS_MAVEN_CREDENTIAL_REF",
+    "BOSS_PLAYWRIGHT_DOWNLOAD_HOST", "BOSS_TOOLCHAIN_MIRROR_URL",
+    "BOSS_GITHUB_WEB_URL", "BOSS_GITHUB_API_URL", "BOSS_GITHUB_GIT_URL",
+    "BOSS_GITLAB_BASE_URL", "BOSS_GITLAB_REPOS",
     "BOSS_UPSTREAM_PROXY", "BOSS_UPSTREAM_HTTP_PROXY", "BOSS_UPSTREAM_NO_PROXY",
     "BOSS_EGRESS_CONNECT_ALLOW", "BOSS_EGRESS_CONNECT_DEFAULTS", "BOSS_EGRESS_PRIVATE_ALLOW",
 )
@@ -82,6 +104,7 @@ CA_CONTAINER_PATH = "/etc/boss/extra-ca.pem"
 CA_INSTALL_COPY = os.path.join(".boss", "extra-ca.pem")
 _HOST_RE = re.compile(r"^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$")
 _GO_PATTERN_RE = re.compile(r"^[A-Za-z0-9._~*/-]+$")
+_GITLAB_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+$")
 _PEM_CERT = re.compile(rb"-----BEGIN CERTIFICATE-----\s+[A-Za-z0-9+/=\s]+?-----END CERTIFICATE-----")
 
 
@@ -95,7 +118,7 @@ def _clean(value: Optional[str]) -> str:
 
 def check_url(name: str, value: str, *, allow_http: bool = False) -> None:
     """Raise SettingError unless `value` is a URL BOSS may write into a build or a run."""
-    what = URL_SETTINGS.get(name) or PROXY_SETTINGS.get(name) or name
+    what = URL_SETTINGS.get(name) or PROXY_SETTINGS.get(name) or GIT_URL_SETTINGS.get(name) or name
     if any(ch.isspace() or ord(ch) < 32 for ch in value):
         raise SettingError(f"{name} ({what}) must be one URL with no spaces or line breaks")
     try:
@@ -228,6 +251,41 @@ def _check_ca_bytes(data: bytes, name: str) -> None:
         raise SettingError(f"{name} holds a certificate that does not parse") from exc
 
 
+def _check_credential_ref(name: str, value: str) -> None:
+    what = CREDENTIAL_REF_SETTINGS.get(name) or name
+    if any(ch.isspace() or ord(ch) < 32 for ch in value):
+        raise SettingError(f"{name} ({what}) must be secret_ref:<id>, store:<key>, or env (no spaces)")
+    lower = value.lower()
+    if lower in ("env", "1", "true", "yes"):
+        return
+    if value.startswith("secret_ref:") and len(value) > len("secret_ref:"):
+        return
+    if value.startswith("store:") and len(value) > len("store:"):
+        return
+    raise SettingError(
+        f"{name} ({what}) must be secret_ref:<id>, store:<key>, or env (never a raw token or URL)"
+    )
+
+
+def _check_build_secret_file(name: str, path: str) -> None:
+    what = BUILD_FILE_SETTINGS.get(name) or name
+    if any(ch in path for ch in ("\n", "\r", "\x00")):
+        raise SettingError(f"{name} ({what}) must be a single file path")
+    if not os.path.isabs(path):
+        raise SettingError(f"{name} ({what}) must be an absolute path")
+    if os.path.basename(path) == ".env":
+        raise SettingError(f"{name} ({what}) must point to a dedicated config file, not .env")
+    if not os.path.isfile(path):
+        raise SettingError(f"{name} ({what}) does not exist or is not a regular file")
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read(CA_MAX_BYTES + 1)
+    except OSError as exc:
+        raise SettingError(f"{name} ({what}) cannot be read ({exc.strerror or 'unreadable'})") from exc
+    if len(data) > CA_MAX_BYTES:
+        raise SettingError(f"{name} ({what}) is larger than {CA_MAX_BYTES // 1024} KB (BuildKit secret limit)")
+
+
 def problems(env: Mapping[str, str]) -> list[str]:
     """Every refused value in `env`, as messages that name the setting and never the value."""
     out: list[str] = []
@@ -236,6 +294,27 @@ def problems(env: Mapping[str, str]) -> list[str]:
         if value:
             try:
                 check_url(name, value)
+            except SettingError as exc:
+                out.append(str(exc))
+    for name in GIT_URL_SETTINGS:
+        value = _clean(env.get(name))
+        if value:
+            try:
+                check_url(name, value)
+            except SettingError as exc:
+                out.append(str(exc))
+    for name in CREDENTIAL_REF_SETTINGS:
+        value = _clean(env.get(name))
+        if value:
+            try:
+                _check_credential_ref(name, value)
+            except SettingError as exc:
+                out.append(str(exc))
+    for name in BUILD_FILE_SETTINGS:
+        value = _clean(env.get(name))
+        if value:
+            try:
+                _check_build_secret_file(name, value)
             except SettingError as exc:
                 out.append(str(exc))
     for name in PROXY_SETTINGS:
@@ -258,6 +337,10 @@ def problems(env: Mapping[str, str]) -> list[str]:
     for pattern in _split(_clean(env.get("BOSS_GONOSUMDB"))):
         if not _GO_PATTERN_RE.match(pattern):
             out.append("BOSS_GONOSUMDB must be a comma-separated list of module path patterns")
+            break
+    for repo in _split(_clean(env.get("BOSS_GITLAB_REPOS"))):
+        if not _GITLAB_REPO_RE.match(repo) or ".." in repo.split("/"):
+            out.append("BOSS_GITLAB_REPOS must be a comma-separated list of group/repo paths")
             break
     gosumdb = _clean(env.get("BOSS_GOSUMDB"))
     if gosumdb:
@@ -291,18 +374,40 @@ def require_valid(env: Mapping[str, str], names: Iterable[str] = ()) -> None:
 
 # ---- what the settings turn into -------------------------------------------------------------
 
+def _registry_auth_configured(env: Mapping[str, str], kind: str) -> bool:
+    upper = kind.upper()
+    if _clean(env.get(f"BOSS_{upper}_CREDENTIAL_REF")):
+        return True
+    if _clean(env.get(f"BOSS_{upper}_TOKEN")) or _clean(env.get(f"BOSS_{upper}_PASSWORD")):
+        return True
+    return False
+
+
 def package_environment(env: Mapping[str, str]) -> dict[str, str]:
     """The package-manager settings a sandboxed run (or a code agent) gets. Fails closed: an
     invalid value raises, because silently using the public registry would breach the policy the
     operator set. The installer and `boss doctor` catch it long before a run does."""
-    require_valid(env, ("BOSS_NPM_REGISTRY", "BOSS_PIP_INDEX_URL", "BOSS_PLAYWRIGHT_DOWNLOAD_HOST"))
+    require_valid(
+        env,
+        ("BOSS_NPM_REGISTRY", "BOSS_NPM_CREDENTIAL_REF",
+         "BOSS_PIP_INDEX_URL", "BOSS_PIP_CREDENTIAL_REF",
+         "BOSS_PLAYWRIGHT_DOWNLOAD_HOST"),
+    )
     out: dict[str, str] = {}
+    egress_url = _clean(env.get("BOSS_EGRESS_URL")).rstrip("/")
     npm = _clean(env.get("BOSS_NPM_REGISTRY"))
     if npm:
-        out.update({"npm_config_registry": npm, "npm_config_strict_ssl": "true"})
+        eff_npm = f"{egress_url}/npm/" if (egress_url and _registry_auth_configured(env, "NPM")) else npm
+        out.update({
+            "npm_config_registry": eff_npm,
+            "npm_config_strict_ssl": "true",
+            "YARN_NPM_REGISTRY_SERVER": eff_npm,
+        })
     pip = _clean(env.get("BOSS_PIP_INDEX_URL"))
     if pip:
-        out["PIP_INDEX_URL"] = pip
+        out["PIP_INDEX_URL"] = (
+            f"{egress_url}/pypi/" if (egress_url and _registry_auth_configured(env, "PIP")) else pip
+        )
     playwright = _clean(env.get("BOSS_PLAYWRIGHT_DOWNLOAD_HOST"))
     if playwright:
         out["PLAYWRIGHT_DOWNLOAD_HOST"] = playwright.rstrip("/")
@@ -311,7 +416,8 @@ def package_environment(env: Mapping[str, str]) -> dict[str, str]:
 
 #: Every name `package_environment` can set.
 PACKAGE_ENV_KEYS: tuple[str, ...] = (
-    "npm_config_registry", "npm_config_strict_ssl", "PIP_INDEX_URL", "PLAYWRIGHT_DOWNLOAD_HOST")
+    "npm_config_registry", "npm_config_strict_ssl", "YARN_NPM_REGISTRY_SERVER",
+    "PIP_INDEX_URL", "PLAYWRIGHT_DOWNLOAD_HOST")
 #: The trust variables the runtime CA wrapper (scripts/install/with-extra-ca.sh) exports, so
 #: every TLS client in a BOSS container trusts the extra CA: OpenSSL, Python ssl/httpx, Go and
 #: Rust (SSL_CERT_FILE), requests, curl, pip, git, and Node (NODE_EXTRA_CA_CERTS).
@@ -327,6 +433,7 @@ PROXY_ENV_KEYS: tuple[str, ...] = (
 PACKAGE_OVERRIDES: dict[str, tuple[str, ...]] = {
     "npm_config_registry": ("NPM_CONFIG_REGISTRY",),
     "npm_config_strict_ssl": ("NPM_CONFIG_STRICT_SSL",),
+    "YARN_NPM_REGISTRY_SERVER": ("yarn_npm_registry_server",),
     "PIP_INDEX_URL": ("pip_index_url", "PIP_EXTRA_INDEX_URL", "PIP_TRUSTED_HOST"),
 }
 
@@ -343,8 +450,50 @@ def go_environment(env: Mapping[str, str], *, default_proxy: str, default_sumdb:
 
 
 def maven_mirror(env: Mapping[str, str]) -> str:
-    require_valid(env, ("BOSS_MAVEN_MIRROR",))
-    return _clean(env.get("BOSS_MAVEN_MIRROR"))
+    require_valid(env, ("BOSS_MAVEN_MIRROR", "BOSS_MAVEN_CREDENTIAL_REF"))
+    mirror = _clean(env.get("BOSS_MAVEN_MIRROR"))
+    if not mirror:
+        return ""
+    egress_url = _clean(env.get("BOSS_EGRESS_URL")).rstrip("/")
+    if egress_url and _registry_auth_configured(env, "MAVEN"):
+        return f"{egress_url}/maven/"
+    return mirror
+
+
+def self_hosted_git_hosts(env: Mapping[str, str]) -> dict[str, str]:
+    """{hostname: provider} for configured self-hosted GHES and GitLab hosts (blocked from raw
+    CONNECT so they must go through boss-egress's Git proxy)."""
+    out: dict[str, str] = {}
+    for var, provider in (
+        ("BOSS_GITHUB_WEB_URL", "github"),
+        ("BOSS_GITHUB_GIT_URL", "github"),
+        ("BOSS_GITHUB_API_URL", "github-api"),
+    ):
+        value = _clean(env.get(var))
+        if not value:
+            continue
+        try:
+            check_url(var, value)
+            host = (urlsplit(value).hostname or "").lower()
+            if host and host not in ("github.com", "api.github.com"):
+                out[host] = provider
+        except SettingError:
+            continue
+    gl = _clean(env.get("BOSS_GITLAB_BASE_URL"))
+    if gl:
+        try:
+            check_url("BOSS_GITLAB_BASE_URL", gl)
+            host = (urlsplit(gl).hostname or "").lower()
+            has_gl_cfg = bool(
+                _clean(env.get("BOSS_GITLAB_TOKEN"))
+                or _clean(env.get("BOSS_GITLAB_PASSWORD"))
+                or _clean(env.get("BOSS_GITLAB_REPOS"))
+            )
+            if host and (host != "gitlab.com" or has_gl_cfg):
+                out[host] = "gitlab"
+        except SettingError:
+            pass
+    return out
 
 
 def registry_endpoints(env: Mapping[str, str]) -> list[tuple[str, int]]:
