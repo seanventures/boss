@@ -572,7 +572,7 @@ button.wf-tag:focus-visible { outline: 2px solid var(--accent); outline-offset: 
 .wf-shelf-tags { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
 .wf-shelf-tag {
   height: 26px; padding: 0 10px; border: 1px solid var(--border); border-radius: 999px;
-  background: transparent; color: var(--muted); font: 600 0.75rem/1 var(--sans); cursor: pointer;
+  background: transparent; color: var(--muted); font: 600 var(--fs-body)/1 var(--sans); cursor: pointer;
 }
 .wf-shelf-tag:hover { color: var(--ink); border-color: var(--accent); }
 .wf-shelf-tag:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -599,7 +599,7 @@ button.wf-tag:focus-visible { outline: 2px solid var(--accent); outline-offset: 
 }
 .wf-shelf-src {
   display: inline-block; padding: 2px 7px; border-radius: 4px; white-space: nowrap;
-  background: var(--surface-3); color: var(--muted); font: 700 0.6875rem/1.4 var(--sans);
+  background: var(--surface-3); color: var(--muted); font: 700 var(--fs-tag)/1.4 var(--sans);
 }
 .wf-shelf-src[data-source="org"] { background: var(--green-soft); color: var(--green); }
 .wf-shelf-card {
@@ -615,13 +615,13 @@ button.wf-tag:focus-visible { outline: 2px solid var(--accent); outline-offset: 
 .wf-shelf-steps li span { padding: 3px 7px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); }
 .wf-shelf-steps li + li::before { content: "→"; color: var(--faint); }
 .wf-shelf-brief { color: var(--muted); font: var(--fs-meta)/1.5 var(--sans); }
-.wf-shelf-brief summary { cursor: pointer; color: var(--accent); font: 600 0.8125rem var(--sans); }
+.wf-shelf-brief summary { cursor: pointer; color: var(--accent); font: 600 var(--fs-title) var(--sans); }
 .wf-shelf-brief p { margin: 6px 0 0; white-space: pre-line; overflow-wrap: anywhere; }
 .wf-shelf-add { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
 .wf-shelf-project {
   flex: 1 1 100%; min-width: 0; height: 34px; padding: 0 8px;
   border: 1px solid var(--border); border-radius: var(--r); background: var(--bg); color: var(--ink);
-  font: 600 0.8125rem/1 var(--sans);
+  font: 600 var(--fs-title)/1 var(--sans);
 }
 .wf-shelf-project:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .wf-shelf-hint { margin: -4px 0 0; color: var(--faint); font: var(--fs-meta)/1.4 var(--sans); }
