@@ -6,10 +6,13 @@ stdin/stdout, nothing else. Tools:
   stats       -> how many times it was initialized, its pid
   write_note  {"text"} -> pretends to write (a tool the tests mark tier 2)
   die         -> exits without answering (a crash)
+  sleep       {"seconds"} -> answers after that long (a slow tool)
+  cancelled   -> the request ids this server was told to cancel (notifications/cancelled)
 """
 import json
 import os
 import sys
+import time
 
 TOOLS = [
     {"name": "echo", "description": "Echo back the text you send.",
@@ -21,7 +24,12 @@ TOOLS = [
     {"name": "write_note", "description": "Write a note somewhere.",
      "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}}},
     {"name": "die", "description": "Exit at once.", "inputSchema": {"type": "object"}},
+    {"name": "sleep", "description": "Answer after `seconds`.",
+     "inputSchema": {"type": "object", "properties": {"seconds": {"type": "number"}}}},
+    {"name": "cancelled", "description": "Ids this server was told to cancel.",
+     "inputSchema": {"type": "object"}},
 ]
+cancelled = []
 
 initialized = 0
 
@@ -36,6 +44,8 @@ for line in sys.stdin:
         continue
     msg = json.loads(line)
     if "id" not in msg:
+        if msg.get("method") == "notifications/cancelled":
+            cancelled.append((msg.get("params") or {}).get("requestId"))
         continue
     method = msg.get("method")
     params = msg.get("params") or {}
@@ -60,6 +70,11 @@ for line in sys.stdin:
             result = text({"initialized": initialized, "pid": os.getpid()})
         elif name == "write_note":
             result = text({"written": args.get("text")})
+        elif name == "sleep":
+            time.sleep(float(args.get("seconds") or 1))
+            result = text({"slept": True})
+        elif name == "cancelled":
+            result = text({"ids": cancelled})
         elif name == "die":
             sys.exit(3)
         else:
