@@ -923,6 +923,40 @@ def _fill_optional_from_run_input(
     return filled
 
 
+def template_view(context: dict[str, Any]) -> dict[str, Any]:
+    """The run's context as a step's text reads it: `{input.<f>}` and `{steps.<id>.output.<f>}`,
+    the same paths a gate's card and a condition use (workflows.fill_template)."""
+    return {"input": context.get("input") or {},
+            "steps": {sid: {"output": out} for sid, out in (context.get("steps") or {}).items()
+                      if isinstance(out, dict)}}
+
+
+def _rendered_inputs(capability: Any, inputs: dict[str, Any], context: dict[str, Any], *,
+                     strict: bool = True) -> dict[str, Any]:
+    """Fill the capability's TEXT inputs with other steps' results (BOSSAPP-1171), or fail the
+    step naming the placeholder that has no value (settled: the same run says the same thing
+    again). `strict=False` (a gate's preview) keeps a text that cannot be filled as written; the
+    step itself then fails when it runs."""
+    names = tuple(getattr(capability, "templated_inputs", ()) or ())
+    if not names:
+        return inputs
+    view: Optional[dict[str, Any]] = None
+    out = dict(inputs)
+    for name in names:
+        given = out.get(name)
+        texts = given if isinstance(given, list) else [given]
+        if not texts or not all(isinstance(t, str) for t in texts) or not any("{" in t for t in texts):
+            continue
+        view = view if view is not None else template_view(context)
+        try:
+            out[name] = workflows.render_step_text(given, view)
+        except workflows.TemplateError as error:
+            if not strict:
+                continue
+            raise SettledCapabilityError(f"'{name}': {error}") from error
+    return out
+
+
 def deploy_step_inputs(connection: Connection, spec_step: dict[str, Any],
                        context: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
     """A deploy step's inputs as it will run with them, resolved before it runs; None when they
@@ -3031,6 +3065,7 @@ def _execute_step(
     inputs = _resolve_inputs(binding.get("inputs") or {}, context,
                              optional=frozenset(capability.optional_inputs or ()))
     inputs = _fill_optional_from_run_input(capability, inputs, context)
+    inputs = _rendered_inputs(capability, inputs, context)
     amendment = None
     if key == "contract_test":
         if not inputs.get("cases"):
@@ -3142,10 +3177,16 @@ def _notification_text(context: dict[str, Any], message: Any) -> tuple[str, str]
     reader wants is where the thing is — the deployed URL, the pull request, the preview — and
     those are already in the run, so the body is assembled from them.
     """
-    title = str(message or (context.get("input") or {}).get("title") or "").strip()
+    said = str(message or (context.get("input") or {}).get("title") or "").strip()
+    # A MESSAGE OF SEVERAL LINES (a filled template: the validation report, the contract table)
+    # is a headline and its body: the first line names the notification, the rest is said whole.
+    title, _, rest = said.partition("\n")
+    title = title.strip()
     workflow = str(context.get("workflow_name") or "Workflow").strip()
     subject = f"{workflow}: {title}"[:180] if title else workflow
     lines = [subject, ""]
+    if rest.strip():
+        lines += [rest.strip(), ""]
     for label, field in (("Live at", "deployed_url"), ("Preview", "preview_url"),
                          ("Pull request", "pull_request_url"), ("Record", "document_id")):
         value = _from_any_step(context, field)
@@ -4506,11 +4547,25 @@ def _perform_capability(
         # PROMOTED IS WHAT THIS RUN STAGED (BOSSAPP-1167). Never "the latest staging
         # deploy for the app": with two tenants in flight that is the other tenant's bundle.
         inputs = _bound_promotion(connection, context, inputs)
+    if key == "rollback_config":
+        # ROLLED BACK IS WHAT THIS RUN SHIPPED (BOSSAPP-1173), by default its latest.
+        inputs = _bound_rollback(connection, context, inputs)
     # Under the run's recorded authority (the step's agent for that person), never the worker's.
     with _step_authority(ctx, connection, project_id, context, step, step_actor):
-        if key == "deploy" and context.get("approval_decision_id"):
+        if key in ("config_deploy", "promote_config", "rollback_config") \
+                and context.get("approval_decision_id"):
+            # The tool plans in a transaction of its own, which cannot see this tick's release
+            # of the gate: the runner checks it here and hands it over as a trusted value.
+            from .deploy_policy import released_gate
+
+            gate = released_gate(connection, project_id, str(context["approval_decision_id"]))
+            if gate:
+                trusted_step = {**trusted_step, "released_gate": gate}
+        if key in _GATE_GOES_TO_THE_DEPLOYMENT and context.get("approval_decision_id"):
             # ONE APPROVAL PER DEPLOY: the step's released gate goes to the deploy explicitly,
-            # so the deployment runs under it instead of asking a second time.
+            # so the deployment runs under it instead of asking a second time. Config deploys,
+            # promotions and rollbacks too (BOSSAPP-1172); production config counts it only
+            # when a person released it (deploy_policy.pre_approval, gate_by_person).
             inputs = {**inputs, "approval_decision_id": str(context["approval_decision_id"])}
         if key == "deploy" and promises_a_person(step):
             # The step promised a person: the deployment it starts may not run on the
@@ -4646,6 +4701,52 @@ def _bound_promotion(connection: Connection, context: dict[str, Any], inputs: di
             "recorded. Nothing was promoted.")
     bound = {k: v for k, v in inputs.items() if k != "deployment_id"}
     return {**bound, "deployment_run_id": given, "bundle_sha256": expected}
+
+
+#: Deploy-like steps whose released gate is the deployment's approval (BOSSAPP-1172):
+#: deploy_policy.GATED_DEPLOYS names the same capabilities on the deployment's side.
+_GATE_GOES_TO_THE_DEPLOYMENT = frozenset({"deploy", "config_deploy", "promote_config",
+                                          "rollback_config"})
+#: The steps whose deployments a run may roll back: the config it shipped itself.
+_ROLLED_BACK_FROM = ("config_deploy", "promote_config")
+
+
+def _bound_rollback(connection: Connection, context: dict[str, Any], inputs: dict[str, Any],
+                    spec: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    """`rollback_config` inputs bound to a deployment THIS run shipped (BOSSAPP-1173), or a
+    refusal. With no `deployment_id` bound, the run's latest config deployment step that
+    produced one (staging, typically: "contract tests failed, roll staging back"). Which steps
+    count is read from the SPEC, never from an output field, as for a promotion; the tool checks
+    the database again (`config_deploy.rollback`: planned by this workflow run)."""
+    run_id = str(context.get("run_id") or "").strip()
+    if spec is None:
+        spec = workflows._run_spec(connection, run_id)
+    produced = context.get("steps") or {}
+    shipped: list[str] = []
+    for sid, template in workflows._step_map(spec).items():
+        binding = template.get("binding") or {}
+        if template.get("kind") != "capability" or binding.get("custom_step") or \
+                binding.get("capability") not in _ROLLED_BACK_FROM:
+            continue
+        output = produced.get(sid)
+        if not isinstance(output, dict) or output.get("step_status") == "failed":
+            continue
+        dep = str(output.get("deployment_id") or output.get("deployment_run_id") or "").strip()
+        if dep:
+            shipped.append(dep)
+    given = str(inputs.get("deployment_id") or inputs.get("deployment_run_id") or "").strip()
+    if not given:
+        if not shipped:
+            raise SettledCapabilityError(
+                "rollback_config found no config deployment this run shipped, so there is "
+                "nothing of this run's to roll back.")
+        given = shipped[-1]
+    elif given not in shipped:
+        raise SettledCapabilityError(
+            f"deployment {given} was not shipped by this run, so this run cannot roll it back. "
+            "A run rolls back only what its own config_deploy or promote_config step shipped.")
+    bound = {k: v for k, v in inputs.items() if k not in ("deployment_id", "deployment_run_id")}
+    return {**bound, "deployment_run_id": given}
 
 
 #: The heading the operator's retry note is given under, in every build it reaches.
@@ -5677,6 +5778,7 @@ _AWAIT_KINDS: dict[str, tuple[str, tuple[str, ...]]] = {
     # shipped, and promoted is not live until production's health check passed.
     "config_deploy": ("deployment", ("deployment_id", "deployment_run_id", "id")),
     "promote_config": ("deployment", ("deployment_id", "deployment_run_id", "id")),
+    "rollback_config": ("deployment", ("deployment_id", "deployment_run_id", "id")),
     # RETRIED IS NOT REBUILT. `retry_code_task` answers `{"status": "retried", "result":
     # {"run_id": <the new attempt>}}` the moment the attempt is queued; the step waits on that
     # attempt as `build` waits on the first.
@@ -6094,6 +6196,15 @@ def _remediation_record(connection: Connection, code_task_run_id: str) -> dict[s
         value = json.loads(value) if isinstance(value, str) else value
         if isinstance(value, dict):
             out[key] = value
+    record = out.get(input_fidelity.VALIDATION_KEY)
+    if isinstance(record, dict):
+        # SAID WHERE A LATER STEP CAN QUOTE IT (BOSSAPP-1131 / 1171): the report as markdown
+        # (`{steps.<build>.output.validation_report}` in a PR comment) and its verdict.
+        from . import validators
+
+        out["validation_report"] = validators.report_markdown(record)
+        out["checks_passed"] = validators.checks_passed(record)
+        out["open_findings"] = len(validators.open_blocking(record))
     return out
 
 
@@ -7824,7 +7935,8 @@ def _gated_inputs(
     capability = get_capability(key)
     inputs = _resolve_inputs(raw, context,
                              optional=frozenset(capability.optional_inputs or ()))
-    return f"capability:{key}", _fill_optional_from_run_input(capability, inputs, context)
+    inputs = _fill_optional_from_run_input(capability, inputs, context)
+    return f"capability:{key}", _rendered_inputs(capability, inputs, context, strict=False)
 
 
 def _action_preview_for(
@@ -8055,6 +8167,12 @@ def _gate_subject(
             connection, project_id, spec_step, context, key):
         # A DEPLOY TO A DEVELOPMENT TARGET ASKS NOBODY (dev autonomy, BOSSAPP-1441): the step
         # runs and its deployment is decided by the agent, logged in "Decided for you".
+        return None
+    if key == "config_deploy" and context is not None and policy_answers_for_step(
+            connection, project_id, spec_step, context.get("input")):
+        # A CONFIG DEPLOY THAT FOLLOWS ITS ENVIRONMENT'S POLICY (BOSSAPP-1172), as a Deploy step
+        # does: where a person set the environment to ship without asking, the step asks nobody
+        # and its deployment runs on that policy. Production never: its policy is never read.
         return None
     if key == "deploy" and context is not None:
         # A DEPLOY THAT WILL BE REFUSED ASKS NOBODY: an app that was told to declare how it

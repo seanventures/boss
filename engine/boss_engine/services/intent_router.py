@@ -102,7 +102,7 @@ _ACTING_FALLBACK = frozenset({
     "start_preview", "stop_preview", "cancel_job", "set_job_priority", "close_orphaned_runs",
     "link_run_origin", "decide", "waive_gates", "send_feedback", "write_db",
     "deploy_app", "merge_apps", "retarget_app", "generate_image", "run_on_host",
-    "deploy_config", "promote_config",
+    "deploy_config", "promote_config", "rollback_config",
 })
 
 _ACTING_TOOLS = _ACTING_FALLBACK   # kept for any caller that imports the name directly

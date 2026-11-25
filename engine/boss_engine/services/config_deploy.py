@@ -58,6 +58,8 @@ from .local_fenced import file_bytes, safe_relative_path
 log = logging.getLogger(__name__)
 
 TARGET_KIND = "config_dir"
+#: A rollback run's release ref: `rollback:<the deployment it undoes>` (never a bundle hash).
+ROLLBACK_REF = "rollback:"
 OPERATION_SKILL = "config_dir.files.deploy"
 RESOURCE_TYPE = "config_dir.files"
 PACKET_KIND = "config"
@@ -679,9 +681,16 @@ def plan_config_deployment(rp: Any, connection: Connection, *, project_id: str, 
                            approval_decision_id: Optional[str] = None, person_required: bool = False,
                            promoted_from: Optional[str] = None, trigger: str = "manual",
                            workflow_run_id: Optional[str] = None,
-                           source: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+                           source: Optional[dict[str, Any]] = None,
+                           rollback_of: Optional[dict[str, Any]] = None,
+                           restoring_approval: Optional[dict[str, Any]] = None,
+                           released_gate: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """Record a deployment of `files` into `target`, held for a person's approval — or running
-    under the approval it already has (the released gate, or the environment's policy)."""
+    under the approval it already has (the released gate, or the environment's policy).
+
+    `rollback_of` (BOSSAPP-1173, `rollback`): the run RESTORES the versions a succeeded
+    deployment kept instead of writing files; `files` is that deployment's manifest (names and
+    hashes, for the card) and nothing new is shipped. Same ChangeSet, approval, job and receipt."""
     from datetime import timedelta
 
     from . import governed_host_deploy as governed
@@ -695,20 +704,25 @@ def plan_config_deployment(rp: Any, connection: Connection, *, project_id: str, 
     from .production import target_is_production
 
     if target_is_production(target):
-        # PRODUCTION IS A PERSON'S ANSWER (review of #119): no environment policy and no gate a
-        # step passes in approves configuration for production; a person approves this run.
-        person_required, approval_decision_id = True, None
+        # PRODUCTION IS A PERSON'S ANSWER (review of #119): no environment policy approves
+        # configuration for production. The one gate that does is this step's own, released by
+        # a PERSON on this run (BOSSAPP-1172, deploy_policy.pre_approval with person_required):
+        # one card per environment, never a policy's and never an agent's answer.
+        person_required = True
     problem = plan_problem(connection, project_id, cfg, rp.settings)
     if problem:
         return governed.refuse_plan(connection, project_id=project_id, target=target, actor=actor,
                                     headline=problem["headline"], action=problem["action"],
                                     reason=problem["reason"])
     manifest = _manifest(files)
-    release = bundle_sha256(files)
+    release = (f"{ROLLBACK_REF}{rollback_of['deployment_run_id']}" if rollback_of
+               else bundle_sha256(files))
     existing = governed.live_run(connection, cfg.id, release)
     if existing:
         return {**rp._get_deployment_run(connection, project_id, existing), "reused": True}
-    governed.supersede_replaced(connection, rp.settings, cfg.id, release, actor=actor)
+    if not rollback_of:
+        # A rollback restores files; it never replaces a deployment someone is deciding on.
+        governed.supersede_replaced(connection, rp.settings, cfg.id, release, actor=actor)
     lease = AssuranceService(rp.settings).acquire_surface(
         connection, project_id=project_id, surface_key=f"deployment_target:{cfg.id}",
         environment=cfg.environment, owner_ref=actor,
@@ -760,12 +774,21 @@ def plan_config_deployment(rp: Any, connection: Connection, *, project_id: str, 
     }
     rollback_plan = [f"Restore the previous version of each file from {desired['previous_versions']}",
                      "Run the reload again", "Check the health URL"]
+    if rollback_of:
+        desired["rollback_of"] = dict(rollback_of)
+        rollback_plan = ["Nothing further is kept: a rollback restores what was there before "
+                         f"{rollback_of['deployment_run_id']}; deploy again to undo it."]
+    verb = "Roll back" if rollback_of else ("Promote" if promoted_from else "Deploy")
     changeset = rp.create_changeset(
         connection, project_id=project_id, provider_account_id=None,
-        title=f"Deploy config for {cfg.app_name} to {where} · {cfg.environment}",
-        summary=(f"Write {len(manifest)} file(s) ({names}) into {cfg.directory} atomically, keep "
-                 f"the previous versions, reload, and check {cfg.health_url}; roll back on a "
-                 "failed check."),
+        title=(f"Roll back config for {cfg.app_name} on {where} · {cfg.environment}" if rollback_of
+               else f"Deploy config for {cfg.app_name} to {where} · {cfg.environment}"),
+        summary=((f"Restore the versions of {names} that deployment "
+                  f"{rollback_of['deployment_run_id']} replaced (removing the files it added), "
+                  f"reload, and check {cfg.health_url}.") if rollback_of else
+                 (f"Write {len(manifest)} file(s) ({names}) into {cfg.directory} atomically, keep "
+                  f"the previous versions, reload, and check {cfg.health_url}; roll back on a "
+                  "failed check.")),
         operations=[{"skill_id": OPERATION_SKILL, "action": "deploy", "resource_type": RESOURCE_TYPE,
                      "resource_ref": f"{cfg.id}:{cfg.app_name}", "desired_state": desired,
                      "risk_tier": 1, "production_affecting": _production.target_is_production(target)}],
@@ -776,14 +799,18 @@ def plan_config_deployment(rp: Any, connection: Connection, *, project_id: str, 
         "directory": cfg.directory, "files": manifest, "bundle_sha256": release,
         "reload": reload, "health_url": cfg.health_url, "promoted_from": promoted_from,
         **({"build": source} if source else {}),
-        "steps": ["Check the directory (read-only)", "Keep the previous versions",
-                  "Write each file to a temp name and rename it into place", "Reload",
-                  "Health check; roll back on failure"],
+        "steps": (["Check the directory (read-only)",
+                   "Restore the kept versions (remove the files that deployment added)",
+                   "Reload", "Health check"] if rollback_of else
+                  ["Check the directory (read-only)", "Keep the previous versions",
+                   "Write each file to a temp name and rename it into place", "Reload",
+                   "Health check; roll back on failure"]),
+        **({"rollback_of": dict(rollback_of)} if rollback_of else {}),
         "rollback": rollback_plan,
         "cost": {"expected_cost_usd_micros": 0, "reservation_id": reservation_id,
                  "note": "Your own host: no provider cost."},
     }
-    question = (f"{'Promote' if promoted_from else 'Deploy'} config for {cfg.app_name} to {where} "
+    question = (f"{verb} config for {cfg.app_name} {'on' if rollback_of else 'to'} {where} "
                 f"· {cfg.environment}"
                 + (f" · from build {source['code_task_run_id']} @ {source['short_sha']}"
                    + (f" ({source['pull_request_url']})" if source.get("pull_request_url") else "")
@@ -794,7 +821,12 @@ def plan_config_deployment(rp: Any, connection: Connection, *, project_id: str, 
     cost = {"expected_cost_usd_micros": 0, "reservation_id": reservation_id,
             "cost_confidence": "no_provider_spend"}
     approval = pre_approval(connection, project_id, cfg.environment,
-                            gate_decision_id=approval_decision_id, person_required=person_required)
+                            gate_decision_id=approval_decision_id, person_required=person_required,
+                            gate_by_person=target_is_production(target), released=released_gate)
+    if approval is None and rollback_of and restoring_approval and not target_is_production(target):
+        # PUTTING BACK WHAT WAS THERE (a staging rollback) runs on the approval the deployment it
+        # undoes ran on; production is never restored on anything but a person's answer.
+        approval = dict(restoring_approval)
     if approval and rp.required_approvers_for_changeset(connection, changeset["id"]):
         approval = None      # dual control is two people's answer; a policy cannot give it
     if approval:
@@ -804,6 +836,17 @@ def plan_config_deployment(rp: Any, connection: Connection, *, project_id: str, 
         decision_id = create_blocking_decision(
             connection, project_id, None, question, recommendation, cost, governed.REASON_CODE,
             risk_tier=risk_tier, default_action="hold")
+    # ONE CARD (BOSSAPP-1172): a production-affecting ChangeSet raises its generic "Approve
+    # ProviderOps ChangeSet" card, which the ChangeSet routes refuse for this skill. The
+    # deployment's own answer (above) is the approval, so the generic card is withdrawn rather
+    # than left in Approvals as a second question about the same change.
+    connection.execute(
+        text("UPDATE decisions SET status = 'withdrawn', updated_at = now(), "
+             "resolution_note = 'Answered by the deployment''s own approval.' "
+             "WHERE project_id = :p AND status = 'pending' AND id <> COALESCE(:d, '') "
+             "AND recommendation->>'action' = 'approve_changeset' "
+             "AND recommendation->>'changeset_id' = :c"),
+        {"p": project_id, "d": decision_id, "c": changeset["id"]})
     connection.execute(
         text("UPDATE changesets SET status = 'pending_approval', risk_tier = :r, "
              "approval_decision_id = :d, updated_at = now() WHERE id = :c"),
@@ -820,6 +863,7 @@ def plan_config_deployment(rp: Any, connection: Connection, *, project_id: str, 
               "health": {"url": cfg.health_url, "expected_status": cfg.health_expected},
               "promoted_from": promoted_from, "workflow_run_id": workflow_run_id,
               **({"build": source} if source else {}),
+              **({"rollback_of": dict(rollback_of)} if rollback_of else {}),
               "surface_ownership": ownership_guard, "governed": True, "plan_review": review}
     connection.execute(
         text("""
@@ -839,13 +883,15 @@ def plan_config_deployment(rp: Any, connection: Connection, *, project_id: str, 
          "ref": target.get("target_ref") or "", "commit": release,
          "packet": json.dumps(packet), "rb": json.dumps(rollback_plan),
          "receipts": json.dumps(changeset["expected_receipts"]), "actor": actor,
-         "res": reservation_id, "trigger": "promotion" if promoted_from else trigger})
+         "res": reservation_id,
+         "trigger": "rollback" if rollback_of else ("promotion" if promoted_from else trigger)})
     emit_event(connection, project_id, "deployment_run.planned", actor, "deployment_run",
                deployment_run_id,
                {"deployment_target_id": cfg.id, "changeset_id": changeset["id"],
                 "decision_id": decision_id, "environment": cfg.environment, "governed": True,
                 "kind": PACKET_KIND, "files": [f["path"] for f in manifest],
-                "bundle_sha256": release, "promoted_from": promoted_from})
+                "bundle_sha256": release, "promoted_from": promoted_from,
+                **({"rollback_of": rollback_of["deployment_run_id"]} if rollback_of else {})})
     if approval:
         record_pre_approval(connection, project_id, approval, entity_type="deployment_run",
                             entity_id=deployment_run_id, actor=actor)
@@ -880,7 +926,8 @@ def deploy_files(engine: Any, settings: Settings, *, project_id: str, actor: str
                  person_required: bool = False, workflow_run_id: Optional[str] = None,
                  created_by_job_id: Optional[str] = None,
                  code_task_run_id: Optional[str] = None,
-                 source_paths: Any = None) -> dict[str, Any]:
+                 source_paths: Any = None,
+                 released_gate: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """`deploy_config`: plan a deployment of these files to a config_dir target. With
     `code_task_run_id` the files are read from THAT BUILD'S branch (`source_paths`), at its head
     commit, and the plan records the run, branch, SHA and pull request."""
@@ -908,6 +955,7 @@ def deploy_files(engine: Any, settings: Settings, *, project_id: str, actor: str
                 if ask:
                     person_required = True       # a person looks, with these reasons on the card
                     approval_decision_id = None   # no earlier gate pre-approves it (as production)
+                    released_gate = None
                     source = {**source, "needs_a_person": ask}
                 built = files_from_build(c, settings, project_id, source, source_paths)
                 files = {**dict(files or {}), **built}
@@ -920,7 +968,8 @@ def deploy_files(engine: Any, settings: Settings, *, project_id: str, actor: str
                 rp, c, project_id=project_id, target=target, files=bundle,
                 bundle_artifact_id=artifact_id, actor=actor,
                 approval_decision_id=approval_decision_id, person_required=person_required,
-                trigger="manual", workflow_run_id=workflow_run_id, source=source)
+                trigger="manual", workflow_run_id=workflow_run_id, source=source,
+                released_gate=released_gate)
             planned = _planned(run)
             return {**planned, "source": source} if source else planned
     except ConfigDeployError as exc:
@@ -932,7 +981,8 @@ def promote(engine: Any, settings: Settings, *, project_id: str, actor: str,
             from_environment: str = "staging", environment: str = "production",
             target_id: Optional[str] = None, approval_decision_id: Optional[str] = None,
             person_required: bool = False, workflow_run_id: Optional[str] = None,
-            expected_bundle_sha256: Optional[str] = None) -> dict[str, Any]:
+            expected_bundle_sha256: Optional[str] = None,
+            released_gate: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """`promote_config`: the exact bundle a SUCCEEDED config deployment shipped (named by its
     id — never "the latest for the app") planned to the next environment's config target.
 
@@ -1009,12 +1059,132 @@ def promote(engine: Any, settings: Settings, *, project_id: str, actor: str,
             run = plan_config_deployment(
                 rp, c, project_id=project_id, target=target, files=bundle,
                 bundle_artifact_id=artifact_id, actor=actor,
-                approval_decision_id=None if to_production else approval_decision_id,
+                # Production: only this step's own gate, released by a person (BOSSAPP-1172).
+                approval_decision_id=approval_decision_id,
                 person_required=person_required or to_production,
-                promoted_from=str(src["id"]), trigger="promotion", workflow_run_id=workflow_run_id)
+                promoted_from=str(src["id"]), trigger="promotion", workflow_run_id=workflow_run_id,
+                released_gate=released_gate)
             return {**_planned(run), "promoted_from": str(src["id"])}
     except ConfigDeployError as exc:
         return {"status": "failed", "reason": str(exc), "headline": exc.headline, "next": exc.action}
+
+
+def rollback(engine: Any, settings: Settings, *, project_id: str, actor: str,
+             deployment_run_id: Optional[str] = None, approval_decision_id: Optional[str] = None,
+             workflow_run_id: Optional[str] = None,
+             released_gate: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    """`rollback_config` (BOSSAPP-1173): put back what a SUCCEEDED config deployment replaced.
+
+    The deployment kept the previous version of every file it wrote (and listed the files that
+    did not exist), so the rollback is a governed run of its own on the same target: restore the
+    kept versions, remove the files it added, reload, check health, receipt. Under the same
+    approval as a deploy there: production is a person's answer (the step's own gate released by
+    a person, or a card); staging runs under the approval the deployment itself ran on, so a
+    workflow that asks for it rolls staging back without asking again.
+
+    Named, never guessed: inside a workflow run only a deployment that run planned. Refused when
+    a later deployment on the target changed the same files (roll that one back first)."""
+    from ..db import begin
+    from .resource_plane import ResourcePlaneService
+
+    rp = ResourcePlaneService(settings)
+    try:
+        with begin(engine) as c:
+            if not deployment_run_id:
+                raise ConfigDeployError("Name the config deployment to roll back (its deployment_run_id).",
+                                        "list_deployments shows the succeeded config deployments.")
+            src = c.execute(text("SELECT * FROM deployment_runs WHERE id = :i AND project_id = :p"),
+                            {"i": deployment_run_id, "p": project_id}).mappings().first()
+            if not src or not is_config_run(src):
+                raise ConfigDeployError("No config deployment to roll back.",
+                                        "Name a succeeded config deployment.")
+            packet = _loads(src["release_packet"], {}) or {}
+            if workflow_run_id and str(packet.get("workflow_run_id") or "") != workflow_run_id:
+                raise ConfigDeployError(
+                    f"Deployment {src['id']} was not planned by this workflow run.",
+                    "A workflow rolls back only a deployment one of its own steps shipped.")
+            if packet.get("rollback_of"):
+                raise ConfigDeployError(f"Deployment {src['id']} is itself a rollback.",
+                                        "Deploy the files again to undo a rollback.")
+            undone = c.execute(
+                text("SELECT id, status FROM deployment_runs WHERE project_id = :p "
+                     "AND release_packet->'rollback_of'->>'deployment_run_id' = :i "
+                     "AND status NOT IN ('failed', 'blocked', 'superseded', 'rejected', 'cancelled') "
+                     "ORDER BY created_at DESC LIMIT 1"),
+                {"p": project_id, "i": src["id"]}).mappings().first()
+            if undone:
+                # ONE ROLLBACK PER DEPLOYMENT: a retried step, or a second request, gets the same.
+                run = rp._get_deployment_run(c, project_id, undone["id"])
+                return {**_planned(run), "rollback_of": str(src["id"]), "reused": True}
+            if src["status"] != "succeeded":
+                raise ConfigDeployError(
+                    f"The {src['environment']} deployment is {src['status']}, not succeeded: "
+                    "there is nothing of it to roll back.",
+                    "A failed deployment already restored the previous versions itself.")
+            files = list(packet.get("files") or [])
+            paths = {str(f.get("path")) for f in files}
+            later = c.execute(
+                text("SELECT id, release_packet FROM deployment_runs WHERE deployment_target_id = :t "
+                     "AND id <> :i AND status = 'succeeded' AND finished_at > :at"),
+                {"t": src["deployment_target_id"], "i": src["id"], "at": src["finished_at"]}).mappings().all()
+            for row in later:
+                theirs = {str(f.get("path")) for f in (_loads(row["release_packet"], {}) or {}).get("files") or []}
+                if theirs & paths:
+                    raise ConfigDeployError(
+                        f"Deployment {row['id']} changed {', '.join(sorted(theirs & paths))} after "
+                        f"{src['id']}; restoring {src['id']}'s kept versions would undo it too.",
+                        f"Roll back {row['id']} first.")
+            target = c.execute(text("SELECT * FROM deployment_targets WHERE id = :t AND project_id = :p"),
+                               {"t": src["deployment_target_id"], "p": project_id}).mappings().first()
+            if not target:
+                raise ConfigDeployError("The deployment's target no longer exists.",
+                                        "Restore the files by hand from the kept versions.")
+            target = dict(target)
+            cfg = read_target(target)
+            to_production = _production.target_is_production(target)
+            # STAGING: the approval the deployment ran under covers putting things back as they
+            # were (its gate or its person's card); production asks again (a person, or the
+            # step's own gate released by one).
+            restoring = None
+            if not to_production:
+                approver = c.execute(text("SELECT approved_by FROM changesets WHERE id = :c"),
+                                     {"c": src["changeset_id"]}).scalar()
+                restoring = {"source": "restore", "decision_id": src.get("decision_id"),
+                             "approved_by": str(approver or src.get("created_by") or actor)}
+            run = plan_config_deployment(
+                rp, c, project_id=project_id, target=target, files=files,
+                bundle_artifact_id=str(packet.get("bundle_artifact_id") or src.get("release_artifact_id") or ""),
+                actor=actor, approval_decision_id=approval_decision_id,
+                person_required=to_production, trigger="rollback", workflow_run_id=workflow_run_id,
+                rollback_of={"deployment_run_id": str(src["id"]),
+                             "previous_versions": f"{versions_root(cfg.directory)}/{src['id']}",
+                             "files": sorted(paths)},
+                restoring_approval=restoring, released_gate=released_gate)
+            return {**_planned(run), "rollback_of": str(src["id"])}
+    except ConfigDeployError as exc:
+        return {"status": "failed", "reason": str(exc), "headline": exc.headline, "next": exc.action}
+
+
+def is_rollback_run(row: Any) -> bool:
+    packet = _loads((row.get("release_packet") if hasattr(row, "get") else None) or {}, {}) or {}
+    return isinstance(packet, dict) and bool(packet.get("rollback_of"))
+
+
+def after_rollback(connection: Connection, row: Mapping[str, Any], status: str, actor: str) -> None:
+    """A rollback that succeeded leaves the deployment it undid `rolled_back`, so nothing
+    promotes it and it is no longer the target's last good release."""
+    if status != "succeeded" or not is_rollback_run(row):
+        return
+    packet = _loads(row.get("release_packet"), {}) or {}
+    undone = str((packet.get("rollback_of") or {}).get("deployment_run_id") or "")
+    if not undone:
+        return
+    connection.execute(
+        text("UPDATE deployment_runs SET status = 'rolled_back', failure_reason = :r, "
+             "updated_at = now() WHERE id = :i AND status = 'succeeded'"),
+        {"i": undone, "r": f"rolled back by {row['id']}"})
+    emit_event(connection, row["project_id"], "deployment_run.rolled_back", actor, "deployment_run",
+               undone, {"rollback_run_id": row["id"]})
 
 
 # ── Apply: the directory, through one shell, locally or over SSH ──────────────────────────────
@@ -1113,6 +1283,66 @@ def restore_script(directory: str, versions: str, kept: list[str], absent: list[
     return "; ".join(lines)
 
 
+def rollback_script(directory: str, versions: str, paths: list[str], token: str) -> str:
+    """Put back what a deployment replaced: each kept version is copied back (to a temp name,
+    then renamed), each file it added is removed. The kept versions stay, so it can be repeated.
+    No kept-versions directory at all means they were pruned: nothing is touched."""
+    lines = [f'set -eu; D={_q(directory)}; V={_q(versions)}; umask 022; '
+             f'[ -d "$V" ] || {{ echo "BOSS_NO_VERSIONS $V"; exit 7; }}']
+    for p in paths:
+        f = _q(p)
+        lines.append(f'if [ -f "$V"/{f} ]; then T="$D/.boss-tmp.{token}"; cp -p "$V"/{f} "$T"; '
+                     f'mv -f "$T" "$D"/{f}; echo "BOSS_RESTORED {p}"; '
+                     f'else rm -f "$D"/{f}; echo "BOSS_REMOVED {p}"; fi')
+    return "; ".join(lines)
+
+
+def _restore_kept(rec: Any, sh: Any, cfg: "ConfigTarget", undo: Mapping[str, Any], paths: list[str],
+                  say: Any, reload_once: Any, probe_fn: Any) -> dict[str, Any]:
+    """Phase two of a ROLLBACK run (BOSSAPP-1173): restore, reload, check health. The versions
+    are found where the undone deployment kept them on this target, never where the plan said."""
+    undone = str(undo.get("deployment_run_id") or "")
+    versions = f"{versions_root(cfg.directory)}/{undone}"
+    with rec.step("restore", label="Restore the kept versions") as h:
+        back = sh.run(rollback_script(cfg.directory, versions, paths, _secrets.token_hex(6)),
+                      timeout=60, write=True)
+        say(h, (back.stdout + back.stderr).strip()[-1500:])
+        if not back.ok:
+            h.failed("the kept versions are gone (pruned)" if "BOSS_NO_VERSIONS" in back.stdout
+                     else f"restoring failed: {(back.stderr or back.stdout).strip()[-300:]}")
+    if not back.ok:
+        rec.finish()
+        return {"status": "failed",
+                "reason": (f"The versions {undone} kept are gone (only the last {KEEP_VERSIONS} "
+                           "deployments' are kept); nothing was changed." if "BOSS_NO_VERSIONS" in back.stdout
+                           else f"Restoring the kept versions failed: {(back.stderr or back.stdout).strip()[-300:]}")}
+    restored = [ln[len("BOSS_RESTORED "):] for ln in back.stdout.splitlines() if ln.startswith("BOSS_RESTORED ")]
+    removed = [ln[len("BOSS_REMOVED "):] for ln in back.stdout.splitlines() if ln.startswith("BOSS_REMOVED ")]
+    with rec.step("reload", label="Reload") as h:
+        failed_reload = reload_once(h)
+        if failed_reload:
+            h.failed(failed_reload)
+    if failed_reload:
+        rec.finish()
+        return {"status": "failed", "reason": f"The files were restored, but {failed_reload}."}
+    with rec.step("observe", label="Health check") as h:
+        health = wait_healthy(str(cfg.health_url), expected=cfg.health_expected, probe_fn=probe_fn)
+        say(h, health)
+        if not health["healthy"]:
+            h.failed(f"{cfg.health_url} answered {health['said']}, expected {cfg.health_expected}")
+    rec.finish()
+    if not health["healthy"]:
+        return {"status": "failed", "health": health,
+                "reason": (f"The files were restored and reloaded, but the health check failed "
+                           f"({health['said']}): look at the target.")}
+    where = cfg.raw.get("target_ref") or cfg.directory
+    return {"status": "succeeded", "health": health, "url": cfg.health_url,
+            "applied": {"operation": "config_rolled_back", "resource_type": RESOURCE_TYPE,
+                        "provider_ref": f"{cfg.transport}://{where}", "app": cfg.app_name,
+                        "host": where, "files": restored + removed, "restored": restored,
+                        "removed": removed, "rollback_of": undone}}
+
+
 def prune_script(directory: str, keep: int = KEEP_VERSIONS) -> str:
     return (f'D={_q(versions_root(directory))}; [ -d "$D" ] || exit 0; '
             f'ls -1dt "$D"/*/ 2>/dev/null | tail -n +{keep + 1} | while read -r old; do rm -rf "$old"; done; true')
@@ -1190,11 +1420,17 @@ def apply_config(engine: Any, settings: Settings, *, row: dict, governance: dict
             return {"status": "blocked", "reason": refused}
         packet = _loads(row.get("release_packet"), {}) or {}
         project_id = row.get("project_id") or trow["project_id"]
+        undo = packet.get("rollback_of") if isinstance(packet.get("rollback_of"), dict) else None
         try:
-            files = load_bundle(c, project_id, str(packet.get("bundle_artifact_id") or row.get("release_artifact_id") or ""))
+            # A ROLLBACK writes nothing new: it restores what its deployment kept.
+            files = [] if undo else load_bundle(
+                c, project_id, str(packet.get("bundle_artifact_id") or row.get("release_artifact_id") or ""))
             sh = shell or shell_for(c, settings, cfg, changeset_id=str(row["changeset_id"]))
+            undo_paths = [safe_relative_path(p) for p in (undo or {}).get("files") or []]
         except ConfigDeployError as exc:
             return {"status": "blocked", "reason": str(exc)}
+        except ValueError as exc:
+            return {"status": "blocked", "reason": f"the rollback names a file outside the directory: {exc}"}
     versions = f"{versions_root(cfg.directory)}/{run_id}"
     paths = [str(f["path"]) for f in files]
     rec = StepRecorder(engine, run_id)
@@ -1258,6 +1494,8 @@ def apply_config(engine: Any, settings: Settings, *, row: dict, governance: dict
         if not pre.ok:
             rec.finish()
             return {"status": "blocked", "reason": f"{cfg.directory}: {reason}"}
+        if undo:
+            return _restore_kept(rec, sh, cfg, undo, undo_paths, say, reload_once, probe_fn)
         with rec.step("keep", label="Keep the previous versions") as h:
             kept_out = sh.run(keep_script(cfg.directory, versions, paths), timeout=60, write=True)
             say(h, (kept_out.stdout + kept_out.stderr).strip())

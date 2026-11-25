@@ -323,6 +323,7 @@ VERDICTS: dict[str, Callable[[Mapping[str, Any], Mapping[str, Any]], Verdict]] =
     "redeploy": awaited_work,
     "config_deploy": awaited_work,
     "promote_config": awaited_work,
+    "rollback_config": awaited_work,
     "retry_build": awaited_work,
     "spec_review": answered_gate,
     "ux_review": answered_gate,
