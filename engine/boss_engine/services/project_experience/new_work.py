@@ -613,13 +613,36 @@ def tell(connection: Connection, project_id: str) -> dict[str, Any]:
     return {"routes": out}
 
 
-def defaults(connection: Connection, project_id: str) -> dict[str, Any]:
+def defaults(connection: Connection, project_id: str,
+             workflow_spec: Any = None) -> dict[str, Any]:
     """The New work modal's other chips, from this project's own record."""
     found = targets(connection, project_id)
     staging = next((t for t in found if not t["prod"]), None)
     return {"tracker": tracker(connection, project_id), "targets": found,
             "target": staging["id"] if staging else None, "tell": tell(connection, project_id),
-            "priority": "normal"}
+            "priority": "normal",
+            "quality_bar": quality_bar(connection, project_id, workflow_spec)}
+
+
+def quality_bar(connection: Connection, project_id: str, workflow_spec: Any = None
+                ) -> dict[str, Any]:
+    """New work's Quality chip (BOSSAPP-1362): the bar this work runs at before anyone picks
+    one — the chosen WORKFLOW's effective bar over the project's (quality_bar.run_base, the same
+    base start_run measures a run against) — and the presets in plain words. Below it needs
+    settings:update."""
+    from ...config import get_settings
+    from .. import project_settings, quality_bar as qb
+
+    try:
+        with connection.begin_nested():
+            bar = project_settings.effective(connection, project_id, get_settings(), qb.SETTING)
+    except Exception:  # noqa: BLE001 — the chip still opens, on the default
+        bar = None
+    base = qb.run_base(workflow_spec if isinstance(workflow_spec, Mapping) else None, bar)
+    view = qb.describe(base)
+    return {"bar": view["bar"], "project_bar": qb.normalize(bar) or qb.DEFAULT,
+            "always": view["always"],
+            "presets": [{k: p[k] for k in ("key", "label", "line")} for p in view["presets"]]}
 
 
 def plan(connection: Connection, project_id: str, kind: str = "feature",
@@ -638,11 +661,11 @@ def plan(connection: Connection, project_id: str, kind: str = "feature",
     out: dict[str, Any] = {"kind": kind, "planner": captain, "workflow": None, "nodes": [],
                            "steps": [], "estimate": None,
                            "options": options(connection, project_id, kind, with_steps=detail)}
+    spec = as_json((resolved or {}).get("spec"), {}) or {}
     if detail:
-        out["defaults"] = defaults(connection, project_id)
+        out["defaults"] = defaults(connection, project_id, spec)
     if resolved is None:
         return out
-    spec = as_json(resolved.get("spec"), {}) or {}
     key = str(resolved["workflow_key"])
     out["workflow"] = {"key": key, "name": resolved.get("name") or key,
                        "chosen": chosen["chosen"],

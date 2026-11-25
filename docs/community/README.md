@@ -54,6 +54,7 @@ Credentials stay on the install. A hosted model receives the authentication and 
 - [GitHub](CONNECT_GITHUB.md), [models](MODEL_CONNECTIONS.md), [terminal](terminal.md), [MCP](MCP.md), [CLI](cli.md)
 - [Features](FEATURES.md) and the [release notes](RELEASE_NOTES_v1.0-rc10.32.md)
 - The [fifteen example workflows](https://github.com/seanventures/boss/blob/main/examples/README.md). Installing an example does not start work.
+- The [Workflow Library](WORKFLOW_LIBRARY.md): add a workflow to a project, change your copy, share your own
 - [Contributing](https://github.com/seanventures/boss/blob/main/CONTRIBUTING.md) and the [Apache License 2.0](https://github.com/seanventures/boss/blob/main/LICENSE)
 - [Report a problem](FEEDBACK_LOOP.md). Security reports go to the address in the [security policy](https://github.com/seanventures/boss/blob/main/SECURITY.md), not a public issue.
 

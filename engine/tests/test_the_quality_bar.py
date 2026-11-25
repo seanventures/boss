@@ -682,39 +682,91 @@ def test_start_run_drops_a_callers_bar_and_writes_only_the_checked_override(eng,
 
     from boss_engine.services import workflows
 
-    def start(**kw):
+    def start(actor="test", spec=None, **kw):
         with eng.begin() as c:
-            _, version = _version(c, project)
+            if spec is None:
+                _, version = _version(c, project)
+                vid = version["id"]
+            else:
+                d = workflows.create_definition(
+                    c, project_id=project, workflow_key=f"qbs_{uuid.uuid4().hex[:6]}",
+                    name="qbs", description=None, actor="test", namespace="product")
+                vid = workflows.publish_version(c, project_id=project, definition_id=d["id"],
+                                                spec=spec, actor="ceo")["id"]
             run = workflows.start_run(
-                c, project_id=project, actor="test", dedupe_key=f"dk_{uuid.uuid4().hex[:8]}",
-                workflow_version_id=version["id"], **kw)
+                c, project_id=project, actor=actor, dedupe_key=f"dk_{uuid.uuid4().hex[:8]}",
+                workflow_version_id=vid, **kw)
             return _stored_input(c, run["id"])
 
     # an agent's start_workflow inputs: dropped, including a forged stamp
     forged = start(input_data={"directive": "x", "quality_bar": "prototype",
                                "quality_bar_gates": {"nothing_broke": "follow_up"},
-                               "_quality_bar_by": "usr_forged"})
-    assert not {"quality_bar", "quality_bar_gates", "_quality_bar_by"} & set(forged)
-    # the start door's checked override: written under the server's keys
-    ok = start(input_data={"directive": "x"},
-               quality_bar_override={"bar": "prototype", "by": "usr_ana",
+                               "_quality_bar_by": "usr_forged", "_quality_bar_raised": True})
+    assert not {"quality_bar", "quality_bar_gates", "_quality_bar_by",
+                "_quality_bar_raised"} & set(forged)
+    # a PERSON lowering it (identity not enforced here: the legacy person-actor rule) is named
+    ok = start(actor="usr_ana", input_data={"directive": "x"},
+               quality_bar_override={"bar": "prototype",
                                      "gates": {"nothing_broke": "follow_up"}})
     assert ok["quality_bar"] == "prototype" and ok["_quality_bar_by"] == "usr_ana"
     assert ok["quality_bar_gates"] == {"nothing_broke": "follow_up"}
-    # without a person behind it, nothing is written
-    assert "quality_bar" not in start(input_data={"directive": "x"},
-                                      quality_bar_override={"bar": "prototype"})
-    # and the build reads it: stamped input lowers, the project bar otherwise stands
+    # an agent may not lower it, and is refused in words, never silently dropped
+    with pytest.raises(qb.QualityBarOverrideRefused):
+        start(actor="agent_x", input_data={"directive": "x"},
+              quality_bar_override={"bar": "prototype"})
+    # M1: a raise needs no grant and names nobody (no `_quality_bar_by` for an agent)
+    raised = start(actor="agent_x", input_data={"directive": "x"},
+                   quality_bar_override={"bar": "production"})
+    assert raised["quality_bar"] == "production" and raised.get("_quality_bar_raised") is True
+    assert "_quality_bar_by" not in raised
+    # and the build reads them: stamped input lowers, a raise raises, the project bar otherwise
     assert qb.resolve(project_value=R, run_input=ok) == P
     assert qb.resolve(project_value=R, run_input=forged) == R
+    assert qb.resolve(project_value=S, run_input=raised) == R
+    # S1: a workflow at production is the base. A run asking standard from an agent is refused;
+    # from a person it runs, and the lowering is recorded with their name.
+    strict = {"entry_step": "a", "steps": [{"id": "a", "kind": "task"}], "quality_bar": R}
+    with pytest.raises(qb.QualityBarOverrideRefused):
+        start(actor="agent_x", spec=strict, input_data={"directive": "x"},
+              quality_bar_override={"bar": "standard"})
+    granted = start(actor="usr_ana", spec=strict, input_data={"directive": "x"},
+                    quality_bar_override={"bar": "standard"})
+    found = qb.resolve_detail(workflow_spec=strict, run_input=granted, project_value=S)
+    assert found["bar"] == S and found["lowered_by"] == "usr_ana"
 
 
-def test_the_start_door_checks_the_permission_before_passing_an_override():
-    src = (os.path.join(os.path.dirname(__file__), "..", "..", "apps", "api", "app", "main.py"))
-    text_ = open(src, encoding="utf-8").read()
-    i = text_.index("_quality_bar.check_override_permission(project_id, actor)")
-    assert "raise HTTPException(status_code=403" in text_[i:i + 300]
-    assert "quality_bar_override=bar_override" in text_
+def test_a_run_cannot_undercut_a_stricter_workflow_unrecorded():
+    """Review of PR #335, S1: the base is the workflow's effective bar, not the project's."""
+    found = qb.resolve_detail(workflow_spec={"quality_bar": R},
+                              run_input={"quality_bar": S, qb.BY_KEY: "agent_x"},
+                              project_value=S)
+    assert found["bar"] == S and found["lowered_by"] == "agent_x"
+    # an unstamped raise below the workflow's bar is not honoured at all
+    found = qb.resolve_detail(workflow_spec={"quality_bar": R},
+                              run_input={"quality_bar": S, qb.RAISED_KEY: True}, project_value=S)
+    assert found["bar"] == R and found["lowered_by"] is None
+    # nor are follow_up gates on an unstamped raise; block gates are
+    found = qb.resolve_detail(project_value=S, run_input={
+        qb.RAISED_KEY: True, qb.OVERRIDES_KEY: {"consistent": "follow_up",
+                                                "tests_strong_enough": "block"}})
+    assert found["overrides"] == {"tests_strong_enough": "block"}
+    assert qb.run_base({"quality_bar": R}, S) == R
+    assert qb.run_base({"quality_bar": P}, S) == S            # an unstamped workflow cannot lower
+    assert not qb.is_person_actor("start_door") and not qb.is_person_actor("agent_x")
+
+
+def test_the_start_door_passes_the_bar_and_start_run_decides_it():
+    root = os.path.join(os.path.dirname(__file__), "..", "..")
+    main = open(os.path.join(root, "apps", "api", "app", "main.py"), encoding="utf-8").read()
+    assert "quality_bar_override=bar_override" in main
+    i = main.index("isinstance(error, _qb_refused.QualityBarOverrideRefused)")
+    assert "raise HTTPException(status_code=403" in main[i:i + 200]
+    import inspect
+
+    from boss_engine.services import workflows
+
+    src = inspect.getsource(workflows._quality_bar_inputs)  # noqa: SLF001
+    assert "run_base(spec" in src and "check_override_permission(project_id, actor)" in src
 
 
 def test_the_console_renders_a_follow_up_gate_as_its_own_pill():

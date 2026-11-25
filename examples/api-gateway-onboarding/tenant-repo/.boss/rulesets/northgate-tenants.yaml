@@ -1,0 +1,37 @@
+# BOSS's layer over the checker's rules: priority (P0-P3), who may fix it, and the guide the
+# fixing agent is given. Security rules are P0/P1; guideline rules are P1/P2.
+ruleset: northgate-tenants
+version: 1
+validator: tenantlint
+rules:
+  no-inlined-secrets:
+    severity: P0
+    autofix: never
+    guide: "Remove the plaintext value. Reference a secret manager entry with api_key_ref instead; never invent the reference, ask the partner for it in the report."
+  cors-no-wildcard-with-credentials:
+    severity: P0
+    autofix: agent
+  upstream-https-required:
+    severity: P1
+    autofix: mechanical
+  no-sensitive-paths-exposed:
+    severity: P0
+    autofix: human
+    guide: "Admin and internal paths are never published to tenants. Remove the route; the partner confirms in the PR."
+  rate-limit-required:
+    severity: P1
+    autofix: mechanical
+    guide: "Add rate_limit with rps: 10 and burst: 10 unless the partner's file names other values."
+  request-size-capped:
+    severity: P1
+    autofix: mechanical
+    guide: "Add max_body_bytes: 1048576 to the route."
+  pii-fields-declared:
+    severity: P2
+    autofix: human
+  owner-contact-required:
+    severity: P2
+    autofix: human
+  path-versioned:
+    severity: P2
+    autofix: human

@@ -1,0 +1,12 @@
+# Run by the "Contract tests" step against the staging gateway the config was deployed to.
+# Each case names a path on the staging target, never a URL of its own.
+cases:
+  - name: gateway is up
+    path: /healthz
+    expect_status: 200
+  - name: payments refuse a request without a token
+    path: /v1/payments
+    expect_status: 401
+  - name: admin path is not published
+    path: /v1/admin/accounts
+    expect_status: [403, 404]

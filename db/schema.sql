@@ -4366,8 +4366,11 @@ CREATE TABLE IF NOT EXISTS workflow_packs (
   published_by TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- The Library's filter words (workflow_marketplace._tags): ["gateway", "onboarding"].
+  tags JSONB NOT NULL DEFAULT '[]'::jsonb,
   UNIQUE(source_definition_id)
 );
+ALTER TABLE workflow_packs ADD COLUMN IF NOT EXISTS tags JSONB NOT NULL DEFAULT '[]'::jsonb;
 CREATE INDEX IF NOT EXISTS idx_workflow_packs_org ON workflow_packs(org_id, status, updated_at DESC);
 CREATE TABLE IF NOT EXISTS workflow_pack_versions (
   id TEXT PRIMARY KEY,

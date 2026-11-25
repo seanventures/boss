@@ -262,6 +262,10 @@ class NewWorkBody(BaseModel):
     #: THE PROFILE THE PERSON PICKED (BOSSAPP-1334): lean | balanced | strict, the build runs on
     #: it (run input `profile`, bound to the build step). Empty: the project's default.
     profile: Optional[str] = None
+    #: THE QUALITY BAR FOR THIS RUN (BOSSAPP-1362, New work's Quality chip): prototype |
+    #: standard | production. Empty: the project's. The start door checks it: below the
+    #: project's bar needs settings:update.
+    quality_bar: Optional[str] = None
     title: Optional[str] = None
     #: Where the suggestion came from (an onboarding candidate's ref, a roadmap item).
     source_ref: Optional[str] = None
@@ -469,6 +473,9 @@ def project_new_work(project_id: str, payload: NewWorkBody, request: Request) ->
     picked_profile = new_work.chosen_profile(payload.profile)
     if picked_profile:
         run_input["profile"] = picked_profile
+    if (payload.quality_bar or "").strip():
+        # Popped and checked by the start door (start_delivery_workflow), never stored as is.
+        run_input["quality_bar"] = payload.quality_bar.strip().lower()
     if payload.source_ref or link:
         run_input["source_ref"] = str(payload.source_ref or link)[:200]
     if issue:

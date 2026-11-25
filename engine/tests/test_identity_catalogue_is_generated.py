@@ -66,9 +66,11 @@ def test_the_built_in_roles_are_the_reviewed_sizes():
     # holds instead of integration:read. Owner, admin, operator, viewer, auditor; delegable.
     # +2 docs:read and docs:publish (BOSSAPP-1384): search/read the org's Confluence (every human
     # role, delegable) and propose a page a person approves (owner, admin, operator; delegable).
-    assert len(Permission) == 213
+    # +1 workflow:share (BOSSAPP-1296, design PR #287): share a project's workflow to the org-wide
+    # Library. Org scope: owner and admin; a project operator publishes only in their project.
+    assert len(Permission) == 214
     sizes = {role: len(perms) for role, perms in ROLE_PERMISSIONS.items()}
-    assert sizes == {"owner": 205, "admin": 196, "operator": 102, "viewer": 52, "auditor": 66,
+    assert sizes == {"owner": 206, "admin": 197, "operator": 102, "viewer": 52, "auditor": 66,
                      "system_worker": 3, "system_collector": 1, "system_scim": 1,
                      "system_self_installer": 2, "system_host": 1}
 
@@ -133,4 +135,4 @@ def test_a_catalogue_that_breaks_a_rule_is_refused(mutate, message):
 
 
 def test_the_source_loads():
-    assert len(load().permissions) == 213
+    assert len(load().permissions) == 214

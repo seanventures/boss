@@ -6,7 +6,7 @@ import { usd } from "../lib/money";
 import { humanDuration } from "../lib/datetime";
 import React, { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ArrowsOut, FilePdf, Hammer, Warning, X } from "@phosphor-icons/react";
+import { ArrowBendDownRight, ArrowsOut, FilePdf, Hammer, Warning, X } from "@phosphor-icons/react";
 import { apiWrite } from "../lib/api-write";
 import { askConsent, consentFromBody } from "../lib/identity/consent";
 import { StartRefusal, asReadiness, type PendingRefusal } from "./workflow-readiness-ui";
@@ -40,6 +40,10 @@ type Contributor = {
   role: string; calls: number; turns: number; usd: number; models: string[];
 };
 type Screen = { name: string; does: string };
+export type RunFollowups = {
+  bar: string; count: number; p1: number; words: string;
+  items: { tier: string; severity: string; text: string }[];
+};
 type Criterion = { id: string; text: string };
 type NextStep = { priority: string; area: string; item: string; why: string };
 type Product = {
@@ -53,6 +57,8 @@ type Product = {
     summary?: string; review_summary?: string; files_changed?: number;
     test_files?: string[]; commands_run?: { command: string; ok: boolean }[];
     verdicts?: Record<string, string | null>; pull_request_url?: string | null;
+    /** What the quality bar let through (engine quality_bar.run_followups): the PR lists the same. */
+    followups?: RunFollowups | null;
   };
 };
 
@@ -524,6 +530,21 @@ export function RunReportPanel(
           <p className="rr-note rr-caveat">
             Not verified against the build, nothing in this run tested them.
           </p>
+        </details>
+      ) : null}
+
+      {build.followups?.items?.length ? (
+        // FOLLOW-UPS (BOSSAPP-1362): what did not block this build at its quality bar, never
+        // dropped; the PR's Follow-ups section lists the same items.
+        <details className="rr-section" open={open} data-testid="run-report-followups">
+          <summary><ArrowBendDownRight size={14} weight="bold" aria-hidden /> Follow-ups
+            <span className="rr-count">{build.followups.count} · {build.followups.bar} bar</span></summary>
+          <p className="rr-note" data-testid="run-report-followups-words">{build.followups.words}. They did not block this build.</p>
+          <ul className="rr-next">
+            {build.followups.items.map((f, i) => (
+              <li key={i} data-priority={f.tier}><b>{f.tier}</b> {f.text}</li>
+            ))}
+          </ul>
         </details>
       ) : null}
 

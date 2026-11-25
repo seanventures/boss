@@ -99,7 +99,7 @@ def test_starting_a_pack_workflow_that_is_not_installed_says_where_it_is(client)
                     json={"project_id": PROJECT, "actor": "ceo", "workflow_key": IR,
                           "input": {"incident_id": "inc_x", "directive": "x"}})
     assert r.status_code == 404, r.text
-    assert "Marketplace" in r.text and "SRE / Helpdesk" in r.text
+    assert "Shared library" in r.text and "SRE / Helpdesk" in r.text
 
 
 def test_publish_and_unpublish_a_workflow_of_your_own(client):
