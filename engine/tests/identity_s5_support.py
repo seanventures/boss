@@ -121,12 +121,56 @@ def db(s5_engine):
     # the anchors it publishes (the delete is rolled back with the rest).
     if conn.execute(text("SELECT to_regclass('events')")).scalar():
         conn.execute(text("DELETE FROM events WHERE event_type = 'identity.audit_anchor'"))
+    hide_committed_chains(conn)
     try:
         yield conn
     finally:
         trans.rollback()
         conn.close()
         _reset_process_state()
+
+
+def hide_committed_chains(conn) -> None:
+    """Each test judges only the audit chain it writes, inside its own rolled-back transaction.
+
+    Other suites (the external-agent token tests, the MCP OAuth tests, worker ticks of API tests)
+    COMMIT security events for org_boss to the shared test database, each under its own master key
+    or none. verify_chain then read a chain this transaction never wrote: unkeyed rows (hash_alg 1)
+    in a keyed chain, or rows keyed under a chain key another master key wrapped. So the security
+    guard (A80) went red by test order and by whatever the shared database had collected, while
+    the code under test was sound. Here, inside the transaction that is rolled back, the committed
+    rows and the committed vault (chain keys, master-key KCVs) are removed from view: the test
+    starts from a genesis chain and a chain key its own master key made, whatever ran before. The delete runs as the audit
+    owner, the one role the append-only trigger lets delete (prune's role), and is never committed.
+    """
+    if not conn.execute(text("SELECT to_regclass('identity_security_events')")).scalar():
+        return
+    if not conn.execute(text("SELECT 1 FROM pg_roles WHERE rolname = 'boss_audit_owner'")).first():
+        return
+    if conn.execute(text("SELECT 1 FROM identity_security_events LIMIT 1")).first():
+        conn.execute(text("SET LOCAL ROLE boss_audit_owner"))
+        try:
+            conn.execute(text("DELETE FROM identity_security_events"))
+        finally:
+            conn.execute(text("RESET ROLE"))
+    # The vault too: items and the registered master key (KCV) another suite committed under its
+    # own BOSS_MASTER_KEY make check_master_key refuse this one (master_key_mismatch) and make
+    # the committed chain key undecryptable. The test starts from an empty vault.
+    if conn.execute(text("SELECT to_regclass('identity_vault_items')")).scalar():
+        if conn.execute(text("SELECT to_regclass('agent_keys')")).scalar():
+            conn.execute(text("DELETE FROM agent_keys WHERE private_vault_item_id IS NOT NULL"))
+        conn.execute(text("DELETE FROM identity_vault_items"))
+    if conn.execute(text("SELECT to_regclass('identity_vault_keks')")).scalar():
+        conn.execute(text("DELETE FROM identity_vault_keks"))
+        # ...and, as the API's boot does before anything is stored, register the master key this
+        # process runs with (another module's import may have set one for the whole session).
+        from boss_engine.identity import vault
+
+        try:
+            vault._kek()  # noqa: SLF001 — is a master key configured at all?
+        except vault.MasterKeyMissing:
+            return
+        vault.check_master_key(db=conn)
 
 
 def settings(**overrides: Any) -> SimpleNamespace:
