@@ -476,15 +476,6 @@ class ToolRegistry:
         # contract items. Every tool, one rule: unknown keys are dropped (and named in the
         # result), and BOSS's own context arrives through `internal`, never through `args`.
         safe_args, ignored = schema_args(spec, args)
-        # AN ARGUMENT THE TOOL DOES NOT TAKE IS REFUSED, NEVER DROPPED INTO A SUCCESS
-        # (BOSSAPP-1361). update_deployment_target was called with `health_check_path`, dropped
-        # it, found "nothing to change" and reported SUCCEEDED — the health check stayed wrong
-        # and the run said it was fixed. Nothing runs; the model is told what the tool takes and
-        # calls again. BOSS's own underscore keys are still dropped quietly: they are never a
-        # caller's to send, and refusing would let a forged one stop a legitimate call.
-        unknown = [k for k in ignored if not str(k).startswith("_")]
-        if unknown:
-            return unknown_args_result(spec, unknown)
         safe_args.update({k: v for k, v in (internal or {}).items() if str(k).startswith("_")})
         safe_args.pop("_operator_confirmed", None)
         # ONE ACTING PROJECT FOR THE GATE AND THE HANDLER (H1). The gate used to read
@@ -552,6 +543,16 @@ class ToolRegistry:
         # deploy tool existed (2026-11-20). Every tool, one rule, checked after
         # every gate (a refusal there says more) and before the handler: the model is told which
         # argument is missing and what the tool takes, so it can call again.
+        # AN ARGUMENT THE TOOL DOES NOT TAKE IS REFUSED, NEVER DROPPED INTO A SUCCESS
+        # (BOSSAPP-1361). update_deployment_target was called with `health_check_path`, dropped
+        # it, found "nothing to change" and reported SUCCEEDED — the health check stayed wrong
+        # and the run said it was fixed. Nothing runs; the model is told what the tool takes and
+        # calls again. After every gate, like a missing argument (a refusal there says more).
+        # Dropped quietly as before: BOSS's own underscore keys (never a caller's to send) and a
+        # claimed `actor` (the acting identity is the session's, whatever a caller claims).
+        unknown = [k for k in ignored if not str(k).startswith("_") and k not in QUIET_ARGS]
+        if unknown:
+            return unknown_args_result(spec, unknown)
         missing = missing_required(spec, safe_args)
         if missing:
             return missing_args_result(spec, missing, ignored)
@@ -768,6 +769,10 @@ def missing_args_result(spec: "ToolSpec", missing: list[str], ignored: list[str]
     if ignored:
         out["ignored_args"] = list(ignored)
     return out
+
+
+#: Caller keys a tool that does not list them drops without refusing the call (see `invoke`).
+QUIET_ARGS = frozenset({"actor"})
 
 
 def unknown_args_result(spec: "ToolSpec", unknown: list[str]) -> dict:

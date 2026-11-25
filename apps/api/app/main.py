@@ -3958,14 +3958,14 @@ def skill_summary_from_service(payload) -> SkillSummary:
 def skill_usability(skill: dict) -> tuple[bool, Optional[str]]:
     """Can BOSS run this catalogue skill here? A skill with no executor (and not one BOSS runs
     itself, nor an MCP or authored one) cannot, whatever its row says."""
-    from boss_engine.services.skill_executors import registered_executor_ids
+    from boss_engine.services.skill_executors import runs_here
 
     if skill.get("system") or str(skill.get("source") or "module") not in (
             "module", "catalog", "builtin"):
         return True, None
     if skill.get("mock_mode"):
         return True, None
-    if str(skill.get("id")) in set(registered_executor_ids()):
+    if runs_here(str(skill.get("id"))):     # the catalogue's own answer (BOSSAPP-1366)
         return True, None
     return False, "Agents can't run this skill on this install"
 

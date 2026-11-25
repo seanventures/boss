@@ -340,7 +340,8 @@ def scope_problem(role: str, wanted: list[str], held: dict[str, list[str]]) -> O
     if cannot_run:
         return (f"{role} holds {', '.join(cannot_run)}, but an agent step cannot offer "
                 f"{'it' if len(cannot_run) == 1 else 'them'} as a tool on this project — not "
-                "in the skill catalogue, or turned off. An authored skill runs as a custom step "
+                "in the skill catalogue, turned off, or with no executor on this install. An "
+                "authored skill runs as a custom step "
                 "(Add step → your skills); otherwise turn it on, or take it off the step.")
     return None
 
@@ -350,7 +351,8 @@ def empty_handed_problem(role: str, held: dict[str, list[str]]) -> str:
     publish check for the same reason as `scope_problem`."""
     if held.get("unrunnable"):
         return (f"{role} holds only {', '.join(held['unrunnable'])}, which an agent step cannot "
-                "offer as tools on this project — not in the skill catalogue, or turned off. "
+                "offer as tools on this project — not in the skill catalogue, turned off, or "
+                "with no executor on this install. "
                 f"Give {role} a skill it can use in Agent Studio, or run that skill as a "
                 "custom step.")
     return (f"{role} holds no skills and no MCP servers, so it cannot do anything. Open the "
