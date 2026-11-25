@@ -190,7 +190,7 @@ def model_key_details(*, provider: str, base_url: str = "", model: str = "") -> 
     url_base = (base_url or spec.get("base_url") or "").strip().rstrip("/")
     if not url_base:
         raise SetupError("a base URL is required for a custom provider.")
-    name = (model or spec.get("example_model") or spec.get("default_model") or "").strip()
+    name = ((model or "").strip() or spec.get("example_model") or spec.get("default_model") or "").strip()
     if not name:
         raise SetupError("a model name is required.")
     suffix = "/messages" if spec.get("api") == "anthropic" else "/chat/completions"

@@ -106,4 +106,75 @@ describe("OpenRouter in Add a model", () => {
     await type(field, "openai/gpt-5");
     expect(q(document.body, "su-model-price")!.textContent).toBe("$2.50 / $10.00 per 1M");
   });
+
+  it("handles null, missing, negative, and non-finite prices gracefully without throwing", async () => {
+    const view = board();
+    vi.stubGlobal("fetch", vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      const body = typeof init?.body === "string" ? JSON.parse(init.body) : {};
+      if (body.op === "model_catalogue") {
+        const res = new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
+        res.json = async () => ({
+          models: ["null/prompt", "null/completion", "nan/model", "inf/model", "neg/model", "free/model", "paid/model"],
+          prices: {
+            "null/prompt": { prompt_usd_per_mtok: null, completion_usd_per_mtok: 0.0 },
+            "null/completion": { prompt_usd_per_mtok: 0.0, completion_usd_per_mtok: null },
+            "nan/model": { prompt_usd_per_mtok: Number.NaN, completion_usd_per_mtok: 0.0 },
+            "inf/model": { prompt_usd_per_mtok: 0.0, completion_usd_per_mtok: Number.POSITIVE_INFINITY },
+            "neg/model": { prompt_usd_per_mtok: -1, completion_usd_per_mtok: 0.0 },
+            "free/model": { prompt_usd_per_mtok: 0, completion_usd_per_mtok: 0 },
+            "paid/model": { prompt_usd_per_mtok: 0.5, completion_usd_per_mtok: 1.5 },
+          },
+        });
+        return res;
+      }
+      return new Response(JSON.stringify(view),
+        { status: 200, headers: { "Content-Type": "application/json" } });
+    }));
+    mounted = await mountBoard(view, "?area=setup&add=openrouter", true, "setup");
+    await flush();
+    const opts = Array.from(document.querySelectorAll("#su-model-options option"));
+    expect(opts.map((o) => o.getAttribute("label"))).toEqual([
+      null,
+      null,
+      null,
+      null,
+      null,
+      "Free",
+      "$0.50 / $1.50 per 1M",
+    ]);
+    const field = q(document.body, "su-model-name") as HTMLInputElement;
+    for (const bad of ["null/prompt", "null/completion", "nan/model", "inf/model", "neg/model"]) {
+      await type(field, bad);
+      expect(q(document.body, "su-model-price")).toBeNull();
+    }
+    await type(field, "free/model");
+    expect(q(document.body, "su-model-price")!.textContent).toBe("Free");
+    await type(field, "paid/model");
+    expect(q(document.body, "su-model-price")!.textContent).toBe("$0.50 / $1.50 per 1M");
+  });
+
+  it("ignores stale model_catalogue responses after rapidly switching providers", async () => {
+    const view = board();
+    let resolveOpenRouter!: (res: Response) => void;
+    const openRouterPending = new Promise<Response>((resolve) => {
+      resolveOpenRouter = resolve;
+    });
+    vi.stubGlobal("fetch", vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      const body = typeof init?.body === "string" ? JSON.parse(init.body) : {};
+      if (body.op === "model_catalogue" && body.provider === "openrouter") {
+        return openRouterPending;
+      }
+      return new Response(JSON.stringify(view),
+        { status: 200, headers: { "Content-Type": "application/json" } });
+    }));
+    mounted = await mountBoard(view, "?area=setup&add=openrouter", true, "setup");
+    // Switch rapidly to OpenAI before the OpenRouter catalogue request settles.
+    await click(q(document.body, "su-provider-openai"));
+    resolveOpenRouter(new Response(JSON.stringify({
+      models: ["stale/openrouter-model"],
+      prices: { "stale/openrouter-model": { prompt_usd_per_mtok: 1.0, completion_usd_per_mtok: 2.0 } },
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    await flush();
+    expect(Array.from(document.querySelectorAll("#su-model-options option"))).toHaveLength(0);
+  });
 });
