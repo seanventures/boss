@@ -262,7 +262,7 @@ def sync_confluence_knowledge(payload: DocsSyncBody) -> dict:
 
 
 @router.get("/v1/docs-connections/sync")
-@permit(P.KNOWLEDGE_MANAGE, scope=Scope.project(query="project_id"))
+@permit(P.KNOWLEDGE_READ, scope=Scope.project(query="project_id"))
 def sync_status(project_id: str) -> dict:
     """The sync job's state (empty when none ran)."""
     with begin(get_engine()) as connection:

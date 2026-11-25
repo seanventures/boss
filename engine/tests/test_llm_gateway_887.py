@@ -222,7 +222,10 @@ def test_without_a_gateway_the_launch_is_unchanged(upstream, monkeypatch):
                         LOGIN if name == "CLAUDE_CODE_OAUTH_TOKEN" else None)
     env = ca.ClaudeCodeAgent(Settings().model_copy(
         update={"claude_code_oauth_token": "", "anthropic_api_key": None}))._child_env()
-    assert env["CLAUDE_CODE_OAUTH_TOKEN"] == LOGIN and "ANTHROPIC_BASE_URL" not in env
+    # The login goes behind the loopback proxy like any credential (BOSSAPP-1480), never to the
+    # gateway: the base URL is the proxy's subscription route.
+    assert mp.held_for(env["CLAUDE_CODE_OAUTH_TOKEN"]) == LOGIN
+    assert env["ANTHROPIC_BASE_URL"].endswith("/claude_subscription")
 
 
 def test_the_live_test_says_ok_or_why_never_the_key(eng, project, store):

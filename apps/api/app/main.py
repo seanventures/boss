@@ -3958,14 +3958,14 @@ def skill_summary_from_service(payload) -> SkillSummary:
 def skill_usability(skill: dict) -> tuple[bool, Optional[str]]:
     """Can BOSS run this catalogue skill here? A skill with no executor (and not one BOSS runs
     itself, nor an MCP or authored one) cannot, whatever its row says."""
-    from boss_engine.services.skill_executors import registered_executor_ids
+    from boss_engine.services.skill_executors import runs_here
 
     if skill.get("system") or str(skill.get("source") or "module") not in (
             "module", "catalog", "builtin"):
         return True, None
     if skill.get("mock_mode"):
         return True, None
-    if str(skill.get("id")) in set(registered_executor_ids()):
+    if runs_here(str(skill.get("id"))):     # the catalogue's own answer (BOSSAPP-1366)
         return True, None
     return False, "Agents can't run this skill on this install"
 
@@ -32550,7 +32550,8 @@ class RecheckBody(BaseModel):
 
 
 @app.get("/v1/code-tasks/{run_id}/recheck")
-@permit(P.CODE_TASK_STEER, scope=Scope.of("code_task", path="run_id"))
+# Whether it can be re-checked and what that costs is a read; the POST below is the steer.
+@permit(P.CODE_TASK_READ, scope=Scope.of("code_task", path="run_id"))
 def code_task_recheck_preview_endpoint(run_id: str) -> dict:
     """Can this change be re-checked, and what it costs (services/change_recheck.py)."""
     from boss_engine.services import change_recheck

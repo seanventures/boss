@@ -376,9 +376,14 @@ def run_bundled_tool(context: Any, skill_id: str, inputs: dict[str, Any]) -> dic
             if k not in (BUNDLE_TOOL_KEY, "project_id") and not str(k).startswith("_")}
     # THE SAME FILTER AS EVERY OTHER DOOR (registry.schema_args): a bundle call cannot set a
     # key the tool's schema does not list.
-    from ..tools.registry import schema_args
+    from ..tools.registry import schema_args, unknown_args_result, unknown_caller_args
 
     args, ignored = schema_args(spec, args)
+    unknown = unknown_caller_args(ignored)
+    if unknown:
+        # REFUSED, NOT DROPPED (BOSSAPP-1361): the same rule as registry.invoke, so an agent
+        # step's call with a wrong argument name fails saying what the tool takes.
+        raise ValueError(unknown_args_result(spec, unknown)["message"])
     ctx = EngineContext(settings=context.settings, engine=context.connection.engine)
     out = spec.handler(ctx, project_id=context.project_id, actor=context.actor, args=args)
     out = out if isinstance(out, dict) else {"value": out}

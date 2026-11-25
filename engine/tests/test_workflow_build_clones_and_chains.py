@@ -347,8 +347,9 @@ def test_a_config_deploy_step_after_a_build_takes_the_builds_run_by_itself():
     from boss_engine.services import workflow_capability_runner as runner
 
     source = __import__("inspect").getsource(runner._perform_capability)
-    assert 'key == "config_deploy" and inputs.get("source_paths")' in source
-    assert "_nearest_build_run_id(connection, context, step)" in source[source.index('key == "config_deploy"'):][:700]
+    branch = 'key == "config_deploy" and inputs.get("source_paths")'
+    assert branch in source
+    assert "_nearest_build_run_id(connection, context, step)" in source[source.index(branch):][:700]
 
 
 # ── D. contract_test: header secret references resolve at run time and are never logged ──────
@@ -521,36 +522,68 @@ def test_a_finished_run_records_the_commit_it_shipped():
 
 
 def test_an_earlier_approved_gate_never_pre_approves_a_build_with_failing_gates(
-        eng, project, gateway, dirs, built, monkeypatch):  # noqa: F811
+        eng, project, gateway, dirs, built):  # noqa: F811
+    """A REAL released gate, no stubs: a config_deploy step's gate, approved by a person on THIS
+    workflow run, is exactly the gate that pre-approves this deploy when the build is clean
+    (control). Once the build has failing gates, neither that gate named as an argument nor the
+    runner's own trusted `released_gate` pre-approves it: a person is asked, and the gate is
+    not spent."""
     from boss_engine.services import deploy_policy
+
+    from .test_workflow_capability_runner import _publish as publish_steps, _start as start_run
 
     settings = _fresh_settings()
     _staging(eng, settings, project, dirs, gateway, approval_free=False)
-    from boss_engine.services.core import create_blocking_decision
+    earlier = f"dec_gate_{uuid.uuid4().hex[:10]}"
+    with eng.begin() as c:
+        _, version = publish_steps(c, project, f"gate_{uuid.uuid4().hex[:6]}", [
+            {"id": "ship", "kind": "capability", "next": [],
+             "binding": {"capability": "config_deploy", "inputs": {}}}], "ship")
+        run = start_run(c, project, version["id"], {})
+        c.execute(text("INSERT INTO decisions (id, project_id, question, status, approved_by) "
+                       "VALUES (:d, :p, 'Ship config?', 'approved', :a)"),
+                  {"d": earlier, "p": project, "a": PERSON})
+        c.execute(text("UPDATE workflow_step_runs SET decision_id = :d, binding_snapshot = "
+                       "COALESCE(binding_snapshot, '{}'::jsonb) || CAST(:s AS JSONB) "
+                       "WHERE workflow_run_id = :r"),
+                  {"d": earlier, "s": json.dumps({"capability": "config_deploy",
+                                                  "released_for": earlier}), "r": run["id"]})
+        mine = deploy_policy.released_gate(c, project, earlier, capability="config_deploy",
+                                           run_id=run["id"])
+    assert mine and mine["approved_by"] == PERSON
+
+    # CONTROL: with a clean build this very gate, as an argument or as the runner's value,
+    # would have pre-approved this config deploy (checked in a transaction that is rolled
+    # back, so the gate is not claimed).
+    with eng.connect() as c:
+        for kw in ({"gate_decision_id": earlier}, {"released": mine}):
+            with c.begin() as tx:
+                ok = deploy_policy.pre_approval(c, project, "staging", gate_capability="config_deploy",
+                                                gate_run_id=run["id"], **kw)
+                assert ok and ok["source"] == "gate" and ok["decision_id"] == earlier, kw
+                tx.rollback()
 
     with eng.begin() as c:
-        earlier = create_blocking_decision(c, project, None, "earlier gate", {}, {}, "test",
-                                           risk_tier=1, default_action="hold")
-    monkeypatch.setattr(deploy_policy, "_gate_approval", lambda c, p, d: {
-        "source": "gate", "decision_id": d, "approved_by": PERSON})
-
-    def deploy():
-        return config_deploy.deploy_files(
-            eng, settings, project_id=project, actor=PERSON, app_name="Northgate Gateway",
-            environment="staging", code_task_run_id=LINEAGE, source_paths=["tenants/lumen-pay.yaml"],
-            approval_decision_id=earlier)
-
-    with eng.begin() as c:        # control: with no ask the earlier gate would have counted
-        assert deploy_policy.pre_approval(c, project, "staging", gate_decision_id=earlier)["source"] == "gate"
         c.execute(text("UPDATE code_task_runs SET finalize_ctx = finalize_ctx || "
                        "'{\"failing_gates\": [\"security_clean\"]}'::jsonb WHERE id = :i"), {"i": LINEAGE})
-    asked = deploy()
-    assert asked["status"] == "planned" and asked["approval"] is None
-    assert "security_clean" in asked["source"]["needs_a_person"]
-    with eng.begin() as c:
-        question = c.execute(text("SELECT d.status FROM decisions d JOIN deployment_runs r ON r.decision_id = d.id "
-                                  "WHERE r.id = :i"), {"i": asked["deployment_run_id"]}).scalar_one()
-    assert question == "pending"          # a card is raised for a person, with the reasons
+    for kw in ({"approval_decision_id": earlier}, {"released_gate": mine},
+               {"approval_decision_id": earlier, "released_gate": mine}):
+        asked = config_deploy.deploy_files(
+            eng, settings, project_id=project, actor=PERSON, app_name="Northgate Gateway",
+            environment="staging", code_task_run_id=LINEAGE, source_paths=["tenants/lumen-pay.yaml"],
+            workflow_run_id=run["id"], **kw)
+        assert asked["status"] == "planned" and asked["approval"] is None, (kw, asked)
+        assert "security_clean" in asked["source"]["needs_a_person"]
+        with eng.begin() as c:
+            question = c.execute(text("SELECT d.id, d.status FROM decisions d JOIN deployment_runs r "
+                                      "ON r.decision_id = d.id WHERE r.id = :i"),
+                                 {"i": asked["deployment_run_id"]}).mappings().one()
+            # a card is raised for a person, with the reasons — never the earlier gate
+            assert question["status"] == "pending" and question["id"] != earlier, kw
+            assert c.execute(text("SELECT 1 FROM deployment_gate_uses WHERE decision_id = :d"),
+                             {"d": earlier}).first() is None, "the earlier gate was spent"
+            c.execute(text("UPDATE deployment_runs SET status = 'cancelled' WHERE id = :i"),
+                      {"i": asked["deployment_run_id"]})
 
 
 def test_the_http_auth_flag_is_set_on_save_and_kept_when_the_value_is_saved_again(eng, project, monkeypatch):  # noqa: F811

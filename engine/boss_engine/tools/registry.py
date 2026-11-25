@@ -543,6 +543,16 @@ class ToolRegistry:
         # deploy tool existed (2026-11-20). Every tool, one rule, checked after
         # every gate (a refusal there says more) and before the handler: the model is told which
         # argument is missing and what the tool takes, so it can call again.
+        # AN ARGUMENT THE TOOL DOES NOT TAKE IS REFUSED, NEVER DROPPED INTO A SUCCESS
+        # (BOSSAPP-1361). update_deployment_target was called with `health_check_path`, dropped
+        # it, found "nothing to change" and reported SUCCEEDED — the health check stayed wrong
+        # and the run said it was fixed. Nothing runs; the model is told what the tool takes and
+        # calls again. After every gate, like a missing argument (a refusal there says more).
+        # Dropped quietly as before: BOSS's own underscore keys (never a caller's to send) and a
+        # claimed `actor` (the acting identity is the session's, whatever a caller claims).
+        unknown = unknown_caller_args(ignored)
+        if unknown:
+            return unknown_args_result(spec, unknown)
         missing = missing_required(spec, safe_args)
         if missing:
             return missing_args_result(spec, missing, ignored)
@@ -759,6 +769,32 @@ def missing_args_result(spec: "ToolSpec", missing: list[str], ignored: list[str]
     if ignored:
         out["ignored_args"] = list(ignored)
     return out
+
+
+#: Caller keys a tool that does not list them drops without refusing the call (see `invoke`).
+QUIET_ARGS = frozenset({"actor"})
+
+
+def unknown_caller_args(ignored: list[str]) -> list[str]:
+    """Of the keys `schema_args` dropped, the ones a caller sent that the tool does not take —
+    refused at every door (registry.invoke, the agent-step tool bundles), never dropped into a
+    success. Underscore keys and QUIET_ARGS are not a caller's to send and stay dropped."""
+    return [k for k in ignored if not str(k).startswith("_") and k not in QUIET_ARGS]
+
+
+def unknown_args_result(spec: "ToolSpec", unknown: list[str]) -> dict:
+    """The refusal for a call naming arguments the tool does not take: which ones, what it does
+    take, and that nothing ran — a result the model reads and calls again from."""
+    props = (spec.parameters or {}).get("properties") or {}
+    takes = {k: str((v or {}).get("description") or (v or {}).get("type") or "")
+             for k, v in props.items()}
+    return {
+        "ok": False, "tool": spec.name, "error": "unknown_arguments",
+        "unknown": list(unknown), "ignored_args": list(unknown), "takes": takes,
+        "message": (f"'{spec.name}' does not take " + ", ".join(repr(u) for u in unknown)
+                    + ", so nothing ran. Call it again with only the arguments it takes: "
+                    + (", ".join(sorted(takes)) or "none") + "."),
+    }
 
 
 def schema_args(spec: "ToolSpec", args: Optional[dict]) -> tuple[dict, list[str]]:

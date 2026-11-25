@@ -295,7 +295,7 @@ def build_agent_platform_router(*, engine, require_write_actor: Callable[..., st
                                       "quiet_modes": ["defer", "ack_and_defer", "answer"]}}
 
     @router.post("/v1/agents/{role_key}/triggers/preview-match")
-    @permit(P.INTEGRATION_READ, scope=Scope.project(body="project_id"))
+    @permit(P.INTEGRATION_READ, scope=Scope.project(body="project_id"), readonly_post=True)
     def preview_match(role_key: str, body: MatchPreviewBody, request: Request) -> dict[str, Any]:
         """Which of the connection's recent events a route filter would match, and which leaf
         held for each (the console shows it before the route is saved). Read-only. Without

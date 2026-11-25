@@ -93,8 +93,9 @@ def for_run(engine: Any, run: Optional[dict], ident: Any = None) -> Iterator[Opt
         yield None
         return
     if ident is not None:
-        root = Path(ident.run_dir) / "template"
-        root.mkdir(mode=0o755)
+        from ..services.sandbox_identity import make_run_dir
+
+        root = make_run_dir(ident, "template-", 0o755)     # never a path the run's uid can race
     else:
         root = Path(tempfile.mkdtemp(prefix="boss-template-"))
     try:

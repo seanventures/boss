@@ -206,14 +206,16 @@ def test_a_recheck_after_a_fix_replaces_the_false_table(eng, project):  # noqa: 
 
 
 def test_every_door_needs_the_steer_permission():
+    """Every door that STARTS a re-check needs steer. The preview (whether it can be re-checked
+    and what it costs) is a read: a GET is declared as a read (BOSSAPP-1359)."""
     from pathlib import Path
 
     root = Path(g.__file__).resolve().parents[3]
     api = (root / "apps/api/app/main.py").read_text(encoding="utf-8")
-    for route in ('@app.get("/v1/code-tasks/{run_id}/recheck")',
-                  '@app.post("/v1/code-tasks/{run_id}/recheck")'):
+    for route, permit in (('@app.get("/v1/code-tasks/{run_id}/recheck")', "CODE_TASK_READ"),
+                          ('@app.post("/v1/code-tasks/{run_id}/recheck")', "CODE_TASK_STEER")):
         at = api.index(route)
-        assert "@permit(P.CODE_TASK_STEER" in api[at:at + 200], route
+        assert f"@permit(P.{permit}" in api[at:at + 300], route
     tools = (root / "engine/boss_engine/tools/builtin.py").read_text(encoding="utf-8")
     at = tools.index('"recheck_change",')
     assert 'permission="code_task:steer"' in tools[at:at + 1500]

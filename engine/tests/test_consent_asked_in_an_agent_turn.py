@@ -43,7 +43,8 @@ def _registry_raising():
 
     reg = ToolRegistry()
     reg.register(ToolSpec(name="create_code_task", description="start a build", kind="write",
-                          handler=handler, parameters={"type": "object", "properties": {}},
+                          handler=handler,
+                          parameters={"type": "object", "properties": {"title": {"type": "string"}}},
                           inherits_route_permission=True, reversibility="reversible"))
     return reg
 

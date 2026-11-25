@@ -4,9 +4,9 @@
   "canonical_key": "method + path",
   "request_body_type_enforcement_note": "pass_through_documented fields appear in OpenAPI but SkipValidation preserves the handler's existing input coercion and error statuses; runtime_validated_input_schema is a legacy schema-presence flag",
   "edition": "community",
-  "operation_count": 2453,
+  "operation_count": 2454,
   "counts": {
-    "api_policy_gated": 2115,
+    "api_policy_gated": 2116,
     "excluded": 131,
     "human_confirmation_gated": 78,
     "operator_only_unavailable": 129
@@ -18443,6 +18443,24 @@
       "domain_scoped_direct_tool": true,
       "requires_explicit_bound_api_credential": true,
       "read_only_available": true
+    },
+    {
+      "method": "POST",
+      "path": "/v1/host-jobs/lease/load",
+      "alias": "post_v1_host_jobs_lease_load_0f8ccb7e",
+      "domain": "other",
+      "summary": "Lease Host Job",
+      "mcp_status": "api_policy_gated",
+      "reason": null,
+      "input_schema_quality": "parameters_only",
+      "mounted_input_schema_quality": "parameters_only",
+      "request_body_type_enforcement": "no_json_body",
+      "curated_input_fields": false,
+      "typed_input_schema": true,
+      "runtime_validated_input_schema": true,
+      "domain_scoped_direct_tool": true,
+      "requires_explicit_bound_api_credential": true,
+      "read_only_available": false
     },
     {
       "method": "GET",

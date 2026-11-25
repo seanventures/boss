@@ -70,6 +70,7 @@ project onto a local model.
 | Identity vault: AES-256-GCM envelope encryption, per-row key wrapped by a master key from `BOSS_MASTER_KEY_FILE` (0600, created on first install); only `vault.py` decrypts | `engine/boss_engine/identity/vault.py` | `engine/tests/test_identity_agents_vault_and_grants.py` (`test_a_secret_round_trips_and_the_database_holds_no_plaintext`, `test_r9_only_vault_py_decrypts`) |
 | Secret references (connections, app secrets): backends `database` (default), `infisical`, Vault and others | `services/secret_backends.py` | `engine/tests/test_secret_access_log_865.py` |
 | Agents never hold an API key: a session gets a short-lived run token and a loopback proxy that adds the key | `services/model_proxy.py` | `engine/tests/test_an_agent_session_never_holds_the_model_key.py` |
+| Agents never hold a subscription login: each engine's session gets a run token at the model proxy, which adds the real login (read live, so refreshes are followed) | `services/subscription_shield.py`, `services/model_proxy.py` | `engine/tests/test_subscription_logins_stay_out_of_the_sandbox.py` |
 | Secrets are redacted from logs, error reports and run output | `engine/boss_engine/identity/redaction.py`, `services/run_secret_redaction.py` | `engine/tests/test_redaction_masks_every_credential.py`, `apps/api/tests/test_no_secret_leaves_the_log.py`, `engine/tests/test_identity_audit_redaction.py` |
 
 Know these:
@@ -77,9 +78,24 @@ Know these:
   the same database as the ciphertext; its health check says so (`secret_backends.py`,
   `key_mode=auto_provisioned`). The installer writes `BOSS_KMS_MASTER_KEY` to `.env`, so a standard
   install does not hit this. Keep `.env` and the key file out of database backups.
-- A **subscription** login (Claude Code, Codex, Grok) is not an API key and is not proxied: it is
-  copied into the sandbox run's home (`services/code_agent.py`, comment above the model proxy;
-  `services/sandbox_identity.py`). Use API keys for the preview.
+- A **subscription** login (Claude Code, Codex, Grok) is held like an API key: the model proxy
+  keeps it and the session gets a short-lived run token. Claude Code gets
+  `CLAUDE_CODE_OAUTH_TOKEN=<run token>` and `ANTHROPIC_BASE_URL`. Codex gets a per-session
+  `CODEX_HOME` whose login carries the run token and no refresh token. Grok gets a session
+  `GROK_HOME` with no login, plus BOSS's chat-proxy URL and an auth command that prints the run
+  token. No login file is copied into a sandbox, and the sandbox drops a raw login a step would
+  inherit (`services/subscription_shield.py`, `services/model_proxy.py`,
+  `services/sandbox_identity.py`). Gaps:
+  - The legacy micro-VM contract v1.0 still carries a Claude token into the guest; v1.1 guests
+    get handles only.
+  - On a host without the sandbox helper (`BOSS_SANDBOX_ISOLATION=auto` with no
+    `boss-sandbox-exec`, such as a developer laptop) the agent runs as the control plane's own
+    uid and can read the CLI homes directly; only the session's environment and files hold run
+    tokens there.
+  - Grok Build's route is built from the CLI's documented variables and has not been checked
+    live against a Grok subscription.
+  - If the install sets `ANTHROPIC_BASE_URL` (a corporate gateway), Claude subscription calls,
+    and the subscription token, go to that gateway.
 
 ## 4. SSO and RBAC
 

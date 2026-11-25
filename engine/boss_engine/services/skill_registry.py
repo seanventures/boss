@@ -350,8 +350,10 @@ def resolve_for_task(
     # switched off used to resolve here anyway (no row, so "enabled"); now it does not.
     from .skill_catalogue import entries
 
+    # ONLY WHAT CAN RUN (BOSSAPP-1366): a skill the catalogue marks unusable — a shipped skill
+    # with no executor here, an authored one whose server is gone — is never offered as a tool.
     catalog = [item["spec"] for item in entries(connection, project_id, settings=settings)
-               .values() if item["spec"] is not None]
+               .values() if item["spec"] is not None and item.get("usable", True)]
     by_id = {str(skill["id"]): skill for skill in catalog}
     catalog_ids = set(by_id)
 

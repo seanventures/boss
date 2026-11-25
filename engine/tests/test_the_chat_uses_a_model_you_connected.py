@@ -289,7 +289,9 @@ def test_and_an_operator_set_token_still_wins(monkeypatch):
 
     monkeypatch.setattr("boss_engine.services.cli_harness.stored_credential", _never)
     env = ClaudeCodeAgent(Settings(CLAUDE_CODE_OAUTH_TOKEN=""))._child_env()
-    assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "operator-token"
+    from boss_engine.services.model_proxy import held_for
+
+    assert held_for(env["CLAUDE_CODE_OAUTH_TOKEN"]) == "operator-token"   # behind a run token
 
 
 def test_a_project_bound_token_wins_over_the_host_environment(monkeypatch):
@@ -300,5 +302,7 @@ def test_a_project_bound_token_wins_over_the_host_environment(monkeypatch):
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "host-token")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "host-api-key")
     env = ClaudeCodeAgent(Settings(CLAUDE_CODE_OAUTH_TOKEN="project-token"))._child_env()
-    assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "project-token"
+    from boss_engine.services.model_proxy import held_for
+
+    assert held_for(env["CLAUDE_CODE_OAUTH_TOKEN"]) == "project-token"   # behind a run token
     assert "ANTHROPIC_API_KEY" not in env

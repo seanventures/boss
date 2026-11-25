@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 2460 operations.
+# 2461 operations.
 "GET /.well-known/agent-card.json": ["public:jwks", "OAPVU"]
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /.well-known/boss-mcp-client.json": ["public:jwks", "OAPVU"]
@@ -536,7 +536,7 @@
 "POST /v1/code-tasks/{run_id}/origin": ["permit code_task:steer @ code_task(path=run_id)", "OAP"]
 "POST /v1/code-tasks/{run_id}/override": ["permit code_task:override @ code_task(path=run_id)", "OA"]
 "POST /v1/code-tasks/{run_id}/preview": ["permit preview:manage @ code_task(path=run_id)", "OAP"]
-"GET /v1/code-tasks/{run_id}/recheck": ["permit code_task:steer @ code_task(path=run_id)", "OAP"]
+"GET /v1/code-tasks/{run_id}/recheck": ["permit code_task:read @ code_task(path=run_id)", "OAPVU"]
 "POST /v1/code-tasks/{run_id}/recheck": ["permit code_task:steer @ code_task(path=run_id)", "OAP"]
 "POST /v1/code-tasks/{run_id}/redelivered": ["permit worker:lease @ org", "-"]
 "GET /v1/code-tasks/{run_id}/result-review": ["permit code_task:read @ code_task(path=run_id)", "OAPVU"]
@@ -790,7 +790,7 @@
 "POST /v1/docs-connections": ["permit integration:manage @ project(body=project_id)", "OA"]
 "GET /v1/docs-connections/catalog": ["permit integration:read @ org", "OAPVU"]
 "GET /v1/docs-connections/spaces": ["permit integration:read @ project(query=project_id)", "OAPVU"]
-"GET /v1/docs-connections/sync": ["permit knowledge:manage @ project(query=project_id)", "OA"]
+"GET /v1/docs-connections/sync": ["permit knowledge:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/docs-connections/sync": ["permit knowledge:manage @ project(body=project_id)", "OA"]
 "POST /v1/docs-connections/test": ["permit integration:manage @ project(body=project_id)", "OA"]
 "POST /v1/docs/update": ["permit system:operate @ project(body=project_id)", "OA"]
@@ -1032,6 +1032,7 @@
 "GET /v1/health-snapshots": ["permit system:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/health-snapshots/refresh": ["permit system:operate @ project(body=project_id)", "OA"]
 "GET /v1/host-jobs/lease": ["permit system:operate @ org +writes_on_get", "OA"]
+"POST /v1/host-jobs/lease/load": ["permit system:operate @ org +writes_on_get", "OA"]
 "GET /v1/host-jobs/public-key": ["permit system:read @ org", "OAPVU"]
 "POST /v1/host-jobs/{job_id}/result": ["permit system:operate @ org", "OA"]
 "POST /v1/hosts/enrol": ["public:host_join_token", "OAPVU"]
@@ -1302,7 +1303,7 @@
 "DELETE /v1/intake/connections/{connection_id}/sso-attestation": ["permit identity_provider:manage @ org", "O"]
 "PUT /v1/intake/connections/{connection_id}/sso-attestation": ["permit identity_provider:manage @ org", "O"]
 "POST /v1/intake/connections/{connection_id}/test": ["permit integration:manage @ intake_connection(path=connection_id)", "OA"]
-"GET /v1/intake/connections/{connection_id}/test-message": ["permit integration:manage @ intake_connection(path=connection_id)", "OA"]
+"GET /v1/intake/connections/{connection_id}/test-message": ["permit integration:read @ intake_connection(path=connection_id)", "OAPVU"]
 "POST /v1/intake/connections/{connection_id}/test-message": ["permit integration:manage @ intake_connection(path=connection_id)", "OA"]
 "GET /v1/intake/dead-letters": ["permit integration:read @ project(query=project_id)", "OAPVU"]
 "GET /v1/intake/events": ["permit integration:read @ project(query=project_id)", "OAPVU"]
@@ -1804,7 +1805,7 @@
 "POST /v1/projects/{project_id}/local-repo": ["permit repository:manage @ project(path=project_id)", "OA"]
 "POST /v1/projects/{project_id}/local-repo/checks": ["permit workflow_run:start @ project(path=project_id)", "OAP"]
 "POST /v1/projects/{project_id}/local-repo/import": ["permit repository:manage @ project(path=project_id)", "OA"]
-"POST /v1/projects/{project_id}/local-repo/working-copies": ["permit repository:read @ project(path=project_id)", "OAPVU"]
+"POST /v1/projects/{project_id}/local-repo/working-copies": ["permit repository:push @ project(path=project_id)", "OAP"]
 "PUT /v1/projects/{project_id}/notification-routes/{event}": ["permit observability:manage @ project(path=project_id)", "OA"]
 "GET /v1/projects/{project_id}/onboarding": ["permit project:read @ project(path=project_id)", "OAPVU"]
 "POST /v1/projects/{project_id}/onboarding/backlog/accept": ["permit work_item:manage @ project(path=project_id)", "OAP"]

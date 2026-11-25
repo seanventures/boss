@@ -127,7 +127,10 @@ def gate(monkeypatch):
 def test_another_projects_run_is_not_found_before_the_handler(gate, monkeypatch, tool):
     reg, calls, _held, _seen = gate
     monkeypatch.setattr(object_rules, "production_projects", lambda *a, **k: [])
-    args = {"run_id": "b_crun", "instructions": "x", "question": "q"}
+    # Only what each tool takes: an argument a tool does not take is refused (BOSSAPP-1361).
+    takes = set((reg.get(tool).parameters or {}).get("properties") or {})
+    args = {k: v for k, v in {"run_id": "b_crun", "instructions": "x", "question": "q"}.items()
+            if k in takes}
     out = reg.invoke(tool, None, project_id="pa", actor="x", args=args, auth=ALICE,
                      operator_confirmed=True)
     assert out["ok"] is False and out["error"] == "not_found", out
