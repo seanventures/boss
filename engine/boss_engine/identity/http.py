@@ -100,6 +100,19 @@ def _open_connection(scheme: str, host: str, ip: str, port: int, timeout: float)
         raise
 
 
+#: Name suffixes that mean "inside a company network", never a public service.
+INTERNAL_SUFFIXES = (".internal", ".local", ".localdomain", ".corp", ".lan", ".intranet",
+                     ".home.arpa", ".private", ".localhost")
+
+
+def internal_looking(host: str) -> bool:
+    """A single-label name or one under an internal suffix. Behind a proxy such a name, when it
+    does not resolve here, is refused unless the operator allow-listed it
+    (BOSS_OUTBOUND_ALLOW_PRIVATE): the proxy would resolve it inside the company."""
+    host = str(host or "").lower().rstrip(".")
+    return "." not in host or host.endswith(INTERNAL_SUFFIXES)
+
+
 def _proxy_for(url: str) -> Optional[str]:
     from ..services.outbound_proxy import proxy_for
 
@@ -242,7 +255,9 @@ def fetch(method: str, url: str, *, headers: Optional[Mapping[str, str]] = None,
                 try:
                     addrs = _resolve(host, port)
                 except OSError as exc:
-                    if proxy is None:
+                    if proxy is None or (internal_looking(host) and not allowed_private):
+                        # An internal-looking name only the proxy knows could be the company's
+                        # own network: a hostile server's discovery document must not reach it.
                         raise OutboundRefused(
                             f"cannot resolve host ({type(exc).__name__})") from exc
                     # Behind a proxy an outside name often does not resolve here; the proxy

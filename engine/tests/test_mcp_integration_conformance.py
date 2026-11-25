@@ -18,7 +18,7 @@ import pytest
 from boss_engine.services import mcp_client, outbound_proxy
 from boss_engine.services.mcp_client import MCPClient, MCPTimeout, MCPToolError
 
-from ._mcp_fakes import FakeConnectProxy, FakeMcp, FakeProxy, make_tls
+from ._mcp_fakes import DEFAULT_TOOLS, FakeConnectProxy, FakeMcp, FakeProxy, make_tls
 
 _PROXY_ENV = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
               "http_proxy", "https_proxy", "all_proxy", "no_proxy")
@@ -374,8 +374,9 @@ def test_a_slow_tool_times_out_in_words_and_is_cancelled(fake, mode):
     with pytest.raises(MCPTimeout) as slow:
         client.call_tool(server.url, "slow", {"seconds": 3})
     said = str(slow.value)
-    assert "slow did not answer within 1s" in said and "timed out" in said
+    assert "did not answer within 1s" in said and "timed out" in said
     assert "BOSS_MCP_CALL_TIMEOUT" in said
+    assert slow.value.retryable is False and slow.value.outcome == "unknown_outcome"
     from boss_engine.services.mcp_registry import _is_transport_failure
 
     assert not _is_transport_failure(slow.value), "a slow tool must not mark the server down"
@@ -542,3 +543,77 @@ def test_inside_a_coding_build_the_gateway_reaches_an_sse_server_and_says_failur
         assert "developer.mozilla.org" not in str(failed.value)
     finally:
         gateway.stop()
+
+
+
+def test_a_timeout_is_never_retried_on_the_unattended_road(fake):
+    """Review of #331: the class itself says retryable False, so no road retries a call that
+    may have run (skill_runtime reads `retryable`; call_tool_unattended raises it as is)."""
+    from boss_engine.services import mcp_registry
+
+    server = fake("streamable")
+    row = {"id": "s1", "name": "slow-srv", "url": server.url, "risk_tier": 0,
+           "provenance": {"trusted": True}, "tools": DEFAULT_TOOLS}
+    with pytest.raises(MCPTimeout) as slow:
+        mcp_registry.call_tool_unattended(None, row, "slow", {"seconds": 3}, timeout=1)
+    assert MCPTimeout.retryable is False and slow.value.retryable is False
+    assert [s["method"] for s in server.seen].count("tools/call") == 1
+
+
+@pytest.mark.parametrize("make", ["timeout", "read", "write", "pool", "500"])
+def test_an_ambiguous_failure_never_reads_as_did_not_run(make, monkeypatch):
+    """Review of #331: durable_operations decides "did not run" (safe to retry an irreversible
+    call) from words. A server on port 4010 and a tool named not_found_check must not trip
+    the 401/404/"not found" marks; and the structured code says unknown_outcome."""
+    import httpx
+
+    from boss_engine.services.durable_operations import ambiguous_outcome
+
+    url = "http://mcp.example:4010/not_found_check/mcp"
+    request = httpx.Request("POST", url)
+    error = {"timeout": MCPTimeout("not_found_check", 5),
+             "read": httpx.ReadTimeout("timed out", request=request),
+             "write": httpx.WriteTimeout("timed out", request=request),
+             "pool": httpx.PoolTimeout("timed out", request=request),
+             "500": httpx.HTTPStatusError("x", request=request,
+                                          response=httpx.Response(500, request=request))}[make]
+    failed = mcp_client.failed_call(error, url)
+    assert getattr(failed, "outcome", None) == "unknown_outcome"
+    assert getattr(failed, "retryable", True) is False
+    words = str(failed)
+    assert "4010" not in words and "not_found" not in words
+    assert ambiguous_outcome({"type": type(failed).__name__, "message": words})
+    assert ambiguous_outcome({"type": "ReadTimeout",
+                              "message": f"{url} not_found_check port 4010 timed out"})
+
+
+def test_whole_word_did_not_run_marks_still_work():
+    from boss_engine.services.durable_operations import ambiguous_outcome
+
+    assert not ambiguous_outcome({"type": "HTTPStatusError", "message": "404 Not Found"})
+    assert not ambiguous_outcome({"type": "X", "message": "timed out after 401 Unauthorized"})
+
+
+def test_a_proxy_only_internal_name_is_refused_unless_allow_listed(monkeypatch):
+    """Review of #331: behind a proxy, a name that does not resolve here is left to the proxy -
+    but not an internal-looking one (single label, .internal/.local/.corp/.lan ...): a hostile
+    MCP server's OAuth metadata must not steer BOSS at the company's own hosts."""
+    from boss_engine.identity import http as safe_http
+    from boss_engine.services import mcp_oauth
+
+    def no_dns(host, port):
+        raise OSError("no such name here")
+
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:9")
+    monkeypatch.setattr(safe_http, "_resolve", no_dns)
+    monkeypatch.setattr(safe_http, "_allowed_private_hosts", lambda: frozenset())
+    for url in ("https://vault.internal/token", "https://jenkins/token",
+                "https://idp.corp/token", "https://nas.local/x", "https://db.lan/x"):
+        with pytest.raises(safe_http.OutboundRefused, match="cannot resolve"):
+            safe_http.fetch("GET", url, purpose="mcp.oauth")
+        with pytest.raises(mcp_oauth.UnsafeDestination):
+            mcp_oauth.guard_url(url, what="token endpoint")
+    assert mcp_oauth.guard_url("https://auth.vendor.example/token", what="token endpoint")
+    monkeypatch.setattr(safe_http, "_allowed_private_hosts",
+                        lambda: frozenset({"idp.corp"}))
+    assert mcp_oauth.guard_url("https://idp.corp/token", what="token endpoint")
