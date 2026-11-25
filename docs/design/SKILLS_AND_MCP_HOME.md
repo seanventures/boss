@@ -233,6 +233,17 @@ Nothing is removed. Options people rarely use are folded under `⋯` or **Advanc
 | Essentials strip and ability cards | Kit | **Keep** as is | Already label + tooltip |
 | Drawer sections (Connection, Tools, Agents, Used in, Try it, More) | drawers | **Keep** | Already one line each, details in tooltips |
 | Who can matrix | Who can | **Keep** | Bulk grants live here |
+| Two search boxes (page Find and All skills' Find a skill) | home | **Remove duplicate**: the page Find filters servers, abilities and All skills | One box |
+| "Skill access" heading twice on Rules | Rules | **Remove duplicate**: the panel keeps its own heading | Duplicate |
+| Add rule / Save rule / Simulate (Rules) | Rules | **Keep**, add `Plus` / `Check` / `Play` icons | Buttons without icons looked plain |
+
+## Look and feel
+
+Every button uses the console's `kit-btn` classes: primary, plain, `-sm`, `-ghost` (new: the
+quiet view buttons) and `-danger`. Each one has a focus ring, a hover state and a greyed disabled
+state. A busy button shows `kit-spin`. The console has one theme (dark tokens). Only chart colours
+change under `data-theme="light"`, so the new screens use tokens only and need nothing per theme.
+Screens were checked at 1440, 1024, 768 and 400 against Workflows. Nothing scrolls sideways.
 
 ## How it is tested
 

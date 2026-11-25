@@ -12,7 +12,7 @@
 import { useGate, GatedButton } from "../../components/gated";
 import { ReadFailure } from "../../components/locked-panel";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowClockwise, ArrowLeft, DotsThree, Key, Lightning, MagnifyingGlass, Plugs, ShieldCheck, Sparkle,
+import { ArrowClockwise, ArrowLeft, DotsThree, Lightning, MagnifyingGlass, Plugs, ShieldCheck, Sparkle,
          SquaresFour, UsersThree } from "@phosphor-icons/react";
 
 import type { Ability } from "../../lib/kit-types";
@@ -322,6 +322,7 @@ export function KitHome({ projectId, actor }: { projectId: string; actor: string
               </>
             ) : initial ? (
               <Library projectId={projectId} actor={actor} kit={kit} crew={crew} initial={initial} query={query}
+                       onClearQuery={() => setQuery("")}
                        request={skillRequest} onRequestDone={() => setSkillRequest(null)}
                        onKitChanged={() => void load("none")} />
             ) : null}
@@ -339,16 +340,13 @@ export function KitHome({ projectId, actor }: { projectId: string; actor: string
 
       {tab === "templates" ? <KitTemplates projectId={projectId} /> : null}
 
-      {/* BOSSAPP-815/817 and 890: the ordered tool rules with Always allow, then skill access. */}
+      {/* BOSSAPP-815/817 and 890: the ordered tool rules with Always allow, then skill access (its own heading). */}
       {tab === "rules" ? (
         <div className="kit-rules" data-testid="kit-rules">
           <h2 className="kit-sec-title" data-tip="Deny, ask, allow or rate-limit tool calls, in order; Always allow">
             <ShieldCheck size={16} weight="duotone" aria-hidden="true" className="kit-icon" /> Tool rules
           </h2>
           <ToolRules projectId={projectId} actor={actor} />
-          <h2 className="kit-sec-title" data-tip="Who may create, import, install, hold or run which skills">
-            <Key size={16} weight="duotone" aria-hidden="true" className="kit-icon" /> Skill access
-          </h2>
           <SkillAccessRules projectId={projectId} />
         </div>
       ) : null}

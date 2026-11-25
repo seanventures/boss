@@ -81,17 +81,18 @@ export function serverProvenance(s: McpServer): "built_in" | "official" | "custo
 
 export type LibraryRequest = "write" | "import" | "built_in";
 
-export function Library({ projectId, actor, kit, crew, initial, onKitChanged, query: pageQuery = "",
-                          request = null, onRequestDone }: {
+export function Library({ projectId, actor, kit, crew, initial, onKitChanged, query: pageQuery,
+                          onClearQuery, request = null, onRequestDone }: {
   projectId: string; actor: string; kit: KitWithCrew | null; crew: CrewMember[];
   initial: KitParams; onKitChanged: () => void;
-  /** The page's Find, added to this list's own. */
-  query?: string;
+  /** The page's Find. Given, it is the only search (no second box); Clear clears it. */
+  query?: string; onClearQuery?: () => void;
   /** What Add skill asked for (Write one / Import / Built in), done once then cleared. */
   request?: LibraryRequest | null; onRequestDone?: () => void;
 }) {
   const [ownQuery, setQuery] = useState("");
-  const query = `${pageQuery} ${ownQuery}`.trim();
+  const query = (pageQuery ?? ownQuery).trim();
+  const clearQuery = () => (pageQuery === undefined ? setQuery("") : onClearQuery?.());
   const [skills, setSkills] = useState<Skill[] | null>(null);
   const [builtIn, setBuiltIn] = useState<BuiltIn[] | null>(null);
   const [assignments, setAssignments] = useState<Assignment[]>([]);
@@ -219,10 +220,12 @@ export function Library({ projectId, actor, kit, crew, initial, onKitChanged, qu
             <button type="button" className="kit-chip kit-chip-btn" aria-pressed={filters.internal} data-tip={TIP.showInternal}
                     data-testid="kit-lib-internal" onClick={() => setFilters((f) => ({ ...f, internal: !f.internal }))}>Show internal</button>
             <span className="kit-spacer" />
-            <label className="kit-search">
-              <MagnifyingGlass size={14} aria-hidden="true" />
-              <input type="search" value={ownQuery} placeholder="Find a skill" aria-label="Find a skill" onChange={(e) => setQuery(e.target.value)} />
-            </label>
+            {pageQuery === undefined ? (
+              <label className="kit-search">
+                <MagnifyingGlass size={14} aria-hidden="true" />
+                <input type="search" value={ownQuery} placeholder="Find a skill" aria-label="Find a skill" onChange={(e) => setQuery(e.target.value)} />
+              </label>
+            ) : null}
             <span className="kit-confirm-wrap">
               <button type="button" className="kit-icon-btn" aria-label="More for skills" data-tip="More" data-testid="kit-lib-more" onClick={() => setMenu((m) => !m)}>
                 <DotsThree size={18} />
@@ -240,7 +243,7 @@ export function Library({ projectId, actor, kit, crew, initial, onKitChanged, qu
               {visibleSkills.length === 0 ? (
                 <li className="kit-list-empty" data-testid="kit-lib-empty">
                   <span>No matches</span>
-                  {q ? <button type="button" className="kit-link" onClick={() => setQuery("")}>Clear</button> : null}
+                  {q ? <button type="button" className="kit-link" onClick={clearQuery}>Clear</button> : null}
                 </li>
               ) : null}
               {visibleSkills.map((r) => (

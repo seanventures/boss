@@ -197,6 +197,7 @@
 .kit-modal-wide { width: min(720px, 100%); }
 .kit-modal-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .kit-modal-head h3 { margin: 0; font: 600 1.0625rem var(--sans); }
+.kit-modal-head h3:focus { outline: none; }
 .kit-modal-foot { display: flex; justify-content: flex-end; gap: 8px; }
 .kit-crew-rows { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
 .kit-crew-rows li { display: flex; align-items: center; gap: 8px; font: 600 0.875rem var(--sans); }
@@ -363,7 +364,7 @@
 .kit-empty { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 22px 16px; border: 1px dashed var(--border-strong); border-radius: var(--r-xl); background: var(--surface); text-align: center; }
 .kit-empty-title { font: 600 0.9375rem var(--sans); color: var(--ink); }
 
-.kit-srv-row { display: grid; grid-template-columns: minmax(7rem, 1.4fr) auto auto auto auto minmax(0, 1fr) auto; align-items: center; gap: 10px; min-height: 44px; padding: 6px 12px; border-bottom: 1px solid var(--border); }
+.kit-srv-row { display: grid; grid-template-columns: minmax(8rem, 15rem) auto auto auto auto minmax(0, 1fr) auto; align-items: center; gap: 10px; min-height: 44px; padding: 6px 12px; border-bottom: 1px solid var(--border); }
 .kit-srv-row:last-child { border-bottom: 0; }
 .kit-srv-row:hover, .kit-srv-row[data-open] { background: var(--accent-soft); }
 .kit-srv-name { justify-self: start; max-width: 100%; padding: 0; border: 0; background: none; color: var(--ink); font: 600 0.8125rem var(--sans); text-align: left; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -389,9 +390,15 @@
   .kit-srv-prov, .kit-srv-err:empty { display: none; }
   .kit-srv-err { grid-column: 1 / -1; grid-row: 2; }
 }
+/* Row actions say only their icon (with aria-label and a tooltip) where the row is narrow; the
+   page's Who can / Templates / Rules keep their words until a phone. */
 @media (max-width: 860px) {
-  .kit-btn-word { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-  .kit-srv-acts .kit-btn, .kit-nav .kit-btn { padding: 6px 8px; }
+  .kit-srv-acts .kit-btn-word { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .kit-srv-acts .kit-btn { padding: 6px 8px; }
+}
+@media (max-width: 560px) {
+  .kit-nav .kit-btn-word { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .kit-nav .kit-btn { padding: 6px 8px; }
 }
 @media (max-width: 560px) {
   .kit-srv-row { grid-template-columns: minmax(0, 1fr) auto; gap: 6px 10px; }
