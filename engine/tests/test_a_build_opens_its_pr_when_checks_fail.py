@@ -259,7 +259,7 @@ def test_the_github_adapter_opens_a_draft_and_marks_it_ready(monkeypatch):
                 "pullRequest": {"isDraft": False}}}})
         raise AssertionError(f"unexpected {method} {url}")
 
-    adapter = GitHubAdapter(Settings(), owner="acme", repo="web", token="t")
+    adapter = GitHubAdapter(Settings(), owner="acme", repo="web", token="t", api_base_url="https://api.github.com")
     monkeypatch.setattr(adapter, "_send", send)
     monkeypatch.setattr(adapter, "_headers", lambda: {})
     monkeypatch.setattr(adapter, "default_branch_sha", lambda: ("main", "base"))

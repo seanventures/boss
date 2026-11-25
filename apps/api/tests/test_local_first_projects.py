@@ -234,7 +234,7 @@ def test_a_local_project_builds_reviews_merges_previews_and_deploys_without_gith
     from boss_engine.identity import runs as identity_runs
 
     with identity_runs.repo_access(engine, host="github", owner=owner, repo=repo,
-                                   project_id=pid, token="never-used") as preview_access:
+                                   project_id=pid, credential=("never-used", "https://api.github.com")) as preview_access:
         assert preview_access.url.startswith("file://") and preview_access.via == "local"
         dest = repo_root.parent / "preview"
         subprocess.run(["git", "clone", "--depth", "1", "--branch", branch, preview_access.url,
@@ -243,7 +243,7 @@ def test_a_local_project_builds_reviews_merges_previews_and_deploys_without_gith
 
     # 920: the staging deploy builds dist/ from the bare repository's default branch.
     work, mode, _entry, sha = deploy_service._build_dist(settings, owner, repo, "main",
-                                                         changed=["index.html", "app.js"])
+                                                         changed=["index.html", "app.js"], web_base="https://github.com")
     try:
         assert mode == "static" and done["merged_sha"].startswith(sha)
         assert (work / "dist" / "index.html").is_file() or (work / "index.html").is_file()

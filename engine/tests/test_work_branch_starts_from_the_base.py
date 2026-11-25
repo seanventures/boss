@@ -50,7 +50,7 @@ class _Repo:
 def _adapter(repo: _Repo, monkeypatch) -> GitHubAdapter:
     adapter = GitHubAdapter(
         Settings(BOSS_GITHUB_TOKEN="t", BOSS_TARGET_GITHUB_OWNER="o",
-                 BOSS_TARGET_GITHUB_REPO="r"))
+                 BOSS_TARGET_GITHUB_REPO="r"), api_base_url="https://api.github.com")
     monkeypatch.setattr(adapter, "_request", repo)
     monkeypatch.setattr(adapter, "default_branch_sha", lambda: ("main", "sha-main"))
     return adapter

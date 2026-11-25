@@ -43,13 +43,14 @@ def world(eng, monkeypatch):
     with eng.begin() as c:
         c.execute(text(
             "INSERT INTO github_connections (id, project_id, connection_label, auth_method, "
-            "credential_ref, status, api_base_url, created_by) VALUES ('ghc_ghes', :p, 'GHES', "
+            "credential_ref, status, api_base_url, created_by) VALUES (:c, :p, 'GHES', "
             "'personal_access_token', 'env:GHES_TOKEN', 'active', :b, 'ceo')"),
-            {"p": project, "b": GHES})
+            {"p": project, "b": GHES, "c": f"ghc_{project}"})
         c.execute(text(
             "INSERT INTO github_repository_bindings (id, project_id, connection_id, owner, name, "
-            "full_name, role, created_by) VALUES ('ghb_ghes', :p, 'ghc_ghes', 'platform', "
-            "'gateway', 'platform/gateway', 'primary', 'ceo')"), {"p": project})
+            "full_name, role, created_by) VALUES (:b, :p, :c, 'platform', "
+            "'gateway', 'platform/gateway', 'primary', 'ceo')"),
+            {"p": project, "b": f"ghb_{project}", "c": f"ghc_{project}"})
 
     from boss_engine.identity import github_setup
     from boss_engine.services.github_connections import GitHubConnectionService
@@ -143,3 +144,81 @@ def test_a_persons_github_com_token_is_never_sent_to_a_ghes_host():
 
     base = SimpleNamespace(api_base_url=GHES, settings=None, owner="platform", repo="gateway")
     assert person_adapter(base, "persons-github-com-token") is base
+
+
+GHES_WEB = "https://ghe.northgate.example"
+ALLOWED_WEB = {(GHES_TOKEN, GHES_WEB), (ENV_TOKEN, github_urls.PUBLIC_WEB),
+               (APP_TOKEN, github_urls.PUBLIC_WEB), ("", GHES_WEB), ("", github_urls.PUBLIC_WEB)}
+
+
+def test_clone_deploy_preview_agent_and_docs_paths_keep_the_pair(eng, world, monkeypatch):
+    """Every git clone (identity.runs.repo_access: preview, skill sources, repo index, security
+    scan), the agent's workspace, the build's clone token (deploy/code task), the outage retry's
+    adapter + push, the docs agent's adapter and the read tools: each (token, host) recorded."""
+    from boss_engine.identity import lineage, runs
+    from boss_engine.services import (agent_loop, agent_shell, code_task_service, docs_agent,
+                                      github_outage, repo_host)
+    from boss_engine.services.github_adapter import GitHubAdapter
+    from boss_engine.services.github_connections import github_credential
+
+    project, settings = world
+    git_pairs: list[tuple[str, str]] = []
+    api_pairs: list[tuple[str, str]] = []
+    real_git_access, real_init = repo_host.git_access, GitHubAdapter.__init__
+
+    def recording_git_access(host, owner, repo, token="", *, web_base):
+        git_pairs.append((token or "", web_base))
+        return real_git_access(host, owner, repo, token, web_base=web_base)
+
+    def recording_init(self, settings, **kw):
+        real_init(self, settings, **kw)
+        api_pairs.append((kw.get("token") or "", self.api_base_url))
+
+    monkeypatch.setattr(repo_host, "git_access", recording_git_access)
+    monkeypatch.setattr(GitHubAdapter, "__init__", recording_init)
+    monkeypatch.setattr(runs, "egress_enabled", lambda: False)
+    monkeypatch.setattr(lineage, "current", lambda: None)
+    monkeypatch.setattr(lineage, "_enforced", lambda: False)
+
+    for owner, repo in (("platform", "gateway"), ("someone", "public-lib")):
+        # 1. a clone through identity.runs.repo_access (preview / skills / index / scan)
+        with runs.repo_access(eng, host="github", owner=owner, repo=repo, project_id=project,
+                              credential=github_credential(eng, settings, project, owner,
+                                                           repo)) as access:
+            assert access.url.startswith((GHES_WEB, github_urls.PUBLIC_WEB))
+        # 2. the build's clone token (code task and the deploy's clone choose the same way)
+        token, api = code_task_service._clone_token(eng, settings, owner=owner, repo=repo,
+                                                    project_id=project, repo_host_kind="github")
+        api_pairs.append((token, api))
+        with eng.begin() as c:
+            # 3. the outage retry: adapter + push
+            github_outage._default_github(c, settings, project, owner, repo)
+            # 4. the docs agent's adapter
+            agent = docs_agent.DocsUpdateService.__new__(docs_agent.DocsUpdateService)
+            agent.settings = settings
+            agent._adapter(c, project, {"owner": owner, "repo": repo})  # noqa: SLF001
+            # 5. the agent's shell workspace
+            monkeypatch.setattr(agent_loop, "_run_repo_and_branch",
+                                lambda *a, **k: {"owner": owner, "repo": repo, "branch": "main",
+                                                 "run_id": "r"})
+            monkeypatch.setattr(agent_shell, "ensure_workspace", lambda *a, **k: ("/tmp/x", None))
+            agent_loop._open_workspace(c, settings, "r", project)  # noqa: SLF001
+
+    api_allowed = ALLOWED | {("", GHES), ("", github_urls.PUBLIC_API)}
+    crossed = [p for p in api_pairs if p not in api_allowed] + \
+        [p for p in git_pairs if p not in ALLOWED_WEB]
+    assert not crossed, f"a token reached another host: {crossed}"
+    assert (GHES_TOKEN, GHES_WEB) in git_pairs and (GHES_TOKEN, GHES) in api_pairs
+    assert any(w == github_urls.PUBLIC_WEB for _t, w in git_pairs)
+
+
+def test_an_adapter_without_a_token_never_lends_the_install_credential_to_another_host():
+    from boss_engine.config import get_settings
+    from boss_engine.services.github_adapter import GitHubAdapter, IntegrationConfigurationError
+
+    adapter = GitHubAdapter(get_settings().model_copy(update={"github_token": ENV_TOKEN}),
+                            owner="platform", repo="gateway", api_base_url=GHES)
+    with pytest.raises(IntegrationConfigurationError):
+        adapter._auth_token()  # noqa: SLF001
+    with pytest.raises(IntegrationConfigurationError):
+        GitHubAdapter(get_settings(), owner="o", repo="r", api_base_url="")

@@ -30,7 +30,7 @@ def _settings() -> Settings:
 
 
 def test_pipeline_adapter_discovers_triggers_and_evaluates_github_actions(monkeypatch):
-    github = GitHubAdapter(_settings())
+    github = GitHubAdapter(_settings(), api_base_url="https://api.github.com")
     calls: list[tuple[str, str, dict | None]] = []
 
     def fake_request(method: str, path: str, json_body=None, **_kwargs):

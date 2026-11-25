@@ -143,7 +143,7 @@ def test_a_clone_uses_the_credential_the_project_connected():
     from boss_engine.services.github_connections import github_token_for
     from boss_engine.tools.builtin import _repo_root
 
-    assert "token" in inspect.signature(_repo_root).parameters
+    assert "credential" in inspect.signature(_repo_root).parameters
     # One resolver (repo_access, BOSSAPP-1338) under the build's rule: the project's own binding.
     from boss_engine.services import repo_access
 
@@ -166,7 +166,8 @@ def test_the_preview_clone_uses_it_too():
     source = inspect.getsource(preview_service)
     assert "token = settings.github_token" not in source, \
         "a preview clone is reading the install-wide setting again"
-    assert source.count("github_token_for(_c, settings, project_id") == 3, \
+    # Each clone resolves the project's own credential WITH its host (BOSSAPP-1286).
+    assert source.count("credential=github_credential(") == 3, \
         "all three clone paths must resolve the project's own credential"
 
 
@@ -233,7 +234,7 @@ def test_every_caller_passes_it():
 
     source = inspect.getsource(builtin)
     assert source.count("_repo_root(ctx.settings, repo, ref,") == 4
-    assert source.count("token=_github_token_for(ctx, project_id, repo)") == 4
+    assert source.count("credential=_github_access_for(ctx, project_id, repo)") == 4
 
 
 def test_and_a_missing_token_is_answered_not_raised():

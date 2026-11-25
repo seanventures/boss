@@ -54,9 +54,15 @@ def test_a_missing_registry_is_not_an_error():
 
 
 def test_both_build_paths_pass_the_project_through():
+    """Both lanes choose the build's credential through github_connections.build_credential,
+    which hands repo_token the connection and the project (and pairs it with its host)."""
+    from boss_engine.services import github_connections
+
     for module in (code_task_service, governed_code_task_service):
         source = inspect.getsource(module)
-        assert "connection=c, project_id=project_id" in source, module.__name__
+        assert "build_credential(c, settings, project_id, owner, repo)" in source, module.__name__
+    assert "connection=connection,\n                              project_id=project_id" in \
+        inspect.getsource(github_connections.build_credential)
 
 
 def test_nothing_here_names_the_operator_platform():

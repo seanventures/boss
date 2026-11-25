@@ -70,8 +70,7 @@ def test_bind_project_github_prefers_primary_binding(monkeypatch):
 
         def adapter_for_binding(self, connection, *, project_id, binding_id):
             adapter = GitHubAdapter(
-                _settings(), owner="example-org", repo="boss", token="mc-token"
-            )
+                _settings(), owner="example-org", repo="boss", token="mc-token", api_base_url="https://api.github.com")
             binding = {
                 "id": binding_id,
                 "owner": "example-org",

@@ -290,6 +290,7 @@ def _preview_clones_the_mirror(engine, settings, run_id: str, mirror: Path) -> N
         patch.setattr(preview_service, "_preview_sandbox", lambda _pid: None)
         patch.setattr(preview_service, "_record_repo_manifests", stop_after_clone)
         patch.setattr(preview_service, "github_token_for", no_github)
+        patch.setattr(preview_service, "github_credential", no_github)
         from boss_engine.identity import runs as identity_runs
 
         patch.setattr(identity_runs, "repo_access", no_github)

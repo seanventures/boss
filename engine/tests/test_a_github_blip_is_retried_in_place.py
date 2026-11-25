@@ -108,7 +108,7 @@ def test_local_git_commands_are_not_retried(tmp_path):
 
 def _adapter():
     return GitHubAdapter(types.SimpleNamespace(target_github_owner="acme", target_github_repo="web"),
-                         owner="acme", repo="web", token="t")
+                         owner="acme", repo="web", token="t", api_base_url="https://api.github.com")
 
 
 def _answers(monkeypatch, codes):

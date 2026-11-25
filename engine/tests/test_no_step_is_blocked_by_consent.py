@@ -134,7 +134,7 @@ def _walk(env, run_id, spec, run_input, label) -> list[tuple]:  # noqa: F811
                 with _step_authority(ctx, c, env.project, {"run_id": run_id}, as_run, ran["agent"]):
                     if cap in REPO_CAPS:
                         with runs.repo_access(env.engine, host="github", owner="acme", repo="web",
-                                              project_id=env.project, token=""):
+                                              project_id=env.project, credential=("", "https://api.github.com")):
                             pass
                     if _builds(step):
                         agent = _building_agent(c, env.project, ran["agent"])

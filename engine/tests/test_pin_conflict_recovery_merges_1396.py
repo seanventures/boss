@@ -16,8 +16,7 @@ from boss_engine.services.software_factory import SoftwareFactoryService
 def test_commit_identity_exposes_parents_on_github_and_local_adapters(tmp_path, monkeypatch):
     # GitHubAdapter.commit_identity includes parents
     github = GitHubAdapter(
-        Settings(BOSS_TARGET_GITHUB_OWNER="acme", BOSS_TARGET_GITHUB_REPO="w", BOSS_GITHUB_TOKEN="t")
-    )
+        Settings(BOSS_TARGET_GITHUB_OWNER="acme", BOSS_TARGET_GITHUB_REPO="w", BOSS_GITHUB_TOKEN="t"), api_base_url="https://api.github.com")
     monkeypatch.setattr(
         github,
         "_request",

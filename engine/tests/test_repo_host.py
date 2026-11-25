@@ -26,7 +26,7 @@ def _settings(**kw) -> Settings:
 
 # --- protocol + factory -------------------------------------------------------
 def test_both_adapters_conform_to_the_protocol():
-    assert isinstance(GitHubAdapter(_settings()), RepoHost)
+    assert isinstance(GitHubAdapter(_settings(), api_base_url="https://api.github.com"), RepoHost)
     assert isinstance(BitbucketAdapter(_settings()), RepoHost)
 
 
@@ -52,13 +52,13 @@ def test_resolve_kind_spec_wins_over_settings():
 
 # --- clone URLs (the one place that knows each host's credential form) --------
 def test_clone_url_forms():
-    assert clone_url_for("github", "o", "r", "T") == "https://x-access-token:T@github.com/o/r.git"
-    assert clone_url_for("github", "o", "r") == "https://github.com/o/r.git"
-    assert clone_url_for("bitbucket", "ws", "slug", "T") == \
+    assert clone_url_for("github", "o", "r", "T", web_base="https://github.com") == "https://x-access-token:T@github.com/o/r.git"
+    assert clone_url_for("github", "o", "r", web_base="https://github.com") == "https://github.com/o/r.git"
+    assert clone_url_for("bitbucket", "ws", "slug", "T", web_base="https://github.com") == \
         "https://x-token-auth:T@bitbucket.org/ws/slug.git"
-    assert clone_url_for("bitbucket", "ws", "slug") == "https://bitbucket.org/ws/slug.git"
+    assert clone_url_for("bitbucket", "ws", "slug", web_base="https://github.com") == "https://bitbucket.org/ws/slug.git"
     with pytest.raises(ValueError):
-        clone_url_for("gitlab", "o", "r")
+        clone_url_for("gitlab", "o", "r", web_base="https://github.com")
 
 
 # --- bitbucket adapter (stubbed wire) -----------------------------------------

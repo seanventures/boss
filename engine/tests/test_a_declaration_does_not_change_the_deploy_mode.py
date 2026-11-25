@@ -41,7 +41,7 @@ def _build_dist(monkeypatch, repo, changed):
         subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
     monkeypatch.setattr(repo_host, "clone_url_for", lambda *_a, **_k: "file://" + str(repo))
     return ds._build_dist(SimpleNamespace(target_repo_host="github"), "o", "r", branch,
-                          changed=changed)
+                          changed=changed, web_base="https://github.com")
 
 
 # A Vite-shaped SPA with no dependencies, so `npm ci` runs offline: `build` writes dist/.
