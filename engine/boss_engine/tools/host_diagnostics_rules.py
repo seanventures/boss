@@ -224,6 +224,7 @@ def _validate_diagnostic_verb(words: list[str]) -> str | None:
     seen_flags: set[str] = set()
     value_map: dict[str, str] = {}
     positionals: list[str] = []
+    sar_u_all_consumed = False
 
     index = 1
     while index < len(words):
@@ -234,6 +235,16 @@ def _validate_diagnostic_verb(words: list[str]) -> str | None:
             if token.startswith("-"):
                 return f"{verb} flags must precede interval and count arguments"
             positionals.append(token)
+            index += 1
+            continue
+
+        if (
+            verb == "sar"
+            and token == "ALL"
+            and "-u" in seen_flags
+            and not sar_u_all_consumed
+        ):
+            sar_u_all_consumed = True
             index += 1
             continue
 
@@ -270,14 +281,6 @@ def _validate_diagnostic_verb(words: list[str]) -> str | None:
         if expanded is not None:
             seen_flags.update(expanded)
             index += 1
-            # `sar -u ALL [interval count]`
-            if (
-                verb == "sar"
-                and "-u" in expanded
-                and index < len(words)
-                and words[index] == "ALL"
-            ):
-                index += 1
             continue
 
         if token.startswith("-"):
@@ -398,7 +401,9 @@ def validate_inspect_host_command(raw_value: object) -> tuple[str | None, str | 
                     break
                 index += 2
             elif any(
-                option.startswith(flag + "=") and option[len(flag) + 1:]
+                option.startswith(flag + "=")
+                and (val := option[len(flag) + 1:])
+                and not val.startswith("-")
                 for flag in JOURNALCTL_VALUE_FLAGS
                 if flag.startswith("--")
             ):
@@ -429,6 +434,19 @@ def validate_inspect_host_command(raw_value: object) -> tuple[str | None, str | 
     return shlex.join(words), None
 
 
+_MISSING_SSH_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bssh[`'\"]?\s+client\s+is\s+not\s+installed\b"),
+    re.compile(r"(?:^|[:/\s])ssh:\s*(?:command\s+)?not\s+found\b"),
+    re.compile(r"(?:^|[:/\s])ssh:\s*no\s+such\s+file\b"),
+    re.compile(r"\bcommand\s+not\s+found:\s*ssh\b"),
+    re.compile(r"\bno\s+[`'\"]?ssh[`'\"]?\s+(?:binary|client)\b"),
+    re.compile(
+        r"[`'\"]ssh[`'\"]\s+(?:binary|client)?\s*(?:is\s+)?"
+        r"(?:not\s+found|not\s+installed|missing)\b"
+    ),
+)
+
+
 def detect_missing_sysstat(
     command: str,
     exit_code: int | None,
@@ -436,7 +454,7 @@ def detect_missing_sysstat(
 ) -> dict[str, str] | None:
     """Distinguish a missing remote sysstat binary from a missing local ssh client."""
     lowered = (stderr or "").lower()
-    if "ssh` client is not installed" in lowered or "ssh client is not installed" in lowered:
+    if any(pattern.search(lowered) for pattern in _MISSING_SSH_PATTERNS):
         return None
     try:
         words = shlex.split((command or "").strip(), posix=True)
@@ -446,6 +464,12 @@ def detect_missing_sysstat(
         return None
     verb = words[0]
     if verb not in SYSSTAT_VERBS:
+        return None
+    named_match = (
+        re.search(r"([a-z0-9_.-]+):\s*(?:command\s+)?not\s+found\b", lowered)
+        or re.search(r"\bcommand\s+not\s+found:\s*([a-z0-9_.-]+)", lowered)
+    )
+    if named_match and named_match.group(1) != verb:
         return None
     if (
         exit_code == 127
@@ -476,6 +500,8 @@ def policy_rule_table() -> dict[str, Any]:
         "category": "network",
         "requires_package": None,
         "required_flags": [],
+        "requires_flag": True,
+        "min_flags": 1,
         "boolean_flags": [
             "-t", "-u", "-l", "-n", "-p", "-a", "-H", "-s", "-4", "-6",
             "--tcp", "--udp", "--listening", "--numeric",

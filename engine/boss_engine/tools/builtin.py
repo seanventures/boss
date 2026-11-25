@@ -9497,8 +9497,17 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
                 if sec not in selected:
                     selected.append(sec)
 
-        task_id = str(args.get("task_id") or "").strip() or None
-        ticket_ref = str(args.get("ticket_ref") or "").strip() or None
+        ansi_re = re.compile(
+            r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][AB012]"
+        )
+        ctrl_re = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+
+        def _clean_diag(text: str) -> str:
+            no_ansi = ansi_re.sub("", text).replace("\r\n", "\n").replace("\r", "")
+            return ctrl_re.sub("", no_ansi)
+
+        task_id = _clean_diag(str(args.get("task_id") or "")).strip() or None
+        ticket_ref = _clean_diag(str(args.get("ticket_ref") or "")).strip() or None
 
         collectors: list[tuple[str, str, str]] = []
         sar_targets = [s for s in selected if s in {"cpu", "memory", "io", "network"}]
@@ -9535,7 +9544,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
             )
         script = "; ".join(script_parts)
 
-        res = _run_read_on_host(ctx, project_id, host_hint, script, max_stdout=32768)
+        res = _run_read_on_host(ctx, project_id, host_hint, script, max_stdout=None)
         if res.get("ok") is False:
             return res
 
@@ -9551,7 +9560,9 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
 
         if not parsed:
             err_code = "ssh_timeout" if res.get("exit_code") == 124 else "ssh_error"
-            msg = (raw_stderr or raw_stdout or "failed to collect host diagnostics")[:500]
+            msg = _clean_diag(
+                raw_stderr or raw_stdout or "failed to collect host diagnostics"
+            )[:500]
             return {
                 "ok": False,
                 "host": res["host"],
@@ -9568,7 +9579,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
 
         for cid, sec, cmd in collectors:
             rc, body = parsed.get(cid, (-1, "collector output missing"))
-            redacted = str(redact_for_agent(body))
+            redacted = str(redact_for_agent(_clean_diag(body)))
             if cid == "processes_top":
                 lines = redacted.splitlines()[:25]
                 bounded = "\n".join(lines)[:1500]

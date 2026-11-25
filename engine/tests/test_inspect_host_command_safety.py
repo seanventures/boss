@@ -66,10 +66,14 @@ def _inspect(ctx, command):
     "ls\ttouch /tmp/x",
     "ls\x00touch /tmp/x",
     "ls\x7ftouch /tmp/x",
+    "ss",
     "ss -K dst 127.0.0.1",
     "ss --kill dst 127.0.0.1",
     "journalctl --vacuum-size=1G",
     "journalctl --rotate",
+    "journalctl --unit=-evil",
+    "journalctl --since=-evil",
+    "journalctl --lines=-5",
     "docker psx",
     "systemctl statusx sshd",
     # MT-1 sysstat / top refusals (before DB or SSH)
@@ -85,6 +89,9 @@ def _inspect(ctx, command):
     "sar --help",
     "sar -n ALL 1 5",
     "sar -n BAD 1 5",
+    "sar -r ALL 1 1",
+    "sar -u ALL ALL 1 1",
+    "sar -u 1 1 ALL",
     "vmstat 1",
     "vmstat 1 5; id",
     "vmstat -p /dev/sda1",
@@ -125,6 +132,8 @@ def test_unsafe_inspection_never_reaches_database_or_ssh(monkeypatch, command, e
     # MT-1 sysstat / top allowlist
     ("sar -u 1 5", "sar -u 1 5"),
     ("sar -u ALL 1 5", "sar -u ALL 1 5"),
+    ("sar -u -r ALL 1 1", "sar -u -r ALL 1 1"),
+    ("sar -ur ALL 1 1", "sar -ur ALL 1 1"),
     ("sar -r 1 3", "sar -r 1 3"),
     ("sar -q 1 2", "sar -q 1 2"),
     ("sar -n DEV 1 3", "sar -n DEV 1 3"),
@@ -199,16 +208,39 @@ def test_inspect_host_detects_missing_sysstat_without_stack_trace(monkeypatch, c
 def test_inspect_host_does_not_confuse_missing_local_ssh_with_missing_sysstat(monkeypatch):
     monkeypatch.setattr(secret_backends, "resolve_target_secret", lambda *_a, **_k: None)
     monkeypatch.setattr(deploy_service, "_ssh_key_file", lambda *_a: "/tmp/fake-key")
-    monkeypatch.setattr(
-        deploy_service, "_ssh",
-        lambda *_a, **_kw: CompletedProcess(
-            [], 127, stdout="",
-            stderr="the `ssh` client is not installed in this environment, so BOSS cannot reach any host.",
-        ),
-    )
-    result = _inspect(HostContext(), "sar -u 1 3")
-    assert result["ok"] is True  # _run_read_on_host returns transport dict; not mislabeled sysstat
-    assert result.get("error") != "missing_package"
+    for stderr in (
+        "the `ssh` client is not installed in this environment, so BOSS cannot reach any host.",
+        "ssh: command not found",
+        "No `ssh` binary found in PATH",
+        "bash: ssh: command not found",
+    ):
+        monkeypatch.setattr(
+            deploy_service, "_ssh",
+            lambda *_a, _s=stderr, **_kw: CompletedProcess([], 127, stdout="", stderr=_s),
+        )
+        result = _inspect(HostContext(), "sar -u 1 3")
+        assert result["ok"] is True  # _run_read_on_host returns transport dict; not mislabeled sysstat
+        assert result.get("error") != "missing_package"
+
+
+def test_detect_missing_sysstat_ignores_local_ssh_errors():
+    from boss_engine.tools.host_diagnostics_rules import detect_missing_sysstat
+
+    for stderr in (
+        "ssh: command not found",
+        "no `ssh` binary found",
+        "No `ssh` binary found in PATH",
+        "the `ssh` client is not installed in this environment",
+        "bash: ssh: command not found",
+        "/usr/bin/ssh: No such file or directory",
+    ):
+        assert detect_missing_sysstat("sar -u 1 1", 127, stderr) is None
+        assert detect_missing_sysstat("sar -u 1 1", None, stderr) is None
+
+    detected = detect_missing_sysstat("sar -u 1 1", 127, "bash: line 1: sar: command not found")
+    assert detected is not None
+    assert detected["package"] == "sysstat"
+    assert detected["verb"] == "sar"
 
 
 def test_collect_diagnostics_refuses_bad_bounds_before_db_or_ssh(monkeypatch):
@@ -336,6 +368,97 @@ def test_collect_diagnostics_degrades_gracefully_when_sysstat_missing(monkeypatc
     assert res["sections"]["processes"]["status"] == "ok"
 
 
+def test_collect_diagnostics_preserves_all_markers_above_32kib(monkeypatch):
+    monkeypatch.setattr(secret_backends, "resolve_target_secret", lambda *_a, **_k: None)
+    monkeypatch.setattr(deploy_service, "_ssh_key_file", lambda *_a: "/tmp/fake-key")
+
+    sar_105kb = "07:00:00 AM CPU %usr %sys\n" + ("07:00:01 AM all 1.20 0.30\n" * 4200)
+    top_55kb = "PID USER COMMAND\n" + ("1234 boss worker\n" * 3500)
+    assert len(sar_105kb) > 100_000
+    assert len(top_55kb) > 50_000
+
+    bundle_stdout = "\n".join([
+        "===BOSS_DIAG:system_uptime===",
+        " 07:00:00 up 5 days, 1 user, load average: 0.25, 0.20, 0.18",
+        "===BOSS_DIAG_RC:system_uptime:0===",
+        "===BOSS_DIAG:sar_bundle===",
+        sar_105kb.rstrip("\n"),
+        "===BOSS_DIAG_RC:sar_bundle:0===",
+        "===BOSS_DIAG:cpu_mpstat===",
+        "all 4.50 0.00 1.20 0.30 94.00",
+        "===BOSS_DIAG_RC:cpu_mpstat:0===",
+        "===BOSS_DIAG:memory_free===",
+        "Mem: 7982 2100 4120 120 1762 5400",
+        "===BOSS_DIAG_RC:memory_free:0===",
+        "===BOSS_DIAG:memory_vmstat===",
+        "procs -----------memory---------- ---swap--",
+        "===BOSS_DIAG_RC:memory_vmstat:0===",
+        "===BOSS_DIAG:io_iostat===",
+        "nvme0n1 1.20 10.0 2.0",
+        "===BOSS_DIAG_RC:io_iostat:0===",
+        "===BOSS_DIAG:network_ss===",
+        "tcp LISTEN 0 4096 0.0.0.0:8000 0.0.0.0:*",
+        "===BOSS_DIAG_RC:network_ss:0===",
+        "===BOSS_DIAG:disk_df===",
+        "/dev/sda1 50G 12G 38G 24% /",
+        "===BOSS_DIAG_RC:disk_df:0===",
+        "===BOSS_DIAG:processes_top===",
+        top_55kb.rstrip("\n"),
+        "===BOSS_DIAG_RC:processes_top:0===",
+    ])
+    monkeypatch.setattr(
+        deploy_service, "_ssh",
+        lambda *_a, **_kw: CompletedProcess([], 0, stdout=bundle_stdout, stderr=""),
+    )
+    res = build_default_registry().invoke(
+        "collect_diagnostics", HostContext(),
+        project_id="project-a", actor="ceo",
+        args={"host": "test-host"},
+    )
+    assert res["ok"] is True
+    assert len(res["ticket_markdown"]) <= 6000
+    for sec in ("system", "cpu", "memory", "io", "network", "disk", "processes"):
+        assert res["sections"][sec]["status"] == "ok"
+        for output in res["sections"][sec]["outputs"]:
+            assert output["exit_code"] == 0
+            assert "collector output missing" not in output["output"]
+
+
+def test_collect_diagnostics_strips_ansi_escapes_and_control_chars(monkeypatch):
+    import json
+
+    monkeypatch.setattr(secret_backends, "resolve_target_secret", lambda *_a, **_k: None)
+    monkeypatch.setattr(deploy_service, "_ssh_key_file", lambda *_a: "/tmp/fake-key")
+    bundle_stdout = "\n".join([
+        "===BOSS_DIAG:system_uptime===",
+        "\x1b]0;web-3\x07\x1b[32mup 3 days\x1b[0m\r\nload:\t0.15\x00\x07",
+        "===BOSS_DIAG_RC:system_uptime:0===",
+        "===BOSS_DIAG:disk_df===",
+        "\x1b[1;31m/dev/sda1\x1b[0m\t50G\t10G\t40G\t20%\t/\r",
+        "===BOSS_DIAG_RC:disk_df:0===",
+    ])
+    monkeypatch.setattr(
+        deploy_service, "_ssh",
+        lambda *_a, **_kw: CompletedProcess([], 0, stdout=bundle_stdout, stderr=""),
+    )
+    res = build_default_registry().invoke(
+        "collect_diagnostics", HostContext(),
+        project_id="project-a", actor="ceo",
+        args={"host": "test-host", "sections": ["system", "disk"]},
+    )
+    assert res["ok"] is True
+    sys_out = res["sections"]["system"]["outputs"][0]["output"]
+    disk_out = res["sections"]["disk"]["outputs"][0]["output"]
+    assert sys_out == "up 3 days\nload:\t0.15"
+    assert disk_out == "/dev/sda1\t50G\t10G\t40G\t20%\t/"
+    payload_text = json.dumps(res["artifact_payload"], ensure_ascii=False)
+    for text in (res["ticket_markdown"], payload_text):
+        assert "\x1b" not in text
+        assert "\r" not in text
+        assert "\x07" not in text
+        assert "\x00" not in text
+
+
 def test_policy_rule_table_matches_validator_contract():
     import json
     from boss_engine.tools.host_diagnostics_rules import policy_rule_table
@@ -349,6 +472,8 @@ def test_policy_rule_table_matches_validator_contract():
     assert "-f" in table["verbs"]["sar"]["forbidden_flags"]
     assert "-K" in table["verbs"]["ss"]["forbidden_flags"]
     assert "--kill" in table["verbs"]["ss"]["forbidden_flags"]
+    assert table["verbs"]["ss"]["requires_flag"] is True
+    assert table["verbs"]["ss"]["min_flags"] == 1
     assert table["caps"]["max_interval_seconds"] == 10
     assert table["caps"]["max_sample_count"] == 10
     assert table["caps"]["max_sample_duration_seconds"] == 30
