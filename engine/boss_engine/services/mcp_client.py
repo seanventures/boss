@@ -10,6 +10,7 @@ from typing import Any, Optional
 import httpx
 
 from ..config import Settings
+from . import outbound_proxy
 
 #: MCP REVISIONS BOSS's client speaks (AP-P5, D10: all three for twelve months).
 #:   2026-07-28  MODERN: stateless. No initialize, no session; every request carries its version,
@@ -240,7 +241,10 @@ class MCPClient:
             # The modern request headers (MCP-Protocol-Version, Mcp-Method, Mcp-Name): BOSS's
             # own, set last so no stored or per-call header can impersonate them.
             sent.update(protocol)
-        return httpx.post(url, json=payload, headers=sent, timeout=self.timeout)
+        # THE PROXY DECISION (outbound_proxy): NO_PROXY read with its CIDR ranges, which httpx
+        # ignores, so an internal server on 10.x is not sent to the company proxy.
+        return httpx.post(url, json=payload, headers=sent, timeout=self.timeout,
+                          **outbound_proxy.httpx_options(url))
 
     @staticmethod
     def _answer(resp: httpx.Response, rid: Any) -> Any:
