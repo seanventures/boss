@@ -36,6 +36,7 @@ import React, { useEffect, useId, useLayoutEffect, useRef, useState } from "reac
 
 import { apiWrite, stepUpNotConfirmedSentence } from "../lib/api-write";
 import { askConsent, consentFromBody } from "../lib/identity/consent";
+import { SETUP_MODEL_READY_EVENT } from "../lib/setup-stepper";
 import { consoleHref } from "./console-href";
 import { openStartSheet } from "./start-project/start-host";
 
@@ -331,7 +332,17 @@ const STATUS: Record<Phase, string> = {
   error: "Not started",
 };
 
-export function BuildHome() {
+export function BuildHome({ modelReady }: { modelReady?: boolean } = {}) {
+  const [knownModelReady, setKnownModelReady] = useState<boolean | undefined>(modelReady);
+  useEffect(() => { setKnownModelReady(modelReady); }, [modelReady]);
+  useEffect(() => {
+    const onModelReady = (e: Event) => {
+      const detail = (e as CustomEvent<boolean>).detail;
+      if (typeof detail === "boolean") setKnownModelReady(detail);
+    };
+    window.addEventListener(SETUP_MODEL_READY_EVENT, onModelReady);
+    return () => window.removeEventListener(SETUP_MODEL_READY_EVENT, onModelReady);
+  }, []);
   const promptId = useId();
   const menuId = useId();
   const promptRef = useRef<HTMLTextAreaElement>(null);
@@ -452,6 +463,13 @@ export function BuildHome() {
 
   const lucky = async () => {
     if (busy || uploading) return;
+    if (knownModelReady === false) {
+      setLaunch(null);
+      setLaunchError(CODE_WORDS.needs_model);
+      setLaunchFix("?area=setup&focus=models");
+      setPhase("error");
+      return;
+    }
     const mine = generation.current;
     const body = {
       prompt,

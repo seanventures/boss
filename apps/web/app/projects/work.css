@@ -38,8 +38,17 @@
 .px-wf-menu .px-tag { margin-left: auto; }
 @media (max-width: 560px) { .px-wf-menu { left: 0; right: auto; } }
 
-/* A Needs-you card that is no piece of work's (Pick a prod host): a row in the same group. */
-.px-wk-card .px-wk-sub .px-ell { max-width: 46ch; }
+/* A Needs-you card that is no piece of work's (Pick a prod host, a failed build): give the text
+   column the full remaining width instead of reserving an empty 1fr links column, and wrap actions cleanly. */
+.px-wk.px-wk-card { grid-template-columns: 1.375rem minmax(0, 1fr) auto; align-items: start; }
+.px-wk.px-wk-card > .px-hide-phone,
+.px-wk.px-wk-card > .px-faces,
+.px-wk.px-wk-card > .px-wk-links { display: none; }
+.px-wk-card .px-wk-sub .px-ell { max-width: none; white-space: normal; overflow-wrap: anywhere; }
+@media (max-width: 760px) {
+  .px-wk.px-wk-card { grid-template-columns: 1.375rem minmax(0, 1fr); }
+  .px-wk.px-wk-card > :last-child { grid-column: 2; justify-self: start; }
+}
 
 /* ── ONE AMBER THING PER VIEW (operator 2026-11-21): the Work tab's count and the "Needs you"
    group's dot; its rows are neutral, their action the normal primary button, no rail. */

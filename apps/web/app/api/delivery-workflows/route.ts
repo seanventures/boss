@@ -194,7 +194,11 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "missing project_id" }, { status: 400 });
   }
   try {
-    const r = await fetch(`${API_URL}${build(project)}`, {
+    const scope = params.get("scope");
+    const path = (view === "runs" || view === "runs_with_tests") && scope === "org"
+      ? `${build(project)}&scope=org`
+      : build(project);
+    const r = await fetch(`${API_URL}${path}`, {
       headers: authHeaders({}),
       cache: "no-store",
     });

@@ -14,6 +14,7 @@
  * started has no link. One "what next" line carries only the buttons that apply, amber only when
  * it is the person's move. Pure functions: the component draws, these decide.
  */
+import { isHydrated } from "./local-time";
 import type { StageKey, StepState, WorkItem, WorkStep } from "./project-experience";
 import { changeHref, changeRef, isLocalChangeUrl } from "./repo-links";
 import { mergeWaitOf, workNextStep, type NextStep } from "./work-next-step";
@@ -241,7 +242,8 @@ export function readyAt(w: WorkItem): string {
 
 export type Times = { kicked: string; ready: string; finished: string; elapsed: string; waiting: string; cost: string; costTitle: string; attempt: number };
 /** The times line: Kicked off · Ready or Elapsed or Finished · Waiting on you · Cost · Attempt. */
-export function panelTimes(w: WorkItem, attempt: number, nowMs = Date.now()): Times {
+export function panelTimes(w: WorkItem, attempt: number, nowMs?: number): Times {
+  const refMs = nowMs ?? (isHydrated() ? Date.now() : 0);
   const live = w.state === "running" || w.state === "stalled";
   const ready = w.state === "needs_you" ? readyAt(w) : "";
   const fin = w.state === "done" || w.state === "failed" ? w.updated_at || "" : "";
@@ -249,8 +251,8 @@ export function panelTimes(w: WorkItem, attempt: number, nowMs = Date.now()): Ti
   const usd = paid ? w.cost_usd! : w.list_usd ?? 0;
   return {
     kicked: w.created_at, ready, finished: fin,
-    elapsed: live ? durationWords(secondsBetween(w.created_at, null, nowMs)) : "",
-    waiting: ready ? durationWords(secondsBetween(ready, null, nowMs)) : "",
+    elapsed: live && refMs > 0 ? durationWords(secondsBetween(w.created_at, null, refMs)) : "",
+    waiting: ready && refMs > 0 ? durationWords(secondsBetween(ready, null, refMs)) : "",
     cost: usd > 0 ? `$${usd.toFixed(2)}` : "", costTitle: paid ? "Spent" : "List price of the calls your plan includes",
     attempt,
   };

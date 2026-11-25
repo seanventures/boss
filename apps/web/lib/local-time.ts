@@ -118,8 +118,9 @@ export function stampLocal(v: number | string | null | undefined, zone: string =
 
 /** A time from an API field: an ISO stamp becomes "3:23 PM" / "Nov 5" in the viewer's zone;
  *  anything already in words ("2h ago", "Mon") is shown as it came. */
-export function whenLocal(v: string | null | undefined, nowMs: number = Date.now(), zone: string = viewerZone()): string {
+export function whenLocal(v: string | null | undefined, nowMs?: number, zone: string = viewerZone()): string {
   if (!v) return "";
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(v)) return v;
-  return sinceLocal(Date.parse(v), nowMs, zone);
+  const refMs = nowMs ?? (isHydrated() ? Date.now() : 0);
+  return sinceLocal(Date.parse(v), refMs, zone);
 }

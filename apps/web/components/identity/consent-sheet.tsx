@@ -20,7 +20,8 @@ import { FileCode, GithubLogo, Laptop, LockKey, ShieldCheck } from "@phosphor-ic
 
 import { AgentAvatar } from "../../app/agent-avatar";
 import { idPost, refusalSentence } from "../../lib/identity/api";
-import { CONSENT_EVENT, grantBodyFor, type ConsentDuration, type ConsentRequest } from "../../lib/identity/consent";
+import { CONSENT_EVENT, grantBodyFor, localName, type ConsentDuration, type ConsentRequest } from "../../lib/identity/consent";
+import { isLocalRepo } from "../../lib/repo-links";
 import { isPermission, type Permission } from "../../lib/identity/permissions.gen";
 import { useGuardedCall } from "./identity-provider";
 import { ErrorLine, Perm, Sheet } from "./kit";
@@ -96,9 +97,24 @@ function PlainConsentSheet({ request, onClose }: { request: ConsentRequest; onCl
       <div className="idn-need">
         {known.map((p) => <Perm key={p} p={p} sm />)}
         {other.map((p) => <Perm key={p} p={p} sm />)}
-        {request.github ? <RepoChip icon={<GithubLogo size={13} aria-hidden />} text={`${request.github.repos.join(", ") || request.github.repo}, ${request.github.summary}`} testId="consent-github" /> : null}
+        {request.github ? (() => {
+          const rawList = request.github.repos.length ? request.github.repos : (request.github.repo ? [request.github.repo] : []);
+          const allLocal = rawList.length > 0 && rawList.every((r) => isLocalRepo(r));
+          const display = rawList.map((r) => (isLocalRepo(r) ? localName(r) : r)).join(", ");
+          return (
+            <RepoChip
+              icon={allLocal ? <Laptop size={13} aria-hidden /> : <GithubLogo size={13} aria-hidden />}
+              text={`${display}, ${allLocal && !request.github.summary ? "on this machine" : request.github.summary}`}
+              testId="consent-github"
+            />
+          );
+        })() : null}
         {/* A repository BOSS keeps on this machine (a local-first project): named, not GitHub. */}
-        {request.local ? <RepoChip icon={<Laptop size={13} aria-hidden />} text={`${request.local.names.join(", ") || request.local.repo}, ${request.local.summary}`} testId="consent-local" /> : null}
+        {request.local ? (() => {
+          const rawList = request.local.names.length ? request.local.names : (request.local.repos.length ? request.local.repos : [request.local.repo]);
+          const display = rawList.map((r) => (isLocalRepo(r) ? localName(r) : r)).join(", ");
+          return <RepoChip icon={<Laptop size={13} aria-hidden />} text={`${display}, ${request.local.summary}`} testId="consent-local" />;
+        })() : null}
       </div>
       <div className="idn-opts" data-testid="consent-durations">
         {durations.map((d, i) => (
@@ -165,18 +181,22 @@ function MultiRepoConsentSheet({ request, onClose }: { request: ConsentRequest; 
         <div>
           <div className="mr-ui-area-name">Allowed for this run</div>
           <div className="mr-cs-list">
-            {mr.repos.map((r) => (
+            {mr.repos.map((r) => {
+              const local = isLocalRepo(r.full_name);
+              const label = local ? localName(r.full_name) : r.full_name;
+              return (
               <div key={r.full_name} className="mr-cs-grant" data-access={r.access} data-testid={`consent-mr-repo-${r.full_name}`}>
                 <span className={`mr-ui-gh${r.access === "read" ? " muted" : ""}`} aria-hidden>
-                  {r.access === "read" ? <FileCode size={15} /> : <GithubLogo size={15} weight="bold" />}
+                  {local ? <Laptop size={15} /> : r.access === "read" ? <FileCode size={15} /> : <GithubLogo size={15} weight="bold" />}
                 </span>
                 <div>
-                  <b data-user-text>{r.full_name}</b>
+                  <b data-user-text title={r.full_name}>{label}</b>
                   <small>{r.words || (r.access === "read" ? "Read only" : "Read, Write on boss/*, Pull requests")}</small>
                 </div>
                 <span className="mr-ui-pill" data-tone={r.access === "write" ? "ok" : "muted"}>{r.access === "write" ? "Write" : "Read"}</span>
               </div>
-            ))}
+              );
+            })}
           </div>
         </div>
         {mr.unreachable.length ? (

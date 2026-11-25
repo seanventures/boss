@@ -247,6 +247,8 @@ export type RunStep = {
 
 type Run = {
   id: string;
+  project_id?: string | null;
+  project_name?: string | null;
   status: string;
   /** "test" for a test run (#512): pinned steps did not run; it is left out of the list unless
    *  "Show test runs" is on. */
@@ -684,7 +686,7 @@ function setAreaUrl(patch: Record<string, string | null>, mode: "push" | "replac
  *  leaving the editor, or switching tab, leaves the full page too. */
 const EDITOR_PARAMS = { wf: null, step: null, view: null, v: null, from: null, [PAGE_PARAM]: null } as const;
 
-export function DeliveryWorkflows({ projectId, actor }: { projectId: string; actor: string }) {
+export function DeliveryWorkflows({ projectId, actor, homeProjectId }: { projectId: string; actor: string; homeProjectId?: string | null }) {
   const [tab, setTabState] = useState<AreaTab>("runs");
   const [editing, setEditing] = useState<string | null>(null);
   /** `page=full`: the workflow, or the run, the URL names, with the whole window. */
@@ -857,13 +859,14 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   // TEST RUNS ARE LEFT OUT OF THE LIST unless asked for (#512): a test is not production work.
   const [showTests, setShowTests] = useState(false);
 
+  const orgScope = Boolean(homeProjectId && projectId === homeProjectId);
   const load = useCallback(async () => {
     const [caps, cat, inst, live, mine, sched] = await Promise.all([
       get<{ capabilities: Capability[]; manual_approval_risk_floor: number }>(
         "capabilities", projectId),
       get<{ items: CatalogueEntry[] }>("catalogue", projectId),
       get<{ items: Installed[] }>("installed", projectId),
-      get<{ runs: Run[] }>(showTests ? "runs_with_tests" : "runs", projectId),
+      get<{ runs: Run[] }>(showTests ? "runs_with_tests" : "runs", projectId, orgScope ? { scope: "org" } : undefined),
       get<{ steps: CustomStep[] }>("custom_steps", projectId),
       get<{ schedules: Schedule[] }>("schedules", projectId),
     ]);
@@ -1919,7 +1922,12 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
                 {runSubject(run) ?? run.workflow_name}
                 {runSubject(run) ? (
                   <em className="dw-run-wf" data-testid="dw-run-workflow">
+                    {run.project_id && run.project_id !== projectId && run.project_name ? `${run.project_name} · ` : ""}
                     {run.workflow_name} v{run.version}
+                  </em>
+                ) : run.project_id && run.project_id !== projectId && run.project_name ? (
+                  <em className="dw-run-wf" data-testid="dw-run-workflow">
+                    {run.project_name}
                   </em>
                 ) : null}
               </span>
@@ -1971,7 +1979,7 @@ function hasFindings(step: RunStep): boolean {
 }
 
 export function phaseOf(step: RunStep):
-    "done" | "now" | "ahead" | "skipped" | "failed" | "findings" | "failed_on" | "nothing" {
+    "done" | "now" | "wait" | "ahead" | "skipped" | "failed" | "findings" | "failed_on" | "nothing" {
   // FAILED, AND THE WORK WENT ON. Research that died is not "not run", that hides something
   // worth fixing, and it is not a stopped run either, because the project carried on without
   // it. Its own state, so neither reading is offered.
@@ -1982,6 +1990,7 @@ export function phaseOf(step: RunStep):
   }
   if (didNothing(step)) return "nothing";
   if (step.status === "succeeded") return hasFindings(step) ? "findings" : "done";
+  if (gateNeedsYou(step) || personWait(step)) return "wait";
   if (["running", "leased", "ready", "waiting", "queued"].includes(step.status)) return "now";
   return "ahead";
 }
@@ -3532,7 +3541,7 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
                     run: appIdentity(runInput as AppRun).name || runAppTitle })
     : "";
   const facts = stepFacts(step);
-  const finished = !["now", "ahead"].includes(phase);
+  const finished = !["now", "wait", "ahead"].includes(phase);
   const question = stepQuestion(step, capability?.label);
   const ask = () => {
     if (act?.roleKey) { askAboutAct(act, question); return; }

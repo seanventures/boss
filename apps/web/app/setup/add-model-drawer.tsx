@@ -412,7 +412,7 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
                    aria-label={tile === "local" ? "URL" : "Base URL"}
                    placeholder={urlHint(entry?.example_base_url
                                     || (provider === "ollama" ? OLLAMA_IN_DOCKER : ""))
-                                || "http://host:8000/v1"}
+                                || "https://host:8000/v1"}
                    onChange={(e) => setBaseUrl(e.target.value)}
                    onBlur={() => { if (tile === "local" && baseUrl) void list("", baseUrl); }} />
           </label>

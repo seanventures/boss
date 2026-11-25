@@ -1115,7 +1115,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="ov-cc" data-area="overview" aria-label="Command center">
           {/* First once setup is ready and no area was asked for. Projects and Repo and models
               still own a first run — landingArea does not point those here. */}
-          <BuildHome />
+          <BuildHome modelReady={setupSummary?.has_model} />
           {/* The monthly check-in: renders nothing unless it is this person's month (≤ once in 30 days). */}
           <CheckinCard projectId={activeProjectId} actor={activeActorId} />
           {/* THE PROJECT PAGE (BOSSAPP-810): "What should we add?" for a project of its own (not the
@@ -3185,7 +3185,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
 
         {shows("delivery_workflows") ? (
         <section className="panel-stack" data-area="delivery_workflows" aria-label="Workflows">
-          <DeliveryWorkflows projectId={activeProjectId} actor={activeActorId} />
+          <DeliveryWorkflows projectId={activeProjectId} actor={activeActorId} homeProjectId={selectedOrg.project_id} />
         </section>
         ) : null}
 

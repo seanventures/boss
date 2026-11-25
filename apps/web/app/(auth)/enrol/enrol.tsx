@@ -24,9 +24,40 @@ import { RecoveryCodesView } from "../recovery-codes";
 import { enrolContinueLabel } from "../../../lib/identity/claim-resume";
 import { TotpStep } from "./totp-step";
 
-type Stage = "choose" | "totp" | "codes" | "password";
+type Stage = "choose" | "totp" | "codes" | "password" | "done";
 
-export function Enrol({ host, next, who, passkeyReason = null, publicOrigin = null, passwordMin = 12 }: {
+const ENROL_STORAGE_KEY = "boss.enrol.state";
+
+function readStoredEnrol(): { stage: "codes" | "password"; codes?: string[] } | null {
+  try {
+    const raw = window.sessionStorage.getItem(ENROL_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { stage?: unknown; codes?: unknown };
+    if (parsed.stage === "codes" && Array.isArray(parsed.codes) && parsed.codes.every((c) => typeof c === "string")) {
+      return { stage: "codes", codes: parsed.codes };
+    }
+    if (parsed.stage === "password") return { stage: "password" };
+  } catch { /* non-browser or malformed */ }
+  return null;
+}
+
+function writeStoredEnrol(state: { stage: "codes" | "password"; codes?: string[] } | null): void {
+  try {
+    if (!state) window.sessionStorage.removeItem(ENROL_STORAGE_KEY);
+    else window.sessionStorage.setItem(ENROL_STORAGE_KEY, JSON.stringify(state));
+  } catch { /* non-browser */ }
+}
+
+export function Enrol({
+  host,
+  next,
+  who,
+  passkeyReason = null,
+  publicOrigin = null,
+  passwordMin = 12,
+  alreadyEnrolled = false,
+  initialNeedsPassword = false,
+}: {
   host: string; next: string; who: { name: string; email: string; hue: number } | null;
   /** The security policy's password minimum (GET /v1/auth/options). */
   passwordMin?: number;
@@ -34,16 +65,22 @@ export function Enrol({ host, next, who, passkeyReason = null, publicOrigin = nu
   passkeyReason?: string | null;
   /** The bound public origin: a passkey works only there (passkeyOtherLoopbackWords). */
   publicOrigin?: string | null;
+  /** True when the signed-in user already has a TOTP factor or passkey on reload. */
+  alreadyEnrolled?: boolean;
+  /** True when /me reported no password yet. */
+  initialNeedsPassword?: boolean;
 }) {
   const [noPasskey, setNoPasskey] = useState<string | null>(null);
-  const [stage, setStage] = useState<Stage>("choose");
+  const [stage, setStage] = useState<Stage>(() =>
+    alreadyEnrolled ? (initialNeedsPassword ? "password" : "done") : "choose",
+  );
   const [passkeys, setPasskeys] = useState(true);
   const [codes, setCodes] = useState<string[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const target = safeNextClient(next);
   /** /me said this person has no password yet: one is chosen after the factor. */
-  const [needsPassword, setNeedsPassword] = useState(false);
+  const [needsPassword, setNeedsPassword] = useState(initialNeedsPassword);
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
 
@@ -51,15 +88,33 @@ export function Enrol({ host, next, who, passkeyReason = null, publicOrigin = nu
     const blocked = passkeyBlockWords(passkeyReason, passkeyPlace(), publicOrigin);
     setNoPasskey(blocked);
     setPasskeys(webauthnAvailable() && !blocked);
-    // No passkey possible here: the authenticator app IS the choice, not a link under a dead button.
-    if (blocked) setStage("totp");
-    primeCsrf().then((me) => setNeedsPassword(me?.sign_in?.password === false)).catch(() => undefined);
-  }, [passkeyReason, publicOrigin]);
+    const saved = alreadyEnrolled ? readStoredEnrol() : null;
+    if (saved?.stage === "codes" && saved.codes?.length) {
+      setCodes(saved.codes);
+      setStage("codes");
+    } else if (saved?.stage === "password") {
+      setStage("password");
+    } else if (alreadyEnrolled) {
+      setStage(initialNeedsPassword ? "password" : "done");
+    } else if (blocked) {
+      // No passkey possible here: the authenticator app IS the choice, not a link under a dead button.
+      setStage("totp");
+    }
+    primeCsrf().then((me) => {
+      const noPw = me?.sign_in?.password === false;
+      setNeedsPassword(noPw);
+      if (alreadyEnrolled && !saved) {
+        setStage(noPw ? "password" : "done");
+      }
+    }).catch(() => undefined);
+  }, [passkeyReason, publicOrigin, alreadyEnrolled, initialNeedsPassword]);
 
   /** The codes issued with the first factor; only when there were none, ask for a set. */
   const toCodes = async (issued: string[] = []) => {
-    setCodes(issued.length ? issued : codesOf(await idPost<RecoveryCodes>("/v1/identity/me/recovery-codes", {})));
+    const nextCodes = issued.length ? issued : codesOf(await idPost<RecoveryCodes>("/v1/identity/me/recovery-codes", {}));
+    setCodes(nextCodes);
     setStage("codes");
+    writeStoredEnrol({ stage: "codes", codes: nextCodes });
   };
 
   const withPasskey = async () => {
@@ -67,6 +122,25 @@ export function Enrol({ host, next, who, passkeyReason = null, publicOrigin = nu
     setError(null);
     try { await toCodes(await registerPasskey()); } catch (e) { setError(sayAuth(e)); } finally { setBusy(false); }
   };
+
+  if (stage === "done") {
+    return (
+      <AuthStage label="Account protected">
+        <Logo host={host} />
+        {who ? (
+          <div className="idn-who-s">
+            <Face name={who.name} tone={who.hue} size={34} />
+            <span><b>{who.name}</b><small>{who.email}</small></span>
+          </div>
+        ) : null}
+        <h1>Your account is protected</h1>
+        <p className="idn-s" data-copy="prose">Your second factor is already set up.</p>
+        <button type="button" className="idn-big p" onClick={() => window.location.assign(target)} data-testid="enrol-already-continue">
+          {enrolContinueLabel(next)}
+        </button>
+      </AuthStage>
+    );
+  }
 
   if (stage === "codes" && codes) {
     return (
@@ -76,7 +150,14 @@ export function Enrol({ host, next, who, passkeyReason = null, publicOrigin = nu
         <p className="idn-s" data-copy="prose">If you lose your second factor, one of these gets you back in. Each works once.</p>
         <RecoveryCodesView codes={codes} host={host} continueLabel={enrolContinueLabel(next)} onContinue={() => {
           setCodes(null);
-          if (needsPassword) { setError(null); setStage("password"); } else window.location.assign(target);
+          if (needsPassword) {
+            setError(null);
+            setStage("password");
+            writeStoredEnrol({ stage: "password" });
+          } else {
+            writeStoredEnrol(null);
+            window.location.assign(target);
+          }
         }} />
       </AuthStage>
     );
@@ -90,6 +171,7 @@ export function Enrol({ host, next, who, passkeyReason = null, publicOrigin = nu
         await primeCsrf();
         await idPost("/v1/identity/me/password", { new: password });
         setPassword("");
+        writeStoredEnrol(null);
         window.location.assign(target);
       } catch (e) { setError(sayAuth(e)); setBusy(false); }
     };
@@ -116,7 +198,7 @@ export function Enrol({ host, next, who, passkeyReason = null, publicOrigin = nu
           <button type="submit" className="idn-big p" disabled={busy || password.length < passwordMin} data-testid="enrol-password">{busy ? "Saving…" : "Set password and continue"}</button>
         </form>
         <div className="idn-alt">
-          <button type="button" onClick={() => window.location.assign(target)} data-testid="enrol-password-later">Later, in My account <CaretRight size={13} className="idn-chev" aria-hidden /></button>
+          <button type="button" onClick={() => { writeStoredEnrol(null); window.location.assign(target); }} data-testid="enrol-password-later">Later, in My account <CaretRight size={13} className="idn-chev" aria-hidden /></button>
         </div>
         <Live text={busy ? "Saving" : ""} />
       </AuthStage>

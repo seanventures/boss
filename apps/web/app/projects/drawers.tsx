@@ -17,6 +17,7 @@ import {
 } from "@phosphor-icons/react";
 
 import { PX_PATHS, findWork, nodeWords, parseDeployments, pxHref, toTab, usePxRead, writePxUrl, type Deployments, type WorkItem } from "../../lib/project-experience";
+import { tidyIds } from "../../lib/work-links";
 import { FX_DEPLOYMENTS } from "../../lib/project-experience-fixtures";
 import { groupTasks, taskOf } from "../../lib/work-tasks";
 import { FullToggle, WorkPanel } from "./work-panel";
@@ -79,13 +80,16 @@ export function DrawerHost({ ctx, drawer, onClose }: { ctx: PxCtx; drawer: { kin
     // A FAILED BUILD's card has its own answers (Retry is a POST, only when it helps), never a
     // generic action that would navigate to an API URL (review #218 L4).
     if (n.kind === "failed") {
+      const norm = (s?: string | null) => tidyIds(s ?? "").trim().replace(/[.?!\s]+$/g, "").replace(/\s+/g, " ").toLowerCase();
+      const showFixDetail = Boolean(n.fix?.detail && norm(n.fix.detail) !== norm(n.detail));
+      const safeSee = n.see_href && !/(?:^|[?&])area=setup(?:&|$)/i.test(n.see_href) ? n.see_href : undefined;
       return (
         <Drawer title={n.label} icon={<Ico icon={Warning} c="red" />} onClose={onClose} testid="px-drawer-needs" sub={<Tag tone="red">failed</Tag>}
-                footer={<><FailedActions retry={n.retry} fix={n.fix} retryReason={n.retry_reason} seeHref={n.see_href} projectId={ctx.projectId}
+                footer={<><FailedActions retry={n.retry} fix={n.fix} retryReason={n.retry_reason} seeHref={safeSee} projectId={ctx.projectId}
                                          actor={ctx.actor} testid="px-drawer-failed" onDone={() => { ctx.refreshWork(); ctx.refreshOverview?.(); }} />
                           <AskBox ctx={ctx} about={n.label} /></>}>
           <p style={{ margin: 0 }} data-testid="px-drawer-failed-why">{n.detail}</p>
-          {n.fix?.detail ? <p className="px-faint" style={{ margin: 0 }}>{n.fix.detail}</p> : null}
+          {showFixDetail ? <p className="px-faint" style={{ margin: 0 }}>{n.fix!.detail}</p> : null}
         </Drawer>
       );
     }

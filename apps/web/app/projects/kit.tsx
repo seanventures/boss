@@ -16,7 +16,7 @@ import {
 import { AgentAvatar } from "../agent-avatar";
 import { useWrapMarks } from "../../lib/wrap-flow";
 import { costWords, isExternal, nodeWords, pxHref, readPxUrl, writePxUrl, type Agent, type Health, type Node, type PxUrl, type ReadState, type StepState } from "../../lib/project-experience";
-import { useLocalTime } from "../../lib/local-time";
+import { isHydrated, localWith, useLocalTime } from "../../lib/local-time";
 import { couldNot } from "../../lib/action-result";
 
 export type Tone = "teal" | "green" | "amber" | "red" | "violet" | "blue";
@@ -167,7 +167,10 @@ export const REC_KIND_WORDS: Record<string, string> = {
 /** THIS WEEK's labels over the dots (screen 04 "Mon · Mon · Wed · Thu · Today"): each point's day in
  *  the viewer's own calendar — Today, Yesterday, else the weekday. When EVERY point happened today,
  *  a row of "Today"s says nothing, so each says its time instead ("09:12"). */
-export function timelineLabels(ats: (string | null)[], now: Date = new Date()): string[] {
+export function timelineLabels(ats: (string | null)[], now: Date | null = isHydrated() ? new Date() : null): string[] {
+  if (!now) {
+    return ats.map((at) => localWith(at, { month: "short", day: "numeric" }));
+  }
   const dates = ats.map((at) => { const d = at ? new Date(at) : null; return d && !Number.isNaN(d.getTime()) ? d : null; });
   const same = (x: Date, y: Date) => x.getFullYear() === y.getFullYear() && x.getMonth() === y.getMonth() && x.getDate() === y.getDate();
   const yesterday = new Date(now); yesterday.setDate(now.getDate() - 1);
@@ -184,8 +187,9 @@ export function timelineLabels(ats: (string | null)[], now: Date = new Date()): 
 export function Timeline({ points, testid, onOpen }: {
   points: { at: string | null; label: string; kind: string; href?: string; detail?: string; sha7?: string | null }[]; testid?: string; onOpen?: (i: number) => void;
 }) {
+  const local = useLocalTime();
   if (!points.length) return null;
-  const labels = timelineLabels(points.map((p) => p.at));
+  const labels = timelineLabels(points.map((p) => p.at), local.ready ? new Date(local.now()) : null);
   const caption = (p: { label: string; sha7?: string | null }) => <>{p.label}{p.sha7 ? <> <span className="px-tl-sha">{p.sha7}</span></> : null}</>;
   return (
     <ol className="px-tl" data-testid={testid} aria-label="Timeline">
