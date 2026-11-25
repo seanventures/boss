@@ -128,7 +128,7 @@ def _step(
     approver_role: Optional[str] = None,
     follows_policy: bool = False,
 ) -> dict[str, Any]:
-    """One catalogue step. `follows_policy` (a Deploy step only): the environment's deploy
+    """One catalogue step. `follows_policy` (a Deploy or config deploy step): the environment's deploy
     policy may answer for it (deploy_policy). Without it a Deploy step PROMISES A PERSON, and
     every surface says so — only a workflow whose words promise nobody at the release opts in."""
     step: dict[str, Any] = {
@@ -147,8 +147,9 @@ def _step(
         if approver_role:
             step["approval"]["approver_role"] = approver_role
         if follows_policy:
-            if capability != "deploy":
-                raise ValueError("only a Deploy step can follow the environment's policy")
+            if capability not in ("deploy", "config_deploy"):
+                raise ValueError("only a Deploy or config deploy step can follow the "
+                                 "environment's policy")
             step["approval"]["follows_policy"] = True
     return step
 
@@ -1704,43 +1705,105 @@ ONBOARD_FILE_BRIEF = (
     "minimal edit of that file: change only what a finding asks for, add nothing it does not, "
     "and leave a finding the repository's rules say a person must decide for that person.")
 
-# ONBOARD A CONFIG FILE (requirement R5, design PR #287): built only from standard steps —
-# the run starts from a file ("Start from a file", start_from_file), the build fixes it in place
-# with the repository's checkers, the review reports, the merge waits on the change's merge card,
-# staging ships the fixed file, and the project's own contract tests run against staging.
-# Checks must pass: an open P0/P1 blocks the merge.
+#: What the run says on the pull request (or channel) that started it (BOSSAPP-1131 / 1171).
+#: Filled from the steps' own results by the runner (workflows.render_step_text); a list is
+#: alternatives, the first whose every placeholder has a value is sent.
+ONBOARD_REPORTS: dict[str, Any] = {
+    "rejected": [
+        "Not onboarded: {input.title}\n{steps.fix.output.validation_report}\n\n"
+        "The proposed fix is {steps.fix.output.pull_request_url}: review it, change your file "
+        "the same way, and push again.",
+        "Not onboarded: {input.title}\n{steps.fix.output.validation_report}",
+        "Not onboarded: {input.title}\nThe file could not be checked and fixed on this run; "
+        "the run's record says why.",
+    ],
+    "rolled_back": [
+        "Rolled back from staging: {input.title}\nThe contract tests failed at "
+        "{steps.staging.output.deployed_url}, so staging is back to what it served before.\n\n"
+        "{steps.contract_tests.output.results_table}",
+        "Rolled back from staging: {input.title}\nThe contract tests failed, so staging is back "
+        "to what it served before.",
+    ],
+    "live": [
+        "Onboarded: {input.title}\n{steps.fix.output.validation_report}\n\n"
+        "Staging: {steps.staging.output.deployed_url} (contract tests "
+        "{steps.contract_tests.output.passed}/{steps.contract_tests.output.total} passed). "
+        "Production: deployed after approval.",
+        "Onboarded: {input.title}\nStaging: {steps.staging.output.deployed_url} (contract tests "
+        "{steps.contract_tests.output.passed}/{steps.contract_tests.output.total} passed). "
+        "Production: deployed after approval.",
+        "Onboarded: {input.title}\nStaging passed its contract tests and the same file is in "
+        "production.",
+    ],
+}
+
+# ONBOARD A CONFIG FILE (requirement R5, design PR #287; the full chain BOSSAPP-1132): built only
+# from standard steps — the run starts from a file ("Start from a file", start_from_file), the
+# build checks it with the repository's checkers and fixes it in place (its change is the fix
+# PR), the review reports, the merge waits on the change's merge card, staging ships the fixed
+# file, the project's own contract tests run against staging, and production gets the same bytes
+# behind ONE person's approval. Every path ends by saying what happened where the run was asked
+# for (`notify_channel`, e.g. github:#12 — the pull request that started it):
+#   * the build or the merge fails (checks must pass: an open P0/P1 blocks it) → rejected, with
+#     the validation report and the fix PR;
+#   * the contract tests fail → staging is rolled back (rollback_config) → rolled back;
+#   * otherwise → live.
+def _onboard_steps() -> list[dict[str, Any]]:
+    def tell(step_id: str, title: str, message: list[str]) -> dict[str, Any]:
+        return {**_step(step_id, "notify", {"message": message,
+                                            "channel": _in("notify_channel")}), "title": title}
+
+    return [
+        {**_step("fix", "build", {
+            **_build_inputs(),
+            "start_from": _in("start_from"),
+            "start_from_content": _in("start_from_content"),
+            "target_path": _in("target_path"),
+        }, nxt=["review"]), "title": "Fix the file", "on_error": "rejected"},
+        _step("review", "review", nxt=["merge"]),
+        {**_step("merge", "merge", nxt=["staging"]), "on_error": "rejected"},
+        # Staging follows its policy: where a person set staging to ship without asking, it
+        # asks nobody (the merge was the person's answer); production always asks.
+        {**_step("staging", "config_deploy", {"source_file": _in("target_path"),
+                                              "environment": "staging"}, nxt=["contract_tests"],
+                 follows_policy=True),
+         "title": "Staging"},
+        {**_step("contract_tests", "contract_test",
+                 {"base_url": _from("staging", "deployed_url")}, nxt=["production"]),
+         "title": "Contract tests", "on_error": "roll_back"},
+        {**_step("production", "promote_config",
+                 {"deployment_id": _from("staging", "deployment_id"),
+                  "bundle_sha256": _from("staging", "bundle_sha256"),
+                  "environment": "production"}, nxt=["report"]),
+         "title": "Production"},
+        tell("report", "Report", ONBOARD_REPORTS["live"]),
+        {**_step("roll_back", "rollback_config",
+                 {"deployment_id": _from("staging", "deployment_id")}, nxt=["report_rollback"]),
+         "title": "Roll back staging"},
+        tell("report_rollback", "Report the rollback", ONBOARD_REPORTS["rolled_back"]),
+        tell("rejected", "Report the rejection", ONBOARD_REPORTS["rejected"]),
+    ]
+
+
 CATALOGUE.append({
     "key": "onboard_config_file",
     "name": "Onboard a config file",
     "description": "A file arrives — a partner's config, say. BOSS checks it with the "
                    "repository's own checkers, fixes what it may, leaves you what it may not, "
-                   "and ships it to staging once merged.",
+                   "ships it to staging once merged, and to production once you approve.",
     "objective": (
         "Take the file the run was given, check it with the repository's declared checkers, "
         "and make it pass with a minimal edit. Findings the repository's rules reserve for a "
         "person stay open for that person. Once merged, the file ships to staging and the "
-        "project's contract tests run against it."
+        "project's contract tests run against it; when they fail staging is rolled back, when "
+        "they pass the same file goes to production after one approval. The outcome is "
+        "reported where the run was asked for."
     ),
     "work_class": "any",
     # NO PASS 2: a config file is checked by its checkers and contract tests, not a test suite.
     "more_tests": False,
     "checks_must_pass": True,
-    "steps": _chain([
-        {**_step("build", "build", {
-            **_build_inputs(),
-            "start_from": _in("start_from"),
-            "start_from_content": _in("start_from_content"),
-            "target_path": _in("target_path"),
-        }), "title": "Fix the file"},
-        _step("review", "review"),
-        _step("merge", "merge"),
-        {**_step("staging", "config_deploy", {"source_file": _in("target_path"),
-                                              "environment": "staging"}),
-         "title": "Staging"},
-        {**_step("contract_tests", "contract_test",
-                 {"base_url": _from("staging", "deployed_url")}),
-         "title": "Contract tests"},
-    ]),
+    "steps": _onboard_steps(),
 })
 
 
@@ -1903,9 +1966,9 @@ _FIELD_TEXT: dict[str, dict[str, Any]] = {
                                        "yet — the run finishing is not the same as the fix "
                                        "shipping."},
     "notify_channel": {"type": "string", "title": "Who to tell",
-                       "description": "Where the outcome is posted: email:someone@example.com or "
-                                      "mattermost:<channel id>. Leave blank and the notify step "
-                                      "is skipped and says so.",
+                       "description": "Where the outcome is posted: email:someone@example.com, "
+                                      "mattermost:<channel id> or a pull request (github:#12). "
+                                      "Leave blank and the notify step is skipped and says so.",
                        "examples": ["email:team@example.com"]},
     "subject_id": {"type": "string", "title": "Subject node",
                    "description": "The case's subject node to investigate (Graph › Knowledge "

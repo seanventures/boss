@@ -32,10 +32,34 @@ ENTRY = next(e for e in wc.CATALOGUE if e["key"] == "onboard_config_file")
 
 def test_it_is_built_only_from_standard_steps_in_order():
     caps = [(s.get("binding") or {}).get("capability") for s in ENTRY["steps"]]
-    assert caps == ["build", "review", "merge", "config_deploy", "contract_test"]
+    assert caps == ["build", "review", "merge", "config_deploy", "contract_test",
+                    "promote_config", "notify", "rollback_config", "notify", "notify"]
     assert all(c in CAPABILITIES for c in caps)
     assert [s["title"] for s in ENTRY["steps"] if s.get("title")] == [
-        "Fix the file", "Staging", "Contract tests"]
+        "Fix the file", "Staging", "Contract tests", "Production", "Report",
+        "Roll back staging", "Report the rollback", "Report the rejection"]
+
+
+def test_every_path_ends_by_reporting_what_happened():
+    """BOSSAPP-1132: a failed check or merge is reported as rejected, a failed contract test
+    rolls staging back and says so, a pass goes to production and says so."""
+    by_id = {s["id"]: s for s in ENTRY["steps"]}
+    assert by_id["fix"]["on_error"] == by_id["merge"]["on_error"] == "rejected"
+    assert by_id["contract_tests"]["on_error"] == "roll_back"
+    assert by_id["contract_tests"]["next"] == ["production"]
+    assert by_id["production"]["next"] == ["report"]
+    assert by_id["roll_back"]["next"] == ["report_rollback"]
+    assert by_id["roll_back"]["binding"]["inputs"] == {
+        "deployment_id": {"from_step": "staging", "field": "deployment_id"}}
+    promote = by_id["production"]["binding"]["inputs"]
+    assert promote["deployment_id"] == {"from_step": "staging", "field": "deployment_id"}
+    assert promote["bundle_sha256"] == {"from_step": "staging", "field": "bundle_sha256"}
+    for sid in ("report", "report_rollback", "rejected"):
+        inputs = by_id[sid]["binding"]["inputs"]
+        assert inputs["channel"] == {"from_input": "notify_channel"}
+        assert isinstance(inputs["message"], list) and inputs["message"], sid
+    assert "{steps.fix.output.validation_report}" in by_id["rejected"]["binding"]["inputs"][
+        "message"][0]
 
 
 def test_its_spec_says_checks_must_pass_and_starts_from_a_file():
