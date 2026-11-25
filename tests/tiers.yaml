@@ -219,7 +219,21 @@ P1:
     # A 4-core / 8 GiB host under pressure (R3, BOSSAPP-1431): builds at once follow the box,
     # job slots are their own setting, heavy builds back off, lowering capacity drains
     - engine/tests/test_a_small_host_admits_by_its_room_and_backs_off.py
+    # Every registered write is reachable by an agent or named as workflow-only (BOSSAPP-1359)
+    - engine/tests/test_agent_behaviour_matrix.py
+    - engine/tests/test_boss_acts_when_asked.py
+    # A workflow that cannot run is refused (BOSSAPP-1361/1365/1366): a skill nothing can run is
+    # never offered, an agent step that did nothing fails and no gate opens over it, a tool
+    # call with an unknown argument runs nothing, a draft is reviewed against its requirement
+    - engine/tests/test_a_skill_that_cannot_run_is_never_offered.py
+    - engine/tests/test_an_agent_step_that_did_nothing_fails.py
+    - engine/tests/test_a_tool_call_with_an_unknown_argument_is_refused.py
+    - engine/tests/test_a_draft_is_reviewed_against_its_requirement.py
+    # A re-check starts only with steer; its preview is a read
+    - engine/tests/test_a_change_can_be_rechecked.py
   api:
+    # GETs are declared as reads; a read-permission POST says it writes nothing (BOSSAPP-1359)
+    - apps/api/tests/test_identity_authz_read_only.py
     # The harness score per change (BOSSAPP-959)
     - apps/api/tests/test_harness_score_api.py
     # Approvals

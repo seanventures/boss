@@ -204,51 +204,54 @@ def test_a_cli_start_refreshes_first_and_refuses_an_expired_unrefreshable_login(
 
 # ---- the build sandbox ---------------------------------------------------------------------
 
-def test_the_sandbox_gets_a_token_refreshed_to_outlive_a_stage(tmp_path, monkeypatch):
+def test_a_run_starts_on_a_token_the_control_plane_refreshed_to_outlive_a_stage(tmp_path,
+                                                                                monkeypatch):
+    """BOSSAPP-1480: nothing is copied into the run any more; the control plane still refreshes
+    a login about to expire before the run starts, so the proxy has a live token to attach."""
     src = _login(tmp_path, monkeypatch, expires_in=40 * 60)          # < the 60 min a stage needs
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "no-codex"))
     endpoint = _Endpoint()
     monkeypatch.setattr(claude_login, "_http_post", endpoint)
+    monkeypatch.setattr(sandbox_identity, "runs_on_long_lived_token", lambda: False)
     home = tmp_path / "run-home"
     home.mkdir()
-    sandbox_identity._seed_claude_login(_Ident(home))
+    sandbox_identity._seed_cli_logins(_Ident(home))
 
     assert len(endpoint.calls) == 1
-    copied = json.loads((home / ".claude" / ".credentials.json").read_text())["claudeAiOauth"]
-    assert copied["accessToken"] == "ACCESS_2"                     # the fresh one
-    assert "refreshToken" not in copied
+    assert not (home / ".claude" / ".credentials.json").exists()
     assert _oauth(src)["refreshToken"] == "REFRESH_2"
+    assert _oauth(src)["accessToken"] == "ACCESS_2"
 
 
-def test_the_sandbox_never_gets_an_expired_token_and_its_claude_start_says_sign_in(
+def test_an_expired_unrefreshable_login_makes_a_sandboxed_claude_start_say_sign_in(
         tmp_path, monkeypatch):
     _login(tmp_path, monkeypatch, expires_in=-5 * 60)               # crun_50cf77b8's case
     monkeypatch.setattr(claude_login, "_http_post", _Endpoint(refuse="invalid_grant"))
     home = tmp_path / "run-home"
     home.mkdir()
     ident = _Ident(home)
-    sandbox_identity._seed_claude_login(ident)
-    assert not (home / ".claude" / ".credentials.json").exists()
-
     monkeypatch.setattr(sandbox_identity, "current", lambda: ident)
     with pytest.raises(claude_login.ClaudeSignInNeeded) as raised:
         claude_login.before_cli_start()
     assert "has expired" in str(raised.value)
+    assert not (home / ".claude").exists()
 
 
 def test_a_long_build_follows_the_control_planes_refresh(tmp_path, monkeypatch):
-    src = _login(tmp_path, monkeypatch, expires_in=5 * 3600)
-    home = tmp_path / "run-home"
-    home.mkdir()
-    ident = _Ident(home)
-    sandbox_identity._seed_claude_login(ident)
-    copy = home / ".claude" / ".credentials.json"
-    assert json.loads(copy.read_text())["claudeAiOauth"]["accessToken"] == "ACCESS_1"
+    """The proxy reads the control plane's CURRENT access token per request: a run's session
+    token keeps working across the control plane's refreshes, with nothing re-copied."""
+    from boss_engine.services import model_proxy, subscription_shield
 
-    _login(tmp_path, monkeypatch, expires_in=8 * 3600, access="ACCESS_9", refresh="REFRESH_9")
-    monkeypatch.setattr(sandbox_identity, "current", lambda: ident)
-    claude_login.before_cli_start()                                 # the next stage's claude
-    oauth = json.loads(copy.read_text())["claudeAiOauth"]
-    assert oauth["accessToken"] == "ACCESS_9" and "refreshToken" not in oauth
+    src = _login(tmp_path, monkeypatch, expires_in=5 * 3600)
+    proxy = model_proxy.ModelProxy()
+    try:
+        token = subscription_shield.claude({}, cli_login=True, proxy=proxy)[
+            "CLAUDE_CODE_OAUTH_TOKEN"]
+        assert model_proxy.held_for(token, proxy) == "ACCESS_1"
+        _login(tmp_path, monkeypatch, expires_in=8 * 3600, access="ACCESS_9", refresh="REFRESH_9")
+        assert model_proxy.held_for(token, proxy) == "ACCESS_9"
+    finally:
+        proxy.stop()
     assert src.exists()
 
 

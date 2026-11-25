@@ -133,7 +133,8 @@ def build_ci_router(*, engine, get_settings: Callable[[], Any], require_actor: C
         raise AssertionError("unreachable")
 
     @router.post("/v1/ci/workflow-checks")
-    @permit(P.CODE_TASK_READ, scope=Scope.project(body="project_id"))
+    # Reads nothing and writes nothing: the files are judged as sent.
+    @permit(P.CODE_TASK_READ, scope=Scope.project(body="project_id"), readonly_post=True)
     def post_workflow_checks(body: WorkflowChecksBody) -> dict[str, Any]:
         """Whether these files change CI, and BOSS's deterministic findings for them (the same
         checks a build's review runs). Reads nothing, writes nothing."""

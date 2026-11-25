@@ -213,7 +213,12 @@ class TestEverySpawnPointGoesThroughIt:
         settings = Settings(CLAUDE_CODE_OAUTH_TOKEN="wizard-stored-token")
         for child in (ClaudeCliAdapter(settings), ClaudeCodeAgent(settings)):
             env = child._child_env()
-            assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "wizard-stored-token"
+            # A build session holds a run token for it (subscription_shield, BOSSAPP-1480).
+            from boss_engine.services.model_proxy import TOKEN_PREFIX, held_for
+
+            token = env["CLAUDE_CODE_OAUTH_TOKEN"]
+            held = held_for(token) if token.startswith(TOKEN_PREFIX) else token
+            assert held == "wizard-stored-token"
             assert "DATABASE_URL" not in env
 
 

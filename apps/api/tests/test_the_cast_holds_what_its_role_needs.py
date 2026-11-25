@@ -76,8 +76,10 @@ def test_each_new_cast_role_holds_every_skill_its_role_names(engine, key):
     with engine.begin() as c:
         held = set(c.execute(text("SELECT skill_id FROM role_skills WHERE project_id = :p "
                                   "AND role_key = :r"), {"p": PROJECT, "r": key}).scalars())
-        # Assignable: a bare registered row with no spec cannot be given to an agent.
-        available = {k for k, e in entries(c, PROJECT).items() if e["source"] != "registered"}
+        # Assignable: a bare registered row with no spec cannot be given to an agent, and nor can
+        # a skill nothing on this install can run (BOSSAPP-1366: the catalogue's `usable`).
+        available = {k for k, e in entries(c, PROJECT).items()
+                     if e["source"] != "registered" and e["usable"]}
     wanted = set(_yaml(key)["permissions"]["allowed_skills"]) & available
     assert wanted <= held, f"{key} is missing {sorted(wanted - held)}"
     assert len(held) >= 2, f"{key} holds only {sorted(held)} on this edition"

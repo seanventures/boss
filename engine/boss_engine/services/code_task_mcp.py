@@ -113,9 +113,11 @@ class HarnessMcp:
 
 
 def _private_dir(sandbox: Any) -> str:
-    directory = tempfile.mkdtemp(prefix="mcp-", dir=str(sandbox.run_dir))
-    os.chmod(directory, 0o2755)
-    return directory
+    # The one safe maker (SandboxIdentity.make_dir): the run's uid owns run_dir and could swap a
+    # path-made directory for a link before a path-based chmod.
+    from .sandbox_identity import make_run_dir
+
+    return str(make_run_dir(sandbox, "mcp-", 0o2755))
 
 
 def _cli_name(server_name: str) -> str:

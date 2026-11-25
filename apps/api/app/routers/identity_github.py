@@ -295,7 +295,7 @@ def build_identity_github_router() -> APIRouter:
             return _err(exc)
 
     @router.post("/v1/identity/github/app/verify")
-    @permit(P.GITHUB_READ, scope=Scope.org())     # asks GitHub, keeps its answer; changes no credential
+    @permit(P.GITHUB_READ, scope=Scope.org(), readonly_post=True)  # asks GitHub; changes no credential
     def app_verify(request: Request):
         """What GitHub actually granted the installation: permissions accepted or waiting, and
         the repositories it was installed on, each gap with the GitHub page that closes it."""

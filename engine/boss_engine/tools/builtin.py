@@ -1790,6 +1790,21 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                                    "— the label and hint the start form shows. required "
                                    "defaults to true.",
                 },
+                "requirement": {
+                    "type": "string",
+                    "description": "The requirement this workflow is designed from (a ticket, "
+                                   "the person's words), verbatim. When you design from one, "
+                                   "pass it and map it in `coverage`: the draft is checked "
+                                   "against it before it publishes, and the check is recorded."},
+                "coverage": {
+                    "type": "array",
+                    "items": {"type": "object"},
+                    "description": "Your self-review of the draft against `requirement`: one "
+                                   "entry per clause of it, {clause, step} naming the step id "
+                                   "that does it, or {clause, gap} saying plainly what this "
+                                   "design does NOT do. Every clause, including the ones the "
+                                   "design misses (a rejection, a test the requirement names, "
+                                   "an input it needs). Required with `requirement`."},
                 "project_id": {"type": "string"},
             },
             ["name", "steps"],
@@ -1826,6 +1841,9 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         spec = _spec_from_steps(args.get("steps") or [], args)
         if isinstance(spec, dict) and spec.get("ok") is False:
             return spec
+        review = requirement_review(args.get("requirement"), args.get("coverage"), spec)
+        if review.get("ok") is False:
+            return review
         with ctx.begin() as c:
             def _exists(k: str) -> bool:
                 return bool(c.execute(
@@ -1910,6 +1928,15 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                     c, project_id=pid, definition_id=definition_id, spec=spec, actor=actor)
             except Exception as error:  # noqa: BLE001 — the reason belongs in the reply
                 return {"ok": False, "error": f"{type(error).__name__}: {str(error)[:300]}"}
+            if review.get("checked"):
+                # THE CHECK, ON THE RECORD: which clause each step does and what the design
+                # leaves out, beside the version it was made for.
+                from ..services.core import emit_event
+
+                emit_event(c, pid, "workflow.requirement_review", actor, "workflow_version",
+                           str(published.get("id") or definition_id),
+                           {"workflow_key": key, "version": published.get("version"),
+                            **{k: review[k] for k in ("requirement", "coverage", "gaps")}})
             work_class = str(args.get("work_class") or "").strip()
             mapped = None
             # BUILD POSTS ONLY work_class=project.new. Mapping that slot — or the
@@ -1932,6 +1959,9 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                     mapped = {"note": f"published, but not mapped: {str(error)[:160]}"}
         return {"status": "published", "workflow_key": key, "definition_id": definition_id,
                 "version": published.get("version"), "steps": len(spec["steps"]),
+                **({"requirement_review": {"clauses": len(review["coverage"]),
+                                           "gaps": review["gaps"]}}
+                   if review.get("checked") else {}),
                 **({"note": f"published as version {published.get('version')} of the existing "
                             f"workflow {key}"} if existing else {}),
                 # Named, because a step BOSS defined on the operator's behalf is something they
@@ -10851,14 +10881,32 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     "captain_drive",
     "captain_overwatch",
     "captain_theater",
+    # ASKING A PERSON, FROM CHAT (BOSSAPP-1359). Each opens a card in Needs you and changes
+    # nothing until a person answers; registered for chat (Exposure surfaces) and unreachable
+    # from it until now, so the agent could only describe the card it was meant to raise.
+    "offer_options", "propose_hire", "propose_secret", "request_budget_override",
+    "request_tool_access", "watch_work_item",
+    # Re-checking a finished change: costs money, so it is offered as a button, never run.
+    "recheck_change",
+    # The project's Knowledge Graph from chat: proposals a person reviews (documents, sections)
+    # and the case-study samples, gated on knowledge:manage like the console's own buttons.
+    "add_document_from_file", "add_regulation_document", "set_ontology_pack",
+    "load_aml_sample", "load_dq_platform",
+    # The Infra Agent's storage incident, from chat as from its own steps: words on the incident,
+    # one notch of the deterministic cleanup, a rule proposal, the install-wide work hold. Tier 3
+    # still always goes to a person; each is gated on system:operate.
+    "storage_report", "storage_run_step", "storage_propose_rule",
+    "work_hold_set", "work_hold_release",
 })
 
 #: REGISTERED, AND DELIBERATELY NOT REACHABLE FROM CHAT.
 #:
 #: The workflow's `research` and `meeting` steps need these tools, but a chat must start a
 #: workflow so the run and its outcome stay linked. The separate raw SQL hold below protects
-#: project-pinned chat until the database enforces project scope.
-_WORKFLOW_ONLY_TOOLS = frozenset({"create_discovery", "request_meeting"})
+#: project-pinned chat until the database enforces project scope. `write_file` writes an agent
+#: step's own /scratch notes and /memories (Exposure surface agent_step only): a chat turn has no
+#: run scratch to write to.
+_WORKFLOW_ONLY_TOOLS = frozenset({"create_discovery", "request_meeting", "write_file"})
 _DISCUSS_UNSCOPED_WRITE_TOOLS = frozenset({"write_db"})
 
 #: Tables raw SQL may never write: every identity table (bindings, roles, seats, credentials, the
@@ -10919,6 +10967,52 @@ def action_unavailable(name: str, settings: Any) -> str | None:
                                          _UNAVAILABLE_DETAIL[key])
         return _UNAVAILABLE_SAID[key]
     return None
+
+
+def requirement_review(requirement: Any, coverage: Any, spec: dict) -> dict:
+    """The authoring turn's self-review of a draft against the requirement it was made from
+    (BOSSAPP-1361).
+
+    A workflow designed from a ticket published ~8 times before it ran, and still never
+    rejected a non-conforming config and tested only /healthz — two things the ticket asked
+    for. The model maps the requirement; this holds the map to the draft: every clause names a
+    step that EXISTS in it or says plainly what the design does not do. Nothing here judges the
+    words (the model does); it refuses a review that is missing, points at a step the draft does
+    not have, or leaves a clause with neither."""
+    said = str(requirement or "").strip()
+    if not said:
+        return {"checked": False}
+    entries = coverage if isinstance(coverage, list) else []
+    if not entries:
+        return {"ok": False, "error": (
+            "a draft made from a requirement is reviewed against it before it publishes: pass "
+            "coverage — one {clause, step} or {clause, gap} per clause of the requirement.")}
+    steps = {str(s.get("id")) for s in spec.get("steps") or [] if isinstance(s, dict)}
+    problems: list[str] = []
+    mapped: list[dict] = []
+    gaps: list[str] = []
+    for n, entry in enumerate(entries, 1):
+        entry = entry if isinstance(entry, dict) else {}
+        clause = str(entry.get("clause") or "").strip()
+        step = str(entry.get("step") or "").strip()
+        gap = str(entry.get("gap") or "").strip()
+        if not clause:
+            problems.append(f"coverage entry {n} names no clause")
+        elif step and step not in steps:
+            problems.append(f"clause {clause[:60]!r} names step {step!r}, which this draft does "
+                            f"not have (steps: {', '.join(sorted(steps))})")
+        elif not step and not gap:
+            problems.append(f"clause {clause[:60]!r} has neither a step that does it nor a gap "
+                            "saying it is not done")
+        else:
+            mapped.append({"clause": clause[:400], **({"step": step} if step else {}),
+                           **({"gap": gap[:400]} if gap else {})})
+            if gap and not step:
+                gaps.append(f"{clause[:120]}: {gap[:200]}")
+    if problems:
+        return {"ok": False, "error": "the draft's review against the requirement is incomplete: "
+                                      + "; ".join(problems[:4])}
+    return {"checked": True, "requirement": said[:4000], "coverage": mapped, "gaps": gaps}
 
 
 def build_discuss_read_registry(*, edition: str | None = None) -> ToolRegistry:
