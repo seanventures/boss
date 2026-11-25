@@ -374,6 +374,7 @@ export const READ_ROUTES: ReadonlyArray<readonly [string, Permission]> = [
   ["govern/envelopes", "budget:read"],
   ["govern/project-limits", "budget:read"],
   ["govern/spend", "budget:read"],
+  ["govern/subscriptions", "budget:read"],
   ["hardware/places", "host:read"],
   ["hardware/resolve", "host:read"],
   ["harness/bench-runs", "assurance:read"],

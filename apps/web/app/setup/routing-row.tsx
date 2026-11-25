@@ -232,6 +232,10 @@ function Meter({ h }: { h: Routing["headroom"][number] }) {
         {h.label}{left != null && h.state !== "exhausted" ? `, ${left}% left` : ""}
       </span>
       {when ? <span className="su-faint">resets {when}</span> : null}
+      {h.stale && h.age_label ? (
+        <span className="su-faint" data-testid={`mr-headroom-age-${h.engine}`}
+              title="BOSS has not heard this account's numbers since; they may have moved.">last reported {h.age_label}</span>
+      ) : null}
     </div>
   );
 }

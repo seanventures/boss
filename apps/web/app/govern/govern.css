@@ -293,3 +293,26 @@
   .gv-bar-fill { transition: none; }
   .gv-row[data-focused], .gv-value[data-pulsed] .gv-value-main, .gv-chip[data-passed] { animation: none; }
 }
+
+/* Subscriptions (BOSSAPP-1342): one card per connected account, its windows and what BOSS does at the limit. */
+.gv-sub-banner { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; padding: 10px 14px; border: 1px solid color-mix(in srgb, var(--amber) 45%, var(--border)); border-radius: var(--r-xl); background: var(--amber-soft); color: var(--ink); }
+.gv-sub-banner[data-state="exhausted"] { border-color: color-mix(in srgb, var(--red) 45%, var(--border)); background: var(--red-soft); }
+.gv-subs { display: flex; flex-direction: column; gap: 12px; }
+.gv-sub { display: flex; flex-direction: column; gap: 8px; padding: 14px; border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--surface); }
+.gv-sub-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
+.gv-sub-name { margin: 0; font-size: var(--fs-title); font-weight: 650; }
+.gv-sub-pill { padding: 1px 10px; border-radius: 999px; font-size: var(--fs-tag); font-weight: 650; background: var(--green-soft); color: var(--green); }
+.gv-sub-pill[data-state="tight"], .gv-sub-pill[data-state="near_limit"] { background: var(--amber-soft); color: var(--amber); }
+.gv-sub-pill[data-state="exhausted"] { background: var(--red-soft); color: var(--red); }
+.gv-sub-win { display: grid; grid-template-columns: 7.5rem 1fr auto; align-items: center; gap: 10px; font-size: var(--fs-row); }
+.gv-sub-meter { height: 8px; border-radius: 999px; background: var(--surface-3); overflow: hidden; }
+.gv-sub-meter > i { display: block; height: 100%; background: var(--green); }
+.gv-sub-meter > i[data-state="tight"], .gv-sub-meter > i[data-state="near_limit"] { background: var(--amber); }
+.gv-sub-meter > i[data-state="exhausted"] { background: var(--red); }
+.gv-sub-faint { color: var(--faint); font-size: var(--fs-meta); }
+.gv-sub-tag { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border); font-size: var(--fs-tag); font-weight: 600; color: var(--muted); }
+.gv-sub-tag[data-tone="accent"] { border-color: var(--teal); color: var(--teal); }
+.gv-sub-pool { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px dashed var(--border-strong); border-radius: var(--r-xl); }
+.gv-sub-pool-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; color: var(--ink); }
+.gv-sub-pool-go { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; text-decoration: none; }
+@media (max-width: 640px) { .gv-sub-win { grid-template-columns: 1fr; } }

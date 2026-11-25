@@ -656,6 +656,32 @@ def before_project_purge(connection: Connection, settings: Any, project_id: str)
 
 # ── choosing ─────────────────────────────────────────────────────────────────────────────────
 
+def routing_pool(connection: Connection, project_id: str, engine: str) -> Optional[dict[str, Any]]:
+    """The pool a project's runs spend on for `engine`: PROJECT POOL -> ORG POOL -> None (the
+    single install login). A project's own pool overrides the org's for that project; a paused
+    one hands over to the org's. `assign` and Govern's headroom (BOSSAPP-1342) both read this,
+    so what Govern shows is the pool a build is given."""
+    for scope in ("project", "org"):
+        candidate = get_pool(connection, project_id, engine, scope=scope)
+        if candidate is not None and candidate["status"] == "active":
+            return candidate
+    return None
+
+
+def choose_member(usable: list[dict[str, Any]], rooms: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """The member a new build is given, from the members with room (`rooms`: id -> Headroom):
+    THE PRIMARY LEADS while it has plenty of room; otherwise the most headroom wins."""
+    from .model_router.headroom import PLENTY
+
+    if not usable:
+        return None
+    primary = next((m for m in usable if m.get("primary")
+                    and rooms[m["id"]].state == PLENTY), None)
+    return primary or sorted(
+        usable, key=lambda m: (-(rooms[m["id"]].left if rooms[m["id"]].left is not None else 1.0),
+                               m["position"], m["last_assigned_at"] or ""))[0]
+
+
 def install_login_refused(connection: Connection, settings: Any, project_id: str,
                           engine: str) -> bool:
     """Is the install's own login for `engine` refused (expired / revoked)? Setup's one status
@@ -691,16 +717,11 @@ def router_account(connection: Connection, settings: Any, project_id: Optional[s
     the seat a new build would be given (the primary with plenty of room, else the most room);
     with every seat at its limit, the one that resets first — so the router's headroom is the
     POOL's, not the install login's (BOSSAPP-1343 review). None without an active pool."""
-    from .model_router.headroom import EXHAUSTED, PLENTY
+    from .model_router.headroom import EXHAUSTED
 
     if not project_id or engine not in ENGINES:
         return None
-    pool = None
-    for scope in ("project", "org"):
-        candidate = get_pool(connection, project_id, engine, scope=scope)
-        if candidate is not None and candidate["status"] == "active":
-            pool = candidate
-            break
+    pool = routing_pool(connection, project_id, engine)
     live = routable(connection, settings, project_id, engine, pool["members"]) if pool else []
     if not live:
         return None
@@ -709,11 +730,7 @@ def router_account(connection: Connection, settings: Any, project_id: Optional[s
     if not usable:
         far = datetime.max.replace(tzinfo=timezone.utc)
         return min(live, key=lambda m: rooms[m["id"]].resets_at or far)["account_key"]
-    primary = next((m for m in usable if m.get("primary") and rooms[m["id"]].state == PLENTY),
-                   None)
-    best = primary or max(usable, key=lambda m: (rooms[m["id"]].left
-                                                 if rooms[m["id"]].left is not None else 1.0))
-    return best["account_key"]
+    return choose_member(usable, rooms)["account_key"]
 
 
 def assign(connection: Connection, project_id: str, engine: str, task_ref: Optional[str], *,
@@ -721,16 +738,9 @@ def assign(connection: Connection, project_id: str, engine: str, task_ref: Optio
     """The member this run spends on, or None when the project has no active pool for `engine`.
     Raises PoolExhausted when every active member is at its limit. With `settings`, an adopted
     install login whose login is refused is skipped (`routable`)."""
-    from .model_router.headroom import EXHAUSTED, PLENTY
+    from .model_router.headroom import EXHAUSTED
 
-    # PROJECT POOL -> ORG POOL -> (None: the single install login). A project's own pool
-    # overrides the org's for that project; a paused one hands over to the org's.
-    pool = None
-    for scope in ("project", "org"):
-        candidate = get_pool(connection, project_id, engine, scope=scope)
-        if candidate is not None and candidate["status"] == "active":
-            pool = candidate
-            break
+    pool = routing_pool(connection, project_id, engine)
     if pool is None:
         return None
     live = routable(connection, settings, project_id, engine, pool["members"])
@@ -750,12 +760,7 @@ def assign(connection: Connection, project_id: str, engine: str, task_ref: Optio
             "SELECT member_id FROM subscription_pool_pins WHERE pool_id = :p AND task_ref = :t"),
             {"p": pool["id"], "t": ref}).scalar()
         pinned = next((m for m in usable if m["id"] == pin), None)
-    # THE PRIMARY LEADS while it has plenty of room; otherwise the most headroom wins.
-    primary = next((m for m in usable if m.get("primary")
-                    and rooms[m["id"]].state == PLENTY), None)
-    chosen = pinned or primary or sorted(
-        usable, key=lambda m: (-(rooms[m["id"]].left if rooms[m["id"]].left is not None else 1.0),
-                               m["position"], m["last_assigned_at"] or ""))[0]
+    chosen = pinned or choose_member(usable, rooms)
     reason = ""
     if ref and pinned is None:
         old = next((m for m in live if m["id"] == pin), None) if pin else None
