@@ -145,6 +145,9 @@ describe("several Claude accounts (BOSSAPP-1343)", () => {
     expect($('[data-testid="pool-primary-spm_a"]')).not.toBeNull();
     expect($('[data-testid="pool-member-primary-spm_a"]')).toBeNull();
     expect($('[data-testid="pool-room-spm_b"]')?.textContent).toBe("At limit");
+    // every new action carries its icon beside its label
+    expect($('[data-testid="pool-member-primary-spm_b"] svg')).not.toBeNull();
+    expect($('[data-testid="pool-signin-open-claude_code"] svg')).not.toBeNull();
     ($('[data-testid="pool-member-primary-spm_b"]') as HTMLButtonElement).click();
     await settle();
     expect(calls.find((c) => c.method === "PATCH")?.body).toEqual({ project_id: "p1", primary: true });

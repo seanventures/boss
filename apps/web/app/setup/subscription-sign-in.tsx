@@ -92,7 +92,7 @@ export function SubscriptionSignIn({ provider, label, autoStart = false, fresh =
     if (opensTab) popup.current = window.open("", "_blank");
     try {
       const started = await setupWrite<SignInSession>(projectId, "sign_in_start",
-                                                      addAccount ? { provider, fresh: true, add_account: true }
+                                                      addAccount ? { provider, add_account: true }
                                                  : fresh ? { provider, fresh: true } : { provider },
                                                       { label: "Sign in" });
       if (alive.current) setSession(started);

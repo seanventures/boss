@@ -13,6 +13,7 @@
  * kit (components/form-kit.tsx, BOSSAPP-1039) — never a hand-rolled stack of bare inputs.
  */
 import React, { useCallback, useEffect, useState } from "react";
+import { Crown, UserPlus, X } from "@phosphor-icons/react";
 
 import { Field, FormError, FormGrid } from "../../components/form-kit";
 import { GatedButton } from "../../components/gated";
@@ -99,7 +100,8 @@ export function PoolsRow({ projectId }: { projectId: string }) {
                     <GatedButton permission="entitlement:manage" projectId={projectId} className="su-link"
                                  data-testid={`pool-member-primary-${m.id}`}
                                  onClick={() => void act(updatePoolMember(projectId, m.id, { primary: true }, "Make primary"),
-                                                         `${m.label} is the primary.`)}>Make primary</GatedButton>
+                                                         `${m.label} is the primary.`)}>
+                      <Crown size={12} aria-hidden="true" />Make primary</GatedButton>
                   ) : null}
                   <GatedButton permission="entitlement:manage" projectId={projectId} className="su-link"
                                data-testid={`pool-member-toggle-${m.id}`}
@@ -150,7 +152,7 @@ function AddAccount({ projectId, pool, onAdded }: { projectId: string; pool: Poo
         <SubscriptionSignIn provider={pool.engine} label={ENGINE_WORDS[pool.engine]} autoStart addAccount
                             onSession={(s) => { if (s?.state === "signed_in") { setSigning(false); onAdded(); } }} />
         <button type="button" className="su-link" data-testid={`pool-signin-close-${pool.engine}`}
-                onClick={() => { setSigning(false); onAdded(); }}>Close</button>
+                onClick={() => { setSigning(false); onAdded(); }}><X size={12} aria-hidden="true" />Close</button>
       </div>
     );
   }
@@ -160,7 +162,7 @@ function AddAccount({ projectId, pool, onAdded }: { projectId: string; pool: Poo
         {pool.engine === "claude_code" ? (
           <GatedButton permission="entitlement:manage" projectId={projectId} className="su-link"
                        data-testid={`pool-signin-open-${pool.engine}`} onClick={() => setSigning(true)}>
-            Sign in another account</GatedButton>
+            <UserPlus size={12} aria-hidden="true" />Sign in another account</GatedButton>
         ) : null}
         <GatedButton permission="entitlement:manage" projectId={projectId} className="su-link"
                      data-testid={`pool-add-open-${pool.engine}`} onClick={() => setOpen(true)}>Add account</GatedButton>
