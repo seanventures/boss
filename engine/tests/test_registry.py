@@ -213,6 +213,7 @@ _EXPECTED_TOOLS: set[str] = {
     "git_history",
     "http_probe",
     "inspect_host",
+    "collect_diagnostics",
     "inspect_self",
     "install_restarts",
     "link_run_origin",
@@ -306,10 +307,10 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 229, (  # + confluence_search, confluence_read_page, confluence_publish_page (BOSSAPP-1384) + update_deployment_target (BOSSAPP-1358) + recheck_change (#168, re-check this change) + close_local_change, reopen_local_change (BOSSAPP-955) + create_config_target, deploy_config, promote_config (BOSSAPP-1140) + 5 storage_* and 2 work_hold_* (unpinned drift on main at f2348b85c) + github_comment, github_open_fix_pr, contract_test (BOSSAPP-1141 / 1142 / 1143, 2026-11-14) + 6 ticket tools (BOSSAPP-1047 B2, 2026-11-13) + 4 run FS tools (AP-P6) + 7 coordination tools and transfer_to_agent (AP-P7)
+    assert len(reg.names()) == 230, (  # + collect_diagnostics (BOSSAPP-1368 MT-1) + confluence_search, confluence_read_page, confluence_publish_page (BOSSAPP-1384) + update_deployment_target (BOSSAPP-1358) + recheck_change (#168, re-check this change) + close_local_change, reopen_local_change (BOSSAPP-955) + create_config_target, deploy_config, promote_config (BOSSAPP-1140) + 5 storage_* and 2 work_hold_* (unpinned drift on main at f2348b85c) + github_comment, github_open_fix_pr, contract_test (BOSSAPP-1141 / 1142 / 1143, 2026-11-14) + 6 ticket tools (BOSSAPP-1047 B2, 2026-11-13) + 4 run FS tools (AP-P6) + 7 coordination tools and transfer_to_agent (AP-P7)
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
-    assert len(read) == 120  # + confluence_search, confluence_read_page (BOSSAPP-1384) + storage_inspect, storage_plan (unpinned drift on main at f2348b85c) + task, start/check/update/cancel/list_subagents, write_todos (AP-P7) + ls, read_file, grep (AP-P6 run FS) + ticket_get, ticket_search, ticket_browse (BOSSAPP-1047 B2) + wiki_read (BOSSAPP-891) + list_work_items (BOSSAPP-830) + install_restarts + + dq_platform_status + kg_neighbors, dq_rulebook_status (rulebook source G6/G7) + aml_sample_status + knowledge_project_setup (BOSSAPP-768 project flow) + find_tools (K5, BOSSAPP-961)
+    assert len(read) == 121  # + collect_diagnostics (BOSSAPP-1368 MT-1) + confluence_search, confluence_read_page (BOSSAPP-1384) + storage_inspect, storage_plan (unpinned drift on main at f2348b85c) + task, start/check/update/cancel/list_subagents, write_todos (AP-P7) + ls, read_file, grep (AP-P6 run FS) + ticket_get, ticket_search, ticket_browse (BOSSAPP-1047 B2) + wiki_read (BOSSAPP-891) + list_work_items (BOSSAPP-830) + install_restarts + + dq_platform_status + kg_neighbors, dq_rulebook_status (rulebook source G6/G7) + aml_sample_status + knowledge_project_setup (BOSSAPP-768 project flow) + find_tools (K5, BOSSAPP-961)
     # + list_platform_gaps (BOSSAPP-571's doorway) + kg_rules (the approved business rules, BOSSAPP-768)
     #                         + wait_for (waiting for BOSS's own work) + kg_schema (what the knowledge graph holds) + code_graph_status, index_repository_code (a repository's code graph) + list_org_repositories (the org's repository registry) + list_projects, describe_project (a project's real state, any project)
     #                        + captain_goals, + 7 kg reads, + 3 self-fix reads, + read_app_logs, + my_recent_work, + system_health, + 7 template/security reads, + precheck_workflow

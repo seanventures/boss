@@ -1,0 +1,50 @@
+# cargo-deny configuration for the metatron Rust workspace.
+# Enforced in CI via EmbarkStudios/cargo-deny-action@v2 (see metatron/ci/metatron.yml).
+
+[graph]
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-musl",
+]
+all-features = false
+
+[advisories]
+ignore = [
+    # Transitive Linux D-Bus stack pulled by keyring 3.6 (linux-native-async-persistent) -> secret-service 4 -> zbus 4.4.0.
+    { id = "RUSTSEC-2026-0370", reason = "Linux-only zbus 4.4.0 transitive dependency of keyring/secret-service 4; no upstream major bump yet" },
+    { id = "RUSTSEC-2026-0371", reason = "Linux-only zvariant 4.2.0 transitive dependency of zbus 4.4.0 via keyring/secret-service 4" },
+    { id = "RUSTSEC-2026-0372", reason = "Linux-only zbus_names 3.0.0 transitive dependency of zbus 4.4.0 via keyring/secret-service 4" },
+]
+
+[licenses]
+confidence-threshold = 0.8
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "OpenSSL",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+highlight = "all"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

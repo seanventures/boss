@@ -1,0 +1,112 @@
+# Staged Rust CI workflow for the `metatron/` Cargo workspace.
+# Note: active `gh` CLI lacks the `workflow` OAuth scope, so this workflow is
+# staged at `metatron/ci/metatron.yml`; promote to `.github/workflows/metatron.yml`
+# with an appropriately scoped token.
+
+name: Metatron CLI
+
+on:
+  pull_request:
+    paths:
+      - "metatron/**"
+      - "THIRD-PARTY-NOTICES.md"
+      - "third_party/notices/**"
+  push:
+    branches:
+      - main
+    paths:
+      - "metatron/**"
+      - "THIRD-PARTY-NOTICES.md"
+      - "third_party/notices/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: metatron-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    defaults:
+      run:
+        working-directory: metatron
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: metatron
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Run workspace tests
+        run: cargo test --workspace --locked
+      - name: Verify vendored provenance headers
+        run: ./scripts/vendor-codex.sh --verify
+      - name: Run cargo-deny
+        if: matrix.os == 'ubuntu-latest'
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: metatron/Cargo.toml
+
+  build-matrix:
+    name: Build (${{ matrix.target }})
+    needs: check
+    timeout-minutes: 25
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            musl: false
+            run_version: true
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            musl: false
+            run_version: false
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            musl: true
+            run_version: true
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
+            musl: true
+            run_version: true
+    defaults:
+      run:
+        working-directory: metatron
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: metatron
+      - name: Install musl tools
+        if: matrix.musl
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Build release binary
+        run: cargo build --release --locked --target ${{ matrix.target }} -p metatron-cli
+      - name: Smoke test --version
+        if: matrix.run_version
+        run: ./target/${{ matrix.target }}/release/metatron --version
+      - name: Verify cross-compiled Mach-O architecture
+        if: matrix.target == 'x86_64-apple-darwin'
+        run: file ./target/${{ matrix.target }}/release/metatron && lipo -archs ./target/${{ matrix.target }}/release/metatron
+      - uses: actions/upload-artifact@v4
+        with:
+          name: metatron-${{ matrix.target }}
+          path: metatron/target/${{ matrix.target }}/release/metatron
