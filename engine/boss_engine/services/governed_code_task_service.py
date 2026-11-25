@@ -7500,8 +7500,36 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         _fidelity: Optional[dict] = None
         _validation: Optional[dict] = None
         _repo_checks: list = []     # input_fidelity.repo_checks, after the implement loop
+        def _microvm_verify_commands(plan, base_root: Path) -> list[str]:
+            if getattr(plan, "runs_steps", False) and getattr(plan, "steps", None):
+                step_dirs = set()
+                for _cmd, step_dir in plan.steps:
+                    try:
+                        rel = Path(step_dir).relative_to(base_root).as_posix()
+                    except ValueError:
+                        rel = ""
+                    step_dirs.add("" if rel in ("", ".") else rel)
+                if len(step_dirs) > 1:
+                    import shlex
+
+                    scoped: list[str] = []
+                    for cmd, step_dir in plan.steps:
+                        try:
+                            rel = Path(step_dir).relative_to(base_root).as_posix()
+                        except ValueError:
+                            rel = ""
+                        if rel and rel != ".":
+                            scoped.append(f"cd {shlex.quote(rel)} && {cmd}")
+                        else:
+                            scoped.append(cmd)
+                    return scoped
+            return list(plan.commands)
+
         if _gate_plan0.source != "task":
-            verify_commands = list(_gate_plan0.commands)
+            verify_commands = (
+                _microvm_verify_commands(_gate_plan0, Path(root))
+                if use_microvm else list(_gate_plan0.commands)
+            )
             test_cmd = ((verification_target.manifest_display(root, _pinned_manifest)
                          if _gate_plan0.from_manifest else _gate_plan0.description
                          if _gate_plan0.runs_steps else " && ".join(verify_commands))
@@ -7913,7 +7941,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             _last_gate_plan[0] = plan
             _last_stack_plan[0] = plan.stack if plan.source == "stack" else None
             if plan.source != "task" and plan.commands:
-                verify_commands = list(plan.commands)
+                verify_commands = _microvm_verify_commands(plan, base_root)
             last_verify_command = (
                 plan.description if plan.runs_steps else " && ".join(plan.commands)
             ) or last_verify_command

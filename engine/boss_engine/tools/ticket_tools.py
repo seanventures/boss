@@ -317,7 +317,8 @@ def _import(ctx, *, project_id, actor, args):
                 done = ticket_sync.ticket_import_items(
                     db, getattr(ctx, "settings", None), project_id=pid,
                     items=list(args.get("items") or []), actor=str(actor or "system"),
-                    connection_id=args.get("connection_id"), provider=args.get("provider"))
+                    connection_id=args.get("connection_id"), provider=args.get("provider"),
+                    person_id=_person(actor))
     except ticket_sync.TicketSyncError as error:
         return {"ok": False, "error": error.code, "message": str(error)}
     except Exception as error:  # noqa: BLE001

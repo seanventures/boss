@@ -455,3 +455,81 @@ def test_use_microvm_replans_verify_commands_before_guest_regression_when_go_on(
     g._run_governed_code_task(conn, settings, object(), run["id"])  # noqa: SLF001
     reg = [cmds for tid, cmds in guest_calls if tid.endswith("-run_all_tests")]
     assert reg == [list(toolchains.GO_GATE)], guest_calls
+
+
+def test_use_microvm_replans_multi_service_preserves_per_step_directories(
+        tmp_path, go_on, monkeypatch):
+    """BOSSAPP-1230 Challenge 3: in use_microvm, a multi-service re-plan (backend/go.mod +
+    web/package.json) preserves per-step directory scoping in verify_commands passed to
+    _guest_stage(run_all_tests)."""
+    from boss_engine.schemas import FileChange
+
+    repo = _tree(tmp_path, {"README.md": "x\n", "backend/.keep": "", "web/.keep": ""})
+    run, conn, settings, _rescued = _mid_build_harness(
+        monkeypatch, repo,
+        spec_extra={
+            "substrate": "microvm",
+            "risk_tier": 1,
+            "instructions": "Build a Go backend in backend/ and a React frontend in web/.",
+        },
+        use_microvm=True,
+    )
+    run["finalize_ctx"] = {"risk_tier": 1}
+    guest_calls: list[tuple[str, list[str]]] = []
+
+    class _FakeVM:
+        last_sandbox_task_id = None
+
+        def __init__(self, _settings):
+            pass
+
+        def run_code_task(self, guest_spec, tenant_id=None):
+            tid = guest_spec["task_id"]
+            guest_calls.append((tid, list(guest_spec["test_commands"])))
+            if tid.endswith("-write_tests"):
+                return SimpleNamespace(
+                    diff=[FileChange(path="backend/main_test.go", content="package main\n")],
+                    deleted=[], cost_usd_micros=0, summary="wrote tests", usage={},
+                    turns=1, tests_passed=True, tests=[], error=None)
+            if tid.endswith("-implement"):
+                return SimpleNamespace(
+                    diff=[
+                        FileChange(path="backend/go.mod", content=GO_MOD),
+                        FileChange(path="backend/main.go", content="package main\nfunc main() {}\n"),
+                        FileChange(path="backend/boss.preview.command", content="go run .\n"),
+                        FileChange(
+                            path="web/package.json",
+                            content=json.dumps({
+                                "name": "web",
+                                "dependencies": {"react": "^18.0.0"},
+                                "scripts": {"build": "echo ok", "test": "echo ok"},
+                            }),
+                        ),
+                    ],
+                    deleted=[], cost_usd_micros=0, summary="wrote stack", usage={},
+                    turns=1, tests_passed=True, tests=[], error=None)
+            return SimpleNamespace(
+                diff=[], deleted=[], cost_usd_micros=0, summary="VERDICT: SURVIVED", usage={},
+                turns=1, tests_passed=True, tests=[], error=None)
+
+    class _FakeAgent:
+        local_repo = False
+        redact = False
+        budget_ceiling = None
+        command_runner = None
+
+        def run_role(self, *_a, **_kw):
+            return {"summary": "VERDICT: SURVIVED\nSTATUS: clean\nCONSISTENCY: consistent",
+                    "cost_usd_micros": 0, "usage": {}, "session_id": "s1"}
+
+    monkeypatch.setattr(g, "MicroVMProvider", _FakeVM)
+    monkeypatch.setattr(g, "make_code_agent", lambda *_a, **_k: _FakeAgent())
+    g._run_governed_code_task(conn, settings, object(), run["id"])  # noqa: SLF001
+    reg = [cmds for tid, cmds in guest_calls if tid.endswith("-run_all_tests")]
+    assert reg == [[
+        "cd backend && go vet ./...",
+        "cd backend && go test ./...",
+        "cd web && npm install --include=dev --no-audit --no-fund --loglevel=error",
+        "cd web && npm run build",
+        "cd web && npm run test",
+    ]], guest_calls

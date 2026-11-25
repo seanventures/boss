@@ -1164,7 +1164,8 @@ def resolve_text(db: Connection, project_id: str, said: str, *,
                         "not_connected": found}
             if found.get("ok"):
                 view = dict(found["ticket"])
-                view["maps_to"] = reach.visible_maps_to(found["maps_to"])
+                view["maps_to"] = reach.visible_maps_to(
+                    found["maps_to"], person_id=person_id, db=db)
                 view["connection_reach"] = found["connection"]["reach"]
                 return {"refs": [{"connection_id": view["connection_id"],
                                   "provider": view["provider"], "key": view["key"]}],
@@ -1175,7 +1176,7 @@ def resolve_text(db: Connection, project_id: str, said: str, *,
                                 "message": found.get("message")}]}
         # A key in a sentence ("Implement KAN-12") that only a connection NOT shared with this
         # project knows: say so, with its way out, instead of nothing.
-        hidden = reach.unshared_ref(db, project_id, said)
+        hidden = reach.unshared_ref(db, project_id, said, person_id=person_id)
         if hidden:
             return {"refs": [], "tickets": [], "errors": [hidden], "connected": len(rows)}
         return {"refs": [], "tickets": [], "errors": [], "connected": len(rows)}
@@ -1193,7 +1194,8 @@ def resolve_text(db: Connection, project_id: str, said: str, *,
         view["connection_id"] = row["id"]
         view["in_boss"] = mark([ticket], in_boss_map(db, family_ids(db, row)))[0]["in_boss"]
         view["maps_to"] = reach.visible_maps_to(
-            reach.mapped_project(db, row, ticket.key or ref.label()))
+            reach.mapped_project(db, row, ticket.key or ref.label()),
+            person_id=person_id, db=db)
         view["connection_reach"] = row.get("reach") or "project"
         reach.audit_read(db, project_id, row, ticket.key or ref.label(), reader=person_id)
         tickets.append(view)

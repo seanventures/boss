@@ -547,14 +547,44 @@ class LocalGitAdapter:
                         "authorized_head_sha": expected_head_sha}
             raise GitHubMergeRejectedError("The change is not open.")
         git_dir = self._require()
+        already_landed = False
         for field, value in {"head_sha": expected_head_sha, "base_sha": expected_base_sha,
                              "head_ref": expected_head_ref, "base_ref": expected_base_ref}.items():
             if current[field] != value:
                 if field == "base_sha" and self._already_landed_on_base(
                         git_dir, expected_head_ref, expected_head_sha,
                         expected_base_sha, current["base_sha"], expected_base_ref):
+                    already_landed = True
                     continue
                 raise GitHubMergeRejectedError("The change moved after it was approved.")
+        if already_landed:
+            with self._tx("merge_pull_request") as c:
+                row = self._row(c, pull_number, lock=True)
+                if row["state"] == "merged":
+                    return {"pull_request_number": pull_number,
+                            "commit_sha": str(row.get("merged_sha") or current["base_sha"]),
+                            "merged": True, "message": "Already merged.",
+                            "merge_method": merge_method,
+                            "previous_target_sha": expected_base_sha,
+                            "authorized_head_sha": expected_head_sha}
+                if row["state"] != "open":
+                    raise GitHubMergeRejectedError("The change is not open.")
+                base_now = local_repo.branch_sha(git_dir, row["base_branch"]) or ""
+                if not base_now or (base_now != current["base_sha"]
+                                    and not self._already_landed_on_base(
+                                        git_dir, expected_head_ref, expected_head_sha,
+                                        expected_base_sha, base_now, expected_base_ref)):
+                    raise GitHubMergeRejectedError("The change moved after it was approved.")
+                c.execute(text(
+                    "UPDATE local_change_sets SET state = 'merged', merged_sha = :s, "
+                    "merged_by = 'boss', merged_at = now(), head_sha = :h, "
+                    "updated_at = now() WHERE id = :id"),
+                    {"s": base_now, "h": expected_head_sha, "id": row["id"]})
+            return {"pull_request_number": pull_number, "commit_sha": base_now, "merged": True,
+                    "message": f"Merged into {expected_base_ref} on this machine.",
+                    "merge_method": merge_method,
+                    "previous_target_sha": expected_base_sha,
+                    "authorized_head_sha": expected_head_sha}
         merged = self.merge_pull_request(pull_number, commit_title, head_sha=expected_head_sha)
         return {"pull_request_number": pull_number, "commit_sha": merged.sha, "merged": True,
                 "message": merged.message, "merge_method": merge_method,
