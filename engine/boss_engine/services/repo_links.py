@@ -43,7 +43,9 @@ def repo_url(full_name: Any) -> Optional[str]:
     name = str(full_name or "").strip().strip("/")
     if not name or "/" not in name or is_local_repo(name):
         return None
-    return f"https://github.com/{name}"
+    from ..identity import github_urls
+
+    return github_urls.repo(name)
 
 
 def blob_url(full_name: Any, path: str, ref: str = "HEAD") -> Optional[str]:

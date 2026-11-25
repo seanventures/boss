@@ -20,6 +20,8 @@ from collections.abc import Iterator, MutableMapping
 from typing import Any, Optional, Protocol
 from urllib.parse import quote
 
+from boss_engine.identity import github_urls
+
 logger = logging.getLogger(__name__)
 
 _SSL = ssl.create_default_context()
@@ -115,7 +117,7 @@ def tracker_destination(provider: Optional[str], configuration: dict[str, Any]) 
     if key == "linear":
         return "https://api.linear.app/graphql"
     if key == "github_issues":
-        return str(configuration.get("api_base_url") or "https://api.github.com")
+        return github_urls.api_base(configuration.get("api_base_url"))
     if key == "azure_devops":
         return "https://dev.azure.com/"
     if key == "asana":
@@ -661,7 +663,7 @@ class GitHubIssuesWorkTrackerAdapter:
                     "api_base_url",
                     "API base (GitHub Enterprise)",
                     required=False,
-                    placeholder="https://api.github.com",
+                    placeholder=github_urls.PUBLIC_API,
                 ),
             ),
         )
@@ -679,13 +681,13 @@ class GitHubIssuesWorkTrackerAdapter:
         num = external_key or external_issue_id
         if not (owner and repo and num):
             return None
-        return f"https://github.com/{owner}/{repo}/issues/{num}"
+        return f"{github_urls.repo(f'{owner}/{repo}', configuration.get('api_base_url'))}/issues/{num}"
 
     def test_connection(self, configuration: dict[str, Any]) -> dict[str, Any]:
         token = resolve_credential(configuration, provider=self.provider_key)
         owner = str(configuration.get("owner") or "").strip()
         repo = str(configuration.get("repo") or "").strip()
-        base = str(configuration.get("api_base_url") or "https://api.github.com").rstrip(
+        base = github_urls.api_base(configuration.get("api_base_url")).rstrip(
             "/"
         )
         if not (token and owner and repo):
@@ -732,7 +734,7 @@ class GitHubIssuesWorkTrackerAdapter:
         token = resolve_credential(configuration, provider=self.provider_key)
         owner = str(configuration.get("owner") or "").strip()
         repo = str(configuration.get("repo") or "").strip()
-        base = str(configuration.get("api_base_url") or "https://api.github.com").rstrip(
+        base = github_urls.api_base(configuration.get("api_base_url")).rstrip(
             "/"
         )
         if not (token and owner and repo):
@@ -1045,7 +1047,7 @@ def update_issue(
     if key == "github_issues":
         owner = str(configuration.get("owner") or "").strip()
         repo = str(configuration.get("repo") or "").strip()
-        base = str(configuration.get("api_base_url") or "https://api.github.com").rstrip("/")
+        base = github_urls.api_base(configuration.get("api_base_url"))
         headers = {"Authorization": f"Bearer {token}", "X-GitHub-Api-Version": "2022-11-28"}
         number = issue.lstrip("#")
         root = f"{base}/repos/{quote(owner)}/{quote(repo)}/issues/{quote(number)}"

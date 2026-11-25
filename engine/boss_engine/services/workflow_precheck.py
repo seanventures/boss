@@ -685,7 +685,11 @@ def _gh_get(ctx: Context, path: str) -> tuple[Optional[int], Any]:
     token = _github_token(ctx, binding)
     if not token:
         return None, "no usable token"
-    base = str(getattr(ctx.settings, "github_api_base_url", "") or "https://api.github.com")
+    from .github_connections import api_base_for_repository
+
+    owner, _, name = str(binding.get("full_name") or "").partition("/")
+    base = ctx.savepoint(lambda: api_base_for_repository(ctx.connection, ctx.project_id, owner, name),
+                         default="") or api_base_for_repository(ctx.connection, None)
     req = urllib.request.Request(base.rstrip("/") + path, headers={
         "Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
         "User-Agent": "boss-precheck"})

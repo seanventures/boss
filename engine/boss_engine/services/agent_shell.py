@@ -126,11 +126,18 @@ def ensure_workspace(
         detail = (result.stderr or "").strip()[-300:]
         # Never echo the clone URL back: it contains the token.
         return None, f"could not check out {owner}/{repo}@{branch}: {_scrub(detail)}"
-    owned_process.run(
-        ["git", "-C", str(path), "remote", "set-url", "origin",
-         f"https://github.com/{owner}/{repo}.git"],
-        capture_output=True, text=True, timeout=30,
-    )
+    # The origin is the clone URL WITHOUT any credential, on the host it was cloned from (a GHES
+    # host stays the GHES host; it is never rewritten to github.com).
+    from urllib.parse import urlsplit, urlunsplit
+
+    parts = urlsplit(clone_url)
+    if parts.scheme in ("http", "https") and parts.hostname:
+        netloc = parts.hostname + (f":{parts.port}" if parts.port else "")
+        owned_process.run(
+            ["git", "-C", str(path), "remote", "set-url", "origin",
+             urlunsplit((parts.scheme, netloc, parts.path, "", ""))],
+            capture_output=True, text=True, timeout=30,
+        )
     return path, None
 
 

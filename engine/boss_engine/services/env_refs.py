@@ -32,6 +32,8 @@ from dataclasses import dataclass
 from typing import Any, Iterable, Mapping, Optional
 from urllib.parse import urlsplit
 
+from boss_engine.identity import github_urls
+
 #: Provider credentials BOSS's own integrations name as `env:` references.
 KNOWN: frozenset[str] = frozenset({
     "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "GROQ_API_KEY", "DEEPSEEK_API_KEY",
@@ -189,8 +191,7 @@ def _is_private_or_local_host(host: str) -> bool:
 #: Each provider's official endpoints (https only). `*.x` matches any subdomain of x.
 PROVIDER_HOSTS: dict[str, tuple[str, ...]] = {
     # api.githubcopilot.com is GitHub's own MCP server (the Library's GitHub entry).
-    "github": ("api.github.com", "github.com", "uploads.github.com", "codeload.github.com",
-               "api.githubcopilot.com"),
+    "github": github_urls.PUBLIC_HOSTS + ("api.githubcopilot.com",),
     "openai": ("api.openai.com",),
     "anthropic": ("api.anthropic.com",),
     "openrouter": ("openrouter.ai",),

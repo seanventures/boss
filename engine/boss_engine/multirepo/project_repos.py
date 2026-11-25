@@ -210,7 +210,7 @@ def _connection_for(db: Any, settings: Any, project_id: str, actor: str, *,
                              "Connect GitHub for this project first (Setup › GitHub access).")
     if full_name:
         from ..services import setup_checks
-        from ..services.github_connections import GitHubConnectionService
+        from ..services.github_connections import GitHubConnectionService, api_base_for_repository
 
         service = GitHubConnectionService(settings)
         for row in rows:
@@ -228,8 +228,7 @@ def _connection_for(db: Any, settings: Any, project_id: str, actor: str, *,
                     continue
                 probed = setup_checks.probe_repository(
                     token, full_name,
-                    api_base=str(getattr(settings, "github_api_base_url", "") or
-                                 "https://api.github.com"))
+                    api_base=api_base_for_repository(db, project_id, *full_name.split("/", 1)))
                 if (probed.get("checks") or {}).get("read", {}).get("ok"):
                     return cid
             except Exception:  # noqa: BLE001 — a connection that cannot be probed cannot reach it either

@@ -38,6 +38,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
+from boss_engine.identity import github_urls
+
 from sqlalchemy import text
 
 log = logging.getLogger(__name__)
@@ -82,7 +84,7 @@ def scopes_to_permissions(scopes_header: Optional[str]) -> dict[str, str]:
     return out
 
 
-def pat_abilities(token: str, *, api_base: str = "https://api.github.com", http: Any = None) -> dict[str, Any]:
+def pat_abilities(token: str, *, api_base: str = "", http: Any = None) -> dict[str, Any]:
     """What a personal access token can do, read from GitHub (GET /user), never from its name.
 
     {ok, login, shape: classic|fine_grained|unknown, granted: [...], missing: [...],
@@ -368,7 +370,7 @@ def _connection_candidates(db: Any, settings: Any, owner: str, project_id: Optio
         label = token_label(row)
         granted = [str(p) for p in (row.get("granted_permissions") or [])]
         missing = [str(p) for p in (row.get("missing_permissions") or [])]
-        api_base = str(row.get("api_base_url") or getattr(settings, "github_api_base_url", "") or "https://api.github.com")
+        api_base = github_urls.api_base(row.get("api_base_url") or getattr(settings, "github_api_base_url", ""))
 
         def mint(row=row) -> Optional[str]:
             try:

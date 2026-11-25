@@ -25,12 +25,100 @@ from typing import Optional
 from urllib.parse import quote, urlencode
 
 WEB_BASE_ENV = "BOSS_GITHUB_WEB_URL"           # github.com; a GitHub Enterprise or test host
+API_BASE_ENV = "BOSS_GITHUB_API_URL"           # api.github.com; GHES: https://<host>/api/v3
 USER = "User"
 ORGANIZATION = "Organization"
 
+#: The ONLY spelling of GitHub's public hosts in engine/API code (BOSSAPP-1286). Everything else
+#: asks this module, so a GitHub Enterprise Server connection is never bypassed by a default.
+#: ``tests/test_github_hosts_come_from_one_builder.py`` fails on a new literal anywhere else.
+PUBLIC_API = "https://api.github.com"
+PUBLIC_WEB = "https://github.com"
+PUBLIC_API_HOST = "api.github.com"
+PUBLIC_WEB_HOST = "github.com"
+#: github.com's own hosts (API, web, uploads, archive downloads, raw files, release assets).
+PUBLIC_HOSTS = (PUBLIC_API_HOST, PUBLIC_WEB_HOST, "uploads.github.com", "codeload.github.com",
+                "raw.githubusercontent.com", "objects.githubusercontent.com")
+#: GitHub Enterprise Server serves REST under /api/v3 and GraphQL at /api/graphql.
+GHES_REST_PATH = "/api/v3"
+GHES_GRAPHQL_PATH = "/api/graphql"
+
 
 def web_base() -> str:
-    return (os.environ.get(WEB_BASE_ENV) or "https://github.com").rstrip("/")
+    """The install's GitHub web origin: BOSS_GITHUB_WEB_URL, else derived from
+    BOSS_GITHUB_API_URL (a GHES ``https://h/api/v3`` -> ``https://h``), else github.com."""
+    explicit = (os.environ.get(WEB_BASE_ENV) or "").strip()
+    if explicit:
+        return explicit.rstrip("/")
+    api = (os.environ.get(API_BASE_ENV) or "").strip()
+    return web_base_for(api) if api else PUBLIC_WEB
+
+
+def install_api_base() -> str:
+    """The install's GitHub REST base: BOSS_GITHUB_API_URL, else derived from
+    BOSS_GITHUB_WEB_URL (a GHES ``https://h`` -> ``https://h/api/v3``), else api.github.com."""
+    explicit = (os.environ.get(API_BASE_ENV) or "").strip()
+    if explicit:
+        return explicit.rstrip("/")
+    web = (os.environ.get(WEB_BASE_ENV) or "").strip()
+    return api_base_for_web(web) if web else PUBLIC_API
+
+
+def api_base(configured: object = None) -> str:
+    """THE REST base for a GitHub call: the connection's configured ``api_base_url`` when it has
+    one, else the install's (env), else api.github.com. Every GitHub call derives from this."""
+    value = str(configured or "").strip()
+    return value.rstrip("/") if value else install_api_base()
+
+
+def is_public_api(api: object = None) -> bool:
+    return api_base(api) == PUBLIC_API
+
+
+def graphql_url(api: object = None) -> str:
+    """GraphQL next to a REST base: api.github.com/graphql, or <host>/api/graphql on GHES."""
+    base = api_base(api)
+    if base.endswith(GHES_REST_PATH):
+        return base[: -len(GHES_REST_PATH)] + GHES_GRAPHQL_PATH
+    return base + "/graphql"
+
+
+def web_base_for(api: object = None) -> str:
+    """The web origin that goes with a REST base (where repositories and PRs are browsed and
+    cloned): github.com for the public API, ``https://h`` for ``https://h/api/v3``."""
+    base = api_base(api) if api else install_api_base()
+    if base == PUBLIC_API:
+        return PUBLIC_WEB
+    if base.endswith(GHES_REST_PATH):
+        return base[: -len(GHES_REST_PATH)]
+    return base
+
+
+def api_base_for_web(web: object) -> str:
+    """The REST base for a web origin: api.github.com for github.com, else ``<origin>/api/v3``."""
+    origin = str(web or "").strip().rstrip("/")
+    if not origin or origin == PUBLIC_WEB:
+        return PUBLIC_API
+    return origin if origin.endswith(GHES_REST_PATH) else origin + GHES_REST_PATH
+
+
+def web_host(api: object = None) -> str:
+    """The web host (no scheme) for a REST base: ``github.com`` or the GHES host."""
+    from urllib.parse import urlsplit
+
+    return (urlsplit(web_base_for(api)).hostname or PUBLIC_WEB_HOST).lower()
+
+
+def github_hosts(api: object = None) -> tuple[str, ...]:
+    """Every host a GitHub connection may reach: github.com's own, plus a GHES host."""
+    from urllib.parse import urlsplit
+
+    extra = []
+    for url in (api_base(api), web_base_for(api)):
+        host = (urlsplit(url).hostname or "").lower()
+        if host and host not in PUBLIC_HOSTS:
+            extra.append(host)
+    return PUBLIC_HOSTS + tuple(dict.fromkeys(extra))
 
 
 def account_type(raw: object) -> Optional[str]:
@@ -165,6 +253,8 @@ def device_verify() -> str:
 OAUTH_AUTHORIZE_PUBLIC = "https://github.com/login/oauth/authorize"
 OAUTH_TOKEN_PUBLIC = "https://github.com/login/oauth/access_token"
 OAUTH_ISSUER_PUBLIC = "https://github.com/login/oauth"
+OAUTH_USER_PUBLIC = f"{PUBLIC_API}/user"
+OAUTH_EMAILS_PUBLIC = f"{PUBLIC_API}/user/emails"
 
 
 def oauth_app_new(owner: Optional[Account] = None) -> str:
@@ -194,5 +284,16 @@ def token_requests(org: Optional[str]) -> str:
 
 # ---- repositories ------------------------------------------------------------------------------------------
 
-def repo(full_name: str) -> str:
-    return f"{web_base()}/{full_name.strip('/')}"
+def repo(full_name: str, api: object = None) -> str:
+    """A repository's web page; with ``api`` (a connection's REST base), on that connection's
+    host (GHES), else on the install's."""
+    base = web_base_for(api) if api else web_base()
+    return f"{base}/{full_name.strip('/')}"
+
+
+def clone_url(full_name: str, api: object = None) -> str:
+    return f"{repo(full_name, api)}.git"
+
+
+def pull_request(full_name: str, number: object, api: object = None) -> str:
+    return f"{repo(full_name, api)}/pull/{number}"

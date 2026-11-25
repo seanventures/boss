@@ -5,6 +5,13 @@ from typing import Any, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+
+def _github_api_base() -> str:
+    """A GitHub connection's REST base when none is given: the install's (BOSSAPP-1286)."""
+    from .identity import github_urls
+
+    return github_urls.api_base()
+
 DataBoundary = Literal["public", "internal", "confidential", "restricted", "local-only"]
 
 
@@ -4709,7 +4716,7 @@ class GitHubConnectionCreateRequest(BaseModel):
     credential_ref: str
     app_id: Optional[str] = None
     installation_id: Optional[str] = None
-    api_base_url: str = "https://api.github.com"
+    api_base_url: str = Field(default_factory=lambda: _github_api_base())
     required_permissions: list[str] = Field(default_factory=lambda: ["pull"])
     metadata: dict[str, Any] = Field(default_factory=dict)
     actor: str = "ceo"
@@ -4870,7 +4877,7 @@ class GitHubEasyConnectRequest(BaseModel):
     token: Optional[str] = None
     app_id: Optional[str] = None
     installation_id: Optional[str] = None
-    api_base_url: str = "https://api.github.com"
+    api_base_url: str = Field(default_factory=lambda: _github_api_base())
     required_permissions: list[str] = Field(
         default_factory=lambda: ["pull", "push", "triage"]
     )

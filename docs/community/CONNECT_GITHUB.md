@@ -38,6 +38,7 @@ That's it. Your next step in Setup is choosing a model.
 Open **Other ways** under Connect GitHub only if the app route can't work for you:
 
 - **GitHub Enterprise Server without apps, an offline install, or an organisation that blocks apps:** paste a fine-grained access token. **Create token** opens GitHub with the two permissions BOSS needs ticked. A token expires on the date you choose, and builds stop when it does, so pick the longest expiry your organisation allows. Setup shows the expiry date ahead of time.
+- **GitHub Enterprise Server:** set the install's `BOSS_GITHUB_API_URL` / `BOSS_GITHUB_WEB_URL` ([GitHub Enterprise](IDENTITY_ADMIN.md#github-enterprise)), or give the connection its own `api_base_url` (`https://<your-host>/api/v3`). Every GitHub call for that connection's repositories then goes to your server: clone, pull requests, checks, events. Custom CA, proxy and what is proven so far are in [Enterprise network › GitHub Enterprise Server](ENTERPRISE_NETWORK.md#github-enterprise-server).
 - **Already connected with a token?** Nothing changes. Your install keeps using it.
 
 ## Events from a repository GitHub cannot reach

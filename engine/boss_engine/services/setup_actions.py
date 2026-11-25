@@ -115,7 +115,9 @@ def _service(settings: Any):
 
 
 def _api_base(settings: Any) -> str:
-    return str(getattr(settings, "github_api_base_url", "") or "https://api.github.com")
+    from ..identity import github_urls
+
+    return github_urls.api_base(getattr(settings, "github_api_base_url", ""))
 
 
 def _dedupe_label(connection: Connection, project_id: str, login: str) -> str:

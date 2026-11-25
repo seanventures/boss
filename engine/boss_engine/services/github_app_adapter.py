@@ -197,10 +197,12 @@ class GitHubAppAdapter:
         self,
         settings: Settings,
         *,
-        api_base_url: str = "https://api.github.com",
+        api_base_url: str = "",
     ):
         self.settings = settings
-        self.api_base_url = api_base_url.rstrip("/")
+        from ..identity import github_urls
+
+        self.api_base_url = github_urls.api_base(api_base_url)
         self._cache: dict[str, tuple[float, InstallationToken]] = {}
 
     # -- configuration ------------------------------------------------------

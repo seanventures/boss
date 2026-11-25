@@ -53,7 +53,7 @@ SAFE_ALGS = frozenset({"RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES
                        "ES512", "EdDSA"})
 MFA_AMR = frozenset({"mfa", "hwk", "otp"})
 
-GITHUB_ISSUER = "https://github.com"
+GITHUB_ISSUER = github_urls.PUBLIC_WEB
 #: Okta (BOSSAPP-1048): the org authorization server (https://{org}.okta.com) or a custom one
 #: (https://{org}.okta.com/oauth2/{id}, e.g. /oauth2/default). The issuer is typed by the admin
 #: and checked by `okta_issuer`; the scopes and groups claim are the form's defaults.
@@ -71,8 +71,8 @@ PRESETS: dict[str, dict[str, Any]] = {
     "github": {"protocol": "oauth2", "issuer": GITHUB_ISSUER,
                "authorization_endpoint": github_urls.OAUTH_AUTHORIZE_PUBLIC,
                "token_endpoint": github_urls.OAUTH_TOKEN_PUBLIC,
-               "user_endpoint": "https://api.github.com/user",
-               "emails_endpoint": "https://api.github.com/user/emails",
+               "user_endpoint": github_urls.OAUTH_USER_PUBLIC,
+               "emails_endpoint": github_urls.OAUTH_EMAILS_PUBLIC,
                "scopes": ["read:user", "user:email"]},
 }
 

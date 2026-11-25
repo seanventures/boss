@@ -103,9 +103,11 @@ def _ssl_context() -> Optional[ssl.SSLContext]:
         return None
 
 
-def _github(path: str, token: str) -> Any:
+def _github(path: str, token: str, api_base: str = "") -> Any:
+    from ..identity import github_urls
+
     req = urllib.request.Request(
-        f"https://api.github.com{path}",
+        f"{github_urls.api_base(api_base)}{path}",
         headers={"Accept": "application/vnd.github+json",
                  **({"Authorization": f"Bearer {token}"} if token else {})})
     with urllib.request.urlopen(req, timeout=20, context=_ssl_context()) as resp:

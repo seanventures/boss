@@ -33,7 +33,7 @@ from .principal import RunTokenClaims, TaskBinding
 
 log = logging.getLogger(__name__)
 
-API_BASE_ENV = "BOSS_GITHUB_API_URL"
+API_BASE_ENV = github_urls.API_BASE_ENV
 APP_ID_ENV = "BOSS_GITHUB_APP_ID"
 INSTALLATION_ENV = "BOSS_GITHUB_APP_INSTALLATION_ID"
 CLIENT_ID_ENV = "BOSS_GITHUB_APP_CLIENT_ID"
@@ -68,7 +68,8 @@ def _default_transport(method: str, url: str, headers: Mapping[str, str], body: 
         return Response(r.status, r.body)
     except NotImplementedError:
         host = (urlsplit(url).hostname or "").lower()
-        if host not in ("api.github.com", "github.com") or urlsplit(url).scheme != "https":
+        if host not in (github_urls.PUBLIC_API_HOST, github_urls.PUBLIC_WEB_HOST) \
+                or urlsplit(url).scheme != "https":
             raise GitHubRefused("outbound_client_unavailable", 503)
         import httpx
 
@@ -82,7 +83,7 @@ TRANSPORT: Callable[[str, str, Mapping[str, str], Optional[bytes]], Response] = 
 
 
 def api_base() -> str:
-    return (os.environ.get(API_BASE_ENV) or "https://api.github.com").rstrip("/")
+    return github_urls.install_api_base()
 
 
 def _call(method: str, path: str, *, token: str, scheme: str = "Bearer", body: Any = None) -> Response:

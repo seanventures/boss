@@ -10,6 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ..config import Settings
+from ..identity import github_urls
 from .core import emit_event, make_id
 from .github_adapter import GitHubAdapter
 from .receipts import ReceiptService
@@ -979,7 +980,7 @@ class GitHubConnectionService:
                                               connection_id=str(github_connection["id"]))
             if not token:
                 return empty
-            got = pat_abilities(token, api_base=str(github_connection.get("api_base_url") or "https://api.github.com"))
+            got = pat_abilities(token, api_base=github_urls.api_base(github_connection.get("api_base_url")))
             return {"granted": list(got.get("granted") or []), "missing": list(got.get("missing") or []),
                     "can_create": got.get("can_create"), "words": str(got.get("words") or "")}
         except Exception:  # noqa: BLE001 — the repository test stands on its own
@@ -1281,7 +1282,7 @@ class GitHubConnectionService:
                 auth_method=auth_method,
                 app_id=app_id,
                 installation_id=installation_id,
-                api_base_url=api_base_url or "https://api.github.com",
+                api_base_url=github_urls.api_base(api_base_url),
                 actor=actor,
             )
         else:
@@ -1293,7 +1294,7 @@ class GitHubConnectionService:
                 credential_ref=credential_ref,
                 app_id=app_id,
                 installation_id=installation_id,
-                api_base_url=api_base_url or "https://api.github.com",
+                api_base_url=github_urls.api_base(api_base_url),
                 required_permissions=required_permissions
                 or ["pull", "push", "triage"],
                 metadata={
@@ -1491,11 +1492,12 @@ class GitHubConnectionService:
                     credential_ref=self._credential_ref(
                         connection, project_id, github_connection["id"])),
                 connection)
-            who = self._github_get("/user", credential) or {}
+            api = github_urls.api_base(github_connection.get("api_base_url"))
+            who = self._github_get("/user", credential, api_base=api) or {}
             login = str(who.get("login") or "").strip()
             repos = self._github_get(
                 "/user/repos?per_page=100&affiliation=owner,collaborator,"
-                "organization_member", credential)
+                "organization_member", credential, api_base=api)
             if login:
                 hint += f" The token belongs to {login}."
             if isinstance(repos, list):
@@ -1513,13 +1515,13 @@ class GitHubConnectionService:
         return f"{base} — {hint}"
 
     @staticmethod
-    def _github_get(path: str, credential: str, timeout: int = 15) -> Any:
+    def _github_get(path: str, credential: str, timeout: int = 15, api_base: str = "") -> Any:
         """A read against GitHub with the connection's own credential. Returns None on error."""
         import urllib.error
         import urllib.request
 
         request = urllib.request.Request(
-            f"https://api.github.com{path}",
+            f"{github_urls.api_base(api_base)}{path}",
             headers={"Authorization": f"Bearer {credential}",
                      "Accept": "application/vnd.github+json",
                      "User-Agent": "boss-setup-check"})
@@ -2012,6 +2014,39 @@ def can_create_repos(granted: Any, missing: Any) -> dict[str, Any]:
     if "administration" in missing_set:
         return {"ok": False, "missing": ["administration"]}
     return {"ok": None, "missing": []}
+
+
+def api_base_for_repository(connection: Connection, project_id: Optional[str], owner: str = "",
+                            repo: str = "") -> str:
+    """THE REST base for a project's repository (BOSSAPP-1286): the ``api_base_url`` of the
+    connection owner/repo is bound through (a GitHub Enterprise Server connection answers
+    ``https://<host>/api/v3``), else the project's primary connection's, else the install's
+    (github_urls.api_base()). Never a literal api.github.com."""
+    if project_id:
+        wanted = f"{owner}/{repo}".strip("/").lower()
+        try:
+            row = connection.execute(text(
+                """
+                SELECT c.api_base_url
+                FROM github_repository_bindings b
+                JOIN github_connections c ON c.id = b.connection_id
+                WHERE b.project_id = :p AND b.status = 'active'
+                  AND c.status IN ('configured', 'active')
+                  AND (:want = '' OR LOWER(b.full_name) = :want OR b.role = 'primary')
+                ORDER BY (LOWER(b.full_name) = :want) DESC, (b.role = 'primary') DESC,
+                         b.updated_at DESC
+                LIMIT 1
+                """), {"p": project_id, "want": wanted if "/" in wanted else ""}).first()
+            if row is None:
+                row = connection.execute(text(
+                    "SELECT api_base_url FROM github_connections WHERE project_id = :p "
+                    "AND status IN ('configured', 'active') ORDER BY updated_at DESC LIMIT 1"),
+                    {"p": project_id}).first()
+            if row is not None and row[0]:
+                return github_urls.api_base(row[0])
+        except Exception as error:  # noqa: BLE001 — an older schema falls back to the install's
+            logger.debug("github: api base lookup failed: %s", type(error).__name__)
+    return github_urls.api_base()
 
 
 def github_token_for(connection: Connection, settings: Settings, project_id: str, owner: str,

@@ -138,7 +138,11 @@ _PR_REF = re.compile(r"^(?:#|pr[/:#-]?|pull/|refs/pull/)(\d+)(?:/head|/merge)?$"
 
 
 def split_repository(repository: str) -> tuple[str, str]:
-    value = str(repository or "").strip().removeprefix("https://github.com/")
+    from ..identity import github_urls
+
+    value = str(repository or "").strip()
+    for web in dict.fromkeys((github_urls.web_base(), github_urls.PUBLIC_WEB)):
+        value = value.removeprefix(web + "/")
     value = value.removesuffix(".git").strip("/")
     owner, _, repo = value.partition("/")
     if not owner or not repo or "/" in repo:
@@ -155,10 +159,12 @@ class GitHubSource:
     command line, an exception message or a log line.
     """
 
-    API = "https://api.github.com"
+    def __init__(self, token: str = "", api_base: str = ""):
+        from ..identity import github_urls
 
-    def __init__(self, token: str = ""):
         self._token = token or ""
+        #: The connection's REST base (GHES: https://<host>/api/v3), never a literal default.
+        self.API = github_urls.api_base(api_base)
 
     def _headers(self, accept: str = "application/vnd.github+json") -> dict[str, str]:
         headers = {"Accept": accept, "X-GitHub-Api-Version": "2022-11-28",
@@ -176,7 +182,7 @@ class GitHubSource:
         except httpx.HTTPError as exc:
             raise StackDeployError(
                 f"BOSS could not reach GitHub ({type(exc).__name__}).",
-                "Check the API container's network access to api.github.com, then try again.",
+                f"Check the API container's network access to {self.API}, then try again.",
                 outage=True)
 
     def _refused(self, response, what: str) -> StackDeployError:
@@ -453,7 +459,9 @@ def github_source(connection: Connection, settings: Settings, project_id: str,
         log.debug("stack deploy: no registered token for %s/%s", owner, repo, exc_info=True)
     if not token:
         token = github_token_for(connection, settings, project_id, owner, repo)
-    return GitHubSource(token or "")
+    from .github_connections import api_base_for_repository
+
+    return GitHubSource(token or "", api_base_for_repository(connection, project_id, owner, repo))
 
 
 def source_for(connection: Connection, settings: Settings, project_id: str,

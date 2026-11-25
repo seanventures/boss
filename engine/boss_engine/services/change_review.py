@@ -39,6 +39,7 @@ from typing import Any, Callable, Mapping, Optional
 
 from sqlalchemy import text
 
+from ..identity import github_urls
 from . import local_repo, local_review
 from .agent_reference import agent_display
 from .core import emit_event
@@ -501,7 +502,7 @@ def person_adapter(base: Any, token: str) -> Any:
     from .github_adapter import GitHubAdapter
 
     return GitHubAdapter(base.settings, owner=base.owner, repo=base.repo, token=token,
-                         api_base_url=getattr(base, "api_base_url", "https://api.github.com"))
+                         api_base_url=getattr(base, "api_base_url", "") or "")
 
 
 def github_binding(c: Any, project_id: str, owner: str, repo: str) -> Optional[dict[str, Any]]:
@@ -543,7 +544,11 @@ class GitHubSource:
         self.full_name = str(binding["full_name"])
         self.binding_id = str(binding["id"])
         self.key = f"gh:{self.full_name.lower()}#{self.number}"
-        self.url = f"https://github.com/{self.full_name}/pull/{self.number}"
+        from .github_connections import api_base_for_repository
+
+        #: The connection's REST base: a GHES pull request links to the GHES host.
+        self.api_base = api_base_for_repository(c, project_id, owner, repo)
+        self.url = github_urls.pull_request(self.full_name, self.number, self.api_base)
         self._adapter: Any = None
         self._meta: Optional[dict[str, Any]] = None
         self.stale = False
@@ -653,7 +658,8 @@ class GitHubSource:
             "created_at": meta.get("created_at"), "updated_at": meta.get("updated_at"),
             "body": meta.get("body") or "", "author": meta.get("user"),
             "where": None,
-            "clone": {"url": f"https://github.com/{self.full_name}.git", "branch": meta.get("head_ref"),
+            "clone": {"url": github_urls.clone_url(self.full_name, self.api_base),
+                      "branch": meta.get("head_ref"),
                       "web_url": self.url,
                       "fetch": f"git fetch origin pull/{self.number}/head:{meta.get('head_ref') or 'pr'}"}}
         try:

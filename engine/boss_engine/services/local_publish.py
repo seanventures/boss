@@ -75,7 +75,7 @@ class CreateRepoResult:
 
 
 def create_repository(*, owner: str, name: str, private: bool = True, token: str,
-                      api_base_url: str = "https://api.github.com", token_kind: str = "app",
+                      api_base_url: str = "", token_kind: str = "app",
                       description: str = "", client: Optional[httpx.Client] = None) -> CreateRepoResult:
     """Make `owner/name` on GitHub, empty (no README: the history comes from BOSS).
 
@@ -157,7 +157,7 @@ NO_CREDENTIAL_WORDS = ("BOSS has no GitHub credential that can create repositori
 
 
 def check_repository(*, owner: str, name: str, token: Optional[str], purpose: str = "create",
-                     api_base_url: str = "https://api.github.com", token_kind: str = "app",
+                     api_base_url: str = "", token_kind: str = "app",
                      client: Optional[httpx.Client] = None, credential_words: str = "",
                      via: str = "") -> dict[str, Any]:
     """BEFORE A PERSON PRESSES CREATE (BOSSAPP-917/921's sheets): can BOSS make `owner/name` (or,
@@ -305,9 +305,10 @@ def default_reach(c: Any, settings: Any, project_id: str, *, connection_id: Opti
     installation on `owner` when it holds administration, the environment App, a project
     connection's token for its own account, the install token — in that order, with the reason."""
     from .github_adapter import GitHubAdapter
-    from .github_connections import github_token_for
+    from .github_connections import api_base_for_repository, github_token_for
     from .repo_creation import repo_creation_credential
     from .repo_host import git_access
+    from ..identity import github_urls
 
     reached: dict[tuple[str, str], Any] = {}
 
@@ -333,7 +334,8 @@ def default_reach(c: Any, settings: Any, project_id: str, *, connection_id: Opti
         return (getattr(got, "token", None) or "") or github_token_for(c, settings, project_id, o, r) or ""
 
     def adapter(o: str, r: str) -> Any:
-        return GitHubAdapter(settings, owner=o, repo=r, token=token(o, r) or None)
+        return GitHubAdapter(settings, owner=o, repo=r, token=token(o, r) or None,
+                             api_base_url=api_base_for_repository(c, project_id, o, r))
 
     create_token, kind, label, words, reason = None, "app", "", "", ""
     if owner:
@@ -358,10 +360,11 @@ def default_reach(c: Any, settings: Any, project_id: str, *, connection_id: Opti
         return (getattr(got, "words", "") or f"BOSS holds no GitHub credential that reaches {o}/{r}.")
 
     return GitHubReach(adapter_for=adapter, reach_words_for=reach_words,
-                       access_for=lambda o, r: git_access("github", o, r, token(o, r)),
+                       access_for=lambda o, r: git_access(
+                           "github", o, r, token(o, r),
+                           web_base=github_urls.web_base_for(api_base_for_repository(c, project_id, o, r))),
                        create_token=create_token, create_token_kind=kind,
-                       api_base_url=str(getattr(settings, "github_api_base_url", "")
-                                        or "https://api.github.com"),
+                       api_base_url=api_base_for_repository(c, project_id, owner, repo),
                        connection_id=conn_id, create_label=label, create_words=words, create_reason=reason)
 
 

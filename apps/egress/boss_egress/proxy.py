@@ -48,7 +48,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Optional
 from urllib.parse import parse_qsl
 
-from boss_engine.identity import egress_rules, github_app, grants, lineage, repo_scope, runs, tokens
+from boss_engine.identity import egress_rules, github_app, github_urls, grants, lineage, repo_scope, runs, tokens
 from boss_engine.identity.principal import RunTokenClaims
 
 log = logging.getLogger("boss.egress")
@@ -59,7 +59,7 @@ BITBUCKET_API_ENV = "BOSS_BITBUCKET_API_URL"       # default https://api.bitbuck
 STRICT_ENV = "BOSS_EGRESS_STRICT_SECRETS"
 #: The host route's guest-facing host names → the provider that serves them (D19).
 GIT_HOSTS = {"github.com": "github", "bitbucket.org": "bitbucket"}
-API_HOSTS = {"github.com": "github-api", "api.github.com": "github-api",
+API_HOSTS = {github_urls.PUBLIC_WEB_HOST: "github-api", github_urls.PUBLIC_API_HOST: "github-api",
              "bitbucket.org": "bitbucket-api", "api.bitbucket.org": "bitbucket-api"}
 #: The ONLY inbound headers that cross the proxy (an allowlist: a header nobody thought of —
 #: X-HTTP-Method-Override, a hop-by-hop header, a credential under a new name — never does).
@@ -618,7 +618,8 @@ class EgressProxy:
                           token: str) -> tuple[str, dict[str, str]]:
         headers = {k: v for k, v in req.headers.items() if k.lower() in _FORWARD}
         if provider == "github":
-            base = (os.environ.get(GIT_UPSTREAM_ENV) or "https://github.com").rstrip("/")
+            # The upstream git origin: explicit, else the install's GitHub web origin (GHES too).
+            base = (os.environ.get(GIT_UPSTREAM_ENV) or github_urls.web_base()).rstrip("/")
             if token:                       # "" = an anonymous read (anonymous_read_allowed)
                 basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
                 headers["Authorization"] = f"Basic {basic}"

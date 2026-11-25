@@ -173,7 +173,7 @@ def _failure_state(answer: HttpAnswer, *, refused: str) -> str:
     return refused
 
 
-def inspect_token(token: str, *, api_base: str = "https://api.github.com",
+def inspect_token(token: str, *, api_base: str = "",
                   http: Optional[Http] = None) -> dict[str, Any]:
     """Who the token belongs to, when it expires, and the repositories it can see.
 
@@ -212,7 +212,7 @@ def inspect_token(token: str, *, api_base: str = "https://api.github.com",
             "repos": repos, "retry_at": None}
 
 
-def probe_repository(token: str, full_name: str, *, api_base: str = "https://api.github.com",
+def probe_repository(token: str, full_name: str, *, api_base: str = "",
                      http: Optional[Http] = None) -> dict[str, Any]:
     """Read, write and pull-request probes against one repository.
 

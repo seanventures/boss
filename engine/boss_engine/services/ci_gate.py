@@ -490,7 +490,7 @@ def grant_view(connection: Any, project_id: str, repository: str, enabled: bool)
 
 
 def setting_view(connection: Any, project_id: str, binding_id: str,
-                 app_cfg: Optional[Mapping[str, Any]] = None, web_base: str = "https://github.com"
+                 app_cfg: Optional[Mapping[str, Any]] = None, web_base: str = ""
                  ) -> dict[str, Any]:
     row = _binding(connection, project_id, binding_id)
     enabled = _meta(row["metadata"]).get(SETTING_KEY) is True
@@ -839,7 +839,9 @@ class HttpCiReader:
 
     def __init__(self, api_base: str, repository: str, token: str,
                  get: Optional[Callable[[str, str], Any]] = None):
-        self.api_base = (api_base or "https://api.github.com").rstrip("/")
+        from ..identity import github_urls
+
+        self.api_base = github_urls.api_base(api_base)
         self.repository = repository
         self.token = token
         if get is None:
@@ -967,7 +969,7 @@ def reader_for_project(connection: Any, settings: Any, project_id: str,
         raise CiSettingError("github_not_connected", 409,
                              "This project has no GitHub repository connected. Connect it in Setup.")
     repo = repository or state["repo"]
-    return HttpCiReader(state.get("api_base") or "https://api.github.com", repo,
+    return HttpCiReader(state.get("api_base") or "", repo,
                         ci_token(connection, settings, project_id, repo)
                         or github_token(connection, settings, project_id, repo))
 

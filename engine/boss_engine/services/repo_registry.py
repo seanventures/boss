@@ -233,7 +233,7 @@ def _fill_local_merged_counts(activity: list[dict[str, Any]], *, max_lookups: in
 
 
 def fill_merged_counts(activity: list[dict[str, Any]], *, token: str,
-                       api_base_url: str = "https://api.github.com",
+                       api_base_url: str = "",
                        max_lookups: int = 25) -> None:
     """Fill `prs_merged` from GitHub. Best-effort: merge state is not in our DB.
 

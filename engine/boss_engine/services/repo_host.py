@@ -49,14 +49,24 @@ class RepoHost(Protocol):
     def get_pull_request_diff(self, pull_number: int) -> str: ...
 
 
-def clone_url_for(host: str, owner: str, repo: str, token: str = "") -> str:
+def _github_web(web_base: str = "") -> str:
+    """The GitHub web origin a clone goes to: the connection's (GHES), else the install's."""
+    from ..identity import github_urls
+
+    return (web_base or github_urls.web_base()).rstrip("/")
+
+
+def clone_url_for(host: str, owner: str, repo: str, token: str = "", web_base: str = "") -> str:
     """The authenticated HTTPS clone URL for a host — the ONE place that knows each host's
-    credential form (previously duplicated, GitHub-only, across 4+ call sites)."""
+    credential form (previously duplicated, GitHub-only, across 4+ call sites). ``web_base`` is
+    a GitHub Enterprise Server origin (``https://ghe.example``); empty means the install's."""
     kind = (host or "github").strip().lower()
     if kind == "github":
+        web = _github_web(web_base)
         if token:
-            return f"https://x-access-token:{token}@github.com/{owner}/{repo}.git"
-        return f"https://github.com/{owner}/{repo}.git"
+            scheme, _, rest = web.partition("://")
+            return f"{scheme}://x-access-token:{token}@{rest}/{owner}/{repo}.git"
+        return f"{web}/{owner}/{repo}.git"
     if kind == "bitbucket":
         # Bitbucket Cloud: workspace/repo_slug; access tokens use the x-token-auth pseudo-user.
         if token:
@@ -82,7 +92,7 @@ def clone_url_for(host: str, owner: str, repo: str, token: str = "") -> str:
 # and no GitHub token exists on this side at all.
 
 _BASIC_USER = {"github": "x-access-token", "bitbucket": "x-token-auth"}
-_HOST_ORIGIN = {"github": "https://github.com/", "bitbucket": "https://bitbucket.org/"}
+_HOST_ORIGIN = {"bitbucket": "https://bitbucket.org/"}   # GitHub's comes from github_urls
 
 
 class GitAccess:
@@ -137,7 +147,7 @@ def git_config_env(pairs) -> dict:
     return env
 
 
-def git_access(host: str, owner: str, repo: str, token: str = "") -> GitAccess:
+def git_access(host: str, owner: str, repo: str, token: str = "", web_base: str = "") -> GitAccess:
     """The legacy (token) path, without leaking the token into the checkout or argv."""
     import base64
 
@@ -146,11 +156,11 @@ def git_access(host: str, owner: str, repo: str, token: str = "") -> GitAccess:
 
     if kind == "local" or local_repo.is_local_owner(owner):
         return GitAccess(local_repo.file_url(local_repo.bare_path(owner, repo)), via="local")
-    url = clone_url_for(kind, owner, repo, "")
+    url = clone_url_for(kind, owner, repo, "", web_base=web_base)
     if not token:
         return GitAccess(url, via="anonymous")
     basic = base64.b64encode(f"{_BASIC_USER.get(kind, 'x-access-token')}:{token}".encode()).decode()
-    origin = _HOST_ORIGIN.get(kind, "https://github.com/")
+    origin = _HOST_ORIGIN.get(kind) or _github_web(web_base) + "/"
     return GitAccess(url, git_config_env([(f"http.{origin}.extraheader", f"AUTHORIZATION: basic {basic}")]),
                      via="token")
 

@@ -263,7 +263,9 @@ def resolve(db: Any, settings: Any, project_id: str, owner: str, repo: str, *,
     credential tried and what GitHub said about each. `verify=False` (the build's bound lookup):
     the first credential that yields a token, asking GitHub nothing."""
     owner, repo = str(owner or "").strip(), str(repo or "").strip()
-    api = str(api_base_url or getattr(settings, "github_api_base_url", "") or "https://api.github.com")
+    from ..identity import github_urls
+
+    api = github_urls.api_base(api_base_url or getattr(settings, "github_api_base_url", ""))
     out = RepoAccess(owner, repo, False)
     found = candidates(db, settings, project_id, owner, repo, bound_only=bound_only, actor=actor)
     read_only: Optional[tuple[Candidate, str]] = None

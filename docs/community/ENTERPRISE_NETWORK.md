@@ -240,14 +240,61 @@ mirror avoids it.
   address still works; `*` never matched anything and still does not.
 * The shell's `HTTPS_PROXY` is no longer adopted automatically (see `--use-shell-proxy`).
 
+## GitHub Enterprise Server
+
+BOSS talks to a GitHub Enterprise Server (GHES) the same way it talks to github.com. Only the
+addresses change:
+
+| What | github.com | GHES |
+| --- | --- | --- |
+| REST API | `https://api.github.com` | `https://ghe.example.com/api/v3` |
+| GraphQL | `https://api.github.com/graphql` | `https://ghe.example.com/api/graphql` |
+| Clone, push, web links | `https://github.com/<owner>/<repo>` | `https://ghe.example.com/<owner>/<repo>` |
+
+**Where BOSS gets the address.** Each GitHub connection has an **API base URL** (`api_base_url`
+on the connection; set it when you create the connection through the API, because the Setup form
+does not show the field yet). Every GitHub call
+for a repository uses the base URL of the connection that repository is bound to: connect, the
+token and repository checks, clone, branches and commits, pull requests, CI checks, the stack
+deploy reader, the branch picker, the poller and the PR links. If a connection has no base URL,
+BOSS uses the install's own (`BOSS_GITHUB_API_URL`, or `BOSS_GITHUB_WEB_URL` + `/api/v3`). Only
+when neither is set does it fall back to github.com. To point the whole install at GHES, set the
+host values in [GitHub Enterprise](IDENTITY_ADMIN.md#github-enterprise).
+
+**Custom CA.** A GHES server usually has a certificate from the company's own CA. Give BOSS that
+root CA as `BOSS_EXTRA_CA_FILE` (see [The company's CA](#the-companys-ca-tls-inspection)). The same
+bundle is used for API calls and for git.
+
+**Proxy.** If GHES is reachable only through the outbound proxy, `BOSS_UPSTREAM_PROXY` covers it.
+If GHES is inside the network and the proxy must be bypassed, add its host to
+`BOSS_UPSTREAM_NO_PROXY` (for example `ghe.example.com`).
+
+**Webhooks or polling.** GHES can send webhooks to BOSS if it can reach BOSS's URL. Each delivery
+carries `X-GitHub-Enterprise-Host` and is checked against the webhook's own secret. If GHES cannot
+reach BOSS, set the repository's event source to polling. BOSS then reads open pull requests and
+branch heads from the GHES API (see [Connect GitHub](CONNECT_GITHUB.md#events-from-a-repository-github-cannot-reach)).
+
+**What is proven, and what is not yet.**
+
+* Proven by tests, against a local GHES fake (`engine/tests/test_a_ghes_repository_journey.py`):
+  REST under `/api/v3`, git on the GHES host, connect, clone, pull request, check runs, a signed
+  webhook and the poller. Another test (`test_github_hosts_come_from_one_builder.py`) fails if new
+  code adds an `api.github.com` default.
+* Not proven yet (needs a GHES sandbox: its URL, its version and a token, from the operator):
+  differences in a real GHES version's API, its TLS chain under a company CA, and GHES through
+  an outbound proxy.
+* Agents' sandboxed git through the egress fence still routes only github.com (see below). For
+  now, give a GHES project a token on its connection.
+
 ## Not covered yet
 
 * **Registry credentials.** These settings work with mirrors that allow anonymous reads. A
   token in a URL is refused, and a run never receives one (`npm_config_//host/:_authToken` is
   withheld from agents as credential-shaped). Authenticated registries will need the same design
   as GitHub: the fence adds the credential, so a sandbox never holds it.
-* **Self-hosted Git** (GitHub Enterprise Server, GitLab) through the fence: only GitHub and
-  Bitbucket are routed today.
+* **Self-hosted Git** (GitHub Enterprise Server, GitLab) through the fence: only github.com and
+  Bitbucket are routed today. BOSS's own GitHub calls already follow a GHES connection (see
+  [GitHub Enterprise Server](#github-enterprise-server)).
 * A download mirror for the JDK, Maven, Gradle and Go toolchain archives at image build (they
   are checksum-pinned, so a mirror would be safe; today they need the proxy and the CA).
 * Yarn Berry's registry, and a Gradle repository mirror.

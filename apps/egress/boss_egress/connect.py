@@ -45,6 +45,8 @@ import struct
 import threading
 from typing import Iterable, NamedTuple, Optional, Union
 
+from boss_engine.identity import github_urls
+
 log = logging.getLogger("boss.egress.connect")
 
 DEFAULT_ALLOW = (
@@ -97,7 +99,8 @@ def toolchain_hosts() -> tuple[str, ...]:
 
 
 #: Never through the tunnel, whatever the allowlist says.
-NEVER = ("github.com", "*.github.com", "*.githubusercontent.com", "api.github.com")
+NEVER = (github_urls.PUBLIC_WEB_HOST, "*.github.com", "*.githubusercontent.com",
+         github_urls.PUBLIC_API_HOST)
 MAX_HEADER = 8192
 
 

@@ -12,6 +12,7 @@ from urllib.parse import quote
 import httpx
 
 from ..config import Settings
+from boss_engine.identity import github_urls
 
 
 class IntegrationConfigurationError(RuntimeError):
@@ -96,13 +97,13 @@ class GitHubAdapter:
         owner: Optional[str] = None,
         repo: Optional[str] = None,
         token: Optional[str] = None,
-        api_base_url: str = "https://api.github.com",
+        api_base_url: str = "",
     ):
         self.settings = settings
         self.owner = (owner or settings.target_github_owner).strip()
         self.repo = (repo or settings.target_github_repo).strip()
         self._token_override = token
-        self.api_base_url = api_base_url.rstrip("/")
+        self.api_base_url = github_urls.api_base(api_base_url)
         self._app = None
 
     @property
@@ -111,8 +112,9 @@ class GitHubAdapter:
 
     def clone_url(self, token: str) -> str:
         from .repo_host import clone_url_for
-        return clone_url_for("github", self.settings.target_github_owner,
-                             self.settings.target_github_repo, token)
+        # This adapter's repository, on this adapter's host (a GHES connection clones from GHES).
+        return clone_url_for("github", self.owner, self.repo, token,
+                             web_base=github_urls.web_base_for(self.api_base_url))
 
     def _auth_token(self) -> str:
         """Prefer a short-lived, repo-scoped GitHub-App installation token

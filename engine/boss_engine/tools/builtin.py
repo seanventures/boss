@@ -9853,9 +9853,14 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         else:
             token = getattr(ctx.settings, "github_token", "") or ""
 
+        from boss_engine.services.github_connections import api_base_for_repository
+
+        with ctx.engine.connect() as _c:
+            _gh_api = api_base_for_repository(_c, pid, *repo_full.split("/", 1))
+
         def get(path: str):
             req = _ureq.Request(
-                f"https://api.github.com{path}",
+                f"{_gh_api}{path}",
                 headers={"Accept": "application/vnd.github+json",
                          **({"Authorization": f"Bearer {token}"} if token else {})})
             with _ureq.urlopen(req, timeout=_turn_seconds(25)) as resp:
