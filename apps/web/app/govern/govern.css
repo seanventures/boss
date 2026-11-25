@@ -274,3 +274,4 @@
 .gv-jr-chip[data-status="red"] { background: var(--red-soft); color: var(--red); }
 .gv-jr-chip[data-status="pending"] { background: var(--amber-soft); color: var(--amber); }
 .gv-jr-host { color: var(--ink-soft); font-weight: 600; }
+.gv-jr-chip[data-posted] { outline: 1px dashed var(--border-strong); outline-offset: -1px; }

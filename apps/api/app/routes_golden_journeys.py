@@ -5,15 +5,20 @@
                                                 two weeks, the pending journeys and the schedule
     POST /v1/golden-journeys/results            {results: [...], host?} rows a runner judged
                                                 (scripts/golden-journeys.py run --record)
-    POST /v1/golden-journeys/run                {project_id, journeys?, variables?} start today's
-                                                run now, in the background
-    POST /v1/golden-journeys/schedule           {project_id, at_time, timezone?, days?} the daily
-                                                run, as a schedule_work wake
+    POST /v1/golden-journeys/run                {journeys?} start today's run now, in the
+                                                background, in the fixture project
+    POST /v1/golden-journeys/schedule           {at_time, timezone?, days?} the install's one
+                                                daily run (a schedule_work row BOSS starts itself)
 
-Journeys are install-wide (assurance at org scope); the run and the schedule act in a project.
+Nothing a caller sends chooses where journeys run or with what: the fixture project and its
+values are the operator's (BOSS_JOURNEY_PROJECT, BOSS_JOURNEY_VARS; services/golden_journeys/
+service.py). A POSTed green is believed only when BOSS's verdict, run again here over the row's
+own calls, accepts every item; and only the journey account's own rows (BOSS_JOURNEY_PRINCIPAL)
+count toward the freeze — anyone else's are shown as `posted`, never counted.
 """
 from __future__ import annotations
 
+import os
 from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, Body, Request
@@ -26,14 +31,14 @@ def _refuse(status: int, error: str, message: str) -> JSONResponse:
     return JSONResponse({"error": error, "message": message}, status_code=status)
 
 
-def _actor(request: Request, fallback: str = "operator") -> str:
+def _principal(request: Request) -> Optional[str]:
     try:
         from apps.api.app import identity_guard
 
         ctx = identity_guard.request_auth(request)
     except Exception:  # noqa: BLE001 — a bare test app has no identity middleware
         ctx = None
-    return ctx.principal.id if ctx is not None else fallback
+    return ctx.principal.id if ctx is not None else None
 
 
 def build_golden_journeys_router(engine_getter: Optional[Callable[[], Any]] = None,
@@ -58,62 +63,75 @@ def build_golden_journeys_router(engine_getter: Optional[Callable[[], Any]] = No
 
     @router.get("/v1/golden-journeys")
     @permit(P.ASSURANCE_READ, scope=Scope.org())
-    def golden_journeys(project_id: Optional[str] = None) -> Any:
+    def golden_journeys() -> Any:
         with _engine().begin() as c:
             out = results.summary(c)
-            out["schedule"] = service.daily_wake(c, project_id) if project_id else None
+            out["schedule"] = service.daily_wake(c)
         out["running"] = service.status().get("running", False)
+        out["fixture_project"] = service.fixture_project() or None
         return out
 
     @router.post("/v1/golden-journeys/results", status_code=201)
     @permit(P.ASSURANCE_RUN, scope=Scope.org())
     def record_results(request: Request, payload: dict = Body(...)) -> Any:
+        from sqlalchemy.exc import DataError
+
         rows = (payload or {}).get("results")
         if not isinstance(rows, list) or not rows:
             return _refuse(422, "bad_request", "Send results: a list of journey results.")
-        known = {j.id for j in definitions.load_all()}
+        by_id = {j.id: j for j in definitions.load_all()}
         host = str((payload or {}).get("host") or "").strip() or None
+        who = _principal(request) or "anonymous"
+        account = (os.environ.get("BOSS_JOURNEY_PRINCIPAL") or "").strip()
+        source = "run" if account and who == account else "posted"
+        for row in rows:
+            if not isinstance(row, dict) or row.get("journey_id") not in by_id:
+                return _refuse(422, "unknown_journey",
+                               f"No journey {row.get('journey_id') if isinstance(row, dict) else row!r}.")
+            if row.get("status") == "green":
+                ok, why = results.rejudge(row, by_id[row["journey_id"]])
+                if not ok:
+                    return _refuse(422, "not_green",
+                                   f"{row['journey_id']} is not green on BOSS's verdict: {why}")
         stored = []
         try:
             with _engine().begin() as c:
                 for row in rows:
-                    if not isinstance(row, dict) or row.get("journey_id") not in known:
-                        return _refuse(422, "unknown_journey",
-                                       f"No journey {row.get('journey_id') if isinstance(row, dict) else row!r}.")
-                    stored.append(results.record(c, row, host=host, actor=_actor(request)))
+                    stored.append(results.record(c, row, host=host, actor=who, source=source))
         except ValueError as exc:
             return _refuse(422, "bad_request", str(exc))
-        return {"stored": stored}
+        except DataError as exc:
+            return _refuse(422, "bad_request", f"a result could not be stored ({type(exc).__name__})")
+        return {"stored": stored, "source": source}
 
     @router.post("/v1/golden-journeys/run", status_code=202)
-    @permit(P.ASSURANCE_RUN, scope=Scope.project(body="project_id"))
-    def run_now(request: Request, payload: dict = Body(...)) -> Any:
+    @permit(P.ASSURANCE_RUN, scope=Scope.org())
+    def run_now(request: Request, payload: Optional[dict] = Body(default=None)) -> Any:
         body = payload or {}
-        project_id = str(body.get("project_id") or "").strip()
-        if not project_id:
-            return _refuse(422, "bad_request", "project_id is required.")
-        variables = body.get("variables") if isinstance(body.get("variables"), dict) else None
         only = [str(j) for j in body.get("journeys") or []] or None
-        out = service.start(_engine(), _settings(), project_id=project_id,
-                            actor=_actor(request), variables=variables, only=only)
+        out = service.start(_engine(), _settings(), actor=_principal(request) or "operator",
+                            only=only)
         if not out.get("ok"):
             return _refuse(409, "not_started", str(out.get("error")))
         return out
 
     @router.post("/v1/golden-journeys/schedule", status_code=201)
-    @permit(P.AUTOPILOT_OPERATE, scope=Scope.project(body="project_id"))
+    @permit(P.AUTOPILOT_OPERATE, scope=Scope.org())
     def schedule(request: Request, payload: dict = Body(...)) -> Any:
         from boss_engine.services.agent_wakeups import WakeupError
 
         body = payload or {}
-        project_id = str(body.get("project_id") or "").strip()
+        project_id = service.fixture_project()
         at_time = str(body.get("at_time") or "").strip()
-        if not project_id or not at_time:
-            return _refuse(422, "bad_request", "project_id and at_time (24h, e.g. 06:00) are required.")
+        if not project_id:
+            return _refuse(409, "no_fixture_project",
+                           "Set BOSS_JOURNEY_PROJECT to the journeys' fixture project first.")
+        if not at_time:
+            return _refuse(422, "bad_request", "at_time (24h, e.g. 06:00) is required.")
         try:
             with _engine().begin() as c:
-                return service.arm_daily(c, project_id=project_id, actor=_actor(request, "ceo"),
-                                         at_time=at_time,
+                return service.arm_daily(c, project_id=project_id,
+                                         actor=_principal(request) or "operator", at_time=at_time,
                                          tz_name=str(body.get("timezone") or "UTC").strip() or "UTC",
                                          days=[str(x) for x in body.get("days") or []])
         except WakeupError as exc:

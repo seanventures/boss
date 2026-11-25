@@ -9,7 +9,9 @@ export type JourneyStatus = "green" | "red" | "pending" | "not_run";
 
 export type JourneyToday = {
   status: JourneyStatus; why?: string; verdict?: string | null; seconds?: number; runs?: number;
-  at?: string | null;
+  at?: string | null; recorded_by?: string | null;
+  /** run: this install's own run (counted); posted: sent by another caller (never counted). */
+  source?: "run" | "posted" | null;
 };
 
 export type Journey = {
@@ -24,6 +26,7 @@ export type JourneysView = {
   history: { day: string; green: boolean; short: string[] }[];
   schedule: { at_time: string; timezone: string; next_wake_at: string | null } | null;
   running: boolean;
+  fixture_project: string | null;
 };
 
 export const STATUS_WORDS: Record<JourneyStatus, string> = {
@@ -34,6 +37,12 @@ export const STATUS_WORDS: Record<JourneyStatus, string> = {
 export function counterWords(v: Pick<JourneysView, "green_days" | "needed" | "freeze_lifted">): string {
   if (v.freeze_lifted) return "Freeze lifted";
   return `${v.green_days} of ${v.needed} green day${v.needed === 1 ? "" : "s"}`;
+}
+
+/** Who wrote a row, said on its chip: the install's own run, or someone's posted result. */
+export function recordedWords(t: JourneyToday): string {
+  if (!t.recorded_by) return "";
+  return t.source === "posted" ? `posted by ${t.recorded_by}, not counted` : `run by ${t.recorded_by}`;
 }
 
 /** Why today is not green yet, shortest first: pending journeys, then reds, then not run. */
@@ -49,15 +58,13 @@ export function todayShort(v: JourneysView): string {
     .filter(Boolean).join(" · ");
 }
 
-export function journeysPath(projectId: string): string {
-  return `/v1/golden-journeys?project_id=${encodeURIComponent(projectId)}`;
-}
+export const JOURNEYS_PATH = "/v1/golden-journeys";
 
 /** For usePolledRead. */
-export function polledJourneys(projectId: string) {
+export function polledJourneys() {
   return async (_etag: string | null, signal: AbortSignal) => {
     try {
-      const r = await fetch(journeysPath(projectId), { cache: "no-store", signal });
+      const r = await fetch(JOURNEYS_PATH, { cache: "no-store", signal });
       const body = await r.json().catch(() => ({}));
       if (!r.ok) {
         return { ok: false as const, status: r.status,
@@ -73,12 +80,12 @@ export function polledJourneys(projectId: string) {
 
 export type RunResult = { ok: true; started: string[]; note?: string } | { ok: false; error: string };
 
-/** Start today's run now (all journeys). One press, one run (lib/api-write.ts). */
-export async function runJourneysNow(projectId: string): Promise<RunResult> {
+/** Start today's run now (all journeys, in the operator's fixture project). One press, one run. */
+export async function runJourneysNow(): Promise<RunResult> {
   try {
     const r = await apiWrite("/v1/golden-journeys/run", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ project_id: projectId }),
+      body: JSON.stringify({}),
     }, { press: { scope: "golden-journeys", label: "Run now" } });
     const body = await r.json().catch(() => ({}));
     if (!r.ok) return { ok: false, error: String((body as { message?: string }).message ?? `BOSS answered ${r.status}`) };

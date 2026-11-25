@@ -21,7 +21,7 @@ import {
 import { GatedButton } from "../../components/gated";
 import { usePolledRead } from "../../lib/log-stream";
 import {
-  STATUS_WORDS, counterWords, polledJourneys, runJourneysNow, todayShort,
+  STATUS_WORDS, counterWords, polledJourneys, recordedWords, runJourneysNow, todayShort,
   type JourneyStatus, type JourneysView,
 } from "../../lib/golden-journeys";
 import { showToast } from "../client-forms";
@@ -30,10 +30,13 @@ const ICON: Record<JourneyStatus, Icon> = {
   green: CheckCircle, red: XCircle, pending: HourglassMedium, not_run: MinusCircle,
 };
 
-export function JourneyChip({ status, host, why }: { status: JourneyStatus; host?: string; why?: string }) {
+export function JourneyChip({ status, host, why, by, posted }: {
+  status: JourneyStatus; host?: string; why?: string; by?: string; posted?: boolean;
+}) {
   const I = ICON[status];
+  const tip = [why || STATUS_WORDS[status], by].filter(Boolean).join(" · ");
   return (
-    <span className="gv-jr-chip" data-status={status} title={why || STATUS_WORDS[status]}
+    <span className="gv-jr-chip" data-status={status} data-posted={posted || undefined} title={tip}
           data-testid="gv-jr-chip">
       <I size={13} weight="bold" aria-hidden />
       {host ? <span className="gv-jr-host">{host}</span> : null}
@@ -42,9 +45,9 @@ export function JourneyChip({ status, host, why }: { status: JourneyStatus; host
   );
 }
 
-export function JourneysCard({ projectId, paused }: { projectId: string; paused: boolean }) {
+export function JourneysCard({ paused }: { projectId?: string; paused: boolean }) {
   const read = usePolledRead<JourneysView>({
-    key: projectId, pollMs: 60_000, paused, read: polledJourneys(projectId),
+    key: "golden-journeys", pollMs: 60_000, paused, read: polledJourneys(),
   });
   const [busy, setBusy] = useState(false);
   const v = read.data;
@@ -52,7 +55,7 @@ export function JourneysCard({ projectId, paused }: { projectId: string; paused:
   async function runNow() {
     if (busy) return;
     setBusy(true);
-    const out = await runJourneysNow(projectId);
+    const out = await runJourneysNow();
     setBusy(false);
     showToast(out.ok ? "success" : "error",
               out.ok ? `Started ${out.started.length} journeys${out.note ? ` (${out.note})` : ""}` : out.error);
@@ -74,7 +77,7 @@ export function JourneysCard({ projectId, paused }: { projectId: string; paused:
               title="Consecutive days every journey was green on every host. The freeze lifts at 5."
               data-testid="gv-jr-counter">{counterWords(v)}</span>
         <span className="gv-spacer" />
-        <GatedButton permission="assurance:run" projectId={projectId} className="ag-btn ag-btn-primary"
+        <GatedButton permission="assurance:run" className="ag-btn ag-btn-primary"
                      disabled={busy || v.running} aria-busy={busy || undefined}
                      title={v.running ? "A run is going" : "Run every journey now"}
                      onClick={() => void runNow()} data-testid="gv-jr-run">
@@ -103,7 +106,8 @@ export function JourneysCard({ projectId, paused }: { projectId: string; paused:
             ) : (
               <span className="gv-jr-hosts">
                 {Object.entries(j.today).map(([host, t]) => (
-                  <JourneyChip key={host} status={t.status} host={single ? undefined : host} why={t.why} />
+                  <JourneyChip key={host} status={t.status} host={single ? undefined : host} why={t.why}
+                               by={recordedWords(t)} posted={t.source === "posted"} />
                 ))}
               </span>
             )}

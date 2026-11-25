@@ -11,7 +11,8 @@ const VIEW: JourneysView = {
   today: "2026-11-25", hosts: ["laptop", "boss-1"], green_days: 3, needed: 5, freeze_lifted: false,
   journeys: [
     { id: "J1", title: "Ticket to pull request", ticket: "BOSSAPP-1284", modes: ["scripted", "real"], pending: null,
-      today: { laptop: { status: "green", why: "" }, "boss-1": { status: "red", why: "AC-2 missing: status is failed" } } },
+      today: { laptop: { status: "green", why: "", recorded_by: "sa_journeys", source: "run" },
+              "boss-1": { status: "red", why: "AC-2 missing: status is failed", recorded_by: "usr_x", source: "posted" } } },
     { id: "J2", title: "Enterprise Server repo, in Go", ticket: "BOSSAPP-1284", modes: ["real"],
       pending: { waits_for: "PR #330", why: "GHES routing" },
       today: { laptop: { status: "pending" }, "boss-1": { status: "pending" } } },
@@ -20,6 +21,7 @@ const VIEW: JourneysView = {
   history: Array.from({ length: 14 }, (_, k) => ({ day: `2026-11-${String(12 + k).padStart(2, "0")}`, green: k > 9, short: k > 9 ? [] : ["J2 pending"] })),
   schedule: { at_time: "06:00", timezone: "Europe/London", next_wake_at: null },
   running: false,
+  fixture_project: "journeys",
 };
 
 const json = (body: unknown, status = 200) =>
@@ -39,6 +41,9 @@ describe("the golden journeys card", () => {
     expect(j1.map((c) => c.getAttribute("data-status"))).toEqual(["green", "red"]);
     expect(j1[1].getAttribute("title")).toContain("AC-2 missing");
     expect(j1[1].textContent).toContain("boss-1");
+    expect(j1[0].getAttribute("title")).toContain("run by sa_journeys");
+    expect(j1[1].getAttribute("title")).toContain("posted by usr_x, not counted");
+    expect(j1[1].hasAttribute("data-posted")).toBe(true);
   });
 
   it("says a pending journey waits for its PR", async () => {
@@ -50,7 +55,7 @@ describe("the golden journeys card", () => {
     expect(chip?.getAttribute("title")).toContain("PR #330");
   });
 
-  it("Run now posts one run for the project", async () => {
+  it("Run now posts one run, naming no project (the fixture project is the operator's)", async () => {
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) =>
       String(url).includes("/run") ? json({ ok: true, started: ["J1", "J2"] }, 202) : json(VIEW));
     vi.stubGlobal("fetch", fetchMock);
@@ -64,7 +69,7 @@ describe("the golden journeys card", () => {
     const posts = fetchMock.mock.calls.filter(([u, i]) => String(u).includes("/v1/golden-journeys/run")
       && (i as RequestInit | undefined)?.method === "POST");
     expect(posts).toHaveLength(1);
-    expect(JSON.parse(String((posts[0][1] as RequestInit).body))).toEqual({ project_id: "p1" });
+    expect(JSON.parse(String((posts[0][1] as RequestInit).body))).toEqual({});
   });
 
   it("says why the read failed", async () => {

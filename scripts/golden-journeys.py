@@ -6,12 +6,13 @@
                                    [--var owner=acme --var repo=sandbox ...] [--vars-file F]
                                    [--only J1,J5] [--record [--host laptop]] [--out results.json]
     scripts/golden-journeys.py report --api URL [--key-env NAME]
-    scripts/golden-journeys.py schedule --api URL --project P --at 06:00 [--tz Europe/London]
+    scripts/golden-journeys.py schedule --api URL --at 06:00 [--tz Europe/London]
 
 `run` plays the journeys against that install's API (real engine), judges each with the
 Acceptance Agent's verdict module and prints one row per journey; `--record` stores the rows on
-the install (POST /v1/golden-journeys/results), where Govern › Journeys and the counter read
-them. `schedule` arms the install's own daily run (a schedule_work wake that calls the
+the install (POST /v1/golden-journeys/results): green rows are re-judged there, and only rows
+sent with the journey account's own key (BOSS_JOURNEY_PRINCIPAL) count toward the freeze. An
+install's own daily run records its rows itself and needs none of this. `schedule` arms the install's own daily run (a schedule_work wake that calls the
 run_golden_journeys tool). `report` prints today's results and the consecutive green days.
 
 The API key is a service account's, read from the environment variable --key-env names; it is
@@ -97,7 +98,7 @@ def cmd_report(args: argparse.Namespace) -> int:
 
 def cmd_schedule(args: argparse.Namespace) -> int:
     status, body = _client(args).call("POST", "/v1/golden-journeys/schedule", {
-        "project_id": args.project, "at_time": args.at, "timezone": args.tz})
+        "at_time": args.at, "timezone": args.tz})
     print(json.dumps(body, indent=1, default=str) if status < 300 else f"HTTP {status}: {body}")
     return 0 if status < 300 else 2
 
@@ -119,7 +120,6 @@ def main(argv: list[str] | None = None) -> int:
             p.add_argument("--host")
             p.add_argument("--out")
         if name == "schedule":
-            p.add_argument("--project", required=True)
             p.add_argument("--at", required=True)
             p.add_argument("--tz", default="UTC")
     args = ap.parse_args(argv)

@@ -16805,8 +16805,13 @@ CREATE TABLE IF NOT EXISTS golden_journey_results (
   seconds DOUBLE PRECISION NOT NULL DEFAULT 0,
   runs INTEGER NOT NULL DEFAULT 1,
   recorded_by TEXT NOT NULL DEFAULT '',
+  -- run: this install's own run (counted); posted: sent by another caller (shown, never counted)
+  source TEXT NOT NULL DEFAULT 'run' CHECK (source IN ('run', 'posted')),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (host, day, journey_id)
 );
 CREATE INDEX IF NOT EXISTS golden_journey_results_day_idx ON golden_journey_results (day DESC);
+-- One daily journeys wake per install (services/golden_journeys/service.arm_daily also locks).
+CREATE UNIQUE INDEX IF NOT EXISTS agent_wakeups_one_golden_journeys
+  ON agent_wakeups ((1)) WHERE kind = 'schedule' AND status = 'active' AND prompt LIKE '[golden-journeys]%';
