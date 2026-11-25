@@ -546,7 +546,7 @@ class GovernedModelDecider:
                             model=chosen.target.model),
                 connection, self._settings, self._project_id,
                 skill_id="model.route_classify", ref="router")
-            _, answer, usage = adapter.create_text_response(_prompt(context, questions))
+        _, answer, usage = adapter.create_text_response(_prompt(context, questions))
         return DecisionBatch(decisions=_parse(answer, questions), backend="model",
                              model=str(usage.get("model") or chosen.target.model or ""),
                              latency_ms=int((time.monotonic() - started) * 1000),

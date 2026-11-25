@@ -193,7 +193,10 @@ class GitHubAdapter:
         """THE one way this adapter talks to GitHub: one request, raised on an error status, and
         retried with backoff when GitHub is having a moment (a 5xx, a timeout, a reset
         connection: transient_retry). A 401/403/404 is an answer and is raised at once."""
+        from ..db import assert_not_in_written_tx
         from .transient_retry import call, is_transient_http_error
+
+        assert_not_in_written_tx(f"github_adapter.{method}")
 
         def once() -> httpx.Response:
             response = httpx.request(method, url, headers=headers, json=json, timeout=30.0)

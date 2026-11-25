@@ -93,6 +93,9 @@ def _trigger_and_wait(
     adapter: PipelineAdapter, ref: str, *, timeout_seconds: int,
     poll_interval_seconds: int,
 ) -> PipelineVerdict:
+    from ..db import assert_not_in_written_tx
+
+    assert_not_in_written_tx("pipeline_adapter.wait_for_verdict")
     handle = adapter.trigger(ref)
     started = time.monotonic()
     while True:
@@ -235,6 +238,9 @@ class GitHubActionsPipeline:
         timeout_seconds: int,
         poll_interval_seconds: int,
     ) -> PipelineVerdict:
+        from ..db import assert_not_in_written_tx
+
+        assert_not_in_written_tx("pipeline_adapter.wait_for_verdict")
         normalized_ref = ref.strip()
         if not normalized_ref:
             raise ValueError("Pipeline ref is required.")

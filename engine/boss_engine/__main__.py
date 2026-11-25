@@ -154,13 +154,18 @@ def _cmd_call(args) -> int:
 
 def _pipeline_turn(ctx, project_id: str, message: str, thread_id: str | None = None) -> dict:
     """ONE AGENT PIPELINE (BOSSAPP-759): with a database, a CLI turn is an Ask BOSS turn —
-    AgentService.chat → IntentRouter.route_turn, the same thread, decision, actions and reply as
-    the console and Metatron."""
+    AgentService.chat_durably → IntentRouter.route_turn, the same thread, decision, actions and
+    reply as the console and Metatron."""
     from .services.agent_service import AgentService
 
-    with ctx.begin() as connection:
-        return AgentService(ctx.settings).chat(connection, project_id=project_id, actor="cli",
-                                               message=message, thread_id=thread_id)
+    return AgentService(ctx.settings).chat_durably(
+        ctx.engine,
+        background=False,
+        project_id=project_id,
+        actor="cli",
+        message=message,
+        thread_id=thread_id,
+    )
 
 
 def _print_offers(turn: dict) -> None:

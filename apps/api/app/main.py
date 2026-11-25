@@ -14618,16 +14618,25 @@ def get_agent_thread_messages_endpoint(thread_id: str, project_id: str, actor: s
         # conversation has moved past.
         offers: list = []
         next_steps: list = []
+        saw_assistant = False
         for message in reversed(history):
             if message.get("role") != "assistant":
                 continue
-            offers = list(message.get("proposed_actions") or [])
-            # THE OTHER STANDING OFFER. A turn that stopped short ends with ONE resume press
-            # ("Keep waiting", "Continue") instead of buttons -- same restore, same reason: a
-            # fresh process or a reloaded console only has the thread, never the live HTTP
-            # response that first carried it.
-            next_steps = list(message.get("next_steps") or [])
-            break
+            if not saw_assistant:
+                # THE OTHER STANDING OFFER. A turn that stopped short ends with ONE resume press
+                # ("Keep waiting", "Continue") instead of buttons -- same restore, same reason: a
+                # fresh process or a reloaded console only has the thread, never the live HTTP
+                # response that first carried it.
+                next_steps = list(message.get("next_steps") or [])
+                saw_assistant = True
+            msg_offers = list(message.get("proposed_actions") or [])
+            if msg_offers:
+                offers = msg_offers
+                break
+            # Preserve staged offers across trailing non-superseding status/consent/error
+            # assistant messages until acted upon (actions) or superseded (proposal).
+            if message.get("actions") or message.get("proposal"):
+                break
         return {
             "thread_id": thread_id,
             "messages": history,
@@ -25034,23 +25043,24 @@ def create_pull_request_proposal(
                 connection, payload.project_id, current_api_principal.get() or "ceo",
                 "github_manage",
             )
-            try:
-                result = software_factory.propose_pull_request(
-                    connection,
-                    payload.project_id,
-                    payload.task_id,
-                    payload.reservation_id,
-                    payload.dedupe_key,
-                    payload.title,
-                    payload.branch_name,
-                    payload.summary,
-                    payload.files,
-                    payload.created_by_job_id,
-                    payload.agent_module_id,
-                )
-            except AgentModuleNotFoundError as error:
-                raise HTTPException(status_code=422, detail=str(error)) from error
-            return PullRequestProposalResponse(**result)
+        try:
+            result = software_factory.propose_pull_request(
+                None,
+                payload.project_id,
+                payload.task_id,
+                payload.reservation_id,
+                payload.dedupe_key,
+                payload.title,
+                payload.branch_name,
+                payload.summary,
+                payload.files,
+                payload.created_by_job_id,
+                payload.agent_module_id,
+                db_engine=engine,
+            )
+        except AgentModuleNotFoundError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return PullRequestProposalResponse(**result)
 
 
 @app.post(
@@ -25068,9 +25078,10 @@ def propose_ci_config(
             payload.actor,
             "task_create",
         )
-        try:
-            descriptor = software_factory.pipeline.discover(payload.repo)
-            descriptor_data = descriptor.to_dict()
+    try:
+        descriptor = software_factory.pipeline.discover(payload.repo)
+        descriptor_data = descriptor.to_dict()
+        with begin(engine) as connection:
             emit_event(
                 connection,
                 payload.project_id,
@@ -25080,41 +25091,42 @@ def propose_ci_config(
                 payload.repo,
                 descriptor_data,
             )
-            if descriptor.configured:
-                return CIConfigProposalResponse(
-                    status="existing_pipeline",
-                    pipeline_descriptor=descriptor_data,
-                )
-            generated = ci_config_generator.generate(
-                language=payload.language,
-                framework=payload.framework,
-                target=payload.target,
+        if descriptor.configured:
+            return CIConfigProposalResponse(
+                status="existing_pipeline",
+                pipeline_descriptor=descriptor_data,
             )
-            proposal = software_factory.propose_pull_request(
-                connection,
-                payload.project_id,
-                payload.task_id,
-                payload.reservation_id,
-                payload.dedupe_key,
-                payload.title,
-                payload.branch_name,
-                (
-                    "Add deterministic CI build/test/deploy-evidence configuration. "
-                    "Provider deployment remains governed by BOSS ChangeSets."
-                ),
-                [FileChange(path=generated["path"], content=generated["content"])],
-                payload.created_by_job_id,
-            )
-        except (ValueError, IntegrationConfigurationError) as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
-        return CIConfigProposalResponse(
-            status=proposal["status"],
-            pipeline_descriptor=descriptor_data,
-            generated_config={
-                key: value for key, value in generated.items() if key != "content"
-            },
-            proposal=PullRequestProposalResponse(**proposal),
+        generated = ci_config_generator.generate(
+            language=payload.language,
+            framework=payload.framework,
+            target=payload.target,
         )
+        proposal = software_factory.propose_pull_request(
+            None,
+            payload.project_id,
+            payload.task_id,
+            payload.reservation_id,
+            payload.dedupe_key,
+            payload.title,
+            payload.branch_name,
+            (
+                "Add deterministic CI build/test/deploy-evidence configuration. "
+                "Provider deployment remains governed by BOSS ChangeSets."
+            ),
+            [FileChange(path=generated["path"], content=generated["content"])],
+            payload.created_by_job_id,
+            db_engine=engine,
+        )
+    except (ValueError, IntegrationConfigurationError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return CIConfigProposalResponse(
+        status=proposal["status"],
+        pipeline_descriptor=descriptor_data,
+        generated_config={
+            key: value for key, value in generated.items() if key != "content"
+        },
+        proposal=PullRequestProposalResponse(**proposal),
+    )
 
 
 @app.post("/v1/software-factory/merges", response_model=PullRequestMergeResponse)
@@ -25126,22 +25138,23 @@ def merge_pull_request(payload: PullRequestMergeRequest) -> PullRequestMergeResp
                 connection, payload.project_id, current_api_principal.get() or "ceo",
                 "github_manage",
             )
-            try:
-                result = software_factory.merge_pull_request(
-                    connection,
-                    payload.project_id,
-                    None,
-                    payload.decision_id,
-                    payload.dedupe_key,
-                    payload.pull_request_number,
-                    payload.pull_request_url,
-                    payload.title,
-                    payload.branch_name,
-                    payload.created_by_job_id,
-                )
-            except ValueError as error:
-                raise HTTPException(status_code=422, detail=str(error)) from error
-            return PullRequestMergeResponse(**result)
+        try:
+            result = software_factory.merge_pull_request(
+                None,
+                payload.project_id,
+                None,
+                payload.decision_id,
+                payload.dedupe_key,
+                payload.pull_request_number,
+                payload.pull_request_url,
+                payload.title,
+                payload.branch_name,
+                payload.created_by_job_id,
+                db_engine=engine,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return PullRequestMergeResponse(**result)
 
 
 @app.post(

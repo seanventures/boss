@@ -999,10 +999,11 @@ def _engine(connection: Connection):
     return engine
 
 
-def _key_proof(connection: Connection, settings: Any, project_id: str, provider: str, *,
+def _key_proof(connection: Any, settings: Any, project_id: str, provider: str, *,
                api_key: str, base_url: str, model: str, actor: str,
                http: Optional[Http], intent: str = "", capacity_group: str = "",
-               backend: str = "", env_name: str = "", request_target: str = "") -> dict[str, Any]:
+               backend: str = "", env_name: str = "", request_target: str = "",
+               db_engine: Any = None) -> dict[str, Any]:
     """One governed completion on an encrypted, proof-only key or local model."""
     from .setup_service import PROVIDERS, governed_proof, model_key_details
 
@@ -1044,7 +1045,7 @@ def _key_proof(connection: Connection, settings: Any, project_id: str, provider:
     candidate["connection_request_endpoint"] = details["endpoint"]
     candidate["connection_request_base_url"] = details["base_url"]
     group = capacity_group or "connection:" + provider + ":" + details["base_url"] + ":" + details["model"]
-    proof = governed_proof(_engine(connection), settings, project_id, f"setup-{provider}",
+    proof = governed_proof(db_engine or _engine(connection), settings, project_id, f"setup-{provider}",
         actor, bound_prove=prove, amount=0 if local else None, candidate=candidate,
         credential=api_key, backend=backend or default_secret_backend(settings),
         intent=intent, capacity_group=group)
@@ -1060,24 +1061,29 @@ def _key_proof(connection: Connection, settings: Any, project_id: str, provider:
     return proof
 
 
-def _subscription_proof(connection: Connection, settings: Any, project_id: str, provider: str,
-                        actor: str, prove_with=None) -> dict[str, Any]:
+def _subscription_proof(connection: Any, settings: Any, project_id: str, provider: str,
+                        actor: str, prove_with=None, *,
+                        db_engine: Any = None,
+                        long_lived_known: Optional[bool] = None) -> dict[str, Any]:
     from .setup_service import governed_proof, prove_coding_agent
 
     started = time.monotonic()
     # On BOSS's long-lived token the CLI login's expiry is not what runs (claude_credential).
-    long_lived = False
-    if provider == "claude_code":
-        from .claude_credential import long_lived_token_info
+    if long_lived_known is not None:
+        long_lived = long_lived_known
+    else:
+        long_lived = False
+        if provider == "claude_code":
+            from .claude_credential import long_lived_token_info
 
-        long_lived = long_lived_token_info(connection, project_id) is not None
+            long_lived = long_lived_token_info(connection, project_id) is not None
     refused = _claude_login_refused(provider) if prove_with is None and not long_lived else None
     if refused is not None:
         # The CLI is never started on an expired login BOSS could not refresh: it would try
         # itself, be refused, and wipe the login (claude_login).
         refused["latency_ms"] = int((time.monotonic() - started) * 1000)
         return refused
-    proof = governed_proof(_engine(connection), settings, project_id, provider, actor,
+    proof = governed_proof(db_engine or _engine(connection), settings, project_id, provider, actor,
                            prove=prove_with or (lambda: prove_coding_agent(settings, provider)),
                            amount=0)
     proof["latency_ms"] = int((time.monotonic() - started) * 1000)
@@ -1878,17 +1884,13 @@ def set_budget(connection: Connection, settings: Any, project_id: str, monthly_c
 
 # ── Checks ────────────────────────────────────────────────────────────────────────────────────
 
-def run_checks(connection: Connection, settings: Any, project_id: str, target: str, *,
-               actor: str = "ceo", http: Optional[Http] = None, model_http: Optional[Http] = None,
-               prove_with=None) -> None:
-    """`all`, `repository`, `repository:<binding_id>` or `model:<source_id>`."""
+def _plan_checks(connection: Connection, settings: Any, project_id: str, target: str
+                 ) -> tuple[str, list[tuple[str, str]]]:
     target = (target or "all").strip()
     view = setup_view.build(connection, settings, project_id)
     repos = [r["binding_id"] or "install" for r in view["repository"]["repos"]]
     models = [m["source_id"] for m in view["models"]]
     if target == "all":
-        setup_view.forget_cached("cli")
-        detect_local(settings, http=model_http)
         todo = [("repository", r) for r in repos] + [("model", m) for m in models]
     elif target == "repository":
         todo = [("repository", r) for r in repos]
@@ -1901,7 +1903,17 @@ def run_checks(connection: Connection, settings: Any, project_id: str, target: s
     else:
         raise SetupActionError(422, "failed", "Unknown check",
                                "all, repository, repository:<id> or model:<id>.")
+    return target, todo
+
+
+def run_checks(connection: Connection, settings: Any, project_id: str, target: str, *,
+               actor: str = "ceo", http: Optional[Http] = None, model_http: Optional[Http] = None,
+               prove_with=None) -> None:
+    """`all`, `repository`, `repository:<binding_id>` or `model:<source_id>`."""
+    target, todo = _plan_checks(connection, settings, project_id, target)
     if target == "all":
+        setup_view.forget_cached("cli")
+        detect_local(settings, http=model_http)
         _verify_github_app(connection)
     for kind, item in todo:
         if kind == "repository":
@@ -1909,6 +1921,259 @@ def run_checks(connection: Connection, settings: Any, project_id: str, target: s
         else:
             check_model(connection, settings, project_id, item, actor=actor, http=model_http,
                         prove_with=prove_with)
+
+
+def _check_repository_phased(engine: Any, settings: Any, project_id: str, binding_id: str, *,
+                             actor: str = "ceo", http: Optional[Http] = None) -> dict[str, Any]:
+    from ..db import begin
+    from .core import emit_event
+    from .receipts import ReceiptService
+    from .repo_creation import pat_abilities
+
+    if binding_id == "install":
+        owner, name, token = setup_view.install_repository(settings)
+        if not (owner and name and token):
+            raise SetupActionError(404, "not_connected", "Not connected", "No repository.")
+        full = f"{owner}/{name}"
+        with begin(engine) as c:
+            receipt_id = _receipt(c, project_id, "github.repository.check",
+                                  {"repository": full, "source": "install"})
+        found = setup_checks.probe_repository(token, full, api_base=_api_base(settings), http=http)
+        login = None
+        if found["state"] == "working":
+            who = setup_checks.inspect_token(token, api_base=_api_base(settings), http=http)
+            login = who.get("account_login")
+        with begin(engine) as c:
+            if receipt_id:
+                summary = {"state": found["state"]}
+                if found["state"] == "working":
+                    ReceiptService().mark_succeeded(c, receipt_id, full, summary)
+                else:
+                    ReceiptService().mark_failed(c, receipt_id, summary)
+            emit_event(c, project_id, "setup.repository_checked", actor, "repository",
+                       "install", {"state": found["state"], "checks": found["checks"],
+                                   "expires_at": found.get("expires_at"),
+                                   "retry_at": found.get("retry_at"),
+                                   "default_branch": found.get("default_branch"),
+                                   "private": found.get("private"), "account_login": login,
+                                   "receipt_id": receipt_id})
+        return found
+
+    with begin(engine) as c:
+        local = c.execute(
+            text("SELECT full_name FROM github_repository_bindings WHERE project_id = :p AND id = :b "
+                 "AND host = 'local'"), {"p": project_id, "b": binding_id}).mappings().first()
+        if local is not None:
+            return _check_local_repository(c, settings, project_id, binding_id,
+                                           local["full_name"], actor=actor)
+        row = c.execute(
+            text("SELECT b.full_name, b.connection_id, c.api_base_url, c.status "
+                 "FROM github_repository_bindings b JOIN github_connections c "
+                 "ON c.id = b.connection_id WHERE b.project_id = :p AND b.id = :b"),
+            {"p": project_id, "b": binding_id}).mappings().first()
+        if row is None:
+            raise SetupActionError(404, "not_connected", "Not connected", "No such repository.")
+        row_data = dict(row)
+        service = _service(settings)
+        try:
+            ref = service.secret_refs.require_usable(
+                c, project_id=project_id,
+                credential_ref=service._credential_ref(c, project_id, row_data["connection_id"]))
+            token = service._resolve_secret(ref, c)
+        except Exception:  # noqa: BLE001
+            token = ""
+        receipt_id = _receipt(c, project_id, "github.repository.check",
+                              {"repository": row_data["full_name"],
+                               "repository_binding_id": binding_id})
+
+    api_base = row_data["api_base_url"] or _api_base(settings)
+    if token:
+        found = setup_checks.probe_repository(token, row_data["full_name"],
+                                              api_base=api_base, http=http)
+    else:
+        at = iso(now_utc())
+        found = {"state": "token_rejected", "expires_at": None, "retry_at": None,
+                 "default_branch": None, "private": None,
+                 "checks": {"read": {"ok": False, "state": "token_rejected", "at": at}}}
+    ok = found["state"] == "working"
+    transient = found["state"] in ("rate_limited", "unreachable")
+    flows_got: Optional[dict] = None
+    if token and not transient:
+        try:
+            flows_got = pat_abilities(token, api_base=api_base, http=http)
+        except Exception:  # noqa: BLE001
+            flows_got = {}
+
+    with begin(engine) as c:
+        checks = {**found["checks"], "state": found["state"], "retry_at": found.get("retry_at")}
+        c.execute(
+            text("UPDATE github_repository_bindings SET checks = CAST(:c AS JSONB), "
+                 "checked_at = now(), default_branch = COALESCE(:db, default_branch), "
+                 "visibility = COALESCE(:vis, visibility), last_synced_at = now(), "
+                 "updated_at = now() WHERE id = :b"),
+            {"c": json.dumps(checks), "db": found.get("default_branch"),
+             "vis": (None if found.get("private") is None
+                     else "private" if found["private"] else "public"), "b": binding_id})
+        c.execute(
+            text("UPDATE github_connections SET "
+                 "status = CASE WHEN :transient THEN status WHEN :ok THEN 'active' ELSE 'error' END, "
+                 "last_test_status = CASE WHEN :transient THEN last_test_status "
+                 "                        WHEN :ok THEN 'passed' ELSE 'failed' END, "
+                 "last_tested_at = now(), expires_at = COALESCE(:exp, expires_at), "
+                 "updated_at = now() WHERE id = :c"),
+            {"ok": ok, "transient": transient, "exp": parse_time(found.get("expires_at")),
+             "c": row_data["connection_id"]})
+        if flows_got is not None:
+            if not flows_got.get("ok") or flows_got.get("can_create") is None:
+                found["flows"] = flows_got
+            else:
+                flow_names = {"contents", "pull_requests", "administration"}
+                try:
+                    crow = c.execute(
+                        text("SELECT granted_permissions, missing_permissions "
+                             "FROM github_connections WHERE id = :c"),
+                        {"c": row_data["connection_id"]}).mappings().first()
+                    granted = {str(x) for x in ((crow or {}).get("granted_permissions") or [])} - flow_names
+                    missing = {str(x) for x in ((crow or {}).get("missing_permissions") or [])} - flow_names
+                    granted |= set(flows_got.get("granted") or [])
+                    missing |= set(flows_got.get("missing") or [])
+                    c.execute(
+                        text("UPDATE github_connections SET granted_permissions = CAST(:g AS JSONB), "
+                             "missing_permissions = CAST(:m AS JSONB), updated_at = now() WHERE id = :c"),
+                        {"g": json.dumps(sorted(granted)), "m": json.dumps(sorted(missing)),
+                         "c": row_data["connection_id"]})
+                except Exception:  # noqa: BLE001
+                    pass
+                found["flows"] = flows_got
+        if receipt_id:
+            summary = {"state": found["state"],
+                       "checks": {k: v.get("ok") for k, v in found["checks"].items()}}
+            if ok:
+                ReceiptService().mark_succeeded(c, receipt_id, row_data["full_name"], summary)
+            else:
+                ReceiptService().mark_failed(c, receipt_id, summary)
+        emit_event(c, project_id, "setup.repository_checked", actor,
+                   "github_repository_binding", binding_id,
+                   {"state": found["state"], "repository": row_data["full_name"],
+                    "receipt_id": receipt_id})
+    return found
+
+
+def _check_model_phased(engine: Any, settings: Any, project_id: str, source_id: str, *,
+                        actor: str = "ceo", http: Optional[Http] = None,
+                        prove_with=None) -> dict[str, Any]:
+    from ..db import begin
+    from .secret_backends import resolve_secret_ref
+
+    if source_id.startswith("env-"):
+        provider = source_id[len("env-"):]
+        attr = next((a for a, p in setup_view._ENV_PROVIDER.items() if p == provider), None)
+        if attr is None:
+            raise SetupActionError(404, "failed", "Not connected", "No such model.")
+        if provider == "claude_code":
+            with begin(engine) as c:
+                from .claude_credential import long_lived_token_info
+
+                ll_env = long_lived_token_info(c, project_id) is not None
+            proof = _subscription_proof(None, settings, project_id, provider, actor,
+                                        db_engine=engine, long_lived_known=ll_env)
+        else:
+            key = "" if provider in setup_view.LOCALS else str(getattr(settings, attr, "") or "")
+            base = (str(getattr(settings, attr, "") or "") if provider in setup_view.LOCALS
+                    else str(getattr(settings, "openai_base_url", "") or "")
+                    if provider == "openai" else "")
+            model = str(getattr(settings, "openai_model", "") or "") if provider == "openai" else ""
+            env_name = ""
+            if key:
+                import os
+                from .env_refs import env_name_allowed
+                names = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY",
+                         "openrouter": "OPENROUTER_API_KEY", "groq": "GROQ_API_KEY",
+                         "deepseek": "DEEPSEEK_API_KEY", "gemini": "GOOGLE_API_KEY",
+                         "xai": "XAI_API_KEY"}
+                wanted = names.get(provider, "")
+                env_name = next((n for n in (wanted, "BOSS_" + wanted)
+                                 if n and env_name_allowed(n) and os.environ.get(n) == key), "")
+                if not env_name:
+                    raise SetupActionError(409, "key_unreadable", "Proof held",
+                                           "Connect this key through its chosen store before checking it.")
+            try:
+                proof = _key_proof(None, settings, project_id, provider, api_key=key,
+                                   base_url=base, model=model, actor=actor, http=http,
+                                   env_name=env_name, capacity_group=f"env-{provider}",
+                                   db_engine=engine)
+            except Exception as exc:  # noqa: BLE001
+                proof = {"ok": False, "state": "unreachable", "error": type(exc).__name__}
+        with begin(engine) as c:
+            _record_model_check(c, project_id, f"env-{provider}", proof, actor, settings)
+        return proof
+
+    with begin(engine) as c:
+        row = c.execute(
+            text("SELECT source_id, credential_secret_ref_id, supported_models, "
+                 "connection_metadata, connection_status FROM entitlement_sources "
+                 "WHERE project_id = :p AND source_id = :s"),
+            {"p": project_id, "s": source_id}).mappings().first()
+        if row is None:
+            raise SetupActionError(404, "failed", "Not connected", "No such model.")
+        provider = setup_view._provider_of(source_id, setup_view._by_entitlement(settings))
+        long_lived = False
+        key = ""
+        backend_name = ""
+        metadata = setup_view._obj(row["connection_metadata"])
+        models = setup_view._list(row["supported_models"])
+        if provider in setup_view.SUBSCRIPTIONS:
+            if provider == "claude_code":
+                from .claude_credential import long_lived_token_info
+
+                long_lived = long_lived_token_info(c, project_id) is not None
+        elif row["credential_secret_ref_id"]:
+            try:
+                key = resolve_secret_ref(c, row["credential_secret_ref_id"], settings)
+            except Exception:  # noqa: BLE001
+                proof = {"ok": False, "state": "key_unreadable"}
+                _record_model_check(c, project_id, source_id, proof, actor, settings)
+                return proof
+            backend_name = _backend_it_lives_in(c, project_id, source_id) or ""
+
+    if provider in setup_view.SUBSCRIPTIONS:
+        proof = _subscription_proof(None, settings, project_id, provider, actor,
+                                    prove_with=prove_with, db_engine=engine,
+                                    long_lived_known=long_lived)
+    else:
+        try:
+            proof = _key_proof(None, settings, project_id, provider, api_key=key,
+                               base_url=str(metadata.get("base_url") or ""),
+                               model=str(models[0] if models else metadata.get("model") or ""),
+                               actor=actor, http=http,
+                               capacity_group=str(metadata.get("capacity_group") or source_id),
+                               backend=backend_name, db_engine=engine)
+        except Exception as exc:  # noqa: BLE001
+            proof = {"ok": False, "state": "unreachable", "error": type(exc).__name__}
+    with begin(engine) as c:
+        _record_model_check(c, project_id, source_id, proof, actor, settings)
+    return proof
+
+
+def run_checks_phased(engine: Any, settings: Any, project_id: str, target: str, *,
+                      actor: str = "ceo", http: Optional[Http] = None,
+                      model_http: Optional[Http] = None, prove_with=None) -> None:
+    """Run setup checks across short DB transactions so external probes never hold a transaction."""
+    from ..db import begin
+
+    with begin(engine) as c:
+        target, todo = _plan_checks(c, settings, project_id, target)
+    if target == "all":
+        setup_view.forget_cached("cli")
+        detect_local(settings, http=model_http)
+        with begin(engine) as c:
+            _verify_github_app(c)
+    for kind, item in todo:
+        if kind == "repository":
+            _check_repository_phased(engine, settings, project_id, item, actor=actor, http=http)
+        else:
+            _check_model_phased(engine, settings, project_id, item, actor=actor, http=model_http,
+                                prove_with=prove_with)
 
 
 def record_flow_permissions(connection: Connection, connection_id: str, token: str, *, api_base: str,

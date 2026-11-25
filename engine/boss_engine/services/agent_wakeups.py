@@ -519,29 +519,21 @@ def wake_one(settings: Any, engine: Any, row: Any) -> dict[str, Any]:
         return {"project_id": row["project_id"], "kind": row["kind"], **outcome,
                 **({} if ok else {"error": reply})}
     try:
-        # THE CONNECTION IS THE FIRST POSITIONAL ARGUMENT, and omitting it meant every
-        # single wake raised TypeError before any model call — the feature was 100%
-        # non-functional while its tests passed, because those tests replaced
-        # AgentService with a stub whose `chat(**kwargs)` accepted anything. A stub that
-        # cannot fail is not a test. `test_the_sweep_binds_the_real_signature` now checks
-        # the call against the real method.
-        #
-        # Its OWN transaction, deliberately: a turn that fails must not roll back the
-        # bookkeeping for the wake that ran it, and a turn that succeeds must be durable
-        # before this loop moves to the next wakeup.
-        with engine.begin() as connection:
-            result = AgentService(settings).chat(
-                connection,
-                project_id=row["project_id"], actor=row["actor"], message=brief,
-                # A MONITOR CONTINUES ITS OWN CONVERSATION; a schedule starts a fresh one,
-                # so a daily briefing does not grow one thread forever.
-                thread_id=row["thread_id"] if row["kind"] == "monitor" else None,
-                # 'chat', NOT 'wakeup'. `agent_threads.surface` is CHECK-constrained to
-                # ('chat','github'), so a schedule — which has no thread and therefore
-                # creates one — failed on the constraint. An unattended turn IS a chat
-                # turn; what makes it unattended is the wakeup row, not a surface label.
-                surface="chat",
-            )
+        # Run durably outside a single outer transaction: each step commits in its own short
+        # transaction so model calls never hold a DB transaction open.
+        result = AgentService(settings).chat_durably(
+            engine,
+            background=False,
+            project_id=row["project_id"],
+            actor=row["actor"],
+            message=brief,
+            # A MONITOR CONTINUES ITS OWN CONVERSATION; a schedule starts a fresh one,
+            # so a daily briefing does not grow one thread forever.
+            thread_id=row["thread_id"] if row["kind"] == "monitor" else None,
+            # 'chat', NOT 'wakeup'. `agent_threads.surface` is CHECK-constrained to
+            # ('chat','github').
+            surface="chat",
+        )
         reply = str((result or {}).get("reply") or "")
         # The agent ends a monitor by calling `stop_watching`, which flips the row itself.
         # Re-reading is how this loop learns that happened rather than rescheduling a
