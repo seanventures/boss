@@ -132,7 +132,9 @@ def test_a_login_and_an_inherited_key_never_reach_the_child_together(monkeypatch
     monkeypatch.setenv("ANTHROPIC_API_KEY", ENV_KEY)
     agent = ClaudeCodeAgent(_settings())
     env = agent._child_env()
-    assert env["CLAUDE_CODE_OAUTH_TOKEN"] == TOKEN and "ANTHROPIC_API_KEY" not in env
+    from boss_engine.services.model_proxy import held_for
+
+    assert held_for(env["CLAUDE_CODE_OAUTH_TOKEN"]) == TOKEN and "ANTHROPIC_API_KEY" not in env
     assert agent._billing == "subscription"
 
 

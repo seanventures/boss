@@ -28,8 +28,9 @@ So the CLI must never be the one that refreshes:
 * `before_cli_start` — every `claude` child BOSS starts on the login
   (`ClaudeCredential.apply`) waits out a refresh in progress, refreshes a token that is about to
   expire, refuses to start the CLI on an expired, unrefreshable login (the CLI would wipe it),
-  and, inside a build sandbox, re-copies the CURRENT access token into the run's config dir.
-* `ensure_fresh` — the sandbox seeding (sandbox_identity._seed_claude_login) asks for a token
+  inside a build sandbox too. Nothing is copied into a sandbox (BOSSAPP-1480): the session holds
+  a run token and the model proxy reads the CURRENT access token on each request.
+* `ensure_fresh` — a sandbox's start (sandbox_identity._refresh_logins_ahead) asks for a token
   that outlives a build stage.
 
 Nothing here prints, logs or returns a token value.
@@ -384,31 +385,20 @@ def before_cli_start(*, post: Optional[Post] = None) -> None:
 
     Refreshes a token about to expire (so the CLI never refreshes, and never wipes), waits out
     a refresh in progress, and raises ClaudeSignInNeeded instead of starting the CLI on an
-    expired login BOSS could not refresh. Inside a build sandbox it also re-copies the current
-    access token into the run's own config dir, so a long build follows the refreshes."""
+    expired login BOSS could not refresh. Nothing is copied into a build sandbox any more
+    (BOSSAPP-1480): the session holds a run token and the model proxy reads this login's current
+    access token on every request (subscription_shield), so a long build follows the refreshes."""
     if not enabled():
         return
     from .claude_credential import cli_login_present
 
     if not cli_login_present():
         return
-    try:
-        from . import sandbox_identity
-
-        ident = sandbox_identity.current()
-    except Exception:  # noqa: BLE001
-        sandbox_identity, ident = None, None  # type: ignore[assignment]
-    # A sandbox's copy cannot refresh itself, so it must outlive a stage; the control plane's
-    # own CLI only needs to stay clear of the CLI's 5-minute refresh window.
-    need = SEED_MIN_VALID_SECONDS if ident is not None else CLI_START_MIN_VALID_SECONDS
-    ok, why = ensure_fresh(need, post=post)
+    # Inside a sandbox too: the session's run token is answered by the proxy with this login's
+    # CURRENT token, so the CLI only needs to stay clear of its own 5-minute refresh window.
+    ok, why = ensure_fresh(CLI_START_MIN_VALID_SECONDS, post=post)
     with _flock(config_dir(), fcntl.LOCK_SH, LOCK_TIMEOUT_SECONDS):
         pass                                     # a refresh in progress finishes first
-    if ident is not None:
-        if not ok:
-            raise ClaudeSignInNeeded(sign_in_words(why))
-        sandbox_identity.copy_claude_access_token(ident)
-        return
     left = seconds_left(read_oauth())
     if not ok and left is not None and left <= 0:
         raise ClaudeSignInNeeded(sign_in_words(why))

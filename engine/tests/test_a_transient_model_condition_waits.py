@@ -116,7 +116,10 @@ def test_the_cli_still_gets_the_login_after_a_blip(store):
 
     store([SecretStoreUnreachable("infisical returned 503 for GET /x"), TOKEN])
     env = ClaudeCodeAgent(Settings(CLAUDE_CODE_OAUTH_TOKEN=""))._child_env()
-    assert env.get("CLAUDE_CODE_OAUTH_TOKEN") == TOKEN
+    # The session holds a run token; the proxy holds the login it stands for (BOSSAPP-1480).
+    from boss_engine.services.model_proxy import held_for
+
+    assert held_for(env.get("CLAUDE_CODE_OAUTH_TOKEN")) == TOKEN
 
 
 @pytest.mark.parametrize("code,kind,transient", [

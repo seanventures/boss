@@ -26,8 +26,8 @@ that adds the key (`engine/boss_engine/services/model_proxy.py`).
 1. **Setup › Models**: connect the key with **Connect**. It makes one small governed call and shows
    **Working** with a receipt ([MODEL_CONNECTIONS.md](../community/MODEL_CONNECTIONS.md#verification-and-live-checks)).
 2. Run any small build. Its cost receipt names your provider: `GET $BOSS/v1/receipts`.
-3. Use an API key, not a subscription sign-in: a subscription login is copied into the sandbox
-   and is not proxied (see the security pack, section 3).
+3. An API key or a subscription sign-in both stay out of the agent's session: the model proxy
+   holds them and the session gets a short-lived run token (see the security pack, section 3).
 
 ## 2. Secrets
 

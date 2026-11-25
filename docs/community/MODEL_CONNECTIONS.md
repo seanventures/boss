@@ -71,9 +71,9 @@ Credentials are stored on the install machine. A hosted provider receives authen
 
 For a dedicated local secret store, choose `--secret-store infisical` during installation.
 
-### Agents never hold your API key
+### Agents never hold your API key or your subscription login
 
-A coding agent runs commands, and those commands can read the agent's environment. So when an agent session runs on an API key, BOSS keeps the key and gives the session something else:
+A coding agent runs commands, and those commands can read the agent's environment and files. So when an agent session runs on an API key or a subscription, BOSS keeps the credential and gives the session something else:
 
 - **A run token and a local address.** The process that starts the session runs a small model proxy on `127.0.0.1`. The session gets `ANTHROPIC_BASE_URL` pointing at it and `ANTHROPIC_API_KEY` set to a `boss_mdl_…` run token. The proxy adds your real key to each request on its way to the provider and streams the answer back.
 - **Model calls only.** The proxy forwards only the provider's model API (for Anthropic: `/v1/messages`, `/v1/messages/count_tokens` and `/v1/models`) to a fixed upstream. It refuses any other path, a token issued for another provider, and an unknown, expired or revoked token, before anything leaves BOSS.
@@ -86,8 +86,14 @@ A coding agent runs commands, and those commands can read the agent's environmen
 | `claude_agent_sdk` (always an Anthropic API key) | Yes. It no longer needs the Claude CLI's own Linux sandbox (bubblewrap), which cannot start inside BOSS's containers |
 | Aider, with `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` or `OPENROUTER_API_KEY` | Yes: each key becomes a token for its own provider, with that provider's base-URL variable set |
 | Native, OpenAI and provider-lane engines | Not needed: these call the model from BOSS's own process, and the commands they run never receive a provider key |
-| A subscription login: Claude Code, Codex ChatGPT, Grok Build | No. These are the CLIs' own sign-ins, not API keys. They stay in the session as before |
-| A micro-VM build | No. The guest gets its credential through its own launch spec and shares no loopback with BOSS |
+| Claude Code subscription (the long-lived token, a pool account, or the CLI's own login) | Yes. The session gets `CLAUDE_CODE_OAUTH_TOKEN` set to a run token and `ANTHROPIC_BASE_URL` at the proxy; the proxy adds the real login as a bearer. For the CLI's own login the proxy reads its current access token on each request, so BOSS's refreshes are followed |
+| Codex ChatGPT subscription | Yes. The session's `CODEX_HOME` is a fresh folder for that session: its `auth.json` holds the run token (no refresh token, and an unsigned identity token with only the plan and account id), and its `config.toml` points Codex at the proxy. It links to Codex's state, so `codex exec resume` still works, and is removed when the session ends |
+| Grok Build subscription | Yes. The session's `GROK_HOME` holds no login; `GROK_CLI_CHAT_PROXY_BASE_URL` points at the proxy and `GROK_AUTH_PROVIDER_COMMAND` prints the run token |
+| A micro-VM build | Contract v1.1 guests get handles only and refuse a raw credential by name. The legacy v1.0 launch spec still carries a Claude subscription token into the guest |
+
+No login file is copied into a build's sandbox any more, and the sandbox drops any raw subscription login a step would otherwise inherit. The proxy forwards only each provider's model paths (for a Claude subscription `/v1/messages` and the model list; for Codex `/responses`, `/responses/compact` and `/models` on ChatGPT's Codex backend; for Grok the chat proxy's `/v1` completions, responses, messages and model list), never an account, settings or token endpoint.
+
+If the install's own environment sets `ANTHROPIC_BASE_URL` (a corporate gateway), the proxy sends Claude subscription calls there too, so that gateway receives the subscription token, as the CLI's calls did before. When a provider refuses a subscription login, the session gets BOSS's own message (expired, revoked or mid-refresh; sign in again in **Setup › Models** if it repeats) instead of the CLI's reaction to it.
 
 No setting turns the proxy off. If it cannot start, the session does not start, and the engine pre-check reports the proxy's own error. It never falls back to handing over the key.
 
@@ -145,7 +151,7 @@ An unused link expires after 15 minutes, and Ctrl-C cancels the sign-in. If the 
 
 What Claude Code runs on, in order:
 
-1. **The long-lived subscription token BOSS obtained** from that sign-in. Every `claude` that BOSS starts, sandboxed builds included, gets it in its environment. **Setup** shows `Claude Code · long-lived subscription token (renews <date>)`. Sign in again before that date.
+1. **The long-lived subscription token BOSS obtained** from that sign-in. Every `claude` that BOSS starts for a build gets a run token for it, through the model proxy (see [Agents never hold your API key or your subscription login](#agents-never-hold-your-api-key-or-your-subscription-login)). **Setup** shows `Claude Code · long-lived subscription token (renews <date>)`. Sign in again before that date.
 2. **The CLI's own login**, if one is still signed in inside BOSS from an earlier install. It lasts about 8 hours and BOSS renews it, and the row says `CLI login (expires in X h)`. Press **Sign in** to move to the long-lived token.
 
 **Connect** proves whichever one is active. It never removes a token BOSS obtained itself. Only a token from the retired paste import counts as a legacy token. **Disconnect** forgets the stored token.
