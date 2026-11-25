@@ -5,14 +5,20 @@ a run gets the member with the most headroom and keeps it for its task -> a memb
 skipped; the pool is exhausted only when every member is -> the run's rate windows land on its
 member -> Claude runs on the member's token, Codex on the member's own CODEX_HOME, and a rotated
 codex login is synced back to the MEMBER's store key through the one sync seam -> no pool, no
-change.
+change. Since BOSSAPP-1480 the session holds a run token, not the login: the model proxy attaches
+the ASSIGNED member's login upstream (checked against a fake upstream), and a codex member's
+login is refreshed by BOSS in the member's home, since its session cannot refresh.
 """
 from __future__ import annotations
 
+import contextlib
+import http.client
 import json
 import os
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 import pytest
 from sqlalchemy import create_engine, text
@@ -27,6 +33,10 @@ TEST_DB = os.environ.get(
 )
 TOKEN_A = "sk-ant-oat01-" + "a" * 48         # shaped like logins; not real ones
 TOKEN_B = "sk-ant-oat01-" + "b" * 48
+INSTALL_TOKEN = "sk-ant-oat01-" + "i" * 48
+DEFAULT_ACCESS = "eyJdefault." + "d" * 40 + ".sig"
+SEAT_ACCESS = "eyJseat." + "s" * 40 + ".sig"
+SEAT_ACCESS_2 = "eyJseat2." + "t" * 40 + ".sig"
 
 
 class MemoryStore:
@@ -170,17 +180,137 @@ def test_a_run_spends_on_its_member(eng, project, store):
     assert accounts.account_key(None, Settings(), project, "codex") != chosen.account_key
 
 
-def test_claude_runs_on_the_members_token(eng, project, store, monkeypatch):
-    from boss_engine.services import code_agent as ca
+class FakeUpstream:
+    """The provider, stubbed: records what the model proxy sent upstream (no provider called)."""
 
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    @contextlib.contextmanager
+    def __call__(self, method, url, headers, body):
+        self.calls.append({"url": url, "headers": {k.lower(): v for k, v in headers.items()}})
+        yield 200, {"content-type": "application/json"}, iter([b'{"ok": true}'])
+
+
+@pytest.fixture()
+def upstream():
+    from boss_engine.services import model_proxy as mp
+
+    stub = FakeUpstream()
+    proxy = mp.ModelProxy(upstream=stub, poll_interval=0.02)
+    mp.set_proxy(proxy)
+    yield stub, proxy
+    mp.set_proxy(None)
+    proxy.stop()
+
+
+def _through_proxy(proxy, path: str, token: str, headers: Optional[dict] = None) -> int:
+    conn = http.client.HTTPConnection(proxy.host, proxy.port, timeout=10)
+    try:
+        conn.request("POST", path, body=b"{}",
+                     headers={"authorization": f"Bearer {token}", **(headers or {})})
+        resp = conn.getresponse()
+        resp.read()
+        return resp.status
+    finally:
+        conn.close()
+
+
+def test_claude_runs_on_the_members_token(eng, project, store, upstream):
+    """The run is assigned seat 1 (most headroom). Its session holds only a run token
+    (subscription_shield, BOSSAPP-1480) — and that token is bound to SEAT 1's login: what the
+    proxy attaches upstream is seat 1's token, never seat 0's and never the install's own login,
+    so the seat that was chosen is the account that is billed and whose limits move."""
+    from boss_engine.services import code_agent as ca
+    from boss_engine.services import model_proxy as mp
+
+    stub, proxy = upstream
     with eng.begin() as c:
         _pool_, (a, b) = _pool(c, project)
         _windows(c, a, used=0.9)
     set_llm_context(project_id=project, run_id="crun_c", db_engine=eng)
     env = ca.ClaudeCodeAgent(Settings().model_copy(
-        update={"claude_code_oauth_token": "", "anthropic_api_key": None}))._child_env()
-    assert env["CLAUDE_CODE_OAUTH_TOKEN"] == TOKEN_B
+        update={"claude_code_oauth_token": INSTALL_TOKEN, "anthropic_api_key": None}))._child_env()
+    run_token = env["CLAUDE_CODE_OAUTH_TOKEN"]
+    assert run_token.startswith(mp.TOKEN_PREFIX)
+    assert env["ANTHROPIC_BASE_URL"].endswith("/claude_subscription")
     assert "ANTHROPIC_API_KEY" not in env
+    held = json.dumps(env)
+    assert not any(t in held for t in (TOKEN_A, TOKEN_B, INSTALL_TOKEN)), \
+        "no login of any seat (or the install's) is in the session"
+
+    assert _through_proxy(proxy, "/claude_subscription/v1/messages", run_token) == 200
+    (call,) = stub.calls
+    assert call["headers"]["authorization"] == f"Bearer {TOKEN_B}", \
+        "the proxy attaches the ASSIGNED seat's login upstream"
+    assert mp.held_for(run_token, proxy) == TOKEN_B
+
+
+def _codex_login(access: str, refresh: str, *, expires_in: float, last_refresh: str) -> str:
+    return json.dumps({"auth_mode": "chatgpt", "OPENAI_API_KEY": None,
+                       "last_refresh": last_refresh,
+                       "tokens": {"id_token": "x.e30.y", "access_token": access,
+                                  "refresh_token": refresh, "account_id": "acct-seat",
+                                  "expires_at": int(time.time() + expires_in)}})
+
+
+def test_codex_seat_login_is_refreshed_by_boss_and_attached_by_the_proxy(
+        eng, project, store, upstream, monkeypatch, tmp_path):
+    """A codex seat's session cannot refresh (its login carries a run token and no refresh
+    token), so BOSS refreshes the SEAT's real login — in the seat's own home, with the seat's
+    refresh token — and the proxy attaches that seat's CURRENT token. The refreshed generation
+    goes back to the SEAT's store key; the single login is neither used nor refreshed."""
+    from boss_engine.services import codex_login
+    from boss_engine.services import model_proxy as mp
+    from boss_engine.services.cli_harness import GenericCliCodeAgent, load_specs
+
+    stub, proxy = upstream
+    base = tmp_path / "codex"
+    base.mkdir()
+    (base / "auth.json").write_text(_codex_login(
+        DEFAULT_ACCESS, "rt_default", expires_in=86400, last_refresh="2026-11-20T00:00:00Z"))
+    monkeypatch.setenv("CODEX_HOME", str(base))
+    # The seat's token runs out in 5 minutes: due for a refresh before any session starts.
+    seat = _codex_login(SEAT_ACCESS, "rt_seat", expires_in=300,
+                        last_refresh="2026-11-10T00:00:00Z")
+    posted: list[dict] = []
+
+    def token_endpoint(url, body):
+        posted.append(body)
+        return 200, {"access_token": SEAT_ACCESS_2, "refresh_token": "rt_seat_2",
+                     "expires_in": 864000}
+    monkeypatch.setattr(codex_login, "_http_post", token_endpoint)
+    with eng.begin() as c:
+        _pool_, (member,) = _pool(c, project, engine="codex", logins=(seat,))
+    set_llm_context(project_id=project, run_id="crun_xr", db_engine=eng)
+    settings = Settings()
+    agent = GenericCliCodeAgent(settings, load_specs(settings)["codex"])
+    agent._preflight(read_only=False)
+    with mp.session_scope():
+        env = agent._env()
+        session_home = env["CODEX_HOME"]
+        assert session_home != agent.cli_home() and session_home != str(base)
+        login = json.loads(open(os.path.join(session_home, "auth.json")).read())
+        run_token = login["tokens"]["access_token"]
+        assert run_token.startswith(mp.TOKEN_PREFIX)
+        assert login["tokens"]["account_id"] == "acct-seat"
+        assert not any(t in json.dumps(env) + json.dumps(login)
+                       for t in (SEAT_ACCESS, SEAT_ACCESS_2, DEFAULT_ACCESS, "rt_seat"))
+        assert [b["refresh_token"] for b in posted] == ["rt_seat"], \
+            "the SEAT's login was refreshed with the seat's own refresh token"
+
+        assert _through_proxy(proxy, "/codex_subscription/responses", run_token,
+                              {"chatgpt-account-id": "acct-seat"}) == 200
+        assert stub.calls[-1]["headers"]["authorization"] == f"Bearer {SEAT_ACCESS_2}"
+
+    seat_home_login = json.loads(open(os.path.join(agent.cli_home(), "auth.json")).read())
+    assert seat_home_login["tokens"]["refresh_token"] == "rt_seat_2"
+    member_key = sp._store_key(sp.secret_name_for("codex", member["id"]))
+    assert json.loads(store.held[member_key])["tokens"]["access_token"] == SEAT_ACCESS_2, \
+        "the refreshed generation goes back to the seat's store key"
+    assert "BOSS_SUBSCRIPTION_CODEX_AUTH_JSON" not in store.held
+    assert json.loads((base / "auth.json").read_text())["tokens"]["access_token"] == \
+        DEFAULT_ACCESS, "the single login is untouched"
 
 
 def test_codex_runs_on_the_members_home_and_syncs_back_to_the_member(eng, project, store,
