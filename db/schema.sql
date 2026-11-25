@@ -16864,3 +16864,21 @@ ALTER TABLE agent_wakeups ADD COLUMN IF NOT EXISTS purpose TEXT;
 -- One daily journeys wake per install (service.arm_daily also takes an advisory lock).
 CREATE UNIQUE INDEX IF NOT EXISTS agent_wakeups_one_golden_journeys
   ON agent_wakeups ((1)) WHERE purpose = 'golden_journeys' AND status = 'active';
+
+-- SHORT-TTL SESSION MONEY-CAP HOLDS (BOSSAPP-1306): concurrent money-billed sessions (across
+-- builds or parallel review seats) register their clamped ceiling as a short-TTL active hold
+-- before running and release it in finally, and money_headroom subtracts active non-expired
+-- holds so N concurrent sessions cannot overshoot a period cap by (N - 1) * headroom.
+CREATE TABLE IF NOT EXISTS session_budget_holds (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  run_id TEXT,
+  amount_usd_micros BIGINT NOT NULL CHECK (amount_usd_micros >= 0),
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'released')),
+  expires_at TIMESTAMPTZ NOT NULL,
+  released_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_session_budget_holds_project_active
+  ON session_budget_holds (project_id, expires_at)
+  WHERE status = 'active';

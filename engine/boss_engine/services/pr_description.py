@@ -45,7 +45,8 @@ def render(*, title: str, evidence: dict, gates: dict, paths: Iterable[str] = ()
            additions: Optional[int] = None, deletions: Optional[int] = None,
            rounds: Iterable[dict] = (), comments: Iterable[dict] = (),
            deferred: Iterable[dict] = (), build_url: str = "", run_id: str = "",
-           quality_gate_id: str = "", baseline: Optional[dict] = None) -> str:
+           quality_gate_id: str = "", baseline: Optional[dict] = None,
+           assumptions: Optional[Iterable[str]] = None) -> str:
     """The description. Every line comes from a record; nothing is written by a model."""
     paths = sorted({str(p) for p in paths if p})
     rounds = [r for r in rounds if isinstance(r, dict)]
@@ -160,6 +161,15 @@ def render(*, title: str, evidence: dict, gates: dict, paths: Iterable[str] = ()
         section = baseline_verify.pr_section(baseline_verify.BaselineRecord.from_dict(baseline))
         if section:
             out += ["", section.rstrip()]
+    # Assumptions (BOSSAPP-1438): non-blocking engineering readings picked during design.
+    raw_assumptions = evidence.get("assumptions") or () if assumptions is None else assumptions
+    assumption_items = [
+        str(a).strip() for a in raw_assumptions if str(a).strip()
+    ]
+    if assumption_items:
+        out += ["", "### Assumptions"]
+        for item in assumption_items[:20]:
+            out.append(f"- {item[:300]}")
     # Links.
     out += ["", "### In BOSS"]
     if build_url:

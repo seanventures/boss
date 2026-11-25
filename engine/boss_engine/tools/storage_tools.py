@@ -31,6 +31,45 @@ def _safe(value: Any) -> Any:
     return json.loads(json.dumps(value, default=str))
 
 
+def _caller_scope(connection: Any, project_id: Any) -> tuple[str | None, str | None, bool]:
+    """(principal_id, org_id, is_install_operator) for the current tool call."""
+    from .registry import CURRENT_TOOL_AUTH
+    from ..services import storage_incidents
+
+    auth = CURRENT_TOOL_AUTH.get()
+    principal = getattr(auth, "principal", None) if auth is not None else None
+    pid = getattr(principal, "id", None) if principal is not None else None
+    org_id = getattr(principal, "org_id", None) if principal is not None else None
+    if auth is None and not org_id and project_id:
+        # Only an unauthenticated (internal/test) call derives its org from the project. An
+        # authenticated principal without an org fails closed, in shadow mode too (matching
+        # the HTTP routes): it never borrows the org of whatever project_id it passes.
+        org_id = storage_incidents.project_org_id(connection, str(project_id))
+    is_op = storage_incidents.is_install_operator(connection, pid) if auth is not None else (
+        storage_incidents.is_install_operator(connection, None)
+    )
+    return (str(pid) if pid else None), (str(org_id) if org_id else None), is_op
+
+
+def _require_operator(connection: Any) -> dict | None:
+    from .registry import CURRENT_TOOL_AUTH
+    from ..services import storage_incidents
+
+    auth = CURRENT_TOOL_AUTH.get()
+    if auth is None:
+        return None
+    principal = getattr(auth, "principal", None)
+    pid = getattr(principal, "id", None) if principal is not None else None
+    if not storage_incidents.is_install_operator(connection, pid):
+        return {
+            "ok": False,
+            "error": "forbidden",
+            "permission": "instance:manage",
+            "message": "Install-wide storage mutations require instance:manage (instance admin).",
+        }
+    return None
+
+
 def register_storage_tools(reg: ToolRegistry) -> None:
     exposure = Exposure(surfaces=("chat", "agent_step", "mcp"), tags=("infra", "storage"),
                         search_hint="disk full storage cleanup infra agent backups docker")
@@ -48,15 +87,35 @@ def register_storage_tools(reg: ToolRegistry) -> None:
         from ..services import storage_incidents, storage_watch, work_hold
 
         with ctx.begin() as c:
+            _pid, org_id, is_op = _caller_scope(c, project_id)
             incident = None
             if args.get("incident_id"):
                 row = storage_incidents.get(c, str(args["incident_id"]))
-                incident = storage_incidents.public(c, row) if row else None
-            summary = storage_watch.summary(c, args.get("host_id") or (incident or {}).get("host_id"))
+                if row is not None:
+                    if is_op:
+                        incident = storage_incidents.public(c, row)
+                    elif org_id and storage_incidents.incident_visible_to_org(c, row, org_id):
+                        incident = storage_incidents.org_scoped_summary_incident(c, row, org_id)
+            if is_op:
+                summary = storage_watch.summary(c, args.get("host_id") or (incident or {}).get("host_id"))
+            else:
+                summary = storage_incidents.scoped_summary(
+                    c, org_id, is_operator=False,
+                    host_id=args.get("host_id") or (incident or {}).get("host_id"),
+                )
             if incident is None and summary.get("open_incident_id"):
                 row = storage_incidents.get(c, str(summary["open_incident_id"]))
-                incident = storage_incidents.public(c, row) if row else None
-            return _safe({"summary": summary, "incident": incident, "hold": work_hold.status(c)})
+                if row is not None:
+                    if is_op:
+                        incident = storage_incidents.public(c, row)
+                    elif org_id and storage_incidents.incident_visible_to_org(c, row, org_id):
+                        incident = storage_incidents.org_scoped_summary_incident(c, row, org_id)
+            hold = (
+                work_hold.status(c)
+                if is_op
+                else storage_incidents.scoped_hold_status(c, org_id, is_operator=False)
+            )
+            return _safe({"summary": summary, "incident": incident, "hold": hold})
 
     @reg.tool(
         "storage_plan",
@@ -70,10 +129,15 @@ def register_storage_tools(reg: ToolRegistry) -> None:
         from ..services import storage_incidents
 
         with ctx.begin() as c:
+            _pid, org_id, is_op = _caller_scope(c, project_id)
             row = storage_incidents.get(c, str(args["incident_id"]))
-            if row is None:
+            if row is None or (not is_op and (not org_id or not storage_incidents.incident_visible_to_org(c, row, org_id))):
                 return {"ok": False, "error": "no such incident"}
-            inc = storage_incidents.public(c, row)
+            inc = (
+                storage_incidents.public(c, row)
+                if is_op
+                else storage_incidents.org_scoped_summary_incident(c, row, org_id)
+            )
             return _safe({"incident_id": inc["id"], "status": inc["status"], "plan": inc["plan"],
                           "flow": inc["flow"], "freed_gb": inc["freed_gb"],
                           "target_pct": inc["target_pct"], "free_pct_now": inc["free_pct_now"]})
@@ -85,11 +149,15 @@ def register_storage_tools(reg: ToolRegistry) -> None:
         "step, or raise the tier-3 card. Tiers 1–2 only; tier 3 always goes to a person. Stops "
         "by itself once free space is above the target.",
         _obj({"project_id": {"type": "string"}, "incident_id": {"type": "string"}}, ["incident_id"]),
-        kind="write", reversibility="safe", permission="system:operate", org_scope=True,
+        kind="write", reversibility="safe", permission="instance:manage", org_scope=True,
         exposure=exposure, idempotency="idempotent")
     def storage_run_step(ctx, *, project_id, actor, args):
         from ..services import storage_cleanup
 
+        with ctx.begin() as c:
+            refused = _require_operator(c)
+            if refused is not None:
+                return refused
         return _safe(storage_cleanup.advance(ctx.engine, str(args["incident_id"]),
                                              actor=actor or "agent:infra"))
 
@@ -102,7 +170,7 @@ def register_storage_tools(reg: ToolRegistry) -> None:
         _obj({"project_id": {"type": "string"}, "incident_id": {"type": "string"},
               "kind": {"type": "string"}, "rule": {"type": "object"}, "why": {"type": "string"}},
              ["incident_id", "kind", "rule", "why"]),
-        kind="write", reversibility="safe", permission="system:operate", org_scope=True,
+        kind="write", reversibility="safe", permission="instance:manage", org_scope=True,
         exposure=exposure)
     def storage_propose_rule(ctx, *, project_id, actor, args):
         from ..services import storage_incidents, storage_rules
@@ -114,6 +182,9 @@ def register_storage_tools(reg: ToolRegistry) -> None:
         if storage_incidents.duplicates_shipped_default(kind, rule):
             return {"ok": False, "error": "that rule duplicates the shipped default; it is already in force"}
         with ctx.begin() as c:
+            refused = _require_operator(c)
+            if refused is not None:
+                return refused
             inc = storage_incidents.get(c, str(args["incident_id"]))
             if inc is None:
                 return {"ok": False, "error": "no such incident"}
@@ -131,7 +202,7 @@ def register_storage_tools(reg: ToolRegistry) -> None:
         "changes no plan and deletes nothing.",
         _obj({"project_id": {"type": "string"}, "incident_id": {"type": "string"},
               "cause_text": {"type": "string"}, "notes": {"type": "string"}}, ["incident_id"]),
-        kind="write", reversibility="safe", permission="system:operate", org_scope=True,
+        kind="write", reversibility="safe", permission="instance:manage", org_scope=True,
         exposure=exposure)
     def storage_report(ctx, *, project_id, actor, args):
         from sqlalchemy import text
@@ -139,6 +210,9 @@ def register_storage_tools(reg: ToolRegistry) -> None:
         from ..services import storage_incidents
 
         with ctx.begin() as c:
+            refused = _require_operator(c)
+            if refused is not None:
+                return refused
             inc = storage_incidents.get(c, str(args["incident_id"]))
             if inc is None:
                 return {"ok": False, "error": "no such incident"}
@@ -161,7 +235,7 @@ def register_storage_tools(reg: ToolRegistry) -> None:
         "keeps going. The executor sets this itself at critical; use it for a warn incident "
         "whose forecast you judge too short.",
         _obj({"project_id": {"type": "string"}, "incident_id": {"type": "string"}}, ["incident_id"]),
-        kind="write", reversibility="safe", permission="system:operate", org_scope=True,
+        kind="write", reversibility="safe", permission="instance:manage", org_scope=True,
         exposure=exposure, idempotency="idempotent")
     def work_hold_set(ctx, *, project_id, actor, args):
         from sqlalchemy import text
@@ -169,6 +243,9 @@ def register_storage_tools(reg: ToolRegistry) -> None:
         from ..services import storage_incidents, work_hold
 
         with ctx.begin() as c:
+            refused = _require_operator(c)
+            if refused is not None:
+                return refused
             inc = storage_incidents.get(c, str(args["incident_id"]))
             if inc is None or inc["status"] == "resolved":
                 return {"ok": False, "error": "no open incident by that id"}
@@ -186,12 +263,15 @@ def register_storage_tools(reg: ToolRegistry) -> None:
         "below target — the executor releases it the moment the target is reached.",
         _obj({"project_id": {"type": "string"}, "incident_id": {"type": "string"},
               "reason": {"type": "string"}}, ["incident_id"]),
-        kind="write", reversibility="safe", permission="system:operate", org_scope=True,
+        kind="write", reversibility="safe", permission="instance:manage", org_scope=True,
         exposure=exposure, idempotency="idempotent")
     def work_hold_release(ctx, *, project_id, actor, args):
         from ..services import storage_cleanup, storage_incidents, work_hold
 
         with ctx.begin() as c:
+            refused = _require_operator(c)
+            if refused is not None:
+                return refused
             inc = storage_incidents.get(c, str(args["incident_id"]))
             if inc is None:
                 return {"ok": False, "error": "no such incident"}

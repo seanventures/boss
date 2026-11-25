@@ -11513,12 +11513,36 @@ def retry_code_task_endpoint(run_id: str, payload: Optional[dict] = None):
             connection, run_row["project_id"], actor, "task_create"
         )
         # A PERSON'S RETRY IS THEIR "PROCEED" past the infra circuit breaker, as a note is.
-        from boss_engine.services.agent_identity import is_person
+        # Only a direct human session counts — never an agent turn, OBO run_token, act chain,
+        # API key, or unauthenticated shadow-mode actor string.
+        from boss_engine.identity.enforcement import is_person_session
+        from boss_engine.identity.legacy import is_bridge_principal
+        from boss_engine.identity.lineage import current_context
 
-        by_person = is_person(actor, connection, run_row["project_id"])
+        auth_ctx = identity_guard.REQUEST_IDENTITY.get()
+        if auth_ctx is None and not identity_guard.IDENTITY_MODE.get():
+            auth_ctx = current_context()
+        by_person = bool(
+            auth_ctx is not None
+            and is_person_session(auth_ctx)
+            and getattr(auth_ctx, "run_token", None) is None
+            and not getattr(getattr(auth_ctx, "chain", None), "hops", ())
+            and getattr(auth_ctx, "act", None) is None
+            and not is_bridge_principal(auth_ctx.principal.id)
+        )
     from .services.code_task_service import RetryRefused, retry_code_task
+    from .services.shepherd_service import SHEPHERD_MAX_LINEAGE_ATTEMPTS
     try:
         rr = p.get("repair_retries")
+        raw_ceiling = p.get("attempt_ceiling")
+        if isinstance(raw_ceiling, int) and not isinstance(raw_ceiling, bool) and raw_ceiling >= 1:
+            ceiling = (
+                min(raw_ceiling, 20)
+                if by_person
+                else min(raw_ceiling, SHEPHERD_MAX_LINEAGE_ATTEMPTS)
+            )
+        else:
+            ceiling = 10 if by_person else SHEPHERD_MAX_LINEAGE_ATTEMPTS
         # profile/repair_retries were accepted by retry_code_task() and DROPPED here, so a
         # caller asking to "retry this in lean mode" silently got the project default. The
         # console's Retry button, the MCP tool and this endpoint must all be able to move the
@@ -11529,6 +11553,7 @@ def retry_code_task_endpoint(run_id: str, payload: Optional[dict] = None):
             fix_note=p.get("fix_note", ""),
             profile=(p.get("profile") or None),
             repair_retries=(int(rr) if isinstance(rr, int) else None),
+            attempt_ceiling=ceiling,
             by_person=by_person,
         )
     except RetryRefused as exc:

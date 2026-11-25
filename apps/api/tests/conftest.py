@@ -366,6 +366,7 @@ def clean_tables(engine):
             "org_settings",
             "skill_invocations",
             "cost_receipts",
+            "session_budget_holds",
             "budget_reservations",
             "budget_allocations",
             "health_snapshots",
