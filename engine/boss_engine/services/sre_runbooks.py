@@ -838,25 +838,40 @@ class SreRunbookService:
                 continue
             if rec.get("runbook_id") != runbook_id or rec.get("incident_id") != incident_id:
                 continue
-            claimed = connection.execute(
-                text(
-                    """
-                    INSERT INTO sre_runbook_approvals_used
-                      (decision_id, project_id, run_id, step_digest)
-                    VALUES (:d, :p, :r, :g)
-                    ON CONFLICT (decision_id) DO NOTHING
-                    """
-                ),
-                {"d": row["id"], "p": project_id, "r": run_id, "g": digest},
-            )
-            if getattr(claimed, "rowcount", 0) != 1:
-                continue                     # already used by an earlier run: never replays
+            if not self._claim(connection, decision_id=row["id"], project_id=project_id,
+                               run_id=run_id, digest=digest):
+                continue                     # already used by another run: never replays
             return {"source": "sre_runbook", "decision_id": row["id"],
                     "approved_by": str(row.get("approved_by") or "a person"),
                     "step": step_id, "action": str(step.get("action") or ""),
                     "params": dict(step.get("params") or {}), "step_digest": digest,
                     "run_id": run_id, "project_id": project_id}
         return None
+
+    def _claim(self, connection: Connection, *, decision_id: str, project_id: str,
+               run_id: str, digest: str) -> bool:
+        """CLAIM, THEN EFFECT. The claim is COMMITTED in its own transaction before any
+        remediation runs: a remediation commits through its own engine transaction, so a claim
+        left in the caller's (still open, maybe rolled back) transaction could vanish after the
+        effect landed and let a later run replay it. A lost effect is safer than a replay. Two
+        concurrent claims: the primary key decides, exactly one inserts. True when THIS run won."""
+        params = {"d": decision_id, "p": project_id, "r": run_id, "g": digest}
+        sql = text(
+            """
+            INSERT INTO sre_runbook_approvals_used (decision_id, project_id, run_id, step_digest)
+            VALUES (:d, :p, :r, :g)
+            ON CONFLICT (decision_id) DO NOTHING
+            """
+        )
+        from sqlalchemy.engine import Engine
+
+        engine = getattr(connection, "engine", None)
+        if isinstance(engine, Engine):
+            with engine.begin() as own:
+                claimed = own.execute(sql, params)
+                return getattr(claimed, "rowcount", 0) == 1
+        claimed = connection.execute(sql, params)          # an in-memory test connection
+        return getattr(claimed, "rowcount", 0) == 1
 
     def _hold_decision(
         self,
