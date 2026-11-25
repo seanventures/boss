@@ -66,6 +66,25 @@ def test_streamable_http_connects_lists_and_calls(fake, mode):
     assert server.sessions, "a legacy server's session was opened"
 
 
+def test_the_http_sse_transport_connects_lists_and_calls(fake):
+    """Row: the 2024-11-05 HTTP+SSE transport (`https://host/sse`), still what many servers ship.
+
+    FAILED BEFORE: BOSS only POSTed to the URL, so registering an SSE server read
+    "405 Method Not Allowed" and it could never be used. Fixed: the spec's backwards-compatible
+    probe (a 4xx to POST, then a GET whose first event is `endpoint`) and an SSE session."""
+    server = fake("sse")
+    _connect_list_call(server.url)
+    assert MCPClient(None).era(server.url) == {"modern": False, "version": None}
+
+
+def test_the_http_sse_transport_carries_the_sign_in(fake):
+    server = fake("sse", auth=("bearer", "sse-tok"))
+    _connect_list_call(server.url, {"Authorization": "Bearer sse-tok"})
+    with pytest.raises(Exception) as refused:
+        MCPClient(None).list_tools(server.url, headers={"Authorization": "Bearer wrong"})
+    assert "401" in str(refused.value)
+
+
 # --------------------------------------------------------------------------- sign-in
 
 def test_a_bearer_token_reaches_the_server_and_a_wrong_one_is_refused(fake):

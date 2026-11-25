@@ -103,12 +103,14 @@ class _Session:
 
 
 class _Era:
-    """What a server speaks: modern (stateless, `version`) or legacy (initialize)."""
-    __slots__ = ("modern", "version", "expires")
+    """What a server speaks: modern (stateless, `version`), legacy (initialize), or the
+    2024-11-05 HTTP+SSE transport (`sse`: a GET stream that names where to POST)."""
+    __slots__ = ("modern", "version", "expires", "sse")
 
-    def __init__(self, modern: bool, version: Optional[str]):
+    def __init__(self, modern: bool, version: Optional[str], sse: bool = False):
         self.modern = modern
         self.version = version
+        self.sse = sse
         self.expires = time.monotonic() + ERA_TTL_SECONDS
 
 
@@ -158,6 +160,28 @@ def _sse_messages(body: str) -> list[Any]:
         elif field == "data":
             data.append(value)
     return out
+
+
+def _sse_events(lines: Any) -> Any:
+    """(event, data) for each event of a live SSE stream, as its lines arrive."""
+    event, data = "message", []
+    for raw in lines:
+        line = str(raw).rstrip("\r")
+        if not line:
+            if data:
+                yield event, "\n".join(data)
+            event, data = "message", []
+            continue
+        if line.startswith(":"):
+            continue
+        field, _, value = line.partition(":")
+        value = value[1:] if value.startswith(" ") else value
+        if field == "event":
+            event = value or "message"
+        elif field == "data":
+            data.append(value)
+    if data:
+        yield event, "\n".join(data)
 
 
 def _message_for(resp: httpx.Response, rid: Any) -> Any:
@@ -299,6 +323,11 @@ class MCPClient:
             return _Era(False, None), False
         if resp.status_code in (401, 403):
             resp.raise_for_status()
+        if resp.status_code in (400, 404, 405) and self._speaks_sse(url, headers):
+            # THE HTTP+SSE TRANSPORT (2024-11-05), the spec's backwards-compatibility probe: a
+            # POST to the URL fails with a 4xx and a GET opens a stream whose first event names
+            # the message endpoint. Many servers still ship only this (`.../sse` URLs).
+            return _Era(False, None, sse=True), True
         try:
             data = _message_for(resp, rid)
         except ValueError:
@@ -410,6 +439,8 @@ class MCPClient:
     def _call(self, url: str, method: str, params: dict, headers: Optional[dict],
               extra: Optional[dict] = None) -> Any:
         era = self._era(url, headers)
+        if era.sse:
+            return self._sse_call(url, method, params, headers, extra)
         if not era.modern:
             return self._legacy(url, method, params, headers, extra)
         try:
@@ -427,6 +458,128 @@ class MCPClient:
             if version is not None:
                 return self._modern(url, version, method, params, headers, extra)
             return self._legacy(url, method, params, headers, extra)
+
+    # ------------------------------------------------------------------ HTTP+SSE (2024-11-05)
+    def _upstream(self, url: str, headers: Optional[dict], extra: Optional[dict] = None
+                  ) -> dict:
+        from boss_engine.identity.tokens import refuse_passthrough
+
+        upstream = refuse_passthrough(headers or {})
+        if extra:
+            upstream = {**upstream, **refuse_passthrough(extra)}
+        return upstream
+
+    def _speaks_sse(self, url: str, headers: Optional[dict]) -> bool:
+        """Whether a GET on `url` opens an SSE stream whose first event is `endpoint`."""
+        if url.startswith("stdio://"):
+            return False
+        sent = {**self._upstream(url, headers), "Accept": "text/event-stream"}
+        try:
+            with httpx.stream("GET", url, headers=sent,
+                              timeout=httpx.Timeout(min(self.timeout, 10.0)),
+                              **outbound_proxy.httpx_options(url)) as resp:
+                if resp.status_code in (401, 403):
+                    resp.raise_for_status()
+                kind = (resp.headers.get("content-type") or "").split(";")[0].strip().lower()
+                if resp.status_code != 200 or kind != "text/event-stream":
+                    return False
+                for event, _data in _sse_events(resp.iter_lines()):
+                    return event == "endpoint"
+        except httpx.HTTPStatusError:
+            raise
+        except (httpx.HTTPError, ValueError):
+            return False
+        return False
+
+    def _sse_call(self, url: str, method: str, params: dict, headers: Optional[dict],
+                  extra: Optional[dict] = None, *, timeout: Optional[float] = None) -> Any:
+        """One request over the HTTP+SSE transport: open the stream, read the endpoint, POST
+        initialize / initialized / the request there, and read each answer from the stream.
+        A session per call: nothing is held open between calls."""
+        from urllib.parse import urljoin, urlsplit
+
+        read = float(timeout or self.timeout)
+        upstream = self._upstream(url, headers)
+        options = outbound_proxy.httpx_options(url)
+        with httpx.stream("GET", url, headers={**upstream, "Accept": "text/event-stream"},
+                          timeout=httpx.Timeout(read, connect=min(read, 10.0)),
+                          **options) as stream:
+            stream.raise_for_status()
+            events = _sse_events(stream.iter_lines())
+            endpoint = None
+            for event, data in events:
+                if event == "endpoint":
+                    endpoint = urljoin(url, data.strip())
+                    break
+            if not endpoint:
+                raise MCPError("the server's SSE stream never named its message endpoint")
+            here, there = urlsplit(url), urlsplit(endpoint)
+            if (here.scheme, here.netloc) != (there.scheme, there.netloc):
+                # The server's sign-in must not follow a message endpoint to another origin.
+                raise MCPError("the server's SSE stream named a message endpoint on another "
+                               "host; BOSS sends its sign-in only to the server it registered")
+
+            def post(message: dict, more: Optional[dict] = None) -> None:
+                resp = httpx.post(endpoint, json=message,
+                                  headers={**upstream, **(more or {}),
+                                           "Content-Type": "application/json"},
+                                  timeout=min(read, self.timeout), **options)
+                resp.raise_for_status()
+
+            def answer(rid: int) -> dict:
+                for event, data in events:
+                    if event != "message":
+                        continue
+                    try:
+                        message = json.loads(data)
+                    except ValueError:
+                        continue
+                    if not isinstance(message, dict):
+                        continue
+                    if message.get("id") == rid and ("result" in message or "error" in message):
+                        return message
+                    if "method" in message and "id" in message:
+                        # A request FROM the server: ping is answered, nothing else is offered.
+                        reply = ({"result": {}} if message["method"] == "ping" else
+                                 {"error": {"code": -32601, "message":
+                                            f"{message['method']} is not supported by BOSS"}})
+                        post({"jsonrpc": "2.0", "id": message["id"], **reply})
+                raise MCPError("the server closed its SSE stream before it answered")
+
+            init_id = _next_id()
+            post({"jsonrpc": "2.0", "id": init_id, "method": "initialize",
+                  "params": {"protocolVersion": FALLBACK_PROTOCOL_VERSION, "capabilities": {},
+                             "clientInfo": dict(CLIENT_INFO)}})
+            initialized = answer(init_id)
+            if initialized.get("error"):
+                error = initialized["error"] if isinstance(initialized["error"], dict) else {}
+                raise MCPError(error.get("message") or "the server refused to initialize",
+                               code=error.get("code"))
+            post({"jsonrpc": "2.0", "method": "notifications/initialized"})
+            rid = _next_id()
+            post({"jsonrpc": "2.0", "id": rid, "method": method, "params": params or {}}, extra)
+            try:
+                message = answer(rid)
+            except httpx.ReadTimeout:
+                if method == "tools/call":
+                    self._cancel_quietly(lambda note: post(note), rid)
+                raise
+        error = message.get("error")
+        if error:
+            if isinstance(error, dict):
+                raise MCPError(error.get("message") or "MCP error", code=error.get("code"),
+                               data=error.get("data"))
+            raise MCPError(str(error))
+        return message.get("result")
+
+    @staticmethod
+    def _cancel_quietly(send: Any, rid: Any) -> None:
+        """Tell the server BOSS stopped waiting for request `rid` (notifications/cancelled)."""
+        try:
+            send({"jsonrpc": "2.0", "method": "notifications/cancelled",
+                  "params": {"requestId": rid, "reason": "BOSS stopped waiting (timeout)"}})
+        except Exception:  # noqa: BLE001 — best effort: the server may be gone
+            pass
 
     def era(self, url: str, headers: Optional[dict] = None) -> dict:
         """What the server speaks, as {"modern": bool, "version": str|None} (probed once)."""
