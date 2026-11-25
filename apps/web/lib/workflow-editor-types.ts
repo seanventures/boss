@@ -99,7 +99,9 @@ export type InstalledFrom = { pack_id: string; pack_name: string; source: "boss"
                    conflicts?: string[] } };
 /** A workflow of this project shared to the org's Library. */
 export type PublishedPack = { pack_id: string; name: string; summary: string; version: string;
-  status: "published" | "unpublished"; tags?: string[] };
+  status: "published" | "unpublished"; tags?: string[];
+  /** After a share: projects whose copy could not take this version (they keep theirs). */
+  blocked?: { project_id: string; reason: string }[] };
 /** One item of the shared Library (design PR #287): BOSS's or your team's. */
 export type MarketPack = { id: string; source: "boss" | "org"; name: string; summary: string;
   publisher: string; version: string; updated_at: string | null;
@@ -111,8 +113,10 @@ export type MarketPack = { id: string; source: "boss" | "org"; name: string; sum
   agents: { key: string; name: string; present: boolean }[];
   /** Library filter words. */
   tags?: string[];
-  /** The org's projects it is added to. */
-  installed_in?: string[] };
+  /** The org's projects it is added to that this person may add to (ids). */
+  installed_in?: string[];
+  /** How many of the org's projects have it (all of them, counted). */
+  used_count?: number };
 /** A project of the org a person may add a Library workflow to. */
 export type LibraryProject = { id: string; name: string };
 export type InstalledAct = "take" | "take_keep" | "dismiss";

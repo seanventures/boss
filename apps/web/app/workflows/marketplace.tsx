@@ -11,7 +11,8 @@
  * the full brief behind a toggle. Two actions:
  *
  *   - Add to project: pick any project of the org you may add to. The workflow lands in that
- *     project's own workflows and follows Library updates until someone changes it there.
+ *     project's own workflows. A BOSS item follows Library updates until someone changes it
+ *     there; a team item's new versions always wait for that project's Review update.
  *   - Edit a copy: add it here (if it is not yet) and open it in the editor. Saving changes the
  *     project's copy only; a later Library version is then offered, never forced.
  *
@@ -42,9 +43,16 @@ export function packMeta(p: MarketPack): string {
 /** The one-line description under a row: summary · steps · projects using it. */
 export function rowLine(p: MarketPack): string {
   const steps = p.workflows.reduce((n, w) => n + (w.step_count ?? w.steps.length), 0);
-  const used = (p.installed_in ?? []).length;
+  const used = p.used_count ?? (p.installed_in ?? []).length;
   return [p.summary || p.workflows[0]?.description || "", steps ? count(steps, "step") : "",
           count(used, "project")].filter(Boolean).join(" · ");
+}
+
+/** How a project's copy takes new versions: BOSS's by itself until changed; a team's always
+ *  waits for that project's Review update (workflow_marketplace.publish offers, never pushes). */
+export function updateHint(p: MarketPack): string {
+  return p.source === "boss" ? "Follows Library updates until you change it."
+    : "New versions wait for your review.";
 }
 
 /** Does the item match the search words (name, summary, tags, its workflows' names)? */
@@ -203,6 +211,13 @@ function ShelfCard({ pack: p, projectId, projects, installBlocked, shareBlocked,
   ];
   const addedTo = (id: string) => (id === projectId && p.installed) || (p.installed_in ?? []).includes(id);
   const targetName = choices.find((c) => c.id === target)?.name ?? target;
+  // THE PICKED PROJECT DECIDES (not the one the page is on): the server lists only projects where
+  // the person holds workflow:install. An older API sends no list: this project's gate decides.
+  const mayAdd = (id: string): string | null => projects.length
+    ? (projects.some((c) => c.id === id) ? null : "You cannot add workflows to that project.")
+    : installBlocked;
+  const addBlocked = mayAdd(target);
+  const editBlocked = mayAdd(projectId);
 
   const add = async () => {
     setBusy("add");
@@ -284,7 +299,7 @@ function ShelfCard({ pack: p, projectId, projects, installBlocked, shareBlocked,
         {inputs.length ? (
           <><dt>Input</dt><dd data-testid={`wf-pack-inputs-${p.id}`} data-user-text>{inputs.join(", ")}</dd></>
         ) : null}
-        <dt>Used</dt><dd>{count((p.installed_in ?? []).length, "project")}</dd>
+        <dt>Used</dt><dd>{count(p.used_count ?? (p.installed_in ?? []).length, "project")}</dd>
         {(p.tags ?? []).length ? <><dt>Tags</dt><dd>{(p.tags ?? []).join(", ")}</dd></> : null}
       </dl>
       {brief ? (
@@ -329,23 +344,23 @@ function ShelfCard({ pack: p, projectId, projects, installBlocked, shareBlocked,
               ))}
             </select>
             <button type="button" className="wf-btn wf-btn-primary" data-testid={`wf-pack-install-${p.id}`}
-                    disabled={busy !== null || Boolean(installBlocked) || addedTo(target)}
-                    title={installBlocked ?? (addedTo(target) ? `Already in ${targetName}` : undefined)}
+                    disabled={busy !== null || Boolean(addBlocked) || addedTo(target)}
+                    title={addBlocked ?? (addedTo(target) ? `Already in ${targetName}` : undefined)}
                     onClick={() => void add()}>
               {addedTo(target) ? <Check size={14} weight="bold" aria-hidden /> : <Plus size={14} aria-hidden />}
               {busy === "add" ? "Adding…" : addedTo(target) ? "Added" : "Add to project"}
             </button>
             {onOpen && first ? (
               <button type="button" className="wf-btn" data-testid={`wf-pack-edit-${p.id}`}
-                      disabled={busy !== null || (!p.installed && Boolean(installBlocked))}
-                      title={!p.installed && installBlocked ? installBlocked
+                      disabled={busy !== null || (!p.installed && Boolean(editBlocked))}
+                      title={!p.installed && editBlocked ? editBlocked
                         : "Open this project's copy in the editor. Your changes stay in this project."}
                       onClick={() => void editCopy()}>
                 <PencilSimple size={14} aria-hidden /> {busy === "edit" ? "Opening…" : "Edit a copy"}
               </button>
             ) : null}
           </div>
-          <p className="wf-shelf-hint">Follows Library updates until you change it.</p>
+          <p className="wf-shelf-hint" data-testid={`wf-pack-hint-${p.id}`}>{updateHint(p)}</p>
         </>
       )}
       {said ? (

@@ -638,6 +638,8 @@ button.wf-tag:focus-visible { outline: 2px solid var(--accent); outline-offset: 
 .wf-publish-radio i { display: block; font-style: normal; color: var(--muted); font-size: var(--fs-meta); }
 .wf-publish-error { margin: 0; color: var(--red); font: var(--fs-meta)/1.4 var(--sans); overflow-wrap: anywhere; }
 .wf-publish-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.wf-publish-held { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; color: var(--amber); font: var(--fs-meta)/1.4 var(--sans); }
+.wf-publish-held ul { margin: 0; padding-left: 18px; color: var(--ink); overflow-wrap: anywhere; }
 .wf-update { display: flex; flex-direction: column; gap: 8px; min-width: 0; font: var(--fs-body)/1.45 var(--sans); }
 .wf-update .wf-std-row { flex-wrap: wrap; }
 .wf-card .wf-pop.wf-card-publish,

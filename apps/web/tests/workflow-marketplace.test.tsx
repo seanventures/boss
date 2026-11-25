@@ -74,6 +74,11 @@ const PACKS = [
                   inputs: ["Start from a file", "Where the fixed file goes"],
                   objective: "Take the file the run was given, check it with the repository's declared checkers." }],
     needs: [], agents: [] },
+  { id: "team_pack", source: "org", name: "Partner config review", summary: "Tell the team.", publisher: "Pat",
+    version: "0.2", updated_at: null, installed: false, installed_version: null, update_available: null,
+    waiting: [], published_here: false, tags: ["review"], installed_in: ["helpdesk"], used_count: 3,
+    workflows: [{ key: "partner_review", name: "Partner config review", description: "", steps: ["Tell"] }],
+    needs: [], agents: [] },
 ];
 
 const PROJECTS = [{ id: "p1", name: "This project" }, { id: "helpdesk", name: "HelpDesk" },
@@ -81,6 +86,7 @@ const PROJECTS = [{ id: "p1", name: "This project" }, { id: "helpdesk", name: "H
 
 let writes: Obj[] = [];
 let refuseUninstall = false;
+let shareBlocked = false;
 const confirmSpy = vi.fn(() => true);
 
 function fakeFetch(input: unknown, init?: RequestInit): Promise<Response> {
@@ -112,7 +118,9 @@ function fakeFetch(input: unknown, init?: RequestInit): Promise<Response> {
   }
   if (body.action === "market_publish") {
     return Promise.resolve(Response.json({ pack: { id: "wpk_2", name: body.name, summary: body.summary,
-                                                   version: body.version, status: "published" } }));
+                                                   version: body.version, status: "published" },
+                                           blocked: shareBlocked ? [{ project_id: "helpdesk", offered: false,
+                                             blocked: "an agent it names is missing" }] : [] }));
   }
   if (body.action === "market_update") return Promise.resolve(Response.json({ marketplace: null }));
   return Promise.resolve(Response.json({ ok: true }));
@@ -134,6 +142,7 @@ beforeEach(() => {
   stub.fetchLibrary.mockReset().mockResolvedValue(LIBRARY);
   writes = [];
   refuseUninstall = false;
+  shareBlocked = false;
   vi.stubGlobal("fetch", vi.fn(fakeFetch));
   vi.stubGlobal("confirm", confirmSpy);
   confirmSpy.mockClear();
@@ -237,6 +246,29 @@ describe("the shared Library (design PR #287)", () => {
     expect(writes).toEqual([{ action: "market_install", project_id: "northgate", pack_id: "api-gateway-onboarding" }]);
     expect($("wf-pack-said-api-gateway-onboarding")!.textContent).toContain("Added to Northgate gateway.");
     expect(confirmSpy).not.toHaveBeenCalled();
+  });
+
+  it("says how a copy takes new versions: BOSS's by itself, a team's waits for review", async () => {
+    window.history.replaceState(null, "", "/?area=delivery_workflows&tab=library&lib=market");
+    await mount();
+    await press("wf-pack-api-gateway-onboarding");
+    expect($("wf-pack-hint-api-gateway-onboarding")!.textContent).toBe("Follows Library updates until you change it.");
+    await press("wf-pack-team_pack");
+    expect($("wf-pack-hint-team_pack")!.textContent).toBe("New versions wait for your review.");
+    // Used counts the whole org; the ids name only projects this person may add to.
+    expect($("wf-pack-line-team_pack")!.textContent).toContain("3 projects");
+  });
+
+  it("a share that some projects could not take names them before closing", async () => {
+    shareBlocked = true;
+    await mount();
+    await press("wf-card-more-lumen_review");
+    await press("wf-card-publish-lumen_review");
+    await press("wf-publish-submit");
+    expect($("wf-publish-blocked")!.textContent).toContain("1 project could not take it");
+    expect($("wf-publish-blocked")!.textContent).toContain("helpdesk: an agent it names is missing");
+    await press("wf-publish-done");
+    expect($("wf-publish-blocked")).toBeNull();
   });
 
   it("Edit a copy adds it to this project and opens the copy in the editor", async () => {

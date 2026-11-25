@@ -163,3 +163,40 @@ def test_the_project_picker_lists_only_projects_a_person_may_add_to(world, id_cl
     assert r.status_code == 200, r.text
     ids = {p["id"] for p in r.json()["projects"]}
     assert world.project_a in ids and world.project_b not in ids
+
+
+def test_another_org_cannot_see_or_add_a_teams_workflow_nor_appear_in_the_picker(
+        world, id_client, engine):
+    other = IdentityWorld.create(engine)
+    definition_id = _own_workflow(engine, world.project_a)
+    admin_a = world.person(f"lib-admin-a-{uuid4().hex[:4]}")
+    world.bind(admin_a, "admin")
+    admin_b = other.person(f"lib-admin-b-{uuid4().hex[:4]}")
+    other.bind(admin_b, "admin")
+    with world.acting_as(world.ctx(admin_a)):
+        shared = id_client.post("/v1/delivery-workflows/marketplace/publish",
+                                json={"project_id": world.project_a, "definition_id": definition_id})
+        assert shared.status_code == 200, shared.text
+        pack_id = shared.json()["pack"]["id"]
+        mine = id_client.get("/v1/delivery-workflows/marketplace",
+                             params={"project_id": world.project_a})
+    picker = {p["id"] for p in mine.json()["projects"]}
+    assert {world.project_a, world.project_b} <= picker
+    assert not picker & {other.project_a, other.project_b}
+
+    with other.acting_as(other.ctx(admin_b)):
+        theirs = id_client.get("/v1/delivery-workflows/marketplace",
+                               params={"project_id": other.project_a})
+        assert theirs.status_code == 200, theirs.text
+        assert pack_id not in {p["id"] for p in theirs.json()["items"]}
+        assert not {p["id"] for p in theirs.json()["projects"]} & {world.project_a, world.project_b}
+        added = id_client.post("/v1/delivery-workflows/marketplace/install",
+                               json={"project_id": other.project_a, "pack_id": pack_id})
+        assert added.status_code == 404, added.text
+        # Nor into org A's project from org B.
+        across = id_client.post("/v1/delivery-workflows/marketplace/install",
+                                json={"project_id": world.project_a, "pack_id": pack_id})
+        assert across.status_code in (403, 404), across.text
+    with engine.begin() as c:
+        c.execute(text("DELETE FROM workflow_pack_versions WHERE pack_id = :p"), {"p": pack_id})
+        c.execute(text("DELETE FROM workflow_packs WHERE id = :p"), {"p": pack_id})

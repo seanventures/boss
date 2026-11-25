@@ -407,6 +407,7 @@ function toPack(raw: unknown): MarketPack {
                inputs: strings(row.inputs), objective: str(row.objective) };
     }),
     tags: strings(p.tags), installed_in: strings(p.installed_in),
+    ...(typeof p.used_count === "number" ? { used_count: p.used_count } : {}),
     installed: p.installed === true, installed_version: str(p.installed_version) || null,
     update_available: str(p.update_available) || null, waiting: strings(p.waiting),
     published_here: p.published_here === true,
@@ -466,7 +467,12 @@ export async function publishPack(projectId: string, definitionId: string,
                                     name: form.name, summary: form.summary, version: form.version,
                                     ...(form.tags ? { tags: form.tags } : {}) });
   const pack = asObj(body.pack);
-  return toPublished({ ...pack, pack_id: pack.id });
+  const shared = toPublished({ ...pack, pack_id: pack.id });
+  const blocked = list(body.blocked).map((b) => {
+    const row = asObj(b);
+    return { project_id: str(row.project_id), reason: str(row.blocked) };
+  }).filter((b) => b.project_id);
+  return shared && blocked.length ? { ...shared, blocked } : shared;
 }
 
 /** Take your pack out of the org's Marketplace. Installed copies stay where they are. */

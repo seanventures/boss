@@ -270,3 +270,44 @@ def test_sharing_keeps_its_tags(eng, project):  # noqa: F811
         # Republished without tags: they stay.
         again = market.publish(c, project, d["id"], "ceo")
         assert again["pack"]["tags"] == ["gateway", "on-boarding"]
+
+
+def test_a_project_that_cannot_take_a_new_shared_version_is_named_not_dropped(eng, project):  # noqa: F811
+    with eng.begin() as c:
+        other = _new_project(c, name="library test b")
+    try:
+        with eng.begin() as c:
+            _editor(c, project)
+            d = workflows.create_definition(c, project_id=project, workflow_key="tell_team",
+                                            name="Tell the team", description=None, actor="ceo",
+                                            namespace=workflows.PRODUCT_NAMESPACE)
+            workflows.publish_version(c, project_id=project, definition_id=d["id"], actor="ceo",
+                                      spec={"entry_step": "tell", "steps": [{
+                                          "id": "tell", "kind": "capability", "next": [],
+                                          "binding": {"capability": "notify",
+                                                      "inputs": {"message": "landed"}}}]})
+            pack = market.publish(c, project, d["id"], "ceo")["pack"]
+            market.install(c, other, pack["id"], "ceo")
+            # v2 adds an agent step: the other project has no agent that holds anything.
+            workflows.publish_version(c, project_id=project, definition_id=d["id"], actor="ceo",
+                                      spec={"entry_step": "edit", "steps": [
+                                          {"id": "edit", "kind": "capability",
+                                           "captain": "video_editor",
+                                           "binding": {"agent_work": True,
+                                                       "inputs": {"instructions": "trim it"}},
+                                           "next": ["tell"]},
+                                          {"id": "tell", "kind": "capability", "next": [],
+                                           "binding": {"capability": "notify",
+                                                       "inputs": {"message": "landed"}}}]})
+            again = market.publish(c, project, d["id"], "ceo")
+            assert [b["project_id"] for b in again["blocked"]] == [other]
+            assert again["blocked"][0]["blocked"]
+            # It keeps running the version it had.
+            assert _row(c, other, "tell_team")["active_version_id"]
+            listed = {p["id"]: p for p in market.list_packs(c, project, visible_to={project})}
+            assert listed[pack["id"]]["used_count"] == 1
+            assert listed[pack["id"]]["installed_in"] == []      # the other project is not visible
+    finally:
+        with eng.begin() as c:
+            c.execute(text("DELETE FROM role_skills WHERE project_id=:p"), {"p": other})
+        _cleanup(eng, [other])

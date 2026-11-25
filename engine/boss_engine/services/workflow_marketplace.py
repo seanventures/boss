@@ -423,9 +423,12 @@ def _inputs(spec: dict[str, Any]) -> list[str]:
             for k in order][:6]
 
 
-def list_packs(connection: Connection, project_id: str) -> list[dict[str, Any]]:
+def list_packs(connection: Connection, project_id: str, *,
+               visible_to: Optional[set[str]] = None) -> list[dict[str, Any]]:
     """Every pack this project can install: BOSS's, then this org's (newest first), each with
-    whether it is installed here, at which version, and whether an update waits for a person."""
+    whether it is installed here, at which version, and whether an update waits for a person.
+    `visible_to`: the project ids the caller may see; `installed_in` names only those (the
+    count, `used_count`, is the whole org's)."""
     installed: dict[str, list[dict[str, Any]]] = {}
     for row in _installed_rows(connection, project_id):
         installed.setdefault(str(row["marketplace_pack_id"]), []).append(row)
@@ -465,7 +468,11 @@ def list_packs(connection: Connection, project_id: str) -> list[dict[str, Any]]:
                            "objective": str(w["spec"].get("objective") or "")[:1200]}
                           for w in contents["workflows"]],
             "tags": contents["tags"],
-            "installed_in": installed_in.get(contents["id"], []),
+            # Every org project it is in, counted; the ids are narrowed by the API to the
+            # projects the person may add to (`visible_to`).
+            "used_count": len(installed_in.get(contents["id"], [])),
+            "installed_in": [p for p in installed_in.get(contents["id"], [])
+                             if visible_to is None or p in visible_to],
             "installed": bool(rows),
             "installed_version": versions[0] if versions else None,
             "update_available": contents["version"] if updates else None,
@@ -855,13 +862,18 @@ def publish(connection: Connection, project_id: str, definition_id: str, actor: 
         try:
             with connection.begin_nested():
                 result = _resync(connection, dict(row), actor, offer_only=True)
-        except workflows.WorkflowError:
+        except workflows.WorkflowError as blocked:
+            # SAID, NEVER DROPPED: that project keeps running the version it has, and the person
+            # sharing is told which project could not take this one, and why.
+            updated.append({"project_id": row["project_id"], "offered": False,
+                            "blocked": str(blocked)[:500]})
             continue
         if result:
             updated.append({"project_id": row["project_id"], "offered": result.get("offered")})
     pack = connection.execute(text("SELECT * FROM workflow_packs WHERE id = :id"),
                               {"id": pack_id}).mappings().one()
-    return {"pack": _pack_out(connection, dict(pack)), "installed_copies": updated}
+    return {"pack": _pack_out(connection, dict(pack)), "installed_copies": updated,
+            "blocked": [u for u in updated if u.get("blocked")]}
 
 
 def unpublish(connection: Connection, project_id: str, pack_id: str,

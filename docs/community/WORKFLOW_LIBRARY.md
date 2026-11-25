@@ -28,8 +28,8 @@ Fix the file → Adversarial review → Merge → Staging → Contract tests
    - **Full brief**: what the workflow is for.
 3. Pick a project and press **Add to project**.
 
-The workflow now sits in that project's own workflows, marked *from Library · v1.0*. Until you
-change it, it takes each new Library version by itself.
+The workflow now sits in that project's own workflows, marked *from Library · v1.0*. This
+template comes from BOSS, so until you change it, it takes each new version by itself (see §7).
 
 > Want only your own copy to change? Press **Edit a copy** instead. It adds the workflow to this
 > project (if it is not there yet) and opens the copy in the editor. Nothing you change there
@@ -125,9 +125,15 @@ change that run.
 
 ## 7. When the Library version changes
 
-- **A copy you never changed** takes the new version by itself.
-- **A copy you changed** is never overwritten. The new version waits beside it, and the card says
-  **Update vX**. Open **Review update** and choose one:
+It depends on where the workflow came from:
+
+- **From BOSS, and you never changed your copy:** it takes the new version by itself.
+- **From BOSS, and you changed your copy:** it is never overwritten.
+- **From your team (shared by another project):** every new version waits for you, changed or
+  not. Another project's publisher never decides what runs in yours.
+
+When a new version waits, it sits beside your copy and the card says **Update vX**. Open
+**Review update** and choose one:
   - **Take it with my changes** (offered only when your changes apply cleanly);
   - **Take it only**;
   - **Not now**.
@@ -142,7 +148,9 @@ On one of your project's workflows, open **⋯ › Share to Library…**. Give i
 - a version.
 
 When you press **Share**, every project in your org can add it from the Library, labelled
-**Your team**. To publish a new version, share it again.
+**Your team**. To publish a new version, share it again. Projects that added it are offered the
+new version; if a project cannot take it (for example, an agent it names is missing there), the
+form lists that project and why, and that project keeps running the version it has.
 
 - **Who can share:** sharing org-wide needs **Share workflows to the org Library**
   (`workflow:share`), an org-level permission that Owners and Admins hold. A project Operator can

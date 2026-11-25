@@ -15,7 +15,7 @@
  */
 // React by name: the suite renders with renderToStaticMarkup (classic runtime).
 import React, { useState } from "react";
-import { ShareNetwork } from "@phosphor-icons/react";
+import { Check, ShareNetwork } from "@phosphor-icons/react";
 
 import { useCan } from "../../components/identity/identity-provider";
 import { nextVersion, publishPack } from "../../lib/workflow-api";
@@ -44,6 +44,8 @@ export function PublishForm({ projectId, definitionId, workflowName, description
   const [tags, setTags] = useState((published?.tags ?? []).join(", "));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // Shared, but some projects that added it could not take this version: said before closing.
+  const [held, setHeld] = useState<PublishedPack | null>(null);
   const badVersion = !/^\d{1,4}(\.\d{1,4}){0,2}$/.test(version.trim());
 
   const publish = async () => {
@@ -52,9 +54,11 @@ export function PublishForm({ projectId, definitionId, workflowName, description
     setError("");
     try {
       const words = tags.split(",").map((t) => t.trim()).filter(Boolean);
-      onDone(await publishPack(projectId, definitionId,
-                               { name: name.trim(), summary: summary.trim(), version: version.trim(),
-                                 ...(words.length ? { tags: words } : {}) }));
+      const shared = await publishPack(projectId, definitionId,
+                                       { name: name.trim(), summary: summary.trim(), version: version.trim(),
+                                         ...(words.length ? { tags: words } : {}) });
+      if (shared?.blocked?.length) setHeld(shared);
+      else onDone(shared);
     } catch (e) {
       setError(String((e as Error)?.message ?? e));
     } finally {
@@ -103,14 +107,26 @@ export function PublishForm({ projectId, definitionId, workflowName, description
         </label>
       </fieldset>
       {error ? <p className="wf-publish-error" role="alert" data-testid="wf-publish-error">{error}</p> : null}
-      <div className="wf-publish-actions">
+      {held ? (
+        <div className="wf-publish-held" role="status" data-testid="wf-publish-blocked">
+          <strong>Shared v{held.version}. {held.blocked!.length === 1 ? "1 project" : `${held.blocked!.length} projects`} could not take it and keep their version:</strong>
+          <ul>
+            {held.blocked!.map((b) => <li key={b.project_id} data-user-text><b>{b.project_id}</b>: {b.reason}</li>)}
+          </ul>
+          <button type="button" className="wf-btn wf-btn-primary" data-testid="wf-publish-done"
+                  onClick={() => onDone(held)}>
+            <Check size={14} aria-hidden /> Done
+          </button>
+        </div>
+      ) : null}
+      {held ? null : <div className="wf-publish-actions">
         <button type="submit" className="wf-btn wf-btn-primary" data-testid="wf-publish-submit"
                 disabled={busy || Boolean(blocked) || badVersion || !name.trim()}
                 title={blocked ?? (badVersion ? "Numbers and dots, like 1.0" : undefined)}>
           <ShareNetwork size={14} aria-hidden /> {busy ? "Sharing…" : "Share"}
         </button>
         <button type="button" className="wf-btn wf-btn-ghost" data-testid="wf-publish-cancel" onClick={onCancel}>Cancel</button>
-      </div>
+      </div>}
     </form>
   );
 }

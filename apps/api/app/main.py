@@ -26577,7 +26577,7 @@ def _library_projects(connection, project_id: str) -> list[dict]:
     from boss_engine.identity.scope import ResolvedScope
 
     return [{"id": str(r["id"]), "name": str(r["name"] or r["id"])} for r in rows
-            if str(r["id"]) == project_id or authz.check(
+            if authz.check(
                 ctx, P.WORKFLOW_INSTALL,
                 ResolvedScope.in_project(ctx.principal.org_id, str(r["id"]))).allowed]
 
@@ -26611,9 +26611,11 @@ def list_workflow_marketplace(project_id: str) -> dict:
     may Add to."""
     with begin(engine) as connection:
         try:
+            projects = _library_projects(connection, project_id)
             return {"project_id": project_id,
-                    "items": workflow_marketplace.list_packs(connection, project_id),
-                    "projects": _library_projects(connection, project_id)}
+                    "items": workflow_marketplace.list_packs(
+                        connection, project_id, visible_to={p["id"] for p in projects}),
+                    "projects": projects}
         except workflow_runtime.WorkflowError as error:
             raise _marketplace_refusal(error) from error
 
