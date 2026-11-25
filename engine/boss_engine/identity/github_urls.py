@@ -26,6 +26,7 @@ from urllib.parse import quote, urlencode
 
 WEB_BASE_ENV = "BOSS_GITHUB_WEB_URL"           # github.com; a GitHub Enterprise or test host
 API_BASE_ENV = "BOSS_GITHUB_API_URL"           # api.github.com; GHES: https://<host>/api/v3
+GIT_BASE_ENV = "BOSS_GITHUB_GIT_URL"           # the install's git origin, when not its web origin
 USER = "User"
 ORGANIZATION = "Organization"
 
@@ -184,9 +185,15 @@ def credential_hosts(api: object) -> frozenset[str]:
     """The hosts a credential of REST base ``api`` may be sent to: github.com's own hosts for the
     public API, else exactly the GHES API host and its web host (with their ports)."""
     base = api_base_of(api)
-    if base == PUBLIC_API:
-        return frozenset(PUBLIC_HOSTS)
-    return frozenset({_netloc(base), _netloc(web_base_for(base))})
+    hosts = set(PUBLIC_HOSTS) if base == PUBLIC_API else {_netloc(base), _netloc(web_base_for(base))}
+    if base == install_api_base():
+        # The install's own GitHub as the operator configured it: its web origin
+        # (BOSS_GITHUB_WEB_URL) and its explicit git origin (BOSS_GITHUB_GIT_URL, IDENTITY_ADMIN.md).
+        hosts.add(_netloc(web_base()))
+        git = (os.environ.get(GIT_BASE_ENV) or "").strip()
+        if git:
+            hosts.add(_netloc(git))
+    return frozenset(hosts)
 
 
 class CrossHostCredential(PermissionError):

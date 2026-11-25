@@ -529,6 +529,14 @@ class EgressProxy:
         template = decision.template
         if not decision.allowed:
             return self._refuse(db, claims, provider, req.method, template, decision.reason)
+        if provider in ("github", "github-api") and not foreign:
+            # THE INSTALL'S ROUTE never serves a repository bound to ANOTHER GitHub host (a GHES
+            # connection): `git clone https://github.com/<that owner>/<repo>` from a sandbox must
+            # not pull the GHES connection's token onto github.com (BOSSAPP-1286).
+            other = self._bound_elsewhere(claims, db, _repo_of(provider, rest))
+            if other:
+                return self._refuse(db, claims, provider, req.method, template,
+                                    "repo_bound_to_other_host")
         if provider.startswith("bitbucket"):
             token = bitbucket_credential()
             if not token:
@@ -558,6 +566,11 @@ class EgressProxy:
             url, headers = self._upstream_request(provider, encoded, req, token, api=foreign)
         except egress_rules.PathRefused as exc:
             return self._refuse(db, claims, provider, req.method, template, str(exc))
+        except github_urls.CrossHostCredential:
+            # The credential belongs to another GitHub host (check_send logged it): refused,
+            # never sent (BOSSAPP-1286).
+            return self._refuse(db, claims, provider, req.method, template,
+                                "credential_host_mismatch")
         return (url, headers, template, token, rest)
 
     def _send(self, claims: RunTokenClaims, provider: str, req: EgressRequest, judged: Any) -> EgressResponse:
@@ -602,6 +615,19 @@ class EgressProxy:
                 break
         return resp
 
+    def _bound_elsewhere(self, claims: RunTokenClaims, db: Any, repo: str) -> bool:
+        """True when owner/repo is bound (in the run's project) to a connection on a GitHub host
+        other than the install's."""
+        from boss_engine.services.github_connections import api_base_for_repository
+
+        owner, _, name = str(repo or "").partition("/")
+        project = getattr(claims.task, "project_id", None)
+        if not owner or not name or not project:
+            return False
+        with db.begin_nested():
+            bound = api_base_for_repository(db, project, owner, name)
+        return not _on_install_host(bound)
+
     def _connection_token(self, claims: RunTokenClaims, db: Any, api: str, repo: str) -> str:
         """The credential of the run's project connection that owner/repo is BOUND through on the
         GHES host `api` — never the install App's token on another host (BOSSAPP-1286). Raises
@@ -623,7 +649,7 @@ class EgressProxy:
                 db, project_id=project, owner=owner, repo=name)
         if not token:
             raise github_app.GitHubRefused("ghes_not_connected", 403)
-        return token
+        return github_urls.tag(token, bound)   # this host's credential, and only this host's
 
     def _installation_token(self, claims: RunTokenClaims, db: Any) -> str:
         cached = github_app.cached_for_run(claims.task.run_id)
@@ -709,7 +735,11 @@ class EgressProxy:
         else:
             base = api or github_app.api_base()
             headers["Authorization"] = f"Bearer {token}"
-        return upstream_url(base, encoded, req.query), headers
+        url = upstream_url(base, encoded, req.query)
+        if provider in ("github", "github-api"):
+            # THE SEND POINT (BOSSAPP-1286): a GitHub credential reaches only its own host.
+            github_urls.check_send(token, url, where="egress")
+        return url, headers
 
     def _refuse(self, db: Any, claims: Optional[RunTokenClaims], provider: str, method: str, template: str,
                 reason: str) -> EgressResponse:

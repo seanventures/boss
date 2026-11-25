@@ -93,7 +93,7 @@ def test_the_route_sends_the_connections_token_to_that_host_only(monkeypatch):
     assert url.startswith(f"https://{HOST}/platform/gateway.git/info/refs")
     assert token == "ghes-conn-token" and headers["Authorization"].startswith("Basic ")
     url, headers = proxy.EgressProxy(engine=None)._upstream_request(
-        "github-api", "/repos/platform/gateway", req, "t", api=GHES_API)
+        "github-api", "/repos/platform/gateway", req, github_urls.tag("t", GHES_API), api=GHES_API)
     assert url.startswith(f"{GHES_API}/repos/platform/gateway")
 
 

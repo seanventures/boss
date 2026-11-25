@@ -184,17 +184,54 @@ def _db() -> Any:
     return _ENGINE[0]
 
 
+#: The last GHES host list read from the database, and when (monotonic seconds).
+_LAST_GOOD: dict[str, Any] = {}
+#: How long a list read before a database failure is still trusted.
+GHES_LIST_GRACE_S = 600.0
+
+
+def _read_ghes_hosts() -> set[str]:
+    """The GHES hosts, READ NOW: the database is asked (a trivial query first, so a failure is
+    seen here rather than swallowed into a cached partial list), then the one list."""
+    from sqlalchemy import text
+
+    from boss_engine.services.github_connections import ghes_hosts
+
+    engine = _db()
+    with engine.connect() as conn:
+        conn.execute(text("SELECT api_base_url FROM github_connections LIMIT 1"))
+    return set(ghes_hosts(engine))
+
+
 def ghes_fenced(host: str) -> bool:
     """A GitHub Enterprise Server host of this install — set on the host OR on any GitHub
     connection's API base (github_connections.ghes_hosts) — is never tunnelled: its credential is
-    added only by the GitHub route (BOSSAPP-1286). Unreadable: fenced by name only (NEVER)."""
-    try:
-        from boss_engine.services.github_connections import ghes_hosts
+    added only by the GitHub route (BOSSAPP-1286).
 
-        return host.lower().rstrip(".") in ghes_hosts(_db())
-    except Exception as exc:  # noqa: BLE001 — the static fence still stands
-        log.warning("could not read the GHES hosts: %s", type(exc).__name__)
+    FAILS CLOSED: when the list cannot be read, a list read within GHES_LIST_GRACE_S still
+    decides; with none, EVERY host is fenced (the CONNECT tunnel refuses until the database
+    answers). A database outage must never open the tunnel to a GHES host whose credential the
+    route alone may add — egress cannot mint a credential without its database either."""
+    import time
+
+    name = host.lower().rstrip(".")
+    try:
+        _db()
+    except RuntimeError:
+        # NO DATABASE CONFIGURED (boss-egress needs DATABASE_URL to mint any credential): no
+        # connection can exist, so no connection-set GHES host either; the install's own GHES host
+        # is in the static fence (NEVER). This is not a read failure, which fails closed below.
         return False
+    try:
+        hosts = _read_ghes_hosts()
+        _LAST_GOOD.update(at=time.monotonic(), hosts=hosts)
+        return name in hosts
+    except Exception as exc:  # noqa: BLE001 — fail closed below
+        log.warning("could not read the GHES hosts: %s", type(exc).__name__)
+    at = _LAST_GOOD.get("at")
+    if at is not None and time.monotonic() - at < GHES_LIST_GRACE_S:
+        return name in _LAST_GOOD.get("hosts", set())
+    return True
 
 
 def _rules_for(host: str) -> list[Rule]:

@@ -95,7 +95,12 @@ def _call(method: str, path: str, *, token: str, scheme: str = "Bearer", body: A
     if body is not None:
         headers["Content-Type"] = "application/json"
         data = json.dumps(body).encode("utf-8")
-    url = path if path.startswith("https://") else f"{api_base()}{path}"
+    url = path if path.startswith(("https://", "http://")) else f"{api_base()}{path}"
+    # THE SEND POINT (BOSSAPP-1286): a credential goes only to the host it belongs to.
+    try:
+        github_urls.check_send(token, url, where="github_app")
+    except github_urls.CrossHostCredential:
+        raise GitHubRefused("credential_host_mismatch", 403) from None
     return TRANSPORT(method, url, headers, data)
 
 
@@ -177,8 +182,9 @@ def mint_installation_token(repos: list[str], permissions: Mapping[str, str], *,
     data = resp.json()
     exp = datetime.fromisoformat(str(data.get("expires_at", "")).replace("Z", "+00:00")) \
         if data.get("expires_at") else datetime.now(timezone.utc) + timedelta(hours=1)
-    return InstallationToken(token=str(data["token"]), expires_at=exp, repositories=tuple(repos),
-                             permissions=dict(permissions))
+    # The App's token belongs to the App's GitHub (the install's API base, BOSSAPP-1286).
+    return InstallationToken(token=github_urls.tag(str(data["token"]), api_base()), expires_at=exp,
+                             repositories=tuple(repos), permissions=dict(permissions))
 
 
 def revoke_installation_token(token: str) -> bool:
@@ -314,7 +320,9 @@ def _credential_for_run(claims: RunTokenClaims, repos: list[str], perms: Mapping
                                         ctx=tokens.context_for(claims, db=db), db=db)
         except (vault.VaultNotFound, vault.VaultNeedsReauth):
             raise GitHubRefused("as_me_not_connected", 409) from None
-        return InstallationToken(token=cred.token, expires_at=cred.expires_at, repositories=tuple(repos),
+        # A person's linked account is on the install's GitHub.
+        return InstallationToken(token=github_urls.tag(cred.token, api_base()),
+                                 expires_at=cred.expires_at, repositories=tuple(repos),
                                  permissions=dict(perms), kind="as_me")
     bound = _bound_connection_token(claims, repos, db=db)
     if bound:
@@ -328,7 +336,8 @@ def _credential_for_run(claims: RunTokenClaims, repos: list[str], perms: Mapping
     org = (github_setup.org_token_for(db, repos, claims.org_id) if repos
            else github_setup.org_token(db, claims.org_id))
     if org is not None:
-        return InstallationToken(token=vault.org_github_token(org["id"], db=db),
+        return InstallationToken(token=github_urls.tag(vault.org_github_token(org["id"], db=db),
+                                                       api_base()),
                                  expires_at=datetime.now(timezone.utc) + timedelta(minutes=30),
                                  repositories=tuple(repos), permissions=dict(perms), kind="org_token")
     if github_setup.org_token(db, claims.org_id) is not None:
@@ -341,6 +350,14 @@ def _credential_for_run(claims: RunTokenClaims, repos: list[str], perms: Mapping
 
 
 def _bound_connection_token(claims: RunTokenClaims, repos: list[str], *, db: Any) -> Optional[str]:
+    """(See below.) The token comes back TAGGED with THAT connection's API base
+    (github_urls.GitHubCredential, BOSSAPP-1286): a GHES connection's token is a GHES credential,
+    and the send points refuse it anywhere else."""
+    return _bound_connection_credential(claims, repos, db=db)
+
+
+def _bound_connection_credential(claims: RunTokenClaims, repos: list[str], *,
+                                 db: Any) -> Optional[str]:
     """The credential of the ONE project connection every one of this run's repos is bound to
     (github_repository_bindings.connection_id), or None (BOSSAPP-1027).
 
@@ -362,7 +379,8 @@ def _bound_connection_token(claims: RunTokenClaims, repos: list[str], *, db: Any
 
     def resolve() -> Optional[str]:
         rows = db.execute(text(
-            "SELECT lower(b.full_name) AS full_name, b.connection_id, c.credential_ref "
+            "SELECT lower(b.full_name) AS full_name, b.connection_id, c.credential_ref, "
+            "c.api_base_url "
             "FROM github_repository_bindings b JOIN github_connections c ON c.id = b.connection_id "
             "WHERE b.project_id = :p AND b.status = 'active' AND c.status IN ('configured', 'active') "
             "AND lower(b.full_name) = ANY(:r)"), {"p": project_id, "r": wanted}).mappings().all()
@@ -374,8 +392,9 @@ def _bound_connection_token(claims: RunTokenClaims, repos: list[str], *, db: Any
         from ..services.github_connections import GitHubConnectionService
 
         owner, _, name = wanted[0].partition("/")
-        return GitHubConnectionService(get_settings()).token_for_repository(
+        token = GitHubConnectionService(get_settings()).token_for_repository(
             db, project_id=project_id, owner=owner, repo=name) or None
+        return github_urls.tag(token, rows[0]["api_base_url"]) if token else None
 
     # An older schema has no bindings, and an unreadable secret is not a reason to refuse here:
     # the rest of the ladder decides. The savepoint keeps a failed read out of the transaction.
