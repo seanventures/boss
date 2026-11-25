@@ -458,6 +458,15 @@ class LocalGitAdapter:
         return local_repo.restack(self._require(), branch_name, merged_head_sha,
                                   base or self.default_branch())
 
+    def commit_identity(self, commit_sha: str) -> dict:
+        """Return the commit SHA and parent SHAs for an immutable local Git commit."""
+        git_dir = self._require()
+        sha = local_repo.rev_parse(git_dir, commit_sha) or commit_sha
+        return {
+            "commit_sha": sha,
+            "parents": local_repo.commit_parents(git_dir, sha),
+        }
+
     def pull_request_snapshot(self, pull_number: int) -> dict:
         row = self.change_set(pull_number)
         git_dir = self._require()

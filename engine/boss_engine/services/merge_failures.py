@@ -32,6 +32,7 @@ log = logging.getLogger(__name__)
 
 NOT_MERGEABLE = "not_mergeable"
 HEAD_CHANGED = "head_changed"
+HEAD_MOVED = "head_moved"
 TRANSIENT = "transient"
 FAILED = "failed"
 #: The recommendation key a merge question carries after its merge failed: {reason, next, kind}.
@@ -40,7 +41,7 @@ _TRANSIENT_MARKS = ("500 ", "502", "503", "504", "timed out", "timeout", "connec
                     "connection reset", "remotedisconnected", "temporarily")
 
 
-def classify(message: str) -> str:
+def classify(message: str, *, pinned: bool = False) -> str:
     low = str(message or "").lower()
     # "does not merge cleanly" is a LOCAL change set's conflict (local_repo.LocalMergeConflict):
     # the same not-mergeable state as GitHub's 405, and it gets the same recovery (BOSSAPP-980).
@@ -49,6 +50,10 @@ def classify(message: str) -> str:
     # conflict as a moved head and retry it forever.
     if "does not merge cleanly" in low:
         return NOT_MERGEABLE
+    if ("the change moved after approval" in low
+            or "head branch was modified" in low
+            or (pinned and "409" in low)):
+        return HEAD_MOVED
     if "409" in low:
         return HEAD_CHANGED
     if "405" in low or "not mergeable" in low or "merge conflict" in low:
@@ -111,6 +116,8 @@ def reason_words(kind: str, message: str, number: Any, url: Any = None) -> str:
     where = "BOSS could not merge it on this machine" if local else "GitHub would not merge it"
     if kind == NOT_MERGEABLE:
         return f"{pr} conflicts with its base branch, so {where}"
+    if kind == HEAD_MOVED:
+        return f"{pr}: the change moved after approval"
     if kind == HEAD_CHANGED:
         return f"{pr} changed while it was being merged"
     if kind == TRANSIENT:
@@ -406,14 +413,15 @@ def retry_refused_handoffs(engine: Any, settings: Any, *, project_id: Optional[s
 
 
 def handle(service: Any, connection: Any, project_id: str, decision_id: str, number: int,
-           url: str, branch_name: Optional[str], receipt_id: str, message: str) -> dict:
+           url: str, branch_name: Optional[str], receipt_id: str, message: str,
+           *, pinned: bool = False) -> dict:
     """What a failed merge becomes. Returns the merge job's result: `retryable` asks the
     worker to retry; status superseded / needs_rebase are handled (the job succeeds); status
     failed is said on the decision and still fails the job."""
     from . import cleared_causes
 
     github = service.github
-    kind = classify(message)
+    kind = classify(message, pinned=pinned)
     reason = reason_words(kind, message, number, url)
     service.receipts.mark_failed(connection, receipt_id, {"message": message, "kind": kind})
     service.events.emit(connection, project_id, "software_factory.pull_request_merge_failed",
@@ -422,6 +430,82 @@ def handle(service: Any, connection: Any, project_id: str, decision_id: str, num
                          "reason": reason, "needs_conflict_resolution": kind == NOT_MERGEABLE})
     base = {"receipt_id": receipt_id, "decision_id": decision_id, "pull_request_url": url,
             "branch_name": branch_name}
+    if kind == HEAD_MOVED:
+        old_row = connection.execute(
+            text(
+                "SELECT task_id, question, recommendation, risk_tier, default_action "
+                "FROM decisions WHERE id = :d AND project_id = :p"
+            ),
+            {"d": decision_id, "p": project_id},
+        ).mappings().first()
+        if not old_row:
+            _mark(
+                connection, decision_id, reason,
+                "Review the updated diff, then press Merge to try again.",
+                kind, reopen=True,
+            )
+            return {**base, "status": "failed", "message": f"Merge failed: {reason}."}
+        new_head_sha = None
+        snap_fn = getattr(github, "pull_request_snapshot", None)
+        if callable(snap_fn):
+            try:
+                snap = snap_fn(int(number)) or {}
+                cand = str(snap.get("head_sha") or "").strip()
+                if cand:
+                    new_head_sha = cand
+            except Exception:  # noqa: BLE001
+                new_head_sha = None
+        _mark(
+            connection, decision_id, reason,
+            "A fresh review card was opened for the updated change.",
+            kind, reopen=False,
+        )
+        _withdraw(
+            connection, project_id, decision_id,
+            f"Withdrawn: {reason}. A fresh review card was opened.",
+            {"kind": "head_moved_after_approval"},
+        )
+        from .core import create_blocking_decision
+
+        old_rec = dict(old_row.get("recommendation") or {})
+        old_rec.pop(KEY, None)
+        old_rec.pop("head_sha", None)
+        old_summary = str(old_rec.get("summary") or "").strip()
+        new_summary = (
+            "The change moved after the previous approval. Review the updated diff and approve to merge."
+            + (f" {old_summary}" if old_summary else "")
+        )
+        new_rec = {
+            **old_rec,
+            # Static decision-producer scan requires "action" literally after any **spread.
+            "action": "review_pull_request",
+            "summary": new_summary,
+            "superseded_decision_id": decision_id,
+            **({"head_sha": new_head_sha} if new_head_sha else {}),
+        }
+        new_question = f"Re-review after head moved: {old_row.get('question') or url}"[:500]
+        new_did = create_blocking_decision(
+            connection,
+            project_id,
+            old_row.get("task_id"),
+            new_question,
+            new_rec,
+            {},
+            "head_moved_after_approval",
+        )
+        connection.execute(
+            text(
+                "UPDATE code_task_runs SET decision_id = :new_d, updated_at = now() "
+                "WHERE decision_id = :old_d AND project_id = :p"
+            ),
+            {"new_d": new_did, "old_d": decision_id, "p": project_id},
+        )
+        return {
+            **base,
+            "status": "failed",
+            "new_decision_id": new_did,
+            "message": f"Merge failed: {reason}. Opened fresh review card {new_did}.",
+        }
     if kind in (HEAD_CHANGED, TRANSIENT):
         _mark(connection, decision_id, reason, "BOSS is trying the merge again.", kind,
               reopen=False)

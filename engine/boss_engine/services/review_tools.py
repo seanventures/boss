@@ -15,9 +15,10 @@ CLI itself printed (its stderr, and the output of the commands the agent ran: a 
 """
 from __future__ import annotations
 
+import difflib
 import json
 import re
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 #: The words a seat's record starts with when its tools could not run.
 NOT_RUN = "NOT RUN"
@@ -123,3 +124,125 @@ def unseen_reason(result: dict, hollow: Optional[str]) -> Optional[str]:
 
 def not_run(reason: str) -> str:
     return f"{NOT_RUN}: {reason}"
+
+
+def _norm_path(path: Any) -> str:
+    return str(path or "").strip().replace("\\", "/").lstrip("./")
+
+
+def changed_hunks(
+    prev_files: Mapping[str, str],
+    curr_files: Mapping[str, str],
+) -> dict[str, Optional[list[tuple[int, int]]]]:
+    """Map each file in `curr_files` to:
+    - None if it is new (absent in `prev_files`, all lines changed),
+    - [] if it is byte-identical to `prev_files`,
+    - [(start, end), ...] 1-based inclusive line spans in `curr_files` that changed.
+    """
+    prev_norm = {_norm_path(k): v for k, v in prev_files.items()}
+    out: dict[str, Optional[list[tuple[int, int]]]] = {}
+    for raw_path, new_text in curr_files.items():
+        path = _norm_path(raw_path)
+        if path not in prev_norm:
+            out[path] = None
+            continue
+        old_text = prev_norm[path]
+        if old_text == new_text:
+            out[path] = []
+            continue
+        old_lines = old_text.splitlines()
+        new_lines = new_text.splitlines()
+        spans: list[tuple[int, int]] = []
+        matcher = difflib.SequenceMatcher(None, old_lines, new_lines)
+        for tag, _i1, _i2, j1, j2 in matcher.get_opcodes():
+            if tag == "equal":
+                continue
+            if tag in ("replace", "insert"):
+                spans.append((j1 + 1, max(j1 + 1, j2)))
+            elif tag == "delete":
+                spans.append((max(1, j1), max(1, j1 + 1)))
+        out[path] = spans
+    return out
+
+
+def _resolve_hunk_path(
+    finding_path: Any,
+    hunks: Mapping[str, Optional[list[tuple[int, int]]]],
+) -> Optional[str]:
+    norm = _norm_path(finding_path)
+    if not norm:
+        return None
+    if norm in hunks:
+        return norm
+    matches = [
+        k for k in hunks
+        if k.endswith("/" + norm) or norm.endswith("/" + k)
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def finding_touches_changed_lines(
+    finding: Mapping[str, Any],
+    hunks: Mapping[str, Optional[list[tuple[int, int]]]],
+    curr_files: Mapping[str, str],  # noqa: ARG001 — retained in public signature
+) -> bool:
+    """True when `finding` is unanchored, unresolvable (fail closed), in a new file, or
+    overlaps a changed hunk; False when it sits on unchanged lines of a previously reviewed file."""
+    resolved = _resolve_hunk_path(finding.get("path"), hunks)
+    if resolved is None:
+        return True
+    spans = hunks[resolved]
+    if spans is None:
+        return True
+    if not spans:
+        return False
+    line = finding.get("line")
+    if line is None:
+        return True
+    try:
+        start = int(line)
+        end = int(finding.get("end_line") or start)
+    except (TypeError, ValueError):
+        return True
+    if end < start:
+        start, end = end, start
+    return any(not (end < h_start or start > h_end) for h_start, h_end in spans)
+
+
+def prior_finding_fingerprints(prior_summary: str, *, stage: Optional[str] = None) -> set[str]:
+    """Fingerprints (`rv:...`) of every FINDING raised in `prior_summary`."""
+    from . import review_comments
+    from .acceptance.ledger import review_fingerprint
+
+    return {
+        review_fingerprint(c.path, c.body)
+        for c in review_comments.parse_findings(prior_summary or "", stage=stage)
+    }
+
+
+def classify_unchanged_findings(
+    findings: list[dict],
+    *,
+    prev_files: Optional[Mapping[str, str]],
+    curr_files: Optional[Mapping[str, str]],
+    prior_summary: str = "",
+    stage: Optional[str] = None,
+) -> list[dict]:
+    """Tag brand-new findings sitting on unchanged code as `newly_noticed` (BOSSAPP-1387).
+    Findings that were already in `prior_summary` or that touch changed lines keep their
+    original status so regressions and unresolved blockers are never demoted."""
+    if prev_files is None or curr_files is None:
+        return [dict(f) for f in findings]
+    from .acceptance.ledger import review_fingerprint
+
+    hunks = changed_hunks(prev_files, curr_files)
+    prior_fps = prior_finding_fingerprints(prior_summary, stage=stage)
+    out: list[dict] = []
+    for f in findings:
+        item = dict(f)
+        fp = review_fingerprint(item.get("path"), item.get("text") or "")
+        if fp not in prior_fps and not finding_touches_changed_lines(item, hunks, curr_files):
+            item["newly_noticed"] = True
+            item["label"] = "newly noticed"
+        out.append(item)
+    return out

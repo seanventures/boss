@@ -167,7 +167,9 @@ def action_for(project_id: str, *, source: str, run_id: Optional[str],
     if fc == "needs_human" or rc in ("harness_unavailable", "stack_unsupported",
                                      "build_services_unavailable", "no_test_files",
                                      "credential_plain_http", "credential_misdirected",
-                                     "model_auth_rejected", "repo_access_denied"):
+                                     "model_auth_rejected", "model_not_configured",
+                                     "repo_access_denied") or re.search(
+            r"\b[a-z0-9_]+_(?:base_url|api_key)\s+is\s+not\s+configured\b", raw, re.I):
         tool = _TOOLCHAIN.search(raw)
         said = parse_sentence(raw)
         cannot = _CANNOT_BUILD.search(raw)
@@ -190,6 +192,13 @@ def action_for(project_id: str, *, source: str, run_id: Optional[str],
                    "href": href(project_id, area="setup", focus="models"),
                    "detail": (_sentence(said["fix"]) if said else
                               "Reconnect the model's account in Setup, then retry.")}
+        elif rc == "model_not_configured" or re.search(
+                r"\b[a-z0-9_]+_(?:base_url|api_key)\s+is\s+not\s+configured\b", raw, re.I):
+            return out(False, {"label": "Fix the model in Setup › Models",
+                               "href": href(project_id, area="setup", focus="models"),
+                               "detail": "This model's endpoint or key is not configured for "
+                                         "builds. Connect or update it in Setup › Models."},
+                       "This model's endpoint or key is not configured: retrying fails the same way")
         elif rc in ("credential_plain_http", "credential_misdirected", "model_auth_rejected"):
             # THE PERSON'S OWN MODEL SETUP (stranger test r6): a plain-http address, a key bound
             # to another host, a key the provider rejected. Said in the refusal's own words.

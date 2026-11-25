@@ -310,3 +310,27 @@ def lineage_clone(run_id: str, fctx: Optional[dict], resolved_clone: str,
     if root != run_id and branch_exists(work_branch):
         return work_branch, work_branch
     return work_branch, resolved_clone
+
+
+def parent_awaiting_decision(connection: Any, project_id: str, parent_branch: str) -> Optional[dict]:
+    """Return the awaiting merge decision on `parent_branch` when a parent PR is still open
+    with a pending/approved/delegated merge card and has not merged yet (BOSSAPP-1395)."""
+    if connection is None or not project_id or not parent_branch:
+        return None
+    row = connection.execute(
+        text(
+            "SELECT d.id AS decision_id, d.status, d.recommendation->>'head_sha' AS head_sha, "
+            "d.recommendation->>'pull_request_url' AS pull_request_url "
+            "FROM decisions d "
+            "LEFT JOIN code_task_runs r ON r.id = d.recommendation->>'run_id' "
+            "  AND r.project_id = d.project_id "
+            "WHERE d.project_id = :p "
+            "AND d.recommendation->>'action' = 'review_pull_request' "
+            "AND d.recommendation->>'branch_name' = :b "
+            "AND d.status IN ('pending', 'approved', 'delegated') "
+            "AND COALESCE(r.finalize_ctx->'merge'->>'sha', '') = '' "
+            "ORDER BY d.created_at DESC LIMIT 1"
+        ),
+        {"p": project_id, "b": parent_branch},
+    ).mappings().first()
+    return dict(row) if row else None

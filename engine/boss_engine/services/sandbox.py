@@ -257,6 +257,7 @@ class CommandResult:
     timed_out: bool
     stdout: str
     stderr: str
+    tampered: bool = False
 
     @property
     def ok(self) -> bool:
@@ -958,7 +959,7 @@ class EphemeralSandbox:
                     size = self._size_of(path)
                     if size is None or size <= MAX_FILE_BYTES:
                         raise
-                    if self._ignored(path):
+                    if path in new_files and self._ignored(path):
                         # .gitignore names it (staged before the rule was added): not the work.
                         self._unstage([path])
                         continue

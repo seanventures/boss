@@ -2209,11 +2209,225 @@ def _advisory(item: Mapping[str, Any]) -> bool:
     return bool(item.get("judgement")) and item.get("status") == PARTIAL
 
 
+def _has_contradicting_evidence(
+    item: Mapping[str, Any],
+    prior_item: Mapping[str, Any],
+    *,
+    stack: Mapping[str, Any],
+    root: Any,
+    exec_log: Any = None,
+    replay: Optional[Mapping[str, Any]] = None,
+    checks: Any = None,
+) -> bool:
+    """Explicit contradicting evidence that invalidates a prior MET on the same head_sha."""
+    if item.get("status") == HUMAN:
+        return True
+    if replay:
+        key = str(item.get("id") or item.get("n") or "")
+        carried = replay.get(key) or replay.get(str(item.get("n") or ""))
+        if isinstance(carried, Mapping) and str(carried.get("result") or "").lower() in (
+            "fail",
+            "failed",
+            "error",
+        ):
+            return True
+    if checks:
+        item_id = item.get("id")
+        item_n = item.get("n")
+        ev_text = str(item.get("evidence") or "")
+        for chk in checks:
+            if not isinstance(chk, Mapping) or chk.get("ok"):
+                continue
+            chk_item = chk.get("item")
+            chk_cmd = str(chk.get("command") or "").strip()
+            if (chk_item is not None and chk_item in (item_id, item_n)) or (
+                chk_cmd and chk_cmd in ev_text
+            ):
+                return True
+    if exec_log is not None:
+        ev_text = str(item.get("evidence") or "")
+        for claim in exec_claims(ev_text):
+            rec = _lookup(exec_log, claim["ref"])
+            if rec is not None:
+                exit_val = _field(rec, "exit")
+                if exit_val is None:
+                    exit_val = _field(rec, "exit_code")
+                if _field(rec, "timed_out") or exit_val not in (None, 0):
+                    return True
+    if stack.get("missing") and root is not None:
+        dep = _deps.stack_claim(item.get("text"), root) or _deps.claim(item.get("text"), root)
+        if dep is not None and dep[0] == "false":
+            return True
+    if root is not None:
+        prior_ev = str(prior_item.get("evidence") or "")
+        if (
+            prior_ev
+            and not prior_ev.startswith("replayed:")
+            and not (prior_item.get("evidence_refs") or [])
+            and not _suite_item(str(item.get("text") or ""))
+        ):
+            found, absent = evidence_paths(
+                root, prior_ev, item_text=str(item.get("text") or "")
+            )
+            if absent and not found:
+                return True
+            if wiring_problem(
+                root,
+                prior_ev,
+                item_text=str(item.get("text") or ""),
+                needs_loader=bool(item.get("needs_loader")),
+            ):
+                return True
+    return False
+
+
+def pin_met_items(
+    record: dict[str, Any],
+    prior_record: Optional[Mapping[str, Any]],
+    *,
+    root: Any = None,
+    head_sha: Optional[str] = None,
+    prior_head_sha: Optional[str] = None,
+    exec_log: Any = None,
+    replay: Optional[Mapping[str, Any]] = None,
+    checks: Any = None,
+) -> dict[str, Any]:
+    """Keep items already MET on the exact same clean `head_sha` MET across re-checks
+    unless explicit contradicting evidence exists (BOSSAPP-1387)."""
+    head = str(head_sha or "").strip()
+    if head:
+        record["head_sha"] = head
+    prev_head = str(prior_head_sha or (prior_record or {}).get("head_sha") or "").strip()
+    if not head or not prev_head or head != prev_head or not isinstance(prior_record, Mapping):
+        return record
+    prior_by_key: dict[str, Mapping[str, Any]] = {}
+    prior_by_id: dict[str, Mapping[str, Any]] = {}
+    for pi in prior_record.get("items") or []:
+        if not isinstance(pi, Mapping):
+            continue
+        if pi.get("status") != MET or pi.get("unverified"):
+            continue
+        pid = str(pi.get("id") or "").strip()
+        if pid:
+            prior_by_id[pid] = pi
+        pkey = item_key(str(pi.get("text") or ""))
+        if pkey:
+            prior_by_key[pkey] = pi
+    if not prior_by_id and not prior_by_key:
+        return record
+
+    judged = list(record.get("items") or [])
+    pinned_any = False
+    stack = record.get("stack") or {}
+    for it in judged:
+        if it.get("status") == MET and not it.get("unverified"):
+            continue
+        pid = str(it.get("id") or "").strip()
+        pkey = item_key(str(it.get("text") or ""))
+        prev_it = (prior_by_id.get(pid) if pid else None) or prior_by_key.get(pkey)
+        if prev_it is None:
+            continue
+        if _has_contradicting_evidence(
+            it,
+            prev_it,
+            stack=stack,
+            root=root,
+            exec_log=exec_log,
+            replay=replay,
+            checks=checks,
+        ):
+            continue
+        it["status"] = MET
+        it["evidence"] = prev_it.get("evidence") or it.get("evidence") or ""
+        if prev_it.get("evidence_refs"):
+            it["evidence_refs"] = list(prev_it["evidence_refs"])
+        it.pop("unverified", None)
+        it["pinned"] = True
+        pinned_any = True
+
+    if not pinned_any:
+        return record
+
+    missing = [i["n"] for i in judged if i["status"] == MISSING]
+    partial = [i["n"] for i in judged if i["status"] == PARTIAL and not _advisory(i)]
+    advisory = [i["n"] for i in judged if _advisory(i)]
+    unjudged = [i["n"] for i in judged if i["status"] == UNJUDGED]
+    met = [i["n"] for i in judged if i["status"] == MET]
+    human = [i["n"] for i in judged if i["status"] == HUMAN]
+    unverified = [i["n"] for i in judged if i.get("unverified")]
+    summary = record.get("summary_line")
+    source = record.get("source") or {"root": True}
+    over_cap = int(record.get("items_not_judged") or 0)
+    dropped = int(record.get("items_dropped") or 0)
+    why = ""
+    if stack.get("missing") or missing or partial:
+        verdict = "not_met"
+    elif unverified or human:
+        verdict = "not_met"
+        why = "; ".join(
+            x
+            for x in (
+                f"{len(unverified)} items claimed MET with evidence BOSS could not verify"
+                if unverified
+                else "",
+                f"{len(human)} items need a person" if human else "",
+            )
+            if x
+        )
+    elif over_cap:
+        verdict, why = (
+            "not_met",
+            f"{over_cap} items not judged (beyond {MAX_PASSES} reviewer passes of {MAX_ITEMS})",
+        )
+    elif not source.get("root"):
+        verdict, why = "not_run", str(source.get("why") or "the must-haves were not found")
+    elif not judged:
+        verdict = "no_items"
+    elif unjudged:
+        verdict, why = "not_run", f"{len(unjudged)} of {len(judged)} items were not answered"
+    elif dropped:
+        verdict, why = "not_run", f"{dropped} items beyond {MAX_TOTAL_ITEMS} were not judged"
+    elif summary == "NOT MET" and (advisory or any(i.get("pinned") for i in judged)):
+        verdict = "met"
+    elif summary != "MET":
+        verdict = "not_run"
+        why = (
+            "the reviewer's summary says NOT MET although every item reads met"
+            if summary == "NOT MET"
+            else "the reviewer gave no ACCEPTANCE summary line"
+        )
+    else:
+        verdict = "met"
+    record.update(
+        {
+            "verdict": verdict,
+            "why": why,
+            "items": judged,
+            "missing": missing,
+            "partial": partial,
+            "unjudged": unjudged,
+            "met": met,
+            "advisory": advisory,
+            "counts": {
+                s: sum(1 for i in judged if i["status"] == s)
+                for s in (MET, PARTIAL, MISSING, UNJUDGED)
+            },
+        }
+    )
+    if record.get("mode") == "exercise" or exec_log is not None or bool(replay):
+        record["counts"][HUMAN] = len(human)
+        record.update({"human": human, "unverified": unverified})
+    return record
+
+
 def judge(items: list[dict], reply: Optional[str], stack: Mapping[str, Any], *,
           root: Any, source: Optional[Mapping[str, Any]] = None,
           dropped: int = 0, summary_line: Optional[str] = "",
           over_cap: int = 0, exec_log: Any = None,
-          replay: Optional[Mapping[str, Any]] = None, checks: Any = None) -> dict[str, Any]:
+          replay: Optional[Mapping[str, Any]] = None, checks: Any = None,
+          prior: Optional[Mapping[str, Any]] = None,
+          head_sha: Optional[str] = None,
+          prior_head_sha: Optional[str] = None) -> dict[str, Any]:
     """The gate's record. It FAILS CLOSED; verdict:
       met       EVERY item MET with evidence in the tree, every declared manifest present, and
                 the reviewer's own summary line says MET
@@ -2297,6 +2511,17 @@ def judge(items: list[dict], reply: Optional[str], stack: Mapping[str, Any], *,
         record.update({"human": human, "unverified": unverified,
                        "replayed": [i["n"] for i in judged if i.get("replayed")],
                        "mode": "exercise"})
+    if prior is not None or head_sha:
+        record = pin_met_items(
+            record,
+            prior,
+            root=root,
+            head_sha=head_sha,
+            prior_head_sha=prior_head_sha,
+            exec_log=exec_log,
+            replay=replay,
+            checks=checks,
+        )
     return record
 
 

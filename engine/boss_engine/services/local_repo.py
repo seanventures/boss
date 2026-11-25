@@ -384,8 +384,10 @@ def merge(git_dir: Path, head: str, base: str, message: str, *, method: str = "m
         # Words only, no sha or branch name: merge_failures.classify reads digits like "409"
         # in hex as a moved GitHub head and would retry this forever.
         if not pinned or merge_base(git_dir, pinned, head_sha) != pinned:
-            raise LocalMergeMoved("The approved commit is no longer on the change's branch "
-                                  "(it was rewritten after the approval); nothing was merged.")
+            raise LocalMergeMoved(
+                "The approved commit is no longer on the change's branch (it was rewritten after "
+                "the approval); nothing was merged. Open the build and press Re-check this change "
+                "to review the current branch and get a fresh merge card.")
         head_sha = pinned
     if merge_base(git_dir, head_sha, base_sha) == head_sha:
         return base_sha                                   # already in
@@ -485,7 +487,15 @@ def restack(git_dir: Path, branch: str, merged_head: str, base: str) -> dict[str
                     "why": f"replaying the commits made after the merge onto {base} "
                            f"conflicted: {said}"}
         git(["push", "--quiet", "--force", "origin", f"HEAD:refs/heads/{branch}"], cwd=wt)
-    return {"restacked": True, "paths": paths, "base": base}
+    return {"restacked": True, "paths": paths, "base": base,
+            "head_sha": branch_sha(git_dir, branch) or ""}
+
+
+def commit_parents(git_dir: Path, ref: str) -> list[str]:
+    """Return parent commit SHAs for `ref`, or [] if unreadable."""
+    out = git(["rev-list", "--parents", "-n", "1", ref], git_dir=git_dir, check=False).strip()
+    parts = out.split()
+    return parts[1:] if len(parts) > 1 else []
 
 
 # ── a local project's repository ─────────────────────────────────────────────────────────────

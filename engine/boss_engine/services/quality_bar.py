@@ -293,6 +293,12 @@ def review_block_severity(bar: str, configured: Optional[str] = None) -> str:
     return base
 
 
+def demote_newly_noticed(bar: str) -> bool:
+    """Whether brand-new findings on unchanged lines are demoted to follow-ups (`standard` and
+    `prototype`) instead of blocking fix rounds (`production` keeps them blocking)."""
+    return (normalize(bar) or DEFAULT) != PRODUCTION
+
+
 #: From this risk tier up, a plan is signed off by a person at every bar.
 SIGNOFF_TIER = 3
 
@@ -470,6 +476,46 @@ def consistency_passes(bar: str, verdict: str, summary: str = "") -> tuple[bool,
     return True, True
 
 
+FLAKY_MAX_CHECKS_PER_BUILD = 2
+FLAKY_MAX_SUITE_MS = 60_000
+FLAKY_MAX_TOTAL_RERUN_MS = 120_000
+FLAKY_MAX_FAILING_TESTS = 3
+
+
+def should_rerun_flaky(
+    *,
+    tampered: bool = False,
+    timed_out: bool = False,
+    install_failed: bool = False,
+    has_command: bool = True,
+    missing_packages: bool = False,
+    failing_count: int = 0,
+    duration_ms: int = 0,
+    checks_used: int = 0,
+    rerun_ms_used: int = 0,
+) -> tuple[bool, str]:
+    """Bound flaky re-run cost so real failures and tampered manifests never triple suite time."""
+    if tampered:
+        return False, "tampered_manifest"
+    if timed_out:
+        return False, "timed_out"
+    if install_failed:
+        return False, "install_failed"
+    if not has_command:
+        return False, "no_command"
+    if missing_packages:
+        return False, "missing_packages"
+    if failing_count > FLAKY_MAX_FAILING_TESTS:
+        return False, "too_many_failures"
+    if duration_ms > FLAKY_MAX_SUITE_MS:
+        return False, "suite_too_slow"
+    if checks_used >= FLAKY_MAX_CHECKS_PER_BUILD:
+        return False, "build_rerun_cap"
+    if rerun_ms_used >= FLAKY_MAX_TOTAL_RERUN_MS:
+        return False, "build_time_cap"
+    return True, "ok"
+
+
 # ---------------------------------------------------------------------------------------------
 # The gates dict: a gate that fails but does not block at this bar is a follow-up, not a failure
 # ---------------------------------------------------------------------------------------------
@@ -616,6 +662,8 @@ def followup_items(evidence: Optional[Mapping[str, Any]], limit: int = 40
         text = _one_line(f.get("text"))
         if not text or text.lower() in seen:
             continue
+        if f.get("newly_noticed") and "newly noticed" not in text.lower():
+            text = f"[newly noticed] {text}"
         seen.add(text.lower())
         where = _one_line(f.get("path"))
         if where and f.get("line"):
@@ -624,6 +672,7 @@ def followup_items(evidence: Optional[Mapping[str, Any]], limit: int = 40
                      if isinstance(f.get(k), str) and f.get(k)), None)
         out.append({"tier": finding_tier(f), "severity": str(f.get("severity") or "major").lower(),
                     "text": (f"{where} — {text}" if where and where not in text else text)[:400],
+                    **({"newly_noticed": True} if f.get("newly_noticed") else {}),
                     # Which seat raised it (a security reviewer's high on a P0 line is never
                     # deferred: review_packet.for_run).
                     **({"seat": seat} if seat else {})})

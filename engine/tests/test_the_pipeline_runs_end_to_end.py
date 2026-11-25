@@ -380,11 +380,16 @@ def test_a_follow_up_builds_on_the_same_branch_and_pull_request(pipeline, built,
     run = out["run"]
     assert error is None, error
     assert run["status"] == "completed", (run["status"], run.get("error"))
-    assert run["pull_request_url"] == built["run"]["pull_request_url"]
+    # BOSSAPP-1395: while the parent's merge card is pending, a GitHub follow-up isolates onto
+    # its own branch cut from the parent's approved head and opens a stacked PR instead of
+    # pushing onto the parent's branch/PR.
+    assert run["pull_request_url"] != built["run"]["pull_request_url"]
     assert out["writes"], "the follow-up never wrote"
     after = pipeline.branch_heads(built["repo"])
-    work = [b for b in after if b != "main"]
-    assert any(after[b] != before.get(b) for b in work), "the follow-up pushed nothing"
+    parent_branch = f"boss/code/{built['run_id']}"
+    followup_branch = f"boss/code/{follow}"
+    assert after.get(parent_branch) == before.get(parent_branch), "parent branch must stay pinned"
+    assert followup_branch in after and after[followup_branch] != after[parent_branch]
 
 
 # ── a re-check of that change ────────────────────────────────────────────────────────────────

@@ -687,6 +687,13 @@ def _explain(error: object, *, source_id: Optional[str] = None) -> dict:
             "action": "Connect a model in Setup.",
             "href": setup_href(source_id), "retry": False,
         }
+    if re.search(r"\b[a-z0-9_]+_(?:base_url|api_key)\s+is\s+not\s+configured\b", lowered):
+        return {
+            "kind": "no_model",
+            "headline": "This model's endpoint or key is not configured.",
+            "action": "Connect or update the model in Setup › Models.",
+            "href": setup_href(source_id), "retry": False,
+        }
     if NO_DIRECT_ANSWER in lowered:
         return {
             "kind": "no_direct_answer",
@@ -745,14 +752,20 @@ def settled_failure(error: object) -> Optional[str]:
     from .model_routing import ModelSpendRefused
 
     said = explain(text)
+    not_configured = bool(
+        re.search(r"\b[a-z0-9_]+_(?:base_url|api_key)\s+is\s+not\s+configured\b", lowered)
+    )
     # An engine that could not run fails the same way on every retry until its fix is made.
     settled = (said["kind"] in ("provider_requirement", "harness_failure")
-               or (said["kind"] == "no_model" and any(m in lowered for m in _SETTLED_MARKERS))
+               or (said["kind"] == "no_model"
+                   and (any(m in lowered for m in _SETTLED_MARKERS) or not_configured))
                or ModelSpendRefused.MARKER in lowered)
     if not settled:
         return None
     if text.startswith(said["headline"]) or said["kind"] == "harness_failure":
         return text            # already explained once; do not wrap it twice
+    if not_configured and "openai_api_key is not configured" not in lowered:
+        return f"{said['headline']} {said['action']}"
     return f"{said['headline']} {said['action']} ({text})"
 
 
