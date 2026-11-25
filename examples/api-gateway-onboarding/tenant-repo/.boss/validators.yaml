@@ -1,0 +1,9 @@
+# Which checker BOSS runs on a tenant file, and how to read its report.
+# BOSS reads this file from the base branch, so a change cannot weaken its own check.
+validators:
+  - id: tenantlint
+    applies_to: ["config/tenants/*.yaml"]
+    run: "python3 tools/tenantlint.py {file} --json"
+    output: {adapter: gwlint-json}
+    rules_doc: rules/TENANT_RULES.md
+    ruleset: northgate-tenants
