@@ -41,6 +41,9 @@ function toast(type: "success" | "error", message: string) {
  * stays disabled. With other unsaved edits they ride along with the next Save instead, a rename
  * must never mark unsaved step edits as saved.
  */
+/** A standard's steps are edited in place; its name and description follow BOSS's catalogue. */
+export const STANDARD_NAME_TIP = "A standard keeps its name. Save as your copy to name it differently.";
+
 export function WorkflowSettings({ state, dispatch, projectId, actor, usedFor, onSchedule, onClose }: {
   state: EditorState;
   dispatch: Dispatch<EditorAction>;
@@ -89,7 +92,7 @@ export function WorkflowSettings({ state, dispatch, projectId, actor, usedFor, o
         </button>
       </header>
 
-      <label className="wf-field" title={standard ? "Shipped with BOSS. Saving makes your own copy." : undefined}>
+      <label className="wf-field" title={standard ? STANDARD_NAME_TIP : undefined}>
         <span className="wf-label">Name</span>
         <Editable>
           <input className="wf-input" value={meta.name} readOnly={standard} maxLength={120}

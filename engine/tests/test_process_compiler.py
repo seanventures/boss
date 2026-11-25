@@ -67,7 +67,8 @@ def test_unknown_role_raises():
 
 
 def test_unknown_action_raises():
-    with pytest.raises(ValueError, match="action"):
+    # BOSSAPP-1351: a refusal says what BOSS can do instead, never "unknown action 'deploy'".
+    with pytest.raises(ValueError, match="no step that does 'deploys'.*custom step"):
         compile_process_from_text("captain deploys the service")
 
 

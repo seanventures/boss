@@ -55,6 +55,18 @@ DEFAULT_POLL_SECONDS = 10
 MAX_POLL_SECONDS = 120
 #: How long a repository with no CI configured is given for an external CI to report a status.
 NO_CI_GRACE_SECONDS = 60
+#: THE CI WAIT COUNTS FROM WHEN A CHECK STARTS RUNNING (BOSSAPP-1453). Time every check sits
+#: queued for a GitHub runner is not CI's run time: on a busy organisation, or one with a single
+#: self-hosted runner, a check can queue longer than the whole timeout. The queue has its own
+#: bound, from when the wait began, so a runner that never comes still ends the wait in words.
+QUEUE_TIMEOUT_SECONDS = 6 * 3600
+#: A check run's statuses before a runner picks it up (GitHub: queued, waiting, requested,
+#: pending). A commit status has no queued state: `pending` there is normalised to running.
+QUEUED_STATUSES = frozenset({"queued", "waiting", "requested", "pending"})
+#: A build that waits for CI IN its own run (run_blocking) holds a worker slot and its budget
+#: hold while it waits, so its queue bound is shorter: an hour, or the run timeout when longer.
+#: The answer is `timed_out` ("CI never started"), which Re-check reads again later.
+IN_BUILD_QUEUE_TIMEOUT_SECONDS = 3600
 
 _log = logging.getLogger("boss.ci_gate")
 TERMINAL = frozenset({"passed", "failed", "timed_out", "no_ci", "unreadable", "cancelled"})
@@ -663,17 +675,41 @@ def look(reader: CiReader, sha: str) -> CiOutcome:
     return evaluate(normalise(reader.check_runs(sha), reader.statuses(sha)))
 
 
+def running(checks: Iterable[Mapping[str, Any]]) -> bool:
+    """Whether any check has left the queue (a runner took it, or it already finished)."""
+    return any(str(c.get("status") or "queued") not in QUEUED_STATUSES for c in checks or ())
+
+
 def settle(outcome: CiOutcome, *, elapsed: float, timeout: float, has_ci: Optional[bool],
-           repository: str = "", grace: float = NO_CI_GRACE_SECONDS) -> CiOutcome:
+           repository: str = "", grace: float = NO_CI_GRACE_SECONDS,
+           ran: Optional[float] = None,
+           queue_timeout: float = QUEUE_TIMEOUT_SECONDS) -> CiOutcome:
     """Turn a non-terminal look into a terminal answer when time says so.
 
     `has_ci` has three values: True (workflows found, or a check reported), False (none), None
     (BOSS could not tell). UNKNOWN NEVER MEANS "HAS CI": with no check reported by the grace
     period, an unknown repository is `unreadable` (terminal and fail closed: the merge and the
     deploy stay refused in words, and an explicit look reads it again), not a 30-minute wait for
-    checks that may never come."""
+    checks that may never come.
+
+    `elapsed` is the time since the wait began; `ran` the time since a check was first seen
+    running (None: not known, read as `elapsed`). The timeout counts `ran`: checks that are all
+    still queued for a runner are bounded by `queue_timeout` instead (BOSSAPP-1453)."""
     if outcome.terminal:
         return outcome
+    if outcome.checks and not running(outcome.checks):
+        if elapsed < queue_timeout:
+            return outcome
+        head = outcome.checks[0]
+        url = head.get("url")
+        n = len(outcome.checks)
+        return CiOutcome(
+            "timed_out",
+            f"CI never started: {n} check{'s' if n != 1 else ''} waited "
+            f"{_minutes(elapsed)} for a GitHub runner and none began running ('{head['name']}' "
+            f"is still queued{' — ' + url if url else ''}). Check the repository's runners on "
+            "GitHub (Settings › Actions › Runners), then press Re-check on this card.",
+            outcome.checks, url, [c["name"] for c in outcome.checks])
     if not outcome.checks and has_ci is False and elapsed >= min(grace, timeout):
         where = f" for {repository}" if repository else ""
         return CiOutcome("no_ci", f"No CI is configured{where} (no .github/workflows and no "
@@ -683,21 +719,33 @@ def settle(outcome: CiOutcome, *, elapsed: float, timeout: float, has_ci: Option
         return CiOutcome("unreadable", unreadable_words(
             f"BOSS could not tell whether {where}has CI, and no check reported in "
             f"{_minutes(min(grace, timeout))}. Read CI again once the host answers"), [])
-    if elapsed >= timeout:
-        if not outcome.checks and outcome.summary.startswith(UNREADABLE_PREFIX):
+    if not outcome.checks:
+        if elapsed < timeout:
+            return outcome
+        if outcome.summary.startswith(UNREADABLE_PREFIX):
             return CiOutcome("unreadable", outcome.summary, [])
-        if not outcome.checks:
-            return CiOutcome("timed_out", f"CI did not finish in {_minutes(timeout)}: no checks "
-                                          "were reported for this commit.", [])
-        pend = [c for c in outcome.checks if c["status"] != "completed"]
-        head = pend[0] if pend else None
-        url = head.get("url") if head else None
-        return CiOutcome("timed_out",
-                         f"CI did not finish in {_minutes(timeout)}"
-                         + (f": '{head['name']}' still running" if head else "")
-                         + (f" — {url}" if url else ""), outcome.checks, url,
-                         [c["name"] for c in pend])
-    return outcome
+        return CiOutcome("timed_out", f"CI did not finish in {_minutes(timeout)}: no checks "
+                                      "were reported for this commit. Check that the "
+                                      "repository's workflows run on this branch, then press "
+                                      "Re-check on this card.", [])
+    ran_for = elapsed if ran is None else min(float(ran), elapsed)
+    if ran_for < timeout:
+        return outcome
+    pend = [c for c in outcome.checks if c["status"] != "completed"]
+    head = pend[0] if pend else None
+    url = head.get("url") if head else None
+    queued_for = max(0.0, elapsed - ran_for)
+    return CiOutcome("timed_out",
+                     f"CI did not finish in {_minutes(timeout)}"
+                     + (f": '{head['name']}' still running" if head else "")
+                     + (f" — {url}" if url else "")
+                     + f" (the {_minutes(timeout)} count from when the first check started "
+                       "running" + (f"; the {_minutes(queued_for)} it waited for a GitHub "
+                                    "runner before that are not counted)"
+                                    if queued_for >= 60 else ")")
+                     + ". Open the check on GitHub to see why it is slow, then press Re-check "
+                       "on this card.",
+                     outcome.checks, url, [c["name"] for c in pend])
 
 
 def next_interval(attempt: int, poll: float = DEFAULT_POLL_SECONDS,
@@ -717,6 +765,7 @@ def wait_for_ci(reader: CiReader, sha: str, *, timeout_seconds: float = DEFAULT_
     if has_ci is None:
         has_ci = _safe_has_workflows(reader, sha)
     start = clock()
+    running_since: Optional[float] = None
     attempt = 0
     while True:
         try:
@@ -725,13 +774,23 @@ def wait_for_ci(reader: CiReader, sha: str, *, timeout_seconds: float = DEFAULT_
             outcome = CiOutcome("waiting", unreadable_words(error), [])
         if outcome.checks:
             has_ci = True
+        if running_since is None and running(outcome.checks):
+            running_since = clock()
+        ran = None if running_since is None else clock() - running_since
         outcome = settle(outcome, elapsed=clock() - start, timeout=timeout_seconds,
-                         has_ci=has_ci, repository=repository)
+                         has_ci=has_ci, repository=repository,
+                         ran=ran if ran is not None else (0.0 if outcome.checks else None))
         if on_look:
             on_look(outcome)
         if outcome.terminal:
             return outcome
-        remaining = timeout_seconds - (clock() - start)
+        elapsed = clock() - start
+        if ran is not None:
+            remaining = timeout_seconds - ran
+        elif outcome.checks:
+            remaining = QUEUE_TIMEOUT_SECONDS - elapsed
+        else:
+            remaining = timeout_seconds - elapsed
         sleep(max(0.0, min(next_interval(attempt, poll_seconds), max(remaining, 0.0))))
         attempt += 1
 
@@ -1013,7 +1072,8 @@ def get_wait(connection: Any, wait_id: str) -> dict[str, Any]:
     out = dict(row)
     if isinstance(out.get("checks"), str):
         out["checks"] = json.loads(out["checks"])
-    for k in ("deadline_at", "next_poll_at", "finished_at", "created_at", "updated_at"):
+    for k in ("deadline_at", "next_poll_at", "finished_at", "created_at", "updated_at",
+              "running_since"):
         if isinstance(out.get(k), datetime):
             out[k] = out[k].isoformat()
     out["blocks_deploy"] = out["status"] not in CLEARED
@@ -1021,7 +1081,8 @@ def get_wait(connection: Any, wait_id: str) -> dict[str, Any]:
 
 
 def poll_wait(connection: Any, wait_id: str, reader: CiReader, *, force: bool = False,
-              now: Optional[datetime] = None, rearm: bool = True) -> dict[str, Any]:
+              now: Optional[datetime] = None, rearm: bool = True,
+              queue_timeout: Optional[float] = None) -> dict[str, Any]:
     """One look at CI for a recorded wait, when it is due (or `force`). Never blocks."""
     from .core import emit_event
 
@@ -1064,10 +1125,11 @@ def poll_wait(connection: Any, wait_id: str, reader: CiReader, *, force: bool = 
         connection.execute(text(
             "UPDATE ci_waits SET status = 'waiting', summary = :su, checks = CAST(:c AS JSONB), "
             "failing_url = NULL, finished_at = NULL, attempts = 0, deadline_at = :d, "
-            "next_poll_at = :now, updated_at = :now WHERE id = :i"),
+            "running_since = :rs, next_poll_at = :now, updated_at = :now WHERE id = :i"),
             {"su": ("CI is running again: " + outcome.summary)[:1000],
              "c": json.dumps(outcome.checks), "d": now + timedelta(seconds=int(
-                 row["timeout_seconds"] or DEFAULT_TIMEOUT_SECONDS)), "now": now, "i": wait_id})
+                 row["timeout_seconds"] or DEFAULT_TIMEOUT_SECONDS)), "now": now, "i": wait_id,
+             "rs": now if running(outcome.checks) else None})
         emit_event(connection, row["project_id"], "ci.rerun", "boss", "ci_wait", wait_id,
                    {"head_sha": row["head_sha"], "was": row["status"]})
         return get_wait(connection, wait_id)
@@ -1077,15 +1139,24 @@ def poll_wait(connection: Any, wait_id: str, reader: CiReader, *, force: bool = 
     deadline = row.get("deadline_at") if hasattr(row, "get") else row["deadline_at"]
     elapsed = (timeout - (deadline - now).total_seconds()) if deadline else \
         (now - row["created_at"]).total_seconds()
+    # THE RUN CLOCK STARTS WHEN A CHECK FIRST LEAVES THE QUEUE (BOSSAPP-1453), recorded on the
+    # wait so every later look counts from there; queued time before it is not run time.
+    running_since = row.get("running_since") if hasattr(row, "get") else None
+    if running_since is None and running(outcome.checks):
+        running_since = now
+    ran = (now - running_since).total_seconds() if running_since is not None else (
+        0.0 if outcome.checks else None)
     outcome = settle(outcome, elapsed=elapsed, timeout=timeout,
-                     has_ci=has_ci, repository=row["repository"])
+                     has_ci=has_ci, repository=row["repository"], ran=ran,
+                     queue_timeout=(QUEUE_TIMEOUT_SECONDS if queue_timeout is None
+                                    else queue_timeout))
     attempts = int(row["attempts"] or 0) + 1
     connection.execute(text(
         "UPDATE ci_waits SET status = :st, summary = :su, checks = CAST(:c AS JSONB), "
-        "failing_url = :f, has_ci = :h, attempts = :a, next_poll_at = :np, "
+        "failing_url = :f, has_ci = :h, attempts = :a, next_poll_at = :np, running_since = :rs, "
         "finished_at = CASE WHEN :term THEN :now ELSE NULL END, updated_at = :now WHERE id = :i"),
         {"st": outcome.state, "su": outcome.summary[:1000], "c": json.dumps(outcome.checks),
-         "f": outcome.failing_url, "h": has_ci, "a": attempts,
+         "f": outcome.failing_url, "h": has_ci, "a": attempts, "rs": running_since,
          "np": now + timedelta(seconds=next_interval(attempts)), "term": outcome.terminal,
          "now": now, "i": wait_id})
     if outcome.terminal:
@@ -1096,14 +1167,24 @@ def poll_wait(connection: Any, wait_id: str, reader: CiReader, *, force: bool = 
     return get_wait(connection, wait_id)
 
 
+def _timeout_of(connection: Any, wait_id: str) -> float:
+    value = connection.execute(text("SELECT timeout_seconds FROM ci_waits WHERE id = :i"),
+                               {"i": wait_id}).scalar()
+    return float(value or DEFAULT_TIMEOUT_SECONDS)
+
+
 def run_blocking(begin: Callable[[], Any], wait_id: str, reader: CiReader, *,
                  sleep: Callable[[float], None] = time.sleep) -> dict[str, Any]:
     """Poll a recorded wait until it is terminal, each look in its own short transaction (a
-    30-minute wait never holds a transaction open). Bounded by the wait's own deadline."""
+    30-minute wait never holds a transaction open). Bounded by the wait's own deadline, and
+    while every check is still queued for a runner by IN_BUILD_QUEUE_TIMEOUT_SECONDS (or the
+    wait's timeout when longer): a build blocked here holds its worker."""
     attempt = 0
     while True:
         with begin() as connection:
-            got = poll_wait(connection, wait_id, reader, force=True)
+            got = poll_wait(connection, wait_id, reader, force=True,
+                            queue_timeout=max(IN_BUILD_QUEUE_TIMEOUT_SECONDS,
+                                              float(_timeout_of(connection, wait_id))))
         if got["status"] in TERMINAL:
             return got
         sleep(next_interval(attempt))
@@ -1225,6 +1306,37 @@ def actor_is_person(connection: Any, project_id: str, actor: str) -> bool:
     return kind in (None, "human")
 
 
+#: The one approval of a multi-repo change set (multirepo/change_sets.ACTION).
+CHANGE_SET_ACTION = "approve_change_set"
+
+
+def _refuse_checks_failing(connection: Any, row: Mapping[str, Any], actor: str, project_id: str, *,
+                           identity_ctx: Any, system_policy: bool, force: bool,
+                           delegated: Any) -> None:
+    """CHECKS FAILING (checks_failing.py): the PR (or a PR of the set) opened after its repair
+    rounds with BOSS's own checks still failing. It is merged only by a PERSON who says why (a
+    forced merge, whose note decisions.transition requires), never by a click, a policy or an
+    agent."""
+    from .checks_failing import merge_refusal, of_decision
+
+    failing = of_decision(row)
+    if failing is None:
+        return
+    # A person's approval delegate (identity/approval_delegations.py) decides this merge FOR
+    # them only when the grant carries `merge_to_release_branch` and the PR's base is the
+    # project's bound release branch — both checked by its authorize() before this runs.
+    by_delegate = (delegated is not None
+                   and getattr(delegated, "kind", None) == "merge_to_release_branch")
+    if system_policy or not (by_delegate or is_person(connection, project_id, actor,
+                                                      identity_ctx)):
+        raise CiGateRefused(
+            "person_approval_required",
+            merge_refusal(failing) + " Only a person signed in to BOSS can decide it.",
+            checks_failing=True)
+    if not force:
+        raise CiGateRefused("checks_failing", merge_refusal(failing), checks_failing=True)
+
+
 def refuse_approval(connection: Any, row: Mapping[str, Any], actor: str, *,
                     identity_ctx: Any = None, system_policy: bool = False,
                     force: bool = False, delegated: Any = None) -> None:
@@ -1233,6 +1345,12 @@ def refuse_approval(connection: Any, row: Mapping[str, Any], actor: str, *,
     rec = _rec(row)
     action = str(rec.get("action") or "")
     project_id = str(row.get("project_id") or "")
+    if action == CHANGE_SET_ACTION:
+        # A MULTI-REPO CHANGE'S ONE MERGE (multirepo/change_sets.py): when any of its PRs opened
+        # with its checks failing, the set card carries them, and merging the set is the same
+        # person's stated decision as a single PR's (below): never a policy, an agent or a click.
+        _refuse_checks_failing(connection, row, actor, project_id, identity_ctx=identity_ctx,
+                               system_policy=system_policy, force=force, delegated=delegated)
     if action not in DEPLOY_ACTIONS | MERGE_ACTIONS and not rec.get("requires_person_approval"):
         return
     changed = ci_changed_for(connection, project_id, rec)
@@ -1247,6 +1365,17 @@ def refuse_approval(connection: Any, row: Mapping[str, Any], actor: str, *,
     if action not in DEPLOY_ACTIONS | MERGE_ACTIONS:
         return
     if action in MERGE_ACTIONS:
+        # THE REVIEW PACKET (review_packet.blocks_merge, SPEC §1.4 rule 6, §3): an invalid packet
+        # or a re-run in progress refuses every merge; a blocked verdict needs a person's force.
+        from .finding_overrides import head_for_url
+        from .review_packet import blocks_merge
+
+        # The change's head NOW (a local change): a packet whose evidence ran on another head
+        # never approves this one (stale → re-checking).
+        refused = blocks_merge(rec, force=force and not system_policy,
+                               current_head=head_for_url(connection, rec.get("pull_request_url")))
+        if refused is not None:
+            raise CiGateRefused(refused[0], refused[1])
         # PEOPLE'S COMMENTS HOLD A LOCAL MERGE (BOSSAPP-948, local_review.merge_hold): while a
         # thread a person started on the change is not resolved, nobody merges it — not a force,
         # not a policy, not a delegate. The person resolves it, or requests changes.
@@ -1256,27 +1385,8 @@ def refuse_approval(connection: Any, row: Mapping[str, Any], actor: str, *,
         if held is not None:
             raise CiGateRefused("review_comments_open", held["reason"],
                                 open_comments=held["open_comments"])
-        # CHECKS FAILING (checks_failing.py): the PR opened after its repair rounds with BOSS's
-        # own checks still failing. It is merged only by a PERSON who says why (a forced merge,
-        # whose note decisions.transition requires), never by a click, a policy or an agent.
-        from .checks_failing import merge_refusal, of_decision
-
-        failing = of_decision(row)
-        # A person's approval delegate (identity/approval_delegations.py) decides this merge FOR
-        # them only when the grant carries `merge_to_release_branch` and the PR's base is the
-        # project's bound release branch — both checked by its authorize() before this runs.
-        by_delegate = (delegated is not None
-                       and getattr(delegated, "kind", None) == "merge_to_release_branch")
-        if failing is not None:
-            if system_policy or not (by_delegate or is_person(connection, project_id, actor,
-                                                              identity_ctx)):
-                raise CiGateRefused(
-                    "person_approval_required",
-                    merge_refusal(failing) + " Only a person signed in to BOSS can decide it.",
-                    checks_failing=True)
-            if not force:
-                raise CiGateRefused("checks_failing", merge_refusal(failing),
-                                    checks_failing=True)
+        _refuse_checks_failing(connection, row, actor, project_id, identity_ctx=identity_ctx,
+                               system_policy=system_policy, force=force, delegated=delegated)
     wait = latest_wait(connection, project_id, pull_request_url=rec.get("pull_request_url"),
                        shas=_shas(rec))
     if wait is not None and wait["status"] in RECHECKABLE:

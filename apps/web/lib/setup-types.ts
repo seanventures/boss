@@ -71,6 +71,10 @@ export type ModelEntry = {
   /** Claude Code only: what it runs on — "long-lived subscription token (renews …)" or
    *  "CLI login (expires in X h)". Never a secret. */
   credential?: { kind: "long_lived_token" | "cli_login"; label: string; expires_at: string | null } | null;
+  /** Setup's write check: one writer session where builds run must write a file and run a
+   *  command. "Checking…" while it runs; then whether this login can write there. */
+  write_check?: { state: "checking" | "ok" | "unproven" | "cannot_write" | "not_checked";
+                  label: string; tone: string; tip: string; checked_at?: string | null } | null;
 };
 
 /** Subscriptions: signed_in | needs_sign_in | not_on_server (nothing is pasted any more). Local:
@@ -93,6 +97,9 @@ export type CatalogueEntry = {
   kind: "subscription" | "api_key" | "local";
   key_url?: string | null;
   example_model?: string | null;
+  /** The model may stay empty; the provider routes (OpenRouter), BOSSAPP-1340. */
+  model_optional?: boolean;
+  default_model?: string | null;
   /** Local › Ollama: where BOSS looks when the URL is left empty (OLLAMA_BASE_URL). */
   example_base_url?: string | null;
   fields: Field[];
@@ -243,7 +250,10 @@ export type SetupView = {
   verdict: { label: string; tone: Tone; tip: string; at?: string | null };
   problems: number;
   secrets: { backend: string; needs_consent: boolean };
-  repository: { connection: RepoConnection | null; repos: RepoEntry[] };
+  repository: { connection: RepoConnection | null; repos: RepoEntry[];
+    /** Code BOSS keeps on this machine for this org (this project's first): it satisfies the
+     *  repository step; GitHub stays optional. Absent on an older API. */
+    local?: LocalCode | null };
   models: ModelEntry[];
   detected: Detected[];
   catalogue: CatalogueEntry[];
@@ -253,7 +263,9 @@ export type SetupView = {
   /** Null when the server has no router tables yet (an older API): the row shows the jobs. */
   routing?: Routing | null;
   budget: Budget;
-  try: { workflow_key: string; last_run: TryRun | null; done?: boolean };
+  try: { workflow_key: string; last_run: TryRun | null; done?: boolean;
+         /** The org's live Try-a-sample project, once made. Absent on an older API. */
+         sample?: { project_id: string; name: string } | null };
   /** Build toolchains in this install's image. Absent on an older API. */
   toolchains?: Toolchain[];
   /** Installed coding adapters, and whether skills and MCP config are delivered. Empty or absent: none. */
@@ -399,5 +411,8 @@ export type RowKey = "github" | "repository" | "models" | "capacity" | "jobs" | 
   /** Advanced: the rows folded under it (`focus=` opens the fold on that row). */
   | "advanced" | "github_app" | "repositories" | "ci" | "build_database" | "build_speed" | "toolchains" | "public_url"
   | "embedding_model"
-  /** Setup › Ticket systems (BOSSAPP-1047) and Events: sections of the board. */
-  | "ticket_systems" | "events";
+  /** Setup › Ticket systems (BOSSAPP-1047), Documents (Confluence) and Events: sections of the board. */
+  | "ticket_systems" | "documents" | "events";
+
+/** A local repository the org has (setup_view.local_code_in_org). */
+export type LocalCode = { full_name: string; project_id: string; project_name: string; pill?: Pill };

@@ -35,6 +35,9 @@ def eng():
             "ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS namespace TEXT NOT NULL DEFAULT 'system'",
             "ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS is_catalogue BOOLEAN NOT NULL DEFAULT false",
             "ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS forked_from_version_id TEXT",
+            *(f"ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS {column} TEXT"
+              for column in ("standard_version_id", "standard_content_hash",
+                             "standard_available_version_id", "standard_dismissed_version_id")),
         ):
             c.exec_driver_sql(ddl)
     return engine
@@ -78,8 +81,8 @@ def test_every_shipped_workflow_validates():
 
 def test_there_are_twelve_and_each_has_a_stable_key():
     keys = [e["key"] for e in catalogue.CATALOGUE]
-    assert len(keys) == 24
-    assert len(set(keys)) == 24, "duplicate workflow key"
+    assert len(keys) == 26  # + onboard_config_file (R5)
+    assert len(set(keys)) == 26, "duplicate workflow key"
     for key in keys:
         assert key.replace("_", "").isalnum(), key
 
@@ -150,20 +153,22 @@ def test_a_grace_period_is_a_real_step_not_a_promise():
 
 # ── Installing it ──────────────────────────────────────────────────────────────
 
-def test_seeding_installs_every_workflow_as_read_only_product(eng, project):
+def test_seeding_installs_every_workflow_as_a_product_standard(eng, project):
     with eng.begin() as c:
         result = catalogue.seed(c, project)
         rows = workflows.list_definitions(c, project, namespace="product")
         # An entry that needs a pack or a sample's connectors installs where they are, and is
         # skipped (with why) here.
-        installable = [e for e in catalogue.CATALOGUE if not catalogue._unmet(c, project, e)]
+        # A Marketplace pack's workflow is never seeded (workflow_marketplace): installed by choice.
+        installable = [e for e in catalogue.CATALOGUE
+                       if not catalogue._unmet(c, project, e) and not catalogue.in_pack(e["key"])]
     assert result["count"] == len(catalogue.CATALOGUE)
     assert len(rows) == len(installable)
     assert all(i.get("skipped") for i in result["installed"]
                if i["key"] not in {e["key"] for e in installable})
     for row in rows:
         assert row["namespace"] == "product"
-        assert row["is_catalogue"] is True, f"{row['workflow_key']} is editable in place"
+        assert row["is_catalogue"] is True, f"{row['workflow_key']} is not a standard"
     # A project with no pack gets no role agent: none of them has anything to work on there.
     with eng.begin() as c:
         roles = c.execute(text("SELECT role_key FROM roles WHERE project_id=:p"),
@@ -219,18 +224,25 @@ def test_seeding_twice_does_not_create_a_second_copy(eng, project):
         versions = c.execute(
             text("SELECT count(*) FROM workflow_versions WHERE project_id=:p"), {"p": project}
         ).scalar()
-        n = sum(1 for e in catalogue.CATALOGUE if not catalogue._unmet(c, project, e))
+        n = sum(1 for e in catalogue.CATALOGUE
+                if not catalogue._unmet(c, project, e) and not catalogue.in_pack(e["key"]))
     assert len(definitions) == n
     assert versions == n, f"re-seeding published {versions - n} redundant versions"
 
 
-def test_a_seeded_workflow_cannot_be_edited_in_place(eng, project):
+def test_a_seeded_workflow_is_edited_in_place_but_not_deleted(eng, project):
+    """REWRITTEN (standards are editable in place, test_a_standard_is_edited_in_place): a
+    seeded standard records its shipped version as its baseline, and stays undeletable."""
     with eng.begin() as c:
         catalogue.seed(c, project)
         row = next(r for r in workflows.list_definitions(c, project, namespace="product")
                    if r["workflow_key"] == "standard_product_delivery")
+        assert row["modified"] is False
+        baseline = c.execute(text("SELECT standard_version_id FROM workflow_definitions "
+                                  "WHERE id = :i"), {"i": row["id"]}).scalar()
+        assert baseline == row["active_version_id"]
         with pytest.raises(workflows.WorkflowNamespaceError):
-            workflows.require_editable(row)
+            workflows.require_own(row, "deleted")
 
 
 def test_seeding_does_not_touch_the_system_namespace(eng, project):
@@ -317,3 +329,29 @@ def test_the_list_the_console_reads_includes_declared_inputs(eng, project):
             for row in workflows.list_definitions(c, project, namespace="product")
         }
     assert listed["needs_a_video"]["input_schema"] == schema
+
+
+# ── A standard added later reaches every project (dry run 3, gap #5) ───────────────────────
+
+def test_a_standard_added_later_reaches_an_older_project(eng, project):
+    """An older project lacked "Onboard a config file": the boot seed was the default project's
+    only. seed_missing_everywhere installs just what a project never had."""
+    with eng.begin() as c:
+        catalogue.seed(c, project)
+        c.execute(text("DELETE FROM workflow_definitions WHERE project_id=:p AND workflow_key="
+                       "'onboard_config_file'"), {"p": project})
+        assert "onboard_config_file" in catalogue.missing_keys(c, project)
+        added = catalogue.seed_missing_everywhere(c, project_ids=[project])
+        assert added == {project: ["onboard_config_file"]}
+        assert catalogue.missing_keys(c, project) == frozenset()
+        assert catalogue.seed_missing_everywhere(c, project_ids=[project]) == {}
+
+
+def test_new_work_options_say_which_workflow_starts_from_a_file(eng, project):
+    from boss_engine.services.project_experience import new_work
+
+    with eng.begin() as c:
+        catalogue.seed(c, project)
+        opts = {o["key"]: o for o in new_work.options(c, project, "feature")}
+    assert opts["onboard_config_file"]["starts_from_file"] is True
+    assert opts["minor_feature"]["starts_from_file"] is False

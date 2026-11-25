@@ -1,0 +1,8 @@
+{
+  "name": "boss-pnpm",
+  "private": true,
+  "description": "pnpm for the BOSS console image, pinned with integrity by package-lock.json.",
+  "dependencies": {
+    "pnpm": "9.15.0"
+  }
+}

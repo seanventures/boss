@@ -127,6 +127,21 @@ describe("which step has work to show", () => {
 });
 
 describe("the step panel", () => {
+  it("keeps a completed panel's long PRD out of the avatar column", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({
+      ...MEETING, status: "awaiting_approval", phase: "done",
+      prd_markdown: "# Preview repair\nGenerate the report and verify HTTP.",
+      title: "A long preview repair request ".repeat(12),
+      decision_id: "dec_preview",
+    })));
+    await mountRun();
+    const record = q('[data-testid="meeting-compact-prd"]');
+    expect(record).not.toBeNull();
+    expect(record!.parentElement!.className).toBe("rp-cmp-prd");
+    expect(record!.parentElement!.parentElement!.className).toBe("rp-cmp");
+    expect(q('[data-testid="meeting-compact"]')!.textContent).toContain("Review in Approvals");
+  });
+
   it("opens on the running panel step: its rounds filling in with seat faces, live", async () => {
     await mountRun();
     const panel = q('[data-testid="dw-step-meeting"] [data-testid="meeting-compact"]');

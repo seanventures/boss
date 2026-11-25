@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The fix card says its confidence reasons beside the level, not only on the title.
  * Blank or whitespace reasons say nothing. Each reason is trimmed, then joined with ", ".

@@ -2,7 +2,12 @@
 
 BOSSAPP-1276. The launch path builds whatever these files describe, so a file that adds a field,
 drops one, repeats an id, or lets web, android, maps, game, 3d, or xr fall under three templates
-fails here. Twenty-four is the first catalog, not a cap. This test only reads the YAML.
+fails here. This test only reads the YAML.
+
+Stranger test 2026-11-18: the gallery offered three Android (Jetpack Compose) templates and a
+Godot game. No BOSS image carries an Android SDK, an emulator or a game engine, so they could
+never build. Every template now names the toolchain it builds with, its stack must be one that
+toolchain builds, and no template may need a platform the image does not carry.
 """
 from __future__ import annotations
 
@@ -10,19 +15,36 @@ import re
 from collections import Counter
 from pathlib import Path
 
+import pytest
 import yaml
+
+from boss_engine.services import factory_launch, stacks, toolchains
 
 CATALOG = Path(__file__).resolve().parents[1] / "boss_engine" / "data" / "factory_templates"
 
 # The field set is the contract. A new key is a new catalog, not a quiet extra.
-FIELDS = ("id", "title", "blurb", "category", "prompt", "stack", "resources", "workflows")
+FIELDS = ("id", "title", "blurb", "category", "prompt", "stack", "toolchain", "resources",
+          "workflows")
 
-CATEGORIES = {"web", "android", "maps", "game", "3d", "xr", "data", "internal"}
+CATEGORIES = {"web", "maps", "game", "3d", "xr", "data", "internal"}
 
-# The six a launch showcase has to be able to start. data and internal may fill the rest.
-MINIMUMS = {"web": 3, "android": 3, "maps": 3, "game": 3, "3d": 3, "xr": 3}
+# The five a launch showcase has to be able to start. data and internal may fill the rest.
+MINIMUMS = {"web": 3, "maps": 3, "game": 3, "3d": 3, "xr": 3}
 
-FIRST_CATALOG = 24
+FIRST_CATALOG = 21
+
+# What each toolchain builds (Python and Node are in every image; Go and Java are opt-in). A
+# template's stack must be one its toolchain builds: a "Go" stack declared `node` would be offered
+# on an install that cannot build it.
+STACKS_BY_TOOLCHAIN = {
+    "python": {"Python", "DuckDB"},
+    "node": {"Next.js", "Three.js", "WebXR", "MapLibre GL", "Leaflet", "Phaser", "HTML canvas"},
+    "go": {"Go", "Go API"},
+    "java": {"Java", "Spring Boot"},
+}
+
+# Platforms no BOSS image carries: the loader's own pattern, so the two can never drift.
+UNBUILDABLE = factory_launch.UNBUILDABLE_PLATFORM
 
 # Resource strings name a kind the launch path can attach locally. An account id is not a kind.
 RESOURCE_KINDS = ("repo", "preview", "database", "model")
@@ -91,6 +113,12 @@ def _problems(path: Path, doc: object) -> list[str]:
     if not isinstance(stack, str) or _STACK.fullmatch(stack) is None:
         problems.append(f"stack {stack!r} is not a short stack name")
 
+    toolchain = doc["toolchain"]
+    if toolchain not in STACKS_BY_TOOLCHAIN:
+        problems.append(f"toolchain {toolchain!r} is not one of {sorted(STACKS_BY_TOOLCHAIN)}")
+    elif stack not in STACKS_BY_TOOLCHAIN[toolchain]:
+        problems.append(f"stack {stack!r} is not one the {toolchain} toolchain builds")
+
     resources = doc["resources"]
     wanted = [kind for kind in RESOURCE_KINDS if isinstance(resources, list) and kind in resources]
     if resources != wanted or not resources:
@@ -155,7 +183,7 @@ def test_no_two_templates_share_an_id():
     assert len(seen) == len(_yaml_files())
 
 
-def test_web_android_maps_game_3d_and_xr_each_have_three():
+def test_web_maps_game_3d_and_xr_each_have_three():
     counts: Counter[str] = Counter()
     for path in _yaml_files():
         doc = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -164,3 +192,156 @@ def test_web_android_maps_game_3d_and_xr_each_have_three():
     short = {category: counts[category] for category, minimum in MINIMUMS.items()
              if counts[category] < minimum}
     assert short == {}, f"category counts under the minimum: {short}"
+
+
+def test_the_toolchains_here_are_the_ones_the_loader_knows():
+    # The loader reads them from stacks.LANGUAGES, the registry of what BOSS builds; this table
+    # only adds which stack names each one builds.
+    assert set(STACKS_BY_TOOLCHAIN) == set(factory_launch.TEMPLATE_TOOLCHAINS) == set(
+        stacks.LANGUAGES)
+    assert set(factory_launch.BUILTIN_TOOLCHAINS) == {
+        key for key, lang in stacks.LANGUAGES.items() if lang.toolchain is None}
+    opt_in = {lang.toolchain for lang in stacks.LANGUAGES.values() if lang.toolchain}
+    assert opt_in <= set(toolchains.KNOWN), "a template toolchain BOSS cannot turn on"
+
+
+def test_the_shipped_catalogue_loads_whole():
+    """A shipped file the loader refuses would only be counted in `skipped` and vanish from the
+    gallery; that is a red test, not a quiet gap."""
+    listed = factory_launch.list_templates(have=set())
+    assert listed["skipped"] == 0
+    assert sorted(t["id"] for t in listed["templates"]) == sorted(p.stem for p in _yaml_files())
+
+
+def test_no_template_needs_a_platform_the_image_does_not_carry():
+    found = []
+    for path in _yaml_files():
+        doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+        for field in ("title", "blurb", "category", "stack", "prompt"):
+            hit = UNBUILDABLE.search(str(doc.get(field) or ""))
+            if hit:
+                found.append(f"{path.name} {field}: {hit.group(0)!r}")
+    assert not found, "templates BOSS cannot build:\n" + "\n".join(found)
+
+
+def test_the_loader_refuses_a_template_without_a_known_toolchain_or_for_android(tmp_path):
+    good = yaml.safe_load((CATALOG / "tile-swap.yaml").read_text(encoding="utf-8"))
+    for name, change in (("no-toolchain", {"toolchain": None}),
+                         ("rust", {"toolchain": "rust"}),
+                         ("android", {"category": "android"}),
+                         ("compose", {"stack": "Jetpack Compose"}),
+                         ("godot", {"stack": "Godot 4"})):
+        doc = {**good, "id": name, **change}
+        if change.get("toolchain", "") is None:
+            doc.pop("toolchain")
+        (tmp_path / f"{name}.yaml").write_text(yaml.safe_dump(doc), encoding="utf-8")
+    (tmp_path / "tile-swap.yaml").write_text(yaml.safe_dump(good), encoding="utf-8")
+    listed = factory_launch.list_templates(tmp_path, have=set())
+    assert [t["id"] for t in listed["templates"]] == ["tile-swap"]
+    assert listed["skipped"] == 5
+
+
+def test_go_templates_are_marked_unavailable_until_go_is_turned_on():
+    without = {t["id"]: t for t in factory_launch.list_templates(have=set())["templates"]}
+    go_ids = {i for i, t in without.items() if t["toolchain"] == "go"}
+    assert {"fixture-clock", "license-shelf"} <= go_ids
+    for ident, item in without.items():
+        if ident in go_ids:
+            assert item["available"] is False
+            assert item["needs"]["label"] == "Needs Go"
+            assert item["needs"]["enable"] == "boss toolchains enable go"
+            assert "boss toolchains enable go" in item["needs"]["message"]
+        else:
+            assert item["available"] is True and item["needs"] is None, ident
+
+    with_go = factory_launch.list_templates(have={"go"})["templates"]
+    assert all(t["available"] and t["needs"] is None for t in with_go)
+
+
+def test_the_listing_reads_the_toolchain_manifest(tmp_path, monkeypatch):
+    manifest = tmp_path / "manifest.json"
+    monkeypatch.setenv(toolchains.MANIFEST_ENV, str(manifest))
+    manifest.write_text("{}", encoding="utf-8")
+    off = {t["id"]: t["available"] for t in factory_launch.list_templates()["templates"]}
+    assert off["fixture-clock"] is False and off["tile-swap"] is True
+    manifest.write_text('{"go": {"go": "1.27"}}', encoding="utf-8")
+    on = {t["id"]: t["available"] for t in factory_launch.list_templates()["templates"]}
+    assert on["fixture-clock"] is True
+
+
+def test_a_launch_of_a_template_that_needs_go_is_refused_in_words(tmp_path, monkeypatch):
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv(toolchains.MANIFEST_ENV, str(manifest))
+    for prompt in ("", "Make it serve two users."):
+        with pytest.raises(factory_launch.FactoryLaunchError) as refused:
+            factory_launch.resolve_spec(prompt, "fixture-clock")
+        error = refused.value
+        assert error.status == 409 and error.code == "toolchain_not_enabled"
+        assert error.message.startswith("Not started: Fixture clock is built in Go")
+        assert "`boss toolchains enable go`" in error.message
+        assert error.body()["message"] == error.message
+
+    # A pasted spec that names Go is held to the same rule.
+    pasted = yaml.safe_dump({**yaml.safe_load((CATALOG / "fixture-clock.yaml").read_text()),
+                             "id": "pasted-go"})
+    with pytest.raises(factory_launch.FactoryLaunchError):
+        factory_launch.resolve_spec(pasted, None)
+
+    # Easy Mode with nothing picked never lands on a template this install cannot build.
+    spec, origin = factory_launch.resolve_spec("", None)
+    assert origin == "lucky" and spec["toolchain"] in ("python", "node")
+    assert "available" not in spec and "needs" not in spec
+
+    manifest.write_text('{"go": {"go": "1.27"}}', encoding="utf-8")
+    spec, origin = factory_launch.resolve_spec("", "fixture-clock")
+    assert origin == "template" and spec["id"] == "fixture-clock" and spec["toolchain"] == "go"
+
+
+@pytest.mark.parametrize("content", [None, "not json", "[1, 2]"])
+def test_an_unreadable_manifest_never_says_turn_go_on(tmp_path, monkeypatch, content):
+    """toolchains.installed() is {} for a missing or broken manifest. That says nothing about
+    whether Go is on, so a Go card must not tell the person to turn on what may be on."""
+    manifest = tmp_path / "manifest.json"
+    if content is not None:
+        manifest.write_text(content, encoding="utf-8")
+    monkeypatch.setenv(toolchains.MANIFEST_ENV, str(manifest))
+
+    listed = {t["id"]: t for t in factory_launch.list_templates()["templates"]}
+    go = listed["fixture-clock"]
+    assert go["available"] is False
+    assert go["needs"]["label"] == "Can't check toolchains"
+    assert "boss toolchains enable" not in go["needs"]["message"]
+    assert "cannot read its toolchain list" in go["needs"]["message"]
+    assert "`boss update`" in go["needs"]["message"]
+    assert listed["tile-swap"]["available"] is True            # Python and Node are always there
+
+    with pytest.raises(factory_launch.FactoryLaunchError) as refused:
+        factory_launch.resolve_spec("", "fixture-clock")
+    assert refused.value.code == "toolchain_not_enabled"
+    assert "cannot read its toolchain list" in refused.value.message
+    assert "not turned on" not in refused.value.message
+
+
+@pytest.mark.parametrize("change", [
+    {"toolchain": "kotlin"},
+    {"stack": "Jetpack Compose", "toolchain": ""},
+    {"category": "android"},
+    {"stack": "Godot 4"},
+])
+def test_a_pasted_spec_for_a_platform_boss_cannot_build_is_refused_in_words(change):
+    doc = {**yaml.safe_load((CATALOG / "tile-swap.yaml").read_text(encoding="utf-8")),
+           "id": "pasted", **change}
+    if doc.get("toolchain") == "":
+        doc.pop("toolchain")
+    with pytest.raises(factory_launch.FactoryLaunchError) as refused:
+        factory_launch.resolve_spec(yaml.safe_dump(doc), None)
+    error = refused.value
+    assert error.status == 409 and error.code == "platform_not_buildable"
+    assert error.message.startswith("Not started: this spec asks for")
+    assert "does not build Android or iOS apps" in error.message
+
+
+def test_prose_that_mentions_android_is_still_a_brief():
+    spec, origin = factory_launch.resolve_spec("Build a web page that lists Android phones.", None)
+    assert origin == "prompt" and spec["stack"] == ""

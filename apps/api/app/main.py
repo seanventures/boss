@@ -56,7 +56,7 @@ from boss_engine.services.env_refs import HostCredentialAuthorityRequired
 from .bootstrap import seed
 from .bootstrap_ports import build_ports
 from .config import get_settings
-from .db import begin, database_is_reachable, ensure_schema, get_engine
+from .db import background, begin, database_is_reachable, ensure_schema, get_engine, spawn_thread
 from .routers import mount_edition_routers
 from .routers.governance import build_governance_router
 from .routers.platform import mount_platform_routers
@@ -701,6 +701,10 @@ from .request_bodies import (
     WorkflowCreateBody,
     WorkflowDraftBody,
     WorkflowPublishBody,
+    WorkflowStandardActBody,
+    WorkflowPackBody,
+    WorkflowPackPublishBody,
+    WorkflowPackUpdateBody,
     WorkflowRenameBody,
     WorkflowWireBody,
     WorkflowCustomStepBody,
@@ -911,6 +915,8 @@ from .services.toolchain_registry import (
     ToolchainRegistryService,
 )
 from .services import workflows as workflow_runtime
+from boss_engine.services import workflow_standards
+from boss_engine.services import workflow_marketplace
 from .services.skill_registry import (
     disable_skill,
     enable_skill,
@@ -1265,9 +1271,26 @@ def _warm_read_paths() -> None:
         print(f"[lifespan] read paths warmed in {time.monotonic() - started:.1f}s")
 
     try:
-        threading.Thread(target=_warm, name="boss-warm-read-paths", daemon=True).start()
+        spawn_thread(_warm, name="boss-warm-read-paths", daemon=True, as_background=True)
     except Exception as exc:  # noqa: BLE001
         print(f"[lifespan] warm-up not started: {exc}")
+
+
+def _fail_turns_of_dead_processes() -> int:
+    """A CHAT TURN WHOSE PROCESS DIED SAYS SO AT ONCE (chat_turns.sweep_dead_owners): at
+    start-up the running turns of a dead process on this host are failed now, not after the
+    heartbeat bound. Never blocks boot."""
+    from boss_engine.services import chat_turns
+
+    try:
+        with begin(engine) as connection:
+            failed = chat_turns.sweep_dead_owners(connection)
+        if failed:
+            print(f"[lifespan] chat turns of a stopped process marked failed: {len(failed)}")
+        return len(failed)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[lifespan] chat turn sweep skipped: {exc}")
+        return 0
 
 
 def _backfill_agent_identities() -> int:
@@ -1515,6 +1538,7 @@ async def lifespan(_: FastAPI):
     _sync_builtin_templates()
     _seed_work_tracker_defaults()
     _backfill_agent_identities()
+    _fail_turns_of_dead_processes()
     _publish_agent_specs()
     _mirror_org_models()
     # REFUSED DEPLOYMENT PLANS LEFT NOTHING BEHIND ONCE, AND NOW NEVER DID. An unverified host
@@ -1587,6 +1611,33 @@ async def lifespan(_: FastAPI):
             print(f"[lifespan] delivery catalogue: {result['count']} workflows for {project}")
     except Exception as exc:  # noqa: BLE001 — never block boot on a seed
         print(f"[lifespan] delivery catalogue seed skipped: {exc}")
+    # A STANDARD ADDED LATER REACHES EVERY PROJECT (dry run 3, gap #5): the seed above is the
+    # default project only, so "Onboard a config file" was missing from every older project.
+    try:
+        from boss_engine.services.workflow_catalogue import seed_missing_everywhere
+
+        with begin(engine) as connection:
+            added = seed_missing_everywhere(connection, actor="boss")
+        if added:
+            print(f"[lifespan] standard workflows added to older projects: {added}")
+    except Exception as exc:  # noqa: BLE001 — never block boot on a seed
+        print(f"[lifespan] standard workflows for older projects skipped: {exc}")
+    # INSTALLED MARKETPLACE PACKS FOLLOW THE PACK BOSS SHIPS (workflow_marketplace.sync_shipped):
+    # an unmodified copy takes a newer version by itself; a modified one is offered it.
+    try:
+        # One short transaction per project: a project's publish lock is never held across
+        # every other project's sync.
+        with begin(engine) as connection:
+            synced_projects = workflow_marketplace.projects_with_shipped_installs(connection)
+        synced: dict = {}
+        for synced_project in synced_projects:
+            with begin(engine) as connection:
+                synced.update(workflow_marketplace.sync_shipped(
+                    connection, actor="boss", project_ids=[synced_project]))
+        if synced:
+            print(f"[lifespan] marketplace installs brought to the shipped packs: {synced}")
+    except Exception as exc:  # noqa: BLE001 — never block boot on a sync
+        print(f"[lifespan] marketplace pack sync skipped: {exc}")
     # SIGNED WORK FOR WHAT RAN BEFORE THE LEDGER. Without this, every Passport, Lineage and
     # Credits screen is empty for existing work until somebody knows to call /v1/acts/backfill.
     # In a thread, one short transaction per run, panel or build with try-locks, so it never
@@ -1599,7 +1650,7 @@ async def lifespan(_: FastAPI):
             if any(written.values()):
                 print(f"[lifespan] signed work reconstructed: {written}")
 
-        threading.Thread(target=_backfill_acts, name="boss-acts-backfill", daemon=True).start()
+        spawn_thread(_backfill_acts, name="boss-acts-backfill", daemon=True, as_background=True)
     except Exception as exc:  # noqa: BLE001 — never block boot on a backfill
         print(f"[lifespan] signed-work backfill not started: {exc}")
     # FLOWS THE OLDER STUDIO FILED UNDER THE SYSTEM NAMESPACE come back where the customer's
@@ -1670,9 +1721,7 @@ async def lifespan(_: FastAPI):
         except Exception as exc:  # noqa: BLE001 — names are a nicety
             print(f"[lifespan] demo-user backfill skipped: {exc}")
 
-    import threading as _threading
-
-    _threading.Thread(target=_name_demo_users, name="demo-user-backfill", daemon=True).start()
+    spawn_thread(_name_demo_users, name="demo-user-backfill", daemon=True, as_background=True)
     # Preview lifecycle is independent from the API. Reconcile the durable rows against
     # live processes/containers/rootfs services; never blanket-kill healthy previews.
     try:
@@ -3373,6 +3422,12 @@ def decision_card_from_row(row, connection=None, project_id: Optional[str] = Non
     from boss_engine.services.core import decision_reason_from_payload
 
     rec = row.get("recommendation") or {}
+    # A MERGE FAILURE IS SAID FOR ITS REPOSITORY'S KIND at display time: a local change never
+    # reads "GitHub would not merge it", whatever an older version stored.
+    from boss_engine.services import merge_failures as _merge_failures
+
+    rec = _merge_failures.for_display(rec)
+    _merge_url = rec.get("pull_request_url") if isinstance(rec, dict) else None
     # A MEETING'S PRD carries its record (BOSSAPP-929): every surface reading this card shows
     # the PRD, the panel that argued it and its file in the repository from one source.
     prd = (prd_record.links(connection, {**dict(row), "project_id": row.get("project_id") or project_id})
@@ -3387,7 +3442,7 @@ def decision_card_from_row(row, connection=None, project_id: Optional[str] = Non
     return DecisionCard(
         id=row["id"],
         task_id=row.get("task_id"),
-        question=row["question"],
+        question=_merge_failures.local_words(row["question"], _merge_url),
         status=row["status"],
         risk_tier=row["risk_tier"],
         default_action=row["default_action"],
@@ -3410,7 +3465,7 @@ def decision_card_from_row(row, connection=None, project_id: Optional[str] = Non
         ),
         executed_by=row.get("executed_by"),
         executed_at=row["executed_at"].isoformat() if row.get("executed_at") else None,
-        resolution_note=row.get("resolution_note"),
+        resolution_note=_merge_failures.local_words(row.get("resolution_note"), _merge_url),
         external_ref=row.get("external_ref"),
         message=row.get("noop_message"),
         via_delegate=row.get("via_delegate"),
@@ -6110,6 +6165,12 @@ def create_project_endpoint(request: Request, payload: ProjectCreateBody) -> Any
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from None
         project_id = created["project_id"]
+        if created.get("sample_key"):
+            # A SAMPLE KEEPS ITS CODE ON THIS MACHINE ("Code can stay on this machine"), the way
+            # Start a new app › This machine does: a local repository, made once, so its build
+            # has somewhere to push without GitHub. Find-or-create: an older sample with no
+            # repository gets one now.
+            project_service.ensure_sample_code(connection, settings, project_id, actor=actor)
         row = connection.execute(text(
             "SELECT p.id, p.name, p.slug, p.workspace_id, p.created_at, p.description, "
             "p.project_type, w.name AS workspace_name, o.id AS org_id, o.name AS org_name FROM projects p "
@@ -6624,24 +6685,25 @@ def resume_agent_run_endpoint(run_id: str, payload: open_bodies.ResumeAgentRunBo
     lease_token = str(payload.get("lease_token") or "").strip()
     if not worker_id or not job_id or not lease_token:
         raise HTTPException(status_code=422, detail="active agent resume lease required")
-    with begin(engine) as connection:
-        project_id = connection.execute(
-            text("SELECT project_id FROM agent_runs WHERE id = :run_id"),
-            {"run_id": run_id},
-        ).scalar_one_or_none()
-        if project_id is None:
-            raise HTTPException(status_code=404, detail="agent run not found")
-        try:
-            lease = jobs.require_active_lease(connection, worker_id, job_id, lease_token)
-        except LeaseNotFoundError as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        if (
-            lease["kind"] != "agent.resume"
-            or lease["project_id"] != project_id
-            or (lease.get("payload") or {}).get("run_id") != run_id
-        ):
-            raise HTTPException(status_code=409, detail="lease does not match agent run")
-        return software_factory.resume_plan_run(connection, run_id)
+    with background():
+        with begin(engine) as connection:
+            project_id = connection.execute(
+                text("SELECT project_id FROM agent_runs WHERE id = :run_id"),
+                {"run_id": run_id},
+            ).scalar_one_or_none()
+            if project_id is None:
+                raise HTTPException(status_code=404, detail="agent run not found")
+            try:
+                lease = jobs.require_active_lease(connection, worker_id, job_id, lease_token)
+            except LeaseNotFoundError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            if (
+                lease["kind"] != "agent.resume"
+                or lease["project_id"] != project_id
+                or (lease.get("payload") or {}).get("run_id") != run_id
+            ):
+                raise HTTPException(status_code=409, detail="lease does not match agent run")
+            return software_factory.resume_plan_run(connection, run_id)
 
 
 @app.get(
@@ -6899,21 +6961,22 @@ def execute_webhook_delivery(
     payload: WebhookDeliveryExecuteRequest,
 ) -> WebhookDeliverySummary:
     require_worker_principal()
-    with begin(engine) as connection:
-        try:
-            item = webhooks.deliver(
-                connection,
-                payload.project_id,
-                delivery_id,
-                payload.created_by_job_id,
-                payload.worker_id,
-                payload.lease_token,
-            )
-        except WebhookDeliveryNotFoundError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
-        return WebhookDeliverySummary(**item)
+    with background():
+        with begin(engine) as connection:
+            try:
+                item = webhooks.deliver(
+                    connection,
+                    payload.project_id,
+                    delivery_id,
+                    payload.created_by_job_id,
+                    payload.worker_id,
+                    payload.lease_token,
+                )
+            except WebhookDeliveryNotFoundError as error:
+                raise HTTPException(status_code=404, detail=str(error)) from error
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+            return WebhookDeliverySummary(**item)
 
 
 @app.post(
@@ -6956,22 +7019,27 @@ async def receive_inbound_webhook(
 @app.post("/v1/webhooks/github", status_code=202)
 @public(reason=PublicReason.HMAC_SIGNED_WEBHOOK, verifier=_identity_verifiers.inbound_webhook_hmac)
 async def receive_github_webhook(request: Request):
-    """Compatibility GitHub ingress with the community event allowlist."""
+    """Compatibility GitHub ingress routed through GitHubIntakeAdapter with the community allowlist."""
     raw_body = await request.body()
     headers = {key.lower(): value for key, value in request.headers.items()}
-    with begin(engine) as connection:
-        result = inbound_webhooks.ingest(
-            connection,
-            "github",
-            raw_body,
-            headers,
-            github_community_only=True,
-        )
-        if result["status"] == "accepted" and result.get("inbound_webhook_id"):
-            github_reconciler.ingest_inbound_webhook(
+
+    def _ingest() -> dict[str, Any]:
+        with begin(engine) as connection:
+            result = inbound_webhooks.ingest(
                 connection,
-                inbound_webhook_id=result["inbound_webhook_id"],
+                "github",
+                raw_body,
+                headers,
+                github_community_only=True,
             )
+            if result["status"] == "accepted" and result.get("inbound_webhook_id"):
+                github_reconciler.ingest_inbound_webhook(
+                    connection,
+                    inbound_webhook_id=result["inbound_webhook_id"],
+                )
+            return result
+
+    result = await run_in_threadpool(_ingest)
     if result["status"] == "rejected":
         raise HTTPException(status_code=401, detail="Invalid webhook signature.")
     if result["status"] == "not_configured":
@@ -7099,19 +7167,20 @@ def execute_github_community_job(
     job_id: str, payload: GitHubCommunityJobExecuteRequest
 ):
     require_worker_principal()
-    with begin(engine) as connection:
-        try:
-            return github_community.execute_job(
-                connection,
-                job_id=job_id,
-                project_id=payload.project_id,
-                worker_id=payload.worker_id,
-                lease_token=payload.lease_token,
-            )
-        except LeaseNotFoundError as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
+    with background():
+        with begin(engine) as connection:
+            try:
+                return github_community.execute_job(
+                    connection,
+                    job_id=job_id,
+                    project_id=payload.project_id,
+                    worker_id=payload.worker_id,
+                    lease_token=payload.lease_token,
+                )
+            except LeaseNotFoundError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @writing_get(app, "/v1/mcp/servers")
@@ -7460,18 +7529,19 @@ def run_meeting_step_endpoint(payload: open_bodies.MeetingStepBody):
     run_id = str(payload.get("run_id") or "").strip()
     if not run_id:
         raise HTTPException(status_code=422, detail="run_id is required.")
-    with begin(engine) as connection:
-        run = connection.execute(
-            text("SELECT project_id FROM meeting_runs WHERE id = :run_id"),
-            {"run_id": run_id},
-        ).mappings().first()
-        if run:
-            actor = str(payload.get("actor") or current_api_principal.get() or "system")
-            require_project_actor(
-                connection, run["project_id"], actor, "workflow_execute"
-            )
-    from .services.meeting_service import advance_meeting_run
-    return advance_meeting_run(engine, settings, jobs, run_id)
+    with background():
+        with begin(engine) as connection:
+            run = connection.execute(
+                text("SELECT project_id FROM meeting_runs WHERE id = :run_id"),
+                {"run_id": run_id},
+            ).mappings().first()
+            if run:
+                actor = str(payload.get("actor") or current_api_principal.get() or "system")
+                require_project_actor(
+                    connection, run["project_id"], actor, "workflow_execute"
+                )
+        from .services.meeting_service import advance_meeting_run
+        return advance_meeting_run(engine, settings, jobs, run_id)
 
 
 @app.post("/v1/code-tasks")
@@ -7519,6 +7589,12 @@ def start_code_task_endpoint(payload: CodeTaskStartBody):
                     **(payload.get("finalize_ctx") or {}),
                     **({"workflow_version_id": payload["workflow_version_id"]}
                        if payload.get("workflow_version_id") else {}),
+                    # A DIRECT CHANGE: no workflow picked and no panel, discovery or decision
+                    # behind it. Its outer run ends with this one change (merged or closed)
+                    # and never builds past it (dry run 2, gap 9).
+                    **({"direct_change": True}
+                       if not payload.get("workflow_version_id")
+                       and not (payload.get("finalize_ctx") or {}).get("origin") else {}),
                 },
                 jobs=jobs,
                 profile=payload.get("profile"),
@@ -7963,7 +8039,8 @@ def follow_up_code_task_endpoint(run_id: str, payload: CodeTaskFollowUpBody):
         raise HTTPException(status_code=403, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
-    return {"status": "queued", **result}
+    # An identical follow-up already in flight is returned, never queued twice (review #224).
+    return {"status": "existing" if result.get("existing") else "queued", **result}
 
 
 @app.get("/v1/qa/benchmark-apps/runs/{run_id}/report")
@@ -8037,20 +8114,21 @@ def sweep_qa_benchmark_evaluations(payload: dict | None = None):
     from boss_engine.services.improvement_programs import reconcile_program_baselines
 
     try:
-        with begin(engine) as connection:
-            result = sweep_terminal_benchmarks(
-                connection,
-                project_id=project_id,
-                actor=actor,
-                limit=limit,
-            )
-            result["baseline_reconciliation"] = reconcile_program_baselines(
-                connection,
-                project_id=project_id,
-                actor="improvement_program_scheduler",
-                limit=limit,
-            )
-            return result
+        with background():
+            with begin(engine) as connection:
+                result = sweep_terminal_benchmarks(
+                    connection,
+                    project_id=project_id,
+                    actor=actor,
+                    limit=limit,
+                )
+                result["baseline_reconciliation"] = reconcile_program_baselines(
+                    connection,
+                    project_id=project_id,
+                    actor="improvement_program_scheduler",
+                    limit=limit,
+                )
+                return result
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
 
@@ -8418,31 +8496,32 @@ def run_code_task_step_endpoint(payload: open_bodies.CodeTaskStepBody):
     run_id = str(payload.get("run_id") or "").strip()
     if not run_id:
         raise HTTPException(status_code=422, detail="run_id is required.")
-    with begin(engine) as connection:
-        run = connection.execute(
-            text("SELECT project_id FROM code_task_runs WHERE id = :run_id"),
-            {"run_id": run_id},
-        ).mappings().first()
-        if run:
-            actor = str(payload.get("actor") or current_api_principal.get() or "system")
-            require_project_actor(
-                connection, run["project_id"], actor, "workflow_execute"
-            )
-    from .services.code_task_service import run_code_task
-    try:
-        return run_code_task(engine, settings, jobs, run_id,
-                             fencing_token=payload.get("fencing_token"))
-    except HTTPException:
-        raise
-    except Exception as exc:  # noqa: BLE001
-        # A crash is recorded ON THE RUN (what, where) and answered in words, so the build's own
-        # page, the worker's error and the stuck-work diagnosis all say what broke -- not a bare
-        # 500 the worker could not even report (crun_de5396b5: 30 silent crashes, 2026-11-07).
-        from boss_engine.services import stuck_work
+    with background():
+        with begin(engine) as connection:
+            run = connection.execute(
+                text("SELECT project_id FROM code_task_runs WHERE id = :run_id"),
+                {"run_id": run_id},
+            ).mappings().first()
+            if run:
+                actor = str(payload.get("actor") or current_api_principal.get() or "system")
+                require_project_actor(
+                    connection, run["project_id"], actor, "workflow_execute"
+                )
+        from .services.code_task_service import run_code_task
+        try:
+            return run_code_task(engine, settings, jobs, run_id,
+                                 fencing_token=payload.get("fencing_token"))
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            # A crash is recorded ON THE RUN (what, where) and answered in words, so the build's own
+            # page, the worker's error and the stuck-work diagnosis all say what broke -- not a bare
+            # 500 the worker could not even report (crun_de5396b5: 30 silent crashes, 2026-11-07).
+            from boss_engine.services import stuck_work
 
-        said = stuck_work.record_step_crash(engine, run_id, exc)
-        LOGGER.exception("code_task_step_crashed run_id=%s", run_id)
-        raise HTTPException(status_code=500, detail=said) from exc
+            said = stuck_work.record_step_crash(engine, run_id, exc)
+            LOGGER.exception("code_task_step_crashed run_id=%s", run_id)
+            raise HTTPException(status_code=500, detail=said) from exc
 
 
 class InvestigationRunBody(BaseModel):
@@ -8470,25 +8549,26 @@ def run_investigation_endpoint(investigation_id: str,
         block_community_investigation, run_investigation,
     )
 
-    with begin(engine) as connection:
-        project_id = connection.execute(
-            text("SELECT project_id FROM investigations WHERE id = :investigation_id"),
-            {"investigation_id": investigation_id},
-        ).scalar_one_or_none()
-        if project_id is None:
-            return {"ok": False, "error": f"no such investigation: {investigation_id}"}
-        actor = current_api_principal.get() or "system"
-        require_project_actor(connection, project_id, actor, "workflow_execute")
-        lease = ({"job_id": payload.job_id, "worker_id": payload.worker_id,
-                  "lease_token": payload.lease_token}
-                 if payload is not None and payload.job_id and payload.worker_id
-                 and payload.lease_token else None)
-        blocked = block_community_investigation(connection, settings, investigation_id,
-                                                lease=lease)
-        if blocked is not None:
-            return blocked
+    with background():
+        with begin(engine) as connection:
+            project_id = connection.execute(
+                text("SELECT project_id FROM investigations WHERE id = :investigation_id"),
+                {"investigation_id": investigation_id},
+            ).scalar_one_or_none()
+            if project_id is None:
+                return {"ok": False, "error": f"no such investigation: {investigation_id}"}
+            actor = current_api_principal.get() or "system"
+            require_project_actor(connection, project_id, actor, "workflow_execute")
+            lease = ({"job_id": payload.job_id, "worker_id": payload.worker_id,
+                      "lease_token": payload.lease_token}
+                     if payload is not None and payload.job_id and payload.worker_id
+                     and payload.lease_token else None)
+            blocked = block_community_investigation(connection, settings, investigation_id,
+                                                    lease=lease)
+            if blocked is not None:
+                return blocked
 
-    return run_investigation(engine, settings, investigation_id=investigation_id, lease=lease)
+        return run_investigation(engine, settings, investigation_id=investigation_id, lease=lease)
 
 
 def _investigation_caller(investigation_id: str, request: Request) -> dict:
@@ -8823,13 +8903,14 @@ def record_host_stall_endpoint(payload: open_bodies.HostStallBody) -> dict:
     stalled = float(payload.get("stalled_seconds") or 0.0)
     if stalled <= 0:
         return {"recorded": False, "reason": "not a stall"}
-    with begin(engine) as connection:
-        # `source` marks a stall measured over the worker's IDLE WAIT only. Rows without one
-        # were written by the old poll clock, which counted every job's duration as a host
-        # stall (stability spec C5); readers ignore them.
-        emit_event(connection, settings.default_project_id, "host.stalled", "boss",
-                   "host", "self", {"stalled_seconds": round(stalled, 2),
-                                    "source": "worker.idle_wait"})
+    with background():
+        with begin(engine) as connection:
+            # `source` marks a stall measured over the worker's IDLE WAIT only. Rows without one
+            # were written by the old poll clock, which counted every job's duration as a host
+            # stall (stability spec C5); readers ignore them.
+            emit_event(connection, settings.default_project_id, "host.stalled", "boss",
+                       "host", "self", {"stalled_seconds": round(stalled, 2),
+                                        "source": "worker.idle_wait"})
     return {"recorded": True, "stalled_seconds": round(stalled, 2)}
 
 
@@ -8852,38 +8933,39 @@ def code_task_redelivered_endpoint(run_id: str, payload: open_bodies.CodeTaskRed
     attempt = int(payload.get("attempt") or 0)
     if not worker_id or not job_id or not lease_token or attempt < 2:
         raise HTTPException(status_code=422, detail="active replay lease and attempt >= 2 required")
-    with begin(engine) as connection:
-        try:
-            lease = jobs.require_active_lease(connection, worker_id, job_id, lease_token)
-        except LeaseNotFoundError as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        run_project = connection.execute(
-            text("SELECT project_id FROM code_task_runs WHERE id = :run_id"),
-            {"run_id": run_id},
-        ).scalar_one_or_none()
-        if run_project is None:
-            raise HTTPException(status_code=404, detail="code task not found")
-        lease_payload = lease.get("payload") or {}
-        if (
-            lease["project_id"] != run_project
-            or (lease_payload.get("run_id") or lease_payload.get("code_task_run_id")) != run_id
-            or lease["attempt"] != attempt
-        ):
-            raise HTTPException(status_code=409, detail="replay lease does not match code task")
-        connection.execute(
-            text(
-                """
-                UPDATE code_task_runs
-                SET finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb)
-                                   || jsonb_build_object('redelivered_attempts',
-                                        COALESCE(finalize_ctx->'redelivered_attempts', '[]'::jsonb)
-                                        || to_jsonb(CAST(:attempt AS int))),
-                    updated_at = now()
-                WHERE id = :run_id
-                """
-            ),
-            {"run_id": run_id, "attempt": attempt},
-        )
+    with background():
+        with begin(engine) as connection:
+            try:
+                lease = jobs.require_active_lease(connection, worker_id, job_id, lease_token)
+            except LeaseNotFoundError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            run_project = connection.execute(
+                text("SELECT project_id FROM code_task_runs WHERE id = :run_id"),
+                {"run_id": run_id},
+            ).scalar_one_or_none()
+            if run_project is None:
+                raise HTTPException(status_code=404, detail="code task not found")
+            lease_payload = lease.get("payload") or {}
+            if (
+                lease["project_id"] != run_project
+                or (lease_payload.get("run_id") or lease_payload.get("code_task_run_id")) != run_id
+                or lease["attempt"] != attempt
+            ):
+                raise HTTPException(status_code=409, detail="replay lease does not match code task")
+            connection.execute(
+                text(
+                    """
+                    UPDATE code_task_runs
+                    SET finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb)
+                                       || jsonb_build_object('redelivered_attempts',
+                                            COALESCE(finalize_ctx->'redelivered_attempts', '[]'::jsonb)
+                                            || to_jsonb(CAST(:attempt AS int))),
+                        updated_at = now()
+                    WHERE id = :run_id
+                    """
+                ),
+                {"run_id": run_id, "attempt": attempt},
+            )
     return {"run_id": run_id, "attempt": attempt, "recorded": True}
 
 
@@ -9215,9 +9297,12 @@ def register_deployment_target(payload: dict):
 
 @app.patch("/v1/deployment-targets/{target_id}")
 # F2: the environment label feeds every production gate, so moving a target to or from
-# production (or changing a production target at all) needs deployment:production.
+# production (or changing a production target at all) needs deployment:production. The target
+# counts by the resolver (resolved=True): renaming an unlabelled remote server "dev" is what
+# would let dev autonomy ship to it unasked (#307 review).
 @permit(P.DEPLOYMENT_TARGET_MANAGE, scope=Scope.of("deployment_target", path="target_id"),
-        production=Production(target="path:target_id", environment="body:environment"))
+        production=Production(target="path:target_id", environment="body:environment",
+                              resolved=True))
 def update_deployment_target_endpoint(target_id: str, payload: DeploymentTargetUpdateBody):
     """Change a target in place — port, domain, health check, status, auto-deploy."""
     payload = payload.payload()
@@ -9594,7 +9679,8 @@ def put_secret_endpoint(payload: SecretPutBody):
                 # bank's outside agent failed "platform secret store is not configured" on the
                 # database-backed laptop install (2026-10-31).
                 backend=payload.get("backend") or durable_secret_backend(settings),
-                scope_type=scope_type, scope_id=scope_id, actor=actor)
+                scope_type=scope_type, scope_id=scope_id, actor=actor,
+                http_auth=payload.get("http_auth"))
     except SecretUnavailable as exc:
         # A backend that cannot accept the write is a configuration problem, not a server bug.
         raise HTTPException(status_code=422, detail=str(exc))
@@ -9999,10 +10085,11 @@ def shepherd_watch_endpoint(project_id: Optional[str] = None, dry_run: bool = Fa
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.shepherd_service import watch, watch_all
-    if project_id:
-        return watch(engine, settings, project_id, dry_run=dry_run, jobs=jobs)
-    # No project named: watch everything with work in flight. Neglect is not project-scoped.
-    return watch_all(engine, settings, dry_run=dry_run, jobs=jobs)
+    with background():
+        if project_id:
+            return watch(engine, settings, project_id, dry_run=dry_run, jobs=jobs)
+        # No project named: watch everything with work in flight. Neglect is not project-scoped.
+        return watch_all(engine, settings, dry_run=dry_run, jobs=jobs)
 
 
 @app.post("/v1/delivery/health/sweep")
@@ -10022,10 +10109,13 @@ def delivery_health_sweep_endpoint(project_id: Optional[str] = None):
     # a deployment that hangs while the API stays up was previously reconciled by nothing —
     # `fail_orphaned_deployments` only runs at startup, which assumes the failure mode is a
     # restart when the observed one is a hang.
-    hung = fail_hung_deployments(engine)
-    result = sweep(engine, settings, project_id=project_id)
+    with background():
+        hung = fail_hung_deployments(engine)
+        result = sweep(engine, settings, project_id=project_id)
     if hung.get("failed"):
         result = {**result, "hung_deployments_failed": hung["failed"]}
+    if hung.get("never_started"):
+        result = {**result, "never_started_deployments_failed": hung["never_started"]}
     return result
 
 
@@ -10040,8 +10130,6 @@ def _start_deployment_in_background(run_id: str, actor: str, *, trigger: str) ->
     made only `deploy` asynchronous, so pressing Redeploy still blocked for a minute and showed
     nothing — the same bug, on the button next to the fixed one.
     """
-    import threading
-
     from .services.delivery_pipeline import execute_deployment
 
     def _run() -> None:
@@ -10067,7 +10155,7 @@ def _start_deployment_in_background(run_id: str, actor: str, *, trigger: str) ->
             except Exception:  # noqa: BLE001 — the DB may be the thing that failed
                 pass
 
-    threading.Thread(target=_run, name=f"deploy-{run_id}", daemon=True).start()
+    spawn_thread(_run, name=f"deploy-{run_id}", daemon=True, as_background=True)
     return {"deployment_run_id": run_id, "status": "started", "trigger": trigger,
             "poll": f"/v1/delivery/deployments/{run_id}"}
 
@@ -10821,7 +10909,8 @@ def plan_stack_deployment_endpoint(payload: open_bodies.StackDeployPlanBody):
     try:
         deployment = plan_stack_deploy(
             engine, settings, project_id=project_id, target_id=target_id,
-            repository=(payload.get("repository") or None), ref=ref, actor=actor)
+            repository=(payload.get("repository") or None), ref=ref, actor=actor,
+            run_id=(str(payload.get("run_id") or "").strip() or None))
     except StackDeployError as exc:
         raise _stack_error(exc)
     return {"deployment": deployment}
@@ -10895,9 +10984,10 @@ def execute_stack_deployment_endpoint(deployment_id: str,
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from boss_engine.services.stack_deploy import execute_stack_job
 
-    return execute_stack_job(engine, settings, deployment_id=deployment_id,
-                             job_id=payload.job_id, worker_id=payload.worker_id,
-                             lease_token=payload.lease_token)
+    with background():
+        return execute_stack_job(engine, settings, deployment_id=deployment_id,
+                                 job_id=payload.job_id, worker_id=payload.worker_id,
+                                 lease_token=payload.lease_token)
 
 
 @app.post("/v1/delivery/deployments/{deployment_run_id}/apply")
@@ -10911,9 +11001,10 @@ def apply_host_deployment_endpoint(deployment_run_id: str,
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from boss_engine.services.governed_host_deploy import execute_host_job
 
-    result = execute_host_job(engine, settings, deployment_run_id=deployment_run_id,
-                              job_id=payload.job_id, worker_id=payload.worker_id,
-                              lease_token=payload.lease_token)
+    with background():
+        result = execute_host_job(engine, settings, deployment_run_id=deployment_run_id,
+                                  job_id=payload.job_id, worker_id=payload.worker_id,
+                                  lease_token=payload.lease_token)
     if result.get("http_status"):
         # A lease that is not this job's, or a run that does not exist: 4xx, never a 200.
         raise HTTPException(status_code=int(result["http_status"]),
@@ -11373,9 +11464,10 @@ def shepherd_autopilot_endpoint(payload: open_bodies.ShepherdAutopilotBody):
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.shepherd_service import autopilot
-    return autopilot(engine, settings, jobs, payload["project_id"],
-                     limit=int(payload.get("limit") or 10),
-                     actor=str(payload.get("actor") or "shepherd"))
+    with background():
+        return autopilot(engine, settings, jobs, payload["project_id"],
+                         limit=int(payload.get("limit") or 10),
+                         actor=str(payload.get("actor") or "shepherd"))
 
 
 @app.post("/v1/shepherd/escalations/{escalation_id}/answer")
@@ -11926,13 +12018,21 @@ def setup_deployment_for_code_task_endpoint(run_id: str, payload: open_bodies.Co
     looks_like_ip = all(part.isdigit() for part in address.split(".")) and address.count(".") == 3
     scheme = "http" if (looks_like_ip or ":" in address) else "https"
 
+    # THE APP SAYS WHERE IT IS HEALTHY (its boss.deploy.yaml), not a hard-coded "/".
+    from boss_engine.services.deployment_fleet import resolve_health_path
+
+    with begin(engine) as connection:
+        health_path, _health_source = resolve_health_path(
+            connection, project_id=run["project_id"], repo=repo, app_name=app_name,
+            health_path=payload.get("health_path"))
+
     created = register_deployment_target({
         "project_id": run["project_id"],
         "app_name": app_name,
         "repo": repo,
         "environment": environment,
         "target_kind": "ssh",
-        "health_checks": [{"kind": "http", "scheme": scheme, "path": "/",
+        "health_checks": [{"kind": "http", "scheme": scheme, "path": health_path,
                            "expect": 200, "expect_status": 200}],
         # Replaced immediately by `attach_target`, which derives it from the host record so the
         # address has exactly one writable home.
@@ -12195,6 +12295,16 @@ def start_preview_endpoint(run_id: str, payload: Optional[dict] = None):
             stop_preview(engine, _pid, settings)
         except Exception:  # noqa: BLE001 — best-effort cleanup
             pass
+    # FRESH DATA: an app's preview data is kept across stops and restarts (preview_data); the
+    # operator's "Fresh data" deletes it, after the stop above has saved it, so the app starts empty.
+    fresh_data = p.get("fresh_data") in (True, "true", "1", 1, "on")
+    if fresh_data:
+        from .services.preview_service import reset_preview_data
+
+        try:
+            reset_preview_data(engine, settings, run_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
 
     # ASYNC, BECAUSE THE WORK OUTLASTS THE REQUEST.
     #
@@ -12310,6 +12420,51 @@ def _preview_served_elsewhere(request: Request, preview_id: str, path: str,
     return Response(status_code=307, headers={**isolation, "Location": target, "Cache-Control": "no-store"})
 
 
+def _preview_wake_answer(request: Request, preview_id: str, path: str,
+                         isolation: dict) -> Optional[Response]:
+    """The answer for a preview that is not running (preview_wake.wake), or None to keep the
+    gateway's own answer (it runs after all)."""
+    from boss_engine.services import preview_wake
+
+    page = request.method == "GET" and preview_wake.is_page_load(request.headers)
+    try:
+        verdict = preview_wake.wake(engine, settings, preview_id, page=page)
+    except Exception:  # noqa: BLE001 — the gateway's own answer stands
+        LOGGER.warning("preview %s: wake-on-visit failed", preview_id, exc_info=True)
+        return None
+    todo = verdict.get("do")
+    if todo == "serve":
+        return None
+    no_store = {**isolation, "Cache-Control": "no-store"}
+    on_origin = bool((request.scope.get("state") or {}).get("boss_preview_origin"))
+    # RECREATE PREVIEW lives in the console (a person's write, with consent): BOSS's public URL,
+    # else this same host when the request did not come through the preview origin.
+    console = str(getattr(settings, "public_url", "") or "") or ("" if on_origin else "/")
+    recreate = (preview_wake.recreate_href(console, str(verdict.get("preview_id") or ""))
+                if console else "")
+    if todo == "redirect":
+        where = preview_wake.sibling_location(
+            request.headers.get("host"), request.url.scheme, preview_id, str(verdict["to"]),
+            path, request.url.query, on_preview_origin=on_origin)
+        return Response(status_code=307, headers={**no_store, "Location": where})
+    if todo == "wait":
+        secs = preview_wake.REFRESH_SECONDS
+        if not page:
+            return Response(content=b"This preview is starting; try again shortly.",
+                            status_code=503, media_type="text/plain",
+                            headers={**no_store, "Retry-After": str(secs)})
+        return Response(content=preview_wake.waking_page(woke=bool(verdict.get("woke"))
+                                                         or verdict.get("id") != preview_id,
+                                                         room=verdict.get("room", True) is not False,
+                                                         recreate=recreate),
+                        status_code=503, media_type="text/html; charset=utf-8",
+                        headers={**no_store, "Retry-After": str(secs), "Refresh": str(secs)})
+    if not page:
+        return None
+    return Response(content=preview_wake.gone_page(str(verdict.get("why") or ""), recreate),
+                    status_code=409, media_type="text/html; charset=utf-8", headers=no_store)
+
+
 @app.api_route("/v1/previews/{preview_id}/web", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
 @app.api_route("/v1/previews/{preview_id}/web/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
 @public(reason=PublicReason.PREVIEW_CAPABILITY_URL, verifier=_identity_verifiers.preview_capability)
@@ -12336,7 +12491,42 @@ async def preview_web_proxy(preview_id: str, request: Request, path: str = ""):
         app_cookie_header=inbound_cookie_header(preview_id, request.headers.get("cookie")),
         # On the preview origin the app is shown at its own paths, so its router matches them.
         serve_at_root=bool((request.scope.get("state") or {}).get("boss_preview_origin")),
+        # Behind a TLS proxy the hop to BOSS is http; the proxy's own proto (else the configured
+        # preview origin's scheme, preview_public_host_headers) is what the browser used.
+        public_scheme=((request.headers.get("x-forwarded-proto") or "").split(",")[0].strip().lower()
+                       or request.url.scheme),
     )
+    if status in (409, 502):
+        # ASLEEP, NOT GONE (preview_wake): a preview BOSS stopped wakes on a page load and says
+        # "Waking up your app…" until it serves; an old link follows its replacement.
+        woken = _preview_wake_answer(request, preview_id, path, isolation)
+        if woken is not None:
+            return woken
+    # AN API HAS NO PAGE AT "/" (preview_landing): a browser opening a running preview's root
+    # that the app answers "nothing here" sees BOSS's landing — "This app is an API" and the
+    # routes that answer, as links — rather than a bare 404 that reads as a broken preview.
+    # Only a RUNNING preview's app answer (landing_for checks the row, so the gateway's own
+    # "preview not found" never becomes a landing), and OFF the event loop: it reads the tree,
+    # the database and asks routes (each PROBE_TIMEOUT_SECONDS, all within the probe budget).
+    from boss_engine.services import preview_landing
+    if preview_landing.wants_landing(request.method, path, status, request.headers):
+        from starlette.concurrency import run_in_threadpool
+        try:
+            page = await run_in_threadpool(
+                preview_landing.landing_for,
+                engine, preview_id, root_status=status, root_body=data or b"",
+                fetch=lambda route: proxy_preview(
+                    engine, preview_id, route.lstrip("/"), "GET", "", None, None,
+                    settings.sandbox_token, incoming_headers={"accept": "*/*"},
+                    timeout=preview_landing.PROBE_TIMEOUT_SECONDS, self_heal=False)[0],
+                link_prefix=preview_landing.link_prefix_for(request.url.path))
+            if page is not None:
+                return Response(content=page, status_code=200,
+                                media_type="text/html; charset=utf-8",
+                                headers={**isolation, "Cache-Control": "no-store",
+                                         "X-Boss-Preview-Landing": "api"})
+        except Exception:  # noqa: BLE001 — the app's own answer stands
+            LOGGER.warning("preview %s: API landing failed", preview_id, exc_info=True)
     set_cookies = list((headers or {}).pop("Set-Cookie", None) or [])
     # The previewed app's own CSP / CORS answers never replace the isolation.
     headers = {k: v for k, v in (headers or {}).items()
@@ -13023,10 +13213,11 @@ def execute_discovery_endpoint(run_id: str, payload: open_bodies.DiscoveryExecut
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.discovery_service import execute_discovery_job
 
-    return execute_discovery_job(
-        settings, run_id=run_id, job_id=payload.job_id,
-        worker_id=payload.worker_id, lease_token=payload.lease_token,
-    )
+    with background():
+        return execute_discovery_job(
+            settings, run_id=run_id, job_id=payload.job_id,
+            worker_id=payload.worker_id, lease_token=payload.lease_token,
+        )
 
 
 @app.get("/v1/discoveries")
@@ -13760,7 +13951,12 @@ def agent_turn(payload: AgentChatRequest, request: Request, *, endpoint: str) ->
     (/v1/engine/agent/chat and its deprecated alias) and the Metatron terminal
     (/v1/metatron/session) — sends its natural-language turn here: one brain (AgentService.chat →
     IntentRouter), one thread model, one set of actions, one consent path. A fix to the agent is
-    made once. test_one_agent_turn enforces that no surface grows a second decision path."""
+    made once. test_one_agent_turn enforces that no surface grows a second decision path.
+
+    DURABLE (services/chat_turns.py): the operator's message and the turn's record are committed
+    before the first model call, and the answer runs on short transactions — a turn that fails,
+    a worker that restarts or an idle-in-transaction timeout leaves the message where it was and
+    the turn marked failed in words. `background` answers 202 {thread_id, turn_id} at once."""
     _enforce_high_cost_rate_limit(
         request, payload.project_id, payload.actor, endpoint=endpoint
     )
@@ -13771,44 +13967,66 @@ def agent_turn(payload: AgentChatRequest, request: Request, *, endpoint: str) ->
             payload.actor,
             "agent_chat",
         )
-        try:
-            result = orchestration_agent.chat(
-                connection,
-                project_id=payload.project_id,
-                actor=payload.actor,
-                thread_id=payload.thread_id,
-                message=payload.message,
-                confirm_plan_id=payload.confirm_plan_id,
-                surface=payload.surface,
-                external_ref=payload.external_ref,
-                role=payload.role,
-                mode=payload.mode,
-                depth=payload.depth,
-                context=payload.context,
-                new_thread=payload.new_thread,
-                attachments=[
-                    {"name": a.name, "media_type": a.media_type, "kind": a.kind,
-                     "data": a.data}
-                    for a in (payload.attachments or [])
-                ],
-            )
-        except AgentThreadNotFoundError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
-        except AgentThreadOwnershipError as error:
-            raise HTTPException(status_code=403, detail=str(error)) from error
-        except HTTPException:
-            raise
-        except Exception as error:  # noqa: BLE001
-            # "Internal Server Error" IS THE FAILURE THIS WHOLE AREA IS ABOUT — and so is its
-            # opposite. Five words that name nothing could not be acted on; the replacement,
-            # the exception's class and text, put "IntegrityError: (psycopg.errors.
-            # UniqueViolation) duplicate key value … [SQL: INSERT INTO agent_threads …" in the
-            # dock on an existing install. One explainer (model_failures.explain_turn_failure) turns any
-            # failure into a sentence; the technical line rides along for a collapsed Details,
-            # and the whole traceback goes to the log.
-            LOGGER.exception("agent chat failed on %s", endpoint)
-            raise AgentTurnFailed(error) from error
-        return AgentChatResponse(**result)
+    try:
+        result = orchestration_agent.chat_durably(
+            engine,
+            background=bool(payload.background),
+            idempotency_key=payload.idempotency_key,
+            project_id=payload.project_id,
+            actor=payload.actor,
+            thread_id=payload.thread_id,
+            message=payload.message,
+            confirm_plan_id=payload.confirm_plan_id,
+            surface=payload.surface,
+            external_ref=payload.external_ref,
+            role=payload.role,
+            mode=payload.mode,
+            depth=payload.depth,
+            context=payload.context,
+            new_thread=payload.new_thread,
+            attachments=[
+                {"name": a.name, "media_type": a.media_type, "kind": a.kind,
+                 "data": a.data}
+                for a in (payload.attachments or [])
+            ],
+        )
+    except AgentThreadNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except AgentThreadOwnershipError as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
+    except HTTPException:
+        raise
+    except Exception as error:  # noqa: BLE001
+        # "Internal Server Error" IS THE FAILURE THIS WHOLE AREA IS ABOUT — and so is its
+        # opposite. Five words that name nothing could not be acted on; the replacement,
+        # the exception's class and text, put "IntegrityError: (psycopg.errors.
+        # UniqueViolation) duplicate key value … [SQL: INSERT INTO agent_threads …" in the
+        # dock on an existing install. One explainer (model_failures.explain_turn_failure) turns any
+        # failure into a sentence; the technical line rides along for a collapsed Details,
+        # and the whole traceback goes to the log. The turn's record already says failed.
+        LOGGER.exception("agent chat failed on %s", endpoint)
+        raise AgentTurnFailed(error) from error
+    if "reply" not in result:
+        # Running (or a replayed key whose turn is still running): the turn to poll.
+        return JSONResponse(status_code=202, content=result)
+    return AgentChatResponse(**result)
+
+
+@app.get("/v1/agent/turns/{turn_id}")
+@permit(P.ASSISTANT_CHAT, scope=Scope.project(query="project_id"))
+def agent_turn_status_endpoint(turn_id: str, project_id: str, actor: str) -> dict:
+    """One chat turn: running, done (with the response the turn would have returned) or failed
+    (with the sentence). What the console polls after a background send, and what it resumes
+    after a reload. A turn whose process died is marked failed here (chat_turns.sweep_orphans)."""
+    from boss_engine.services import chat_turns
+
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "agent_chat")
+        turn = chat_turns.read(connection, turn_id)
+        if turn is None or turn["project_id"] != project_id:
+            raise HTTPException(status_code=404, detail="No such turn.")
+        require_agent_thread_owner(connection, turn["thread_id"], actor)
+    return turn
 
 
 @app.post("/v1/engine/agent/action", response_model=AgentActionRunResponse)
@@ -14084,9 +14302,10 @@ def agent_wakeups_tick(payload: open_bodies.AgentWakeupsTickBody) -> dict:
     payload = payload.payload()
     from boss_engine.services.agent_wakeups import run_due
 
-    return run_due(settings, engine,
-                   limit=int(payload.get("limit") or 5),
-                   project_id=str(payload.get("project_id") or "").strip() or None)
+    with background():
+        return run_due(settings, engine,
+                       limit=int(payload.get("limit") or 5),
+                       project_id=str(payload.get("project_id") or "").strip() or None)
 
 
 @app.get("/v1/agent/wakeups")
@@ -14156,7 +14375,11 @@ def review_memory_endpoint(memory_id: str, payload: open_bodies.MemoryReviewBody
 @app.post("/v1/memory/{memory_id}/forget")
 @permit(P.MEMORY_MANAGE, scope=Scope.project(body="project_id"))
 def forget_memory_endpoint(memory_id: str, payload: open_bodies.MemoryForgetBody) -> dict:
-    """Retire a memory that is wrong or no longer true. Retired, never deleted."""
+    """Retire a memory that is wrong or no longer true. Retired, never deleted.
+
+    A knowledge-graph lesson, rule or fact (a kgn_… id) is retired in the graph with a `reason`
+    (KnowledgeService.retire): closed on the database's clock, audited in kg_audit, dropped
+    from the AGE mirror — the same retire the agent's `forget` tool does."""
     payload = payload.payload()
     from boss_engine.services.agent_memory import MemoryError_, forget
 
@@ -14166,6 +14389,22 @@ def forget_memory_endpoint(memory_id: str, payload: open_bodies.MemoryForgetBody
         raise HTTPException(status_code=400, detail="project_id and actor are required")
     with begin(engine) as connection:
         require_project_actor(connection, project_id, actor, "agent_chat")
+        if memory_id.startswith("kgn_"):
+            from boss_engine.services.knowledge.service import KnowledgeService
+
+            try:
+                return KnowledgeService().retire(
+                    connection, project_id=project_id, node_id=memory_id,
+                    reason=str(payload.get("reason") or ""), actor_kind="person",
+                    actor_ref=actor)
+            except LookupError as error:
+                raise HTTPException(status_code=404, detail=str(error)) from error
+            except PermissionError as error:
+                # Another project's node reads as not found, never as "it exists elsewhere".
+                raise HTTPException(status_code=404, detail="no such knowledge node in this "
+                                                            "project") from error
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
         try:
             return forget(connection, project_id=project_id, memory_id=memory_id, actor=actor)
         except MemoryError_ as error:
@@ -14361,8 +14600,13 @@ def get_agent_thread_messages_endpoint(thread_id: str, project_id: str, actor: s
         # showed after that was a promise it had no basis for.
         #
         # Console chat commits progress independently of its final messages.
+        from boss_engine.services import chat_turns
         from boss_engine.services.agent_turn_status import thread_is_working
 
+        # THE TURN STILL IN FLIGHT, BY ID (chat_turns): a console that reloaded mid-turn
+        # resumes polling it rather than showing a question with no answer coming. Swept first,
+        # so a turn whose process died reads as failed here, never as running.
+        running = chat_turns.running_turn(connection, project_id, thread_id)
         working = thread_is_working(connection, project_id, thread_id)
         history = orchestration_agent.list_messages(connection, thread_id)
         # THE BUTTONS COME BACK WITH THE CONVERSATION.
@@ -14391,6 +14635,7 @@ def get_agent_thread_messages_endpoint(thread_id: str, project_id: str, actor: s
             "proposed_actions": offers,
             "next_steps": next_steps,
             "working": working,
+            "turn": running,
         }
 
 
@@ -14784,34 +15029,35 @@ def execute_orchestrator_next_move(
         raise HTTPException(status_code=422,
                             detail="an active next_move job lease is required "
                                    "(worker_id, created_by_job_id, lease_token)")
-    with begin(engine) as connection:
-        try:
-            lease = jobs.require_active_lease(connection, worker_id, job_id, lease_token)
-        except LeaseNotFoundError as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        if lease["kind"] != "agent.orchestrator.next_move" or lease["project_id"] != payload.project_id:
-            raise HTTPException(status_code=409, detail="lease does not match this next_move")
-        try:
-            return orchestrator_next_move.execute(
-                connection,
-                project_id=payload.project_id,
-                event_id=payload.event_id,
-                event_type=payload.event_type,
-                entity_type=payload.entity_type,
-                entity_id=payload.entity_id,
-                event_data=payload.event_data,
-                task_id=payload.task_id,
-                data_boundary=payload.data_boundary,
-                created_by_job_id=payload.created_by_job_id,
-                worker_id=payload.worker_id,
-                lease_token=payload.lease_token,
-            )
-        except ValueError as error:
-            return {
-                "status": "failed",
-                "retryable": False,
-                "message": str(error),
-            }
+    with background():
+        with begin(engine) as connection:
+            try:
+                lease = jobs.require_active_lease(connection, worker_id, job_id, lease_token)
+            except LeaseNotFoundError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            if lease["kind"] != "agent.orchestrator.next_move" or lease["project_id"] != payload.project_id:
+                raise HTTPException(status_code=409, detail="lease does not match this next_move")
+            try:
+                return orchestrator_next_move.execute(
+                    connection,
+                    project_id=payload.project_id,
+                    event_id=payload.event_id,
+                    event_type=payload.event_type,
+                    entity_type=payload.entity_type,
+                    entity_id=payload.entity_id,
+                    event_data=payload.event_data,
+                    task_id=payload.task_id,
+                    data_boundary=payload.data_boundary,
+                    created_by_job_id=payload.created_by_job_id,
+                    worker_id=payload.worker_id,
+                    lease_token=payload.lease_token,
+                )
+            except ValueError as error:
+                return {
+                    "status": "failed",
+                    "retryable": False,
+                    "message": str(error),
+                }
 
 
 class AgentStudioRunExecuteRequest(BaseModel):
@@ -14831,20 +15077,21 @@ def execute_agent_studio_run(payload: AgentStudioRunExecuteRequest) -> dict[str,
     that called no model. It now runs here, through the governed agent-step pipeline, under the
     worker's LIVE lease on that very job."""
     require_worker_principal()
-    with begin(engine) as connection:
-        try:
-            lease = jobs.require_active_lease(connection, payload.worker_id, payload.created_by_job_id,
-                                              payload.lease_token)
-        except LeaseNotFoundError as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        if lease["kind"] != "agent.studio.execute" or lease["project_id"] != payload.project_id:
-            raise HTTPException(status_code=409, detail="lease does not match this Agent Studio run")
-        try:
-            return {"status": "succeeded", **agent_studio.execute_run(
-                connection, project_id=payload.project_id, run_id=payload.agent_studio_run_id,
-                actor="worker")}
-        except ValueError as error:
-            return {"status": "failed", "retryable": False, "message": str(error)}
+    with background():
+        with begin(engine) as connection:
+            try:
+                lease = jobs.require_active_lease(connection, payload.worker_id, payload.created_by_job_id,
+                                                  payload.lease_token)
+            except LeaseNotFoundError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            if lease["kind"] != "agent.studio.execute" or lease["project_id"] != payload.project_id:
+                raise HTTPException(status_code=409, detail="lease does not match this Agent Studio run")
+            try:
+                return {"status": "succeeded", **agent_studio.execute_run(
+                    connection, project_id=payload.project_id, run_id=payload.agent_studio_run_id,
+                    actor="worker")}
+            except ValueError as error:
+                return {"status": "failed", "retryable": False, "message": str(error)}
 
 
 @app.get("/v1/meetings", response_model=MeetingListResponse)
@@ -17668,72 +17915,73 @@ def disable_project_skill(skill_id: str, payload: SkillToggleRequest) -> dict:
 @permit(P.SKILL_INVOKE, scope=Scope.project(body="project_id"))
 def invoke_skill(skill_id: str, payload: SkillInvokeRequest) -> dict:
     """Run API mock mode or lease-owned worker real mode through one governance gauntlet."""
-    with begin(engine) as connection:
-        try:
-            executor_context = None
-            if not payload.mock:
-                if not (
-                    payload.created_by_job_id
-                    and payload.worker_id
-                    and payload.lease_token
-                ):
-                    raise HTTPException(
-                        status_code=400,
-                        detail=(
-                            "Real skill invocation requires an active worker lease. "
-                            "Use mock=true for a side-effect-free invocation."
-                        ),
+    with background():
+        with begin(engine) as connection:
+            try:
+                executor_context = None
+                if not payload.mock:
+                    if not (
+                        payload.created_by_job_id
+                        and payload.worker_id
+                        and payload.lease_token
+                    ):
+                        raise HTTPException(
+                            status_code=400,
+                            detail=(
+                                "Real skill invocation requires an active worker lease. "
+                                "Use mock=true for a side-effect-free invocation."
+                            ),
+                        )
+                    leased_job = jobs.require_active_lease(
+                        connection,
+                        payload.worker_id,
+                        payload.created_by_job_id,
+                        payload.lease_token,
                     )
-                leased_job = jobs.require_active_lease(
+                    job_payload = leased_job.get("payload") or {}
+                    if (
+                        leased_job["project_id"] != payload.project_id
+                        or leased_job["kind"] != "skill.execute"
+                        or job_payload.get("skill_id") != skill_id
+                        or (job_payload.get("caller") or "worker") != payload.caller
+                        or (job_payload.get("inputs") or {}) != payload.inputs
+                    ):
+                        raise HTTPException(
+                            status_code=409,
+                            detail=(
+                                "Skill invocation does not match the active leased job "
+                                "scope."
+                            ),
+                        )
+                    executor_context = SkillExecutorContext(
+                        settings=settings,
+                        connection=connection,
+                        project_id=payload.project_id,
+                        actor=payload.worker_id,
+                        created_by_job_id=payload.created_by_job_id,
+                    )
+                return skill_runtime.invoke(
                     connection,
-                    payload.worker_id,
-                    payload.created_by_job_id,
-                    payload.lease_token,
+                    payload.project_id,
+                    skill_id,
+                    payload.caller,
+                    payload.inputs,
+                    mock=payload.mock,
+                    executor_context=executor_context,
+                    actor=(
+                        payload.worker_id
+                        if not payload.mock
+                        else payload.actor or payload.caller
+                    ),
                 )
-                job_payload = leased_job.get("payload") or {}
-                if (
-                    leased_job["project_id"] != payload.project_id
-                    or leased_job["kind"] != "skill.execute"
-                    or job_payload.get("skill_id") != skill_id
-                    or (job_payload.get("caller") or "worker") != payload.caller
-                    or (job_payload.get("inputs") or {}) != payload.inputs
-                ):
-                    raise HTTPException(
-                        status_code=409,
-                        detail=(
-                            "Skill invocation does not match the active leased job "
-                            "scope."
-                        ),
-                    )
-                executor_context = SkillExecutorContext(
-                    settings=settings,
-                    connection=connection,
-                    project_id=payload.project_id,
-                    actor=payload.worker_id,
-                    created_by_job_id=payload.created_by_job_id,
-                )
-            return skill_runtime.invoke(
-                connection,
-                payload.project_id,
-                skill_id,
-                payload.caller,
-                payload.inputs,
-                mock=payload.mock,
-                executor_context=executor_context,
-                actor=(
-                    payload.worker_id
-                    if not payload.mock
-                    else payload.actor or payload.caller
-                ),
-            )
-        except LeaseNotFoundError as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        except SkillNotFoundError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
-        except SkillPermissionError as error:
-            raise HTTPException(status_code=403, detail=str(error)) from error
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
+            except LeaseNotFoundError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            except SkillNotFoundError as error:
+                raise HTTPException(status_code=404, detail=str(error)) from error
+            except SkillPermissionError as error:
+                raise HTTPException(status_code=403, detail=str(error)) from error
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @app.get("/v1/model-adapters", response_model=ModelAdapterListResponse)
@@ -17959,22 +18207,23 @@ def acquire_model_gateway_lease(
     payload: ModelGatewayLeaseAcquireRequest,
 ) -> ModelGatewayLeaseAcquireResponse:
     require_worker_principal()
-    with begin(engine) as connection:
-        try:
-            result = model_gateway.acquire(
-                connection,
-                payload.project_id,
-                **payload.model_dump(exclude={"project_id"}),
-            )
-        except LeaseNotFoundError as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        except ModelCapacityDeniedError as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        except ModelGatewayLeaseError as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
-        return ModelGatewayLeaseAcquireResponse(**result)
+    with background():
+        with begin(engine) as connection:
+            try:
+                result = model_gateway.acquire(
+                    connection,
+                    payload.project_id,
+                    **payload.model_dump(exclude={"project_id"}),
+                )
+            except LeaseNotFoundError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            except ModelCapacityDeniedError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            except ModelGatewayLeaseError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+            return ModelGatewayLeaseAcquireResponse(**result)
 
 
 @app.get(
@@ -18086,17 +18335,18 @@ def heartbeat_model_gateway_lease(
     lease_id: str, payload: ModelGatewayLeaseHeartbeatRequest
 ) -> ModelGatewayLeaseSummary:
     require_worker_principal()
-    with begin(engine) as connection:
-        try:
-            lease = model_gateway.heartbeat(
-                connection,
-                payload.project_id,
-                lease_id,
-                **payload.model_dump(exclude={"project_id"}),
-            )
-        except (LeaseNotFoundError, ModelGatewayLeaseError) as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        return ModelGatewayLeaseSummary(**lease)
+    with background():
+        with begin(engine) as connection:
+            try:
+                lease = model_gateway.heartbeat(
+                    connection,
+                    payload.project_id,
+                    lease_id,
+                    **payload.model_dump(exclude={"project_id"}),
+                )
+            except (LeaseNotFoundError, ModelGatewayLeaseError) as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            return ModelGatewayLeaseSummary(**lease)
 
 
 @app.post(
@@ -18109,19 +18359,20 @@ def start_model_gateway_invocation(
     lease_id: str, payload: ModelGatewayInvocationStartRequest
 ) -> ModelGatewayInvocationStartResponse:
     require_worker_principal()
-    with begin(engine) as connection:
-        try:
-            result = model_gateway.start_invocation(
-                connection,
-                payload.project_id,
-                lease_id,
-                **payload.model_dump(exclude={"project_id"}),
-            )
-        except (LeaseNotFoundError, ModelGatewayLeaseError) as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
-        return ModelGatewayInvocationStartResponse(**result)
+    with background():
+        with begin(engine) as connection:
+            try:
+                result = model_gateway.start_invocation(
+                    connection,
+                    payload.project_id,
+                    lease_id,
+                    **payload.model_dump(exclude={"project_id"}),
+                )
+            except (LeaseNotFoundError, ModelGatewayLeaseError) as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+            return ModelGatewayInvocationStartResponse(**result)
 
 
 @app.post(
@@ -18135,20 +18386,21 @@ def settle_model_gateway_invocation(
     payload: ModelGatewayInvocationSettleRequest,
 ) -> ModelGatewayInvocationSummary:
     require_worker_principal()
-    with begin(engine) as connection:
-        try:
-            invocation = model_gateway.settle_invocation(
-                connection,
-                payload.project_id,
-                lease_id,
-                invocation_id,
-                **payload.model_dump(exclude={"project_id"}),
-            )
-        except (LeaseNotFoundError, ModelGatewayLeaseError) as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        except ModelGatewayInvocationError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
-        return ModelGatewayInvocationSummary(**invocation)
+    with background():
+        with begin(engine) as connection:
+            try:
+                invocation = model_gateway.settle_invocation(
+                    connection,
+                    payload.project_id,
+                    lease_id,
+                    invocation_id,
+                    **payload.model_dump(exclude={"project_id"}),
+                )
+            except (LeaseNotFoundError, ModelGatewayLeaseError) as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            except ModelGatewayInvocationError as error:
+                raise HTTPException(status_code=404, detail=str(error)) from error
+            return ModelGatewayInvocationSummary(**invocation)
 
 
 @app.post(
@@ -18160,17 +18412,18 @@ def release_model_gateway_lease(
     lease_id: str, payload: ModelGatewayLeaseReleaseRequest
 ) -> ModelGatewayLeaseSummary:
     require_worker_principal()
-    with begin(engine) as connection:
-        try:
-            lease = model_gateway.release(
-                connection,
-                payload.project_id,
-                lease_id,
-                **payload.model_dump(exclude={"project_id"}),
-            )
-        except (LeaseNotFoundError, ModelGatewayLeaseError) as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        return ModelGatewayLeaseSummary(**lease)
+    with background():
+        with begin(engine) as connection:
+            try:
+                lease = model_gateway.release(
+                    connection,
+                    payload.project_id,
+                    lease_id,
+                    **payload.model_dump(exclude={"project_id"}),
+                )
+            except (LeaseNotFoundError, ModelGatewayLeaseError) as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            return ModelGatewayLeaseSummary(**lease)
 
 
 # --------------------------------------------------------------------------- #
@@ -20873,31 +21126,32 @@ def execute_github_reconciliation_run(
     payload: GitHubReconciliationExecuteRequest,
 ) -> GitHubReconciliationExecuteResponse:
     require_worker_principal()
-    with begin(engine) as connection:
-        try:
-            result = github_reconciler.execute(
-                connection,
-                project_id=payload.project_id,
-                run_id=run_id,
-                job_id=payload.job_id,
-                worker_id=payload.worker_id,
-                lease_token=payload.lease_token,
+    with background():
+        with begin(engine) as connection:
+            try:
+                result = github_reconciler.execute(
+                    connection,
+                    project_id=payload.project_id,
+                    run_id=run_id,
+                    job_id=payload.job_id,
+                    worker_id=payload.worker_id,
+                    lease_token=payload.lease_token,
+                )
+            except GitHubReconciliationNotFoundError as error:
+                raise HTTPException(status_code=404, detail=str(error)) from error
+            except (
+                LeaseNotFoundError,
+                GitHubReconciliationStateError,
+                GitHubReconciliationProviderError,
+                GitHubConnectionStateError,
+                GitHubRepositoryBindingNotFoundError,
+                ValueError,
+            ) as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            return GitHubReconciliationExecuteResponse(
+                run=GitHubReconciliationRunSummary(**result["run"]),
+                job=result["job"],
             )
-        except GitHubReconciliationNotFoundError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
-        except (
-            LeaseNotFoundError,
-            GitHubReconciliationStateError,
-            GitHubReconciliationProviderError,
-            GitHubConnectionStateError,
-            GitHubRepositoryBindingNotFoundError,
-            ValueError,
-        ) as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        return GitHubReconciliationExecuteResponse(
-            run=GitHubReconciliationRunSummary(**result["run"]),
-            job=result["job"],
-        )
 
 
 @app.post(
@@ -21406,29 +21660,30 @@ def sync_external_resources(payload: ResourceSyncRequest, request: Request) -> R
     _enforce_high_cost_rate_limit(
         request, payload.project_id, payload.actor, endpoint="/v1/resources/sync"
     )
-    with begin(engine) as connection:
-        require_project_actor(
-            connection,
-            payload.project_id,
-            payload.actor,
-            "providerops_manage",
-        )
-        try:
-            result = resource_plane.sync_resources(
+    with background():
+        with begin(engine) as connection:
+            require_project_actor(
                 connection,
-                project_id=payload.project_id,
-                provider_account_id=payload.provider_account_id,
-                actor=payload.actor,
+                payload.project_id,
+                payload.actor,
+                "providerops_manage",
             )
-        except ProviderAccountNotFoundError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
-        return ResourceSyncResponse(
-            project_id=result["project_id"],
-            runs=[ResourceSyncRunSummary(**item) for item in result["runs"]],
-            resources_seen=result["resources_seen"],
-            resources_changed=result["resources_changed"],
-            costs_seen=result["costs_seen"],
-        )
+            try:
+                result = resource_plane.sync_resources(
+                    connection,
+                    project_id=payload.project_id,
+                    provider_account_id=payload.provider_account_id,
+                    actor=payload.actor,
+                )
+            except ProviderAccountNotFoundError as error:
+                raise HTTPException(status_code=404, detail=str(error)) from error
+            return ResourceSyncResponse(
+                project_id=result["project_id"],
+                runs=[ResourceSyncRunSummary(**item) for item in result["runs"]],
+                resources_seen=result["resources_seen"],
+                resources_changed=result["resources_changed"],
+                costs_seen=result["costs_seen"],
+            )
 
 
 @app.get("/v1/costs", response_model=CostEventListResponse)
@@ -22732,6 +22987,10 @@ def create_deployment_run(
             )
         except (ProviderAccountNotFoundError, ValueError) as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
+        if item.get("refused"):
+            # The production quality bar (quality_bar.plan_refusal): said in words, nothing planned.
+            raise HTTPException(status_code=409, detail=item.get("failure_reason")
+                                or "Deployment policy blocked this run.")
         return DeploymentRunSummary(**item)
 
 
@@ -23199,27 +23458,28 @@ def deliver_outbox_message(
 ) -> OutboxDeliveryResponse:
     if not payload.reservation_id:
         raise HTTPException(status_code=422, detail="reservation_id is required to deliver")
-    with begin(engine) as connection:
-        try:
-            require_project_actor(
-                connection,
-                payload.project_id,
-                payload.actor,
-                "comms_manage",
-            )
-            result = comms.deliver_outbox_message(
-                connection,
-                payload.project_id,
-                message_id,
-                payload.reservation_id,
-                payload.dedupe_key,
-                payload.created_by_job_id,
-            )
-        except OutboxMessageNotFoundError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
-        except InvalidCreatedByJobError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
-        return OutboxDeliveryResponse(**result)
+    with background():
+        with begin(engine) as connection:
+            try:
+                require_project_actor(
+                    connection,
+                    payload.project_id,
+                    payload.actor,
+                    "comms_manage",
+                )
+                result = comms.deliver_outbox_message(
+                    connection,
+                    payload.project_id,
+                    message_id,
+                    payload.reservation_id,
+                    payload.dedupe_key,
+                    payload.created_by_job_id,
+                )
+            except OutboxMessageNotFoundError as error:
+                raise HTTPException(status_code=404, detail=str(error)) from error
+            except InvalidCreatedByJobError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            return OutboxDeliveryResponse(**result)
 
 
 @app.get("/v1/comms/inbox", response_model=InboxMessageListResponse)
@@ -23437,30 +23697,31 @@ def enqueue_docs_update(payload: DocsUpdateRequest) -> JobSummary:
 def execute_docs_update(payload: DocsUpdateExecuteRequest) -> dict[str, Any]:
     """Worker-only execution boundary for a leased ``docs.update`` job."""
     require_worker_principal()
-    with begin(engine) as connection:
-        actor = (
-            payload.actor if payload.actor != "manual"
-            else current_api_principal.get() or "system"
-        )
-        require_project_actor(connection, payload.project_id, actor, "github_manage")
-        try:
-            return docs_updates.run_update(
-                connection,
-                project_id=payload.project_id,
-                event_id=payload.event_id,
-                event_type=payload.event_type,
-                entity_type=payload.entity_type,
-                entity_id=payload.entity_id,
-                task_id=payload.task_id,
-                data_boundary=payload.data_boundary,
-                created_by_job_id=payload.created_by_job_id,
+    with background():
+        with begin(engine) as connection:
+            actor = (
+                payload.actor if payload.actor != "manual"
+                else current_api_principal.get() or "system"
             )
-        except ValueError as error:
-            return {
-                "status": "failed",
-                "retryable": False,
-                "message": str(error),
-            }
+            require_project_actor(connection, payload.project_id, actor, "github_manage")
+            try:
+                return docs_updates.run_update(
+                    connection,
+                    project_id=payload.project_id,
+                    event_id=payload.event_id,
+                    event_type=payload.event_type,
+                    entity_type=payload.entity_type,
+                    entity_id=payload.entity_id,
+                    task_id=payload.task_id,
+                    data_boundary=payload.data_boundary,
+                    created_by_job_id=payload.created_by_job_id,
+                )
+            except ValueError as error:
+                return {
+                    "status": "failed",
+                    "retryable": False,
+                    "message": str(error),
+                }
 
 
 def _job_effect_permission(kind: str) -> Optional[str]:
@@ -24251,16 +24512,18 @@ async def worker_poll(payload: WorkerPollRequest) -> WorkerPollResponse:
     from boss_engine.services import worker_longpoll
 
     def claim() -> Optional[dict[str, Any]]:
-        with begin(engine) as connection:
-            return jobs.claim_job(
-                connection,
-                payload.worker_id,
-                payload.capabilities,
-                payload.lease_ttl_seconds,
-            )
+        with background():
+            with begin(engine) as connection:
+                return jobs.claim_job(
+                    connection,
+                    payload.worker_id,
+                    payload.capabilities,
+                    payload.lease_ttl_seconds,
+                )
 
-    got = await worker_longpoll.poll(engine, claim=claim, capabilities=payload.capabilities,
-                                     wait_ms=payload.wait_ms)
+    with background():
+        got = await worker_longpoll.poll(engine, claim=claim, capabilities=payload.capabilities,
+                                         wait_ms=payload.wait_ms)
     return WorkerPollResponse(status=got["status"],
                               job=LeasedJob(**got["job"]) if got.get("job") else None,
                               long_poll=bool(got.get("long_poll")),
@@ -24271,12 +24534,13 @@ async def worker_poll(payload: WorkerPollRequest) -> WorkerPollResponse:
 @permit(P.WORKER_LEASE)
 def register_worker(payload: WorkerRegistrationRequest) -> dict[str, Any]:
     require_worker_principal()
-    with begin(engine) as connection:
-        require_project_actor(connection, payload.project_id, payload.actor, "command_submit")
-        try:
-            return worker_registry.register(connection, project_id=payload.project_id, worker_id=payload.worker_id, capabilities=payload.capabilities, metadata=payload.metadata, actor=payload.actor)
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
+    with background():
+        with begin(engine) as connection:
+            require_project_actor(connection, payload.project_id, payload.actor, "command_submit")
+            try:
+                return worker_registry.register(connection, project_id=payload.project_id, worker_id=payload.worker_id, capabilities=payload.capabilities, metadata=payload.metadata, actor=payload.actor)
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @app.get("/v1/workers")
@@ -24291,21 +24555,22 @@ def list_workers(project_id: str) -> dict[str, Any]:
 @permit(P.WORKER_LEASE)
 def worker_heartbeat(payload: WorkerHeartbeatRequest) -> WorkerHeartbeatResponse:
     require_worker_principal()
-    with begin(engine) as connection:
-        try:
-            result = jobs.heartbeat(
-                connection,
-                payload.worker_id,
-                payload.job_id,
-                payload.lease_token,
-                payload.lease_ttl_seconds,
-                handing_back=payload.handing_back,
-            )
-        except LeaseNotFoundError as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        result = dict(result)
-        result["progressing"] = _code_task_job_progressing(connection, payload.job_id)
-        return WorkerHeartbeatResponse(**result)
+    with background():
+        with begin(engine) as connection:
+            try:
+                result = jobs.heartbeat(
+                    connection,
+                    payload.worker_id,
+                    payload.job_id,
+                    payload.lease_token,
+                    payload.lease_ttl_seconds,
+                    handing_back=payload.handing_back,
+                )
+            except LeaseNotFoundError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            result = dict(result)
+            result["progressing"] = _code_task_job_progressing(connection, payload.job_id)
+            return WorkerHeartbeatResponse(**result)
 
 
 def _code_task_job_progressing(connection, job_id: str) -> Optional[bool]:
@@ -24327,38 +24592,40 @@ def _code_task_job_progressing(connection, job_id: str) -> Optional[bool]:
 @permit(P.WORKER_LEASE)
 def worker_complete(payload: WorkerCompleteRequest) -> WorkerCompleteResponse:
     require_worker_principal()
-    with begin(engine) as connection:
-        try:
-            result = jobs.complete(
-                connection,
-                payload.worker_id,
-                payload.job_id,
-                payload.lease_token,
-                payload.result,
-            )
-        except LeaseNotFoundError as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        return WorkerCompleteResponse(**result)
+    with background():
+        with begin(engine) as connection:
+            try:
+                result = jobs.complete(
+                    connection,
+                    payload.worker_id,
+                    payload.job_id,
+                    payload.lease_token,
+                    payload.result,
+                )
+            except LeaseNotFoundError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            return WorkerCompleteResponse(**result)
 
 
 @app.post("/v1/worker/fail", response_model=WorkerFailResponse)
 @permit(P.WORKER_LEASE)
 def worker_fail(payload: WorkerFailRequest) -> WorkerFailResponse:
     require_worker_principal()
-    with begin(engine) as connection:
-        try:
-            result = jobs.fail(
-                connection,
-                payload.worker_id,
-                payload.job_id,
-                payload.lease_token,
-                payload.error,
-                payload.retryable,
-                payload.retry_delay_seconds,
-            )
-        except LeaseNotFoundError as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        return WorkerFailResponse(**result)
+    with background():
+        with begin(engine) as connection:
+            try:
+                result = jobs.fail(
+                    connection,
+                    payload.worker_id,
+                    payload.job_id,
+                    payload.lease_token,
+                    payload.error,
+                    payload.retryable,
+                    payload.retry_delay_seconds,
+                )
+            except LeaseNotFoundError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            return WorkerFailResponse(**result)
 
 
 @writing_get(app, "/v1/decisions/inbox", response_model=DecisionInboxResponse)
@@ -24524,7 +24791,7 @@ def approve_decision_card(
             # §6.13: the first of two approvals of a tier-3 decision is recorded (this transaction
             # commits it); the decision stays pending for a second person.
             return JSONResponse(status_code=202, content=pending.body())
-        if row.get("status") == "withdrawn":
+        if row.get("status") == "withdrawn" and not row.get("noop_message"):
             # A STALE CARD'S PRESS WITHDREW IT (a re-check's Fix card, #170): nothing was
             # approved, so the answer is not 200. Returned, never raised, so this transaction
             # still commits the withdrawal and the card stops asking.
@@ -24737,22 +25004,23 @@ def settle_decision(
 @app.post("/v1/openai/plans", response_model=OpenAIPlanResponse)
 @permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"))
 def create_openai_plan(payload: OpenAIPlanRequest) -> OpenAIPlanResponse:
-    with begin(engine) as connection:
-        try:
-            result = software_factory.create_plan_artifact(
-                connection,
-                payload.project_id,
-                payload.reservation_id,
-                payload.dedupe_key,
-                payload.prompt,
-                payload.system_prompt,
-                payload.created_by_job_id,
-                payload.agent_module_id,
-                payload.task_id,
-            )
-        except AgentModuleNotFoundError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
-        return OpenAIPlanResponse(**result)
+    with background():
+        with begin(engine) as connection:
+            try:
+                result = software_factory.create_plan_artifact(
+                    connection,
+                    payload.project_id,
+                    payload.reservation_id,
+                    payload.dedupe_key,
+                    payload.prompt,
+                    payload.system_prompt,
+                    payload.created_by_job_id,
+                    payload.agent_module_id,
+                    payload.task_id,
+                )
+            except AgentModuleNotFoundError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+            return OpenAIPlanResponse(**result)
 
 
 @app.post("/v1/software-factory/proposals", response_model=PullRequestProposalResponse)
@@ -24760,28 +25028,29 @@ def create_openai_plan(payload: OpenAIPlanRequest) -> OpenAIPlanResponse:
 def create_pull_request_proposal(
     payload: PullRequestProposalRequest,
 ) -> PullRequestProposalResponse:
-    with begin(engine) as connection:
-        require_project_actor(
-            connection, payload.project_id, current_api_principal.get() or "ceo",
-            "github_manage",
-        )
-        try:
-            result = software_factory.propose_pull_request(
-                connection,
-                payload.project_id,
-                payload.task_id,
-                payload.reservation_id,
-                payload.dedupe_key,
-                payload.title,
-                payload.branch_name,
-                payload.summary,
-                payload.files,
-                payload.created_by_job_id,
-                payload.agent_module_id,
+    with background():
+        with begin(engine) as connection:
+            require_project_actor(
+                connection, payload.project_id, current_api_principal.get() or "ceo",
+                "github_manage",
             )
-        except AgentModuleNotFoundError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
-        return PullRequestProposalResponse(**result)
+            try:
+                result = software_factory.propose_pull_request(
+                    connection,
+                    payload.project_id,
+                    payload.task_id,
+                    payload.reservation_id,
+                    payload.dedupe_key,
+                    payload.title,
+                    payload.branch_name,
+                    payload.summary,
+                    payload.files,
+                    payload.created_by_job_id,
+                    payload.agent_module_id,
+                )
+            except AgentModuleNotFoundError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+            return PullRequestProposalResponse(**result)
 
 
 @app.post(
@@ -24851,27 +25120,28 @@ def propose_ci_config(
 @app.post("/v1/software-factory/merges", response_model=PullRequestMergeResponse)
 @permit(P.GITHUB_MERGE, scope=Scope.project(body="project_id"))
 def merge_pull_request(payload: PullRequestMergeRequest) -> PullRequestMergeResponse:
-    with begin(engine) as connection:
-        require_project_actor(
-            connection, payload.project_id, current_api_principal.get() or "ceo",
-            "github_manage",
-        )
-        try:
-            result = software_factory.merge_pull_request(
-                connection,
-                payload.project_id,
-                None,
-                payload.decision_id,
-                payload.dedupe_key,
-                payload.pull_request_number,
-                payload.pull_request_url,
-                payload.title,
-                payload.branch_name,
-                payload.created_by_job_id,
+    with background():
+        with begin(engine) as connection:
+            require_project_actor(
+                connection, payload.project_id, current_api_principal.get() or "ceo",
+                "github_manage",
             )
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
-        return PullRequestMergeResponse(**result)
+            try:
+                result = software_factory.merge_pull_request(
+                    connection,
+                    payload.project_id,
+                    None,
+                    payload.decision_id,
+                    payload.dedupe_key,
+                    payload.pull_request_number,
+                    payload.pull_request_url,
+                    payload.title,
+                    payload.branch_name,
+                    payload.created_by_job_id,
+                )
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+            return PullRequestMergeResponse(**result)
 
 
 @app.post(
@@ -24883,28 +25153,29 @@ def merge_pull_request(payload: PullRequestMergeRequest) -> PullRequestMergeResp
 def create_sandbox_deployment(
     payload: SandboxDeploymentRequest,
 ) -> SandboxDeploymentResponse:
-    with begin(engine) as connection:
-        require_project_actor(
-            connection, payload.project_id, current_api_principal.get() or "ceo",
-            "github_manage",
-        )
-        try:
-            result = software_factory.create_deployment(
-                connection,
-                payload.project_id,
-                None,
-                payload.decision_id,
-                payload.dedupe_key,
-                payload.merged_sha,
-                payload.pull_request_url,
-                payload.title,
-                payload.branch_name,
-                payload.environment,
-                payload.created_by_job_id,
+    with background():
+        with begin(engine) as connection:
+            require_project_actor(
+                connection, payload.project_id, current_api_principal.get() or "ceo",
+                "github_manage",
             )
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
-        return SandboxDeploymentResponse(**result)
+            try:
+                result = software_factory.create_deployment(
+                    connection,
+                    payload.project_id,
+                    None,
+                    payload.decision_id,
+                    payload.dedupe_key,
+                    payload.merged_sha,
+                    payload.pull_request_url,
+                    payload.title,
+                    payload.branch_name,
+                    payload.environment,
+                    payload.created_by_job_id,
+                )
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+            return SandboxDeploymentResponse(**result)
 
 
 @app.get(
@@ -24962,30 +25233,31 @@ def request_infra_provision_review(
 @app.post("/v1/infra/droplets", response_model=InfraProvisionResponse)
 @permit(P.INFRA_PROVISION, scope=Scope.project(body="project_id"))
 def create_infra_droplet(payload: InfraProvisionRequest) -> InfraProvisionResponse:
-    with begin(engine) as connection:
-        require_project_actor(
-            connection, payload.project_id, current_api_principal.get() or "ceo",
-            "infra_provision",
-        )
-        try:
-            result = infrastructure.create_droplet(
-                connection,
-                project_id=payload.project_id,
-                task_id=payload.task_id,
-                decision_id=payload.decision_id,
-                reservation_id=payload.reservation_id,
-                dedupe_key=payload.dedupe_key,
-                title=payload.title,
-                region=payload.region,
-                size=payload.size,
-                ttl_minutes=payload.ttl_minutes,
-                tags=payload.tags,
-                created_by_job_id=payload.created_by_job_id,
-                data_boundary=payload.data_boundary,
+    with background():
+        with begin(engine) as connection:
+            require_project_actor(
+                connection, payload.project_id, current_api_principal.get() or "ceo",
+                "infra_provision",
             )
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
-        return InfraProvisionResponse(**result)
+            try:
+                result = infrastructure.create_droplet(
+                    connection,
+                    project_id=payload.project_id,
+                    task_id=payload.task_id,
+                    decision_id=payload.decision_id,
+                    reservation_id=payload.reservation_id,
+                    dedupe_key=payload.dedupe_key,
+                    title=payload.title,
+                    region=payload.region,
+                    size=payload.size,
+                    ttl_minutes=payload.ttl_minutes,
+                    tags=payload.tags,
+                    created_by_job_id=payload.created_by_job_id,
+                    data_boundary=payload.data_boundary,
+                )
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+            return InfraProvisionResponse(**result)
 
 
 @app.post("/v1/infra/droplets/queue", response_model=JobSummary, status_code=201)
@@ -25043,27 +25315,28 @@ def list_infra_resources(
 def terminate_infra_resource(
     resource_id: str, payload: InfraTerminationRequest
 ) -> InfraTerminationResponse:
-    with begin(engine) as connection:
-        try:
-            require_project_actor(
-                connection,
-                payload.project_id,
-                payload.actor,
-                "infra_provision",
-            )
-            result = infrastructure.terminate_droplet(
-                connection,
-                project_id=payload.project_id,
-                resource_id=resource_id,
-                dedupe_key=payload.dedupe_key,
-                reason=payload.reason,
-                created_by_job_id=payload.created_by_job_id,
-            )
-        except InfraResourceNotFoundError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
-        return InfraTerminationResponse(**result)
+    with background():
+        with begin(engine) as connection:
+            try:
+                require_project_actor(
+                    connection,
+                    payload.project_id,
+                    payload.actor,
+                    "infra_provision",
+                )
+                result = infrastructure.terminate_droplet(
+                    connection,
+                    project_id=payload.project_id,
+                    resource_id=resource_id,
+                    dedupe_key=payload.dedupe_key,
+                    reason=payload.reason,
+                    created_by_job_id=payload.created_by_job_id,
+                )
+            except InfraResourceNotFoundError as error:
+                raise HTTPException(status_code=404, detail=str(error)) from error
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+            return InfraTerminationResponse(**result)
 
 
 @app.post(
@@ -25983,9 +26256,10 @@ def tick_workflow_schedules(payload: open_bodies.WorkflowSchedulesTickBody) -> d
     # The worker may share a principal-bound API key with an operator in a local install.
     # Use that authenticated identity for authorization rather than trusting a claimed actor.
     actor = current_api_principal.get() or str(payload.get("actor") or "system").strip()
-    with begin(engine) as connection:
-        require_project_actor(connection, project_id, actor, "workflow_execute")
-        started = schedules.run_due(connection, project_id=project_id)
+    with background():
+        with begin(engine) as connection:
+            require_project_actor(connection, project_id, actor, "workflow_execute")
+            started = schedules.run_due(connection, project_id=project_id)
     return {"started": started, "count": len(started)}
 
 
@@ -26269,6 +26543,150 @@ def install_delivery_catalogue(payload: ProjectBody) -> dict:
         return seed(connection, project_id, actor=actor)
 
 
+# ── The Workflow Marketplace (workflow_marketplace) ───────────────────────────────────────────
+#
+# Packs of workflows a project installs into its OWN workflows ("Yours"), and an org's own
+# workflows published for its other projects. Under /v1/delivery-workflows, not /v1/marketplace:
+# that prefix is the paid surface (route_ownership), and workflow packs are community.
+
+
+def _marketplace_refusal(error: Exception) -> HTTPException:
+    if isinstance(error, workflow_runtime.WorkflowNotFoundError):
+        return HTTPException(status_code=404, detail=str(error))
+    if isinstance(error, workflow_runtime.WorkflowNamespaceError):
+        return HTTPException(status_code=403, detail=str(error))
+    if isinstance(error, (workflow_runtime.WorkflowValidationError,
+                          workflow_runtime.WorkflowBindingBlockedError)):
+        return HTTPException(status_code=422, detail=str(error))
+    return HTTPException(status_code=409, detail=str(error))
+
+
+@app.get("/v1/delivery-workflows/marketplace")
+@permit(P.WORKFLOW_READ, scope=Scope.project(query="project_id"))
+def list_workflow_marketplace(project_id: str) -> dict:
+    """Every pack this project can install — BOSS's, then its org's, newest first — each with
+    its publisher, version, workflows, what it needs here, and Installed / Update available."""
+    with begin(engine) as connection:
+        try:
+            return {"project_id": project_id,
+                    "items": workflow_marketplace.list_packs(connection, project_id)}
+        except workflow_runtime.WorkflowError as error:
+            raise _marketplace_refusal(error) from error
+
+
+@app.post("/v1/delivery-workflows/marketplace/install")
+@permit(P.WORKFLOW_INSTALL, scope=Scope.project(body="project_id"))
+def install_workflow_pack(payload: WorkflowPackBody) -> dict:
+    """Install a pack: its workflows are copied into the project's own, each recording the pack
+    and version it came from. Installed already: brought to the pack's version."""
+    payload = payload.payload()
+    project_id = str(payload.get("project_id") or "").strip()
+    pack_id = str(payload.get("pack_id") or "").strip()
+    if not project_id or not pack_id:
+        raise HTTPException(status_code=400, detail="project_id and pack_id are required")
+    actor = _delivery_workflow_actor(payload)
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "workflow_manage")
+        try:
+            return workflow_marketplace.install(connection, project_id, pack_id, actor)
+        except workflow_runtime.WorkflowError as error:
+            raise _marketplace_refusal(error) from error
+
+
+@app.post("/v1/delivery-workflows/marketplace/uninstall")
+@permit(P.WORKFLOW_INSTALL, scope=Scope.project(body="project_id"))
+def uninstall_workflow_pack(payload: WorkflowPackBody) -> dict:
+    """Remove a pack's workflows (retired when they have runs). Refused while one is running."""
+    payload = payload.payload()
+    project_id = str(payload.get("project_id") or "").strip()
+    pack_id = str(payload.get("pack_id") or "").strip()
+    if not project_id or not pack_id:
+        raise HTTPException(status_code=400, detail="project_id and pack_id are required")
+    actor = _delivery_workflow_actor(payload)
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "workflow_manage")
+        try:
+            return workflow_marketplace.uninstall(connection, project_id, pack_id, actor)
+        except workflow_runtime.WorkflowError as error:
+            raise _marketplace_refusal(error) from error
+
+
+@app.post("/v1/delivery-workflows/marketplace/update")
+@permit(P.WORKFLOW_INSTALL, scope=Scope.project(body="project_id"))
+def update_installed_workflow(payload: WorkflowPackUpdateBody) -> dict:
+    """"Review update" on a modified installed copy: `take`, `take_keep` (my changes applied on
+    the new version; refused with the clashes named when it does not apply cleanly) or
+    `dismiss`. Unmodified copies update by themselves. Runs in flight keep their version."""
+    payload = payload.payload()
+    project_id = str(payload.get("project_id") or "").strip()
+    definition_id = str(payload.get("definition_id") or "").strip()
+    action = str(payload.get("act") or "").strip()
+    if not project_id or not definition_id or action not in {"take", "take_keep", "dismiss"}:
+        raise HTTPException(status_code=400, detail=(
+            "project_id, definition_id and act (take, take_keep or dismiss) are required"))
+    actor = _delivery_workflow_actor(payload)
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "workflow_manage")
+        try:
+            return workflow_marketplace.answer_update(connection, project_id, definition_id,
+                                                      actor, action)
+        except workflow_runtime.WorkflowError as error:
+            raise _marketplace_refusal(error) from error
+
+
+@app.post("/v1/delivery-workflows/marketplace/publish")
+@permit(P.WORKFLOW_PUBLISH, scope=Scope.project(body="project_id"))
+def publish_workflow_pack(payload: WorkflowPackPublishBody) -> dict:
+    """Publish one of this project's own workflows to its org's Marketplace, as a versioned
+    pack every project in the org can install. Again: the next version (it must be later)."""
+    payload = payload.payload()
+    project_id = str(payload.get("project_id") or "").strip()
+    definition_id = str(payload.get("definition_id") or "").strip()
+    if not project_id or not definition_id:
+        raise HTTPException(status_code=400, detail="project_id and definition_id are required")
+    actor = _delivery_workflow_actor(payload)
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "workflow_manage")
+        try:
+            return workflow_marketplace.publish(
+                connection, project_id, definition_id, actor,
+                name=payload.get("name"), summary=payload.get("summary"),
+                version=payload.get("version"), publisher=_member_display_name(
+                    connection, project_id, actor))
+        except workflow_runtime.WorkflowError as error:
+            raise _marketplace_refusal(error) from error
+
+
+@app.post("/v1/delivery-workflows/marketplace/unpublish")
+@permit(P.WORKFLOW_PUBLISH, scope=Scope.project(body="project_id"))
+def unpublish_workflow_pack(payload: WorkflowPackBody) -> dict:
+    """Take this project's pack out of the org's Marketplace; installed copies stay."""
+    payload = payload.payload()
+    project_id = str(payload.get("project_id") or "").strip()
+    pack_id = str(payload.get("pack_id") or "").strip()
+    if not project_id or not pack_id:
+        raise HTTPException(status_code=400, detail="project_id and pack_id are required")
+    actor = _delivery_workflow_actor(payload)
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "workflow_manage")
+        try:
+            return workflow_marketplace.unpublish(connection, project_id, pack_id, actor)
+        except workflow_runtime.WorkflowError as error:
+            raise _marketplace_refusal(error) from error
+
+
+def _member_display_name(connection, project_id: str, actor: str) -> str:
+    """The publisher a pack shows: the person's display name here, else their actor id."""
+    try:
+        with connection.begin_nested():
+            name = connection.execute(
+                text("SELECT display_name FROM project_members WHERE project_id = :p "
+                     "AND member_id = :m"), {"p": project_id, "m": actor}).scalar()
+    except Exception:  # noqa: BLE001 — a name is words
+        name = None
+    return str(name or actor)
+
+
 @app.post("/v1/delivery-workflows/apply")
 @permit(P.WORKFLOW_PUBLISH, scope=Scope.project(body="project_id"))
 def apply_delivery_workflow(payload: WorkflowApplyBody) -> dict:
@@ -26462,39 +26880,71 @@ def get_delivery_workflow_asks(project_id: str) -> dict:
 
 @app.get("/v1/delivery-workflows/runs")
 @permit(P.WORKFLOW_READ, scope=Scope.project(query="project_id"))
-def list_delivery_runs(project_id: str, limit: int = 25, include_test: bool = False) -> dict:
+def list_delivery_runs(
+    request: Request,
+    project_id: str,
+    limit: int = 25,
+    include_test: bool = False,
+    scope: str = "project",
+) -> dict:
     """Live and recent delivery runs, each with where it has got to.
 
     TEST RUNS (workflow_test_runs) are left out unless `include_test`; each run says its `mode`
-    and, for a run started from a step of another, `rerun_of`.
+    and, for a run started from a step of another, `rerun_of`. When `scope == "org"`, returns
+    runs across every visible project in the same org where the caller has `workflow:read`.
 
     One query for the list and one for the steps, rather than a call per run: a project with
     twenty workflows in flight should cost two round trips to render, not twenty-one.
     """
+    project_ids = [project_id]
+    if scope == "org":
+        from boss_engine.identity import viewer as _viewer
+
+        visible = visible_project_rows(request)
+        target_org = next(
+            (str(r.get("org_id") or "") for r in visible if str(r["id"]) == project_id),
+            None,
+        )
+        if target_org:
+            scoped_ids = [
+                str(r["id"])
+                for r in visible
+                if str(r.get("org_id") or "") == target_org
+                and _viewer.may(str(r["id"]), P.WORKFLOW_READ.value) is not False
+            ]
+            if project_id not in scoped_ids:
+                scoped_ids.insert(0, project_id)
+        else:
+            scoped_ids = [project_id]
+        project_ids = scoped_ids
+
     with begin(engine) as connection:
         runs = connection.execute(
             text(
                 """
-                SELECT r.id, r.project_id, r.dedupe_key, r.status, r.actor, r.input, r.blocked_reason, r.error,
+                SELECT r.id, r.project_id, p.name AS project_name,
+                       r.dedupe_key, r.status, r.actor, r.input, r.blocked_reason, r.error,
                        r.created_at, r.updated_at, r.completed_at, r.mode, r.rerun_of,
                        d.workflow_key, d.name AS workflow_name, v.version, v.spec
                 FROM workflow_runs r
+                JOIN projects p ON p.id = r.project_id
                 JOIN workflow_definitions d ON d.id = r.workflow_definition_id
                 JOIN workflow_versions v ON v.id = r.workflow_version_id
-                WHERE r.project_id = :project_id
+                WHERE r.project_id = ANY(:project_ids)
                   AND COALESCE(d.namespace, 'system') = 'product'
                   AND (CAST(:include_test AS BOOLEAN) OR r.mode <> 'test')
                 ORDER BY r.updated_at DESC
                 LIMIT :limit
                 """
             ),
-            {"project_id": project_id, "limit": max(1, min(100, limit)),
+            {"project_ids": project_ids, "limit": max(1, min(100, limit)),
              "include_test": bool(include_test)},
         ).mappings().all()
         if not runs:
             return {"project_id": project_id, "runs": []}
 
         ids = [r["id"] for r in runs]
+        run_project_by_id = {r["id"]: str(r["project_id"]) for r in runs}
         steps = connection.execute(
             text(
                 """
@@ -26522,9 +26972,10 @@ def list_delivery_runs(project_id: str, limit: int = 25, include_test: bool = Fa
 
         _blockers = {}
         for _s in steps:
+            _run_pid = run_project_by_id.get(_s["workflow_run_id"], project_id)
             try:
                 _blockers[(_s["workflow_run_id"], _s["step_id"])] = _blocker_status(
-                    connection, project_id, dict(_s))
+                    connection, _run_pid, dict(_s))
             except Exception:  # noqa: BLE001 — a re-check must never fail the page
                 _blockers[(_s["workflow_run_id"], _s["step_id"])] = None
 
@@ -26533,7 +26984,12 @@ def list_delivery_runs(project_id: str, limit: int = 25, include_test: bool = Fa
         # (workflow_run_actions.require), so a button cannot be shown that its endpoint refuses.
         from boss_engine.services import workflow_run_actions as _run_actions
 
-        _actions = _run_actions.actions_for(connection, project_id, ids)
+        _actions: dict[str, list] = {}
+        _ids_by_project: dict[str, list[str]] = {}
+        for _rid, _pid in run_project_by_id.items():
+            _ids_by_project.setdefault(_pid, []).append(_rid)
+        for _pid, _pids in _ids_by_project.items():
+            _actions.update(_run_actions.actions_for(connection, _pid, _pids))
 
         # A DEPLOY STEP THAT SHIPS TO A STACK TARGET IS THAT DEPLOYMENT'S APPROVAL.
         #
@@ -26558,9 +27014,10 @@ def list_delivery_runs(project_id: str, limit: int = 25, include_test: bool = Fa
             if ((_spec_step.get("binding") or {}).get("capability") != "deploy"
                     or _s["step_kind"] != "capability"):
                 continue
+            _run_pid = run_project_by_id.get(_s["workflow_run_id"], project_id)
             try:
                 _found = _stack_deploy_for_step(
-                    connection, project_id, run_id=_s["workflow_run_id"],
+                    connection, _run_pid, run_id=_s["workflow_run_id"],
                     spec_step=_spec_step, status=str(_s["status"] or ""),
                     output=_s["output"], default_owner=_owner)
             except Exception:  # noqa: BLE001 — the page renders without it
@@ -26764,6 +27221,7 @@ def list_delivery_runs(project_id: str, limit: int = 25, include_test: bool = Fa
         out.append({
             "id": run["id"],
             "project_id": run["project_id"],
+            "project_name": run["project_name"],
             "dedupe_key": run["dedupe_key"],
             "status": run["status"],
             # A TEST RUN says so, and a re-run says where it came from (workflow_test_runs).
@@ -26858,7 +27316,11 @@ def get_delivery_workflow_spec(workflow_key: str, project_id: str,
         # would refuse to open the very thing the "New workflow" button had just made.
         row = connection.execute(
             text(
-                "SELECT d.id, d.name, d.description, d.is_catalogue, d.forked_from_version_id, "
+                "SELECT d.id, d.project_id, d.name, d.description, d.is_catalogue, "
+                "       d.forked_from_version_id, d.active_version_id, d.standard_version_id, "
+                "       d.standard_content_hash, d.standard_available_version_id, "
+                "       d.standard_dismissed_version_id, d.marketplace_pack_id, "
+                "       d.marketplace_version, d.marketplace_waiting, "
                 "       v.id AS version_id, v.version, v.spec "
                 "FROM workflow_definitions d "
                 "LEFT JOIN workflow_versions v ON v.workflow_definition_id = d.id "
@@ -26943,6 +27405,17 @@ def get_delivery_workflow_spec(workflow_key: str, project_id: str,
                           if v["published_at"] else None,
                           "is_active": bool(v["is_active"])} for v in versions],
             "copy": copy,
+            # A STANDARD'S STATE (workflow_standards.state): `modified`, `baseline_version`,
+            # `changes` (one line per step added/removed/changed from the shipped spec) and
+            # `new_standard` when BOSS shipped a newer one beside the operator's edit.
+            # None for the operator's own workflows.
+            "standard": workflow_standards.state(connection, dict(row)),
+            # FROM THE MARKETPLACE (workflow_marketplace.install_state): the pack, its version,
+            # Modified, and a newer version waiting with its changes. None otherwise.
+            "marketplace": workflow_marketplace.install_state(connection, dict(row), detail=True),
+            # PUBLISHED from here to the org's Marketplace: the pack, its version and status.
+            "published": workflow_marketplace.published_from(connection, project_id,
+                                                              str(row["id"])),
         }
 
 
@@ -27061,11 +27534,16 @@ def save_delivery_workflow(payload: WorkflowSaveBody) -> dict:
             definition = workflow_runtime.require_namespace(
                 connection, project_id, definition_id, workflow_runtime.PRODUCT_NAMESPACE
             )
-            workflow_runtime.require_editable(definition)
+            # A STANDARD IS EDITED IN PLACE (workflow_standards): this publishes its next
+            # version; the shipped spec stays its baseline for Modified and Reset.
             version = workflow_runtime.publish_version(
                 connection, project_id=project_id, definition_id=definition_id,
                 spec=spec, actor=actor,
             )
+            if definition.get("is_catalogue"):
+                from boss_engine.services.workflow_catalogue import repoint_defaults_for
+
+                repoint_defaults_for(connection, project_id, str(definition["workflow_key"]))
         except workflow_runtime.WorkflowNamespaceError as error:
             raise HTTPException(status_code=403, detail=str(error)) from error
         except workflow_runtime.WorkflowNotFoundError as error:
@@ -27082,6 +27560,50 @@ def save_delivery_workflow(payload: WorkflowSaveBody) -> dict:
         except workflow_runtime.WorkflowConflictError:
             return {"unchanged": True, "note": "This is identical to the current version."}
         return {"version": version}
+
+
+@app.post("/v1/delivery-workflows/standard")
+@permit(P.WORKFLOW_PUBLISH, scope=Scope.project(body="project_id"))
+def act_on_standard_workflow(payload: WorkflowStandardActBody) -> dict:
+    """Reset a standard to what BOSS shipped, or answer "New standard available".
+
+    `act`: `reset` (the shipped spec becomes the version new runs use; the edits stay in
+    the version list), `take_new` (the newer shipped standard only), `take_new_keep` (the newer
+    standard with the operator's changes applied on it — refused with the clashes named when
+    it does not apply cleanly) or `dismiss` ("Not now"). Runs already going keep the version
+    they started on. Same permission as Save.
+    """
+    payload = payload.payload()
+    project_id = str(payload.get("project_id") or "").strip()
+    definition_id = str(payload.get("definition_id") or "").strip()
+    action = str(payload.get("act") or "").strip()
+    actor = _delivery_workflow_actor(payload)
+    if not project_id or not definition_id or action not in {
+            "reset", "take_new", "take_new_keep", "dismiss"}:
+        raise HTTPException(status_code=400, detail=(
+            "project_id, definition_id and act (reset, take_new, take_new_keep or "
+            "dismiss) are required"))
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "workflow_manage")
+        try:
+            if action == "reset":
+                return workflow_standards.reset_to_standard(
+                    connection, project_id, definition_id, actor)
+            if action == "dismiss":
+                return workflow_standards.dismiss_new_standard(
+                    connection, project_id, definition_id, actor)
+            return workflow_standards.take_new_standard(
+                connection, project_id, definition_id, actor,
+                keep_changes=action == "take_new_keep")
+        except workflow_runtime.WorkflowNamespaceError as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
+        except workflow_runtime.WorkflowNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except workflow_runtime.WorkflowConflictError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except (workflow_runtime.WorkflowValidationError,
+                workflow_runtime.WorkflowBindingBlockedError) as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 # ── The workflow editor (Workflow Studio) ─────────────────────────────────────────────────────
@@ -27198,6 +27720,7 @@ def publish_delivery_workflow(payload: WorkflowPublishBody):
                     description=None if description is None else str(description),
                     from_workflow_key=payload.get("from_workflow_key"),
                     update_copy_id=str(payload.get("update_copy_id") or "").strip() or None,
+                    as_copy=bool(payload.get("as_copy")),
                 )
             except workflow_runtime.WorkflowNameInUseError as error:
                 raise _EditorRefusal(JSONResponse(status_code=409, content={
@@ -27534,6 +28057,10 @@ def prepare_delivery_deploy_target(run_id: str, payload: WorkflowDeployTargetBod
                     status_code=409,
                     detail=f"host '{host['name']}' has no free port between {low} and {high}.")
             target_id = make_id("deptgt")
+            from boss_engine.services.deployment_fleet import resolve_health_path
+
+            _health_path, _ = resolve_health_path(
+                connection, project_id=project_id, repo=str(repo or ""), app_name=app_name)
             connection.execute(text("""
                 INSERT INTO deployment_targets
                   (id, project_id, app_name, repo, environment, target_kind, target_ref,
@@ -27546,7 +28073,7 @@ def prepare_delivery_deploy_target(run_id: str, payload: WorkflowDeployTargetBod
                 "env": environment,
                 "ref": f"{host['ssh_user'] or 'root'}@{host['address']}:{host['ssh_port'] or 22}",
                 "dom": json.dumps([f"{host['address']}:{port}"]),
-                "hc": json.dumps([{"kind": "http", "path": "/", "expect": 200,
+                "hc": json.dumps([{"kind": "http", "path": _health_path, "expect": 200,
                                    "scheme": "http"}]),
                 "by": actor,
             })
@@ -27876,6 +28403,24 @@ def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = Non
     # it, would otherwise convene a panel and fail only at the build.
     extends: Optional[dict] = None
     extends_run_id = str(run_input.get("extends_run_id") or "").strip()
+    preview_anchor = str(run_input.get("preview_id") or "").strip()
+    if preview_anchor and not extends_run_id:
+        # A REPAIR STARTED FROM A PREVIEW continues that preview's build. A preview of this
+        # project with no build behind it (started from a branch) has no lineage: the start
+        # goes on as before, the preview id ignored.
+        with _tx() as connection:
+            seen_preview = connection.execute(text(
+                "SELECT id, run_id FROM app_previews WHERE id = :id AND project_id = :project"),
+                {"id": preview_anchor, "project": project_id}).first()
+        if not seen_preview:
+            raise HTTPException(status_code=404, detail=(
+                "That preview is not in this project. Open the app in Work and start the "
+                "repair from its build."))
+        extends_run_id = str(seen_preview[1] or "")
+        if extends_run_id and (run_input.get("base_branch") or run_input.get("release_base_sha")):
+            raise HTTPException(status_code=422, detail=(
+                "A preview repair that sets base_branch or release_base_sha must also name "
+                "extends_run_id, the build to repair. Start it from that build's page instead."))
     run_input.pop("extends_run_id", None)
     if extends_run_id:
         from boss_engine.services.code_task_service import (
@@ -27900,8 +28445,22 @@ def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = Non
 
         _require_permission(None, P.CODE_TASK_STEER, project_id, label="extends_run_id")
         run_input["extends_run_id"] = extends_run_id
-        extends = {"run_id": extends_run_id, "app": app_name(parent),
-                   "branch": work_branch_for(parent)}
+        # WHICH CHANGE, from the one resolver New work and the build step ask
+        # (new_work.build_mode): a merged change is continued as a new change from the default
+        # branch; an open (or rejected) one continues on the app's branch.
+        from boss_engine.services.project_experience import new_work as _new_work
+
+        branch = work_branch_for(parent)
+        # An incident's or a release's fix is cut from the serving commit at its build step
+        # (release_base_for), never re-based here.
+        if (run_input.get("extends_from_default") is not True and not run_input.get("incident_id")
+                and not run_input.get("release_base_sha")):
+            with _tx() as connection:
+                mode = _new_work.build_mode(connection, project_id, extends_run_id)
+            if mode and mode.get("mode") == "new_change":
+                run_input["extends_from_default"] = True
+                branch = mode["branch"]
+        extends = {"run_id": extends_run_id, "app": app_name(parent), "branch": branch}
     # WHICH RUNNING PREVIEW the operator was looking at when they asked for the change: the
     # build is told, as the quick change's feedback is (anchor /v1/previews/<id>/web/). Only
     # alongside extends_run_id, and only a preview of this project.
@@ -27917,6 +28476,19 @@ def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = Non
         extends["preview_id"] = preview_id
     # THE CONTRACT ITEMS THIS CHANGE REPLACES (a picker's ids, never read from the words):
     # only with extends_run_id, only a person allowed to revise (BOSSAPP-1322, PR #161 C1).
+    # THE QUALITY BAR (quality_bar.py): a bar below the project's, or a per-gate map, is a
+    # PERSON's call with settings:update, checked here and recorded by start_run.
+    bar_override = None
+    _asked_bar = run_input.pop("quality_bar", None)
+    _asked_gates = run_input.pop("quality_bar_gates", None)
+    if _asked_bar or _asked_gates:
+        from boss_engine.services import quality_bar as _quality_bar
+
+        try:
+            _quality_bar.check_override_permission(project_id, actor)
+        except _quality_bar.QualityBarOverrideRefused as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
+        bar_override = {"bar": _asked_bar, "gates": _asked_gates, "by": actor}
     picked_items = run_input.pop("replaces", None)
     checked_items: list[str] = []
     if picked_items:
@@ -27971,9 +28543,19 @@ def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = Non
             )
             version_id = running["version_id"] if running else None
             if not version_id:
+                # IN A MARKETPLACE PACK THIS PROJECT HAS NOT INSTALLED: say where it is.
+                pack = workflow_marketplace.SHIPPED_PACKS.get(
+                    workflow_marketplace.PACK_OF_KEY.get(workflow_key, ""))
+                waiting = connection.execute(
+                    text("SELECT marketplace_waiting FROM workflow_definitions "
+                         "WHERE project_id = :p AND workflow_key = :k AND status <> 'retired'"),
+                    {"p": project_id, "k": workflow_key}).scalar()
                 raise HTTPException(
-                    status_code=404, detail=f"no delivery workflow '{workflow_key}'"
-                )
+                    status_code=409 if waiting else 404,
+                    detail=(f"'{workflow_key}' is installed but waiting: {waiting}" if waiting
+                            else f"'{workflow_key}' is in the {pack.name} pack. Install it "
+                            "from Workflows › Marketplace." if pack
+                            else f"no delivery workflow '{workflow_key}'"))
         # RUNNING IT AGAIN REPEATS THE OPERATOR'S CHOICE. A run they started without a
         # deployment host was refused on its re-run, with no way to start anyway; Stop and run
         # again was worse — it stopped the original first, then the start was refused, and
@@ -28022,6 +28604,7 @@ def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = Non
             run = workflow_runtime.start_run(
                 connection, project_id=project_id, actor=actor, input_data=run_input,
                 checked_replaces=checked_items or None,
+                quality_bar_override=bar_override,
                 # IDEMPOTENT WHEN THE CALLER SAYS SO: the same dedupe_key returns the run it
                 # already started. The console sends one per intent ("replace run X"), so a
                 # second press of Stop-and-run-again cannot start a second workflow.
@@ -28258,12 +28841,15 @@ def _precheck_response(body: dict, *, workflow: Optional[str] = None,
 @app.get("/v1/delivery-workflows/{workflow_key}/readiness")
 @permit(P.WORKFLOW_READ, scope=Scope.project(query="project_id"))
 def get_delivery_workflow_readiness(workflow_key: str, project_id: str,
-                                    input: Optional[str] = None) -> dict:
+                                    input: Optional[str] = None,
+                                    code_location: Optional[str] = None) -> dict:
     """What this workflow needs from this project, each item checked, with the fix.
 
     The same answer Start gives when it refuses, asked before pressing it — the start form and
     the example setup scripts draw it. `input` is the run input as JSON, for needs that depend
-    on it (a notify channel the operator typed).
+    on it (a notify channel the operator typed). `code_location=local` asks for a project that
+    will keep its code on this machine (Try a sample): the local repository it gets answers the
+    repository need, so the list is the whole of what the start will refuse, asked once.
     """
     from boss_engine.services import workflow_readiness
 
@@ -28278,7 +28864,8 @@ def get_delivery_workflow_readiness(workflow_key: str, project_id: str,
                                 detail=f"no delivery workflow '{workflow_key}'")
         result = workflow_readiness.readiness_of_version(
             connection, settings, project_id, version_id=str(running["version_id"]),
-            input_data=supplied if isinstance(supplied, dict) else {})
+            input_data=supplied if isinstance(supplied, dict) else {},
+            local_code=code_location == "local")
         return {"workflow_key": workflow_key, "project_id": project_id, **result}
 
 
@@ -28315,6 +28902,17 @@ def run_delivery_capabilities(payload: open_bodies.DeliveryCapabilitiesRunBody) 
         raise HTTPException(status_code=400, detail="project_id is required")
     ctx = EngineContext.create()
     worker_id = str(payload.get("worker_id") or "capability-runner")
+    # BACKGROUND WORK (boss_engine.db.background, BOSSAPP-1456): every transaction the tick and
+    # its sweeps open waits a bounded time for a lock, is ended when it idles past the background
+    # limit, and appends its audit events at its commit — so no tick can hold up a sign-in.
+    with background():
+        return _advance_delivery_capabilities(ctx, project_id, worker_id)
+
+
+def _advance_delivery_capabilities(ctx: Any, project_id: str, worker_id: str) -> dict:
+    """The body of POST /v1/delivery-workflows/run-capabilities, run as background work."""
+    from boss_engine.services import workflow_capability_runner
+
     with begin(engine) as connection:
         projects = workflow_capability_runner.projects_with_work(connection, project_id)
     advanced: dict[str, Any] = {}
@@ -28464,21 +29062,23 @@ def publish_workflow_version(
             if definition and not _is_worker_principal():
                 workflow_runtime.refuse_operator_edit_of_boss_workflow(
                     dict(definition), settings.specpack_root / "workflows")
-            # A STANDARD IS NOT EDITED IN PLACE, whichever door is used. The delivery-workflow
-            # endpoints refused it; this generic one published straight over it, so the copy
-            # rule held only for callers that happened to use the other route.
-            if definition:
-                workflow_runtime.require_editable(dict(definition))
-            return WorkflowVersionSummary(
-                **workflow_runtime.publish_version(
-                    connection,
-                    project_id=payload.project_id,
-                    definition_id=definition_id,
-                    spec=payload.spec,
-                    actor=payload.actor,
-                    activate=payload.activate,
-                )
+            # A standard is edited in place through any door, and its shipped spec stays its
+            # baseline (workflow_standards), so publishing here is an edit like the editor's —
+            # and, like the editor's, BOSS's own default mapping follows it.
+            published = workflow_runtime.publish_version(
+                connection,
+                project_id=payload.project_id,
+                definition_id=definition_id,
+                spec=payload.spec,
+                actor=payload.actor,
+                activate=payload.activate,
             )
+            if definition and definition.get("is_catalogue") and payload.activate:
+                from boss_engine.services.workflow_catalogue import repoint_defaults_for
+
+                repoint_defaults_for(connection, payload.project_id,
+                                     str(definition["workflow_key"]))
+            return WorkflowVersionSummary(**published)
         except workflow_runtime.WorkflowNamespaceError as error:
             raise HTTPException(status_code=403, detail=str(error)) from error
         except workflow_runtime.WorkflowError as error:
@@ -29364,129 +29964,130 @@ def execute_work_tracker_sync(
 ) -> dict[str, Any]:
     """Execute a tracker write only inside a fenced, receipt-producing job."""
     require_worker_principal()
-    with begin(engine) as connection:
-        try:
-            leased_job = jobs.require_active_lease(
-                connection,
-                payload.worker_id,
-                payload.created_by_job_id,
-                payload.lease_token,
-            )
-            if (
-                leased_job["project_id"] != payload.project_id
-                or leased_job["kind"] != "work_tracker.issue.sync"
-                or (leased_job["payload"] or {}).get("binding_id")
-                != payload.binding_id
-            ):
-                raise ValueError(
-                    "Active lease does not authorize this work-tracker sync."
+    with background():
+        with begin(engine) as connection:
+            try:
+                leased_job = jobs.require_active_lease(
+                    connection,
+                    payload.worker_id,
+                    payload.created_by_job_id,
+                    payload.lease_token,
                 )
-            context = work_orchestration.tracker_sync_context(
-                connection,
-                project_id=payload.project_id,
-                binding_id=payload.binding_id,
-            )
-            provider_key = context["provider"]["provider_key"]
-            tenant = connection.execute(
-                text(
-                    """
-                    SELECT w.org_id, p.workspace_id
-                    FROM projects p
-                    JOIN workspaces w ON w.id=p.workspace_id
-                    WHERE p.id=:project_id
-                    """
-                ),
-                {"project_id": payload.project_id},
-            ).mappings().one()
-            effect_payload = {
-                "binding_id": payload.binding_id,
-                "provider": provider_key,
-                "title": context["work_item"]["title"],
-                "description_html": context["description_html"],
-            }
-            receipt, created = receipts.create_or_reuse(
-                connection,
-                tenant["org_id"],
-                tenant["workspace_id"],
-                payload.project_id,
-                f"work-tracker-sync:{provider_key}:{payload.binding_id}",
-                f"{provider_key}.issue.ensure",
-                {
-                    "binding_id": payload.binding_id,
-                    "work_item_id": context["work_item"]["id"],
-                    "provider": provider_key,
-                },
-                effect_payload,
-                created_by_job_id=payload.created_by_job_id,
-                data_boundary=leased_job["data_boundary"],
-            )
-            if not created and receipt["status"] == "succeeded":
-                return {
-                    "status": "succeeded",
-                    "receipt_id": receipt["id"],
-                    "binding": context["binding"],
-                    "reused": True,
-                }
-            # Multi-provider create via work_tracker_adapters (Plane default).
-            created_issue = work_orchestration.execute_tracker_issue_create(
-                connection,
-                project_id=payload.project_id,
-                binding_id=payload.binding_id,
-            )
-            if not created_issue.get("ok"):
-                failure_reason = str(
-                    created_issue.get("reason") or f"{provider_key}_issue_create_failed"
-                )
-                error = {
-                    "reason": failure_reason,
-                    "provider": provider_key,
-                }
-                receipts.mark_failed(connection, receipt["id"], error)
-                work_orchestration.mark_tracker_sync_failed(
+                if (
+                    leased_job["project_id"] != payload.project_id
+                    or leased_job["kind"] != "work_tracker.issue.sync"
+                    or (leased_job["payload"] or {}).get("binding_id")
+                    != payload.binding_id
+                ):
+                    raise ValueError(
+                        "Active lease does not authorize this work-tracker sync."
+                    )
+                context = work_orchestration.tracker_sync_context(
                     connection,
                     project_id=payload.project_id,
                     binding_id=payload.binding_id,
-                    error=error,
+                )
+                provider_key = context["provider"]["provider_key"]
+                tenant = connection.execute(
+                    text(
+                        """
+                        SELECT w.org_id, p.workspace_id
+                        FROM projects p
+                        JOIN workspaces w ON w.id=p.workspace_id
+                        WHERE p.id=:project_id
+                        """
+                    ),
+                    {"project_id": payload.project_id},
+                ).mappings().one()
+                effect_payload = {
+                    "binding_id": payload.binding_id,
+                    "provider": provider_key,
+                    "title": context["work_item"]["title"],
+                    "description_html": context["description_html"],
+                }
+                receipt, created = receipts.create_or_reuse(
+                    connection,
+                    tenant["org_id"],
+                    tenant["workspace_id"],
+                    payload.project_id,
+                    f"work-tracker-sync:{provider_key}:{payload.binding_id}",
+                    f"{provider_key}.issue.ensure",
+                    {
+                        "binding_id": payload.binding_id,
+                        "work_item_id": context["work_item"]["id"],
+                        "provider": provider_key,
+                    },
+                    effect_payload,
+                    created_by_job_id=payload.created_by_job_id,
+                    data_boundary=leased_job["data_boundary"],
+                )
+                if not created and receipt["status"] == "succeeded":
+                    return {
+                        "status": "succeeded",
+                        "receipt_id": receipt["id"],
+                        "binding": context["binding"],
+                        "reused": True,
+                    }
+                # Multi-provider create via work_tracker_adapters (Plane default).
+                created_issue = work_orchestration.execute_tracker_issue_create(
+                    connection,
+                    project_id=payload.project_id,
+                    binding_id=payload.binding_id,
+                )
+                if not created_issue.get("ok"):
+                    failure_reason = str(
+                        created_issue.get("reason") or f"{provider_key}_issue_create_failed"
+                    )
+                    error = {
+                        "reason": failure_reason,
+                        "provider": provider_key,
+                    }
+                    receipts.mark_failed(connection, receipt["id"], error)
+                    work_orchestration.mark_tracker_sync_failed(
+                        connection,
+                        project_id=payload.project_id,
+                        binding_id=payload.binding_id,
+                        error=error,
+                        actor=payload.worker_id,
+                    )
+                    return {
+                        "status": "failed",
+                        "receipt_id": receipt["id"],
+                        "reason": failure_reason,
+                    }
+                external_issue_id = str(created_issue["external_issue_id"])
+                external_key = created_issue.get("external_key")
+                binding = work_orchestration.mark_tracker_synced(
+                    connection,
+                    project_id=payload.project_id,
+                    binding_id=payload.binding_id,
+                    external_issue_id=external_issue_id,
+                    external_key=external_key,
+                    external_url=created_issue.get("external_url"),
+                    external_state=str(created_issue.get("external_state") or "open"),
                     actor=payload.worker_id,
                 )
-                return {
-                    "status": "failed",
-                    "receipt_id": receipt["id"],
-                    "reason": failure_reason,
+                result = {
+                    "binding_id": payload.binding_id,
+                    "external_issue_id": external_issue_id,
+                    "external_key": external_key,
+                    "external_url": binding.get("external_url"),
+                    "provider": provider_key,
                 }
-            external_issue_id = str(created_issue["external_issue_id"])
-            external_key = created_issue.get("external_key")
-            binding = work_orchestration.mark_tracker_synced(
-                connection,
-                project_id=payload.project_id,
-                binding_id=payload.binding_id,
-                external_issue_id=external_issue_id,
-                external_key=external_key,
-                external_url=created_issue.get("external_url"),
-                external_state=str(created_issue.get("external_state") or "open"),
-                actor=payload.worker_id,
-            )
-            result = {
-                "binding_id": payload.binding_id,
-                "external_issue_id": external_issue_id,
-                "external_key": external_key,
-                "external_url": binding.get("external_url"),
-                "provider": provider_key,
-            }
-            receipts.mark_succeeded(
-                connection,
-                receipt["id"],
-                external_issue_id,
-                result,
-            )
-            return {
-                "status": "succeeded",
-                "receipt_id": receipt["id"],
-                "binding": binding,
-                "reused": False,
-            }
-        except (LeaseNotFoundError, ValueError) as error:
-            _raise_work_orchestration_error(error)
+                receipts.mark_succeeded(
+                    connection,
+                    receipt["id"],
+                    external_issue_id,
+                    result,
+                )
+                return {
+                    "status": "succeeded",
+                    "receipt_id": receipt["id"],
+                    "binding": binding,
+                    "reused": False,
+                }
+            except (LeaseNotFoundError, ValueError) as error:
+                _raise_work_orchestration_error(error)
 
 
 @app.post("/v1/work-orchestration/bot-identities")
@@ -30156,30 +30757,31 @@ def dispatch_a2a_message(
     message_id: str, payload: A2ADispatchRequest
 ) -> dict[str, Any]:
     require_worker_principal()
-    with begin(engine) as connection:
-        try:
-            job = jobs.require_active_lease(
-                connection,
-                payload.worker_id,
-                payload.created_by_job_id,
-                payload.lease_token,
-            )
-            if (
-                job["kind"] != "a2a.dispatch"
-                or (job["payload"] or {}).get("message_id") != message_id
-            ):
-                raise A2AStateError(
-                    "Active lease does not authorize this A2A message."
+    with background():
+        with begin(engine) as connection:
+            try:
+                job = jobs.require_active_lease(
+                    connection,
+                    payload.worker_id,
+                    payload.created_by_job_id,
+                    payload.lease_token,
                 )
-            return a2a.dispatch(
-                connection,
-                project_id=payload.project_id,
-                message_id=message_id,
-                created_by_job_id=payload.created_by_job_id,
-                actor=payload.worker_id,
-            )
-        except Exception as error:  # noqa: BLE001
-            _raise_agent_studio_error(error)
+                if (
+                    job["kind"] != "a2a.dispatch"
+                    or (job["payload"] or {}).get("message_id") != message_id
+                ):
+                    raise A2AStateError(
+                        "Active lease does not authorize this A2A message."
+                    )
+                return a2a.dispatch(
+                    connection,
+                    project_id=payload.project_id,
+                    message_id=message_id,
+                    created_by_job_id=payload.created_by_job_id,
+                    actor=payload.worker_id,
+                )
+            except Exception as error:  # noqa: BLE001
+                _raise_agent_studio_error(error)
 
 
 @app.post("/v1/a2a/poll")
@@ -31877,6 +32479,8 @@ def code_task_review_pr_again_endpoint(run_id: str, payload: ReviewPrAgainBody) 
 
 class RecheckBody(BaseModel):
     actor: str
+    # "production": re-check at the production quality bar (every review seat convened).
+    quality_bar: Optional[str] = None
 
 
 @app.get("/v1/code-tasks/{run_id}/recheck")
@@ -31913,7 +32517,8 @@ def code_task_recheck_endpoint(run_id: str, payload: RecheckBody) -> dict:
         by_person = is_person(actor, connection, owner)
     try:
         return change_recheck.request(engine, settings, jobs, run_id, project_id=owner,
-                                      actor=actor, by_person=by_person)
+                                      actor=actor, by_person=by_person,
+                                      quality_bar=payload.quality_bar)
     except change_recheck.RecheckRefused as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -31928,7 +32533,8 @@ def code_task_review_pr_again_run_endpoint(run_id: str, payload: dict) -> dict:
     require_worker_principal()
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
-    return pr_review_again.execute(engine, get_settings(), {**(payload or {}), "run_id": run_id})
+    with background():
+        return pr_review_again.execute(engine, get_settings(), {**(payload or {}), "run_id": run_id})
 
 
 class CodeTaskCancelBody(BaseModel):

@@ -18,6 +18,7 @@ import { actorWords, looksLikeAnId } from "../../lib/actor-words";
 import { RunFace } from "../agents/run-face";
 import { afterWrite, decideDeploy, rollbackDeploy } from "./infra-actions";
 import { ago, dur, inWords, localTime, useNow } from "./infra-util";
+import { couldNot } from "../../lib/action-result";
 import { StateWord } from "./kit";
 import { LOCAL, useLocalTime, type LocalTime } from "../../lib/local-time";
 
@@ -125,7 +126,7 @@ export function DeployRowView({ row, projectId, actor, onOpen, onChanged, action
     setBusy(v); setError(null);
     const r = await decideDeploy(row.decisionId, actor, v);
     setBusy(null);
-    if (!r.ok) { setError(r.error); return; }
+    if (!r.ok) { setError(couldNot(`${v} the deploy`, r.error ? inWords(r.error) : "")); return; }
     give(v);
     showToast("success", v === "approve" ? "Approved, starting the deploy" : "Deploy rejected");
     afterWrite(onChanged);
@@ -135,7 +136,7 @@ export function DeployRowView({ row, projectId, actor, onOpen, onChanged, action
     setBusy("rollback"); setError(null);
     const r = await rollbackDeploy(projectId, row.ref, actor);
     setBusy(null);
-    if (!r.ok) { setError(r.error); return; }
+    if (!r.ok) { setError(couldNot("roll back", r.error ? inWords(r.error) : "")); return; }
     const sha = typeof (r.data as { sha7?: unknown }).sha7 === "string" ? (r.data as { sha7: string }).sha7 : row.rollbackToSha7 ?? "";
     showToast("success", sha ? `Rolling back to ${sha}` : "Rolling back");
     afterWrite(onChanged);
@@ -179,7 +180,7 @@ export function DeployRowView({ row, projectId, actor, onOpen, onChanged, action
             {busy === "rollback" ? "Rolling back…" : "Roll back"}
           </GatedButton>
         ) : null}
-        {error ? <span className="inf-error inf-trunc" role="alert" title={inWords(error)} data-copy="data">Couldn&apos;t do that</span> : null}
+        {error ? <span className="inf-error inf-trunc" role="alert" title={error} data-copy="data" data-user-text>{error}</span> : null}
       </span>
       <button type="button" className="inf-link inf-dep-go" aria-label={`Open ${row.app} ${row.env} deploy`}
               data-testid="inf-deploy-row-open" onClick={() => onOpen(row.ref)}>Open</button>

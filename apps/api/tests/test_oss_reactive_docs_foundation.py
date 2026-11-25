@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from sqlalchemy import text
 
 from apps.api.app.config import get_settings
@@ -23,6 +24,16 @@ from apps.api.app.services.jobs import JobLeaseService, enqueue_job
 
 
 PROJECT_ID = "boss-dogfood"
+
+
+@pytest.fixture(autouse=True)
+def _project_has_a_github_repository(monkeypatch):
+    """boss-dogfood publishes its docs to a GitHub repository (the install-wide target, the
+    registry's legacy fallback). A project with no repository, or one on this machine, queues
+    no docs update at all (test_docs_update_works_on_a_local_repo)."""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "target_github_owner", "example")
+    monkeypatch.setattr(settings, "target_github_repo", "boss")
 
 
 def test_enqueue_job_is_deduplicated_and_service_delegates(engine):

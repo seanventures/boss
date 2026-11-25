@@ -425,6 +425,11 @@ def _cmd_code(args) -> int:
         payload["repository"] = args.repo
     if args.base_branch:
         payload["base_branch"] = args.base_branch
+    # A project with several apps: name the app to change, or ask for a new one (else BOSS asks).
+    if getattr(args, "app", ""):
+        payload["extends_run_id"] = args.app
+    if getattr(args, "new_app", False):
+        payload["new_app"] = True
     if args.profile:
         payload["profile"] = args.profile
     if args.criteria:
@@ -529,6 +534,10 @@ def build_parser() -> argparse.ArgumentParser:
     cd.add_argument("--title", default="", help="short title (default: the instructions)")
     cd.add_argument("--repo", default="", help="registered repo: owner/name, name, or binding id")
     cd.add_argument("--base-branch", default="", help="branch to build on (default main)")
+    cd.add_argument("--app", default="", help="a build (crun_...) of the app to change; "
+                                              "needed when the project has several apps")
+    cd.add_argument("--new-app", action="store_true",
+                    help="build a new app beside the project's existing ones")
     cd.add_argument("--profile", default="",
                     choices=["", "lean", "balanced", "strict", "vag"],
                     help="cost/rigor dial")

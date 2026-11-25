@@ -563,7 +563,7 @@ describe("the words on the page", () => {
       const root = $('[data-testid="command-center"]')!;
       // The templates' and apps' own words are user text; the page's words are budgeted —
       // except the approved look's own two lines, which are the design's (mockup m7).
-      const APPROVED = ["Each one is a full brief your team can build today", "Start a , or pick a template below."];
+      const APPROVED = ["Each one is a full brief your team can build today", "Start a , or pick an idea under Ideas and connectors."];
       expect(overBudget(root).filter((t) => !APPROVED.includes(t))).toEqual([]);
     });
 });

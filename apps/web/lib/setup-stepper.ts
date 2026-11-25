@@ -5,6 +5,7 @@
  * with only the current row open; after the first pull request it is a board with no numbers.
  * The server says which step is next (`view.next`); this only turns that into row modes.
  */
+import { isHydrated } from "./hydration-state";
 import type { RowKey, SetupView } from "./setup-types";
 
 export type RowMode = "current" | "done" | "waiting" | "collapsed" | "open";
@@ -47,7 +48,7 @@ export type SetupParams = { focus: RowKey | null; add: string | null; source: st
 
 const ROWS: RowKey[] = ["github", "repository", "models", "capacity", "jobs", "budget", "try",
                         "advanced", "github_app", "repositories", "ci", "build_database", "build_speed",
-                        "toolchains", "public_url", "embedding_model", "ticket_systems", "events"];
+                        "toolchains", "public_url", "embedding_model", "ticket_systems", "documents", "events"];
 
 /** Rows folded under Advanced: a deep link to one opens the fold first. */
 export const ADVANCED_ROWS: readonly RowKey[] = ["advanced", "github_app", "repositories", "ci", "build_database",
@@ -75,11 +76,13 @@ export function readParams(search: string): SetupParams {
 }
 
 /** "5m", "2h", "3d" — how long ago, for the "Checked" tooltip and age. */
-export function ageLabel(at: string | null, now = Date.now()): string {
+export function ageLabel(at: string | null, now?: number): string {
   if (!at) return "";
   const t = Date.parse(at);
   if (!Number.isFinite(t)) return "";
-  const s = Math.max(0, Math.floor((now - t) / 1000));
+  if (now === undefined && !isHydrated()) return "";
+  const ref = now ?? Date.now();
+  const s = Math.max(0, Math.floor((ref - t) / 1000));
   if (s < 60) return `${s}s`;
   if (s < 3600) return `${Math.floor(s / 60)}m`;
   if (s < 86400) return `${Math.floor(s / 3600)}h`;
@@ -87,11 +90,13 @@ export function ageLabel(at: string | null, now = Date.now()): string {
 }
 
 /** Whole days until `at`, never negative. */
-export function daysUntil(at: string | null, now = Date.now()): number | null {
+export function daysUntil(at: string | null, now?: number): number | null {
   if (!at) return null;
   const t = Date.parse(at);
   if (!Number.isFinite(t)) return null;
-  return Math.max(0, Math.floor((t - now) / 86_400_000));
+  if (now === undefined && !isHydrated()) return null;
+  const ref = now ?? Date.now();
+  return Math.max(0, Math.floor((t - ref) / 86_400_000));
 }
 
 /** Which tile Add a model opens on in first run: a subscription already signed in on the
@@ -118,13 +123,22 @@ export function canAsk(view: SetupView): boolean {
 
 export type SetupSummary = { ready: boolean; badge: { count: number; tone: "amber" | "red" } | null;
   /** The rail shows Get started (the Welcome) until GitHub, a model and a first PR exist. */
-  get_started?: boolean };
+  get_started?: boolean;
+  /** True when at least one usable (green) model is configured. */
+  has_model?: boolean };
+
+/** THE REPOSITORY STEP IS DONE when the project has a repository, or the org keeps code on this
+ *  machine (stranger test: a local project left Setup saying "2 to go" and asking for GitHub).
+ *  GitHub is optional: it is for PRs on GitHub. */
+export function hasCode(view: { repository: { repos: unknown[]; local?: unknown } }): boolean {
+  return view.repository.repos.length > 0 || Boolean(view.repository.local);
+}
 
 /** Whether the Welcome is still the landing page and the rail shows Get started: GitHub, a model
  *  and a first PR (any, `try.done`) are not all there yet (BOSSAPP-808). */
 export function getStarted(view: Pick<SetupView, "repository" | "models"> & Partial<SetupView>): boolean {
   const github = (view.github_accounts ?? []).some((a) => a.pill.tone === "green")
-    || view.repository.repos.some((r) => r.pill.tone === "green");
+    || view.repository.repos.some((r) => r.pill.tone === "green") || Boolean(view.repository.local);
   const model = view.models.some((m) => m.pill.tone === "green");
   return !(github && model && Boolean(view.try?.done));
 }
@@ -133,12 +147,13 @@ export function getStarted(view: Pick<SetupView, "repository" | "models"> & Part
  *  checks, red while any check fails. */
 export function summarize(view: Pick<SetupView, "ready" | "next" | "problems" | "repository" | "models">):
   SetupSummary {
-  const unfinished = (view.repository.repos.length ? 0 : 1) + (view.models.length ? 0 : 1);
+  const unfinished = (hasCode(view) ? 0 : 1) + (view.models.length ? 0 : 1);
   const count = unfinished + view.problems;
   return {
     ready: view.ready,
     badge: count > 0 ? { count, tone: view.problems > 0 ? "red" : "amber" } : null,
     get_started: getStarted(view),
+    has_model: view.models.some((m) => m.pill.tone === "green"),
   };
 }
 
@@ -147,3 +162,6 @@ export const SETUP_BADGE_EVENT = "boss:setup-badge";
 
 /** The board tells the rail whether Get started still shows (no reload needed). */
 export const GET_STARTED_EVENT = "boss:setup-get-started";
+
+/** The board tells BuildHome whether at least one usable model is configured. */
+export const SETUP_MODEL_READY_EVENT = "boss:setup-model-ready";

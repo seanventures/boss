@@ -7,7 +7,9 @@
  *
  *   header   two lines: title #n · state · branch → base · checks · open comments · Clone ·
  *            (Open on GitHub) · Request changes · Merge — then where it is (repository, sync)
- *   tabs     Conversation · Commits · Files changed · Code · Checks
+ *   tabs     Overview · Conversation · Commits · Files changed · Code · Checks — validation is a
+ *            checker: its row on Checks, its findings as notes on their lines in Files changed
+ *            (workflow-library DESIGN decision 4); an old ?tab=validation opens Checks
  *   panes    full width: the tab (Files changed: tree | diff) and the PR agent on the right;
  *            under 1100px the agent is a button; on a phone the diff alone
  *
@@ -17,7 +19,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft, ArrowSquareOut, ChatCircleDots, ChatCircleText, CircleNotch, Code, FileCode, GitCommit, GitMerge,
-  FolderOpen, GithubLogo, HardDrives, Info, PencilSimpleLine, Robot, ShieldCheck, Terminal, XCircle,
+  FolderOpen, GithubLogo, HardDrives, Info, ListChecks, PencilSimpleLine, Robot, ShieldCheck, Terminal, XCircle,
 } from "@phosphor-icons/react";
 
 import { BoxPop } from "../../../../components/box-pop";
@@ -43,12 +45,23 @@ import {
 } from "./review-panes";
 import { DockPane, ReviewLayoutProvider, useReviewLayout } from "./review-dock";
 import { TicketSyncBadge } from "../../../projects/linked-ticket";
+import { blockingOpen, blockingRows, checkSource, packetOf, packetTally, type ReviewPacket } from "../../../../lib/validation-review";
+import { originalCommit } from "../../../../lib/line-notes";
+import { ReviewPacketView, packetHold } from "../../../validation/review-packet";
+import { useValidation, useValidationPins } from "../../../validation/line-notes";
+import { CheckRows } from "../../../validation/checks-rows";
+import { PinsContext } from "./pins";
 import "./change-set.css";
 
 export { InlineNote, Review };
 
 export type Tab = "overview" | "conversation" | "commits" | "files" | "code" | "checks";
 const TABS: Tab[] = ["overview", "conversation", "commits", "files", "code", "checks"];
+/** A tab named in a link: the retired Validation tab is Checks now. */
+export function tabOf(t: string | null | undefined): Tab | null {
+  const x = t === "validation" ? "checks" : t;
+  return TABS.includes(x as Tab) ? (x as Tab) : null;
+}
 
 export function ChangeSetView({ projectId, number, repo = null, tab = null, commit = null, loc = null, me = null, org = null, project = null }: {
   projectId: string; number: string;
@@ -64,7 +77,7 @@ export function ChangeSetView({ projectId, number, repo = null, tab = null, comm
   return (
     <IdentityProvider me={me} org={org} project={project} projectId={projectId}>
       <ReviewLayoutProvider page="change">
-        <ChangeSetPage projectId={projectId} number={number} repo={repo} startTab={TABS.includes(tab as Tab) ? (tab as Tab) : null}
+        <ChangeSetPage projectId={projectId} number={number} repo={repo} startTab={tabOf(tab)}
                        startCommit={commit} startLoc={loc} />
       </ReviewLayoutProvider>
       <ConsentHost />
@@ -124,8 +137,32 @@ function ChangeSetPage({ projectId, number, repo, startTab, startCommit, startLo
     return () => { alive = false; };
   }, [at, loaded]);
 
+  // THE REVIEW PACKET (validation-review SPEC §1.4): the merge decision's typed packet, read once
+  // the change names its decision. An invalid packet holds Merge in the header.
+  const decisionId = cs?.merge?.decision_id || cs?.decision?.id || "";
+  const [packet, setPacket] = useState<ReviewPacket | null>(null);
+  useEffect(() => {
+    if (!decisionId) { setPacket(null); return undefined; }
+    let alive = true;
+    idGet<unknown>(`/v1/decisions/${encodeURIComponent(decisionId)}?project_id=${encodeURIComponent(projectId)}`)
+      .then((d) => { if (alive) setPacket(packetOf((d as { recommendation?: Record<string, unknown> } | null)?.recommendation)); })
+      .catch(() => { if (alive) setPacket(null); });
+    return () => { alive = false; };
+  }, [decisionId, projectId, headSha]);
+  // A packet whose checks ran on an older commit than the head holds Merge too (stale).
+  const hold = packetHold(packet, false, cs?.head_sha ?? null);
+  const csHeld: ChangeSet | null = cs && hold && cs.merge ? { ...cs, merge: { ...cs.merge, held: hold } } : cs;
+
   // EVERY TAB SWITCHES THE MAIN VIEW, AND THE URL KEEPS IT (?tab=…&commit=…): links and Back work.
   const [tab, setTabState] = useState<Tab>(startTab ?? (startCommit ? "commits" : "files"));
+  // ?tab=validation (old links): the page shows Checks, and the address says so.
+  useEffect(() => {
+    if (startTab !== "checks") return;
+    try {
+      const q = new URLSearchParams(window.location.search);
+      if (q.get("tab") === "validation") { q.set("tab", "checks"); window.history.replaceState(window.history.state, "", `${window.location.pathname}?${q}`); }
+    } catch { /* the view is right either way */ }
+  }, [startTab]);
   const [shownCommit, setShownCommit] = useState<string | null>(startCommit);
   const go = useCallback((t: Tab, commit: string | null = null) => {
     setTabState(t); setShownCommit(t === "commits" ? commit : null);
@@ -136,7 +173,7 @@ function ChangeSetPage({ projectId, number, repo, startTab, startCommit, startLo
   useEffect(() => {
     const back = () => {
       const r = readChangeUrl(window.location.pathname, window.location.search);
-      setTabState(TABS.includes(r.tab as Tab) ? (r.tab as Tab) : "files");
+      setTabState(tabOf(r.tab) ?? "files");
       setShownCommit(r.commit);
       if (r.loc) setFocus({ path: r.loc.path, n: Date.now() });
     };
@@ -144,6 +181,20 @@ function ChangeSetPage({ projectId, number, repo, startTab, startCommit, startLo
     return () => window.removeEventListener("popstate", back);
   }, []);
   const [range, setRange] = useState<Range>(WHOLE_CHANGE);
+  // VALIDATION IS A CHECKER: read once for the Checks rows and the notes on Files changed.
+  const validation = useValidation(projectId, cs ? cs.number || number : null);
+  const v = validation.state === "ready" ? validation.data : null;
+  // ONE COUNT SOURCE for the Checks badge, the packet card and the Checks rows (checkSource).
+  const shown = checkSource(v, packet).packet;
+  // "FIX A GIVEN FILE": the original file is the change's first commit, so Files changed opens
+  // on original → fixed (that commit … head); the whole change stays one click away.
+  const original = useMemo(() => (v?.target ? originalCommit(commits) : null), [v?.target, commits]);
+  const rangeSet = useRef(false);
+  useEffect(() => {
+    if (!original || rangeSet.current) return;
+    rangeSet.current = true;
+    setRange((r) => (!r.base && !r.head ? { base: original.sha, head: null } : r));
+  }, [original]);
   // THE ONE SOURCE OF EVERY COUNT: the diff of the current base…head (the whole change, or the
   // range the person picked), read once here; the tab badge, tree, toolbar and summary read it.
   const whole = !range.base && !range.head;
@@ -171,6 +222,8 @@ function ChangeSetPage({ projectId, number, repo, startTab, startCommit, startLo
   // (faster) read say "resolved" while the thread and the header still said open.
   const reread = useCallback(() => { void read().catch(() => null).finally(() => setAgentKey((k) => k + 1)); }, [read]);
   const jump = useJumpTo();
+  const pins = useValidationPins(v, projectId, cs?.number || number, () => { validation.refresh(); reread(); },
+                                 original ? commits.indexOf(original) + 1 : 0);
   const inline = useMemo(() => commentsByLine<Note>((cs?.review ?? []).flatMap((n) =>
     n.comments.map((c) => ({ ...c, author: n.author })))), [cs?.review]);
   const lineReview = useLineReview({
@@ -189,10 +242,10 @@ function ChangeSetPage({ projectId, number, repo, startTab, startCommit, startLo
     }, 160);
   }, []);
   const onJumpLoc = useCallback((path: string, line?: number | null, side: "new" | "old" = "new") => {
-    setRange(WHOLE_CHANGE); setFocus({ path, n: Date.now() }); setTabState("files"); setShownCommit(null);
+    setRange(original ? { base: original.sha, head: null } : WHOLE_CHANGE); setFocus({ path, n: Date.now() }); setTabState("files"); setShownCommit(null);
     try { window.history.pushState({ tab: "files" }, "", changeUrl(asked, "files", null, { path, line, side })); } catch { /* the view still moves */ }
     scrollLoc(path, line, side);
-  }, [asked, scrollLoc]);
+  }, [asked, scrollLoc, original]);
   // A pasted ?file=&line= link: the page lands on that row once the diff is there.
   const landed = useRef(false);
   useEffect(() => {
@@ -239,7 +292,7 @@ function ChangeSetPage({ projectId, number, repo, startTab, startCommit, startLo
               <BranchChips cs={cs} />
               <ChecksPill cs={cs} />
               {/* The ticket this change is for (BOSSAPP-1047): its key and what BOSS wrote back. */}
-              {cs.run_id ? <TicketSyncBadge runId={cs.run_id} projectId={projectId} /> : null}
+              {cs.workflow_run_id ? <TicketSyncBadge runId={cs.workflow_run_id} projectId={projectId} /> : null}
               {cs.comment_summary.human_open ? (
                 <span className="cs-pill" data-tone="amber" title="Open line comments from people" data-testid="change-set-open-comments">
                   <ChatCircleDots size={12} aria-hidden />{cs.comment_summary.human_open} open</span>) : null}
@@ -261,7 +314,7 @@ function ChangeSetPage({ projectId, number, repo, startTab, startCommit, startLo
                   <button type="button" className="lr-btn gr-sheet-btn" data-kind="ghost" aria-expanded={dock.layout.agent === "overlay"}
                           onClick={() => dock.dispatch(dock.layout.agent === "overlay" ? { type: "close", pane: "agent" } : { type: "open", pane: "agent" })}
                           data-testid="gr-agent-toggle"><Robot size={14} aria-hidden />Agent</button>) : null}
-                <Decide cs={cs} projectId={projectId} number={String(cs.number)} at={at} reread={read} compact />
+                <Decide cs={csHeld ?? cs} projectId={projectId} number={String(cs.number)} at={at} reread={read} packet={packet} compact />
               </span>
             </div>
             <SourceLine cs={cs} />
@@ -275,14 +328,17 @@ function ChangeSetPage({ projectId, number, repo, startTab, startCommit, startLo
             <TabLink tab="commits" on={tab} set={setTab} icon={<GitCommit size={13} aria-hidden />} label="Commits" n={commits.length || cs.commits.length} />
             <TabLink tab="files" on={tab} set={setTab} icon={<FileCode size={13} aria-hidden />} label="Files changed" n={files.length} />
             <TabLink tab="code" on={tab} set={setTab} icon={<Code size={13} aria-hidden />} label="Code" />
-            <TabLink tab="checks" on={tab} set={setTab} icon={<ShieldCheck size={13} aria-hidden />} label="Checks" n={checkCount || undefined} />
+            <TabLink tab="checks" on={tab} set={setTab} icon={<ListChecks size={13} aria-hidden />} label="Checks"
+                     n={(shown ? blockingOpen(packetTally(shown)) : 0) || checkCount || undefined} />
           </nav>
           <div className="gr-body">
             <div className="gr-tab" data-tab={tab}>
               {tab === "files" ? (
+                <PinsContext.Provider value={range.head ? null : pins}>
                 <FilesTab cs={cs} at={at} commits={commits} files={files} diff={diffNow} loading={!whole && !ranged && !rangeErr} focus={focus}
                           error={rangeErr} review={lineReview} inline={inline} viewed={viewed}
                           onViewed={setViewedState} onViewFile={openCode} range={range} setRange={setRange} />
+                </PinsContext.Provider>
               ) : tab === "code" ? (
                 <div id="lr-code"><CodeTab cs={cs} at={at} startPath={codePath} onChanged={reread} commits={commits} /></div>
               ) : tab === "commits" ? (
@@ -290,12 +346,17 @@ function ChangeSetPage({ projectId, number, repo, startTab, startCommit, startLo
                             hrefFor={(sha) => changeUrl(asked, "commits", sha)} wholeFiles={wholeFiles} wholeDiff={cs.diff}
                             review={lineReview} inline={inline} onCompare={(r) => { setRange(r); setTab("files"); }} onViewFile={openCode} />
               ) : tab === "overview" ? (
+                <>
+                {shown ? <div style={{ marginBottom: 16 }}><ReviewPacketView packet={shown} projectId={projectId} fallbackTitle={cs.title}
+                                                                    eyebrow="Review packet" testid="change-packet" compact /></div> : null}
                 <OverviewTab cs={cs} at={at} files={wholeFiles} commitHref={(sha) => changeUrl(asked, "commits", sha)} onChanged={reread}
                              onJump={onJump} onJumpLoc={onJumpLoc} onFiles={() => { setRange(WHOLE_CHANGE); setTab("files"); }} />
+                </>
               ) : tab === "conversation" ? (
                 <ConversationTab cs={cs} at={at} files={wholeFiles} commitHref={(sha) => changeUrl(asked, "commits", sha)} onChanged={reread} onJump={onJump} onFiles={() => { setRange(WHOLE_CHANGE); setTab("files"); }} />
               ) : (
-                <ChecksTab cs={cs} decision={<DecisionCard cs={cs} at={at} reread={read} />} />
+                <ChecksTab cs={cs} decision={<DecisionCard cs={cs} at={at} reread={read} />}
+                           rows={<CheckRows cs={cs} v={v} packet={packet} onJump={onJumpLoc} projectId={projectId} />} />
               )}
             </div>
             <DockPane pane="agent" label="Agent" icon={<Robot size={15} aria-hidden />} testid="gr-dock-agent">
@@ -366,8 +427,10 @@ function MergeHeldWhy({ sentence }: { sentence: string | null }) {
 
 /** Merge and Request changes. `compact`: the header's buttons; the Checks tab shows the
  *  decision's card (DecisionCard). */
-export function Decide({ cs, projectId, number, reread, at, compact = false }: {
-  cs: ChangeSet; projectId: string; number: string; reread: () => Promise<ChangeSet>; at?: ChangeAt; compact?: boolean;
+export function Decide({ cs, projectId, number, reread, at, packet = null, compact = false }: {
+  cs: ChangeSet; projectId: string; number: string; reread: () => Promise<ChangeSet>; at?: ChangeAt;
+  /** The merge decision's review packet: a BLOCKED one makes Merge the reasoned "Merge anyway". */
+  packet?: ReviewPacket | null; compact?: boolean;
 }) {
   const where: ChangeAt = at ?? { projectId, number };
   const guarded = useGuardedCall();
@@ -388,12 +451,20 @@ export function Decide({ cs, projectId, number, reread, at, compact = false }: {
       if (alive.current) setBusy(null);
     }
   };
-  const merge = async () => {
+  // A BLOCKED PACKET (open P0/P1): Merge opens the reasoned "Merge anyway" form, the same as the
+  // merge card; the engine refuses a plain merge of it. Invalid / re-checking stay disabled (held).
+  const blocked = packet?.verdict.state === "blocked" && !cs.merge?.held;
+  const rows = blocked ? blockingRows(packet) : [];
+  const [anyway, setAnyway] = useState(false);
+  const [why, setWhy] = useState("");
+  const merge = async (reason?: string) => {
     if (busy) return;
+    if (blocked && !reason?.trim()) { setAnyway(true); return; }
     setBusy("merge"); setSaid(null);
     try {
       await guarded(`Merge ${cs.source === "github" ? "PR" : "change"} #${cs.number || number} into ${cs.base_branch}.`, () =>
-        idPost(`${changeBase(where)}/merge`, {}));
+        idPost(`${changeBase(where)}/merge`, reason?.trim() ? { note: reason.trim(), force: true } : {}));
+      setAnyway(false); setWhy("");
       setBusy("merging");
       // BOSS runs the governed merge on its own (a worker job): the page reads back while the
       // decision is approved and the change still open (the effect below), however long it takes.
@@ -418,15 +489,30 @@ export function Decide({ cs, projectId, number, reread, at, compact = false }: {
   ) : merging ? (
     <span className="cs-merging" role="status" data-testid="change-set-merging"><CircleNotch size={14} className="cs-spin" aria-hidden /> BOSS is merging…</span>
   ) : cs.state === "open" && cs.merge ? (
-    <>
+    <span className="gr-anchor">
       <button type="button" className="cs-primary" data-testid="change-set-merge" disabled={!!busy || !!cs.merge.held} aria-busy={!!busy || undefined}
-              title={cs.merge.held?.reason || "A person merges · BOSS runs the governed merge"} data-held={cs.merge.held?.state || undefined}
-              onClick={() => void merge()}>
+              aria-expanded={blocked ? anyway : undefined} data-blocked={blocked || undefined}
+              title={cs.merge.held?.reason || (blocked ? `Blocked: ${rows.length || "open"} P0/P1 open · merging needs your reason` : "A person merges · BOSS runs the governed merge")}
+              data-held={cs.merge.held?.state || undefined}
+              onClick={() => (blocked ? setAnyway((v) => !v) : void merge())}>
         {busy ? <CircleNotch size={15} className="cs-spin" aria-hidden /> : <GitMerge size={15} weight="bold" aria-hidden />}
-        {cs.merge.held ? cs.merge.held.label : "Merge"}
+        {cs.merge.held ? cs.merge.held.label : blocked ? "Merge anyway…" : "Merge"}
       </button>
       <MergeHeldWhy sentence={mergeHeldSentence(cs.merge.held?.reason)} />
-    </>
+      {blocked && anyway ? (
+        <BoxPop className="lr-composer gr-pop" fit={false} onEscape={() => setAnyway(false)} data-testid="change-set-merge-anyway">
+          <p className="cs-small"><b>Blocked</b> · merging goes past these, and your reason is recorded with the merge.</p>
+          {rows.length ? <ul className="cs-small cs-blocked-rows" data-testid="change-set-blocked-rows">{rows.map((r) => <li key={r}><code>{r}</code></li>)}</ul> : null}
+          <textarea className="lr-input" rows={3} value={why} onChange={(e) => setWhy(e.target.value)} aria-label="Why merge with these open"
+                    placeholder="Why merge with these open? Recorded with the merge." data-testid="change-set-merge-reason" />
+          <div className="lr-composer-f"><span className="cs-spacer" />
+            <button type="button" className="lr-btn" data-kind="ghost" onClick={() => setAnyway(false)}>Cancel</button>
+            <button type="button" className="lr-btn" data-kind="danger" disabled={!!busy || !why.trim()} title={!why.trim() ? "Write why first" : undefined}
+                    onClick={() => void merge(why)} data-testid="change-set-merge-anyway-send">
+              {busy ? <CircleNotch size={13} className="cs-spin" aria-hidden /> : null}Merge anyway</button></div>
+          {said ? <p className="cs-error" role="alert">{said}</p> : null}
+        </BoxPop>) : null}
+    </span>
   ) : null;
   const local = cs.source === "local";
   const closeBtn = local && cs.state === "open" && !merging ? (

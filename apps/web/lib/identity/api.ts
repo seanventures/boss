@@ -249,7 +249,14 @@ export async function idFetch<T>(method: string, path: string, body?: unknown, i
     if (!(e instanceof IdentityError && e.stepUp && WRITE.has(method) && !init.background)) throw e;
     const mirror = currentMirror() ?? liveMirror();
     if (!mirror) throw e;  // no console on the page to ask through: the caller's own handling
-    if (await mirror.stepUp(reason ?? "Confirm it's you to continue.")) return idFetchFresh<T>(method, path, body, init);
+    if (await mirror.stepUp(reason ?? "Confirm it's you to continue.")) {
+      // THE STEP-UP ROTATED THE SESSION, AND WITH IT THE CSRF TOKEN (the API's answer carries no
+      // new token). The replay used to go out with the old one, get `403 csrf_failed`, and lean
+      // on the retry below — a refusal on every step-up (dry run 2, gap 10). Read the new token
+      // first, so the action resumes on its first send.
+      await refreshCsrf();
+      return idFetchFresh<T>(method, path, body, init);
+    }
     throw new IdentityError(401, "step_up_cancelled", { body: { error: "step_up_cancelled", detail: stepUpNotConfirmedSentence() } });
   }
 }

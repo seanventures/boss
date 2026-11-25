@@ -21,11 +21,14 @@ DOCKERFILE = ROOT / "Dockerfile.community"
 
 
 def _runtime_copies() -> dict[str, str]:
-    """src -> dest of the plain COPY lines of the python-runtime stage (WORKDIR /app)."""
+    """src -> dest of the plain COPY lines of the app-src stage (the /app every Python image
+    copies whole; WORKDIR /app is set in python-base, which app-src builds on)."""
     text = DOCKERFILE.read_text()
-    stage = text[text.index("AS python-runtime"):]
+    base = text[text.index("AS python-base\n"):]
+    assert "WORKDIR /app" in base[:base.index("\nFROM ")]
+    assert "FROM python-base AS app-src" in text
+    stage = text[text.index("AS app-src"):]
     stage = stage[:stage.index("\nFROM ")] if "\nFROM " in stage else stage
-    assert "WORKDIR /app" in stage
     return {m.group(1): m.group(2) for m in re.finditer(r"(?m)^COPY (?!--)(\S+) (\S+)$", stage)}
 
 

@@ -36,10 +36,16 @@ function merge(prev: Item[], learnings: KgLearningItem[], rules: KgRule[], edges
   return [...by.values()].sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
 }
 
+/** A build's own working notes (a failing test, the workaround, what made it pass): the cockpit
+ *  shows them; a workflow screen does not — its reader is the person, not the build (dry run 5). */
+export const BUILD_INTERNAL_KINDS = new Set(["test_failure", "workaround", "fix"]);
+export const forPeople = <T extends { kind: string; how: string }>(items: T[]): T[] =>
+  items.filter((i) => !(i.how === "learned" && BUILD_INTERNAL_KINDS.has(i.kind)));
+
 /** The viewer's own zone, labelled (lib/kg-view.ts kgWhen). */
 const clock = kgWhen;
 
-export function LearnedStrip({ projectId, actor, runId, live, orgId, always = false }: {
+export function LearnedStrip({ projectId, actor, runId, live, orgId, always = false, people = false }: {
   projectId: string; actor: string;
   /** The run: a build (code task run id) or a workflow run id. */
   runId: string;
@@ -49,10 +55,13 @@ export function LearnedStrip({ projectId, actor, runId, live, orgId, always = fa
   /** Drawn even when nothing is learned yet (the work drawer's "What it learned" opens it on
    *  purpose, so an empty run says so instead of drawing nothing). */
   always?: boolean;
+  /** A person's screen (the workflow run view): the build's own working notes are left out. */
+  people?: boolean;
 }) {
   const w = useMemo(() => ({ projectId, actor }), [projectId, actor]);
   const onScreen = useOnScreen();
-  const [items, setItems] = useState<Item[]>([]);
+  const [all, setItems] = useState<Item[]>([]);
+  const items = useMemo(() => (people ? forPeople(all) : all), [all, people]);
   const [state, setState] = useState<"loading" | "ready" | "absent" | "error">("loading");
   const [error, setError] = useState("");
   const [active, setActive] = useState(0);
@@ -93,7 +102,7 @@ export function LearnedStrip({ projectId, actor, runId, live, orgId, always = fa
 
   if (state === "absent") return always ? <p className="kg-quiet" data-testid="kg-strip-absent">This BOSS doesn&apos;t record what runs learn yet.</p> : null;
   if (state === "loading" && !items.length) return always ? <p className="kg-quiet" role="status">Reading what it learned…</p> : null;
-  if (state === "ready" && !items.length && !live && !always) return null;
+  if (state === "ready" && !items.length && (people || !live) && !always) return null;
   const learned = items.filter((i) => i.how === "learned").length;
   const used = items.length - learned;
   return (

@@ -7,9 +7,15 @@
 #   scripts/test-tier.sh changed [--since R] P0 + the tests of what changed since R (a minor's gate)
 #   scripts/test-tier.sh P2                  everything not in tests/tiers.yaml (on demand / nightly)
 #
-# Only NEW failures fail the gate: a failure listed in tests/known-failures.txt is reported, not
-# counted. The API tests spend ~6 s each resetting their database, so they run sharded across
-# boss_test_t1..tN (created when missing) on the boss-community-db-1 container.
+# Red is not normal (BOSSAPP-1429, scripts/known_failures.py): a failure listed in the suite's
+# baseline (tests/known-failures/<suite>.txt) is reported, not counted; any other failure fails the
+# gate, so does a listed test that now passes (delete its line: the list only shrinks), and so does
+# a red SECURITY GUARD (tests/tiers.yaml `security:`), listed or not. Every file a baseline names
+# runs in every tier, so every line is judged on every run. The worker suite is small and always
+# runs whole. The API tests spend ~6 s each resetting their database, so they run sharded across
+# boss_test_t1..tN (created when missing) on the test Postgres (`boss dev up`, the
+# boss-community-db-test-1 container, :55700) — never the install's own `db`, where test databases
+# are leftovers BOSS removes (BOSSAPP-1459). BOSS_TEST_PG_URL or BOSS_TEST_DB_CONTAINER override.
 set -uo pipefail
 
 TIER="${1:-}"; shift || true
@@ -26,7 +32,10 @@ esac
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
 OUT="${TEST_TIER_OUT:-$(mktemp -d -t boss-tier-XXXX)}"
-DBC="${BOSS_TEST_DB_CONTAINER:-boss-community-db-1}"
+# A reused TEST_TIER_OUT must not judge an earlier run's logs.
+rm -f "$OUT"/*.log "$OUT"/*.files "$OUT"/api.shard* "$OUT"/failed.txt "$OUT"/passed.txt \
+  "$OUT"/ran.txt "$OUT"/unfinished.txt "$OUT"/judge.txt 2>/dev/null
+DBC="${BOSS_TEST_DB_CONTAINER:-boss-community-db-test-1}"
 # The test databases: <prefix> for the engine suite, <prefix>_t1..tN for the API shards.
 DBP="${TEST_TIER_DB_PREFIX:-boss_test}"
 case "$DBP" in boss_test*) ;; *) echo "TEST_TIER_DB_PREFIX must start with boss_test" >&2; exit 2 ;; esac
@@ -38,7 +47,10 @@ import yaml
 
 tier, since, out = sys.argv[1], sys.argv[2], sys.argv[3]
 tiers = yaml.safe_load(open("tests/tiers.yaml"))
+# worker: apps/worker/tests (the lease loops, job slots, the idle/stall clock). It was never run
+# by any gate until R3 (BOSSAPP-1431): a 4-core / 8 GiB host's one-slot bug lived there.
 SUITES = {"engine": ("engine/tests", ".py"), "api": ("apps/api/tests", ".py"),
+          "worker": ("apps/worker/tests", ".py"), "scripts": ("scripts/tests", ".py"),
           "web": ("apps/web/tests", (".ts", ".tsx"))}
 
 def listed(t):
@@ -85,16 +97,44 @@ else:  # changed: P0 + tests that touch what changed since `since`
                 continue
             if any(re.search(rf"\b{re.escape(st)}\b", text) for st in stems):
                 pick[s].append(f)
+# A file runs in the suite its PATH names (tiers.yaml lists scripts/tests under engine:).
+sys.path.insert(0, "scripts")
+import known_failures as kf
+
+every_file = [f for s in SUITES for f in pick[s]]
+by_path = {s: [] for s in SUITES}
+for f in every_file:
+    s = kf.suite_of(f) or "engine"
+    if f not in by_path[s]:
+        by_path[s].append(f)
+# The worker suite is small: it always runs whole (it never ran anywhere before BOSSAPP-1429).
+by_path["worker"] += [f for f in every("worker") if f not in by_path["worker"]]
+# Every file a baseline names runs, so a line that passes now is caught as STALE.
+try:
+    listed_files = sorted({e.file for b in kf.load_all().values() for e in b.values()})
+except ValueError as error:
+    sys.exit(f"tests/known-failures: {error}")
+# Every security guard runs in every tier: a red one fails every gate, so it must be in every run.
+try:
+    guard_files = sorted(kf.security_files())
+except ValueError as error:
+    sys.exit(f"tests/tiers.yaml: {error}")
+for f in listed_files + guard_files:
+    s = kf.suite_of(f)
+    if s and f not in by_path[s]:
+        by_path[s].append(f)
 for s in SUITES:
-    files = [f for f in pick[s] if os.path.exists(f)]
+    files = [f for f in by_path[s] if os.path.exists(f)]
     open(os.path.join(out, f"{s}.files"), "w").write("\n".join(files) + ("\n" if files else ""))
     print(f"{tier}: {s} {len(files)} files")
 PY
 [ $? -eq 0 ] || exit 2
 
-# Only some suites (CI's p0 job runs engine,api; its web job runs the whole web suite).
-for s in engine api web; do
-  case ",${TEST_TIER_SUITES:-engine,api,web}," in *",$s,"*) ;; *) : > "$OUT/$s.files" ;; esac
+# Only some suites (CI's p0 job runs the ones ci.yml's TEST_TIER_SUITES names; its web job
+# runs the whole web suite through scripts/web-unit-ci.py).
+SUITES_ON="${TEST_TIER_SUITES:-engine,api,worker,scripts,web}"
+for s in engine api worker scripts web; do
+  case ",$SUITES_ON," in *",$s,"*) ;; *) : > "$OUT/$s.files" ;; esac
 done
 
 # ---- database ------------------------------------------------------------------------------
@@ -123,7 +163,7 @@ for k, v in (("PGU", u.username or ""), ("PW", pw), ("PGHOSTNAME", u.hostname or
 PY
 )" || { echo "BOSS_TEST_PG_URL: cannot reach Postgres or create the test databases" >&2; exit 2; }
 else
-  PGU=$(docker exec "$DBC" printenv POSTGRES_USER 2>/dev/null) || { echo "no $DBC container" >&2; exit 2; }
+  PGU=$(docker exec "$DBC" printenv POSTGRES_USER 2>/dev/null) || { echo "no $DBC container: start the test Postgres with \`boss dev up\` (or set BOSS_TEST_PG_URL)" >&2; exit 2; }
   PGP=$(docker exec "$DBC" printenv POSTGRES_PASSWORD)
   PORT=$(docker port "$DBC" 5432 | head -1 | awk -F: '{print $NF}')
   PW=$(python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.argv[1],safe=""))' "$PGP")
@@ -143,10 +183,25 @@ summary=()
 # ---- engine (one database: its fixtures expect the seeded boss_test) -------------------------
 if [ -s "$OUT/engine.files" ]; then
   t0=$(secs)
-  BOSS_TEST_DATABASE_URL="postgresql+psycopg://$PGU:$PW@$PGHOSTNAME:$PORT/$DBP" PYTHONPATH=.:engine \
-    perl -e 'alarm shift; exec @ARGV' "$RUN_TIMEOUT" python3 -m pytest -q -p no:cacheprovider -W ignore $(cat "$OUT/engine.files") -rfE > "$OUT/engine.log" 2>&1
+  # DATABASE_URL too: a test that falls back to the default engine (ensure_schema) must reach the
+  # same test database, never whatever answers on localhost:5432 on this machine.
+  BOSS_TEST_DATABASE_URL="postgresql+psycopg://$PGU:$PW@$PGHOSTNAME:$PORT/$DBP" \
+  DATABASE_URL="postgresql+psycopg://$PGU:$PW@$PGHOSTNAME:$PORT/$DBP" PYTHONPATH=.:engine \
+    perl -e 'alarm shift; exec @ARGV' "$RUN_TIMEOUT" python3 -m pytest -q -p no:cacheprovider -W ignore $(cat "$OUT/engine.files") -rA > "$OUT/engine.log" 2>&1
   summary+=("engine $(( $(secs) - t0 ))s: $(tail -1 "$OUT/engine.log")")
 fi
+
+# ---- worker and scripts (no database of their own; each its own run) --------------------------
+# worker: its tests fake the control plane; the one real-Postgres test opts in with
+# BOSS_RUN_WORKER_ACK_TEST=1. `boss_worker` is importable both ways.
+for s in worker scripts; do
+  [ -s "$OUT/$s.files" ] || continue
+  t0=$(secs)
+  BOSS_TEST_DATABASE_URL="postgresql+psycopg://$PGU:$PW@$PGHOSTNAME:$PORT/$DBP" PYTHONPATH=.:engine:apps/worker \
+    perl -e 'alarm shift; exec @ARGV' "$RUN_TIMEOUT" \
+    python3 -m pytest -q -p no:cacheprovider -W ignore $(cat "$OUT/$s.files") -rA > "$OUT/$s.log" 2>&1
+  summary+=("$s $(( $(secs) - t0 ))s: $(tail -1 "$OUT/$s.log")")
+done
 
 # ---- api (sharded) and web (in parallel with it) ---------------------------------------------
 t0=$(secs)
@@ -155,7 +210,7 @@ if [ -s "$OUT/api.files" ]; then
   for i in $(seq 0 $(( N - 1 ))); do
     [ -s "$OUT/api.shard$i" ] || continue
     ( DATABASE_URL="$APISCHEME://$PGU:$PW@$PGHOSTNAME:$PORT/${DBP}_t$(( i + 1 ))" PYTHONPATH=.:engine \
-        perl -e 'alarm shift; exec @ARGV' "$RUN_TIMEOUT" python3 -m pytest -q -p no:cacheprovider -W ignore $(cat "$OUT/api.shard$i") -rfE > "$OUT/api$i.log" 2>&1 ) &
+        perl -e 'alarm shift; exec @ARGV' "$RUN_TIMEOUT" python3 -m pytest -q -p no:cacheprovider -W ignore $(cat "$OUT/api.shard$i") -rA > "$OUT/api$i.log" 2>&1 ) &
   done
 fi
 if [ -s "$OUT/web.files" ]; then
@@ -171,40 +226,48 @@ if [ -s "$OUT/web.files" ]; then
   summary+=("web $(grep web_secs "$OUT/web.log" | awk '{print $2}')s: $(grep -E 'Tests +[0-9]' "$OUT/web.log" | tail -1 | sed 's/^ *//')")
 fi
 
-# ---- only NEW failures fail the gate ----------------------------------------------------------
+# ---- the baselines judge the run (scripts/known_failures.py) ----------------------------------
 # Only real test ids (a log line such as "ERROR boss.api:main.py:1728" is not a failed test).
-cat "$OUT"/engine.log "$OUT"/api[0-9]*.log 2>/dev/null | grep -E "^(FAILED|ERROR) " | sed 's/ - .*//' | awk '{print $2}' \
-  | grep -E '^(engine|apps)/' > "$OUT/failed.txt"
-grep -E "^ FAIL " "$OUT/web.log" 2>/dev/null | sed 's/^ FAIL  *//; s/ >.*//' >> "$OUT/failed.txt"
-# A pytest run that never printed its summary ("N passed in 12.3s") crashed or was killed: that
-# is a failure too, never a silent pass. "no tests ran" IS a summary, and it is a failure: an
-# empty file on the tier must not pass the gate (BOSSAPP-972).
-for log in "$OUT"/engine.log "$OUT"/api[0-9]*.log; do
-  [ -f "$log" ] || continue
+PYLOGS=$(ls "$OUT"/engine.log "$OUT"/worker.log "$OUT"/scripts.log "$OUT"/api[0-9]*.log 2>/dev/null)
+cat $PYLOGS /dev/null | grep -E "^(FAILED|ERROR) " | sed 's/ - .*//' | awk '{print $2}' \
+  | grep -E '^(engine|apps|scripts)/' > "$OUT/failed.txt"
+grep -E "^ FAIL " "$OUT/web.log" 2>/dev/null | sed -E 's/^ FAIL  *//; s/ (>|\[).*//' | sed 's#^#apps/web/#' >> "$OUT/failed.txt"
+# What ran: every file of every suite that ran. A run that never printed its summary ("N passed
+# in 12.3s") crashed or was killed: that is a failure too, never a silent pass, and its files are
+# "unfinished" (their baseline lines cannot be judged stale). "no tests ran" IS a summary, and it
+# is a failure: an empty file on the tier must not pass the gate (BOSSAPP-972).
+cat "$OUT"/engine.files "$OUT"/worker.files "$OUT"/scripts.files "$OUT"/api.files "$OUT"/web.files 2>/dev/null \
+  | sort -u > "$OUT/ran.txt"
+: > "$OUT/unfinished.txt"
+for log in $PYLOGS; do
+  name=$(basename "$log" .log)
+  case "$name" in api[0-9]*) files="$OUT/api.shard${name#api}" ;; *) files="$OUT/$name.files" ;; esac
   if grep -qE 'no tests ran.* in [0-9.]+s' "$log"; then
-    echo "$(basename "$log" .log): no tests ran (see $log)" >> "$OUT/failed.txt"
+    echo "$name: no tests ran (see $log)" >> "$OUT/failed.txt"
   fi
-  grep -qE '(passed|failed|error|skipped|no tests ran).* in [0-9.]+s' "$log" \
-    || echo "$(basename "$log" .log): the pytest run did not finish (see $log)" >> "$OUT/failed.txt"
+  # A collection error interrupts the whole session: nothing else in that run was judged.
+  if grep -q 'Interrupted: ' "$log" || ! grep -qE '(passed|failed|error|skipped|no tests ran).* in [0-9.]+s' "$log"; then
+    echo "$name: the pytest run did not finish (see $log)" >> "$OUT/failed.txt"
+    cat "$files" >> "$OUT/unfinished.txt" 2>/dev/null
+  fi
 done
+if [ -s "$OUT/web.files" ] && ! grep -qE 'Test Files ' "$OUT/web.log" 2>/dev/null; then
+  echo "web: the vitest run did not finish (see $OUT/web.log)" >> "$OUT/failed.txt"
+  cat "$OUT/web.files" >> "$OUT/unfinished.txt"
+fi
 sort -u -o "$OUT/failed.txt" "$OUT/failed.txt"
-KNOWN="tests/known-failures.txt"
-if [ -f "$KNOWN" ]; then grep -vE '^\s*(#|$)' "$KNOWN" | sort -u > "$OUT/known.txt"; else : > "$OUT/known.txt"; fi
-# A known entry may name a whole file (prefix match) or one test id.
-python3 - "$OUT" <<'PY'
-import sys, os
-out = sys.argv[1]
-known = [l.strip() for l in open(os.path.join(out, "known.txt")) if l.strip()]
-failed = [l.strip() for l in open(os.path.join(out, "failed.txt")) if l.strip()]
-new = [f for f in failed if not any(f == k or f.startswith(k + "::") or f == k.split("::")[0] and "::" not in k for k in known)]
-old = [f for f in failed if f not in new]
-open(os.path.join(out, "new.txt"), "w").write("\n".join(new) + ("\n" if new else ""))
-print(f"known failures (not counted): {len(old)}")
-print(f"NEW failures: {len(new)}")
-for f in new[:40]:
-    print("  " + f)
-PY
+# What passed (pytest -rA lists every test's outcome): a baseline line is stale only when a test
+# it names PASSED here, never because it was skipped. A web file that ran and did not fail passed.
+cat $PYLOGS /dev/null | grep -E "^PASSED " | awk '{print $2}' > "$OUT/passed.txt"
+if [ -s "$OUT/web.files" ]; then
+  grep -vxF -f <(sed 's/::.*//' "$OUT/failed.txt") "$OUT/web.files" >> "$OUT/passed.txt" || true
+fi
+python3 scripts/known_failures.py judge --ran "$OUT/ran.txt" --failed "$OUT/failed.txt" \
+  --passed "$OUT/passed.txt" --unfinished "$OUT/unfinished.txt" --suites "$SUITES_ON" \
+  > "$OUT/judge.txt" 2>&1
+JUDGED=$?
+cat "$OUT/judge.txt"
 
 echo "== tier $TIER  (logs: $OUT)"
 for line in "${summary[@]}"; do echo "  $line"; done
-[ -s "$OUT/new.txt" ] && exit 1 || exit 0
+[ "$JUDGED" -eq 0 ] && exit 0 || exit 1

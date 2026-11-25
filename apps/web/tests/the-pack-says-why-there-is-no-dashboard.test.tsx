@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The pack says why there is no dashboard, beside "No dashboard link yet",
  * not only on that span's title. A blank or whitespace why says nothing.

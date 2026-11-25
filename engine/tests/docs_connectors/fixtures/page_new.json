@@ -1,0 +1,25 @@
+{
+  "id": "555",
+  "status": "current",
+  "title": "New Page",
+  "spaceId": "98",
+  "parentId": null,
+  "authorId": "u1",
+  "createdAt": "2026-01-01T00:00:00.000Z",
+  "version": {
+    "number": 1,
+    "createdAt": "2026-11-10T09:00:00.000Z",
+    "message": "",
+    "authorId": "u1"
+  },
+  "body": {
+    "storage": {
+      "representation": "storage",
+      "value": "<p>x</p>"
+    }
+  },
+  "_links": {
+    "webui": "/spaces/ENG/pages/555/New+Page",
+    "base": "https://acme.atlassian.net/wiki"
+  }
+}

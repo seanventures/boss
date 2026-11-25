@@ -216,7 +216,8 @@ def explain_version(
             from .deploy_policy import step_answer
 
             deploy = step_answer(connection, project_id, step)
-        by_policy = bool(deploy and deploy["who"] == "policy")
+        # Dev autonomy's agent answers a deploy to a development target (BOSSAPP-1441).
+        by_policy = bool(deploy and deploy["who"] in ("policy", "agent"))
         if (effective == "manual" or spec_of.get("is_gate")) and not by_panel and not by_policy:
             gates += 1
 
@@ -290,6 +291,31 @@ def explain_version(
             "next": list(step.get("next") or []),
         })
 
+    # THE STORED SCHEMA, VERBATIM. `you_must_supply` was rebuilt from which steps read
+    # `from_input`, so a version whose input_schema said {cases, url} was described with
+    # whatever the steps happened to reference. The start form renders from the schema, and so
+    # does the start check; the description now says exactly that.
+    schema = spec.get("input_schema") if isinstance(spec.get("input_schema"), dict) else {}
+    if schema:
+        from .workflows import declared_input_names
+
+        properties = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
+        json_schema = "required" in schema or "properties" in schema
+        required_names = [str(n) for n in schema.get("required") or []] if json_schema else []
+        names = list(dict.fromkeys(
+            [*properties, *required_names] if json_schema else declared_input_names(schema)))
+        stored_inputs = [
+            {"name": str(n), "required": str(n) in required_names,
+             **({"title": properties[n].get("title")} if isinstance(properties.get(n), dict)
+                and properties[n].get("title") else {}),
+             **({"description": properties[n].get("description")}
+                if isinstance(properties.get(n), dict) and properties[n].get("description")
+                else {})}
+            for n in names]
+        if json_schema:
+            supply = [i["name"] for i in stored_inputs if i["required"]]
+    else:
+        stored_inputs = []
     blocked = [
         f"“{s['label']}” has no source for {i['name']!r}"
         for s in steps for i in s["inputs"] if i["required"] and not i["ready"]
@@ -307,6 +333,7 @@ def explain_version(
         "steps": steps,
         # The three questions asked, answered at the top rather than inferred from the list.
         "you_must_supply": supply,
+        "inputs": stored_inputs,
         "results": sorted(set(results)),
         "agents": agents,
         "gates": gates,

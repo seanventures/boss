@@ -35,7 +35,7 @@ export const UNPRICED_CHOICES: { key: UnpricedPolicy; label: string; hint: strin
   { key: "block", label: "Block it", hint: "Paid work waits and asks you" },
 ];
 
-const dollars = (micros: number | null | undefined) =>
+const dollars = (micros: number | string | null | undefined) =>
   micros === null || micros === undefined ? "" : String(Math.round(Number(micros) / 10_000) / 100);
 const MONEY = { min: 0.01, max: 1_000_000, cents: true, money: true } as const;
 const BURST = { min: 0, max: 1_000_000, cents: true, money: true } as const;

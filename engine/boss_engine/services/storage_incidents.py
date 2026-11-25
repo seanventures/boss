@@ -91,7 +91,7 @@ def explain_cause(sample: Mapping[str, Any], forecast: Any,
         candidates.append((pg_temp * 3, "pg.temp_spill",
                            f"Postgres wrote {pg_temp:.0f} GB of temporary files: a query ran with "
                            "no temp-space limit."))
-    if backups > 0:
+    if backups >= 1:
         candidates.append((backups, "backups.no_retention",
                            f"{backups_n or 'Many'} backups hold {backups:.0f} GB; one is written per "
                            "upgrade and nothing removed the old ones."))
@@ -155,6 +155,26 @@ def level_of(incident: Optional[Mapping[str, Any]]) -> str:
     if not incident or incident.get("status") == "resolved":
         return "ok"
     return "critical" if incident.get("severity") == "critical" else "warn"
+
+
+def activity_text(incident: Mapping[str, Any]) -> str:
+    status = incident.get("status")
+    if status == "resolved":
+        return "Storage recovered"
+    if status == "asking":
+        return "Infra Agent needs one answer"
+    if status == "resuming":
+        return "Infra Agent is resuming work"
+    reachable = bool((incident.get("helper") or {}).get("reachable"))
+    plan = _json(incident.get("plan"), []) or []
+    if any(step.get("state") == "running" and (step.get("where") == "api" or reachable)
+           for step in plan):
+        return "Infra Agent is cleaning"
+    if not reachable:
+        return "Cleanup blocked: host helper unavailable"
+    if any(step.get("state") in ("planned", "queued") for step in plan):
+        return "Cleanup queued"
+    return "Cleanup exhausted: free space by hand"
 
 
 def last_resolved(connection: Any, host_id: str) -> Optional[dict[str, Any]]:
@@ -346,7 +366,10 @@ def on_level(connection: Any, *, host_id: str, level: str, previous: str,
         return out
 
     inc_id = inc["id"]
-    changes: dict[str, Any] = {"free_pct_now": free_now}
+    # The cause stays the one the incident opened (or escalated) with: the rule a person
+    # ticks, and the report's "learned", are filed under it (review of PR #300).
+    changes: dict[str, Any] = {"free_pct_now": free_now,
+                               "host_label": sample.get("host_label") or inc.get("host_label")}
     if level == "critical" and inc.get("severity") != "critical":
         # Escalate: the open incident is reused (one per host).
         cause_key, cause_text = explain_cause(sample, forecast, thresholds)
@@ -364,6 +387,9 @@ def on_level(connection: Any, *, host_id: str, level: str, previous: str,
         _admit_agent(connection, inc)
         out.update({"action": "escalated"})
         return out
+    if level == "warn" and inc.get("severity") == "critical":
+        changes["severity"] = "warn"
+        changes["status"] = "asking" if inc.get("status") == "asking" else "warn"
     if level == "ok":
         _update(connection, inc_id, **changes)
         resolve(connection, inc_id, reason="free space is back above target")

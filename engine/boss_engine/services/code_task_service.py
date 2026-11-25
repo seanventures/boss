@@ -37,7 +37,7 @@ from .run_terminal import on_status_written
 from .jobs import JOB_PRIORITY_BACKGROUND, JOB_PRIORITY_REQUESTED
 from .core import emit_event
 from .core import emit_event, make_id
-from .github_app_adapter import GitHubAppAdapter
+from .github_app_adapter import GitHubNotConnected
 from .iac_verify import is_iac_task
 from .llm_telemetry import clear_llm_context, record_llm_call, set_llm_context
 from .agent_acts import pr_trailers as _pr_trailers
@@ -508,6 +508,67 @@ def is_simulated_run(run: Optional[dict]) -> bool:
     return bool(run.get("status") == SIMULATED_FIXTURE_STATUS or spec.get("simulated"))
 
 
+def _will_start_outer_run(fctx: Optional[dict]) -> bool:
+    """Does this build start its project's OUTER workflow run (a new piece of work), or is it more
+    work inside a run that already exists? One rule, read where the person is asked for consent
+    (so the one consent covers that workflow) and where the run is started.
+
+    `root_run_id` is deliberately NOT a continuation: a web-app build mints one for the scaffold
+    branch before any task exists, so the FIRST task of a new app carries one."""
+    fctx = fctx or {}
+    _chose_a_workflow = bool(fctx.get("workflow_version_id"))
+    # A LANE OF A MULTI-REPO CHANGE (change_set_id) is governed by its change set.
+    _continuation = ("is_followup", "parent_run_id", "deferred_from_run", "qa_benchmark", "change_set_id")
+    governed = bool(fctx.get("workflow_run_id")) or (
+        not _chose_a_workflow and bool((fctx.get("origin") or {}).get("workflow_run_id")))
+    return (not governed) and (_chose_a_workflow or (
+        not any(fctx.get(k) for k in _continuation)
+        # Slice 1 of a decomposition IS the project; slices 2..N are the rest of the same one.
+        and int(fctx.get("decomposition_index") or 1) <= 1
+    ))
+
+
+def _governing_workflow(connection: Any, project_id: str, task_id: Optional[str],
+                        chosen_id: Optional[str]) -> Optional[dict]:
+    """The workflow a build's outer run follows: the one the person picked, else the mapping."""
+    from .workflows import workflow_by_version, workflow_for_code_task
+
+    governing = None
+    if chosen_id:
+        governing = workflow_by_version(connection, project_id, str(chosen_id))
+    if not governing:
+        governing = workflow_for_code_task(connection, project_id=project_id, task_id=task_id)
+    return governing or None
+
+
+def _delivery_workflow_needs(connection: Any, project_id: str, task_id: Optional[str],
+                             fctx: Optional[dict], repos: list[str]) -> tuple[list[str], frozenset, list[str]]:
+    """(agent roles, permissions, repositories) the build's delivery workflow will use, so the ONE
+    consent the person gives at the start names them (operator, 2026-11-19: starting the
+    workflow never needs its own approval). Only agents this project has: a role with no agent
+    would make identity not apply at all (consent._agents). Empty when nothing resolves."""
+    from boss_engine.identity import consent as _consent
+    from boss_engine.identity import runs as _identity_runs
+    from .workflows import delivery_workflow_spec
+
+    try:
+        with _savepoint(connection):
+            governing = _governing_workflow(connection, project_id, task_id,
+                                            (fctx or {}).get("workflow_version_id"))
+            if not governing or not governing.get("version_id"):
+                return [], frozenset(), []
+            spec = delivery_workflow_spec(connection, project_id, str(governing["version_id"]))
+            if not spec:
+                return [], frozenset(), []
+            roles, perms, wf_repos = _consent.workflow_needs(
+                connection, project_id, spec, {"repository": repos[0]} if repos else {})
+            roles = [r for r in roles if _identity_runs.agent_for_role(connection, project_id, r)]
+            return roles, perms, list(wf_repos)
+    except Exception:  # noqa: BLE001 — the build's own consent still stands; the run says the rest
+        logger.warning("delivery workflow needs not read for %s", project_id, exc_info=True)
+        return [], frozenset(), []
+
+
 def start_code_task(
     connection, *, project_id: str, task_id: Optional[str], title: str,
     instructions: str, acceptance_criteria: list[str], test_commands: list[str],
@@ -524,6 +585,8 @@ def start_code_task(
     automatic_retry: bool = False,
     continuation: bool = False,
     outcome: Optional[dict] = None,
+    run_after_seconds: int = 0,
+    remediate: Optional[dict] = None,
 ) -> str:
     """Create the durable run row and enqueue the single `code.task` job.
 
@@ -690,9 +753,10 @@ def start_code_task(
                 _wf = _parent_workflow_run(connection, parent_run)
             identity_acting = _consent.carry_retry_authority(
                 connection, parent_run_id=parent_run, new_run_id=run_id, project_id=project_id,
-                role_keys=[builder], permissions=_consent.CODE_TASK_PERMISSIONS,
+                role_keys=[builder], permissions=_consent.code_task_permissions(
+                    _consent_repos(owner, repo, repo_host), repo_host),
                 repos=_consent_repos(owner, repo, repo_host), by_boss=automatic_retry or continuation,
-                workflow_run_id=_wf, gap=authority_gap)
+                workflow_run_id=_wf, gap=authority_gap, same_build=automatic_retry)
         if automatic_retry and identity_acting is None:
             # NOT STARTED rather than started to be refused: no person's grant covers this
             # attempt, so identity would block it the moment it ran (crun_da5f6f72: "No one's
@@ -704,10 +768,29 @@ def start_code_task(
     if not simulated and identity_acting is None:
         from boss_engine.identity import consent as _consent
 
+        _repos = list(_consent_repos(owner, repo, repo_host))
+        _roles, _perms, _covers = [builder], set(_consent.code_task_permissions(_repos, repo_host)), None
+        from boss_engine.identity import lineage as _start_lineage
+
+        _ctx = _start_lineage.current_context()
+        if _will_start_outer_run(finalize_ctx) and _ctx is not None and _ctx.is_human_session:
+            # A person at the console (Easy Mode, a template, Try a sample, New work). A key or an
+            # MCP client keeps today's ask (the builder): it cannot see a sheet, and a standing
+            # grant it already holds must not stop covering its builds.
+            # ONE CONSENT FOR THE WHOLE DELIVERY WORKFLOW: the build, and every step of the
+            # workflow run it starts below (tests, review, preview, staging deploy, smoke,
+            # monitoring) — the outer run inherits this grant and never asks on its own.
+            _wf_roles, _wf_perms, _wf_repos = _delivery_workflow_needs(
+                connection, project_id, task_id, finalize_ctx, _repos)
+            if _wf_roles:
+                _roles += [r for r in _wf_roles if r not in _roles]
+                _perms |= set(_wf_perms)
+                _repos += [r for r in _wf_repos if r not in _repos]
+                _covers = _consent.DELIVERY_COVERS
         identity_acting = _consent.require_authority(
-            org_id=None, project_id=project_id, role_keys=[builder],
-            permissions=_consent.CODE_TASK_PERMISSIONS, repos=_consent_repos(owner, repo, repo_host),
-            task=title, run_id=f"run_ct:{run_id}", db=connection)
+            org_id=None, project_id=project_id, role_keys=_roles,
+            permissions=frozenset(_perms), repos=_repos,
+            task=title, run_id=f"run_ct:{run_id}", db=connection, covers=_covers)
     if substrate:  # per-run substrate override (retry fallback: microvm infra-failure -> local)
         spec["substrate"] = substrate
     if repo_host:  # BOSS-267: per-task SCM provider (github default; bitbucket, ...)
@@ -732,7 +815,15 @@ def start_code_task(
         spec["model_config"] = model_config
     if isinstance(repair_retries, int):  # VAG Phase 3: per-run repair-loop budget override
         spec["repair_retries"] = repair_retries
-    bench = (finalize_ctx or {}).get("qa_benchmark") if isinstance((finalize_ctx or {}).get("qa_benchmark"), dict) else {}
+    if isinstance(remediate, dict) and str(remediate.get("input") or "").strip():
+        # A REMEDIATION (input_fidelity): its input, output, answer files and validator.
+        # `content` / `original_path` / `start_from`: the run STARTED FROM A FILE
+        # (start_from_file) — the original, fixed in place at the target.
+        spec["remediate"] = {k: remediate[k] for k in ("input", "output", "answer_files",
+                                                       "validator", "content", "original_path",
+                                                       "start_from", "content_sha256")
+                             if remediate.get(k)}
+    bench =(finalize_ctx or {}).get("qa_benchmark") if isinstance((finalize_ctx or {}).get("qa_benchmark"), dict) else {}
     if bench.get("app_root"):
         spec["app_root"] = bench["app_root"]
     if bench.get("project_kind"):
@@ -853,12 +944,7 @@ def start_code_task(
     _already_governed = bool(run_finalize.get("workflow_run_id"))
     # A LANE OF A MULTI-REPO CHANGE (multirepo/change_sets.py) is governed by its change set:
     # never an outer workflow run of its own per repository.
-    _continuation = ("is_followup", "parent_run_id", "deferred_from_run", "qa_benchmark", "change_set_id")
-    _is_new_project = (not _already_governed) and (_chose_a_workflow or (
-        not any(run_finalize.get(k) for k in _continuation)
-        # Slice 1 of a decomposition IS the project; slices 2..N are the rest of the same one.
-        and int(run_finalize.get("decomposition_index") or 1) <= 1
-    ))
+    _is_new_project = (not _already_governed) and _will_start_outer_run(run_finalize)
 
     try:
         from .workflows import workflow_by_version, workflow_for_code_task
@@ -1012,7 +1098,11 @@ def start_code_task(
         jobs.create_job(connection, project_id=project_id, task_id=task_id,
                         kind="code.task",
                         priority=code_task_job_priority(connection, run_finalize, job_priority),
-                        payload={"run_id": run_id})
+                        payload={"run_id": run_id},
+                        # NOT BEFORE, IN THE SAME WRITE AS THE JOB (stranger test r6): a backoff
+                        # written after the job was queued let the worker take it at once.
+                        **({"run_after_seconds": int(run_after_seconds)}
+                           if run_after_seconds and run_after_seconds > 0 else {}))
     emit_event(connection, project_id, "code_task.started", "boss", "code_task_run", run_id,
                {"task_id": task_id, "title": title, "repo": f"{owner}/{repo}"})
 
@@ -1027,63 +1117,19 @@ def start_code_task(
     # `build` waits on this code task instead of starting a second one, and — when the project
     # came from a panel — `meeting` waits on that panel instead of convening another.
     if _is_new_project:
-        try:
-            from .workflows import start_project_run
-
-            origin = run_finalize.get("origin") or {}
-            # UNDER THE BUILD'S OWN AUTHORITY. Started outside it, a build asked for with an API
-            # key (or by MCP or an agent) gave its outer run no recorded authority
-            # (consent.require_for_workflow sees no grant), so every later step that acts on the
-            # branch ran bare as the worker and was refused: on boss-1 all 18 launch-readiness and
-            # More tests attempts in ten days, "needs Retry builds (code_task:retry)", while the
-            # person's standing grant held it. The run now records the grant the build runs under.
-            def _start_outer_run():
-                return start_project_run(
-                    connection,
-                    project_id=project_id,
-                    actor="boss",
-                    title=title,
-                    directive=instructions,
-                    # THE SAME WORKFLOW THE TASK RECORDS. It was already resolved above —
-                    # honouring the picker on the New project form, then any mapping, then the
-                    # default. Letting start_project_run resolve it a second time would let the
-                    # two disagree: the project page naming one workflow and the run that
-                    # governs it following another.
-                    workflow_version_id=(run_finalize.get("workflow") or {}).get("version_id"),
-                    extra_input={
-                        "acceptance_criteria": acceptance_criteria,
-                        "test_commands": test_commands,
-                        "repository": repo,
-                        "adopt_code_task_run_id": run_id,
-                        "adopt_meeting_run_id": origin.get("meeting_run_id"),
-                        "adopt_discovery_run_id": origin.get("discovery_run_id"),
-                        "adopt_decision_id": origin.get("decision_id"),
-                    },
-                )
-
-            from boss_engine.identity import consent as _consent_errors
-
-            try:
-                with (_identity_lineage.acting(identity_acting) if identity_acting is not None
-                      else _identity_lineage.nullcontext()):
-                    started = _start_outer_run()
-            except (_consent_errors.ConsentRequired, _consent_errors.AuthorityLost) as exc:
-                # The build's grant does not cover every step the workflow will run (a deploy
-                # agent it never named). The build must still have its run; its later steps then
-                # ask for authority as they always did. Said, not silent.
-                logger.warning("outer run for %s starts without the build's authority: %s",
-                               run_id, type(exc).__name__)
-                started = _start_outer_run()
-            if started:
-                connection.execute(
-                    sql("UPDATE code_task_runs SET finalize_ctx = "
-                        "COALESCE(finalize_ctx,'{}'::jsonb) || "
-                        "jsonb_build_object('workflow_run_id', CAST(:w AS text)) "
-                        "WHERE id = :r"),
-                    {"w": started.get("id"), "r": run_id},
-                )
-        except Exception as exc:  # noqa: BLE001 — a project must start without an outer run
-            logger.warning("could not start the outer workflow run for %s: %s", run_id, exc)
+        # UNDER THE BUILD'S OWN AUTHORITY, and never a second consent. Started outside it, a build
+        # asked for with an API key (or by MCP or an agent) gave its outer run no recorded
+        # authority, so every later step that acts on the branch ran bare as the worker and was
+        # refused (boss-1: 18 launch-readiness / More tests attempts in ten days). Started under it
+        # but asked for its own consent, a person's Easy Mode build was refused `consent_required`
+        # for scope workflow_run and the refusal was swallowed: the build ran with no workflow, so
+        # its deploy, smoke test and monitoring never happened (2026-11-19). The run now INHERITS
+        # the grant the build runs under (consent.inherit_build_authority).
+        start_delivery_workflow(
+            connection, project_id=project_id, task_id=task_id, run_id=run_id, title=title,
+            instructions=instructions, acceptance_criteria=acceptance_criteria,
+            test_commands=test_commands, repo=repo, finalize_ctx=run_finalize,
+            identity_acting=identity_acting)
 
         # AND SOMEBODY LEADS IT.
         #
@@ -1115,6 +1161,160 @@ def start_code_task(
         except Exception as exc:  # noqa: BLE001 — an unled build is better than no build
             logger.warning("could not put a captain on %s: %s", run_id, exc)
     return run_id
+
+
+WORKFLOW_NOT_STARTED_ACTION = "start_delivery_workflow"
+
+
+def _savepoint(connection: Any) -> Any:
+    """A failure inside must not abort the build's own transaction (Postgres would refuse every
+    later statement of the start). A persistence without savepoints just runs the block."""
+    import contextlib
+
+    nested = getattr(connection, "begin_nested", None)
+    return nested() if callable(nested) else contextlib.nullcontext()
+
+
+def start_delivery_workflow(
+    connection: Any, *, project_id: str, task_id: Optional[str], run_id: str, title: str,
+    instructions: str, acceptance_criteria: Any = None, test_commands: Any = None,
+    repo: Optional[str] = None, finalize_ctx: Optional[dict] = None, identity_acting: Any = None,
+    raise_card: bool = True,
+) -> Optional[dict]:
+    """Start (or attach) the OUTER workflow run of the build `run_id`, adopting that build.
+
+    Every path a person starts work on (Easy Mode, a template, Try a sample, New work, a PRD's
+    approval) comes here. The run inherits the authority the build was started under, so it
+    never asks for its own consent. If it still cannot start, that is NEVER only a log line: the
+    build records why (`finalize_ctx.workflow_start_error`), an event says so, and the person
+    gets one card — "Start <app>'s delivery workflow" — whose approval starts it (the same call).
+
+    Returns the started run, or None (no workflow resolves for the project, or it did not start)."""
+    from boss_engine.identity import consent as _consent
+    from boss_engine.identity import lineage as _identity_lineage
+    from .workflows import start_project_run
+
+    fctx = finalize_ctx if finalize_ctx is not None else {}
+    origin = fctx.get("origin") or {}
+    started = None
+    error: Optional[str] = None
+    consent_needed = False
+    try:
+        with _savepoint(connection):
+            with (_identity_lineage.acting(identity_acting) if identity_acting is not None
+                  else _identity_lineage.nullcontext()):
+                started = start_project_run(
+                    connection,
+                    project_id=project_id,
+                    actor="boss",
+                    title=title,
+                    directive=instructions,
+                    # THE SAME WORKFLOW THE TASK RECORDS (resolved once, at creation: the picker,
+                    # then any mapping — Easy Mode's own — then the default). Resolving it again
+                    # here would let the project page name one workflow and the run follow another.
+                    workflow_version_id=(fctx.get("workflow") or {}).get("version_id"),
+                    extra_input={
+                        "acceptance_criteria": acceptance_criteria,
+                        "test_commands": test_commands,
+                        "repository": repo,
+                        "adopt_code_task_run_id": run_id,
+                        "adopt_meeting_run_id": origin.get("meeting_run_id"),
+                        "adopt_discovery_run_id": origin.get("discovery_run_id"),
+                        "adopt_decision_id": origin.get("decision_id"),
+                        # A DIRECT CHANGE (POST /v1/code-tasks, no workflow picked): its outer
+                        # run ends when that change merges or closes (workflow_capability_runner.
+                        # _direct_change_ended), never building past it.
+                        **({"direct_change": True} if fctx.get("direct_change") else {}),
+                    },
+                    inherit_authority=identity_acting,
+                )
+    except (_consent.ConsentRequired, _consent.AuthorityLost) as exc:
+        consent_needed = True
+        error = "it needs your OK to act for you" if isinstance(exc, _consent.ConsentRequired) \
+            else "the authority it would run under has ended"
+    except Exception as exc:  # noqa: BLE001 — the build keeps running; the person is told below
+        error = (str(exc) or type(exc).__name__)[:300]
+    if started:
+        connection.execute(
+            sql("UPDATE code_task_runs SET finalize_ctx = "
+                "(COALESCE(finalize_ctx,'{}'::jsonb) - 'workflow_start_error') || "
+                "jsonb_build_object('workflow_run_id', CAST(:w AS text)) WHERE id = :r"),
+            {"w": started.get("id"), "r": run_id},
+        )
+        fctx["workflow_run_id"] = started.get("id")
+        return started
+    if error is None:
+        return None                              # no workflow for this project: nothing to start
+    logger.warning("the delivery workflow of %s did not start: %s", run_id, error)
+    _workflow_not_started(connection, project_id=project_id, task_id=task_id, run_id=run_id,
+                          title=title, error=error, consent_needed=consent_needed,
+                          raise_card=raise_card)
+    return None
+
+
+def _workflow_not_started(connection: Any, *, project_id: str, task_id: Optional[str], run_id: str,
+                          title: str, error: str, consent_needed: bool, raise_card: bool) -> None:
+    """Said, not swallowed: on the build, as an event, and as ONE open card per build."""
+    from .core import create_blocking_decision, now_utc
+    from .decision_actions import OPEN_STATUSES
+
+    try:
+        with _savepoint(connection):
+            app = title or "this app"
+            question = (f"BOSS needs your OK to run {app}'s delivery workflow" if consent_needed
+                        else f"{app}'s delivery workflow did not start")
+            decision_id = None
+            if raise_card:
+                decision_id = connection.execute(sql(
+                    "SELECT id FROM decisions WHERE project_id = :p AND status = ANY(:s) "
+                    "AND recommendation->>'action' = :a AND recommendation->>'run_id' = :r LIMIT 1"),
+                    {"p": project_id, "s": sorted(OPEN_STATUSES), "a": WORKFLOW_NOT_STARTED_ACTION,
+                     "r": run_id}).scalar()
+                if not decision_id:
+                    decision_id = create_blocking_decision(
+                        connection, project_id, task_id, question,
+                        {"action": WORKFLOW_NOT_STARTED_ACTION, "run_id": run_id,
+                         "summary": (f"The build is running, but the workflow that carries it "
+                                     f"through tests, review, preview, deploy and monitoring did "
+                                     f"not start: {error}. Approve to start it now."),
+                         "why": error},
+                        {}, "delivery_workflow_not_started", risk_tier=1)
+            connection.execute(
+                sql("UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb) || "
+                    "jsonb_build_object('workflow_start_error', CAST(:e AS jsonb)) WHERE id = :r"),
+                {"e": json.dumps({"reason": error, "consent_needed": consent_needed,
+                                  "decision_id": decision_id, "at": now_utc().isoformat()}),
+                 "r": run_id})
+            emit_event(connection, project_id, "code_task.workflow_not_started", "boss",
+                       "code_task_run", run_id, {"reason": error, "decision_id": decision_id,
+                                                  "consent_needed": consent_needed})
+    except Exception:  # noqa: BLE001 — the build must still start; the warning above stands
+        logger.exception("could not record that the delivery workflow of %s did not start", run_id)
+
+
+def attach_delivery_workflow(connection: Any, run_id: str, *, raise_card: bool = False) -> Optional[dict]:
+    """RECOVERY: give a build that ran without its outer workflow run one now (the card's
+    approval; any later pass that finds such a build). Adopts the build as it is, under the
+    authority it was started under. None when it already has one or none can be started."""
+    from boss_engine.identity import runs as _identity_runs
+
+    row = connection.execute(sql(
+        "SELECT project_id, task_id, title, spec, finalize_ctx FROM code_task_runs WHERE id = :r"),
+        {"r": run_id}).mappings().first()
+    if row is None:
+        return None
+    fctx = dict(row["finalize_ctx"] or {})
+    if fctx.get("workflow_run_id"):
+        return None
+    spec = dict(row["spec"] or {})
+    return start_delivery_workflow(
+        connection, project_id=str(row["project_id"]), task_id=row["task_id"], run_id=run_id,
+        title=str(row["title"] or spec.get("title") or ""),
+        instructions=str(spec.get("instructions") or row["title"] or ""),
+        acceptance_criteria=spec.get("acceptance_criteria"),
+        test_commands=spec.get("test_commands"), repo=spec.get("repo"), finalize_ctx=fctx,
+        identity_acting=_identity_runs.original_build_authority(connection, run_id),
+        raise_card=raise_card)
 
 
 def work_branch_for(run: dict) -> str:
@@ -1180,6 +1380,18 @@ def change_request(instructions: str, *, title: Optional[str] = None,
             "criteria": [str(c) for c in (criteria or []) if str(c).strip()],
             "requested_by": actor,
             "replaces": [str(x) for x in (replaces or []) if str(x).strip()]}
+
+
+#: A follow-up still on its way: a second identical request joins it instead of queuing another.
+FOLLOWUP_IN_FLIGHT = ("queued", "running", "repairing", "waiting_for_github", "waiting_on_person")
+
+
+def followup_brief_key(instructions: Any) -> str:
+    """The identity of a follow-up's brief: its words, whitespace-normalised."""
+    import hashlib
+
+    words = " ".join(str(instructions or "").split())
+    return hashlib.sha256(words.encode()).hexdigest()[:24]
 
 
 def start_followup_task(
@@ -1333,6 +1545,28 @@ def start_followup_task(
         child_fctx["change_request"] = change_request(
             instructions, title=title, criteria=acceptance_criteria, actor=actor,
             replaces=replaces)
+
+    # ONE FOLLOW-UP PER BRIEF IN FLIGHT (review #224): a second press of "Let BOSS fix these",
+    # another tab, or a retried request queued a second paid build with the very same brief.
+    # The same parent and the same words while one is still queued or running returns that one.
+    brief = followup_brief_key(instructions)
+    child_fctx["followup_brief"] = brief
+    live = None
+    if connection is not None and getattr(getattr(connection, "dialect", None), "name", "") \
+            == "postgresql":
+        # Two presses at once: the second waits for the first's row, then finds it.
+        connection.execute(sql("SELECT pg_advisory_xact_lock(hashtext(:k))"),
+                           {"k": f"followup:{parent_run_id}:{brief}"})
+        in_flight = ", ".join(f"'{s_}'" for s_ in FOLLOWUP_IN_FLIGHT)
+        live = connection.execute(sql(
+            "SELECT id FROM code_task_runs WHERE project_id = :p "
+            "AND finalize_ctx->>'parent_run_id' = :r AND finalize_ctx->>'followup_brief' = :b "
+            f"AND status IN ({in_flight}) ORDER BY created_at DESC LIMIT 1"),
+            {"p": run["project_id"], "r": parent_run_id, "b": brief}).scalar()
+    if live:
+        return {"run_id": str(live), "root_run_id": root, "base_branch": base_branch,
+                "owner": spec.get("owner"), "repo": spec.get("repo"),
+                "process_run_id": None, "existing": True}
 
     run_id = start_code_task(
         connection,
@@ -1991,7 +2225,9 @@ def redeliver_code_task(engine, settings: Settings, run_id: str, *, automatic: b
             carried = _consent.carry_retry_authority(
                 c, parent_run_id=run_id, new_run_id="delivery", project_id=run["project_id"],
                 role_keys=[_identity_runs.resolved_builder({"role_key": spec.get("role_key")}, fctx)],
-                permissions=_consent.CODE_TASK_PERMISSIONS,
+                permissions=_consent.code_task_permissions(
+                    _consent_repos(spec.get("owner"), spec.get("repo"), spec.get("repo_host")),
+                    spec.get("repo_host")),
                 repos=_consent_repos(spec.get("owner"), spec.get("repo"), spec.get("repo_host")),
                 by_boss=True, workflow_run_id=str(fctx.get("workflow_run_id") or "") or None)
         if carried is None:
@@ -2058,6 +2294,17 @@ def redeliver_code_task(engine, settings: Settings, run_id: str, *, automatic: b
             "decision_id": proposal.get("decision_id")}
 
 
+def _within_auto_retry_budget(settings, fctx_prev: dict, automatic: bool) -> bool:
+    """BOSS's own platform retry inside its bound (build_auto_retries): the caller
+    (_retry_after_infra_failure) already caps the lineage's automatic retries, so the breaker
+    below does not refuse the second of them as a "blind" one."""
+    if not automatic:
+        return False
+    from .governed_code_task_service import _auto_retry_limits, auto_retries_made
+
+    return auto_retries_made(fctx_prev) < _auto_retry_limits(settings)[0]
+
+
 def retry_code_task(
     engine, settings: Settings, jobs, run_id: str, *, fix_note: str = "",
     profile: Optional[str] = None, repair_retries: Optional[int] = None,
@@ -2066,6 +2313,11 @@ def retry_code_task(
     title: Optional[str] = None, automatic: bool = False, by_person: bool = False,
     change_request: Optional[dict] = None,
     recheck: bool = False,
+    recheck_bar: Optional[str] = None,
+    platform_retry: bool = False,
+    after_update: bool = False,
+    auto_retry_attempt: Optional[int] = None,
+    run_after_seconds: int = 0,
 ) -> dict:
     """Resume a failed/blocked code task as a NEW attempt in the same lineage — carrying the prior
     attempt's findings forward as explicit feedback so the agent fixes the identified issues instead
@@ -2084,14 +2336,29 @@ def retry_code_task(
     That is the explicit "I know, proceed" the infra circuit breaker below waits for, exactly as
     a fix note is: northgate-gateway's build died twice on a BOSS bug fixed since, the person
     retried the step, and the breaker refused it for want of a note — so the step started
-    nothing and was dead-lettered (wfr_b4dbf0868f224963b793, 2026-11-16)."""
+    nothing and was dead-lettered (wfr_b4dbf0868f224963b793, 2026-11-16).
+
+    `platform_retry=True` (with automatic): BOSS's bounded retry of a build that died of BOSS's
+    own platform error (_retry_after_infra_failure). It is already capped there
+    (build_auto_retries), so the infra circuit breaker lets it through within that cap.
+
+    `after_update=True` (with automatic): BOSS restarting, once, a build that a BOSS bug stopped
+    before BOSS was UPDATED (build_restart_recovery): it ran older code, so the "failed before
+    BOSS last started" refusal does not apply to it."""
     with _transaction(engine) as c:
         prev = load_code_task_run(c, run_id)
         prev_gates_failed = _recorded_failed_gates(c, run_id) if prev is not None else []
-        failed_at = _failed_at(c, run_id) if (prev is not None and automatic) else None
+        # THE RESTART GUARD IS FOR BUILDS THAT DIED. A build that COMPLETED (it opened its pull
+        # request) did not die before a restart: BOSS starting a NEW repair attempt of it — a
+        # merge conflict handed to its builder, with the conflict note — is not a blind re-run
+        # of crashed work (northgate-gateway #9, crun_2bc5ad4b…, refused 2026-11-21 17:45).
+        failed_at = (_failed_at(c, run_id)
+                     if (prev is not None and automatic
+                         and str(prev.get("status") or "") != "completed") else None)
     if prev is None:
         raise ValueError(f"code task run not found: {run_id}")
-    if automatic and failed_at is not None and failed_at < PROCESS_STARTED_AT:
+    if (automatic and not after_update and failed_at is not None
+            and failed_at < PROCESS_STARTED_AT):
         raise RetryNeedsPerson(
             "BOSS did not retry this build by itself: it failed before BOSS last started "
             "(an upgrade or a restart), and a build that died before a restart is only run "
@@ -2157,7 +2424,8 @@ def retry_code_task(
             "NOTE: the previous attempt failed with an infrastructure error on the micro-VM "
             "substrate; this attempt runs on the local substrate (degraded mode).")
     elif (prev_infra and prev_substrate == "local_subprocess" and attempt >= 3
-          and not fix_note and not (by_person and not automatic)):
+          and not fix_note and not (by_person and not automatic)
+          and not (platform_retry and _within_auto_retry_budget(settings, fctx_prev, automatic))):
         raise ValueError(
             f"circuit breaker: {attempt - 1} attempts in this lineage have failed with "
             f"infrastructure errors (last: {str(prev.get('error') or '')[:200]!r}) and the run is "
@@ -2313,9 +2581,16 @@ def retry_code_task(
             base_branch=spec.get("base_branch") or None,
             role_key=spec.get("role_key"),
             finalize_ctx={"parent_run_id": run_id, "root_run_id": root, "attempt": attempt,
+                          # WHICH AUTOMATIC PLATFORM RETRY THIS IS, written WITH the row — never
+                          # after the job is queued (a fast-failing attempt read it as 0).
+                          **({"auto_infra_retry": int(auto_retry_attempt)}
+                             if auto_retry_attempt else {}),
                           # RE-CHECK THIS CHANGE (change_recheck): every gate on the branch
                           # head, no code written, no repair round.
                           **({"recheck_only": True, "recheck_of": run_id} if recheck else {}),
+                          # A re-check AT THE PRODUCTION BAR (change_recheck._bar_asked): raises
+                          # this run's bar so every review seat sits (governed _bar_for_run).
+                          **({"recheck_bar": recheck_bar} if recheck and recheck_bar else {}),
                           # A fresh build of the same brief, not a repair (see `fresh` above).
                           **({"fresh_build": True} if fresh else {}),
                           # AN EXPLICIT CHOICE MAKES THIS A PIECE OF WORK IN ITS OWN RIGHT.
@@ -2431,9 +2706,14 @@ def retry_code_task(
             repair_retries=(repair_retries if isinstance(repair_retries, int)
                             else spec.get("repair_retries")),
             substrate=substrate_override,
+            # THE SAME REPOSITORY HOST: a retry of a build on this machine's local repository
+            # stays local (it lost `local` and was read as a GitHub repository nothing could
+            # clone).
+            repo_host=spec.get("repo_host") or None,
             job_priority=job_priority,
             automatic_retry=automatic,
             outcome=started,
+            run_after_seconds=run_after_seconds,
         )
         if pr_url and new_id:
             # A NEWER BUILD OF THE CHANGE makes every "Fix these" card of its PR a stale
@@ -2837,6 +3117,55 @@ def is_rules_forbidden(reason: str) -> bool:
     return _RULES_403.search(text) is not None
 
 
+#: FAILURES ONLY THE PERSON'S OWN SETUP CAN FIX (stranger test r6, 2026-11-18: a plain-http custom
+#: model's key refusal was classed `infra`, retried 14 times and filed as a BOSS self-fix). Each is
+#: a refusal of what the person connected — a credential, their model's key, a repository's
+#: access — so another attempt meets the same answer: needs_human, never an automatic retry.
+#:
+#: NEVER BOSS'S OWN (review of #227): in egress mode the person never holds the git credential —
+#: BOSS's helper or the run's shim socket does — and the egress proxy answers 401 for its own
+#: run tokens and handles. A failure that names BOSS's egress, its model gateway or its own
+#: tokens is BOSS's, whatever words git or a client wraps it in; so is "could not read Username"
+#: (BOSS's credential helper not answering, every time it was seen).
+_BOSS_OWN_AUTH = re.compile(
+    r"boss-egress|boss_egress|model[ _-]gateway|run_token_|handle_(?:expired|revoked|replay)|"
+    r"egress_not_registered|host_proof_required|could not read username", re.I)
+#: The person's model provider refusing its key, in the provider's own words (a bare "401
+#: Unauthorized" can be BOSS's gateway or egress and is not enough).
+_PROVIDER_KEY_REFUSED = ("invalid x-api-key", "invalid api key", "incorrect api key",
+                         "authentication_error", "invalid_api_key")
+
+
+def _person_side(lowered: str) -> Optional[str]:
+    if "boss only sends keys over https" in lowered:
+        return "credential_plain_http"
+    if "is sent only to" in lowered and "refusing to send" in lowered:
+        return "credential_misdirected"
+    if _BOSS_OWN_AUTH.search(lowered):
+        return None
+    import os
+    from urllib.parse import urlsplit
+
+    egress = (urlsplit(os.environ.get("BOSS_EGRESS_URL") or "").hostname or "").lower()
+    if egress and egress in lowered:
+        return None                          # BOSS's egress under another name
+    if any(s in lowered for s in _PROVIDER_KEY_REFUSED):
+        return "model_auth_rejected"
+    if ("permission to " in lowered and " denied to " in lowered) or re.search(
+            r"repository '[^']*' not found", lowered) or any(
+            s in lowered for s in ("repository not found", "access denied to repository",
+                                   "not have access to this repository")):
+        return "repo_access_denied"          # git: "Permission to o/r.git denied to user."
+    return None
+
+
+def person_side_reason(reason: str) -> Optional[str]:
+    """The reason code when `reason` is a failure only the person's own setup can fix
+    (credential_plain_http, credential_misdirected, model_auth_rejected, repo_access_denied),
+    else None. The one classifier for builds and panels (meeting_service.person_side_failure)."""
+    return _person_side(str(reason or "").lower())
+
+
 def classify_pipeline_exception(reason: str) -> tuple[str, str]:
     """Map a pipeline exception onto the failure taxonomy. Most unexpected exceptions ARE infra
     (platform's fault) — but an agent that exhausted its turn cap is a RECOVERABLE task-shaped
@@ -2854,6 +3183,9 @@ def classify_pipeline_exception(reason: str) -> tuple[str, str]:
         # or account. Not `infra` — an automatic retry meets the same broken engine — and not
         # the code's fault: the operator makes the fix the verdict names, then retries.
         return "needs_human", "harness_unavailable"
+    person = _person_side(r)
+    if person is not None:
+        return "needs_human", person
     if "build services unavailable" in r:
         # The run declared a database BOSS could not give it: an operator starts build-services
         # (or removes the declaration). Retrying without it would only fail the same way.
@@ -2992,6 +3324,16 @@ def _fail(
     emit_event(connection, project_id, "code_task.failed", "boss", "code_task_run", run_id,
                {"reason": reason[:300], "status": status,
                 "failure_class": failure_class, "reason_code": reason_code})
+    if not hasattr(connection, "save_run") and reason_code in (
+            "credential_plain_http", "credential_misdirected", "model_auth_rejected"):
+        try:
+            from . import setup_actions
+
+            with connection.begin_nested():
+                setup_actions.mark_model_refused(
+                    connection, project_id, reason_code=reason_code, error=reason)
+        except Exception:  # noqa: BLE001
+            pass
     return {"status": status, "done": True, "error": reason,
             "failure_class": failure_class, "reason_code": reason_code}
 
@@ -3181,6 +3523,29 @@ def _transient_retry_recorder(engine, run_id: str):
     return record
 
 
+def _clone_token(engine, settings: Settings, *, owner: str, repo: str, project_id: str,
+                 repo_host_kind: str) -> str:
+    """The credential the build clones and pushes with. A repository BOSS keeps on this machine
+    (`local_<project>/<name>`, or the spec's repo_host "local") needs none: asking GitHub for one
+    failed every local build with a 500 on an install without a GitHub token (Easy Mode,
+    2026-11-18). The governed lane makes the same decision."""
+    from .local_repo import is_local_owner as _is_local_owner
+
+    if repo_host_kind == "bitbucket":
+        return settings.bitbucket_token or ""
+    if repo_host_kind == "local" or _is_local_owner(owner):
+        return ""
+    # Shared decision — see repo_token. Was: prefer the App and fail hard when this repo
+    # is outside its installation, even with a working PAT configured.
+    from .github_app_adapter import repo_token
+
+    # THE PROJECT'S OWN REGISTERED CREDENTIAL, as a third source after the App and the
+    # environment. This is the build that used to die on "BOSS_GITHUB_TOKEN is not set"
+    # against a repository the operator had just connected in Setup.
+    with _transaction(engine) as c:
+        return repo_token(settings, owner, repo, connection=c, project_id=project_id)
+
+
 def run_code_task(engine, settings: Settings, jobs, run_id: str,
                   *, fencing_token: Optional[str] = None) -> dict:
     """Execute one full code-task attempt. Safe to re-run after a crash.
@@ -3224,6 +3589,22 @@ def _run_code_task_once(engine, settings: Settings, jobs, run_id: str,
                 _link_env(engine, run_id, _run_project(engine, run_id)), \
                 _transient_retry.reporting(_transient_retry_recorder(engine, run_id)):
             return _run_code_task(engine, settings, jobs, run_id, fencing_token=fencing_token)
+    except GitHubNotConnected as exc:
+        # ONLY "no credential anywhere" -- a token-issue 5xx, a missing private key or a missing
+        # PyJWT still raise (the worker retries, the step logs it at error level).
+        # NEVER A 500 FOR A MISSING GITHUB CREDENTIAL (Easy Mode, crun_3c87d5a3, 2026-11-18): the
+        # step endpoint answered 500 and the worker said "the control plane crashed". It is a
+        # setup gap a person fixes: the run stops in words, with where to fix it.
+        words = (f"This build could not reach its GitHub repository: {exc} Connect GitHub in "
+                 "Setup › GitHub (or connect this repository to the project), then retry.")
+        with _transaction(engine) as c:
+            run = load_code_task_run(c, run_id)
+            if run is not None and run["status"] not in (
+                    "completed", "failed", "cancelled", "blocked", "waiting_on_person"):
+                return _fail(c, run_id, run["project_id"], words, status="blocked",
+                             failure_class="needs_human", reason_code="github_not_connected")
+        return {"status": "blocked", "done": True, "reason": "github_not_connected",
+                "message": words}
     except SandboxUnavailable as exc:
         # Fail closed: a build never runs unisolated when isolation is required.
         with _transaction(engine) as c:
@@ -3444,25 +3825,20 @@ def _run_code_task(engine, settings: Settings, jobs, run_id: str,
     with _transaction(engine) as c:
         _bases = _build_base.resolve_build_base(
             c, project_id=project_id, owner=owner, repo=repo,
-            explicit=spec.get("base_branch"), host_default=_host_default, run_id=run_id)
+            explicit=spec.get("base_branch"), host_default=_host_default, run_id=run_id,
+            # A DEFAULT BRANCH THAT MOVED is followed, and said (BOSSAPP-1439).
+            branch_exists=(getattr(sf.github, "branch_exists", None)
+                           if repo_host_kind == "github" else None))
         emit_event(c, project_id, "code_task.base_branch_resolved", "boss", "code_task_run",
                    run_id, _bases.as_event())
+        if _bases.note:
+            emit_event(c, project_id, "code_task.default_branch_moved", "boss",
+                       "code_task_run", run_id, {"message": _bases.note,
+                                                 "from": _bases.moved_from, "to": _bases.clone})
     base_branch = _bases.clone     # may advance to work_branch below (a repair)
     repo_base_branch = _bases.pr   # the PR's base
-    if repo_host_kind == "bitbucket":
-        token = settings.bitbucket_token or ""
-    else:
-        app = GitHubAppAdapter(settings)
-        # Shared decision — see repo_token. Was: prefer the App and fail hard when this repo
-        # is outside its installation, even with a working PAT configured.
-        from .github_app_adapter import repo_token
-
-        # THE PROJECT'S OWN REGISTERED CREDENTIAL, as a third source after the App and the
-        # environment. This is the build that used to die on "BOSS_GITHUB_TOKEN is not set"
-        # against a repository the operator had just connected in Setup.
-        with _transaction(engine) as c:
-            token = repo_token(settings, owner, repo,
-                               connection=c, project_id=project_id)
+    token = _clone_token(engine, settings, owner=owner, repo=repo, project_id=project_id,
+                         repo_host_kind=repo_host_kind)
 
     # Feedback-iteration: reuse the ROOT run's branch and clone its accumulated code so the
     # model builds ON prior work (not from base), and update the SAME PR. Mirrors the governed

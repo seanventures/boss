@@ -64,9 +64,11 @@ def test_the_built_in_roles_are_the_reviewed_sizes():
     # system_host, held by sys_host alone).
     # +1 ticket:read (2026-11-15): look up, search and browse tickets — what every agent preset
     # holds instead of integration:read. Owner, admin, operator, viewer, auditor; delegable.
-    assert len(Permission) == 211
+    # +2 docs:read and docs:publish (BOSSAPP-1384): search/read the org's Confluence (every human
+    # role, delegable) and propose a page a person approves (owner, admin, operator; delegable).
+    assert len(Permission) == 213
     sizes = {role: len(perms) for role, perms in ROLE_PERMISSIONS.items()}
-    assert sizes == {"owner": 203, "admin": 194, "operator": 100, "viewer": 51, "auditor": 65,
+    assert sizes == {"owner": 205, "admin": 196, "operator": 102, "viewer": 52, "auditor": 66,
                      "system_worker": 3, "system_collector": 1, "system_scim": 1,
                      "system_self_installer": 2, "system_host": 1}
 
@@ -131,4 +133,4 @@ def test_a_catalogue_that_breaks_a_rule_is_refused(mutate, message):
 
 
 def test_the_source_loads():
-    assert len(load().permissions) == 211
+    assert len(load().permissions) == 213

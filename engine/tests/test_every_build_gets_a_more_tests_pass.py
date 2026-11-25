@@ -23,6 +23,23 @@ from boss_engine.services.workflow_catalogue import CATALOGUE, entry_spec
 from .test_workflow_capability_runner import eng, project  # noqa: F401 - fixtures by name
 
 
+@pytest.fixture(autouse=True)
+def _this_project_asks_in_development(eng, project):  # noqa: F811
+    """These pin the promise a Deploy step makes to a PERSON, so the project's autonomy policy
+    says ask in development (BOSSAPP-1441). Dev autonomy's default — the agent ships to a
+    development target and every surface says so — is pinned in test_dev_autonomy_acts_and_logs
+    and test_only_allowed_classes_wait_outside_production."""
+    from boss_engine.services import autonomy_policy
+
+    with eng.begin() as c:
+        autonomy_policy.save(c, kind=autonomy_policy.PROJECT, scope_id=project,
+                             raw={"dev": "ask"}, actor="test")
+    yield
+    with eng.begin() as c:
+        c.execute(text("DELETE FROM autonomy_policies WHERE scope_id = :p"), {"p": project})
+
+
+
 def _cap(step):
     return (step.get("binding") or {}).get("capability")
 
@@ -63,6 +80,13 @@ OPTED_OUT = {
     # Users are failing now: the fix's own criteria demand the regression test and its gates run
     # the whole existing suite; a second pass and its second deploy would hold the recovery.
     "incident_response",
+    # Easy Mode's MVP pipeline (operator, 2026-11-19: "main P1 test pass ... it should be fast
+    # and work MVP"): the build's own tests and its P1 must-haves are the bar; the rest are
+    # follow-ups, so a second pass and a second deploy would only make it slower.
+    "easy_mode_mvp",
+    # Onboard a config file: a config file is judged by the repository's checkers and the
+    # project's contract tests against staging, not a test suite (workflow_catalogue).
+    "onboard_config_file",
 }
 
 
@@ -71,7 +95,7 @@ def test_the_catalogue_workflows_that_build_are_the_ones_expected():
         "standard_product_delivery", "minor_feature", "major_feature", "fast_fix",
         "backend_service_setup", "ux_certification", "security_hardening", "data_migration",
         "compliance_release", "third_party_integration", "deprecation_sunset",
-        "incremental_build", "incident_response"}
+        "incremental_build", "incident_response", "easy_mode_mvp", "onboard_config_file"}
 
 
 def _the_rule_holds(spec, key):

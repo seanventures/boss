@@ -8,7 +8,9 @@ boss-community-* stack: API http://localhost:8000, console http://localhost:3000
 through BOSS's API, the way the console starts it: signed in with email + password + the
 authenticator code, the consent sheet answered (a `task` grant for this build's repository on a
 409 consent_required), and a stale second factor stepped up on a 401 step_up_required. Nobody
-clicks anything.
+clicks anything. When the build's own delivery workflow asks its owner for the PRD approval
+(`spec_review`, kept for a person on an install that enforces identity), the gate approves it as
+that owner, as the person would on the Approvals page.
 
 It then watches the run every POLL_S seconds and fails FAST, with the reason, on: the run blocked,
 failed or cancelled; a pending decision for this build that the gate does not answer; no agent
@@ -105,6 +107,39 @@ def code_task_body(brief: dict[str, Any], *, base_branch: str, stamp: str) -> di
         "profile": brief.get("profile"), "risk_tier": brief.get("risk_tier"),
         "owner": owner, "repo": repo, "base_branch": base_branch, "open_pr": True,
     }
+
+
+def new_work_body(brief: dict[str, Any], *, app: Optional[str], stamp: str) -> dict[str, Any]:
+    """POST /v1/projects/{p}/work as the New work modal sends it: no app (`infer_app`, so BOSS
+    must ask which when the project has several) or the chosen app."""
+    body: dict[str, Any] = {"kind": brief.get("kind") or "feature", "text": brief["change"],
+                            "title": f"{brief['title']} · e2e gate {stamp}",
+                            "acceptance_criteria": list(brief.get("acceptance_criteria") or []),
+                            "profile": brief.get("profile")}
+    if app:
+        body["app"] = app
+    else:
+        body["infer_app"] = True
+    return body
+
+
+def asked_which_app(status: int, out: Any) -> bool:
+    """New work with no app chosen beside several apps must ASK (422 app_selection_required),
+    never start a fresh build on the default branch."""
+    detail = out.get("detail") if isinstance(out, dict) else None
+    return status == 422 and isinstance(detail, dict) \
+        and detail.get("error") == "app_selection_required"
+
+
+def base_check(events: list[dict], expected_branch: Optional[str]) -> tuple[str, bool, str]:
+    """The build started from the chosen app's branch (code_task.base_branch_resolved), never the
+    bare default branch when that app's change is still open."""
+    seen = _latest(events, "code_task.base_branch_resolved")
+    base = ((seen or {}).get("data") or {}).get("base_branch")
+    if not expected_branch:
+        return ("builds on the chosen app", False, "New work's plan named no branch for the app")
+    return ("builds on the chosen app", base == expected_branch,
+            f"cloned {base or '(no base_branch_resolved event)'}, the app's branch is {expected_branch}")
 
 
 def apply_body(brief: dict[str, Any], *, egress: list[str], stamp: str) -> dict[str, Any]:
@@ -394,8 +429,31 @@ def pending_for(run: Optional[dict], wf_id: Optional[str], title: str) -> list[d
                        "AND decision_id IS NOT NULL)")
     skip = f" AND id <> {_q(run['decision_id'])}" if run and run.get("decision_id") else ""
     skip += " AND question NOT LIKE 'Approve code change:%'"     # the merge question: expected
-    return sql_json(f"SELECT id, question FROM decisions WHERE status = 'pending' AND project_id = {_q(PROJECT)} "
+    return sql_json(f"SELECT id, question, recommendation->>'capability' AS capability, "
+                    f"recommendation->>'workflow_run_id' AS workflow_run_id "
+                    f"FROM decisions WHERE status = 'pending' AND project_id = {_q(PROJECT)} "
                     f"AND ({' OR '.join(clauses)}){skip} ORDER BY created_at")
+
+
+#: Workflow gates the person who started the build answers, as they would on the Approvals page.
+#: `spec_review` ("PRD approval"): on an install that enforces identity, a direct change's
+#: delivery workflow keeps a person's PRD sign-off (BOSS-482: auto-approval follows
+#: BOSS_AUTHZ_MODE). Since every build a person starts gets its delivery workflow (rc10.31), the
+#: gate's own build raises that card, and its owner approves it.
+PERSON_ANSWERS = frozenset({"spec_review"})
+
+
+def ours_to_answer(pending: list[dict], wf_id: Optional[str]) -> tuple[list[dict], list[dict]]:
+    """Split pending decisions into (the ones the gate's person approves, the rest). Only a gate
+    in PERSON_ANSWERS raised by THIS build's own workflow run is answered; anything else still
+    stops the gate."""
+    mine, rest = [], []
+    for d in pending:
+        if wf_id and d.get("workflow_run_id") == wf_id and d.get("capability") in PERSON_ANSWERS:
+            mine.append(d)
+        else:
+            rest.append(d)
+    return mine, rest
 
 
 def workflow_row(wf_id: str) -> Optional[dict]:
@@ -472,6 +530,8 @@ class Started:
     wf_id: Optional[str] = None
     title: str = ""
     notes: list[str] = field(default_factory=list)
+    answered: list[str] = field(default_factory=list)
+    expected_branch: Optional[str] = None
 
 
 def start(person: Person, brief: dict, stamp: str) -> Started:
@@ -489,6 +549,37 @@ def start(person: Person, brief: dict, stamp: str) -> Started:
         if not wf_id:
             raise GateFail(f"the apply started no workflow run: {str(out)[:300]}")
         return Started(None, wf_id, title=f"{body['new_app']['name']}: add")
+    if brief.get("start") == "new_work_app":
+        work = f"/v1/projects/{urllib.parse.quote(PROJECT, safe='')}/work"
+        status, plan = person.call("GET", f"{work}/plan?kind={brief.get('kind') or 'feature'}")
+        if status != 200:
+            raise GateFail(f"New work's plan answered {status}")
+        choices = plan.get("app_choices") or []
+        if len(choices) < 2:
+            raise GateFail(f"project {PROJECT} has {len(choices)} built app(s); this brief needs "
+                           "at least two (set BOSS_E2E_PROJECT)")
+        status, out = person.call("POST", work, new_work_body(brief, app=None, stamp=stamp))
+        if not asked_which_app(status, out):
+            raise GateFail(f"New work with no app chosen beside {len(choices)} apps did not ask "
+                           f"which: {status} {str(out)[:300]}")
+        print(f"  asked which app, as it must: {str((out.get('detail') or {}).get('message'))[:120]}",
+              flush=True)
+        app = os.environ.get("BOSS_E2E_APP") or choices[0]["run_id"]
+        status, plan = person.call("GET", f"{work}/plan?app={urllib.parse.quote(app, safe='')}")
+        anchor = (plan or {}).get("anchor") if status == 200 else None
+        if not anchor:
+            raise GateFail(f"New work cannot build onto {app}: {str(plan)[:300]}")
+        out = person.start_with_consent(work, new_work_body(brief, app=app, stamp=stamp))
+        wf_id = out.get("run_id") or (out.get("run") or {}).get("id")
+        if not wf_id:
+            raise GateFail(f"New work started no workflow run: {str(out)[:300]}")
+        print(f"  building onto {anchor.get('app')} ({anchor.get('mode')}, {anchor.get('branch')})",
+              flush=True)
+        # A merged app's new change starts from the project's mainline (resolved at the build,
+        # not knowable here): only an open change has a branch to compare.
+        return Started(None, wf_id, title=new_work_body(brief, app=app, stamp=stamp)["title"],
+                       expected_branch=anchor.get("branch") if anchor.get("mode") == "continue"
+                       else "")
     if brief.get("base") == "web_scaffold" and not branch_exists(SCAFFOLD_BRANCH):
         raise GateFail(f"the scaffold base {SCAFFOLD_BRANCH} is gone from {REPO}; set BOSS_E2E_BASE_BRANCH "
                        "to a branch POST /v1/web-app seeded")
@@ -544,7 +635,20 @@ def main(argv: Optional[list[str]] = None) -> int:
                     print(f"  the workflow's build: run {started.run_id}", flush=True)
             run = run_row(started.run_id) if started.run_id else None
             turn = last_turn_epoch(started.run_id) if started.run_id else None
-            pending = pending_for(run, started.wf_id, started.title)
+            wf_of_run = started.wf_id or (run or {}).get("workflow_run_id")
+            answer, pending = ours_to_answer(pending_for(run, started.wf_id or wf_of_run, started.title),
+                                             wf_of_run)
+            for d in answer:
+                if d["id"] in started.answered:
+                    raise GateFail(f"the {d.get('capability')} decision {d['id']} is still pending after "
+                                   "the gate approved it")
+                status, out = person.call("POST", f"/v1/decisions/{d['id']}/approve",
+                                          {"actor": ACTOR, "note": "e2e gate: the build's owner approves its PRD"})
+                if status not in (200, 202):
+                    raise GateFail(f"approving {d['id']} ({d.get('question', '')[:80]}) was refused: "
+                                   f"{status} {str(out)[:300]}")
+                started.answered.append(d["id"])
+                print(f"  approved as the owner: {d['id']} — {d.get('question', '')[:100]} ({status})", flush=True)
             reason = watch_verdict(run=run, now=now, started=t0, last_turn=turn, budget_min=budget,
                                    pending=pending, wf=wf)
             line = f"{run['status']}/{run.get('phase')}" if run else "waiting for the build to start"
@@ -558,7 +662,11 @@ def main(argv: Optional[list[str]] = None) -> int:
             time.sleep(POLL_S)
 
         minutes = (time.time() - t0) / 60
-        checks = final_checks(run, run_events(run["id"]))
+        events = run_events(run["id"])
+        checks = final_checks(run, events)
+        if brief.get("start") == "new_work_app":
+            if started.expected_branch != "":
+                checks.append(base_check(events, started.expected_branch))
         print("\nchecks:")
         for check, ok, detail in checks:
             print(f"  [{'ok' if ok else 'FAIL'}] {check}: {detail}")

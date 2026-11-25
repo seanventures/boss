@@ -49,7 +49,7 @@ const MORE: { key: Tab; label: string; tip: string }[] = [
   // Autonomy tab; unchanged).
   { key: "areas", label: "Per-area autonomy", tip: "The A0–A3 grid per task class, always-on agents and today's agent budget" },
   { key: "spend", label: "Where the money went", tip: "By agent, by step, savings and top drivers" },
-  { key: "board", label: "Advanced limits", tip: "Pace, thresholds, token guides, review rounds" },
+  { key: "board", label: "Advanced limits", tip: "Pace, thresholds, review rounds, agents fixing failures, each build and start" },
   { key: "envelopes", label: "Envelopes", tip: "Allocations, initiatives and commitments" },
   { key: "sharing", label: "Sharing", tip: "What this install tells the BOSS project, and the switch" },
   { key: "selffix", label: "Self-fix", tip: "BOSS fixing its own bugs: the switch and the caps" },

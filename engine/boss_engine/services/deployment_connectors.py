@@ -113,7 +113,9 @@ def _check_kind(check: dict) -> str:
     kind = str(check.get("kind") or "").strip().lower()
     if kind:
         return kind
-    if check.get("scheme") or check.get("path") is not None:
+    # `{"url": "http://host:8080/readyz", "expected_status": 200}` is the OTHER shape a target
+    # declares (a config_dir target writes it). A URL is an HTTP request by definition.
+    if check.get("url") or check.get("scheme") or check.get("path") is not None:
         return "http"
     if check.get("port"):
         return "tcp"
@@ -288,6 +290,155 @@ def _health_url(domain: str, check: dict, app_port: Optional[int] = None) -> str
     if app_port and scheme == "http":
         domain = f"{host_part.split(':')[0]}:{app_port}"
     return f"{scheme}://{domain}{check.get('path', '/')}"
+
+
+def _probe_base(target: dict) -> tuple[Optional[str], str, Optional[int]]:
+    """(scheme or None, host, port or None) a target's RELATIVE checks are asked against.
+
+    The address the app serves on, from the first of: its domain, its public URL, the URL its
+    newest healthy stack deploy opened, and finally the host in `target_ref` (whose port is the
+    SSH port, never the app's, so it is dropped). A domain may be a bare `host:port` or a full
+    URL — a config_dir target stores its health URL as its domain.
+    """
+    from urllib.parse import urlsplit
+
+    candidates = list(target.get("domains") or []) + [
+        target.get("public_url"), target.get("stack_open_url")]
+    for raw in candidates:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        if "://" in text:
+            parts = urlsplit(text)
+            if parts.hostname:
+                return parts.scheme.lower() or None, parts.hostname, parts.port
+            continue
+        hostport = text.split("/")[0]
+        host, _, port = hostport.partition(":")
+        if host:
+            return None, host, int(port) if port.isdigit() else None
+    ref = str(target.get("target_ref") or "").strip()
+    if ref and "/" not in ref:
+        host = ref.split("@", 1)[-1].split(":")[0]
+        if host:
+            return None, host, None
+    return None, "", None
+
+
+def declared_health_probes(target: dict, *, app_port: Optional[int] = None) -> list[dict]:
+    """THE ONE PLACE a target's declared health checks become things to ask.
+
+    Every probe path — a connector's observe(), the stack probe, a target kind with no connector
+    (config_dir), the factory briefing's "probe now", the blackbox scrape — reads the checks
+    through this, so none of them can quietly ask "/" while the target declared /healthz. That
+    drift is what painted a working API gateway "Down": the stack probe GET'd "/" (404 — an API
+    has no page there) and ignored the /healthz the target declared, and the config_dir target
+    had no connector so its declared /readyz was never asked at all.
+
+    Both shapes are read:
+        {"url": "http://h:8080/readyz", "expected_status": 200}
+        {"kind": "http", "path": "/healthz", "port": 8080, "scheme": "http", "expect_status": 200}
+    and a bare `{"port": N}` / `{"kind": "tcp"}` is a socket check.
+
+    Returns one entry per declared check:
+        {"kind": "http", "url", "expected", "check"}
+        {"kind": "tcp", "host", "port", "check"}
+        {"kind": ..., "skipped": reason, "check"}   — said, never silently dropped
+    `app_port` is the port the app was actually published on (the SSH connector knows it); for
+    a plain-http check it wins over a stale port in the domain, as it always has.
+    """
+    base_scheme, host, base_port = _probe_base(target)
+    out: list[dict] = []
+    for check in target.get("health_checks") or []:
+        if not isinstance(check, dict):
+            continue
+        kind = _check_kind(check)
+        if kind == "tcp":
+            port = int(check.get("port") or base_port or app_port or 0)
+            if not host or not port:
+                out.append({"kind": kind, "check": check,
+                            "skipped": "no port to connect to on this target"})
+                continue
+            out.append({"kind": kind, "host": host, "port": port, "check": check})
+            continue
+        if kind != "http":
+            out.append({"kind": kind, "check": check, "skipped": f"unsupported kind {kind!r}"})
+            continue
+        url = str(check.get("url") or "").strip()
+        if not url.startswith(("http://", "https://")):
+            if not host:
+                out.append({"kind": kind, "check": check,
+                            "skipped": "no address to ask on this target"})
+                continue
+            # A relative `url` ("/healthz") is a path; `path` wins when both are given.
+            path = str(check.get("path") if check.get("path") is not None else (url or "/"))
+            if not path.startswith("/"):
+                path = "/" + path
+            # `scheme` is explicit, never inferred from the shape of a domain (see _health_url);
+            # a domain written as a full URL HAS said its scheme.
+            scheme = str(check.get("scheme") or base_scheme or "https").lower()
+            port = (app_port if app_port and scheme == "http" else None) \
+                or (int(check["port"]) if str(check.get("port") or "").isdigit() else None) \
+                or base_port
+            url = f"{scheme}://{host}{f':{port}' if port else ''}{path}"
+        out.append({"kind": kind, "url": url, "expected": _expected_status(check),
+                    "check": check})
+    return out
+
+
+def observe_declared(target: dict, *, app_port: Optional[int] = None,
+                     diagnose: Any = None, timeout: float = 15) -> dict:
+    """Ask every declared check (declared_health_probes) and say whether the target serves.
+
+    `healthy` is None — unknown, not a pass and not a failure — when nothing could be asked.
+    `diagnose(url)` explains an unreachable URL when the caller can (the SSH connector asks the
+    host); without one the bare error stands.
+    """
+    results = []
+    healthy = True
+    probed = 0
+    for p in declared_health_probes(target, app_port=app_port):
+        if p.get("skipped"):
+            results.append({"check": p["check"], "skipped": p["skipped"]})
+            continue
+        if p["kind"] == "tcp":
+            probed += 1
+            outcome = tcp_probe(p["host"], p["port"])
+            results.append({"socket": f"{p['host']}:{p['port']}", **outcome})
+            healthy = healthy and bool(outcome["ok"])
+            continue
+        probed += 1
+        url, expect = p["url"], p["expected"]
+        try:
+            req = urllib.request.Request(url, method="GET", headers={"User-Agent": "boss-health"})
+            with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+                code = resp.status
+            ok = code == expect
+        except urllib.error.HTTPError as exc:
+            code, ok = exc.code, exc.code == expect
+        except Exception as exc:  # noqa: BLE001 — unreachable IS the answer, not an error
+            entry = {"url": url, "status": None, "expected": expect, "ok": False,
+                     "error": f"{type(exc).__name__}: {exc}"[:120]}
+            if diagnose is not None:
+                try:
+                    entry["diagnosis"] = diagnose(url)
+                except Exception:  # noqa: BLE001 — a diagnosis never costs the verdict
+                    pass
+            results.append(entry)
+            healthy = False
+            continue
+        healthy = healthy and ok
+        results.append({"url": url, "status": code, "expected": expect, "ok": ok})
+
+    # A SKIPPED CHECK IS NOT A PASS. `healthy` started True and only a FAILING check set it
+    # False, so a target whose every check was skipped came back healthy having probed
+    # nothing — which is exactly what happened for two days across three apps. Unknown is
+    # the honest answer, and the sweep records it as unknown rather than as up.
+    if not probed:
+        return {"healthy": None,
+                "reason": "nothing was probed: no check on this target could be run",
+                "checks": results}
+    return {"healthy": healthy, "checks": results}
 
 
 def _split_ref(target_ref: str) -> tuple[str, str, int]:
@@ -945,7 +1096,9 @@ class SSHContainerConnector:
         """
         checks = target.get("health_checks") or []
         domains = target.get("domains") or []
-        if not domains:
+        declares_url = any(isinstance(c, dict) and str(c.get("url") or "").startswith(
+            ("http://", "https://")) for c in checks)
+        if not domains and not declares_url:
             return {"healthy": None, "reason": "no domain declared"}
 
         # NO CHECK IS NOT A PASS — IT IS A PORT TO KNOCK ON.
@@ -956,60 +1109,13 @@ class SSHContainerConnector:
         if not checks:
             checks = [{"kind": "tcp"}]
 
-        results = []
-        healthy = True
-        probed = 0
-        for check in checks:
-            kind = _check_kind(check)
-            if kind == "tcp":
-                host_part, _, port_part = str(domains[0]).partition(":")
-                port = int(check.get("port") or port_part or _app_port(target, default=0) or 0)
-                if not port:
-                    results.append({"check": check,
-                                    "skipped": "no port to connect to on this target"})
-                    continue
-                probed += 1
-                outcome = tcp_probe(host_part, port)
-                results.append({"socket": f"{host_part}:{port}", **outcome})
-                healthy = healthy and bool(outcome["ok"])
-                continue
-            if kind != "http":
-                results.append({"check": check, "skipped": f"unsupported kind {kind!r}"})
-                continue
-            probed += 1
-            url = _health_url(domains[0], check, _app_port(target, default=0) or None)
-            expect = _expected_status(check)
-            try:
-                req = urllib.request.Request(url, method="GET")
-                with urllib.request.urlopen(req, timeout=15) as resp:
-                    code = resp.status
-                ok = code == expect
-            except urllib.error.HTTPError as exc:
-                code, ok = exc.code, exc.code == expect
-            except Exception as exc:  # noqa: BLE001 — unreachable IS the answer, not an error
-                code, ok = None, False
-                results.append({
-                    "url": url, "error": f"{type(exc).__name__}: {exc}"[:120],
-                    # Unreachable has two very different causes and one identical symptom.
-                    # Asking the HOST whether the app answers on localhost separates them: a
-                    # broken app is the deployment's fault, a blocked port is the firewall's,
-                    # and an operator handed only "urlopen error timed out" cannot tell which.
-                    "diagnosis": self._why_unreachable(target, settings, url),
-                })
-                healthy = False
-                continue
-            healthy = healthy and ok
-            results.append({"url": url, "status": code, "expected": expect, "ok": ok})
-
-        # A SKIPPED CHECK IS NOT A PASS. `healthy` started True and only a FAILING check set it
-        # False, so a target whose every check was skipped came back healthy having probed
-        # nothing — which is exactly what happened for two days across three apps. Unknown is
-        # the honest answer, and the sweep records it as unknown rather than as up.
-        if not probed:
-            return {"healthy": None,
-                    "reason": "nothing was probed: no check on this target could be run",
-                    "checks": results}
-        return {"healthy": healthy, "checks": results}
+        # The declared checks are resolved and asked by the ONE shared path every probe uses
+        # (declared_health_probes / observe_declared), so this connector and the health sweep
+        # can never disagree about which URL "healthy" means. `if not probed:` lives there.
+        return observe_declared(
+            {**target, "health_checks": checks},
+            app_port=_app_port(target, default=0) or None,
+            diagnose=lambda url: self._why_unreachable(target, settings, url))
 
     # -- rollback ---------------------------------------------------------------
     def rollback(self, engine, settings: Settings, target: dict, to: dict, *,

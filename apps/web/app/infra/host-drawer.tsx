@@ -25,6 +25,7 @@ import { registerLocalPlace } from "../../lib/hardware";
 import { withKeyFile } from "../../lib/ssh-key-file";
 import { STAGES, useHostDetail, type HostDetail, type Resident, type StageKey } from "../../lib/infra-view";
 import { showToast } from "../client-forms";
+import { couldNot } from "../../lib/action-result";
 import {
   adoptHostKey, afterWrite, generateHostKey, installHostKey, provisionHost, retireHost, verifyHost,
 } from "./infra-actions";
@@ -35,6 +36,13 @@ import { ServerOverview } from "./server-overview";
 import { ServerSetup } from "./server-setup";
 import { openDockAbout } from "../../lib/dock-subject";
 import { setCrumbTrail } from "../shell-crumb-here";
+
+/** What each setup button does, for "Couldn't <do it>: <reason>." */
+const HOST_DOING: Record<string, string> = {
+  generate: "make a key for this host", adopt: "adopt that key", "install-key": "put the key on the host",
+  docker: "set up Docker on the host", ran: "connect to the host", verify: "connect to the host",
+  "verify-2": "connect to the host",
+};
 
 const STORES: { key: string; label: string; tip: string }[] = [
   { key: "database", label: "Database", tip: "database (survives restarts)" },
@@ -105,7 +113,7 @@ function Setup({ host, actor, refresh }: { host: HostDetail; actor: string; refr
   const act = (key: string, fn: () => Promise<{ ok: boolean; error?: string }>, done?: string) => run(key, async () => {
     setError(null);
     const r = await fn();
-    if (!r.ok) { setError(r.error ?? "Couldn't do that"); return; }
+    if (!r.ok) { setError(couldNot(HOST_DOING[key] ?? key.replace(/-/g, " "), r.error)); return; }
     if (done) showToast("success", done);
     afterWrite(refresh);
   });

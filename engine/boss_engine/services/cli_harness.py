@@ -24,6 +24,8 @@ corrupt the one place BOSS answers "what did this cost".
 """
 from __future__ import annotations
 
+from . import brief_items as _brief_items
+
 import contextlib
 import contextvars
 from dataclasses import dataclass
@@ -40,7 +42,7 @@ import tomllib
 from typing import Callable, Optional
 
 from . import model_proxy as _model_proxy
-from . import owned_process
+from . import owned_process, review_tools
 from .harness_delivery import delivers_kit
 from .harness_registry import FailurePattern, RuntimeBinary
 from .workspace_perms import tidies_workspace
@@ -67,7 +69,33 @@ CLAUDE_FAILURE_PATTERNS = (
                    r"sandbox is required but failed to initiali[sz]e",
                    "install what the Claude CLI's sandbox needs (bubblewrap and socat) on the "
                    "BOSS host or image, then retry"),
+    # An organisation's managed settings (server-managed, or managed-settings.json) refusing a
+    # writer's tool, in the CLI's own words (claude-code 2.1.197). A deny rule BOSS set itself
+    # says only "Permission to use … has been denied." and is not this.
+    # ANCHORED to the CLI's own refusal line ("<Tool> is blocked by enterprise managed policy"):
+    # a proxy's "403 - blocked by your organization's policy" page, or a grep of a doc that
+    # quotes the words, is not Claude Code refusing its writer (review of #258).
+    FailurePattern("policy_denied",
+                   r"(?m)^[ \t]*(?:Error:\s*)?(?:[\w()* -]{1,60} is )?blocked by enterprise "
+                   r"(?:managed )?policy\b",
+                   "this Claude Code login is managed by its organisation, whose policy refuses "
+                   "what a BOSS writer needs; ask the organisation's admin to allow it, or "
+                   "connect another login, then run the engine check in Setup › Models (see "
+                   "docs/community/ENGINE_SANDBOX.md, \"Managed engine policies\")",
+                   writer_only=True),
 )
+#: Codex's own words when its organisation's requirements take a sandbox mode away (codex-cli
+#: 0.154 and 0.158 binaries; engine_policy reads the same pattern at Setup).
+CODEX_DOWNGRADE_PATTERN = (
+    r"configured value for `(?:permission_profile|sandbox_mode|default_permissions)` is "
+    r"disallowed by requirements"
+    r"|configured value is disallowed by requirements; falling back to required value for\b"
+    r"|default sandbox policy is disallowed by requirements"
+    r"|cannot be used because requirements do not allow `sandbox_mode"
+    r"|`(?:sandbox_mode|permission_profile|default_permissions)[^`\n]{0,80}` is (?:disallowed|not "
+    r"allowed) by requirements"
+    r"|derived permission profile cannot be represented as a legacy sandbox policy; falling "
+    r"back to read-only")
 #: How the Codex CLI says its Linux sandbox (Landlock + seccomp) could not be applied.
 CODEX_FAILURE_PATTERNS = (
     FailurePattern("sandbox_unavailable",
@@ -76,6 +104,18 @@ CODEX_FAILURE_PATTERNS = (
                    r"|sandbox\((?:landlockrestrict|seccompinstall|seccompbackend)\)",
                    "run Codex on a kernel with Landlock and seccomp enabled (or give it a host "
                    "that has them), then retry"),
+    # AN ORGANISATION'S CODEX REQUIREMENTS (ChatGPT Enterprise/Business, cloud-managed or
+    # requirements.toml) forbidding the access BOSS asked for: Codex says so once and carries on
+    # READ-ONLY, so a writer writes nothing and every command dies in bubblewrap. The exact
+    # wordings, from the codex-cli 0.154 and 0.158 binaries (engine_policy.CODEX_DOWNGRADE).
+    FailurePattern("policy_denied", CODEX_DOWNGRADE_PATTERN,
+                   "this Codex login is managed by its organisation, whose requirements forbid "
+                   "the full access a BOSS writer runs with, so Codex fell back to read-only; "
+                   "run the engine check in Setup › Models so BOSS proves Codex's own "
+                   "workspace sandbox here and uses it, or ask the organisation's Codex admin "
+                   "to allow danger-full-access (see docs/community/ENGINE_SANDBOX.md, "
+                   "\"Managed engine policies\")",
+                   writer_only=True, in_tool_results=False, in_stream=True),
 )
 
 #: Scope under which BOSS's own API stores a subscription credential. One constant so the
@@ -1598,7 +1638,8 @@ class GenericCliCodeAgent:
         by BOSS's fallbacks; a reviewer on a CLI without read-only mode judges a copy."""
         from .engine_contract import EngineCapabilities
 
-        return EngineCapabilities(read_only=self.spec.supports_read_only())
+        return EngineCapabilities(read_only=self.spec.supports_read_only(),
+                                  read_only_shell=self.spec.name == "codex")
 
     # -- process ------------------------------------------------------
     def _resolve_binary(self) -> str:
@@ -1679,13 +1720,18 @@ class GenericCliCodeAgent:
                 raise CliHarnessUnavailable(str(refused)) from refused
         return _model_proxy.shield_env(env, settings=self.settings)
 
-    def _argv(self, prompt: str, *, read_only: bool, model: Optional[str]) -> list[str]:
+    def _argv(self, prompt: str, *, read_only: bool, model: Optional[str],
+              by_copy: bool = False) -> list[str]:
         argv = [self._resolve_binary(), *self.spec.args]
         # Mode-specific argv rather than one list: codex takes `--sandbox read-only` vs
         # `--sandbox workspace-write` on the SAME flag, so appending a read-only suffix to a
         # list that already carried the write value would leave two copies and let argument
         # order decide whether a reviewer can edit the code it is reviewing.
-        argv += list(self.spec.read_only_args if read_only else self.spec.write_args)
+        # A codex reviewer on BOSS's throwaway copy runs unsandboxed (BOSSAPP-1350: its own
+        # read-only sandbox cannot start in a container); the copy is the boundary.
+        unsandboxed = by_copy and self.spec.name == "codex"
+        argv += list(self.spec.read_only_args if read_only and not unsandboxed
+                     else self.spec.write_args)
         if self.spec.name == "claude_code":
             from .claude_credential import split_pick
 
@@ -2017,14 +2063,14 @@ class GenericCliCodeAgent:
         self._write_auth_file(content)
 
     def _raise_harness_verdict(self, *, stdout: str, stderr: str, summary: str,
-                               ok: bool) -> None:
+                               ok: bool, writer: Optional[bool] = None) -> None:
         """THE CLI COULD NOT RUN, IN ITS OWN WORDS (harness_failures: its sandbox, a runtime
         binary; on a failed exit also its login, its account, a crash). Not the agent's work:
         the stage stops with the harness verdict instead of handing on what it wrote blind."""
         from . import harness_failures
 
         verdict = harness_failures.classify(f"{stderr or ''}\n{stdout or ''}",
-                                            engine=self.engine, where="stream")
+                                            engine=self.engine, where="stream", writer=writer)
         if verdict is None and not ok:
             verdict = harness_failures.classify(f"{summary}\n{stderr or ''}",
                                                 engine=self.engine, where="engine")
@@ -2045,6 +2091,15 @@ class GenericCliCodeAgent:
 
                     verdict = dataclasses.replace(verdict,
                                                   message=f"{verdict.message} [{said}]")
+            if verdict.kind == "auth_refused":
+                import dataclasses
+
+                # The CLI's own stderr, kept apart from the summary: the one thing that can
+                # tell a provider refusal from an app's own 401 (harness_refusal).
+                verdict = dataclasses.replace(verdict, transport_text=(stderr or "")[-4000:])
+                if getattr(self, "_pool", None) is not None:
+                    verdict = dataclasses.replace(
+                        verdict, source_id=f"pool:{self._pool.member_id}")
             raise harness_failures.trip(verdict)
 
     def _versioned_model(self, model: Optional[str]) -> Optional[str]:
@@ -2074,7 +2129,8 @@ class GenericCliCodeAgent:
         import re as _re
         import tempfile
 
-        argv = self._argv(prompt, read_only=read_only, model=model)
+        argv = self._argv(prompt, read_only=read_only, model=model,
+                          by_copy=bool(_ignored.get("_contract_read_only_copy")))
         final_path = None
         if self.spec.final_message_flag:
             fd, final_path = tempfile.mkstemp(prefix="boss-cli-final-", suffix=".txt")
@@ -2179,7 +2235,7 @@ class GenericCliCodeAgent:
         except Exception:  # noqa: BLE001 — a transcript never fails a build
             pass
         self._raise_harness_verdict(stdout=proc.stdout or "", stderr=proc.stderr or "",
-                                    summary=summary, ok=ok)
+                                    summary=summary, ok=ok, writer=not read_only)
         if not ok:
             _log.warning("%s exited %s: %s", self.spec.name, proc.returncode,
                          (proc.stderr or "")[:300])
@@ -2187,7 +2243,7 @@ class GenericCliCodeAgent:
                 raise CliHarnessUnavailable(
                     f"{self.spec.name} exited {proc.returncode}: {summary[:300]}")
         return {
-            "summary": summary[:8000] or f"({self.spec.name} produced no output)",
+            "summary": _brief_items.clip_summary(summary) or f"({self.spec.name} produced no output)",
             "usage": {"model": model or self.spec.name},
             "cost_usd_micros": 0,
             "cost_unreported": True,
@@ -2197,6 +2253,9 @@ class GenericCliCodeAgent:
             "model": model or "",
             "exit_code": proc.returncode,
             "stop_reason": "done" if ok else "error",
+            # The CLI's own stderr, never the model's words (review_tools).
+            **({"tools_blocked": blocked} if (blocked := review_tools.blocked_by_transport(
+                proc.stderr)) else {}),
         }
 
     def run(self, spec, repo, sandbox):

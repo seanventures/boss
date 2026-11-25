@@ -468,8 +468,11 @@ def prune_activity_retention(payload: Optional[dict] = None) -> dict[str, Any]:
         except (TypeError, ValueError):
             raise HTTPException(status_code=422, detail="days must be an integer")
 
-    with begin(get_engine()) as connection:
-        result = prune(connection, days=requested)
+    from boss_engine.db import background
+
+    with background():
+        with begin(get_engine()) as connection:
+            result = prune(connection, days=requested)
     result["floor_days"] = retention_days()
     return result
 

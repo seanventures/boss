@@ -946,8 +946,13 @@ class ModelGatewayService:
             text("SELECT id, status, lease_owner FROM jobs WHERE id=:id FOR UPDATE"),
             {"id": invocation["job_id"]},
         ).mappings().first()
-        if job and (job["status"] not in ("leased", "running")
-                    or job["lease_owner"] != lease["worker_id"]):
+        # TAKEN means another worker holds the job NOW (or it is queued to run again). A job that
+        # ENDED — failed, dead-lettered, cancelled, succeeded — is held by nobody: its call is
+        # settled here, never left for a person (northgate-gateway rcpt_da8c5f2e…, 2026-11-21:
+        # its proof job was dead-lettered, and every settle was refused as "taken").
+        if job and ((job["status"] in ("leased", "running")
+                     and job["lease_owner"] != lease["worker_id"])
+                    or job["status"] == "queued"):
             raise ModelGatewayLeaseError("The call's job was taken by another worker.")
         settled = self._record_settlement(
             connection, project_id, lease, invocation, worker_id=actor,
@@ -1012,9 +1017,6 @@ class ModelGatewayService:
                 int(lease["estimated_cost_usd_micros"]), actual_cost_usd_micros, worker_id,
                 included_in_subscription=included, allow_expired=allow_expired_reservation,
             )
-        elif reservation_id:
-            self.budget.release(connection, project_id, reservation_id, "Model invocation failed before billable use.")
-
         status = "succeeded" if succeeded else "failed"
         usage_overruns = {
             key: {"allowed": int(limit), "actual": int(usage_units.get(key, 0))}
@@ -1046,6 +1048,14 @@ class ModelGatewayService:
             {"status": status, "provider_ref": provider_ref, "usage": json.dumps(usage_units),
              "actual": money_usd_micros, "error": json.dumps(error or {}), "id": invocation_id},
         ).mappings().one()
+        if reservation_id and not chargeable:
+            # RELEASED ONLY ONCE THE INVOCATION SAYS IT FAILED. Release reads the project's
+            # budget state, and that read asks whether any released reservation still has an
+            # invocation `in_progress` (legacy_model_reconciliation): released first, this very
+            # invocation was one, and a refused API-key proof (HTTP 401, no use) raised
+            # "Reconcile historical unresolved model exposure before paid work" on a person
+            # (dec_e77ed3f1, recipe-box, 2026-11-18).
+            self.budget.release(connection, project_id, reservation_id, "Model invocation failed before billable use.")
         connection.execute(
             text("UPDATE model_gateway_leases SET status=:status, completed_at=now(), result=CAST(:result AS JSONB) WHERE id=:id"),
             {"status": "completed" if succeeded else "failed", "id": lease_id,

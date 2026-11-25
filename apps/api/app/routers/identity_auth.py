@@ -232,6 +232,14 @@ def _private_client(request: Request) -> Optional[str]:
     return claim_module.site_claim_client(creds.peer_ip, creds.headers.get("x-forwarded-for"))
 
 
+def _public_host_command(*, claimed: bool) -> Optional[str]:
+    """The `boss` command an anonymous caller may read: never a filesystem path once claimed."""
+    from boss_engine.identity.host_command import host_boss_command
+
+    command = host_boss_command()
+    return None if claimed and command != "boss" else command
+
+
 def build_identity_auth_router() -> APIRouter:
     router = APIRouter(tags=["identity-auth"])
 
@@ -258,6 +266,8 @@ def build_identity_auth_router() -> APIRouter:
             origin = public_origin(db) or authn.request_origin(credentials(request)) or ""
             claim_info = None
             if not claim_module.is_claimed(db):
+                from boss_engine.identity.host_command import host_boss_command
+
                 # read-only (R5): the API's lifespan keeps a live claim link printed
                 private = _private_client(request) if not bridged else None
                 paths = claim_module.available_paths(db, bridged, private_client=bool(private))
@@ -282,6 +292,9 @@ def build_identity_auth_router() -> APIRouter:
                     # network) or "private_network" (this browser's real address is private, so
                     # it claims on the site itself). None: the setup link is the way in.
                     "network": ("bridge" if bridged else "private_network" if private else None),
+                    # this install's `boss` command: a second install's full launcher path, since
+                    # plain `boss` there runs the first install (stranger test r2)
+                    "host_command": host_boss_command(),
                 }
             from boss_engine.config import get_settings
 
@@ -309,6 +322,11 @@ def build_identity_auth_router() -> APIRouter:
                 "claim": claim_info,
                 # The policy's password minimum, so every "choose a password" field says it.
                 "password_min_length": pol.password_min_length if pol else 12,
+                # This install's `boss` command for host-side fixes (the Forgot? sheet's
+                # recover-owner, stranger test r3). This route is public: a launcher PATH is said
+                # only while unclaimed (as the claim block does). After the claim, plain `boss` on
+                # a default install, else None, and the page says "this install's boss command".
+                "host_command": _public_host_command(claimed=claim_info is None),
             }, headers={"Cache-Control": "no-store"})
 
     @router.post("/v1/auth/invitations/preview")

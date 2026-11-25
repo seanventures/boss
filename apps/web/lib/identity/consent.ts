@@ -34,6 +34,8 @@ export type ConsentLocal = {
   repos: string[];
   /** "on this machine" (engine identity/consent.py LOCAL_SUMMARY). */
   summary: string;
+  /** What the sheet calls them: the app's name ("CSV quality desk"), never `local_<project>/…`. */
+  names: string[];
 };
 
 export type ConsentRequest = {
@@ -53,6 +55,8 @@ export type ConsentRequest = {
   max_days: number | null;
   /** A multi-repo app's repositories for this run, when the API sent them. */
   multirepo?: MultiRepoConsent | null;
+  /** One line on what this consent also covers (a new piece of work: its delivery workflow). */
+  covers?: string | null;
   /** Called with the new grant id, or null when the person cancels. */
   onDecided?: (grantId: string | null) => void;
 };
@@ -74,6 +78,12 @@ const str = (v: unknown): string => (typeof v === "string" ? v : "");
 const strs = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
 
 /** The sheet's request from a 409 body, or null when the body is not a consent request. */
+/** A local repository in words when the engine sent no name: `local_<project>/csv-quality-desk` → "Csv quality desk". */
+export function localName(full: string): string {
+  const words = (full.split("/").pop() || full).replace(/[-_]+/g, " ").trim();
+  return words ? words[0].toUpperCase() + words.slice(1) : full;
+}
+
 export function consentFromBody(raw: unknown): ConsentRequest | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const b = raw as Record<string, unknown>;
@@ -103,7 +113,8 @@ export function consentFromBody(raw: unknown): ConsentRequest | null {
   const lo = b.local && typeof b.local === "object" ? b.local as Record<string, unknown> : null;
   const localRepos = lo ? (strs(lo.repos).length ? strs(lo.repos) : (str(lo.repo) ? [str(lo.repo)] : [])) : [];
   const local: ConsentLocal | null = lo && localRepos.length
-    ? { repo: str(lo.repo) || localRepos[0], repos: localRepos, summary: str(lo.summary) || "on this machine" }
+    ? { repo: str(lo.repo) || localRepos[0], repos: localRepos, summary: str(lo.summary) || "on this machine",
+        names: strs(lo.names).length ? strs(lo.names) : localRepos.map(localName) }
     : null;
   const durations = (Array.isArray(b.durations) ? b.durations : []).flatMap((d): ConsentDuration[] => {
     if (!d || typeof d !== "object") return [];
@@ -114,6 +125,7 @@ export function consentFromBody(raw: unknown): ConsentRequest | null {
   const taskRunId = str(b.task_run_id) || null;
   return {
     scope: str(b.scope) || null,
+    covers: str(b.covers) || null,
     task: str(b.task) || "this work",
     task_run_id: taskRunId,
     agents,
@@ -197,7 +209,9 @@ export async function withConsent<T>(start: () => Promise<T>): Promise<T> {
  */
 export async function withConsentResult<R extends { ok: boolean; data?: unknown }>(call: () => Promise<R>): Promise<R> {
   const r = await call();
-  const asked = !r.ok ? consentFromBody((r.data as Record<string, unknown> | undefined)?.consent) : null;
+  const data = r.data as Record<string, unknown> | undefined;
+  // callAction already asked (data.consentAsked): never a second sheet.
+  const asked = !r.ok && !data?.consentAsked ? consentFromBody(data?.consent) : null;
   if (asked && await askConsent(asked)) return call();
   return r;
 }

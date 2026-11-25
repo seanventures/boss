@@ -340,34 +340,37 @@ def reflect_due(engine: Any, *, limit: int = 10) -> list[dict[str, Any]]:
     """Every ENABLED project whose last reflection is older than its cadence: claimed atomically
     (so two API processes never both run it), then each named role — or every role with evidence
     — is reflected on. A project that never turned reflection on is never touched."""
-    with engine.begin() as c:
-        claimed = c.execute(text(
-            "UPDATE reflection_settings SET last_run_at = now() WHERE project_id IN ("
-            "SELECT project_id FROM reflection_settings WHERE enabled AND (last_run_at IS NULL "
-            "OR last_run_at < now() - make_interval(hours => every_hours)) "
-            "ORDER BY last_run_at NULLS FIRST LIMIT :l FOR UPDATE SKIP LOCKED) "
-            "RETURNING project_id, roles"), {"l": int(limit)}).mappings().all()
-    done: list[dict[str, Any]] = []
-    for row in claimed:
-        roles = row["roles"]
-        if isinstance(roles, str):
-            roles = json.loads(roles)
+    from ..db import background
+
+    with background():
         with engine.begin() as c:
-            targets = list(roles or []) or _roles_with_evidence(c, row["project_id"], WINDOW_DAYS)
-        for role in targets:
-            try:
-                with engine.begin() as c:
-                    done.append(reflect(c, row["project_id"], role, actor=REFLECTION_ACTOR,
-                                        trigger="scheduled"))
-            except Exception as exc:  # noqa: BLE001 — one role never stops the others
-                _log.warning("reflection on %s failed", role, exc_info=True)
-                with engine.begin() as c:
-                    c.execute(text(
-                        "INSERT INTO reflection_runs (id, project_id, role_key, trigger, status, "
-                        "error, created_by) VALUES (:i, :p, :r, 'scheduled', 'failed', :e, :a)"),
-                        {"i": make_id("rfl"), "p": row["project_id"], "r": str(role),
-                         "e": f"{type(exc).__name__}: {exc}"[:500], "a": REFLECTION_ACTOR})
-    return done
+            claimed = c.execute(text(
+                "UPDATE reflection_settings SET last_run_at = now() WHERE project_id IN ("
+                "SELECT project_id FROM reflection_settings WHERE enabled AND (last_run_at IS NULL "
+                "OR last_run_at < now() - make_interval(hours => every_hours)) "
+                "ORDER BY last_run_at NULLS FIRST LIMIT :l FOR UPDATE SKIP LOCKED) "
+                "RETURNING project_id, roles"), {"l": int(limit)}).mappings().all()
+        done: list[dict[str, Any]] = []
+        for row in claimed:
+            roles = row["roles"]
+            if isinstance(roles, str):
+                roles = json.loads(roles)
+            with engine.begin() as c:
+                targets = list(roles or []) or _roles_with_evidence(c, row["project_id"], WINDOW_DAYS)
+            for role in targets:
+                try:
+                    with engine.begin() as c:
+                        done.append(reflect(c, row["project_id"], role, actor=REFLECTION_ACTOR,
+                                            trigger="scheduled"))
+                except Exception as exc:  # noqa: BLE001 — one role never stops the others
+                    _log.warning("reflection on %s failed", role, exc_info=True)
+                    with engine.begin() as c:
+                        c.execute(text(
+                            "INSERT INTO reflection_runs (id, project_id, role_key, trigger, status, "
+                            "error, created_by) VALUES (:i, :p, :r, 'scheduled', 'failed', :e, :a)"),
+                            {"i": make_id("rfl"), "p": row["project_id"], "r": str(role),
+                             "e": f"{type(exc).__name__}: {exc}"[:500], "a": REFLECTION_ACTOR})
+        return done
 
 
 _STARTED = threading.Event()
@@ -384,10 +387,13 @@ def start(engine: Any, settings: Any) -> None:
     _STARTED.set()
 
     def loop() -> None:
+        from ..db import background
+
         time.sleep(120)  # let the API finish booting first
         while True:
             try:
-                reflect_due(engine)
+                with background():
+                    reflect_due(engine)
             except Exception:  # noqa: BLE001 — the loop must outlive one bad tick
                 _log.warning("reflection tick failed", exc_info=True)
             time.sleep(max(60, minutes * 60))

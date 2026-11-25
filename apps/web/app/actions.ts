@@ -10,7 +10,7 @@ import { withdrawnNote, withdrawnSentence } from "../lib/decision-withdrawn";
 import { buildCommandRequest } from "../lib/commands";
 import { apiWrite, pressToken } from "../lib/api-write";
 import { act, apiFetch, consentOfThrown } from "../lib/server-action";
-import { missingInput, okResult, type ActionResult } from "../lib/action-result";
+import { describeActionError, missingInput, okResult, type ActionResult } from "../lib/action-result";
 import { previewWebHref } from "../lib/browser-links";
 import { apiErrorTechnical, detailText } from "../lib/api-error";
 import { declareAction } from "../lib/identity/guarded-action";
@@ -127,7 +127,7 @@ async function postJsonReturn(path: string, body: Record<string, unknown>): Prom
     }
     return { ok: true, data: await r.json() };
   } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : "request failed" };
+    return { ok: false, error: describeActionError(e) };
   }
 }
 
@@ -248,6 +248,12 @@ export async function askBossAction(
     // THE DOCK'S "Investigate further" / "Do the fix": the full tool loop, on request. Unset, a
     // question about a record is answered first in one call (subject_answer.py).
     depth: String(formData.get("depth") ?? "").trim() === "investigate" ? "investigate" : undefined,
+    // ANSWER IN THE BACKGROUND (services/chat_turns.py): the API commits the message and a turn
+    // record, answers 202 {thread_id, turn_id}, and the dock polls the turn (lib/chat-turn.ts).
+    // The message is kept whatever happens to the answer, and a reload resumes the wait.
+    background: String(formData.get("background") ?? "") === "1" ? true : undefined,
+    // ONE PRESS, ONE TURN: a resent send with the same key gets the turn it already started.
+    idempotency_key: String(formData.get("idempotency_key") ?? "").trim() || undefined,
   });
 }
 
@@ -301,7 +307,7 @@ async function getJsonReturn(path: string): Promise<ActionResult> {
     }
     return { ok: true, data: await r.json() };
   } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : "request failed" };
+    return { ok: false, error: describeActionError(e) };
   }
 }
 
@@ -2777,7 +2783,7 @@ export async function listSecretsAction(projectId?: string): Promise<any> {
 
 /** Upload a secret. The value is written through to a backend; nothing returns it afterwards. */
 export async function putSecretAction(input: {
-  name: string; value: string; secret_kind?: string; backend?: string; scope_id?: string;
+  name: string; value: string; secret_kind?: string; backend?: string; scope_id?: string; http_auth?: boolean;
 }): Promise<any> {
   return post("/v1/secrets", { project_id: PROJECT_ID, actor: CONSOLE_ACTOR, ...input });
 }
@@ -3152,7 +3158,7 @@ export async function deleteMeetingRoleAction(formData: FormData): Promise<Actio
  */
 export async function followUpCodeTaskAction(
   formData: FormData,
-): Promise<{ run_id?: string; error?: string }> {
+): Promise<{ run_id?: string; existing?: boolean; error?: string }> {
   const runId = String(formData.get("run_id") ?? "").trim();
   const instructions = String(formData.get("instructions") ?? "").trim();
   if (!runId) return { error: "no run named" };
@@ -3162,7 +3168,8 @@ export async function followUpCodeTaskAction(
     // No revalidatePath: it replaces the client tree while this promise resolves, so the
     // component that awaited it is remounted and the result lands on an instance nobody
     // renders -- the "nothing happened" defect this console has had repeatedly.
-    return { run_id: out?.run_id };
+    // `existing`: an identical follow-up was already in flight; the API returned that one.
+    return { run_id: out?.run_id, existing: (out as { existing?: boolean } | undefined)?.existing === true };
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error) };
   }
@@ -3203,7 +3210,7 @@ export async function retryCodeTaskWithStateAction(
     revalidatePath("/");
     return { runId: res?.run_id, attempt: res?.attempt };
   } catch (e) {
-    return { error: e instanceof Error ? e.message : String(e) };
+    return { error: describeActionError(e) };
   }
 }
 
@@ -3585,18 +3592,23 @@ export async function attachTargetToHostAction(
 }
 
 export async function startPreviewAction(
-  _prev: { url?: string; error?: string; note?: string } | null,
+  _prev: { url?: string; error?: string; note?: string; id?: string; starting?: boolean } | null,
   formData: FormData,
-): Promise<{ url?: string; error?: string; note?: string }> {
+): Promise<{ url?: string; error?: string; note?: string; id?: string; starting?: boolean }> {
   const runId = String(formData.get("run_id") ?? "").trim();
   if (!runId) return { error: "missing run_id" };
   try {
-    const res = await client.startPreview(runId, 60, getActor(formData));
+    const res = await client.startPreview(runId, 60, getActor(formData), formData.get("fresh_data") === "true");
     revalidatePath("/");
     // A same-origin gateway path: neither the preview's 127.0.0.1 port nor this server's API
     // address is reachable from the operator's browser (see lib/browser-links).
     if (res.status === "running" && res.id) {
-      return { url: previewWebHref(res.id) };
+      return { url: previewWebHref(res.id), id: res.id };
+    }
+    // STARTED, NOT FAILED: the engine builds it in the background (start_preview_async) and
+    // its link says "Starting your app…" until it serves (preview_wake).
+    if (res.status === "starting" && res.id) {
+      return { url: previewWebHref(res.id), id: res.id, starting: true };
     }
     // Library/CLI build — there is no live web app to serve, so it was "run" by executing its
     // tests. Show that outcome instead of mislabeling a passing test run as a failure.

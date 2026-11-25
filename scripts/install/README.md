@@ -4,7 +4,7 @@ Install BOSS Community on a machine you administer. This page is the installer r
 
 ## Install
 
-For v1.0-rc10.27, use the [commit-pinned GitHub checkout](#straight-from-github). You need Git and repository access; use an account with access if GitHub asks you to sign in. The website installer and hosted manual are deployed separately, so source publication alone does not verify their version.
+For v1.0-rc10.32, use the [commit-pinned GitHub checkout](#straight-from-github). You need Git and repository access; use an account with access if GitHub asks you to sign in. The website installer and hosted manual are deployed separately, so source publication alone does not verify their version.
 
 ### One command
 
@@ -24,7 +24,7 @@ Pass installer flags after `bash -s --`:
 
 ```bash
 curl -fsSL https://boss.sean.network/install.sh | bash -s -- --yes
-curl -fsSL https://boss.sean.network/install.sh | bash -s -- --ref v1.0-rc10.27 --console-origin https://boss.example.com
+curl -fsSL https://boss.sean.network/install.sh | bash -s -- --ref v1.0-rc10.32 --console-origin https://boss.example.com
 ```
 
 `BOSS_REF=main` (or `--ref main`) installs the development branch instead of a release.
@@ -51,7 +51,7 @@ After the stack is healthy, the installer runs one **Models** step. `boss connec
 **3. When no model is usable, offer one.** "Usable" means a connected API key, subscription, or Ollama. These offers come only at a terminal, one question each:
 
 - Sign in to Codex, then Claude Code, then Grok Build, inside BOSS. Each question defaults to no.
-- Set up a free local model, with the download size in the question. This one defaults to **yes**, because without it BOSS has no model; it is still a question because the download is several GB. See [The local model](#the-local-model). `--no-local-model` turns this offer off.
+- Optionally set up a free local model, with the download size in the question (about 4.4 GB for the default). This one also defaults to **no**: pressing Enter downloads nothing. A subscription or an API key works without it, and a local model is slow on a CPU. See [The local model](#the-local-model). `--no-local-model` turns this offer off.
 - The installer only: install the official coding CLIs on this machine, through the same path as `--install-coding-clis`. Codex needs its CLI here to sign in; Claude Code and Grok Build already run inside BOSS. This question defaults to no.
 
 `--yes` asks nothing and installs nothing extra. Only explicit flags install: `--install-ollama` (with `--local-model NAME`) and `--install-coding-clis`.
@@ -101,10 +101,12 @@ The installer puts `boss` in `~/.local/bin` (or in `/usr/local/bin` when that is
 | Command | What it does |
 |---|---|
 | `boss status` | Install directory, release, services, and API health |
-| `boss open` | Prints the Mission Control address |
+| `boss open` | Prints the Mission Control address, and how to claim BOSS while it has no Owner |
 | `boss password` | Shows the console password, in a terminal only: it claims a new install, then signs teammates in as Operator for 30 days after the claim. `boss password reset` rotates it |
 | `boss doctor` | Runs `checkup.sh` (`--probe` also asks a model a question) |
 | `boss logs [-f] [api\|worker\|web\|db]` | Recent service logs |
+| `boss stop` | Stops every service of this install, including web, Grafana, Prometheus and the optional dev profiles (test database, runner, toolchains). Data, containers and images are kept |
+| `boss start` | Starts this install's enabled services again, without a rebuild. Optional dev profiles stay stopped: bring them back with `boss dev up` or `boss toolchains enable …` |
 | `boss connect` | Runs the [Models](#models) step again. It saves newly exported provider keys into `.env` and restarts only api and worker. It then asks once before each sign-in or connection, offers a subscription sign-in or a local model when nothing is usable, and ends with the Models table. `--connect-found` answers yes for what was found. `--yes` asks nothing and installs nothing |
 | `boss connect --list` / `--summary` | Prints what this machine has, or the Models table, and changes nothing |
 | `boss connect --install-ollama [--local-model NAME]` | Sets up [the local model](#the-local-model) end to end without asking |
@@ -138,29 +140,29 @@ This is the same command as [Install](#install): it installs the newest release 
 
 ### Straight from GitHub
 
-Install v1.0-rc10.27 without the website. This uses Git authentication if the repository requires access, checks out the published commit for that tag, and installs that same commit:
+Install v1.0-rc10.32 without the website. This uses Git authentication if the repository requires access, checks out the published commit for that tag, and installs that same commit:
 
 ```bash
 (
   set -e
   BOSS_RELEASE_COMMIT=ae15726290b2044de556e4f9166de0d38690009c
-  git clone --branch v1.0-rc10.27 https://github.com/seanventures/boss.git boss-rc10.27
-  cd boss-rc10.27
+  git clone --branch v1.0-rc10.32 https://github.com/seanventures/boss.git boss-rc10.32
+  cd boss-rc10.32
   git checkout --detach "$BOSS_RELEASE_COMMIT"
   ./install.sh --dir "$PWD" --ref "$BOSS_RELEASE_COMMIT"
 )
 ```
 
-The `boss-rc10.27` directory must not already exist. Read the script in that checkout before running it if you want to inspect it. This records a pinned commit; a later upgrade needs `boss upgrade --to REF`. Add installer flags to the `./install.sh` line, for example `--console-origin https://boss.example.com`.
+The `boss-rc10.32` directory must not already exist. Read the script in that checkout before running it if you want to inspect it. This records a pinned commit; a later upgrade needs `boss upgrade --to REF`. Add installer flags to the `./install.sh` line, for example `--console-origin https://boss.example.com`.
 
 ### From a local checkout
 
 Clone the release and install it in place:
 
 ```bash
-git clone --branch v1.0-rc10.27 https://github.com/seanventures/boss.git
+git clone --branch v1.0-rc10.32 https://github.com/seanventures/boss.git
 cd boss
-./install.sh --dir "$PWD" --ref v1.0-rc10.27
+./install.sh --dir "$PWD" --ref v1.0-rc10.32
 ```
 
 A checkout at a release tag stays on that release. A checkout on a branch follows `main` unless you pass `--ref`, and the ref is then [recorded](#which-release-and-staying-on-it). From a checkout you already have on the branch you want:
@@ -342,13 +344,15 @@ The BOSS source URL the installer uses is not an operator repository binding. Fr
 
 - Fresh VM: Ubuntu 22.04/24.04 or Debian 12/13, 64-bit, with `sudo` or root access
 - Existing Linux/macOS host: `git`, `curl`, running Docker Engine/Desktop and Compose
+- macOS without Docker Desktop: [Colima](../../docs/community/COLIMA.md) (profile sizing, the credential helper, the Docker context the installer saves)
 - Existing distro Docker packages are not removed automatically; upgrade those manually
+- A company network (outbound proxy, TLS inspection, internal npm/PyPI/Go/Maven mirrors, internal hosts for the sandbox fence): [Enterprise network](../../docs/community/ENTERPRISE_NETWORK.md). The installer checks those settings before it saves `.env`, and checks for TLS inspection before it builds
 
 ### Sizing
 
 | | Need | Why |
 |---|---|---|
-| **Disk** | **About 100 GB recommended working capacity** | Images, build cache and agent repositories need space; the amount varies by selected services and workload. The installer reports the install filesystem separately from an accessible local Linux Docker image store, with an advisory below about 80 GB free. This is not a hard minimum. |
+| **Disk** | **About 100 GB recommended working capacity** | Images, build cache and agent repositories need space; the amount varies by selected services and workload. The installer reports the install filesystem separately from an accessible local Linux Docker image store, with an advisory below about 80 GB free. This is not a hard minimum. The api/worker image carries Java and Go by default, about 0.75 GB of it ([toolchains](../../docs/community/TOOLCHAINS.md); `boss toolchains disable java` / `go` drops them). |
 | **RAM** | **8 GB minimum, 16 GB comfortable** | The six containers idle at about 1.6 GB. Coding work runs inside the API container and adds whatever that task installs. Less than 8 GB will swap. |
 | **CPU** | 4 cores | Reviewers run in parallel. |
 
@@ -370,6 +374,29 @@ Everything derives from these variables; set them once in `.env`:
 
 `NEXT_PUBLIC_BOSS_API_URL` derives from `BOSS_API_PORT` automatically. Set it explicitly only when the API is reached at a different hostname than the browser uses, such as a remote VM, where it must be the address **the browser** will use, not `127.0.0.1`.
 
+### Two installs on one machine
+
+A second install beside an existing one needs its own Compose project name, its own ports, and its own `boss` command. Otherwise it shares the first install's containers, volumes and database.
+
+```bash
+COMPOSE_PROJECT_NAME=boss-two BOSS_BIN_DIR="$HOME/boss-two-bin" \
+BOSS_PREVIEW_PORT=3101 BOSS_GRAFANA_PORT=3400 \
+  ./install.sh --dir ~/boss-two --api-port 8100 --web-port 3100 --postgres-port 5532
+```
+
+The installer saves `COMPOSE_PROJECT_NAME`, `BOSS_BIN_DIR` and the ports in that install's `.env`. Its `boss` command (`~/boss-two-bin/boss`) reads them from there, so later commands never need the variables again and never act on the first install. Without `BOSS_BIN_DIR`, the first install keeps `~/.local/bin/boss` and the installer prints the command for the second one.
+
+Other host ports a second install may need, once the matching feature is on. Give each a free port the same way:
+
+| Setting | Default | Used by |
+|---|---|---|
+| `BOSS_MAILPIT_PORT` | 8025 | the local test inbox (`--with-mailpit`) |
+| `BOSS_TOOLCHAIN_REGISTRY_PORT` | 5000 | the toolchain image registry (`boss toolchains enable …`) |
+| `BOSS_TEST_POSTGRES_PORT` | 55700 | the developer test database (`boss dev up`) |
+| `BOSS_METRICS_PORT` | 9464 | metrics inside the install's own network only; it is not published on the host, so it can stay the same |
+
+Run the second install by its full path (`~/boss-two-bin/boss doctor`, `~/boss-two-bin/boss identity setup-link`). Do not add its directory to `PATH`: plain `boss` would then run the second install in every new shell. Its `boss doctor`, `boss open` and the installer's card print that full path.
+
 ### Installing on a server
 
 The worked path for a console hostname is [docs/community/hostname.md](../../docs/community/hostname.md). On the VM:
@@ -383,10 +410,10 @@ The web listener and Postgres stay on loopback. The API stays on `127.0.0.1` unl
 To skip the proxy, use an SSH tunnel to a VM you administer:
 
 ```bash
-ssh -L 3000:127.0.0.1:3000 -L 8000:127.0.0.1:8000 user@your-vm
+ssh -L 3000:127.0.0.1:3000 -L 3001:127.0.0.1:3001 -L 8000:127.0.0.1:8000 user@your-vm
 ```
 
-Then open `http://127.0.0.1:3000` on the computer that opened the tunnel. The public URL is baked into the web build. An older `.env` that set `BOSS_BIND_ADDRESS=0.0.0.0` is moved back to loopback on rerun. The only way to publish the API is `--api-bind` / `BOSS_API_BIND`, and authentication stays required.
+Then open `http://localhost:3000` on the computer that opened the tunnel (the host the claim link prints; `127.0.0.1` is a different site for passkeys and sessions). Port 3001 is where previews open. The public URL is baked into the web build. An older `.env` that set `BOSS_BIND_ADDRESS=0.0.0.0` is moved back to loopback on rerun. The only way to publish the API is `--api-bind` / `BOSS_API_BIND`, and authentication stays required.
 
 ## Verify the install
 
@@ -409,7 +436,7 @@ The checks cover: containers running, the API answering, the address compiled in
   ok    repository: connected
   ok    host: scheduling BOSS normally
 
-  BOSS is ready.  Mission Control: http://127.0.0.1:3000
+  BOSS is ready.  Mission Control: http://localhost:3000
 ```
 
 > [!NOTE]
@@ -442,7 +469,8 @@ Returns three separate grades (delivery, efficiency, host) deterministically, wi
 ```bash
 source ~/boss/boss-community.env.sh
 curl -sS "$BOSS_API_URL/health"
-# Mission Control: http://127.0.0.1:3000 — the first visit claims it (boss password proves it is you)
+# First, claim it: boss identity setup-link prints a one-hour link; open it and create the Owner.
+# Then Mission Control: http://localhost:3000/?area=setup (repository, model, first pull request)
 ```
 
 ## Upgrade & recover
@@ -465,7 +493,7 @@ Everything BOSS creates on your machine has a retention rule or a guardrail, so 
 | Pre-upgrade backups (`~/boss-backups`) | After every complete backup: keep the newest 10 and anything from the last 7 days, within 20 GB in total. The cap wins over the count and the days, but never goes below the newest 3 (so a rollback to the release before last stays possible); oldest go first; never the backup just taken. One log line per removal. | `BOSS_BACKUP_KEEP` (10), `BOSS_BACKUP_KEEP_DAYS` (7), `BOSS_BACKUP_CAP_GB` (20) |
 | In-database hourly backups (backups volume) | Keep 6 hourly, 7 daily, 4 weekly, 6 monthly | `BOSS_BACKUP_KEEP_HOURLY` (6), `_DAILY` (7), `_WEEKLY` (4), `_MONTHLY` (6) |
 | BOSS images | After a successful upgrade only the new release's tags and the `prev-<tag>` rollback point stay; dangling BOSS images go. Never an image a container uses, never one that is not `boss-community-*`. | `boss prune` runs it on demand |
-| Docker build cache | Capped: Docker keeps the newest 10 GB. The cache is Docker-wide; on a machine shared with other projects set it higher, or `0` for no cap. | `BOSS_BUILD_CACHE_CAP_GB` (10) |
+| Docker build cache | Capped: Docker keeps the newest 10 GB. The cache is Docker-wide; on a machine shared with other projects set it higher, or `0` for no cap. On a dedicated host (`BOSS_DEDICATED_HOST=1`, which `remote.sh` writes unless `.env` already says `0`) BOSS also prunes cache older than three days above 75% disk. | `BOSS_BUILD_CACHE_CAP_GB` (10), `BOSS_DEDICATED_HOST` |
 | Container logs | 50 MB × 3 files per container | `BOSS_LOG_MAX_SIZE` (50m), `BOSS_LOG_MAX_FILES` (3) |
 | Postgres | A query may spill at most 5 GB to temp files; a session idle inside a transaction is ended after 15 min; the worker's statements end after 30 min (the API, which runs migrations, has no statement limit). | `BOSS_PG_TEMP_FILE_LIMIT` (5GB), `BOSS_PG_IDLE_IN_TRANSACTION_TIMEOUT` (15min), `BOSS_WORKER_DB_STATEMENT_TIMEOUT_SECONDS` (1800, `0` = none) |
 | Disk check before an upgrade | `boss upgrade` measures free space on this host and on Docker's own disk, estimates the build (about 35 GB for a full rebuild when the build cache is cold, 5 GB when warm) and refuses, with nothing changed, when either has less than that plus the floor. `--skip-disk-check` goes ahead regardless. | `BOSS_DISK_FLOOR_GB` (20), `BOSS_UPGRADE_FULL_BUILD_GB` (35), `BOSS_UPGRADE_INCREMENTAL_BUILD_GB` (5), `BOSS_DISK_CHECK` (`off` to skip) |
@@ -629,7 +657,8 @@ Backups contain private `.env` and identity keys and must be protected together.
 
 A remote archive install uses `.boss-shipped-commit` rather than Git.
 
-- **Update:** the local `upgrade.sh` requires a Git checkout, so use `remote.sh update` from your machine instead; it backs up on the VM first.
+- **Update:** the local `upgrade.sh` requires a Git checkout, so use `remote.sh update` from your machine instead; it backs up on the VM first. It rebuilds api, worker and egress (and the runner when it runs) together, so every image carries the same build toolchains, and warns if any running service still differs from the api.
+- **Dedicated host:** `remote.sh install` and `update` write `BOSS_DEDICATED_HOST=1` into the VM's `.env` when the line is missing, which lets BOSS prune old Docker build cache above 75% disk. A machine that also runs other projects should keep their cache: put `BOSS_DEDICATED_HOST=0` in its `.env` before the first install or update. An explicit value is never changed. Local installs are not marked.
 - **Recover:** prepare a fresh checkout at the backed-up commit on the VM, then use current recovery tools and the complete database, identity-key, artifact and local repositories archive. Pre-guard source requires explicit offline data-only recovery. Success retains the startup hold; it does not authorize starting the archived API.
 - **Failed update:** the new source is at the install path while the prior source remains at `PATH.prev` until installer/recreation succeeds. A failed build leaves the old containers running; after diagnosing the failure, you can move `PATH.prev` back to `PATH` before retrying. If recreation started, a database migration may have run: inspect the backup on that VM and use the complete recovery procedure above instead of only moving source. A failed source swap itself restores the prior source path, and the remote script refuses to discard a leftover `PATH.prev` on a later attempt.
 
@@ -691,6 +720,7 @@ Every flag is optional. See `./install.sh --help` for the full list. Added for t
 | `--no-local-model` | Never offer the local model |
 | `--rebind-ollama` | Allow `--install-ollama` to move an Ollama you already had from `127.0.0.1` to the Docker bridge address (Linux) |
 | `--no-discover` | Skip looking for model keys and subscriptions |
+| `--use-shell-proxy` | Save this shell's `HTTPS_PROXY` / `NO_PROXY` as BOSS's outbound proxy (`BOSS_UPSTREAM_PROXY`). Without it the shell's proxy is never used ([enterprise network](../../docs/community/ENTERPRISE_NETWORK.md)) |
 | `--no-boss-command` | Do not install `boss` on `PATH` |
 
-`BOSS_BIN_DIR` chooses where `boss` goes. `BOSS_INSTALL_DIR` points `boss` at another install.
+`BOSS_BIN_DIR` chooses where `boss` goes. An installed `boss` always runs its own install; use `boss --dir PATH` to act on another one. `BOSS_INSTALL_DIR` only chooses where `install.sh` installs.

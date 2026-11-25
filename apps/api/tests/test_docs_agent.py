@@ -3,9 +3,11 @@ from __future__ import annotations
 from datetime import date
 import json
 
+import pytest
 from sqlalchemy import text
 
 from apps.api.app import main as main_module
+from apps.api.app.config import get_settings
 from apps.api.app.services.core import emit_event, make_id
 from apps.api.app.services.docs_agent import (
     DocsDraft,
@@ -22,6 +24,16 @@ from apps.api.app.services.github_adapter import PullRequestResult
 
 
 PROJECT_ID = "boss-dogfood"
+
+
+@pytest.fixture(autouse=True)
+def _project_has_a_github_repository(monkeypatch):
+    """boss-dogfood publishes its docs to a GitHub repository (the install-wide target, the
+    registry's legacy fallback). A project with no repository, or one on this machine, queues
+    no docs update at all (test_docs_update_works_on_a_local_repo)."""
+    for settings in {id(s): s for s in (get_settings(), main_module.docs_updates.settings)}.values():
+        monkeypatch.setattr(settings, "target_github_owner", "example")
+        monkeypatch.setattr(settings, "target_github_repo", "boss")
 
 
 class FakeDocsAgent:
@@ -191,7 +203,7 @@ def test_manual_docs_job_executes_budgeted_receipted_draft_pr(
     }
     first = client.post("/v1/docs/update", json=request)
     second = client.post("/v1/docs/update", json=request)
-    assert first.status_code == 201
+    assert first.status_code == 201, first.text
     assert second.status_code == 201
     assert first.json()["id"] == second.json()["id"]
 

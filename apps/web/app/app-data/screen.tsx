@@ -5,6 +5,7 @@
  * and a trash that holds a row for 30 days.
  */
 import React, { useCallback, useEffect, useState } from "react";
+import { apiWrite } from "../../lib/api-write";
 
 const CSS = `
 .ad1266 {
@@ -289,7 +290,7 @@ export function AppDataScreen({ projectId, appKey, appName }: {
   }, [project, app]);
 
   async function mutate(path: string, body: unknown) {
-    const response = await fetch(path, {
+    const response = await apiWrite(path, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),

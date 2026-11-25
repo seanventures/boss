@@ -1289,6 +1289,8 @@ CREATE INDEX IF NOT EXISTS idx_ci_waits_project_sha
   ON ci_waits(project_id, head_sha, created_at DESC);
 -- BOSSAPP-946: whether a repository has CI can be unknown (NULL); unknown never means "has CI".
 ALTER TABLE ci_waits ALTER COLUMN has_ci DROP NOT NULL;
+-- BOSSAPP-1453: when a check first left the runner queue; the CI timeout counts from here.
+ALTER TABLE ci_waits ADD COLUMN IF NOT EXISTS running_since TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS github_branch_policies (
   id TEXT PRIMARY KEY,
@@ -4264,8 +4266,10 @@ CREATE TABLE IF NOT EXISTS workflow_definitions (
   -- a customer workflow has to say what it is.
   namespace TEXT NOT NULL DEFAULT 'system'
     CHECK (namespace IN ('system', 'product')),
-  -- Catalogue workflows BOSS ships are read-only: a customer forks one to change it, which is
-  -- what keeps "reset to the standard" possible and the diff against it visible.
+  -- A catalogue workflow BOSS ships (a "standard"). Editable in place: an edit publishes the
+  -- next version of this same definition, and the shipped spec stays recorded as its baseline
+  -- (standard_version_id below), so "Modified", the diff and "Reset to standard" all have
+  -- something to compare against.
   is_catalogue BOOLEAN NOT NULL DEFAULT false,
   forked_from_version_id TEXT,
   active_version_id TEXT,
@@ -4304,6 +4308,76 @@ ALTER TABLE workflow_versions
   GENERATED ALWAYS AS (workflow_definition_id) STORED;
 CREATE INDEX IF NOT EXISTS idx_workflow_versions_project
   ON workflow_versions(project_id, workflow_definition_id, version DESC);
+
+-- A STANDARD'S BASELINE (workflow_standards.py). `standard_version_id` is the version holding
+-- the spec BOSS last shipped for this standard and `standard_content_hash` that version's hash:
+-- the definition is "Modified" when its active version's hash differs. A newer shipped spec
+-- for a Modified standard is published as a version that is NOT made active and pointed at by
+-- `standard_available_version_id` ("New standard available"); "Not now" records the one the
+-- operator set aside in `standard_dismissed_version_id`. A seed never overwrites an edit.
+ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS standard_version_id TEXT;
+ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS standard_content_hash TEXT;
+ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS standard_available_version_id TEXT;
+ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS standard_dismissed_version_id TEXT;
+-- Until standards were editable, a standard's active version WAS what BOSS shipped: that is
+-- its baseline. Idempotent: only rows with no baseline yet.
+UPDATE workflow_definitions d
+   SET standard_version_id = d.active_version_id, standard_content_hash = v.content_hash
+  FROM workflow_versions v
+ WHERE d.is_catalogue AND d.standard_version_id IS NULL AND v.id = d.active_version_id;
+
+-- THE WORKFLOW MARKETPLACE (workflow_marketplace.py). A pack is a versioned set of workflows a
+-- project INSTALLS into its own workflows ("Yours"), never into the standards. BOSS ships two
+-- (Banking Data Quality, SRE / Helpdesk; defined in code); an org publishes its own from any of
+-- its workflows, visible to every project in that org. An installed copy carries where it came
+-- from (`marketplace_pack_id`, `marketplace_version`) and uses the standard baseline columns
+-- above for "Modified" and "Update available": an unmodified copy takes a newer pack version by
+-- itself, a modified one is offered it and never overwritten. `marketplace_waiting` says why an
+-- installed copy has no runnable version yet (a connector the pack needs is not set up).
+ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS marketplace_pack_id TEXT;
+ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS marketplace_version TEXT;
+ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS marketplace_waiting TEXT;
+CREATE INDEX IF NOT EXISTS idx_workflow_definitions_marketplace
+  ON workflow_definitions(marketplace_pack_id) WHERE marketplace_pack_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS workflow_packs (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES orgs(id),
+  name TEXT NOT NULL,
+  summary TEXT,
+  publisher TEXT NOT NULL,
+  version TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'published' CHECK (status IN ('published', 'unpublished')),
+  source_project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  source_definition_id TEXT NOT NULL,
+  published_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(source_definition_id)
+);
+CREATE INDEX IF NOT EXISTS idx_workflow_packs_org ON workflow_packs(org_id, status, updated_at DESC);
+CREATE TABLE IF NOT EXISTS workflow_pack_versions (
+  id TEXT PRIMARY KEY,
+  pack_id TEXT NOT NULL REFERENCES workflow_packs(id) ON DELETE CASCADE,
+  version TEXT NOT NULL,
+  -- [{workflow_key, name, description, spec}]: what an install copies.
+  workflows JSONB NOT NULL,
+  published_by TEXT NOT NULL,
+  published_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(pack_id, version)
+);
+-- DQ AND INCIDENT RESPONSE MOVED FROM THE STANDARDS INTO MARKETPLACE PACKS. A project that already
+-- has them keeps them, now as installed copies (Yours · from Marketplace): same definition, same
+-- versions, same runs, and the shipped baseline above stays their baseline. Idempotent: only rows
+-- still marked standard.
+UPDATE workflow_definitions
+   SET is_catalogue = false,
+       marketplace_pack_id = CASE WHEN workflow_key = 'incident_response' THEN 'sre-helpdesk'
+                                  ELSE 'banking-dq' END,
+       marketplace_version = '1.0',
+       updated_at = now()
+ WHERE is_catalogue
+   AND workflow_key IN ('dq_incident_rca', 'dq_incident_escalation', 'dq_monitor_intake',
+                        'incident_response');
 
 CREATE TABLE IF NOT EXISTS workflow_mappings (
   id TEXT PRIMARY KEY,
@@ -7135,6 +7209,48 @@ CREATE TABLE IF NOT EXISTS agent_progress (
 );
 CREATE INDEX IF NOT EXISTS idx_agent_progress_thread
   ON agent_progress(thread_id, id DESC);
+
+-- ONE CHAT TURN, DURABLY (services/chat_turns.py). The operator's message and this row are
+-- committed BEFORE the first model call, so a turn that fails, a worker that restarts or a
+-- Postgres idle-in-transaction timeout can no longer roll the question back. The turn itself
+-- runs on short transactions; its reply (and `result`, the response a console that reloaded
+-- reads back) lands with status 'done', a failure with status 'failed' and a plain sentence in
+-- `error`. `heartbeat_at` moves at every step: a 'running' row whose heartbeat stopped is a
+-- turn whose process died, and the sweeper marks it failed.
+CREATE TABLE IF NOT EXISTS agent_chat_turns (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  thread_id TEXT NOT NULL,
+  actor TEXT NOT NULL,
+  agent_role TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'running'
+    CHECK (status IN ('queued', 'running', 'done', 'failed')),
+  user_message_id TEXT,
+  reply_message_id TEXT,
+  act_id TEXT,
+  error TEXT,
+  result JSONB,
+  -- The writes its tools made, recorded as they happened (chat_turns.note_action): a failed
+  -- turn names them as done, so "ask again" never repeats them.
+  actions JSONB NOT NULL DEFAULT '[]'::jsonb,
+  -- The client's idempotency key: the same key is the same turn, never a second message.
+  client_key TEXT,
+  -- host:pid:token of the process answering it; start-up fails a dead owner's turns at once.
+  owner TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finished_at TIMESTAMPTZ
+);
+-- A database that created this table before these columns existed gains them here.
+ALTER TABLE agent_chat_turns ADD COLUMN IF NOT EXISTS actions JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE agent_chat_turns ADD COLUMN IF NOT EXISTS client_key TEXT;
+ALTER TABLE agent_chat_turns ADD COLUMN IF NOT EXISTS owner TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_chat_turns_client_key
+  ON agent_chat_turns(project_id, actor, client_key) WHERE client_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_agent_chat_turns_thread
+  ON agent_chat_turns(thread_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_chat_turns_live
+  ON agent_chat_turns(project_id, heartbeat_at) WHERE status IN ('queued', 'running');
 
 -- BOSS debugging the way an engineer debugs: a real Claude Code session with a shell, the
 -- app's repo, read-only SQL and a way onto the fleet. See services/investigation.py for why
@@ -12475,6 +12591,7 @@ ALTER TABLE tool_call_audit ADD COLUMN IF NOT EXISTS screen JSONB;
 CREATE TABLE IF NOT EXISTS execution_environments (
   id          TEXT PRIMARY KEY,
   project_id  TEXT REFERENCES projects(id) ON DELETE CASCADE,  -- NULL: org-wide
+  org_id      TEXT REFERENCES orgs(id),
   name        TEXT NOT NULL,
   driver      TEXT NOT NULL
     CHECK (driver IN ('local', 'ssh', 'kubernetes', 'microvm', 'e2b', 'daytona')),
@@ -12492,9 +12609,11 @@ CREATE TABLE IF NOT EXISTS execution_environments (
 CREATE UNIQUE INDEX IF NOT EXISTS uq_execution_environments_project_name
   ON execution_environments (project_id, name) WHERE project_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_execution_environments_org_name
-  ON execution_environments (name) WHERE project_id IS NULL;
+  ON execution_environments (COALESCE(org_id, ''), name) WHERE project_id IS NULL;
 CREATE INDEX IF NOT EXISTS idx_execution_environments_project
   ON execution_environments (project_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_execution_environments_org
+  ON execution_environments (org_id, project_id, status, created_at DESC);
 
 -- One build's hold on an environment (the shape preview_sandboxes proved: a
 -- durable reservation with a TTL and one reaper). acquire() writes a row,
@@ -14984,8 +15103,9 @@ CREATE INDEX IF NOT EXISTS idx_storage_actions_incident ON storage_actions (inci
 CREATE TABLE IF NOT EXISTS retention_rules (
   id TEXT PRIMARY KEY,
   host_id TEXT,
-  kind TEXT NOT NULL CHECK (kind IN ('backups', 'images', 'build_cache', 'logs', 'telemetry',
-                                     'scratch_db', 'kg_derived', 'docker_trim', 'threshold')),
+  kind TEXT NOT NULL CHECK (kind IN ('backups', 'scheduled_backups', 'images', 'build_cache',
+                                     'logs', 'telemetry', 'scratch_db', 'kg_derived', 'docker_trim',
+                                     'threshold')),
   rule JSONB NOT NULL DEFAULT '{}'::jsonb,
   enabled BOOLEAN NOT NULL DEFAULT true,
   source TEXT NOT NULL DEFAULT 'default' CHECK (source IN ('default', 'operator', 'learned')),
@@ -14994,6 +15114,21 @@ CREATE TABLE IF NOT EXISTS retention_rules (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ
 );
+-- BOSSAPP-1459: the scheduled (in-app) backups' cap has its OWN rule kind, never `backups` (the
+-- host's pre-upgrade recovery archives): approving one must not make deleting the other automatic.
+DO $$ BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'retention_rules_kind_check'
+      AND pg_get_constraintdef(oid) NOT LIKE '%scheduled_backups%'
+  ) THEN
+    ALTER TABLE retention_rules DROP CONSTRAINT retention_rules_kind_check;
+    ALTER TABLE retention_rules
+      ADD CONSTRAINT retention_rules_kind_check
+      CHECK (kind IN ('backups', 'scheduled_backups', 'images', 'build_cache', 'logs', 'telemetry',
+                      'scratch_db', 'kg_derived', 'docker_trim', 'threshold'));
+  END IF;
+END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS retention_rules_one_per_kind_host
   ON retention_rules (kind, COALESCE(host_id, ''));
 
@@ -15401,13 +15536,16 @@ END $$;
 -- the run's delegated token for its destination (model gateway, MCP gateway, run plane, egress).
 ALTER TABLE agent_hosts ADD COLUMN IF NOT EXISTS host_tokens BOOLEAN NOT NULL DEFAULT false;
 -- ================================ end P8b-6/7 ==
--- ================================ AMEX-G3 (BOSSAPP-1139): a non-zero exit fails the step ==
+-- ================================ BOSSAPP-1139: a non-zero exit fails the step ==
 -- `skill.sandboxed_command` always returned `exit_code`, and the workflow runner never read it:
 -- a validator that exited 1 went green and the run went on to deploy. New sandboxed_command
 -- skills are saved with `fail_on_exit: true` (skill_definitions.validate_config); the ones
 -- authored before the flag existed keep today's behaviour by an EXPLICIT false, written ONCE.
 -- ONE-TIME, not on every boot: recorded in `schema_backfills`, so a skill authored or edited
 -- after this ran (which always carries the key) is never touched by it again.
+-- The marker was first written under an older key; an install that holds it has run this
+-- backfill already, so the guard also skips on that key, matched by its md5 (the old name
+-- is not kept in the tree).
 CREATE TABLE IF NOT EXISTS schema_backfills (
   key TEXT PRIMARY KEY,
   applied_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -15416,17 +15554,18 @@ CREATE TABLE IF NOT EXISTS schema_backfills (
 DO $$
 DECLARE changed INTEGER;
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM schema_backfills WHERE key = 'amex_g3_fail_on_exit_false') THEN
+  IF NOT EXISTS (SELECT 1 FROM schema_backfills WHERE key = 'sandboxed_command_fail_on_exit_false'
+                    OR md5(key) = '12368305bd947fc7cac0c3dd9173f951') THEN
     UPDATE skill_definitions
        SET config = config || '{"fail_on_exit": false}'::jsonb
      WHERE behaviour_kind = 'sandboxed_command'
        AND NOT (config ? 'fail_on_exit');
     GET DIAGNOSTICS changed = ROW_COUNT;
     INSERT INTO schema_backfills (key, rows_changed)
-    VALUES ('amex_g3_fail_on_exit_false', changed) ON CONFLICT (key) DO NOTHING;
+    VALUES ('sandboxed_command_fail_on_exit_false', changed) ON CONFLICT (key) DO NOTHING;
   END IF;
 END $$;
--- ================================ end AMEX-G3 ==
+-- ================================ end BOSSAPP-1139 ==
 -- ================================ BOSSAPP-1163: standing grants cover the project's local repos ==
 -- A grant now names the repositories BOSS keeps ON THIS MACHINE as `resources.local.repos`
 -- (identity/grants.py). Standing grants made before that named none, so a schedule on a
@@ -15636,6 +15775,12 @@ CREATE TABLE IF NOT EXISTS findings (
   updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (project_id, number)
 );
+-- A row no follow-up should carry (its check did not run, or a later check superseded it) is
+-- moved here with its reason, once (ledger.drop_stale), so counts and badges stop including it.
+ALTER TABLE findings DROP CONSTRAINT IF EXISTS findings_status_check;
+ALTER TABLE findings ADD CONSTRAINT findings_status_check
+  CHECK (status IN ('open', 'in_progress', 'fixed', 'waived', 'wont_fix', 'duplicate',
+                    'superseded'));
 CREATE UNIQUE INDEX IF NOT EXISTS uq_findings_live_fingerprint
   ON findings (project_id, lineage_root_run_id, fingerprint)
   WHERE status IN ('open', 'in_progress');
@@ -15766,6 +15911,7 @@ CREATE TABLE IF NOT EXISTS factory_launch_attachments (
   byte_size INTEGER NOT NULL DEFAULT 0,
   text_extract TEXT NOT NULL DEFAULT '',
   drive_source_id TEXT,
+  uploaded_by TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_factory_launch_attachments_org
@@ -16388,3 +16534,255 @@ CREATE TABLE IF NOT EXISTS month_closes (
 );
 CREATE INDEX IF NOT EXISTS idx_month_closes_org
   ON month_closes (org_id, "month");
+
+-- BOSSAPP-1384 DOCUMENT-SYSTEM CONNECTIONS (services/docs_connections.py). A document system
+-- (Confluence) is connected ONCE per org, like the ticket systems' org-wide list, and every
+-- project of the org reads through it. The row keeps no secret: `configuration.secret_ref_id`
+-- names the vault entry (stored under the home project), and the row says who connected it and
+-- whether its last test passed.
+CREATE TABLE IF NOT EXISTS docs_connections (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES orgs(id),
+  home_project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  provider_key TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disconnected')),
+  configuration JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by TEXT NOT NULL DEFAULT 'system',
+  last_tested_at TIMESTAMPTZ,
+  last_test_ok BOOLEAN,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (org_id, provider_key)
+);
+
+-- A Confluence page published by an agent is a third kind of consented subject: widened only
+-- when the live constraint does not already allow it.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conrelid = 'change_consents'::regclass
+       AND conname = 'change_consents_subject_kind_check'
+       AND pg_get_constraintdef(oid) LIKE '%confluence%') THEN
+    ALTER TABLE change_consents DROP CONSTRAINT IF EXISTS change_consents_subject_kind_check;
+    ALTER TABLE change_consents ADD CONSTRAINT change_consents_subject_kind_check
+      CHECK (subject_kind IN ('skill', 'prompt', 'wiki', 'confluence'));
+  END IF;
+END $$;
+
+-- A COMPLETED BUILD NEVER ENDS SILENT (2026-11-18, crun_5b11643d: an Easy Mode build passed
+-- every gate and ended completed with no pull request, no merge card and no reason). A run that
+-- turns `completed` with no pull request carries `finalize_ctx.no_pull_request` {reason, words}:
+-- the paths that skip the PR on purpose write their own (services/pull_request_owed.py); any
+-- other path gets this one, so "completed, no PR, no why" cannot be stored.
+CREATE OR REPLACE FUNCTION code_task_runs_no_silent_completion() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.status = 'completed'
+     AND (TG_OP = 'INSERT' OR OLD.status IS DISTINCT FROM 'completed')
+     AND COALESCE(NEW.pull_request_url, '') = ''
+     AND (COALESCE(NEW.finalize_ctx, '{}'::jsonb) -> 'no_pull_request') IS NULL THEN
+    NEW.finalize_ctx := COALESCE(NEW.finalize_ctx, '{}'::jsonb) || jsonb_build_object(
+      'no_pull_request', jsonb_build_object(
+        'reason', 'unexplained',
+        'words', 'This build completed without opening a pull request, and the step that '
+                 || 'finished it did not say why. Its work is on its branch; open the run to '
+                 || 'see its last step, or retry it to open the pull request.'));
+  END IF;
+  IF NEW.status = 'completed'
+     AND COALESCE(NEW.pull_request_url, '') <> ''
+     AND (COALESCE(NEW.finalize_ctx, '{}'::jsonb) -> 'no_pull_request' ->> 'reason') = 'unexplained' THEN
+    NEW.finalize_ctx := NEW.finalize_ctx - 'no_pull_request';
+  END IF;
+  RETURN NEW;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'code_task_runs_no_silent_completion'
+                 AND tgrelid = 'code_task_runs'::regclass) THEN
+    CREATE TRIGGER code_task_runs_no_silent_completion BEFORE INSERT OR UPDATE
+      ON code_task_runs FOR EACH ROW EXECUTE FUNCTION code_task_runs_no_silent_completion();
+  END IF;
+END $$;
+
+-- EVERY FAILURE HAS AN OWNER (services/failure_owner.py, 2026-11-19). One row per failed item's
+-- lineage (a build and its retries, a workflow run, a job and its re-runs): who owns it now —
+-- an agent acting on it (`fixing`, "BOSS is fixing this: attempt 1 of 2 — …"), a person's action
+-- item with the reason BOSS could not fix it (`needs_person`, `decision_id`), or `resolved`.
+-- engine/tests/test_every_failure_has_an_owner.py enforces that no failure is left bare.
+CREATE TABLE IF NOT EXISTS failure_owners (
+  id TEXT PRIMARY KEY,
+  surface TEXT NOT NULL,
+  item_key TEXT NOT NULL,
+  item_id TEXT,
+  project_id TEXT,
+  title TEXT,
+  state TEXT NOT NULL CHECK (state IN ('fixing', 'needs_person', 'resolved')),
+  class TEXT CHECK (class IS NULL OR class IN ('app', 'platform', 'person')),
+  cause_code TEXT,
+  cause TEXT NOT NULL DEFAULT '',
+  owner TEXT,
+  owned_by TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 2,
+  next_attempt_at TIMESTAMPTZ,
+  words TEXT NOT NULL DEFAULT '',
+  reason TEXT NOT NULL DEFAULT '',
+  action TEXT NOT NULL DEFAULT '',
+  decision_id TEXT,
+  hints JSONB NOT NULL DEFAULT '{}'::jsonb,
+  history JSONB NOT NULL DEFAULT '[]'::jsonb,
+  failed_at TIMESTAMPTZ,
+  opened_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  resolved_at TIMESTAMPTZ,
+  UNIQUE (surface, item_key)
+);
+CREATE INDEX IF NOT EXISTS idx_failure_owners_open ON failure_owners (project_id, updated_at DESC)
+  WHERE state <> 'resolved';
+CREATE INDEX IF NOT EXISTS idx_failure_owners_decision ON failure_owners (decision_id)
+  WHERE decision_id IS NOT NULL;
+
+-- WHICH PROBE TOOK EACH SAMPLE (fix/slo-ignores-samples-from-a-different-probe). A probe bug —
+-- a GET of "/" on an API that declared /healthz, or "no connector for target_kind" — recorded
+-- failures that were never downtime, and the 24 h SLO kept reading them after the probe was
+-- fixed. Each sample now carries the signature of the probe that took it (what was asked), the
+-- target carries the signature it is measured with now and since when, and every reader of
+-- availability, SLO, incidents and alerts reads `counted_health_samples`: only samples taken by
+-- the target's current probe. Rows from before this column (NULL) count until the target has
+-- a current signature — i.e. until its first sample under the new code — and never after.
+ALTER TABLE deployment_health_samples ADD COLUMN IF NOT EXISTS probe_signature TEXT;
+ALTER TABLE deployment_targets ADD COLUMN IF NOT EXISTS probe_signature TEXT;
+ALTER TABLE deployment_targets ADD COLUMN IF NOT EXISTS probe_signature_since TIMESTAMPTZ;
+CREATE OR REPLACE VIEW counted_health_samples AS
+  SELECT s.id, s.project_id, s.deployment_target_id, s.checked_at, s.ok, s.status_code,
+         s.latency_ms, s.error, s.observed_version, s.probe_signature
+  FROM deployment_health_samples s
+  JOIN deployment_targets t ON t.id = s.deployment_target_id
+  WHERE t.probe_signature IS NULL
+     OR (s.probe_signature = t.probe_signature
+         -- A→B→A: the first A's samples belong to an earlier record, not this one, and
+         -- "Measured since" must say exactly what is counted.
+         AND (t.probe_signature_since IS NULL OR s.checked_at >= t.probe_signature_since));
+
+-- VALIDATION OVERRIDES AND RE-RUNS (docs/design/validation-review/SPEC.md §3, 2026-11-21). A
+-- person's accept / reject / edit / waive / reopen of one validator finding (or revert_all of
+-- the target file), shown in the review packet as O-n. reject / edit / revert_all write one
+-- commit to the change branch (commit_sha); before/after text is secret-masked. Every override
+-- queues a re-run of the validator at the new head (validation_reruns), whose boss.validation/v1
+-- record makes packet v(n+1). The validator's own output is never edited.
+CREATE TABLE IF NOT EXISTS finding_overrides (
+  id text PRIMARY KEY,
+  project_id text NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  change_number int NOT NULL,
+  finding_id text NOT NULL,
+  action text NOT NULL CHECK (action IN ('accept','reject','edit','remove','waive','reopen','revert_all')),
+  actor text NOT NULL,
+  reason text,
+  approver text,
+  approved_at timestamptz,
+  expires_at timestamptz,
+  before_text text,
+  after_text text,
+  commit_sha text,
+  rerun_id text,
+  packet_version int NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_finding_overrides_change
+  ON finding_overrides (project_id, change_number, created_at);
+CREATE TABLE IF NOT EXISTS validation_reruns (
+  id text PRIMARY KEY,
+  project_id text NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  change_number int NOT NULL,
+  head_sha text,
+  finding_id text,
+  state text NOT NULL DEFAULT 'pending' CHECK (state IN ('pending','running','done','failed')),
+  validation jsonb,
+  error text,
+  started_at timestamptz,
+  finished_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+ALTER TABLE validation_reruns ADD COLUMN IF NOT EXISTS finding_id text;
+-- The head an override was made at: (finding, head, action) makes a replay idempotent.
+ALTER TABLE finding_overrides ADD COLUMN IF NOT EXISTS head_sha text;
+-- `remove`: a person deletes the finding's whole block (a route and its keys) with one commit.
+DO $$ BEGIN
+  ALTER TABLE finding_overrides DROP CONSTRAINT IF EXISTS finding_overrides_action_check;
+  ALTER TABLE finding_overrides ADD CONSTRAINT finding_overrides_action_check
+    CHECK (action IN ('accept','reject','edit','remove','waive','reopen','revert_all'));
+END $$;
+CREATE INDEX IF NOT EXISTS idx_validation_reruns_change
+  ON validation_reruns (project_id, change_number, created_at);
+
+-- DEV AUTONOMY (BOSSAPP-1441): one answer to "is this production?" (services/production.py) and
+-- one policy for when agents act without asking (services/autonomy_policy.py).
+--
+-- A deployment target's tier, set by a person in Infra › Deploys: dev | staging | prod. NULL means
+-- nobody said; the resolver then reads the environment's name, then whether the target runs on
+-- this machine, and treats anything else (an unlabelled remote server) as production.
+ALTER TABLE deployment_targets ADD COLUMN IF NOT EXISTS tier TEXT;
+DO $$ BEGIN
+  ALTER TABLE deployment_targets DROP CONSTRAINT IF EXISTS deployment_targets_tier_check;
+  ALTER TABLE deployment_targets ADD CONSTRAINT deployment_targets_tier_check
+    CHECK (tier IS NULL OR tier IN ('dev', 'staging', 'prod'));
+END $$;
+-- Backfilled ONCE from the names BOSS already read as production (identity's rule) and the
+-- incident squad's non-production list; a name neither knows stays NULL (the resolver decides).
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM schema_once WHERE key = 'deployment_targets_tier_backfill') THEN
+    UPDATE deployment_targets SET tier = CASE
+        WHEN lower(environment) IN ('production', 'prod', 'prd', 'live')
+          OR lower(environment) LIKE 'production%' OR lower(environment) LIKE 'prod-%'
+          OR lower(environment) LIKE 'prod\_%' OR lower(environment) LIKE 'live-%' THEN 'prod'
+        WHEN lower(environment) IN ('staging', 'stage', 'stg', 'preview', 'qa', 'test', 'testing')
+          THEN 'staging'
+        WHEN lower(environment) IN ('dev', 'development', 'local', 'localhost', 'sandbox', 'ci')
+          THEN 'dev'
+        ELSE NULL END
+      WHERE tier IS NULL;
+    INSERT INTO schema_once (key) VALUES ('deployment_targets_tier_backfill')
+      ON CONFLICT (key) DO NOTHING;
+  END IF;
+END $$;
+
+-- Where a repository's DEFAULT branch ships: a deployment target id, 'none' (it ships nowhere),
+-- or NULL (nobody said — a merge into it is treated as a production release and asks).
+ALTER TABLE github_repository_bindings ADD COLUMN IF NOT EXISTS default_branch_ships_to TEXT;
+
+-- The autonomy policy: one org default (scope_kind 'org') and an optional per-project row that may
+-- only be stricter. {dev: act|act_capped|ask, prod: ask, unknown_remote: prod,
+-- dev_topup_usd: {per_item, per_day}, explicit_stops: honour}. No row: the built-in default
+-- (dev: act, prod: ask), the operator's standing word.
+CREATE TABLE IF NOT EXISTS autonomy_policies (
+  scope_kind TEXT NOT NULL CHECK (scope_kind IN ('org', 'project')),
+  scope_id TEXT NOT NULL,
+  policy JSONB NOT NULL,
+  set_by TEXT NOT NULL,
+  set_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (scope_kind, scope_id)
+);
+-- Dev autonomy decides only cards written from here on (or stamped by the sink): a card pending
+-- before this install had none of the markers a person's stop is written with.
+INSERT INTO schema_once (key) VALUES ('dev_autonomy_started') ON CONFLICT (key) DO NOTHING;
+
+-- Backfill execution_environments.org_id once for rows created before org_id existed.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM schema_once WHERE key = 'execution_environments_org_id_backfill') THEN
+    UPDATE execution_environments e
+    SET org_id = w.org_id
+    FROM projects p
+    JOIN workspaces w ON w.id = p.workspace_id
+    WHERE e.project_id = p.id
+      AND e.org_id IS NULL;
+    UPDATE execution_environments
+    SET org_id = (SELECT id FROM orgs ORDER BY created_at, id LIMIT 1)
+    WHERE project_id IS NULL
+      AND org_id IS NULL
+      AND EXISTS (SELECT 1 FROM orgs);
+    INSERT INTO schema_once (key) VALUES ('execution_environments_org_id_backfill')
+      ON CONFLICT (key) DO NOTHING;
+  END IF;
+END $$;

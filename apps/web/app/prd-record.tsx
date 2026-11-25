@@ -36,6 +36,13 @@ export function PrdRepoLink({ repo, testid = "prd-repo" }: { repo: PrdRepo; test
   );
 }
 
+/** How many agents sat on the panel: the seats on its agenda (facilitator included), or the
+ *  positions recorded when there is no agenda. A panel whose round gists were not kept read
+ *  "0 agents" beside a five-seat agenda; never a zero when someone sat. */
+export function panelSize(m: Pick<NonNullable<PrdRecord["meeting"]>, "positions" | "agenda">): number {
+  return Math.max(m.positions.length, m.agenda.participants.length);
+}
+
 export function PrdRecordView({ prd, link = (h) => h, open = false, testid = "prd-record" }: {
   prd: PrdRecord; link?: (href: string) => string; open?: boolean; testid?: string;
 }) {
@@ -63,7 +70,7 @@ export function PrdRecordView({ prd, link = (h) => h, open = false, testid = "pr
         <div data-testid={`${testid}-meeting`}>
           <button type="button" onClick={() => setShowMeeting((v) => !v)} aria-expanded={showMeeting}
                   style={{ ...chip, cursor: "pointer", background: "transparent" }} data-testid={`${testid}-meeting-toggle`}>
-            How the panel got here · {m.positions.length} agent{m.positions.length === 1 ? "" : "s"}
+            How the panel got here{panelSize(m) ? ` · ${panelSize(m)} agent${panelSize(m) === 1 ? "" : "s"}` : ""}
             {m.dissent.length ? ` · ${m.dissent.length} dissent` : ""}
           </button>
           {showMeeting ? (

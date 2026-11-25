@@ -52,6 +52,20 @@ class Response:
         return json.loads(text)
 
 
+class _SameHostRedirects(urllib.request.HTTPRedirectHandler):
+    """A redirect is followed only to the SAME host and scheme (https stays https). urllib's default
+    would resend the Authorization header to wherever a 302 points; here a cross-host (or
+    downgrading) hop is not followed at all, so the credential never leaves the host the
+    connection was checked against. The 3xx comes back to the caller as the response."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+        old, new = urllib.parse.urlsplit(req.full_url), urllib.parse.urlsplit(newurl)
+        if (new.hostname or "").lower() != (old.hostname or "").lower() or \
+                new.scheme != old.scheme or new.port != old.port:
+            return None
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def _urllib_transport(method: str, url: str, headers: dict[str, str], data: Optional[bytes],
                       timeout: float, context: Optional[ssl.SSLContext]) -> Response:
     request = urllib.request.Request(url, data=data, method=method, headers=headers)
@@ -59,7 +73,10 @@ def _urllib_transport(method: str, url: str, headers: dict[str, str], data: Opti
         kwargs: dict[str, Any] = {"timeout": timeout}
         if url.lower().startswith("https://"):
             kwargs["context"] = context or ssl.create_default_context()
-        with urllib.request.urlopen(request, **kwargs) as response:  # noqa: S310 — host checked
+        opener = urllib.request.build_opener(
+            _SameHostRedirects(),
+            *([urllib.request.HTTPSHandler(context=kwargs["context"])] if "context" in kwargs else []))
+        with opener.open(request, timeout=timeout) as response:  # noqa: S310 — host checked
             return Response(response.status, {k.lower(): v for k, v in response.headers.items()},
                             response.read())
     except urllib.error.HTTPError as error:
@@ -82,6 +99,20 @@ def _host_matches(host: str, pattern: str) -> bool:
 
 def _host_of(url: str) -> str:
     return (urllib.parse.urlsplit(url or "").hostname or "").lower().rstrip(".")
+
+
+def _loopback(host: str) -> bool:
+    """A host that is not on the public internet: loopback, a private/link-local address, a
+    single-label name (a compose service such as ``plane-api``) or a ``.local``/``.internal``/
+    ``.lan`` name. Self-hosted Jira or Plane over plain http on such a host keeps working; plain
+    http to a PUBLIC host with a credential is refused."""
+    if host == "localhost" or "." not in host or host.endswith((".local", ".internal", ".lan", ".localhost")):
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return address.is_loopback or address.is_private or address.is_link_local
 
 
 def _link_local(host: str) -> bool:
@@ -115,6 +146,9 @@ def check_host(url: str, official: tuple[str, ...], configured: tuple[str, ...],
         raise HostNotAllowed(f"{provider}: not an http(s) URL", provider=provider)
     if host in _BLOCKED_HOSTS or _link_local(host):
         raise HostNotAllowed(f"{provider}: {host} is never a ticket system", provider=provider)
+    if scheme == "http" and not _loopback(host):
+        raise HostNotAllowed(f"{provider}: refusing a plain-http request to {host}; a credential "
+                             "is only sent over https to a public host.", provider=provider)
     if any(_host_matches(host, p) for p in configured):
         return
     if scheme == "https" and any(_host_matches(host, p) for p in official):
@@ -135,7 +169,7 @@ class TicketHttp:
                  default_hosts: tuple[str, ...] = (), base_url_fields: tuple[str, ...] = (),
                  guard_provider: str = "", timeout: float = DEFAULT_TIMEOUT_S,
                  ssl_context: Optional[ssl.SSLContext] = None,
-                 extra_headers: Optional[dict[str, str]] = None):
+                 extra_headers: Optional[dict[str, str]] = None, retry_unsafe: bool = True):
         """``pick_credential()`` -> ActingCredential (auth.select_credential); ``auth(credential)``
         -> (headers, base URL override or None) — an OAuth token may address another API base
         (Atlassian: https://api.atlassian.com/ex/jira/{cloudId})."""
@@ -147,6 +181,10 @@ class TicketHttp:
         self.timeout = timeout
         self.ssl_context = ssl_context
         self.extra_headers = dict(extra_headers or {})
+        #: False: a write (POST/PUT/PATCH/DELETE) is never re-sent after a network error or a 5xx,
+        #: because the first attempt may have been applied (a 429 is rejected before it runs and
+        #: is still retried). The caller reads the target back to learn what happened.
+        self.retry_unsafe = retry_unsafe
         self.official, self.configured = allowed_hosts(conn, default_hosts, base_url_fields,
                                                        guard_provider)
         self._headers_cache: Optional[dict[str, str]] = None
@@ -203,7 +241,7 @@ class TicketHttp:
             except TicketSystemError:
                 raise
             except Exception as error:  # noqa: BLE001 — network: retried, then typed
-                if attempt < MAX_RETRIES:
+                if attempt < MAX_RETRIES and self._may_retry(method):
                     SLEEP(BACKOFF_BASE_S * (2 ** attempt))
                     attempt += 1
                     continue
@@ -212,14 +250,22 @@ class TicketHttp:
                     provider=self.provider) from None
             status = response.status
             self._record(method, safe_path, status)
+            if 300 <= status < 400 and status not in ok_statuses and status != 304:
+                raise TicketSystemError(
+                    f"{self.provider}: {method} {safe_path} was redirected ({status}); BOSS does "
+                    "not follow a redirect with a credential attached.", status=status,
+                    provider=self.provider)
             if status < 400 or status in ok_statuses:
                 return response
-            retryable = status == 429 or status >= 500
+            retryable = status == 429 or (status >= 500 and self._may_retry(method))
             if retryable and attempt < MAX_RETRIES:
                 SLEEP(self._delay(response, attempt))
                 attempt += 1
                 continue
             raise self._error(method, safe_path, response)
+
+    def _may_retry(self, method: str) -> bool:
+        return self.retry_unsafe or method.upper() in ("GET", "HEAD", "OPTIONS")
 
     def _record(self, method: str, path: str, status: Optional[int]) -> None:
         if self.credential is not None:

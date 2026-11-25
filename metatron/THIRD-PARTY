@@ -1,0 +1,5 @@
+Third-party notices and license provenance for the `metatron/` Rust workspace are retained at the repository root:
+
+- Notice index: `../THIRD-PARTY-NOTICES.md`
+- Retained upstream texts: `../third_party/notices/codex-05ae1b0f-LICENSE` and `../third_party/notices/codex-05ae1b0f-NOTICE`
+- Vendored crates: `third_party/codex/` (pinned to `openai/codex` commit `05ae1b0fdd5ab412d24248acc76c5d9f6f275440`, Apache-2.0; includes Ratatui MIT attribution in `NOTICE`)

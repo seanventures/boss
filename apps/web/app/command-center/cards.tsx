@@ -85,7 +85,7 @@ export function needRow(item: AttentionItem, now: number | null): NeedRow {
              sub: [source, waited && (item.run ? `waiting ${waited}` : `raised ${waited} ago`)].filter(Boolean).join(", ") };
   }
   if (item.kind === "readiness") {
-    return { item, roleKey: null, icon: "Settings", primary: false, title: `Setup: ${withoutIds(item.title)}`,
+    return { item, roleKey: null, icon: "⚙", primary: false, title: `Setup: ${withoutIds(item.title)}`,
              sub: item.detail || "Builds can't start until this is done" };
   }
   if (item.kind === "system_health") {
@@ -353,7 +353,7 @@ export function FlightCard({ view, projectId, actor, orgId, now, onRefresh, onSt
             <b>Nothing running right now</b>
             <span>
               Start a <button type="button" className="cc-inline-link" onClick={onStart} data-testid="cc-start-work"
-                              data-href={linkTo({ area: "delivery_workflows" }, orgId)}>build above</button>, or pick a template below.
+                              data-href={linkTo({ area: "delivery_workflows" }, orgId)}>build</button>, or pick an idea under Ideas and connectors.
             </span>
           </div>
         </div>

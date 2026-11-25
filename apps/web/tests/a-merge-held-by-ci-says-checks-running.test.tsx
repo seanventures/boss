@@ -84,7 +84,9 @@ describe("a merge held by CI", () => {
     const approve = tid("decision-approve") as HTMLButtonElement;
     expect(approve.textContent).toContain("Checks running…");
     expect(approve.disabled).toBe(true);
-    expect(tid("decision-held")?.textContent).toContain("CI is still running");
+    // The hold's words: once on the card's status line (approvals wireframe B), whole in the title.
+    expect(tid("decision-status")?.textContent).toContain("CI is still running");
+    expect(approve.title).toContain("CI is still running");
   });
 
   it("the change set keeps the engine's hold on its merge", () => {

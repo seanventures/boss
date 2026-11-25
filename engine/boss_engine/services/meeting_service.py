@@ -20,13 +20,14 @@ import json
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ..config import Settings
-from ..db import begin
+from ..db import begin, map_in_context
 from .jobs import JOB_PRIORITY_INTERACTIVE
 from .core import stable_dedupe_key, create_artifact, create_blocking_decision, emit_event, make_id
 from .mcp_registry import (
@@ -558,7 +559,7 @@ def _ask_panel(adapter, personas: list[dict], make_prompt, seats: Optional[dict]
         return p["title"], txt
 
     with ThreadPoolExecutor(max_workers=max(1, len(personas))) as pool:
-        for title, txt in pool.map(one, personas):
+        for title, txt in map_in_context(pool, one, personas):
             out[title] = txt
     return out, cost, model
 
@@ -923,6 +924,36 @@ def completed_benchmark_build(connection, project_id: str, benchmark_id: str,
     }
 
 
+#: How many seats a compact panel has (Easy Mode): the chair and two more.
+COMPACT_SEATS = 3
+
+#: Who approves a panel's PRD, when the caller says (`constraints.spec_approval`):
+#: "start" — the person's own start covers it (Easy Mode's light lane: the PRD is approved under
+#: the consent they gave when they pressed it, and recorded so); "person" — a person reads it
+#: first (Easy Mode's "Review the plan first"). Absent: the install's setting decides.
+SPEC_APPROVED_BY_START = "start"
+SPEC_APPROVED_BY_PERSON = "person"
+
+#: The PRD decision's note when the person's start approved it.
+APPROVED_BY_START_NOTE = ("Approved by your Easy Mode start: you asked BOSS to build this, and "
+                          "the panel's spec is what it builds. Read it under Meetings.")
+
+
+def is_compact(constraints: Optional[dict]) -> bool:
+    """A compact panel: a few seats, one round, then the PRD (constraints.compact)."""
+    return str((constraints or {}).get("compact") or "").lower() in ("true", "1", "yes")
+
+
+def spec_approval_of(constraints: Optional[dict]) -> str:
+    """Who approves this panel's PRD: SPEC_APPROVED_BY_START (only with the person the runner
+    stamped, `approved_by_start`), SPEC_APPROVED_BY_PERSON, or ""."""
+    said = str((constraints or {}).get("spec_approval") or "").strip().lower()
+    if said == SPEC_APPROVED_BY_START and not str(
+            (constraints or {}).get("approved_by_start") or "").strip():
+        return ""
+    return said if said in (SPEC_APPROVED_BY_START, SPEC_APPROVED_BY_PERSON) else ""
+
+
 def start_meeting_run(connection, *, project_id, task_id, directive, url, constraints, role_keys,
                       finalize_ctx, title: Optional[str] = None) -> str:
     run_id = make_id("mrun")
@@ -931,14 +962,21 @@ def start_meeting_run(connection, *, project_id, task_id, directive, url, constr
     constraints = dict(constraints or {})
     constraints.setdefault("meeting_type", DEFAULT_MEETING_TYPE)
     constraints["meeting_type"] = normalize_meeting_type(constraints.get("meeting_type"))
+    # A COMPACT PANEL (Easy Mode, 2026-11-19): a few seats and one round, so the spec is written
+    # in minutes. With no site to study it starts at its one round, not at research.
+    compact = is_compact(constraints)
+    if compact:
+        personas = personas[:COMPACT_SEATS]
+    first_phase = "round1" if compact and not str(url or "").strip() else "research"
     connection.execute(
         text("""
             INSERT INTO meeting_runs (id, project_id, task_id, status, phase, directive, url,
                                       role_keys, constraints, finalize_ctx, title)
-            VALUES (:id, :p, :t, 'running', 'research', :d, :url,
+            VALUES (:id, :p, :t, 'running', :phase, :d, :url,
                     CAST(:rk AS JSONB), CAST(:c AS JSONB), CAST(:fc AS JSONB), :title)
         """),
         {"id": run_id, "p": project_id, "t": task_id, "d": directive, "url": url, "title": title,
+         "phase": first_phase,
          "rk": json.dumps([p["key"] for p in personas]),
          "c": json.dumps(constraints or {}), "fc": json.dumps(finalize_ctx or {})},
     )
@@ -1063,6 +1101,11 @@ def convene_prd_meeting_core(
     for a workflow step, and the accountable {actor} — so its seats are signed under that
     work (agent_acts.sync_meeting), never under a made-up person."""
     constraints = dict(constraints or {})
+    # APPROVAL BY A PERSON'S EASY MODE START IS NEVER A CALLER'S TO CLAIM: only the workflow
+    # runner stamps it, on an Easy Mode MVP run (workflow_capability_runner._stamp_start_approval).
+    constraints.pop("approved_by_start", None)
+    if str(constraints.get("spec_approval") or "").strip().lower() == SPEC_APPROVED_BY_START:
+        constraints.pop("spec_approval")
     constraints.setdefault("meeting_type", DEFAULT_MEETING_TYPE)
     constraints["meeting_type"] = normalize_meeting_type(constraints.get("meeting_type"))
     # WHAT THE PERSON ASKED, kept apart from the prompt BOSS built around it (meeting_brief):
@@ -1199,6 +1242,151 @@ def advance_meeting_run(engine, settings: Settings, jobs, run_id: str) -> dict:
         with begin(engine) as c:
             return _advance_simulated_phase(c, settings, jobs, run)
 
+    try:
+        return _advance_phase(engine, settings, jobs, run, run_id, phase)
+    except Exception as error:  # noqa: BLE001 — a usage limit waits; the person's setup is theirs
+        wait = usage_limit_wait(error)
+        if wait is not None:
+            return _wait_for_model(engine, jobs, run, run_id, wait)
+        person = person_side_failure(error)
+        if person is None:
+            raise
+        return _fail_for_person(engine, settings, run, run_id, person)
+
+
+def person_side_failure(error: object) -> Optional[dict[str, str]]:
+    """{reason_code, words} when the panel's model refused for a reason only the person's own
+    setup can fix (a plain-http model address, a key bound to another host, a key the provider
+    rejected) — the build pipeline's own classifier (code_task_service.person_side_reason), so a
+    panel and a build say the same thing. None for anything else."""
+    from .build_failure import failure_words
+    from .code_task_service import person_side_reason
+
+    raw = str(error or "")
+    code = person_side_reason(raw)
+    if code is None or code == "repo_access_denied":
+        return None
+    # The refusal's own sentence (env_refs.CredentialMisdirected), whatever a seat wrapped it in.
+    own = re.search(r"Your model at \S+ is plain http;.*?\(Setup › Models\)\.", raw) or \
+        re.search(r"\S+ belongs to .*? is sent only to .*?refusing to send it[^.]*\.", raw)
+    return {"reason_code": code, "words": own.group(0) if own else failure_words(raw)}
+
+
+def release_meeting_hold(connection, settings: Settings, run_id: str, why: str) -> None:
+    """Release the panel's own "Multi-agent PRD meeting" reservation once the panel has ended
+    without finishing (failed, cancelled, built from the brief instead). Stranger test r8
+    (2026-11-19): a failed panel kept its $6 hold and the build after it sat in budget_wait
+    ("the project's budget cap is reached") with $0 spent. Its seats' turns are governed and
+    settled on their own, so the hold is pure headroom. Never raises."""
+    point = connection.begin_nested()
+    try:
+        row = connection.execute(text(
+            "SELECT project_id, finalize_ctx->>'reservation_id' AS r FROM meeting_runs "
+            "WHERE id = :id"), {"id": run_id}).mappings().first()
+        if row and row["r"]:
+            from .budget import BudgetGovernor
+
+            BudgetGovernor(settings).release(connection, row["project_id"], row["r"], why)
+        point.commit()
+    except Exception:  # noqa: BLE001 — the budget's own guard releases it on its next read
+        point.rollback()
+
+
+def _fail_for_person(engine, settings: Settings, run: dict, run_id: str,
+                     person: dict[str, str]) -> dict:
+    """THE PANEL'S MODEL REFUSED FOR THE PERSON'S OWN SETUP (stranger test r8: a plain-http "Other"
+    model). Not a server error: the run fails with the refusal in plain words and its reason
+    (state.failure_class / reason_code, which failure_owner reads as the person's), its hold is
+    released, and the step answers 200 — the job is not retried into a dead letter. The person's
+    "Done — retry" resumes it from this phase (failure_owner.Meetings)."""
+    with begin(engine) as c:
+        c.execute(text(
+            "UPDATE meeting_runs SET status = 'failed', error = :e, updated_at = now(), "
+            "state = COALESCE(state, '{}'::jsonb) || jsonb_build_object("
+            "'failure_class', 'needs_human', 'reason_code', CAST(:rc AS text)) "
+            "WHERE id = :id AND status = 'running'"),
+            {"e": person["words"][:500], "rc": person["reason_code"], "id": run_id})
+        release_meeting_hold(c, settings, run_id, "panel stopped: " + person["words"][:200])
+        if person["reason_code"] in ("credential_plain_http", "credential_misdirected",
+                                     "model_auth_rejected"):
+            try:
+                from . import setup_actions
+
+                with c.begin_nested():
+                    setup_actions.mark_model_refused(
+                        c, str(run["project_id"]),
+                        reason_code=person["reason_code"], error=person["words"])
+            except Exception:  # noqa: BLE001
+                pass
+        emit_event(c, run["project_id"], "meeting.failed", "boss", "meeting_run", run_id,
+                   {"phase": run["phase"], "failure_class": "needs_human",
+                    "reason_code": person["reason_code"], "words": person["words"][:300]})
+    return {"status": "failed", "done": True, "phase": run["phase"],
+            "failure_class": "needs_human", "reason_code": person["reason_code"],
+            "words": person["words"]}
+
+
+def usage_limit_wait(error: BaseException, now: Optional[datetime] = None
+                     ) -> Optional[dict[str, Any]]:
+    """A model's own usage or rate limit ("You've hit your session limit · resets 7:50pm (UTC)",
+    a 429) as {resets_at, words}: a known-reset condition, never a crash. None for anything else
+    — and for a monthly spend limit, which a person lifts, not a clock."""
+    from .model_router.headroom import windows_from_limit_message
+
+    now = now or datetime.now(timezone.utc)
+    body = str(error)
+    # The CLI wraps the provider's sentence in its JSON result ("result":"You've hit … (UTC)",…):
+    # read the sentence itself, so its reset time is not lost to the quote after it.
+    said = re.search(r'"result"\s*:\s*"((?:[^"\\]|\\.)*)"', body)
+    if said:
+        body = said.group(1).replace("\\'", "'")
+    windows = {k: v for k, v in (windows_from_limit_message(body, now=now)
+                                 or windows_from_limit_message(str(error), now=now)).items()
+               if k != "monthly"}
+    if not windows:
+        return None
+    resets = max(datetime.fromisoformat(str(w["resets_at"])) for w in windows.values())
+    if resets.tzinfo is None:
+        resets = resets.replace(tzinfo=timezone.utc)
+    resets = max(resets, now + timedelta(seconds=30))
+    when = resets.astimezone(timezone.utc)
+    label = f"{when.strftime('%I:%M%p').lstrip('0').lower()} UTC"
+    if when.date() != now.astimezone(timezone.utc).date():
+        label = f"{when.strftime('%a')} {label}"
+    return {"resets_at": when.isoformat(), "label": label,
+            "words": (f"Waiting for the model's usage limit to reset at {label}; "
+                      "BOSS resumes it by itself then.")}
+
+
+#: Extra time after the provider's reset before the step runs again (clocks differ).
+RESET_GRACE_SECONDS = 60
+
+
+def _wait_for_model(engine, jobs, run: dict, run_id: str, wait: dict) -> dict:
+    """PARK THE PANEL UNTIL THE MODEL'S LIMIT RESETS (tester, recipe-box, 2026-11-18: a panel
+    step died on "You've hit your session limit · resets 7:50pm (UTC)", the API answered 500,
+    the job was dead-lettered and the run abandoned 21 min later). The phase is kept, the same
+    step is queued to run after the reset (a queued job: never "abandoned"), and the run says
+    why in words."""
+    resets = datetime.fromisoformat(wait["resets_at"])
+    delay = max(0, int((resets - datetime.now(timezone.utc)).total_seconds())) + RESET_GRACE_SECONDS
+    with begin(engine) as c:
+        c.execute(text(
+            "UPDATE meeting_runs SET state = COALESCE(state, '{}'::jsonb) || "
+            "jsonb_build_object('waiting_for_model', CAST(:w AS jsonb)), updated_at = now() "
+            "WHERE id = :id"), {"w": json.dumps(wait), "id": run_id})
+        jobs.create_job(c, project_id=run["project_id"], task_id=run["task_id"],
+                        kind="meeting.step", priority=JOB_PRIORITY_INTERACTIVE,
+                        payload={"run_id": run_id}, run_after_seconds=delay)
+        emit_event(c, run["project_id"], "meeting.waiting_for_model", "boss", "meeting_run",
+                   run_id, {"phase": run["phase"], "resets_at": wait["resets_at"],
+                            "words": wait["words"]})
+    return {"status": "waiting_for_model", "done": False, "phase": run["phase"],
+            "resets_at": wait["resets_at"], "words": wait["words"]}
+
+
+def _advance_phase(engine, settings: Settings, jobs, run: dict, run_id: str, phase: str) -> dict:
+    """One real phase of a meeting (advance_meeting_run), persisted with its next step."""
     with begin(engine) as c:
         personas = resolve_roles(run["role_keys"], load_role_map(c, run["project_id"]))
         # Each seat in the voice of the agent behind it (agent_persona.seat_voices).
@@ -1206,6 +1394,7 @@ def advance_meeting_run(engine, settings: Settings, jobs, run_id: str) -> dict:
 
         personas = seat_voices(c, run["project_id"], personas)
     state = dict(run["state"])
+    state.pop("waiting_for_model", None)       # the limit it waited for has reset
     # THE SETTING SAYS "AND MEETINGS", AND THIS LINE WAS NOT READING IT.
     #
     # `chat_llm_engine` is labelled "Console chat, agents and meetings" and its help text
@@ -1274,7 +1463,8 @@ def advance_meeting_run(engine, settings: Settings, jobs, run_id: str) -> dict:
         # EACH TURN CARRIES ITS GIST: the seat's own headline and key points, taken off the
         # reply and stored beside it, so the meeting room never cuts a card out of markdown.
         state["round1"], state["round1_gists"] = with_gists(r1)
-        next_phase = "round2"
+        # A compact panel has one round: its facilitator reconciles round 1 directly.
+        next_phase = "synthesis" if is_compact(run.get("constraints")) else "round2"
     elif phase == "round2":
         base = _make_base(run["directive"], run["constraints"], state.get("research") or {}, run["url"])
         r1_blob = _panel_blob(personas, state.get("round1") or {})
@@ -1287,7 +1477,7 @@ def advance_meeting_run(engine, settings: Settings, jobs, run_id: str) -> dict:
         next_phase = "synthesis"
     elif phase == "synthesis":
         base = _make_base(run["directive"], run["constraints"], state.get("research") or {}, run["url"])
-        r2_blob = _panel_blob(personas, state.get("round2") or {})
+        r2_blob = _panel_blob(personas, state.get("round2") or state.get("round1") or {})
         fac_sys = (f"You are the {FACILITATOR_TITLE}. You ran a cross-functional meeting and must reconcile "
                    "the team's debate into a single agreed direction. Be decisive, resolve conflicts explicitly, "
                    "and surface genuine open questions rather than papering over them.")
@@ -1309,6 +1499,15 @@ def advance_meeting_run(engine, settings: Settings, jobs, run_id: str) -> dict:
                    "Non-Goals, Target Users, Functional & Non-Functional Requirements, Proposed Solution, "
                    "Risks & Mitigations (note which role raised each), Acceptance Criteria, Rollout, Open "
                    "Questions, and the single decision needing human approval.\n\n"
+                   "ACCEPTANCE CRITERIA ARE BEHAVIOUR, FEW AND CHECKABLE: 3 to 7 must-haves, each "
+                   "something the app is seen to DO (a user action and its visible result, a "
+                   "response, a rule the data keeps), sized to the change — a small fix gets two "
+                   "or three. Never process rules: no exact test or file names, no wording the "
+                   "pull request description must contain, no instructions on how a test is "
+                   "written or what it mocks, no conditional 'if X was added, call it out' items, "
+                   "no metrics or telemetry the request did not ask for. Those belong in "
+                   "Rollout or Risks, if anywhere; the build's own checks already gate tests "
+                   "passing.\n\n"
                    "VISUALS — do NOT write a wall of text. Include at least: (1) a **Mermaid** "
                    "architecture/flow diagram in a ```mermaid code block (GitHub renders it inline) — "
                    "e.g. `flowchart LR` of the user journey or the system components; (2) for a UI/"
@@ -1323,6 +1522,7 @@ def advance_meeting_run(engine, settings: Settings, jobs, run_id: str) -> dict:
         with begin(engine) as c:
             c.execute(text("UPDATE meeting_runs SET status='failed', error=:e, updated_at=now() WHERE id=:id"),
                       {"e": f"unknown phase {phase}", "id": run_id})
+            release_meeting_hold(c, settings, run_id, f"panel failed: unknown phase {phase}")
         return {"status": "failed", "done": True}
 
     # persist this phase + enqueue the next step ATOMICALLY (no stall on crash)
@@ -1384,16 +1584,31 @@ def _finalize_meeting(connection, settings, run_id) -> dict:
     # PRD" decision beside it would publish findings into the repository and could auto-start a
     # build nobody chose. So it raises none (security_scan/review.py).
     security_review = (run.get("constraints") or {}).get("purpose") == "security_review"
+    # WHO APPROVES THIS PRD, WHEN THE CALLER SAID (Easy Mode): the person's start covers it on
+    # the light lane, whatever the install's setting; "Review the plan first" always waits.
+    approval = spec_approval_of(run.get("constraints"))
+    # A STOP A PERSON SET is written on the card, so dev autonomy honours it (autonomy_gate):
+    # "Review the plan first", the install's own "a person approves every PRD", or a PRD that
+    # departs from the stack the person's brief named.
+    deviates = prd_blocks_auto_approve(run.get("directive"), state.get("prd_markdown"))
+    explicit_stop = (
+        "Review the plan first" if approval == SPEC_APPROVED_BY_PERSON else
+        "BOSS_MEETING_PRD_AUTO_APPROVE=false: a person approves every PRD"
+        if getattr(settings, "meeting_prd_auto_approve", True) is False
+        and approval != SPEC_APPROVED_BY_START else
+        "the PRD declares a different stack from the brief" if deviates else None)
     decision_id = None if security_review else create_blocking_decision(connection, project_id, task_id,
         _PRD_DECISION_QUESTION,
         {"action": "execute_agent_tool", "tool": "publish_document", "start_code_task": True,
+         "meeting_run_id": run_id,
          "args": {"title": "PRD: " + meeting_title(run.get("title"), run["directive"]), "markdown": state.get("prd_markdown") or "",
                   "subtitle": f"Drafted by a BOSS agent panel · source {run['url']}", "repo_subdir": "docs/prd"},
          "task_id": task_id,
          # A panel convened for a FEATURE OF AN APP THAT EXISTS: approving its PRD builds onto
          # that app (decisions._build_prd_onto_app). Carried as data, never as text in the PRD.
          **({"extends_run_id": str((run.get("constraints") or {})["extends_run_id"])}
-            if (run.get("constraints") or {}).get("extends_run_id") else {})},
+            if (run.get("constraints") or {}).get("extends_run_id") else {}),
+         **({"explicit_stop": explicit_stop} if explicit_stop else {})},
         {}, "meeting_prd_ready_to_publish", risk_tier=2)
 
     # Resolve the gate the panel has already satisfied.
@@ -1408,9 +1623,13 @@ def _finalize_meeting(connection, settings, run_id) -> dict:
     # reader can always tell which approvals a human made. The follow-on (start the governed
     # build) is the same code path a human approval runs.
     auto_approve = bool(decision_id and getattr(settings, "meeting_prd_auto_approve", False))
+    if approval == SPEC_APPROVED_BY_START:
+        auto_approve = bool(decision_id)
+    elif approval == SPEC_APPROVED_BY_PERSON:
+        auto_approve = False
     # A swapped stack is the blocking question, not a silent start. The spec gate asks
     # enable / accept / stop; approving the PRD here would build the substitute.
-    if auto_approve and prd_blocks_auto_approve(run.get("directive"), state.get("prd_markdown")):
+    if auto_approve and deviates:
         emit_event(connection, project_id, "meeting.prd_stack_deviation", "boss",
                    "decision", decision_id,
                    {"why": "The PRD declares a different stack from the brief. "
@@ -1420,11 +1639,21 @@ def _finalize_meeting(connection, settings, run_id) -> dict:
         from .decisions import SYSTEM_ACTOR, DecisionService
 
         try:
-            DecisionService(settings).transition(
-                connection, decision_id, action="approve", actor=SYSTEM_ACTOR,
-                system_policy=True,
-                note="Approved automatically: the agent panel reviewed and drafted this PRD. "
-                     "Set BOSS_MEETING_PRD_AUTO_APPROVE=false to require a human approval.")
+            if approval == SPEC_APPROVED_BY_START:
+                DecisionService(settings).transition(
+                    connection, decision_id, action="approve", actor=SYSTEM_ACTOR,
+                    system_policy=True, note=APPROVED_BY_START_NOTE)
+            else:
+                # DEV AUTONOMY decides it (autonomy_gate): the product manager agent, named, with
+                # the same follow-on (start the governed build); a project whose policy says ask
+                # in development keeps the card for a person.
+                from . import autonomy_gate
+
+                autonomy_gate.decide(connection, settings, decision_id)
+            if approval == SPEC_APPROVED_BY_START:
+                emit_event(connection, project_id, "meeting.prd_approved_by_start", "boss",
+                           "decision", decision_id,
+                           {"meeting_run_id": run_id, "why": APPROVED_BY_START_NOTE})
         except Exception as error:  # noqa: BLE001
             # A failed auto-approval must not lose the meeting's work. The decision stays
             # pending and a human can approve it in the console exactly as before.
@@ -2218,3 +2447,109 @@ def run_simulated_meeting(
         "dissent_records": standup_outputs.get("dissent_records") or [],
         "already": not created,
     }
+
+
+def revise_prd_from_decision(
+    connection,
+    settings: Settings,
+    decision_row: dict[str, Any],
+    *,
+    actor: str,
+    note: str,
+) -> str:
+    """Create a revised PRD publish decision from a person's Request changes note, update
+    meeting_runs.decision_id + state, and repoint any waiting SPEC_DECISION_KIND workflow step.
+    Always sets explicit_stop so the revised PRD is never silently auto-approved."""
+    old_decision_id = str(decision_row["id"])
+    project_id = str(decision_row["project_id"])
+    rec = decision_row.get("recommendation")
+    if isinstance(rec, str):
+        try:
+            rec = json.loads(rec)
+        except ValueError:
+            rec = {}
+    rec = dict(rec or {})
+    args = dict(rec.get("args") or {})
+    meeting_run_id = str(rec.get("meeting_run_id") or "").strip() or None
+    if not meeting_run_id:
+        found = connection.execute(
+            text("SELECT id FROM meeting_runs WHERE decision_id = :d "
+                 "ORDER BY updated_at DESC LIMIT 1"),
+            {"d": old_decision_id},
+        ).scalar()
+        if found:
+            meeting_run_id = str(found)
+    run = load_meeting_run(connection, meeting_run_id) if meeting_run_id else None
+    state = dict((run or {}).get("state") or {})
+    prev_markdown = str(state.get("prd_markdown") or args.get("markdown") or "").rstrip()
+    clean_note = str(note or "").strip()
+    revision_section = (
+        f"\n\n## Requested Changes ({actor})\n\n{clean_note}\n"
+        if clean_note else ""
+    )
+    revised_markdown = f"{prev_markdown}{revision_section}".lstrip()
+    if run and run.get("directive"):
+        from .stacks import ensure_stack_line
+
+        revised_markdown = ensure_stack_line(revised_markdown, str(run.get("directive") or ""))
+    task_id = (
+        decision_row.get("task_id")
+        or (run.get("task_id") if run else None)
+        or rec.get("task_id")
+    )
+    new_args = {**args, "markdown": revised_markdown}
+    new_rec = {
+        **rec,
+        "action": "execute_agent_tool",
+        "tool": "publish_document",
+        "start_code_task": bool(rec.get("start_code_task", True)),
+        "args": new_args,
+        **({"task_id": task_id} if task_id else {}),
+        **({"meeting_run_id": meeting_run_id} if meeting_run_id else {}),
+        "revised_from_decision_id": old_decision_id,
+        "revision_note": clean_note,
+        "explicit_stop": "Revised after requested changes — awaiting person approval",
+    }
+    new_decision_id = create_blocking_decision(
+        connection,
+        project_id,
+        task_id,
+        str(decision_row.get("question") or _PRD_DECISION_QUESTION),
+        new_rec,
+        {},
+        "meeting_prd_ready_to_publish",
+        risk_tier=2,
+    )
+    if meeting_run_id and run is not None:
+        history = list(state.get("revision_history") or [])
+        history.append({
+            "from_decision_id": old_decision_id,
+            "to_decision_id": new_decision_id,
+            "actor": actor,
+            "note": clean_note,
+        })
+        state["prd_markdown"] = revised_markdown
+        state["revision_history"] = history
+        connection.execute(
+            text("UPDATE meeting_runs SET decision_id = :d, state = CAST(:s AS JSONB), "
+                 "updated_at = now() WHERE id = :id"),
+            {"d": new_decision_id, "s": json.dumps(state), "id": meeting_run_id},
+        )
+    from .workflow_capability_runner import repoint_spec_decision
+
+    repointed = repoint_spec_decision(connection, old_decision_id, new_decision_id)
+    emit_event(
+        connection,
+        project_id,
+        "meeting.prd_revised",
+        actor,
+        "decision",
+        new_decision_id,
+        {
+            "from_decision_id": old_decision_id,
+            "meeting_run_id": meeting_run_id,
+            "note": clean_note[:500],
+            "repointed_steps": repointed,
+        },
+    )
+    return new_decision_id

@@ -26,6 +26,8 @@ import { nameOf } from "../agents/run-face";
 import { addFeaturePatch } from "../../lib/compose-links";
 import { Go, dollars } from "./hero";
 import { useIdentityVersion } from "../../lib/use-agent-identities";
+import type { YourApp } from "../../lib/your-app";
+import { OpenAppChip } from "../projects/your-app";
 
 /** One scrolling row. The › button scrolls a card's width; it hides at the end. */
 export function Rail({ label, children, testId, resetKey }: {
@@ -203,10 +205,13 @@ export function filterApps(apps: CcApp[], f: ShelfFilter, needOf: (a: CcApp) => 
   return apps.filter((a) => shelfState(a, needOf(a)) === f);
 }
 
-export function AppsShelf({ apps, attention = [], orgId, projectId }: {
+export function AppsShelf({ apps, attention = [], orgId, projectId, openApp = null, actor }: {
   apps: CcApp[] | null; attention?: AttentionItem[]; orgId?: string | null;
   /** The project these apps are in: "+ Add a feature" opens New work there (AR-20). */
   projectId: string;
+  /** YOUR APP (projects summary `app`): its "Open app" sits on the card of the app it builds, or
+   *  in the shelf's header when no card holds that build. */
+  openApp?: YourApp | null; actor?: string;
 }) {
   useIdentityVersion(); // names and faces re-resolve when the install's identities load
   const [filter, setFilter] = useState<ShelfFilter>("all");
@@ -226,6 +231,8 @@ export function AppsShelf({ apps, attention = [], orgId, projectId }: {
           ))}
         </div>
         <span className="cc-spacer" />
+        {openApp && !(apps ?? []).some((a) => a.runIds.includes(openApp.run_id))
+          ? <OpenAppChip app={openApp} projectId={projectId} actor={actor} testid="cc-open-app" /> : null}
         <Go className="cc-link" patch={{ area: "code_tasks", view: "apps", build: null, role: null }} orgId={orgId}
             testId="cc-factory-link">Code Tasks ↗</Go>
       </div>
@@ -263,6 +270,8 @@ export function AppsShelf({ apps, attention = [], orgId, projectId }: {
                   title={`Add a feature to ${a.app}`} ariaLabel={`Add a feature to ${a.app}`}>
                 ＋ Add a feature
               </Go>
+              {openApp && a.runIds.includes(openApp.run_id)
+                ? <span className="cc-app-run"><OpenAppChip app={openApp} projectId={projectId} actor={actor} testid={`cc-app-open-${a.key}`} /></span> : null}
             </div>
           );
         })}

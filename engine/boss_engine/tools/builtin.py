@@ -14,7 +14,6 @@ from __future__ import annotations
 import json
 import os as _os
 import re
-import shlex
 import subprocess as _subprocess
 from typing import Any, Optional as _Optional
 
@@ -27,6 +26,14 @@ from ..services.workflow_drafting import (
     _ensure_steps_for_skills,
     _resolve_subworkflows,
     _spec_from_steps,
+)
+from .host_diagnostics_rules import (
+    INSPECT_HOST_VERBS as _INSPECT_HOST_VERBS,  # noqa: F401
+    JOURNALCTL_FLAGS as _JOURNALCTL_FLAGS,  # noqa: F401
+    JOURNALCTL_VALUE_FLAGS as _JOURNALCTL_VALUE_FLAGS,  # noqa: F401
+    SHELL_META as _INSPECT_HOST_SHELL_META,  # noqa: F401
+    detect_missing_sysstat as _detect_missing_sysstat,
+    validate_inspect_host_command as _validate_inspect_host_command,
 )
 from .registry import PROJECT_ARG, PROJECT_ARG_SCHEMA, Exposure, ToolRegistry, ToolSpec
 
@@ -52,22 +59,6 @@ def _obj(props: dict, required: list[str] | None = None) -> dict:
 _LIMIT = {"type": "integer", "minimum": 1, "maximum": 200, "default": 25}
 _PAID_EFFECT_EDITIONS = frozenset({
     "cloud", "enterprise", "enterprise_cloud", "enterprise_self_hosted",
-})
-
-
-_INSPECT_HOST_VERBS = (
-    "docker ps", "docker logs", "docker inspect", "docker stats --no-stream",
-    "docker images", "df", "free", "uptime", "uname", "ls", "cat /etc/os-release",
-    "systemctl status", "journalctl", "ss -", "netstat", "ps aux", "whoami",
-)
-_INSPECT_HOST_SHELL_META = frozenset("&;|<>`$\\")
-_JOURNALCTL_FLAGS = frozenset({
-    "-b", "--boot", "-k", "--dmesg", "-q", "--quiet", "-r", "--reverse",
-    "-x", "--catalog", "--no-pager", "--utc",
-})
-_JOURNALCTL_VALUE_FLAGS = frozenset({
-    "-u", "--unit", "-n", "--lines", "-p", "--priority", "-o", "--output",
-    "--since", "--until",
 })
 
 
@@ -126,72 +117,8 @@ def _app_logs_command(ctx: Any, project_id: str, args: dict) -> tuple[Any, Any]:
 
 
 def _inspect_host_command(raw_value: object) -> tuple[str | None, str | None]:
-    """Return one shell-safe read command, or a reason before any credential/SSH access.
-
-    SSH transports a *single string* interpreted by a remote shell. A permitted prefix such
-    as ``ls`` does not make ``ls & touch /tmp/x`` safe. Reject shell syntax before tokenizing,
-    verify the complete verb and its read-only options, then quote every token for that shell.
-    """
-    if not isinstance(raw_value, str):
-        return None, "a read-only command is required"
-    if any(ord(ch) < 32 or ord(ch) == 127 or ch in _INSPECT_HOST_SHELL_META
-           for ch in raw_value):
-        return None, "shell metacharacters and control characters are not permitted"
-    try:
-        words = shlex.split(raw_value.strip(), posix=True)
-    except ValueError:
-        return None, "unbalanced command quoting is not permitted"
-    if not words:
-        return None, "a read-only command is required"
-
-    verb = words[0]
-    if verb == "docker":
-        allowed = len(words) >= 2 and words[1] in {"ps", "logs", "inspect", "images"}
-        allowed = allowed or (len(words) >= 3 and words[1:3] == ["stats", "--no-stream"])
-    elif verb == "cat":
-        allowed = words == ["cat", "/etc/os-release"]
-    elif verb == "systemctl":
-        allowed = (len(words) >= 2 and words[1] == "status"
-                   and all(re.fullmatch(r"[A-Za-z0-9_.@:-]+", unit)
-                           for unit in words[2:]))
-    elif verb == "journalctl":
-        allowed = True
-        index = 1
-        while index < len(words):
-            option = words[index]
-            if option in _JOURNALCTL_FLAGS:
-                index += 1
-            elif option in _JOURNALCTL_VALUE_FLAGS and index + 1 < len(words):
-                value = words[index + 1]
-                if not value or value.startswith("-"):
-                    allowed = False
-                    break
-                index += 2
-            elif any(option.startswith(flag + "=") and option[len(flag) + 1:]
-                     for flag in _JOURNALCTL_VALUE_FLAGS if flag.startswith("--")):
-                index += 1
-            else:
-                allowed = False
-                break
-    elif verb == "ss":
-        # `ss -K`/`ss --kill` terminates sockets; only listing switches belong here.
-        allowed = len(words) >= 2 and all(
-            re.fullmatch(r"-[tulnpaHs46]+", option)
-            or option in {"--tcp", "--udp", "--listening", "--numeric",
-                          "--processes", "--all", "--summary", "--no-header"}
-            for option in words[1:]
-        )
-    elif verb == "ps":
-        allowed = words == ["ps", "aux"]
-    elif verb in {"df", "free", "uptime", "uname", "ls", "netstat", "whoami"}:
-        allowed = True
-    else:
-        allowed = False
-    if not allowed:
-        return None, "only read-only commands are allowed here: " + ", ".join(
-            _INSPECT_HOST_VERBS
-        )
-    return shlex.join(words), None
+    """Return one shell-safe read command, or a reason before any credential/SSH access."""
+    return _validate_inspect_host_command(raw_value)
 
 
 def _community_restricted(settings: Any) -> bool:
@@ -1044,11 +971,8 @@ def _register_read_tools(reg: ToolRegistry) -> None:
             # Matched three ways because an operator says "192.0.2.202" and the console says
             # "hetzner-ci-01"; forcing them to know the id is a lookup they should not have to do.
             row = c.execute(
-                _text(
-                    "SELECT * FROM deployment_hosts "
-                    "WHERE project_id=:p AND (id=:n OR name=:n OR address=:n) LIMIT 1"
-                ),
-                {"p": pid, "n": needle},
+                _text(_host_by_hint_sql()),
+                {"p": pid, "h": needle},
             ).mappings().first()
             if not row:
                 return {"error": f"no host matching {needle!r} in this project"}
@@ -1216,6 +1140,19 @@ def _build_onto_existing_app(ctx, cts, pid: str, actor: str, args: dict, extends
 
                 raise CapabilityWaitError(said, wait_seconds=60, kind="app_busy")
             return {"ok": False, "error": said}
+        # WHICH CHANGE (new_work.build_mode, the one resolver every door asks): the app's open
+        # change continues on its branch; a MERGED change starts a new change of the app from
+        # the default branch — a repair from a preview or an agent's extends never pushes onto
+        # merged history (only New work used to check). A change whose merge was rejected keeps
+        # its branch (a person asking for a change after "not yet" continues it). A release fix
+        # is cut from its serving commit instead, and stays the lineage's follow-up.
+        release_base = str(args.get("release_base_sha") or "").strip() or None
+        new_change = bool(args.get("extends_from_default")) and not release_base
+        if not release_base and not new_change:
+            from ..services.project_experience import new_work
+
+            mode = new_work.build_mode(c, pid, extends)
+            new_change = bool(mode and mode.get("mode") == "new_change")
         agent = _building_agent(c, pid, actor)
         instructions = args.get("instructions") or ""
         preview_id = str(args.get("preview_id") or "").strip()
@@ -1245,8 +1182,8 @@ def _build_onto_existing_app(ctx, cts, pid: str, actor: str, args: dict, extends
                 reference_links=args.get("reference_links") or None,
                 workflow_run_id=finalize_ctx.get("workflow_run_id"),
                 finalize_extra={"origin": finalize_ctx.get("origin"), "agent": agent},
-                release_base_sha=str(args.get("release_base_sha") or "").strip() or None,
-                new_change=bool(args.get("extends_from_default")),
+                release_base_sha=release_base,
+                new_change=new_change,
             )
         except ValueError as exc:  # a simulated or vanished parent: say so, start nothing
             return {"ok": False, "error": str(exc)}
@@ -1389,7 +1326,10 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         "BOSS and auto-starts this code task once the PRD is approved.",
         _obj(
             {
-                "title": {"type": "string"},
+                "title": {"type": "string",
+                          "description": "the work's short human name, at most six words, in "
+                                         "your words (e.g. 'Bench name on map bubble') — never "
+                                         "the first words of the request"},
                 "instructions": {"type": "string", "description": "what to build/change"},
                 "acceptance_criteria": {"type": "array", "items": {"type": "string"}},
                 "test_commands": {"type": "array", "items": {"type": "string"}},
@@ -1432,9 +1372,17 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 },
                 "preview_id": {
                     "type": "string",
-                    "description": "with extends_run_id: the running preview (prev_...) the "
-                                   "operator was looking at when they asked for this. The "
-                                   "builder is told which one.",
+                    "description": "the running preview (prev_...) the operator was looking "
+                                   "at when they asked for this. The builder is told which "
+                                   "one; without extends_run_id the task is a repair of that "
+                                   "preview's build, on its app's branch.",
+                },
+                "new_app": {
+                    "type": "boolean",
+                    "description": "the person asked for a NEW app. Only then may a project "
+                                   "with several apps get a task that names none of them "
+                                   "(extends_run_id, preview_id, task_id): otherwise BOSS "
+                                   "asks which app to change.",
                 },
                 "extends_from_default": {
                     "type": "boolean",
@@ -1443,6 +1391,33 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                                    "new branch and PR), not a push onto the merged branch.",
                 },
                 "risk_tier": {"type": "integer", "minimum": 0, "maximum": 3},
+                "remediate": {
+                    "type": "object",
+                    "description": "the task REMEDIATES one input file (validate it, fix it): "
+                                   "the output must be a minimal edit of that input, and "
+                                   "BOSS checks it is (no copied reference answer, no added "
+                                   "blocks, no unbacked claims). `answer_files`: reference "
+                                   "answers for the same input the builder must not read "
+                                   "(siblings like *.good.yaml are found anyway). "
+                                   "`validator`: {name, check, fix} command templates with "
+                                   "{file}; its findings are recorded on the step.",
+                    "properties": {
+                        "input": {"type": "string"},
+                        "output": {"type": "string"},
+                        "answer_files": {"type": "array", "items": {"type": "string"}},
+                        "validator": {"type": "object", "properties": {
+                            "name": {"type": "string"}, "check": {"type": "string"},
+                            "fix": {"type": "string"}}},
+                        # START FROM A FILE (start_from_file): the original (uploaded text,
+                        # or a repo path) fixed in place at `input`; committed first.
+                        "start_from": {"type": "boolean"},
+                        "content": {"type": "string"},
+                        "original_path": {"type": "string"},
+                        # The TRUE upload's sha256 (its secrets are masked in `content`).
+                        "content_sha256": {"type": "string"},
+                    },
+                    "required": ["input"],
+                },
                 "profile": {
                     "type": "string",
                     "enum": ["lean", "balanced", "strict", "vag"],
@@ -1481,6 +1456,49 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         if started_by:
             finalize_ctx["origin"] = started_by
         extends = str(args.get("extends_run_id") or "").strip()
+        preview_id = str(args.get("preview_id") or "").strip()
+        new_app = args.get("new_app") is True
+        if new_app and (extends or preview_id):
+            return {"ok": False, "error": ("Name the app to change (extends_run_id or preview_id) "
+                                           "or ask for a new app (new_app), not both.")}
+        if preview_id and not extends:
+            with ctx.begin() as connection:
+                preview = _preview_in_project(connection, preview_id, pid)
+            if not preview:
+                return {"ok": False, "error": ("That preview is not in this project. Name the build to repair "
+                                               "as extends_run_id (list_previews shows each preview's build).")}
+            # A preview with no build behind it has no lineage to continue: as before.
+            if preview.get("run_id"):
+                if base_branch or args.get("release_base_sha"):
+                    return {"ok": False, "error": ("A preview repair that sets base_branch or release_base_sha must "
+                                                   "also name extends_run_id, the build to repair.")}
+                extends = str(preview["run_id"])
+        # A TASK WHOSE APP IS ALREADY BUILT continues that app (its branch, its open change),
+        # through the same path as extends_run_id. The task's first build is often the lineage's
+        # root (no root_run_id): the old lookup read only root_run_id, found none and started a
+        # fresh build on the default branch beside the app.
+        if not extends and task_id and not base_branch and not new_app:
+            with ctx.begin() as connection:
+                extends = _task_app_run(connection, pid, str(task_id)) or ""
+        # NOTHING NAMED BESIDE SEVERAL APPS: ask which (Choose an application / Create a new
+        # app), never a quiet fresh build on the default branch (RCA #9). A workflow's build step
+        # was decided at its start door; an explicit base, a release fix or a task are named.
+        from ..services.workflow_capability_runner import _IN_STEP_AUTHORITY
+
+        if (not extends and not new_app and not base_branch and not task_id
+                and not args.get("release_base_sha") and not finalize_ctx.get("workflow_run_id")
+                and not _IN_STEP_AUTHORITY.get()):
+            from ..services.project_experience import new_work
+
+            try:
+                with ctx.begin() as connection:
+                    new_work.require_app_choice(connection, pid, (
+                        "Which one should this change? Name it as extends_run_id (or the "
+                        "preview_id the person was looking at), or pass new_app: true to "
+                        "create a new app. list_code_tasks shows each app's build."))
+            except new_work.AppChoiceNeeded as asked:
+                return {"ok": False, "needs_app_choice": True, "error": str(asked),
+                        "app_choices": asked.choices}
         # AN APP BUILT FROM SEVERAL REPOSITORIES gets one change set — a lane per repository, in
         # dependency order, linked PRs, one approval — instead of a single build in one repo.
         multi = _multirepo_change(ctx, pid, actor, args, extends, finalize_ctx)
@@ -1513,23 +1531,6 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                     c, ctx.settings, pid, selector=args.get("repository"))
             except rr.RepositoryResolutionError as exc:
                 return {"ok": False, "error": str(exc)}
-            # Build-on-existing: if this task already has a built app (a completed
-            # code task with a PR), EXTEND that app's branch instead of a fresh
-            # build on main. Mirrors intent_router._existing_app_for_task.
-            if task_id and not args.get("base_branch"):
-                branch, root = _existing_app_branch(c, pid, task_id)
-                if branch:
-                    base_branch = branch
-                    extended_from = root
-                    finalize_ctx = {"root_run_id": root, "web_app_build": True,
-                                    **({"origin": finalize_ctx["origin"]}
-                                       if finalize_ctx.get("origin") else {})}
-                    risk_tier = 0 if risk_tier is None else risk_tier
-                    instructions = (
-                        "EXTEND the existing app on this branch — do NOT rebuild from scratch. "
-                        "Make the smallest change that satisfies the request, preserving all "
-                        "current features.\n\n" + instructions
-                    )
             # WHO BUILDS IT. A workflow step that names an agent runs this tool AS that agent
             # (step_agents.resolve → `actor`), so a build step naming the Frontend Engineer
             # hands the code task to the Frontend Engineer, recorded where the run's stages
@@ -1555,6 +1556,8 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 jobs=ctx.jobs,
                 risk_tier=risk_tier,
                 profile=args.get("profile"),
+                remediate=(args.get("remediate")
+                           if isinstance(args.get("remediate"), dict) else None),
             )
         return {
             "status": "queued",
@@ -1727,7 +1730,15 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         _obj(
             {
                 "workflow_key": {"type": "string",
-                                 "description": "lower_snake_case identifier, stable"},
+                                 "description": "lower_snake_case identifier, stable. Pass the "
+                                                "key of a workflow that EXISTS to publish its "
+                                                "next version (or version_of); a new key that "
+                                                "collides with an existing workflow is "
+                                                "refused. Nothing is renamed for you."},
+                "version_of": {"type": "string",
+                               "description": "the key of an existing workflow this publishes "
+                                              "the next version of; refused if it does not "
+                                              "exist."},
                 "name": {"type": "string"},
                 "description": {"type": "string"},
                 "work_class": {"type": "string",
@@ -1749,9 +1760,17 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                                    "stops for a person; {id, wait_seconds} pauses. `captain` "
                                    "is one of the project's agents. `approval` is 'manual' or "
                                    "'auto' — a capability at or above the risk floor is forced "
-                                   "manual whatever you ask for. You do NOT wire inputs: a "
-                                   "step's required input is connected to the nearest earlier "
-                                   "step that produces it.",
+                                   "manual whatever you ask for. ANY step may carry input: "
+                                   "{name: value} — a literal (e.g. contract_test cases: "
+                                   "[{name, method, path, expect_status}], a deployment "
+                                   "target_id for a deploy / promote step; "
+                                   "deployment_target: <id> is the same), a reference to an "
+                                   "earlier step {from_step: <id>, field: <field it produces>} "
+                                   "(the field may differ from the input's name: smoke_test "
+                                   "url from deploy's deployed_url), or {from_input: <name>} "
+                                   "for something the operator types. An input you leave out "
+                                   "is connected to the nearest earlier step that produces a "
+                                   "field of that name.",
                     "items": {"type": "object"},
                 },
                 "inputs": {
@@ -1773,7 +1792,7 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 },
                 "project_id": {"type": "string"},
             },
-            ["workflow_key", "name", "steps"],
+            ["name", "steps"],
         ),
         kind="write",
         reversibility="safe", permission="workflow:publish",
@@ -1782,16 +1801,54 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         wf = services_module("workflows")
         caps = services_module("workflow_capabilities")
         pid = args.get("project_id") or project_id
-        key = re.sub(r"[^a-z0-9_]+", "_", str(args.get("workflow_key") or "").strip().lower())
+        # THE KEY IS THE WORKFLOW'S IDENTITY, and nothing here renames it. A key that is not
+        # lower_snake_case is refused (saying why), not tidied into a different workflow. A new
+        # version of an existing workflow is asked for by NAMING that workflow (`workflow_key`
+        # or `version_of`, which must exist); a key that collides with one is refused with the
+        # existing key named, so the button always shows exactly what it will publish.
+        asked_key = str(args.get("workflow_key") or "").strip()
+        version_of = str(args.get("version_of") or "").strip()
+        if version_of and asked_key and version_of != asked_key:
+            return {"ok": False, "error": f"version_of {version_of!r} and workflow_key "
+                                          f"{asked_key!r} name different workflows. Pass one."}
+        key = asked_key or version_of
+        derived = False
+        if not key:
+            key = re.sub(r"_+", "_", re.sub(r"[^a-z0-9_]+", "_",
+                                            str(args.get("name") or "").strip().lower())).strip("_")
+            derived = True
         if not re.fullmatch(r"[a-z][a-z0-9_]{2,60}", key or ""):
-            return {"ok": False, "error": "workflow_key must be lower_snake_case, 3-61 chars"}
+            return {"ok": False,
+                    "error": f"workflow_key {(asked_key or version_of or key)!r} must be "
+                             "lower_snake_case, 3-61 characters, starting with a letter. To "
+                             "publish a new version of a workflow that exists, pass ITS key "
+                             "(describe_workflow lists them)."}
         spec = _spec_from_steps(args.get("steps") or [], args)
         if isinstance(spec, dict) and spec.get("ok") is False:
             return spec
         with ctx.begin() as c:
-            # VALIDATE BEFORE CREATING ANYTHING. A definition row for a spec that cannot publish
-            # leaves a workflow in the catalogue that does not work, and the operator has to go
-            # and delete it.
+            def _exists(k: str) -> bool:
+                return bool(c.execute(
+                    _text("SELECT 1 FROM workflow_definitions WHERE project_id=:p AND "
+                          "workflow_key=:k"), {"p": pid, "k": k}).first())
+
+            if version_of and not _exists(version_of):
+                return {"ok": False,
+                        "error": f"version_of {version_of!r} is not a workflow in this project; "
+                                 "describe_workflow lists them. Pass workflow_key for a new one."}
+            versioned = re.fullmatch(r"(.+?)_v\d+", key)
+            if derived and _exists(key):
+                return {"ok": False,
+                        "error": f"the name {args.get('name')!r} gives the key {key!r}, which "
+                                 "is already a workflow here. To publish its next version "
+                                 f"pass workflow_key={key!r}; for a different workflow pass a "
+                                 "different workflow_key."}
+            if versioned and not _exists(key) and _exists(versioned.group(1)):
+                return {"ok": False,
+                        "error": f"{versioned.group(1)!r} already exists, so {key!r} would be a "
+                                 "second workflow. To publish a new version of it pass "
+                                 f"workflow_key={versioned.group(1)!r}; for a different "
+                                 "workflow pick an unrelated key."}
             try:
                 caps_by_key = {x["key"]: x for x in caps.palette()}
                 # A STEP THAT NAMES A REAL SKILL IS NOT A MISTAKE TO REFUSE.
@@ -1821,7 +1878,8 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                     problems += [p["detail"] for p in shape + blocked
                                  if p["detail"] not in problems]
                 if problems:
-                    return {"ok": False, "error": "; ".join(problems[:4])}
+                    return {"ok": False,
+                            "error": "; ".join(_how_to_set(p) for p in problems[:4])}
                 existing = c.execute(
                     _text("SELECT id, COALESCE(is_catalogue, false) AS is_catalogue "
                           "FROM workflow_definitions "
@@ -1829,15 +1887,17 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                     {"p": pid, "k": key},
                 ).mappings().first()
                 if existing:
-                    # THE TWELVE BOSS SHIPS ARE READ-ONLY. The visual builder already
-                    # refuses this (`require_editable`). start_workflow and the unmapped
-                    # default both take the latest version of this key, so publishing
-                    # here would silently replace the gated path every new Build follows.
+                    # A DRAFT NEVER LANDS ON A STANDARD. People edit standards in place in the
+                    # Workflow editor (where Changes from standard and Reset to standard are);
+                    # this tool runs without a press, and start_workflow and the unmapped
+                    # default take this key's running version, so publishing here would
+                    # silently replace the gated path every new Build follows.
                     if existing["is_catalogue"]:
                         return {"ok": False,
-                                "error": f"{key} is one of BOSS's catalogue workflows. "
-                                         "Fork it and edit the fork; editing it would "
-                                         "change the path every new Build follows."}
+                                "error": f"{key} is one of BOSS's catalogue workflows (a "
+                                         "standard). Draft under a new key, or ask the person "
+                                         "to edit the standard in the Workflow editor, where "
+                                         "Reset to standard can undo it."}
                     definition_id = str(existing["id"])
                 else:
                     definition_id = wf.create_definition(
@@ -1872,6 +1932,8 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                     mapped = {"note": f"published, but not mapped: {str(error)[:160]}"}
         return {"status": "published", "workflow_key": key, "definition_id": definition_id,
                 "version": published.get("version"), "steps": len(spec["steps"]),
+                **({"note": f"published as version {published.get('version')} of the existing "
+                            f"workflow {key}"} if existing else {}),
                 # Named, because a step BOSS defined on the operator's behalf is something they
                 # should be able to find and change afterwards.
                 **({"defined_steps": made} if made else {}),
@@ -2303,7 +2365,9 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 "workflow_key": {"type": "string",
                                  "description": "which workflow to run, by key"},
                 "title": {"type": "string",
-                          "description": "short name for the run and its document"},
+                          "description": "short name for the run and its document: at most "
+                                         "six words, in your words (e.g. 'Bench name on map "
+                                         "bubble') — never the first words of the request"},
                 "from_discovery": {
                     "type": "string",
                     "description": "a COMPLETED discovery run (drun_…) whose dossier this run "
@@ -2506,6 +2570,27 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                                    "Unknown or disabled keys are left out; none left = the "
                                    "project's default panel.",
                 },
+                "compact": {
+                    "type": "boolean",
+                    "description": "a compact panel: three seats and one round, then the PRD "
+                                   "(Easy Mode's fast spec).",
+                },
+                "spec_approval": {
+                    "type": "string", "enum": ["", "person"],
+                    "description": "'person' — a person reads and approves the PRD first, "
+                                   "whatever the install's setting; empty — the setting.",
+                },
+                "time_budget_seconds": {
+                    "type": "integer",
+                    "description": "how long the workflow waits for this panel before it "
+                                   "builds from the brief instead (with fallback_to_brief).",
+                },
+                "fallback_to_brief": {
+                    "type": "boolean",
+                    "description": "when the panel fails or runs past its time budget, the "
+                                   "workflow builds from the brief and records why, rather "
+                                   "than stopping.",
+                },
                 "purpose": {
                     "type": "string", "enum": ["prd", "security_review"],
                     "description": "what the panel's document is: a PRD (the default; "
@@ -2579,10 +2664,31 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 # Who convened it (agent_acts.origin): its seats sit under that work.
                 origin=services_module("agent_acts").current_origin(actor),
                 role_keys=[str(k) for k in (args.get("seats") or []) if str(k).strip()][:8] or None,
-                constraints=({"purpose": "security_review"}
-                             if args.get("purpose") == "security_review" else None),
+                constraints=_meeting_constraints(args),
             )
         return {"status": "running", "meeting": _json_safe(result), "project_id": pid}
+
+    def _meeting_constraints(args):
+        """The panel's constraints from the tool's arguments: a security review's purpose, and
+        Easy Mode's compact panel, who approves its PRD, and its time budget and fallback."""
+        out = {}
+        if args.get("purpose") == "security_review":
+            out["purpose"] = "security_review"
+        if str(args.get("compact") or "").lower() in ("true", "1"):
+            out["compact"] = True
+        # Only stricter: approval by a person's Easy Mode start is never a tool argument (it is
+        # server-only, workflow_capability_runner._stamp_start_approval).
+        if str(args.get("spec_approval") or "").strip().lower() == "person":
+            out["spec_approval"] = "person"
+        try:
+            budget = int(args.get("time_budget_seconds") or 0)
+        except (TypeError, ValueError):
+            budget = 0
+        if budget > 0:
+            out["time_budget_seconds"] = budget
+        if str(args.get("fallback_to_brief") or "").lower() in ("true", "1"):
+            out["fallback_to_brief"] = True
+        return out or None
 
     @reg.tool(
         "start_preview",
@@ -2837,6 +2943,39 @@ def _is_real_record(ctx: Any, key: str, value: str) -> bool:
         return False
 
 
+#: Arguments every offer may carry whatever its tool declares: the console scopes the press.
+_OFFER_SCOPE_ARGS = frozenset({"project_id", "project"})
+
+
+def _argument_problem(reg: Any, name: str, args: dict) -> str:
+    """Why `args` cannot be the arguments of tool `name` as its schema declares them, or "":
+    a name the tool does not take (when its schema is closed), or a required one missing."""
+    try:
+        spec = reg.get(name)
+    except Exception:  # noqa: BLE001 — an unknown tool is refused elsewhere, in its own words
+        return ""
+    schema = getattr(spec, "parameters", None) or {}
+    props = schema.get("properties") or {}
+    problems = []
+    if schema.get("additionalProperties") is False and props:
+        unknown = sorted(k for k in args if k not in props and k not in _OFFER_SCOPE_ARGS)
+        if unknown:
+            problems.append(f"it does not take {', '.join(unknown)}")
+    missing = [r for r in (schema.get("required") or [])
+               if args.get(r) is None or (isinstance(args.get(r), str) and not args[r].strip())]
+    if missing:
+        problems.append(f"it needs {', '.join(missing)}")
+    if not problems:
+        return ""
+    # A MISSING VALUE IS LOOKED UP, NOT FILLED IN. Told only the names, a model that put a
+    # domain where run_id belongs re-offers with run_id="crun_placeholder"; say where the real
+    # value comes from, as the invented-argument refusal does.
+    lookup = (" Look up the real value of each missing one first (list_code_tasks or "
+              "get_code_task for a run) — never invent it." if missing else "")
+    return ("; ".join(problems) + f". {name} takes: {', '.join(sorted(props)) or 'nothing'}. "
+            "Offer it again with exactly those names." + lookup)
+
+
 def _placeholder_argument(args: dict, ctx: Any = None) -> str:
     """The first argument that looks invented, described for the model, or ''.
 
@@ -3084,7 +3223,14 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         "connection details from the host record. An app that already has a target for that "
         "environment adopts it instead of growing a second one. It creates the DESTINATION and "
         "ships nothing — deploy with deploy_app afterwards. Never write this row with SQL: the "
-        "table has columns this sets that a hand-written INSERT does not know about.",
+        "table has columns this sets that a hand-written INSERT does not know about. "
+        "HEALTH CHECK: it comes from the app's own boss.deploy.yaml health path, never a guess "
+        "of '/': when you can read the manifest (read_code), pass health_path; the result says "
+        "where the path came from. WHERE: when the operator asks for a place (\"local\", a "
+        "named machine), pass it as `host`. If no registered host matches, this REFUSES with "
+        "'no host matches ...' and an offer (e.g. register this machine as a deployment host); "
+        "tell the operator that plainly and offer the path — never create the target somewhere "
+        "else and say nothing.",
         _obj({"app_name": {"type": "string",
                            "description": "the app's NAME, e.g. 'Change Calendar' — not the "
                                           "directive it was built from"},
@@ -3092,6 +3238,13 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
               "host_id": {"type": "string",
                           "description": "optional dh_ — only needed when the project deploys "
                                          "to more than one host"},
+              "host": {"type": "string",
+                       "description": "the place the operator asked for in words: 'local', a "
+                                      "host's name or address. Refused when none matches."},
+              "health_path": {"type": "string",
+                              "description": "the app's health path from its boss.deploy.yaml "
+                                             "(e.g. /healthz); found from the last deploy's "
+                                             "manifest when unset"},
               "port": {"type": "integer",
                        "description": "optional; leave unset and a free one is chosen"}},
              required=["app_name"]),
@@ -3106,13 +3259,51 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                 c, project_id=project_id, app_name=str(args.get("app_name") or ""),
                 environment=str(args.get("environment") or "staging"),
                 host_id=(str(args["host_id"]) if args.get("host_id") else None),
+                host=(str(args["host"]) if args.get("host") else None),
+                health_path=(str(args["health_path"]) if args.get("health_path") else None),
                 port=(int(args["port"]) if args.get("port") else None),
                 actor=actor,
             )
 
     @reg.tool(
+        "update_deployment_target",
+        "Change an existing deployment target in place: its health check (health_path, "
+        "health_expected_status), port, host, or environment variables BY REFERENCE (env: "
+        "NAME -> an existing secret reference id; never a value). Use it when the target's "
+        "health path returns 404 (preflight_deployment_target says so) or the operator asks to "
+        "change a target. Offer it with propose_action so nothing is written until the operator "
+        "accepts. It does not deploy.",
+        _obj({"target_id": {"type": "string"},
+              "health_path": {"type": "string", "description": "e.g. /healthz"},
+              "health_expected_status": {"type": "integer"},
+              "port": {"type": "integer"},
+              "host_id": {"type": "string", "description": "rebind to this dh_ host"},
+              "env": {"type": "object", "additionalProperties": {"type": "string"},
+                      "description": "NAME -> secret reference id (sref_...)"}},
+             required=["target_id"]),
+        kind="write",
+        # OPERATOR ONLY: rebinding or re-checking a target (production included) is the
+        # operator's press on a proposal, never the model's direct call.
+        reversibility="safe", permission="deployment_target:manage", operator_only=True,
+        exposure=Exposure(tags=("deploy", "hosts")))
+    def update_deployment_target(ctx, *, project_id, actor, args):
+        from ..services.deployment_fleet import update_deployment_target as _update
+
+        env = args.get("env") if isinstance(args.get("env"), dict) else None
+        with ctx.begin() as c:
+            return _update(
+                c, project_id=args.get("project_id") or project_id,
+                target_id=str(args["target_id"]),
+                health_path=(str(args["health_path"]) if args.get("health_path") else None),
+                health_expected_status=(int(args["health_expected_status"])
+                                        if args.get("health_expected_status") else None),
+                port=(int(args["port"]) if args.get("port") else None),
+                host_id=(str(args["host_id"]) if args.get("host_id") else None),
+                env=env, actor=actor)
+
+    @reg.tool(
         "create_config_target",
-        "Give a system's CONFIGURATION somewhere to deploy to (AMEX-G4): a config directory on a "
+        "Give a system's CONFIGURATION somewhere to deploy to (BOSSAPP-1140): a config directory on a "
         "host — an API gateway's tenants/ folder, say — with how it is reloaded (a command run in "
         "the directory, or an HTTP hook; none when the system watches its directory) and the "
         "health URL BOSS checks after a reload. One target per app and environment, like any "
@@ -3160,7 +3351,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
 
     @reg.tool(
         "deploy_config",
-        "Deploy CONFIGURATION FILES — not a built app — to a config_dir target (AMEX-G4): the "
+        "Deploy CONFIGURATION FILES — not a built app — to a config_dir target (BOSSAPP-1140): the "
         "validated tenant YAML into the gateway's staging directory, say. Each file is written "
         "to a temp name and renamed into place (atomic), the previous version is kept beside the "
         "directory for rollback, the target's reload runs, and its health URL is checked; a "
@@ -3182,6 +3373,14 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
               "produced_artifacts": {"type": "object",
                                      "description": "a CLI step's produced_artifacts: name → art_ id",
                                      "additionalProperties": True},
+              "code_task_run_id": {"type": "string",
+                                   "description": "a finished build: ship its files FROM ITS "
+                                                  "BRANCH (at its head commit), not the default "
+                                                  "branch. A workflow wires the build step's "
+                                                  "code_task_run_id here."},
+              "source_paths": {"description": "with code_task_run_id: the files (or folders "
+                                              "ending in /) the build wrote — a list of repo "
+                                              "paths, or {destination: repo path}"},
               "approval_decision_id": {"type": "string",
                                        "description": "set by a workflow's step only; leave empty"},
               "person_required": {"type": "boolean",
@@ -3205,14 +3404,16 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
             approval_decision_id=(str(args["approval_decision_id"])
                                   if args.get("approval_decision_id") else None),
             person_required=args.get("person_required") is True,
+            code_task_run_id=(str(args["code_task_run_id"]) if args.get("code_task_run_id") else None),
+            source_paths=args.get("source_paths"),
             # Which run deployed it, set by the runner on the server (never an argument), so a
-            # promotion can be checked against the run that staged it (AMEX-G9).
+            # promotion can be checked against the run that staged it (BOSSAPP-1167).
             workflow_run_id=WORKFLOW_RUN_ID.get() or None)
 
     @reg.tool(
         "promote_config",
         "Promote the EXACT configuration a succeeded config deployment shipped — the same bytes, "
-        "by sha256 — to the next environment's config_dir target (AMEX-G4): staging → "
+        "by sha256 — to the next environment's config_dir target (BOSSAPP-1140): staging → "
         "production by default. Name the source by deployment_run_id (or deployment_id) — "
         "it is never guessed; list_deployments shows them. Inside a workflow it must be the "
         "run's own staging deployment with its bundle_sha256; a mismatch is refused. Same "
@@ -3244,7 +3445,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         from ..services.github_actions import WORKFLOW_RUN_ID
 
         # `deployment_id` is what a config_deploy step's output calls it; it was silently
-        # ignored before, and the tool fell back to the app's latest staging deploy (AMEX-G9).
+        # ignored before, and the tool fell back to the app's latest staging deploy (BOSSAPP-1167).
         source = args.get("deployment_run_id") or args.get("deployment_id")
         return promote(
             ctx.engine, ctx.settings, project_id=project_id, actor=actor,
@@ -3268,10 +3469,31 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         kind="read", permission="deployment:read",
         exposure=Exposure(tags=("deploy", "hosts")))
     def preflight_deployment_target(ctx, *, project_id, actor, args):
+        from ..services.deployment_fleet import health_path_findings
         from ..services.shepherd_service import _act_on_deployment
-        return {"run_id": args["run_id"],
-                "result": _act_on_deployment(
-                    ctx.engine, ctx.settings, str(args["run_id"]), "preflight_target", actor)}
+
+        out = {"run_id": args["run_id"],
+               "result": _act_on_deployment(
+                   ctx.engine, ctx.settings, str(args["run_id"]), "preflight_target", actor)}
+        # THE HEALTH PATH IS PART OF "CAN THIS BE DEPLOYED TO": a check on a page the app does
+        # not serve fails every deploy. Probe it; a 404 is a warning with the path that answers.
+        try:
+            with ctx.begin() as c:
+                target = c.execute(_text(
+                    "SELECT t.id, t.domains, t.health_checks FROM deployment_runs r "
+                    "JOIN deployment_targets t ON t.id = r.deployment_target_id "
+                    "WHERE r.release_packet->>'code_task_run_id' = :i "
+                    "ORDER BY r.created_at DESC LIMIT 1"),
+                    {"i": str(args["run_id"])}).mappings().first()
+            findings = health_path_findings(dict(target)) if target else []
+        except Exception:  # noqa: BLE001 - the probe must never break the preflight
+            findings = []
+        if findings:
+            out["health"] = findings
+            warnings = [f["warning"] for f in findings if f.get("warning")]
+            if warnings:
+                out["warnings"] = warnings
+        return out
 
     @reg.tool(
         "propose_action",
@@ -3320,6 +3542,22 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                         "available": sorted(_DISCUSS_OPERATIONS_TOOLS)}
             name = "start_workflow"
             call_args["workflow_key"] = workflow_key
+        if name == "draft_workflow" and not (str(call_args.get("workflow_key") or "").strip()
+                                             or str(call_args.get("version_of") or "").strip()):
+            return {"ok": False, "proposed": False,
+                    "error": "a draft_workflow button must name its workflow_key (or version_of "
+                             "for a new version of an existing one) so the button shows exactly "
+                             "what it will publish."}
+        wrong = _argument_problem(reg, name, call_args)
+        if wrong:
+            # A BUTTON WHOSE ARGUMENTS ITS TOOL DOES NOT TAKE IS A BUTTON THAT CANNOT RUN.
+            #
+            # Laptop 2026-11-20: create_config_target was offered with `host` and `reload`
+            # (the tool takes `host_id`, `reload_command`, `reload_url`). The console rendered it
+            # unpressable, and had it run, the host would have been dropped and the target made
+            # on the BOSS machine instead. Refused here, the model re-offers with the real names.
+            return {"ok": False, "proposed": False,
+                    "error": f"cannot propose {name!r} with these arguments: {wrong}"}
         unavailable = action_unavailable(name, getattr(ctx, "settings", None))
         if unavailable:
             return {"ok": False,
@@ -5628,10 +5866,10 @@ def _draft_problems(connection, project_id: str, spec: dict, caps_by_key: dict,
             continue
         kind = str(binding.get("capability") or "")
         if kind not in caps_by_key:
-            near = ", ".join(sorted(caps_by_key)[:8])
+            near = ", ".join(sorted(caps_by_key))
             problems.append(
                 f"step '{entry.get('id')}' asks for '{kind}', which is not a capability. "
-                f"Available kinds include: {near}.")
+                f"Valid capabilities: {near}.")
             continue
         capability = caps_by_key[kind]
         if (capability.get("approval_forced_manual")
@@ -5645,6 +5883,19 @@ def _draft_problems(connection, project_id: str, spec: dict, caps_by_key: dict,
     problems.extend(services_module("step_agents").assignment_problems(
         connection, project_id, spec))
     return problems
+
+
+def _how_to_set(problem: str) -> str:
+    """A "needs 'x', which is not set" sentence, with the three ways to set it."""
+    found = re.search(r"step '([^']+)'.*? needs '([^']+)', which is not set", problem)
+    if not found or "Set it" in problem:
+        return problem
+    step, name = found.group(1), found.group(2)
+    return (f"{problem.rstrip('.')}. Set it one of three ways: a literal on that step "
+            f"(\"input\": {{\"{name}\": <value>}}), from an earlier step "
+            f"(\"input\": {{\"{name}\": {{\"from_step\": \"<step id>\", \"field\": "
+            f"\"<field it produces>\"}}}}; the field need not be named {name}), or from the "
+            f"operator (add \"{name}\" to the workflow's `inputs`).")
 
 
 def _text(sql: str):
@@ -5697,7 +5948,7 @@ def _preview_in_project(connection, preview_id: str, project_id: str):
     """Load a preview only when it belongs to the session project."""
     return connection.execute(
         _text(
-            "SELECT id, project_id, status FROM app_previews "
+            "SELECT id, project_id, status, run_id FROM app_previews "
             "WHERE id=:id AND project_id=:p"
         ),
         {"id": preview_id, "p": project_id},
@@ -5712,28 +5963,17 @@ def _decision_in_project(connection, decision_id: str, project_id: str):
     ).mappings().first()
 
 
-def _existing_app_branch(conn, project_id: str, task_id: str) -> tuple:
-    """The app branch + lineage root for a task that already has a built app
-    (latest completed code-task run with a PR). Mirrors intent_router so chat
-    enhancements extend the existing PR instead of rebuilding on main."""
-    row = conn.execute(
+def _task_app_run(conn, project_id: str, task_id: str) -> "_Optional[str]":
+    """The build of the app a task already has — its newest completed run with a PR — or None
+    (the task has no app yet). create_code_task builds onto it as onto extends_run_id."""
+    return conn.execute(
         _text(
-            "SELECT finalize_ctx FROM code_task_runs "
+            "SELECT id FROM code_task_runs "
             "WHERE project_id = :p AND task_id = :t AND status = 'completed' "
             "AND pull_request_url IS NOT NULL ORDER BY created_at DESC LIMIT 1"
         ),
         {"p": project_id, "t": task_id},
-    ).mappings().first()
-    if not row:
-        return None, None
-    fc = row["finalize_ctx"]
-    if isinstance(fc, str):
-        try:
-            fc = json.loads(fc)
-        except (ValueError, TypeError):
-            fc = {}
-    root = (fc or {}).get("root_run_id")
-    return (f"boss/code/{root}", root) if root else (None, None)
+    ).scalar()
 
 
 def _workflow_step_of(c, project_id: str, run_id: str) -> "_Optional[dict]":
@@ -6468,9 +6708,7 @@ def _project_probe_host(ctx: Any, project_id: _Optional[str], host: str
     try:
         with ctx.begin() as c:
             row = c.execute(
-                _text("SELECT id, name, address, port_min, port_max FROM deployment_hosts "
-                      "WHERE project_id = :p AND (address = :h OR name = :h) "
-                      "AND status <> 'retired' LIMIT 1"),
+                _text(_host_by_hint_sql("id, name, address, port_min, port_max")),
                 {"p": project_id, "h": host}).mappings().first()
     except Exception:  # noqa: BLE001 — no proof of registration is no probe
         row = None
@@ -7035,9 +7273,16 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
 
     @reg.tool(
         "forget",
-        "Retire a memory that is wrong or no longer true, by id (from recall). Retired, not "
-        "deleted — a rule that shaped past answers stays auditable.",
-        _obj({"memory_id": {"type": "string"}, "project_id": {"type": "string"}},
+        "Retire something BOSS remembers that is wrong or no longer true, by id: a memory "
+        "(from recall) or a knowledge-graph lesson, rule or fact (a kgn_… id, from recall's "
+        "knowledge or a search). Retired, not deleted — what it shaped stays auditable. For a "
+        "graph lesson, say why in `reason`; it is recorded in the knowledge audit and the "
+        "lesson leaves the graph at once.",
+        _obj({"memory_id": {"type": "string",
+                            "description": "a memory id, or a knowledge node id (kgn_…)"},
+              "reason": {"type": "string",
+                         "description": "why it is wrong (required for a kgn_… id)"},
+              "project_id": {"type": "string"}},
              ["memory_id"]),
         kind="write",
         reversibility="safe", permission="memory:manage",
@@ -7046,12 +7291,25 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
         from ..services.agent_memory import MemoryError_, forget as _forget
 
         pid = args.get("project_id") or project_id
+        target = str(args.get("memory_id") or "").strip()
+        if target.startswith("kgn_"):
+            # A KNOWLEDGE LESSON IS RETIRED IN THE GRAPH (KnowledgeService.retire): closed on
+            # the database's clock, audited with the reason, gone from the AGE mirror. An agent
+            # may retire what agents inferred; a rule a person approved is a person's to retire.
+            from ..services.knowledge.service import KnowledgeService
+
+            try:
+                with ctx.begin() as c:
+                    return {"ok": True, **KnowledgeService().retire(
+                        c, project_id=pid, node_id=target,
+                        reason=str(args.get("reason") or "").strip(),
+                        actor_kind="agent", actor_ref=actor)}
+            except (LookupError, PermissionError, ValueError) as error:
+                return {"ok": False, "error": str(error)}
         try:
             with ctx.begin() as c:
                 return {"ok": True,
-                        **_forget(c, project_id=pid,
-                                  memory_id=str(args.get("memory_id") or "").strip(),
-                                  actor=actor)}
+                        **_forget(c, project_id=pid, memory_id=target, actor=actor)}
         except MemoryError_ as error:
             return {"ok": False, "error": str(error)}
 
@@ -8438,7 +8696,7 @@ def _register_deployment_target_tools(reg: ToolRegistry) -> None:
             ).mappings().all()
             hosts = {r["id"]: dict(r) for r in c.execute(_text(
                 "SELECT id, name, address, status, key_secret_ref FROM deployment_hosts "
-                "WHERE project_id = :p"), {"p": pid}).mappings()}
+                f"WHERE {_usable_hosts_sql()}"), {"p": pid}).mappings()}
 
         out = []
         for row in rows:
@@ -8515,7 +8773,7 @@ def _register_deployment_target_tools(reg: ToolRegistry) -> None:
                 return {"ok": False, "error": "the target has no host and none was given"}
             host = c.execute(_text(
                 "SELECT id, name, address, ssh_user, ssh_port FROM deployment_hosts "
-                "WHERE id = :h AND project_id = :p"),
+                f"WHERE id = :h AND {_usable_hosts_sql()}"),
                 {"h": host_id, "p": pid}).mappings().first()
             if host is None:
                 return {"ok": False, "error": f"no host {host_id} in {pid}"}
@@ -9125,12 +9383,13 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
     @reg.tool(
         "inspect_host",
         "Run a READ-ONLY command on a registered deployment host over SSH — what is "
-        "running there, disk, a deployed app's own container logs. The database records "
-        "what BOSS INTENDED; this shows what the machine is actually doing. Refuses "
-        "anything that could change the host.",
+        "running there, disk, a deployed app's own container logs, or bounded host "
+        "performance metrics (sar, vmstat, iostat, mpstat, top -b -n 1). The database "
+        "records what BOSS INTENDED; this shows what the machine is actually doing. "
+        "Refuses anything that could change the host.",
         _obj({"host": {"type": "string", "description": "host name or id from the fleet"},
               "command": {"type": "string",
-                          "description": "e.g. 'docker ps', 'df -h', 'docker logs --tail 50 app'"}},
+                          "description": "e.g. 'docker ps', 'df -h', 'sar -u 1 5', 'top -b -n 1'"}},
              ["host", "command"]), permission="host:exec",
         exposure=Exposure(tags=("deploy", "hosts")))
     def inspect_host(ctx, *, project_id, actor, args):
@@ -9138,7 +9397,281 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         if error:
             return {"ok": False, "error": error,
                     "note": "this tool inspects; it never changes a host."}
-        return _run_read_on_host(ctx, project_id, (args.get("host") or "").strip(), command)
+        res = _run_read_on_host(ctx, project_id, (args.get("host") or "").strip(), command)
+        if res.get("ok") is False:
+            return res
+        missing = _detect_missing_sysstat(
+            command, res.get("exit_code"), res.get("stderr") or "",
+        )
+        if missing:
+            return {
+                "ok": False,
+                "host": res["host"],
+                "command": res["command"],
+                "exit_code": res["exit_code"],
+                "error": "missing_package",
+                "missing_package": missing["package"],
+                "message": (
+                    f"'{missing['verb']}' is unavailable on {res['host']}: the "
+                    f"'{missing['package']}' package is not installed. "
+                    f"{missing['install_hint']}"
+                ),
+                "install_hint": missing["install_hint"],
+                "stdout": res["stdout"],
+                "stderr": res["stderr"],
+            }
+        return res
+
+    @reg.tool(
+        "collect_diagnostics",
+        "Collect a bounded, read-only performance and health diagnostics snapshot from a "
+        "registered deployment host (CPU, memory, block I/O, network, disk, and top "
+        "processes) and return structured sections plus a ticket-ready markdown summary "
+        "and artifact payload.",
+        _obj({
+            "host": {"type": "string", "description": "host name or id from the fleet"},
+            "interval_seconds": {"type": "integer", "minimum": 1, "maximum": 5, "default": 1,
+                                 "description": "sample interval in seconds (1..5)"},
+            "count": {"type": "integer", "minimum": 1, "maximum": 5, "default": 3,
+                      "description": "sample count (1..5, interval * count <= 10)"},
+            "sections": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "enum": ["system", "cpu", "memory", "io", "network", "disk", "processes"],
+                },
+                "description": "optional subset of diagnostic sections to collect",
+            },
+            "task_id": {"type": "string", "description": "optional task id to link in payload"},
+            "ticket_ref": {"type": "string", "description": "optional ticket key for summary"},
+            "project_id": {"type": "string"},
+        }, ["host"]),
+        permission="host:exec",
+        exposure=Exposure(
+            tags=("deploy", "hosts", "diagnostics"),
+            search_hint="sar vmstat iostat mpstat top cpu memory disk network snapshot ticket",
+        ),
+    )
+    def collect_diagnostics(ctx, *, project_id, actor, args):
+        from datetime import datetime, timezone
+
+        from ..services.agent_baseline import redact_for_agent
+
+        host_hint = str(args.get("host") or "").strip()
+        if not host_hint:
+            return {"ok": False, "error": "host is required"}
+
+        raw_interval = args.get("interval_seconds")
+        interval = 1 if raw_interval is None else raw_interval
+        if isinstance(interval, bool) or not isinstance(interval, int) or interval < 1 or interval > 5:
+            return {"ok": False, "error": "interval_seconds must be an integer between 1 and 5"}
+
+        raw_count = args.get("count")
+        count = 3 if raw_count is None else raw_count
+        if isinstance(count, bool) or not isinstance(count, int) or count < 1 or count > 5:
+            return {"ok": False, "error": "count must be an integer between 1 and 5"}
+
+        if interval * count > 10:
+            return {
+                "ok": False,
+                "error": (
+                    f"interval_seconds * count ({interval * count}s) exceeds the 10s "
+                    "sampling window cap for collect_diagnostics"
+                ),
+            }
+
+        all_sections = ("system", "cpu", "memory", "io", "network", "disk", "processes")
+        raw_sections = args.get("sections")
+        if raw_sections is None or raw_sections == []:
+            selected = list(all_sections)
+        else:
+            if not isinstance(raw_sections, list):
+                return {"ok": False, "error": "sections must be a list of section names"}
+            selected = []
+            for sec in raw_sections:
+                if not isinstance(sec, str) or sec not in all_sections:
+                    return {
+                        "ok": False,
+                        "error": f"invalid diagnostics section {sec!r}; allowed: {', '.join(all_sections)}",
+                    }
+                if sec not in selected:
+                    selected.append(sec)
+
+        ansi_re = re.compile(
+            r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][AB012]"
+        )
+        ctrl_re = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+
+        def _clean_diag(text: str) -> str:
+            no_ansi = ansi_re.sub("", text).replace("\r\n", "\n").replace("\r", "")
+            return ctrl_re.sub("", no_ansi)
+
+        task_id = _clean_diag(str(args.get("task_id") or "")).strip() or None
+        ticket_ref = _clean_diag(str(args.get("ticket_ref") or "")).strip() or None
+
+        collectors: list[tuple[str, str, str]] = []
+        sar_targets = [s for s in selected if s in {"cpu", "memory", "io", "network"}]
+        if "system" in selected:
+            collectors.append(("system_uptime", "system", "uptime"))
+        if sar_targets:
+            collectors.append((
+                "sar_bundle",
+                sar_targets[0],
+                f"sar -u -r -q -n DEV -b -d {interval} {count}",
+            ))
+        if "cpu" in selected:
+            collectors.append(("cpu_mpstat", "cpu", f"mpstat -P ALL {interval} {count}"))
+        if "memory" in selected:
+            collectors.append(("memory_free", "memory", "free -m"))
+            collectors.append(("memory_vmstat", "memory", f"vmstat {interval} {count}"))
+        if "io" in selected:
+            collectors.append(("io_iostat", "io", f"iostat -xz {interval} {count}"))
+        if "network" in selected:
+            collectors.append(("network_ss", "network", "ss -tulnp"))
+        if "disk" in selected:
+            collectors.append(("disk_df", "disk", "df -h"))
+        if "processes" in selected:
+            collectors.append(("processes_top", "processes", "top -b -n 1 -w 160"))
+
+        script_parts = []
+        for cid, _sec, cmd in collectors:
+            safe_cmd, err = _inspect_host_command(cmd)
+            if err or not safe_cmd:
+                return {"ok": False, "error": err or f"invalid collector command: {cmd}"}
+            script_parts.append(
+                f"printf '===BOSS_DIAG:{cid}===\\n'; {safe_cmd} 2>&1; "
+                f"printf '\\n===BOSS_DIAG_RC:{cid}:%d===\\n' $?"
+            )
+        script = "; ".join(script_parts)
+
+        res = _run_read_on_host(ctx, project_id, host_hint, script, max_stdout=None)
+        if res.get("ok") is False:
+            return res
+
+        raw_stdout = res.get("stdout") or ""
+        raw_stderr = res.get("stderr") or ""
+        parsed: dict[str, tuple[int, str]] = {}
+        marker_re = re.compile(
+            r"===BOSS_DIAG:([a-z0-9_]+)===\n(.*?)\n===BOSS_DIAG_RC:\1:(-?[0-9]+)===",
+            re.DOTALL,
+        )
+        for m in marker_re.finditer(raw_stdout):
+            parsed[m.group(1)] = (int(m.group(3)), m.group(2).strip())
+
+        if not parsed:
+            err_code = "ssh_timeout" if res.get("exit_code") == 124 else "ssh_error"
+            msg = _clean_diag(
+                raw_stderr or raw_stdout or "failed to collect host diagnostics"
+            )[:500]
+            return {
+                "ok": False,
+                "host": res["host"],
+                "exit_code": res.get("exit_code"),
+                "error": err_code,
+                "message": str(redact_for_agent(msg)),
+            }
+
+        missing_packages: list[str] = []
+        warnings: list[str] = []
+        sections_out: dict[str, dict[str, Any]] = {
+            sec: {"status": "ok", "outputs": []} for sec in selected
+        }
+
+        for cid, sec, cmd in collectors:
+            rc, body = parsed.get(cid, (-1, "collector output missing"))
+            redacted = str(redact_for_agent(_clean_diag(body)))
+            if cid == "processes_top":
+                lines = redacted.splitlines()[:25]
+                bounded = "\n".join(lines)[:1500]
+            else:
+                bounded = redacted[:1200]
+
+            missing = _detect_missing_sysstat(cmd, rc, redacted)
+            entry: dict[str, Any] = {
+                "command": cmd,
+                "exit_code": rc,
+                "output": bounded,
+            }
+            if missing:
+                entry["missing_package"] = missing["package"]
+                if missing["package"] not in missing_packages:
+                    missing_packages.append(missing["package"])
+                hint_msg = (
+                    f"'{missing['verb']}' unavailable (missing '{missing['package']}'): "
+                    f"{missing['install_hint']}"
+                )
+                if hint_msg not in warnings:
+                    warnings.append(hint_msg)
+                if sections_out[sec]["status"] == "ok":
+                    sections_out[sec]["status"] = "degraded"
+            elif rc != 0:
+                if sections_out[sec]["status"] == "ok":
+                    sections_out[sec]["status"] = "partial"
+            sections_out[sec]["outputs"].append(entry)
+
+        if res.get("exit_code") == 124:
+            warnings.append("SSH connection timed out before all sections completed.")
+
+        collected_at = datetime.now(timezone.utc).isoformat()
+        meta_parts = [f"Collected: {collected_at}", f"Window: {interval}s x {count}"]
+        if ticket_ref:
+            meta_parts.append(f"Ticket: {ticket_ref}")
+        if task_id:
+            meta_parts.append(f"Task: {task_id}")
+        md_lines = [
+            f"### Host Diagnostics: {res['host']}",
+            " | ".join(meta_parts),
+        ]
+        if warnings:
+            md_lines.append("")
+            md_lines.append("**Warnings:**")
+            for w in warnings:
+                md_lines.append(f"- {w}")
+        for sec in selected:
+            sec_data = sections_out[sec]
+            md_lines.append("")
+            md_lines.append(f"#### {sec.capitalize()} ({sec_data['status']})")
+            for item in sec_data["outputs"]:
+                md_lines.append(f"`$ {item['command']}` (rc={item['exit_code']})")
+                md_lines.append("```text")
+                md_lines.append(item["output"] or "(no output)")
+                md_lines.append("```")
+
+        ticket_markdown = str(redact_for_agent("\n".join(md_lines)))
+        if len(ticket_markdown) > 6000:
+            ticket_markdown = ticket_markdown[:5984].rstrip() + "\n...(truncated)"
+
+        artifact_payload = redact_for_agent({
+            "artifact_type": "host_diagnostics",
+            "title": f"Host diagnostics — {res['host']} ({collected_at})",
+            "task_id": task_id,
+            "ticket_ref": ticket_ref,
+            "content": {
+                "host": res["host"],
+                "collected_at": collected_at,
+                "interval_seconds": interval,
+                "count": count,
+                "missing_packages": missing_packages,
+                "warnings": warnings,
+                "sections": sections_out,
+                "markdown": ticket_markdown,
+            },
+        })
+
+        return {
+            "ok": True,
+            "host": res["host"],
+            "collected_at": collected_at,
+            "interval_seconds": interval,
+            "count": count,
+            "task_id": task_id,
+            "ticket_ref": ticket_ref,
+            "missing_packages": missing_packages,
+            "warnings": warnings,
+            "sections": sections_out,
+            "ticket_markdown": ticket_markdown,
+            "artifact_payload": artifact_payload,
+        }
 
     @reg.tool(
         "read_app_logs",
@@ -9170,17 +9703,15 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         return {**out, "app": target["app_name"], "environment": target.get("environment"),
                 "containers_from": source}
 
-    def _run_read_on_host(ctx, project_id, want, command):
+    def _run_read_on_host(ctx, project_id, want, command, *, max_stdout: int | None = 6000):
         """inspect_host's transport: the registered host, its own key, one read command."""
         from ..services.deploy_service import (_discard_key_file, _materialise_key, _ssh,
                                                _ssh_key_file)
         from ..services.secret_backends import resolve_target_secret
 
         with ctx.begin() as c:
-            row = c.execute(_text(
-                "SELECT * FROM deployment_hosts "
-                "WHERE project_id = :p AND (id = :h OR name = :h OR address = :h)"),
-                {"p": project_id, "h": want}).mappings().first()
+            row = c.execute(_text(_host_by_hint_sql()),
+                            {"p": project_id, "h": want}).mappings().first()
             if row is None:
                 return {"ok": False, "error": f"no registered host {want!r}"}
             host = dict(row)
@@ -9202,8 +9733,10 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         finally:
             if ephemeral:
                 _discard_key_file(ephemeral)
+        raw_out = res.stdout or ""
+        stdout = raw_out[-max_stdout:] if max_stdout is not None else raw_out
         return {"host": host["name"], "command": command, "exit_code": res.returncode,
-                "stdout": (res.stdout or "")[-6000:], "stderr": (res.stderr or "")[-2000:]}
+                "stdout": stdout, "stderr": (res.stderr or "")[-2000:]}
 
     @reg.tool(
         "read_pull_request",
@@ -9415,12 +9948,11 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         timeout = int(args.get("timeout_s") or 120)
 
         with ctx.begin() as c:
-            row = c.execute(_text(
-                "SELECT * FROM deployment_hosts "
-                "WHERE project_id = :p AND (id = :h OR name = :h OR address = :h)"),
-                {"p": project_id, "h": want}).mappings().first()
+            row = c.execute(_text(_host_by_hint_sql(own_only=True)),
+                            {"p": project_id, "h": want}).mappings().first()
             if row is None:
-                return {"ok": False, "error": f"no registered host {want!r} in this project"}
+                return {"ok": False, "error": f"no registered host {want!r} in this project "
+                                              "(run_on_host acts only on the project's own hosts)"}
             host = dict(row)
             probe = {"secret_refs": ([{"name": "ssh_key",
                                        "secret_ref_id": host["key_secret_ref"]}]
@@ -9493,12 +10025,20 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
                     "ms": round((_time.time() - started) * 1000),
                     "error": f"{type(exc).__name__}: {exc}"[:300]}
 
-    # CONTRACT TESTS (AMEX-G7, BOSSAPP-1143). `http_probe` is one GET. An API that was just
+    # CONTRACT TESTS (BOSSAPP-1143). `http_probe` is one GET. An API that was just
     # given a tenant's routes has a contract: a valid token reaches the upstream, no token is a
     # 401, the eleventh request in a second is a 429, the rejected path stays rejected. Each is
     # a method, headers, a body, an expected status and a few JSON fields — a case — and the
     # step runs the list and reports a table. Same edition rule as http_probe: Community has no
     # project-bound destination for a URL yet, so it refuses rather than probe anywhere.
+    #: A header value: a literal string, or a SECRET REFERENCE resolved when the step runs, so an
+    #: authenticated case never carries a token in the spec.
+    _SECRET_HEADER = {"oneOf": [
+        {"type": "string"},
+        {"type": "object", "properties": {"secret_ref": {"type": "string"},
+                                          "prefix": {"type": "string"}},
+         "required": ["secret_ref"], "additionalProperties": False}],
+        "description": "a string, or {secret_ref: <secret ref id>, prefix?: 'Bearer '}"}
     _CONTRACT_CASE = {
         "type": "object",
         "properties": {
@@ -9507,7 +10047,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
                        "enum": ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]},
             "url": {"type": "string", "description": "a full URL; or give path + base_url"},
             "path": {"type": "string", "description": "joined onto base_url"},
-            "headers": {"type": "object", "additionalProperties": {"type": "string"}},
+            "headers": {"type": "object", "additionalProperties": _SECRET_HEADER},
             "json": {"description": "a JSON body (sets Content-Type: application/json)"},
             "body": {"type": "string", "description": "a raw body, when not JSON"},
             "expect_status": {"description": "an HTTP status, or a list of acceptable ones; "
@@ -9535,8 +10075,9 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
                         "maxItems": 100},
               "base_url": {"type": "string",
                            "description": "prefix for cases that give a path"},
-              "headers": {"type": "object", "additionalProperties": {"type": "string"},
-                          "description": "headers every case sends (a case's own win)"},
+              "headers": {"type": "object", "additionalProperties": _SECRET_HEADER,
+                          "description": "headers every case sends (a case's own win); a token "
+                                         "is a secret reference, never pasted"},
               "timeout_s": {"type": "integer", "minimum": 1, "maximum": 60, "default": 10}},
              ["cases"]),
         # IRREVERSIBLE for a resumed run: a case may POST or DELETE, so a call whose outcome was
@@ -9552,7 +10093,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         # WHERE IT MAY SEND: public hosts, and the private ones that are THIS project's own
         # deployment targets and hosts — read from the database, never from the arguments.
         #
-        # COMMUNITY (AMEX-G8, BOSSAPP-1166) used to refuse the tool outright: Community has no
+        # COMMUNITY (BOSSAPP-1166) used to refuse the tool outright: Community has no
         # egress network policy, so a URL probe could reach anywhere. Now every request — and
         # every redirect hop — must go to the exact scheme, host and port of a deployment
         # target a PERSON created (`project_origins`): not another port on that host, not a
@@ -9569,10 +10110,44 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
                     "project has none. A person creates the target (with its health URL) "
                     "first."}
         per_request = _turn_seconds(int(args.get("timeout_s") or 10))
-        return run_cases(args.get("cases"), base_url=str(args.get("base_url") or ""),
-                         timeout_s=per_request, headers=args.get("headers"),
+        # SECRET REFERENCES BECOME VALUES HERE, at run time, and nowhere that is recorded.
+        from ..services.contract_tests import (HeaderSecretRefused, http_auth_problem,
+                                               resolve_header_secrets)
+        from ..services.secret_backends import resolve_secret_ref
+
+        def _resolve(ref_id: str) -> str:
+            # A refused or failed resolution is audited by `resolve_secret_ref` inside the
+            # transaction it raises from, which rolls back: so the refusal is written again,
+            # in a transaction of its own, before the error leaves.
+            from ..services import secret_access_log as _access
+            from ..services.secret_backends import SecretUnavailable
+
+            try:
+                with ctx.begin() as db:
+                    problem = http_auth_problem(db, ref_id, project_id)
+                    if problem:
+                        raise HeaderSecretRefused(problem)
+                    return resolve_secret_ref(db, ref_id, ctx.settings, project_id)
+            except (SecretUnavailable, HeaderSecretRefused) as exc:
+                try:
+                    with ctx.begin() as db:
+                        _access.record_access(
+                            db, secret_ref_id=ref_id, project_id=project_id, outcome="refused",
+                            who=_access.who_is_accessing(db, project_id),
+                            reason=f"contract_test header: {str(exc)[:120]}")
+                except Exception:  # noqa: BLE001 — the audit never changes the refusal
+                    pass
+                raise
+
+        cases, shared_headers, bad, secret_headers = resolve_header_secrets(
+            args.get("cases"), args.get("headers"), _resolve)
+        if bad:
+            return {"ok": False, "error": bad}
+        return run_cases(cases, base_url=str(args.get("base_url") or ""),
+                         timeout_s=per_request, headers=shared_headers,
                          allowed_private=allowed, deadline_s=_turn_seconds(300),
-                         project_only=project_only, origins=origins)
+                         project_only=project_only, origins=origins,
+                         secret_headers=secret_headers)
 
     @reg.tool(
         "git_history",
@@ -9948,7 +10523,11 @@ def build_default_registry() -> ToolRegistry:
     register_knowledge_project_tools(reg)
     # Ticket systems: Jira, Plane, GitHub Issues through one contract (BOSSAPP-1047 B2).
     _register_ticket_tools(reg)
-    # A PR comment and a fix PR on a repository bound to the project (AMEX-G5/G6,
+    # Confluence: search and read pages, propose a page a person approves (BOSSAPP-1384).
+    from .confluence_tools import register_confluence_tools
+
+    register_confluence_tools(reg)
+    # A PR comment and a fix PR on a repository bound to the project (BOSSAPP-1141 / 1142,
     # BOSSAPP-1141/1142): the API-onboarding workflow's two GitHub effects, as tools.
     from .github_tools import register_github_tools
 
@@ -10015,7 +10594,7 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     # Each writes to the team's own ticket system as the person (or the connection's bot);
     # a write that would carry flagged ticket text waits for the person (low_trust).
     "ticket_import", "ticket_comment", "ticket_transition",
-    # GitHub from chat (AMEX-G5/G6): "comment the report on PR #12", "open a fix PR with this
+    # GitHub from chat (BOSSAPP-1141 / 1142): "comment the report on PR #12", "open a fix PR with this
     # file", "run the contract cases against staging". Each is receipted; a fix PR is a branch
     # of BOSS's own and merging stays a person's decision.
     "github_comment", "github_open_fix_pr", "contract_test",
@@ -10035,6 +10614,9 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     # "Update the wiki: ..." from chat: one proposed page change, written only when a person
     # approves exactly that diff (wiki.propose_patch, BOSSAPP-891).
     "wiki_propose",
+    # "Publish this to Confluence" from chat: one proposed page (create or versioned update),
+    # written only when a person approves exactly that diff (confluence_publish, BOSSAPP-1384).
+    "confluence_publish_page",
     # "Scan my app" from chat: the pinned scanners on the app's own code, BOSS's own targets only.
     "run_security_scan",
     # SETUP REPAIR, because a diagnosis with no matching capability is a loop — and setup is
@@ -10089,6 +10671,9 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     # Somewhere to deploy TO. Without this the only route to a first deployment was write_db
     # with hand-composed SQL — which BOSS took, against a schema it had to guess at.
     "create_deployment_target",
+    # Changing one: health path, port, host, env by reference. Offered as a proposal; the write
+    # happens when the operator accepts. BOSS said "I have no tool to edit a target" for this.
+    "update_deployment_target",
     # Queue and run state
     "cancel_job",
     "set_job_priority",
@@ -10178,7 +10763,7 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     # admitting it here does not by itself hand anybody a shell.
     "run_on_host",
     "redeploy",
-    # Configuration deploys (config_deploy, AMEX-G4): files into a config directory, governed
+    # Configuration deploys (config_deploy, BOSSAPP-1140): files into a config directory, governed
     # like a deploy; a promotion ships the same bytes to production under its rules.
     "deploy_config", "promote_config", "create_config_target",
     # Removing an app: a button the person presses, governed like a deploy (app_removal).
@@ -10389,4 +10974,15 @@ def _usable_hosts(alias: str = "") -> str:
     """deployment_fleet.usable_hosts_sql: a project's hosts include the ones its organisation shares."""
     from ..services.deployment_fleet import usable_hosts_sql
 
+    return usable_hosts_sql(alias)
+
+
+def _host_by_hint_sql(columns: str = "*", *, own_only: bool = False) -> str:
+    """deployment_fleet.host_by_hint_sql: the one id/name/address lookup over usable hosts."""
+    from ..services.deployment_fleet import host_by_hint_sql
+    return host_by_hint_sql(columns, own_only=own_only)
+
+
+def _usable_hosts_sql(alias: str = "") -> str:
+    from ..services.deployment_fleet import usable_hosts_sql
     return usable_hosts_sql(alias)

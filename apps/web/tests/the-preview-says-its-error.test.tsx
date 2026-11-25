@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The preview says its error, beside Stopped or Failed, not only in the title.
  * A blank error is nothing. More than six words is a paragraph.

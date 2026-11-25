@@ -21,12 +21,13 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 from sqlalchemy import text
 
@@ -131,6 +132,223 @@ def reap_dirs(*, tmp: Optional[Path] = None, min_age: float = DIR_MIN_AGE_SECOND
             release("dir", key, "reaped: unclaimed")
     return {"removed": len(removed), "kept": kept, "freed_mb": round(freed / 1e6, 1),
             "paths": removed[:20]}
+
+
+#: A sandbox run directory nothing holds and nothing touched for this long is a leftover.
+SANDBOX_ORPHAN_SECONDS = 24 * 3600
+_HEX_KEY = re.compile(r"^[0-9a-f]{24}$")
+
+
+def _newest_mtime(path: Path, depth: int = 2) -> float:
+    """The newest mtime of `path` and what is under it to `depth` levels (a run writes into its
+    workspaces and HOME, not into the run directory itself). Unreadable entries are skipped."""
+    newest = 0.0
+    stack = [(path, 0)]
+    while stack:
+        p, d = stack.pop()
+        try:
+            st = p.lstat()
+        except OSError:
+            continue
+        newest = max(newest, st.st_mtime)
+        if d < depth and p.is_dir() and not p.is_symlink():
+            try:
+                stack.extend((c, d + 1) for c in p.iterdir())
+            except OSError:
+                continue
+    return newest
+
+
+def _uid_lock_free(uid: int) -> bool:
+    """No process in this container holds the run lease of `uid` (sandbox_identity._lease_uid)."""
+    import fcntl
+
+    from . import sandbox_identity
+
+    path = os.path.join(sandbox_identity.SHIM_ROOT, f"uid-{uid}.lock")
+    try:
+        fd = os.open(path, os.O_RDWR)
+    except OSError:
+        return True             # never leased here since the container started
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return True
+    except OSError:
+        return False
+    finally:
+        os.close(fd)
+
+
+def _uid_has_processes(uid: int) -> bool:
+    for status in Path("/proc").glob("[0-9]*/status"):
+        try:
+            for line in status.read_text().splitlines():
+                if line.startswith("Uid:"):
+                    if str(uid) in line.split()[1:2]:
+                        return True
+                    break
+        except OSError:
+            continue
+    return False
+
+
+def reap_sandbox_dirs(engine: Any = None, *, root: Optional[Path] = None,
+                      min_age: float = SANDBOX_ORPHAN_SECONDS,
+                      now: Optional[float] = None) -> dict[str, Any]:
+    """A SANDBOX THAT OUTLIVED ITS RUN (BOSSAPP-1459). `sandbox_identity.release` removes a run's
+    directory when the run ends; a run that died with its process (an API restart, a deploy)
+    never got there, and its workspace stayed: 2.7 GB of them on the operator's laptop, the oldest
+    a week old. A directory under the sandbox root is a leftover only when ALL hold:
+
+    * it is one BOSS made: a 24-hex owner key, owned by a uid of the sandbox pool;
+    * no lease on that uid is held in this container, and no process runs as it;
+    * it is not the directory of a live owner (a running preview, an unended build, a lease of
+      this process): BOSS holds a preview's directory across restarts;
+    * nothing under it (two levels deep) changed for `min_age` (24 h).
+
+    Then it is removed the way `release` removes one (as the run's uid, then as BOSS)."""
+    from . import sandbox_identity
+
+    root = root or sandbox_identity.run_root()
+    now = now if now is not None else time.time()
+    live: set[str] = set(owned_process.live_owner_ids())
+    with sandbox_identity._ACTIVE_LOCK:
+        live |= set(sandbox_identity._ACTIVE)
+    if engine is not None:
+        try:
+            live |= live_preview_handles(engine)["ids"]
+            tasks = _live_sandbox_tasks(engine)
+        except Exception:  # noqa: BLE001 — unknown: keep every sandbox
+            return {"removed": 0, "kept": "live owners unknown"}
+        if "*" in tasks:
+            return {"removed": 0, "kept": "live owners unknown"}
+        live |= tasks
+    live_keys = {sandbox_identity.owner_key(o) for o in live}
+    removed, kept, freed = [], 0, 0
+    try:
+        entries = sorted(p for p in root.iterdir() if p.is_dir() and not p.is_symlink())
+    except OSError:
+        return {"removed": 0, "kept": 0}
+    pool = range(sandbox_identity.UID_BASE, sandbox_identity.UID_BASE + sandbox_identity.UID_COUNT)
+    for path in entries:
+        try:
+            uid = path.lstat().st_uid
+        except OSError:
+            continue
+        if not _HEX_KEY.match(path.name) or uid not in pool or path.name in live_keys:
+            kept += 1
+            continue
+        if now - _newest_mtime(path) < min_age or not _uid_lock_free(uid) or _uid_has_processes(uid):
+            kept += 1
+            continue
+        size = _du(path)
+        sandbox_identity._purge(sandbox_identity.SandboxIdentity(key=path.name, uid=uid, run_dir=path))
+        if not path.exists():
+            removed.append(path.name)
+            freed += size
+    return {"removed": len(removed), "kept": kept, "freed_mb": round(freed / 1e6, 1),
+            "keys": removed[:20]}
+
+
+# ------------------------------------------------------------------------------------------ #
+# test databases on the live server
+# ------------------------------------------------------------------------------------------ #
+
+#: The test Postgres's Compose service name (`boss dev up`). Resolvable on this network only
+#: while an install runs one: then the test data is someone's, and it stays.
+TEST_SERVER_HOST = "db-test"
+
+
+def test_server_present(host: str = TEST_SERVER_HOST) -> bool:
+    import socket
+
+    try:
+        socket.getaddrinfo(host, 5432)
+        return True
+    except OSError:
+        return False
+
+
+#: An unstamped test database (`boss_test_t1`) is a leftover only once it was seen idle, with no
+#: transaction committed in it, on two passes at least this far apart.
+TEST_DB_QUIET_SECONDS = 3600.0
+_TEST_DB_SEEN: dict[str, tuple[float, int]] = {}
+
+
+def reap_test_databases(engine: Any, *, test_server: Optional[bool] = None,
+                        only: Optional[Sequence[str]] = None,
+                        now: Optional[float] = None) -> dict[str, Any]:
+    """TEST DATABASES ON AN INSTALL THAT RUNS NO TESTS (BOSSAPP-1459). Only the test suites and
+    scratch work make `boss_test*` / `boss_scratch*` databases, and they belong on the test
+    Postgres (`boss dev up`, BOSSAPP-1152). Found on the live server of an install that runs no
+    tests (eight of them on the operator's laptop), they are leftovers: each one nobody is
+    connected to is dropped. Kept, all of them, when:
+
+    * this install runs a test Postgres (the `db-test` host resolves): a developer works here;
+    * the database BOSS itself runs on is a test one (a test suite's own API, a CI shard):
+      the others on that server are its siblings', never this process's to drop.
+
+    And each database only when nobody is connected AND it is provably done: a stamped one
+    (dev/test_databases.parse_stamped) past its 24 h TTL, or an unstamped one (`boss_test_t1`,
+    which an older branch's test-tier.sh still makes here) seen idle with the same commit count
+    on two passes TEST_DB_QUIET_SECONDS apart — never one a suite is between sessions in."""
+    from ..dev.test_databases import parse_stamped
+    from .disk_budget import is_test_database
+
+    clock = now if now is not None else time.time()
+
+    if test_server is None:
+        test_server = test_server_present()
+    if test_server:
+        return {"dropped": [], "kept": "a test Postgres runs on this install"}
+    with engine.connect() as c:
+        current = str(c.execute(text("SELECT current_database()")).scalar() or "")
+        if is_test_database(current) or os.environ.get("BOSS_ENVIRONMENT", "").strip().lower() in \
+                ("test", "e2e", "ci"):
+            return {"dropped": [], "kept": "this BOSS runs on a test database"}
+        rows = c.execute(text(
+            "SELECT d.datname, COALESCE(s.xact_commit, 0) FROM pg_database d "
+            "LEFT JOIN pg_stat_database s ON s.datname = d.datname "
+            "WHERE NOT d.datistemplate AND d.datname <> current_database() "
+            "AND (d.datname LIKE 'boss\\_test%' OR d.datname LIKE 'boss\\_scratch%')")).all()
+    dropped: list[str] = []
+    waiting: list[str] = []
+    for name, commits in ((str(r[0]), int(r[1] or 0)) for r in rows):
+        if only is not None and name not in only:
+            continue        # a test's own databases only, never a neighbour's on the same server
+        if not is_test_database(name) or not re.fullmatch(r"[a-z0-9_]{1,63}", name):
+            continue
+        stamped = parse_stamped(name)
+        if stamped is not None:
+            if not stamped.expired():
+                continue
+        else:
+            seen = _TEST_DB_SEEN.get(name)
+            if seen is None or seen[1] != commits:
+                _TEST_DB_SEEN[name] = (clock, commits)      # first sight, or it was used since
+                waiting.append(name)
+                continue
+            if clock - seen[0] < TEST_DB_QUIET_SECONDS:
+                waiting.append(name)
+                continue
+        try:
+            with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as c:
+                try:
+                    c.execute(text("SET lock_timeout = '2s'"))
+                    busy = c.execute(text("SELECT 1 FROM pg_stat_activity WHERE datname = :n LIMIT 1"),
+                                     {"n": name}).first()
+                    if busy:
+                        _TEST_DB_SEEN.pop(name, None)
+                        continue
+                    c.execute(text(f'DROP DATABASE IF EXISTS "{name}"'))
+                finally:
+                    c.execute(text("RESET lock_timeout"))    # a pooled connection keeps no limit
+            dropped.append(name)
+            _TEST_DB_SEEN.pop(name, None)
+        except Exception:  # noqa: BLE001 — a connection arrived, or no right: the next pass
+            _log.info("test database %s not dropped", name, exc_info=True)
+    return {"dropped": dropped, "waiting": waiting}
 
 
 def _du(path: Path) -> int:
@@ -260,7 +478,7 @@ def reap_docker(engine: Any, *, install_id: Optional[str], binary: str = "docker
                 cid in live["containers"] or \
                 any(cid.startswith(x) or x.startswith(cid) for x in live["containers"] if x):
             continue
-        _docker(["rm", "-f", cid], binary=binary)
+        _docker(["rm", "-f", "-v", cid], binary=binary)
         removed_c.append(name or cid)
     # Images: same two ways in. An image a remaining container uses, or a young one, stays.
     used = set(_docker(["ps", "-a", "--format", "{{.Image}}"], binary=binary).split())
@@ -441,71 +659,78 @@ def reap_jobs(engine: Any, settings: Any = None) -> dict[str, int]:
 def tick(engine: Any, settings: Any = None) -> dict[str, Any]:
     """One reaper pass. Every part is independent: one failing never stops the others."""
     global _last_tables
+    from ..db import background
+
     report: dict[str, Any] = {"at": time.time()}
-    report["processes"] = _safe(lambda: reap_processes(engine))
-    if engine is not None:
-        from . import preview_service
+    with background():
+        report["processes"] = _safe(lambda: reap_processes(engine))
+        if engine is not None:
+            from . import preview_service
 
-        def _reap_previews() -> Any:
-            # Under pressure (L1+) an unwatched preview goes after 5 minutes, not 20.
-            from .admission import L1, current_level
-            with engine.begin() as c:
-                level = current_level(c)
-            return preview_service.reap_previews(
-                engine, settings, idle_minutes=5 if level >= L1 else None)
+            def _reap_previews() -> Any:
+                # Under pressure (L1+) an unwatched preview goes after 5 minutes, not 20.
+                from .admission import L1, current_level
+                with engine.begin() as c:
+                    level = current_level(c)
+                return preview_service.reap_previews(
+                    engine, settings, idle_minutes=5 if level >= L1 else None)
 
-        report["previews"] = _safe(_reap_previews)
-        report["preview_workdirs"] = _safe(
-            lambda: preview_service.sweep_preview_workdirs(engine))
-    if engine is not None:
-        report["jobs"] = _safe(lambda: reap_jobs(engine, settings))
+            report["previews"] = _safe(_reap_previews)
+            report["preview_workdirs"] = _safe(
+                lambda: preview_service.sweep_preview_workdirs(engine))
+        if engine is not None:
+            report["jobs"] = _safe(lambda: reap_jobs(engine, settings))
 
-        def _reconcile_unknown() -> Any:
-            # A job parked in unknown_outcome (an irreversible effect whose call ended without
-            # an answer, BOSSAPP-986) is only released once the provider says what happened.
-            from ..config import get_settings
-            from .durable_operations import reconcile_unknown_outcomes
+            def _reconcile_unknown() -> Any:
+                # A job parked in unknown_outcome (an irreversible effect whose call ended without
+                # an answer, BOSSAPP-986) is only released once the provider says what happened.
+                from ..config import get_settings
+                from .durable_operations import reconcile_unknown_outcomes
 
-            return reconcile_unknown_outcomes(engine, settings or get_settings())
+                return reconcile_unknown_outcomes(engine, settings or get_settings())
 
-        report["unknown_outcomes"] = _safe(_reconcile_unknown)
-    if engine is not None:
-        # A build that died without teardown must not hold an execution
-        # environment forever (BOSSAPP-824): held leases past their TTL expire.
-        from . import execution_environments
+            report["unknown_outcomes"] = _safe(_reconcile_unknown)
+        if engine is not None:
+            # A build that died without teardown must not hold an execution
+            # environment forever (BOSSAPP-824): held leases past their TTL expire.
+            from . import execution_environments
 
-        report["environment_leases"] = _safe(
-            lambda: execution_environments.reap_leases(engine, settings))
-        # Workspace snapshots past their TTL go with their objects (BOSSAPP-826).
-        # No store configured -> it returns before touching the table.
-        from . import workspace_snapshots
+            report["environment_leases"] = _safe(
+                lambda: execution_environments.reap_leases(engine, settings))
+            # Workspace snapshots past their TTL go with their objects (BOSSAPP-826).
+            # No store configured -> it returns before touching the table.
+            from . import workspace_snapshots
 
-        report["workspace_snapshots"] = _safe(
-            lambda: workspace_snapshots.reap_expired(engine, settings))
-    # Stdio MCP servers idle past their template's TTL, dead ones, and containers whose
-    # creating process is gone (BOSSAPP-850).
-    from . import mcp_stdio_supervisor
+            report["workspace_snapshots"] = _safe(
+                lambda: workspace_snapshots.reap_expired(engine, settings))
+        # Stdio MCP servers idle past their template's TTL, dead ones, and containers whose
+        # creating process is gone (BOSSAPP-850).
+        from . import mcp_stdio_supervisor
 
-    report["mcp_stdio"] = _safe(mcp_stdio_supervisor.reap_tick)
-    report["dirs"] = _safe(lambda: reap_dirs())
-    # A run that died never dropped its build-services database (build_services).
-    from . import build_services
+        report["mcp_stdio"] = _safe(mcp_stdio_supervisor.reap_tick)
+        report["dirs"] = _safe(lambda: reap_dirs())
+        # A run that died never dropped its build-services database (build_services).
+        from . import build_services
 
-    report["build_databases"] = _safe(lambda: build_services.reap_tick(engine))
-    if engine is not None and docker_available():
-        from .resource_ledger import install_id
+        report["build_databases"] = _safe(lambda: build_services.reap_tick(engine))
+        if engine is not None and docker_available():
+            from .resource_ledger import install_id
 
-        def _install() -> Optional[str]:
-            with engine.begin() as c:
-                return install_id(c)
+            def _install() -> Optional[str]:
+                with engine.begin() as c:
+                    return install_id(c)
 
-        inst = _safe(_install)
-        inst = inst if isinstance(inst, str) else None
-        report["docker"] = _safe(lambda: reap_docker(engine, install_id=inst))
-        report["disk"] = _safe(lambda: prune_disk(install_id=inst))
-    if engine is not None and time.time() - _last_tables > _TABLES_EVERY:
-        _last_tables = time.time()
-        report["tables"] = _safe(lambda: prune_tables(engine))
+            inst = _safe(_install)
+            inst = inst if isinstance(inst, str) else None
+            report["docker"] = _safe(lambda: reap_docker(engine, install_id=inst))
+            report["disk"] = _safe(lambda: prune_disk(install_id=inst))
+        if engine is not None and time.time() - _last_tables > _TABLES_EVERY:
+            _last_tables = time.time()
+            report["tables"] = _safe(lambda: prune_tables(engine))
+            # BOSSAPP-1459: what a run or a test left behind and nothing uses any more. Background
+            # work (db.background): its transactions get the tick's lock and idle limits.
+            report["sandbox_dirs"] = _safe(lambda: reap_sandbox_dirs(engine))
+            report["test_databases"] = _safe(lambda: reap_test_databases(engine))
     _LAST.clear()
     _LAST.update(report)
     return report

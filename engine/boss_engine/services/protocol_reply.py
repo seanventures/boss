@@ -31,8 +31,8 @@ _DECISION_KEYS = frozenset({"action", "confidence"})
 
 _FENCE_OPEN = re.compile(r"^```[a-zA-Z0-9]*\s*")
 _FENCE_CLOSE = re.compile(r"\s*```$")
-_STRING_FIELD = r'"%s"\s*:\s*"((?:[^"\\]|\\.)*)"'
-_CALL_START = re.compile(r'\{\s*"name"\s*:\s*"([^"\\]+)"\s*,\s*"arguments"\s*:\s*')
+_CALL_START = re.compile(
+    r'\{\s*"name"\s*:\s*"([^"\\]+)"\s*,\s*"(?:arguments|args|input|parameters)"\s*:\s*')
 
 
 def _unfenced(text: str) -> str:
@@ -42,14 +42,41 @@ def _unfenced(text: str) -> str:
     return t.strip()
 
 
+_FIELD_START = r'"%s"\s*:\s*"'
+#: Where a string VALUE of the protocol object really ends: its closing quote is followed by the
+#: next key (`, "final":`) or by the object's own close at the end of the text.
+_VALUE_END = re.compile(r'(?<!\\)"(?=\s*,\s*"[A-Za-z_]+"\s*:|\s*\}\s*(?:```)?\s*$)')
+_BARE_QUOTE = re.compile(r'(?<!\\)((?:\\\\)*)"')
+
+
 def _string_field(text: str, key: str) -> Optional[str]:
-    found = re.search(_STRING_FIELD % re.escape(key), text)
-    if not found:
+    """The string value of `key` in a protocol object that does not parse as JSON.
+
+    THE WHOLE VALUE, NOT UP TO ITS FIRST QUOTE. A model writing prose inside `"final"` quotes
+    words unescaped (`the app's "Deploy" control`); reading up to the first unescaped quote
+    stored a 3,900-character answer as its first 2,587 characters, cut mid-sentence at
+    "(the app's" (northgate-gateway, 2026-11-20). The value ends at the quote that is followed
+    by the next key or by the object's close at the end of the text; quotes before it are the
+    prose's own."""
+    start = re.search(_FIELD_START % re.escape(key), text)
+    if not start:
         return None
+    end = _VALUE_END.search(text, start.end())
+    if end is None:
+        # No closing quote where a value ends (the reply was cut): everything after the open.
+        segment = text[start.end():].rstrip()
+        segment = re.sub(r'"?\s*\}?\s*$', "", segment)
+    else:
+        segment = text[start.end():end.start()]
     try:
-        return json.loads(f'"{found.group(1)}"')
+        return json.loads(f'"{segment}"', strict=False)
     except ValueError:
-        return found.group(1)
+        pass
+    try:  # the prose's own unescaped quotes, escaped
+        return json.loads('"' + _BARE_QUOTE.sub(lambda m: m.group(1) + '\\"', segment) + '"',
+                          strict=False)
+    except ValueError:
+        return segment
 
 
 def _salvage(text: str) -> Optional[dict]:
@@ -61,7 +88,7 @@ def _salvage(text: str) -> Optional[dict]:
         if value is not None:
             out[key] = value
     calls = []
-    decoder = json.JSONDecoder()
+    decoder = json.JSONDecoder(strict=False)
     for match in _CALL_START.finditer(text):
         try:
             arguments, _end = decoder.raw_decode(text, match.end())
@@ -88,7 +115,9 @@ def parse(text: Any) -> Optional[dict]:
     if not t.startswith("{"):
         return None
     try:
-        obj, _end = json.JSONDecoder().raw_decode(t)
+        # strict=False: a literal newline inside a string (models write paragraphs) is text,
+        # not a reason to fall back to salvage.
+        obj, _end = json.JSONDecoder(strict=False).raw_decode(t)
     except ValueError:
         obj = None
     if isinstance(obj, dict):
@@ -99,6 +128,47 @@ def parse(text: Any) -> Optional[dict]:
     if not re.match(r'^\{\s*"(thought|tool_calls|tool_call|final|action)"\s*:', t):
         return None
     return _salvage(t)
+
+
+#: Where a model may put a tool call's arguments in the text protocol, in the order read. The
+#: protocol asks for `arguments`; models trained on other tool formats write `args`, `input`
+#: (Anthropic) or `parameters`.
+_ARG_KEYS = ("arguments", "args", "input", "parameters")
+#: Keys of a tool call that are never one of the tool's own arguments.
+_CALL_KEYS = frozenset({"name", "id", "type", "function", "thought", *_ARG_KEYS})
+
+
+def call_arguments(call: Any) -> Any:
+    """A text-protocol tool call's ARGUMENTS, wherever the model put them — the one reading
+    every CLI text adapter (Claude Code, Codex, ...) and the engine loop share.
+
+    Asked about a first stack deploy, Sonnet answered
+    `{"name": "find_tools", "query": "deploy a stack target for the first time"}` — the
+    argument beside the name, not under `arguments`. Reading only `arguments` ran find_tools
+    with `{}`, the search had no query, returned nothing, and the agent told the operator no
+    deploy tool existed (2026-11-20, northgate-gateway). So:
+
+      * `arguments` / `args` / `input` / `parameters`, as an object or a JSON string, is read
+        first (the first one present that is not empty);
+      * otherwise the call's OTHER keys (anything but name/id/type/function/thought) are the
+        arguments — a flattened call keeps what it said.
+
+    Returns a dict, or a string as the model wrote it (the caller parses or refuses it)."""
+    if not isinstance(call, dict):
+        return {}
+    for key in _ARG_KEYS:
+        value = call.get(key)
+        if isinstance(value, dict) and value:
+            return value
+        if isinstance(value, str) and value.strip() not in ("", "{}"):
+            return value
+    flat = {k: v for k, v in call.items() if k not in _CALL_KEYS}
+    if flat:
+        return flat
+    for key in _ARG_KEYS:
+        if isinstance(call.get(key), (dict, str)):
+            return call[key]
+    return {}
 
 
 def is_decision_structure(text: Any) -> bool:

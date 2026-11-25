@@ -215,8 +215,15 @@ def start_workflow_on_grant(
         # Said once, with the door, rather than raised: one misconfigured door must not stop
         # the others.
         logger.warning("event_dispatch.workflow_missing", extra=extra)
+        from .workflow_marketplace import PACK_OF_KEY, SHIPPED_PACKS
+
+        pack = SHIPPED_PACKS.get(PACK_OF_KEY.get(str(workflow_key), ""))
         return {"run_id": None, "entry": None, "lost_reason": None,
-                "word": f"There is no published {workflow_key} workflow here"}
+                # IN A MARKETPLACE PACK NOT INSTALLED HERE: say where it is (never auto-installed
+                # by an agent: installing is a person's choice).
+                "word": (f"{workflow_key} is in the {pack.name} pack: install it from "
+                         "Workflows › Marketplace" if pack
+                         else f"There is no published {workflow_key} workflow here")}
     from .workflow_readiness import (
         WorkflowNotReadyError, record_refused, record_started_anyway, refuse_unless_ready,
     )
@@ -426,23 +433,30 @@ def dispatch_event(
         task_id = data.get("task_id")
         if subscription["sink_ref"] == "docs.update":
             from ..config import get_settings
-            from .docs_agent import enqueue_docs_update_job
+            from .docs_agent import DocsNotApplicable, enqueue_docs_update_job
 
-            job = enqueue_docs_update_job(
-                connection,
-                get_settings(),
-                project_id=project_id,
-                event_id=event_id,
-                event_type=event_type,
-                event_actor=actor,
-                entity_type=entity_type,
-                entity_id=entity_id,
-                task_id=task_id if isinstance(task_id, str) else None,
-                priority=int(config.get("priority", 100)),
-                max_attempts=int(config.get("max_attempts", 3)),
-                data_boundary=sink_boundary,
-                subscription_id=subscription["id"],
-            )
+            try:
+                job = enqueue_docs_update_job(
+                    connection,
+                    get_settings(),
+                    project_id=project_id,
+                    event_id=event_id,
+                    event_type=event_type,
+                    event_actor=actor,
+                    entity_type=entity_type,
+                    entity_id=entity_id,
+                    task_id=task_id if isinstance(task_id, str) else None,
+                    priority=int(config.get("priority", 100)),
+                    max_attempts=int(config.get("max_attempts", 3)),
+                    data_boundary=sink_boundary,
+                    subscription_id=subscription["id"],
+                )
+            except DocsNotApplicable as why:
+                # A repository on this machine, or none: no job bound to "/" is ever queued.
+                enqueued.append({"kind": "job", "skipped": True,
+                                 "subscription_id": subscription["id"],
+                                 "sink_ref": "docs.update", "reason": str(why)})
+                continue
             enqueued.append(job)
             continue
         job = enqueue_job(

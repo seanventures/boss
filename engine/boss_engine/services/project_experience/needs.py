@@ -330,9 +330,27 @@ def prod_host_card(project_id: str) -> dict[str, Any]:
                        "href": href(project_id, area="infra", add="target", env="production")}}
 
 
+def _is_easy_mode_project(connection: Connection, project_id: str) -> bool:
+    """True when this project was launched as Easy Mode MVP and has not been promoted to a
+    non-Easy-Mode production workflow/target (BOSSAPP-1406: Easy Mode MVP never asks to pick a
+    prod host)."""
+    row = connection.execute(text(
+        "SELECT ("
+        " EXISTS (SELECT 1 FROM workflow_runs r "
+        "         JOIN workflow_versions v ON v.id = r.workflow_version_id "
+        "         JOIN workflow_definitions d ON d.id = v.workflow_definition_id "
+        "         WHERE r.project_id = :p AND d.workflow_key = 'easy_mode_mvp')"
+        " OR EXISTS (SELECT 1 FROM receipts WHERE project_id = :p AND effect_kind = 'factory.launch')"
+        ") AS easy_mode"), {"p": project_id}).mappings().first()
+    return bool(row and row["easy_mode"])
+
+
 def prod_waits(connection: Connection, project_id: str) -> bool:
     """Production waits on a person: a non-production environment is live (a healthy deploy on
-    an active target) and the project has no active production target."""
+    an active target) and the project has no active production target. Easy Mode MVP projects
+    run as previews/staging and never ask 'Pick a prod host'."""
+    if _is_easy_mode_project(connection, project_id):
+        return False
     row = connection.execute(text(
         "SELECT EXISTS (SELECT 1 FROM stack_deployments s JOIN deployment_targets t ON "
         " t.id = s.target_id WHERE t.project_id = :p AND t.status = 'active' AND s.status = "
@@ -341,6 +359,17 @@ def prod_waits(connection: Connection, project_id: str) -> bool:
         " AND lower(COALESCE(environment, '')) IN ('production', 'prod')) AS prod"),
         {"p": project_id}).mappings().first()
     return bool(row and row["staged"] and not row["prod"])
+
+
+#: "Only you" items a sample project (projects.sample_key) does not need on its PR path.
+OPTIONAL_FOR_A_SAMPLE = frozenset({"deploy_target"})
+
+
+def _is_sample(connection: Connection, project_id: str) -> bool:
+    """Try a sample's project (projects.sample_key set)."""
+    row = connection.execute(text(
+        "SELECT sample_key FROM projects WHERE id = :p"), {"p": project_id}).first()
+    return bool(row and row[0])
 
 
 def setup_cards(connection: Connection, project_id: str,
@@ -359,7 +388,14 @@ def setup_cards(connection: Connection, project_id: str,
             {"p": project_id}).first()
         onboarding = onboarding_service.view(connection, project_id) if has_run else {}
     out = []
+    sample = _is_sample(connection, project_id)
     for item in (onboarding or {}).get("only_you") or []:
+        # A SAMPLE NEVER WAITS ON A SERVER (stranger test r3, 2026-11-18): Try a sample builds and
+        # opens its PR with no host — its own checklist says so — yet "Pick a staging host" sat in
+        # Needs you and the bell. A server is optional for it; the onboarding checklist keeps the
+        # row, and a deploy the run reaches still stops for a person there.
+        if sample and str(item.get("key")) in OPTIONAL_FOR_A_SAMPLE:
+            continue
         action = item.get("action") or {}
         out.append({"id": f"onb:{item['key']}", "kind": "setup",
                     "label": ONLY_YOU_WORDS.get(str(item["key"])) or item["label"],
@@ -382,10 +418,19 @@ def cards(connection: Connection, project_id: str, work_items: list[dict[str, An
 
     runs = {w["id"]: w for w in work_items if w.get("source") == "workflow_run"}
     by_decision = {d: w for w in work_items for d in w.get("decision_ids") or []}
+    by_meeting = {
+        str((s.get("output") or {}).get("meeting_run_id")): w
+        for w in runs.values()
+        for s in (w.get("steps") or [])
+        if isinstance(s.get("output"), dict) and (s.get("output") or {}).get("meeting_run_id")
+    }
     out = []
     for d in waiting_on_operator(connection, project_id):
         rec = d.get("recommendation") if isinstance(d.get("recommendation"), dict) else {}
-        run = runs.get(str(rec.get("workflow_run_id") or "")) or by_decision.get(str(d["id"]))
+        run = (runs.get(str(rec.get("workflow_run_id") or ""))
+               or by_decision.get(str(d["id"]))
+               or (by_meeting.get(str(rec.get("item_id") or ""))
+                   if rec.get("surface") == "meeting" else None))
         out.append(card(connection, project_id, d, run))
     out = one_per_subject(out)
     # ONE SOURCE FOR NEEDS YOU: every piece of work the Work tab groups under Needs you has its

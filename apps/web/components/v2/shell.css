@@ -537,6 +537,11 @@
   font-family: var(--v2-font-display);
 }
 .v2-chat-close:hover { color: var(--v2-ink); }
+/* Full screen sits beside close (components/chat-fullscreen): close keeps the right edge. */
+.v2-chat-full { display: inline-grid; place-items: center; }
+.v2-chat-full + .v2-chat-close { margin-left: 0; }
+.v2-chat[data-chat-full="1"] .v2-chat-log, .v2-chat[data-chat-full="1"] .v2-chat-composer,
+.v2-chat[data-chat-full="1"] .v2-chat-context { padding-inline: max(16px, calc((100% - 60rem) / 2)); }
 .v2-chat-context {
   margin: 0; padding: 10px 16px; font-size: 0.63158rem; color: var(--v2-muted);
   border-bottom: 1px solid var(--v2-surface); line-height: 1.45;

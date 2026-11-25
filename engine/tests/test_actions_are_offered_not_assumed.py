@@ -85,7 +85,8 @@ def test_a_namespaced_tool_name_still_resolves():
     """Models emit `functions/redeploy`; a proposal is no different."""
     out = build_default_registry().invoke(
         "propose_action", object(), project_id="p", actor="ceo",
-        args={"tool": "functions/redeploy", "label": "Redeploy"})
+        args={"tool": "functions/redeploy", "args": {"run_id": "crun_a57b42adc0884dc4bfda"},
+              "label": "Redeploy"})
     assert out["ok"] is True and out["tool"] == "redeploy"
 
 
@@ -154,17 +155,20 @@ def test_an_invented_argument_is_refused(args):
     assert "look" in out["error"].lower(), "the refusal must say what to do instead"
 
 
-@pytest.mark.parametrize("args", [
-    {"run_id": "crun_a57b42adc0884dc4bfda"},
-    {"run_id": "crun_0cd37e41b83a4114b567", "reason": "operator asked to retry"},
-    {"job_id": "job_4dc32933157c", "band": "interactive"},
-    {},
+@pytest.mark.parametrize("tool,args", [
+    ("redeploy", {"run_id": "crun_a57b42adc0884dc4bfda"}),
+    ("redeploy", {"run_id": "crun_0cd37e41b83a4114b567", "reason": "operator asked to retry"}),
+    # Each offer carries its OWN tool's arguments (a button's arguments are its tool's
+    # arguments, 040027cc7): a job's band goes to set_job_priority, not redeploy.
+    ("set_job_priority", {"job_id": "job_4dc32933157c", "band": "interactive",
+                          "reason": "operator is waiting"}),
+    ("close_orphaned_runs", {}),
 ])
-def test_a_real_argument_is_accepted(args):
+def test_a_real_argument_is_accepted(tool, args):
     assert _placeholder_argument(args) == ""
     out = build_default_registry().invoke(
         "propose_action", object(), project_id="p", actor="ceo",
-        args={"tool": "redeploy", "args": args, "label": "Redeploy"})
+        args={"tool": tool, "args": args, "label": "Do it"})
     assert out["ok"] is True and out["proposed"] is True
 
 

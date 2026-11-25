@@ -251,6 +251,13 @@ def refuse_policy_approval(row: Mapping[str, Any], *, system_policy: bool, actor
             rec = {}
     if (rec or {}).get("action") not in PERSON_ACTIONS:
         return
+    from .autonomy_gate import permits
+
+    if permits(row, actor):
+        # DEV AUTONOMY (BOSSAPP-1441): on a DEVELOPMENT install (production.resolve_install) a
+        # self-fix installs with automatic rollback on a failed health check; a production
+        # install still asks a person (the route says ask there, so this never passes).
+        return
     if system_policy or actor in (sf.SYSTEM_ACTOR, "system", sf.ACTOR_AGENT) \
             or str(actor).startswith(("agt_", "sys_")):
         raise InstallRefused("A person approves every BOSS self-fix install and removal; no "
@@ -391,7 +398,10 @@ def on_revise(connection: Connection, row: Mapping[str, Any], actor: str,
     rounds = int(sfx.get("repair_rounds") or 0) + 1
     sf.transition(connection, sfx["id"], sf.FIXING, actor=actor,
                   sentence=f"{actor} asked for changes; {sf.AGENT_NAME} is fixing it again.",
-                  data={"note": (note or "")[:600]}, repair_rounds=rounds)
+                  data={"note": (note or "")[:600]}, repair_rounds=rounds,
+                  # A round's clock starts when its build does, never during the wait for a
+                  # person or a worker (R3, BOSSAPP-1431).
+                  started_at=None)
     sf.enqueue_build(connection, sf.get(connection, sfx["id"]),
                      round_note=f"A person asked for changes: {note or ''}")
 
@@ -767,7 +777,7 @@ def rebase_stale(connection: Connection, settings: Any) -> list[str]:
                             sentence="BOSS's stack changed since this fix was checked; checking "
                                      "it again on the new one.", base_sha=running,
                             repair_rounds=int((sf.get(connection, sfx_id) or {}).get(
-                                "repair_rounds") or 0))
+                                "repair_rounds") or 0), started_at=None)
         sf.enqueue_build(connection, sfx, round_note="rebase onto the running stack")
         moved.append(sfx_id)
     return moved

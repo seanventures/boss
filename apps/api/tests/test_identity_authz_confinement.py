@@ -6,10 +6,10 @@ permission held in A reaches B's row. Routes declare those ids (`@permit(..., co
 the enforcement point answers another project's object 404 before the handler runs.
 
 The suite is generated from the declarations: for EVERY confined id of EVERY route, a principal of
-project A naming project B's object is refused 404 ({"error": "not_found"}), and the same request
-naming A's object is allowed (the control). Object loaders are pointed by id prefix (b_* is in
-project B, a_* in A); the loaders themselves run against the real schema in
-test_identity_authz_object_kinds.py. REQUIRED pins the ids the review found unconfined, so
+project A naming project B's object (another org's, for a kind the org shares) is refused 404
+({"error": "not_found"}), and the same request naming A's object is allowed (the control). Object
+loaders are pointed by id prefix (b_* is in project B, x_* in another org, a_* in A); the loaders
+themselves run against the real schema in test_identity_authz_object_kinds.py. REQUIRED pins the ids the review found unconfined, so
 dropping one of them from a declaration fails here.
 """
 from __future__ import annotations
@@ -23,6 +23,7 @@ from apps.api.app import identity_guard
 from apps.api.app.main import app
 from apps.api.tests import identity_matrix
 from apps.api.tests.identity_fixtures import IdentityWorld
+from boss_engine.identity import object_rules
 from boss_engine.identity import scope as scope_module
 from boss_engine.identity.declarations import Permit
 
@@ -78,11 +79,28 @@ def admin(world):
 
 @pytest.fixture
 def placed(monkeypatch, world):
-    """b_* objects live in project B, everything else in project A (this org)."""
+    """b_* objects live in project B, x_* in ANOTHER org, everything else in project A (this org).
+    An org-shared kind (object_rules.ORG_SHARED_KINDS: a deployment host any project of its org
+    may use) has no project B object: its tenant boundary is the org (_counter_example)."""
+    def loader(shared):
+        def load(db, oid):
+            oid = str(oid)
+            if oid.startswith("x_"):
+                return ("org_somebody_else", "p_somebody_else")
+            if oid.startswith("b_"):
+                return None if shared else (world.org, world.project_b)
+            return (world.org, world.project_a)
+        return load
     for kind in scope_module.registered_object_kinds():
         monkeypatch.setitem(scope_module._OBJECT_LOADERS, kind,  # noqa: SLF001
-                            lambda db, oid: (world.org, world.project_b if str(oid).startswith("b_")
-                                             else world.project_a))
+                            loader(kind in object_rules.ORG_SHARED_KINDS))
+
+
+def _counter_example(rule) -> str:
+    """Another tenant's object: another project's, or — when every kind the id names is shared by
+    the org (a deployment host) — another org's."""
+    shared = all(kind in object_rules.ORG_SHARED_KINDS for kind in rule.kinds)
+    return "x_obj" if shared else "b_obj"
 
 
 def _request(method, path, access, rule, world, object_id):
@@ -115,7 +133,8 @@ def test_the_review_list_is_declared():
 def test_another_projects_object_in_a_request_is_not_found(method, path, access, rule, mirror,
                                                           world, admin, placed):
     with world.acting_as(world.ctx(admin)):
-        refused = mirror.request(**_request(method, path, access, rule, world, "b_obj"))
+        refused = mirror.request(**_request(method, path, access, rule, world,
+                                            _counter_example(rule)))
         allowed = mirror.request(**_request(method, path, access, rule, world, "a_obj"))
     assert refused.status_code == 404 and refused.json() == {"error": "not_found"}, refused.text
     assert allowed.status_code == 200, allowed.text

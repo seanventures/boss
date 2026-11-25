@@ -102,7 +102,70 @@ def test_the_infra_retry_of_a_consented_workflow_build_runs_under_that_runs_gran
     runs.finish_code_task_run(env.engine, started[0], org_id="org_boss")
 
 
+def _org_default_off(env):
+    """The org default "agents fix failures with the starter's authority" (identity/
+    fix_authority) turned OFF for the project: the rules below are what applies then."""
+    from boss_engine.services import project_settings
+
+    with env.engine.begin() as c:
+        project_settings.set_one(c, env.project, "agents_fix_failures", 0)
+
+
+def test_by_default_an_ended_grant_no_longer_stops_boss_s_retry(env, staffed):  # noqa: F811
+    """THE ORG DEFAULT (operator 2026-11-21): the run's grant has ended, and BOSS's retry runs
+    anyway — as the same person, on that person's fixer authority, never BOSS's own key."""
+    _, crun, grant = _workflow_build(env)
+    with env.engine.begin() as c:
+        c.execute(text("UPDATE identity_delegation_grants SET status='expired' WHERE id=:g"), {"g": grant})
+    with lineage.acting(WORKER_KEY):
+        new = cts.retry_code_task(env.engine, get_settings(), _Jobs(), crun, automatic=True)["run_id"]
+    with env.engine.begin() as c:
+        job = c.execute(text("SELECT j.on_behalf_of, g.authority_kind FROM jobs j JOIN "
+                             "identity_delegation_grants g ON g.id = j.grant_id WHERE "
+                             "j.kind='code.task' AND j.payload->>'run_id'=:r"), {"r": new}).one()
+    assert job == (ALICE, "fixer")
+    _, crun2, grant2 = _workflow_build(env)
+    with env.engine.begin() as c:                            # a person's REVOKE is their "no"
+        c.execute(text("UPDATE identity_delegation_grants SET status='revoked' "
+                       "WHERE authority_kind='fixer' AND user_principal_id=:u"), {"u": ALICE})
+        c.execute(text("UPDATE identity_delegation_grants SET status='expired' WHERE id=:g"),
+                  {"g": grant2})
+    with pytest.raises(cts.RetryNeedsPerson):
+        with lineage.acting(WORKER_KEY):
+            cts.retry_code_task(env.engine, get_settings(), _Jobs(), crun2, automatic=True)
+
+
+def test_a_workflow_run_whose_grant_ended_continues_on_its_persons_fixer_authority(env, staffed):  # noqa: F811
+    """The runner's one read of a run's authority (_live_run_authority): an ended "this run
+    only" grant moves the run onto its person's fixer authority (recorded on the run, audited
+    as the org default) instead of parking it for a renewal; a REVOKED grant never does."""
+    from boss_engine.identity import consent
+    from boss_engine.services import workflow_capability_runner as runner
+
+    wf_run, _crun, grant = _workflow_build(env)
+    with env.engine.begin() as c:
+        c.execute(text("UPDATE identity_delegation_grants SET status='expired' WHERE id=:g"), {"g": grant})
+    with env.engine.begin() as c:
+        assert consent.acting_for_workflow_run(c, wf_run) is None
+        acting = runner._live_run_authority(c, env.project, wf_run)
+    with env.engine.begin() as c:
+        now_on = c.execute(text("SELECT g.authority_kind FROM workflow_runs r JOIN "
+                                "identity_delegation_grants g ON g.id = r.grant_id WHERE r.id=:r"),
+                           {"r": wf_run}).scalar()
+        live = consent.acting_for_workflow_run(c, wf_run)
+    assert acting is not None and acting.principal_id == ALICE and now_on == "fixer"
+    assert live is not None and live.grant_id == acting.grant_id
+    assert any(e.event_type == "delegation.org_default_applied" and e.grant_id == acting.grant_id
+               for e in env.world.events)
+    wf2, _c2, grant2 = _workflow_build(env)
+    with env.engine.begin() as c:
+        c.execute(text("UPDATE identity_delegation_grants SET status='revoked' WHERE id=:g"), {"g": grant2})
+    with env.engine.begin() as c:
+        assert runner._live_run_authority(c, env.project, wf2) is None, "a revoke is a person's no"
+
+
 def test_with_no_live_grant_boss_does_not_start_the_retry_and_leaves_it_to_a_person(env, staffed):  # noqa: F811
+    _org_default_off(env)
     _, crun, grant = _workflow_build(env)
     with env.engine.begin() as c:
         c.execute(text("UPDATE identity_delegation_grants SET status='expired' WHERE id=:g"), {"g": grant})
@@ -127,15 +190,101 @@ def test_a_build_stamped_as_boss_itself_carries_nothing(env, staffed):  # noqa: 
     assert _children(env, crun) == 0
 
 
-def test_a_this_build_only_grant_is_not_carried_past_its_build(env, staffed):  # noqa: F811
+def _standalone_build(env):
+    """An Easy Mode build (no workflow run) the person consented to "for this build only":
+    the grant is bound to `run_ct:<build>` and the build's job runs under it."""
     _, crun, grant = _workflow_build(env)
     with env.engine.begin() as c:
         c.execute(text("UPDATE identity_delegation_grants SET task_run_id=:t WHERE id=:g"),
                   {"t": f"run_ct:{crun}", "g": grant})
+        c.execute(text("UPDATE code_task_runs SET finalize_ctx = finalize_ctx - 'workflow_run_id' "
+                       "WHERE id=:r"), {"r": crun})
+        c.execute(text("UPDATE jobs SET chain=NULL, payload = jsonb_set(payload, '{_identity,run_id}', "
+                       "to_jsonb(CAST(:t AS text))) WHERE kind='code.task' AND payload->>'run_id'=:r"),
+                  {"t": f"run_ct:{crun}", "r": crun})
+    return crun, grant
+
+
+def test_boss_retries_a_this_build_only_build_under_that_same_grant(env, staffed):  # noqa: F811
+    """recipe-box (2026-11-18): crun_6883ec7c died on BOSS's own git-index bug; the person's
+    "this build only" grant was live, yet BOSS withheld its retry and asked the person to press
+    Retry — under that very grant. BOSS's retry of the SAME build now carries it, bound to it."""
+    crun, grant = _standalone_build(env)
+    with lineage.acting(WORKER_KEY):
+        new = cts.retry_code_task(env.engine, get_settings(), _Jobs(), crun, automatic=True)["run_id"]
+    job = _job_of(env, new)
+    assert job["on_behalf_of"] == ALICE and job["grant_id"] == grant and not job["on_behalf_system"]
+    assert str(job["payload"]["_identity"]["run_id"]).startswith(f"run_ct:{crun}/retry:")
+
+
+def test_boss_retries_its_own_retry_under_the_same_this_build_only_grant(env, staffed):  # noqa: F811
+    """The build's own retry chain is the same build: BOSS's retry R2 of its retry R1 of build B
+    still carries B's "this build only" grant (no lineage walk: R1 ran as the person), bound to
+    run_ct:B/retry:R1/retry:R2."""
+    crun, grant = _standalone_build(env)
+    with lineage.acting(WORKER_KEY):
+        r1 = cts.retry_code_task(env.engine, get_settings(), _Jobs(), crun, automatic=True)["run_id"]
+    with env.engine.begin() as c:
+        c.execute(text("UPDATE code_task_runs SET status='failed', phase='done', error='git: 502', "
+                       "finalize_ctx = finalize_ctx || '{\"failure_class\": \"infra\"}'::jsonb "
+                       "WHERE id=:r"), {"r": r1})
+    with lineage.acting(WORKER_KEY):
+        r2 = cts.retry_code_task(env.engine, get_settings(), _Jobs(), r1, automatic=True)["run_id"]
+    job = _job_of(env, r2)
+    assert job["on_behalf_of"] == ALICE and job["grant_id"] == grant
+    assert str(job["payload"]["_identity"]["run_id"]).startswith(f"run_ct:{crun}/retry:{r1}/retry:")
+
+
+def test_a_this_build_only_grant_is_not_carried_to_another_build(env, staffed):  # noqa: F811
+    _org_default_off(env)
+    _, crun, grant = _workflow_build(env)
+    with env.engine.begin() as c:
+        # The grant is for ANOTHER build: never carried past the one it was given for.
+        c.execute(text("UPDATE identity_delegation_grants SET task_run_id=:t WHERE id=:g"),
+                  {"t": "run_ct:crun_someotherbuild", "g": grant})
     with pytest.raises(cts.RetryNeedsPerson):
         with lineage.acting(WORKER_KEY):
             cts.retry_code_task(env.engine, get_settings(), _Jobs(), crun, automatic=True)
     assert _children(env, crun) == 0
+
+
+def test_a_follow_up_boss_starts_does_not_ride_a_this_build_only_grant():
+    """Only BOSS's RETRY of the same build carries it (same_build); a continuation does not."""
+    import inspect
+
+    from boss_engine.identity import consent
+
+    src = inspect.getsource(cts.start_code_task)
+    assert "same_build=automatic_retry" in src
+    assert "same_build" in inspect.signature(consent.carry_retry_authority).parameters
+
+
+def test_a_merge_conflict_on_a_completed_build_is_handed_to_its_builder_after_a_restart(
+        env, staffed, monkeypatch):  # noqa: F811
+    """northgate-gateway #9 (2026-11-21 17:45): crun_2bc5ad4b COMPLETED and opened its change;
+    BOSS restarted; the merge then conflicted. Handing the conflict to the builder is a NEW
+    repair with the conflict note — not a blind re-run of a build that died before a restart —
+    so the restart guard never refuses it."""
+    from boss_engine.services import merge_failures
+
+    _, crun, _ = _workflow_build(env)
+    url = f"http://boss-local/local_{env.project}/{env.project}/pull/9"
+    with env.engine.begin() as c:
+        c.execute(text("UPDATE code_task_runs SET status='completed', pull_request_url=:u, "
+                       "updated_at = now() - interval '2 hours' WHERE id=:r"), {"u": url, "r": crun})
+    monkeypatch.setattr(cts, "PROCESS_STARTED_AT", cts.PROCESS_STARTED_AT.__class__.now(
+        cts.PROCESS_STARTED_AT.tzinfo) - timedelta(minutes=30))   # restarted AFTER it completed
+    note = merge_failures.conflict_note(9, url, "boss/code/x does not merge cleanly into main: "
+                                        "config/tenants/lumen-pay.yaml conflict.")
+    with lineage.acting(WORKER_KEY):
+        new = cts.retry_code_task(env.engine, get_settings(), _Jobs(), crun, automatic=True,
+                                  fix_note=note)
+    assert new.get("run_id") and new["run_id"] != crun and new.get("created") is not False
+    assert _children(env, crun) == 1
+    with env.engine.begin() as c:
+        fx = c.execute(text("SELECT finalize_ctx FROM code_task_runs WHERE id=:r"),
+                       {"r": new["run_id"]}).scalar()
+    assert "conflicts with its base branch" in fx["feedback_history"][-1]["fix_note"]
 
 
 def test_a_build_that_failed_before_boss_started_is_not_retried_automatically(env, staffed, monkeypatch):  # noqa: F811

@@ -113,6 +113,31 @@ describe("one approval for a change (screen 7)", () => {
     expect(formOf()).toMatchObject({ action: "revise", note: "Use the shared cart id type in web too." });
   });
 
+  it("a set with checks failing says so and merges only with a reason, sent forced", async () => {
+    api();
+    resolve.mockResolvedValue({ ok: true, message: "Approved." });
+    const base = changeSetDecision();
+    await mount("owner", changeSetDecision({
+      recommendation: { ...base.recommendation, checks_failing: {
+        gates: [{ gate: "security_clean", label: "Security clean", security: true, detail: "failing on api" }],
+        findings: [], security: true } },
+      allowedActions: [
+        { action: "approve", label: "Merge all 3 with checks failing", tone: "reject", effect: "Say why.", needs: "note" },
+        ...base.allowedActions.slice(1)],
+    }));
+    expect(tid("mr-approval-checks-failing")?.textContent).toContain("Security clean (failing on api)");
+    expect(tid("mr-approval-checks-failing")?.textContent).toContain("security finding open");
+    const merge = tid("mr-approval-approve") as HTMLButtonElement;
+    expect(merge.textContent?.trim()).toBe("Merge all 3 with checks failing");
+    expect(merge.disabled).toBe(true);
+    await click(merge);
+    expect(resolve).not.toHaveBeenCalled();
+    await type(tid("mr-approval-reason"), "Hotfix; the follow-up fixes the finding today.");
+    await click(tid("mr-approval-approve"));
+    expect(formOf()).toMatchObject({ action: "approve", force: "true", content_hash: "hash_heads_v1",
+                                     note: "Hotfix; the follow-up fixes the finding today." });
+  });
+
   it("Reject sends reject", async () => {
     api();
     resolve.mockResolvedValue({ ok: true });

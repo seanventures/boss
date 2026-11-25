@@ -121,7 +121,9 @@ Use --web or --no-web to change the existing choice deliberately.
 If the new release fails to start, the previous release is put back and
 started again (data volumes are kept). --no-rollback leaves it as it is.
 The images running before the upgrade are kept as prev-<tag>: `boss rollback`
-(rollback.sh) puts that release back later, without a build.
+(rollback.sh) puts that release back later, without a build. One previous set only: the next
+upgrade replaces it, and once this release has run BOSS_ROLLBACK_KEEP_HOURS (72) with a
+healthy API, prune.sh drops it (docs/operations/DISK_BUDGET.md).
 
 DISK CHECK (storage hygiene layer 1). Before anything is built, the free space on this host
 and on Docker's own disk is measured against what the upgrade will need: about
@@ -168,6 +170,16 @@ INSTALL_DIR="$(cd "$INSTALL_DIR" && pwd -P)"
   { echo 'This install is a remote.sh archive without Git; run remote.sh update from the operator machine.' >&2; exit 1; }
 [[ -z "$(git -C "$INSTALL_DIR" status --porcelain --untracked-files=no)" ]] ||
   { echo 'Tracked local changes need to be committed or moved before upgrade; nothing changed.' >&2; exit 1; }
+
+# The one compose-file resolver (compose_files.sh): the engine inner-sandbox overlay when .env
+# opts in. The installer this runs recreates the containers through the same resolver.
+upgrade_compose_files() {
+  BOSS_COMPOSE_FILES=(-f "$INSTALL_DIR/scripts/install/community-compose.yml")
+  [[ -f "$INSTALL_DIR/scripts/install/compose_files.sh" ]] || return 0
+  # shellcheck source=compose_files.sh
+  source "$INSTALL_DIR/scripts/install/compose_files.sh"
+  boss_compose_files "$INSTALL_DIR" "$INSTALL_DIR/.env"
+}
 
 OLD_COMMIT="$(git -C "$INSTALL_DIR" rev-parse HEAD)"
 CURRENT_REF="$(installed_ref "$INSTALL_DIR")"
@@ -281,7 +293,8 @@ keep_previous_images() {
   # the resume's backup would refuse. Leave the rollback point that still names the running image.
   local tag_id="" run_id="" prev_id="" cid=""
   tag_id="$("${d[@]}" image inspect --format '{{.Id}}' "boss-community-api:$tag" 2>/dev/null || true)"
-  cid="$("${d[@]}" compose -f "$INSTALL_DIR/scripts/install/community-compose.yml" --env-file "$INSTALL_DIR/.env" ps -q api 2>/dev/null || true)"
+  upgrade_compose_files || true
+  cid="$("${d[@]}" compose "${BOSS_COMPOSE_FILES[@]}" --env-file "$INSTALL_DIR/.env" ps -q api 2>/dev/null || true)"
   [[ -z "$cid" ]] || run_id="$("${d[@]}" inspect --format '{{.Image}}' "$cid" 2>/dev/null || true)"
   prev_id="$("${d[@]}" image inspect --format '{{.Id}}' "boss-community-api:prev-$tag" 2>/dev/null || true)"
   if [[ -n "$run_id" && -n "$tag_id" && -n "$prev_id" && "$run_id" == "$prev_id" && "$run_id" != "$tag_id" && -f "$INSTALL_DIR/.boss-rollback" ]]; then
@@ -442,7 +455,8 @@ fi
 test_db_compose() {
   local d=(docker)
   docker info >/dev/null 2>&1 || d=(sudo -n docker)
-  "${d[@]}" compose -f "$INSTALL_DIR/scripts/install/community-compose.yml" \
+  upgrade_compose_files || return 1
+  "${d[@]}" compose "${BOSS_COMPOSE_FILES[@]}" \
     --env-file "$INSTALL_DIR/.env" --profile dev "$@"
 }
 test_db_running() {
@@ -550,6 +564,12 @@ if [[ -f "$INSTALL_DIR/scripts/install/steward.py" ]] && command -v python3 >/de
    grep -q -- '--relabel-volumes' "$INSTALL_DIR/scripts/install/steward.py"; then
   python3 "$INSTALL_DIR/scripts/install/steward.py" --install-dir "$INSTALL_DIR" --relabel-volumes </dev/null ||
     echo 'BOSS volume labels were not checked; the Infra Agent lists any it cannot judge.' >&2
+fi
+# TEST LEFTOVERS (BOSSAPP-1459): the test Postgres's volume goes when no container uses it.
+if [[ -f "$INSTALL_DIR/scripts/install/steward.py" ]] && command -v python3 >/dev/null 2>&1 &&
+   grep -q -- '--test-leftovers' "$INSTALL_DIR/scripts/install/steward.py"; then
+  python3 "$INSTALL_DIR/scripts/install/steward.py" --install-dir "$INSTALL_DIR" --test-leftovers </dev/null ||
+    echo 'Test leftovers were not checked; boss prune does it later.' >&2
 fi
 # Read only now: the installer and its backup never touch db-test, so this is the container
 # that ran through the upgrade (and a failed upgrade makes no Docker call for it at all).

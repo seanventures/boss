@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The learned row says the detail, beside the row, not only on its title.
  * A blank detail says nothing. The same words as the label or the sub say

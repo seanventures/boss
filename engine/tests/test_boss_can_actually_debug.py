@@ -269,7 +269,11 @@ class TestARealDebuggingSession:
             parent, body = stages[stage]
             chain += body
             stage = parent
-        assert re.search(r"npm install -g[^\n]*@anthropic-ai/claude-code@", chain)
+        # The CLIs are installed from the committed lockfile (scripts/install/cli-lock).
+        assert re.search(r"COPY scripts/install/cli-lock/package\.json[^\n]*/opt/boss-clis/", chain)
+        assert "npm ci --prefix /opt/boss-clis" in chain
+        lock = pathlib.Path("scripts/install/cli-lock/package.json").read_text()
+        assert '"@anthropic-ai/claude-code"' in lock
         client = pathlib.Path("apps/worker/boss_worker/control_plane.py").read_text()
         assert "/v1/investigations/" in client
         main = pathlib.Path("apps/api/app/main.py").read_text()
@@ -836,11 +840,25 @@ class TestTheOperatorCanSeeItThinking:
 
     def test_reporting_can_never_break_the_work(self):
         """A progress indicator that can fail the thing it reports on is worse than none."""
-        from boss_engine.services import code_agent
+        from boss_engine.services import code_agent, harness_failures
 
-        body = inspect.getsource(code_agent)
-        i = body.index("if on_turn:")
-        assert "except Exception" in body[i:i + 260]
+        # The engines hand their turns over through one path (harness_failures.deliver_turns),
+        # and every caller callback runs through _best_effort there.
+        assert "harness_failures.deliver_turns(" in inspect.getsource(code_agent)
+        deliver = inspect.getsource(harness_failures.deliver_turns)
+        assert "_best_effort(on_turn, turn)" in deliver
+        assert "_best_effort(self.inner, turn)" in inspect.getsource(harness_failures.TurnSink)
+        # Behaviour, not only source: a callback that raises does not stop delivery.
+        seen = []
+
+        def broken(turn):
+            seen.append(turn)
+            raise RuntimeError("the progress line failed")
+
+        harness_failures.deliver_turns([{"direction": "assistant", "content": "a"},
+                                        {"direction": "assistant", "content": "b"}],
+                                       broken, engine=None)
+        assert len(seen) == 2
 
     def test_the_investigation_reports_into_the_thread_that_asked(self):
         from boss_engine.services.debug_session import run_investigation

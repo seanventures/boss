@@ -11,6 +11,7 @@ import { revalidatePath } from "next/cache";
 import { client, PROJECT_ID, resolveProjectId } from "../../lib/client";
 import { declareAction } from "../../lib/identity/guarded-action";
 import { consentOfThrown } from "../../lib/server-action";
+import { codeWords } from "../../lib/action-result";
 
 export type FloorResult = {
   ok: boolean; error?: string; data?: { consent?: unknown };
@@ -25,8 +26,8 @@ function consentAnswer(e: unknown): FloorResult | null {
 }
 
 function said(e: unknown): string {
-  if (e instanceof BossApiError) return e.message || `The API answered ${e.status}.`;
-  return e instanceof Error ? e.message : String(e);
+  if (e instanceof BossApiError) return codeWords(e.message) || `The API answered ${e.status}.`;
+  return codeWords(e instanceof Error ? e.message : String(e));
 }
 
 function field(form: FormData, key: string): string {
@@ -44,7 +45,9 @@ export async function retryBuildAction(form: FormData): Promise<FloorResult> {
     revalidatePath("/");
     return { ok: true, runId: res?.run_id, attempt: res?.attempt };
   } catch (e) {
-    return { ok: false, error: said(e) };
+    // A retry the person's standing grants don't cover asks for consent (the sheet, via
+    // callAction), exactly as Easy Mode's launch does — never the bare code.
+    return consentAnswer(e) ?? { ok: false, error: said(e) };
   }
 }
 
@@ -64,7 +67,7 @@ export async function waiveChecksAction(form: FormData): Promise<FloorResult> {
     if (out.status === "error") return { ok: false, error: out.detail || "The PR could not be opened." };
     return { ok: true, url: out.pull_request_url };
   } catch (e) {
-    return { ok: false, error: said(e) };
+    return consentAnswer(e) ?? { ok: false, error: said(e) };
   }
 }
 

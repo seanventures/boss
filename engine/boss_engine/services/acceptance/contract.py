@@ -557,6 +557,14 @@ def prose_prompt(ticket: Mapping[str, Any], text: str, listed: list[str]) -> str
         "- Leave out what is already listed below.\n"
         f"- At most {MAX_PROSE_ITEMS} items.\n"
         "THEN, over EVERY requirement (the ones listed below and yours), copy exactly:\n"
+        "- `p2`: the ones that are NOT the critical path: edge cases, extra fixtures or sample "
+        "data, documentation details, stricter optional rules, and PROCESS RULES about how the "
+        "work is done or described rather than what the app does — an exact test or file name, "
+        "wording in the pull request description, how a test is written (which locator, which "
+        "wrapper, what it mocks), telemetry or metrics the brief did not ask for as a feature. "
+        "A requirement that the app starts, that sign-in or authorization works, or that is the "
+        "main path of a requested feature (what a user sees it do) is never one: leave it out "
+        "of this list.\n"
         "- `judgement`: the ones that are a matter of taste with no objective check (naming "
         "style, clarity, 'clean' or 'idiomatic' code). A behaviour, a file, a command, a "
         "language, a limit or a test is never one.\n"
@@ -567,7 +575,8 @@ def prose_prompt(ticket: Mapping[str, Any], text: str, listed: list[str]) -> str
         "THE TEXT:\n" + (text[:MAX_PROSE_CHARS] or "(no further text)") + "\n\n"
         "Answer ONLY with a JSON object between these two lines:\n" + _PROSE_OPEN + "\n"
         '{"items": [{"text": "<the words, copied>", "why": "<why it is a requirement>"}], '
-        '"judgement": ["<a requirement, copied>"], "needs_loader": ["<a requirement, copied>"]}\n'
+        '"judgement": ["<a requirement, copied>"], "needs_loader": ["<a requirement, copied>"], '
+        '"p2": ["<a requirement, copied>"]}\n'
         + _PROSE_CLOSE + "\n")
 
 
@@ -595,6 +604,19 @@ def parse_tags(reply: Any, candidates: Iterable[str]) -> dict[str, list[str]]:
                   if isinstance(t, str) and _key(t) in by_key]
         out[tag] = list(dict.fromkeys(picked))
     return out
+
+
+def parse_p2(reply: Any, candidates: Iterable[str]) -> list[str]:
+    """The requirements the reader tagged P2 (not the critical path), each one of `candidates`
+    word for word, under the floor (quality_bar.floor_tier: the app starting, sign-in and
+    authorization are never P2)."""
+    from .. import quality_bar
+
+    by_key = {_key(c): c for c in candidates if _key(c)}
+    raw = _reply_json(reply).get("p2")
+    picked = [by_key[_key(t)] for t in (raw if isinstance(raw, list) else [])
+              if isinstance(t, str) and _key(t) in by_key]
+    return [w for w in dict.fromkeys(picked) if quality_bar.floor_tier(w, quality_bar.P2)]
 
 
 def parse_prose(reply: Any, text: str) -> list[str]:
@@ -651,11 +673,12 @@ def prose_digest(ticket: Optional[Mapping[str, Any]], *,
                     _body_of(ticket)])
 
 
-_PROSE_KEYS = ("prose_digest", "prose_items", "judgement_items", "loader_items")
+_PROSE_KEYS = ("prose_digest", "prose_items", "judgement_items", "loader_items", "p2_items")
 
 
 def _no_prose() -> dict[str, Any]:
-    return {"prose_digest": None, "prose_items": [], "judgement_items": [], "loader_items": []}
+    return {"prose_digest": None, "prose_items": [], "judgement_items": [], "loader_items": [],
+            "p2_items": []}
 
 
 def ticket_prose(ticket: Optional[Mapping[str, Any]], *, ask: Any = None,
@@ -695,7 +718,8 @@ def ticket_prose(ticket: Optional[Mapping[str, Any]], *, ask: Any = None,
     found = parse_prose(reply, text)
     tags = parse_tags(reply, ticket_items(ticket, prose=found))
     return {"prose_digest": digest, "prose_items": found,
-            "judgement_items": tags["judgement"], "loader_items": tags["needs_loader"]}
+            "judgement_items": tags["judgement"], "loader_items": tags["needs_loader"],
+            "p2_items": parse_p2(reply, ticket_items(ticket, prose=found))}
 
 
 # ---------------------------------------------------------------------------------------------
@@ -757,11 +781,15 @@ def _tagged(ticket_words: Iterable[str], prose: Mapping[str, Any]) -> list[dict[
     under the floor (floor_tags)."""
     judgement = {_key(t) for t in prose.get("judgement_items") or []}
     loader = {_key(t) for t in prose.get("loader_items") or []}
+    p2 = {_key(t) for t in prose.get("p2_items") or []}
     out = []
     for w in ticket_words:
         tags = floor_tags(w, {"judgement": _key(w) in judgement,
                               "needs_loader": _key(w) in loader}, where="extraction")
-        out.append({"source": "ticket", "text": w, **tags})
+        out.append({"source": "ticket", "text": w, **tags,
+                    # THE QUALITY BAR'S TIER (quality_bar.item_tier): P2 only when the reader said
+                    # so (under the floor); every other item is P1 and held at every bar.
+                    **({"tier": "P2"} if _key(w) in p2 else {})})
     return out
 
 
@@ -885,10 +913,14 @@ def build_items(sources: Iterable[Mapping[str, Any]], *, start: int = 1) -> list
                 continue
             origin = _src(str(it.get("source") or kind or "criterion"), kind, ref)
             tags = {t: True for t in ITEM_TAGS if it.get(t)}
+            if it.get("tier"):
+                tags["tier"] = it["tier"]
             if key in by_key:
                 held = by_key[key]["sources"]
                 if origin not in held:
                     held.append(origin)
+                if "tier" in by_key[key]:
+                    tags.pop("tier", None)        # the first tag stands
                 by_key[key].update(tags)
                 continue
             n = start + len(items)
@@ -1140,6 +1172,35 @@ def revise(connection: Any, contract_id: str, *, added: Iterable[Any] = (),
                         added=[i["id"] for i in joined], removed=sorted(gone))
 
 
+def set_tiers(connection: Any, contract_id: str, tiers: Mapping[str, str], *, reason: str,
+              actor: str) -> dict[str, Any]:
+    """A PERSON's tier edit (`tiers`: item id -> "P1" | "P2"): a new version, attributed to them.
+    An operator's tier wins: it is stamped `tier_by: operator` and a re-read of the ticket never
+    changes it (revise_from_ticket only tags items it adds). Refused unless `actor` may revise."""
+    from .. import quality_bar
+
+    cur = _newest(connection, contract_id)
+    _may_revise(cur["project_id"], actor)
+    wanted = {str(k): quality_bar.parse_tier(v) for k, v in (tiers or {}).items()}
+    unknown = set(wanted) - {i["id"] for i in cur["items"]}
+    if unknown:
+        raise ValueError(f"no such items in contract v{cur['version']}: {sorted(unknown)}")
+    if any(v is None for v in wanted.values()):
+        raise ValueError("a tier is P1 or P2")
+    changed: list[str] = []
+    items = []
+    for i in cur["items"]:
+        i = dict(i)
+        want = wanted.get(i["id"])
+        if want and i.get("tier", "P1") != want:
+            i["tier"], i["tier_by"] = want, "operator"
+            changed.append(i["id"])
+        items.append(i)
+    if not changed:
+        return cur
+    return _new_version(connection, cur, items, reason=reason, actor=actor, retagged=changed)
+
+
 def _record_reading(connection: Any, cur: Mapping[str, Any], prose: Mapping[str, Any]) -> None:
     from sqlalchemy import text
 
@@ -1174,6 +1235,7 @@ def revise_from_ticket(connection: Any, contract: Mapping[str, Any],
     now_keys = {_key(w) for w in now}
     want = {_key(t["text"]): {g: True for g in ITEM_TAGS if t.get(g)}
             for t in _tagged(now, prose)}
+    tier_by_key = {_key(t["text"]): t["tier"] for t in _tagged(now, prose) if t.get("tier")}
     held_keys = {_key(i["text"]) for i in cur["items"] if _from_ticket(i)}
     held_tags = {_key(i["text"]): {g: True for g in ITEM_TAGS if i.get(g)}
                  for i in cur["items"] if _from_ticket(i)}
@@ -1219,7 +1281,8 @@ def revise_from_ticket(connection: Any, contract: Mapping[str, Any],
         have.add(_key(w))
         items.append({"id": f"AC-{n}", "n": n, "text": _verbatim(w), **origin,
                       "sources": [origin], "priority": "must", "check_hint": None,
-                      **want.get(_key(w), {})})
+                      **want.get(_key(w), {}),
+                      **({"tier": tier_by_key[_key(w)]} if _key(w) in tier_by_key else {})})
         added.append(f"AC-{n}")
         n += 1
     n_add, n_rm = len(added), len(removed)
@@ -1515,6 +1578,7 @@ def gate_items(contract: Mapping[str, Any]) -> list[dict[str, str]]:
     contract id, which the report shows (`id`), and the request that added it."""
     return [{"source": str(i.get("source") or "criterion"), "text": str(i["text"]),
              **{t: True for t in ITEM_TAGS if i.get(t)},
+             **({"tier": i["tier"]} if i.get("tier") else {}),
              **({"id": i["id"]} if i.get("id") else {}),
              **({"request": i["request"]} if i.get("request") else {})}
             for i in contract.get("items") or []]

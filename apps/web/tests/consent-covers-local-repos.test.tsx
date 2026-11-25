@@ -13,6 +13,8 @@
  *   - the dock keeps a consent-refused offer standing (no repair turn, not spent);
  *   - "Let an agent act for me" lists a project's local repository, labelled, and grants it.
  */
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -47,7 +49,7 @@ describe("the consent request names the repository on this machine", () => {
   it("reads `local` from the 409 and sends it back as the grant's local block", () => {
     const req = consentFromBody(LOCAL_409)!;
     expect(req.github).toBeNull();
-    expect(req.local).toEqual({ repo: LOCAL, repos: [LOCAL], summary: "on this machine" });
+    expect(req.local).toEqual({ repo: LOCAL, repos: [LOCAL], summary: "on this machine", names: ["Desk"] });
     const standing = grantBodyFor(req, req.durations[1]);
     expect(standing).toEqual({ agents: ["agt_forge"], permissions: LOCAL_409.permissions, projects: ["prj_desk"],
       kind: "standing", days: 30, purpose: LOCAL_409.task, local: { repos: [LOCAL] } });
@@ -61,10 +63,49 @@ describe("the consent request names the repository on this machine", () => {
     const decided: Array<string | null> = [];
     const req: ConsentRequest = { ...consentFromBody(LOCAL_409)!, onDecided: (id) => decided.push(id) };
     await mountAs(<ConsentSheet request={req} onClose={() => undefined} />, "owner");
-    expect(tid("consent-local")?.textContent).toBe(` ${LOCAL}, on this machine`);
+    // The app's name, never the `local_<project>/…` id (stranger test r8).
+    expect(tid("consent-local")?.textContent).toBe("Desk, on this machine");
     await click(tid("consent-standing"));
     expect(calls[0].body).toMatchObject({ kind: "standing", local: { repos: [LOCAL] } });
     expect(decided).toEqual(["dlg_1"]);
+  });
+});
+
+describe("the Easy Mode sheet on a local repository (stranger test r3)", () => {
+  const LONG = "local_build-a-python-app-named-csv-quality-des-29bc4174/build-a-python-app-named-csv-quality-desk-with-a-command";
+
+  it("keeps a long repository chip inside the sheet, with the whole name on hover", async () => {
+    stubFetch(() => undefined);
+    const req = consentFromBody({ ...LOCAL_409, local: { repo: LONG, repos: [LONG], summary: "on this machine" } })!;
+    await mountAs(<ConsentSheet request={req} onClose={() => undefined} />, "owner");
+    const chip = tid("consent-local") as HTMLElement;
+    expect(chip.classList.contains("idn-chip-repo")).toBe(true);
+    const said = "Build a python app named csv quality desk with a command, on this machine";
+    expect(chip.getAttribute("title")).toBe(said);
+    expect(chip.querySelector(".idn-chip-text")?.textContent).toBe(said);
+  });
+
+  it("names the app the engine sends, never the repository id (stranger test r8)", async () => {
+    stubFetch(() => undefined);
+    const ID = "local_csv-quality-desk-8955ad16/csv-quality-desk";
+    const req = consentFromBody({ ...LOCAL_409, local: { repo: ID, repos: [ID], summary: "on this machine", names: ["CSV quality desk"] } })!;
+    await mountAs(<ConsentSheet request={req} onClose={() => undefined} />, "owner");
+    expect(tid("consent-local")?.textContent).toBe("CSV quality desk, on this machine");
+    expect(grantBodyFor(req, req.durations[1])).toMatchObject({ local: { repos: [ID] } });
+  });
+
+  it("asks for no GitHub ability when the build is on this machine", async () => {
+    stubFetch(() => undefined);
+    await mountAs(<ConsentSheet request={consentFromBody(LOCAL_409)!} onClose={() => undefined} />, "owner");
+    const need = document.querySelector(".idn-need")!.textContent ?? "";
+    expect(need).not.toMatch(/GitHub/);
+    expect(tid("consent-github")).toBeNull();
+  });
+
+  it("the chip ellipsizes and never grows past its row", () => {
+    const css = readFileSync(join(__dirname, "../app/identity/identity.css"), "utf8");
+    expect(css).toMatch(/\.idn-chip-repo \{[^}]*max-width: 100%[^}]*min-width: 0/);
+    expect(css).toMatch(/\.idn-chip-repo \.idn-chip-text \{[^}]*text-overflow: ellipsis/);
   });
 });
 

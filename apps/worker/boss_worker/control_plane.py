@@ -230,6 +230,20 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def run_engine_check(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Ask the API container to run Setup's write check for a model login (engine_policy)."""
+        response = self._client.post(
+            "/v1/setup/engine-check/execute",
+            json={key: payload[key] for key in ("job_id", "worker_id", "lease_token")})
+        response.raise_for_status()
+        return response.json()
+
+    def run_validation_rerun(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Ask the API container to re-run a validator after an override (finding_overrides)."""
+        response = self._client.post(f"/v1/validation-reruns/{payload['rerun_id']}/run", json={})
+        response.raise_for_status()
+        return response.json()
+
     def run_security_scan(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Ask the API container to run one security scan — the scanners live there (F4)."""
         response = self._client.post(f"/v1/security/scans/{payload['scan_id']}/run", json={})

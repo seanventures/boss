@@ -45,11 +45,23 @@ WORDS = {
     "last_factor": "This pool requires a second factor: add another before removing this one.",
     "mail_unavailable": "This BOSS cannot send email yet, so this step is unavailable.",
     "too_many": "Too many attempts. Wait a few minutes, then try again.",
+    "challenge_invalid": "That sign-in request expired. Go back and start it again.",
+    "passkey_failed": ("Your passkey could not be checked. Try it again, or sign in with your "
+                       "password."),
+    "passkey_limit": "You have the most passkeys allowed. Remove one before adding another.",
+    "passkeys_off": "This app does not use passkeys. Sign in with your password.",
+    "passkeys_unavailable": ("Passkeys do not work on this browser or device. Sign in with your "
+                             "password."),
 }
 
 
 def _words(code: str) -> str:
-    return WORDS.get(code, "That did not work. Try again.")
+    """The person's words for a refusal; an unlisted one still names its cause and the way out."""
+    if code in WORDS:
+        return WORDS[code]
+    named = " ".join(str(code or "").replace("_", " ").split()) or "no reason given"
+    return (f"This step could not finish ({named}). Go back and try it again; if it keeps "
+            "happening, tell the app's administrator what it said.")
 
 
 def _reply(status: int, page: tuple[str, dict[str, str]], cookies: Optional[list[str]] = None) -> Any:

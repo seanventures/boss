@@ -9,6 +9,7 @@ import React, { useEffect, useRef, useState } from "react";
 
 import type { Spec, SpecStep } from "../../../lib/workflow-editor-types";
 import { publishSpec } from "../../../lib/workflow-api";
+import { couldNot, reasonOf } from "../../../lib/action-result";
 import "./wizard.css";
 
 type Who = "person" | "role";
@@ -186,7 +187,7 @@ export function WorkflowWizard({ projectId, onClose, onOpen }: {
       setPhase("saved");
     } catch (e) {
       setSaved(null);
-      setError(e instanceof Error && e.message ? e.message : "Could not save.");
+      setError(couldNot("save the workflow", reasonOf(e), "Nothing was saved."));
     } finally {
       saving.current = false;
       setBusy(false);

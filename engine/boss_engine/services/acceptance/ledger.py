@@ -202,7 +202,7 @@ def _emit(connection: Any, project_id: str, event: str, row: Mapping[str, Any],
 
 
 _WORK_STATUS = {"open": "todo", "in_progress": "active", "fixed": "done", "waived": "cancelled",
-                "wont_fix": "cancelled", "duplicate": "cancelled"}
+                "wont_fix": "cancelled", "duplicate": "cancelled", "superseded": "cancelled"}
 
 
 def _sync_work_item(connection: Any, row: Mapping[str, Any]) -> None:
@@ -654,7 +654,9 @@ def _count(delta: LedgerDelta, row: Mapping[str, Any], what: str) -> None:
 def observe_review(connection: Any, *, project_id: str, lineage: str, run_id: Optional[str],
                    comments: Iterable[Any], check_id: Optional[str] = None,
                    pr_url: Optional[str] = None, stage: Optional[str] = None,
-                   seats: Iterable[str] = (), reviewed_paths: Iterable[str] = ()
+                   seats: Iterable[str] = (), reviewed_paths: Iterable[str] = (),
+                   blind_seats: Iterable[str] = (),
+                   na_answers: Optional[Mapping[str, tuple[str, str, str]]] = None
                    ) -> LedgerDelta:
     """Reviewer findings (review_comments.ReviewComment, any severity, advisory or not) into
     the ledger: `rv:` fingerprint dedupe; "same as F-n" merges into F-n only when F-n is a live
@@ -665,9 +667,17 @@ def observe_review(connection: Any, *, project_id: str, lineage: str, run_id: Op
     `seats` / `reviewed_paths` (L4): the seats that reviewed this round and the files it
     changed. A live review row a seat raised earlier, on one of those files, that the same seat
     did not report again this round is FIXED BY THAT RE-REVIEW (`fixed_by_review`), so a
-    follow-up stops resending what a repair round already fixed."""
+    follow-up stops resending what a repair round already fixed.
+
+    `blind_seats` (BOSSAPP-1360): seats recorded not_run / hollow / tools_blocked. What a blind
+    seat said, and any finding that only describes BOSS's own tooling failure, is never a row."""
+    from .. import review_tools
+
     delta = LedgerDelta()
     reported: set[str] = set()
+    blind = set(blind_seats or ())
+    comments = review_tools.drop_blind(comments, {s: True for s in blind})
+    seats = [s for s in seats or [] if s not in blind]       # a blind seat re-reviewed nothing
     for c in comments or []:
         get_ = (c.get if isinstance(c, Mapping) else (lambda k, d=None, _c=c: getattr(_c, k, d)))
         body = str(get_("body") or get_("text") or "").strip()
@@ -719,7 +729,114 @@ def observe_review(connection: Any, *, project_id: str, lineage: str, run_id: Op
     delta.add(fixed_by_review(connection, project_id=project_id, lineage=lineage, run_id=run_id,
                               seats=seats, reviewed_paths=reviewed_paths, reported=reported,
                               check_id=check_id))
+    if na_answers:
+        confirm_not_applicable(connection, project_id=project_id, lineage=lineage, run_id=run_id,
+                               answers={k: v for k, v in na_answers.items() if v[0] not in blind},
+                               reviewed_paths=reviewed_paths, check_id=check_id)
     return delta
+
+
+def declare_not_applicable(connection: Any, *, project_id: str, lineage: str,
+                           run_id: Optional[str], rows: Iterable[Mapping[str, Any]]) -> list[str]:
+    """The planner's `ITEM <key>: NOT APPLICABLE — <reason>` (plan_coverage) as PENDING CHECKS
+    (BOSSAPP-1360): one open row each, which a review seat must confirm — it closes when a seat
+    that reviewed does not refute the reason, and stays open (a finding) when it does."""
+    ids = []
+    for r in rows or []:
+        key = str(r.get("key") or r.get("id") or "")
+        if not key:
+            continue
+        row, _what = upsert(
+            connection, project_id=project_id, lineage=lineage, kind="review",
+            severity=_sev(str(r.get("severity") or "minor").lower()),
+            fingerprint=f"na:{key}", title=f"Planner says {key} is not applicable: verify"[:300],
+            body=f"The plan declares {key} NOT APPLICABLE: {r.get('why') or ''}. "
+                 f"Item: {r.get('item') or ''}", stage="plan_check", run_id=run_id)
+        ids.append(row["id"])
+    return ids
+
+
+_NA_ANSWER = re.compile(
+    r"(?im)^[\s>*\-`]*NA\s+`?([A-Za-z][\w.\-]*\d[\w.\-]*)`?\s*:\s*\**(CONFIRMED|REFUTED)\**"
+    r"\s*(?:[\u2014\u2013:\-]+\s*(.*))?$")
+
+
+def parse_na_answers(summaries: Mapping[str, str]) -> dict[str, tuple[str, str, str]]:
+    """{KEY: (seat, CONFIRMED|REFUTED, why)} from the reviewing seats' replies (`NA F-42:
+    CONFIRMED` / `NA F-42: REFUTED — why`). A REFUTED from any seat wins over a CONFIRMED."""
+    out: dict[str, tuple[str, str, str]] = {}
+    for seat, text_ in (summaries or {}).items():
+        for m in _NA_ANSWER.finditer(str(text_ or "")):
+            key, verdict = m.group(1).upper(), m.group(2).upper()
+            if key not in out or (verdict == "REFUTED" and out[key][1] != "REFUTED"):
+                out[key] = (seat, verdict, " ".join(str(m.group(3) or "").split())[:300])
+    return out
+
+
+def confirm_not_applicable(connection: Any, *, project_id: str, lineage: str,
+                           run_id: Optional[str], answers: Mapping[str, tuple[str, str, str]],
+                           reviewed_paths: Iterable[str] = (), check_id: Optional[str] = None
+                           ) -> dict[str, list[str]]:
+    """The review seats' POSITIVE answers to the planner's pending not-applicable checks:
+
+      CONFIRMED  closes the `na:<key>` row AND the original <key> row (superseded, "confirmed
+                 not applicable by <seat>") — unless the original cites a file this run changed:
+                 that is addressed by the change, not "not applicable";
+      REFUTED    closes the check and REOPENS <key> as a normal open item (the reason is carried);
+      no answer  the check stays open: it goes to the next brief as a normal item.
+    Silence is never a confirmation."""
+    from sqlalchemy import text
+
+    out: dict[str, list[str]] = {"confirmed": [], "refuted": []}
+    paths = {_fold(p).lstrip("./") for p in reviewed_paths or [] if p}
+    rows = connection.execute(text(
+        "SELECT id, fingerprint FROM findings WHERE project_id = :p AND lineage_root_run_id = :l "
+        "AND status IN ('open', 'in_progress') AND fingerprint LIKE 'na:%'"),
+        {"p": project_id, "l": lineage}).mappings().all()
+    for r in rows:
+        key = r["fingerprint"][3:].upper()
+        got = (answers or {}).get(key)
+        if not got:
+            continue
+        seat, verdict, why = got
+        original = by_key(connection, project_id, key) if re.fullmatch(r"F-\d+", key) else None
+        if verdict == "CONFIRMED":
+            if original and original.get("path") and _fold(original["path"]).lstrip("./") in paths:
+                original = None                    # the change touched it: addressed, not N/A
+                done = "addressed by this run's change"
+            else:
+                done = f"confirmed not applicable by {seat}"
+            mark_fixed(connection, r["id"], check_id=check_id, run_id=run_id, stage="re-review",
+                       evidence=[{"kind": "re-review", "ref": run_id, "seat": seat,
+                                  "confirmed": "not applicable"}])
+            if original and original["status"] in LIVE:
+                connection.execute(text(
+                    "UPDATE findings SET status = 'superseded', waive_reason = :w, "
+                    "followup_run_id = NULL, updated_at = now() WHERE id = :i"),
+                    {"w": done, "i": original["id"]})
+                row = get(connection, original["id"])
+                if row:
+                    _sync_work_item(connection, row)
+            out["confirmed"].append(r["id"])
+        else:
+            connection.execute(text(
+                "UPDATE findings SET status = 'superseded', waive_reason = :w, "
+                "followup_run_id = NULL, updated_at = now() WHERE id = :i"),
+                {"w": f"{seat} refuted it: {why}"[:300], "i": r["id"]})
+            if original and original["status"] not in LIVE:
+                connection.execute(text(
+                    "UPDATE findings SET status = 'open', waive_reason = NULL, "
+                    "reopened_count = reopened_count + 1, updated_at = now() WHERE id = :i"),
+                    {"i": original["id"]})
+                row = get(connection, original["id"])
+                if row:
+                    _sync_work_item(connection, row)
+            if original is not None:
+                _observe(connection, original["id"], check_id=check_id, run_id=run_id,
+                         stage=seat, status_seen="open",
+                         evidence=[{"kind": "said", "text": f"not applicable REFUTED: {why}"}])
+            out["refuted"].append(r["id"])
+    return out
 
 
 def fixed_by_review(connection: Any, *, project_id: str, lineage: str, run_id: Optional[str],
@@ -951,6 +1068,110 @@ def hold(connection: Any, ids: Iterable[str], *, followup_run_id: str) -> int:
     return len(got)
 
 
+#: A check that did not judge: what it saw is no finding (BOSSAPP-1355).
+BLIND_VERDICTS = ("not_run", "no_items")
+
+
+def _raised_blind(connection: Any, finding_id: str) -> bool:
+    """Whether every sighting of the row came from a seat its run recorded as not having
+    reviewed (finalize_ctx.review_rounds[].seats[stage].hollow)."""
+    from sqlalchemy import text
+
+    obs = connection.execute(text(
+        "SELECT run_id, stage FROM finding_observations WHERE finding_id = :f "
+        "AND status_seen = 'open'"), {"f": finding_id}).mappings().all()
+    if not obs:
+        return False
+    for o in obs:
+        ctx = connection.execute(text(
+            "SELECT finalize_ctx FROM code_task_runs WHERE id = :r"),
+            {"r": o["run_id"]}).scalar() if o["run_id"] else None
+        rounds = (ctx or {}).get("review_rounds") if isinstance(ctx, dict) else None
+        if not any(isinstance((rd or {}).get("seats"), dict)
+                   and ((rd["seats"].get(o["stage"]) or {}).get("hollow"))
+                   for rd in rounds or [] if isinstance(rd, dict)):
+            return False
+    return True
+
+
+def stale_rows(connection: Any, rows: Iterable[Mapping[str, Any]], *, project_id: str,
+               lineage: str) -> dict[str, str]:
+    """Which open rows a follow-up must NOT carry, and why (BOSSAPP-1355): {row id: reason}.
+      - a row only checks that did not run (`not_run`/`no_items`) ever observed: nothing judged it;
+      - a pipeline gate line (`gate:acceptance_met`) whose run's check did not run, or that a
+        LATER judged check of the lineage superseded — one that recorded `ac:` rows of its own
+        (a check that judged everything missing is a judgement, never dropped by its counts);
+      - a second row with the same fingerprint (the newest wins)."""
+    from sqlalchemy import text
+
+    rows = list(rows or [])
+    out: dict[str, str] = {}
+    seen: dict[str, Mapping[str, Any]] = {}
+    from .. import review_tools
+
+    for r in rows:
+        fp = str(r.get("fingerprint") or "")
+        # A finding about BOSS's own tooling failing (a blind seat's "every command failed",
+        # `bwrap: ...`) is no finding about the app: never carried to a builder (BOSSAPP-1360).
+        # Only a row a seat recorded hollow / not_run / tools_blocked raised, and never a
+        # security row: a seat that ran, or a security finding, is not judged by its prose.
+        if r.get("kind") not in ("acceptance_gap", "security") and review_tools.is_tooling_failure(
+                f"{r.get('title') or ''} {r.get('body') or ''}", r.get("path")) \
+                and _raised_blind(connection, r["id"]):
+            out[r["id"]] = "describes BOSS's own tooling failure (a blind review seat)"
+            continue
+        if fp and fp in seen:
+            older = r if int(r.get("number") or 0) < int(seen[fp].get("number") or 0) else seen[fp]
+            out[older["id"]] = "duplicate fingerprint"
+        if fp and (fp not in seen or int(r.get("number") or 0) > int(seen[fp].get("number") or 0)):
+            seen[fp] = r
+        obs = connection.execute(text(
+            "SELECT o.check_id, o.run_id, c.verdict, rc.verdict AS run_verdict "
+            "FROM finding_observations o LEFT JOIN acceptance_checks c ON c.id = o.check_id "
+            "LEFT JOIN acceptance_checks rc ON rc.code_task_run_id = o.run_id "
+            "AND rc.lineage_root_run_id = :l WHERE o.finding_id = :f"),
+            {"f": r["id"], "l": lineage}).mappings().all()
+        if fp == "gate:acceptance_met":
+            if obs and any(o["run_verdict"] in BLIND_VERDICTS for o in obs) and not any(
+                    o["run_verdict"] in ("met", "not_met") for o in obs):
+                out[r["id"]] = "its check was blind (not_run)"
+                continue
+            later = connection.execute(text(
+                "SELECT 1 FROM acceptance_checks c WHERE c.project_id = :p "
+                "AND c.lineage_root_run_id = :l AND c.verdict IN ('met', 'not_met') "
+                "AND c.created_at > :since AND EXISTS (SELECT 1 FROM finding_observations o "
+                "JOIN findings f ON f.id = o.finding_id WHERE o.check_id = c.id "
+                "AND f.fingerprint LIKE 'ac:%') LIMIT 1"),
+                {"p": project_id, "l": lineage,
+                 "since": r.get("updated_at") or r.get("created_at")}).first()
+            if later:
+                out[r["id"]] = "superseded by a later judged check"
+            continue
+        if obs and all(o["check_id"] and o["verdict"] in BLIND_VERDICTS for o in obs):
+            out[r["id"]] = "its source check did not run"
+    return out
+
+
+def drop_stale(connection: Any, rows: Iterable[Mapping[str, Any]], *, project_id: str,
+               lineage: str) -> dict[str, str]:
+    """`stale_rows`, and each moved to the terminal `superseded` state with its reason (once:
+    only a row still open or held moves), so counts, estimates and badges stop including it."""
+    from sqlalchemy import text
+
+    why = stale_rows(connection, rows, project_id=project_id, lineage=lineage)
+    for fid, reason in why.items():
+        got = connection.execute(text(
+            "UPDATE findings SET status = 'superseded', waive_reason = :w, "
+            "followup_run_id = NULL, updated_at = now() "
+            "WHERE id = :i AND status IN ('open', 'in_progress') RETURNING id"),
+            {"w": reason, "i": fid}).scalar()
+        if got:
+            row = get(connection, fid)
+            if row:
+                _sync_work_item(connection, row)
+    return why
+
+
 def followup_line(row: Mapping[str, Any]) -> str:
     """One open row as the follow-up's finding line: its key, what it is, where, the proof
     that would close it."""
@@ -983,6 +1204,8 @@ def followup_spec(connection: Any, *, project_id: str, lineage: str,
     if only is not None:
         keep = set(only)
         rows = [r for r in rows if r["id"] in keep]
+    stale = drop_stale(connection, rows, project_id=project_id, lineage=lineage)
+    rows = [r for r in rows if r["id"] not in stale]
     contract = _contract.latest(connection, root_run_id=lineage, project_id=project_id)
     open_items = {r.get("contract_item_id"): r for r in open_for(
         connection, project_id=project_id, lineage=lineage)
@@ -1009,7 +1232,7 @@ def followup_spec(connection: Any, *, project_id: str, lineage: str,
 __all__ = [
     "KINDS", "LIVE", "LedgerDelta", "SEVERITIES", "by_key", "followup_line", "followup_spec",
     "gap_fingerprint", "get", "held_by_live_followup", "hold", "human_key", "lineage_of",
-    "mark_fixed", "merge_into", "observations", "observe_check", "observe_findings",
+    "drop_stale", "mark_fixed", "merge_into", "stale_rows", "observations", "observe_check", "observe_findings",
     "observe_review", "open_for", "release_dead_holds", "review_fingerprint", "title_of",
     "transition", "upsert",
 ]

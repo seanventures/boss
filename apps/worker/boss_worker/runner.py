@@ -387,6 +387,10 @@ def capabilities() -> list[str]:
         "docs.update",
         # A security scan (F4): the API runs the scanners in the build sandbox under this lease.
         "security.scan",
+        "validation.rerun",
+        # Setup's write check for a model login (engine_policy): the API runs one writer session
+        # in a build's sandbox under this lease. Declared here or Setup shows "Checking…" forever.
+        "engine.check",
         # The code graph of a registered repository (knowledge/repo_index.py): the API fetches
         # the branch and indexes it under this lease. Declared here or it sits queued.
         "knowledge.repository.index",
@@ -836,6 +840,10 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
     if job.kind == "meeting.step":
         result = client.run_meeting_step({"run_id": job.payload["run_id"]})
         if result.get("status") == "failed":
+            # A person-side failure (HTTP 200 needs_human, done=True) already failed the panel
+            # cleanly and released its hold; retrying the job would deadletter into a duplicate card.
+            if result.get("failure_class") == "needs_human" or result.get("done") is True:
+                return result
             raise RuntimeError(result.get("error") or "Meeting step failed.")
         return result
     if job.kind == "code.task":
@@ -931,6 +939,16 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
         # The scanners and the sandbox helper are in the api image: the API runs the scan. A
         # scan whose tools failed is a recorded result (status failed, with why), not a retry.
         return client.run_security_scan({"scan_id": job.payload["scan_id"]})
+    if job.kind == "validation.rerun":
+        # A person overrode a validation finding (finding_overrides): the validator runs again
+        # on the change's target in the API's sandbox. A re-run that could not run is recorded
+        # failed on the packet, not retried.
+        return client.run_validation_rerun({"rerun_id": job.payload["rerun_id"]})
+    if job.kind == "engine.check":
+        # The CLIs and the sandbox helper are in the api image: the API runs the check under a
+        # build's sandbox uid. A check that could not run is a recorded result, not a retry.
+        return client.run_engine_check({"job_id": job.id, "worker_id": client.worker_id,
+                                        "lease_token": job.lease_token})
     if job.kind == "docs.update":
         result = client.run_docs_update(
             {
@@ -1143,27 +1161,28 @@ def _execute_agent_run_here(job: LeasedJob, client: ControlPlaneClient) -> dict[
     lease, drained at a step boundary when this worker is told to stop. None: not a worker-
     admitted run (an `agent.resume` of a run from before AP-P2) — the API resumes it."""
     from boss_engine.config import get_settings
-    from boss_engine.db import get_engine
+    from boss_engine.db import background, get_engine
     from boss_engine.services import agent_run_worker
 
-    engine = get_engine(get_settings())
-    run_id = str(job.payload.get("run_id") or "")
-    if job.kind == "agent.resume":
-        with engine.connect() as connection:
-            if not agent_run_worker.on_worker(connection, run_id):
-                return None
-    flag = HANDED_BACK.setdefault(job.id, threading.Event())
-    try:
-        result = agent_run_worker.execute(
-            engine, get_settings(), kind=job.kind, job_id=job.id, run_id=run_id,
-            worker_id=client.worker_id, lease_token=job.lease_token,
-            drain=SHUTDOWN.is_set, handed_back=flag.is_set)
-    finally:
-        HANDED_BACK.pop(job.id, None)
-    if result.get("status") == "failed" and not (result.get("job_deferred")
-                                                  or result.get("clean_failure")):
-        raise RuntimeError(result.get("message") or "Agent run failed.")
-    return result
+    with background():
+        engine = get_engine(get_settings())
+        run_id = str(job.payload.get("run_id") or "")
+        if job.kind == "agent.resume":
+            with engine.connect() as connection:
+                if not agent_run_worker.on_worker(connection, run_id):
+                    return None
+        flag = HANDED_BACK.setdefault(job.id, threading.Event())
+        try:
+            result = agent_run_worker.execute(
+                engine, get_settings(), kind=job.kind, job_id=job.id, run_id=run_id,
+                worker_id=client.worker_id, lease_token=job.lease_token,
+                drain=SHUTDOWN.is_set, handed_back=flag.is_set)
+        finally:
+            HANDED_BACK.pop(job.id, None)
+        if result.get("status") == "failed" and not (result.get("job_deferred")
+                                                      or result.get("clean_failure")):
+            raise RuntimeError(result.get("message") or "Agent run failed.")
+        return result
 
 
 def _tick_ai_sre_overwatch(settings: WorkerSettings) -> None:
@@ -1174,7 +1193,7 @@ def _tick_ai_sre_overwatch(settings: WorkerSettings) -> None:
         return
     try:
         from boss_engine.config import get_settings
-        from boss_engine.db import get_engine
+        from boss_engine.db import background, get_engine
         from boss_engine.services.ai_sre_overwatch import safe_tick
 
         engine_settings = get_settings()
@@ -1184,12 +1203,13 @@ def _tick_ai_sre_overwatch(settings: WorkerSettings) -> None:
             or getattr(settings, "project_id", None)
             or "boss-dogfood"
         )
-        result = safe_tick(
-            get_engine(engine_settings),
-            engine_settings,
-            project_id=str(project_id),
-            actor="metatron",
-        )
+        with background():
+            result = safe_tick(
+                get_engine(engine_settings),
+                engine_settings,
+                project_id=str(project_id),
+                actor="metatron",
+            )
         _last_ai_sre_overwatch_monotonic = now
         if isinstance(result, dict) and result.get("status") not in {"empty", "observed", "in_progress"}:
             LOGGER.info(

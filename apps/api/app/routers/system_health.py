@@ -13,7 +13,7 @@ from typing import Optional, Union
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
-from boss_engine.db import begin, get_engine
+from boss_engine.db import background, begin, get_engine
 
 router = APIRouter(tags=["system-health"])
 
@@ -23,6 +23,7 @@ class BuildsAtOnceBody(BaseModel):
 
     value: Optional[Union[int, str]] = Field(default="auto",
                                              description='"auto" or 1-8 builds at once')
+    worker_slots: Optional[int] = Field(default=None, ge=1, le=4)
 
 
 @router.get("/v1/system/deploy-readiness")
@@ -46,8 +47,9 @@ def get_system_health() -> dict[str, Any]:
     from boss_engine.services.obs_view import health_body
 
     cap = admission.sample()
-    with begin(get_engine()) as connection:
-        state = admission.snapshot(connection, cap=cap)
+    with background():
+        with begin(get_engine()) as connection:
+            state = admission.snapshot(connection, cap=cap)
     # One derivation: Observability › System shows this same body (obs_view.system).
     return health_body(cap, state)
 
@@ -73,10 +75,12 @@ def put_builds_at_once(project_id: str, payload: BuildsAtOnceBody) -> dict[str, 
                                 detail=f"value must be between 1 and {admission.MAX_SLOTS}")
     cap = admission.sample()
     with begin(get_engine()) as connection:
+        if payload.worker_slots is not None:
+            admission.set_state(connection, "agent_capacity", {"worker_slots": payload.worker_slots})
         admission.set_state(connection, "builds_at_once",
                             {"value": value, "set_for_project": project_id})
         state = admission.snapshot(connection, cap=cap)
-    return {"builds_at_once": state["builds_at_once"], "label": state["label"]}
+    return {"worker_slots": state["worker_slots"], "builds_at_once": state["builds_at_once"], "label": state["label"]}
 
 
 class FindingActBody(BaseModel):

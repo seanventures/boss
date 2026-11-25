@@ -14,7 +14,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
   ArrowSquareOut, ArrowsClockwise, Bell, Copy, Crown, Eye, EyeSlash, GearSix, GitBranch, GitMerge, GithubLogo, HandWaving, HardDrives, Headset, Info,
-  Key, LockKey, Package, PencilSimple, Plus, Siren, SlidersHorizontal, SteeringWheel, Ticket, User, UserCircle,
+  Key, LockKey, Package, PencilSimple, Plus, Scales, Siren, SlidersHorizontal, SteeringWheel, Ticket, User, UserCircle,
   type Icon,
 } from "@phosphor-icons/react";
 
@@ -40,6 +40,7 @@ import { LocalCodePanel } from "./publish-sheet";
 import { ToolchainImageCard } from "./toolchain-image";
 import { TicketSystemCard } from "./ticket-system-settings";
 import { PortabilityCard } from "./portability-card";
+import { ValidatorsCard } from "../validation/ruleset-editor";
 
 /** The section nav and card icons, in the wireframe's order and colours (13-01). */
 const SECTION_ICON: Record<string, { icon: Icon; c: Tone | "grey" }> = {
@@ -118,6 +119,10 @@ export function SaidLine({ line }: { line: Line }) {
   );
 }
 
+/** Where a section lands when a link scrolls to it: below the top bar and the project's sticky
+ *  head (useStickyHead measures both into --px-head-h), with a little air. */
+export const SECTION_SCROLL_MARGIN = "calc(var(--px-head-h, 80px) + 12px)";
+
 export function SettingsTab({ ctx }: { ctx: PxCtx }) {
   const read = usePxRead<Settings>(PX_PATHS.settings(ctx.projectId), parseSettings, { everyMs: 60_000, demo: () => parseSettings(FX_SETTINGS) });
   const data = read.data ?? (read.state === "missing" ? fallbackSettings(ctx) : null);
@@ -151,6 +156,8 @@ export function SettingsTab({ ctx }: { ctx: PxCtx }) {
                 })}
                 {/* The cards below the API's sections have a place in the nav too: the Ticket
                     system card was only reachable by scrolling past everything (console walk). */}
+                <button type="button" onClick={() => document.querySelector("[data-testid='px-set-validators']")?.scrollIntoView?.({ block: "start", behavior: "smooth" })}
+                        data-testid="px-set-nav-validators"><Scales size={14} aria-hidden />Validators</button>
                 {!ctx.demo ? (
                   <button type="button" onClick={() => document.querySelector("[data-testid='px-set-tickets']")?.scrollIntoView?.({ block: "start", behavior: "smooth" })}
                           data-testid="px-set-nav-tickets"><Ticket size={14} aria-hidden />Ticket system</button>
@@ -167,6 +174,8 @@ export function SettingsTab({ ctx }: { ctx: PxCtx }) {
                 {by.autonomy || by.repos ? <div className="px-grid px-g2">{card("autonomy")}{card("repos")}</div> : null}
                 {card("notifications")}
                 {st.sections.filter((x) => !["demo_logins", "deploy_values", "targets", "captain", "autonomy", "repos", "notifications"].includes(x.key)).map((x) => card(x.key))}
+                {/* Validation and review §4: each ruleset's P-levels, auto-fix modes and guides. */}
+                <ValidatorsCard projectId={ctx.projectId} demo={ctx.demo} />
                 {/* BOSSAPP-1047: which ticket system feeds this project, and its default project. */}
                 {!ctx.demo ? <TicketSystemCard projectId={ctx.projectId} /> : null}
                 {/* BOSSAPP-825: the project's own build image (setup session → Capture → chip). */}
@@ -205,7 +214,7 @@ function SectionCard({ sec, ctx, onChanged, setRef }: { sec: SettingsSection; ct
   const known = ["demo_logins", "deploy_values", "targets", "captain", "autonomy", "repos", "notifications"].includes(sec.key);
   if (!known || (!Object.keys(raw).length && sec.key !== "captain")) openLinks(sec).filter((x) => !(sec.key === "repos" && /^Add\b/.test(x.label))).forEach((x) => head.push(<PxLink key={`${x.label}-${x.open}`} href={x.open} className="px-more" testid={`px-set-act-${sec.key}`}>{x.label}</PxLink>));
   return (
-    <section ref={setRef} className="px-card" aria-labelledby={`px-set-${sec.key}`} data-testid={`px-set-${sec.key}`} style={{ scrollMarginTop: 80 }}>
+    <section ref={setRef} className="px-card" aria-labelledby={`px-set-${sec.key}`} data-testid={`px-set-${sec.key}`} style={{ scrollMarginTop: SECTION_SCROLL_MARGIN }}>
       <div className="px-card-h">
         {meta?.c === "grey" ? <span className="px-ico" aria-hidden><GithubLogo size={16} weight="duotone" /></span>
           : <Ico icon={meta?.icon ?? GearSix} c={(meta?.c as Tone) ?? "blue"} />}

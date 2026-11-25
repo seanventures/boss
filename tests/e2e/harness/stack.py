@@ -363,6 +363,9 @@ class LocalStack:
             [teardown.real_docker() or "docker", "run", "-d", "--rm",
              "--name", self.state.pg_container,
              "--label", f"{teardown.LABEL_KEY}={self.state.run_id}",
+             # The image's data VOLUME, labelled so teardown removes it by the run's label.
+             "--mount", "type=volume,dst=/var/lib/postgresql/data,"
+                        f"volume-label={teardown.LABEL_KEY}={self.state.run_id}",
              "-e", "POSTGRES_USER=boss", "-e", f"POSTGRES_PASSWORD={self.state.db_password}",
              "-e", f"POSTGRES_DB={DB_NAME}",
              "-p", f"127.0.0.1:{self.state.pg_port}:5432", PG_IMAGE],

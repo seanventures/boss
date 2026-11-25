@@ -27,6 +27,7 @@ import {
 
 import { GatedButton } from "../../components/gated";
 import { notifyChanged } from "../changed";
+import { localWith } from "../../lib/local-time";
 import {
   acceptBacklog, firstWorkAccept, navigateTo, projectHref, pxHref, runAccept, startOnboarding,
   type NextItem, type Node, type Onboarding, type OnboardingItem,
@@ -202,7 +203,7 @@ function OnboardingLogList({ ob }: { ob: Onboarding }) {
     <ol className="px-ob-log" id="px-ob-log" data-testid="px-ob-log" aria-label="Onboarding log">
       {ob.log.length ? ob.log.map((e, i) => (
         <li key={`${e.at}-${i}`} data-s={e.state}>
-          <time className="px-mono px-faint" dateTime={e.at}>{e.at ? new Date(e.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : ""}</time>
+          <time className="px-mono px-faint" dateTime={e.at}>{e.at ? localWith(e.at, { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : ""}</time>
           <Face agent={e.agent === "chief_of_staff" ? MARSHAL : crewOf(e.agent)} size={18} state={e.state === "now" ? "working" : "idle"} />
           <b>{e.label}</b><span>{e.text}</span>
         </li>

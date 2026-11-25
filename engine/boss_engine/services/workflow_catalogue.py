@@ -205,6 +205,12 @@ _AML_ALERT_SUBJECT = [
 ]
 
 
+#: Easy Mode's workflow (services/factory_launch.py starts it), and how long its panel may take
+#: before the build starts from the brief instead.
+EASY_MODE_WORKFLOW = "easy_mode_mvp"
+EASY_MODE_PANEL_SECONDS = 12 * 60
+
+
 def _in(field: str) -> dict[str, str]:
     return {"from_input": field}
 
@@ -666,6 +672,50 @@ CATALOGUE: list[dict[str, Any]] = [
         ]),
     },
     {
+        # EASY MODE'S ONE FAST PIPELINE (operator, 2026-11-19): "make sure we add panel, workflow
+        # can be build, main P1 test pass, preview and deployment - it should be simple, don't
+        # need much validation, it should be fast and work MVP". A compact panel writes a lean
+        # PRD that the person's start approves (factory_launch: spec_approval "start"); the build
+        # runs on the light lane (standard: only the P1 floor blocks, the rest are follow-ups);
+        # its preview starts when it is ready; the deploy follows the environment's policy (no
+        # person for a non-production target) once the person merges. Merge is the one person
+        # step. A panel that fails or overruns builds from the brief instead (fallback_to_brief).
+        "key": EASY_MODE_WORKFLOW,
+        "name": "Easy Mode MVP",
+        "description": "Idea to a working app, fast: a short agent panel writes the spec, BOSS "
+                       "builds it, previews it and deploys it after you merge.",
+        "objective": (
+            "Build a working first version (an MVP) of what the person asked for, quickly. The "
+            "panel is short: agree what the app must do, as 3 to 7 behaviour-level acceptance "
+            "criteria, and keep the scope to a first version a person can open and use today. "
+            "No research, no architecture review, no extra process."
+        ),
+        # A new project's work; never the class's default route (_DEFAULT_MAPPINGS names
+        # Standard Product Delivery): Easy Mode starts this workflow by key.
+        "work_class": "project.new",
+        # P1 ONLY: no second More tests pass. The build's own tests and its P1 must-haves are
+        # the bar; everything else is a follow-up.
+        "more_tests": False,
+        "steps": _chain([
+            _step("meeting", "meeting", {"directive": _in("directive"), "compact": True,
+                                         "time_budget_seconds": EASY_MODE_PANEL_SECONDS,
+                                         "fallback_to_brief": True}),
+            _step("build", "build", _build_inputs(after_meeting=True)),
+            _step("preview", "preview", {"run_id": _from("build", "code_task_run_id")}),
+            # The run's numbers before it ships, like every workflow that deploys (no model).
+            _step("report", "report"),
+            # STAGING, UNDER ITS POLICY: Easy Mode's start sets the project's staging policy to
+            # ship without asking when the project has none (factory_launch.spec_first_run), so
+            # the deploy needs no person. Production is never this step's environment.
+            # NO SERVER (most laptops): the step is skipped in words — "Your app runs as a
+            # preview. Add a server in Infra to deploy it." — and the preview keeps running.
+            _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id"),
+                                       "environment": "staging", "skip_without_host": True},
+                  follows_policy=True),
+            _step("notify", "notify", _notify_inputs()),
+        ]),
+    },
+    {
         "key": "major_feature",
         "name": "Major Feature",
         # NO LONGER PROMISES A SIGN-OFF BEFORE THE BUILD. This said "a person signing off on it
@@ -741,7 +791,8 @@ CATALOGUE: list[dict[str, Any]] = [
             # report. And a run that stops even earlier is not left without one: the same
             # report is assembled on demand for any run, at any point, from the same evidence.
             _step("report", "report"),
-            _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
+            _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id"),
+                                       "skip_without_deploy_ask": True},
                   approver_role="release_manager"),
             _step("notify", "notify", _notify_inputs()),
         ]),
@@ -1645,6 +1696,53 @@ CATALOGUE: list[dict[str, Any]] = [
 # (`requires`: the banking-dq pack and the DQ sample's connectors).
 CATALOGUE.extend(dq_catalogue.entries(_step, _in))
 
+#: What the build of "Onboard a config file" is told. Generic on purpose: the checker, its rules
+#: and the guides the fixing agent reads come from the REPOSITORY (`.boss/validators.yaml`,
+#: `.boss/rulesets/`), and the remediation contract (input_fidelity) holds the build to them.
+ONBOARD_FILE_BRIEF = (
+    "Fix the file this run started from so the repository's own checkers pass. Keep it a "
+    "minimal edit of that file: change only what a finding asks for, add nothing it does not, "
+    "and leave a finding the repository's rules say a person must decide for that person.")
+
+# ONBOARD A CONFIG FILE (requirement R5, design PR #287): built only from standard steps —
+# the run starts from a file ("Start from a file", start_from_file), the build fixes it in place
+# with the repository's checkers, the review reports, the merge waits on the change's merge card,
+# staging ships the fixed file, and the project's own contract tests run against staging.
+# Checks must pass: an open P0/P1 blocks the merge.
+CATALOGUE.append({
+    "key": "onboard_config_file",
+    "name": "Onboard a config file",
+    "description": "A file arrives — a partner's config, say. BOSS checks it with the "
+                   "repository's own checkers, fixes what it may, leaves you what it may not, "
+                   "and ships it to staging once merged.",
+    "objective": (
+        "Take the file the run was given, check it with the repository's declared checkers, "
+        "and make it pass with a minimal edit. Findings the repository's rules reserve for a "
+        "person stay open for that person. Once merged, the file ships to staging and the "
+        "project's contract tests run against it."
+    ),
+    "work_class": "any",
+    # NO PASS 2: a config file is checked by its checkers and contract tests, not a test suite.
+    "more_tests": False,
+    "checks_must_pass": True,
+    "steps": _chain([
+        {**_step("build", "build", {
+            **_build_inputs(),
+            "start_from": _in("start_from"),
+            "start_from_content": _in("start_from_content"),
+            "target_path": _in("target_path"),
+        }), "title": "Fix the file"},
+        _step("review", "review"),
+        _step("merge", "merge"),
+        {**_step("staging", "config_deploy", {"source_file": _in("target_path"),
+                                              "environment": "staging"}),
+         "title": "Staging"},
+        {**_step("contract_tests", "contract_test",
+                 {"base_url": _from("staging", "deployed_url")}),
+         "title": "Contract tests"},
+    ]),
+})
+
 
 def _staff_builds_by_app_kind() -> None:
     """Apply BUILD_AGENT_BY_ENTRY to the catalogue's build steps, once, at import."""
@@ -1730,6 +1828,15 @@ _FIELD_TEXT: dict[str, dict[str, Any]] = {
               "description": "A short name for this piece of work. It names the run, the app "
                              "it builds and the written record.",
               "examples": ["Shift swap board"]},
+    "start_from": {"type": "string", "title": "Start from a file",
+                   "description": "The file to start from: its path in the repository, or the "
+                                  "name of the file you upload."},
+    "start_from_content": {"type": "string", "format": "textarea",
+                           "title": "Uploaded file (optional)",
+                           "description": "The file's text, when it is not in the repository. "
+                                          "It becomes the change's first commit."},
+    "target_path": {"type": "string", "title": "Where the fixed file goes",
+                    "description": "Its path in the repository, e.g. config/tenants/name.yaml."},
     "repository": {"type": "string", "title": "Repository (optional)",
                    "description": "owner/name of the GitHub repository to build in. Leave blank "
                                   "for this project's primary repository."},
@@ -1847,6 +1954,15 @@ BRIEFS: dict[str, dict[str, Any]] = {
                                  "to the approvals page that exports this month's approved "
                                  "swaps."},
     },
+    EASY_MODE_WORKFLOW: {
+        "directive": ("What should it do?",
+                      "Who it is for and what a person can do with it. A short panel turns it "
+                      "into a spec, then BOSS builds, previews and deploys a first version."),
+        "example": {"title": "Recipe box",
+                    "directive": "A recipe box: save recipes with ingredients and steps, search "
+                                 "them by ingredient, and mark favourites. One page, no "
+                                 "accounts."},
+    },
     "major_feature": {
         "directive": ("What is the feature?",
                       "The feature, who needs it and why. It is researched and specified "
@@ -1856,6 +1972,16 @@ BRIEFS: dict[str, dict[str, Any]] = {
                     "directive": "Let staff offer a recurring shift (every Tuesday for six "
                                  "weeks) in one action, with the manager approving the series "
                                  "or individual dates."},
+    },
+    "onboard_config_file": {
+        "directive": ("What should the fix do?",
+                      "The checker, its rules and guides come from the repository; say "
+                      "anything else the fix should know."),
+        "required": ("start_from", "target_path"),
+        "example": {"title": "Lumen Pay tenant onboarding",
+                    "start_from": "lumen-pay.yaml",
+                    "target_path": "config/tenants/lumen-pay.yaml",
+                    "directive": ONBOARD_FILE_BRIEF},
     },
     "fast_fix": {
         "directive": ("What is broken?",
@@ -2058,6 +2184,10 @@ def input_schema_for(entry: dict[str, Any]) -> dict[str, Any]:
             if field in required and text_for["title"].endswith(" (optional)"):
                 text_for["title"] = text_for["title"][: -len(" (optional)")]
             properties[field] = text_for
+    if "directive" not in properties:
+        properties["directive"] = {"type": "string", "format": "textarea", "title": title,
+                                   "description": help_text,
+                                   "examples": [brief["example"]["directive"]]}
     return {"type": "object",
             "required": [f for f in order if f in required],
             "properties": properties}
@@ -2084,6 +2214,10 @@ def entry_spec(entry: dict[str, Any]) -> dict[str, Any]:
     # `monitoring_gate`: block (the default) or warn (monitoring_pack.gate_mode).
     if entry.get("monitoring_gate"):
         spec["monitoring_gate"] = entry["monitoring_gate"]
+    # "CHECKS MUST PASS" (quality_bar.checks_must_pass): the repo's checkers' open P0/P1 block
+    # the merge. Absent means off (the light lane), so no other entry's spec changes.
+    if entry.get("checks_must_pass"):
+        spec["checks_must_pass"] = True
     # THE PIPELINE'S SHAPE BEYOND ITS STEPS (the DQ pipeline): the loop back, the side
     # workflows and paths, and the shared services, so the Pipeline view can draw them.
     if entry.get("pipeline"):
@@ -2107,6 +2241,7 @@ def catalogue_summary(prd_auto_approve: Optional[bool] = None) -> list[dict[str,
 
     if prd_auto_approve is None:
         prd_auto_approve = prd_auto_approved()
+    from .command_center import is_marker_step
     from .workflow_readiness import need_for, needs_of
 
     out = []
@@ -2149,8 +2284,12 @@ def catalogue_summary(prd_auto_approve: Optional[bool] = None) -> list[dict[str,
             "key": entry["key"],
             "name": entry["name"],
             "description": entry["description"],
+            # IN A MARKETPLACE PACK (workflow_marketplace): installed from there, not a standard.
+            "pack": in_pack(entry["key"]),
             "work_class": entry["work_class"],
-            "step_count": len(entry["steps"]),
+            # Markers (fork/join) are not steps: the same count as the plan and a run's "k of n".
+            "step_count": sum(1 for s in entry["steps"]
+                              if isinstance(s, dict) and not is_marker_step(s)),
             "steps": [
                 {"id": s["id"],
                  "capability": (s.get("binding") or {}).get("capability") or s["kind"]}
@@ -2176,6 +2315,15 @@ def catalogue_summary(prd_auto_approve: Optional[bool] = None) -> list[dict[str,
     return out
 
 
+def in_pack(workflow_key: str) -> Optional[str]:
+    """The Marketplace pack a catalogue entry ships in (Banking Data Quality, SRE / Helpdesk), or
+    None for a standard. A pack's workflows are never seeded: a project installs the pack, and
+    they land in its own workflows, not the standards (workflow_marketplace)."""
+    from .workflow_marketplace import PACK_OF_KEY
+
+    return PACK_OF_KEY.get(str(workflow_key or ""))
+
+
 def _gated(entry: dict[str, Any]) -> bool:
     """The entry installs only where the project has something (`requires`, or the pack its
     step contracts name), so a seed that ran before it arrived skipped it."""
@@ -2189,8 +2337,16 @@ def seed_now_unlocked(connection: Connection, project_id: str,
     loaded, a document confirmed — so the entry is there the moment it can run, not at the next
     boot (2026-11-01: the DQ platform and rulebook loads left rulebook_extraction uninstalled
     and "Extract rules" answered "no delivery workflow"). Idempotent."""
+    # AN INSTALLED PACK WAITING FOR THIS (a connector the DQ pipeline calls) is published now.
+    from .workflow_marketplace import publish_waiting
+
+    try:
+        with connection.begin_nested():
+            publish_waiting(connection, project_id, actor=actor)
+    except Exception:  # noqa: BLE001 — the boot sync tries again
+        pass
     keys = frozenset(e["key"] for e in CATALOGUE
-                     if _gated(e) and not _unmet(connection, project_id, e))
+                     if _gated(e) and not in_pack(e["key"]) and not _unmet(connection, project_id, e))
     if not keys:
         return {"project_id": project_id, "installed": [], "count": 0, "mapped": []}
     return seed(connection, project_id, actor=actor, only=keys)
@@ -2202,6 +2358,38 @@ def seed_unlocked_by_pack(connection: Connection, project_id: str, pack_id: str,
     project now meets (seed_now_unlocked). ``pack_id`` is the pack just set. Idempotent."""
     del pack_id  # what it unlocks depends on every pack the project holds, not this one alone
     return seed_now_unlocked(connection, project_id, actor=actor)
+
+
+def missing_keys(connection: Connection, project_id: str) -> frozenset[str]:
+    """The ungated catalogue entries this project has no definition of at all (never installed).
+    A retired one has its row, so it is not missing (a catalogue workflow cannot be deleted)."""
+    have = set(str(k) for k in connection.execute(
+        text("SELECT workflow_key FROM workflow_definitions WHERE project_id = :p"),
+        {"p": project_id}).scalars().all())
+    return frozenset(e["key"] for e in CATALOGUE
+                     if not _gated(e) and not in_pack(e["key"]) and e["key"] not in have)
+
+
+def seed_missing_everywhere(connection: Connection, actor: str = "boss",
+                            project_ids: Optional[list[str]] = None) -> dict[str, list[str]]:
+    """EVERY PROJECT GETS A NEW STANDARD WORKFLOW, NOT ONLY THE DEFAULT ONE (dry run 3, gap #5).
+
+    The full catalogue is seeded when a project is created and, at boot, into the default
+    project only. A standard added to the catalogue later ("Onboard a config file") therefore
+    never reached a project created before it: not in New work, not in its Workflows, only in
+    Library › "Install 8". Called at boot: installs, per project, just the ungated entries it
+    has no definition of. Idempotent; a project already complete costs one SELECT."""
+    out: dict[str, list[str]] = {}
+    projects = list(project_ids) if project_ids is not None else [str(p) for p in connection.execute(
+        text("SELECT id FROM projects ORDER BY id")).scalars().all()]
+    for project_id in projects:
+        keys = missing_keys(connection, project_id)
+        if not keys:
+            continue
+        with connection.begin_nested():
+            seed(connection, project_id, actor=actor, only=keys)
+        out[project_id] = sorted(keys)
+    return out
 
 
 def seed(connection: Connection, project_id: str, actor: str = "boss",
@@ -2218,7 +2406,7 @@ def seed(connection: Connection, project_id: str, actor: str = "boss",
     # `_staffed_for` dropped every one and the run (and its consent) fell back to other agents.
     # Through the shipped-cast install path: additive, an operator's delete holds.
     wanted = [role for entry in CATALOGUE
-              if (only is None or entry["key"] in only)
+              if (only is None or entry["key"] in only) and not in_pack(entry["key"])
               and not _unmet(connection, project_id, entry)
               for role in roles_needed(entry)]
     if wanted:
@@ -2233,6 +2421,13 @@ def seed(connection: Connection, project_id: str, actor: str = "boss",
     ).scalars().all())
     for entry in CATALOGUE:
         if only is not None and entry["key"] not in only:
+            continue
+        pack = in_pack(entry["key"])
+        if pack:
+            # NOT SHIPPED BY DEFAULT (the operator, 2026-11-22): a Marketplace pack's workflow is
+            # installed by the project (Workflows › Marketplace › Install), into its own.
+            installed.append({"key": entry["key"], "version_id": None, "version": None,
+                              "skipped": f"in the '{pack}' Marketplace pack"})
             continue
         unmet = _unmet(connection, project_id, entry)
         if unmet:
@@ -2252,8 +2447,8 @@ def seed(connection: Connection, project_id: str, actor: str = "boss",
 
         if existing:
             definition_id = existing["id"]
-            # A catalogue workflow is read-only (a customer forks it to change it), so its name
-            # and description follow the catalogue: a reworded standard reads the new words.
+            # A standard's name and description follow the catalogue (renaming one is refused:
+            # workflows.require_own), so a reworded standard reads the new words.
             connection.execute(
                 text("UPDATE workflow_definitions SET name = :n, description = :d, "
                      "updated_at = now() WHERE id = :id AND is_catalogue "
@@ -2274,12 +2469,15 @@ def seed(connection: Connection, project_id: str, actor: str = "boss",
 
         spec = entry_spec(_staffed_for(entry, present))
         try:
-            version = workflows.publish_version(
-                connection, project_id=project_id, definition_id=definition_id,
-                spec=spec, actor=actor,
-            )
+            # THROUGH THE STANDARD'S BASELINE (workflow_standards.record_shipped): an unmodified
+            # standard takes the new spec; a standard the operator edited is never overwritten —
+            # the new spec waits beside it as "New standard available".
+            from .workflow_standards import record_shipped
+
+            version = record_shipped(connection, definition_id, spec, actor)
             installed.append({"key": entry["key"], "version_id": version["id"],
-                              "version": version["version"]})
+                              "version": version["version"],
+                              **({"offered": True} if version.get("offered") else {})})
         except workflows.WorkflowConflictError:
             # Same content hash: already published. Nothing to do, and not an error.
             installed.append({"key": entry["key"], "version_id": None, "version": None})
@@ -2344,7 +2542,7 @@ def restaff_role_agent_entries(connection: Connection, project_id: str,
     judgement, so a project that installed them before their steps named the role agents (or
     before the roles were installed) is backfilled on the next boot (shipped_cast.sync_project).
     Idempotent: an unchanged spec publishes nothing. None when the project has none of them."""
-    keys = frozenset(e["key"] for e in CATALOGUE if roles_needed(e))
+    keys = frozenset(e["key"] for e in CATALOGUE if roles_needed(e) and not in_pack(e["key"]))
     have = frozenset(str(k) for k in connection.execute(
         text("SELECT workflow_key FROM workflow_definitions WHERE project_id = :p "
              "AND workflow_key = ANY(:k)"), {"p": project_id, "k": sorted(keys)}).scalars())
@@ -2430,7 +2628,8 @@ def restaff_without(connection: Connection, project_id: str, role_key: str, *,
     rows = connection.execute(
         text(
             """
-            SELECT d.id AS definition_id, d.workflow_key, v.spec
+            SELECT d.id AS definition_id, d.workflow_key, v.spec, d.is_catalogue,
+                   (v.content_hash = d.standard_content_hash) AS unmodified
               FROM workflow_definitions d
               JOIN workflow_versions v ON v.id = d.active_version_id
              WHERE d.project_id = :p
@@ -2452,6 +2651,14 @@ def restaff_without(connection: Connection, project_id: str, role_key: str, *,
                 spec={**spec, "steps": staffed["steps"]}, actor=actor)
         except workflows.WorkflowConflictError:
             continue
+        if row["is_catalogue"] and row["unmodified"]:
+            # An unmodified standard restaffed is still the standard (for this project's
+            # agents): it stays unmodified, and Reset goes back to a spec that can run here.
+            connection.execute(
+                text("UPDATE workflow_definitions SET standard_version_id = :v, "
+                     "standard_content_hash = :h WHERE id = :id"),
+                {"v": version["id"], "h": version["content_hash"],
+                 "id": row["definition_id"]})
         republished.append({"workflow_key": row["workflow_key"],
                             "version": version.get("version")})
     return republished
@@ -2503,11 +2710,13 @@ def _repoint_default(
             or not row["is_catalogue"]):
         return False                       # the operator's, not ours
 
+    # THE VERSION THAT RUNS (the definition's active one), not the newest row: a standard the
+    # operator edited has a newer SHIPPED version waiting beside their edit, not in use.
     newest = connection.execute(
         text("SELECT v.id FROM workflow_versions v "
              "  JOIN workflow_definitions d ON d.id = v.workflow_definition_id "
              " WHERE v.project_id = :p AND d.workflow_key = :k AND v.status = 'published' "
-             " ORDER BY v.created_at DESC LIMIT 1"),
+             " ORDER BY (v.id = d.active_version_id) DESC, v.created_at DESC LIMIT 1"),
         {"p": project_id, "k": workflow_key},
     ).first()
     if not newest or newest[0] == row["workflow_version_id"]:
@@ -2521,6 +2730,23 @@ def _repoint_default(
         {"v": newest[0], "m": mapping_id},
     )
     return True
+
+
+def repoint_defaults_for(connection: Connection, project_id: str, workflow_key: str) -> int:
+    """Move BOSS's own default mappings for this standard onto its active version — called when
+    an operator edits, resets or upgrades a standard, so new work follows what they saved.
+    An operator's own mapping is never moved (_repoint_default). Returns how many moved."""
+    moved = 0
+    for work_class, key in _DEFAULT_MAPPINGS:
+        if key != workflow_key:
+            continue
+        rows = connection.execute(
+            text("SELECT id FROM workflow_mappings WHERE project_id = :p "
+                 "AND selector_kind = 'work_class' AND selector_value = :sv AND enabled"),
+            {"p": project_id, "sv": work_class}).scalars().all()
+        for mapping_id in rows:
+            moved += int(_repoint_default(connection, str(mapping_id), project_id, key))
+    return moved
 
 
 def _seed_default_mappings(
@@ -2561,7 +2787,7 @@ def _seed_default_mappings(
             text("SELECT v.id FROM workflow_versions v "
                  "  JOIN workflow_definitions d ON d.id = v.workflow_definition_id "
                  " WHERE v.project_id=:p AND d.workflow_key=:k AND v.status='published' "
-                 " ORDER BY v.created_at DESC LIMIT 1"),
+                 " ORDER BY (v.id = d.active_version_id) DESC, v.created_at DESC LIMIT 1"),
             {"p": project_id, "k": key},
         ).first()
         if not version:

@@ -223,7 +223,7 @@ describe("Helm's understanding and Talk it through", () => {
     expect(tid("px-ub")!.getAttribute("data-state")).toBe("fallback");
     expect(tid("px-ub")!.textContent).toContain("Start uses your words as written");
     await press(tid("px-compose-start"));
-    expect(posts(calls, `/v1/projects/${P}/work`)[0].body).toEqual({ kind: "feature", text: WORDS });
+    expect(posts(calls, `/v1/projects/${P}/work`)[0].body).toEqual({ kind: "feature", text: WORDS, infer_app: true });
   });
 
   it("Open in Ask Helm carries the draft to the captain, never sent", async () => {
@@ -247,13 +247,15 @@ describe("Picked for you, Add to Next", () => {
     await press(tid("px-nw-bar-input"));
     expect(calls.some((c) => c.path === `/v1/projects/${P}/work/plan` && new URLSearchParams(c.search).get("detail") === "true")).toBe(true);
     expect(tid("px-compose-change")!.textContent).toContain("3 steps");
+    // Every step keeps its number, the one you approve too (stranger test r2: 1 2 4 5 …).
+    expect([...tid("px-compose-change")!.querySelectorAll(".px-nw-st .px-nw-stn")].map((n) => n.textContent)).toEqual(["1", "2", "3"]);
     expect(tid("px-compose-change")!.textContent).toContain("1 you approve: the deploy");
     await press(tid("px-compose-change"));
     const major = tid("px-compose-wf-major_feature")!.textContent!;
     expect(major).toContain("11 steps");
     expect(major).toContain("was “Spec first · Major”");
     await press(tid("px-nw-steps-open"));
-    expect($$("[data-testid='px-nw-steps'] li").map((l) => l.textContent)).toEqual(["1Plan", "2Build", "✋Deployyou approve the deploy"]);
+    expect($$("[data-testid='px-nw-steps'] li").map((l) => l.textContent)).toEqual(["1Plan", "2Build", "3Deployyou approve the deploy"]);
   });
 
   it("Add to Next goes through the plan route with the chips, and nothing starts", async () => {
@@ -266,7 +268,7 @@ describe("Picked for you, Add to Next", () => {
     await press(tid("px-nw-chip-issue"));
     await press(tid("px-nw-issue-create"));
     await press(tid("px-nw-next"));
-    expect(posts(calls, `/v1/projects/${P}/plan`)[0].body).toEqual({ kind: "feature", text: "Export swaps as CSV", priority: "urgent", issue: { mode: "create" } });
+    expect(posts(calls, `/v1/projects/${P}/plan`)[0].body).toEqual({ kind: "feature", text: "Export swaps as CSV", priority: "urgent", issue: { mode: "create" }, infer_app: true });
     expect(posts(calls, `/v1/projects/${P}/work`)).toHaveLength(0);
     expect(tid("px-composer")).toBeNull();
     expect(tid("px-said")!.textContent).toMatch(/Added to Next \(#1\)/);

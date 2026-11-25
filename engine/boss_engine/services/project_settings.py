@@ -127,6 +127,16 @@ KNOBS: dict[str, dict[str, Any]] = {
                 "ask you one question. 1 on, 0 to send every failure to a person.",
         "kind": "int", "min": 0, "max": 1,
     },
+    # AGENTS FIX FAILURES WITH THE STARTER'S AUTHORITY (identity/fix_authority.py): on by
+    # default; off sends a failure that needs the starter's authority back to them as a card.
+    "agents_fix_failures": {
+        "attr": "agents_fix_failures",
+        "label": "Agents fix failures with your authority",
+        "help": "When work you started fails, BOSS's agents fix it with your own authority (never "
+                "merge, production deploy, secrets or approvals) without asking you for a grant "
+                "again. Recorded in the audit log. 1 on, 0 to be asked each time.",
+        "kind": "int", "min": 0, "max": 1,
+    },
     "recovery_budget_cents": {
         "attr": "recovery_budget_cents",
         "label": "Recovery budget (cents)",
@@ -139,6 +149,19 @@ KNOBS: dict[str, dict[str, Any]] = {
         "label": "Recovery time (minutes)",
         "help": "How long one failed step's recovery may go on before it asks you.",
         "kind": "int", "min": 5, "max": 1440,
+    },
+    # THE QUALITY BAR (quality_bar.py, BOSSAPP-1362): one dial for how strict every gate is.
+    # Read by each build's gates (resolve_for_run) and by a production deploy/promote step.
+    "quality_bar": {
+        "attr": "quality_bar",
+        "label": "Quality bar",
+        "help": "prototype: blocks only when the app does not build or start, the tests it wrote "
+                "fail, or a security issue is found; everything else becomes a follow-up. "
+                "standard: also blocks on the must-haves that matter (P1), a review blocker and "
+                "broken existing tests; the rest becomes a follow-up. production: blocks on "
+                "everything, and a production release refuses a build that passed at a lighter "
+                "bar. A workflow or a single run may set its own.",
+        "kind": "choice", "choices": ["prototype", "standard", "production"],
     },
     # OPEN THE PR WHEN CHECKS FAIL (checks_failing.py): after its repair rounds a build whose
     # checks still fail opens a draft PR labelled `checks failing` instead of waiting for a waiver.

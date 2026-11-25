@@ -40,6 +40,8 @@ CONSOLE_OBJECT_KINDS: dict[str, str] = {
     "self_fix": "self_fix",
     "shepherd_escalation": "shepherd_escalation",
     "agent_thread": "agent_thread",
+    # A preview link's "Recreate preview in BOSS" (preview_wake.recreate_href).
+    "preview": "app_preview",
 }
 
 

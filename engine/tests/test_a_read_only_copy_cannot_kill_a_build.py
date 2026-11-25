@@ -145,7 +145,7 @@ def test_make_writable_never_leaves_the_workspace(ws, tmp_path_factory):
     os.chmod(outside, 0o644)
 
 
-# ---- (c) one automatic retry for an infra failure ---------------------------------------------
+# ---- (c) bounded automatic retries for an infra failure ---------------------------------------------
 
 class _Conn:
     def __init__(self, log):
@@ -169,29 +169,79 @@ def _wire(monkeypatch, log, retry):
     return g
 
 
-def test_an_infra_failure_is_retried_once_automatically(monkeypatch):
+def test_an_infra_failure_is_retried_automatically_with_backoff(monkeypatch):
     log, retried = [], []
 
     def retry(engine, settings, jobs, run_id, **kw):
-        retried.append(run_id)
+        retried.append((run_id, kw.get("automatic"), kw.get("platform_retry"),
+                        kw.get("auto_retry_attempt"), kw.get("run_after_seconds")))
         return {"status": "queued", "run_id": "crun_next"}
 
     g = _wire(monkeypatch, log, retry)
+    monkeypatch.setattr(g, "lineage_auto_retries", lambda *a: 0)
     out = g._retry_after_infra_failure(None, None, None, "crun_a", "p", {}, {"status": "failed"})
-    assert retried == ["crun_a"]
+    # The count and the backoff (30 s, doubled per try) go WITH the new attempt's row and job —
+    # never written after it is queued (stranger test r6).
+    assert retried == [("crun_a", True, True, 1, 30)]
     assert out["auto_retry_run_id"] == "crun_next" and out["status"] == "failed"
-    flagged = [e for e in log if e[0] == "sql"]
-    assert flagged and flagged[0][2] == {"k": g.AUTO_INFRA_RETRY_KEY, "id": "crun_next"}
-    assert any(e[0] == "event" and e[1] == "code_task.auto_retried" for e in log)
+    assert out["auto_retry_attempt"] == 1
+    assert not [e for e in log if e[0] == "sql"], "nothing is written after the job is queued"
+    said = [e for e in log if e[0] == "event" and e[1] == "code_task.auto_retried"]
+    assert said and said[0][2]["attempt"] == 1 and said[0][2]["of"] == 2
 
 
-def test_the_automatic_retry_is_not_retried_again(monkeypatch):
+def test_the_count_comes_from_the_lineage_not_the_runs_own_field(monkeypatch):
+    """A fast-failing attempt whose own field was never written (r6: 15 builds, ~7 s apart)."""
+    log, retried = [], []
+    g = _wire(monkeypatch, log, lambda *a, **k: retried.append(k) or {"run_id": "crun_n"})
+    monkeypatch.setattr(g, "lineage_auto_retries", lambda *a: 1)
+    out = g._retry_after_infra_failure(None, None, None, "crun_b", "p", {}, {"status": "failed"})
+    assert out["auto_retry_attempt"] == 2 and retried[0]["run_after_seconds"] == 60
+    monkeypatch.setattr(g, "lineage_auto_retries", lambda *a: 2)
+    out = g._retry_after_infra_failure(None, None, None, "crun_n", "p", {}, {"status": "failed"})
+    assert len(retried) == 1, "bounded: two tries, then it stops"
+    assert out["auto_retry"] == "not_again" and "tried this build 3 times" in out["next_step"]
+    assert "?" not in out["next_step"]
+
+
+def test_the_hard_cap_holds_whatever_the_setting_says(monkeypatch):
+    log, retried = [], []
+    g = _wire(monkeypatch, log, lambda *a, **k: retried.append(k) or {"run_id": "crun_n"})
+    monkeypatch.setattr(g, "lineage_auto_retries", lambda *a: 2)
+    many = type("S", (), {"build_auto_retries": 5, "build_auto_retry_backoff_seconds": 30})()
+    out = g._retry_after_infra_failure(None, many, None, "crun_c", "p", {}, {"status": "failed"})
+    assert retried == [] and out["auto_retry"] == "not_again"
+
+
+def test_a_withheld_retry_marks_the_build_as_needing_an_ok(monkeypatch):
+    from boss_engine.services import code_task_service
+
+    log = []
+
+    def retry(*a, **k):
+        raise code_task_service.RetryNeedsPerson("no person's grant covers another attempt")
+
+    g = _wire(monkeypatch, log, retry)
+    out = g._retry_after_infra_failure(None, None, None, "crun_w", "p", {}, {"status": "failed"})
+    assert out["auto_retry"] == "needs_person"
+    marked = [e for e in log if e[0] == "sql" and "auto_retry_needs_ok" in e[1]]
+    assert marked and marked[0][2] == {"id": "crun_w"}
+
+
+def test_automatic_retries_can_be_turned_off(monkeypatch):
     log, retried = [], []
     g = _wire(monkeypatch, log, lambda *a, **k: retried.append(1))
-    out = g._retry_after_infra_failure(None, None, None, "crun_b", "p",
-                                       {g.AUTO_INFRA_RETRY_KEY: True}, {"status": "failed"})
-    assert retried == []
-    assert "press Retry" in out["next_step"]
+    off = type("S", (), {"build_auto_retries": 0, "build_auto_retry_backoff_seconds": 30})()
+    out = g._retry_after_infra_failure(None, off, None, "crun_b", "p", {}, {"status": "failed"})
+    assert retried == [] and out["auto_retry"] == "off"
+
+
+def test_automatic_retries_are_on_by_default():
+    from boss_engine.config import Settings
+
+    fields = Settings.model_fields
+    assert fields["build_auto_retries"].default == 2
+    assert fields["build_auto_retry_backoff_seconds"].default > 0
 
 
 def test_a_refused_retry_leaves_a_plain_message(monkeypatch):

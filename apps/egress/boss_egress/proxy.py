@@ -314,8 +314,12 @@ class EgressProxy:
         template = f"/{kind}/{{host}}"
 
         def answer(status: int, reason: str) -> EgressResponse:
+            from boss_engine.services.lapsed import say
+
+            # The reason stays the machine code; the message says what lapsed and what to do.
             return EgressResponse(status, {"content-type": "application/json"},
-                                  json.dumps({"error": "refused", "reason": reason}).encode())
+                                  json.dumps({"error": "refused", "reason": reason,
+                                              "message": say(reason)}).encode())
 
         with self.engine.begin() as db:
             # 0. WHO IS CALLING: an enrolled host, by its proof or a terminator's forwarded cert.

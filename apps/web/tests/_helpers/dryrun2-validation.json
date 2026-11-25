@@ -1,0 +1,848 @@
+{
+ "validation": {
+  "validator": {
+   "id": "gwlint",
+   "fix": "go run ./cmd/gwlint --fix {file}",
+   "run": "go run ./cmd/gwlint validate {file} --json",
+   "adapter": "gwlint-json",
+   "version": "a422a06",
+   "rules_doc": "rules/api-guidelines.yaml"
+  },
+  "ruleset": {
+   "id": "northgate",
+   "sha": "2b7fa8ea8635",
+   "rules": {
+    "no-inlined-secrets": {
+     "guide": "Delete the key if the route already authenticates another way; otherwise replace with api_key_secret_ref: vault://<tenant>/<name>. Never write a hash you computed.",
+     "autofix": "never",
+     "enabled": true,
+     "severity": "P0"
+    },
+    "pii-fields-declared": {
+     "guide": "Declare the PII fields the route returns; ask the partner when unsure.",
+     "autofix": "agent",
+     "enabled": true,
+     "severity": "P2"
+    },
+    "rate-limit-required": {
+     "guide": null,
+     "autofix": "mechanical",
+     "enabled": true,
+     "severity": "P1"
+    },
+    "request-size-capped": {
+     "guide": null,
+     "autofix": "mechanical",
+     "enabled": true,
+     "severity": "P1"
+    },
+    "upstream-https-required": {
+     "guide": null,
+     "autofix": "mechanical",
+     "enabled": true,
+     "severity": "P0"
+    },
+    "no-sensitive-paths-exposed": {
+     "guide": "Removing a route is a product decision: leave it for a person.",
+     "autofix": "human",
+     "enabled": true,
+     "severity": "P0"
+    },
+    "tenant-id-matches-filename": {
+     "guide": null,
+     "autofix": "never",
+     "enabled": true,
+     "severity": "P1"
+    },
+    "tenant-rate-limit-required": {
+     "guide": "rps 50, burst 50 unless the brief names a quota.",
+     "autofix": "agent",
+     "enabled": true,
+     "severity": "P1"
+    },
+    "cors-no-wildcard-with-credentials": {
+     "guide": "Default to allow_credentials: false. Only keep credentials if the partner named exact origins in the brief.",
+     "autofix": "agent",
+     "enabled": true,
+     "severity": "P0"
+    }
+   },
+   "custom": [],
+   "version": 1
+  },
+  "input": {
+   "file": "examples/lumen-pay.bad.yaml",
+   "from": "partner",
+   "sha256": "2f2e3d332f53e125c97cf4e9307db738a58a41d1ed6be1cabbf3ae5a011da220",
+   "text": "tenant: lumen-pay\nowner: \"Lumen Pay Platform Team\"\ncontact: \"platform@lumenpay.example\"\ntier: standard\ndata_classification: pii\nroutes:\n  - path: /v1/payments\n    description: \"List recent payments for the authenticated merchant.\"\n    methods: [\"GET\"]\n    upstream: lumen-pay-core\n    auth:\n      type: jwt\n      issuer: \"https://issuer.lumenpay.example\"\n      audience: \"northgate\"\n      scopes: [\"payments.read\"]\n      jwks_url: \"https://issuer.lumenpay.example/.well-known/jwks.json\"\n      api_key: \"[SECRET]\"\n    cors:\n      allow_origins: [\"*\"]\n      allow_credentials: true\n  - path: /v1/admin/accounts\n    description: \"Internal account admin surface, never meant for tenants.\"\n    methods: [\"GET\"]\n    upstream: lumen-pay-core\n    auth:\n      type: jwt\n      issuer: \"https://issuer.lumenpay.example\"\n      audience: \"northgate\"\n      scopes: [\"admin.read\"]\n      jwks_url: \"https://issuer.lumenpay.example/.well-known/jwks.json\"\n    rate_limit:\n      rps: 10\n      burst: 10\nupstreams:\n  lumen-pay-core:\n    url: \"http://lumen-pay-core.internal.example\"\n    timeout_ms: 2000\n"
+  },
+  "target": "config/tenants/lumen-pay.yaml",
+  "before": {
+   "exit": 1,
+   "command": "go run ./cmd/gwlint validate .boss-validation/lumen-pay.yaml --json",
+   "findings": [
+    "V-01",
+    "V-02",
+    "V-03",
+    "V-04",
+    "V-05",
+    "V-06",
+    "V-07",
+    "V-08",
+    "V-09"
+   ]
+  },
+  "after": {
+   "exit": 1,
+   "command": "go run ./cmd/gwlint validate config/tenants/lumen-pay.yaml --json",
+   "findings": [
+    "V-03",
+    "V-05",
+    "V-07",
+    "V-08"
+   ],
+   "head_sha": "fa05ac2d6d71e40d29aa1160c5d2c3ade3656f5d"
+  },
+  "fixes": [
+   {
+    "finding": "V-02",
+    "rule": "pii-fields-declared",
+    "file": "config/tenants/lumen-pay.yaml",
+    "line": 5,
+    "before": null,
+    "after": "pii_fields: [\"merchant_id\", \"customer_email\"]",
+    "kind": "agent",
+    "hunk_id": "h-02"
+   },
+   {
+    "finding": "V-01",
+    "rule": "tenant-rate-limit-required",
+    "file": "config/tenants/lumen-pay.yaml",
+    "line": 5,
+    "before": null,
+    "after": "rate_limit:\n  rps: 50\n  burst: 50",
+    "kind": "agent",
+    "hunk_id": "h-02"
+   },
+   {
+    "finding": "V-04",
+    "rule": "request-size-capped",
+    "file": "config/tenants/lumen-pay.yaml",
+    "line": 10,
+    "before": null,
+    "after": "    max_body_bytes: 65536",
+    "kind": "agent",
+    "hunk_id": "h-03"
+   },
+   {
+    "finding": "V-09",
+    "rule": "upstream-https-required",
+    "file": "config/tenants/lumen-pay.yaml",
+    "line": 36,
+    "before": "    url: \"http://lumen-pay-core.internal.example\"",
+    "after": "    url: \"https://mock-upstream-staging:9001\"",
+    "kind": "agent",
+    "hunk_id": "h-05"
+   },
+   {
+    "finding": null,
+    "rule": null,
+    "file": "config/tenants/lumen-pay.yaml",
+    "line": 0,
+    "before": null,
+    "after": "# Remediated per gwlint's never-fixable findings against examples/lumen-pay.bad.yaml:\n#   - no-inlined-secrets: removed the inlined auth.api_key live-secret value entirely.\n#   - cors-no-wildcard-with-credentials: [SECRET] allow_origins + allow_credentials: false below.\n#   - pii-fields-declared: pii_fields lists this tenant's exposed personal-data fields.\n#   - tenant-rate-limit-required: top-level rate_limit added at tenant scope.\n#   - no-sensitive-paths-exposed: the internal account-admin route was removed, not secured.",
+    "kind": "agent",
+    "hunk_id": "h-01"
+   },
+   {
+    "finding": null,
+    "rule": null,
+    "file": "config/tenants/lumen-pay.yaml",
+    "line": 19,
+    "before": "      allow_origins: [\"*\"]",
+    "after": "      allow_origins: [\"https://dashboard.lumenpay.example\"]",
+    "kind": "agent",
+    "hunk_id": "h-04"
+   }
+  ],
+  "findings": [
+   {
+    "id": "V-01",
+    "source": {
+     "kind": "validator",
+     "name": "gwlint",
+     "rule_id": "tenant-rate-limit-required",
+     "rule_doc": "rules/api-guidelines.yaml#tenant-rate-limit-required"
+    },
+    "severity": "P1",
+    "location": {
+     "file": "config/tenants/lumen-pay.yaml",
+     "line": 7,
+     "partner_line": 1
+    },
+    "original": "tenant: lumen-pay",
+    "fixed": "rate_limit:",
+    "hunk_id": "h-02",
+    "fix_kind": "agent",
+    "status": "fixed",
+    "override": null,
+    "title": "Every tenant must declare a tenant-level rate limit within bounds",
+    "basis": "ruleset northgate v1"
+   },
+   {
+    "id": "V-02",
+    "source": {
+     "kind": "validator",
+     "name": "gwlint",
+     "rule_id": "pii-fields-declared",
+     "rule_doc": "rules/api-guidelines.yaml#pii-fields-declared"
+    },
+    "severity": "P2",
+    "location": {
+     "file": "config/tenants/lumen-pay.yaml",
+     "line": 11,
+     "partner_line": 5
+    },
+    "original": "data_classification: pii",
+    "fixed": "pii_fields: [\"merchant_id\", \"customer_email\"]",
+    "hunk_id": "h-02",
+    "fix_kind": "agent",
+    "status": "fixed",
+    "override": null,
+    "title": "Tenants handling PII should declare which fields to redact",
+    "basis": "ruleset northgate v1"
+   },
+   {
+    "id": "V-03",
+    "source": {
+     "kind": "validator",
+     "name": "gwlint",
+     "rule_id": "rate-limit-required",
+     "rule_doc": "rules/api-guidelines.yaml#rate-limit-required"
+    },
+    "severity": "P1",
+    "location": {
+     "file": "config/tenants/lumen-pay.yaml",
+     "line": 17,
+     "partner_line": 7
+    },
+    "original": "  - path: /v1/payments",
+    "fixed": null,
+    "hunk_id": null,
+    "fix_kind": "none",
+    "status": "open",
+    "override": null,
+    "title": "Every route must declare a rate limit within bounds",
+    "basis": "ruleset northgate v1"
+   },
+   {
+    "id": "V-04",
+    "source": {
+     "kind": "validator",
+     "name": "gwlint",
+     "rule_id": "request-size-capped",
+     "rule_doc": "rules/api-guidelines.yaml#request-size-capped"
+    },
+    "severity": "P1",
+    "location": {
+     "file": "config/tenants/lumen-pay.yaml",
+     "line": 17,
+     "partner_line": 7
+    },
+    "original": "  - path: /v1/payments",
+    "fixed": "    max_body_bytes: 65536",
+    "hunk_id": "h-03",
+    "fix_kind": "agent",
+    "status": "fixed",
+    "override": null,
+    "title": "Every route must declare a request body size cap",
+    "basis": "ruleset northgate v1"
+   },
+   {
+    "id": "V-05",
+    "source": {
+     "kind": "validator",
+     "name": "gwlint",
+     "rule_id": "no-inlined-secrets",
+     "rule_doc": "rules/api-guidelines.yaml#no-inlined-secrets"
+    },
+    "severity": "P0",
+    "location": {
+     "file": "config/tenants/lumen-pay.yaml",
+     "line": 28,
+     "partner_line": 17
+    },
+    "original": "      api_key: \"[SECRET]\"",
+    "fixed": null,
+    "hunk_id": null,
+    "fix_kind": "human",
+    "status": "open",
+    "override": null,
+    "title": "No API keys, tokens or passwords inlined in plaintext",
+    "basis": "ruleset northgate v1"
+   },
+   {
+    "id": "V-06",
+    "source": {
+     "kind": "validator",
+     "name": "gwlint",
+     "rule_id": "cors-no-wildcard-with-credentials",
+     "rule_doc": "rules/api-guidelines.yaml#cors-no-wildcard-with-credentials"
+    },
+    "severity": "P0",
+    "location": {
+     "file": "config/tenants/lumen-pay.yaml",
+     "line": 31,
+     "partner_line": 20
+    },
+    "original": "      allow_credentials: true",
+    "fixed": "      allow_credentials: true",
+    "hunk_id": "h-04",
+    "fix_kind": "agent",
+    "status": "fixed",
+    "override": null,
+    "title": "CORS must not combine a wildcard origin with credentials",
+    "basis": "ruleset northgate v1"
+   },
+   {
+    "id": "V-07",
+    "source": {
+     "kind": "validator",
+     "name": "gwlint",
+     "rule_id": "no-sensitive-paths-exposed",
+     "rule_doc": "rules/api-guidelines.yaml#no-sensitive-paths-exposed"
+    },
+    "severity": "P0",
+    "location": {
+     "file": "config/tenants/lumen-pay.yaml",
+     "line": 32,
+     "partner_line": 21
+    },
+    "original": "  - path: /v1/admin/accounts",
+    "fixed": null,
+    "hunk_id": null,
+    "fix_kind": "human",
+    "status": "open",
+    "override": null,
+    "title": "Routes must not expose /admin, /internal or /debug paths",
+    "basis": "ruleset northgate v1"
+   },
+   {
+    "id": "V-08",
+    "source": {
+     "kind": "validator",
+     "name": "gwlint",
+     "rule_id": "request-size-capped",
+     "rule_doc": "rules/api-guidelines.yaml#request-size-capped"
+    },
+    "severity": "P1",
+    "location": {
+     "file": "config/tenants/lumen-pay.yaml",
+     "line": 32,
+     "partner_line": 21
+    },
+    "original": "  - path: /v1/admin/accounts",
+    "fixed": null,
+    "hunk_id": null,
+    "fix_kind": "none",
+    "status": "open",
+    "override": null,
+    "title": "Every route must declare a request body size cap",
+    "basis": "ruleset northgate v1"
+   },
+   {
+    "id": "V-09",
+    "source": {
+     "kind": "validator",
+     "name": "gwlint",
+     "rule_id": "upstream-https-required",
+     "rule_doc": "rules/api-guidelines.yaml#upstream-https-required"
+    },
+    "severity": "P0",
+    "location": {
+     "file": "config/tenants/lumen-pay.yaml",
+     "line": 46,
+     "partner_line": 35
+    },
+    "original": "  lumen-pay-core:",
+    "fixed": "    url: \"https://mock-upstream-staging:9001\"",
+    "hunk_id": "h-05",
+    "fix_kind": "agent",
+    "status": "open",
+    "override": null,
+    "title": "Upstream URLs must use https://",
+    "basis": "ruleset northgate v1"
+   },
+   {
+    "id": "U-01",
+    "source": {
+     "kind": "guard",
+     "name": "boss",
+     "rule_id": "unexplained-security-change",
+     "rule_doc": null
+    },
+    "severity": "P0",
+    "location": {
+     "file": "config/tenants/lumen-pay.yaml",
+     "line": 47,
+     "partner_line": 36
+    },
+    "original": "    url: \"http://lumen-pay-core.internal.example\"",
+    "fixed": "    url: \"https://mock-upstream-staging:9001\"",
+    "hunk_id": "h-05",
+    "fix_kind": "agent",
+    "status": "open",
+    "override": null,
+    "title": "Unexplained security change: lumen-pay-core.url",
+    "basis": "boss guard: a change to auth or upstream keys"
+   }
+  ],
+  "hunks": [
+   {
+    "id": "h-01",
+    "line": 1,
+    "added": 6,
+    "removed": 0,
+    "out_line": 1
+   },
+   {
+    "id": "h-02",
+    "line": 6,
+    "added": 4,
+    "removed": 0,
+    "out_line": 12
+   },
+   {
+    "id": "h-03",
+    "line": 11,
+    "added": 1,
+    "removed": 0,
+    "out_line": 21
+   },
+   {
+    "id": "h-04",
+    "line": 19,
+    "added": 1,
+    "removed": 1,
+    "out_line": 30
+   },
+   {
+    "id": "h-05",
+    "line": 36,
+    "added": 1,
+    "removed": 1,
+    "out_line": 47
+   }
+  ]
+ },
+ "overrides": [
+  {
+   "ref": "O-1",
+   "id": "ovr_2c5e5f5e061449b7a763",
+   "finding_id": "V-06",
+   "action": "edit",
+   "actor": "usr_ownerfixture0001",
+   "reason": "Partner named the dashboard origin and needs credentials there (dry run).",
+   "commit_sha": "fa05ac2d6d71e40d29aa1160c5d2c3ade3656f5d",
+   "created_at": "2026-11-22T04:34:41.260142+00:00",
+   "packet_version": 2
+  }
+ ],
+ "rerun": {
+  "id": "vrr_fd4b00403e7341b7afd4",
+  "project_id": "northgate-gateway",
+  "change_number": 14,
+  "head_sha": "fa05ac2d6d71e40d29aa1160c5d2c3ade3656f5d",
+  "finding_id": "V-06",
+  "state": "done",
+  "error": null,
+  "started_at": "2026-11-22T04:34:41.678154+00:00",
+  "finished_at": "2026-11-22T04:34:45.696816+00:00",
+  "created_at": "2026-11-22T04:34:41.260142+00:00"
+ },
+ "head_sha": "fa05ac2d6d71e40d29aa1160c5d2c3ade3656f5d",
+ "packet": {
+  "packet_version": 2,
+  "head_sha": "fa05ac2d6d71e40d29aa1160c5d2c3ade3656f5d",
+  "work": {
+   "title": "Lumen Pay tenant onboarding",
+   "workflow_run": "wfr_6fb6dfad1d0f4b9395fd",
+   "run_no": 20,
+   "build": "crun_007992ff41514b07a6fb",
+   "later_builds": [
+    "crun_b669868f0b184f81aa08"
+   ],
+   "change": 14
+  },
+  "verdict": {
+   "state": "blocked",
+   "reasons": [
+    "open_p0:U-01",
+    "open_p0:V-05",
+    "open_p0:V-07",
+    "open_p0:V-09",
+    "open_p1:V-03",
+    "open_p1:V-08",
+    "unexplained_hunk:h-01",
+    "unexplained_hunk:h-04"
+   ]
+  },
+  "counts": {
+   "P0": {
+    "found": 5,
+    "open": 4,
+    "waived": 0
+   },
+   "P1": {
+    "found": 4,
+    "open": 2,
+    "waived": 0
+   },
+   "P2": {
+    "found": 1,
+    "open": 0,
+    "waived": 0
+   },
+   "P3": {
+    "found": 0,
+    "open": 0,
+    "waived": 0
+   },
+   "unmapped": 0,
+   "review": {
+    "found": 0,
+    "open": 0,
+    "deferred": 0,
+    "blocking": 0
+   }
+  },
+  "vs_input": {
+   "file": "config/tenants/lumen-pay.yaml",
+   "hunks": 5,
+   "added": 13,
+   "removed": 2,
+   "hunks_by_finding": {
+    "h-02": [
+     "V-02",
+     "V-01"
+    ],
+    "h-03": [
+     "V-04"
+    ],
+    "h-05": [
+     "V-09"
+    ]
+   },
+   "unexplained_hunks": [
+    "h-01",
+    "h-04"
+   ]
+  },
+  "validators": [
+   {
+    "id": "gwlint",
+    "ruleset": "northgate v1",
+    "before": 9,
+    "after_open": 5,
+    "after_waived": 0,
+    "exit": 1,
+    "evidence": "E-3",
+    "evidence_ids": [
+     "E-1",
+     "E-2",
+     "E-3"
+    ],
+    "guard": null,
+    "error": null
+   }
+  ],
+  "tests": [
+   {
+    "id": "T-1",
+    "suite": "go vet ./... && go test ./...",
+    "passed": null,
+    "failed": null,
+    "exit": 0,
+    "ok": true,
+    "evidence": "E-T1",
+    "sha": "fa05ac2d6d71e40d29aa1160c5d2c3ade3656f5d"
+   }
+  ],
+  "overrides": [
+   {
+    "id": "O-1",
+    "finding": "V-06",
+    "action": "edit",
+    "actor": "usr_ownerfixture0001",
+    "reason": "Partner named the dashboard origin and needs credentials there (dry run).",
+    "approver": null,
+    "approved_at": null,
+    "expires_at": null,
+    "commit_sha": "fa05ac2d6d71e40d29aa1160c5d2c3ade3656f5d",
+    "at": "2026-11-22T04:34:41.260142+00:00"
+   }
+  ],
+  "claims": [
+   {
+    "text": "gwlint: 9 found, 4 fixed, 5 open",
+    "refs": [
+     "E-3",
+     "V-01",
+     "V-02",
+     "V-04",
+     "V-06"
+    ]
+   },
+   {
+    "text": "1 test run(s) pass at the head",
+    "refs": [
+     "T-1"
+    ]
+   }
+  ],
+  "risks": [],
+  "contract": [],
+  "findings": [
+   {
+    "id": "U-01",
+    "source": {
+     "kind": "guard",
+     "name": "boss",
+     "rule_id": "unexplained-security-change",
+     "rule_doc": null
+    },
+    "severity": "P0",
+    "location": {
+     "file": "config/tenants/lumen-pay.yaml",
+     "line": 47,
+     "partner_line": 36
+    },
+    "original": "    url: \"http://lumen-pay-core.internal.example\"",
+    "fixed": "    url: \"https://mock-upstream-staging:9001\"",
+    "hunk_id": "h-05",
+    "fix_kind": "agent",
+    "status": "open",
+    "override": null,
+    "title": "Unexplained security change: lumen-pay-core.url",
+    "basis": "boss guard: a change to auth or upstream keys"
+   },
+   {
+    "id": "V-05",
+    "source": {
+     "kind": "validator",
+     "name": "gwlint",
+     "rule_id": "no-inlined-secrets",
+     "rule_doc": "rules/api-guidelines.yaml#no-inlined-secrets"
+    },
+    "severity": "P0",
+    "location": {
+     "file": "config/tenants/lumen-pay.yaml",
+     "line": 28,
+     "partner_line": 17
+    },
+    "original": "      api_key: \"[SECRET]\"",
+    "fixed": null,
+    "hunk_id": null,
+    "fix_kind": "human",
+    "status": "open",
+    "override": null,
+    "title": "No API keys, tokens or passwords inlined in plaintext",
+    "basis": "ruleset northgate v1"
+   },
+   {
+    "id": "V-07",
+    "source": {
+     "kind": "validator",
+     "name": "gwlint",
+     "rule_id": "no-sensitive-paths-exposed",
+     "rule_doc": "rules/api-guidelines.yaml#no-sensitive-paths-exposed"
+    },
+    "severity": "P0",
+    "location": {
+     "file": "config/tenants/lumen-pay.yaml",
+     "line": 32,
+     "partner_line": 21
+    },
+    "original": "  - path: /v1/admin/accounts",
+    "fixed": null,
+    "hunk_id": null,
+    "fix_kind": "human",
+    "status": "open",
+    "override": null,
+    "title": "Routes must not expose /admin, /internal or /debug paths",
+    "basis": "ruleset northgate v1"
+   },
+   {
+    "id": "V-09",
+    "source": {
+     "kind": "validator",
+     "name": "gwlint",
+     "rule_id": "upstream-https-required",
+     "rule_doc": "rules/api-guidelines.yaml#upstream-https-required"
+    },
+    "severity": "P0",
+    "location": {
+     "file": "config/tenants/lumen-pay.yaml",
+     "line": 46,
+     "partner_line": 35
+    },
+    "original": "  lumen-pay-core:",
+    "fixed": "    url: \"https://mock-upstream-staging:9001\"",
+    "hunk_id": "h-05",
+    "fix_kind": "agent",
+    "status": "open",
+    "override": null,
+    "title": "Upstream URLs must use https://",
+    "basis": "ruleset northgate v1"
+   },
+   {
+    "id": "V-03",
+    "source": {
+     "kind": "validator",
+     "name": "gwlint",
+     "rule_id": "rate-limit-required",
+     "rule_doc": "rules/api-guidelines.yaml#rate-limit-required"
+    },
+    "severity": "P1",
+    "location": {
+     "file": "config/tenants/lumen-pay.yaml",
+     "line": 17,
+     "partner_line": 7
+    },
+    "original": "  - path: /v1/payments",
+    "fixed": null,
+    "hunk_id": null,
+    "fix_kind": "none",
+    "status": "open",
+    "override": null,
+    "title": "Every route must declare a rate limit within bounds",
+    "basis": "ruleset northgate v1"
+   },
+   {
+    "id": "V-08",
+    "source": {
+     "kind": "validator",
+     "name": "gwlint",
+     "rule_id": "request-size-capped",
+     "rule_doc": "rules/api-guidelines.yaml#request-size-capped"
+    },
+    "severity": "P1",
+    "location": {
+     "file": "config/tenants/lumen-pay.yaml",
+     "line": 32,
+     "partner_line": 21
+    },
+    "original": "  - path: /v1/admin/accounts",
+    "fixed": null,
+    "hunk_id": null,
+    "fix_kind": "none",
+    "status": "open",
+    "override": null,
+    "title": "Every route must declare a request body size cap",
+    "basis": "ruleset northgate v1"
+   },
+   {
+    "id": "V-06",
+    "source": {
+     "kind": "validator",
+     "name": "gwlint",
+     "rule_id": "cors-no-wildcard-with-credentials",
+     "rule_doc": "rules/api-guidelines.yaml#cors-no-wildcard-with-credentials"
+    },
+    "severity": "P0",
+    "location": {
+     "file": "config/tenants/lumen-pay.yaml",
+     "line": 31,
+     "partner_line": 20
+    },
+    "original": "      allow_credentials: true",
+    "fixed": "      allow_credentials: true",
+    "hunk_id": "h-04",
+    "fix_kind": "human",
+    "status": "fixed",
+    "override": {
+     "id": "O-1",
+     "action": "edit",
+     "actor": "usr_ownerfixture0001",
+     "reason": "Partner named the dashboard origin and needs credentials there (dry run).",
+     "approver": null,
+     "approved_at": null,
+     "expires_at": null,
+     "commit_sha": "fa05ac2d6d71e40d29aa1160c5d2c3ade3656f5d",
+     "at": "2026-11-22T04:34:41.260142+00:00"
+    },
+    "title": "CORS must not combine a wildcard origin with credentials",
+    "basis": "ruleset northgate v1"
+   },
+   {
+    "id": "V-01",
+    "source": {
+     "kind": "validator",
+     "name": "gwlint",
+     "rule_id": "tenant-rate-limit-required",
+     "rule_doc": "rules/api-guidelines.yaml#tenant-rate-limit-required"
+    },
+    "severity": "P1",
+    "location": {
+     "file": "config/tenants/lumen-pay.yaml",
+     "line": 7,
+     "partner_line": 1
+    },
+    "original": "tenant: lumen-pay",
+    "fixed": "rate_limit:",
+    "hunk_id": "h-02",
+    "fix_kind": "agent",
+    "status": "fixed",
+    "override": null,
+    "title": "Every tenant must declare a tenant-level rate limit within bounds",
+    "basis": "ruleset northgate v1"
+   },
+   {
+    "id": "V-04",
+    "source": {
+     "kind": "validator",
+     "name": "gwlint",
+     "rule_id": "request-size-capped",
+     "rule_doc": "rules/api-guidelines.yaml#request-size-capped"
+    },
+    "severity": "P1",
+    "location": {
+     "file": "config/tenants/lumen-pay.yaml",
+     "line": 17,
+     "partner_line": 7
+    },
+    "original": "  - path: /v1/payments",
+    "fixed": "    max_body_bytes: 65536",
+    "hunk_id": "h-03",
+    "fix_kind": "agent",
+    "status": "fixed",
+    "override": null,
+    "title": "Every route must declare a request body size cap",
+    "basis": "ruleset northgate v1"
+   },
+   {
+    "id": "V-02",
+    "source": {
+     "kind": "validator",
+     "name": "gwlint",
+     "rule_id": "pii-fields-declared",
+     "rule_doc": "rules/api-guidelines.yaml#pii-fields-declared"
+    },
+    "severity": "P2",
+    "location": {
+     "file": "config/tenants/lumen-pay.yaml",
+     "line": 11,
+     "partner_line": 5
+    },
+    "original": "data_classification: pii",
+    "fixed": "pii_fields: [\"merchant_id\", \"customer_email\"]",
+    "hunk_id": "h-02",
+    "fix_kind": "agent",
+    "status": "fixed",
+    "override": null,
+    "title": "Tenants handling PII should declare which fields to redact",
+    "basis": "ruleset northgate v1"
+   }
+  ]
+ }
+}

@@ -32,6 +32,9 @@ CREATE TABLE agent_threads (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now())
 """
 
+#: The thread lookup prefers the conversation with messages (agent_service._find_role_thread).
+MESSAGES = "CREATE TABLE agent_messages (id TEXT PRIMARY KEY, thread_id TEXT NOT NULL)"
+
 
 @pytest.fixture()
 def engine(monkeypatch):
@@ -57,6 +60,7 @@ def _service() -> AgentService:
 def test_a_stale_three_column_index_reuses_the_thread_instead_of_failing(engine):
     with engine.begin() as c:
         c.execute(text(TABLE))
+        c.execute(text(MESSAGES))
         c.execute(text(
             "CREATE UNIQUE INDEX idx_agent_threads_surface_external "
             "ON agent_threads(project_id, surface, external_ref) WHERE external_ref IS NOT NULL"))
@@ -75,6 +79,7 @@ def test_a_race_for_the_same_agents_thread_returns_the_winner(engine, monkeypatc
     """Two first turns: the lookup misses for both, the second INSERT loses."""
     with engine.begin() as c:
         c.execute(text(TABLE))
+        c.execute(text(MESSAGES))
         c.execute(text(
             "CREATE UNIQUE INDEX idx_agent_threads_surface_external "
             "ON agent_threads(project_id, surface, external_ref, agent_role) "

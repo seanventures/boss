@@ -228,6 +228,8 @@ h6 {
   font-family: var(--mono);
   font-size: 0.59rem;
 }
+/* "+N in other projects" beside the Approvals badge: quiet, a hint not an alarm. */
+.bx-nav-badge.bx-nav-badge-quiet { margin-left: 4px; opacity: 0.6; }
 
 .bx-sidebar-foot {
   gap: 12px;
@@ -2980,6 +2982,11 @@ select.input:focus,
   line-height: 1.55;
   margin: 0 0 12px;
 }
+/* One fact per line: a merge card's words are rows, never sentences joined with spaces. */
+.dq-rationale .dq-line { display: block; }
+.dq-blocked-rows { margin: 0 0 6px; padding: 0; list-style: none; font-family: var(--v2-font-mono); font-size: 0.63158rem; color: var(--v2-red); }
+.dq-blocked-rows li + li { margin-top: 2px; }
+.dq-rationale .dq-line + .dq-line { margin-top: 2px; }
 .dq-evidence {
   display: flex;
   align-items: center;
@@ -3630,7 +3637,7 @@ select.input:focus,
   padding: 10px 12px;
   border: 1px solid var(--raised);
   border-radius: 8px;
-  font-size: 0.68421rem;
+  font-size: var(--fs-tag);
   color: var(--ink, var(--boss-c-e6edf3));
   min-width: 0;
 }
@@ -3638,7 +3645,7 @@ select.input:focus,
 .ap-row { display: grid; grid-template-columns: 4rem minmax(0, 1fr); gap: 8px; }
 .ap-row dt {
   font-family: var(--mono);
-  font-size: 0.55263rem;
+  font-size: var(--fs-label);
   text-transform: none;
   letter-spacing: 0;
   color: var(--muted);
@@ -3652,7 +3659,7 @@ select.input:focus,
   overflow: auto;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font-size: 0.65789rem;
+  font-size: var(--fs-tag);
   line-height: 1.55;
   border-radius: 6px;
   background: color-mix(in srgb, var(--raised) 45%, transparent);
@@ -3663,12 +3670,12 @@ select.input:focus,
 .ap-chip {
   margin-left: 6px;
   font-family: var(--mono);
-  font-size: 0.55263rem;
+  font-size: var(--fs-label);
   color: var(--muted);
 }
 .ap-excerpt {
   display: block;
-  font-size: 0.63158rem;
+  font-size: var(--fs-tag);
   color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
@@ -3682,10 +3689,10 @@ select.input:focus,
 .ap-commit { display: grid; gap: 2px; min-width: 0; }
 .ap-commit-id, .ap-commit-msg { overflow-wrap: anywhere; min-width: 0; }
 .ap-commit-id {
-  font-family: var(--mono); font-size: 0.63158rem; color: var(--muted);
+  font-family: var(--mono); font-size: var(--fs-tag); color: var(--muted);
 }
 .ap-long { white-space: pre-wrap; display: block; max-height: 120px; overflow: auto; }
-.ap-more, .ap-redacted, .ap-unresolved { font-size: 0.63158rem; color: var(--muted); margin: 6px 0 0; }
+.ap-more, .ap-redacted, .ap-unresolved { font-size: var(--fs-tag); color: var(--muted); margin: 6px 0 0; }
 .dw-step-decide .ap { flex-basis: 100%; }
 
 /* Keep every header control visible on the narrowest phone layout. */

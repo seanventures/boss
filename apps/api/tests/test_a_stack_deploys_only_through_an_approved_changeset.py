@@ -123,7 +123,9 @@ def stack(client, engine, monkeypatch):
     target = client.post("/v1/deployments/stack/targets", json={
         "project_id": HOME, "host_id": host_id, "repository": "acme/shop",
         "app_name": f"shop-{uuid4().hex[:6]}", "public_url": "https://shop.example.test",
-        "actor": "ceo"})
+        # STAGING: a production stack target needs a build that passes the production bar
+        # (quality_bar.stack_plan_decision); these tests are about the governed plan itself.
+        "environment": "staging", "actor": "ceo"})
     assert target.status_code == 201, target.text
     return {"host": host, "journal": journal, "target": target.json(), "github": github}
 
@@ -325,7 +327,7 @@ def test_a_second_target_on_the_host_gets_its_own_dir_never_the_first_ones(clien
     first = _plan(client, stack)
     staging = client.post("/v1/deployments/stack/targets", json={
         "project_id": HOME, "host_id": stack["target"]["host_id"], "repository": "acme/shop",
-        "app_name": stack["target"]["app_name"], "environment": "staging", "actor": "ceo"})
+        "app_name": stack["target"]["app_name"], "environment": "development", "actor": "ceo"})
     assert staging.status_code == 201, staging.text
     response = client.post("/v1/deployments/stack/plan", json={
         "project_id": HOME, "target_id": staging.json()["id"], "ref": "main", "actor": "ceo"})
@@ -463,6 +465,7 @@ def test_the_workflow_deploy_step_plans_a_stack_without_a_preview(
                  "'https://github.com/acme/shop/pull/7', "
                  "'{\"merge\": {\"sha\": \"mmmmmmmmmmmm\", \"source\": \"boss\"}}'::jsonb)"),
             {"i": run_id, "p": HOME, "s": '{"owner": "acme", "repo": "shop"}'})
+        _judged(connection, run_id)
     with engine.begin() as connection:
         ctx = SimpleNamespace(engine=engine, settings=api_main.settings)
         result = runner._perform_capability(
@@ -479,6 +482,17 @@ def test_the_workflow_deploy_step_plans_a_stack_without_a_preview(
     assert deployment["code_task_run_id"] == run_id
 
 
+def _judged(connection, run_id: str) -> None:
+    """The build's recorded, passing quality gate: a production release is judged on it
+    (quality_bar.production_refusal fails closed on a build nothing judged)."""
+    connection.execute(
+        text("INSERT INTO quality_gates (id, project_id, code_task_run_id, risk_tier, status, "
+             "fail_closed, gates_passed, gates_failed, evidence) VALUES (:g, :p, :r, 1, 'pass', "
+             "true, '[\"code_review_passed\",\"security_clean\",\"consistent\",\"acceptance_met\"]'::jsonb, "
+             "'[]'::jsonb, '{}'::jsonb)"),
+        {"g": f"qg_{run_id}", "p": HOME, "r": run_id})
+
+
 def _build(engine, spec: str, number: int = 7, *, merged: bool = True) -> str:
     """A finished build with PR #number. MERGED by default: a workflow's deploy waits for its
     pull request's merge (runner._merge_wait), so a build these tests deploy has been merged."""
@@ -490,6 +504,7 @@ def _build(engine, spec: str, number: int = 7, *, merged: bool = True) -> str:
                  "pull_request_number, finalize_ctx) VALUES (:i, :p, 'completed', 'A feature', "
                  "CAST(:s AS JSONB), :n, CAST(:f AS JSONB))"),
             {"i": run_id, "p": HOME, "s": spec, "n": number, "f": json.dumps(fctx)})
+        _judged(connection, run_id)
     return run_id
 
 

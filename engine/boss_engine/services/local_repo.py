@@ -51,7 +51,16 @@ IMPORT_EXCLUDES = ("node_modules/", ".venv/", "venv/", "__pycache__/", ".pytest_
                    "*.pyc")
 
 #: A new local project's first commit.
-GITIGNORE = "node_modules/\n.venv/\n__pycache__/\ndist/\nbuild/\n.env\n.env.local\n*.pyc\n.DS_Store\n"
+#: A new local project's .gitignore: secrets, dependencies, and build output that is never source
+#: in any stack (Go test binaries *.test, Windows *.exe, Gradle/Compose .gradle/, *.apk, *.aab,
+#: JVM target/ and *.class, Next.js .next/, Godot .godot/ and *.pck). Not `bin/`: in a Node or a
+#: Python project bin/ holds source (bin/cli.js). A compiled program anywhere else is caught by
+#: the sandbox (EphemeralSandbox.diff), and the Go templates write theirs to /bin/ and ignore it.
+GITIGNORE = (
+    "node_modules/\n.venv/\n__pycache__/\ndist/\nbuild/\n.env\n.env.local\n*.pyc\n.DS_Store\n"
+    "# build output\n"
+    "*.exe\n*.test\ntarget/\n.gradle/\n*.class\n*.apk\n*.aab\n.next/\n.godot/\n*.pck\n"
+)
 
 
 class LocalRepoError(RuntimeError):
@@ -247,7 +256,11 @@ def commit_files(git_dir: Path, branch: str, files: Mapping[str, Content], messa
             if not rel or ".." in Path(rel).parts:
                 raise LocalRepoError(f"Refusing a path outside the repository: {path!r}.")
             if content is None:
-                git(["update-index", "--force-remove", "--", rel], git_dir=git_dir, env=env)
+                # `--force-remove` needs a work tree and this is a BARE repository ("this
+                # operation must be run in a work tree"): every deletion failed the commit.
+                # Mode 0 through --index-info removes the entry with no work tree.
+                git(["update-index", "--index-info"], git_dir=git_dir, env=env,
+                    input=f"0 {_ZERO}\t{rel}\n".encode("utf-8"))
                 continue
             data = content.encode("utf-8") if isinstance(content, str) else bytes(content)
             blob = git(["hash-object", "-w", "--stdin"], git_dir=git_dir, input=data).strip()
@@ -344,16 +357,38 @@ def worktree(git_dir: Path, ref: Optional[str] = None):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def merge(git_dir: Path, head: str, base: str, message: str, *, method: str = "merge") -> str:
+class LocalMergeMoved(LocalRepoError):
+    """The commit a person approved is no longer on the change's branch (it was rewritten)."""
+
+
+def merge(git_dir: Path, head: str, base: str, message: str, *, method: str = "merge",
+          at: Optional[str] = None) -> str:
     """Merge branch `head` into branch `base` (fast-forward when possible, else a merge commit;
     `squash` makes one commit). Returns the new head of `base`. A conflict changes nothing and
-    raises LocalMergeConflict with the conflicting paths."""
+    raises LocalMergeConflict with the conflicting paths.
+
+    `at`: merge exactly that commit of `head` — the one a person approved — and not whatever
+    the branch holds now. A follow-up build keeps committing to its lineage's branch, so the
+    tip can be newer than the approval (neighborhood-board change #1, 2026-11-19: the merge
+    swept in a follow-up's unreviewed checkpoint, and the follow-up then had no change of its
+    own). Commits after `at` stay on the branch for their own change. `at` no longer on the
+    branch raises LocalMergeMoved and changes nothing."""
     head_sha = branch_sha(git_dir, head)
     base_sha = branch_sha(git_dir, base)
     if not head_sha:
         raise LocalRepoError(f"There is no branch {head!r} to merge.")
     if not base_sha:
         raise LocalRepoError(f"There is no branch {base!r} to merge into.")
+    if at:
+        pinned = rev_parse(git_dir, at)
+        # Words only, no sha or branch name: merge_failures.classify reads digits like "409"
+        # in hex as a moved GitHub head and would retry this forever.
+        if not pinned or merge_base(git_dir, pinned, head_sha) != pinned:
+            raise LocalMergeMoved(
+                "The approved commit is no longer on the change's branch (it was rewritten after "
+                "the approval); nothing was merged. Open the build and press Re-check this change "
+                "to review the current branch and get a fresh merge card.")
+        head_sha = pinned
     if merge_base(git_dir, head_sha, base_sha) == head_sha:
         return base_sha                                   # already in
     if method != "squash" and merge_base(git_dir, head_sha, base_sha) == base_sha:
@@ -361,11 +396,12 @@ def merge(git_dir: Path, head: str, base: str, message: str, *, method: str = "m
         return head_sha                                   # fast-forward
     with worktree(git_dir, base) as wt:
         git(["fetch", "--quiet", "origin", f"refs/heads/{head}:refs/remotes/origin/{head}"], cwd=wt)
+        # The commit itself (an ancestor of the fetched branch), never the moving branch name.
         if method == "squash":
-            done = subprocess.run(["git", "merge", "--squash", f"origin/{head}"], cwd=str(wt),
+            done = subprocess.run(["git", "merge", "--squash", head_sha], cwd=str(wt),
                                   capture_output=True, env=_env(), timeout=300)
         else:
-            done = subprocess.run(["git", "merge", "--no-ff", "-m", message, f"origin/{head}"],
+            done = subprocess.run(["git", "merge", "--no-ff", "-m", message, head_sha],
                                   cwd=str(wt), capture_output=True, env=_env(), timeout=300)
         if done.returncode != 0:
             conflicted = git(["diff", "--name-only", "--diff-filter=U"], cwd=wt, check=False)
@@ -374,9 +410,132 @@ def merge(git_dir: Path, head: str, base: str, message: str, *, method: str = "m
                 + (f": {', '.join(conflicted.split()[:8])} conflict." if conflicted.strip() else
                    f": {(done.stderr or b'').decode('utf-8', 'replace').strip()[-200:]}"))
         if method == "squash":
+            staged = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=str(wt),
+                                    capture_output=True, env=_env(), timeout=60)
+            if staged.returncode == 0:
+                return branch_sha(git_dir, base) or ""
             git(["commit", "--quiet", "-m", message], cwd=wt)
         git(["push", "--quiet", "origin", f"HEAD:refs/heads/{base}"], cwd=wt)
     return branch_sha(git_dir, base) or ""
+
+
+def _wire_alternates(wt_git: Path, git_dir: Path) -> None:
+    alt = wt_git / "objects" / "info" / "alternates"
+    alt.parent.mkdir(parents=True, exist_ok=True)
+    alt.write_text(str((git_dir / "objects").resolve()) + "\n", encoding="utf-8")
+
+
+def _matches_expected_squash_diff(git_dir: Path, expected_base_sha: str, head_sha: str,
+                                  current_base_sha: str, changed: list[str]) -> bool:
+    """True when `current_base_sha` matches the 3-way merge tree of `(expected_base_sha, head_sha)`
+    on all paths in `changed`."""
+    mt = subprocess.run(
+        ["git", "--git-dir", str(git_dir), "merge-tree", "--write-tree",
+         expected_base_sha, head_sha],
+        capture_output=True, env=_env(), timeout=120,
+    )
+    if mt.returncode == 0:
+        expected_tree = (mt.stdout or b"").decode("utf-8", "replace").splitlines()[0].strip()
+        if not expected_tree:
+            return False
+        same_files = subprocess.run(
+            ["git", "--git-dir", str(git_dir), "diff", "--quiet",
+             current_base_sha, expected_tree, "--", *changed],
+            capture_output=True, env=_env(), timeout=60,
+        )
+        return same_files.returncode == 0
+    stderr = (mt.stderr or b"").decode("utf-8", "replace").lower()
+    if mt.returncode == 1 and "usage:" not in stderr and "unknown option" not in stderr:
+        return False
+    # Fallback for Git < 2.38 without `merge-tree --write-tree`: temporary worktree 3-way merge.
+    with worktree(git_dir, None) as wt:
+        wt_git = wt / ".git"
+        if not (rev_parse(wt_git, expected_base_sha) and rev_parse(wt_git, head_sha)
+                and rev_parse(wt_git, current_base_sha)):
+            _wire_alternates(wt_git, git_dir)
+        co = subprocess.run(
+            ["git", "checkout", "--quiet", "--detach", expected_base_sha],
+            cwd=str(wt), capture_output=True, env=_env(), timeout=120,
+        )
+        if co.returncode != 0:
+            return False
+        done = subprocess.run(
+            ["git", "merge", "--squash", head_sha],
+            cwd=str(wt), capture_output=True, env=_env(), timeout=300,
+        )
+        if done.returncode != 0:
+            return False
+        wr = subprocess.run(
+            ["git", "write-tree"],
+            cwd=str(wt), capture_output=True, env=_env(), timeout=60,
+        )
+        if wr.returncode != 0:
+            return False
+        expected_tree = (wr.stdout or b"").decode("utf-8", "replace").strip()
+        if not expected_tree:
+            return False
+        same_files = subprocess.run(
+            ["git", "diff", "--quiet", current_base_sha, expected_tree, "--", *changed],
+            cwd=str(wt), capture_output=True, env=_env(), timeout=60,
+        )
+        return same_files.returncode == 0
+
+
+def already_squashed_into(git_dir: Path, head_branch: str, head_sha: str,
+                          expected_base_sha: str, current_base_sha: str,
+                          base_branch: str) -> bool:
+    """True when `expected_base_sha` moved to `current_base_sha` with `head_sha`'s changes
+    already squashed onto `base_branch` (so a retry after a DB rollback is idempotent)."""
+    if not (head_sha and expected_base_sha and current_base_sha):
+        return False
+    if current_base_sha == expected_base_sha:
+        return False
+    if merge_base(git_dir, expected_base_sha, current_base_sha) != expected_base_sha:
+        return False
+    resolved_head = rev_parse(git_dir, head_sha)
+    if not resolved_head:
+        return False
+    head_sha = resolved_head
+    mb = merge_base(git_dir, head_sha, expected_base_sha) or expected_base_sha
+    changed = [
+        p for p in git(["diff", "--name-only", "--no-renames", mb, head_sha],
+                       git_dir=git_dir).splitlines()
+        if p.strip()
+    ]
+    if not changed:
+        return False
+    if not _matches_expected_squash_diff(git_dir, expected_base_sha, head_sha,
+                                         current_base_sha, changed):
+        return False
+    with worktree(git_dir, base_branch) as wt:
+        wt_git = wt / ".git"
+        if not rev_parse(wt_git, current_base_sha):
+            _wire_alternates(wt_git, git_dir)
+        if rev_parse(wt_git, "HEAD") != current_base_sha:
+            co = subprocess.run(
+                ["git", "checkout", "--quiet", "--detach", current_base_sha],
+                cwd=str(wt), capture_output=True, env=_env(), timeout=120,
+            )
+            if co.returncode != 0:
+                return False
+        if not rev_parse(wt_git, head_sha):
+            if head_branch and branch_exists(git_dir, head_branch):
+                git(["fetch", "--quiet", "origin",
+                     f"refs/heads/{head_branch}:refs/remotes/origin/{head_branch}"],
+                    cwd=wt, check=False)
+            if not rev_parse(wt_git, head_sha):
+                _wire_alternates(wt_git, git_dir)
+                if not rev_parse(wt_git, head_sha):
+                    return False
+        done = subprocess.run(["git", "merge", "--squash", head_sha], cwd=str(wt),
+                              capture_output=True, env=_env(), timeout=300)
+        if done.returncode != 0:
+            return False
+        staged = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=str(wt),
+                                capture_output=True, env=_env(), timeout=60)
+        if staged.returncode != 0:
+            return False
+    return True
 
 
 def counts(git_dir: Path, branch: str, base: str) -> dict[str, int]:
@@ -451,7 +610,15 @@ def restack(git_dir: Path, branch: str, merged_head: str, base: str) -> dict[str
                     "why": f"replaying the commits made after the merge onto {base} "
                            f"conflicted: {said}"}
         git(["push", "--quiet", "--force", "origin", f"HEAD:refs/heads/{branch}"], cwd=wt)
-    return {"restacked": True, "paths": paths, "base": base}
+    return {"restacked": True, "paths": paths, "base": base,
+            "head_sha": branch_sha(git_dir, branch) or ""}
+
+
+def commit_parents(git_dir: Path, ref: str) -> list[str]:
+    """Return parent commit SHAs for `ref`, or [] if unreadable."""
+    out = git(["rev-list", "--parents", "-n", "1", ref], git_dir=git_dir, check=False).strip()
+    parts = out.split()
+    return parts[1:] if len(parts) > 1 else []
 
 
 # ── a local project's repository ─────────────────────────────────────────────────────────────
@@ -460,18 +627,31 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def initial_files(title: str, description: str = "") -> dict[str, str]:
+#: Stack-specific build output, added to a new project's .gitignore by its stack's first word.
+#: Go builds its program into /bin/ (the Go templates say `go build -o bin/<name> .`); only
+#: there, since bin/ holds source in other stacks.
+STACK_GITIGNORE = {"go": "# Go: compiled programs\n/bin/\n"}
+
+
+def gitignore_for(stack: Optional[str] = None) -> str:
+    """A new project's .gitignore: the shared rules plus its stack's own build output."""
+    word = str(stack or "").strip().split(" ", 1)[0].lower()
+    return GITIGNORE + STACK_GITIGNORE.get(word, "")
+
+
+def initial_files(title: str, description: str = "", stack: Optional[str] = None
+                  ) -> dict[str, str]:
     readme = f"# {title.strip() or 'New project'}\n"
     if description.strip():
         readme += f"\n{description.strip()}\n"
     readme += ("\nThis project's code lives on this machine, in a git repository BOSS keeps. "
                "Publish it to GitHub whenever you are ready; its whole history goes with it.\n")
-    return {"README.md": readme, ".gitignore": GITIGNORE}
+    return {"README.md": readme, ".gitignore": gitignore_for(stack)}
 
 
 def create(project_id: str, name: str, *, settings: Any = None, title: str = "",
            description: str = "", files: Optional[Mapping[str, Content]] = None,
-           default: str = DEFAULT_BRANCH) -> dict[str, Any]:
+           default: str = DEFAULT_BRANCH, stack: Optional[str] = None) -> dict[str, Any]:
     """A new local project's bare repository with an initial commit (README, .gitignore).
     Idempotent: an existing repository is returned as it is."""
     owner, repo = owner_for(project_id), clean_name(name)
@@ -480,7 +660,7 @@ def create(project_id: str, name: str, *, settings: Any = None, title: str = "",
         return describe(owner, repo, settings)
     init_bare(path, default=default, marker={"project_id": project_id, "name": repo,
                                              "created_at": _now(), "origin": "new"})
-    commit_files(path, default, files or initial_files(title or name, description),
+    commit_files(path, default, files or initial_files(title or name, description, stack),
                  "Initial commit (BOSS)")
     return describe(owner, repo, settings)
 

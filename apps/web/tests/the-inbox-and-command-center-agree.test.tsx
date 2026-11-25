@@ -104,7 +104,8 @@ describe("the inbox groups by the engine's attention", () => {
         roles={[]} projectId="p" actorId="ceo" orgId="org_1" initialFilter="expired" />,
     );
     expect(markup).toContain('data-testid="decision-filter-expired"');
-    expect(markup).toContain("Expired, still answerable");
+    // "Expired", the page's old deadline paragraph as its tooltip (approvals wireframe B).
+    expect(markup).toMatch(/data-testid="decision-filter-expired" title="A card that passes its deadline expires to its default[^"]*still be answered\."[^>]*>Expired</);
     expect(markup).toContain('data-testid="decision-expired-note"');
     expect(markup).toContain("Waiting since");
     expect(markup).toContain("nothing applied");

@@ -5,6 +5,7 @@
  * Build stays shut until the person approves the plan.
  */
 import React, { useEffect, useState } from "react";
+import { apiWrite } from "../../lib/api-write";
 
 type Turn = { mode: string; text: string; reply: string; wrote_code: boolean };
 type Plan = { id: string; steps: string[]; writes_code: boolean };
@@ -186,7 +187,7 @@ const CSS = `
 `;
 
 async function post(url: string, payload: object): Promise<{ ok: boolean; body: ThreadBody }> {
-  const response = await fetch(url, {
+  const response = await apiWrite(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),

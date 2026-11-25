@@ -13,6 +13,7 @@ into a 404 — never a 403 that would confirm the object exists.
 """
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Callable, Mapping, Optional
@@ -148,13 +149,25 @@ def registered_object_kinds() -> frozenset[str]:
     return frozenset(_OBJECT_LOADERS)
 
 
-def load_object(kind: str, db: Any, object_id: str) -> Optional[tuple[str, str]]:
+def _call_loader(loader: Any, db: Any, object_id: str, *, org_id: Optional[str] = None) -> Optional[tuple[str, str]]:
+    try:
+        sig = inspect.signature(loader)
+        if "org_id" in sig.parameters or any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+        ):
+            return loader(db, object_id, org_id=org_id)
+    except (TypeError, ValueError):
+        pass
+    return loader(db, object_id)
+
+
+def load_object(kind: str, db: Any, object_id: str, *, org_id: Optional[str] = None) -> Optional[tuple[str, str]]:
     """(org_id, project_id) of one object by its registered kind, or None when it does not exist.
     Raises NotImplementedError for a kind with no loader (fail closed: the guard answers 503)."""
     loader = _OBJECT_LOADERS.get(kind)
     if loader is None:
         raise NotImplementedError(f"no object loader registered for {kind!r}")
-    return loader(db, str(object_id))
+    return _call_loader(loader, db, str(object_id), org_id=org_id)
 
 
 def _read(values: RequestValues, where: str, name: str) -> Optional[str]:
@@ -189,7 +202,7 @@ def resolve(spec: ScopeSpec, values: RequestValues, *, org_id: str, db: Any = No
     loader = _OBJECT_LOADERS.get(spec.object_kind or "")
     if loader is None:
         raise NotImplementedError(f"no object loader registered for {spec.object_kind!r} (S2)")
-    found = loader(db, value)
+    found = _call_loader(loader, db, value, org_id=org_id)
     if found is None or found[0] != org_id:
         raise ScopeNotFound(f"{spec.object_kind} {value!r}")
     if found[1] is None:

@@ -1,6 +1,5 @@
 """Contract tests: a list of HTTP cases, each with a method, headers, a body and what it must
-answer — run against a deployed thing, judged case by case, reported as a table (AMEX-G7,
-BOSSAPP-1143).
+answer — run against a deployed thing, judged case by case, reported as a table (BOSSAPP-1143).
 
 `smoke_test` asks one question: does GET / answer 2xx. An API gateway that was just given a new
 tenant's routes needs a dozen: does a valid JWT reach the upstream (200), does no token get a
@@ -98,7 +97,7 @@ def check_host(url: str, allowed_private: frozenset[str] = frozenset(), *,
     host is one of `allowed_private` (the project's own deployment targets and hosts, from the
     database, never from the arguments).
 
-    `project_only` (Community, AMEX-G8): Community has no egress network policy, so the guard
+    `project_only` (Community, BOSSAPP-1166): Community has no egress network policy, so the guard
     is the policy. The request's exact ORIGIN — scheme, host AND port — must be one of
     `origins`: the URLs of deployment targets a PERSON created (`project_origins`). Another
     port on the same host (the BOSS API on localhost), a public host, or a target an agent
@@ -266,7 +265,8 @@ def _credential_header(name: str) -> bool:
 def _send(case: dict[str, Any], timeout_s: float,
           allowed_private: frozenset[str] = frozenset(),
           project_only: bool = False,
-          origins: frozenset[tuple[str, str, int]] = frozenset()) -> dict[str, Any]:
+          origins: frozenset[tuple[str, str, int]] = frozenset(),
+          secret_headers: frozenset[str] = frozenset()) -> dict[str, Any]:
     started = time.time()
     url, method, body = case["url"], case["method"], case["body"]
     headers = {k: v for k, v in case["headers"].items() if k.lower() != "host"}
@@ -303,7 +303,8 @@ def _send(case: dict[str, Any], timeout_s: float,
             if origin_of(url) != first:
                 # CREDENTIALS STAY WITH THEIR ORIGIN: a redirect elsewhere never carries the
                 # case's token, cookie or key (review of #125).
-                headers = {k: v for k, v in headers.items() if not _credential_header(k)}
+                headers = {k: v for k, v in headers.items()
+                           if not _credential_header(k) and k.lower() not in secret_headers}
             if status in (301, 302, 303) and method not in ("GET", "HEAD"):
                 method, body = "GET", None
                 headers = {k: v for k, v in headers.items() if k.lower() != "content-type"}
@@ -364,12 +365,85 @@ def results_table(results: Iterable[Mapping[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+class HeaderSecretRefused(RuntimeError):
+    """A secret reference refused for a header, with words that are safe to show (never a value)."""
+
+
+def http_auth_problem(db: Any, ref_id: str, project_id: str) -> Optional[str]:
+    """Only a secret reference a person marked for HTTP auth (kind api_token, metadata
+    `http_auth: true`) may become a request header: a provider's own key (an LLM or GitHub token)
+    or a private key is never something a test spec can read out into a request."""
+    from sqlalchemy import text
+
+    row = db.execute(text("SELECT secret_kind, metadata FROM secret_refs WHERE id = :i"),
+                     {"i": ref_id}).mappings().first()
+    if row is None:
+        return f"secret reference {ref_id} does not exist"
+    meta = row["metadata"] if isinstance(row["metadata"], dict) else {}
+    if str(row["secret_kind"] or "") != "api_token" or meta.get("http_auth") is not True:
+        return (f"secret reference {ref_id} is not marked for HTTP auth (api_token with "
+                "metadata http_auth: true), so it cannot be sent as a request header")
+    return None
+
+
+def resolve_header_secrets(cases: Any, headers: Any, resolver: Any
+                           ) -> tuple[Any, Any, Optional[str], frozenset[str]]:
+    """Header values that are SECRET REFERENCES, resolved at run time (never a raw token in a spec).
+
+    A header value is a string, or {"secret_ref": "<secret ref id>", "prefix": "Bearer "}: the
+    reference is what the workflow spec, the step's recorded input and the logs hold; the value
+    exists only in the request this step sends (and, once resolved, is registered for redaction
+    by the resolver). `resolver(ref_id) -> str`. Returns (cases, headers, error): `error` names
+    the header and the reference id, never a value. The fourth item is the (lower-case) names of
+    the headers that held a secret: `run_cases(secret_headers=…)` never sends them to another
+    origin on a redirect."""
+    secret_names: set[str] = set()
+
+    def one(where: str, mapping: Any) -> tuple[Any, Optional[str]]:
+        if not isinstance(mapping, Mapping):
+            return mapping, None
+        out: dict[str, Any] = {}
+        for name, value in mapping.items():
+            if isinstance(value, Mapping) and "secret_ref" in value:
+                ref = str(value.get("secret_ref") or "").strip()
+                if not ref:
+                    return mapping, f"{where}header {name!r}: secret_ref is empty."
+                try:
+                    out[name] = f"{value.get('prefix') or ''}{resolver(ref)}"
+                    secret_names.add(str(name).lower())
+                except Exception as exc:  # noqa: BLE001 — say which reference, never what it held
+                    why = (str(exc)[:200] if isinstance(exc, HeaderSecretRefused)
+                           else type(exc).__name__)
+                    return mapping, (f"{where}header {name!r}: the secret reference {ref} could "
+                                     f"not be resolved ({why}).")
+            else:
+                out[name] = value
+        return out, None
+
+    none: frozenset[str] = frozenset()
+    shared, error = one("", headers)
+    if error:
+        return cases, headers, error, none
+    if not isinstance(cases, (list, tuple)):
+        return cases, shared, None, frozenset(secret_names)
+    resolved = []
+    for i, case in enumerate(cases):
+        if isinstance(case, Mapping) and isinstance(case.get("headers"), Mapping):
+            own, error = one(f"case {i + 1}: ", case["headers"])
+            if error:
+                return cases, headers, error, none
+            case = {**case, "headers": own}
+        resolved.append(case)
+    return resolved, shared, None, frozenset(secret_names)
+
+
 def run_cases(cases: Any, *, base_url: str = "", timeout_s: Any = 10,
               headers: Optional[Mapping[str, str]] = None,
               allowed_private: Iterable[str] = (),
               deadline_s: Optional[float] = None,
               project_only: bool = False,
-              origins: Iterable[tuple[str, str, int]] = ()) -> dict[str, Any]:
+              origins: Iterable[tuple[str, str, int]] = (),
+              secret_headers: Iterable[str] = ()) -> dict[str, Any]:
     """Run every case and say, per case and in total, what passed.
 
     Returns `ok: False` with an `error` when the cases cannot be run as written (not a list, a
@@ -415,7 +489,7 @@ def run_cases(cases: Any, *, base_url: str = "", timeout_s: Any = 10,
                             "error": None, "body_excerpt": ""})
             continue
         answer = _send(case, max(1.0, min(float(timeout), left)), allowed, project_only,
-                       allowed_origins)
+                       allowed_origins, frozenset(str(h).lower() for h in secret_headers))
         failures = _judge(case, answer)
         results.append({
             "name": case["name"], "method": case["method"], "url": case["url"],
@@ -471,7 +545,7 @@ def project_deployment_hosts(db: Any, project_id: str) -> frozenset[str]:
 
 
 def project_origins(db: Any, project_id: str) -> frozenset[tuple[str, str, int]]:
-    """COMMUNITY'S ALLOW-LIST (AMEX-G8): the exact (scheme, host, port) of the URLs of this
+    """COMMUNITY'S ALLOW-LIST (BOSSAPP-1166): the exact (scheme, host, port) of the URLs of this
     project's deployment targets that a PERSON created — health checks, domains, public URL.
     A target an agent created adds nothing: an agent that could add a target could otherwise
     point a contract test anywhere. A bare domain allows https:443 and http:80 on that name;
@@ -513,4 +587,38 @@ def project_origins(db: Any, project_id: str) -> frozenset[tuple[str, str, int]]
     return frozenset(o for o in out if o[1] not in _blocked_hosts())
 
 
-__all__ = ["CaseError", "HostRefused", "check_host", "origin_of", "project_deployment_hosts", "project_origins", "MAX_CASES", "METHODS", "json_path", "results_table", "run_cases"]
+__all__ = ["CaseError", "HeaderSecretRefused", "http_auth_problem", "resolve_header_secrets", "HostRefused", "check_host", "origin_of", "project_deployment_hosts", "project_origins", "MAX_CASES", "METHODS", "json_path", "results_table", "run_cases"]
+
+
+# ── the project's own contract tests, from its repository ─────────────────────────────────────
+
+#: Where a repository declares its contract tests ("Contract tests after staging" reads it).
+REPO_FILE = ".boss/contract_tests.yaml"
+
+
+def from_repo(text: Optional[str]) -> dict[str, Any]:
+    """The cases a repository declares in ``REPO_FILE``: ``{cases, headers?}`` (``base_url`` is
+    the staging target's, never the file's). Raises CaseError when the file is not a
+    ``cases:`` list, said without its content (a header may hold a token)."""
+    import yaml
+
+    if not text:
+        raise CaseError(f"The repository declares no contract tests ({REPO_FILE}).")
+    try:
+        data = yaml.safe_load(text) or {}
+    except yaml.YAMLError:
+        raise CaseError(f"{REPO_FILE} does not parse as YAML.") from None
+    cases = data.get("cases") if isinstance(data, Mapping) else None
+    if not isinstance(cases, list) or not cases:
+        raise CaseError(f"{REPO_FILE} needs a non-empty `cases:` list.")
+    for i, case in enumerate(cases):
+        # THE STAGING TARGET ONLY: a repository's case names a `path` on the step's base_url
+        # (the staging deploy), never a `url` of its own — a file in a change must not point
+        # the project's header secrets at another host.
+        if isinstance(case, Mapping) and str(case.get("url") or "").strip():
+            raise CaseError(f"{REPO_FILE} case {i + 1}: give a `path` on the staging target, "
+                            "not a `url`.")
+    out: dict[str, Any] = {"cases": cases[:MAX_CASES]}
+    if isinstance(data.get("headers"), Mapping):
+        out["headers"] = dict(data["headers"])
+    return out

@@ -239,7 +239,9 @@ def _bounded(fn: Callable[[], Any], timeout_s: float) -> Any:
         finally:
             done.set()
 
-    threading.Thread(target=run, name="route-classify", daemon=True).start()
+    from ...db import spawn_thread
+
+    spawn_thread(run, name="route-classify", daemon=True)
     if not done.wait(timeout_s):
         raise FutureTimeout()
     if "error" in box:

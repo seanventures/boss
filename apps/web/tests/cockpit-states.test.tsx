@@ -140,6 +140,37 @@ describe("the cockpit header says one state", () => {
     expect(text('[data-testid="fx-unreachable"]')).toContain("Can't reach BOSS");
     expect($('[data-testid="fx-unreachable"] button')?.title).toBe("down");
   });
+
+  it("a build of another project is not an outage: it says whose it is and opens it there", async () => {
+    // 2026-11-19: Park bench map's build, opened under the home project, said Can't reach BOSS.
+    const assign = vi.fn();
+    const was = window.location;
+    Object.defineProperty(window, "location", { configurable: true,
+      value: { ...was, href: "http://x/?org=org_boss&area=code_tasks&build=crun_inv2", search: "?org=org_boss&area=code_tasks&build=crun_inv2", pathname: "/", assign } });
+    try {
+      stubFetch(() => Response.json({ error: "not_found" }, { status: 404 }), (url) =>
+        url.includes("/v1/console/resolve-owner")
+          ? { project_id: "park-bench-map-e86c6d9e", project_name: "Park bench map", can_view: true } : undefined);
+      await mount(view());
+      expect($('[data-testid="fx-unreachable"]')).toBeNull();
+      expect(text('[data-testid="fx-elsewhere"]')).toBe("This build belongs to Park bench map, opening it…");
+      expect(assign).toHaveBeenCalledTimes(1);
+      const to = new URLSearchParams(String(assign.mock.calls[0][0]).split("?")[1]);
+      expect(to.get("project_id")).toBe("park-bench-map-e86c6d9e");
+      expect(to.get("build")).toBe("crun_inv2");
+      expect(to.get("org")).toBe("org_boss");
+    } finally {
+      Object.defineProperty(window, "location", { configurable: true, value: was });
+    }
+  });
+
+  it("a build that is nobody's here says so in words, never Can't reach BOSS", async () => {
+    stubFetch(() => Response.json({ error: "not_found" }, { status: 404 }), (url) =>
+      url.includes("/v1/console/resolve-owner") ? Response.json({ detail: "not found" }, { status: 404 }) : undefined);
+    await mount(view());
+    expect($('[data-testid="fx-unreachable"]')).toBeNull();
+    expect(text('[data-testid="fx-elsewhere"]')).toBe("This build isn't in this project, or you can't open it.");
+  });
 });
 
 describe("the header's actions", () => {

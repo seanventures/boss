@@ -122,6 +122,7 @@ _declare(IDEMPOTENT,
          "register_repository", "remove_project_repository", "reopen_local_change",
          "resolve_review_comment",
          "restore_project", "retarget_app", "retry_workflow_step", "set_job_priority",
+         "update_deployment_target",
          # a fix PR converges: the branch exists, the file is at this content, the PR is open
          "github_open_fix_pr",
          "set_ontology_pack", "set_project_setting", "set_project_team", "skip_workflow_step",
@@ -139,7 +140,9 @@ _declare(KEYED,
          "offer_options", "open_incident", "propose_hire", "propose_secret", "record_learning",
          "register_mcp_server", "remember", "report_friction", "request_budget_override",
          "request_tool_access", "run_security_scan", "schedule_work", "send_feedback",
-         "steer_code_task", "watch", "watch_work_item", "wiki_propose")
+         "steer_code_task", "watch", "watch_work_item", "wiki_propose",
+         # a proposal for a person: the same exact change is found waiting, not filed twice
+         "confluence_publish_page")
 
 
 def declared(name: str) -> Optional[str]:

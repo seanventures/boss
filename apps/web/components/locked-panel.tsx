@@ -8,6 +8,7 @@
  */
 import React from "react";
 import { LockSimple } from "@phosphor-icons/react";
+import { couldNot } from "../lib/action-result";
 
 export function LockedPanel({ label = "Locked", reason, inline = false, testId }: {
   label?: string; reason: string; inline?: boolean; testId?: string;
@@ -37,7 +38,7 @@ export async function lockedReason(response: Response): Promise<string> {
 
 /** A read that failed, said for what it was (P1-11/12/13: "can't reach" only when nothing answered).
  *  `status` 0: nothing answered → "Can't reach BOSS API". 401/403: the viewer may not read it →
- *  locked. Anything else: the API answered with a problem → "Couldn't load". */
+ *  locked. Anything else: the API answered with a problem → "Couldn't load this: <why>." */
 export type ReadProblem = { text: string; status: number };
 
 export function readFailureLabel(status: number): "locked" | "unreachable" | "failed" {
@@ -52,9 +53,15 @@ export function ReadFailure({ problem, onRetry, testId, retryTestId, className =
   if (kind === "locked") return <LockedPanel reason={problem.text || "You can't read this, ask an Admin"} testId={testId} />;
   return (
     <div className={className} role="alert" data-testid={testId}>
-      <span data-tip={problem.text || undefined} title={problem.text || undefined}>
-        {kind === "unreachable" ? "Can't reach BOSS API" : "Couldn't load"}
-      </span>
+      {kind === "unreachable" ? (
+        <span data-tip={problem.text || undefined} title={problem.text || undefined}>Can't reach BOSS API</span>
+      ) : (
+        // The reason on screen, not in a tooltip (BOSSAPP-1428): "Couldn't load this: <why>."
+        <span data-user-text>
+          {couldNot("load this", problem.text || (problem.status ? `BOSS answered HTTP ${problem.status}` : ""),
+                    onRetry ? "" : undefined)}
+        </span>
+      )}
       {onRetry ? <button type="button" className="kit-link" data-testid={retryTestId} onClick={onRetry}>Retry</button> : null}
     </div>
   );

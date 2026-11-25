@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { describeApiError } from "../../../lib/api-error";
+import { describeApiError, stepUpCode } from "../../../lib/api-error";
 import { API_URL, authHeaders } from "../../../lib/client";
 import { apiWrite, type WriteMethod } from "../../../lib/api-write";
 import { rawRequestUrl } from "../../../lib/raw-request-url";
@@ -29,7 +29,7 @@ async function forward(path: string, init: { method: "GET" | WriteMethod; body?:
     // A 204 has no body; that is success, not an empty error.
     const data = r.status === 204 ? {} : await r.json().catch(() => ({}));
     if (!r.ok) {
-      return NextResponse.json({ error: describeApiError(data, r.status) }, { status: r.status });
+      return NextResponse.json({ error: describeApiError(data, r.status), ...stepUpCode(data) }, { status: r.status });
     }
     return NextResponse.json(data);
   } catch (e) {

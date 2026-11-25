@@ -8,6 +8,7 @@
  * Geography labels are compared locally. No cloud region is contacted.
  */
 import React, { useRef, useState } from "react";
+import { apiWrite } from "../../lib/api-write";
 
 export const GEOGRAPHIES = [
   { id: "eu", label: "European Union" },
@@ -250,7 +251,7 @@ export function ResidencyPin({
       return;
     }
     const path = `/v1/projects/${encodeURIComponent(projectId)}/residency-pins/${encodeURIComponent(appKey)}`;
-    const response = await fetch(path, {
+    const response = await apiWrite(path, {
       method: next ? "PUT" : "DELETE",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(

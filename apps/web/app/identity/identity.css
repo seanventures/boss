@@ -177,6 +177,10 @@
 .idn-role { display: inline-flex; align-items: center; gap: 6px; font-size: 0.63158rem; font-weight: 700; color: color-mix(in srgb, var(--idn-rh, var(--idn-sky)) 80%, var(--ink)); background: color-mix(in srgb, var(--idn-rh, var(--idn-sky)) 14%, transparent); border: 1px solid color-mix(in srgb, var(--idn-rh, var(--idn-sky)) 35%, transparent); border-radius: 999px; padding: 2px 9px; white-space: nowrap; }
 .idn-role i { font-style: normal; font-weight: 500; color: var(--faint); font-size: 0.60526rem; border-left: 1px solid color-mix(in srgb, var(--idn-rh, var(--idn-sky)) 30%, transparent); padding-left: 6px; }
 .idn-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border-strong); border-radius: 999px; padding: 3px 10px; font-size: 0.63158rem; color: var(--muted); background: color-mix(in srgb, var(--surface-3) 55%, transparent); white-space: nowrap; }
+/* A repository chip never runs past its sheet: it shrinks to the row and its name ellipsizes. */
+.idn-chip-repo { max-width: 100%; min-width: 0; }
+.idn-chip-repo > svg { flex: none; }
+.idn-chip-repo .idn-chip-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .idn-tag { font: 600 0.55263rem var(--mono); letter-spacing: 0; text-transform: none; border-radius: 6px; padding: 2px 7px; background: color-mix(in srgb, var(--idn-sky) 16%, transparent); color: var(--idn-ink-blue); }
 .idn-tag.warn { background: var(--amber-soft); color: var(--idn-ink-warn); }
 .idn-tag.bad { background: var(--red-soft); color: var(--idn-ink-bad); }

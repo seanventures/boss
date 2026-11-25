@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The experiment says why that verdict, beside the label, not only on the
  * verdict span's title. A blank why says nothing. More than six words is a

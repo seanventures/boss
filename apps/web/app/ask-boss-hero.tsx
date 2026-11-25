@@ -44,6 +44,7 @@ import { linkTo, navigate, plainClick } from "./agents/live-util";
 import { callAction } from "../lib/call-action";
 import { GatedButton, useGate } from "../components/gated";
 import { useIdentity } from "../components/identity/identity-provider";
+import { NO_REASON, couldNot, reasonOf } from "../lib/action-result";
 const NORMAL_SECONDS = 20;
 // The same bound the dock uses. A deep turn is genuinely longer since the answering agent
 // moved to Opus, 192s for 27 lookups, measured, and 120 handed control back in the middle of
@@ -1064,8 +1065,8 @@ export function DefaultWorkflowPicker({ projectId }: { projectId: string }) {
         setNote({ text: String(body?.detail ?? body?.error ?? `failed (${res.status})`)
                           .slice(0, 120), title: "", bad: true });
       }
-    } catch {
-      setNote({ text: "could not save", title: "", bad: true });
+    } catch (e) {
+      setNote({ text: couldNot("save the workflow for new projects", reasonOf(e)), title: "", bad: true });
     } finally {
       setSaving(false);
     }
@@ -1310,7 +1311,7 @@ export function AskBossHero({
         );
         return;
       }
-      if (!r.ok || !r.data) { setError(r.error ?? "request failed"); return; }
+      if (!r.ok || !r.data) { setError(couldNot("ask BOSS", r.error)); return; }
       const d = r.data as Record<string, unknown>;
       if (typeof d.thread_id === "string") setThreadId(d.thread_id);
       setProposed(Array.isArray(d.proposed_actions) ? (d.proposed_actions as ProposedAction[]) : []);
@@ -1393,7 +1394,7 @@ export function AskBossHero({
       // just changed. Same signal the dock sends.
       if (ok) notifyChanged("command-center", { tool: a.tool });
       setReply((prev) =>
-        `${prev}\n\n${ok ? "✓" : "Warning"} **${a.label}**${ok ? ", done." : ` failed: ${data?.error ?? r.error ?? "unknown error"}`}`);
+        `${prev}\n\n${ok ? "✓" : "Warning"} **${a.label}**${ok ? ", done." : ` failed: ${data?.error ?? r.error ?? NO_REASON}`}`);
       // An offer is spent once taken: leaving it on screen invites a second, duplicate run.
       setProposed((p) => p.filter((x) => x.id !== a.id));
       setRanAction(null);

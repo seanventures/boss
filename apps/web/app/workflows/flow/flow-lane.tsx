@@ -904,7 +904,7 @@ export function FlowLane(p: {
         <button type="button" className="wf-lane-arrow" data-side="right" data-testid="wf-lane-right"
                 aria-controls={viewportId} aria-label="Scroll the steps right" tabIndex={-1}
                 data-off={!ends.right || undefined} disabled={!ends.right}
-                onClick={() => nudge(1)}>Next</button>
+                onClick={() => nudge(1)}>›</button>
       ) : null}
       {scrolls ? (
         <>

@@ -10,8 +10,9 @@
  * the same card, `BriefCard`): your words stay, Helm's rewrite sits below them with its additions
  * marked. The draft (words, kind, chat, brief, chips) is kept per project on Esc.
  */
+import { apiWrite } from "./api-write";
 import {
-  PX_PATHS, a, n, o, parseAgent, parseWorkPlan, pxWrite, s, startWork, toWorkKind,
+  PX_PATHS, a, isPxDemo, n, o, parseAgent, parseWorkPlan, pxWrite, s, startWork, toWorkKind,
   type Agent, type PxWrite, type WorkKind, type WorkPlan,
 } from "./project-experience";
 import { changeRef } from "./repo-links";
@@ -88,12 +89,42 @@ export type ChatMsg = { from: "you" | "helm" | "sys"; text: string; ask?: boolea
 
 export type UnderstandBody = { kind: WorkKind; text: string; chat: ChatMsg[]; brief: Brief | null; hint?: string; draft: string; workflow_key?: string };
 
+/**
+ * HELM'S READ IS A REAL MODEL TURN (recipe-box walk 2026-11-18): the brief is ~1,000 written
+ * tokens, so on a subscription model it takes 15-40 s, bounded by the engine's turn deadline
+ * (understanding.TURN_SECONDS, 45 s) and `understand`'s own 55 s. "Reading your words and the
+ * code graph…" with nothing moving read as hung. The card says how long it has been reading,
+ * and past READ_PATIENCE_S that Start does not need it.
+ */
+export const READ_PATIENCE_S = 12;
+export function readingWords(seconds: number, opts: { starting?: boolean } = {}): string {
+  if (opts.starting) return "Starting with your words as written; the brief is not needed to start.";
+  if (seconds < 4) return "Reading your words and the code graph…";
+  if (seconds < READ_PATIENCE_S) return `Writing the brief from your words and the code graph · ${seconds}s`;
+  return `Still writing the brief · ${seconds}s. Start works now: your words go as written.`;
+}
+
 /** One turn of Helm's understanding. A slow or missing model is an answer (`no_model`), never a throw. */
 export async function understand(projectId: string, body: UnderstandBody, ms = 55_000): Promise<Understanding> {
   const chat = body.chat.filter((m) => m.from !== "sys").map((m) => ({ from: m.from, text: m.text, ...(m.ask ? { ask: true } : {}) }));
-  const send = pxWrite(`/v1/projects/${encodeURIComponent(projectId)}/work/understand`,
-    { kind: body.kind, text: body.text, chat, brief: body.brief, hint: body.hint ?? "", draft: body.draft,
-      ...(body.workflow_key ? { workflow_key: body.workflow_key } : {}) } as R, "Ask Helm");
+  const payload = { kind: body.kind, text: body.text, chat, brief: body.brief, hint: body.hint ?? "", draft: body.draft,
+                   ...(body.workflow_key ? { workflow_key: body.workflow_key } : {}) } as R;
+  if (isPxDemo()) return parseUnderstanding(DEMO_UNDERSTANDING(body));
+  // NOT A PRESS: Helm reads as you type, so this is a background write. Sent as an operator's
+  // press ("Ask Helm") it held the press scope for the whole 15-40 s turn, and the next read of
+  // the changed words was REFUSED ("Ask Helm was not sent — the previous Ask Helm is still in
+  // progress") while the older answer was then dropped as stale. Without a press only an
+  // identical read joins the running one (lib/api-write.ts runPress).
+  const send = apiWrite(`/v1/projects/${encodeURIComponent(projectId)}/work/understand`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), cache: "no-store",
+  }).then(async (res): Promise<PxWrite> => {
+    let parsed: unknown = null;
+    try { parsed = await res.json(); } catch { /* empty */ }
+    return res.ok ? { ok: true, status: res.status, body: o(parsed), error: null }
+                  : { ok: false, status: res.status, body: null, error: s(o(parsed).message) || s(o(o(parsed).detail).message) || `The API answered ${res.status}.` };
+  // A write that throws (a dropped connection) is an answer too: the card never stays "reading"
+  // on a promise that rejected.
+  }).catch((e: unknown): PxWrite => ({ ok: false, status: 0, body: null, error: e instanceof Error ? e.message : "no answer" }));
   const late = new Promise<PxWrite>((resolve) => setTimeout(() => resolve({ ok: false, status: 0, body: null, error: "Helm took too long" }), ms));
   const r = await Promise.race([send, late]);
   if (r.demo) return parseUnderstanding(DEMO_UNDERSTANDING(body));
@@ -124,6 +155,7 @@ export type PlanDetail = WorkPlan & {
   steps: Step[]; optionDetail: Record<string, OptionDetail>; defaults: NwDefaults | null;
   /** Only when an app was asked for: the anchor, or why that app is not one of this project's. */
   anchor?: Anchor | null; anchorError?: string;
+  appChoices?: { runId: string; app: string }[];
 };
 
 /** THE BRIEF'S LIMIT (AR-21): the engine's MAX_DIRECTIVE (services/project_experience/add_project.py)
@@ -182,6 +214,7 @@ export const parsePlanDetail = (v: unknown): PlanDetail => {
     ...base,
     ...("anchor" in x ? { anchor: parseAnchor(x.anchor) } : {}),
     ...(s(x.anchor_error) ? { anchorError: s(x.anchor_error) } : {}),
+    appChoices: a(x.app_choices).map((item) => ({ runId: s(o(item).run_id), app: s(o(item).app) })),
     steps: a(x.steps).map((z) => ({ id: s(o(z).id), label: s(o(z).label), you: o(z).you === true, approve: s(o(z).approve), agent: parseAgent(o(z).agent) })).filter((z) => z.label),
     optionDetail,
     defaults: d ? {
@@ -195,8 +228,8 @@ export const parsePlanDetail = (v: unknown): PlanDetail => {
   };
 };
 
-export const planDetailPath = (projectId: string, kind: string, workflowKey = "", app = "") =>
-  `${PX_PATHS.workPlan(projectId, kind, workflowKey)}&detail=true${app ? `&app=${encodeURIComponent(app)}` : ""}`;
+export const planDetailPath = (projectId: string, kind: string, workflowKey = "", app = "", newApp = false) =>
+  `${PX_PATHS.workPlan(projectId, kind, workflowKey)}&detail=true${app ? `&app=${encodeURIComponent(app)}` : ""}${newApp ? "&new_app=true" : ""}`;
 
 // ── Start and Add to Next ────────────────────────────────────────────────────────────────────
 export type IssueChoice = { mode: "none" } | { mode: "link"; url: string } | { mode: "create" };
@@ -205,6 +238,9 @@ export type StartFields = {
   workflow_key?: string; start_anyway?: string[];
   /** The app it builds onto (AR-20): the door's `app`, sent as is; the engine resolves it. */
   app?: string;
+  new_app?: boolean;
+  /** Nothing named: the engine builds onto the only app, or asks which (never a fresh build). */
+  infer_app?: boolean;
   /** The profile it runs on (BOSSAPP-1334): lean | balanced | strict. */
   profile?: string;
 };
@@ -220,6 +256,8 @@ export function workBody(kind: WorkKind, text: string, f: StartFields): R {
     ...(f.workflow_key ? { workflow_key: f.workflow_key } : {}),
     ...(f.start_anyway?.length ? { start_anyway: f.start_anyway } : {}),
     ...(f.app ? { app: f.app } : {}),
+    ...(f.new_app ? { new_app: true } : {}),
+    ...(f.infer_app ? { infer_app: true } : {}),
     ...(f.profile ? { profile: f.profile } : {}),
   };
 }

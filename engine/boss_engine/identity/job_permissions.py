@@ -52,6 +52,11 @@ JOB_KIND_PERMISSIONS: dict[str, str] = {
     "code.task": P.CODE_TASK_CREATE,
     "investigation.run": P.HOST_EXEC,
     "security.scan": P.SECURITY_SCAN_RUN,           # F4: scanners in the sandbox, own app only
+    # a validator re-run after a person's override of a finding (finding_overrides, SPEC §3)
+    "validation.rerun": P.GITHUB_MERGE,
+    # Setup's write check for a model login (engine_policy): one writer session in a build's
+    # sandbox, spend governed like the connection proof; queued by Connect
+    "engine.check": P.MODEL_PROVIDER_MANAGE,
     # the code graph of a registered repository: parsing only, no model, no outside effect
     "knowledge.repository.index": P.KNOWLEDGE_READ,
     # the onboarding agent (project_experience/onboarding.py): checks access, maps and reads the

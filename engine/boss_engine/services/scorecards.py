@@ -496,7 +496,7 @@ def _deploy_facts(connection, column: str, value: str) -> dict[str, Any]:
     h24 = None
     if healthy and at is not None and at < datetime.now(timezone.utc) - timedelta(hours=25):
         got = connection.execute(text("""
-            SELECT bool_and(ok) AS all_ok, COUNT(*) AS n FROM deployment_health_samples
+            SELECT bool_and(ok) AS all_ok, COUNT(*) AS n FROM counted_health_samples
             WHERE deployment_target_id = :t AND checked_at BETWEEN :a AND :b"""),
             {"t": d["target_id"], "a": at + timedelta(hours=23),
              "b": at + timedelta(hours=25)}).mappings().first()

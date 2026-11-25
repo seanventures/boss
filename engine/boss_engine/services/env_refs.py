@@ -23,6 +23,7 @@ resolve_target_secret, work_tracker_adapters.resolve_credential) and where a ref
 from __future__ import annotations
 
 import base64
+import ipaddress
 import os
 import re
 import threading
@@ -162,6 +163,27 @@ class Binding:
     """The provider a credential belongs to, and the hosts it may be sent to."""
     provider: str
     hosts: tuple[str, ...] = ()      # "api.github.com", "*.atlassian.net"
+    allow_private_http: bool = False
+
+
+_BLOCKED_HTTP_HOSTS = ("metadata.google.internal", "metadata", "169.254.169.254", "fd00:ec2::254")
+
+
+def _is_private_or_local_host(host: str) -> bool:
+    """True for loopback, private RFC1918/ULA IPs, single-label compose/LAN names, and
+    .local/.internal/.lan/.localhost; explicitly False for cloud metadata and link-local IPs."""
+    h = (host or "").strip().lower().rstrip(".")
+    if not h or h in _BLOCKED_HTTP_HOSTS:
+        return False
+    try:
+        addr = ipaddress.ip_address(h)
+        if addr.is_link_local or addr.is_multicast or addr.is_unspecified:
+            return False
+        return addr.is_loopback or addr.is_private
+    except ValueError:
+        pass
+    return h == "localhost" or "." not in h or h.endswith(
+        (".local", ".internal", ".lan", ".localhost"))
 
 
 #: Each provider's official endpoints (https only). `*.x` matches any subdomain of x.
@@ -179,6 +201,8 @@ PROVIDER_HOSTS: dict[str, tuple[str, ...]] = {
     "mistral": ("api.mistral.ai",),
     "plane": ("api.plane.so", "app.plane.so"),
     "jira": ("*.atlassian.net", "api.atlassian.com", "mcp.atlassian.com"),
+    # Confluence Cloud (BOSSAPP-1384): the configured site, and Atlassian's gateway for OAuth 3LO.
+    "confluence": ("*.atlassian.net", "api.atlassian.com"),
     "linear": ("api.linear.app", "mcp.linear.app"),
     "azure_devops": ("dev.azure.com", "*.dev.azure.com", "*.visualstudio.com"),
     "asana": ("app.asana.com",),
@@ -214,6 +238,7 @@ OPERATOR_BASE_URLS: dict[str, tuple[str, ...]] = {
     "mistral": ("MISTRAL_BASE_URL",),
     "plane": ("PLANE_BASE_URL", "PLANE_API_URL", "PLANE_PROJECT_URL"),
     "jira": ("JIRA_BASE_URL",),
+    "confluence": ("CONFLUENCE_BASE_URL",),
     "digitalocean": ("BOSS_DO_INFERENCE_BASE_URL",),
 }
 
@@ -255,8 +280,22 @@ class CredentialMisdirected(ValueError):
     """A host credential was about to be sent somewhere other than its provider. The message names
     the credential and the host, never the value."""
 
-    def __init__(self, label: str, binding: Binding, host: str):
-        self.label, self.binding, self.host = label, binding, host
+    def __init__(self, label: str, binding: Binding, host: str, url: str = ""):
+        self.label, self.binding, self.host, self.url = label, binding, host, url
+        parts = urlsplit(url or "")
+        #: THE RIGHT HOST OVER PLAIN HTTP (stranger test r6, 2026-11-18): the key's own host,
+        #: refused only because the address is http — said as that, never "sent only to X;
+        #: refusing to send it to X".
+        self.plain_http = bool(
+            host and (parts.scheme or "").lower() in ("http", "ws")
+            and any(_host_matches(host.lower().rstrip("."), p) for p in binding.hosts))
+        if self.plain_http:
+            # Host and port only: a URL's userinfo is never repeated in words.
+            address = f"{parts.scheme}://{parts.hostname}" + (f":{parts.port}" if parts.port else "")
+            super().__init__(
+                f"Your model at {address} is plain http; BOSS only sends keys over https. "
+                "Use an https address (Setup › Models).")
+            return
         where = ", ".join(_official_and_operator_hosts(binding)) or "nowhere over HTTP"
         super().__init__(
             f"{label} belongs to {binding.provider} and is sent only to {where}; refusing to send "
@@ -306,12 +345,14 @@ def register_provider_hosts(provider: str, hosts: Iterable[str] = (), *,
         OPERATOR_BASE_URLS[key] = tuple(dict.fromkeys(OPERATOR_BASE_URLS.get(key, ()) + names))
 
 
-def provider_binding(provider: Optional[str], extra_hosts: Iterable[str] = ()) -> Binding:
+def provider_binding(provider: Optional[str], extra_hosts: Iterable[str] = (), *,
+                     allow_private_http: bool = False) -> Binding:
     """The binding of a provider by name (a reference's `provider`), plus hosts an org admin set."""
     key = (provider or "").strip().lower()
     key = _PROVIDER_ALIASES.get(key, key)
     extra = tuple(str(h).strip().lower().rstrip(".") for h in extra_hosts if str(h).strip())
-    return Binding(key or "unknown", PROVIDER_HOSTS.get(key, ()) + extra)
+    return Binding(key or "unknown", PROVIDER_HOSTS.get(key, ()) + extra,
+                   allow_private_http=allow_private_http)
 
 
 def binding_for(name: str) -> Optional[Binding]:
@@ -344,16 +385,20 @@ def _host_matches(host: str, pattern: str) -> bool:
 
 def destination_allowed(binding: Binding, url: str) -> bool:
     """May a credential with this binding be sent to `url`? Official hosts need https; a host the
-    operator configured is taken with whatever scheme the operator gave it."""
+    operator configured is taken with whatever scheme the operator gave it; custom endpoints on
+    private/loopback/single-label hosts allow http when `binding.allow_private_http` is set."""
     parts = urlsplit(url or "")
     host = (parts.hostname or "").lower().rstrip(".")
+    scheme = (parts.scheme or "").lower()
     if not host:
         return False
     if any(_host_matches(host, p) for p in _operator_hosts(binding.provider)):
         return True
-    if (parts.scheme or "").lower() not in ("https", "wss"):
-        return False
-    return any(_host_matches(host, p) for p in binding.hosts)
+    if scheme in ("https", "wss"):
+        return any(_host_matches(host, p) for p in binding.hosts)
+    if binding.allow_private_http and scheme == "http" and _is_private_or_local_host(host):
+        return any(_host_matches(host, p) for p in binding.hosts)
+    return False
 
 
 def assert_may_send(name: str, url: str) -> None:
@@ -362,7 +407,7 @@ def assert_may_send(name: str, url: str) -> None:
     binding = binding_for(name)
     if binding is not None and not destination_allowed(binding, url):
         raise CredentialMisdirected(f"The host credential {name}", binding,
-                                    (urlsplit(url or "").hostname or ""))
+                                    (urlsplit(url or "").hostname or ""), url)
 
 
 # ---- credentials resolved from org-level material (not in the environment) -----------------------
@@ -464,7 +509,7 @@ def check_outbound(url: str, headers: Any = None, body: Any = None) -> None:
         else:
             refused.setdefault(value, (label, binding))
     for label, binding in refused.values():
-        raise CredentialMisdirected(label, binding, (urlsplit(url or "").hostname or ""))
+        raise CredentialMisdirected(label, binding, (urlsplit(url or "").hostname or ""), url)
 
 
 def misdirection_in(exc: Optional[BaseException]) -> Optional["CredentialMisdirected"]:

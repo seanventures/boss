@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -78,13 +78,18 @@ def budget_period(period: str, now: Optional[datetime] = None) -> dict[str, Any]
 
 
 def period_spend(connection: Connection, project_id: str, period: str,
-                 now: Optional[datetime] = None) -> dict[str, Any]:
+                 now: Optional[datetime] = None,
+                 exclude_reservations: Iterable[str] = ()) -> dict[str, Any]:
     """THE ONE MEASURE OF A PERIOD'S SPEND: the money settled in it (MONEY_SQL — a subscription
     or local call is $0, included_spend.py) plus ALL outstanding reservations. An unresolved
     liability does not disappear at midnight: settlement replaces its hold with period spend.
-    Every cap, state, forecast and message reads this."""
+    Every cap, state, forecast and message reads this.
+
+    `exclude_reservations`: holds left out — only ever a job's OWN reservation, when that job's
+    admission is decided (a reservation never blocks the work it was made for)."""
     bounds = budget_period(period, now)
-    params = {"p": project_id, "start": bounds["start"], "end": bounds["end"]}
+    params = {"p": project_id, "start": bounds["start"], "end": bounds["end"],
+              "own": [str(r) for r in exclude_reservations if r]}
     # Both aggregates share one MVCC snapshot. Separate statements can miss a hold
     # consumed between the actual-cost read and the held-cost read.
     totals = connection.execute(
@@ -92,7 +97,8 @@ def period_spend(connection: Connection, project_id: str, period: str,
              f"(SELECT COALESCE(SUM({MONEY_SQL}), 0) AS total FROM cost_receipts "
              "WHERE project_id = :p AND created_at >= :start AND created_at < :end) actual "
              "CROSS JOIN (SELECT COALESCE(SUM(amount_usd_micros), 0) AS total, COUNT(*) AS n "
-             "FROM budget_reservations WHERE project_id = :p AND status = 'active') held"),
+             "FROM budget_reservations WHERE project_id = :p AND status = 'active' "
+             "AND NOT (id = ANY(CAST(:own AS TEXT[])))) held"),
         params).mappings().one()
     return {**bounds, "actual_usd_micros": int(totals["actual"] or 0),
             "reserved_usd_micros": int(totals["held"] or 0),
@@ -172,6 +178,28 @@ BURST_QUEUED_MESSAGE = ("Waiting for the per-minute budget: requests that have w
 #: request keeps its place in line before it is presumed gone.
 BURST_WINDOW_SECONDS = 60
 BURST_WAITER_GRACE_SECONDS = 30
+
+
+def reserve_apart(governor: Any, connection: Any, project_id: str, category: str,
+                  amount_usd_micros: int, reason: str, expires_in_minutes: int,
+                  **kwargs: Any) -> dict:
+    """`governor.reserve`, committed in its OWN short transaction — for a caller that keeps
+    its own transaction open across provider I/O or tool calls (a chat turn).
+
+    THE ADMISSION LOCK IS TRANSACTION-SCOPED (`_try_admit`), so a reservation taken on a
+    chat turn's connection held the project's admission for the whole turn — minutes of
+    model calls and tools. Every tool in that turn that reserved on its own connection
+    (deploy_app, deploy_config, a build) was refused "Budget admission is busy with another
+    transaction", every time: laptop 2026-11-20, four deploy_app attempts in a row, with
+    nothing else running on the project. Reserved apart, the lock is released at once;
+    the caller still releases or settles the reservation on its own connection, by id."""
+    engine = getattr(connection, "engine", None)
+    if engine is None:   # a stub connection in a unit test: nothing to hold apart
+        return governor.reserve(connection, project_id, category, amount_usd_micros, reason,
+                                expires_in_minutes, **kwargs)
+    with engine.begin() as own:
+        return governor.reserve(own, project_id, category, amount_usd_micros, reason,
+                                expires_in_minutes, **kwargs)
 
 
 def burst_waiter_key(category: str, reason: str) -> str:
@@ -518,6 +546,7 @@ class BudgetGovernor:
             query_params["project_id"] = project_id
 
         rows = connection.execute(query, query_params).mappings().all()
+        self.release_ended_meeting_holds(connection, project_id)
 
         # Expiry revokes authority; it is not evidence that a provider never accepted work.
         # Keep positive exposure until explicit settlement or a known no-call release. The
@@ -543,6 +572,40 @@ class BudgetGovernor:
                 {},
             )
         return expired_ids
+
+    #: Why a hold of a panel that ended is released (budget.reservation_released `reason`).
+    ENDED_MEETING_NOTE = ("The panel this was held for has ended ({status}), so its hold no longer "
+                          "blocks other work; its turns were governed and settled on their own.")
+
+    def release_ended_meeting_holds(self, connection: Connection,
+                                    project_id: Optional[str] = None) -> list[str]:
+        """A HOLD FOR A PANEL THAT HAS ENDED NEVER BLOCKS (stranger test r8, 2026-11-19): a failed
+        "Multi-agent PRD meeting" kept its $6 reservation and the build after it sat in
+        budget_wait with $0 spent. Every path that ends a panel (failed, cancelled by the
+        shepherd or the brief fallback, completed) is covered here, on every budget read, so no
+        path that forgets to release can block work again. The panel's seats reserve and settle
+        their own turns, so the meeting-level hold is headroom, never spend."""
+        point = connection.begin_nested()
+        try:
+            rows = connection.execute(text(
+                "UPDATE budget_reservations r SET status = 'released' FROM meeting_runs m "
+                "WHERE r.status = 'active' AND m.finalize_ctx->>'reservation_id' = r.id "
+                "AND m.project_id = r.project_id "
+                "AND m.status IN ('failed', 'cancelled', 'completed') "
+                "AND (CAST(:p AS text) IS NULL OR r.project_id = :p) "
+                "RETURNING r.id, r.project_id, r.category, r.amount_usd_micros, m.status"),
+                {"p": project_id}).mappings().all()
+            point.commit()
+        except Exception:  # noqa: BLE001 — a missing table must never break a budget read
+            point.rollback()
+            return []
+        for row in rows:
+            emit_event(connection, row["project_id"], "budget.reservation_released",
+                       "budget_governor", "budget_reservation", row["id"],
+                       {"reason": self.ENDED_MEETING_NOTE.format(status=row["status"]),
+                        "category": row["category"],
+                        "amount_usd_micros": int(row["amount_usd_micros"] or 0)})
+        return [str(r["id"]) for r in rows]
 
     def _recorded_outcome(self, connection: Connection, reservation_id: str) -> Optional[dict]:
         """What BOSS's own ledger says happened to the call a reservation paid for, or None when
@@ -709,7 +772,8 @@ class BudgetGovernor:
             {"p": project_id, "r": reservation_id})
 
     def status_for_project(self, connection: Connection, project_id: str,
-                           *, now: Optional[datetime] = None) -> dict:
+                           *, now: Optional[datetime] = None,
+                           exclude_reservations: Iterable[str] = ()) -> dict:
         """The budget as every gate and screen reads it. Each cap is measured over its own
         period (period_spend); the period nearest its cap — the binding one — supplies the
         top-level numbers (`cap`, `actual`, `reserved`, `available`, `utilization`, state), and
@@ -783,7 +847,8 @@ class BudgetGovernor:
         periods: dict[str, dict[str, Any]] = {}
         for column, period in CAP_PERIODS:
             cap = int(policy_row[column] or 0)
-            spend = period_spend(connection, project_id, period, now)
+            spend = period_spend(connection, project_id, period, now,
+                                 exclude_reservations=exclude_reservations)
             committed = spend["actual_usd_micros"] + spend["reserved_usd_micros"]
             utilization = 0.0 if cap == 0 else committed / cap
             periods[period] = {

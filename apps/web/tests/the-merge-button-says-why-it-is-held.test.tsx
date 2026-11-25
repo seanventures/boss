@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The merge button says why it is held, beside the label, not only on the title.
  * A blank or whitespace reason says nothing. The visible reason is trimmed.

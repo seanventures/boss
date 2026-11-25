@@ -99,7 +99,7 @@ def test_the_plan_says_which_app_branch_and_change_new_work_builds_onto(client, 
     assert by_key.json()["anchor"]["branch"] == f"boss/code/{ROOT}"
 
     # No door, no anchor; an app that is not here says so instead of planning onto main.
-    assert "anchor" not in client.get(f"/v1/projects/{_project()}/work/plan").json()
+    assert client.get(f"/v1/projects/{_project()}/work/plan").json()["anchor"]["run_id"] == RUN
     nowhere = client.get(f"/v1/projects/{_project()}/work/plan", params={"app": "crun_elsewhere"})
     assert nowhere.status_code == 200
     assert nowhere.json()["anchor"] is None
@@ -116,6 +116,31 @@ def test_new_work_named_for_an_app_continues_that_apps_lineage(client, engine):
     assert out["extends"]["run_id"] == RUN
     assert out["extends"]["branch"] == f"boss/code/{ROOT}"
     assert _workflow_input(engine, out["run_id"])["extends_run_id"] == RUN
+
+
+def test_new_work_without_an_app_continues_the_only_app(client, engine):
+    _the_app(engine)
+    started = _start(client, {"kind": "bug", "text": "Repair the existing browser preview.",
+                              "infer_app": True})
+    assert started.status_code == 200, started.text
+    assert _workflow_input(engine, started.json()["run_id"])["extends_run_id"] == RUN
+
+
+def test_a_card_that_names_no_app_still_starts_fresh_work_beside_several_apps(client, engine):
+    """Chat cards, the roadmap, onboarding and agents post …/work with no app (review of PR
+    #300): with two apps they are not refused, and nothing is built onto an app unasked. Only
+    the modal's infer_app asks which."""
+    _the_app(engine)
+    _insert(engine, "crun_ngother01", fctx={"attempt": 1, "app_id": "app_other"},
+            title="Ledger Viewer", spec={"repo": "ledger-viewer"})
+    started = _start(client, {"kind": "feature", "text": "Add a status page."})
+    assert started.status_code == 200, started.text
+    assert not _workflow_input(engine, started.json()["run_id"]).get("extends_run_id")
+    asked = client.post(f"/v1/projects/{_project()}/work",
+                        json={"kind": "feature", "text": "Add a status page.", "infer_app": True})
+    assert asked.status_code == 422, asked.text
+    assert asked.json()["detail"]["error"] == "app_selection_required"
+    assert "Pick one under Application in New work" in asked.json()["detail"]["message"]
 
 
 def test_new_work_named_for_an_app_that_is_not_here_starts_nothing(client, engine):

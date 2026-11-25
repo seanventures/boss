@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The extension row says why it is blocked. The problems are on the title today
  * and have to be readable beside Blocked. Blank is nothing. More than six words

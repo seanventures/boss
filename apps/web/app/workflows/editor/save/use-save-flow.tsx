@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useRef, useState, type Dispatch, type Re
 
 import { TOAST_EVENT } from "../../../../lib/api-write";
 import {
-  NameInUseError, ProblemsError, checkSpec, isDirty, publishSpec,
+  NameInUseError, ProblemsError, checkSpec, fetchSpec, isDirty, publishSpec,
 } from "../../../../lib/workflow-editor-types";
 import type {
   CheckResult, EditorAction, EditorMeta, EditorState, Problem, PublishRequest, Spec,
@@ -15,6 +15,8 @@ import { jsonGate } from "../json/json-view";
 import { SaveCopyPopover, type CopyChoice } from "./save-copy-popover";
 
 export const SAVE_TIP = "Publish as the next version (Ctrl+S)";
+/** Save on a standard: it is edited in place, and can always go back to what BOSS shipped. */
+export const STANDARD_SAVE_TIP = "Publish as the next version of this standard. Reset to standard brings back what BOSS shipped.";
 export const CHECK_TIP = "Runs every check Save runs, without saving.";
 
 const EMPTY_SUMMARY: CheckResult["summary"] = { steps: 0, agents: [], approvals: [], typical_minutes: null, needs: [] };
@@ -43,8 +45,10 @@ type Pop = null | "copy" | "issues" | "start" | "use-for";
  * Check, Save, Save as my copy and Start, the publish half of the editor.
  *
  * ONE PATH TO A VERSION. Save always runs `/check` first, then ONE `publish` call: an own
- * workflow gets v(n+1); a new one is created and published at once; a standard becomes your
- * copy (or updates the copy you already have) in the same single call. Nothing is written
+ * workflow gets v(n+1); a new one is created and published at once; a STANDARD is edited in
+ * place and gets v(n+1) too (the shipped spec stays its baseline, so Reset to standard can
+ * bring it back). Save as my copy (secondary) makes your copy of a standard, or updates the
+ * copy you already have, in the same single call. Nothing is written
  * before the check passes, and Save is disabled while one is in flight, so a double press, a
  * failed publish or a second Save of a standard cannot leave an orphan or a second copy.
  *
@@ -62,8 +66,9 @@ export function useSaveFlow({ state, dispatch, projectId, onNavigate, onStart, a
   /** The work classes a standard being edited is mapped to, for the after-copy `Use for` chip. */
   standardUsedFor?: string[];
 }): {
-  save(): Promise<void>; check(): Promise<void>; start(): void; guardLeave(go: () => void): void;
-  saving: boolean; checking: boolean; popover: ReactNode; label: "Save" | "Save as my copy";
+  save(): Promise<void>; saveAsCopy(): Promise<void>; check(): Promise<void>; start(): void;
+  guardLeave(go: () => void): void;
+  saving: boolean; checking: boolean; popover: ReactNode; label: "Save";
   canSave: boolean; saveTip: string; nameError: string; dirty: boolean;
   saveRef: RefObject<HTMLButtonElement | null>; startRef: RefObject<HTMLButtonElement | null>;
 } {
@@ -85,17 +90,15 @@ export function useSaveFlow({ state, dispatch, projectId, onNavigate, onStart, a
   const dirty = isDirty(state);
   const gate = jsonGate(state);
   const standard = meta.is_catalogue;
-  const label: "Save" | "Save as my copy" = standard ? "Save as my copy" : "Save";
+  const label = "Save" as const;
   const readOnly = meta.readOnlyVersion != null;
 
-  const canSave = !saving && !gate.blocked && !readOnly && state.spec.steps.length > 0
-    // A standard can be saved as a copy unchanged: that IS the change.
-    && (dirty || standard);
+  const canSave = !saving && !gate.blocked && !readOnly && state.spec.steps.length > 0 && dirty;
   const saveTip = gate.blocked ? gate.tip
     : readOnly ? `Viewing v${meta.readOnlyVersion}`
     : state.spec.steps.length === 0 ? "Add a step first"
-    : !dirty && !standard ? "No changes"
-    : standard ? "Shipped with BOSS. Saving makes your own copy."
+    : !dirty ? "No changes"
+    : standard ? STANDARD_SAVE_TIP
     : SAVE_TIP;
 
   // A copy just saved from a standard that is mapped to a class of work: say the copy is not
@@ -122,8 +125,7 @@ export function useSaveFlow({ state, dispatch, projectId, onNavigate, onStart, a
     const s = live.current;
     const local = localProblems(s.spec);
     if (local.length) { showProblems(local); return false; }
-    const definitionId = s.meta.is_catalogue ? (s.meta.copy?.definition_id ?? null) : s.meta.definition_id;
-    const result = await checkSpec(projectId, s.spec, definitionId);
+    const result = await checkSpec(projectId, s.spec, s.meta.definition_id);
     dispatch({ type: "SET_PROBLEMS", result, spec: s.spec });
     // A WARNING DOES NOT BLOCK SAVE: "Needs Deploy set up" means the step cannot RUN yet, and the
     // server says the workflow is fine to save (ok). It is still shown, with its fix.
@@ -153,7 +155,9 @@ export function useSaveFlow({ state, dispatch, projectId, onNavigate, onStart, a
     const s = live.current;
     const m = s.meta;
     let req: PublishRequest;
-    if (m.is_catalogue) {
+    // `copy` is the Save as my copy choice; without it, a standard is edited in place.
+    const asCopy = m.is_catalogue && copy !== null;
+    if (asCopy) {
       const updating = copy?.mode === "update" && m.copy;
       req = {
         definition_id: null,
@@ -162,7 +166,11 @@ export function useSaveFlow({ state, dispatch, projectId, onNavigate, onStart, a
         spec: s.spec,
         from_workflow_key: m.workflow_key,
         update_copy_id: updating ? m.copy!.definition_id : null,
+        as_copy: true,
       };
+    } else if (m.is_catalogue) {
+      // IN PLACE, under the standard's own name: the next version of the standard itself.
+      req = { definition_id: m.definition_id, name: m.name, description: m.description, spec: s.spec };
     } else {
       req = { definition_id: m.definition_id, name: m.name.trim(), description: m.description, spec: s.spec,
               from_workflow_key: m.from_workflow_key };
@@ -173,13 +181,20 @@ export function useSaveFlow({ state, dispatch, projectId, onNavigate, onStart, a
       if ("unchanged" in result) {
         toast("success", "No changes");
         // Updating a copy that already says exactly this: go to the copy, as a save would.
-        const target = m.is_catalogue && req.update_copy_id ? m.copy!.workflow_key : m.workflow_key;
+        const target = asCopy && req.update_copy_id ? m.copy!.workflow_key : m.workflow_key;
         if (target !== m.workflow_key) onNavigate(target!);
         else dispatch({ type: "SAVED", spec: s.spec, meta: m, sent: m });
         if (startAfter.current && target) onStart?.(target);
         return;
       }
-      const next: EditorMeta = {
+      // A standard edited in place stays a standard, now Modified: its changes are re-read.
+      const inPlace = m.is_catalogue && !asCopy;
+      const fresh = inPlace && m.workflow_key
+        ? await fetchSpec(projectId, m.workflow_key).then((got) => got.meta, () => null) : null;
+      const next: EditorMeta = inPlace ? {
+        ...m, version: result.version, readOnlyVersion: null,
+        standard: fresh?.standard ?? m.standard ?? null,
+      } : {
         ...m,
         definition_id: result.definition.id,
         workflow_key: result.definition.workflow_key,
@@ -189,12 +204,13 @@ export function useSaveFlow({ state, dispatch, projectId, onNavigate, onStart, a
         from_workflow_key: m.is_catalogue ? m.workflow_key : m.from_workflow_key,
         copy: null,
         readOnlyVersion: null,
+        standard: null,
       };
       // `s` is the snapshot that was published: it becomes the baseline, and anything edited
       // since (the editor stays live during a save) is kept as the next unsaved change.
       dispatch({ type: "SAVED", spec: s.spec, meta: next, sent: m });
-      toast("success", m.is_catalogue ? `Saved as your copy, v${result.version}` : `Saved, v${result.version}`);
-      const used = m.is_catalogue ? standardUsedFor?.[0] : undefined;
+      toast("success", asCopy ? `Saved as your copy, v${result.version}` : `Saved, v${result.version}`);
+      const used = asCopy ? standardUsedFor?.[0] : undefined;
       if (used) {
         try { window.sessionStorage.setItem(USE_FOR_KEY(result.definition.workflow_key), used); } catch { /* */ }
       }
@@ -205,7 +221,7 @@ export function useSaveFlow({ state, dispatch, projectId, onNavigate, onStart, a
       if (e instanceof ProblemsError) showProblems(e.problems);
       else if (e instanceof NameInUseError) {
         setNameError("Name in use");
-        if (!m.is_catalogue) toast("error", "Name in use");
+        if (!asCopy) toast("error", "Name in use");
       } else toast("error", String((e as Error)?.message ?? e));
     } finally {
       inFlight.current = false;
@@ -223,9 +239,24 @@ export function useSaveFlow({ state, dispatch, projectId, onNavigate, onStart, a
     catch (e) { toast("error", String((e as Error)?.message ?? e)); }
     finally { inFlight.current = false; setSaving(false); }
     if (!ok) { startAfter.current = false; return; }
-    if (live.current.meta.is_catalogue) { setNameError(""); setPop("copy"); return; }
     await publish(null);
   }, [canSave, runCheck, publish]);
+
+  /** SAVE AS MY COPY (a standard only): the standard stays as it is and you get your own. */
+  const saveAsCopy = useCallback(async () => {
+    const s = live.current;
+    if (inFlight.current || !s.meta.is_catalogue || s.jsonError || !s.spec.steps.length
+        || s.meta.readOnlyVersion != null) return;
+    inFlight.current = true;
+    setSaving(true);
+    let ok = false;
+    try { ok = await runCheck(); }
+    catch (e) { toast("error", String((e as Error)?.message ?? e)); }
+    finally { inFlight.current = false; setSaving(false); }
+    if (!ok) return;
+    setNameError("");
+    setPop("copy");
+  }, [runCheck]);
 
   const start = useCallback(() => {
     const m = live.current.meta;
@@ -307,6 +338,6 @@ export function useSaveFlow({ state, dispatch, projectId, onNavigate, onStart, a
     </>
   );
 
-  return { save, check, start, guardLeave, saving, checking, popover, label, canSave, saveTip,
+  return { save, saveAsCopy, check, start, guardLeave, saving, checking, popover, label, canSave, saveTip,
            nameError, dirty, saveRef, startRef };
 }

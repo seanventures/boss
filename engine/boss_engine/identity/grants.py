@@ -114,6 +114,16 @@ def is_captain_authority(grant: Optional[DelegationGrant]) -> bool:
     return grant is not None and grant.authority_kind == CAPTAIN_AUTHORITY
 
 
+#: identity_delegation_grants.authority_kind of a person's fixer authority (fix_authority.py).
+FIXER_AUTHORITY = "fixer"
+
+
+def is_boss_kept_authority(grant: Optional[DelegationGrant]) -> bool:
+    """An authority BOSS keeps for its own agents (the Captain's, a person's fixer authority):
+    never a person's consent for NEW work, so consent, schedules and find_covering skip it."""
+    return grant is not None and grant.authority_kind in (CAPTAIN_AUTHORITY, FIXER_AUTHORITY)
+
+
 def load(grant_id: Optional[str], *, db: Any) -> Optional[DelegationGrant]:
     from sqlalchemy import text
 
@@ -135,6 +145,21 @@ def is_live(grant: Optional[DelegationGrant], *, now: Optional[datetime] = None)
     if grant is None or grant.status != GrantStatus.ACTIVE:
         return False
     return grant.expires_at is None or grant.expires_at > (now or _now())
+
+
+def usable(grant: Optional[DelegationGrant], *, db: Any) -> bool:
+    """Live, and — for a person's FIXER authority (fix_authority.py) — its org default still on
+    for its project, read AT EVERY USE: turning `agents_fix_failures` off stops work already
+    standing on a fixer grant (a token mint, a run's authority, a carried retry), not only new
+    grants. Every place that decides whether a grant may still act asks this."""
+    if not is_live(grant):
+        return False
+    if grant.authority_kind == FIXER_AUTHORITY:
+        from . import fix_authority
+
+        project = grant.project_ids[0] if grant.project_ids else None
+        return fix_authority.enabled(db, project, org_id=grant.org_id)
+    return True
 
 
 def allows_as_user(grant_id: Optional[str], provider: str, *, db: Any) -> bool:
@@ -582,10 +607,15 @@ def mark_first_use(db: Any, grant: DelegationGrant) -> None:
 
     from . import lineage
 
-    was = db.execute(text("SELECT last_used_at FROM identity_delegation_grants WHERE id = :g FOR UPDATE"),
-                     {"g": grant.id}).scalar()
+    # NEVER WAITS (BOSSAPP-1456): `last_used_at` is a marker, not a lock to queue on. A grant row
+    # another transaction holds (a tick mid-step, a cascade) is being used or changed right now;
+    # that transaction stamps it, and a token is never held up for it.
+    row = db.execute(text("SELECT id, last_used_at FROM identity_delegation_grants WHERE id = :g "
+                          "FOR UPDATE SKIP LOCKED"), {"g": grant.id}).first()
+    if row is None:
+        return
     db.execute(text("UPDATE identity_delegation_grants SET last_used_at = now() WHERE id = :g"), {"g": grant.id})
-    if was is None:
+    if row[1] is None:
         lineage.grant_event(db, grant, "delegation.used_first")
 
 
@@ -708,6 +738,16 @@ def narrow_grant(ctx: AuthContext, grant_id: str, permissions: frozenset[str], *
     if dropped:
         db.execute(text("DELETE FROM identity_delegation_grant_permissions WHERE grant_id = :g AND permission_key = ANY(:p)"),
                    {"g": g.id, "p": sorted(dropped)})
+        if g.authority_kind == FIXER_AUTHORITY:
+            # Remembered: BOSS never re-grants a key the person took off their fixer authority
+            # (fix_authority.ensure reads `resources.fixer.withheld`).
+            import json as _json
+
+            withheld = sorted(set(((g.resources or {}).get("fixer") or {}).get("withheld") or ())
+                              | set(dropped))
+            db.execute(text("UPDATE identity_delegation_grants SET resources = COALESCE(resources, "
+                            "'{}'::jsonb) || jsonb_build_object('fixer', CAST(:f AS jsonb)) "
+                            "WHERE id = :g"), {"g": g.id, "f": _json.dumps({"withheld": withheld})})
     after = load(g.id, db=db)
     lineage.grant_event(db, after, "delegation.narrowed", ctx=ctx, details={"removed": sorted(dropped)})
     return after
@@ -743,7 +783,7 @@ def find_covering(person_id: str, *, agent_ids: Iterable[str], permissions: froz
 
     agent_ids, repos = list(agent_ids), list(repos)
     # The project's Captain authority is never a person's consent: a person's own start asks them.
-    found = [g for g in for_person(person_id, db=db) if not is_captain_authority(g)
+    found = [g for g in for_person(person_id, db=db) if not is_boss_kept_authority(g)
              and covers(g, agent_ids=agent_ids, permissions=permissions, project_id=project_id, repos=repos, run_id=run_id)]
     found.sort(key=lambda g: (0 if g.task_run_id and not g.task_run_id.startswith(PENDING_PREFIX)
                               else 1 if not g.task_run_id else 2))

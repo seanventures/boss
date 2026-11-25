@@ -725,6 +725,10 @@ class GitHubConnectionService:
             if default_branch is not None
             else existing["default_branch"]
         )
+        if default_branch is not None and next_default_branch != existing["default_branch"]:
+            # A branch a person chose is kept even when the host's default moves
+            # (build_base_branch, BOSSAPP-1439); one read from the host is followed.
+            next_metadata = {**(next_metadata or {}), "default_branch_from": "person"}
         connection.execute(
             text(
                 """
@@ -1652,6 +1656,9 @@ class GitHubConnectionService:
                 UPDATE github_repository_bindings
                 SET repository_id = :repository_id,
                     default_branch = :default_branch,
+                    -- read from the host: a later move of it is followed (build_base_branch)
+                    metadata = CASE WHEN CAST(:default_branch AS TEXT) IS NULL THEN metadata
+                               ELSE metadata || '{"default_branch_from": "host"}'::jsonb END,
                     visibility = :visibility,
                     archived = :archived,
                     permissions = CAST(:permissions AS JSONB),

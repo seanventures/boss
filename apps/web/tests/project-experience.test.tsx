@@ -348,11 +348,18 @@ describe("the Project page header, Needs you and tabs (screen 4)", () => {
     expect(document.activeElement?.getAttribute("data-testid")).toBe("px-compose-text");
   });
 
-  it("Needs you is on every tab and each item opens its drawer; Esc and Back close it", async () => {
+  it("Needs you is ONE amber count on the Work tab, on every tab; its items open their drawer; Esc and Back close it", async () => {
     engine();
     await openProject("&tab=deployments");
-    expect(tid("px-needs-bar")!.textContent).toContain("2 need you");
-    await press(tid("px-needs-dec_merge3"));
+    // No bar above the tabs (operator 2026-11-21: "Needs you in lots of places … all yellow").
+    expect(tid("px-needs-bar")).toBeNull();
+    // The merge and Pick a prod host (lib needsYouCount); the build stalled since Nov 4 has
+    // waited more than 7 days, so it is under Stopped.
+    expect(tid("px-tab-work-needs")!.textContent).toBe("2");
+    expect(tid("px-tab-work-needs")!.getAttribute("data-tone")).toBe("amber");
+    window.history.replaceState(null, "", `/?org=org_1&project_id=${P}&area=project&tab=deployments&drawer=needs:dec_merge3`);
+    await act(async () => { window.dispatchEvent(new PopStateEvent("popstate")); });
+    await settle();
     expect(params().get("drawer")).toBe("needs:dec_merge3");
     expect(tid("px-drawer-needs")).not.toBeNull();
     // It acts in place (PX-05): the primary is named for the action; the PR is a link beside it.
@@ -363,7 +370,8 @@ describe("the Project page header, Needs you and tabs (screen 4)", () => {
     await settle();
     expect(params().get("drawer")).toBeNull();
     expect(tid("px-drawer-needs")).toBeNull();
-    await press(tid("px-needs-dec_prodhost"));
+    await press(tid("px-tab-work"));
+    await press(tid("px-work-needs-act-dec_prodhost"));
     expect(tid("px-drawer-needs")).not.toBeNull();
     await act(async () => { window.history.back(); });
     await settle(10);
@@ -397,7 +405,9 @@ describe("Overview (screen 4)", () => {
     window.history.replaceState(null, "", `/?org=org_1&project_id=${P}&area=project`);
     await act(async () => { window.dispatchEvent(new PopStateEvent("popstate")); });
     await press(tid("px-tile-running"));
-    expect([params().get("tab"), params().get("drawer")]).toEqual(["work", "work:wi_search"]);
+    // The tile's work opens its Work panel in the drawer (Work panel v2).
+    expect([params().get("area"), params().get("drawer")]).toEqual(["project", "work:wi_search"]);
+    expect(tid("wp")).not.toBeNull();
     window.history.replaceState(null, "", `/?org=org_1&project_id=${P}&area=project`);
     await act(async () => { window.dispatchEvent(new PopStateEvent("popstate")); });
     await settle();
@@ -406,9 +416,16 @@ describe("Overview (screen 4)", () => {
     window.history.replaceState(null, "", `/?org=org_1&project_id=${P}&area=project`);
     await act(async () => { window.dispatchEvent(new PopStateEvent("popstate")); });
     await settle();
-    expect(tid("px-ov-ny-act-dec_merge3")!.getAttribute("href")).toContain("/pull/3");
+    // Needs you: the count and ONE link to Work's group, never the list again.
+    // One count with the Work tab (lib needsYouCount): the merge and Pick a prod host.
+    expect(tid("px-ov-needs-open")!.textContent).toContain("2 items wait on you");
+    expect(tid("px-ov-ny-act-dec_merge3")).toBeNull();
     await press(tid("px-ov-work-wi_visual"));
-    expect(params().get("drawer")).toBe("work:wi_visual");
+    // Recent work opens its Work panel in the drawer (Work panel v2).
+    expect([params().get("area"), params().get("drawer")]).toEqual(["project", "work:wi_visual"]);
+    window.history.replaceState(null, "", `/?org=org_1&project_id=${P}&area=project`);
+    await act(async () => { window.dispatchEvent(new PopStateEvent("popstate")); });
+    await settle();
     await press(tid("px-ov-accept-rec_weekend"));
     expect(calls.some((c) => c.method === "POST" && c.path === "/v1/ambient/roadmap/rec_weekend/accept")).toBe(true);
     await press(tid("px-ov-plan-week"));
@@ -430,7 +447,7 @@ describe("Overview (screen 4)", () => {
     expect(tid("px-project-note")).not.toBeNull();
     expect($("h1")!.textContent).toBe("Order service");
     expect(tid("px-head-repo")!.textContent).toContain("acme/orders");
-    expect(tid("px-needs-bar")!.textContent).toContain("1 needs you");
+    expect(tid("px-tab-work-needs")!.textContent).toBe("1");
   });
 
   it("a failed read says so and retries", async () => {
@@ -456,19 +473,23 @@ describe("Work (screens 5, 5b)", () => {
       box.dispatchEvent(new Event("input", { bubbles: true }));
     });
     await press(tid("px-compose-start"));
-    expect(calls.find((c) => c.method === "POST" && c.path === `/v1/projects/${P}/work`)?.body).toEqual({ kind: "bug", text: "SLA ignores weekends" });
+    expect(calls.find((c) => c.method === "POST" && c.path === `/v1/projects/${P}/work`)?.body).toEqual({ kind: "bug", text: "SLA ignores weekends", infer_app: true });
     expect(tid("px-said")!.textContent).toMatch(/Started/);
-    // BOSSAPP-954: a GitHub PR opens BOSS's change page for it (GitHub when it is in no project).
-    expect(tid("px-work-pr-wi_visual")!.getAttribute("href")).toBe("/changes/github/paramg/helpdesk-ai-demo/3");
-    expect(tid("px-work-run-wi_visual")!.getAttribute("href")).toContain("area=delivery_workflows");
-    await press(tid("px-work-act-wi_visual"));
-    expect(tid("px-drawer-work")).not.toBeNull();
-    // The real steps only (a skipped station is not a step), each with its face (screen 05b).
-    expect($$("[data-testid='px-drawer-work-steps'] .px-step").length).toBe(6);
-    expect(tid("px-drawer-work-merge")!.textContent).toContain("Merge PR #3");
-    expect(tid("px-drawer-link-build")!.getAttribute("href")).toContain("area=code_tasks");
+    // THE ROW (design #287): Workflow #N · Build · Change #N as short chips; BOSSAPP-954: a GitHub
+    // PR opens BOSS's change page for it.
+    const rowRun = tid("px-work-run-wi_visual")!.getAttribute("href")!;
+    expect(rowRun).toContain("area=delivery_workflows");
+    expect(tid("px-work-run-wi_visual")!.textContent).toMatch(/^Workflow/);
+    const rowChange = tid("px-work-change-wi_visual")!;
+    expect(rowChange.textContent).toBe("PR #3");
+    expect(rowChange.getAttribute("href")).toBe("/changes/github/paramg/helpdesk-ai-demo/3");
     await press(tid("px-work-board"));
     expect(tid("px-work-columns")).not.toBeNull();
+    await press(tid("px-work-list"));
+    // A click on the row opens its Work panel in the drawer (Work panel v2), its links the row's.
+    await press(tid("px-work-open-wi_visual"));
+    expect(params().get("drawer")).toBe("work:wi_visual");
+    expect(tid("wp-link-run")!.getAttribute("href")).toBe(rowRun);
   });
 
   // BOSSAPP-1038: list view reads the project-experience work store; the tree reads the
@@ -520,6 +541,7 @@ describe("Work (screens 5, 5b)", () => {
     expect(tid("px-nw-bar-input")!.getAttribute("aria-disabled")).toBe("true");
     await press(tid("px-nw-bar-input"));
     expect(tid("px-composer")).toBeNull();
+    await press(tid("px-work-f-planned"));
     expect(tid("px-work-start-wi_email")!.getAttribute("aria-disabled")).toBe("true");
     expect(tid("px-head-new-work")!.getAttribute("aria-disabled")).toBe("true");
   });
@@ -527,6 +549,8 @@ describe("Work (screens 5, 5b)", () => {
   it("a build, its retries and follow-ups are ONE row: clean title, attempt pill, Stalled since, never Running", async () => {
     engine();
     await openProject("&tab=work");
+    // Stalled since Nov 4, it has waited more than 7 days: it is under Stopped.
+    await press(tid("px-work-f-stopped"));
     // One row for the whole chain; no attempt is a row of its own.
     expect(tid("px-work-crun_aml")).not.toBeNull();
     for (const id of ["crun_aml_f3", "crun_aml_f2", "crun_aml_r1"]) expect(tid(`px-work-${id}`)).toBeNull();
@@ -534,44 +558,37 @@ describe("Work (screens 5, 5b)", () => {
     expect(tid("px-work-open-crun_aml")!.textContent).toBe("AML flagged line by kind");
     expect(row.textContent).not.toContain("Follow-up: checks failing");
     // Human words, never the raw source.
-    expect(row.textContent).toContain("Build");
     expect(row.textContent).not.toContain("code_task");
-    expect(tid("px-work-stalled-crun_aml")!.textContent).toMatch(/^Stalled · since /);
+    expect(tid("px-work-status-crun_aml")!.textContent).toBe("Stalled");
     expect(row.getAttribute("data-s")).toBe("stalled");
-    // Counted as Stalled, not Running; the chips match the rows.
-    expect(tid("px-work-f-stalled")!.textContent).toContain("1");
-    expect(tid("px-work-f-running")!.textContent).toContain("1");
-    await press(tid("px-work-f-running"));
+    // Stalled is never BOSS working; the counts are the tabs' own rows.
+    expect(tid("px-work-rows")!.getAttribute("data-tab")).toBe("stopped");
+    expect(tid("px-work-n-working")!.textContent).toBe("1");
+    await press(tid("px-work-f-working"));
     expect(tid("px-work-crun_aml")).toBeNull();
-    await press(tid("px-work-f-stalled"));
     expect($$("[data-testid='px-work-rows'] .px-wk").length).toBe(1);
-    await press(tid("px-work-f-all"));
-    // The pill expands the attempts, newest first, each labelled and openable.
-    const pill = tid("px-work-attempts-crun_aml")!;
-    expect(pill.textContent).toContain("7 attempts");
-    expect(pill.getAttribute("aria-expanded")).toBe("false");
-    expect((tid("px-work-attempts-list-crun_aml") as HTMLElement).hidden).toBe(true);
-    await press(pill);
-    expect(pill.getAttribute("aria-expanded")).toBe("true");
-    expect((tid("px-work-attempts-list-crun_aml") as HTMLElement).hidden).toBe(false);
-    const labels = $$("[data-testid='px-work-attempts-list-crun_aml'] .px-att b").map((b) => b.textContent);
+    await press(tid("px-work-f-stopped"));
+    // ▸ lists the iterations, latest first, each with its own status and Build link.
+    expect(tid("px-work-iterations-crun_aml")).toBeNull();
+    await press(tid("px-work-caret-crun_aml"));
+    const labels = $$("[data-testid='px-work-iterations-crun_aml'] .wl-title .px-ell").map((b) => b.textContent);
     expect(labels).toEqual(["Follow-up 3 · checks failing", "Follow-up 2 · retry 1", "Follow-up 2 · checks failing",
                             "Follow-up 1 · retry 1", "Follow-up 1 · checks failing", "Retry 1", "Build"]);
-    expect(tid("px-attempt-crun_aml_f3")!.textContent).toContain("Stalled");
-    expect(tid("px-attempt-crun_aml_f2")!.textContent).toContain("Handed on");
-    expect(tid("px-attempt-pr-crun_aml_r1")!.getAttribute("href")).toMatch(/\/6$/);
-    // An attempt opens as itself in the drawer.
-    await press(tid("px-attempt-open-crun_aml_r1"));
-    expect(params().get("drawer")).toBe("work:crun_aml_r1");
-    expect(tid("px-drawer-work")!.textContent).toContain("Retry 1");
-    expect(tid("px-drawer-link-build")!.getAttribute("href")).toContain("build=crun_aml_r1");
+    expect(tid("px-work-iter-crun_aml_f3")!.textContent).toContain("Stalled");
+    expect(tid("px-work-iter-crun_aml_f2")!.textContent).toContain("Earlier attempt");
+    expect(tid("px-work-build-crun_aml_r1")!.getAttribute("href")).toContain("build=crun_aml_r1");
   });
 
-  it("the group's drawer says it is stalled and lists every attempt; the board shows the pill", async () => {
+  it("an old group drawer link opens its build (no workflow); the board shows the pill", async () => {
     engine();
-    await openProject("&tab=work&drawer=build:crun_aml");
-    expect(tid("px-drawer-work-stalled")!.textContent).toMatch(/Stalled since/);
-    expect($$("[data-testid='px-drawer-work-attempts'] .px-li").length).toBe(7);
+    await openProject("&tab=work&drawer=build:crun_aml&wp=full");
+    // An rc10.32 panel link opens the panel again, over the whole screen; a build with no
+    // workflow draws its stations as the stages, and Build links its own page.
+    expect(tid("px-drawer-work")!.getAttribute("data-chat-full")).toBe("1");
+    expect(tid("wp-stage-build-link")!.getAttribute("href")).toContain("build=crun_aml_f3");
+    await press(tid("px-drawer-work-full"));
+    expect(params().get("wp")).toBeNull();
+    expect(tid("px-drawer-work")!.getAttribute("data-chat-full")).toBeNull();
     unmount();
     engine();
     await openProject("&tab=work");
@@ -590,7 +607,9 @@ describe("Work (screens 5, 5b)", () => {
   it("a drawer opened from a link lands open (deep link) and a stale one says so", async () => {
     engine();
     await openProject("&tab=work&drawer=work:wi_ui");
-    expect(tid("px-drawer-work")!.textContent).toContain("UI refresh");
+    // A work link opens its Work panel in the drawer (Work panel v2).
+    expect(tid("px-drawer-work")).not.toBeNull();
+    expect(tid("wp-title")!.textContent).toBe("UI refresh");
     unmount();
     engine();
     await openProject("&tab=work&drawer=work:gone");
@@ -898,9 +917,9 @@ describe("the engine's own answers (what the API serves, not the sample)", () =>
   it("the engine's drawer links open: run:<id> is the work drawer, env:<target> the environment, section:<key> is Settings", async () => {
     realEngine();
     await openProject("&tab=work&drawer=run:wfr_run1");
-    expect(tid("px-drawer-work")).not.toBeNull();
-    // One action (05b): with a PR it is "Merge PR #n", which approves the merge question in BOSS.
-    expect(new URLSearchParams((tid("px-drawer-work-decide") ?? tid("px-drawer-work-merge"))!.getAttribute("href")!.split("?")[1]).get("decision")).toBe("dec_1");
+    // run:<id> opens that run's Work panel in the drawer (Work panel v2).
+    expect([params().get("area"), params().get("drawer")]).toEqual(["project", "run:wfr_run1"]);
+    expect(tid("wp")).not.toBeNull();
     unmount(); realEngine();
     await openProject("&tab=deployments&drawer=env:dept_1");
     expect(tid("px-drawer-env")).not.toBeNull();
@@ -960,8 +979,8 @@ describe("the engine's own answers (what the API serves, not the sample)", () =>
   it("an onboarding item waiting on you is listed once in Needs you, never twice", async () => {
     realEngine((c) => (c.method === "GET" && c.path === `/v1/projects/${P}/onboarding`
       ? { body: { ...FX_ONBOARDING, state: "needs_you" } } : undefined));
-    await openProject("", "owner");
-    expect($$("[data-testid='px-needs-bar'] .px-needs-item").filter((x) => /App secret/.test(x.textContent ?? ""))).toHaveLength(1);
+    await openProject("&tab=work", "owner");
+    expect($$("[data-testid='px-work-rows'] .px-wk").filter((x) => /App secret/.test(x.textContent ?? ""))).toHaveLength(1);
   });
 
   it("an onboarding that never started offers Start onboarding, which posts §8's start", async () => {

@@ -1,31 +1,55 @@
 # Build toolchains
 
 BOSS builds, tests and previews projects inside its build sandbox (see [SANDBOX.md](SANDBOX.md)).
-Python 3.11 and Node 20 are always installed. Other stacks are **opt-in for each install**, so an
-install that never builds Java doesn't carry a JDK, and one that never builds Go carries no Go.
+Python 3.11 and Node 20 are always installed. **Java and Go are on by default**, because most
+projects people bring use one of them. Each install can turn either off (and the security scanners
+on), so an install that never builds Java can drop the JDK.
 
-| Toolchain | What you get | Image cost |
-|---|---|---|
-| `python`, `node` | Always installed | — |
-| `java` | Temurin JDK 21.0.12.1+1, Maven 3.9.16, Gradle 8.14.6 | about 0.5 GB on the api/worker image |
-| `go` | Go 1.27.4 (`go`, `gofmt`) | about 0.25 GB on the api/worker image |
-| `security` | Semgrep, OSV-Scanner, OWASP ZAP (includes Java) | see the security review docs |
+| Toolchain | What you get | Default | Image cost |
+|---|---|---|---|
+| `python`, `node` | Always installed | always | — |
+| `java` | Temurin JDK 21.0.12.1+1, Maven 3.9.16, Gradle 8.14.6 | on | about 0.5 GB on the api/worker image |
+| `go` | Go 1.27.4 (`go`, `gofmt`) | on | about 0.25 GB on the api/worker image |
+| `security` | Semgrep, OSV-Scanner, OWASP ZAP (includes Java) | off (opt-in) | see the security review docs |
 
-`BOSS_TOOLCHAINS` is `none` (the default) or a comma-separated list with no spaces, such as
-`java,go`. An unknown name stops the image build with a message that says what is accepted.
+`BOSS_TOOLCHAINS` in the install's `.env` is `none` or a comma-separated list with no spaces,
+such as `java,go`. With no `BOSS_TOOLCHAINS` line (or an empty one) the install gets the
+default, `java,go`. An unknown name stops the image build with a message that says what is
+accepted.
 
-## Turn a toolchain on
+With the default, a first image build downloads the JDK, Maven, Gradle and Go (about 0.75 GB
+more on the api/worker image than `none`), and the egress proxy opens Maven Central, the Gradle
+plugin portal and the Go module proxy for sandboxed builds (it opens them only when the image
+carries the toolchain).
+
+## Existing installs, after an upgrade
+
+- **No `BOSS_TOOLCHAINS` line in `.env`** (the toolchains were never touched): the next
+  `boss update` or `boss upgrade` builds Java and Go in. Nothing is written to `.env`, so the
+  install keeps following the default.
+- **`BOSS_TOOLCHAINS=none`** (someone turned them off): stays off. An explicit value always wins.
+- **`BOSS_TOOLCHAINS=java`, `go`, `security`, …**: kept exactly as it is.
+
+Every service built with `BOSS_TOOLCHAINS` is rebuilt together: api and worker (they build
+projects), egress (it opens Maven Central, the Gradle portal and the Go proxy only when its own
+image has the toolchain) and the runner when it runs. `boss update`, `remote.sh update` and
+`boss toolchains enable|disable` all do this. `boss toolchains` and `remote.sh update` say so
+when a running service carries different toolchains than the api, with the command that fixes it.
+
+## Turn a toolchain on or off
 
 On the BOSS host:
 
 ```sh
-boss toolchains enable java     # adds java to BOSS_TOOLCHAINS in .env, rebuilds api + worker, restarts them
-boss toolchains enable go       # now BOSS_TOOLCHAINS=java,go
-boss toolchains                 # what .env asks for, and what the running image has
-boss toolchains disable java    # removes java and keeps go; the last one off leaves none
+boss toolchains                 # what .env asks for (or the default), and what the running image has
+boss toolchains disable java    # saves BOSS_TOOLCHAINS=go in .env, rebuilds api, worker and egress, restarts them
+boss toolchains disable go      # the last one off saves BOSS_TOOLCHAINS=none, and that is kept
+boss toolchains enable go       # back on: BOSS_TOOLCHAINS=go
+boss toolchains enable security # the scanners (opt-in), on top of Java
 ```
 
-You can also set `BOSS_TOOLCHAINS=java,go` in the install's `.env` yourself and run `boss update`.
+You can also set `BOSS_TOOLCHAINS=java,go` (or `none`) in the install's `.env` yourself and run
+`boss update`.
 
 `security` is built on the Java stage (OWASP ZAP needs its JRE), so an install with `security`
 has Java whatever the list says. `boss toolchains disable java` refuses while `security` is on and
@@ -42,9 +66,10 @@ that is off shows the command that turns it on.
 `toolchains-go`, `toolchains-security`). From `ARG BOSS_TOOLCHAINS` it works out, for each
 toolchain, either that toolchain's stage or the empty one (`tc-java`, `tc-go`, `tc-security`).
 The `toolchains` stage lays their `/opt/toolchains` trees over one another and merges their
-manifests into one `manifest.json`, and `python-runtime` copies `/opt/toolchains` from it.
-BuildKit skips any stage that nothing uses, so a default install never downloads a JDK or Go. We
-picked this over the alternatives:
+manifests into one `manifest.json`, and `python-runtime` copies `/opt/toolchains` from it (the
+slim egress image copies only the manifest, to know which package hosts to open).
+BuildKit skips any stage that nothing uses, so an install with `BOSS_TOOLCHAINS=none` never
+downloads a JDK or Go. We picked this over the alternatives:
 
 - **A separate `api-java` image** would have to be built, tagged and kept in step with the api,
   worker, egress and mcp-tools images. Every compose file, the upgrade path and `boss prune`
@@ -117,20 +142,22 @@ a `go.mod`, the one most of its source is written in decides (Java on a tie).
 
 - Maven and Gradle reach the internet only through boss-egress's CONNECT proxy. They ignore
   `HTTPS_PROXY`, so at run start BOSS writes the proxy into the run's own `~/.m2/settings.xml`
-  and `~/.gradle/gradle.properties`. The default allowlist (`BOSS_EGRESS_CONNECT_ALLOW`) gains
+  and `~/.gradle/gradle.properties`. The built-in allowlist gains
   these hosts and nothing else: `repo.maven.apache.org`, `repo1.maven.org`,
   `plugins.gradle.org` and `plugins-artifacts.gradle.org` (only on an install with Java). A project that needs another
-  repository (a company Nexus, JitPack) has to be added to the allowlist by the operator.
+  repository (a company Nexus, JitPack) has to be allowed by the operator (`BOSS_EGRESS_CONNECT_ALLOW`,
+  or `BOSS_MAVEN_MIRROR` for a mirror of everything: [Enterprise network](ENTERPRISE_NETWORK.md)).
 - Go honours `HTTPS_PROXY`, so it needs no config file. Each run gets
   `GOPROXY=https://proxy.golang.org` (no `direct`: a module is never fetched from its source
   host) and `GOSUMDB=sum.golang.org`, and the allowlist gains exactly those two hosts. The proxy
-  serves module zips itself, so `storage.googleapis.com` is not needed. Private modules are not
-  supported in the sandbox: nothing may skip the proxy or the checksum database.
+  serves module zips itself, so `storage.googleapis.com` is not needed. Nothing may skip the
+  proxy. A company module proxy replaces both (`BOSS_GOPROXY`, `BOSS_GOSUMDB`), and its internal
+  modules can be named in `BOSS_GONOSUMDB` ([Enterprise network](ENTERPRISE_NETWORK.md)).
 - **Toolchain hosts open only with the toolchain.** boss-egress reads the image's manifest: the
   Maven and Gradle hosts are allowed only when Java is installed, the Go hosts only when Go is.
   Every allowed host is also a way out: a module proxy fetches any public path it is asked for,
   so a run could encode data into its requests. An install that doesn't build Go doesn't open the
-  Go proxy at all. `BOSS_EGRESS_CONNECT_ALLOW` still replaces the whole list.
+  Go proxy at all. `BOSS_EGRESS_CONNECT_ALLOW` adds hosts to this list (`BOSS_EGRESS_CONNECT_DEFAULTS=off` drops the built-in hosts).
 - **Caches are kept per project.** When a build ends, BOSS copies the run's `~/.m2/repository`
   and `~/.gradle/caches/modules-2` (Java), or `~/go/pkg/mod` (`GOMODCACHE`) and
   `~/.cache/go-build` (`GOCACHE`) (Go), into `/var/lib/boss/toolchain-cache/<hash of project id>`.

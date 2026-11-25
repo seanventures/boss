@@ -516,6 +516,15 @@ def tick(engine, settings: Any, *, now: Optional[datetime] = None,
         with begin(engine) as c:
             return DecisionService(settings).expire_overdue(c)
     out["decisions_expired"] = guard("deadlines", deadlines) or 0
+
+    # DEV AUTONOMY'S SWEEP (autonomy_gate, BOSSAPP-1441): cards BOSS answers in development that
+    # the after-commit decide did not reach (a direct insert, a restart) are decided here, with
+    # the same follow-on a person's Approve runs.
+    def autonomy():
+        from .autonomy_gate import sweep
+
+        return sweep(engine, settings)
+    out["autonomy"] = guard("autonomy", autonomy)
     out["routed"] = guard("routes", routes)
     # A PERSON'S WATCHDOGS ON WORK TREES (BOSSAPP-880, work_watchdogs): a subtree that stopped
     # unfinished, has blocked work, closed or stalled is told once per fingerprint, queued in
@@ -526,6 +535,14 @@ def tick(engine, settings: Any, *, now: Optional[datetime] = None,
         return work_watchdogs.sweep(engine, settings, now=now)
     out["watchdogs"] = guard("watchdogs", watchdogs)
 
+    # A BUILD A BOSS BUG STOPPED, RESTARTED ONCE BOSS IS UPDATED (build_restart_recovery): a
+    # platform failure from before this update is retried on the new code, or said in words.
+    def restart_recovery():
+        from . import build_restart_recovery
+
+        return build_restart_recovery.sweep(engine, settings, now=now)
+    out["restart_recovery"] = guard("restart_recovery", restart_recovery)
+
     # STATUS CARDS (BOSSAPP-883, status_cards): each card whose refresh time passed is
     # recomposed; a changed document is stored as its next revision.
     def cards():
@@ -533,6 +550,14 @@ def tick(engine, settings: Any, *, now: Optional[datetime] = None,
 
         return status_cards.sweep(engine, settings, now=now)
     out["status_cards"] = guard("status_cards", cards)
+
+    # APPROVED CONFLUENCE PAGES (BOSSAPP-1384): a page whose approval committed but whose write
+    # never finished (a restart in between) is written now. Idempotent and claim-fenced.
+    def confluence_publish_catch_up():
+        from . import confluence_publish
+
+        return len(confluence_publish.tick(engine, settings))
+    out["confluence_publish"] = guard("confluence_publish", confluence_publish_catch_up)
     out["delivery"] = guard("deliver", lambda: notify.deliver_due(engine, settings, now=now))
     # Two-way chat (BOSSAPP-834): decision cards and answers, retried with backoff, dead-lettered.
     out["chat"] = guard("chat", lambda: notify.deliver_chat_due(engine, settings, now=now))
@@ -568,6 +593,16 @@ def tick(engine, settings: Any, *, now: Optional[datetime] = None,
 
         return stuck_work.sweep(engine, settings, now=now, adapter=adapter)
     out["stuck_work"] = guard("stuck_work", stuck_sweep)
+
+    # EVERY FAILURE HAS AN OWNER (failure_owner): after every other owner had its turn (a
+    # build's retry, a step's recovery, the Shepherd's diagnosis, the restart after an update),
+    # each failed item left is given one — BOSS's bounded attempt, or ONE action item for a
+    # person with the reason BOSS could not fix it. Never a bare "failed".
+    def failure_owner_sweep():
+        from . import failure_owner
+
+        return failure_owner.sweep(engine, settings, now=now)
+    out["failure_owner"] = guard("failure_owner", failure_owner_sweep)
     return out
 
 

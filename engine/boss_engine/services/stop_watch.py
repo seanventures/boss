@@ -56,8 +56,11 @@ def tick(engine: Any) -> list[dict[str, Any]]:
     if not live:
         return []
     try:
-        with engine.begin() as c:
-            stopped = stopped_runs(c, live)
+        from ..db import background
+
+        with background():
+            with engine.begin() as c:
+                stopped = stopped_runs(c, live)
     except Exception:  # noqa: BLE001 — a DB blip must not kill the watch
         _log.debug("stop watch query failed", exc_info=True)
         return []

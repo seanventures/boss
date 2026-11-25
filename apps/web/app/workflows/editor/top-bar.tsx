@@ -25,7 +25,9 @@ import { CHECK_TIP } from "./save/use-save-flow";
 
 export type VersionRow = { version: number; published_at: string; is_active: boolean };
 
-export const STANDARD_TIP = "Shipped with BOSS. Saving makes your own copy.";
+export const STANDARD_TIP = "Shipped with BOSS. Edit it here; Reset to standard brings the shipped one back.";
+export const MODIFIED_TIP = "You changed this standard. Reset to standard brings the shipped one back.";
+export const NEW_STANDARD_TIP = "BOSS shipped a newer version of this standard. Your changes were kept.";
 export const VERSION_TIP = "Each save is a new version. Running work keeps its version.";
 export const NO_DELETE_TIP = "Standards can't be deleted.";
 
@@ -69,7 +71,17 @@ export function TopBar(p: {
   onSave(): void; saveLabel: string; saveBlocked?: string | null; saveTip: string; saving: boolean;
   saveRef: RefObject<HTMLButtonElement | null>;
   onDuplicate(): void; duplicateBlocked?: string | null; onUseFor(): void; onChanges(): void; onDiscard(): void; onDelete(): void;
+  /** A standard only: make your own copy instead of editing it (secondary to Save). */
+  onSaveAsCopy?(): void; saveAsCopyBlocked?: string | null;
+  /** Opens the standard's "New standard available" offer. */
+  onNewStandard?(): void;
   deleteBlocked?: string | null;
+  /** Publish this workflow (Yours, saved) to the org's Marketplace: the form is drawn by the host. */
+  publishForm?: (close: () => void) => React.ReactNode;
+  publishBlocked?: string | null;
+  /** Installed from the Marketplace: Uninstall its pack instead of Delete. */
+  onUninstall?(): Promise<string | null>;
+  uninstallBlocked?: string | null;
   readOnly: boolean;
   /** Whether the editor has the whole window (`page=full`), and the press that switches it.
    *  Absent: the host offers no full page, and no button is drawn. */
@@ -79,7 +91,9 @@ export function TopBar(p: {
   const meta = state.meta;
   const jsonLine = state.jsonError ? `Fix the JSON first (line ${state.jsonError.line})` : null;
 
-  const [pop, setPop] = useState<null | "versions" | "menu" | "describe" | "discard" | "delete">(null);
+  const [pop, setPop] = useState<null | "versions" | "menu" | "describe" | "discard" | "delete" | "publish" | "uninstall">(null);
+  const [uninstallSaid, setUninstallSaid] = useState("");
+  const [uninstalling, setUninstalling] = useState(false);
   const versionsRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLButtonElement>(null);
   const describeRef = useRef<HTMLButtonElement>(null);
@@ -108,7 +122,7 @@ export function TopBar(p: {
               bar wraps its actions to the next line rather than squeeze it to "DQ RCA a…". */}
           <label className="wf-name" data-error={p.nameError ? "true" : undefined}
                  style={{ ["--wf-name-ch" as string]: String(Math.max(8, meta.name.trim().length + 2)) } as React.CSSProperties}>
-            <input className="wf-name-input" value={meta.name} aria-label="Name" readOnly={p.readOnly}
+            <input className="wf-name-input" value={meta.name} aria-label="Name" readOnly={p.readOnly || meta.is_catalogue}
                    autoFocus={p.autoFocusName} data-testid="wf-name" aria-invalid={p.nameError ? true : undefined}
                    data-tip={meta.name.trim() || undefined} data-tip-when="cut"
                    onFocus={(e) => { if (p.autoFocusName) e.currentTarget.select(); }}
@@ -118,25 +132,37 @@ export function TopBar(p: {
             {p.nameError ? <span className="wf-name-error" role="alert">{p.nameError}</span> : null}
           </label>
 
-          {viewing !== null ? (
-            <span className="wf-chip" data-tone="amber" data-testid="wf-viewing">
-              Viewing v{viewing}
-              <button type="button" className="wf-link" onClick={p.onRestoreVersion} data-testid="wf-restore"
-                      data-tip="Make this the draft. Save publishes it as the next version.">Restore</button>
-              <button type="button" className="wf-link" onClick={p.onLeaveVersion} aria-label="Back to the current version"
-                      data-tip="Back to the current version" data-testid="wf-leave-version">×</button>
-            </span>
-          ) : meta.version !== null ? (
-            <button type="button" ref={versionsRef} className="wf-chip wf-chip-btn" data-tip={VERSION_TIP}
-                    aria-haspopup="dialog" onClick={() => void openVersions()} data-testid="wf-version">
-              v{meta.version}
-            </button>
-          ) : null}
+          {/* The version and what it is (v1 · Standard) wrap as one, never apart. */}
+          <span className="wf-bar-kind">
+            {viewing !== null ? (
+              <span className="wf-chip" data-tone="amber" data-testid="wf-viewing">
+                Viewing v{viewing}
+                <button type="button" className="wf-link" onClick={p.onRestoreVersion} data-testid="wf-restore"
+                        data-tip="Make this the draft. Save publishes it as the next version.">Restore</button>
+                <button type="button" className="wf-link" onClick={p.onLeaveVersion} aria-label="Back to the current version"
+                        data-tip="Back to the current version" data-testid="wf-leave-version">×</button>
+              </span>
+            ) : meta.version !== null ? (
+              <button type="button" ref={versionsRef} className="wf-chip wf-chip-btn" data-tip={VERSION_TIP}
+                      aria-haspopup="dialog" onClick={() => void openVersions()} data-testid="wf-version">
+                v{meta.version}
+              </button>
+            ) : null}
 
-          {meta.is_catalogue ? (
-            <span className="wf-chip" data-tone="accent" data-tip={STANDARD_TIP} data-testid="wf-kind">Standard</span>
-          ) : meta.definition_id ? (
-            <span className="wf-chip" data-testid="wf-kind">Yours</span>
+            {meta.is_catalogue && meta.standard?.modified ? (
+              <span className="wf-chip" data-tone="amber" data-tip={MODIFIED_TIP} data-testid="wf-kind">Modified</span>
+            ) : meta.is_catalogue ? (
+              <span className="wf-chip" data-tone="accent" data-tip={STANDARD_TIP} data-testid="wf-kind">Standard</span>
+            ) : meta.definition_id ? (
+              <span className="wf-chip" data-testid="wf-kind">Yours</span>
+            ) : null}
+          </span>
+
+          {meta.is_catalogue && meta.standard?.new_standard ? (
+            <button type="button" className="wf-chip wf-chip-btn" data-tone="accent" data-tip={NEW_STANDARD_TIP}
+                    onClick={() => p.onNewStandard?.()} data-testid="wf-new-standard">
+              New standard available
+            </button>
           ) : null}
 
           {meta.is_catalogue && meta.copy ? (
@@ -256,10 +282,28 @@ export function TopBar(p: {
         </div>
       </Popover>
 
-      <Popover anchor={menuRef} open={pop === "menu" || pop === "discard" || pop === "delete"}
-               onClose={close} label="More" role={pop === "menu" ? "menu" : "dialog"} width={220}
-               testId="wf-menu">
-        {pop === "discard" ? (
+      <Popover anchor={menuRef} open={pop === "menu" || pop === "discard" || pop === "delete"
+                                      || pop === "publish" || pop === "uninstall"}
+               onClose={close} label="More" role={pop === "menu" ? "menu" : "dialog"}
+               width={pop === "publish" ? 340 : 220} testId="wf-menu">
+        {pop === "publish" && p.publishForm ? (
+          p.publishForm(close)
+        ) : pop === "uninstall" && meta.marketplace ? (
+          <div className="wf-pop-form" data-testid="wf-uninstall">
+            <div className="wf-pop-title">Uninstall <span data-user-text>{meta.marketplace.pack_name}</span>?</div>
+            {uninstallSaid ? <p className="wf-publish-error" role="alert" data-testid="wf-uninstall-said">{uninstallSaid}</p> : null}
+            <div className="wf-pop-actions">
+              <button type="button" className="wf-btn wf-btn-danger" autoFocus data-testid="wf-uninstall-confirm"
+                      disabled={uninstalling || Boolean(p.uninstallBlocked)} title={p.uninstallBlocked ?? "Its workflows leave Yours. Ones that ran keep their history."}
+                      onClick={async () => {
+                        setUninstalling(true);
+                        const said = await p.onUninstall?.() ?? null;
+                        setUninstalling(false);
+                        if (said) setUninstallSaid(said); else close();
+                      }}>{uninstalling ? "Uninstalling…" : "Uninstall"}</button>
+            </div>
+          </div>
+        ) : pop === "discard" ? (
           <div className="wf-pop-form">
             <div className="wf-pop-title">Discard changes?</div>
             <div className="wf-pop-actions">
@@ -277,6 +321,11 @@ export function TopBar(p: {
           </div>
         ) : (
           <ul className="wf-menu" role="none">
+            {meta.is_catalogue && p.onSaveAsCopy ? (
+              <li role="none"><Btn role="menuitem" className="wf-menu-item" onClick={() => { close(); p.onSaveAsCopy?.(); }}
+                                   blocked={(p.readOnly && `Viewing v${viewing}`) || p.saveAsCopyBlocked}
+                                   testId="wf-menu-save-copy">Save as your copy</Btn></li>
+            ) : null}
             <li role="none"><Btn role="menuitem" className="wf-menu-item" onClick={() => { close(); p.onDuplicate(); }}
                                  blocked={(p.readOnly && `Viewing v${viewing}`) || p.duplicateBlocked} testId="wf-menu-duplicate">Duplicate</Btn></li>
             <li role="none"><Btn role="menuitem" className="wf-menu-item" onClick={() => { close(); p.onUseFor(); }}
@@ -285,8 +334,19 @@ export function TopBar(p: {
                                  onClick={() => { close(); p.onChanges(); }} testId="wf-menu-changes">Changes</Btn></li>
             <li role="none"><Btn role="menuitem" className="wf-menu-item" blocked={!dirty && "No changes"}
                                  onClick={() => setPop("discard")} testId="wf-menu-discard">Discard changes</Btn></li>
-            <li role="none"><Btn role="menuitem" className="wf-menu-item wf-menu-danger" blocked={p.deleteBlocked}
-                                 onClick={() => setPop("delete")} testId="wf-menu-delete">Delete</Btn></li>
+            {p.publishForm ? (
+              <li role="none"><Btn role="menuitem" className="wf-menu-item" blocked={p.publishBlocked}
+                                   onClick={() => setPop("publish")} testId="wf-menu-publish">
+                {meta.published?.status === "published" ? "Publish again…" : "Publish to Marketplace…"}</Btn></li>
+            ) : null}
+            {meta.marketplace && p.onUninstall ? (
+              <li role="none"><Btn role="menuitem" className="wf-menu-item wf-menu-danger" blocked={p.uninstallBlocked}
+                                   onClick={() => { setUninstallSaid(""); setPop("uninstall"); }}
+                                   testId="wf-menu-uninstall">Uninstall…</Btn></li>
+            ) : (
+              <li role="none"><Btn role="menuitem" className="wf-menu-item wf-menu-danger" blocked={p.deleteBlocked}
+                                   onClick={() => setPop("delete")} testId="wf-menu-delete">Delete</Btn></li>
+            )}
           </ul>
         )}
       </Popover>

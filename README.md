@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/seanventures/boss/releases/tag/v1.0-rc10.27"><img alt="Release v1.0-rc10.27" src="https://img.shields.io/badge/release-v1.0--rc10.27-1aa89a?style=flat-square"></a>
+  <a href="https://github.com/seanventures/boss/releases/tag/v1.0-rc10.35"><img alt="Release v1.0-rc10.35" src="https://img.shields.io/badge/release-v1.0--rc10.35-1aa89a?style=flat-square"></a>
   <a href="LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/license-Apache%202.0-101820?style=flat-square"></a>
   <img alt="Self-hosted" src="https://img.shields.io/badge/deploy-self--hosted-101820?style=flat-square">
   <img alt="Interfaces: web, terminal, CLI, MCP" src="https://img.shields.io/badge/interfaces-web%20%C2%B7%20terminal%20%C2%B7%20CLI%20%C2%B7%20MCP-101820?style=flat-square">
@@ -19,33 +19,37 @@ Credentials stay on the machine. A call to a hosted model sends that provider th
 
 ## The shortest path
 
-1. Install v1.0-rc10.27.
+1. Install v1.0-rc10.35.
 2. Claim the install.
 3. Connect a repository.
 4. Connect a model.
 5. Open one pull request.
 
-The [quickstart](docs/community/QUICKSTART.md) is those steps. A hostname and TLS are in the [hostname guide](docs/community/hostname.md). Passkeys, passwords, and an SSH tunnel are in [sign-in](docs/community/CONSOLE_AUTH.md).
+The [quickstart](docs/community/QUICKSTART.md) is those steps. A hostname and TLS are in the [hostname guide](docs/community/hostname.md). Passkeys, passwords, and an SSH tunnel are in [sign-in](docs/community/CONSOLE_AUTH.md). A company network (a proxy, TLS inspection, internal package mirrors) is in [enterprise network](docs/community/ENTERPRISE_NETWORK.md), and a Mac without Docker Desktop in [Colima](docs/community/COLIMA.md).
 
 You need Git on the install machine. If GitHub asks you to sign in, use an account that can read the repository. On Ubuntu or Debian without Git, first run `sudo apt-get update && sudo apt-get install -y git`.
 
 ```bash
 (
   set -e
-  git clone --branch v1.0-rc10.27 https://github.com/seanventures/boss.git boss-rc10.27
-  cd boss-rc10.27
+  git clone --branch v1.0-rc10.35 https://github.com/seanventures/boss.git boss-rc10.35
+  cd boss-rc10.35
   BOSS_RELEASE_COMMIT="$(git rev-parse HEAD)"
   ./install.sh --dir "$PWD" --ref "$BOSS_RELEASE_COMMIT"
 )
 ```
 
-Use a new directory named `boss-rc10.27`. The command stops if the clone fails, and it pins the install to that commit. Continue from `cd boss-rc10.27`. Services listen on the machine itself. Add `--console-origin https://boss.example.com`, with your hostname, when the console will be opened from somewhere else. Omit it to open `http://127.0.0.1:3000` on the install machine.
+Use a new directory named `boss-rc10.35`. The command stops if the clone fails, and it pins the install to that commit. Continue from `cd boss-rc10.35`. Services listen on the machine itself. Add `--console-origin https://boss.example.com`, with your hostname, when the console will be opened from somewhere else. Omit it to open `http://localhost:3000` on the install machine.
 
 `boss upgrade` writes a backup (database, keys, artifacts, and the local repositories volume that holds unpublished local projects' code), then moves to a later release. `boss upgrade --to REF` picks the release. `boss uninstall` stops BOSS and keeps the data. Ports, flags, and recovery are in the [installer guide](scripts/install/README.md).
 
-The copy at [boss.sean.network/install.sh](https://boss.sean.network/install.sh) is published separately. This page does not treat it as v1.0-rc10.27. The manual in this repository is the source. The [hosted docs](https://boss.sean.network/docs/) are published separately too.
+Upgrade note: BOSS acts on its own approval cards in development and asks you in production. The installer writes `BOSS_INSTALL_TIER` (`dev` on a Mac with no public `--console-origin`, `prod` on a server or a `remote.sh` host); a Linux laptop or a dev VM passes `--install-tier dev`.
 
-The installer targets Ubuntu 22.04/24.04 and Debian 12/13, and it can set up Docker. The bounded installed checks behind this candidate are an owned Linux arm64 machine that already had Docker. A clean-host install and useful provider work are separate checks. Read the [release notes](docs/community/RELEASE_NOTES_v1.0-rc10.27.md) and the [RC9 validation record](docs/community/RC9_VALIDATION.md) before you rely on a path.
+The copy at [boss.sean.network/install.sh](https://boss.sean.network/install.sh) is published separately. This page does not treat it as v1.0-rc10.35. The manual in this repository is the source. The [hosted docs](https://boss.sean.network/docs/) are published separately too.
+
+The installer targets Ubuntu 22.04/24.04 and Debian 12/13, and it can set up Docker. Before this tag was published it was installed from these instructions, word for word, on an Ubuntu 24.04 x86_64 host, claimed, and walked through Setup, a sample project and the model screen; a template build ran from Easy Mode to its pull request on a second install with a model connected. Read the [release notes](docs/community/RELEASE_NOTES_v1.0-rc10.35.md) and the [RC9 validation record](docs/community/RC9_VALIDATION.md) before you rely on a path.
+
+Disk: a first install needs about 21 GB free, and the installer checks this before it starts. A running install uses about 20–30 GB and cleans up after itself; `boss doctor` shows where the space goes. See [the disk budget](docs/operations/DISK_BUDGET.md).
 
 ## What you get
 

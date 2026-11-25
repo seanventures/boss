@@ -163,9 +163,9 @@ CAPABILITY_PRECHECKS: dict[str, CapabilityPrecheck] = {
     "monitor": CapabilityPrecheck(_INFRA),
     "notify": NO_CHECKS("readiness checks the channel connection"),
     "smoke_test": CapabilityPrecheck(("authority.consent", "smoke.contract")),
-    # AMEX-G7: the cases are the step's own input; the URL they hit is the deployed app's.
+    # BOSSAPP-1143: the cases are the step's own input; the URL they hit is the deployed app's.
     "contract_test": CapabilityPrecheck(("authority.consent",)),
-    # AMEX-G5/G6: both write to the project's GitHub repository through its binding.
+    # BOSSAPP-1141 / 1142: both write to the project's GitHub repository through its binding.
     "github_comment": CapabilityPrecheck(("authority.consent", "github.access")),
     "fix_pr": CapabilityPrecheck(("authority.consent", "github.access")),
     "wait_for_ci": CapabilityPrecheck(("github.access", "github.ci")),
@@ -1705,7 +1705,9 @@ def check_test_plan(ctx: Context, step: dict[str, Any]) -> dict[str, Any]:
             spec = raw if isinstance(raw, dict) else json.loads(raw or "{}")
             title = str(row["title"] or title)
     try:
-        plan = vt.resolve_gate_plan(spec, title, ctx.app_dir, app_id=None, changed=None)
+        pinned = vt.pin_verify_manifest(ctx.app_dir)
+        plan = vt.resolve_gate_plan(
+            spec, title, ctx.app_dir, app_id=None, changed=None, pinned=pinned)
         plan_txt = f"gate plan ({plan.source}): {plan.description[:200]}"
         finding = getattr(plan, "finding", None) or plan.error
     except Exception as exc:  # noqa: BLE001

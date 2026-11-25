@@ -25,6 +25,7 @@ _GATE_WORDS = {
     "consistent": "Consistent", "nothing_broke": "Nothing broke", "app_serves": "App starts",
     "web_package_honest": "Package honest", "template_tests": "Template tests",
     "no_committed_secrets": "No secrets", "acceptance_met": "Must-haves met",
+    "input_fidelity": "Derived from input",
 }
 
 
@@ -83,20 +84,38 @@ def render(*, title: str, evidence: dict, gates: dict, paths: Iterable[str] = ()
     # (the rounds record an unconvened seat as not_run, which must not turn its gate false).
     skipped = {g: why for g, why in _seat_policy.skipped_gates(evidence).items() if g in gates}
     final = next((r.get("seats") or {} for r in reversed(rounds) if r.get("seats")), {})
+    # A REVIEW THAT REFUTED ONLY WITH FINDINGS BELOW THE BAR'S BLOCKING SEVERITY (a MAJOR at
+    # the standard bar) passed its gate: those findings are the build's follow-ups, so the
+    # review is a follow-up here, never "❌ failed" over a build that was not blocked.
+    graded = {"code_review_passed"} if (
+        gates.get("code_review_passed")
+        and str((final.get("review_code") or {}).get("verdict") or "") == "refuted"
+        and evidence.get("deferred_findings")) else set()
     for seat, gate, good in (("review_code", "code_review_passed", {"survived"}),
                              ("security_check", "security_clean", {"clean"}),
                              ("consistency_check", "consistent", {"consistent"})):
         verdict = str((final.get(seat) or {}).get("verdict") or "")
         # Only ever downgrades: a recorded failure stays a failure.
-        if gate in gates and verdict and gate not in skipped:
+        if gate in gates and verdict and gate not in skipped and gate not in graded:
             gates[gate] = bool(gates[gate]) and verdict in good
-    passed = [k for k, v in gates.items() if v and k not in skipped]
-    failed = [k for k, v in gates.items() if not v and k not in skipped]
+    # A gate the quality bar let through is a THIRD bucket, never passed (quality_bar.py): it
+    # did not pass, and at this bar it does not fail the build.
+    followups = {g: lines for g, lines in
+                 ((evidence.get("quality_bar") or {}).get("followups") or {}).items()
+                 if g in gates}
+    followups.update({g: [] for g in graded if g not in followups})
+    passed = [k for k, v in gates.items() if v and k not in skipped and k not in followups]
+    failed = [k for k, v in gates.items() if not v and k not in skipped and k not in followups]
     out += ["", "### Checks"]
     if gates:
-        out.append(f"{len(passed)} passed, {len(failed)} failed"
+        out.append(f"{len(passed)} passed"
+                   + (f", {len(followups)} follow-ups" if followups else "")
+                   + f", {len(failed)} failed"
                    + (f", {len(skipped)} skipped." if skipped else "."))
         out += [f"- ❌ {_gate(g)}" for g in failed]
+        out += [f"- 🔸 {_gate(g)} — follow-up (quality bar: "
+                f"{(evidence.get('quality_bar') or {}).get('bar') or 'standard'})"
+                for g in followups]
         out += [f"- ✅ {_gate(g)}" for g in passed]
         out += [f"- ⏭ {_gate(g)} — skipped: {why}" for g, why in skipped.items()]
     else:
@@ -126,9 +145,14 @@ def render(*, title: str, evidence: dict, gates: dict, paths: Iterable[str] = ()
     deferred = list(deferred or [])
     if deferred:
         out.append(f"- Deferred as follow-up work: {len(deferred)}")
+    from . import brief_items as _brief_items
+
+    out += _brief_items.pr_lines(evidence.get("brief_items"))
     hollow = evidence.get("review_hollow") or {}
     for stage, why in hollow.items():
         out.append(f"- ⚠ {SEAT_LABELS.get(stage, stage)} did not see the change ({why}).")
+    for stage, why in (evidence.get("review_suspect") or {}).items():
+        out.append(f"- ⚠ {SEAT_LABELS.get(stage, stage)} verdict is suspect ({why}).")
     # L1 baseline-aware verification: failures the change did not cause, named as such.
     if baseline:
         from . import baseline_verify

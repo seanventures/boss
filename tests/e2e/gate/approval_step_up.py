@@ -181,11 +181,17 @@ def main() -> int:
         return {s["step_id"]: s for s in found[0]["steps"]}
 
     # ---- a tiny workflow: PRD approval, then a second gate ------------------------------------------
+    # Each gate is one its AUTHOR set to ask ("mode": "manual"): a stop a person set. On a
+    # development install, dev autonomy (BOSSAPP-1441, services/autonomy_gate.py) answers every
+    # other gate itself a moment after it opens, so a plain gate was already approved by BOSS when
+    # the person re-sent theirs (409 "already approved", enterprise lane 2026-11-24). This check
+    # is about the PERSON's approval surviving step-up, so its gates are the person's.
+    manual = {"mode": "manual"}
     spec = {"entry_step": "prd", "steps": [
         {"id": "prd", "kind": "decision", "captain": "human", "next": ["ship"],
-         "question": f"Approve the PRD? ({uuid4().hex[:6]})"},
+         "approval": manual, "question": f"Approve the PRD? ({uuid4().hex[:6]})"},
         {"id": "ship", "kind": "decision", "captain": "human", "next": [],
-         "question": f"Ship it? ({uuid4().hex[:6]})"}]}
+         "approval": manual, "question": f"Ship it? ({uuid4().hex[:6]})"}]}
     pub = wf("publish", name=f"Gate step-up {uuid4().hex[:6]}", spec=spec)
     expect(pub.status_code == 200, f"publishing the workflow failed: {_short(pub)}")
     key = pub.json()["definition"]["workflow_key"]

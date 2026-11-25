@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The gateway test says the detail, beside Works or Failed, not only on its title.
  * A blank detail says nothing. Works and Failed are already visible, so those words

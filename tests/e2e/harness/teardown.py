@@ -69,6 +69,11 @@ def labelled_images(run_id: str) -> list[str]:
     return sorted(set(_docker("images", "-q", "--filter", f"label={LABEL_KEY}={run_id}")))
 
 
+def labelled_volumes(run_id: str) -> list[str]:
+    """Volumes this run labelled (the stack's Postgres data volume, stack.start_postgres)."""
+    return sorted(set(_docker("volume", "ls", "-q", "--filter", f"label={LABEL_KEY}={run_id}")))
+
+
 # ----------------------------------------------------------------------------- processes
 def fingerprint(pid: int) -> Optional[str]:
     """When a live process started, or None. Taken at spawn, compared at stop: a PID and its
@@ -173,11 +178,16 @@ def stop(run_id: str, run_dir: str, pids: dict[str, int], fingerprints: dict[str
         strays = marked_processes(run_id, run_dir)
         if strays:
             _terminate(strays, groups=False)
+    # -v: a container's anonymous volumes go with it. The Postgres image declares a data VOLUME,
+    # and `rm -f` without -v left one (~125-435 MB) behind per run (BOSSAPP-1459).
     containers = labelled_containers(run_id)
     if containers:
-        _docker("rm", "-f", *containers)
+        _docker("rm", "-f", "-v", *containers)
     if pg_container:
-        _docker("rm", "-f", pg_container)
+        _docker("rm", "-f", "-v", pg_container)
+    volumes = labelled_volumes(run_id)
+    if volumes:
+        _docker("volume", "rm", "-f", *volumes)
     images = labelled_images(run_id)
     if images:
         _docker("rmi", "-f", *images)
@@ -194,6 +204,9 @@ def leftovers(run_id: str, run_dir: str) -> list[str]:
     for cid in labelled_containers(run_id):
         found.append(f"container {cid} labelled {LABEL_KEY}={run_id} is still there; remove it "
                      f"with `docker rm -f {cid}`")
+    for volume in labelled_volumes(run_id):
+        found.append(f"volume {volume} labelled {LABEL_KEY}={run_id} is still there; remove it with "
+                     f"`docker volume rm {volume}`")
     for image in labelled_images(run_id):
         found.append(f"image {image} labelled {LABEL_KEY}={run_id} is still there; remove it with "
                      f"`docker rmi -f {image}`")

@@ -120,20 +120,25 @@ beforeEach(() => { window.history.replaceState(null, "", "/"); });
 afterEach(() => { unmount(); });
 
 describe("Overview speaks in words (screen 04)", () => {
-  it("Needs you names the action, draws its mini flow, and the row opens its drawer", async () => {
+  it("Needs you lives in Work's group: it names the action, draws its mini flow, and the row opens its drawer", async () => {
     engine();
     await openProject();
-    const card = tid("px-ov-needs")!;
-    expect(card.textContent).toContain("Deploy PR #5 to Staging");
-    expect(card.textContent).not.toMatch(/@[0-9a-f]{7,}|203\.0\.113|Answer/);
-    expect(tid("px-ov-ny-act-dec_dep5")!.textContent).toBe("Approve deploy");
-    expect(tid("px-ov-ny-act-dec_merge3")!.textContent).toBe("Review PR");
-    expect(tid("px-ov-ny-act-prod:host")!.textContent).toBe("Pick host");
-    const flow = tid("px-ov-ny-flow-dec_dep5")!;
+    // The Overview counts and links; it never repeats the items (operator 2026-11-21).
+    expect(tid("px-ov-needs")!.textContent).not.toContain("Deploy PR #5 to Staging");
+    await press(tid("px-ov-needs-open"));
+    expect(params().get("tab")).toBe("work");
+    const group = tid("px-work-rows")!;
+    expect(group.textContent).toContain("Deploy PR #5 to Staging");
+    expect(group.textContent).not.toMatch(/@[0-9a-f]{7,}|203\.0\.113/);
+    expect(tid("px-work-needs-act-dec_dep5")!.textContent).toBe("Approve deploy");
+    expect(tid("px-work-needs-act-prod:host")!.textContent).toBe("Pick host");
+    const flow = tid("px-work-needs-dec_dep5-flow")!;
     expect([...flow.querySelectorAll(".px-fl-n")].map((n) => n.textContent)).toEqual(["PR #5 merged", "Staging · you", "Smoke test"]);
-    expect(flow.querySelector('[data-t="waiting"]')!.textContent).toContain("Staging · you");
-    expect(card.textContent).toContain("Beacon can't choose this");
-    await press(tid("px-ov-ny-dec_dep5"));
+    expect(group.textContent).toContain("Beacon can't choose this");
+    // "Only you" is the group heading's, said once — never on each row.
+    expect(tid("px-work-g-needs_you")!.textContent).toContain("only you can do these");
+    expect(group.textContent).not.toContain("Only you");
+    await press(tid("px-work-needs-act-dec_dep5"));
     expect(params().get("drawer")).toBe("needs:dec_dep5");
   });
 

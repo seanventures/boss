@@ -1295,3 +1295,15 @@ flowchart LR
 The survey shows BOSS is not behind LangChain on the parts that are hard to build. Hash-bound approvals, OBO identity, enforced permissions, cost economics and outcome-scored memory are ahead of anything in the LangChain stack. Self-hosted, the LangChain stack ships with no auth at all. BOSS is behind on packaging and unity: no single agent object, no single run, no single thread, no single trace. That gap comes from four turn engines, two catalogues and about twenty clocks growing independently, not from missing technology. The kernel was designed to close it and has sat dark. The highest-leverage move is to finish and flip the kernel, with governance as mandatory middleware and the versioned agent spec as its input. Building a parallel framework, or importing one, would not close the gap.
 
 The external evidence also changes what "deepagents-level depth" should mean for BOSS. LangChain's own trajectory is to make planning opt-in, deprecate the supervisor library and move sub-agents onto addressable server runs. Anthropic's and Cognition's results agree with it: depth comes from durable runs, disciplined context and verified, single-writer coordination, not from more agents. BOSS should therefore spend first on checkpoints, offloading, summarisation and traces, and only then on sub-agent fan-out. Shaped as A2A tasks and governed by OBO tokens and budget slices, BOSS's sub-agents would be both interoperable and safer than the framework they are measured against.
+
+---
+
+## Follow-on design documents
+
+These design documents expand on the kernel, middleware, host boundary, and eventing architecture introduced above:
+
+- [AGENT_MIDDLEWARE.md](AGENT_MIDDLEWARE.md) — Mandatory governance middleware and turn pipeline contracts.
+- [AGENT_HOSTS.md](AGENT_HOSTS.md) — Agent host runtime and execution boundary specification.
+- [AGENT_HOSTS_LLD.md](AGENT_HOSTS_LLD.md) — Low-level design for agent host runtime, lifecycle, and isolation.
+- [EVENTING.md](EVENTING.md) — Control-plane eventing architecture, durability, and stream semantics.
+- [EVENTING_LLD.md](EVENTING_LLD.md) — Low-level design for event schemas, cursors, delivery guarantees, and persistence.

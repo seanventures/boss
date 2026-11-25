@@ -9,6 +9,7 @@
  * the person's name as a watermark. Read-only values sit on a steel plate with a clasp.
  */
 import React, { useEffect, useMemo, useState } from "react";
+import { apiWrite } from "../../lib/api-write";
 
 type Field = { key: string; label: string; position?: number };
 type Grant = {
@@ -92,7 +93,7 @@ export function FieldAcl({ projectId = "", actor = "" }: { projectId?: string; a
     setGateError("");
     setSaving(true);
     try {
-      const response = await fetch(`/v1/field-acl/apps/${encodeURIComponent(app.id)}/grants`, {
+      const response = await apiWrite(`/v1/field-acl/apps/${encodeURIComponent(app.id)}/grants`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ project_id: projectId, actor, grants: grantsFrom(app, subjects, gates) }),
@@ -161,7 +162,7 @@ export function FieldAcl({ projectId = "", actor = "" }: { projectId?: string; a
     setWriteError("");
     setSaving(true);
     try {
-      const response = await fetch(`/v1/field-acl/apps/${encodeURIComponent(app.id)}/record`, {
+      const response = await apiWrite(`/v1/field-acl/apps/${encodeURIComponent(app.id)}/record`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ project_id: projectId, actor, as_user: opened.as_user, values }),
@@ -185,7 +186,7 @@ export function FieldAcl({ projectId = "", actor = "" }: { projectId?: string; a
     if (!userId) return;
     setGateError("");
     try {
-      const response = await fetch(
+      const response = await apiWrite(
         `/v1/field-acl/apps/${encodeURIComponent(app.id)}/members/${encodeURIComponent(userId)}`,
         {
           method: "PUT",
@@ -220,7 +221,7 @@ export function FieldAcl({ projectId = "", actor = "" }: { projectId?: string; a
     if (!fields.length) { setCreateError("Add a field first."); return; }
     setCreateError("");
     try {
-      const response = await fetch("/v1/field-acl/apps", {
+      const response = await apiWrite("/v1/field-acl/apps", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ project_id: projectId, actor, name: name.trim(), fields }),

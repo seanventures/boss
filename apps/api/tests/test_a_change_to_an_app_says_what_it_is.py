@@ -100,3 +100,32 @@ def test_a_workflow_from_a_preview_tells_the_build_which_preview(client, engine,
     built = _tick_until_built(client, engine, started.json()["run"]["id"])
     assert "/v1/previews/prev_scoreview/web/" in built[0]["spec"]["instructions"]
     assert built[0]["spec"]["base_branch"] == f"boss/code/{APP_ROOT}"
+
+
+def test_a_repair_from_a_preview_alone_builds_onto_that_previews_app(client, engine, panel):  # noqa: F811
+    """A repair started from a preview with no extends_run_id continues the preview's own build
+    (never a fresh build on the default branch); a preview of no build here, or one with an
+    explicit base, is refused with what to do instead."""
+    _the_app(engine)
+    client.post("/v1/delivery-workflows/catalogue/install",
+                json={"project_id": _project(), "actor": "ceo"})
+    with engine.begin() as connection:
+        connection.execute(text(
+            "INSERT INTO app_previews (id, project_id, run_id, status) "
+            "VALUES ('prev_repairme', :p, :r, 'stopped') ON CONFLICT (id) DO NOTHING"),
+            {"p": _project(), "r": APP_RUN})
+
+    foreign = _start(client, {"title": "x", "directive": "x", "preview_id": "prev_elsewhere"})
+    assert foreign.status_code == 404
+    assert "not in this project" in foreign.json()["detail"]
+
+    based = _start(client, {"title": "x", "directive": "x", "preview_id": "prev_repairme",
+                            "base_branch": "release"})
+    assert based.status_code == 422
+    assert "must also name extends_run_id" in based.json()["detail"]
+
+    started = _start(client, {"title": "Repair the preview", "directive": "Serve the report.",
+                              "preview_id": "prev_repairme"})
+    assert started.status_code == 200, started.text
+    assert started.json()["extends"]["run_id"] == APP_RUN
+    assert started.json()["extends"]["preview_id"] == "prev_repairme"

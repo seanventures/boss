@@ -1,0 +1,15 @@
+{
+  "results": [
+    {
+      "id": "1",
+      "name": "runbook",
+      "prefix": "global"
+    },
+    {
+      "id": "2",
+      "name": "prod",
+      "prefix": "global"
+    }
+  ],
+  "_links": {}
+}

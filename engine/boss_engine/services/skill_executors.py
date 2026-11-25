@@ -492,12 +492,19 @@ def execute_deployment_run_plan(
         deployment_target_id=_required_text(inputs, "deployment_target_id"),
         commit_ref=inputs.get("commit_ref"),
         release_packet={
-            "artifact_id": _required_text(inputs, "release_packet_artifact_id")
+            "artifact_id": _required_text(inputs, "release_packet_artifact_id"),
+            # The build this release is of: a production target needs one that passes the
+            # production bar (quality_bar.plan_refusal); a skill may name it.
+            **({"code_task_run_id": str(inputs["code_task_run_id"])}
+               if inputs.get("code_task_run_id") else {}),
         },
         expected_cost_usd_micros=int(inputs.get("expected_cost_usd_micros") or 0),
         reservation_id=inputs.get("reservation_id"),
         actor=context.actor,
     )
+    if run.get("refused"):
+        # The production quality bar refused it (quality_bar.plan_refusal): nothing was planned.
+        raise ValueError(run.get("failure_reason") or "Deployment policy blocked this run.")
     return {
         "deployment_run_id": run["id"],
         "changeset_id": run.get("changeset_id"),
@@ -742,7 +749,7 @@ def _isolation_available(settings: Settings) -> tuple[bool, str]:
     the box that holds every project's credentials, so this refuses rather than degrades. A
     refusal an operator can read beats a capability that quietly runs in the wrong place.
 
-    `local_fenced` (AMEX-G2) is the worker's own per-run fence — a pool uid, deny-by-default
+    `local_fenced` (BOSSAPP-1138) is the worker's own per-run fence — a pool uid, deny-by-default
     egress except the loopback relays, a per-run directory — and is accepted when that fence is
     actually up (local_fenced.fence_problem), never on an install marked untrusted. It is NOT
     strong isolation, and `isolation_grade` says so.
@@ -798,7 +805,7 @@ def execute_sandboxed_command(
         raise SandboxIsolationUnavailable(
             f"{skill_key} runs a command and cannot be executed here: {grade['why']}")
 
-    # FILES, NOT ONLY STRINGS (AMEX-G2). `files` maps an input name to content (a string, or
+    # FILES, NOT ONLY STRINGS (BOSSAPP-1138). `files` maps an input name to content (a string, or
     # {text|content|base64}); each is written into the workdir and the input's placeholder
     # becomes that file's path, so a skill whose command reads `{tenant_yaml}` is handed a
     # file, not a 4 KB argument. A `files` entry counts as the input being present.
@@ -819,7 +826,7 @@ def execute_sandboxed_command(
         from .local_fenced import (LocalFenceUnavailable, LocalFencedSandbox,
                                    binaries_changed, check_local_binaries, keep_produced)
 
-        # THE PINNED IMAGE IS NOT USED HERE (AMEX-G12): the command runs on the worker's own
+        # THE PINNED IMAGE IS NOT USED HERE (BOSSAPP-1170): the command runs on the worker's own
         # filesystem. The CLIs it needs are declared (`local_binaries`) and checked against the
         # operator's allow-list before anything runs; the run records which ran, with hashes.
         try:
@@ -2082,7 +2089,7 @@ def execute_slack_post(context: "SkillExecutorContext", inputs: dict[str, Any]
     resp.raise_for_status()
     data = resp.json()
     if not data.get("ok"):
-        raise RuntimeError(f"Slack refused the post: {data.get('error') or 'unknown error'}")
+        raise RuntimeError(f"Slack refused the post: {data.get('error') or 'Slack gave no reason'}")
     return {"provider_ref": f"slack:{data.get('channel')}:{data.get('ts')}", "channel": channel}
 
 
@@ -2693,6 +2700,24 @@ def execute_tickets_write(context: "SkillExecutorContext", inputs: dict[str, Any
     from .agent_baseline import run_bundled_tool
 
     return run_bundled_tool(context, "tickets.write", inputs)
+
+
+@register_executor("confluence.read")
+def execute_confluence_read(context: "SkillExecutorContext", inputs: dict[str, Any]) -> dict[str, Any]:
+    """The org's Confluence, read: confluence_search, confluence_read_page (BOSSAPP-1384).
+    See agent_baseline.CONFLUENCE_READ_TOOLS."""
+    from .agent_baseline import run_bundled_tool
+
+    return run_bundled_tool(context, "confluence.read", inputs)
+
+
+@register_executor("confluence.publish")
+def execute_confluence_publish(context: "SkillExecutorContext", inputs: dict[str, Any]) -> dict[str, Any]:
+    """Propose a Confluence page: confluence_publish_page queues a diff a person approves
+    (BOSSAPP-1384). See agent_baseline.CONFLUENCE_WRITE_TOOLS."""
+    from .agent_baseline import run_bundled_tool
+
+    return run_bundled_tool(context, "confluence.publish", inputs)
 
 
 @register_executor("knowledge.propose")

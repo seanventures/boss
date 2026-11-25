@@ -8,6 +8,7 @@ decision, raised for the step's approver_role, is the gate. A deploy that does n
 stack target keeps its gate exactly as before.
 """
 from __future__ import annotations
+import pytest
 
 from types import SimpleNamespace
 from uuid import uuid4
@@ -24,6 +25,23 @@ from apps.api.tests.test_a_stack_deploys_only_through_an_approved_changeset impo
     _build,
     stack,
 )
+
+
+@pytest.fixture(autouse=True)
+def _the_org_asks_in_development(engine):
+    """These pin what a PERSON is asked, so the org's autonomy policy says ask in development
+    (BOSSAPP-1441); dev autonomy's default is pinned in test_dev_autonomy_api."""
+    from boss_engine.config import get_settings
+    from boss_engine.services import autonomy_policy
+
+    org = get_settings().default_org_id
+    with engine.begin() as c:
+        autonomy_policy.save(c, kind=autonomy_policy.ORG, scope_id=org, raw={"dev": "ask"},
+                             actor="test")
+    yield
+    with engine.begin() as c:
+        c.execute(text("DELETE FROM autonomy_policies WHERE scope_id = :o"), {"o": org})
+
 
 
 def _deploy_run(engine, build_run_id: str, **extra) -> str:

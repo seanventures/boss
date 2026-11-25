@@ -34,6 +34,7 @@ from ..services import protocol_reply
 from ..tools import ToolError, ToolRegistry, build_discuss_read_registry
 from ..tools.registry import offer_warning
 from ..services.cli_chat_session import in_turn_scope
+from ..services.reply_style import ACTION_REPLY_STYLE
 from ..services.low_trust import Ledger, outside_origin, release, remember
 from ..services.tool_result_text import clip_for_model
 
@@ -142,8 +143,9 @@ checked and there is nothing" is noise on a question that never needed one. \
 Say nothing about what you did not find unless its absence IS the answer.
 - Write tools change real state. If you are not certain the user asked you to \
 create/launch something, ask first — don't fire a write speculatively.
-- Be concise and concrete. Give run ids and URLs when you have them.
-"""
+- Be concise and concrete. Give URLs when you have them; raw run ids only when \
+the person asks for them.
+""" + "\n" + ACTION_REPLY_STYLE
 
 
 @dataclass
@@ -287,7 +289,7 @@ def _calls_meant(structure: dict) -> list[dict]:
     for i, call in enumerate(raw or []):
         if not isinstance(call, dict) or not call.get("name"):
             continue
-        args = call.get("arguments")
+        args = protocol_reply.call_arguments(call)
         calls.append({"id": f"call_meant_{i + 1}", "name": str(call["name"]),
                       "arguments": args if isinstance(args, str) else json.dumps(args or {})})
     return calls
@@ -401,6 +403,7 @@ def _step_label(name: str, args: dict) -> str:
         "list_code_tasks": "listing the work",
         "get_code_task": "reading the run",
         "inspect_host": "inspecting the host",
+        "collect_diagnostics": "collecting host diagnostics",
         "read_app_logs": "reading the app's logs",
         "recall_role_experience": "recalling what this role has argued here",
         "describe_role": "reading the role's remit",

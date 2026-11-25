@@ -28,6 +28,7 @@ type Op = { method: "POST" | "PUT" | "DELETE"; path: (b: Record<string, unknown>
 const enc = (v: unknown) => encodeURIComponent(String(v ?? ""));
 
 const OPS: Record<string, Op> = {
+  agent_capacity: { method: "PUT", path: (b) => `/v1/projects/${enc(b.project_id)}/settings/builds_at_once`, pathOnly: ["project_id"] },
   checks: { method: "POST", path: () => "/v1/setup/checks" },
   repo_token: { method: "POST", path: () => "/v1/setup/repository/token" },
   repo_select: { method: "POST", path: () => "/v1/setup/repository/select" },
@@ -98,7 +99,7 @@ export async function GET(req: Request) {
   const catalogue = url.searchParams.get("catalogue");
   const ciWorkflows = url.searchParams.get("ci_workflows");
   const signIn = url.searchParams.get("sign_in");
-  const path = signIn
+  const path = url.searchParams.get("agent_capacity") === "1" ? "/v1/system/health" : signIn
     ? `/v1/setup/sign-in/${enc(signIn)}?project_id=${enc(projectId)}`
     : ciWorkflows
     ? `/v1/setup/repository/${enc(ciWorkflows)}/ci-workflows?project_id=${enc(projectId)}`

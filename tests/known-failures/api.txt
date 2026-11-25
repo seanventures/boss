@@ -1,0 +1,7 @@
+# Known failures of this suite on origin/main (BOSSAPP-1429, scripts/known_failures.py). The list only
+# shrinks: a gate fails on any failure not listed here, on a listed test that now passes (delete its
+# line), and on any red security guard (tests/tiers.yaml `security:`), which can never be listed.
+# Never add a line to make a gate pass: only a failure that also happens on origin/main, with a ticket.
+#
+# Format: <test id or test file> | <ticket> | <owner> | <since YYYY-MM-DD> | <why it fails today>
+# Seeded 2026-11-23 from the P0 tier at b73f45b56: nothing listed.

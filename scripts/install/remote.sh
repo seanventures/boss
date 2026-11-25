@@ -39,6 +39,9 @@ MODEL_NAME=""
 MODEL_BASE_URL=""
 PROJECT_ID="boss-dogfood"
 SECRET_STORE=""
+# A remote install is PRODUCTION unless the operator says otherwise (BOSSAPP-1441).
+INSTALL_TIER="prod"
+INSTALL_TIER_EXPLICIT=0
 EXTRA_INSTALL_ARGS=()
 REMOTE_DOCKER="docker"
 
@@ -99,6 +102,11 @@ options:
   --project ID         model/env: project id (default boss-dogfood)
   --secret-store WHICH install: database (default, 4 containers) or infisical (6 containers,
                        ~400MB more, a real secret store). Both stay on the server
+  --install-tier dev|prod
+                       install/update: whether BOSS on this host is a development or a
+                       production install (BOSS_INSTALL_TIER). Default prod: in production BOSS
+                       asks a person before it deploys or merges; in development it acts and
+                       logs. An update keeps the host's tier unless this flag is passed
   --                   everything after this is passed through to install.sh
 
 Model keys are read from a hidden prompt or stdin. Do not pass them as arguments; the
@@ -123,6 +131,11 @@ while [[ $# -gt 0 ]]; do
     --token|--token=*|--api-key|--api-key=*)
       die "Refusing a secret on the command line. It would be saved in shell history and process listings. Use the hidden prompt or pipe one line on stdin." ;;
     --secret-store) SECRET_STORE="${2:-}"; shift 2 ;;
+    --install-tier)
+      case "${2:-}" in
+        dev|prod) INSTALL_TIER="$2"; INSTALL_TIER_EXPLICIT=1; shift 2 ;;
+        *) die "--install-tier takes dev or prod" ;;
+      esac ;;
     --accept-database-fallback)
       die "--accept-database-fallback is gone: a subscription signs in inside BOSS (subscription --provider codex|claude_code|grok); nothing is stored from this laptop." ;;
     --purge-data) PURGE_DATA=1; shift ;;
@@ -243,7 +256,7 @@ report_capacity() {
   [[ "$slots" -gt $(( cores / 2 )) ]] && slots=$(( cores / 2 ))
   [[ "$slots" -lt 1 ]] && slots=1
   say "Builds at once: ${slots} (auto) — more are queued, not run into swap"
-  [[ "${disk:-0}" -lt 15 ]] && warn "under 15GB free — the images alone are ~13GB"
+  [[ "${disk:-0}" -lt 15 ]] && warn "under 15GB free — the images alone are ~14GB (with the default Java and Go)"
   # NO SWAP IS THE RISK, not the RAM figure on its own. The console build is the peak, and on a
   # box with nothing to page out to the kernel kills it rather than slowing down — which reads
   # as a mysterious installer failure rather than as "this machine is too small".
@@ -335,17 +348,31 @@ cmd_install() {
     backup_remote
   fi
   ship_source
+  # A reinstall over an existing .env: mark it now, so install.sh's rewrite carries it and the
+  # containers it starts already see it.
+  ensure_dedicated_mark
   local args=(--dir "$DIR" --api-port "$API_PORT" --web-port "$WEB_PORT" --postgres-port "$PG_PORT")
   # Community ports remain on the VM's loopback. A laptop connects through
   # the tunnel command, which makes 127.0.0.1 the correct browser API address.
   [[ -n "$SECRET_STORE" ]] && args+=(--secret-store "$SECRET_STORE")
+  # The host's tier: an explicit flag wins; otherwise a reinstall keeps the tier its .env has
+  # (ensure_install_tier writes prod when it has none) and a first install is prod.
+  ensure_install_tier
+  if [[ "$INSTALL_TIER_EXPLICIT" -eq 1 ]] || ! rshq "[ -f '$DIR/.env' ]"; then
+    args+=(--install-tier "$INSTALL_TIER")
+  fi
   [[ "$ASSUME_YES" -eq 1 ]] && args+=(-y --skip-model-key)
   [[ ${#EXTRA_INSTALL_ARGS[@]} -gt 0 ]] && args+=("${EXTRA_INSTALL_ARGS[@]}")
   say "running the installer on the host — this builds images and takes a while"
   # -t so the installer's progress reaches this terminal as it happens rather than in one
   # silent block at the end.
-  ssh "${SSH_OPTS[@]}" ${TTY_OPT[@]+"${TTY_OPT[@]}"} "$HOST" "cd '$DIR' && bash install.sh ${args[*]}" \
+  # A first install has no .env yet: the mark goes in the environment, so the containers
+  # install.sh starts see it (compose takes the shell's value), and into .env right after.
+  # With an .env, its own line (written above, or an explicit 0) is what counts.
+  ssh "${SSH_OPTS[@]}" ${TTY_OPT[@]+"${TTY_OPT[@]}"} "$HOST" \
+    "cd '$DIR' && if [ -f .env ]; then bash install.sh ${args[*]}; else BOSS_DEDICATED_HOST=1 bash install.sh ${args[*]}; fi" \
     || die "the installer failed on $HOST; previous source remains at $DIR.prev and private backup was printed above"
+  ensure_dedicated_mark
   clear_prev || warn "previous source remains at $DIR.prev; remove it after verifying this install"
   prune_remote
   ok "installer finished"
@@ -354,7 +381,7 @@ cmd_install() {
   # do not suggest opening unencrypted public HTTP endpoints.
   printf "\n${B}Where it is${N}\n\n"
   say "Tunnel    ${D}$(again) tunnel${N}"
-  say "Console   http://127.0.0.1:${WEB_PORT} after connecting the tunnel"
+  say "Console   http://localhost:${WEB_PORT} after connecting the tunnel"
   say "API       http://127.0.0.1:${API_PORT} after connecting the tunnel"
   printf "\n${B}What next${N}\n\n"
   claim_next
@@ -392,6 +419,69 @@ prune_remote() {
   out="$(rsh "cd '$DIR' && bash scripts/install/prune.sh --dedicated" 2>&1)" \
     || { warn "disk prune skipped: ${out##*$'\n'}"; return 0; }
   say "disk: $(printf '%s\n' "$out" | grep -E '^disk (before|after)' | tr '\n' ' ')"
+}
+
+# THE INSTALL TIER (BOSSAPP-1441, dev autonomy). BOSS acts on its own in development and asks a
+# person in production; a host this script installs is remote, so it is production unless the
+# operator passed --install-tier dev. A tier already in .env is kept unless the flag was passed.
+ensure_install_tier() {
+  local out
+  out="$(rsh "f='$DIR/.env'
+       [ -f \"\$f\" ] || exit 0
+       if grep -q '^BOSS_INSTALL_TIER=.' \"\$f\"; then
+         [ '$INSTALL_TIER_EXPLICIT' = 1 ] || exit 0
+         grep -q '^BOSS_INSTALL_TIER=$INSTALL_TIER\$' \"\$f\" && exit 0
+       fi
+       tmp=\"\$f.tier.\$\$\"
+       grep -v '^BOSS_INSTALL_TIER=' \"\$f\" > \"\$tmp\" || true
+       if [ -s \"\$tmp\" ] && [ -n \"\$(tail -c 1 \"\$tmp\")\" ]; then printf '\n' >> \"\$tmp\"; fi
+       printf 'BOSS_INSTALL_TIER=$INSTALL_TIER\n' >> \"\$tmp\"
+       cat \"\$tmp\" > \"\$f\" && rm -f \"\$tmp\" && echo wrote")" \
+    || { warn "could not write BOSS_INSTALL_TIER=$INSTALL_TIER to $DIR/.env; BOSS reads its public URL instead (remote = production)"; return 0; }
+  [[ "$out" == *wrote* ]] && say "BOSS on $HOST is a ${INSTALL_TIER} install (BOSS_INSTALL_TIER=$INSTALL_TIER in .env)"
+  return 0
+}
+
+# THE DEDICATED-HOST MARK. The same reason as prune_remote, for the prunes that run between
+# deploys: the API's disk reaper (resource_reaper.prune_disk, a system thread of the api
+# process; compose passes the mark to the api service), the steward and `boss prune`
+# only touch the Docker build cache when .env says BOSS_DEDICATED_HOST=1, and nothing wrote it,
+# so boss-1 sat at 80% disk with 46 GB of cache between updates. A host this script installs runs
+# only BOSS, so install and update write the mark when the line is absent. A line that is
+# already there, BOSS_DEDICATED_HOST=0 included (an operator who shares the machine), is never
+# changed. A laptop install never runs this and stays unset. install.sh carries unknown .env
+# lines across its rewrite (restore_preserved_env.sh), so the mark survives every rerun.
+ensure_dedicated_mark() {
+  local out
+  out="$(rsh "f='$DIR/.env'
+       [ -f \"\$f\" ] || exit 0
+       grep -q '^BOSS_DEDICATED_HOST=' \"\$f\" && exit 0
+       if [ -s \"\$f\" ] && [ -n \"\$(tail -c 1 \"\$f\")\" ]; then printf '\n' >> \"\$f\"; fi
+       printf 'BOSS_DEDICATED_HOST=1\n' >> \"\$f\" && echo wrote")" \
+    || { warn "could not write BOSS_DEDICATED_HOST=1 to $DIR/.env; build-cache pruning stays off until it is set"; return 0; }
+  [[ "$out" == *wrote* ]] && say "marked $HOST as a dedicated BOSS host (BOSS_DEDICATED_HOST=1 in .env)"
+  return 0
+}
+
+# ONE TOOLCHAIN SET ACROSS THE IMAGES. After an update, every running service built with
+# BOSS_TOOLCHAINS must carry the api's /opt/toolchains/manifest.json (written with sorted keys, so
+# equal sets are equal text). A difference is said in words with the fix, never left for the first
+# Go or Maven build to find. Best effort: a service that is not running is skipped.
+check_toolchain_drift() {
+  local compose="$1" script out
+  script="cd '$DIR' || exit 0
+m() { $compose exec -T \"\$1\" cat /opt/toolchains/manifest.json </dev/null 2>/dev/null | tr -d ' \n'; }
+ref=\$(m api); [ -n \"\$ref\" ] || exit 0
+for s in worker kg-mcp egress runner; do
+  v=\$(m \$s) || continue
+  [ -z \"\$v\" ] || [ \"\$v\" = \"\$ref\" ] || echo \"\$s has \$v, api has \$ref\"
+done"
+  out="$(rshq "$script" || true)"
+  [[ -n "$out" ]] || return 0
+  warn "these services run different build toolchains than the api:"
+  printf '%s\n' "$out" | sed 's/^/      /'
+  say "  rebuild them together: ${D}$(again) update --all-services${N}"
+  return 0
 }
 
 # UPDATES RESTARTED BUILDS (stability spec C6): every recreate killed the API mid-turn and the
@@ -439,6 +529,11 @@ cmd_update() {
 
   ship_source
 
+  # Installs made before the mark existed get it here, before the build and recreate below.
+  ensure_dedicated_mark
+  # The same for the install tier (BOSS_INSTALL_TIER): a host with none becomes prod.
+  ensure_install_tier
+
   # Archive updates do not run install.sh. Prepare a private copy of .env with
   # the dedicated worker key, then build against that copy. A failed build
   # leaves the live credentials unchanged; only a successful build promotes it.
@@ -446,8 +541,34 @@ cmd_update() {
   rsh "cd '$DIR' && cp -p .env '$next_env' && chmod 600 '$next_env' && python3 scripts/install/reconcile_api_credentials.py --ensure-worker '$next_env'" \
     || { rsh "rm -f '$DIR/$next_env'"; die "could not bind separate owner and worker keys on $HOST; previous source remains at $DIR.prev"; }
 
-  local services="api worker"
-  [[ "$WITH_CONSOLE" -eq 1 ]] && services="api worker web"
+  # THE ENTERPRISE NETWORK, as install.sh does it: the one finalize every lifecycle path runs
+  # (engine/boss_engine/services/enterprise_network.py). It refuses an invalid setting, keeps a
+  # narrowed sandbox fence narrow (BOSS_EGRESS_CONNECT_DEFAULTS=off from the live .env), and
+  # writes .boss/extra-ca.pem, which compose mounts with create_host_path: false, BEFORE the
+  # build. "recreate-ca-mount": it replaced a directory there, so the services mounting it are
+  # force-recreated below whatever was rebuilt.
+  local finalize_out CA_RECREATE=0
+  # A shipped tree without the finalize is a tree problem, not refused settings: say so, with its
+  # own exit code (3), before anything is built.
+  if ! rshq "[ -f '$DIR/engine/boss_engine/services/enterprise_network.py' ]"; then
+    rsh "rm -f '$DIR/$next_env'"
+    printf "\n  ${R}✗ %s${N}\n\n" "this BOSS tree has no enterprise_network.py; update the tree first (previous source remains at $DIR.prev)" >&2
+    exit 3
+  fi
+  finalize_out="$(rsh "cd '$DIR' && python3 engine/boss_engine/services/enterprise_network.py finalize '$next_env' --previous .env")" \
+    || { rsh "rm -f '$DIR/$next_env'"; die "the enterprise network settings on $HOST were refused (above); previous source remains at $DIR.prev"; }
+  case "$finalize_out" in *recreate-ca-mount*) CA_RECREATE=1 ;; esac
+
+  # api and worker, plus every other service whose image carries the toolchains (BOSS_TOOLCHAINS):
+  # egress opens the Maven, Gradle and Go proxy hosts only when its OWN image has the toolchain
+  # (apps/egress/boss_egress/connect.py). An update that rebuilt api and worker alone, after the
+  # default became java,go, left egress on the old image: Setup said Go was on and every Go build
+  # failed at its first download. The runner builds too, so it comes along when it is running.
+  local services="api worker kg-mcp egress"
+  local runner_running=0
+  rshq "$REMOTE_DOCKER ps --filter name=boss-community-runner- -q | grep -q ." \
+    && runner_running=1 && services="$services runner"
+  [[ "$WITH_CONSOLE" -eq 1 ]] && services="$services web"
   [[ "$ALL_SERVICES"  -eq 1 ]] && services=""
   if [[ -n "$services" ]]; then
     say "rebuilding: $services  ${D}(console left alone; --with-console to include it)${N}"
@@ -469,14 +590,18 @@ cmd_update() {
     && profiles="$profiles --profile web"
   rshq "$REMOTE_DOCKER ps --filter name=boss-community-mailpit- -q | grep -q ." \
     && profiles="$profiles --profile mail"
+  [[ "$runner_running" -eq 1 ]] && profiles="$profiles --profile runner"
   local update_started
   update_started=$(rshq "date -u +%s")
-  local compose_build="$REMOTE_DOCKER compose -f scripts/install/community-compose.yml --env-file $next_env $profiles"
-  local compose="$REMOTE_DOCKER compose -f scripts/install/community-compose.yml --env-file .env $profiles"
+  # THE ONE COMPOSE-FILE RESOLVER (scripts/install/compose_files.sh), run ON the host in the new
+  # source: the engine inner-sandbox overlay when that install's .env opts in. Relative paths
+  # (no spaces), expanded by the remote shell.
+  local compose_build="$REMOTE_DOCKER compose \$(bash scripts/install/compose_files.sh . $next_env) --env-file $next_env $profiles"
+  local compose="$REMOTE_DOCKER compose \$(bash scripts/install/compose_files.sh . .env) --env-file .env $profiles"
 
   say "building — this takes a few minutes"
   ssh "${SSH_OPTS[@]}" ${TTY_OPT[@]+"${TTY_OPT[@]}"} "$HOST" \
-    "cd '$DIR' && $compose_build build $services" \
+    "cd '$DIR' && bash scripts/install/build_images.sh --dir . --only '$services' -- $compose_build" \
     || { rsh "rm -f '$DIR/$next_env'"; die "the build failed on $HOST. Old containers still run; previous source is at $DIR.prev."; }
 
   rsh "cd '$DIR' && mv '$next_env' .env && chmod 600 .env" \
@@ -486,6 +611,13 @@ cmd_update() {
 
   # BUILD FIRST, THEN SWAP. A failed build above leaves the running install untouched, which is
   # the whole reason these are two steps rather than `up -d --build`.
+  if [[ "$CA_RECREATE" -eq 1 && -n "$services" ]]; then
+    # Containers created over the old directory mount fail their next restart: recreate every
+    # running service that mounts the CA, not only the rebuilt ones.
+    local ca_running
+    ca_running=$(rshq "cd '$DIR' && $compose ps --status running --services | grep -xE 'api|worker|runner|egress|model-gateway|mcp-tools|kg-mcp' | tr '\n' ' '" || true)
+    services="$(printf '%s\n' $services $ca_running | sort -u | tr '\n' ' ')"
+  fi
   say "recreating: ${services:-all}"
   ssh "${SSH_OPTS[@]}" ${TTY_OPT[@]+"${TTY_OPT[@]}"} "$HOST" \
     "cd '$DIR' && $compose up -d --no-deps --force-recreate $services" \
@@ -499,6 +631,7 @@ cmd_update() {
       [ \"\$t\" -lt '$update_started' ] && echo \"\$c\"; done | grep -v infisical || true")
     [[ -z "$stale" ]] || die "these services were not rebuilt and still run the old build: $stale"
   fi
+  check_toolchain_drift "$compose"
   clear_prev || warn "previous source remains at $DIR.prev; remove it after verifying this update"
 
   prune_remote
@@ -622,7 +755,7 @@ cmd_smoke() {
     # SAY WHERE TO GO, not just what was compiled in. Reported as "console: <api url>" this
     # sent an operator to the API port, where `/` is a 404 and the install looks broken.
     say ""
-    say "  ${B}Open the console through the SSH tunnel:${N} http://127.0.0.1:${WEB_PORT}"
+    say "  ${B}Open the console through the SSH tunnel:${N} http://localhost:${WEB_PORT}"
     say "  ${D}it calls the API at: $baked${N}"
   fi
 
@@ -739,7 +872,7 @@ cmd_env() {
 cmd_tunnel() {
   head_ "Forwarding $HOST to this laptop"
   say "API      http://127.0.0.1:$API_PORT"
-  say "Console  http://127.0.0.1:$WEB_PORT"
+  say "Console  http://localhost:$WEB_PORT"
   say ""
   say "Leave this running. Ctrl-C closes the tunnel."
   say ""

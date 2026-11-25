@@ -1,6 +1,5 @@
 """Two small GitHub effects a workflow step or an agent can perform on a repository bound to the
-project: a comment on a pull request or issue, and a fix pull request (AMEX-G5 / G6,
-BOSSAPP-1141 / 1142).
+project: a comment on a pull request or issue, and a fix pull request (BOSSAPP-1141 / 1142).
 
 WHY THESE EXIST. The API-onboarding workflow validates a tenant's YAML with a CLI and must then
 (a) tell the author on their pull request what the validator found and (b) offer the corrected

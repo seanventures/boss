@@ -149,8 +149,11 @@ def test_a_follow_up_after_the_merge_is_shown_as_one_beside_the_merge(engine):
     assert item["state"] == "needs_you" and item["action_label"] == "Merge"
     # The PR shown is the one in question — never the run's first PR beside #237's question.
     assert item["links"]["pr"]["number"] == 237
-    assert item["links"]["merge_pr"] == {"number": 237, "external_url": f"{REPO}/pull/237",
-                                         "follow_up_of": 236, "failed": None}
+    mp = item["links"]["merge_pr"]
+    assert {k: mp[k] for k in ("number", "external_url", "follow_up_of", "failed")} == {
+        "number": 237, "external_url": f"{REPO}/pull/237", "follow_up_of": 236, "failed": None}
+    # The Work panel's fields: the build that opened it; nothing fixing it, no check on record.
+    assert mp["build_id"] and mp["fixing"] is None and mp["acceptance"] is None
 
     from boss_engine.services.project_experience.work_story import story
 
@@ -348,7 +351,7 @@ def test_a_real_conflict_goes_to_the_build_agent_and_asks_again_only_when_mergea
 
     handed = []
     monkeypatch.setattr(merge_failures, "hand_to_builder",
-                        lambda c, s, run, note: handed.append((run, note)) or "crun_next")
+                        lambda c, s, run, note, why=None: handed.append((run, note)) or "crun_next")
     branch = f"boss/code/crun_{uuid4().hex[:8]}"
     did = _decision(engine, n=237, branch=branch, status="approved")
     run = _build(engine, n=237, did=did)
@@ -394,6 +397,39 @@ def test_a_moved_head_retries_and_says_so(engine):
     assert out["retryable"] is True and out["status"] == "failed"
     status, _q, rec = _status(engine, did)
     assert status == "approved" and rec["merge_failed"]["kind"] == "head_changed"
+
+
+def test_a_pinned_409_withdraws_stale_card_and_opens_fresh_pending_card(engine):
+    from boss_engine.services import merge_failures
+
+    did = _decision(engine, n=243, branch="boss/code/pinned_x", status="approved")
+    run_id = _build(engine, n=243, did=did)
+    gh = _GitHub(superseded=False)
+    gh.pull_request_snapshot = lambda _n: {"head_sha": "new_head_sha_999"}
+    service = _Service(gh)
+    with engine.begin() as c:
+        out = merge_failures.handle(
+            service, c, _pid(), did, 243, f"{REPO}/pull/243", "boss/code/pinned_x",
+            "rcpt_pinned", "409 Conflict: Head branch was modified. Review and try the merge again.",
+            pinned=True,
+        )
+    assert out["status"] == "failed"
+    assert "retryable" not in out
+    new_did = out["new_decision_id"]
+    old_status, _oq, old_rec = _status(engine, did)
+    assert old_status == "withdrawn"
+    assert old_rec["merge_failed"]["kind"] == "head_moved"
+    new_status, _nq, new_rec = _status(engine, new_did)
+    assert new_status == "pending"
+    assert new_rec["action"] == "review_pull_request"
+    assert new_rec["head_sha"] == "new_head_sha_999"
+    assert new_rec["superseded_decision_id"] == did
+    with engine.begin() as c:
+        linked_did = c.execute(
+            text("SELECT decision_id FROM code_task_runs WHERE id = :r"),
+            {"r": run_id},
+        ).scalar()
+    assert linked_did == new_did
 
 
 # ── 5. an approved merge that died silently is tried once more ──────────────────────────────

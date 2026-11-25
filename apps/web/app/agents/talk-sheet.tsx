@@ -8,6 +8,7 @@
  */
 
 import { GatedButton } from "../../components/gated";
+import { ChatFullscreenButton, useChatFullscreen } from "../../components/chat-fullscreen";
 import React, { useEffect, useMemo, useRef } from "react";
 import { RateScope } from "../improve/rate-it";
 
@@ -17,6 +18,8 @@ import {
   useStickToBottom,
 } from "./converse-parts";
 import type { SeatInfo } from "../../lib/agent-converse";
+import { conversationInvestigation } from "../../lib/conversation-investigation";
+import { openDockAbout } from "../../lib/dock-subject";
 
 export function TalkSheet({ projectId, actor, conversationId, greet, draft, book, onClose, onPlan, onNew }: {
   projectId: string; actor: string; conversationId: string;
@@ -44,6 +47,7 @@ export function TalkSheet({ projectId, actor, conversationId, greet, draft, book
     greeted.current = true;
     void live.send("");
   }, [greet, conversation, live]);
+  const fs = useChatFullscreen();
   const scroller = useStickToBottom(conversation?.turns.map((t) => t.content.length).join(","));
 
   useEffect(() => {
@@ -56,16 +60,28 @@ export function TalkSheet({ projectId, actor, conversationId, greet, draft, book
   const plan = conversation?.kind === "plan";
   const lastAgent = [...(conversation?.turns ?? [])].reverse().find((t) => t.speakerKind === "agent");
   const spoke = (conversation?.turns ?? []).some((t) => t.speakerKind === "person");
+  const handoff = conversation ? conversationInvestigation(conversation.context, conversation.turns) : null;
 
   return (
     <SeatBook.Provider value={merged}>
-      <aside className="ag-talk" role="dialog" aria-modal="false" data-testid="ag-talk"
+      <aside className="ag-talk" role="dialog" aria-modal="false" data-testid="ag-talk" {...fs.attr}
              data-kind={conversation?.kind ?? ""} aria-label={roleKey ? seatName(merged.get(roleKey) ?? null).name : "Talk"}>
         <TalkHead roleKey={roleKey} state={state} conversation={conversation} plan={plan}
-                  onClose={onClose}
+                  onClose={onClose} fs={fs}
                   onPlan={onPlan && conversation && !plan ? () => onPlan(roleKey, conversation) : undefined}
                   onNew={onNew && roleKey ? () => onNew(roleKey) : undefined} />
         <div className="ag-talk-body" ref={scroller} data-testid="ag-talk-body">
+          {/* A talk about a run or step: one door to the agent that can act (it only advises
+              here). Nothing for a talk with no run behind it. */}
+          {!plan && handoff ? (
+            <div data-testid="ag-talk-action-handoff">
+              <button type="button" className="ag-btn" disabled={busy}
+                      title="This chat only advises. BOSS can read the logs and act, with your approval."
+                      onClick={() => { onClose(); openDockAbout(handoff); }}>
+                Investigate with BOSS
+              </button>
+            </div>
+          ) : null}
           <RateScope.Provider value={{ projectId, actor }}>
           {(conversation?.turns ?? []).map((turn) => (
             <TurnItem key={turn.turnId} turn={turn} live={busy && turn.status === "streaming"}
@@ -95,9 +111,10 @@ export function TalkSheet({ projectId, actor, conversationId, greet, draft, book
   );
 }
 
-function TalkHead({ roleKey, state, conversation, plan, onClose, onPlan, onNew }: {
+function TalkHead({ roleKey, state, conversation, plan, onClose, onPlan, onNew, fs }: {
   roleKey: string; state: "idle" | "thinking" | "speaking"; conversation: ConversationView | null;
   plan: boolean; onClose: () => void; onPlan?: () => void; onNew?: () => void;
+  fs: { full: boolean; toggle: () => void };
 }) {
   const seat = useSeat(roleKey);
   const who = seatName(seat);
@@ -124,6 +141,7 @@ function TalkHead({ roleKey, state, conversation, plan, onClose, onPlan, onNew }
                           title="Scope a piece of work, then start it">Plan it</GatedButton> : null}
         {onNew ? <button type="button" className="ag-icon-btn" onClick={onNew} title="New talk"
                          aria-label="New talk">＋</button> : null}
+        <ChatFullscreenButton full={fs.full} onToggle={fs.toggle} className="ag-icon-btn" testid="ag-talk-fullscreen" />
         <button type="button" className="ag-icon-btn" onClick={onClose} aria-label="Close" title="Close">×</button>
       </span>
     </header>

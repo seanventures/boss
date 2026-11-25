@@ -356,7 +356,7 @@ class StdioInstance:
             pass
         if self.container:
             try:
-                owned_process.run([self.docker, "rm", "-f", self.container],
+                owned_process.run([self.docker, "rm", "-f", "-v", self.container],
                                   capture_output=True, text=True, timeout=30)
             except Exception:  # noqa: BLE001 — --rm and the closed stdin end it anyway
                 pass
@@ -623,7 +623,7 @@ def sweep_orphan_containers(binary: str = "docker") -> list[str]:
             pass
         except PermissionError:
             continue
-        _docker(["rm", "-f", cid], binary=binary)
+        _docker(["rm", "-f", "-v", cid], binary=binary)
         removed.append(cid)
     return removed
 

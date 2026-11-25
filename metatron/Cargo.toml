@@ -1,0 +1,74 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/metatron-cli",
+    "crates/metatron-tui",
+    "crates/metatron-core",
+    "crates/metatron-protocol",
+    "crates/metatron-boss-client",
+    "crates/metatron-exec",
+    "crates/metatron-sandbox",
+    "crates/metatron-policy",
+    "crates/metatron-remote",
+    "crates/metatron-tools",
+    "crates/metatron-secrets",
+    "crates/metatron-mcp",
+    "crates/metatron-session",
+    "crates/metatron-audit",
+    "third_party/codex/utils/head-tail-buffer",
+    "third_party/codex/utils/pty",
+    "third_party/codex/keyring-store",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+rust-version = "1.94.0"
+
+[workspace.dependencies]
+# First-party workspace crates
+metatron-cli = { path = "crates/metatron-cli" }
+metatron-tui = { path = "crates/metatron-tui" }
+metatron-core = { path = "crates/metatron-core" }
+metatron-protocol = { path = "crates/metatron-protocol" }
+metatron-boss-client = { path = "crates/metatron-boss-client" }
+metatron-exec = { path = "crates/metatron-exec" }
+metatron-sandbox = { path = "crates/metatron-sandbox" }
+metatron-policy = { path = "crates/metatron-policy" }
+metatron-remote = { path = "crates/metatron-remote" }
+metatron-tools = { path = "crates/metatron-tools" }
+metatron-secrets = { path = "crates/metatron-secrets" }
+metatron-mcp = { path = "crates/metatron-mcp" }
+metatron-session = { path = "crates/metatron-session" }
+metatron-audit = { path = "crates/metatron-audit" }
+
+# Vendored leaf crates (openai/codex@05ae1b0fdd5ab412d24248acc76c5d9f6f275440)
+codex-keyring-store = { path = "third_party/codex/keyring-store" }
+codex-utils-head-tail-buffer = { path = "third_party/codex/utils/head-tail-buffer" }
+codex-utils-pty = { path = "third_party/codex/utils/pty" }
+
+# Registry-only external dependencies (crates.io; zero git dependencies)
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+ctor = "0.6.3"
+keyring = { version = "3.6", default-features = false }
+lazy_static = "1"
+libc = "0.2.182"
+log = "0.4"
+portable-pty = "0.9.0"
+pretty_assertions = "1.4.1"
+tempfile = "3.23.0"
+tokio = "1"
+tracing = "0.1.44"
+
+[workspace.lints.rust]
+unexpected_cfgs = "warn"
+unsafe_op_in_unsafe_fn = "warn"
+
+[workspace.lints.clippy]
+await_holding_lock = "deny"
+expect_used = "deny"
+redundant_clone = "deny"
+uninlined_format_args = "deny"
+unwrap_used = "deny"

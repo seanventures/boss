@@ -110,7 +110,7 @@ export function demoIncidentDetail(incidentId: string): IncidentDetail | null {
     actions: Array.from({ length: 9 }, (_, i) => ({ id: `sa_${i}`, tool: "storage.x", tier: 1, where: "host", dry_run: i % 2 === 0, status: "done", items: 1, bytes: 1e9, plan_hash: "ph", receipt_id: `rcp_${i}`, decision_id: null, actor: "agent:infra", started_at: null, ended_at: null, result: {} })),
     receipts: Array.from({ length: 9 }, (_, i) => ({ id: `rcp_${i}`, dedupe_key: `k${i}`, effect_kind: "storage", status: "done", created_at: at("18:10") })),
     paused_work: [
-      { job_id: "job_4127", kind: "code_task", run_id: "4127", title: "AMEX statements import", paused_at: at("18:02"), resumed_at: at("18:13"), waited_seconds: 11 * 60 },
+      { job_id: "job_4127", kind: "code_task", run_id: "4127", title: "Statements import", paused_at: at("18:02"), resumed_at: at("18:13"), waited_seconds: 11 * 60 },
       { job_id: "job_4129", kind: "workflow", run_id: "4129", title: "HelpDesk PR #88 review", paused_at: at("18:03"), resumed_at: at("18:13"), waited_seconds: 10 * 60 },
       { job_id: "job_4131", kind: "code_task", run_id: "4131", title: "NorthPeak checkout fix", paused_at: at("18:04"), resumed_at: at("18:13"), waited_seconds: 9 * 60 },
     ],

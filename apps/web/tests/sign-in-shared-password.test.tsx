@@ -40,6 +40,8 @@ async function mount(options: AuthOptions) {
   return host;
 }
 
+/** Always in the future: a fixed date rotted once the calendar passed it. */
+const SOON = new Date(Date.now() + 10 * 86_400_000).toISOString();
 const BASE: AuthOptions = { org_name: "Acme BOSS", host: "boss.acme.dev", providers: [], smtp: false, signup: false, legacy_password: true, claim: null };
 
 describe("the shared console password after the claim", () => {
@@ -47,12 +49,12 @@ describe("the shared console password after the claim", () => {
     const off = await mount(BASE);
     expect(off.querySelector("[data-testid='shared-password-toggle']")).toBeNull();
     act(() => root?.unmount());
-    const on = await mount({ ...BASE, shared_password: { until: "2026-11-05T12:00:00Z" } });
+    const on = await mount({ ...BASE, shared_password: { until: SOON } });
     expect(on.querySelector("[data-testid='shared-password-toggle']")?.textContent).toBe("Use the shared password");
   });
 
   it("asks for no email, says Operator and until when, and posts no email", async () => {
-    const el = await mount({ ...BASE, shared_password: { until: "2026-11-05T12:00:00Z" } });
+    const el = await mount({ ...BASE, shared_password: { until: SOON } });
     await act(async () => el.querySelector<HTMLButtonElement>("[data-testid='shared-password-toggle']")!.click());
     expect(el.querySelector("#email")).toBeNull();
     expect(el.querySelector("label[for='password']")?.textContent).toBe("Shared password");

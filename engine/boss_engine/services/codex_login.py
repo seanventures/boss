@@ -181,7 +181,38 @@ def mark_revoked(error: str) -> None:
     was revoked" from a run, the proof turn, or our own refresh attempt) flip the state to
     refresh_failed immediately — a 401 from Codex is a credential problem for a person to fix,
     never retried as if it were transient."""
-    _record(config_dir(), state=REFRESH_FAILED, error=str(error)[:200])
+    home = config_dir()
+    # The same lock the refresher holds while it writes the state file, so a refresh finishing
+    # at this moment cannot interleave with (and lose) this record. Best effort on a timeout:
+    # a dead credential must still be recorded.
+    try:
+        with _flock(home, fcntl.LOCK_EX, 5.0):
+            _record(home, state=REFRESH_FAILED, error=str(error)[:200])
+    except OSError:
+        _record(home, state=REFRESH_FAILED, error=str(error)[:200])
+
+
+def failure_stands(home: Optional[str] = None, now: Optional[float] = None) -> bool:
+    """Does the recorded refresh_failed still describe THIS login?
+
+    A failure is a fact about one login. Signing in again installs a newer login (its
+    `last_refresh` is newer than the failure's timestamp), and the old verdict must not outlive
+    it: the state file was sticky, and on the laptop (2026-11-17) a http_401 recorded on 7 Nov
+    kept every run's sandbox from being seeded after the operator signed in afresh, while the
+    Setup proof (which reads the control plane's file directly) passed. Runs then started with no
+    login and failed 401 on wss://api.openai.com/v1/responses."""
+    st = _read_state(home)
+    if st.get("state") != REFRESH_FAILED:
+        return False
+    try:
+        at = datetime.fromisoformat(str(st.get("at") or ""))
+        failed_at = (at if at.tzinfo else at.replace(tzinfo=timezone.utc)).timestamp()
+    except ValueError:
+        return True          # no usable timestamp: the failure stands (never assume it healed)
+    age = _last_refresh_age(_read_doc(home), failed_at)
+    # `age` is how old the login was when the failure was recorded; negative = the login was
+    # issued AFTER the failure, so the failure belongs to a login that no longer exists.
+    return not (age is not None and age < 0)
 
 
 def status(now: Optional[float] = None) -> dict[str, Any]:
@@ -192,7 +223,7 @@ def status(now: Optional[float] = None) -> dict[str, Any]:
         return {"state": ABSENT}
     left = seconds_left(tokens, now)
     st = _read_state()
-    failed = st.get("state") == REFRESH_FAILED
+    failed = failure_stands()
     if left is not None and left <= 0:
         state = EXPIRED
     elif failed:
@@ -420,7 +451,10 @@ _THREAD: Optional[threading.Thread] = None
 
 def tick() -> dict[str, Any]:
     try:
-        return refresh_if_due(REFRESH_WINDOW_SECONDS)
+        from ..db import background
+
+        with background():
+            return refresh_if_due(REFRESH_WINDOW_SECONDS)
     except Exception as exc:  # noqa: BLE001 — the thread must keep running
         _log.warning("Codex login refresh tick failed: %s", type(exc).__name__)
         return {"result": "error", "error": type(exc).__name__}

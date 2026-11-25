@@ -103,5 +103,9 @@ def test_the_answer_path_reads_now_before_the_model_is_called():
     src = inspect.getsource(intent_router.IntentRouter._answer)
     read = src.index("current_state_note(connection, project_id, _question)")
     again = src.index("if asked_before(messages):")
-    model = src.index("self.budget.reserve(")
+    # The spend is reserved apart from the turn's transaction (62ab128d0, reserve_apart), and
+    # the model is called after it; both come after the current state is read.
+    reserve = src.index("reservation = reserve_apart(")
+    model = src.index("self._answer_agent().chat(")
+    assert reserve < model
     assert read < model and again < model, "the current state must be in the FIRST prompt"

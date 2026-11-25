@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * A rejected option already shows its label and an ✕, and puts why only on the
  * title, falling back to "Not chosen". That why has to be readable beside the

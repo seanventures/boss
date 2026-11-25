@@ -3,14 +3,17 @@ title: Orbit dodge
 blurb: A pilot changes orbit to dodge rocks and the score is how long the ship lasts.
 category: game
 prompt: |
-  Build a Godot 4 game named Orbit Dodge. A ship circles a planet at one of three radii. A press
-  of the action key moves the ship to the next radius and wraps from the outer ring back to the
-  inner ring. Asteroids spawn at the edge and travel inward. A collision ends the run. The score
-  is the number of whole seconds survived, shown on screen, and the best score is kept in a local
-  save file. There is no online leaderboard. A passing test sets the ship on the middle ring,
+  Build a browser game named Orbit Dodge on a single HTML canvas page, with Phaser or plain
+  canvas code. A ship circles a planet at one of three radii. A press of the space bar or a tap
+  moves the ship to the next radius and wraps from the outer ring back to the inner ring.
+  Asteroids spawn at the edge and travel inward. A collision ends the run. The score is the number
+  of whole seconds survived, shown on screen, and the best score is kept in local storage. There
+  is no online leaderboard and no asset download. Keep the game rules in a module that runs
+  without a browser so the tests run in Node. A passing test sets the ship on the middle ring,
   spawns an asteroid on the outer ring, and asserts the run continues, then spawns one on the
   middle ring and asserts the run ends.
-stack: Godot 4
+stack: Phaser
+toolchain: node
 resources:
   - repo
   - preview

@@ -8,9 +8,10 @@ step's output reached the next step's input, whether each gate opened and closed
 seven-day grace period ever ended — was unknown, so R5 could not be claimed or protected.
 
 This starts every entry in CATALOGUE with only the inputs its own input_schema requires, and
-ticks the real runner: research, the panel, the build, the preview, the launch-readiness repair
-and the deployment are fakes that record what they were asked and land their work as finished
-rows in the tables the runner waits on; every gate a person answers is approved; the grace
+ticks the real runner: research, the panel, the build, the launch-readiness repair and the
+deployment are fakes that record what they were asked and land their work as finished rows in
+the tables the runner waits on. The PREVIEW is not a fake (BOSSAPP-1433 R5): the build's tree is
+a tiny declared app and preview_service.start_preview starts it and it must answer HTTP; every gate a person answers is approved; the grace
 period is fast-forwarded. The run must complete with every step done or honestly skipped. A
 template added to the catalogue is driven here without anyone listing it.
 """
@@ -26,6 +27,7 @@ from sqlalchemy import text
 from boss_engine.services import workflow_capability_runner as runner
 from boss_engine.services import workflow_catalogue as wc
 
+from . import real_preview
 from .test_a_failed_step_stops_the_run import _insert_awaited
 from .test_workflow_capability_runner import (  # noqa: F401 - fixtures used by name
     Ctx,
@@ -121,11 +123,27 @@ def _fakes(c, project_id: str) -> dict[str, FakeTool]:
         return {"status": "extending", "result": {"run_id": run_id}}
 
     def preview(pid, args):
-        preview_id = new("prv")
-        _insert_awaited(c, pid, "app_previews", preview_id, "running")
-        c.execute(text("UPDATE app_previews SET run_id = :r WHERE id = :i"),
-                  {"i": preview_id, "r": args.get("run_id")})
-        return {"status": "starting", "preview_id": preview_id}
+        # THE REAL START (BOSSAPP-1433 R5, RCA row 3). This inserted a "running" app_previews row
+        # and started nothing, so a template whose preview could not start passed here. The
+        # build it previews is made a verify-green local build holding a tiny declared app, and
+        # BOSS's own preview_service.start_preview starts it (inside this test's transaction,
+        # which is where the build's row is); the app must answer before the step is fed back.
+        from boss_engine.config import Settings
+        from boss_engine.services import preview_service
+
+        run_id = str(args.get("run_id") or "")
+        real_preview.make_previewable(c, run_id, "command")
+        started_runs.append(run_id)
+        rec = preview_service.start_preview(real_preview.SameTransaction(c), Settings(), run_id,
+                                            ttl_minutes=int(args.get("ttl_minutes") or 60),
+                                            ready_timeout=60)
+        # A preview that did not start fails the template here, whatever the runner does next.
+        assert rec.get("status") == "running", rec
+        served = c.execute(text("SELECT url FROM app_previews WHERE id = :i"),
+                           {"i": rec["id"]}).scalar()
+        status, body = real_preview.fetch(served + "/")
+        assert status == 200 and real_preview.MARK["command"] in body, (status, body[:200])
+        return {"preview": rec}   # what the start_preview tool answers
 
     def security_scan(pid, args):
         # A finished scan with nothing found: the review's later steps say "not needed".
@@ -137,6 +155,7 @@ def _fakes(c, project_id: str) -> dict[str, FakeTool]:
         return {"status": "queued", "scan_id": scan_id}
 
     made_targets: dict = {}
+    started_runs: list[str] = []
 
     def deploy(pid, args):
         # The app's target, made by its first deploy and reused by the next (Deploy again).
@@ -157,11 +176,25 @@ def _fakes(c, project_id: str) -> dict[str, FakeTool]:
                   {"i": run_id, "t": target_id})
         return {"status": "planned", "deployment_run_id": run_id}
 
-    return {name: FakeTool(name, handler) for name, handler in (
+    def deploy_config(pid, args):
+        # A config deployment (Onboard a config file's Staging): planned, then applied.
+        run_id = new("drn")
+        _insert_awaited(c, pid, "deployment_runs", run_id, "succeeded")
+        return {"status": "planned", "deployment_run_id": run_id}
+
+    def contract_test(pid, args):
+        cases = list(args.get("cases") or [])
+        return {"ok": True, "total": len(cases), "passed": len(cases), "failed": 0,
+                "cases": [], "results_table": "| Case |", "failed_cases": []}
+
+    fakes = {name: FakeTool(name, handler) for name, handler in (
         ("create_discovery", research), ("request_meeting", meeting),
         ("create_code_task", code_task), ("extend_code_task", extend),
         ("start_preview", preview), ("deploy_app", deploy),
-        ("run_security_scan", security_scan))}
+        ("run_security_scan", security_scan), ("deploy_config", deploy_config),
+        ("contract_test", contract_test))}
+    fakes["start_preview"].started_runs = started_runs
+    return fakes
 
 
 def _incident(c, project_id: str, monkeypatch) -> str:
@@ -255,18 +288,31 @@ def test_every_catalogue_template_runs_to_its_last_step(eng, project, monkeypatc
             "scan_id": f"rscan_{uuid.uuid4().hex[:10]}", "files_read": 3, "rules_proposed": 0,
             "spend_usd": 0.0, "stopped_by": "scope_exhausted", "report": {},
             "review_link": {}})
+        # CONTRACT TESTS AFTER STAGING read the project's own from its repository; the harness
+        # has none, so the repo's file is stood in for.
+        monkeypatch.setattr(runner, "_repo_contract_cases", lambda *_a, **_k: {
+            **_a[-1], "cases": [{"name": "healthz", "path": "/healthz"}]})
         # ONLY WHAT START WOULD REQUIRE — the form's required fields and nothing else.
-        brief = {"title": TITLE, "directive": wc.example_for(key)["directive"],
+        example = wc.example_for(key) or {}
+        brief = {"title": TITLE, "directive": example["directive"],
+                 "start_from": example.get("start_from"),
+                 "target_path": example.get("target_path"),
                  "notify_channel": "mattermost:announcements", "app_key": "swap-board",
                  "scope": ["pkg:owner/swap-board:core:com.example.swaps"]}
         if "incident_id" in spec["input_schema"]["required"]:
             brief["incident_id"] = _incident(c, project, monkeypatch)
         run_input = {name: brief[name] for name in spec["input_schema"]["required"]}
         run = _start(c, project, version["id"], run_input)
-        _drive(eng, c, project, run["id"])
-        status = c.execute(text("SELECT status FROM workflow_runs WHERE id = :r"),
-                           {"r": run["id"]}).scalar()
-        steps = _steps(c, run["id"])
+        try:
+            _drive(eng, c, project, run["id"])
+            status = c.execute(text("SELECT status FROM workflow_runs WHERE id = :r"),
+                               {"r": run["id"]}).scalar()
+            steps = _steps(c, run["id"])
+        finally:
+            # Every preview it started is stopped, through stop_preview, process and all.
+            real_preview.stop_all(real_preview.SameTransaction(c), project)
+            for started in fakes["start_preview"].started_runs:
+                real_preview.forget_workspace(started)
     # SUCCEEDED, every one. A `skipped` row here would be a step the run never reached
     # (`path_not_reached`), which is the silent failure this test exists to catch.
     unfinished = {sid: (s["status"], s.get("last_error")) for sid, s in steps.items()

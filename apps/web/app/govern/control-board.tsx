@@ -34,6 +34,21 @@ const HELP: Record<string, string> = {
   captain_auto_improve: "Off: the Captain only proposes improve builds. On: it starts them, spending budget.",
   max_concurrent_jobs: "Seeded into job slots when the project starts",
   max_workers_total: "Upper bound for autoscaling",
+  agents_fix_failures: "Recorded in the audit log as the starter's own delegation. A person can revoke theirs in My account › Agents acting for me.",
+  step_recovery: "Retry, fix the app, clean an earlier release, wait for a BOSS fix, or ask you one question",
+  recovery_budget_cents: "Model turns plus the repair builds it starts. A Retry starts a new budget.",
+  recovery_max_minutes: "Past it, the step's agent asks you",
+  deploy_fix_attempts: "Per deploy step, for the app's own reasons only",
+  open_pr_when_checks_fail: "Security findings first. A follow-up build fixes them. You decide the merge.",
+  quality_bar: "A workflow or a single run may set its own",
+  build_test_budget: "Over it, BOSS trims the suite",
+  build_implement_budget_minutes: "Its fix round included",
+  build_streams_min: "Even on a busy host",
+  build_streams_max: "When the host has room",
+  workflow_precheck_agent: "Runs at the start door, before any build spends",
+  workflow_precheck_agent_max_cents: "No turn starts once it is spent",
+  workflow_precheck_agent_max_turns: "No turn starts once they are spent",
+  workflow_precheck_agent_max_wait_seconds: "Past it, the start goes ahead without the check",
 };
 
 const ENFORCED_TIP: Record<string, string> = {
@@ -47,6 +62,8 @@ const ENFORCED_TIP: Record<string, string> = {
   captain_own_builds: "Checked before the Captain starts a build nobody asked for",
   each_deploy_step: "Checked before BOSS fixes an app whose deploy failed and ships it again",
   each_failed_step: "Checked at every decision a step's agent makes to recover it",
+  each_build: "Read by every build as it runs",
+  each_start: "Read at every workflow start",
   job_queue: "Job slots seeded at project start",
   scaling: "Autoscaling never goes past this",
   advisory: "Shapes alerts and tips. Doesn't stop model calls.",
@@ -65,9 +82,10 @@ const CHIP_TIP: Record<string, string> = {
 export function valueText(c: Control): string {
   if (c.value_effective === null || c.value_effective === undefined) return c.unit === "intensity" ? "Not set" : "—";
   switch (c.unit) {
-    case "usd_micros": return money(c.value_effective);
-    case "usd_micros_per_min": return money(c.value_effective, { perMin: true });
+    case "usd_micros": return money(Number(c.value_effective));
+    case "usd_micros_per_min": return money(Number(c.value_effective), { perMin: true });
     case "switch": return c.value_effective ? "On" : "Off";
+    case "choice": return String(c.value_effective).replace(/^./, (ch) => ch.toUpperCase());
     default: return String(c.value_effective);
   }
 }
@@ -76,6 +94,7 @@ export function valueText(c: Control): string {
 export function noteText(c: Control): { text: string; tip: string } | null {
   if (c.note?.kind === "floor") return { text: `set ${c.note.stored}, min ${c.note.floor}`, tip: `Values under ${c.note.floor} behave like ${c.note.floor} today` };
   if (c.note?.kind === "reads_as") return { text: `set 0, reads as ${c.note.reads_as}`, tip: `0 is read as ${c.note.reads_as} today` };
+  if (c.note?.kind === "org_off") return { text: c.note.text, tip: "The organisation's Identity policy turns this off for every project; this project's setting can't turn it back on" };
   if (c.note?.kind === "default") return { text: "(default)", tip: "BOSS's default. Edit to set your own." };
   return null;
 }
@@ -113,7 +132,30 @@ export const AGENT_ROWS: [string, string][] = [
   ["code_review_inrun_max_rounds", "Review rounds"], ["captain_leads_projects", "Captain leads"],
   ["captain_auto_improve", "Captain self-improves"],
   ["max_concurrent_jobs", "Jobs at once"], ["max_workers_total", "Workers"]];
-const ROW_NAMES: Record<string, string> = Object.fromEntries([...SPEND_ROWS, ...AGENT_ROWS]);
+export const FAILED_STEP_ROWS: [string, string][] = [
+  ["agents_fix_failures", "Agents fix failures with your authority"], ["step_recovery", "Agents recover failed steps"],
+  ["recovery_budget_cents", "Recovery budget (cents)"], ["recovery_max_minutes", "Recovery time (minutes)"],
+  ["deploy_fix_attempts", "Deploy fixes"]];
+export const BUILD_ROWS: [string, string][] = [
+  ["open_pr_when_checks_fail", "Open the PR when checks fail"], ["quality_bar", "Quality bar"],
+  ["build_test_budget", "Tests per build"], ["build_implement_budget_minutes", "Implement time limit"],
+  ["build_streams_min", "Fewest parallel streams"], ["build_streams_max", "Most parallel streams"]];
+export const START_ROWS: [string, string][] = [
+  ["workflow_precheck_agent", "Model pre-check at start"], ["workflow_precheck_agent_max_cents", "Model pre-check cost cap (cents)"],
+  ["workflow_precheck_agent_max_turns", "Model pre-check turns"], ["workflow_precheck_agent_max_wait_seconds", "Model pre-check wait (seconds)"]];
+/** The board, as an engine without `sections` (or an unreachable one) is drawn. The engine's
+ *  `sections` win whenever they come: every key the API lists is drawn (govern_view.BOARD). */
+export const FALLBACK_SECTIONS: { key: string; name: string; rows: [string, string][] }[] = [
+  { key: "spend", name: "Spend caps", rows: SPEND_ROWS }, { key: "agents", name: "How hard agents work", rows: AGENT_ROWS },
+  { key: "each_failed_step", name: "Each failed step", rows: FAILED_STEP_ROWS },
+  { key: "each_build", name: "Each build", rows: BUILD_ROWS }, { key: "each_start", name: "Each start", rows: START_ROWS }];
+const ROW_NAMES: Record<string, string> = Object.fromEntries(FALLBACK_SECTIONS.flatMap((s) => s.rows));
+
+/** The sections to draw: the engine's when it sends them, else the fallback. */
+export function boardSections(view: GovernView | null): { key: string; name: string; keys: string[] }[] {
+  if (view?.sections?.length) return view.sections;
+  return FALLBACK_SECTIONS.map((s) => ({ key: s.key, name: s.name, keys: s.rows.map(([k]) => k) }));
+}
 
 export function ControlBoard({ view, projectId, actor, unreachable, focus, onSaved }: {
   view: GovernView | null;
@@ -155,14 +197,18 @@ export function ControlBoard({ view, projectId, actor, unreachable, focus, onSav
     );
   };
 
+  const sections = boardSections(view);
+  const drawn = (s: { key: string; name: string; keys: string[] }) => (
+    <section key={s.key} className="gv-sec" aria-labelledby={`gv-sec-${s.key}`} data-testid={`gv-sec-${s.key}`}>
+      <h3 id={`gv-sec-${s.key}`} className="gv-sec-head">{s.name.toUpperCase()}</h3>
+      <ul className="gv-rows" role="list">
+        {s.keys.map((key) => row(key))}
+      </ul>
+    </section>
+  );
   return (
     <div className="gv-board" data-testid="gv-board">
-      <section className="gv-sec" aria-labelledby="gv-sec-spend">
-        <h3 id="gv-sec-spend" className="gv-sec-head">SPEND CAPS</h3>
-        <ul className="gv-rows" role="list">
-          {SPEND_ROWS.map(([key]) => row(key))}
-        </ul>
-      </section>
+      {sections.filter((s) => s.key === "spend").map(drawn)}
       <section className="gv-sec" aria-labelledby="gv-sec-rises">
         <h3 id="gv-sec-rises" className="gv-sec-head">WHEN SPEND RISES</h3>
         <div className="gv-chips" data-testid="gv-thresholds">
@@ -174,12 +220,7 @@ export function ControlBoard({ view, projectId, actor, unreachable, focus, onSav
           ))}
         </div>
       </section>
-      <section className="gv-sec" aria-labelledby="gv-sec-agents">
-        <h3 id="gv-sec-agents" className="gv-sec-head">HOW HARD AGENTS WORK</h3>
-        <ul className="gv-rows" role="list">
-          {AGENT_ROWS.map(([key]) => row(key))}
-        </ul>
-      </section>
+      {sections.filter((s) => s.key !== "spend").map(drawn)}
       <TokenGuides view={view} projectId={projectId} actor={actor} disabled={unreachable} onSaved={onSaved} />
       <section className="gv-sec gv-elsewhere" aria-label="Elsewhere">
         <h3 className="gv-sec-head">ELSEWHERE</h3>
@@ -224,6 +265,7 @@ function ControlRow({ keyName, control: c, projectId, actor, disabled, editing, 
         data-focused={focused || undefined} data-advisory={c?.advisory || undefined} data-editing={editing || undefined}>
       <span className="gv-name">
         <span title={HELP[keyName]}>{name}</span>
+        {c?.explain ? <span className="gv-explain" data-testid={`gv-explain-${keyName}`}>{c.explain}</span> : null}
       </span>
       <span className="gv-value" data-pulsed={pulsed || undefined}>
         <span className="gv-value-main" data-testid={`gv-value-${keyName}`}>{c ? valueText(c) : "—"}</span>
@@ -277,6 +319,10 @@ function ControlRow({ keyName, control: c, projectId, actor, disabled, editing, 
             <MonthlyCapEditor control={c} projectId={projectId} busy={busy}
                               onSave={(usd) => void write("monthly_cap", { monthly_cap_usd: usd }, `${name} saved`)}
                               onCancel={() => onEdit(false)} />
+          ) : c.unit === "choice" ? (
+            <ChoiceEditor control={c} busy={busy}
+                          onSave={(v) => void write("setting", { key: keyName, value: v }, `${name} saved`)}
+                          onCancel={() => onEdit(false)} />
           ) : c.unit === "switch" ? (
             <SwitchEditor control={c} busy={busy}
                           onSave={(on) => void write("setting", { key: keyName, value: on ? "1" : "0" }, `${name} saved`)}
@@ -339,6 +385,24 @@ function SwitchEditor({ control, busy, onSave, onCancel }: {
       <button type="button" role="switch" aria-checked={on} className="gv-switch" data-testid="gv-switch"
               onClick={() => setOn(!on)}>{on ? "On" : "Off"}</button>
       <span className="gv-preview-line">BOSS will use {on ? "On" : "Off"}</span>
+      <Buttons busy={busy} onCancel={onCancel} />
+    </form>
+  );
+}
+
+function ChoiceEditor({ control, busy, onSave, onCancel }: {
+  control: Control; busy: boolean; onSave: (value: string) => void; onCancel: () => void;
+}) {
+  const choices = control.bounds?.choices ?? [];
+  const [value, setValue] = useState(String(control.value_effective ?? choices[0] ?? ""));
+  return (
+    <form className="gv-edit-form" noValidate onSubmit={(e) => { e.preventDefault(); onSave(value); }}
+          onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); onCancel(); } }}>
+      <select className="gv-input" autoFocus aria-label={control.name} value={value} data-testid="gv-choice"
+              onChange={(e) => setValue(e.target.value)}>
+        {choices.map((ch) => <option key={ch} value={ch}>{ch}</option>)}
+      </select>
+      <span className="gv-preview-line">BOSS will use {value}</span>
       <Buttons busy={busy} onCancel={onCancel} />
     </form>
   );

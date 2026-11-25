@@ -136,6 +136,12 @@ PROPOSE_FACT_TOOLS: tuple[str, ...] = ("kg_propose_fact",
 TICKET_READ_TOOLS: tuple[str, ...] = ("ticket_get", "ticket_search", "ticket_browse")
 TICKET_WRITE_TOOLS: tuple[str, ...] = ("ticket_import", "ticket_comment", "ticket_transition")
 
+#: `confluence.read` / `confluence.publish` offer the org's Confluence (BOSSAPP-1384). Both are role
+#: grants (the roles that read tickets, and the documentation writer), never in the baseline.
+#: Publishing is a QUEUED proposal: nothing is written until a person approves the diff.
+CONFLUENCE_READ_TOOLS: tuple[str, ...] = ("confluence_search", "confluence_read_page")
+CONFLUENCE_WRITE_TOOLS: tuple[str, ...] = ("confluence_publish_page",)
+
 #: `storage.steward` offers the Infra Agent's tools (BOSSAPP-1157, tools/storage_tools.py): read a
 #: host's storage and the open incident, move the deterministic executor one notch, propose a
 #: retention rule, write the cause and report, set/release the work hold within its rules. Every
@@ -151,6 +157,7 @@ STORAGE_TOOLS: tuple[str, ...] = STORAGE_READ_TOOLS + STORAGE_WRITE_TOOLS
 BUNDLE_WRITES: dict[str, tuple[str, ...]] = {"knowledge.propose": PROPOSE_FACT_TOOLS,
                                              "boss.fundamentals": FUNDAMENTALS_WRITES,
                                              "tickets.write": TICKET_WRITE_TOOLS,
+                                             "confluence.publish": CONFLUENCE_WRITE_TOOLS,
                                              "storage.steward": STORAGE_WRITE_TOOLS}
 WRITE_BUNDLES: frozenset[str] = frozenset(BUNDLE_WRITES)
 
@@ -172,7 +179,8 @@ def bundles() -> dict[str, tuple[str, ...]]:
     return {"repo.read": REPO_READ_TOOLS, "boss.fundamentals": FUNDAMENTALS_TOOLS,
             "boss.propose_fix": PROPOSE_TOOLS, "knowledge.read": KNOWLEDGE_TOOLS,
             "knowledge.propose": PROPOSE_FACT_TOOLS, "tickets.read": TICKET_READ_TOOLS,
-            "tickets.write": TICKET_WRITE_TOOLS, "storage.steward": STORAGE_TOOLS}
+            "tickets.write": TICKET_WRITE_TOOLS, "storage.steward": STORAGE_TOOLS,
+            "confluence.read": CONFLUENCE_READ_TOOLS, "confluence.publish": CONFLUENCE_WRITE_TOOLS}
 
 
 def bundle_tool_spec(skill_id: str, tool: str, *, edition: str | None = None) -> Any:

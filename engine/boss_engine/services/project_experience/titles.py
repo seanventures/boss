@@ -149,6 +149,26 @@ def short_title(title: Any, brief: Any = None, *, stored: Any = None, limit: int
     return shorten(t or b, limit)
 
 
+_PRD_HEAD = re.compile(r"^\s{0,3}#{1,2}\s+(.+?)\s*#*\s*$", re.M)
+_PRD_LEAD = re.compile(r"^(?:PRD|Product requirements?(?: document)?|Spec(?:ification)?|"
+                       r"Feature|Minor feature|Brief)\s*(?::|[—–-])\s*", re.I)
+
+
+def prd_title(markdown: Any, limit: int = 6) -> str:
+    """THE WORK'S NAME FROM ITS PRD: the document's first heading, without its "PRD:" lead
+    ("# PRD: Bench Name Label on Map Bubble" → "Bench Name Label on Map Bubble"), at most
+    `limit` words (shortened by rule past that). "" when the PRD has no heading that names
+    anything ("# PRD", "# Product requirements"). Deterministic: the same PRD, the same name."""
+    m = _PRD_HEAD.search(str(markdown or ""))
+    if not m:
+        return ""
+    head = re.sub(r"[*_`]+", "", m.group(1)).strip()
+    head = _PRD_LEAD.sub("", head).strip()
+    if not head or head.lower().strip(" :") in ("prd", "product requirements", "spec", "draft"):
+        return ""
+    return _tidy(head) if len(head.split()) <= limit else shorten(head, limit)
+
+
 def title_fields(title: Any, brief: Any = None, *, stored: Any = None) -> dict[str, Optional[str]]:
     """{label, title}: the short name every surface shows, and the full text for the drawer."""
     full = _clean(title) or _clean(brief) or None
@@ -165,4 +185,4 @@ def run_name(title: Any, brief: Any = None) -> str:
     return name or "an earlier build"
 
 
-__all__ = ["run_name", "shorten", "short_title", "strip_label", "title_fields"]
+__all__ = ["prd_title", "run_name", "shorten", "short_title", "strip_label", "title_fields"]

@@ -154,7 +154,11 @@ def test_actual_role_contracts_guard_before_application_or_api_initialization():
     check = "python3 " + recovery.GUARD + " --check"
     assert entrypoint.index(check) < entrypoint.index('UID_RANGE=')
     assert entrypoint.index(check) < entrypoint.index('id -u')
-    assert dockerfile.index('ENTRYPOINT ["python3",') < dockerfile.index('FROM python-runtime AS api')
+    # Every Python image descends from python-base, whose ENTRYPOINT is the guard; api and runner
+    # replace it with boss-entrypoint, which runs the guard first (above).
+    base = dockerfile.split(" AS python-base\n", 1)[1].split("\nFROM ", 1)[0]
+    assert 'ENTRYPOINT ["python3", "/usr/local/libexec/boss/recovery_guard.py"]' in base
+    assert dockerfile.index('ENTRYPOINT ["python3",') < dockerfile.index('FROM python-app AS api')
     assert 'ENTRYPOINT ["/usr/local/bin/boss-entrypoint"]' in dockerfile
     for role, command in recovery.ROLES.items():
         service = config["services"][role]

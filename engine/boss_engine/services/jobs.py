@@ -1185,6 +1185,8 @@ class JobLeaseService:
                 "job_id": job_id,
             },
         )
+        if not handing_back:
+            self._renew_own_reservations(connection, row["project_id"], job_id, current_time)
         if row["kind"] == "agent.studio.execute":
             connection.execute(
                 text(
@@ -2777,6 +2779,57 @@ class JobLeaseService:
         )
         return str(reservation_id) if reservation_id else None
 
+    def _renew_own_reservations(self, connection: Connection, project_id: str, job_id: str,
+                                current_time) -> int:
+        """A LIVE JOB KEEPS ITS HOLDS (BOSSAPP-1452). A build renewed its budget hold only at
+        its stage boundaries, so one long stage on a small host outlived the hold's 45 minutes
+        and the build ran on a lapsed reservation. The lease heartbeat is the proof the job is
+        alive, so every heartbeat renews the job's own active holds to a full window from now
+        (never shortening one, never reviving a settled, released or expired one). A job that
+        died stops heartbeating, and its holds lapse as before. Never fails a heartbeat."""
+        held = self._own_reservations(connection, project_id, job_id)
+        if not held:
+            return 0
+        from .build_budget import RESERVATION_MINUTES
+
+        try:
+            with connection.begin_nested():
+                renewed = connection.execute(
+                    text("UPDATE budget_reservations SET expires_at = GREATEST(expires_at, :at) "
+                         "WHERE id = ANY(:ids) AND project_id = :p AND status = 'active' "
+                         "AND expires_at > :now"),
+                    {"ids": held, "p": project_id, "now": current_time,
+                     "at": current_time + timedelta(minutes=RESERVATION_MINUTES)})
+                return int(getattr(renewed, "rowcount", 0) or 0)
+        except Exception:  # noqa: BLE001 — a hold not renewed lapses as it did before
+            return 0
+
+    @staticmethod
+    def _own_reservations(connection: Connection, project_id: str, job_id: str) -> list[str]:
+        """The active holds made FOR this job: reserved under its id, or — for the build job
+        itself (`code.task`) — the reservation of the build it carries (code_task_runs.
+        reservation_id, the run named in its payload). Any other job that merely names a build
+        run in its payload still counts that hold."""
+        try:
+            with connection.begin_nested():
+                rows = connection.execute(
+                    text(
+                        """
+                        SELECT r.id FROM budget_reservations r
+                        WHERE r.project_id = :p AND r.status = 'active'
+                          AND (r.job_id = :j OR r.id IN (
+                                SELECT c.reservation_id FROM jobs j
+                                JOIN code_task_runs c ON c.id = j.payload->>'run_id'
+                                WHERE j.id = :j AND j.kind = 'code.task'
+                                  AND c.reservation_id IS NOT NULL))
+                        """
+                    ),
+                    {"p": project_id, "j": job_id},
+                ).scalars().all()
+        except Exception:  # noqa: BLE001 — unread: the job is judged as before
+            return []
+        return [str(r) for r in rows]
+
     def _budget_state_policy_for_job(
         self,
         connection: Connection,
@@ -2785,7 +2838,14 @@ class JobLeaseService:
         job_id: str,
         kind: str,
     ) -> Optional[dict[str, Any]]:
-        snapshot = self.budget.status_for_project(connection, project_id)
+        # A RESERVATION NEVER BLOCKS THE JOB IT WAS MADE FOR (stranger test r3, 2026-11-18): an
+        # Easy Mode launch reserved the whole $10 cap for its build, the state went red on that
+        # hold alone, and the build's own job was deferred "cap reached" at $0.00 spent. This
+        # job is admitted against the money OTHER work holds; every other job still counts its
+        # hold as committed.
+        own = self._own_reservations(connection, project_id, job_id)
+        snapshot = self.budget.status_for_project(connection, project_id,
+                                                  exclude_reservations=own)
         budget_state = snapshot["budget_state"]
         if budget_state not in {"orange", "red"}:
             return None

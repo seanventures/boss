@@ -20,15 +20,16 @@
  */
 import { GatedButton, useGate } from "../../components/gated";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowClockwise, CaretDown, Cpu, GitBranch, Lightning, SlidersHorizontal, Ticket } from "@phosphor-icons/react";
+import { ArrowClockwise, BookOpen, CaretDown, Cpu, GitBranch, Lightning, SlidersHorizontal, Ticket } from "@phosphor-icons/react";
 
 import { fetchSetup, SetupFailure, setupWrite } from "../../lib/setup-client";
 import {
-  ADVANCED_ROWS, defaultAdd, readParams, rowMode, SETUP_BADGE_EVENT, stepNumber, summarize, type SetupParams,
+  ADVANCED_ROWS, defaultAdd, readParams, rowMode, SETUP_BADGE_EVENT, SETUP_MODEL_READY_EVENT, stepNumber, summarize, type SetupParams,
 } from "../../lib/setup-stepper";
 import type { RowKey, SetupView } from "../../lib/setup-types";
 import { BuildDatabaseRow } from "./build-database-row";
 import { BuildSpeedRow } from "./build-speed-row";
+import { AgentCapacityRow } from "./agent-capacity-row";
 import { EmbeddingModelRow } from "./embedding-model-row";
 import { CapacityRow } from "./capacity-row";
 import { ModelsRow } from "./models-row";
@@ -44,9 +45,11 @@ import { HarnessAdaptersRow } from "./harness-adapters-row";
 import { GatewaysRow } from "./gateways-row";
 import { PoolsRow } from "./pools-row";
 import { TicketSystemsRow } from "./ticket-systems-row";
+import { ConfluenceRow } from "./confluence-row";
 import { SetupSection } from "./setup-section";
 import { accountsOf } from "./setup-blocks";
 import { EventsRow } from "../events/events-row";
+import { AutonomySetupRow } from "../autonomy/setup-row";
 import { SharingAsk } from "../improve/sharing-ask";
 import { CiWorkflowsToggle } from "./ci-workflows-toggle";
 import { GitHubSigninRow, useSignin } from "./github-signin-row";
@@ -55,6 +58,7 @@ import { SectionLabel } from "../section-label";
 import { useOnScreen } from "../../lib/area-shown";
 import { SetupBlocks, WhoDoesWhat } from "./setup-blocks";
 import { GET_STARTED_EVENT, getStarted, Welcome } from "./welcome";
+import { switchAreaWith } from "../url-intent";
 
 /** One plain line per Advanced item (≤ 6 words), the detail in its tooltip. */
 const ADVANCED: Record<string, { line: string; tip: string }> = {
@@ -136,7 +140,9 @@ function oldWelcomeLink(): boolean {
 }
 
 function navigate(area: "welcome" | "setup"): void {
-  try { window.dispatchEvent(new CustomEvent("boss:navigate", { detail: area })); } catch { /* no window */ }
+  // The area goes into the URL first, so an old link's `focus=try` survives the switch to
+  // Get started (url-intent switchAreaWith).
+  try { switchAreaWith(area); } catch { /* no window */ }
 }
 
 /**
@@ -236,7 +242,9 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
   useEffect(() => {
     if (!view) return;
     try {
-      window.dispatchEvent(new CustomEvent(SETUP_BADGE_EVENT, { detail: summarize(view).badge }));
+      const summary = summarize(view);
+      window.dispatchEvent(new CustomEvent(SETUP_BADGE_EVENT, { detail: summary.badge }));
+      window.dispatchEvent(new CustomEvent(SETUP_MODEL_READY_EVENT, { detail: Boolean(summary.has_model) }));
     } catch { /* no window */ }
   }, [view]);
 
@@ -370,6 +378,7 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
           <div className="su-adv-item" ref={ref("ci")}><Why id="ci" /><CiPermission /></div>
           <div className="su-adv-item" ref={ref("build_database")}><Why id="build_database" /><BuildDatabaseRow /></div>
           <div className="su-adv-item" ref={ref("build_speed")}><Why id="build_speed" /><BuildSpeedRow /></div>
+          <div className="su-adv-item"><AgentCapacityRow /></div>
           <div className="su-adv-item" ref={ref("toolchains")}><Why id="toolchains" /><ToolchainsRow /></div>
           {view.harness_adapters?.length ? (
             <div className="su-adv-item"><Why id="adapters" /><HarnessAdaptersRow /></div>
@@ -449,8 +458,8 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
                        step={shift(stepNumber(view, "repository"))} focused={focus === "repository"} />
         <ModelsRow ref={ref("models")} mode={rowMode(view, "models")}
                    step={shift(stepNumber(view, "models"))} focused={focus === "models" || focus === "capacity"}
-                   add={params.add} source={params.source}
-                   onAddHandled={() => setParams((p) => ({ ...p, add: null }))}>
+                   add={params.add ?? modelAdd} source={params.source}
+                   onAddHandled={() => { setModelAddDone(true); setParams((p) => ({ ...p, add: null })); }}>
           {/* rc9 (BOSS-434/437): the model sources sit inside Models, one heading and panel. */}
           <CapacityRow ref={ref("capacity")} actor={actor} focused={focus === "capacity"} />
           {/* The org's one embedding model (meaning search), set once for every project. */}
@@ -458,8 +467,13 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
         </ModelsRow>
         {/* TICKET SYSTEMS (BOSSAPP-1047 T1): the one place Jira, Plane, GitHub Issues… connect. */}
         <div ref={ref("ticket_systems")}><TicketSystemsRow projectId={projectId} focused={focus === "ticket_systems"} /></div>
+        {/* DOCUMENTS (operator, 2026-11-18): Confluence is a document repository, not a ticket
+            system: its own area, never under Ticket systems. */}
+        <div ref={ref("documents")}><ConfluenceRow projectId={projectId} /></div>
         {/* EVENTS (P9a-7): what wakes the agents; the way into Setup › Events. */}
         <div><EventsRow projectId={projectId} /></div>
+        {/* AUTONOMY (BOSSAPP-1441): one line; it is set in Govern › Where people decide. */}
+        <div><AutonomySetupRow projectId={projectId} /></div>
         {/* NO TRY IT HERE (operator, 2026-11-04: "Why trying out sample project is in Repos and
             Models"): Setup is connections only. The sample and the one-sentence PR live on the
             Welcome (step 3); `focus=try` opens it. */}
@@ -487,6 +501,14 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
 
   // THE STEPPER while a repository or a model is missing (1 GitHub, 2 Repos, 3 Model).
   const stepper = view.next === "repository" || view.next === "model";
+  // Welcome's and the first run's "Add model / Add another account" (`open=add`) land on the
+  // block's own Add — IN BOTH LAYOUTS (stranger test 2026-11-17: on a fresh install, which shows
+  // the stepper, "Add model" landed on Setup without opening the drawer). Any other link to a
+  // block only lands on it (tester, 2026-11-05: focus=repository opened "Add a GitHub account",
+  // focus=models the Add a model drawer).
+  const blockOpen = openAdd && params.focus && BLOCK_FOCUS.has(params.focus) && !params.add && !params.source
+    ? (params.focus === "models" ? "model" as const : "account" as const) : null;
+  const modelAdd = blockOpen === "model" && !modelAddDone ? defaultAdd(view).provider : null;
   if (layout === "setup" && !stepper) {
     const openAdvanced = (row?: string) => {
       setClassicOpen(true);
@@ -497,12 +519,6 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
         window.setTimeout(() => classicRef.current?.scrollIntoView?.({ behavior: "smooth", block: "start" }), 50);
       }
     };
-    // Welcome's "Add another account / model" (`open=add`) land on the block's own Add; any
-    // other link to a block only lands on it (tester, 2026-11-05: focus=repository opened "Add a
-    // GitHub account", focus=models the Add a model drawer).
-    const blockOpen = openAdd && params.focus && BLOCK_FOCUS.has(params.focus) && !params.add && !params.source
-      ? (params.focus === "models" ? "model" as const : "account" as const) : null;
-    const modelAdd = blockOpen === "model" && !modelAddDone ? defaultAdd(view).provider : null;
     return (
       <BoardContext.Provider value={ctx}>
         <div className="su-board" data-testid="su-board" data-layout="setup">
@@ -526,7 +542,7 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
               Test all
             </GatedButton>
           </header>
-          {/* ONE FOLD PER TOPIC (operator, 2026-11-15): Repos, Models, Ticket systems, Events,
+          {/* ONE FOLD PER TOPIC (operator, 2026-11-15): Repos, Models, Ticket systems, Documents, Events,
               each a line of state when folded (setup-section.tsx). */}
           <SetupSection id="repos" title="Repos" icon={<GitBranch size={16} />} summary={repoSummary(view)}
                         tone={repoTone(view)} attention={repoTone(view) !== "green"}
@@ -570,10 +586,19 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
                         focused={focus === "ticket_systems"}>
             <div ref={ref("ticket_systems")}><TicketSystemsRow projectId={projectId} focused={focus === "ticket_systems"} onSummary={setTicketWords} /></div>
           </SetupSection>
+          {/* DOCUMENTS (operator, 2026-11-18): Confluence is a document repository, not a ticket
+              system — its own fold, where later document stores (SharePoint, Google Drive) join it. */}
+          <SetupSection id="documents" title="Documents" icon={<BookOpen size={16} />}
+                        summary="Confluence: pages agents read, sync and publish"
+                        focused={focus === "documents"}>
+            <div ref={ref("documents")}><ConfluenceRow projectId={projectId} /></div>
+          </SetupSection>
           <SetupSection id="events" title="Events" icon={<Lightning size={16} />} summary="Slack, GitHub or a webhook wakes an agent"
                         focused={focus === "events"}>
             <div ref={ref("events")}><EventsRow projectId={projectId} /></div>
           </SetupSection>
+          {/* AUTONOMY (BOSSAPP-1441): the same one line as the classic board; set in Govern. */}
+          <div className="su-sec-line"><AutonomySetupRow projectId={projectId} /></div>
           <details className="su-advanced su-advanced-all" data-testid="su-advanced-all" ref={classicRef}
                    open={classicOpen}
                    onToggle={(e) => setClassicOpen((e.currentTarget as HTMLDetailsElement).open)}>
@@ -624,13 +649,14 @@ const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
 const worst = (tones: string[]): "green" | "amber" | "red" | "grey" =>
   tones.includes("red") ? "red" : tones.includes("amber") ? "amber" : tones.length ? "green" : "grey";
 
-/** "2 repos · 1 GitHub account" — or what is missing. */
+/** "2 repos · 1 GitHub account" — or what is missing / local-only. */
 export function repoSummary(view: SetupView): string {
   const repos = view.repository.repos.length;
   const accounts = accountsOf(view).length;
-  if (!repos && !accounts) return "No GitHub account yet";
+  if (!repos && !accounts) return view.repository.local ? "On this machine · no GitHub account yet" : "No GitHub account yet";
   if (!repos) return `${plural(accounts, "GitHub account")} · no repo yet`;
-  return `${plural(repos, "repo")} · ${plural(accounts || 1, "GitHub account")}`;
+  if (!accounts) return `${plural(repos, "repo")}${view.repository.local ? " · on this machine" : ""}`;
+  return `${plural(repos, "repo")} · ${plural(accounts, "GitHub account")}`;
 }
 export const repoTone = (view: SetupView) => worst(view.repository.repos.map((r) => r.pill.tone));
 

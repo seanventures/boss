@@ -11,6 +11,7 @@ prompt: |
   test runs the command on a fixture of five rows with one blank cell and one repeated key and
   checks that the report states both.
 stack: Python
+toolchain: python
 resources:
   - repo
   - preview

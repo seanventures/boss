@@ -107,20 +107,21 @@ class Pipeline:
         return dict(line.split(" ", 1) for line in out.splitlines() if line.strip())
 
     # -- starting and running work -------------------------------------------------------------
-    def build(self, *, faults: str = "", tag: str = "build") -> tuple[str, str]:
+    def build(self, *, faults: str = "", tag: str = "build",
+              brief_extra: str = "", seed: Optional[dict] = None) -> tuple[str, str]:
         """A small fresh build, started as the API starts one. Returns (run_id, repo)."""
         from boss_engine.services import code_task_service
 
         self._engine_env(faults)
         repo = f"pipe-{tag}-{uuid.uuid4().hex[:6]}"
-        self.repos[repo] = self.hub.seed(OWNER, repo, {"README.md": f"# {repo}\n"})
+        self.repos[repo] = self.hub.seed(OWNER, repo, {"README.md": f"# {repo}\n", **(seed or {})})
         with self.engine.begin() as c:
             run_id = code_task_service.start_code_task(
                 c, project_id=self.project, task_id=None, title=f"Slug service ({tag})",
                 instructions=("Build a tiny plain Node ESM service at the repository root: "
                               "slug(text) in src/slug.js and an HTTP server in src/server.js "
                               "answering GET /?q=<text> with {\"slug\": ...} on $PORT. Tests "
-                              "under node --test."),
+                              "under node --test.") + brief_extra,
                 acceptance_criteria=["slug lowercases and joins words with hyphens",
                                      "GET /?q= answers the slug as JSON"],
                 test_commands=["npm test"], owner=OWNER, repo=repo, base_branch="main",
@@ -379,11 +380,16 @@ def test_a_follow_up_builds_on_the_same_branch_and_pull_request(pipeline, built,
     run = out["run"]
     assert error is None, error
     assert run["status"] == "completed", (run["status"], run.get("error"))
-    assert run["pull_request_url"] == built["run"]["pull_request_url"]
+    # BOSSAPP-1395: while the parent's merge card is pending, a GitHub follow-up isolates onto
+    # its own branch cut from the parent's approved head and opens a stacked PR instead of
+    # pushing onto the parent's branch/PR.
+    assert run["pull_request_url"] != built["run"]["pull_request_url"]
     assert out["writes"], "the follow-up never wrote"
     after = pipeline.branch_heads(built["repo"])
-    work = [b for b in after if b != "main"]
-    assert any(after[b] != before.get(b) for b in work), "the follow-up pushed nothing"
+    parent_branch = f"boss/code/{built['run_id']}"
+    followup_branch = f"boss/code/{follow}"
+    assert after.get(parent_branch) == before.get(parent_branch), "parent branch must stay pinned"
+    assert followup_branch in after and after[followup_branch] != after[parent_branch]
 
 
 # ── a re-check of that change ────────────────────────────────────────────────────────────────

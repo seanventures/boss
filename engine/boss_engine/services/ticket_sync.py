@@ -823,15 +823,16 @@ def _ensure_worker() -> None:
 
         def work() -> None:
             from ..config import get_settings
-            from ..db import get_engine
+            from ..db import background, get_engine
 
             while True:
                 event_id, _project, event_type, entity_type, entity_id, data = _QUEUE.get()
                 try:
-                    engine = get_engine()
-                    if _committed(engine, event_id):
-                        on_event(engine, get_settings(), event_type, entity_type, entity_id,
-                                 data)
+                    with background():
+                        engine = get_engine()
+                        if _committed(engine, event_id):
+                            on_event(engine, get_settings(), event_type, entity_type, entity_id,
+                                     data)
                 except Exception:  # noqa: BLE001
                     logger.warning("ticket sync worker failed on %s", event_type, exc_info=True)
                 finally:
@@ -1073,7 +1074,8 @@ def _intake_row(db: Any, project_id: str, *, connection_id: Optional[str] = None
 
 def ticket_import_items(db: Any, settings: Any, *, project_id: str, items: list[dict[str, Any]],
                         actor: str, connection_id: Optional[str] = None,
-                        provider: Optional[str] = None) -> dict[str, Any]:
+                        provider: Optional[str] = None,
+                        person_id: Optional[str] = None) -> dict[str, Any]:
     """The ``ticket_import`` tool's door: a thin wrapper over B1's import
     (``ticket_intake.import_by_keys``): work items + bindings (status todo), deduped on the
     binding; an epic ``with_children`` brings its children under it."""
@@ -1081,13 +1083,15 @@ def ticket_import_items(db: Any, settings: Any, *, project_id: str, items: list[
 
     from . import ticket_reach as reach
 
+    resolved_person = person_id if person_id is not None else _person(actor)
     try:
         row = _intake_row(db, project_id, connection_id=connection_id, provider=provider)
         if row is None:
-            why = reach.nothing_reachable(db, project_id, provider=provider)
+            why = reach.nothing_reachable(db, project_id, provider=provider,
+                                          person_id=resolved_person)
             raise TicketSyncError(why["message"], status=403 if why["error"] == "not_shared"
                                   else 409, code=why["error"])
-        read = intake.read_for_import(db, row, items, person_id=_person(actor),
+        read = intake.read_for_import(db, row, items, person_id=resolved_person,
                                       project_id=project_id, reader=actor)
         row = reach.project_row_for(db, settings, project_id, row, actor=actor)
     except intake.TicketApiError as error:
@@ -1207,42 +1211,49 @@ def _pickup_card(db: Any, project_id: str, provider: str, key: str) -> Optional[
         {"p": project_id, "a": PICKUP_ACTION, "k": provider, "key": key}).scalar()
 
 
-def pickup(engine: Any, settings: Any, row: Mapping[str, Any], ticket: Any, *,
-           source: str) -> dict[str, Any]:
+def pickup_in_tx(db: Any, settings: Any, row: Mapping[str, Any], ticket: Any, *,
+                 source: str) -> dict[str, Any]:
     """A ticket that carries the pick-up label: offered (ask) or imported and started
-    (auto_start). Deduped on the binding (already in BOSS) and on an earlier card for it."""
+    (auto_start). Runs inside caller's transaction, deduped on the binding and on an earlier
+    card for it."""
     from .core import create_blocking_decision, emit_event
 
-    with engine.begin() as db:
-        home = home_row(db, row) or dict(row)
+    home = home_row(db, row) or dict(row)
     options = sync_settings(home["configuration"])          # the HOME's settings, never a mirror's
     label = options["pickup"]["label"].lower()
     if not label or label not in {str(lb).lower() for lb in ticket.labels}:
         return {"status": "ignored", "reason": "no pick-up label", "key": ticket.key}
+    row = _target_row(db, home, ticket)                  # the mapped project's row
+    project_id, provider = str(row["project_id"]), str(row["provider_key"])
+    found = binding_for(db, project_id, provider, ticket.key, external_id=str(ticket.id or ""))
+    if found is not None:
+        return {"status": "already_in_boss", "key": ticket.key,
+                "work_item_id": found["work_item_id"]}
+    card = _pickup_card(db, project_id, provider, ticket.key)
+    if card:
+        return {"status": "already_asked", "key": ticket.key, "decision_id": card}
+    if options["pickup"]["mode"] == "ask":
+        decision_id = create_blocking_decision(
+            db, project_id, None,
+            f"{ticket.key} “{_short(ticket.title, 120)}” is labelled “{label}”. Start it in "
+            "BOSS?",
+            {"action": PICKUP_ACTION, "provider": provider, "connection_id": row["id"],
+             "key": ticket.key, "id": ticket.id, "url": ticket.url,
+             "title": _short(ticket.title, 200), "type": ticket.type, "source": source,
+             "screen": dict(ticket.screen or {}), "untrusted": ticket.untrusted},
+            {}, PICKUP_ACTION, risk_tier=1)
+        emit_event(db, project_id, "ticket_sync.pickup_waiting", "ticket_sync", "decision",
+                   decision_id, {"key": ticket.key, "provider": provider, "source": source})
+        return {"status": "waiting", "key": ticket.key, "decision_id": decision_id}
+    return _import_and_start(db, settings, row, ticket, source=source)
+
+
+def pickup(engine: Any, settings: Any, row: Mapping[str, Any], ticket: Any, *,
+           source: str) -> dict[str, Any]:
+    """A ticket that carries the pick-up label: offered (ask) or imported and started
+    (auto_start). Deduped on the binding (already in BOSS) and on an earlier card for it."""
     with engine.begin() as db:
-        row = _target_row(db, home, ticket)                  # the mapped project's row
-        project_id, provider = str(row["project_id"]), str(row["provider_key"])
-        found = binding_for(db, project_id, provider, ticket.key, external_id=str(ticket.id or ""))
-        if found is not None:
-            return {"status": "already_in_boss", "key": ticket.key,
-                    "work_item_id": found["work_item_id"]}
-        card = _pickup_card(db, project_id, provider, ticket.key)
-        if card:
-            return {"status": "already_asked", "key": ticket.key, "decision_id": card}
-        if options["pickup"]["mode"] == "ask":
-            decision_id = create_blocking_decision(
-                db, project_id, None,
-                f"{ticket.key} “{_short(ticket.title, 120)}” is labelled “{label}”. Start it in "
-                "BOSS?",
-                {"action": PICKUP_ACTION, "provider": provider, "connection_id": row["id"],
-                 "key": ticket.key, "id": ticket.id, "url": ticket.url,
-                 "title": _short(ticket.title, 200), "type": ticket.type, "source": source,
-                 "screen": dict(ticket.screen or {}), "untrusted": ticket.untrusted},
-                {}, PICKUP_ACTION, risk_tier=1)
-            emit_event(db, project_id, "ticket_sync.pickup_waiting", "ticket_sync", "decision",
-                       decision_id, {"key": ticket.key, "provider": provider, "source": source})
-            return {"status": "waiting", "key": ticket.key, "decision_id": decision_id}
-        return _import_and_start(db, settings, row, ticket, source=source)
+        return pickup_in_tx(db, settings, row, ticket, source=source)
 
 
 def _target_row(db: Any, home: Mapping[str, Any], ticket: Any) -> dict[str, Any]:
@@ -1303,39 +1314,126 @@ def _import_and_start(db: Any, settings: Any, row: Mapping[str, Any], ticket: An
             **({"not_started": why} if why else {})}
 
 
-def ingest_webhook(engine: Any, settings: Any, connection_id: str, headers: Mapping[str, str],
-                   body: bytes) -> dict[str, Any]:
-    """A verified delivery -> the ticket it names -> pickup. Statuses: rejected | not_found |
-    ignored | waiting | started | imported | already_in_boss | already_asked."""
-    from ..connectors.tickets import TicketRef, get_ticket_adapter
+def _ensure_intake_connection(db: Any, home: Mapping[str, Any]) -> dict[str, Any]:
+    """Ensure the home `work_tracker_providers` row has a paired `intake_connections` row so
+    inbound ticket webhooks land in `intake_events` and execute inside `event_intake`."""
+    import secrets as _secrets
 
-    with engine.begin() as db:
-        row, ok = verify_inbound_webhook(db, settings, connection_id, headers, body)
-    if row is None:
-        return {"status": "not_found"}
-    if not ok:
-        return {"status": "rejected"}
-    options = sync_settings(row["configuration"])
+    ic_id = f"ic_trk_{home['id']}"
+    existing = db.execute(
+        text("SELECT * FROM intake_connections WHERE id = :id"), {"id": ic_id}
+    ).mappings().first()
+    if existing is not None:
+        return dict(existing)
+    row = db.execute(
+        text(
+            """
+            INSERT INTO intake_connections (
+                id, project_id, kind, name, mode, config, secret_refs,
+                path_token, status, created_by
+            )
+            VALUES (
+                :id, :p, :k, :name, 'push', CAST(:cfg AS JSONB), '{}'::jsonb,
+                :pt, 'active', :cb
+            )
+            ON CONFLICT (id) DO UPDATE SET updated_at = intake_connections.updated_at
+            RETURNING *
+            """
+        ),
+        {
+            "id": ic_id,
+            "p": str(home["project_id"]),
+            "k": str(home["provider_key"]),
+            "name": str(home.get("display_name") or home["provider_key"]),
+            "cfg": json.dumps({"work_tracker_provider_id": str(home["id"])}),
+            "pt": f"trk_{home['id']}_{_secrets.token_urlsafe(12)}",
+            "cb": str(home.get("created_by") or "system"),
+        },
+    ).mappings().one()
+    return dict(row)
+
+
+def process_intake_event(db: Any, settings: Any, *, provider_id: str,
+                         raw_body: bytes) -> dict[str, Any]:
+    """Processor-side ticket pickup (F9): parse webhook, fetch ticket from provider, and run
+    `pickup_in_tx`. Transient provider errors propagate so `event_intake.process_one` retries
+    with backoff."""
+    from ..connectors.intake.contract import ParseRefused
+    from ..connectors.tickets import TicketRef, get_ticket_adapter
+    from ..connectors.tickets.contract import NotFound
+
+    row = provider_row(db, provider_id)
+    if row is None or row["status"] != "active":
+        return {"status": "dead", "reason": "ticket connection deleted"}
+    home = home_row(db, row) or dict(row)
+    options = sync_settings(home["configuration"])
     if options["inbound"]["mode"] == "off":
         return {"status": "ignored", "reason": "inbound is off for this connection"}
-    adapter = get_ticket_adapter(str(row["provider_key"]))
+    adapter = get_ticket_adapter(str(home["provider_key"]))
     try:
-        event = adapter.parse_webhook(body)
-    except Exception:  # noqa: BLE001
-        return {"status": "invalid"}
+        event = adapter.parse_webhook(raw_body)
+    except Exception as error:  # noqa: BLE001
+        raise ParseRefused(
+            f"Ticket webhook unreadable: {type(error).__name__}",
+            provider=str(home["provider_key"]),
+        ) from None
     if event.ref is None or event.kind not in ("created", "updated"):
         return {"status": "ignored", "reason": f"{event.kind} events are not pick-ups"}
     if event.kind == "updated" and event.changed and \
             not any(str(c).lower() in ("labels", "label", "labels_list") for c in event.changed):
         return {"status": "ignored", "reason": "the labels did not change"}
+    conn = connection_from_row(db, home, app_settings=settings)
     try:
-        with engine.begin() as db:
-            conn = connection_from_row(db, row, app_settings=settings)
-            ticket = adapter.get_ticket(conn, TicketRef(adapter.provider_key, key=event.ref.key,
-                                                        id=event.ref.id, url=event.ref.url))
-    except Exception as error:  # noqa: BLE001
-        return {"status": "unreadable", "reason": _plain_error(error)}
-    return pickup(engine, settings, row, ticket, source="webhook")
+        ticket = adapter.get_ticket(
+            conn,
+            TicketRef(adapter.provider_key, key=event.ref.key, id=event.ref.id, url=event.ref.url),
+        )
+    except NotFound:
+        return {"status": "ignored", "reason": "ticket not found"}
+    return pickup_in_tx(db, settings, home, ticket, source="webhook")
+
+
+def ingest_webhook(engine: Any, settings: Any, connection_id: str, headers: Mapping[str, str],
+                   body: bytes) -> dict[str, Any]:
+    """Front-door ticket webhook (F9): verify, dedupe, and enqueue into `intake_events` with
+    ZERO outbound provider HTTP calls. Returns rejected | not_found | ignored | received | duplicate."""
+    from ..connectors.intake import get_intake_adapter
+    from ..connectors.intake.contract import (
+        ACK_DUPLICATE,
+        RawRequest,
+        Verified,
+        lower_headers,
+    )
+    from . import event_intake
+
+    norm_headers = lower_headers(headers)
+    with engine.begin() as db:
+        row, ok = verify_inbound_webhook(db, settings, connection_id, norm_headers, body)
+        if row is None:
+            return {"status": "not_found"}
+        if not ok:
+            return {"status": "rejected"}
+        options = sync_settings(row["configuration"])
+        if options["inbound"]["mode"] == "off":
+            return {"status": "ignored", "reason": "inbound is off for this connection"}
+        ic_row = _ensure_intake_connection(db, row)
+        intake_adapter = get_intake_adapter(str(row["provider_key"]))
+        req = RawRequest(method="POST", headers=norm_headers, body=body or b"")
+        scheme = f"{row['provider_key']}_sha256" if (
+            norm_headers.get("x-hub-signature") or norm_headers.get("x-plane-signature")
+        ) else f"{row['provider_key']}_token"
+        ack = event_intake.accept_in_tx(
+            db, intake_adapter, ic_row, req, Verified(scheme=scheme),
+            settings=settings, handshake=False,
+        )
+    outcome = ack.get("outcome") or ack.get("body", {}).get("status")
+    status = "duplicate" if outcome == ACK_DUPLICATE else "received"
+    return {
+        "status": status,
+        "event_id": ack.get("event_id"),
+        "connection_id": str(row["id"]),
+        "intake_connection_id": str(ic_row["id"]),
+    }
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1492,34 +1590,37 @@ def tick(engine: Any, settings: Any, *, holder: str = HOLDER,
          now: Optional[datetime] = None) -> list[dict[str, Any]]:
     """One scheduler tick: each poll-mode connection's poll, the card answers and the catch-up
     sweep — every job on its own lease, so exactly one process fires each."""
+    from ..db import background
+
     now = now or datetime.now(timezone.utc)
     ran: list[dict[str, Any]] = []
-    with engine.begin() as db:
-        rows = db.execute(text(
-            "SELECT id, project_id, provider_key, display_name, status, configuration, created_by "
-            "FROM work_tracker_providers WHERE status = 'active'")).mappings().all()
-    for raw in rows:
-        row = dict(raw)
-        row["configuration"] = dict(_json(row.get("configuration"), {}) or {})
-        if is_mirror(row):
-            continue        # its home polls the site once; pickup routes by the mappings
-        options = sync_settings(row["configuration"])
-        if options["inbound"]["mode"] != "poll":
-            continue
-        from ..connectors.tickets import REGISTRY
+    with background():
+        with engine.begin() as db:
+            rows = db.execute(text(
+                "SELECT id, project_id, provider_key, display_name, status, configuration, created_by "
+                "FROM work_tracker_providers WHERE status = 'active'")).mappings().all()
+        for raw in rows:
+            row = dict(raw)
+            row["configuration"] = dict(_json(row.get("configuration"), {}) or {})
+            if is_mirror(row):
+                continue        # its home polls the site once; pickup routes by the mappings
+            options = sync_settings(row["configuration"])
+            if options["inbound"]["mode"] != "poll":
+                continue
+            from ..connectors.tickets import REGISTRY
 
-        if REGISTRY.get(str(row["provider_key"])) is None:
-            continue
-        done = run_job(engine, f"poll:{row['id']}", holder, now,
-                       timedelta(minutes=options["inbound"]["poll_minutes"]),
-                       lambda row=row: poll_connection(engine, settings, row))
-        if done is not None:
-            ran.append(done)
-    for job, every, fn in (("answers", ANSWERS_EVERY, lambda: apply_answers(engine, settings)),
-                           ("sweep", SWEEP_EVERY, lambda: sweep(engine, settings))):
-        done = run_job(engine, job, holder, now, every, fn)
-        if done is not None:
-            ran.append(done)
+            if REGISTRY.get(str(row["provider_key"])) is None:
+                continue
+            done = run_job(engine, f"poll:{row['id']}", holder, now,
+                           timedelta(minutes=options["inbound"]["poll_minutes"]),
+                           lambda row=row: poll_connection(engine, settings, row))
+            if done is not None:
+                ran.append(done)
+        for job, every, fn in (("answers", ANSWERS_EVERY, lambda: apply_answers(engine, settings)),
+                               ("sweep", SWEEP_EVERY, lambda: sweep(engine, settings))):
+            done = run_job(engine, job, holder, now, every, fn)
+            if done is not None:
+                ran.append(done)
     return ran
 
 

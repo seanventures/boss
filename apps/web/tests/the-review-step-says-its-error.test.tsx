@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * A review step says its error in the step, not only in the title.
  * A trimmed error is the sentence. Blank is nothing. A sentence over six

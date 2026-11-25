@@ -12,6 +12,7 @@ import httpx
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from . import production as _production
 from ..config import Settings
 from .budget import BudgetGovernor, budget_period
 from .core import (
@@ -179,7 +180,7 @@ PHASED_APPLY_SKILLS: dict[str, str] = {
         "applies it (services/governed_host_deploy.py). It is never approved or applied "
         "through the ChangeSet routes."
     ),
-    # Configuration files into a config_dir target (AMEX-G4): the same decision, the same
+    # Configuration files into a config_dir target (BOSSAPP-1140): the same decision, the same
     # worker job, a different phase two (services/config_deploy.py).
     "config_dir.files.deploy": (
         "is a configuration deployment: approve its decision{decision} in Approvals and BOSS's "
@@ -2044,7 +2045,7 @@ class ResourcePlaneService:
         actor: str,
         config_target: bool = False,
     ) -> dict[str, Any]:
-        # A CONFIG DIRECTORY (config_deploy, AMEX-G4) is made only by create_config_target, which
+        # A CONFIG DIRECTORY (config_deploy, BOSSAPP-1140) is made only by create_config_target, which
         # enforces the operator's roots, the reload allowlists and a person for any reload. The
         # generic routes (POST /v1/deployments, the deployment.target.register skill) would
         # skip all three, so they are refused here, in the one place every caller passes.
@@ -2375,8 +2376,12 @@ class ResourcePlaneService:
         actor: str,
         approval_decision_id: Optional[str] = None,
         person_required: bool = False,
+        reships: Optional[str] = None,
     ) -> dict[str, Any]:
-        """`approval_decision_id`: the workflow gate that already approved this deploy, passed
+        """`reships`: TRUSTED callers only (delivery_pipeline.redeploy): the prior production
+        deployment run this release re-ships at the SAME commit (quality_bar.plan_refusal checks
+        it). Never taken from a request body or a release packet.
+        `approval_decision_id`: the workflow gate that already approved this deploy, passed
         explicitly by the runner (deploy_policy.pre_approval decides whether it counts).
         `person_required`: the step that started it promised a person, so no policy answers."""
         if expected_cost_usd_micros < 0:
@@ -2395,6 +2400,18 @@ class ResourcePlaneService:
             from .governed_host_deploy import GovernedHostDeployError
 
             raise GovernedHostDeployError(refused, refused.action)
+        # THE BAR FOLLOWS WHERE IT SHIPS (quality_bar.py): every production deployment is planned
+        # here, so a promotion from staging and a direct deploy meet the same production bar.
+        from . import quality_bar as _quality_bar
+
+        bar_refusal, bar_commit = _quality_bar.plan_decision(
+            connection, target=target, release_packet=release_packet, commit_ref=commit_ref,
+            reships=reships)
+        if bar_refusal:
+            return {"status": "failed", "refused": True, "failure_reason": bar_refusal,
+                    "quality_bar": "production"}
+        if bar_commit:
+            commit_ref = bar_commit     # a production release ships the commit its build judged
         if expected_cost_usd_micros > 0 and not reservation_id:
             decision_id = create_blocking_decision(
                 connection,
@@ -2690,7 +2707,7 @@ class ResourcePlaneService:
                 **(operation.get("desired_state") or {}),
                 "surface_ownership": ownership_guard,
             }
-            risk_tier = 3 if target["environment"] == "production" else 2
+            risk_tier = _production.risk_tier_for(target=target)
             changeset = self.create_changeset(
                 connection,
                 project_id=project_id,
@@ -2706,7 +2723,7 @@ class ResourcePlaneService:
                 rollback_plan=rollback_plan,
                 risk_tier=risk_tier,
                 approval_required=(
-                    target["environment"] in {"staging", "production"}
+                    _production.environment_tier(target["environment"]) in ("staging", "prod")
                     or bool(
                         rollout_policy
                         and rollout_policy.get("requires_approval", True)
@@ -2867,7 +2884,7 @@ class ResourcePlaneService:
                     "health_check_results": results,
                 },
                 "deployment_health_failed",
-                risk_tier=3 if deployment_run["environment"] == "production" else 2,
+                risk_tier=_production.risk_tier_for(target=target),
             )
 
         connection.execute(
@@ -4305,7 +4322,7 @@ class ResourcePlaneService:
         for row in resources:
             resource = self._serialize_external_resource(row)
             operation = self._cleanup_operation_for_resource(resource)
-            if resource["environment"] == "production":
+            if _production.resolve_environment(resource["environment"]).prod:
                 skipped.append(
                     {
                         "external_resource_id": resource["id"],
@@ -5192,7 +5209,7 @@ class ResourcePlaneService:
             "requires_change_set": True,
             "requires_budget_reservation": True,
             "requires_approval": True,
-            "requires_health_check": environment == "production",
+            "requires_health_check": _production.is_production_environment(environment),
             "requires_rollback_plan": True,
             "rollout_notes": None,
             "status": "missing",
@@ -5215,14 +5232,14 @@ class ResourcePlaneService:
             return "missing_active_environment_policy"
         if mode in {"disabled", "metadata_only"}:
             return f"environment_{environment}_not_enabled_for_provider_rollout"
-        if environment == "production" and mode != "production_allowed":
+        if _production.is_production_environment(environment) and mode != "production_allowed":
             return "production_rollout_requires_production_allowed_policy"
         if environment == "staging" and mode not in {
             "staging_allowed",
             "production_allowed",
         }:
             return "staging_rollout_requires_staging_allowed_policy"
-        if environment not in {"staging", "production"} and mode not in {
+        if _production.environment_tier(environment) not in ("staging", "prod") and mode not in {
             "preview_allowed",
             "staging_allowed",
             "production_allowed",
@@ -5266,7 +5283,7 @@ class ResourcePlaneService:
             recommendation,
             evidence,
             reason_code,
-            risk_tier=3 if target["environment"] == "production" else 2,
+            risk_tier=_production.risk_tier_for(target=target),
         )
         emit_event(
             connection,
@@ -5399,9 +5416,9 @@ class ResourcePlaneService:
             "action": skill_id,
             "resource_type": resource_type,
             "resource_ref": target["target_ref"],
-            "risk_tier": 3 if target["environment"] == "production" else 2,
+            "risk_tier": _production.risk_tier_for(target=target),
             "destructive": False,
-            "production_affecting": target["environment"] == "production",
+            "production_affecting": _production.production_affecting(target=target),
             "desired_state": {
                 "deployment_target_id": target["id"],
                 "target_kind": target["target_kind"],

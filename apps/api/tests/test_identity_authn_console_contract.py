@@ -32,7 +32,9 @@ def test_auth_options_before_and_after_the_claim(world, engine):
     opts = client.get("/v1/auth/options").json()
     assert set(opts) >= {"org_name", "host", "providers", "smtp", "signup", "legacy_password", "claim"}
     assert opts["claim"]["path"] == "setup_token" and opts["claim"]["expires_at"]
-    assert "ceo" in opts["claim"]["seats"] and opts["smtp"] is False and opts["providers"] == []
+    # seats: only those with history on this install (none on a fresh one; see
+    # test_a_fresh_install_claims_without_a_seat_question)
+    assert isinstance(opts["claim"]["seats"], list) and opts["smtp"] is False and opts["providers"] == []
     make_user(engine, "owner@example.test", role="owner")
     from apps.api.tests.identity_s1_world import mark_claimed
 

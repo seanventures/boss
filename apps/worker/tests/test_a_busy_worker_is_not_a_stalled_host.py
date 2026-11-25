@@ -89,3 +89,26 @@ def test_lease_slots_follow_the_control_planes_measure_or_a_pin():
 
     broken = SimpleNamespace(_client=SimpleNamespace(get=lambda *_a, **_k: 1 / 0))
     assert worker_main.worker_slots(broken, auto) == 1, "an older API: one slot, as before"
+
+    independent = SimpleNamespace(_client=SimpleNamespace(get=lambda *_args, **_kwargs:
+        SimpleNamespace(raise_for_status=lambda: None, json=lambda: {
+            "admission": {"worker_slots": 3, "builds_at_once": {"value": 1}}})))
+    assert worker_main.worker_slots(independent, auto) == 3
+
+
+def test_reducing_slots_stops_new_leases_without_running_a_job(monkeypatch):
+    from types import SimpleNamespace
+
+    closed = []
+    client = SimpleNamespace(close=lambda: closed.append(True))
+    settings = SimpleNamespace(worker_id="worker", control_plane_url="http://unused", api_key="unused")
+    settings.model_copy = lambda **_: settings
+    monkeypatch.setattr(worker_main, "_STOPPING", False)
+    monkeypatch.setattr(worker_main, "ControlPlaneClient", lambda *_args, **_kwargs: client)
+    monkeypatch.setattr(worker_main, "worker_slots", lambda *_: 1)
+    monkeypatch.setattr(worker_main.time, "sleep", lambda _: setattr(worker_main, "_STOPPING", True))
+    def unexpected_job(*_args, **_kwargs):
+        raise AssertionError("a drained slot must not lease new work")
+    monkeypatch.setattr(worker_main, "run_worker_cycle", unexpected_job)
+    worker_main._extra_lease_loop(settings, 2)
+    assert closed == [True]

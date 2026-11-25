@@ -1,5 +1,4 @@
-"""A PR comment and a fix pull request as tools and workflow steps (AMEX-G5 / G6,
-BOSSAPP-1141 / 1142), against a fake GitHub adapter.
+"""A PR comment and a fix pull request as tools and workflow steps (BOSSAPP-1141 / 1142), against a fake GitHub adapter.
 
 What is claimed:
 
@@ -29,7 +28,7 @@ from boss_engine.services import workflow_capabilities as caps
 from boss_engine.services import workflow_outcomes as outcomes
 from boss_engine.tools.builtin import build_default_registry
 
-from .amex_workflow_fixtures import eng, project  # noqa: F401
+from .onboarding_workflow_fixtures import eng, project  # noqa: F401
 from .test_workflow_custom_steps import Ctx
 
 

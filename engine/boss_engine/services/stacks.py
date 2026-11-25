@@ -684,7 +684,7 @@ def render_supported_stacks_md() -> str:
     for lang in LANGUAGES.values():
         lines.append(f"| {lang.label} | {lang.runtime} | {lang.package_manager} | "
                      f"{', '.join(f'`{m}`' for m in lang.manifests)} | "
-                     f"{'always installed' if lang.toolchain is None else f'opt-in: `{toolchains.ENABLE_HINT.format(name=lang.toolchain)}`'} |")
+                     f"{'always installed' if lang.toolchain is None else f'on by default (if turned off: `{toolchains.ENABLE_HINT.format(name=lang.toolchain)}`)'} |")
     lines += ["", "## Commands", "",
               "Each service runs its own, in its own directory. `—`: not a separate step.", "",
               "| Language | install | build | lint | typecheck | test | e2e |",
@@ -1511,6 +1511,7 @@ class StackPlan:
     serve_frontend: bool = False
     frontend_command: Optional[list[str]] = None
     error: Optional[str] = None
+    toolchain_missing: bool = False
 
     def dir_of(self, service: Service) -> Path:
         return self.app_dir if service.rel == "." else self.app_dir / service.rel
@@ -1558,11 +1559,13 @@ def stack_plan(app_dir: Path | str, services: Optional[list[Service]] = None) ->
     plan = StackPlan(base, services)
     bad = [s for s in services if not s.supported]
     if bad:
+        plan.toolchain_missing = True
         plan.error = verdict([s.language for s in bad], where=f"This app ({', '.join(s.rel for s in bad)})"
                              ).message
         return plan
     off = [s.language for s in services if not language_ready(s.language)]
     if off:
+        plan.toolchain_missing = True
         plan.error = verdict((), off, where="This app").message
         return plan
     order = {"backend": 0, "frontend": 1, "unknown": 2, "e2e": 3}
@@ -1573,7 +1576,10 @@ def stack_plan(app_dir: Path | str, services: Optional[list[Service]] = None) ->
         path = plan.dir_of(plan.backend)
         from .preview_service import _declared_command_in, preview_health_path
 
-        declared = _declared_command_in(path)
+        try:
+            declared = _declared_command_in(path)
+        except ValueError as error:      # a malformed boss.preview.report: say how to fix it
+            declared, plan.error = None, str(error)
         plan.backend_command = (["sh", "-lc", declared] if declared
                                 else LANGUAGES[plan.backend.language].start(plan.backend, path))
         plan.backend_health = preview_health_path(path)

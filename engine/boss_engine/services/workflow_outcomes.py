@@ -245,15 +245,25 @@ def contract_test(result: Mapping[str, Any], inputs: Mapping[str, Any]) -> Verdi
     if refused:
         return refused
     produced = {name: result.get(name) for name in
-                ("passed", "failed", "total", "results_table", "failed_cases")
+                ("passed", "failed", "total", "results_table", "failed_cases", "dropped_cases")
                 if name in result}
     failed = result.get("failed")
     if not isinstance(failed, int) or not isinstance(result.get("total"), int):
         return Verdict(FAILED, "the contract test reported no counts", produced)
+    # A CASE AN AGENT DROPPED (contract_remedy: unreachable as written) is said on the verdict,
+    # with its reason: "11/12 — 1 case dropped: <reason>", never silently fewer cases.
+    dropped = [d for d in (result.get("dropped_cases") or []) if isinstance(d, Mapping)]
+    said = ""
+    if dropped:
+        of = int(result["total"]) + len(dropped)
+        said = (f"{int(result.get('passed') or 0)}/{of} — {len(dropped)} case"
+                f"{'s' if len(dropped) != 1 else ''} dropped: "
+                + "; ".join(f"{d.get('name')}: {d.get('reason')}" for d in dropped))[:900]
+        produced["note"] = said
     if failed:
         names = ", ".join(str(n) for n in (result.get("failed_cases") or [])[:8]) or "see table"
-        return Verdict(FAILED, f"{failed} of {result['total']} contract case(s) failed: {names}",
-                       produced)
+        return Verdict(FAILED, f"{failed} of {result['total']} contract case(s) failed: {names}"
+                       + (f" ({said})" if said else ""), produced)
     if not result["total"]:
         return Verdict(FAILED, "no contract cases ran", produced)
     return Verdict(SUCCEEDED, "", produced)
@@ -331,6 +341,8 @@ VERDICTS: dict[str, Callable[[Mapping[str, Any], Mapping[str, Any]], Verdict]] =
     "github_comment": github_comment,
     "fix_pr": fix_pr,
     "wait_for_ci": awaited_work,
+    # Merge: waits on the build's merge (the runner's merge await), then succeeds.
+    "merge": awaited_work,
     "teardown_preview": finished_tool,
     "cost_check": finished_tool,
     "security_scan": awaited_work,

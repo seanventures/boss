@@ -709,6 +709,12 @@ def require_a_person(connection: Connection, decision: Mapping[str, Any], actor:
     from .decisions import SYSTEM_ACTOR
 
     why = ""
+    from .autonomy_gate import permits
+
+    if permits(decision, who):
+        # DEV AUTONOMY (BOSSAPP-1441): the architect agent's document is accepted as written in
+        # development; a person can send it back afterwards (Undo).
+        return
     if system_policy or who == SYSTEM_ACTOR or lowered in _MACHINE_ACTORS:
         why = f"'{who or 'a policy'}' is BOSS acting by itself, not a person"
     elif lowered.startswith(("agent:", "agent_", "role:")):

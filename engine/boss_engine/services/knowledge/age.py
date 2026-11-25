@@ -167,7 +167,7 @@ def _node_rows(connection: Connection, project_id: str, ids: list[str] | None = 
                attrs->>'type_kind' AS type_kind, attrs->>'lang' AS lang, attrs->>'line' AS line,
                CASE WHEN kind = 'rule' THEN attrs->>'status' END AS status
         FROM kg_nodes
-        WHERE project_id = :p AND (valid_to IS NULL OR valid_to > now()) {where}
+        WHERE project_id = :p AND (valid_to IS NULL OR valid_to > clock_timestamp()) {where}
         """), {"p": project_id, "ids": list(ids or [])}).mappings()]
 
 
@@ -176,8 +176,8 @@ def _edge_rows(connection: Connection, project_id: str, where: str = "", params:
         f"""
         SELECT e.id, e.src_id, e.dst_id, e.kind, e.trust_tier, e.confidence FROM kg_edges e
         JOIN kg_nodes s ON s.id = e.src_id JOIN kg_nodes d ON d.id = e.dst_id
-        WHERE e.project_id = :p AND (e.valid_to IS NULL OR e.valid_to > now())
-          AND (s.valid_to IS NULL OR s.valid_to > now()) AND (d.valid_to IS NULL OR d.valid_to > now())
+        WHERE e.project_id = :p AND (e.valid_to IS NULL OR e.valid_to > clock_timestamp())
+          AND (s.valid_to IS NULL OR s.valid_to > clock_timestamp()) AND (d.valid_to IS NULL OR d.valid_to > clock_timestamp())
           {where}
         """), {"p": project_id, **(params or {})}).mappings()]
 
@@ -253,7 +253,7 @@ def _project_all_edges(connection: Connection, project_id: str, name: str) -> in
     Same rows and properties as _insert_edges over _edge_rows."""
     have = _labels(connection, name)
     kinds = connection.execute(text(
-        "SELECT DISTINCT kind FROM kg_edges WHERE project_id = :p AND (valid_to IS NULL OR valid_to > now())"),
+        "SELECT DISTINCT kind FROM kg_edges WHERE project_id = :p AND (valid_to IS NULL OR valid_to > clock_timestamp())"),
         {"p": project_id}).scalars().all()
     written = 0
     for kind in sorted(kinds):
@@ -269,8 +269,8 @@ def _project_all_edges(connection: Connection, project_id: str, name: str) -> in
             "JOIN kg_nodes s ON s.id = e.src_id JOIN kg_nodes d ON d.id = e.dst_id "
             "JOIN kg_age_vertices sv ON sv.project_id = :p AND sv.node_id = e.src_id "
             "JOIN kg_age_vertices dv ON dv.project_id = :p AND dv.node_id = e.dst_id "
-            "WHERE e.project_id = :p AND e.kind = :k AND (e.valid_to IS NULL OR e.valid_to > now()) "
-            "AND (s.valid_to IS NULL OR s.valid_to > now()) AND (d.valid_to IS NULL OR d.valid_to > now())"),
+            "WHERE e.project_id = :p AND e.kind = :k AND (e.valid_to IS NULL OR e.valid_to > clock_timestamp()) "
+            "AND (s.valid_to IS NULL OR s.valid_to > clock_timestamp()) AND (d.valid_to IS NULL OR d.valid_to > clock_timestamp())"),
             {"p": project_id, "k": kind}).rowcount
     return written
 

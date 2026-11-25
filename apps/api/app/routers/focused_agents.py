@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from boss_engine.services.focused_agents import FocusedAgentService
 
 from ..config import get_settings
-from ..db import begin, get_engine
+from ..db import background, begin, get_engine
 
 
 router = APIRouter(tags=["focused-agents"])
@@ -153,8 +153,20 @@ def activate_focused_agent(agent_id: str, payload: FocusedAgentActorRequest) -> 
 def tick_all_focused_agents(payload: TickAllRequest) -> dict[str, Any]:
     if not payload.project_id.strip():
         raise HTTPException(status_code=422, detail="project_id is required")
-    with begin(get_engine()) as connection:
-        _require(connection, payload.project_id, payload.actor)
-        return _service().tick_due(
-            connection, project_id=payload.project_id, actor=payload.actor
+    with background():
+        from boss_engine.services import bots, projects_archive
+
+        engine = get_engine()
+        with begin(engine) as connection:
+            _require(connection, payload.project_id, payload.actor)
+            if bots.flag_on(bots.BOTS_FOCUSED_AGENTS):
+                if projects_archive.is_archived(connection, payload.project_id):
+                    return {"ran": [], "skipped": [], "active": 0,
+                            **projects_archive.skipped(payload.project_id)}
+            else:
+                return _service().tick_due(
+                    connection, project_id=payload.project_id, actor=payload.actor
+                )
+        return bots.tick_focused_agents(
+            _service(), engine, project_id=payload.project_id, actor=payload.actor
         )

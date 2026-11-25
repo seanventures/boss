@@ -2,6 +2,80 @@
 
 All notable changes to BOSS Community. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Release notes with more detail live in `docs/community/RELEASE_NOTES_*.md`.
 
+## [v1.0-rc10.32]
+
+Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.32.md](docs/community/RELEASE_NOTES_v1.0-rc10.32.md).
+
+### Added
+
+- Enterprise networks: company CA at build and run time, registry mirrors, outbound proxy, an egress allowlist that adds to the built-in hosts, a lockfile for the coding CLIs, Colima guidance, and an opt-in engine inner sandbox (off by default). Much of it came from an enterprise contributor.
+- The Work panel: one landing page per piece of work, and a one-line Work row.
+
+### Changed
+
+- Agents fix failures with the starter's authority, on by default (merge, production deploy, approvals, secrets and host commands stay with people). Turn it off in Govern or per project with `agents_fix_failures`.
+- A remediation must ship an edit of its input; the validator's findings and fixes are recorded.
+- Failing checks never read "Ready to merge"; health probes use declared checks; API previews open on routes that answer.
+- Helm chat turns survive a reload or restart and land in their thread; `forget` retires knowledge-graph lessons.
+- The community candidate version is `1.0.0-rc.10.32`.
+
+## [v1.0-rc10.31]
+
+Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.31.md](docs/community/RELEASE_NOTES_v1.0-rc10.31.md).
+
+### Changed
+
+- Project pages have an About this app card (spec summary, must-haves met or partly met, Read the full spec) and What was discussed / What was built for each piece of work.
+- The Work row's button names the real next step; every change has Open, Start or Recreate preview; short titles come from the spec; the Outputs header matches Checks.
+- Build pages open from any project; "Can't reach BOSS" shows only when BOSS is down; the sidebar keeps your current, newest and last-opened project.
+- Chat windows have an Attach icon and a full-screen button; Helm replies are short with Details folded.
+- Docs updates never ask for GitHub on local projects. The community candidate version is `1.0.0-rc.10.31`.
+
+## [v1.0-rc10.30]
+
+Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.30.md](docs/community/RELEASE_NOTES_v1.0-rc10.30.md).
+
+### Changed
+
+- Easy Mode runs a quick spec panel, then build, P1 tests, preview and deploy to staging (skipped in plain words when there is no server). It never auto-merges; you press Approve and merge. Every Easy Mode build gets its delivery workflow under the one consent at the start.
+- Merge takes the approved head; a follow-up after merge opens its own change (local repos).
+- Failed deploys say what BOSS is doing about them, and app crashes are caught in about 30 seconds.
+- Every project page shows "Your app" with Open app; previews stay running while memory allows, can be recreated, and sleeping links wake.
+- Every failure in BOSS has an agent owner: fixing, or one action item with the reason and Done - retry. The community candidate version is `1.0.0-rc.10.30`.
+
+## [v1.0-rc10.29]
+
+Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.29.md](docs/community/RELEASE_NOTES_v1.0-rc10.29.md).
+
+### Changed
+
+- The template gallery offers only what this install can build: Android and Godot templates removed, Orbit dodge is a browser game, every template names its toolchain, and a template whose toolchain is off shows "Needs Go" / "Needs Java" with the command; a launch of one is refused in words.
+- Java and Go are built in by default (about 0.75 GB more). Existing installs get them on the next update unless `.env` sets `BOSS_TOOLCHAINS=none` or its own list. A toolchain change also rebuilds egress.
+- Remote installs mark the host dedicated (`BOSS_DEDICATED_HOST=1`) when unset, so old build cache is cleaned automatically.
+- Template cards show a drawing of each app and fold to two rows with Show all. The community candidate version is `1.0.0-rc.10.29`.
+- The Build with BOSS composer has icons, tinted suggestion chips and a readable Easy Mode button.
+- Top-bar menus (Builds, bell, account) keep their own width; Find a build was squeezed to its button.
+- Light lane for normal builds (quality bar `standard` by default): review findings become follow-ups on a ready card; production stays strict.
+- BOSS retries its own failures (max 2, spaced); person-side failures say what to do; failed builds are visible with fix/Retry; plain words throughout.
+- Easy Mode asks "Confirm it's you" instead of failing; started card with Watch the build.
+- Previews: no garbled Next.js pages, data kept across restarts, working App link.
+- Security: BOSS's git and file work on a build's tree runs as the build's user.
+
+## [v1.0-rc10.28]
+
+Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.28.md](docs/community/RELEASE_NOTES_v1.0-rc10.28.md).
+
+### Fixed
+
+- First-run install, claim and sign-in: the claim step leads, the claim link works in an open tab, no seat question on a new install, local model off by default, `boss doctor` wording, side-by-side installs, `boss stop` / `boss start`.
+- Command Center templates load; Easy Mode asks for consent, gives the project a local repository and opens its pull request.
+- Try a sample shows every need up front and keeps its code on this machine; dead controls, counts and the project strip fixed.
+- Host tools see org-shared servers; Confluence moved to Setup › Documents.
+
+### Changed
+
+- A freshly claimed install retires the shared console password (no second factor). The community candidate version is `1.0.0-rc.10.28`.
+
 ## [v1.0-rc10.27]
 
 Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.27.md](docs/community/RELEASE_NOTES_v1.0-rc10.27.md).

@@ -110,7 +110,7 @@ describe("the self-fix approval card", () => {
   it("a decided card shows its verdict, not the answers", async () => {
     fakeSelfFixApi(newState());
     await mount(decision({ status: "approved", approvedBy: "usr_x" }));
-    await click(tid("decision-filter-all"));
+    await click(tid("decision-filter-resolved"));
     expect(tid("sfx-card")).toBeTruthy();
     expect(tid("decision-approve")).toBeNull();
   });

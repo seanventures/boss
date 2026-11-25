@@ -20,8 +20,8 @@ export function useAutoCheck(state: EditorState, dispatch: Dispatch<EditorAction
   const latest = useRef<Spec>(state.spec);
   latest.current = state.spec;
 
-  const definitionId = state.meta.is_catalogue
-    ? (state.meta.copy?.definition_id ?? null) : state.meta.definition_id;
+  // A standard is edited in place: it is checked as itself.
+  const definitionId = state.meta.definition_id;
 
   useEffect(() => {
     if (state.jsonError || !state.spec.steps.length || !projectId) return;

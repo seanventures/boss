@@ -34,6 +34,7 @@ import json
 import logging
 import os
 import shutil
+import stat
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -153,7 +154,7 @@ class SandboxIdentity:
     uid: int
     run_dir: Path
     _lock_fd: Optional[int] = field(default=None, repr=False)
-    #: A workload that must hold no model credential (an authored skill's command, AMEX-G2):
+    #: A workload that must hold no model credential (an authored skill's command, BOSSAPP-1138):
     #: no CLI login was seeded into its HOME, and env() withholds every model-shaped name.
     credential_free: bool = False
     #: A uid of the SEALED sub-pool (loopback only): env() gives it no proxy, and git in it reads
@@ -282,9 +283,10 @@ class SandboxIdentity:
             self._helper("kill", str(self.uid), check=False)
 
     def workspace(self, prefix: str) -> Path:
-        """A fresh directory for one sandbox (a stage's clone) inside the run directory. BOSS
-        creates it and its first contents with umask 0: only this run and BOSS can reach them
-        (the run directory is 2770), and the run's uid must be able to edit what BOSS cloned."""
+        """A fresh directory for one sandbox (a stage's clone) inside the run directory, 2777:
+        only this run and BOSS can reach it (the run directory is 2770), and the run's uid must
+        be able to edit what BOSS clones into it (the clone's own git runs with umask 0 —
+        a per-spawn `umask` (Popen's), never the process-wide one)."""
         import tempfile
 
         path = Path(tempfile.mkdtemp(prefix=prefix, dir=str(self.run_dir)))
@@ -308,6 +310,9 @@ def _lease_uid(key: str, *, sealed: bool = False) -> tuple[int, int]:
         fd = os.open(os.path.join(SHIM_ROOT, f"uid-{uid}.lock"), os.O_CREAT | os.O_RDWR, 0o600)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            os.ftruncate(fd, 0)
+            os.lseek(fd, 0, os.SEEK_SET)
+            os.write(fd, key.encode("utf-8"))
             return uid, fd
         except OSError:
             os.close(fd)
@@ -390,14 +395,13 @@ def acquire(owner_id: str, *, project_id: Optional[str] = None,
         ident.killall()                                  # nothing of a previous lease survives
         if ident.run_dir.exists():
             _purge(ident)
-        old = os.umask(0)
-        try:
-            ident.run_dir.mkdir(mode=0o700)
-            for sub in (ident.home, ident.tmp):
-                sub.mkdir()
-                os.chmod(sub, 0o2777)
-        finally:
-            os.umask(old)
+        # Modes by chmod, never os.umask: the umask is process-wide, and every other thread's
+        # files would be created world-writable meanwhile (process_umask guard test).
+        ident.run_dir.mkdir(mode=0o700)
+        os.chmod(ident.run_dir, 0o700)
+        for sub in (ident.home, ident.tmp):
+            sub.mkdir()
+            os.chmod(sub, 0o2777)
         if seed_logins and not sealed:
             _seed_cli_logins(ident)
         _seed_toolchains(ident, project_id)
@@ -414,6 +418,62 @@ def acquire(owner_id: str, *, project_id: Optional[str] = None,
     return ident
 
 
+def held_identity(owner_id: str) -> Optional[SandboxIdentity]:
+    """The uid and directory `owner_id` holds: this process's lease, or — after an API restart,
+    or from another process — the one its run directory names (its owner is the uid that held
+    it). None when it holds none (isolation off, or already released)."""
+    with _ACTIVE_LOCK:
+        ident = _ACTIVE.get(owner_id)
+    if ident is not None:
+        return ident
+    try:
+        run_dir = run_root() / owner_key(owner_id)
+        st = os.lstat(run_dir)
+    except OSError:
+        return None
+    if not (stat.S_ISDIR(st.st_mode) and UID_BASE <= st.st_uid < UID_BASE + UID_COUNT):
+        return None
+    with _ACTIVE_LOCK:
+        for active in _ACTIVE.values():
+            if active.uid == st.st_uid:
+                return None
+    lock_path = os.path.join(SHIM_ROOT, f"uid-{st.st_uid}.lock")
+    if os.path.exists(lock_path):
+        try:
+            fd = os.open(lock_path, os.O_RDWR)
+        except OSError:
+            try:
+                fd = os.open(lock_path, os.O_RDONLY)
+            except OSError:
+                return None
+        try:
+            holder = os.read(fd, 256).decode("utf-8", errors="ignore").strip()
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                if holder != run_dir.name:
+                    return None
+            else:
+                with contextlib.suppress(OSError):
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                if holder and holder != run_dir.name:
+                    return None
+        finally:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+    return SandboxIdentity(key=run_dir.name, uid=st.st_uid, run_dir=run_dir)
+
+
+def stop_owner(owner_id: str) -> Optional[SandboxIdentity]:
+    """Kill every process of the uid `owner_id` holds, and say which identity that was (None when
+    it holds none). Raises SandboxUnavailable when the kill could not be done: a caller about to
+    read the owner's tree as BOSS must not read it while its uid can still change it."""
+    ident = held_identity(owner_id)
+    if ident is not None:
+        ident._helper("kill", str(ident.uid))
+    return ident
+
+
 def release(owner_id: str, *, project_id: Optional[str] = None) -> None:
     """End what `acquire` started: every process of the uid is killed, the directory removed and
     the uid freed. Idempotent; never raises. A lease this process does not hold (an API restart)
@@ -422,10 +482,8 @@ def release(owner_id: str, *, project_id: Optional[str] = None) -> None:
         ident = _ACTIVE.pop(owner_id, None)
     if ident is None:
         with contextlib.suppress(Exception):
-            run_dir = run_root() / owner_key(owner_id)
-            st = os.lstat(run_dir)
-            if UID_BASE <= st.st_uid < UID_BASE + UID_COUNT:
-                orphan = SandboxIdentity(key=run_dir.name, uid=st.st_uid, run_dir=run_dir)
+            orphan = held_identity(owner_id)
+            if orphan is not None:
                 orphan.killall()
                 _purge(orphan)
         return
@@ -438,6 +496,8 @@ def release(owner_id: str, *, project_id: Optional[str] = None) -> None:
             toolchains.save_cache(ident.home, project_id)
     _purge(ident)
     if ident._lock_fd is not None:
+        with contextlib.suppress(OSError):
+            os.ftruncate(ident._lock_fd, 0)
         with contextlib.suppress(OSError):
             os.close(ident._lock_fd)
 

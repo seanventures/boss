@@ -339,12 +339,14 @@ def _apps(connection: Any, project_id: str) -> list[dict[str, Any]]:
     for r in rows:
         host = r["host_name"] or (str(r["target_ref"] or "").split("@")[-1].split(":")[0] or None)
         out.append({"target_id": r["id"], "app_name": r["app_name"], "environment": r["environment"],
-                    "host": host, "production": _is_production(r["environment"])})
+                    "host": host, "production": _production_named(r["environment"])})
     return out
 
 
-def _is_production(environment: Any) -> bool:
-    return str(environment or "").strip().lower() in ("production", "prod", "live")
+def _production_named(environment: Any) -> bool:
+    from .production import is_production_environment
+
+    return is_production_environment(environment)
 
 
 def _home(settings: Any) -> str:

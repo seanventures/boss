@@ -10,6 +10,7 @@ prompt: |
   frame's title in a caption bar. A passing test loads the six titles, asserts six frames exist,
   and moves the camera to the second frame to check that its title is the caption.
 stack: Three.js
+toolchain: node
 resources:
   - repo
   - preview

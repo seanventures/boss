@@ -26,7 +26,7 @@ export const BLANK = {
   skill_key: "", label: "", summary: "", behaviour_kind: "sandboxed_command",
   knowledge: "", inputs: "", produces: "",
   image: "", command: "", timeout_seconds: "300", network: false,
-  /** A non-zero exit fails the step (AMEX-G3). On for a new skill; an edit keeps what is stored. */
+  /** A non-zero exit fails the step (BOSSAPP-1139). On for a new skill; an edit keeps what is stored. */
   fail_on_exit: true,
   mcp_server_id: "", tool_name: "", executor_id: "",
   language: "python", source: "", program_timeout: "60",

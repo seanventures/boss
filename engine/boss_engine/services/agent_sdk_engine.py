@@ -578,17 +578,12 @@ def build_agent_class():
                                 produced, engine_name=self.engine, model=model_name) or 0)
                         except Exception:  # noqa: BLE001
                             pass
-                        for turn in produced:
-                            try:
-                                if on_turn:
-                                    on_turn(turn)
-                            except Exception:  # noqa: BLE001
-                                pass
                     # THE HARNESS ANSWERING IN THE COMMAND'S PLACE — crun_f103065e's "Sandbox is
                     # required but failed to initialize … socat not installed" on 19 of 206
                     # turns — ends the session at its first occurrence (run_session re-raises).
-                    for turn in produced:
-                        harness_failures.check_turn(turn, engine=self.engine)
+                    # The one shared turn path checks each turn once (deliver_turns).
+                    harness_failures.deliver_turns(produced, on_turn if capturing else None,
+                                                   engine=self.engine, writer=not read_only)
 
                 try:
                     result = run_session(

@@ -7,10 +7,16 @@ prompt: |
   command line. A package folder may contain a LICENSE file. The program reads the first line and
   records a known SPDX identifier when that line is MIT, Apache-2.0, or BSD-3-Clause, and records
   missing otherwise. It writes an HTML report in the workspace listing every package and its
-  result, with missing rows first. Do not call a license-scanning service. The preview is that
-  HTML file opened locally. A passing test runs against a fixture of four packages, one each for MIT,
+  result, with missing rows first. Do not call a license-scanning service. Keep the program a CLI.
+  For the browser preview, write boss.preview.report with a relative HTML path and a prepare
+  command that generates the self-contained report from checked-in demo package fixtures.
+  BOSS serves that report over HTTP; do not use a desktop opener or boss.preview.command.
+  A passing test runs against a fixture of four packages, one each for MIT,
   Apache-2.0, and BSD-3-Clause, plus one folder with no license file, and checks the report text.
+  Build the program into bin/ (go build -o bin/licenseshelf .), which the project's .gitignore ignores;
+  never leave a compiled binary in the repository.
 stack: Go
+toolchain: go
 resources:
   - repo
   - preview

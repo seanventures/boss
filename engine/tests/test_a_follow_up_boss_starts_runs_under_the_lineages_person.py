@@ -122,7 +122,13 @@ def test_a_revoked_grant_leaves_the_follow_up_blocked_and_says_which(env, staffe
 
 
 def test_a_this_build_only_grant_does_not_extend_to_a_follow_up(env, staffed, monkeypatch):  # noqa: F811
+    """With the org default OFF. (On, the follow-up runs on its person's fixer authority, never
+    on the one-build grant: test_a_follow_up_retry_never_rides_a_this_build_only_grant.)"""
+    from boss_engine.services import project_settings
+
     _, crun, grant = _workflow_build(env)
+    with env.engine.begin() as c:
+        project_settings.set_one(c, env.project, "agents_fix_failures", 0)
     with env.engine.begin() as c:
         c.execute(text("UPDATE identity_delegation_grants SET task_run_id=:t WHERE id=:g"),
                   {"t": f"run_ct:{crun}", "g": grant})

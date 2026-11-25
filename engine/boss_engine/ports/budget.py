@@ -14,9 +14,11 @@ class BudgetPort(Protocol):
     every adapter: test_budget_port_contract.py checks the call sites against this list.
     """
 
-    def status_for_project(self, connection: Any, project_id: str) -> dict[str, Any]:
+    def status_for_project(self, connection: Any, project_id: str,
+                           exclude_reservations: Any = ()) -> dict[str, Any]:
         """The project's budget snapshot. Callers read at least `budget_state`
-        (green/yellow/orange/red) to decide how much to spend."""
+        (green/yellow/orange/red) to decide how much to spend. `exclude_reservations` leaves
+        out a job's OWN holds when that job's admission is decided (jobs._own_reservations)."""
         ...
 
     def reserve(

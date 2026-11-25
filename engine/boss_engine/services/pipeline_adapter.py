@@ -242,10 +242,29 @@ class GitHubActionsPipeline:
             external_id=f"checks:{normalized_ref}",
         )
         started = time.monotonic()
+        checked_workflows = False
         while True:
             result = self.verdict(handle)
             if result.completed:
                 return result
+            if not checked_workflows and not result.checks:
+                checked_workflows = True
+                from . import ci_gate
+
+                has_ci = ci_gate._safe_has_workflows(  # noqa: SLF001
+                    ci_gate.AdapterCiReader(self.github),
+                    normalized_ref,
+                )
+                if has_ci is False:
+                    return PipelineVerdict(
+                        provider=self.provider,
+                        repository=self.repository,
+                        ref=normalized_ref,
+                        status="no_ci",
+                        summary="No CI is configured (no .github/workflows and no check runs).",
+                        completed=True,
+                        checks=[],
+                    )
             if time.monotonic() - started >= timeout_seconds:
                 return PipelineVerdict(
                     provider=self.provider,

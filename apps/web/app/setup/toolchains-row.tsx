@@ -2,7 +2,7 @@
 
 /**
  * BUILD TOOLCHAINS: what the build sandbox can build and run on this install. Python and Node
- * are always there; Java (and later stacks) is turned on per install with BOSS_TOOLCHAINS, so
+ * are always there; Java and Go are on by default and set per install with BOSS_TOOLCHAINS, so
  * a stack that is off says how to turn it on. Read from the Setup view (`toolchains`).
  */
 import React from "react";

@@ -1,0 +1,10 @@
+# Known failures of this suite on origin/main (BOSSAPP-1429, scripts/known_failures.py). The list only
+# shrinks: a gate fails on any failure not listed here, on a listed test that now passes (delete its
+# line), and on any red security guard (tests/tiers.yaml `security:`), which can never be listed.
+# Never add a line to make a gate pass: only a failure that also happens on origin/main, with a ticket.
+#
+# Format: <test id or test file> | <ticket> | <owner> | <since YYYY-MM-DD> | <why it fails today>
+# Seeded 2026-11-23 from the whole scripts suite at b73f45b56 (it ran in no gate before).
+scripts/tests/test_metatron_tui.py::test_community_snapshot_maps_every_operator_operation | BOSSAPP-1442 | scripts | 2026-11-23 | the TUI snapshot misses operator operations added since
+scripts/tests/test_metatron_tui.py::test_live_community_app_schema_and_catalog_map_every_mounted_operator_route | BOSSAPP-1442 | scripts | 2026-11-23 | the TUI catalogue misses mounted operator routes added since
+scripts/tests/test_typed_request_bodies_wave3.py::test_all_remaining_community_json_bodies_have_documented_fields | BOSSAPP-1442 | scripts | 2026-11-23 | request bodies added since have undocumented fields

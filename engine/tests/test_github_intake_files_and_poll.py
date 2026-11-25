@@ -1,4 +1,4 @@
-"""GitHub intake for API onboarding (AMEX-G11 BOSSAPP-1169, AMEX-G1 BOSSAPP-1175), without a
+"""GitHub intake for API onboarding (BOSSAPP-1169, BOSSAPP-1175), without a
 database: a pull request's changed files, the `glob` filter op, and the repository poller
 against a fake GitHub API.
 

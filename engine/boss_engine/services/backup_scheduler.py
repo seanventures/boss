@@ -25,6 +25,7 @@ and repository volumes) that upgrades take; `boss rollback --restore-backup` res
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import logging
 import os
@@ -266,13 +267,18 @@ def run_backup(engine: Any, settings: Any = None, *, now: Optional[datetime] = N
     partial = final.with_suffix(".dump.partial")
     try:
         folder.mkdir(parents=True, exist_ok=True, mode=0o700)
-        old_umask = os.umask(0o077)
-        try:
-            done = runner([getattr(settings, "backup_pg_dump", "pg_dump"), "-Fc", "--no-password",
-                           "-f", str(partial)], env=_pg_env(settings.database_url),
-                          capture_output=True, text=True, timeout=DUMP_TIMEOUT_SECONDS)
-        finally:
-            os.umask(old_umask)
+        # OWNER-ONLY BY THE FILE'S OWN MODE, NEVER THE PROCESS UMASK. os.umask is process-wide:
+        # for the ~35 s of this dump every file ANY thread of the API created was 0600, and a
+        # review seat's `git status` rewrote a run's .git/index as boss 0600 (crun_6883ec7c lost
+        # a finished build to it). The partial file is made 0600 first; pg_dump -f truncates
+        # it and keeps that mode.
+        with contextlib.suppress(FileNotFoundError):
+            partial.unlink()
+        os.close(os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+        os.chmod(partial, 0o600)
+        done = runner([getattr(settings, "backup_pg_dump", "pg_dump"), "-Fc", "--no-password",
+                       "-f", str(partial)], env=_pg_env(settings.database_url),
+                      capture_output=True, text=True, timeout=DUMP_TIMEOUT_SECONDS)
         if done.returncode != 0:
             raise RuntimeError(f"pg_dump failed ({done.returncode}): {_short(done.stderr)}")
         if not partial.exists() or partial.stat().st_size == 0:
@@ -315,18 +321,219 @@ def run_backup(engine: Any, settings: Any = None, *, now: Optional[datetime] = N
     return row
 
 
+def _remove(engine: Any, row: Mapping[str, Any], remover: Optional[Callable[[str], None]],
+            *, why: str = "pruned") -> bool:
+    """One verified backup off the disk (file, then uploaded object), its row marked pruned."""
+    if row.get("path"):
+        try:
+            Path(row["path"]).unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            _log.warning("could not remove %s backup %s", why, row["id"], exc_info=True)
+            return False
+    if row.get("object_key") and remover is not None:
+        try:
+            remover(str(row["object_key"]))
+        except Exception:  # noqa: BLE001 — the row stays pruned; the object is the store's
+            _log.warning("could not remove uploaded backup %s", row["id"], exc_info=True)
+    with engine.begin() as c:
+        c.execute(text("UPDATE backups SET status = 'pruned' WHERE id = :i AND status = 'verified'"),
+                  {"i": row["id"]})
+    return True
+
+
 def prune(engine: Any, settings: Any = None, *,
           remover: Optional[Callable[[str], None]] = None) -> list[str]:
-    """Apply the tiers to verified backups: remove the rest (file + object), mark them pruned."""
+    """Apply the tiers to verified backups: remove the rest (file + object), mark them pruned.
+    Then the cap (BOSSAPP-1459): past the count or the size the oldest go — at once when a
+    `backups` rule is approved, else through one storage decision (`ask_over_cap`)."""
+    from ..db import background
+
     settings = _settings(settings)
+    with background():
+        with engine.begin() as c:
+            rows = [dict(r) for r in c.execute(text(
+                "SELECT id, path, object_key, started_at, bytes FROM backups WHERE status = 'verified'"
+            )).mappings()]
+        keep = retention_keep(rows, Policy.from_settings(settings))
+        pruned: list[str] = []
+        for row in rows:
+            if str(row["id"]) in keep:
+                continue
+            if _remove(engine, row, remover):
+                pruned.append(str(row["id"]))
+        kept = [r for r in rows if str(r["id"]) in keep]
+        with engine.begin() as c:
+            max_count, cap_gb, approved = cap_policy(c, settings)
+        over = over_cap(kept, max_count=max_count, cap_gb=cap_gb)
+        if over and approved:
+            for row in over:
+                if _remove(engine, row, remover, why="over-cap"):
+                    pruned.append(str(row["id"]))
+        elif over:
+            ask_over_cap(engine, over, max_count=max_count, cap_gb=cap_gb,
+                         kept_n=len(kept) - len(over))
+        return pruned
+
+
+# ------------------------------------------------------------------------------------------ #
+# the cap — count and bytes over the tiers (BOSSAPP-1459)
+# ------------------------------------------------------------------------------------------ #
+
+#: The storage decision's tool name (storage_cleanup routes its answer here).
+CAP_TOOL = "storage.remove_scheduled_backups"
+#: Its OWN retention rule kind: never `backups`, which governs the host's pre-upgrade recovery
+#: archives (storage.remove_backups) — approving this card must not make deleting those automatic.
+CAP_RULE_KIND = "scheduled_backups"
+#: The newest backups the cap never takes, whatever the rule says.
+CAP_FLOOR = 3
+#: A "Not now" is asked again after this long.
+ASK_AGAIN_AFTER = timedelta(hours=24)
+
+
+def cap_policy(connection: Any, settings: Any) -> tuple[int, float, bool]:
+    """(max count, cap GB, approved). An APPROVED `scheduled_backups` retention rule (an
+    operator's, or one learned from an answered card) sets both numbers and makes removal automatic; without one
+    the settings give the numbers and the removal is asked (production) — or answered by the
+    install's own autonomy (dev tier: autonomy_gate lets BOSS answer `storage_delete`)."""
+    max_count = int(getattr(settings, "backup_max_count", 12) or 12)
+    cap_gb = float(getattr(settings, "backup_cap_gb", 5.0) or 5.0)
+    try:
+        from . import storage_rules
+
+        with connection.begin_nested():
+            rule = storage_rules.rule_for(connection, CAP_RULE_KIND)
+    except Exception:  # noqa: BLE001 — no rules table: the settings, asked
+        rule = None
+    if rule and rule.get("source") in ("operator", "learned"):
+        r = rule.get("rule") or {}
+        try:
+            max_count = int(r.get("keep_newest") or max_count)
+            cap_gb = float(r.get("cap_gb") or cap_gb)
+        except (TypeError, ValueError):
+            pass
+        return max(CAP_FLOOR, max_count), cap_gb, True
+    return max(CAP_FLOOR, max_count), cap_gb, False
+
+
+def over_cap(rows: Iterable[Mapping[str, Any]], *, max_count: int, cap_gb: float,
+             floor: int = CAP_FLOOR) -> list[dict[str, Any]]:
+    """The oldest backups past `max_count` or past `cap_gb` in total — never one of the newest
+    `floor`. Pure: newest first, a backup stays while both numbers still hold."""
+    ordered = sorted((dict(r) for r in rows), key=lambda r: _utc(r["started_at"]), reverse=True)
+    cap = cap_gb * 1e9
+    used, out, cut = 0.0, [], False
+    for i, row in enumerate(ordered):
+        size = float(row.get("bytes") or 0)
+        if i < floor or (not cut and i < max_count and used + size <= cap):
+            used += size
+            continue
+        cut = True          # monotone: once one is past the cap, every older one is too
+        out.append(row)
+    return out
+
+
+def ask_over_cap(engine: Any, over: list[Mapping[str, Any]], *, max_count: int,
+                 cap_gb: float, kept_n: int = 0) -> Optional[str]:
+    """ONE storage decision for the backups past the cap (the Infra Agent's card, kind
+    `storage_delete`): it lists them, proposes the rule that makes it automatic next time, and is
+    not raised again while one is open or for a day after a "Not now"."""
+    import json
+
+    from . import storage_cleanup, storage_incidents, storage_watch
+    from .core import create_blocking_decision
+    from .decision_actions import OPEN_STATUSES
+    from .typed_forms import normalize_form
+
+    gb = sum(float(r.get("bytes") or 0) for r in over) / 1e9
     with engine.begin() as c:
-        rows = [dict(r) for r in c.execute(text(
-            "SELECT id, path, object_key, started_at FROM backups WHERE status = 'verified'"
-        )).mappings()]
-    keep = retention_keep(rows, Policy.from_settings(settings))
-    pruned: list[str] = []
+        recent = c.execute(text(
+            "SELECT id FROM decisions WHERE recommendation->>'tool' = :t "
+            "AND (status = ANY(:open) "
+            "OR (status = 'rejected' AND updated_at > now() - make_interval(hours => :h))) "
+            "LIMIT 1"), {"t": CAP_TOOL, "open": sorted(OPEN_STATUSES),
+                         "h": int(ASK_AGAIN_AFTER.total_seconds() // 3600)}).first()
+        if recent is not None:
+            return None
+        project_id = storage_incidents.default_project(c)
+        if not project_id:
+            return None
+        proposed = {"keep_newest": int(max_count), "cap_gb": float(cap_gb)}
+        question = (f"Delete {len(over)} old database backups ({gb:.1f} GB)? "
+                    f"The newest {max(CAP_FLOOR, kept_n)} stay.")
+        reason = (f"Scheduled backups are past their cap ({max_count} backups or {cap_gb:g} GB). "
+                  "Deleting a backup cannot be undone, so on a production install a person says yes "
+                  "once on this card: tick the rule and next time it is automatic. "
+                  + storage_cleanup._LEFT_ALONE_LINE)
+        host_id = storage_watch.local_host_id()
+        ids = [str(r["id"]) for r in over]
+        rec = {"action": "storage_delete", "tool": CAP_TOOL, "incident_id": None,
+               "host_id": host_id, "args": proposed,
+               "plan_hash": storage_cleanup.plan_hash(CAP_TOOL, host_id, proposed, ids),
+               "items": len(over), "gb": round(gb, 2), "keeps": int(max_count),
+               "to_delete": ids[:500], "kept": [],
+               "already_done_gb": 0.0, "free_pct_now": None, "target_pct": None, "paused_runs": 0,
+               "rule_proposal": {"kind": CAP_RULE_KIND, "rule": proposed, "preticked": True},
+               "alternatives": [], "never_automatic": ["unlabelled", "data volumes",
+                                                       "non-scratch databases"],
+               "left_alone": list(storage_cleanup.LEFT_ALONE), "ui": "StorageDeleteDecision"}
+        decision_id = create_blocking_decision(c, project_id, None, question, rec,
+                                               {"estimated_cost_usd": 0.0}, reason,
+                                               risk_tier=3, default_action="hold")
+        c.execute(text("UPDATE decisions SET form_schema = CAST(:f AS JSONB) WHERE id = :id"),
+                  {"f": json.dumps(normalize_form(storage_cleanup.ASK_FORM)), "id": decision_id})
+    return str(decision_id)
+
+
+def on_cap_decision(connection: Any, decision: Mapping[str, Any], *, verdict: str, actor: str,
+                    make_rule: Optional[bool] = None,
+                    args: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
+    """The storage decision's answer (storage_cleanup.on_delete_decision routes it here).
+    Approve: write the rule when asked (next time it is automatic), then remove exactly the
+    listed backups that are still verified. Not now: asked again after ASK_AGAIN_AFTER."""
+    import json
+
+    rec = decision.get("recommendation") or {}
+    if isinstance(rec, str):
+        try:
+            rec = json.loads(rec)
+        except ValueError:
+            rec = {}
+    if verdict != "approve":
+        return {"state": "refused", "ask_again_after_hours": ASK_AGAIN_AFTER.total_seconds() / 3600}
+    proposal = rec.get("rule_proposal") or {}
+    rule = {**dict(proposal.get("rule") or {}), **dict(args or {})}
+    want_rule = bool(proposal.get("preticked")) if make_rule is None else bool(make_rule)
+    if want_rule:
+        from . import storage_rules
+
+        storage_rules.upsert(connection, kind=CAP_RULE_KIND, rule=rule, source="learned", actor=actor,
+                             decision_id=str(decision.get("id") or ""))
+    ids = [str(i) for i in (rec.get("to_delete") or [])]
+    if args:
+        # "Keep 20 instead": only what is STILL past the cap with the person's numbers goes —
+        # never a backup the card listed that the new numbers keep.
+        current = [dict(r) for r in connection.execute(text(
+            "SELECT id, started_at, bytes FROM backups WHERE status = 'verified'")).mappings()]
+        try:
+            still = {str(r["id"]) for r in over_cap(
+                current, max_count=max(CAP_FLOOR, int(rule.get("keep_newest") or CAP_FLOOR)),
+                cap_gb=float(rule.get("cap_gb") or 1e9))}
+        except (TypeError, ValueError):
+            still = set()
+        ids = [i for i in ids if i in still]
+    rows = [dict(r) for r in connection.execute(text(
+        "SELECT id, path, object_key, started_at, bytes FROM backups "
+        "WHERE status = 'verified' AND id = ANY(:ids)"), {"ids": ids}).mappings()]
+    # Never one of the newest CAP_FLOOR, even if they moved since the card was raised.
+    newest = {str(r[0]) for r in connection.execute(text(
+        "SELECT id FROM backups WHERE status = 'verified' ORDER BY started_at DESC LIMIT :n"),
+        {"n": CAP_FLOOR}).all()}
+    remover = s3_remover(_settings(None))
+    removed: list[str] = []
     for row in rows:
-        if str(row["id"]) in keep:
+        if str(row["id"]) in newest:
             continue
         if row.get("path"):
             try:
@@ -334,18 +541,14 @@ def prune(engine: Any, settings: Any = None, *,
             except FileNotFoundError:
                 pass
             except OSError:
-                _log.warning("could not remove pruned backup %s", row["id"], exc_info=True)
+                _log.warning("could not remove over-cap backup %s", row["id"], exc_info=True)
                 continue
         if row.get("object_key") and remover is not None:
-            try:
+            with contextlib.suppress(Exception):
                 remover(str(row["object_key"]))
-            except Exception:  # noqa: BLE001 — the row stays pruned; the object is the store's
-                _log.warning("could not remove uploaded backup %s", row["id"], exc_info=True)
-        with engine.begin() as c:
-            c.execute(text("UPDATE backups SET status = 'pruned' WHERE id = :i"),
-                      {"i": row["id"]})
-        pruned.append(str(row["id"]))
-    return pruned
+        connection.execute(text("UPDATE backups SET status = 'pruned' WHERE id = :i"), {"i": row["id"]})
+        removed.append(str(row["id"]))
+    return {"state": "done", "removed": removed, "rule": want_rule}
 
 
 # ------------------------------------------------------------------------------------------ #
@@ -399,22 +602,25 @@ def tick(engine: Any, settings: Any = None, *, now: Optional[datetime] = None,
          holder: str = HOLDER, runner: Runner = subprocess.run,
          uploader: Optional[Callable[[Path, str], None]] = None,
          remover: Optional[Callable[[str], None]] = None) -> dict[str, Any]:
+    from ..db import background
+
     settings = _settings(settings)
     now = now or datetime.now(timezone.utc)
     if not getattr(settings, "backup_schedule_enabled", False):
         return {"ran": False, "reason": "disabled"}
-    with engine.begin() as c:
-        if not acquire_lease(c, holder, now):
-            return {"ran": False, "reason": "another process holds the lease"}
-        mark_interrupted(c, now)
-        due = is_due(c, settings, now)
-    if not due:
-        return {"ran": False, "reason": "not due"}
-    row = run_backup(engine, settings, now=now, runner=runner,
-                     uploader=uploader if uploader is not None else s3_uploader(settings))
-    pruned = prune(engine, settings,
-                   remover=remover if remover is not None else s3_remover(settings))
-    return {"ran": True, "backup": row, "pruned": pruned}
+    with background():
+        with engine.begin() as c:
+            if not acquire_lease(c, holder, now):
+                return {"ran": False, "reason": "another process holds the lease"}
+            mark_interrupted(c, now)
+            due = is_due(c, settings, now)
+        if not due:
+            return {"ran": False, "reason": "not due"}
+        row = run_backup(engine, settings, now=now, runner=runner,
+                         uploader=uploader if uploader is not None else s3_uploader(settings))
+        pruned = prune(engine, settings,
+                       remover=remover if remover is not None else s3_remover(settings))
+        return {"ran": True, "backup": row, "pruned": pruned}
 
 
 _THREAD: Optional[threading.Thread] = None

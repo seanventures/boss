@@ -78,7 +78,49 @@ export type WorkflowSummary = { definition_id: string; workflow_key: string; nam
   last_run?: { id?: string; status: string; at: string } | null; schedule?: unknown; used_for?: string[];
   /** The running version's id: what a "Run another workflow" step is pinned to. Null when
    *  nothing is published yet. */
-  active_version_id?: string | null };
+  active_version_id?: string | null;
+  /** A standard edited in place: its running version is not the one BOSS shipped. */
+  modified?: boolean;
+  /** A standard the operator edited, with a newer shipped standard waiting beside the edit. */
+  new_standard_available?: boolean;
+  /** Installed from the Marketplace (engine workflow_marketplace): Yours, with where it came from. */
+  marketplace?: InstalledFrom | null;
+  /** Published from here to the org's Marketplace. */
+  published?: PublishedPack | null };
+
+/* ── The Workflow Marketplace (engine workflow_marketplace) ───────────────────────── */
+
+/** Where an installed copy came from: the pack, its version, Modified, a newer version waiting
+ *  for the operator (only when they changed it: unmodified copies update by themselves), and why
+ *  it cannot run yet (a connector the pack needs is not set up). */
+export type InstalledFrom = { pack_id: string; pack_name: string; source: "boss" | "org";
+  version: string | null; modified: boolean; waiting: string | null;
+  update: null | { version: string | null; changes?: StandardChange[]; applies_cleanly?: boolean;
+                   conflicts?: string[] } };
+/** A workflow of this project published to the org's Marketplace. */
+export type PublishedPack = { pack_id: string; name: string; summary: string; version: string;
+  status: "published" | "unpublished" };
+/** One pack on the Marketplace screen. */
+export type MarketPack = { id: string; source: "boss" | "org"; name: string; summary: string;
+  publisher: string; version: string; updated_at: string | null;
+  workflows: { key: string; name: string; description: string; steps: string[] }[];
+  installed: boolean; installed_version: string | null; update_available: string | null;
+  waiting: string[]; published_here: boolean;
+  needs: { key: string; label: string; ok: boolean; note: string | null }[];
+  agents: { key: string; name: string; present: boolean }[] };
+export type InstalledAct = "take" | "take_keep" | "dismiss";
+
+/* ── A standard edited in place (engine workflow_standards) ───────────────────────── */
+
+/** One line of "Changes from standard": a step added, removed or changed, or a setting. */
+export type StandardChange = { change: "added" | "removed" | "changed" | "setting"; step_id: string | null;
+  text: string };
+/** What the editor shows about a standard: Modified and its changes, and a newer shipped
+ *  standard waiting ("New standard available"), with whether the operator's changes apply on it. */
+export type StandardState = { modified: boolean; baseline_version: number | null; changes: StandardChange[];
+  new_standard: null | { version: number; changes: StandardChange[]; applies_cleanly: boolean;
+                         conflicts: string[] } };
+export type StandardAct = "reset" | "take_new" | "take_new_keep" | "dismiss";
 
 /* ── Problems / check / publish ───────────────────────────────────────────────────── */
 
@@ -91,7 +133,9 @@ export type CheckResult = { ok: boolean; problems: Problem[];
   summary: { steps: number; agents: string[]; approvals: string[]; typical_minutes: number | null;
              needs: string[] } };
 export type PublishRequest = { definition_id: string | null; name: string; description?: string; spec: Spec;
-  from_workflow_key?: string | null; update_copy_id?: string | null };
+  from_workflow_key?: string | null; update_copy_id?: string | null;
+  /** With a standard's definition_id: make your own copy instead of editing it in place. */
+  as_copy?: boolean };
 export type PublishResult =
   | { unchanged: true }
   | { definition: { id: string; workflow_key: string; name: string }; version: number; created: boolean };
@@ -132,7 +176,13 @@ export type StepView = { id: string; title: string;
 export type EditorMeta = { definition_id: string | null; workflow_key: string | null; name: string;
   description: string; is_catalogue: boolean; from_workflow_key: string | null; version: number | null;
   copy?: { definition_id: string; workflow_key: string; name: string } | null;
-  readOnlyVersion?: number | null };
+  readOnlyVersion?: number | null;
+  /** A standard's state (null for the operator's own workflows). */
+  standard?: StandardState | null;
+  /** Installed from the Marketplace: the pack, version, Modified and an update waiting. */
+  marketplace?: InstalledFrom | null;
+  /** Published from here to the org's Marketplace. */
+  published?: PublishedPack | null };
 /** `loaded` is null for a workflow never saved (new, or an unsaved duplicate): any step makes it
  *  dirty. `jsonText` is null unless someone is typing in the JSON view; the view shows
  *  `specText(spec)` otherwise. `wired` names, per step, the inputs the editor wired itself
@@ -221,7 +271,7 @@ export {
 } from "./workflow-editor-store";
 export {
   fetchPalette, fetchLibrary, fetchSpec, checkSpec, publishSpec, renameWorkflow, deleteWorkflow,
-  draftFromDescription, ProblemsError, NameInUseError,
+  draftFromDescription, ProblemsError, NameInUseError, standardAct,
 } from "./workflow-api";
 export { applyStepPatch, inputSourceOf, deepEqual, TITLE_MAX } from "./workflow-spec";
 

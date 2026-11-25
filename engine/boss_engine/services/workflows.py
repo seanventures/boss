@@ -1201,7 +1201,7 @@ def _runs_before(normalized: dict[str, Any], *,
     """For each reachable step, the steps that have certainly finished when it starts.
 
     `failed_counts`: a step reached by p's error path counts p as having run — p failed, and
-    its failed output is in the run context for that path (AMEX-G10). That is what a binding
+    its failed output is in the run context for that path (BOSSAPP-1168). That is what a binding
     may read (`binding_order_problems`); "finished" for a re-run (`workflow_test_runs`) still
     means completed.
 
@@ -1288,7 +1288,7 @@ def binding_order_problems(
     optional_for = optional_inputs or _capability_optional_inputs
     steps = _step_map(normalized)
     # A step on an error path may read the step that failed into it: its failed output (exit
-    # code, log tail) is in the run context for that path (AMEX-G10, BOSSAPP-1168).
+    # code, log tail) is in the run context for that path (BOSSAPP-1168).
     before = _runs_before(normalized, failed_counts=True)
     found: list[dict[str, Any]] = []
     for sid, step in steps.items():
@@ -1682,7 +1682,7 @@ def delete_definition(
     which is what stops it appearing in the picker.
     """
     definition = require_namespace(connection, project_id, definition_id, PRODUCT_NAMESPACE)
-    require_editable(definition)
+    require_own(definition, "deleted")
 
     live = connection.execute(
         text(
@@ -1747,17 +1747,19 @@ def delete_definition(
             "workflow_key": definition["workflow_key"], "name": definition["name"]}
 
 
-def require_editable(definition: dict[str, Any]) -> None:
-    """Refuse to edit a catalogue workflow in place.
+def require_own(definition: dict[str, Any], act: str) -> None:
+    """Refuse to delete or rename a standard (a catalogue workflow BOSS ships).
 
-    The twelve BOSS ships are read-only on purpose: forking is what keeps "reset to the
-    standard" meaningful and keeps the customer's diff against it visible. Editing in place
-    would quietly make every fleet's "Standard Product Delivery" a different thing.
+    A standard's STEPS are the operator's to edit in place — an edit publishes its next version
+    and the shipped spec stays its baseline, so "Reset to standard" always has something to go
+    back to (workflow_standards). What stays BOSS's is that it exists and what it is called:
+    deleting one would leave nothing to reset to, and its name follows the catalogue.
     """
     if definition.get("is_catalogue"):
         raise WorkflowNamespaceError(
-            f"'{definition['workflow_key']}' is a standard workflow BOSS ships and cannot be "
-            "edited in place. Save it as your copy to change it."
+            f"'{definition['name']}' is a standard workflow BOSS ships and cannot be {act}. "
+            "Edit its steps in place (Reset to standard brings the shipped ones back), or "
+            "Save as your copy to make your own."
         )
 
 
@@ -1872,6 +1874,13 @@ def list_definitions(
                      WHERE v.id = d.active_version_id) AS step_specs,
                    (SELECT v.version FROM workflow_versions v
                      WHERE v.id = d.active_version_id) AS active_version,
+                   -- A STANDARD THE OPERATOR EDITED (workflow_standards): its active version
+                   -- is not the shipped baseline. The library chips it Modified.
+                   ((d.is_catalogue OR d.marketplace_pack_id IS NOT NULL)
+                    AND d.standard_content_hash IS NOT NULL
+                    AND (SELECT v.content_hash FROM workflow_versions v
+                          WHERE v.id = d.active_version_id)
+                        IS DISTINCT FROM d.standard_content_hash) AS standard_modified,
                    -- WHAT STARTING IT WILL ASK FOR. The console's start form renders FROM
                    -- this; without it a workflow whose steps read `from_input` is startable
                    -- only by a caller that already knows the field names.
@@ -1924,11 +1933,44 @@ def list_definitions(
             ).mappings()
         }
 
+    # The Marketplace packs the installed copies came from: names and current versions, once.
+    pack_names: dict[str, str] = {}
+    pack_versions: dict[str, str] = {}
+    if any(row.get("marketplace_pack_id") for row in rows):
+        from .workflow_marketplace import SHIPPED_PACKS
+
+        for pack in SHIPPED_PACKS.values():
+            pack_names[pack.pack_id], pack_versions[pack.pack_id] = pack.name, pack.version
+        org_ids = [str(r["marketplace_pack_id"]) for r in rows
+                   if r.get("marketplace_pack_id") and r["marketplace_pack_id"] not in SHIPPED_PACKS]
+        if org_ids:
+            for pack in connection.execute(
+                    text("SELECT id, name, version FROM workflow_packs WHERE id = ANY(:ids)"),
+                    {"ids": org_ids}).mappings():
+                pack_names[str(pack["id"])], pack_versions[str(pack["id"])] = (
+                    str(pack["name"]), str(pack["version"]))
+    # WHAT THIS PROJECT PUBLISHED to its org's Marketplace, by the workflow it came from.
+    published: dict[str, dict[str, Any]] = {}
+    if _table_exists(connection, "workflow_packs"):
+        for pack in connection.execute(
+                text("SELECT id, name, summary, version, status, source_definition_id "
+                     "FROM workflow_packs WHERE source_project_id = :p"),
+                {"p": project_id}).mappings():
+            published[str(pack["source_definition_id"])] = {
+                "pack_id": pack["id"], "name": pack["name"], "summary": pack["summary"] or "",
+                "version": pack["version"], "status": pack["status"]}
     items = []
     for row in rows:
         item = _serialize_definition(row)
         item["version_count"] = int(row["version_count"])
-        item["step_count"] = int(row["step_count"] or 0)
+        if str(row["id"]) in published:
+            item["published"] = published[str(row["id"])]
+        from .command_center import is_marker_step
+
+        specs = row["step_specs"] if isinstance(row["step_specs"], list) else None
+        # Markers (fork/join) are not steps: the same count as the plan and a run's "k of n".
+        item["step_count"] = (sum(1 for st in specs if isinstance(st, dict) and not is_marker_step(st))
+                              if specs is not None else int(row["step_count"] or 0))
         from .deploy_policy import step_answer
 
         item["steps"] = _step_outline(
@@ -1952,6 +1994,29 @@ def list_definitions(
                             "at": _iso(row["last_run_at"])}
                             if row["last_run_status"] else None)
         item["used_for"] = list(row["used_for"] or [])
+        if item["is_catalogue"]:
+            item["modified"] = bool(row.get("standard_modified"))
+            waiting = row.get("standard_available_version_id")
+            item["new_standard_available"] = bool(
+                waiting and waiting != row.get("standard_dismissed_version_id")
+                and waiting != row.get("standard_version_id"))
+        elif row.get("marketplace_pack_id"):
+            # FROM THE MARKETPLACE (workflow_marketplace): Yours, with where it came from, the
+            # pack version, Modified, and a newer version waiting for the operator's call.
+            from .workflow_marketplace import (
+                SHIPPED_PACKS, update_waiting as _update_waiting)
+
+            pack_id = str(row["marketplace_pack_id"])
+            item["marketplace"] = {
+                "pack_id": pack_id,
+                "pack_name": pack_names.get(pack_id) or pack_id,
+                "source": "boss" if pack_id in SHIPPED_PACKS else "org",
+                "version": row.get("marketplace_version"),
+                "modified": bool(row.get("standard_modified")),
+                "update": ({"version": pack_versions.get(pack_id)}
+                           if _update_waiting(dict(row)) else None),
+                "waiting": row.get("marketplace_waiting") or None,
+            }
         items.append(item)
     return items
 
@@ -2033,6 +2098,10 @@ def _step_outline(specs: Any, step_labels: dict[str, str],
                                                                  "says": PERSON_SAYS}
             if answer.get("who") == "policy":
                 outline[-1]["approval"] = "policy"
+                outline[-1]["policy"] = answer.get("environment")
+            elif answer.get("who") == "agent":
+                # Dev autonomy ships it: the target is not production (BOSSAPP-1441).
+                outline[-1]["approval"] = "agent"
                 outline[-1]["policy"] = answer.get("environment")
             outline[-1]["says"] = answer.get("says") or PERSON_SAYS
     return outline
@@ -2255,6 +2324,22 @@ def publish_version(
     # STAMPED WITH THE AGENT RULES IT WAS CHECKED UNDER, so a start or a run months from now
     # applies those rules and not whatever this code says then. A step-level copy (which
     # `_run_spec` adds for the runner) is never trusted from a caller.
+    # THE QUALITY BAR ON A WORKFLOW (quality_bar.py): any workflow may set its own bar, but only a
+    # person with settings:update may publish one, recorded here; a caller's own stamp is dropped.
+    # A workflow with no bar of its own takes the project's.
+    from . import quality_bar as _qb
+
+    normalized.pop(_qb.BY_KEY, None)
+    if _qb.SETTING in normalized or _qb.OVERRIDES_KEY in normalized:
+        try:
+            _qb.check_override_permission(project_id, actor)
+        except _qb.QualityBarOverrideRefused as refused:
+            raise WorkflowValidationError(str(refused)) from refused
+        normalized[_qb.BY_KEY] = str(actor)
+        emit_event(connection, project_id, "workflow.quality_bar_set", actor,
+                   "workflow_definition", definition_id,
+                   {"quality_bar": normalized.get(_qb.SETTING),
+                    "gates": normalized.get(_qb.OVERRIDES_KEY) or {}, "by": str(actor)})
     normalized[AGENT_RULES_KEY] = CURRENT_AGENT_RULES
     for step in normalized["steps"]:
         step.pop(AGENT_RULES_KEY, None)
@@ -2293,7 +2378,9 @@ def publish_version(
                 {"id": existing["id"]})
             result["status"] = "published"
             result["republished"] = True
-        if str(definition.get("active_version_id") or "") != str(existing["id"]):
+        # NOT WHEN ASKED NOT TO ACTIVATE: a new standard for a Modified standard is published
+        # beside the operator's edit (workflow_standards), and a match must not take over.
+        if activate and str(definition.get("active_version_id") or "") != str(existing["id"]):
             connection.execute(
                 text(
                     """
@@ -2502,7 +2589,7 @@ def rename_definition(
     other edit, and a name the operator already uses.
     """
     definition = require_namespace(connection, project_id, definition_id, PRODUCT_NAMESPACE)
-    require_editable(definition)
+    require_own(definition, "renamed")
     changes: dict[str, Any] = {}
     if name is not None:
         cleaned = _clean_text(name, "name")
@@ -2541,13 +2628,18 @@ def publish_from_editor(
     description: Optional[str] = None,
     from_workflow_key: Optional[str] = None,
     update_copy_id: Optional[str] = None,
+    as_copy: bool = False,
 ) -> dict[str, Any]:
     """Save what the editor holds, as one act: the operator's own workflow, a new one, or a copy.
 
       * `update_copy_id` — publish onto that existing copy (the "Update my copy" choice).
       * `definition_id` of the operator's own workflow — publish its next version.
-      * no `definition_id`, or a standard's — create the operator's workflow and publish v1.
-        `from_workflow_key` (or the standard's own key) is recorded as what it was copied from.
+      * `definition_id` of a standard, under its own name — publish ITS next version, in place
+        (the shipped spec stays its baseline: workflow_standards).
+      * `as_copy` (or another name) with a standard's `definition_id`, or no `definition_id` —
+        create the
+        operator's workflow and publish v1. `from_workflow_key` (or the standard's own key) is
+        recorded as what it was copied from.
 
     Name and description travel with the save. A name is checked only when it changes, and a
     name the library already lists is refused (409, with a free one) — a standard's included.
@@ -2566,15 +2658,18 @@ def publish_from_editor(
     standard: Optional[dict[str, Any]] = None
     if definition_id:
         loaded = require_namespace(connection, project_id, definition_id, PRODUCT_NAMESPACE)
-        if loaded.get("is_catalogue"):
-            # A STANDARD IS NEVER EDITED IN PLACE. Saving one makes the operator's copy of it.
+        if loaded.get("is_catalogue") and (as_copy or update_copy_id
+                                           or cleaned_name != loaded["name"]):
+            # SAVE AS YOUR COPY: the standard stays as it is and the operator gets their own.
+            # A standard keeps its name, so a save under another name is a copy too (what
+            # every save of a standard was before standards became editable in place).
             standard = loaded
             source_key = source_key or str(loaded["workflow_key"])
         elif not update_copy_id:
             target = loaded
     if update_copy_id:
         target = require_namespace(connection, project_id, update_copy_id, PRODUCT_NAMESPACE)
-        require_editable(target)
+        require_own(target, "used as your copy")
         # The editor titles a standard with the standard's name. Sent back on "Update my
         # copy", that is not a rename: renaming the copy to it would list the copy and the
         # standard under one name. A different name is a rename, checked like any other.
@@ -2609,13 +2704,18 @@ def publish_from_editor(
             forked_from_version_id=str(source["version_id"]) if source else None,
         )
         created = True
-    else:
+    elif not target.get("is_catalogue"):
         renamed = bool(rename_definition(
             connection, project_id, str(target["id"]), actor=actor, name=cleaned_name,
             description=description)["changed"])
 
     version = publish_version(connection, project_id=project_id,
                               definition_id=str(target["id"]), spec=spec, actor=actor)
+    if target.get("is_catalogue"):
+        # New work follows the edit: BOSS's own default mapping moves to the active version.
+        from .workflow_catalogue import repoint_defaults_for
+
+        repoint_defaults_for(connection, project_id, str(target["workflow_key"]))
     if (not created and not renamed and version.get("duplicate")
             and not version.get("reactivated")):
         return {"unchanged": True}
@@ -3307,7 +3407,19 @@ def checked_capability_inputs(connection: Connection, project_id: str, spec: dic
 #: written only by start_run's `checked_replaces`.
 CHECKED_REPLACES_KEY = "_checked_replaces"
 #: Input keys no caller may set: dropped from every caller's input by start_run.
-SERVER_ONLY_INPUTS = frozenset({"replaces", CHECKED_REPLACES_KEY})
+#: The quality bar's keys are server-only too (quality_bar.py): a caller's `quality_bar`,
+#: `quality_bar_gates` and `_quality_bar_by` are dropped, so an agent's start_workflow inputs can
+#: never lower (or set) a bar; only `quality_bar_override`, filled by the start door after its
+#: permission check, writes them.
+#: Easy Mode (factory_launch.spec_first_run): the person whose start approves the panel's PRD —
+#: written only through start_run's `spec_approved_by_start`, honoured only on an Easy Mode MVP
+#: run (workflow_capability_runner._stamp_start_approval). `skip_without_host` is the Easy Mode
+#: deploy step's own binding; `skip_without_deploy_ask` is `fast_fix`'s own binding; a caller's
+#: input never reaches a deploy step with either.
+SPEC_BY_START_KEY = "_spec_approved_by_start"
+SERVER_ONLY_INPUTS = frozenset({"replaces", CHECKED_REPLACES_KEY, "quality_bar",
+                                "quality_bar_gates", "_quality_bar_by", SPEC_BY_START_KEY,
+                                "skip_without_host", "skip_without_deploy_ask"})
 
 
 def start_run(
@@ -3329,8 +3441,15 @@ def start_run(
     allow_live: Optional[list[str]] = None,
     rerun_of: Optional[dict[str, Any]] = None,
     checked_replaces: Optional[list[str]] = None,
+    quality_bar_override: Optional[dict[str, Any]] = None,
+    inherit_authority: Any = None,
+    spec_approved_by_start: Optional[str] = None,
 ) -> dict[str, Any]:
     """Start a run.
+
+    `quality_bar_override` ({bar?, gates?, by}): a quality bar / per-gate map a PERSON with
+    settings:update asked for at the start door (quality_bar.check_override_permission, already
+    checked). Written under keys no caller can write; the build resolves its bar from them.
 
     `checked_replaces`: the contract items a PERSON picked to replace, already checked by the
     HTTP start endpoint (acceptance.contract.checked_replaces, under their request). Recorded
@@ -3369,8 +3488,19 @@ def start_run(
                   and str(k) != PRECHECK_KEY and str(k) not in SERVER_ONLY_INPUTS}
     if checked_replaces:
         input_data[CHECKED_REPLACES_KEY] = [str(x) for x in checked_replaces]
+    if quality_bar_override and quality_bar_override.get("by"):
+        from . import quality_bar as _qb
+
+        if _qb.normalize(quality_bar_override.get("bar")):
+            input_data[_qb.SETTING] = _qb.normalize(quality_bar_override["bar"])
+        if isinstance(quality_bar_override.get("gates"), dict):
+            input_data[_qb.OVERRIDES_KEY] = {str(k): str(v) for k, v in
+                                             quality_bar_override["gates"].items()}
+        input_data[_qb.BY_KEY] = str(quality_bar_override["by"])
     if precheck_record:
         input_data[PRECHECK_KEY] = dict(precheck_record)
+    if str(spec_approved_by_start or "").strip():
+        input_data[SPEC_BY_START_KEY] = str(spec_approved_by_start).strip()
     for key, value in (adopted or {}).items():
         if not str(key).startswith(ADOPT_PREFIX):
             raise WorkflowValidationError(f"{key!r} is not an adoption key")
@@ -3433,6 +3563,11 @@ def start_run(
         raise WorkflowValidationError(
             f"this workflow needs {len(absent)} input(s) it was not given: {named}")
     input_data = checked_capability_inputs(connection, project_id, spec, input_data)
+    # AN UPLOADED FILE'S SECRETS ARE NEVER STORED (start_from_file.mask_run_input): masked
+    # before the run's input is written, its true sha256 kept beside it.
+    from .start_from_file import mask_run_input
+
+    input_data = mask_run_input(input_data)
 
     run_id = make_id("wfr")
     root_run_id = run_id
@@ -3446,7 +3581,10 @@ def start_run(
         connection, project_id=project_id, spec=spec, input_data=input_data, run_id=run_id,
         parent_run_id=parent_run_id,
         title=consent_task_title(connection, project_id, version["workflow_definition_id"],
-                                 input_data))
+                                 input_data),
+        # The delivery workflow of a person's own new work runs under the consent that started
+        # the build (consent.inherit_build_authority): never a second consent of its own.
+        inherit=inherit_authority)
     policy_snapshot = _consent.record_on_run(policy_snapshot, identity_acting)
     if parent_run_id:
         parent = connection.execute(
@@ -4981,6 +5119,17 @@ def _process_control_step(connection: Connection, run: Any, row: Any) -> None:
             **({"what_to_check": guidance} if guidance else {}),
             **({"review": review} if review else {}),
             **({"gate": card} if card else {}),
+            # AN AUTHOR'S "ASK ME" IS A STOP A PERSON SET (dev autonomy, BOSSAPP-1441): an
+            # Approval gate whose author chose `approval: {mode: manual}` is answered by a person
+            # even on a development install, exactly as a capability step's manual gate is
+            # (workflow_capability_runner; autonomy_gate._explicit_stop reads this key).
+            **({"approval_mode_requested": "manual"}
+               if "manual" in {str(approval_of.get(k) or "").strip().lower()
+                               for approval_of in [template.get("approval")
+                                                   if isinstance(template.get("approval"), dict)
+                                                   else {"mode": template.get("approval")}]
+                               for k in ("requested_mode", "mode")}
+               else {}),
             # LAST, so a spec's own recommendation cannot replace it. This card is the step's
             # gate: approving it must release the step, and the buttons the inbox draws are
             # decided by this action (decision_actions). It came first, before the spread.
@@ -7737,6 +7886,8 @@ def waiting_on_label(step: dict[str, Any]) -> Optional[str]:
         from .repo_links import change_ref
 
         return f"{change_ref(merge.get('pull_request_url'), number)} to be merged"
+    if (step.get("output") or {}).get("waiting_on_person"):
+        return "you"
     approver = (step.get("approval") or {}).get("approver_role")
     if approver:
         return str(approver)
@@ -8657,6 +8808,17 @@ def workflow_by_version(
 PROJECT_WORK_CLASS = "project.new"
 
 
+def delivery_workflow_spec(connection: Connection, project_id: str,
+                           workflow_version_id: str) -> Optional[dict[str, Any]]:
+    """The published spec of the workflow version a project's outer run will follow (what its
+    steps will use, for the consent the person gives when they start the work)."""
+    try:
+        version = _version_row(connection, project_id, str(workflow_version_id))
+    except Exception:  # noqa: BLE001 — no such version here: nothing to add to the consent
+        return None
+    return _published_spec(version["spec"], project_roster(connection, project_id))
+
+
 def start_project_run(
     connection: Connection,
     *,
@@ -8666,8 +8828,12 @@ def start_project_run(
     directive: str,
     workflow_version_id: Optional[str] = None,
     extra_input: Optional[dict[str, Any]] = None,
+    inherit_authority: Any = None,
 ) -> Optional[dict[str, Any]]:
     """Start the OUTER workflow for a project, and return the run.
+
+    `inherit_authority`: the Acting the project's build was started under. The outer run records
+    it (consent.inherit_build_authority) instead of asking the person to consent a second time.
 
     A project's life is research → panel → approve the spec → build → review → test → preview →
     deploy → monitor. Every one of those is a workflow step with a duration, a status and
@@ -8709,6 +8875,7 @@ def start_project_run(
         # of the request — must not produce two nine-step pipelines racing each other over one
         # repository.
         dedupe_key=f"project:{project_id}:{title[:80]}:{directive[:120]}",
+        inherit_authority=inherit_authority,
     )
     # CHECKED, NOT REFUSED. The build this run governs is already going, so refusing would only
     # leave it unwatched — but the run still ends in a deploy, and on a project with no host it

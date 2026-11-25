@@ -74,8 +74,9 @@ def test_a_recorded_last_error_is_recognised_by_its_text():
 def test_a_failure_with_no_better_name_is_still_a_sentence():
     said = explain_turn_failure(RuntimeError("boom at step 3"))
     assert said["kind"] == "turn_failed"
-    assert said["sentence"].startswith("BOSS couldn't finish this turn.")
-    assert "RuntimeError" not in said["sentence"] and "boom" not in said["sentence"]
+    # Its one-line cause, quoted (BOSSAPP-1428): "couldn't finish this turn" alone said nothing.
+    assert said["sentence"] == ("BOSS couldn't finish this turn: `RuntimeError: boom at step 3`. "
+                                "Try again; if it repeats, Details shows the error.")
     assert said["detail"] == "RuntimeError: boom at step 3"
 
 

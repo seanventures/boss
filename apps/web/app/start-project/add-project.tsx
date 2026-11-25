@@ -49,20 +49,21 @@ import { IdeasDialog } from "../../components/v2/templates/ideas-dialog";
 import { adapterLanguage, useStackAdapters } from "../../components/v2/templates/stack-warning";
 import { templatesApi } from "../../lib/templates";
 import { ageShort, hostFolders, type FolderFacts, type FolderHost } from "../../lib/host-folder";
-import { accountsOf, allPresets, createFresh, ensureSample, installWideRefusal, nameFromIdea, projectPageHref, type Preset } from "../../lib/start-project";
+import { accountsOf, allPresets, createFresh, nameFromIdea, projectPageHref, type Preset } from "../../lib/start-project";
 import {
-  addProjectApi, bringChoices, creatingOwners, defaultWhere, detect, doorOf, estimateTip, estimateWords, hostPort, lineCount, nameFromTitle, nextFreeName, repoSlug,
+  addProjectApi, bringChoices, creatingOwners, defaultWhere, detect, doorOf, estimateTip, estimateWords, hostPort, lineCount, nameFromTitle, newAppDots, nextFreeName, repoSlug,
   type Brief, type BriefField, type Bring, type Door, type Kind, type LocalFolder, type OwnerCredential, type Preview, type RepoCheck, type RepoRead, type Understanding,
 } from "../../lib/add-project";
 import { normalizeChannel } from "../workflows/compose-plan";
-import { ReadinessPanel, asReadiness, unaccepted, type Readiness } from "../workflow-readiness-ui";
+import { ReadinessPanel, asReadiness, startAnywayHint, unaccepted, type Readiness } from "../workflow-readiness-ui";
 import { useRegistry } from "./import-repo";
 import { WORDS_IN_LINK, withNewWorkDoor } from "../../lib/compose-links";
 import { asRunProfile, useDefaultProfile } from "../../lib/run-profiles";
 import { keepNewWorkDraft } from "../../lib/new-work";
 import { InUseBlock, InUseTag, PlanBoxes, egressOf, ownFields, usedBy, type InUseActions, type PlanState } from "./add-project-plan";
 import { BriefCard, Marked, type BriefRow } from "../projects/brief-card";
-import { SAMPLE, knowledgePresetHref } from "./start-sheet";
+import { knowledgePresetHref } from "./start-sheet";
+import { SAMPLE, SampleNeeds, useSampleStart } from "./sample-start";
 import "./start-project.css";
 import "./add-project.css";
 
@@ -109,6 +110,15 @@ export function refusalText(e: unknown, doing: "create" | "read" = "read"): stri
     return /\s/.test(said.trim()) ? said : `Not done: ${said.replace(/_/g, " ")}.`;
   }
   return e instanceof Error ? e.message : String(e);
+}
+
+/** ONE TRUTHFUL STATE under the idea (stranger test: "Helm rewrote it" beside "could not rewrite
+ *  it"). Only a brief Helm actually wrote says it rewrote the words; a fallback (no model, a
+ *  timeout) keeps the words as typed and the card below says why. */
+export function briefNote(u: Pick<Understanding, "status" | "brief"> | null): string | null {
+  if (!u?.brief) return null;
+  if (u.status === "ok" && !u.brief.raw) return "Helm rewrote it below ↓";
+  return "Kept as you typed it below ↓";
 }
 
 /** "ledger-api" → "Ledger api": a folder's name as a project name. */
@@ -185,7 +195,7 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
   }, [projectId]);
   const box = useRef<HTMLTextAreaElement>(null);
   const setDoor = (d: Door) => {
-    setDoorState(d); setError(null); setFixHref(null); setRefusal(null);
+    setDoorState(d); setError(null); setFixHref(null); setRefusal(null); sample.reset();
     window.setTimeout(() => box.current?.focus(), 0);
   };
 
@@ -523,7 +533,7 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
     : ghBlocked ? `GitHub can’t make ${repoCheck!.full_name}: see Code`
     : door === "new" && plan.where === "github_new" && !plan.newRepo.owner ? "Pick the GitHub owner (Code)"
     : !name ? "Give it a name (the Name chip)"
-    : refusal && open.length ? `Tick ${open.length === 1 ? "the item" : `the ${open.length} items`} above to start anyway`
+    : refusal && open.length ? startAnywayHint(refusal, startAnyway)
     : askEgress && egress.length && !plan.egressOk ? "Tick “Allow these hosts” above first" : "";
   const egressBox = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -599,32 +609,11 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
   };
 
   // ── the sample, the presets ────────────────────────────────────────────────────────────
-  const [sampleProject, setSampleProject] = useState<string | null>(null);
-  const runSample = async () => {
-    if (!canCreate.allowed) { setError(canCreate.reason); return; }
-    setBusy("sample"); setError(null);
-    try {
-      let pid = sampleProject;
-      if (!pid) {
-        const wide = asReadiness(await installWideRefusal(homeId, SAMPLE.workflow_key, undefined, startAnyway));
-        if (wide) { setRefusal(wide); setBusy(null); return; }
-        const made = await guarded("Create the Hello World project.", () => ensureSample(SAMPLE.name));
-        pid = made.id;
-        setSampleProject(pid);
-      }
-      await guarded("Start the sample.", () => withConsent(() => templatesApi.apply(SAMPLE.template, {
-        project_id: pid!, new_app: { name: SAMPLE.name }, stack: SAMPLE.stack, workflow_key: SAMPLE.workflow_key,
-        dedupe_key: `sample:${pid}`, ...(startAnyway.length ? { start_anyway: startAnyway } : {}) } as never)));
-      go(projectPageHref(pid, homeId));
-    } catch (e) {
-      const b = e instanceof IdentityError ? e.body : {};
-      const detail = (b.detail && typeof b.detail === "object" ? b.detail : {}) as Record<string, unknown>;
-      const r = asReadiness(b.readiness ?? detail.readiness);
-      if (r) { setRefusal(r); setBusy(null); return; }
-      setError(refusalText(e));
-      setBusy(null);
-    }
-  };
+  // TRY A SAMPLE: one path with the Start sheet (sample-start.tsx) — every need listed before
+  // anything is made, the tick is the answer, the code kept on this machine.
+  const sample = useSampleStart({ homeId, go, words: (e) => refusalText(e), setError,
+                                  setBusy: (b) => setBusy((cur) => (b ? "sample" : cur === "sample" ? null : cur)) });
+  const runSample = () => { setRefusal(null); void sample.run(); };
   // A "Try a sample" door opens the sheet with the sample chip lit: one press starts it. A link
   // never creates anything by being opened.
   const pickPreset = async (p: Preset) => {
@@ -787,7 +776,7 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
         <div data-testid="ap-readiness">
           <ReadinessPanel readiness={refusal} accepted={startAnyway} onAccept={setStartAnyway} />
         </div>
-      ) : null}
+      ) : <SampleNeeds refusal={sample.refusal} accepted={sample.accepted} onAccept={sample.accept} testid="ap-sample-readiness" />}
       {error ? <p className="bx-np-error" role="alert" data-testid="ap-error">{error}
         {fixHref ? <> <a className="npx-link" href={homeHref(Object.fromEntries(new URLSearchParams(fixHref.replace(/^\/?\?/, ""))))} data-testid="ap-error-fix">Connect GitHub ›</a></> : null}</p> : null}
     </>
@@ -847,7 +836,7 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
                   <span className="npx-spacer" />
                   {looksLikeCode ? (
                     <button type="button" className="npx-link" data-testid="ap-looks-like-code" onClick={toExisting}>Code you have? Bring existing code ›</button>
-                  ) : brief ? <span className="npx-hide-s">Helm rewrote it below ↓</span> : null}
+                  ) : briefNote(u) ? <span className="npx-hide-s" data-testid="ap-brief-note">{briefNote(u)}</span> : null}
                 </>
               ) : <span>⇧↵ adds lines under the {kind === "folder" ? "folder" : "repo"}: a note to Helm</span>}
             </div>
@@ -944,7 +933,7 @@ export function AddProjectSheet({ projectId, homeId, startKind = "idea", initial
               <span className="npx-spacer" />
               {helmLive && kind !== "idea" ? <span className="npx-tag" data-tone="blue"><i className="npx-pulse" aria-hidden />live</span> : null}
               <span className="npx-ready" data-testid="ap-ready" title="Readiness: what this install needs before it can start">
-                {(preview?.readiness ?? []).map((d) => (
+                {(door === "new" ? newAppDots(preview?.readiness ?? [], plan.where) : preview?.readiness ?? []).map((d) => (
                   <a key={d.key} href={d.ok || !d.href ? undefined : homeHref(Object.fromEntries(new URLSearchParams(d.href.replace(/^\/?\?/, ""))))}
                      data-ok={d.ok || undefined} data-testid={`ap-dot-${d.key}`} title={`${d.label}: ${d.detail}`}><i aria-hidden />{d.label}</a>
                 ))}

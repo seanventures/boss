@@ -339,6 +339,10 @@ def mount_platform_routers(app: FastAPI) -> None:
     from .portability import router as portability_router
 
     app.include_router(portability_router)
+    # Validation and review (SPEC docs/design/validation-review §3): overrides + re-runs
+    from .validation_review import router as validation_review_router
+
+    app.include_router(validation_review_router)
 
     # Agent-wide OSS key management (KMS)
     try:
@@ -486,6 +490,11 @@ def mount_platform_routers(app: FastAPI) -> None:
 
     app.include_router(decide_list_router)
 
+    # Dev autonomy (BOSSAPP-1441): the policy, the production resolver, "decided for you".
+    from .autonomy import router as autonomy_router
+
+    app.include_router(autonomy_router)
+
     try:
         from .factory_flow import router as factory_flow_router
 
@@ -513,6 +522,11 @@ def mount_platform_routers(app: FastAPI) -> None:
 
     app.include_router(ticket_systems_router)
 
+    # Document systems (BOSSAPP-1384): Confluence, connected once for the org. Unguarded, too.
+    from .docs_connections import router as docs_connections_router
+
+    app.include_router(docs_connections_router)
+
     # Swarm gap routers. Every include already above stays, including factory_launch_router.
     from .gap_1241 import router as gap_1241_router
     from .gap_1242 import router as gap_1242_router
@@ -532,7 +546,6 @@ def mount_platform_routers(app: FastAPI) -> None:
     from .gap_1257 import router as gap_1257_router
     from .gap_1258 import router as gap_1258_router
     from .gap_1259 import router as gap_1259_router
-    from .gap_1260 import router as gap_1260_router
     from .gap_1261 import router as gap_1261_router
     from .gap_1262 import router as gap_1262_router
     from .gap_1263 import router as gap_1263_router
@@ -566,7 +579,6 @@ def mount_platform_routers(app: FastAPI) -> None:
     app.include_router(gap_1257_router)
     app.include_router(gap_1258_router)
     app.include_router(gap_1259_router)
-    app.include_router(gap_1260_router)
     app.include_router(gap_1261_router)
     app.include_router(gap_1262_router)
     app.include_router(gap_1263_router)

@@ -4,7 +4,7 @@ import React, { useEffect, useRef, useState, useTransition, ReactNode } from 're
 import { useConsoleRefresh } from "./use-console-refresh";
 import { useFormStatus } from 'react-dom';
 
-import { describeActionError, isActionResult, type ActionResult } from '../lib/action-result';
+import { NO_REASON, describeActionError, isActionResult, type ActionResult } from '../lib/action-result';
 
 import { pasteConnectSuccessCopy } from '../lib/paste-connect';
 import { notifyChanged } from './changed';
@@ -199,7 +199,9 @@ export function ActionForm({
     // consent_required as `{ok: false, data: {consent}}` (lib/server-action.ts act): the consent
     // sheet opens here, with the exact agents and repositories the API named, and once the
     // person grants, the same submit is sent once more. Cancelled, the refusal stands as written.
-    const asked = !outcome.ok ? consentFromBody(outcome.data?.consent) : null;
+    // callAction asks once for every action now (data.consentAsked): never a second sheet.
+    const asked = !outcome.ok && !(outcome.data as { consentAsked?: boolean } | undefined)?.consentAsked
+      ? consentFromBody(outcome.data?.consent) : null;
     if (asked && await askConsent(asked)) outcome = await submit();
     setResult(outcome);
     onResult?.(outcome);
@@ -211,7 +213,7 @@ export function ActionForm({
       // router (tests, the org gate), where useRouter throws.
       notifyChanged('action-form');
     } else {
-      showToast('error', outcome.error ?? 'That did not work, and the server gave no reason.');
+      showToast('error', outcome.error ?? NO_REASON);
     }
   };
 

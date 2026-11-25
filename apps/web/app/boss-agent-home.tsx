@@ -233,7 +233,7 @@ export function BossAgentHome({ projectId, actor, initialTaskId, roleName }: {
 
       {/* The conversation, unchanged, same component the dock uses, so there is one chat in
           BOSS rather than two that drift. */}
-      <AgentChat projectId={projectId} actor={actor}
+      <AgentChat projectId={projectId} actor={actor} expandable
                  initialTaskId={initialTaskId} roleName={roleName} />
     </div>
   );

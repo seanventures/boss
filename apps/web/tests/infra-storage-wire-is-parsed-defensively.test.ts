@@ -66,7 +66,7 @@ describe("the storage incident wire", () => {
     expect(stripHeadline(i)).toBe("Storage critical on laptop-boss · Infra Agent is cleaning");
     expect(stripSubline(i)).toMatch(/^\d+ % free · 14 runs paused at a checkpoint · nothing is lost$/);
     expect(stripHeadline(openIncident(demoIncident("asking"))!)).toContain("needs one answer");
-    expect(stripSubline({ ...i, helper: { lastSeenAt: null, reachable: false } })).toContain("host helper unreachable");
+    expect(stripSubline({ ...i, helper: { lastSeenAt: null, reachable: false } })).toContain("The host helper isn't answering, so BOSS can't free space. On the host run `boss steward status`, then `boss steward install`.");
   });
 
   it("measures progress to the target and the Command Center status", () => {
@@ -79,6 +79,17 @@ describe("the storage incident wire", () => {
     expect(withInfraStatus({ ...base, key: "unreachable" }, open).key).toBe("unreachable");
     expect(withInfraStatus({ ...base, key: "budget_stopped" }, open).key).toBe("budget_stopped");
     expect(withInfraStatus(base, null)).toBe(base);
+  });
+
+  it("never describes an exhausted or unavailable cleanup as running", () => {
+    const incident = openIncident(demoIncident("1"))!;
+    const blocked = { ...incident, plan: [], helper: { lastSeenAt: null, reachable: false } };
+    expect(stripHeadline(blocked)).toContain("Cleanup blocked: host helper unavailable");
+    expect(stripHeadline({ ...blocked, helper: { lastSeenAt: null, reachable: true } }))
+      .toContain("Cleanup exhausted: free space by hand");
+    expect(withInfraStatus({ key: "infra_incident", text: "Infra Agent is cleaning", tone: "red", tip: "" }, blocked).text)
+      .toBe("Cleanup blocked: host helper unavailable");
+    expect(stripHeadline({ ...blocked, status: "asking" })).toContain("needs one answer");
   });
 });
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { GatedButton } from "../components/gated";
-import { IDENTITY_PARAMS } from "./url-intent";
+import { IDENTITY_PARAMS, moveToArea } from "./url-intent";
 import { rememberOrg, withOrgRestored } from "../lib/console-org";
 import { isInConsoleLink } from "./console-href";
 import { consoleParams, resolveLegacyArea } from "./legacy-areas";
@@ -28,12 +28,13 @@ import { ProjectMenu, type ProjectMenuItem } from "./project-menu";
 import { useDetailsDismiss } from "../lib/details-dismiss";
 import { PresencePill } from "./agents/presence-pill";
 import { MOUNTED_NAV, MountedSlice } from "./reconcile-mounts";
+import { INSIDER_AREAS, insiderShown, useInsider } from "../lib/insider-areas";
 import { NEW_BUILD_TIP, openNewProject } from "../lib/compose-links";
 import { actorWords } from "../lib/actor-words";
 import { setConsoleLive } from "../lib/console-live";
 import { PAINTED_EVENT } from "../lib/area-painted";
 import { useAttention } from "../lib/agents-live";
-import { useOrgNeeds } from "../lib/project-experience";
+import { useApprovalCounts } from "../lib/project-experience";
 import { useTitleCount } from "../lib/tab-title";
 import { ConverseHost } from "./agents/converse-host";
 import { useLoadIdentities } from "../lib/use-agent-identities";
@@ -107,6 +108,7 @@ import {
   shouldShowPaidNavBadge,
 } from "../lib/edition";
 import { EditionChip } from "./edition-ui";
+import { ChatFullscreenButton, useChatFullscreen } from "../components/chat-fullscreen";
 import { areaVisibilityCss } from "../lib/area-visibility";
 import type { AreaId } from "../lib/area-ids";
 import { accessForArea } from "../lib/identity/area-access";
@@ -219,6 +221,22 @@ const ICONS = {
 //  and nobody should. The chat agent starts a WORKFLOW now (see start_workflow in builtin.py),
 //  so the dossier is a step's output and the run is what you open.
 const OFF_THE_NAV = new Set<AreaId>(["discovery", "meetings"]);
+/** The rail's Approvals badge (review of #200). With a project open: its Needs action (the
+ *  queue's own count, from the attention poll; the server's first-paint count until that
+ *  answers), and `elsewhere` = what the live org total holds beyond it ("+N in other projects"),
+ *  so project B needing you still shows from project A. With no project open: the live org
+ *  total, never the stale first-paint number. */
+export function approvalsBadge(attention: { count: number } | null | undefined, orgNeeds: number | null | undefined,
+                               firstPaint: number, projectOpen: boolean): { count: number; elsewhere: number } {
+  if (!projectOpen) return { count: orgNeeds ?? firstPaint, elsewhere: 0 };
+  const count = attention ? attention.count : firstPaint;
+  return { count, elsewhere: attention && orgNeeds != null ? Math.max(0, orgNeeds - count) : 0 };
+}
+
+/** The badge's words on hover: "2 here · 3 in other projects". */
+export function approvalsTip(b: { count: number; elsewhere: number }): string | undefined {
+  return b.elsewhere ? `${b.count} here · ${b.elsewhere} in other project${b.elsewhere === 1 ? "" : "s"}` : undefined;
+}
 /** The Project page (BOSSAPP-914) is reached from Projects (its rail list), never as a row of its own. */
 const UNDER_PROJECTS = new Set<AreaId>(["project"]);
 /** Get started has its own rail button above the groups, shown only while setup is unfinished. */
@@ -488,7 +506,9 @@ function ConsoleShellInner({
   const titleAttention = useAttention(scope.projectId ?? scope.project);
   // X-14 ONE NUMBER: what waits on you across every project (the Projects page's Need-you tile),
   // for the bell, the rail's Approvals badge and the tab title alike.
-  const orgNeeds = useOrgNeeds();
+  // One set with the Approvals page (stranger test r3): this project's live count + the other
+  // projects' own counts (lib/project-experience approvalCountsOf), never org total − here.
+  const orgNeeds = useApprovalCounts(scope.projectId ?? scope.project, titleAttention?.count).total;
   useTitleCount(orgNeeds ?? titleAttention?.count ?? 0);
   const switchOrg = () => {
     try {
@@ -871,7 +891,7 @@ function ConsoleShellInner({
         const url = new URL(window.location.href);
         if (url.searchParams.get("area") === id) window.location.replace(url.toString());
         else {
-          url.searchParams.set("area", id);
+          moveToArea(url.searchParams, id);
           window.location.assign(url.toString());
         }
         setAreaLoadAsked({ id, at: Date.now() });
@@ -979,7 +999,7 @@ function ConsoleShellInner({
     window.localStorage.setItem("boss.area", id);
     try {
       const url = new URL(window.location.href);
-      url.searchParams.set("area", id);
+      moveToArea(url.searchParams, id);
       if (url.toString() !== window.location.href) {
         // AN AREA STILL TO BE FETCHED GETS ITS URL WHEN IT ARRIVES. A pushState is a router
         // action in Next 15 (it syncs the router's URL); one issued just before the area's
@@ -1010,7 +1030,7 @@ function ConsoleShellInner({
       // From the URL as it is NOW, not as it was at the click: a filter or a restore that
       // committed while the area loaded (`&state=pending`) is kept, never overwritten.
       const url = new URL(window.location.href);
-      url.searchParams.set("area", due.id);
+      moveToArea(url.searchParams, due.id);
       if (url.toString() === window.location.href) return;
       window.history.pushState(null, "", `${url.pathname}${url.search}${url.hash}`);
       window.dispatchEvent(new PopStateEvent("popstate"));
@@ -1223,6 +1243,11 @@ function ConsoleShellInner({
     document.addEventListener("mouseup", onUp);
   }, []);
 
+  // FULL SCREEN for the dock's chat (components/chat-fullscreen); a closed dock is never full.
+  const dockFs = useChatFullscreen();
+  const exitDockFs = dockFs.exit;
+  useEffect(() => { if (!dockedRun) exitDockFs(); }, [dockedRun, exitDockFs]);
+
   const closeDock = useCallback(() => {
     const url = new URL(window.location.href);
     url.searchParams.delete("agent");
@@ -1317,10 +1342,13 @@ function ConsoleShellInner({
   // (SSO stays in the sidebar).
   // THE RAIL SHOWS ONLY WHAT THE VIEWER CAN OPEN (IDENTITY.md §6.5). A direct URL to one they
   // cannot still lands, on <AccessDenied> naming the permission, never a blank page.
+  // INSIDER ITEMS (Self-fixes, Landed slices) only on an install that has fixed BOSS itself.
+  const insider = useInsider(scope.projectId ?? scope.project);
   const navAreas = useMemo(
     () => areasForEdition.filter(
-      (a) => isCommunityPrimaryNavVisible(a.id, resolvedEdition) && !OWN_RAIL_BUTTON.has(a.id) && !UNDER_PROJECTS.has(a.id) && !OFF_THE_NAV.has(a.id) && areaCan(a.id).allowed),
-    [areasForEdition, resolvedEdition, areaCan],
+      (a) => isCommunityPrimaryNavVisible(a.id, resolvedEdition) && !OWN_RAIL_BUTTON.has(a.id) && !UNDER_PROJECTS.has(a.id) && !OFF_THE_NAV.has(a.id) && areaCan(a.id).allowed
+        && (!INSIDER_AREAS.has(a.id) || insiderShown(insider))),
+    [areasForEdition, resolvedEdition, areaCan, insider],
   );
 
   const activeDef = areasForEdition.find((a) => a.id === active) ?? areasForEdition[0];
@@ -1359,12 +1387,15 @@ function ConsoleShellInner({
     window.addEventListener(GET_STARTED_EVENT, on);
     return () => window.removeEventListener(GET_STARTED_EVENT, on);
   }, []);
+  const approvals = approvalsBadge(titleAttention, orgNeeds, status.pendingDecisions, Boolean(scope.projectId ?? scope.project));
   const badgeFor = (id: AreaId): number | undefined => {
-    // X-14 ONE COUNT: the rail's Approvals badge is the bell's number and Approvals' Needs action
-    // (decisions + what only a person can set up), from the same poll; the server's count is the
-    // first paint only.
+    // THE BADGE COUNTS WHAT THE QUEUE SHOWS: Approvals' Needs action is this project's decisions
+    // + what only a person can set up here (decision-inbox-ui, the /v1/agents/live `attention`
+    // poll), so the badge is that same number. It was the bell's org-wide sum (X-14), and a
+    // stranger saw Approvals 5 over a queue that said 0 (2026-11-17): the 5 were set-up asks on
+    // two other projects. The bell keeps the org-wide number; the server's count is first paint.
     if (id === "decisions") {
-      const n = orgNeeds ?? (titleAttention ? titleAttention.count : status.pendingDecisions);
+      const n = approvals.count;
       return n > 0 ? n : undefined;
     }
     if (id === "ops" && status.deadletters > 0) return status.deadletters;
@@ -1575,9 +1606,14 @@ function ConsoleShellInner({
                     ) : null}
                     {badge ? (
                       <span className="bx-nav-badge" data-testid={`nav-badge-${a.id}`}
-                            data-tone={a.id === "setup" ? setupBadge?.tone : undefined}>
+                            data-tone={a.id === "setup" ? setupBadge?.tone : undefined}
+                            title={a.id === "decisions" ? approvalsTip(approvals) : undefined}>
                         {badge}
                       </span>
+                    ) : null}
+                    {a.id === "decisions" && approvals.elsewhere ? (
+                      <span className="bx-nav-badge bx-nav-badge-quiet" data-testid="nav-badge-decisions-elsewhere"
+                            title={approvalsTip(approvals)}>+{approvals.elsewhere}</span>
                     ) : null}
                   </button>
                 );
@@ -1585,7 +1621,7 @@ function ConsoleShellInner({
             </div>
           ))}
         </nav>
-        <details className="bx-nav-mounted" data-testid="reconcile-mounts">
+        {insiderShown(insider) ? <details className="bx-nav-mounted" data-testid="reconcile-mounts">
           <summary>Landed slices</summary>
           {MOUNTED_NAV.map((item) => (
             <button
@@ -1598,7 +1634,7 @@ function ConsoleShellInner({
               {item.label}
             </button>
           ))}
-        </details>
+        </details> : null}
 
         <div className="bx-sidebar-foot">
           {/* WHO IS SIGNED IN, the person, from the session, never a claimed actor string. */}
@@ -1843,7 +1879,7 @@ function ConsoleShellInner({
         </ActiveAreaContext.Provider>
         {dockedRun ? (
           <aside className="bx-dock" aria-label="Ask BOSS about this app"
-                 style={{ width: dockWidth }}>
+                 style={{ width: dockWidth }} {...dockFs.attr}>
             {/* Drag to resize. The panel is fixed and overlays the page, so without this it
                 simply hid the right-hand column of cards with no way to see them again. */}
             <div className="bx-dock-grip" onMouseDown={startResize}
@@ -1870,6 +1906,8 @@ function ConsoleShellInner({
                   title and the run id, and a text "Close" competed with both while doing the
                   most ordinary thing in the panel. aria-label keeps it announced to screen
                   readers, and title keeps it discoverable on hover. */}
+              <ChatFullscreenButton full={dockFs.full} onToggle={dockFs.toggle}
+                                    className="cap-btn bx-dock-close bx-dock-full" testid="bx-dock-fullscreen" />
               <button type="button" className="cap-btn bx-dock-close" onClick={closeDock}
                       aria-label="Close the Ask BOSS panel" title="Close">
                 <X size={14} weight="bold" aria-hidden />

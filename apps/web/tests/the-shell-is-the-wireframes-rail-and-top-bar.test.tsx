@@ -106,7 +106,8 @@ describe("the rail", () => {
     // Activity log stays (parity: it was on the rail before), between Observability and Self-fixes.
     expect(order.filter((a) => a !== "activity")).toEqual(WIREFRAME_RAIL);
     expect($('[data-area-nav="decisions"]')!.title).toBe("Approvals — Explicit approvals before real effects");
-    expect($('[data-testid="nav-badge-decisions"]')!.textContent).toBe("3") // X-14: the bell's count, not the server's first paint;
+    // The queue's count (this project's Needs action, the attention poll's 3), not the server's first paint.
+    expect($('[data-testid="nav-badge-decisions"]')!.textContent).toBe("3");
     expect($('[data-testid="nav-projects-new"]')).not.toBeNull();
   });
 
@@ -124,7 +125,7 @@ describe("the rail", () => {
     expect($(`[data-testid="nav-project-${id("HelpDesk AI Demo")}"] .bx-nav-dot`)!.dataset.s).toBe("you");
   });
 
-  it("X-14 the rail's Approvals badge is the bell's number (the server's 2 is first paint only)", async () => {
+  it("the rail's Approvals badge counts what the queue shows (this project's attention), not the server's 2", async () => {
     await mount("overview");
     expect($("[data-testid='nav-badge-decisions']")!.textContent).toBe("3");
   });
@@ -134,6 +135,21 @@ describe("the rail", () => {
     const list = [p("a", 0, "1"), p("b", 0, "9"), p("c", 1, "2"), p("d", 0, "8"), p("e", 0, "7"), p("f", 0, "6"), p("g", 0, "5")];
     expect(railProjects(list, null).map((x) => x.id)).toEqual(["c", "b", "d", "e", "f"]);
     expect(railProjects(list, "a").map((x) => x.id)).toEqual(["c", "b", "d", "e", "a"]);
+  });
+
+  it("railProjects: the newest project and the one opened last always have a row, the cap still holds", () => {
+    // 2026-11-19: Park bench map, just made, was hidden under five projects that needed you more.
+    const p = (name: string, needs: number, at: string, created = "2026-01-01"): RailProject =>
+      ({ id: name, name, needs, at, dot: "done", created });
+    const list = [p("a", 2, "9"), p("b", 2, "8"), p("c", 1, "7"), p("d", 1, "6"), p("e", 1, "5"),
+                  p("f", 0, "4"), p("new", 0, "1", "2026-11-19"), p("g", 0, "3")];
+    expect(railProjects(list, null).map((x) => x.id)).toEqual(["a", "b", "c", "d", "new"]);
+    // The open one, the one opened last and the newest: three kept, ranked order, five rows.
+    expect(railProjects(list, "g", RAIL_PROJECTS_MAX, "f").map((x) => x.id)).toEqual(["a", "b", "f", "g", "new"]);
+    // Already in the top five: nothing moves.
+    expect(railProjects(list, "a", RAIL_PROJECTS_MAX, "b").map((x) => x.id)).toEqual(["a", "b", "c", "d", "new"]);
+    // A remembered project that is gone (archived, deleted) takes no row.
+    expect(railProjects(list, null, RAIL_PROJECTS_MAX, "gone")).toHaveLength(RAIL_PROJECTS_MAX);
   });
 
   it("fits a 900px window: compact rows, a scrolling area list, a footer that stays, a full-height colour", () => {
@@ -188,7 +204,9 @@ describe("the top bar", () => {
     await mount("overview");
     const bell = $('[data-testid="topbar-bell"]')!;
     expect(bell.title).toBe("Approvals waiting on you");
-    expect($('[data-testid="topbar-bell-count"]')!.textContent).toBe("3");
+    // One set with Approvals (stranger test r3): the open project's live 3 + the other projects'
+    // 2 + 1 from the summary (its own row says 0 there, the live count wins for the open project).
+    expect($('[data-testid="topbar-bell-count"]')!.textContent).toBe("6");
     await act(async () => { bell.click(); });
     expect($('[data-testid="ag-crew-need-dec_1"]')!.textContent).toContain("Merge PR #3");
     expect($('[data-testid="topbar-bell-approvals"]')).not.toBeNull();

@@ -20,9 +20,9 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Optional
 
 from .design_prompts import is_ui_bearing
 
@@ -109,7 +109,8 @@ def run_until_failure(sandbox, commands):
 # broken tree that the app's own installs (a `pretest` script, a deploy) then trip on.
 _INSTALL_COMMAND = re.compile(
     r"^\s*(?:npm\s+(?:install|i|ci)\b|pnpm\s+(?:install|i)\b|yarn(?:\s+install)?\s*$"
-    r"|python3?\s+-m\s+pip\s+install\b|pip3?\s+install\b|mvn\b.*dependency:)")
+    r"|python3?\s+-m\s+pip\s+install\b|pip3?\s+install\b|mvn\b.*dependency:"
+    r"|go\s+mod\s+download\b)")
 #: The one instruction a fix round gets with an install failure.
 INSTALL_REPAIR_INSTRUCTION = (
     "Resolve the dependency conflict in package.json (pick versions whose peer dependencies "
@@ -117,7 +118,8 @@ INSTALL_REPAIR_INSTRUCTION = (
 
 
 def is_install_command(command: str) -> bool:
-    """True for a dependency install (npm install/ci, pnpm, yarn, pip, maven go-offline)."""
+    """True for a dependency install (npm install/ci, pnpm, yarn, pip, maven go-offline, go mod
+    download)."""
     return bool(_INSTALL_COMMAND.match(str(command or "")))
 
 
@@ -155,9 +157,58 @@ def install_failure(result) -> dict | None:
     if not is_install_command(command):
         return None
     out = (getattr(result, "stdout", "") or "") + "\n" + (getattr(result, "stderr", "") or "")
+    timed_out = bool(getattr(result, "timed_out", False))
+    from .suite_environment import classify_install
+
     return {"command": command, "exit_code": getattr(result, "exit_code", None),
-            "timed_out": bool(getattr(result, "timed_out", False)),
-            "summary": install_error_summary(out)}
+            "timed_out": timed_out,
+            "summary": install_error_summary(out),
+            # WHY it failed, read from the whole output (suite_environment.classify_install):
+            # the registry's certificate, network, credential or policy — or None, the code's.
+            "environment": classify_install(out, timed_out=timed_out)}
+
+
+#: What the coder is told when the registry's policy blocked one package version.
+REGISTRY_POLICY_INSTRUCTION = (
+    "Your package registry's policy (a curation firewall such as Artifactory Curation or Nexus "
+    "Firewall) blocked {package}. Choose a version of that package the registry allows (an "
+    "earlier or later release) in the manifest; do not remove the dependency, vendor it, or "
+    "bypass the registry (no --registry, .npmrc, pip index-url or GOPROXY changes).")
+#: What the coder is told when the install timed out with no sign of a slow network.
+INSTALL_TIMEOUT_INSTRUCTION = (
+    "The install did not finish in time. If a dependency you added or changed runs a slow or "
+    "hanging install script (postinstall, a native build), replace it with one that does not; "
+    "do not add --ignore-scripts or skip the install.")
+
+
+def install_environment(failure: Any) -> Optional[dict]:
+    """suite_environment.classify_install's verdict for a recorded install failure (read from
+    its whole output when it was recorded, else from its summary)."""
+    if not isinstance(failure, dict):
+        return None
+    env = failure.get("environment")
+    if isinstance(env, dict):
+        return env
+    from .suite_environment import classify_install
+
+    return classify_install(str(failure.get("summary") or ""),
+                            timed_out=bool(failure.get("timed_out")))
+
+
+def install_environment_failure(failure: Any) -> bool:
+    """The install failed for its ENVIRONMENT (registry certificate, network, credential, a
+    registry or proxy refusing the registry, a timeout on a slow network): no code change can
+    fix it, so no repair round runs on it and no test result exists."""
+    env = install_environment(failure)
+    return bool(env and env.get("environment"))
+
+
+def registry_policy_blocked(failure: Any) -> Optional[str]:
+    """The package@version a registry's curation policy blocked, or None."""
+    env = install_environment(failure)
+    if env and env.get("kind") == "registry_policy_blocked":
+        return env.get("package") or "a package version"
+    return None
 
 
 def install_repair_evidence(failure: dict, output: str = "") -> str:
@@ -165,9 +216,104 @@ def install_repair_evidence(failure: dict, output: str = "") -> str:
     command BOSS runs, npm's error text, and the one instruction."""
     how = "timed out" if failure.get("timed_out") else f"exit {failure.get('exit_code')}"
     tail = "\n".join(_meaningful_lines(output)[-VERIFY_FAILURE_LINES:])
+    env = install_environment(failure) or {}
+    blocked = registry_policy_blocked(failure)
+    then = f" Then run exactly `{failure.get('command')}` yourself and make sure it passes."
+    if install_environment_failure(failure):
+        instruction = (f"Dependency installation could not complete: {env.get('reason')}. "
+                       "Inspect registry connectivity, approved CA trust, registry credentials "
+                       "and install logs before retrying. No application test result is "
+                       "available; do not change application code to bypass this failure.")
+        then = ""
+    elif blocked:
+        instruction = REGISTRY_POLICY_INSTRUCTION.format(package=blocked)
+    elif failure.get("timed_out"):
+        instruction = INSTALL_TIMEOUT_INSTRUCTION
+    else:
+        instruction = INSTALL_REPAIR_INSTRUCTION
     return (f"BOSS's dependency install failed, so nothing else ran: `{failure.get('command')}` "
-            f"({how}) in a clean sandbox.\n{tail}\n\n{INSTALL_REPAIR_INSTRUCTION} Then run "
-            f"exactly `{failure.get('command')}` yourself and make sure it passes.")
+            f"({how}) in a clean sandbox.\n{tail}\n\n{instruction}{then}")
+
+
+#: The files whose content decides what an install does: a retry of the same install on the
+#: same files is the same install (BOSS never re-runs it in one build); a manifest or lockfile
+#: change is a new install.
+_INSTALL_INPUTS = ("package.json", "package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml",
+                   "yarn.lock", ".npmrc", ".yarnrc.yml", "requirements.txt", "requirements-dev.txt",
+                   "pyproject.toml", "poetry.lock", "uv.lock", "Pipfile.lock", "go.mod", "go.sum",
+                   "pom.xml")
+
+
+def install_inputs_hash(cwd: Any) -> str:
+    """A hash of the install's manifest and lockfiles in `cwd` (missing files count as absent)."""
+    import hashlib
+
+    digest = hashlib.sha256()
+    for name in _INSTALL_INPUTS:
+        try:
+            data = (Path(str(cwd)) / name).read_bytes()
+        except OSError:
+            continue
+        digest.update(name.encode() + b"\0" + hashlib.sha256(data).digest())
+    return digest.hexdigest()[:16]
+
+
+class InstallCircuitBreaker:
+    """BOUNDED INSTALL RETRIES, KEYED ON WHAT IS BEING INSTALLED.
+
+    * A timeout is retried ONCE with double the time (a cold cache through a slow proxy can
+      exceed the limit once and pass warm) — within `budget_seconds` of retry time per build.
+    * A transient network failure (DNS, reset) is retried ONCE after a short backoff.
+    * An install that still fails for its environment, or still times out, is not run again
+      for the SAME manifest and lockfiles in this build: the first result is replayed (tests did
+      not run, and the build says why). A changed package.json or lockfile is a new install.
+    * A dependency conflict is never suppressed: it is the coder's to fix and re-check."""
+
+    def __init__(self, *, budget_seconds: int = 1800, backoff_seconds: float = 10.0,
+                 sleep: Callable[[float], None] = None):
+        import time as _time
+
+        self.failures: dict = {}
+        self.budget_seconds = budget_seconds
+        self.backoff_seconds = backoff_seconds
+        self.sleep = sleep or _time.sleep
+        self.retry_seconds_used = 0.0
+        self.retries: list[dict] = []
+
+    def _left(self) -> float:
+        return self.budget_seconds - self.retry_seconds_used
+
+    def run(self, command, cwd, execute, *, timeout: Optional[int] = None):
+        key = (str(cwd), command, install_inputs_hash(cwd))
+        if key in self.failures:
+            previous = self.failures[key]
+            return replace(previous, duration_ms=0, stderr=(previous.stderr or "") +
+                           "\n[ boss ] Dependency install retry suppressed for this run after "
+                           "an installation timeout or infrastructure failure on the same "
+                           "manifest and lockfiles. Tests did not run.\n"), True
+
+        def attempt(limit):
+            return execute() if limit is None else execute(limit)
+
+        result = attempt(timeout)
+        failure = install_failure(result)
+        env = install_environment(failure) or {}
+        if failure and failure.get("timed_out") and timeout and self._left() >= 2 * timeout:
+            # ONE RETRY WITH DOUBLE THE TIME, within the build's retry budget.
+            self.retry_seconds_used += 2 * timeout
+            self.retries.append({"why": "timeout", "timeout": 2 * timeout})
+            result = attempt(2 * timeout)
+        elif env.get("transient") and not (failure or {}).get("timed_out") \
+                and self._left() >= self.backoff_seconds:
+            self.sleep(self.backoff_seconds)
+            self.retry_seconds_used += self.backoff_seconds + (
+                getattr(result, "duration_ms", 0) or 0) / 1000
+            self.retries.append({"why": env.get("kind"), "backoff": self.backoff_seconds})
+            result = attempt(timeout)
+        failure = install_failure(result)
+        if failure and (install_environment_failure(failure) or failure.get("timed_out")):
+            self.failures[key] = result
+        return result, False
 
 
 #: How many times one hand-off may go back to the warm session for BOSS's install alone (the
@@ -200,6 +346,7 @@ def install_rounds(check, ask, *, rounds: int = INSTALL_FIX_ROUNDS, over_budget=
     `check()` runs BOSS's exact install and returns None when it passed, else (failure, output);
     `ask(prompt)` sends the prompt to the warm session and returns False when it could not.
     The install is checked again after every reply. Returns True when the install passes."""
+    policy_asked: set = set()
     for round_i in range(1, rounds + 2):
         checked = check()
         if checked is None:
@@ -207,11 +354,19 @@ def install_rounds(check, ask, *, rounds: int = INSTALL_FIX_ROUNDS, over_budget=
                 emit("code_task.install_fixed", {"rounds": round_i - 1})
             return True
         failure, output = checked
+        env = install_environment(failure) or {}
         emit("code_task.install_failed", {"round": round_i, "command": failure.get("command"),
                                           "summary": failure.get("summary"),
-                                          "boss_added": failure.get("boss_added") or []})
-        if round_i > rounds or over_budget():
+                                          "boss_added": failure.get("boss_added") or [],
+                                          **({"cause": env.get("kind")} if env else {})})
+        if install_environment_failure(failure) or round_i > rounds or over_budget():
             return False
+        blocked = registry_policy_blocked(failure)
+        if blocked:
+            # ONE round per blocked package: the coder picks a version the registry allows.
+            if blocked in policy_asked:
+                return False
+            policy_asked.add(blocked)
         if not ask(install_fix_prompt(failure, output, round_i)):
             return False
     return False
@@ -747,7 +902,12 @@ class GatePlan:
         toolchain this install lacks, or is one BOSS cannot build. A person turns it on (or
         changes the brief); a repair round never gets it, and nothing may gate it as another
         stack instead."""
-        return self.source == "toolchain_missing" and bool(self.error)
+        if self.source == "toolchain_missing" and bool(self.error):
+            return True
+        if (self.source == "stack" and bool(self.error)
+                and bool(getattr(self.stack, "toolchain_missing", False))):
+            return True
+        return False
 
     @property
     def runs_steps(self) -> bool:
@@ -896,18 +1056,20 @@ def checkout_problem(root: Path | str, *, branch: str = "", owner: str = "",
     head (the branch's remote head is not in its history). Never the stack, never an empty or
     small tree: a follow-up that rewrites Node into Go, a retry of an empty first build, an empty
     slice branch and a polyglot repo all build on exactly what the branch holds (PR #164 E2).
-    None when git cannot say (no checkout, no remote ref): nothing to prove wrong."""
-    import subprocess
+    None when git cannot say (no checkout, no remote ref): nothing to prove wrong.
+
+    Read-only git on the run's tree (git_safety.tree_git): as the run's uid, so a planted
+    objects/info/alternates cannot make BOSS read another repository's objects."""
+    from .git_safety import tree_git
 
     base = Path(root)
 
     def git(*args: str) -> str | None:
         try:
-            got = subprocess.run(["git", "-C", str(base), *args], capture_output=True, text=True,
-                                 timeout=20)
+            got = tree_git(base, *args, timeout=20)
         except Exception:  # noqa: BLE001
             return None
-        return got.stdout.strip() if got.returncode == 0 else None
+        return got.stdout.strip() if got is not None and got.returncode == 0 else None
 
     if git("rev-parse", "--is-inside-work-tree") != "true":
         return None
@@ -1787,3 +1949,38 @@ def qa_static_findings(output: str, qa_files, *, app_rel: str = "") -> list[str]
         if re.search(r"\berror\b", line, re.I) and _about_qa(line):
             out.append(line.strip())
     return out[:60]
+
+
+#: A bare package the code or its tests import that is not installed (Node's own wording, and
+#: Python's): `Cannot find package 'jsdom' imported from …`, `Cannot find module 'jsdom'`,
+#: `ModuleNotFoundError: No module named 'httpx'`. A relative path ('./x') is the app's own file.
+_MISSING_PACKAGE = re.compile(
+    r"Cannot find (?:package|module) ['\"](?P<node>(?:@[\w.-]+/)?[\w][\w.-]*)(?:/[^'\"]*)?['\"]"
+    r"|No module named ['\"](?P<py>[\w][\w.]*)['\"]")
+
+
+def missing_packages(output: Any) -> list[str]:
+    """The packages a failed run could not load because they are not installed."""
+    found = []
+    for m in _MISSING_PACKAGE.finditer(str(output or "")):
+        name = m.group("node") or (m.group("py") or "").split(".")[0]
+        if name and name not in found:
+            found.append(name)
+    return found[:8]
+
+
+def missing_package_note(output: Any) -> str:
+    """THE BUILD'S OWN TESTS COULD NOT RUN: a package they load is not installed (Recipe box,
+    2026-11-18: `node --test` exited before any test ran because jsdom was absent). A floor
+    failure the AGENTS fix — declare the package so BOSS's install installs it — never a
+    question for a person. "" when nothing is missing."""
+    names = missing_packages(output)
+    if not names:
+        return ""
+    listed = ", ".join(f"`{n}`" for n in names)
+    return ("\n\nTHE SUITE COULD NOT LOAD " + listed + ": not installed. Declare "
+            + ("it" if len(names) == 1 else "them")
+            + " in the project's manifest (package.json devDependencies for a test-only package, "
+            "or the Python requirements) at a version that works with the code; BOSS's install "
+            "step then installs it before the tests run again. Do not remove or skip the tests "
+            "that need it.")

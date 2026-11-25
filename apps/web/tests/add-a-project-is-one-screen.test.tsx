@@ -319,6 +319,9 @@ describe("the walk's gaps stay closed (laptop walk 2026-11-07)", () => {
     expect(tid("ap-box-workflow")!.textContent).toContain(`${you} you approve`);
     const strip = tid("ap-strip")!;
     expect(strip.querySelectorAll("li[data-you]").length).toBe(you);
+    // Every step keeps its number, 1..n, the ones you approve too (stranger test r2: 1 2 4 5 …).
+    expect([...strip.querySelectorAll("li")].map((li) => li.textContent))
+      .toEqual(STANDARD.step_list.map((_, i) => String(i + 1)));
     // The legend names what you approve in the step's few words, never its full label.
     expect(strip.textContent).toContain("you approve: PRD · PR");
     expect(strip.textContent).not.toContain("prd approval");

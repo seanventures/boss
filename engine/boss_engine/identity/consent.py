@@ -53,8 +53,34 @@ def _github_summary(needs: dict[str, str], pattern: str) -> str:
 LOCAL_SUMMARY = "on this machine"
 
 
+def local_repo_names(repos: Iterable[str], db: Any = None) -> list[str]:
+    """What the sheet calls each repository on this machine: its app's name ("CSV quality desk"),
+    never the id `local_<project>/csv-quality-desk` (stranger test r8, 2026-11-19). A local
+    project's repository is its app, named after the project; without the project's name, the
+    repository's own name in words."""
+    from sqlalchemy import text
+
+    out: list[str] = []
+    for full in repos:
+        owner, _, name = str(full).partition("/")
+        label = ""
+        if db is not None and owner.startswith("local_"):
+            try:
+                with db.begin_nested():
+                    label = str(db.execute(text("SELECT name FROM projects WHERE id = :p"),
+                                           {"p": owner[len("local_"):]}).scalar() or "")
+            except Exception:  # noqa: BLE001 — the repository's own name below
+                label = ""
+        if not label.strip():
+            words = (name or owner).replace("-", " ").replace("_", " ").strip()
+            label = words[:1].upper() + words[1:]
+        if label not in out:
+            out.append(label.strip())
+    return out
+
+
 def repo_blocks(repos: Iterable[str], needs: Optional[dict[str, str]] = None, *,
-                summary: bool = True) -> dict[str, Any]:
+                summary: bool = True, db: Any = None) -> dict[str, Any]:
     """The consent body's `github` and `local` blocks for the repositories the work names
     (BOSSAPP-1163). A repository on this machine (`local_<project>/<name>`) is no GitHub access:
     it is asked for, and granted, as `local` — the sheet's grant body sends both back as
@@ -70,13 +96,96 @@ def repo_blocks(repos: Iterable[str], needs: Optional[dict[str, str]] = None, *,
         if summary:
             gh["summary"] = _github_summary(needs, "boss/*")
     return {"github": gh,
-            "local": {"repo": local[0], "repos": local, "summary": LOCAL_SUMMARY} if local else None}
+            "local": {"repo": local[0], "repos": local, "summary": LOCAL_SUMMARY,
+                      "names": local_repo_names(local, db)} if local else None}
 
 
 def carry_retry_authority(db: Any, *, parent_run_id: str, new_run_id: str, project_id: Optional[str],
                           role_keys: Iterable[str], permissions: Iterable[str], repos: Iterable[str] = (),
                           by_boss: bool = False, workflow_run_id: Optional[str] = None,
-                          gap: Optional[list[str]] = None) -> Optional[Acting]:
+                          gap: Optional[list[str]] = None,
+                          same_build: bool = False) -> Optional[Acting]:
+    """`_carry_retry_authority` (the grant the parent ran under, when it still covers), then —
+    for a retry BOSS itself decided — the ORG DEFAULT (identity/fix_authority.py, operator
+    2026-11-21): BOSS's fixing agents continue the work with its person's own delegable
+    authority, never wider than that person ∩ the agents' ceilings. The grant a build ran under
+    ending with its run (a workflow's "this run only" grant) or for "that build only" is no
+    longer a reason to stop: northgate-gateway #9's merge conflict was never handed to its
+    builder for exactly that."""
+    role_keys, permissions, repos = list(role_keys), list(permissions), list(repos)
+    own_gap: list[str] = []
+    carried = _carry_retry_authority(
+        db, parent_run_id=parent_run_id, new_run_id=new_run_id, project_id=project_id,
+        role_keys=role_keys, permissions=permissions, repos=repos, by_boss=by_boss,
+        workflow_run_id=workflow_run_id, gap=own_gap, same_build=same_build)
+    if carried is not None or not by_boss or not project_id:
+        if gap is not None:
+            gap.extend(own_gap)
+        return carried
+    fixer_gap: list[str] = []
+    renewed = _fixer_retry_authority(db, parent_run_id=parent_run_id, new_run_id=new_run_id,
+                                     project_id=project_id, role_keys=role_keys,
+                                     permissions=permissions, repos=repos, gap=fixer_gap)
+    if renewed is None and gap is not None:
+        # The LAST entry is what the blocked build says: why its own grant did not carry, and
+        # why the org default could not either.
+        gap.extend(own_gap + fixer_gap)
+        if own_gap and fixer_gap:
+            gap.append(f"{own_gap[-1]}; and {fixer_gap[-1]}")
+    return renewed
+
+
+def _fixer_retry_authority(db: Any, *, parent_run_id: str, new_run_id: str, project_id: str,
+                           role_keys: list[str], permissions: list[str], repos: list[str],
+                           gap: list[str]) -> Optional[Acting]:
+    """The person behind the lineage (the build's own, else the nearest person-started
+    ancestor's) lends BOSS's fixing agents their authority by the org default. A lineage a KEY
+    or BOSS itself started has no signed-in person behind it and stays as it was (always-on work
+    runs on the project's Captain authority instead); a grant its person REVOKED is their "no"."""
+    from . import fix_authority, grants, runs
+
+    parent = runs.original_build_authority(db, parent_run_id)
+    origin = parent_run_id
+    if _carries_nothing(parent):
+        origin, parent = _lineage_person(db, parent_run_id)
+        origin = origin or parent_run_id
+    person = None
+    if parent is not None and not getattr(parent, "system", False) \
+            and not str(parent.principal_id or "").startswith("sys_"):
+        person = parent.principal_id
+    if not person:
+        gap.append("no signed-in person started this work (a key or BOSS itself did), so there "
+                   "is no one's authority for its agents to use")
+        return None
+    ran_under = grants.load(parent.grant_id, db=db) if parent.grant_id else None
+    if ran_under is not None and getattr(ran_under.status, "value", ran_under.status) in (
+            "revoked", "suspended"):
+        gap.append(f"grant {ran_under.id}, which the work ran under, was revoked; that is its "
+                   "person's no, so BOSS's agents do not continue it")
+        return None
+    agent_ids = []
+    for rk in role_keys:
+        aid = runs.agent_for_role(db, project_id, rk)
+        if not aid:
+            gap.append(f"its builder ({rk}) has no Passport in this project")
+            return None
+        agent_ids.append(aid)
+    grant = fix_authority.ensure(db, person_id=person, project_id=project_id, agent_ids=agent_ids,
+                                 permissions=permissions, repos=repos,
+                                 why=f"BOSS retries build {parent_run_id} to fix it",
+                                 ref=f"run_ct:{parent_run_id}", gap=gap)
+    if grant is None:
+        return None
+    base = (parent.run_id if parent is not None and parent.run_id else f"run_ct:{origin}")
+    return Acting(principal_id=grant.user_principal_id, org_id=grant.org_id, grant_id=grant.id,
+                  run_id=f"{base}/retry:{new_run_id}")
+
+
+def _carry_retry_authority(db: Any, *, parent_run_id: str, new_run_id: str, project_id: Optional[str],
+                           role_keys: Iterable[str], permissions: Iterable[str], repos: Iterable[str] = (),
+                           by_boss: bool = False, workflow_run_id: Optional[str] = None,
+                           gap: Optional[list[str]] = None,
+                           same_build: bool = False) -> Optional[Acting]:
     """A RETRY KEEPS ITS GRANT (R2): the authority the parent build was started under (its first
     code.task job), carried to the retry as a child run of the parent's (`<parent run>/retry:<new>`),
     so a task-bound grant covers the retry exactly as it covered the parent — and nothing else.
@@ -95,7 +204,13 @@ def carry_retry_authority(db: Any, *, parent_run_id: str, new_run_id: str, proje
       stamped as BOSS's own work has no person behind it, so nothing is carried;
     * still live, still covering the builder, permissions and repos, and bound to the same run
       (`<run>/retry:<new>`);
-    * never a "this build only" grant (`run_ct:`): it ends with the build it was given for.
+    * a "this build only" grant (`run_ct:`) only for BOSS's RETRY OF THAT SAME BUILD
+      (`same_build`: retry_code_task(automatic=True)), bound to it as `run_ct:<build>/retry:<new>`
+      — never to a follow-up or any other build (no lineage walk: the grant's build is the
+      one being retried). The build is not finished while BOSS is retrying
+      what failed on BOSS's side: crun_6883ec7c (recipe-box, 2026-11-18) died on BOSS's own git
+      index permission bug, its person's "this build only" grant was live, and BOSS left it
+      failed for the person to press Retry — under the very same grant.
 
     The same rule carries a lineage's CONTINUATION that BOSS starts: a "Follow-up: checks
     failing" / deferred-findings task (start_code_task(continuation=True) -> `by_boss=True`).
@@ -145,12 +260,16 @@ def carry_retry_authority(db: Any, *, parent_run_id: str, new_run_id: str, proje
     whose = ("the build it continues" if origin_run == parent_run_id
              else f"its lineage's person-started build ({origin_run})")
     g = grants.load(parent.grant_id, db=db)
-    if by_boss and g is not None and str(g.task_run_id or "").startswith("run_ct:"):
+    # SAME BUILD MEANS THE BUILD ITSELF: never a build reached by walking its lineage. A
+    # follow-up BOSS stamped (its own spec) whose ancestor holds a "this build only" grant is
+    # another build (review of #222): its retry needs the person's go-ahead or a standing grant.
+    if (by_boss and g is not None and str(g.task_run_id or "").startswith("run_ct:")
+            and not (same_build and origin_run == parent_run_id)):
         return _no(f"grant {g.id} was given for build {str(g.task_run_id)[len('run_ct:'):]} only "
                    "and does not extend past it")             # "this build only": not past it
     if g is None or g.user_principal_id != parent.principal_id:
         return _no(f"grant {parent.grant_id}, which {whose} ran under, is gone")
-    if not grants.is_live(g):
+    if not grants.usable(g, db=db):
         return _no(f"grant {g.id}, which {whose} ran under, is "
                    f"{getattr(g.status, 'value', g.status)} or expired")
     agent_ids = []
@@ -218,7 +337,8 @@ def _lineage_person(db: Any, run_id: str) -> tuple[Optional[str], Optional[Actin
 
 def require_authority(*, org_id: Optional[str], project_id: Optional[str], role_keys: Iterable[str],
                       permissions: Iterable[str], repos: Iterable[str] = (), task: str, run_id: Optional[str],
-                      github_needs: Optional[dict[str, str]] = None, db: Any) -> Optional[Acting]:
+                      github_needs: Optional[dict[str, str]] = None, db: Any,
+                      covers: Optional[str] = None) -> Optional[Acting]:
     """The Acting (person + covering grant) the work runs under, or ConsentRequired.
 
     A person in a console session gets the consent sheet. A person using a PAT, an API key or an
@@ -266,12 +386,13 @@ def require_authority(*, org_id: Optional[str], project_id: Optional[str], role_
             "error": "consent_required", "task": task[:200], "task_run_id": None,
             "agents": [{"id": p.agent_id, "name": _name(db, p.agent_id), "role_key": p.role_key} for p in agents],
             "permissions": sorted(needed), "projects": [project_id] if project_id else [],
-            **repo_blocks(repos, needs, summary=False),
+            **repo_blocks(repos, needs, summary=False, db=db),
             "durations": [{"kind": "standing", "label": f"For {int(pol.delegation_default_days)} days",
                            "days": int(pol.delegation_default_days)}],
             "max_days": int(pol.delegation_max_days),
             "hint": "No grant of yours covers this. Open the link to give consent in the console, then "
                     "retry with the same key.",
+            **({"covers": covers} if covers else {}),
         }))
     raise ConsentRequired(offer_link(db, ctx, {
         "error": "consent_required",
@@ -280,11 +401,12 @@ def require_authority(*, org_id: Optional[str], project_id: Optional[str], role_
         "agents": [{"id": p.agent_id, "name": _name(db, p.agent_id), "role_key": p.role_key} for p in agents],
         "permissions": sorted(needed),
         "projects": [project_id] if project_id else [],
-        **repo_blocks(repos, needs),
+        **repo_blocks(repos, needs, db=db),
         "durations": [{"kind": "task", "label": "For this build only", "days": None},
                       {"kind": "standing", "label": f"For {int(pol.delegation_default_days)} days",
                        "days": int(pol.delegation_default_days)}],
         "max_days": int(pol.delegation_max_days),
+        **({"covers": covers} if covers else {}),
     }))
 
 
@@ -366,6 +488,26 @@ def _name(db: Any, principal_id: str) -> str:
 
 #: What a code task's builder needs (the same scope the run token is minted with).
 CODE_TASK_PERMISSIONS = frozenset({"code_task:read", "code_task:steer", "repository:read", "github:read", "github:sync"})
+#: What a build asks of GitHub. A build whose repositories are ALL on this machine (a local
+#: repository, BOSSAPP-918: file://, no credential, no egress) never touches GitHub, so its consent
+#: sheet does not ask "View GitHub / Sync with GitHub" (stranger test r3, Easy Mode on a local repo).
+GITHUB_BUILD_PERMISSIONS = frozenset({"github:read", "github:sync"})
+
+
+def _is_local_repo(full_name: Any, repo_host: Optional[str] = None) -> bool:
+    from ..services.local_repo import is_local
+
+    return str(repo_host or "").strip().lower() == "local" or is_local(full_name)
+
+
+def code_task_permissions(repos: Iterable[str] = (), repo_host: Optional[str] = None) -> frozenset[str]:
+    """The permissions a build asks for, by where its code lives: CODE_TASK_PERMISSIONS, without
+    the GitHub ones when every repository it names is local. No repository named: all of them
+    (where the build will push is not known yet)."""
+    names = [str(r or "").strip() for r in repos if str(r or "").strip()]
+    if names and all(_is_local_repo(name, repo_host) for name in names):
+        return CODE_TASK_PERMISSIONS - GITHUB_BUILD_PERMISSIONS
+    return CODE_TASK_PERMISSIONS
 
 
 # ---- workflow runs and schedules ---------------------------------------------------------------------
@@ -501,18 +643,18 @@ def workflow_needs(db: Any, project_id: str, spec: Any, input_data: Any) -> tupl
             key = str(c or "").strip().lower()
             if key and key != "human" and key not in roles:
                 roles.append(key)
-    if builds:
-        perms |= CODE_TASK_PERMISSIONS
-        # Repository work a step does OUTSIDE a delegated chain (a preview's or a deploy's clone,
-        # a review's checkout run as the person: runs.repo_access) runs as the default builder.
-        default = _resolved_builder()
-        if default not in roles:
-            roles.append(default)
     # A LOCAL REPOSITORY (BOSSAPP-918) is on this machine: no GitHub access is asked for it — but
     # it IS named, as `local` (BOSSAPP-1163). Dropped here, the run's grant was minted with no
     # repositories at all, and the first follow-up build on the local repository (Request changes
     # on the merge decision) was refused `consent_required` by that very grant.
     repos = _repos_for(db, project_id, input_data) if builds else []
+    if builds:
+        perms |= code_task_permissions(repos)
+        # Repository work a step does OUTSIDE a delegated chain (a preview's or a deploy's clone,
+        # a review's checkout run as the person: runs.repo_access) runs as the default builder.
+        default = _resolved_builder()
+        if default not in roles:
+            roles.append(default)
     return roles, frozenset(perms), repos
 
 
@@ -654,6 +796,14 @@ def _agents(db: Any, project_id: str, role_keys: list[str]):
                 # In its OWN transaction: the caller's is about to roll back on 409
                 # consent_required, and the Passports must outlive it for the grant to name them.
                 _upgrade_committed(db, org)
+                p = passports.get(aid, db=db)
+                if p is None:
+                    # A project made in THIS transaction (Easy Mode creates the project and starts
+                    # its first build in one go, 2026-11-18): its roles are not visible to another
+                    # transaction, so the committed upgrade cannot see them. Issue them here; if
+                    # this transaction rolls back, the project and its agents go with it.
+                    passports.upgrade_from_roles(org_id=org, db=db,
+                                                 default_sponsor=_first_owner(db, org))
             p = passports.get(aid, db=db)
         if p is None:
             if aid and lineage._enforced():  # noqa: SLF001
@@ -708,7 +858,7 @@ def _consent_body(db: Any, *, ctx_person: str, org_id: str, agents, needed, proj
         "task_run_id": None if standing_only else grants.PENDING_PREFIX + secrets.token_urlsafe(12),
         "agents": [{"id": p.agent_id, "name": _name(db, p.agent_id), "role_key": p.role_key} for p in agents],
         "permissions": sorted(needed), "projects": [project_id] if project_id else [],
-        **repo_blocks(repos, needs),
+        **repo_blocks(repos, needs, db=db),
         "durations": durations, "max_days": int(pol.delegation_max_days),
     }
 
@@ -763,16 +913,92 @@ def own_github_refusal(db: Any, *, org_id: str, person_id: str, project_id: str,
     return {"state": "refused", **refused, "linked": linked}
 
 
+#: The one line the consent sheet shows when the person's consent to start work also covers that
+#: work's delivery workflow (operator, 2026-11-19: "Why we need approval for starting the workflow").
+DELIVERY_COVERS = ("Covers this build and its delivery workflow: tests, review, preview, staging deploy, "
+                   "smoke test and monitoring. Merging to main, production deploys, spending past the "
+                   "budget and permission changes still ask you.")
+
+
+def inherit_build_authority(db: Any, build: Acting, *, workflow_run_id: str, ctx: Any = None,
+                            ambient: Optional[Acting] = None) -> Optional[Acting]:
+    """THE DELIVERY WORKFLOW RUNS UNDER THE CONSENT THAT STARTED ITS BUILD.
+
+    A person starts work once (Easy Mode, a template, Try a sample, New work) and consents once.
+    The outer workflow run that carries that build through tests, review, preview, staging deploy,
+    smoke test and monitoring is the same work, so it never asks again. It was asking: the build's
+    grant ("for this build only", bound to `run_ct:<build>`) did not cover `run_wf:<run>`, so
+    require_for_workflow raised consent_required inside the build's start, the start swallowed it,
+    and every Easy Mode build ran with no workflow at all (2026-11-19, Neighborhood board).
+
+    Returns the Acting to record on the workflow run (`run_wf:<run>`, the build's person and
+    grant), or None when there is nothing to carry (BOSS's own build, a delegated chain, another
+    person's build, a grant that is gone) — the caller then decides as before.
+
+    A "for this build only" grant is MOVED to the workflow run: `task_run_id` becomes
+    `run_wf:<run>` and the build's first job is re-stamped `run_wf:<run>`, so the build mints
+    `run_wf:<run>/ct:<build>` exactly as a build the workflow started itself, and the grant ends
+    with the workflow run (maintenance.end_workflow_task_grants), not when the build finishes and
+    the deploy is still to come. A standing grant is recorded as it is."""
+    from sqlalchemy import text
+
+    from . import grants, lineage
+
+    if build is None or not build.grant_id or build.chain or getattr(build, "system", False) \
+            or str(build.principal_id or "").startswith("sys_"):
+        return None
+    if ctx is not None and ctx.run_token is None and ctx.principal.id != build.principal_id \
+            and not _is_system(ctx.principal):
+        return None                                   # someone else's build: never their grant
+    if ctx is None and ambient is not None and not (
+            ambient.system or str(ambient.principal_id).startswith("sys_")
+            or ambient.principal_id == build.principal_id):
+        return None
+    g = grants.load(build.grant_id, db=db)
+    if g is None or g.user_principal_id != build.principal_id or not grants.usable(g, db=db):
+        return None
+    wf_run = f"run_wf:{workflow_run_id}"
+    if g.task_run_id and not grants.run_matches(g, wf_run):
+        old = str(g.task_run_id)
+        build_run = str(build.run_id or "")
+        if not (old.startswith("run_ct:") and build_run == old):
+            return None                               # bound to some other run: not this build's
+        moved = db.execute(text("UPDATE identity_delegation_grants SET task_run_id = :w WHERE id = :g "
+                                "AND task_run_id = :old RETURNING id"),
+                           {"w": wf_run, "g": g.id, "old": old}).scalar()
+        if not moved:
+            return None
+        crun = old[len("run_ct:"):]
+        db.execute(text(
+            "UPDATE jobs SET payload = jsonb_set(payload, '{_identity,run_id}', to_jsonb(CAST(:w AS text))) "
+            "WHERE kind = 'code.task' AND payload->>'run_id' = :c AND grant_id = :g "
+            "AND payload->'_identity' IS NOT NULL"), {"w": wf_run, "c": crun, "g": g.id})
+        lineage.grant_event(db, grants.load(g.id, db=db) or g, "delegation.extended", details={
+            "change": "carried_to_delivery_workflow", "from_run": old, "to_run": wf_run})
+    return Acting(principal_id=build.principal_id, org_id=build.org_id or g.org_id, grant_id=g.id,
+                  run_id=wf_run)
+
+
 def require_for_workflow(db: Any, *, project_id: str, spec: Any, input_data: Any, run_id: str,
-                         parent_run_id: Optional[str] = None, title: str = "") -> Optional[Acting]:
+                         parent_run_id: Optional[str] = None, title: str = "",
+                         inherit: Optional[Acting] = None) -> Optional[Acting]:
     """At workflow-run start. Returns the Acting to record on the run, None when identity does not
     apply (system start, no Passports), or raises ConsentRequired (a person) / AuthorityLost (a
-    schedule's or job's grant that no longer covers)."""
+    schedule's or job's grant that no longer covers).
+
+    `inherit`: the authority of the build this run is the delivery workflow OF (the outer run
+    code_task_service starts for a person's new work). That run never asks for its own consent:
+    the person's one consent at the start covers the whole delivery workflow
+    (`inherit_build_authority`)."""
     from . import grants, lineage
 
     wf_run = f"run_wf:{run_id}"
     ctx = lineage.current_context()
     ambient = lineage.current()
+    if inherit is not None:
+        carried = inherit_build_authority(db, inherit, workflow_run_id=run_id, ctx=ctx, ambient=ambient)
+        if carried is not None:
+            return carried
     if parent_run_id:
         # A CHILD RUN INHERITS ITS PARENT'S AUTHORITY ONLY FOR THAT AUTHORITY'S OWN PERSON (#2):
         # naming someone else's run as the parent is not a way to run under their grant. Allowed:
@@ -802,6 +1028,10 @@ def require_for_workflow(db: Any, *, project_id: str, spec: Any, input_data: Any
                                  agents=agents, needed=needed, project_id=project_id, repos=repos,
                                  task=title or "this workflow run", scope="workflow_run",
                                  standing_only=False)
+            # THE PERSON'S OWN START OF A WORKFLOW (Easy Mode's easy_mode_mvp, a template): one
+            # consent covers the whole delivery workflow, and the sheet says so in the same one
+            # line as a build's (stranger test r8: Easy Mode's sheet lacked it).
+            body["covers"] = DELIVERY_COVERS
             multi = _multirepo_app(db, project_id, input_data)
             if multi:
                 # The consent sheet's multi-repo layout: which repositories, with which access,
@@ -942,10 +1172,19 @@ def acting_for_workflow_run(db: Any, workflow_run_id: Optional[str]) -> Optional
     if acting is None or not acting.grant_id:
         return None
     g = grants.load(acting.grant_id, db=db)
-    if g is None or g.user_principal_id != acting.principal_id or not grants.is_live(g):
+    if g is None or g.user_principal_id != acting.principal_id or not grants.usable(g, db=db):
         return None
     if not (acting.run_id or "").startswith("run_wf:") or not grants.run_matches(g, acting.run_id):
         return None
+    if g.authority_kind == grants.FIXER_AUTHORITY:
+        # CHAINED TO THE GRANT THE RUN WAS STARTED UNDER (fix_authority.renew_run records it):
+        # a person who REVOKES that grant ends this run's fixer authority too.
+        snap = db.execute(text("SELECT policy_snapshot->>'fixer_from' FROM workflow_runs "
+                               "WHERE id = :i"), {"i": workflow_run_id}).scalar()
+        origin = grants.load(snap, db=db) if snap else None
+        if origin is not None and getattr(origin.status, "value", origin.status) in (
+                "revoked", "suspended"):
+            return None
     return acting
 
 
@@ -965,7 +1204,7 @@ def require_for_schedule(db: Any, *, project_id: str, spec: Any, input_data: Any
         return None
     needed = frozenset(k for k in needed if catalogue.is_known(k) and catalogue.meta(k).delegable)
     standing = [g for g in grants.for_person(ctx.principal.id, db=db)
-                if not g.task_run_id and not grants.is_captain_authority(g) and grants.covers(g, agent_ids=[p.agent_id for p in agents], permissions=needed,
+                if not g.task_run_id and not grants.is_boss_kept_authority(g) and grants.covers(g, agent_ids=[p.agent_id for p in agents], permissions=needed,
                                                        project_id=project_id, repos=repos, run_id=None)]
     if not standing:
         raise ConsentRequired(_consent_body(db, ctx_person=ctx.principal.id, org_id=ctx.principal.org_id, agents=agents,
@@ -1001,6 +1240,6 @@ def schedule_acting(db: Any, schedule_row: Any) -> Optional[Acting]:
     g = grants.load(link.get("grant_id"), db=db)
     if g is None or g.user_principal_id != link.get("on_behalf_of") or g.task_run_id:
         raise AuthorityLost("grant_unknown")
-    if not grants.is_live(g):
+    if not grants.usable(g, db=db):
         raise AuthorityLost(f"grant_{g.status.value}")
     return Acting(principal_id=g.user_principal_id, org_id=g.org_id, grant_id=g.id)

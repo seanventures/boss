@@ -227,6 +227,21 @@ def firing_alerts(connection: Connection, target_ids: list[str]) -> dict[str, li
     return out
 
 
+def measured_words(since: Any) -> Optional[str]:
+    """ "Measured since 21 Nov 14:05 UTC" — when the target's current probe began, or None."""
+    if not since:
+        return None
+    at = since if isinstance(since, datetime) else None
+    if at is None:
+        try:
+            at = datetime.fromisoformat(str(since))
+        except ValueError:
+            return None
+    if at.tzinfo is None:
+        at = at.replace(tzinfo=timezone.utc)
+    return "Measured since " + at.astimezone(timezone.utc).strftime("%-d %b %H:%M UTC")
+
+
 def target_states(connection: Connection, target_ids: list[str], *,
                   now: Optional[datetime] = None) -> dict[str, dict[str, Any]]:
     """Batched (the Projects list): per target, THE health (state_of) from its newest probes, its
@@ -240,7 +255,7 @@ def target_states(connection: Connection, target_ids: list[str], *,
     for r in connection.execute(text(
             "SELECT t, ok, latency_ms FROM (SELECT deployment_target_id AS t, ok, latency_ms, "
             " checked_at, row_number() OVER (PARTITION BY deployment_target_id "
-            " ORDER BY checked_at DESC) AS n FROM deployment_health_samples "
+            " ORDER BY checked_at DESC) AS n FROM counted_health_samples "
             " WHERE deployment_target_id = ANY(:ids) AND checked_at >= :since) s "
             "WHERE n <= 10 ORDER BY t, checked_at DESC"),
             {"ids": target_ids, "since": (now or datetime.now(timezone.utc)) - timedelta(days=7)}
@@ -249,6 +264,9 @@ def target_states(connection: Connection, target_ids: list[str], *,
     window = probe_window(connection, target_ids, now=now)
     fires = firing_alerts(connection, target_ids)
     objectives = _objectives_for(connection, target_ids)
+    since = {str(r["id"]): r["probe_signature_since"] for r in connection.execute(text(
+        "SELECT id, probe_signature_since FROM deployment_targets WHERE id = ANY(:ids)"),
+        {"ids": target_ids}).mappings()}
     out = {}
     for tid in target_ids:
         up = window.get(tid, {}).get("uptime")
@@ -256,7 +274,9 @@ def target_states(connection: Connection, target_ids: list[str], *,
         held = objectives.get(tid, DEFAULT_SLO)
         state, why = state_of(verdict(newest.get(tid, [])), pct, fires.get(tid, []), held)
         out[tid] = {"health": state, "health_reason": why, "uptime_pct": pct,
-                    "p95_ms": window.get(tid, {}).get("p95_ms")}
+                    "p95_ms": window.get(tid, {}).get("p95_ms"),
+                    "measured_since": since[tid].isoformat() if since.get(tid) else None,
+                    "measured_words": measured_words(since.get(tid))}
     return out
 
 
@@ -316,6 +336,10 @@ def environments(connection: Connection, project_id: str, *,
             "series": {"errors": errors, "latency": latency},
             "slo": {"target": held, "burn": burn(uptime, held),
                     "budget_used_pct": budget_used(uptime, held),
+                    # Uptime counts only the target's CURRENT probe (counted_health_samples):
+                    # samples a different (since-fixed) probe took are not downtime.
+                    "measured_since": t.get("measured_since"),
+                    "measured_words": measured_words(t.get("measured_since")),
                     **hours_left(uptime, held)},
             "slo_words": None if chosen is not None else INSTALL_DEFAULT_WORDS,
             "latency_objective_ms": latency_ms,

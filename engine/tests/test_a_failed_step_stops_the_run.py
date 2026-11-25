@@ -76,6 +76,8 @@ INTERNAL = {
     "review": "_observed_from_the_build",
     "test": "_observed_from_the_build",
     "monitor": "_observed_from_the_build",
+    # Merge (R5): waits on the build's merge; a merge that cannot be read fails the step.
+    "merge": "_merge_step",
     # REWRITTEN (2026-10-02): notify was listed below as commissioning nothing — a `recorded`
     # no-op that went green having told nobody, at the end of three catalogue templates and as
     # Deprecation / Sunset's whole announcement. The runner now sends it, so a send that cannot
@@ -179,7 +181,7 @@ def test_no_awaited_failure_is_turned_into_a_success():
 
 @pytest.fixture(autouse=True)
 def _promotion_binding_is_its_own_test(monkeypatch):
-    """"Promote only what this run staged" (AMEX-G9) is proved by
+    """"Promote only what this run staged" (BOSSAPP-1167) is proved by
     test_two_runs_in_flight_each_promote_only_what_they_staged. Here promote_config is one
     capability among all, in a one-step workflow with no staging step, and what is under test
     is how its failures stop the run."""
@@ -187,8 +189,13 @@ def _promotion_binding_is_its_own_test(monkeypatch):
                         lambda connection, context, inputs, spec=None: inputs)
 
 
+#: Inputs a step is given here beyond its required ones: a contract test without `cases` reads
+#: the project's own from its repository (R5), which is not the tool this file drives.
+_GIVEN = {"contract_test": {"cases": "x"}}
+
+
 def _required(key: str) -> dict:
-    return {name: "x" for name in CAPABILITIES[key].required_inputs}
+    return {**{name: "x" for name in CAPABILITIES[key].required_inputs}, **_GIVEN.get(key, {})}
 
 
 def _two_step(c, project_id: str, key: str, inputs: dict | None = None):
@@ -600,8 +607,8 @@ def test_a_recorded_failure_shape_is_what_the_tool_returns(eng, project):
 
     tools = {spec.name: spec for spec in build_default_registry().specs()}
     # The Down server stands in for this project's own deployment: contract_test reaches a
-    # loopback host only when it is one of the project's deployment hosts (AMEX-G7 review).
-    from .amex_workflow_fixtures import add_deployment_host
+    # loopback host only when it is one of the project's deployment hosts (BOSSAPP-1143 review).
+    from .onboarding_workflow_fixtures import add_deployment_host
 
     with eng.begin() as c:
         add_deployment_host(c, project, "127.0.0.1")
@@ -624,7 +631,7 @@ def test_a_recorded_failure_shape_is_what_the_tool_returns(eng, project):
                 call("http_probe", {"url": f"http://127.0.0.1:{dead_port}/", "timeout_s": 2}),
                 call("http_probe", {"url": "http://127.0.0.1:9/"}, edition="community"),
             ],
-            # AMEX-G7: cases that cannot run; a case the Down server fails; Community's refusal.
+            # BOSSAPP-1143: cases that cannot run; a case the Down server fails; Community's refusal.
             "contract_test": [
                 call("contract_test", {"cases": []}),
                 call("contract_test", {"cases": [
@@ -634,7 +641,7 @@ def test_a_recorded_failure_shape_is_what_the_tool_returns(eng, project):
                 call("contract_test", {"cases": [{"url": "http://127.0.0.1:9/"}]},
                      edition="community"),
             ],
-            # AMEX-G5/G6: this project has no repository bound.
+            # BOSSAPP-1141 / 1142: this project has no repository bound.
             "github_comment": [call("github_comment", {"number": 1, "body": "report"})],
             "fix_pr": [call("github_open_fix_pr",
                             {"title": "fix", "path": "tenants/x.yaml", "content": "a: 1\n"})],

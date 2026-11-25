@@ -85,6 +85,9 @@ def test_cleanup_preview_does_not_mutate_even_on_a_full_dedicated_host(tmp_path)
     result = subprocess.run(["bash", str(PRUNE), "--dry-run"], env=env,
                             capture_output=True, text=True, check=True)
     calls = (tmp_path / "docker.log").read_text().splitlines()
-    assert calls and all(call.split()[0] in {"info", "ps", "images"} for call in calls)
+    # Reads only (`context inspect` and `system df` measure Docker's disk and cache).
+    assert calls and all(call.split()[0] in {"info", "ps", "images", "context", "system"}
+                         for call in calls)
+    assert not any(call.split()[0] == "run" for call in calls)
     assert "would run: docker image prune" in result.stdout
     assert "would run: docker builder prune" in result.stdout

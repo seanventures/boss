@@ -28,6 +28,7 @@ import { usePolledRead } from "../../lib/log-stream";
 import { clock as logClock, utcTitle } from "../../lib/log-time";
 import { logHref } from "../../lib/log-url";
 import { isLoopbackPreviewUrl } from "../../lib/code-tasks";
+import { consoleHref } from "../url-intent";
 import { humanDuration } from "../../lib/datetime";
 import { INCLUDED_TIP, laneAgentOf, spendLabel, type LaneAgent } from "../agents/chain-model";
 import { nameOf, RunFace } from "../agents/run-face";
@@ -87,15 +88,19 @@ export type OutputFact = { label: string; value: string; tip?: string; href?: st
 /** A RECORD ID IS A LINK, NEVER TEXT (rc10 tester: "Details, 11" listed `deprun_…`, `dec_…`,
  *  `chg_…` on a finished deploy step). The kinds a person can open become a named link; the
  *  rest (targets, jobs, acts) are bookkeeping the panel already names elsewhere and drop. */
-const ID_LINKS: Array<[RegExp, string, (id: string) => string]> = [
-  [/^deprun_/, "Deployment", (id) => `?area=infra&view=deploys&deploy=${encodeURIComponent(`delivery:${id}`)}`],
-  [/^sdep_/, "Deployment", (id) => `?area=infra&view=deploys&deploy=${encodeURIComponent(`stack:${id}`)}`],
-  [/^dec_/, "Decision", (id) => `?area=decisions&decision=${encodeURIComponent(id)}`],
-  [/^chg_/, "Change set", (id) => `?area=infra&view=cloud&cloud=changes&changeset=${encodeURIComponent(id)}`],
-  [/^crun_/, "Build", (id) => `?area=code_tasks&build=${encodeURIComponent(id)}`],
-  [/^wfr_/, "Workflow run", (id) => `?area=delivery_workflows&wfr=${encodeURIComponent(id)}`],
-  [/^sfx_/, "Self-fix", (id) => `?area=self_fixes&sfx=${encodeURIComponent(id)}`],
+const ID_LINKS: Array<[RegExp, string, (id: string) => Record<string, string>]> = [
+  [/^deprun_/, "Deployment", (id) => ({ area: "infra", view: "deploys", deploy: `delivery:${id}` })],
+  [/^sdep_/, "Deployment", (id) => ({ area: "infra", view: "deploys", deploy: `stack:${id}` })],
+  [/^dec_/, "Decision", (id) => ({ area: "decisions", decision: id })],
+  [/^chg_/, "Change set", (id) => ({ area: "infra", view: "cloud", cloud: "changes", changeset: id })],
+  [/^crun_/, "Build", (id) => ({ area: "code_tasks", build: id })],
+  [/^wfr_/, "Workflow run", (id) => ({ area: "delivery_workflows", wfr: id })],
+  [/^sfx_/, "Self-fix", (id) => ({ area: "self_fixes", sfx: id })],
 ];
+/** THROUGH consoleHref, so the org AND the project this run is in ride along: a bare
+ *  `?area=code_tasks&build=…` reopened the build under the home project ("Can't reach BOSS"). */
+const idHref = (params: Record<string, string>) =>
+  consoleHref(typeof window === "undefined" ? "" : window.location.search, params);
 // BOSS's own record prefixes, named: a looser shape matched words like "not_applicable".
 const RECORD_ID = /^(deprun|sdep|dec|chg|crun|wfr|deptgt|job|act|rrcpt|res|agt|usr|dh|tsk|mrun|prev|qg|drun|asb|tpl|tapp|disc|mtg|sfx)_[A-Za-z0-9]+$/;
 /** Lifecycle fields that describe a step IN FLIGHT. On a finished step they are stale: a
@@ -163,7 +168,7 @@ export function stepOutput(output: Record<string, unknown> | null | undefined,
       const link = ID_LINKS.find(([re]) => re.test(text));
       if (!link) return;
       const [, kind, href] = link;
-      list.push({ label, value: `Open ${kind.toLowerCase()}`, tip: kind, href: href(text) });
+      list.push({ label, value: `Open ${kind.toLowerCase()}`, tip: kind, href: idHref(href(text)) });
       return;
     }
     list.push({ label, value: WORDS[text] ?? text, ...(tip ? { tip } : {}) });
@@ -202,7 +207,14 @@ const SENTENCES: Record<string, string> = {
   "workflow.step_failed": "Step failed",
   "workflow.step_skipped": "Step skipped",
   "workflow.step_waiting": "Waiting for a decision",
+  "workflow.panel_waits_on_person": "Panel waiting on you",
+  "workflow.spec_fallback": "Built from brief after panel stopped",
   "workflow.research_skipped": "Research skipped",
+  "workflow.governed_code_task_service": "Build runner",
+  "workflow.code_task_service": "Build runner",
+  "workflow.meeting_service": "Agent panel",
+  "workflow.workflow_capability_runner": "Workflow runner",
+  "workflow.failure_owner": "Failure tracker",
   "code_task.started": "Work started",
   "code_task.branch_refreshed": "Updated the branch",
   "code_task.auto_preview_skipped": "Preview skipped",
@@ -227,6 +239,26 @@ const SENTENCES: Record<string, string> = {
 function words(snake: string): string {
   const s = snake.replace(/[._]/g, " ").trim();
   return s ? s[0].toUpperCase() + s.slice(1) : "";
+}
+
+const INTERNAL_SERVICE_LABELS: Record<string, string> = {
+  governed_code_task_service: "Build runner",
+  "governed code task service": "Build runner",
+  code_task_service: "Build runner",
+  "code task service": "Build runner",
+  meeting_service: "Agent panel",
+  "meeting service": "Agent panel",
+  workflow_capability_runner: "Workflow runner",
+  "workflow capability runner": "Workflow runner",
+  failure_owner: "Failure tracker",
+  "failure owner": "Failure tracker",
+};
+
+function cleanStepLogWords(text: string): string {
+  return text.replace(
+    /\b(governed_code_task_service|governed code task service|code_task_service|code task service|meeting_service|meeting service|workflow_capability_runner|workflow capability runner|failure_owner|failure owner)\b/gi,
+    (m) => INTERNAL_SERVICE_LABELS[m.toLowerCase()] ?? m,
+  );
 }
 
 /** A log row as a sentence a person reads, or null for bookkeeping the panel leaves out. */
@@ -254,11 +286,12 @@ export function stepLogSentence(item: Pick<ActivityLogItem, "source" | "kind" | 
   // "Harbor: port 8000 held by this app's earlier release (helpdesk-ai) → cleaning it up…".
   if ((item.kind.startsWith("recovery.") || item.kind === "boss.recommendation_recorded")
       && typeof data.sentence === "string" && data.sentence.trim()) {
-    return data.sentence.trim();
+    return cleanStepLogWords(data.sentence.trim());
   }
   if (SENTENCES[item.kind]) return SENTENCES[item.kind];
   // Fallback: the classifier's title, without the source's name in front of it.
-  return (item.title || words(item.kind)).replace(/^(Code Task|Workflow|Log|Llm)\s+/i, "") || null;
+  const raw = (item.title || words(item.kind)).replace(/^(Code Task|Workflow|Log|Llm)\s+/i, "");
+  return raw ? cleanStepLogWords(raw) : null;
 }
 
 export type StepLogRow = { id: string; at: string; text: string; level: string; tip: string };
@@ -349,6 +382,7 @@ export function clock(iso: string): string {
 /** Done by / Doing / Queued for / Assigned to / Skipped, from the step's own state. */
 export function actorVerb(phase: string, status: string): string {
   if (phase === "skipped") return "Skipped";
+  if (phase === "wait") return "Waiting on";
   if (phase === "ahead") return "Assigned to";
   if (phase === "now") return ["ready", "queued", "pending"].includes(status) ? "Queued for" : "Doing";
   // A step that failed was not "done": the run card said "Done by BOSS" over a failed smoke test.

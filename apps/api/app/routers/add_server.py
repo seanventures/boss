@@ -29,7 +29,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from boss_engine.config import get_settings
-from boss_engine.db import begin, get_engine
+from boss_engine.db import begin, get_engine, spawn_thread
 from boss_engine.identity import P, Scope, permit
 
 router = APIRouter(tags=["infra"])
@@ -136,7 +136,8 @@ def _turn_soon(host_id: str) -> None:
         if host_id in _turning:
             return
         _turning.add(host_id)
-    threading.Thread(target=_turn, args=(host_id,), daemon=True, name=f"server-setup-{host_id}").start()
+    spawn_thread(_turn, args=(host_id,), daemon=True,
+                 name=f"server-setup-{host_id}", as_background=True)
 
 
 @router.post("/v1/servers")
@@ -181,6 +182,8 @@ def server_setup(host_id: str) -> Any:
 @router.post("/v1/servers/tick")
 @permit(P.SYSTEM_OPERATE, scope=Scope.org())
 def servers_tick() -> dict[str, Any]:
+    from boss_engine.db import background
     from boss_engine.services import add_server
 
-    return add_server.tick(_engine, _settings)
+    with background():
+        return add_server.tick(_engine, _settings)

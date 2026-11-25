@@ -73,7 +73,7 @@ describe("after that it is quiet, and recoverable", () => {
 
 describe("a step that cannot run takes one line", () => {
   it("no paragraph, no button, no role note while it is blocked", () => {
-    expect(UI).toContain("{needsYou(step) && shippedTo ? <ReviewAndDecide step={step} /> : null}");
+    expect(UI).toContain("{needsYou(step) && shippedTo ? <ReviewAndDecide step={step} projectId={projectId} actor={actor} /> : null}");
   });
 
   it("its state is still said, beside the title", () => {

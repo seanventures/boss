@@ -11,6 +11,7 @@ prompt: |
   asserts there are six crates, and simulates a pick on the third crate to check that its label is
   the one shown.
 stack: Three.js
+toolchain: node
 resources:
   - repo
   - preview

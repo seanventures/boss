@@ -8,6 +8,8 @@
  */
 import React from "react";
 
+import { gateFailedWords, gateLabel, plainSentence } from "../lib/plain-words";
+
 export type ChecksFailingGate = { gate: string; label: string; security: boolean; detail?: string };
 export type ChecksFailingFinding = {
   gate: string; stage: string; security: boolean; severity: string; where?: string; text: string;
@@ -30,7 +32,7 @@ export function checksFailingOf(recommendation: Record<string, unknown> | null |
   const r = raw as Record<string, unknown>;
   const gates = (Array.isArray(r.gates) ? r.gates : [])
     .filter((g): g is Record<string, unknown> => !!g && typeof g === "object")
-    .map((g) => ({ gate: str(g.gate), label: str(g.label) || str(g.gate),
+    .map((g) => ({ gate: str(g.gate), label: str(g.label) || gateLabel(str(g.gate)),
                    security: g.security === true, detail: str(g.detail) || undefined }))
     .filter((g) => g.gate);
   if (!gates.length) return null;
@@ -45,6 +47,39 @@ export function checksFailingOf(recommendation: Record<string, unknown> | null |
   return { gates: first(gates), findings: first(findings), security: r.security === true
              || gates.some((g) => g.security),
            draft: r.draft === true, followup_run_id: str(r.followup_run_id) || undefined };
+}
+
+/**
+ * OLD TESTS THAT CANNOT BE NAMED (engine quality_bar.broken_tests_block: "failing existing tests
+ * could not be named"). A card must never say "Checks failing · Old tests broke" when no failing
+ * test can be named: it reads "Old tests: unknown (why)" instead, and the rest of the record (any
+ * other failing gate) still says Checks failing. `real` is null when nothing else failed.
+ */
+export const OLD_TESTS_GATE = "existing_tests_intact";
+export type ChecksFailingSplit = { real: ChecksFailingRecord | null; oldTestsUnknown: string | null };
+export function splitChecksFailing(record: ChecksFailingRecord | null): ChecksFailingSplit {
+  if (!record) return { real: null, oldTestsUnknown: null };
+  const old = record.gates.find((g) => g.gate === OLD_TESTS_GATE);
+  const named = (g: ChecksFailingGate) => record.findings.some((f) => f.gate === g.gate)
+    || (!!g.detail && !/could not be named|cannot be named|no failing test|unknown/i.test(g.detail));
+  if (!old || named(old)) return { real: record, oldTestsUnknown: null };
+  const why = old.detail ? plainSentence(old.detail).replace(/\.$/, "")
+    : "no failing test could be named";
+  const gates = record.gates.filter((g) => g.gate !== OLD_TESTS_GATE);
+  const findings = record.findings.filter((f) => f.gate !== OLD_TESTS_GATE);
+  return {
+    real: gates.length ? { ...record, gates, findings, security: gates.some((g) => g.security) || findings.some((f) => f.security) } : null,
+    oldTestsUnknown: why,
+  };
+}
+
+/** "Old tests: unknown (why)": said once, plainly, never as a failing check. */
+export function OldTestsUnknown({ why }: { why: string }) {
+  return (
+    <p className="dq-guidance" data-testid="decision-old-tests-unknown">
+      <b>Old tests: unknown</b> ({why}).
+    </p>
+  );
 }
 
 export function ChecksFailing({ record }: { record: ChecksFailingRecord }) {
@@ -66,11 +101,16 @@ export function ChecksFailing({ record }: { record: ChecksFailingRecord }) {
         {record.gates.map((g) => (
           <li key={g.gate} data-security={g.security || undefined}>
             {g.security ? <b>Security, </b> : null}
-            <b>{g.label}</b> <span className="v2-mono">({g.gate})</span>
-            {g.detail ? <>: {g.detail}</> : null}
+            <b>{g.gate ? gateFailedWords(g.gate) : plainSentence(g.label)}</b>
+            {g.detail ? <>: {plainSentence(g.detail)}</> : null}
           </li>
         ))}
       </ul>
+      {/* The gate keys, for whoever needs to grep a log: folded, never in the sentence. */}
+      <details className="dq-muted" data-testid="decision-checks-keys">
+        <summary>Check names</summary>
+        <span className="v2-mono">{record.gates.map((g) => g.gate).join(", ")}</span>
+      </details>
       {record.findings.length ? (
         <details open={record.security} data-testid="decision-checks-findings">
           <summary>{record.findings.length} open finding{record.findings.length === 1 ? "" : "s"}</summary>
@@ -91,14 +131,9 @@ export function ChecksFailing({ record }: { record: ChecksFailingRecord }) {
 
 /** The failing gates a merge card carries (checks_failing, or its PR lineage's), labelled. */
 export function failingGateLabels(r: Record<string, unknown>): string {
-  const cf = r.checks_failing as Record<string, unknown> | undefined;
-  const gates = cf && Array.isArray(cf.gates) ? cf.gates : [];
-  return gates
-    .map((g) => (g && typeof g === "object"
-      ? String((g as Record<string, unknown>).label || (g as Record<string, unknown>).gate || "")
-      : ""))
-    .filter(Boolean)
-    .join(", ");
+  // Old tests that cannot be named are "unknown", never a failing gate (splitChecksFailing).
+  const real = splitChecksFailing(checksFailingOf(r)).real;
+  return (real?.gates ?? []).map((g) => gateFailedWords(g.gate) || g.label).filter(Boolean).join(", ");
 }
 
 /**
@@ -203,6 +238,55 @@ export function MustHaves({ data }: { data: MustHaveRecord }) {
           ))}
         </tbody>
       </table>
+    </details>
+  );
+}
+
+/**
+ * READY, WITH FOLLOW-UPS (engine quality_bar.merge_followups). A build whose only open items are
+ * follow-ups (review findings below the quality bar's blocking severity, gates the bar let
+ * through) is a normal ready-to-merge card: never "Checks failing", never a reason to type.
+ * BOSS's follow-up build fixes them; the card lists them, P1 first, folded.
+ */
+export type FollowUpItem = { tier: string; severity: string; text: string };
+export type FollowUpsRecord = { count: number; p1: number; queued: boolean; bar: string; items: FollowUpItem[];
+  /** Who takes them, in words (engine quality_bar.followup_words): never "BOSS is fixing it" unless a build will. */
+  words: string };
+
+export function followUpsOf(recommendation: Record<string, unknown> | null | undefined
+): FollowUpsRecord | null {
+  if (splitChecksFailing(checksFailingOf(recommendation)).real) return null;   // a failing card says that instead
+  const raw = recommendation?.followups;
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  const items = (Array.isArray(r.items) ? r.items : [])
+    .filter((i): i is Record<string, unknown> => !!i && typeof i === "object")
+    .map((i) => ({ tier: str(i.tier) || "P1", severity: str(i.severity), text: str(i.text) }))
+    .filter((i) => i.text);
+  const count = typeof r.count === "number" ? r.count : items.length;
+  if (!count) return null;
+  return { count, p1: typeof r.p1 === "number" ? r.p1 : items.filter((i) => i.tier === "P1").length,
+           queued: r.queued === true, bar: str(r.bar) || "standard", items,
+           words: str(r.words) };
+}
+
+export function FollowUps({ record }: { record: FollowUpsRecord }) {
+  const n = record.count;
+  return (
+    <details className="dq-guidance" data-testid="decision-follow-ups">
+      <summary>
+        <b>Ready to merge.</b>{" "}
+        {record.words || `${n} follow-up${n === 1 ? "" : "s"}${record.queued ? ` queued, BOSS is fixing ${n === 1 ? "it" : "them"}` : " listed for later"}`}
+        {record.p1 ? ` (${record.p1} P1)` : ""}. {n === 1 ? "It does" : "They do"} not block at the {record.bar} quality bar.
+      </summary>
+      <ul>
+        {record.items.map((f, i) => (
+          <li key={i}>
+            <span className="v2-mono">{f.tier}{f.severity ? ` [${f.severity.toUpperCase()}]` : ""}</span>{" "}
+            <span style={{ whiteSpace: "pre-wrap" }}>{f.text}</span>
+          </li>
+        ))}
+      </ul>
     </details>
   );
 }

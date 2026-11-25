@@ -173,14 +173,18 @@ def test_every_need_is_checked_and_comes_with_a_fix(key):
     """Each thing a template needs is checked, and when it is missing the operator is told what
     it is, which steps need it, and what to do — never a bare key."""
     spec = wc.entry_spec(ENTRIES[key])
+    expected = set(ready.needs_of(spec))
     result = ready.preflight(_NothingConnected(), _Settings(), "p_empty", spec,
                              {"notify_channel": "email:team@example.com"})
-    assert not result["ready"]
-    assert {m["key"] for m in result["missing"]} >= {"model"}
-    for need in result["missing"]:
-        assert need["label"] and need["fix"] and need["detail"], need
-        assert need["needed_by"], need
-    assert "missing" in result["summary"]
+    if expected:
+        assert not result["ready"]
+        assert {m["key"] for m in result["missing"]} >= expected
+        for need in result["missing"]:
+            assert need["label"] and need["fix"] and need["detail"], need
+            assert need["needed_by"], need
+        assert "missing" in result["summary"]
+    else:
+        assert result["ready"]
 
 
 def test_every_template_that_deploys_needs_somewhere_to_deploy():
@@ -261,7 +265,7 @@ _RECORDS = ("record_started_anyway(", "note_unready_start(")
 #: Doors with nobody at the keyboard. A refusal there must be said where people look — the
 #: event door used to refuse and only log.
 _UNATTENDED = {
-    ("engine/boss_engine/services/workflow_schedules.py", "run_due"),
+    ("engine/boss_engine/services/workflow_schedules.py", "_fire"),
     # dispatch_event itself no longer calls start_run: it delegates to
     # start_workflow_on_grant, which makes the same preflight/refusal under its own name.
 }
@@ -307,7 +311,7 @@ def test_every_door_that_starts_a_run_checks_readiness_first():
     # The enumeration found the doors it must: HTTP, the agent's tool, schedules, events.
     assert ("apps/api/app/main.py", "start_delivery_workflow") in names
     assert ("engine/boss_engine/tools/builtin.py", "start_workflow") in names
-    assert ("engine/boss_engine/services/workflow_schedules.py", "run_due") in names
+    assert ("engine/boss_engine/services/workflow_schedules.py", "_fire") in names
     unchecked = [
         f"{rel}:{name}" for rel, name, body in callers
         if (rel, name) not in EXEMPT and not any(check in body for check in _CHECKS)

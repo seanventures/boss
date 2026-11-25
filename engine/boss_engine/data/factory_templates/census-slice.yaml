@@ -3,13 +3,14 @@ title: Census slice
 blurb: An analyst filters a synthetic population table by age band and region and reads the counts.
 category: data
 prompt: |
-  Build a local app named Census Slice on a DuckDB file. Seed it from a CSV of 200 synthetic
+  Build a local Python app named Census Slice on a DuckDB file, using the duckdb package. Seed it from a CSV of 200 synthetic
   people with an age, a region of North, South, East, or West, and a household id. The page has
   controls for an age band and a region and shows the matching person count and the number of
   distinct households. The CSV and the database file stay on disk. There is no warehouse account.
   A passing test loads the fixture, filters ages 0 to 17 in the North region, and checks the count
   against a query the test runs itself.
 stack: DuckDB
+toolchain: python
 resources:
   - repo
   - preview

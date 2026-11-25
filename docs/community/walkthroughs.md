@@ -28,7 +28,7 @@ When the installer finishes, open [http://127.0.0.1:3000](http://127.0.0.1:3000)
 If BOSS runs on a VM you administer and you are at another computer, open an SSH tunnel to your VM:
 
 ```sh
-ssh -L 3000:127.0.0.1:3000 -L 8000:127.0.0.1:8000 user@your-vm
+ssh -L 3000:127.0.0.1:3000 -L 3001:127.0.0.1:3001 -L 8000:127.0.0.1:8000 user@your-vm
 ```
 
 Leave the tunnel open, then open [http://127.0.0.1:3000](http://127.0.0.1:3000) on the computer that started it. The ports on the VM stay bound to loopback.

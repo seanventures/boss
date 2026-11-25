@@ -35,6 +35,9 @@ delegate:
   engine/boss_engine/services/governed_code_task_service.py:
     calls: [run_role]
     why: "the governed build pipeline: every stage is a run_role on the contracted engine"
+  engine/boss_engine/services/engine_policy.py:
+    calls: [run_role]
+    why: "the writer check: one short session on the coding engine proves it can write and run a command under the chosen mode; the engine runs its own loop, like any delegate"
   engine/boss_engine/services/discovery_service.py:
     calls: [run_research]
     why: "web research sessions on a coding engine"

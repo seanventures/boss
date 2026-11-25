@@ -29,7 +29,8 @@ from boss_engine.services.claude_cli_adapter import FallingBackAdapter
 
 def test_the_panel_uses_the_engine_this_project_chose():
     """Through the one router (model_routing), not a pasted copy of the resolution."""
-    source = inspect.getsource(meeting_service.advance_meeting_run)
+    source = (inspect.getsource(meeting_service.advance_meeting_run)
+              + inspect.getsource(meeting_service._advance_phase))  # one phase, inside the limit guard
     assert 'model_routing.project_chat_adapter(c, settings, run["project_id"])' in source
     assert "chat_engine_for" not in source.split("from . import model_routing")[1]
 

@@ -135,12 +135,11 @@ def _last_event_data(connection: Any, project_id: str, event_type: str) -> Any:
         if nested is not None:
             nested.commit()
         return row[0] if row is not None else None
-    except Exception:  # noqa: BLE001 — an unanswerable check never swallows the event
-        try:
-            if nested is not None and nested.is_active:
-                nested.rollback()
-        except Exception:  # noqa: BLE001
-            pass
+    except Exception as error:  # noqa: BLE001 — an unanswerable check never swallows the event
+        if nested is not None:
+            from ..db import release_failed_savepoint
+
+            release_failed_savepoint(nested, error, connection=connection)
         return None
 
 
@@ -673,6 +672,12 @@ def _create_blocking_decision_postgres(
             "risk_tier": risk_tier,
         },
     )
+    # DEV AUTONOMY'S ONE CHOKE POINT (services/autonomy_gate.py, BOSSAPP-1441): the card is
+    # classified and, when BOSS answers it in development, decided after this commits with the
+    # same follow-on a person's Approve runs. It never fails the producer.
+    from . import autonomy_gate
+
+    autonomy_gate.on_created(connection, project_id, decision_id)
     return decision_id
 
 

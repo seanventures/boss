@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The fix card says the rejected guess beside "First guess rejected", not only on the title.
  * Blank or whitespace guesses say nothing. Each guess trims hypothesis and why, joins those
