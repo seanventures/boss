@@ -2249,7 +2249,8 @@ def _fields_read(steps: list[dict[str, Any]]) -> tuple[list[str], set[str]]:
 def input_schema_for(entry: dict[str, Any]) -> dict[str, Any]:
     """The JSON Schema Start draws its form from: every field a step reads, required where a
     step cannot run without it, worded for this template."""
-    brief = BRIEFS[entry["key"]]
+    # A Library template (workflow_marketplace.PackTemplate) keeps its standard's start form.
+    brief = BRIEFS[entry.get("brief_key") or entry["key"]]
     order, required = _fields_read(entry["steps"])
     required |= set(brief.get("required") or ())
     title, help_text = brief["directive"]

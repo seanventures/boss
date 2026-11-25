@@ -23,7 +23,7 @@ export function MarketStrip({ projectId, meta, blocked, onUpdated }: {
   const m = meta.marketplace;
   if (!m || !meta.definition_id || !meta.workflow_key) return null;
   return (
-    <section className="wf-std" aria-label="From the Marketplace" data-testid="wf-market-strip">
+    <section className="wf-std" aria-label="From the Library" data-testid="wf-market-strip">
       {open && m.update ? (
         <UpdateReview projectId={projectId} workflowKey={meta.workflow_key} definitionId={meta.definition_id}
                       installed={m} blocked={blocked} onClose={() => setOpen(false)}
@@ -32,7 +32,7 @@ export function MarketStrip({ projectId, meta, blocked, onUpdated }: {
       <div className="wf-std-row">
         <span className="wf-std-hint" data-testid="wf-market-line"
               data-tip={m.modified ? "You changed it: a newer version waits for you." : "Updates by itself when the pack does."}>
-          From Marketplace · <span data-user-text>{m.pack_name}</span> v{m.version ?? "?"}{m.modified ? " · Modified" : ""}
+          From Library · <span data-user-text>{m.pack_name}</span> v{m.version ?? "?"}{m.modified ? " · Modified" : ""}
         </span>
         {m.waiting ? (
           <span className="wf-chip" data-tone="amber" data-tip={m.waiting} data-testid="wf-market-waiting">Waiting</span>

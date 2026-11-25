@@ -26561,15 +26561,61 @@ def _marketplace_refusal(error: Exception) -> HTTPException:
     return HTTPException(status_code=409, detail=str(error))
 
 
+def _library_projects(connection, project_id: str) -> list[dict]:
+    """The org's projects a person may Add to (the Library's project picker): under identity,
+    only those where they hold workflow:install; otherwise every project of this org."""
+    rows = connection.execute(
+        text("SELECT p.id, p.name FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+             "WHERE w.org_id = (SELECT w2.org_id FROM projects p2 JOIN workspaces w2 "
+             "ON w2.id = p2.workspace_id WHERE p2.id = :p) "
+             "AND p.archived_at IS NULL ORDER BY lower(p.name), p.id"),
+        {"p": project_id}).mappings().all()
+    ctx = identity_guard.REQUEST_IDENTITY.get()
+    if not identity_guard.identity_enforced() or ctx is None:
+        return [{"id": str(r["id"]), "name": str(r["name"] or r["id"])} for r in rows]
+    from boss_engine.identity import authz
+    from boss_engine.identity.scope import ResolvedScope
+
+    return [{"id": str(r["id"]), "name": str(r["name"] or r["id"])} for r in rows
+            if authz.check(
+                ctx, P.WORKFLOW_INSTALL,
+                ResolvedScope.in_project(ctx.principal.org_id, str(r["id"]))).allowed]
+
+
+def _require_org_share() -> None:
+    """SHARING TO THE ORG LIBRARY IS AN ORG-LEVEL ACT (BOSSAPP-1296): beside the project's
+    workflow:publish the route declares, the person must hold workflow:share from an org
+    binding — a project operator publishes in their project, an org admin shares org-wide.
+    Shadow/off: the route's own guard decides, as for every other route."""
+    if not identity_guard.identity_enforced():
+        return
+    ctx = identity_guard.REQUEST_IDENTITY.get()
+    if ctx is None:
+        raise HTTPException(status_code=401, detail={"error": "unauthenticated"})
+    from boss_engine.identity import authz
+    from boss_engine.identity.scope import ResolvedScope
+
+    if not authz.check(ctx, P.WORKFLOW_SHARE, ResolvedScope.org_level(ctx.principal.org_id)).allowed:
+        raise HTTPException(status_code=403, detail={
+            "error": "forbidden", "permission": P.WORKFLOW_SHARE.value,
+            "message": "Sharing to the org Library needs the org-level permission "
+                       "'Share workflows to the org Library' (an org Owner or Admin)."})
+
+
 @app.get("/v1/delivery-workflows/marketplace")
 @permit(P.WORKFLOW_READ, scope=Scope.project(query="project_id"))
 def list_workflow_marketplace(project_id: str) -> dict:
-    """Every pack this project can install — BOSS's, then its org's, newest first — each with
-    its publisher, version, workflows, what it needs here, and Installed / Update available."""
+    """The Library: every pack this project can install — BOSS's, then its org's, newest first —
+    each with its publisher, version, tags, workflows (steps, inputs, brief), what it needs here,
+    Installed / Update available, and the org's projects it is in; plus the projects a person
+    may Add to."""
     with begin(engine) as connection:
         try:
+            projects = _library_projects(connection, project_id)
             return {"project_id": project_id,
-                    "items": workflow_marketplace.list_packs(connection, project_id)}
+                    "items": workflow_marketplace.list_packs(
+                        connection, project_id, visible_to={p["id"] for p in projects}),
+                    "projects": projects}
         except workflow_runtime.WorkflowError as error:
             raise _marketplace_refusal(error) from error
 
@@ -26644,14 +26690,18 @@ def publish_workflow_pack(payload: WorkflowPackPublishBody) -> dict:
     definition_id = str(payload.get("definition_id") or "").strip()
     if not project_id or not definition_id:
         raise HTTPException(status_code=400, detail="project_id and definition_id are required")
+    _require_org_share()
     actor = _delivery_workflow_actor(payload)
+    tags = payload.get("tags")
+    if tags is not None and not isinstance(tags, list):
+        raise HTTPException(status_code=422, detail="tags is a list of words")
     with begin(engine) as connection:
         require_project_actor(connection, project_id, actor, "workflow_manage")
         try:
             return workflow_marketplace.publish(
                 connection, project_id, definition_id, actor,
                 name=payload.get("name"), summary=payload.get("summary"),
-                version=payload.get("version"), publisher=_member_display_name(
+                version=payload.get("version"), tags=tags, publisher=_member_display_name(
                     connection, project_id, actor))
         except workflow_runtime.WorkflowError as error:
             raise _marketplace_refusal(error) from error
@@ -26660,7 +26710,8 @@ def publish_workflow_pack(payload: WorkflowPackPublishBody) -> dict:
 @app.post("/v1/delivery-workflows/marketplace/unpublish")
 @permit(P.WORKFLOW_PUBLISH, scope=Scope.project(body="project_id"))
 def unpublish_workflow_pack(payload: WorkflowPackBody) -> dict:
-    """Take this project's pack out of the org's Marketplace; installed copies stay."""
+    """Take this project's pack out of the org's Library; installed copies stay."""
+    _require_org_share()
     payload = payload.payload()
     project_id = str(payload.get("project_id") or "").strip()
     pack_id = str(payload.get("pack_id") or "").strip()
@@ -28552,7 +28603,7 @@ def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = Non
             if not version_id:
                 # IN A MARKETPLACE PACK THIS PROJECT HAS NOT INSTALLED: say where it is.
                 pack = workflow_marketplace.SHIPPED_PACKS.get(
-                    workflow_marketplace.PACK_OF_KEY.get(workflow_key, ""))
+                    workflow_marketplace.pack_of_key(workflow_key) or "")
                 waiting = connection.execute(
                     text("SELECT marketplace_waiting FROM workflow_definitions "
                          "WHERE project_id = :p AND workflow_key = :k AND status <> 'retired'"),
@@ -28561,7 +28612,7 @@ def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = Non
                     status_code=409 if waiting else 404,
                     detail=(f"'{workflow_key}' is installed but waiting: {waiting}" if waiting
                             else f"'{workflow_key}' is in the {pack.name} pack. Install it "
-                            "from Workflows › Marketplace." if pack
+                            "from Workflows › Shared library." if pack
                             else f"no delivery workflow '{workflow_key}'"))
         # RUNNING IT AGAIN REPEATS THE OPERATOR'S CHOICE. A run they started without a
         # deployment host was refused on its re-run, with no way to start anyway; Stop and run
