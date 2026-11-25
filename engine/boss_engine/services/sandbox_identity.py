@@ -310,6 +310,9 @@ def _lease_uid(key: str, *, sealed: bool = False) -> tuple[int, int]:
         fd = os.open(os.path.join(SHIM_ROOT, f"uid-{uid}.lock"), os.O_CREAT | os.O_RDWR, 0o600)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            os.ftruncate(fd, 0)
+            os.lseek(fd, 0, os.SEEK_SET)
+            os.write(fd, key.encode("utf-8"))
             return uid, fd
         except OSError:
             os.close(fd)
@@ -428,9 +431,37 @@ def held_identity(owner_id: str) -> Optional[SandboxIdentity]:
         st = os.lstat(run_dir)
     except OSError:
         return None
-    if stat.S_ISDIR(st.st_mode) and UID_BASE <= st.st_uid < UID_BASE + UID_COUNT:
-        return SandboxIdentity(key=run_dir.name, uid=st.st_uid, run_dir=run_dir)
-    return None
+    if not (stat.S_ISDIR(st.st_mode) and UID_BASE <= st.st_uid < UID_BASE + UID_COUNT):
+        return None
+    with _ACTIVE_LOCK:
+        for active in _ACTIVE.values():
+            if active.uid == st.st_uid:
+                return None
+    lock_path = os.path.join(SHIM_ROOT, f"uid-{st.st_uid}.lock")
+    if os.path.exists(lock_path):
+        try:
+            fd = os.open(lock_path, os.O_RDWR)
+        except OSError:
+            try:
+                fd = os.open(lock_path, os.O_RDONLY)
+            except OSError:
+                return None
+        try:
+            holder = os.read(fd, 256).decode("utf-8", errors="ignore").strip()
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                if holder != run_dir.name:
+                    return None
+            else:
+                with contextlib.suppress(OSError):
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                if holder and holder != run_dir.name:
+                    return None
+        finally:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+    return SandboxIdentity(key=run_dir.name, uid=st.st_uid, run_dir=run_dir)
 
 
 def stop_owner(owner_id: str) -> Optional[SandboxIdentity]:
@@ -465,6 +496,8 @@ def release(owner_id: str, *, project_id: Optional[str] = None) -> None:
             toolchains.save_cache(ident.home, project_id)
     _purge(ident)
     if ident._lock_fd is not None:
+        with contextlib.suppress(OSError):
+            os.ftruncate(ident._lock_fd, 0)
         with contextlib.suppress(OSError):
             os.close(ident._lock_fd)
 

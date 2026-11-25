@@ -13,6 +13,9 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Folders, Plus } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
+import { useGuardedCall } from "../../components/identity/identity-provider";
+import { enc, idPost, IdentityError, refusalSentence } from "../../lib/identity/api";
+import { withConsent } from "../../lib/identity/consent";
 import {
   PX_PATHS, costWords, navigateTo, parseSummary, projectHref, startOnboarding, usePageSearch, usePxRead, type Node, type ProjectCard, type ProjectsSummary,
 } from "../../lib/project-experience";
@@ -85,7 +88,7 @@ function ProjectsSkeleton() {
 }
 
 const isWorking = (c: ProjectCard) => !c.archived && c.running > 0;
-const isOnboarding = (c: ProjectCard) => !c.archived && (c.onboarding_active || (c.stage === "onboarding" && c.status_label !== "Not onboarded"));
+const isOnboarding = (c: ProjectCard) => !c.archived && !c.awaiting_consent && (c.onboarding_active || (c.stage === "onboarding" && c.status_label !== "Not onboarded"));
 
 function ProjectsList({ cards, note, cap, onRetry, onChanged }: {
   cards: ProjectCard[]; note?: string | null; cap: number | null; onRetry?: () => void; onChanged?: () => void;
@@ -211,7 +214,10 @@ export function cardJourney(card: ProjectCard): Node[] {
 export function ProjectCardView({ card, onChanged }: { card: ProjectCard; onChanged?: () => void }) {
   const href = projectHref(card.id);
   const open = () => navigateTo(href);
+  const guarded = useGuardedCall();
   const [said, setSaid] = useState("");
+  const [consentBusy, setConsentBusy] = useState(false);
+  const awaitingConsent = Boolean(card.awaiting_consent || card.status_label === "Waiting for your consent");
   const deployed = card.journey.some((j) => (j.key === "staging" || j.key === "production") && j.state === "done");
   // THE CHIP SAYS THE REAL STATE: Needs you · Onboarding · Working (only while something
   // runs, teal and live) · Live · Idle — never "Working" over a card that says idle.
@@ -222,6 +228,7 @@ export function ProjectCardView({ card, onChanged }: { card: ProjectCard; onChan
   const pill = failedTag && !card.build_failed!.beside && !card.running
     ? failedTag
     : card.needs_you ? <Tag tone="amber">{card.needs_you} need you</Tag>
+    : awaitingConsent ? <Tag tone="amber">Waiting for your consent</Tag>
     : card.onboarding_active ? <Tag tone="blue">Onboarding</Tag>
     : card.archived ? <Tag tone="idle">Archived</Tag>
     : card.running > 0 ? <Tag tone="teal"><span className="px-dot" data-s="now" data-round aria-hidden />Working</Tag>
@@ -233,6 +240,19 @@ export function ProjectCardView({ card, onChanged }: { card: ProjectCard; onChan
     const r = await startOnboarding(card.id);
     setSaid(r.ok ? (r.demo ? "Sample mode — nothing was sent." : "Helm is reading it now.") : (r.error ?? "It didn't start."));
     if (r.ok && !r.demo) onChanged?.();
+  };
+  const startConsent = async () => {
+    const target = card.awaiting_consent ?? { href: `/v1/projects/${enc(card.id)}/factory/resume`, method: "POST", body: {} };
+    setConsentBusy(true);
+    setSaid("");
+    try {
+      await guarded("Start the project.", () => withConsent(() => idPost(target.href, target.body)));
+      onChanged?.();
+    } catch (e) {
+      setSaid(e instanceof IdentityError && e.code === "step_up_cancelled" ? "Not started: you cancelled the check."
+        : e instanceof IdentityError && e.body.error === "consent_required" ? "Not started: the agents need your consent first."
+        : refusalSentence(e));
+    } finally { setConsentBusy(false); }
   };
   const progress = card.onboarding_progress;
   const lines = card.lines.length ? card.lines : [card.live_url ? "live" : "not deployed yet"];
@@ -261,7 +281,13 @@ export function ProjectCardView({ card, onChanged }: { card: ProjectCard; onChan
           <span className="px-pc-line1" data-tone={card.line_tone || undefined}>
             <span className="px-dot" data-s={card.line_tone === "done" ? "done" : card.line_tone === "now" ? "now" : card.line_tone === "bad" ? "bad" : card.line_tone === "you" ? "you" : undefined} aria-hidden />
             {lines[0]}</span>
-          {card.status_label === "Not onboarded" && !card.archived ? (
+          {awaitingConsent && !card.archived ? (
+            <GatedButton permission="workflow_run:start" projectId={card.id} className="px-linkbtn" disabled={consentBusy}
+                         data-testid={`px-card-consent-start-${card.id}`}
+                         onClick={() => void startConsent()}>
+              {consentBusy ? "Starting…" : "Waiting for your consent — Start"}
+            </GatedButton>
+          ) : card.status_label === "Not onboarded" && !card.archived ? (
             <GatedButton permission="workflow_run:start" projectId={card.id} className="px-linkbtn" data-testid={`px-card-onboard-${card.id}`}
                          onClick={() => void startOnb()}>Not onboarded · Start onboarding</GatedButton>
           ) : lines[1] ? <span className="px-faint px-ell" style={{ display: "block" }}>{lines[1]}</span> : null}

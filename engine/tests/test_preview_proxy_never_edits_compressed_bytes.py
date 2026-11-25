@@ -48,6 +48,9 @@ ROUTES: dict[str, tuple[str, str | None, bytes]] = {
     "/bomb": ("text/html", "gzip", gzip.compress(b"\0" * (64 << 20), compresslevel=9)),
     "/bomb.js": ("application/javascript", "gzip, gzip",
                  gzip.compress(gzip.compress(b"\0" * (64 << 20), compresslevel=9))),
+    # An uncompressed oversized response (both 200 and 500 HTTPError).
+    "/raw-bomb": ("text/plain", None, b"A" * (3 << 20)),
+    "/raw-bomb-err": ("text/plain", None, b"E" * (3 << 20)),
 }
 
 
@@ -58,7 +61,7 @@ class _App(http.server.BaseHTTPRequestHandler):
         _App.seen.append(self.headers.get("Accept-Encoding"))
         path = self.path.split("?", 1)[0]
         ctype, encoding, body = ROUTES[path]
-        self.send_response(404 if path == "/missing" else 200)
+        self.send_response(404 if path == "/missing" else 500 if path == "/raw-bomb-err" else 200)
         self.send_header("Content-Type", ctype)
         if encoding:
             self.send_header("Content-Encoding", encoding)
@@ -242,3 +245,13 @@ def test_a_multi_member_gzip_body_decodes_whole():
 def test_a_truncated_stream_is_passed_on_as_it_came():
     cut = gzip.compress(HTML)[:-20]
     assert preview_service._plain_body(cut, "gzip") == (cut, "gzip")
+
+
+def test_oversized_raw_body_is_refused_without_unbounded_read(upstream, monkeypatch):
+    monkeypatch.setenv("BOSS_PREVIEW_MAX_BODY_MB", "1")
+    for path in ("/raw-bomb", "/raw-bomb-err"):
+        status, _ctype, data, _headers = _proxy(path)
+        assert status == 502, path
+        assert b"too large to show" in data
+    with pytest.raises(preview_service.PreviewBodyTooLarge):
+        preview_service._plain_body(b"x" * ((1 << 20) + 1), None)

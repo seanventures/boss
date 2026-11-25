@@ -97,6 +97,23 @@ def _run(tmp_path: Path, cmd: str, host_env: str | None,
     (host_dir / "scripts" / "install").mkdir(parents=True)
     (host_dir / "install.sh").write_text(FAKE_INSTALL)
     (host_dir / "scripts" / "install" / "reconcile_api_credentials.py").write_text("")
+    (host_dir / "scripts" / "install" / "compose_files.sh").write_text(
+        "#!/usr/bin/env bash\nprintf '%s\\n' -f scripts/install/community-compose.yml\n"
+    )
+    (host_dir / "scripts" / "install" / "build_images.sh").write_text(
+        "#!/usr/bin/env bash\n"
+        "only=\"\"\n"
+        "while [[ $# -gt 0 ]]; do\n"
+        "  case \"$1\" in\n"
+        "    --only) only=\"$2\"; shift 2 ;;\n"
+        "    --dir|--build-arg) shift 2 ;;\n"
+        "    --) shift; break ;;\n"
+        "    *) shift ;;\n"
+        "  esac\n"
+        "done\n"
+        "# shellcheck disable=SC2086\n"
+        "\"$@\" build $only\n"
+    )
     # The shipped tree carries the real enterprise-network finalize that `update` runs.
     if ship_enterprise:
         (host_dir / ENTERPRISE).parent.mkdir(parents=True)
@@ -167,7 +184,7 @@ def test_an_update_of_an_unmarked_install_marks_it_before_the_build(tmp_path: Pa
     build_env = log.split("--- build env\n", 1)[1]
     assert "BOSS_DEDICATED_HOST=1" in build_env.splitlines()
     # The api (whose reaper reads it) is recreated after the mark.
-    assert "up -d --no-deps --force-recreate api worker egress" in log
+    assert "up -d --no-deps --force-recreate api worker kg-mcp egress" in log
 
 
 def test_a_second_update_writes_nothing_twice(tmp_path: Path) -> None:
@@ -190,16 +207,16 @@ def test_the_engine_reads_the_name_remote_sh_writes() -> None:
 def test_an_update_rebuilds_egress_with_api_and_worker(tmp_path: Path) -> None:
     result, _, log = _run(tmp_path, "update", host_env="BOSS_API_KEY=x\nBOSS_DEDICATED_HOST=1\n")
     assert result.returncode == 0, result.stdout + result.stderr
-    assert " build api worker egress\n" in log
-    assert "--force-recreate api worker egress\n" in log
+    assert " build api worker kg-mcp egress\n" in log
+    assert "--force-recreate api worker kg-mcp egress\n" in log
 
 
 def test_a_running_runner_is_rebuilt_too_under_its_profile(tmp_path: Path) -> None:
     result, _, log = _run(tmp_path, "update", host_env="BOSS_API_KEY=x\nBOSS_DEDICATED_HOST=1\n",
                           extra_env={"FAKE_RUNNER": "1"})
     assert result.returncode == 0, result.stdout + result.stderr
-    build = next(l for l in log.splitlines() if " build " in l)
-    assert "--profile runner" in build and build.endswith(" build api worker egress runner")
+    build = next(line for line in log.splitlines() if " build " in line)
+    assert "--profile runner" in build and build.endswith(" build api worker kg-mcp egress runner")
 
 
 def test_an_egress_on_other_toolchains_is_said_with_the_fix(tmp_path: Path) -> None:

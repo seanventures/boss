@@ -524,3 +524,90 @@ def test_a_stuck_session_is_replaced_never_returned(tmp_path, monkeypatch):
     assert _start("claude_code", cli, tmp_path, store=_Store())["sign_in_id"] == second["sign_in_id"]
     third = _start("claude_code", cli, tmp_path, store=_Store(), fresh=True)
     assert third["sign_in_id"] != second["sign_in_id"]
+
+
+def test_codex_and_grok_cli_homes_are_isolated_per_org(tmp_path, monkeypatch):
+    import stat as _stat
+
+    for provider, home_env in (("codex", "CODEX_HOME"), ("grok", "GROK_HOME")):
+        sign_in.reset_for_tests()
+        base = tmp_path / provider
+        monkeypatch.setenv(home_env, str(base))
+        log = tmp_path / f"{provider}_env.log"
+        url = "https://auth.openai.com/codex/device" if provider == "codex" else "https://accounts.x.ai/oauth2/device?user_code=ABCD-EFGH1"
+        cli = _stub(tmp_path, f"{provider}_cli", f"""
+printf 'action=%s home=%s\\n' "${{1:-login}}" "${{{home_env}:-}}" >> "{log}"
+if [ "${{1:-}}" = "logout" ]; then
+  rm -f "${{{home_env}}}/auth.json"
+  exit 0
+fi
+if [ "${{1:-}}" = "login" ] && [ "${{2:-}}" = "status" ]; then
+  if [ -f "${{{home_env}}}/auth.json" ]; then
+    echo "Logged in"
+    exit 0
+  fi
+  echo "Not logged in"
+  exit 1
+fi
+echo '{url}'
+echo '   ABCD-EFGH1'
+while [ ! -e "{tmp_path}/approve_{provider}" ]; do sleep 0.05; done
+printf '{{"ok":true}}' > "${{{home_env}}}/auth.json"
+chmod 600 "${{{home_env}}}/auth.json"
+""")
+        # Org A signs in; Org B must NOT see Org A's session (fresh=False) and Org B's fresh=True
+        # logout must only touch Org B's home, leaving Org A's session intact.
+        home_a = sign_in._cli_home(sign_in.LOGINS[provider], "org_alpha")
+        home_b = sign_in._cli_home(sign_in.LOGINS[provider], "org_beta")
+        assert home_a and home_b and home_a != home_b
+        os.makedirs(home_a, mode=0o700, exist_ok=True)
+        (Path(home_a) / "auth.json").write_text('{"ok":true}')
+        os.chmod(Path(home_a) / "auth.json", 0o600)
+
+        from boss_engine.services import cli_harness
+        orig_specs = cli_harness.load_specs
+
+        def fake_specs(settings=None):
+            specs = dict(orig_specs(settings))
+            s = specs[provider]
+            specs[provider] = cli_harness.CliHarnessSpec(
+                name=s.name, binary=str(cli), version_args=s.version_args,
+                auth_check_args=("login", "status"),
+                auth_ok_pattern=r"Logged in", auth_fail_pattern=r"Not logged in",
+                signin_hint=s.signin_hint, install_hint=s.install_hint, docs_url=s.docs_url,
+                home_env=home_env, default_home=str(base), auth_file_name="auth.json",
+                require_local_session_file=True,
+            )
+            return specs
+
+        monkeypatch.setattr(cli_harness, "load_specs", fake_specs)
+
+        # Org B with fresh=False starts a waiting session (does NOT inherit Org A's login).
+        sess_b = sign_in.start(
+            provider, project_id="p_b", org_id="org_beta", actor="ceo",
+            argv=(str(cli),), logout_argv=(str(cli), "logout"), fresh=False,
+        )
+        assert sess_b["state"] == "waiting", sess_b
+        assert _stat.S_IMODE(Path(home_b).stat().st_mode) == 0o700
+
+        # While Org B's session is live, Org A gets neutral 409 wording (no "Another organization").
+        with pytest.raises(sign_in.SignInError) as clash:
+            sign_in.start(
+                provider, project_id="p_a", org_id="org_alpha", actor="ceo",
+                argv=(str(cli),), logout_argv=(str(cli), "logout"),
+            )
+        assert clash.value.status == 409
+        assert "another organization" not in str(clash.value.detail.get("headline") or "").lower()
+        assert "another organization" not in str(clash.value.detail.get("fix") or "").lower()
+
+        # Cancel Org B, then start fresh=True for Org B — Org A's auth.json must still exist.
+        sign_in.cancel(sess_b["sign_in_id"])
+        sess_b2 = sign_in.start(
+            provider, project_id="p_b", org_id="org_beta", actor="ceo",
+            argv=(str(cli),), logout_argv=(str(cli), "logout"), fresh=True,
+        )
+        assert sess_b2["state"] == "waiting"
+        assert (Path(home_a) / "auth.json").exists()
+        sign_in.cancel(sess_b2["sign_in_id"])
+        assert f"action=logout home={home_b}" in log.read_text()
+        assert f"action=logout home={home_a}" not in log.read_text()

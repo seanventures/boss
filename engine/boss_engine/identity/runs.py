@@ -638,14 +638,56 @@ def agent_for_role(db: Any, project_id: Optional[str], role_key: Optional[str]) 
     has_project = db.execute(text("SELECT 1 FROM information_schema.columns WHERE table_name = 'roles' "
                                   "AND column_name = 'project_id'")).scalar()
     if has_project:
-        found = db.execute(text("SELECT agent_id FROM roles WHERE role_key = :r AND agent_id IS NOT NULL "
-                                "ORDER BY (project_id = :p) DESC LIMIT 1"), {"r": role_key, "p": project_id}).scalar()
+        if project_id:
+            found = db.execute(
+                text("SELECT agent_id FROM roles WHERE project_id = :p AND role_key = :r "
+                     "AND agent_id IS NOT NULL LIMIT 1"),
+                {"p": project_id, "r": role_key}).scalar()
+            if found:
+                return found
+            found = db.execute(
+                text("SELECT agent_id FROM roles WHERE project_id = :p "
+                     "AND lower(spec->'persona'->>'callsign') = lower(:r) "
+                     "AND agent_id IS NOT NULL ORDER BY role_key LIMIT 1"),
+                {"p": project_id, "r": role_key}).scalar()
+            if found:
+                return found
+            has_org_tables = db.execute(
+                text("SELECT to_regclass('projects') IS NOT NULL AND to_regclass('workspaces') IS NOT NULL")
+            ).scalar()
+            if not has_org_tables:
+                return None
+            org_id = db.execute(
+                text("SELECT w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+                     "WHERE p.id = :p"),
+                {"p": project_id}).scalar()
+            if not org_id:
+                return None
+            found = db.execute(
+                text("SELECT r.agent_id FROM roles r "
+                     "JOIN projects p ON p.id = r.project_id "
+                     "JOIN workspaces w ON w.id = p.workspace_id "
+                     "WHERE w.org_id = :o AND r.role_key = :r AND r.agent_id IS NOT NULL "
+                     "ORDER BY r.project_id LIMIT 1"),
+                {"o": org_id, "r": role_key}).scalar()
+            if found:
+                return found
+            return db.execute(
+                text("SELECT r.agent_id FROM roles r "
+                     "JOIN projects p ON p.id = r.project_id "
+                     "JOIN workspaces w ON w.id = p.workspace_id "
+                     "WHERE w.org_id = :o AND lower(r.spec->'persona'->>'callsign') = lower(:r) "
+                     "AND r.agent_id IS NOT NULL ORDER BY r.role_key, r.project_id LIMIT 1"),
+                {"o": org_id, "r": role_key}).scalar()
+        found = db.execute(
+            text("SELECT agent_id FROM roles WHERE role_key = :r AND agent_id IS NOT NULL LIMIT 1"),
+            {"r": role_key}).scalar()
         if found:
             return found
-        return db.execute(text(
-            "SELECT agent_id FROM roles WHERE lower(spec->'persona'->>'callsign') = lower(:r) "
-            "AND agent_id IS NOT NULL ORDER BY (project_id = :p) DESC, role_key LIMIT 1"),
-            {"r": role_key, "p": project_id}).scalar()
+        return db.execute(
+            text("SELECT agent_id FROM roles WHERE lower(spec->'persona'->>'callsign') = lower(:r) "
+                 "AND agent_id IS NOT NULL ORDER BY role_key LIMIT 1"),
+            {"r": role_key}).scalar()
     return db.execute(text("SELECT agent_id FROM roles WHERE role_key = :r AND agent_id IS NOT NULL LIMIT 1"),
                       {"r": role_key}).scalar()
 

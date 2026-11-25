@@ -15,6 +15,8 @@ import os
 import re
 import subprocess
 import sys
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -195,7 +197,8 @@ def _boss_sh_toolchains_command() -> str:
              # `exec -T SERVICE cat manifest` answers FAKE_MANIFEST_<SERVICE> (absent: not running).
              # A rebuild goes through `compose --build-images "svc svc"` (scripts/install/
              # build_images.sh, BOSSAPP-1458): recorded as the build it is.
-             "compose() { case \"$1\" in build) echo \"BUILT $*\" ;; --build-images) echo \"BUILT build $2\" ;;\n"
+             "compose() { while [[ \"${1:-}\" == --profile ]]; do shift 2; done\n"
+             "  case \"$1\" in build) echo \"BUILT $*\" ;; --build-images) echo \"BUILT build $2\" ;;\n"
              "  up) echo \"UP $*\" ;;\n"
              "  ps) [[ -z \"${FAKE_RUNNER:-}\" ]] || echo runner ;;\n"
              "  exec) local v=\"FAKE_MANIFEST_${3//-/_}\"; [[ -n \"${!v:-}\" ]] || return 1;"
@@ -236,8 +239,8 @@ def test_disable_go_from_the_default_persists_java_only(tmp_path):
     out = _toolchains(env, "disable", "go")
     assert out.returncode == 0, out.stderr
     assert _setting(env) == ["BOSS_TOOLCHAINS=java"]
-    assert "BUILT build api worker egress\n" in out.stdout
-    assert "UP up -d --no-deps --no-build --force-recreate egress\n" in out.stdout
+    assert "BUILT build api worker kg-mcp egress\n" in out.stdout
+    assert "UP up -d --no-deps --no-build --force-recreate kg-mcp egress\n" in out.stdout
     assert "APPLIED Toolchains (java)" in out.stdout
     out = _toolchains(env, "disable", "java")
     assert out.returncode == 0, out.stderr
@@ -270,7 +273,7 @@ def test_enabling_security_on_the_default_keeps_java_and_go(tmp_path):
 
 #: Built with BOSS_TOOLCHAINS but never reading /opt/toolchains at run time (no builds, no
 #: allowlist). A new python-runtime service must be put here or in toolchain_services.
-DOES_NOT_READ_THE_MANIFEST = {"mcp-tools", "kg-mcp"}
+DOES_NOT_READ_THE_MANIFEST = {"mcp-tools"}
 
 
 def test_every_service_that_reads_the_manifest_is_rebuilt_with_a_toolchain_change(tmp_path):
@@ -285,7 +288,7 @@ def test_every_service_that_reads_the_manifest_is_rebuilt_with_a_toolchain_chang
                                                                  "FAKE_RUNNER": "1"}).stdout.split()
     assert set(listed) == takes - DOES_NOT_READ_THE_MANIFEST
     remote = (ROOT / "scripts" / "install" / "remote.sh").read_text()
-    assert 'local services="api worker egress"' in remote and 'services="$services runner"' in remote
+    assert 'local services="api worker kg-mcp egress"' in remote and 'services="$services runner"' in remote
 
 
 def test_a_running_runner_is_rebuilt_and_recreated_with_a_toolchain_change(tmp_path):
@@ -293,8 +296,107 @@ def test_a_running_runner_is_rebuilt_and_recreated_with_a_toolchain_change(tmp_p
     env.write_text("BOSS_TOOLCHAINS=java,go\n")
     out = _toolchains(env, "disable", "go", FAKE_RUNNER="1")
     assert out.returncode == 0, out.stderr
-    assert "BUILT build api worker egress runner\n" in out.stdout
-    assert "--force-recreate egress runner\n" in out.stdout
+    assert "BUILT build api worker kg-mcp egress runner\n" in out.stdout
+    assert "--force-recreate kg-mcp egress runner\n" in out.stdout
+
+
+@pytest.mark.parametrize("runner_up", ["0", "1"])
+def test_boss_sh_toolchains_enable_go_recreates_services_under_set_u(tmp_path, runner_up):
+    """End-to-end boss.sh under `set -euo pipefail` (and bash 3.2): empty profile_flags when
+    runner is down must not abort with `profile_flags[@]: unbound variable`."""
+    class _HealthHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"ok")
+
+        def log_message(self, format, *args):
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _HealthHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        port = server.server_address[1]
+        install_dir = tmp_path / "install"
+        (install_dir / "scripts" / "install").mkdir(parents=True)
+        (install_dir / "scripts" / "install" / "community-compose.yml").write_text(
+            (ROOT / "scripts" / "install" / "community-compose.yml").read_text()
+        )
+        env_file = install_dir / ".env"
+        env_file.write_text(
+            f"COMPOSE_PROJECT_NAME=boss-probe\n"
+            f"BOSS_TOOLCHAINS=java\n"
+            f"BOSS_COMMUNITY_WEB_ENABLED=0\n"
+            f"BOSS_API_BIND=127.0.0.1\n"
+            f"BOSS_API_PORT={port}\n"
+        )
+
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        docker_log = tmp_path / "docker.log"
+        stub_docker = bin_dir / "docker"
+        stub_docker.write_text(
+            "#!/usr/bin/env bash\n"
+            "set -euo pipefail\n"
+            'if [[ "${1:-}" == "info" ]]; then\n'
+            "  exit 0\n"
+            "fi\n"
+            'printf \'%s\\n\' "$*" >> "$STUB_DOCKER_LOG"\n'
+            'if [[ " $* " == *" ps "* && "${STUB_RUNNER_UP:-0}" == "1" ]]; then\n'
+            "  printf 'api\\nworker\\nkg-mcp\\negress\\nrunner\\n'\n"
+            "fi\n"
+        )
+        stub_docker.chmod(0o755)
+
+        run_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in {"BOSS_INSTALL_DIR", "DOCKER_HOST", "DOCKER_CONTEXT"}
+        }
+        run_env["PATH"] = f"{bin_dir}:{run_env['PATH']}"
+        run_env["STUB_RUNNER_UP"] = runner_up
+        run_env["STUB_DOCKER_LOG"] = str(docker_log)
+
+        out = subprocess.run(
+            [
+                "bash",
+                str(ROOT / "scripts" / "install" / "boss.sh"),
+                "--dir",
+                str(install_dir),
+                "toolchains",
+                "enable",
+                "go",
+            ],
+            capture_output=True,
+            text=True,
+            env=run_env,
+        )
+        assert out.returncode == 0, f"stdout:\n{out.stdout}\nstderr:\n{out.stderr}"
+        assert "unbound variable" not in out.stderr
+        assert _setting(env_file) == ["BOSS_TOOLCHAINS=java,go"]
+
+        log_lines = docker_log.read_text().splitlines()
+        recreate_lines = [
+            line
+            for line in log_lines
+            if " up -d --no-deps --no-build --force-recreate " in line and "kg-mcp" in line
+        ]
+        assert len(recreate_lines) == 1, log_lines
+        recreate = recreate_lines[0]
+        if runner_up == "1":
+            assert "--profile runner" in recreate
+            assert recreate.endswith(" up -d --no-deps --no-build --force-recreate kg-mcp egress runner")
+        else:
+            assert "--profile runner" not in recreate
+            assert recreate.endswith(" up -d --no-deps --no-build --force-recreate kg-mcp egress")
+        assert any(
+            line.endswith(" up -d --no-deps --no-build --force-recreate api worker")
+            for line in log_lines
+        ), log_lines
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def test_toolchains_list_flags_an_egress_on_other_toolchains(tmp_path):

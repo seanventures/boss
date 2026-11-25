@@ -14,7 +14,7 @@ import time
 
 import pytest
 
-from boss_engine.identity import object_kinds, object_rules
+from boss_engine.identity import object_kinds, object_rules, scope as scope_module
 from boss_engine.identity.object_rules import Confine, Confined, _confine_one
 from boss_engine.services import subscription_sign_in as sign_in
 
@@ -57,6 +57,8 @@ def test_another_orgs_start_is_refused_not_handed_the_live_sign_in(monkeypatch):
                       signed_in=lambda: False, argv=("true",))
     assert refused.value.status == 409
     assert "ABCD" not in str(refused.value.detail)
+    assert "another organization" not in str(refused.value.detail.get("headline") or "").lower()
+    assert "another organization" not in str(refused.value.detail.get("fix") or "").lower()
     assert live.state == "waiting"                     # theirs is not killed either
     with pytest.raises(sign_in.SignInError):
         sign_in.start("codex", project_id="p_two", org_id="org_two", actor="other", fresh=True,
@@ -97,11 +99,28 @@ class _Rows:
 RULE = Confine("body", "transcript_id", ("task_voice_transcript",))
 
 
-def test_a_transcript_key_held_in_two_projects_is_refused():
-    db = _Rows([("org_one", "p_one"), ("org_two", "p_two")])
-    assert object_kinds.get("task_voice_transcript").load(db, "t1") == object_kinds.AMBIGUOUS
+def test_a_transcript_key_held_in_two_projects_in_same_org_is_refused(monkeypatch):
+    db = _Rows([("org_one", "p_one"), ("org_one", "p_two")])
+    spec = object_kinds.get("task_voice_transcript")
+    assert spec.load(db, "t1", org_id="org_one") == object_kinds.AMBIGUOUS
     with pytest.raises(Confined):
         _confine_one(RULE, "t1", org_id="org_one", project_id="p_one", db=db)
+    # Scope.of(..., ...) -> scope.resolve must also raise ScopeNotFound on AMBIGUOUS.
+    monkeypatch.setitem(scope_module._OBJECT_LOADERS, "task_voice_transcript", spec.load)  # noqa: SLF001
+    with pytest.raises(scope_module.ScopeNotFound):
+        scope_module.resolve(
+            scope_module.Scope.of("task_voice_transcript", body="transcript_id"),
+            scope_module.RequestValues(path_params={}, query={}, body={"transcript_id": "t1"}),
+            org_id="org_one", db=db)
+
+
+def test_a_transcript_key_held_in_two_different_orgs_resolves_for_caller_org():
+    db = _Rows([("org_one", "p_one"), ("org_two", "p_two")])
+    spec = object_kinds.get("task_voice_transcript")
+    assert spec.load(db, "t1", org_id="org_one") == ("org_one", "p_one")
+    _confine_one(RULE, "t1", org_id="org_one", project_id="p_one", db=db)
+    with pytest.raises(Confined):
+        _confine_one(RULE, "t1", org_id="org_one", project_id="p_other", db=db)
 
 
 def test_a_transcript_key_held_once_is_placed_at_its_project():

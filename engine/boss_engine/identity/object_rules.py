@@ -29,6 +29,7 @@ arguments as the body, read through the `args:` location).
 """
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping, Optional
 
@@ -207,7 +208,7 @@ def check_named(values: RequestValues, *, org_id: str, project_id: Optional[str]
 ORG_SHARED_KINDS = frozenset({
     "deployment_host",
     "agent_host", "agent_host_join_token", "director_node", "factory_launch_attachment",
-    "github_repo", "org_llm_gateway", "org_skill_policy_rule", "remote_agent_profile",
+    "github_repo", "org_execution_environment", "org_llm_gateway", "org_skill_policy_rule", "remote_agent_profile",
     "workspace",
     # A provider sign-in (object_kinds.InProcessOrgKind) belongs to the ORG it was started for:
     # its token lands in that org's model home, and a start from any project of that org is
@@ -220,8 +221,16 @@ ORG_SHARED_KINDS = frozenset({
 def _confine_one(rule: Confine, object_id: str, *, org_id: str, project_id: Optional[str],
                  db: Any) -> None:
     found_any = False
+    accepts_org = False
+    try:
+        sig = inspect.signature(load_object)
+        accepts_org = "org_id" in sig.parameters or any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+        )
+    except (TypeError, ValueError):
+        accepts_org = False
     for kind in rule.kinds:
-        found = load_object(kind, db, object_id)
+        found = load_object(kind, db, object_id, org_id=org_id) if accepts_org else load_object(kind, db, object_id)
         if found is None:
             continue
         found_any = True

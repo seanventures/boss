@@ -14,6 +14,9 @@ import {
 } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
+import { useGuardedCall } from "../../components/identity/identity-provider";
+import { enc, idPost, IdentityError, refusalSentence } from "../../lib/identity/api";
+import { withConsent } from "../../lib/identity/consent";
 import { KIND_WORDS, WORK_ORDER, WORK_WORDS, navigateTo, needsYouCards, pxHref, waitingSinceWords, runAccept, startOnboarding, workWhen, writePxUrl, type NextItem, type WorkItem } from "../../lib/project-experience";
 import { Empty, Face, Flow, HEALTH_WORD, Ico, Journey, PxLink, REC_KIND_WORDS, Ring, Said, Spark, Stations, Tag, Timeline, Cost, CardFailed } from "./kit";
 import { notifyChanged } from "../changed";
@@ -98,6 +101,42 @@ function goHref(ctx: PxCtx, href: string, fallback: () => void) {
 }
 
 
+function AwaitingConsentCard({ ctx, accept }: { ctx: PxCtx; accept: NonNullable<PxCtx["overview"]["project"]["awaiting_consent"]> }) {
+  const guarded = useGuardedCall();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const start = async () => {
+    setBusy(true); setError("");
+    try {
+      await guarded("Start the project.", () => withConsent(() => idPost(accept.href || `/v1/projects/${enc(ctx.projectId)}/factory/resume`, accept.body)));
+      ctx.refreshOverview?.();
+      ctx.refreshWork();
+    } catch (e) {
+      setError(e instanceof IdentityError && e.code === "step_up_cancelled" ? "Not started: you cancelled the check."
+        : e instanceof IdentityError && e.body.error === "consent_required" ? "Not started: the agents need your consent first."
+        : refusalSentence(e));
+    } finally { setBusy(false); }
+  };
+  return (
+    <section className="px-card" data-you aria-labelledby="px-ov-consent-h" data-testid="px-ov-awaiting-consent">
+      <div className="px-card-h">
+        <Ico icon={Key} c="amber" />
+        <h2 id="px-ov-consent-h">Waiting for your consent</h2>
+        <Tag tone="amber">Easy Mode</Tag>
+      </div>
+      <p className="px-faint" style={{ margin: "0 0 10px" }}>
+        This project was created and waits for your consent to the agents before its build starts.
+      </p>
+      <GatedButton permission="workflow_run:start" projectId={ctx.projectId} className="px-btn" data-kind="primary"
+                   disabled={busy} data-testid="px-ov-consent-start" onClick={() => void start()}>
+        {busy ? "Starting…" : "Waiting for your consent — Start"}
+      </GatedButton>
+      {error ? <p role="alert" className="px-faint" style={{ margin: "8px 0 0" }} data-testid="px-ov-consent-error">{error}</p> : null}
+    </section>
+  );
+}
+
+
 export function OverviewTab({ ctx }: { ctx: PxCtx }) {
   const ov = ctx.overview;
   const t = ov.tiles;
@@ -111,6 +150,7 @@ export function OverviewTab({ ctx }: { ctx: PxCtx }) {
     <div className="px-stack" data-testid="px-overview">
       {/* Right after Create and start (Add a project v2): the first stage, the PRD first. */}
       <StartedCards ctx={ctx} />
+      {ov.project.awaiting_consent ? <AwaitingConsentCard ctx={ctx} accept={ov.project.awaiting_consent} /> : null}
       {ov.journey.length || ov.errors?.journey ? (
         <section className="px-card" aria-labelledby="px-ov-j">
           <div className="px-card-h"><Ico icon={Path} c="teal" /><h2 id="px-ov-j">Journey</h2>

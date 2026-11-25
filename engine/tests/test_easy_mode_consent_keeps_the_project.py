@@ -41,6 +41,15 @@ def _local_repos_in_tmp(monkeypatch, tmp_path):
     monkeypatch.setattr(get_settings(), "local_repo_root", str(tmp_path / "repos"))
 
 
+@pytest.fixture(autouse=True)
+def _a_model_is_connected(monkeypatch):
+    """The builder here is a stand-in that needs no model; the model-first check is not what
+    these consent tests exercise."""
+    from boss_engine.services import model_readiness
+
+    monkeypatch.setattr(model_readiness, "usable_model", lambda *a, **kw: True)
+
+
 class _Budget:
     """Reserves nothing real: the reservation's own release is the savepoint's (asserted by the
     API suite against the real governor)."""
@@ -117,17 +126,7 @@ def _cleanup(env, project_ids, dedupe_key):  # noqa: F811
             c.execute(text("DELETE FROM projects WHERE id = :p"), {"p": pid})
 
 
-def _own_agents_only(env):  # noqa: F811
-    """The fixture's project has a role keyed `forge` (the default builder's callsign); the role-key
-    lookup prefers it over the new project's Forge (software_engineer). Out of the way here, so the
-    agent asked about is the kept project's own."""
-    with env.engine.begin() as c:
-        c.execute(text("UPDATE roles SET role_key = role_key || '_fixture' WHERE project_id = :p"),
-                  {"p": env.project})
-
-
 def test_consent_keeps_the_project_and_the_retry_builds_in_it(env, monkeypatch, tmp_path):  # noqa: F811
-    _own_agents_only(env)
     monkeypatch.setattr(lineage, "_enforced", lambda: True)
     monkeypatch.setattr(consent, "_first_owner", lambda db, org: ALICE)
     template_id = f"csv-desk-{uuid.uuid4().hex[:6]}"
@@ -215,7 +214,6 @@ BOB = "usr_bob_easy"
 def test_two_people_pressing_the_same_template_never_share_a_project(env, monkeypatch, tmp_path):  # noqa: F811
     """A's launch waits for A's consent; B presses the same template and gets B's own project,
     asked of B, never A's kept one (nor A's run once A has built)."""
-    _own_agents_only(env)
     monkeypatch.setattr(lineage, "_enforced", lambda: True)
     monkeypatch.setattr(consent, "_first_owner", lambda db, org: ALICE)
     with env.engine.begin() as c:
@@ -262,7 +260,6 @@ def test_two_people_pressing_the_same_template_never_share_a_project(env, monkey
 
 def test_a_launch_that_needs_no_consent_is_unchanged(env, monkeypatch, tmp_path):  # noqa: F811
     """No person to ask (system work): one transaction, one project, one succeeded receipt."""
-    _own_agents_only(env)
     template_id = f"csv-desk-{uuid.uuid4().hex[:6]}"
     root = _template(tmp_path, template_id)
     starts: list = []
@@ -283,3 +280,51 @@ def test_a_launch_that_needs_no_consent_is_unchanged(env, monkeypatch, tmp_path)
     finally:
         if dedupe_key:
             _cleanup(env, made, dedupe_key)
+
+
+def test_agent_for_role_prefers_own_project_callsign_and_isolates_orgs(env):  # noqa: F811
+    """Project B having role_key='forge' must not steal 'forge' from Project A's callsign Forge,
+    and cross-org projects must never be consulted (while same-org fallback still works)."""
+    from boss_engine.identity import runs
+
+    suf = uuid.uuid4().hex[:8]
+    org2 = f"org_iso_{suf}"
+    ws2 = f"ws_iso_{suf}"
+    p_a = f"p_a_{suf}"
+    p_other_org = f"p_o_{suf}"
+    agt_a = f"agt_a_{suf}"
+    agt_other_org = f"agt_o_{suf}"
+    try:
+        with env.engine.begin() as c:
+            c.execute(text("INSERT INTO projects (id, workspace_id, name, slug) "
+                           "VALUES (:p, 'ws_wf', 'Proj A', :p)"), {"p": p_a})
+            c.execute(text("INSERT INTO roles (id, project_id, role_key, display_name, spec, agent_id) "
+                           "VALUES (:i, :p, 'software_engineer', 'SE', "
+                           "'{\"persona\": {\"callsign\": \"Forge\"}}'::jsonb, :a)"),
+                      {"i": f"role_a_{suf}", "p": p_a, "a": agt_a})
+            c.execute(text("INSERT INTO orgs (id, name) VALUES (:o, 'Other Org')"), {"o": org2})
+            c.execute(text("INSERT INTO workspaces (id, org_id, name) VALUES (:w, :o, 'ws2')"),
+                      {"w": ws2, "o": org2})
+            c.execute(text("INSERT INTO projects (id, workspace_id, name, slug) "
+                           "VALUES (:p, :w, 'Other Org Proj', :p)"), {"p": p_other_org, "w": ws2})
+            c.execute(text("INSERT INTO roles (id, project_id, role_key, display_name, spec, agent_id) "
+                           "VALUES (:i, :p, 'only_there', 'Only There', '{}'::jsonb, :a)"),
+                      {"i": f"role_o_{suf}", "p": p_other_org, "a": agt_other_org})
+
+        with env.engine.connect() as c:
+            # env.project has role_key='forge', but p_a's own callsign 'Forge' must win.
+            assert runs.agent_for_role(c, p_a, "forge") == agt_a
+            # Same-org fallback finds role_key='atlas' from env.project when p_a lacks it.
+            expected_atlas = c.execute(text("SELECT agent_id FROM roles WHERE project_id = :p AND role_key = 'atlas'"),
+                                       {"p": env.project}).scalar()
+            assert runs.agent_for_role(c, p_a, "atlas") == expected_atlas
+            # Cross-org role is never returned.
+            assert runs.agent_for_role(c, p_a, "only_there") is None
+            # Missing project has no org row -> safe None.
+            assert runs.agent_for_role(c, f"p_missing_{suf}", "forge") is None
+    finally:
+        with env.engine.begin() as c:
+            c.execute(text("DELETE FROM roles WHERE project_id IN (:pa, :po)"), {"pa": p_a, "po": p_other_org})
+            c.execute(text("DELETE FROM projects WHERE id IN (:pa, :po)"), {"pa": p_a, "po": p_other_org})
+            c.execute(text("DELETE FROM workspaces WHERE id = :w"), {"w": ws2})
+            c.execute(text("DELETE FROM orgs WHERE id = :o"), {"o": org2})
