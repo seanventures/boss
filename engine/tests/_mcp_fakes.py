@@ -310,7 +310,7 @@ class FakeProxy:
         self._server.server_close()
 
 
-def make_tls(directory: Any) -> tuple[Any, str]:
+def make_tls(directory: Any, names: tuple[str, ...] = ()) -> tuple[Any, str]:
     """A private CA and a certificate for 127.0.0.1 it signed: (server SSLContext, CA PEM path).
     The CA plays the company's root (a TLS-inspecting gateway, an internal server)."""
     import datetime
@@ -347,7 +347,8 @@ def make_tls(directory: Any) -> tuple[Any, str]:
             .not_valid_after(now + datetime.timedelta(days=30))
             .add_extension(x509.SubjectAlternativeName(
                 [x509.IPAddress(ipaddress.ip_address("127.0.0.1")),
-                 x509.DNSName("localhost")]), critical=False)
+                 x509.DNSName("localhost"), *[x509.DNSName(n) for n in names]]),
+                critical=False)
             .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(
                 ca_key.public_key()), critical=False)
             .add_extension(x509.ExtendedKeyUsage([x509.oid.ExtendedKeyUsageOID.SERVER_AUTH]),
@@ -366,3 +367,69 @@ def make_tls(directory: Any) -> tuple[Any, str]:
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(cert_path, key_path)
     return context, ca_path
+
+
+class FakeConnectProxy:
+    """An HTTPS proxy as a company runs one: CONNECT host:port, every host tunnelled to this
+    machine's same port (the company DNS knows names this machine does not). Records each
+    CONNECT; `refuse` answers 403 instead."""
+
+    def __init__(self, *, refuse: bool = False) -> None:
+        import socket
+
+        self.connects: list[str] = []
+        self.refuse = refuse
+        proxy = self
+
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def log_message(self, *_a: Any) -> None:
+                return
+
+            def do_CONNECT(self) -> None:  # noqa: N802
+                proxy.connects.append(self.path)
+                if proxy.refuse:
+                    self.send_response(403, "Blocked by the company proxy")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                port = int(self.path.rsplit(":", 1)[1])
+                upstream = socket.create_connection(("127.0.0.1", port), timeout=30)
+                self.send_response(200, "Connection established")
+                self.end_headers()
+                self.close_connection = True
+                client = self.connection
+
+                def pipe(src: Any, dst: Any) -> None:
+                    try:
+                        while True:
+                            data = src.recv(65536)
+                            if not data:
+                                break
+                            dst.sendall(data)
+                    except OSError:
+                        pass
+                    finally:
+                        try:
+                            dst.shutdown(socket.SHUT_WR)
+                        except OSError:
+                            pass
+
+                back = threading.Thread(target=pipe, args=(upstream, client), daemon=True)
+                back.start()
+                pipe(client, upstream)
+                back.join(timeout=30)
+                upstream.close()
+
+        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self._server.daemon_threads = True
+        threading.Thread(target=self._server.serve_forever, daemon=True).start()
+
+    @property
+    def url(self) -> str:
+        return f"http://127.0.0.1:{self._server.server_address[1]}"
+
+    def close(self) -> None:
+        self._server.shutdown()
+        self._server.server_close()

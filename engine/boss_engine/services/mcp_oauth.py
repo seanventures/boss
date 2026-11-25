@@ -121,6 +121,8 @@ def guard_url(url: str, *, what: str) -> str:
         try:
             addresses = safe_http._resolve(host, parts.port or (443 if scheme == "https" else 80))
         except OSError:
+            if scheme == "https" and safe_http._proxy_for(raw):
+                return raw   # behind the company proxy the proxy resolves it (identity.http)
             raise UnsafeDestination("unresolvable", f"The {what}'s host {host} does not resolve.") \
                 from None
     if not addresses:

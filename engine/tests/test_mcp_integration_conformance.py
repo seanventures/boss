@@ -18,7 +18,7 @@ import pytest
 from boss_engine.services import mcp_client, outbound_proxy
 from boss_engine.services.mcp_client import MCPClient, MCPTimeout, MCPToolError
 
-from ._mcp_fakes import FakeMcp, FakeProxy, make_tls
+from ._mcp_fakes import FakeConnectProxy, FakeMcp, FakeProxy, make_tls
 
 _PROXY_ENV = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
               "http_proxy", "https_proxy", "all_proxy", "no_proxy")
@@ -168,6 +168,67 @@ def test_an_extra_ca_lets_boss_trust_an_internal_https_server(fake, monkeypatch,
     monkeypatch.setenv("HTTPS_PROXY", "http://proxy.corp.example:8080")
     mcp_client.forget_sessions()
     _connect_list_call(server.url)
+
+
+def test_https_through_an_inspecting_proxy_with_the_company_ca(fake, monkeypatch, tmp_path):
+    """Row: an outside HTTPS MCP server, reached only through the company proxy, presenting a
+    certificate the company CA signed (what a TLS-inspecting gateway does)."""
+    tls, ca = make_tls(tmp_path, names=("mcp.partner.example",))
+    server = fake("streamable", tls=tls)
+    proxy = FakeConnectProxy()
+    try:
+        monkeypatch.setenv("HTTPS_PROXY", proxy.url)
+        monkeypatch.setenv("SSL_CERT_FILE", ca)
+        _connect_list_call(server.url_on("mcp.partner.example"))
+        assert proxy.connects and proxy.connects[0].startswith("mcp.partner.example:")
+    finally:
+        proxy.close()
+
+
+def test_oauth_discovery_and_refresh_go_through_the_proxy(fake, monkeypatch, tmp_path):
+    """Row: OAuth (sign-in discovery, token exchange, refresh) behind the company proxy.
+
+    FAILED BEFORE: identity.http (the SSRF-safe client every OAuth request uses) only ever
+    connected directly to the address it resolved itself, so where the proxy is the only way
+    out an outside authorization server answered "cannot resolve host" / "connection failed
+    (TimeoutError)" while the MCP calls themselves worked. Fixed: HTTPS through the proxy with
+    CONNECT, by NO_PROXY; TLS still verified against the host name."""
+    import json as _json
+
+    from boss_engine.identity import http as safe_http
+
+    tls, ca = make_tls(tmp_path, names=("auth.partner.example",))
+    server = fake("streamable", tls=tls)
+    proxy = FakeConnectProxy()
+
+    def no_dns(host, port):
+        raise OSError("this machine cannot resolve outside names")
+
+    try:
+        monkeypatch.setenv("HTTPS_PROXY", proxy.url)
+        monkeypatch.setenv("SSL_CERT_FILE", ca)
+        monkeypatch.setattr(safe_http, "_resolve", no_dns)
+        body = _json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).encode()
+        answer = safe_http.fetch("POST", server.url_on("auth.partner.example"),
+                                 headers={"Content-Type": "application/json"}, data=body,
+                                 purpose="mcp.oauth")
+        assert answer.status == 200 and answer.json()["result"]["tools"]
+        assert proxy.connects == [f"auth.partner.example:{server.port}"]
+        from boss_engine.services import mcp_oauth
+
+        assert mcp_oauth.guard_url(server.url_on("auth.partner.example"), what="token endpoint")
+        # NO_PROXY keeps an internal authorization server off the proxy, and then it must
+        # resolve here as before.
+        monkeypatch.setenv("NO_PROXY", ".partner.example")
+        with pytest.raises(safe_http.OutboundRefused, match="cannot resolve"):
+            safe_http.fetch("GET", server.url_on("auth.partner.example"), purpose="mcp.oauth")
+        # A proxy that refuses the tunnel says so.
+        monkeypatch.delenv("NO_PROXY")
+        proxy.refuse = True
+        with pytest.raises(safe_http.OutboundRefused, match="proxy refused the tunnel"):
+            safe_http.fetch("GET", server.url_on("auth.partner.example"), purpose="mcp.oauth")
+    finally:
+        proxy.close()
 
 
 # --------------------------------------------------------------------------- plain words
