@@ -569,6 +569,20 @@ def _mirror_token_into_vault(connection: Connection, service: Any, project_id: s
         return                             # the App's own tokens: nothing to keep
     if _signin_person(connection, project_id, connection_id):
         return                             # a person's own sign-in: never lent to the org's builds
+    # THE ORG STORE HOLDS THE INSTALL'S GITHUB CREDENTIALS ONLY (BOSSAPP-1286): everything read
+    # back from it (control_plane_token, the org token) is used as the install's own. A token of a
+    # connection on another host (GHES) is never mirrored there — that would re-label it.
+    from ..identity import github_urls
+
+    conn_base = service._connection_api_base(connection, project_id, str(connection_id))  # noqa: SLF001
+    if conn_base != github_urls.api_base():
+        from .core import emit_event
+
+        emit_event(connection, project_id, "github.org_token_unchanged", actor, "github_connection",
+                   connection_id, {"reason": "other_host", "message": (
+                       "This token is for another GitHub host; it stays on its own connection "
+                       "and is not the organisation's install token.")})
+        return
     org_of_project = connection.execute(
         text("SELECT w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
              "WHERE p.id = :p"), {"p": project_id}).scalar()
@@ -597,7 +611,7 @@ def _mirror_token_into_vault(connection: Connection, service: Any, project_id: s
         ref = service.secret_refs.require_usable(
             connection, project_id=project_id,
             credential_ref=service._credential_ref(connection, project_id, connection_id))
-        token = service._resolve_secret(ref, connection)
+        token = github_urls.tag(service._resolve_secret(ref, connection), conn_base)
         org_id = connection.execute(
             text("SELECT w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
                  "WHERE p.id = :p"), {"p": project_id}).scalar()

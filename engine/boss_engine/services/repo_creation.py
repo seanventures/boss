@@ -355,7 +355,7 @@ def _org_member(token: str, owner: str, api_base: str) -> bool:
 
 def _connection_candidates(db: Any, settings: Any, owner: str, project_id: Optional[str], *,
                            owner_type: str = "", probe: bool = True,
-                           actor: Optional[str] = None) -> list[Candidate]:
+                           actor: Optional[str] = None, api_base: str = "") -> list[Candidate]:
     """Project connections whose token creates in `owner`: its own user, or an organisation it
     is an active member of (checked at GitHub, only for an organisation owner, and only when
     `probe`: the owner picker reads no secrets and asks GitHub nothing)."""
@@ -363,7 +363,13 @@ def _connection_candidates(db: Any, settings: Any, owner: str, project_id: Optio
 
     service = GitHubConnectionService(settings)
     out: list[Candidate] = []
+    # THE TARGET HOST (BOSSAPP-1286): a repository is created on one GitHub — the install's,
+    # unless the caller names another. A connection of another host is never a candidate, even
+    # when its account has the owner's login (logins are only unique per host).
+    target = github_urls.api_base(api_base)
     for row in _connection_rows(db, project_id, actor):
+        if github_urls.api_base(row.get("api_base_url")) != target:
+            continue
         login = str(row.get("account_login") or "")
         same = login.lower() == owner.lower()
         if not same and owner_type != "Organization":

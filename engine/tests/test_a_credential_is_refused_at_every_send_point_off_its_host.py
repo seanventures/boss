@@ -171,3 +171,67 @@ def test_a_tag_is_never_laundered_onto_another_host():
     with pytest.raises(G.CrossHostCredential):
         G.tag(G.tag("t", GHES), PUBLIC)
     assert repr(G.tag("secret-value", GHES)).count("secret-value") == 0
+
+
+# ---- the static guard: every GitHub credential builder goes through the send check ----------------
+
+import ast as _ast
+import re as _re
+from pathlib import Path as _Path
+
+_ROOT = _Path(__file__).resolve().parents[2]
+#: GitHub-flavoured requests (its media type / API version header, or a token-in-URL user)...
+_GITHUB = _re.compile(r"vnd\.github|X-GitHub-Api-Version|x-access-token", _re.I)
+#: ...that put a credential on them (a bearer/basic Authorization, or a token in the URL).
+_CREDENTIAL = _re.compile(r"Bearer |x-access-token:|AUTHORIZATION: basic|\"token ", _re.I)
+#: The calls that ARE the send check (check_send itself, or a helper that calls it first).
+_CHECKS = ("check_send", "_send_check", "_send_base", "_check_jwt_host")
+#: Header helpers that build but never send; every caller sends through a check (named here).
+_HELPERS = {
+    "engine/boss_engine/services/setup_checks.py:_gh_headers":
+        "inspect_token/probe_repository/pat_abilities/_org_member call _send_check first",
+    "engine/boss_engine/services/stack_deploy.py:_headers": "GitHubSource._get calls check_send",
+}
+
+
+def _unchecked_github_credential_builders() -> list[str]:
+    out = []
+    for top in ("engine/boss_engine", "apps/api/app", "apps/egress", "apps/worker"):
+        for path in sorted((_ROOT / top).rglob("*.py")):
+            rel = path.relative_to(_ROOT).as_posix()
+            if "/tests/" in rel or rel.endswith("identity/github_urls.py"):
+                continue
+            src = path.read_text(encoding="utf-8", errors="replace")
+            try:
+                tree = _ast.parse(src)
+            except SyntaxError:
+                continue
+            for fn in _ast.walk(tree):
+                if not isinstance(fn, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+                    continue
+                seg = _ast.get_source_segment(src, fn) or ""
+                if _GITHUB.search(seg) and _CREDENTIAL.search(seg) \
+                        and not any(c in seg for c in _CHECKS) \
+                        and f"{rel}:{fn.name}" not in _HELPERS:
+                    out.append(f"{rel}:{fn.lineno} {fn.name}")
+    return out
+
+
+def test_every_github_credential_builder_goes_through_the_send_check():
+    """Building an Authorization header, a basic git header or a token-in-URL for GitHub without
+    github_urls.check_send is how S2 (repository create/check) and M2 (tickets) were missed."""
+    missing = _unchecked_github_credential_builders()
+    assert not missing, ("call github_urls.check_send(token, url) before sending a GitHub "
+                         "credential:\n" + "\n".join(missing))
+
+
+def test_the_static_guard_sees_a_planted_builder(tmp_path):
+    planted = tmp_path / "engine" / "boss_engine" / "x.py"
+    planted.parent.mkdir(parents=True)
+    planted.write_text('def leak(t):\n    return {"Authorization": f"Bearer {t}", '
+                       '"Accept": "application/vnd.github+json"}\n')
+    globals()["_ROOT"], old = tmp_path, globals()["_ROOT"]
+    try:
+        assert _unchecked_github_credential_builders() == ["engine/boss_engine/x.py:1 leak"]
+    finally:
+        globals()["_ROOT"] = old

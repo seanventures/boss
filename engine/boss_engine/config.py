@@ -705,6 +705,17 @@ class Settings(BaseSettings):
     github_token: Optional[str] = Field(
         default=None, validation_alias=AliasChoices("BOSS_GITHUB_TOKEN", "GITHUB_TOKEN")
     )
+
+    @field_validator("github_token", mode="after")
+    @classmethod
+    def _install_token_knows_its_host(cls, value: Optional[str]) -> Optional[str]:
+        """The install's own token is tagged with the install's GitHub host at its source
+        (BOSSAPP-1286): every send point then knows where it may go."""
+        if not value:
+            return value
+        from .identity import github_urls
+
+        return github_urls.tag(value, "")
     # Webhook routing and target-repository setup must never assume a developer's repo.
     # A new installation starts unbound until its operator connects a repository.
     github_owner: str = Field(default="", alias="BOSS_GITHUB_OWNER")

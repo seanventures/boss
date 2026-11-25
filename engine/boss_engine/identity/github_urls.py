@@ -213,6 +213,34 @@ def _refuse(token: object, target: str, where: str) -> None:
         f"{target} ({where})")
 
 
+class UntaggedGitHubCredential(CrossHostCredential):
+    """Strict mode: a credential without a host reached a send point. Every source tags what it
+    hands out (a connection's/binding's token, the App's, the org store's, the install's), so an
+    untagged one is a source that forgot — a hard error in tests and development."""
+
+
+#: Untagged credentials that reached a send point, by send point (production keeps sending them
+#: as the install's own and counts them; strict mode refuses them).
+UNTAGGED_SENDS: "dict[str, int]" = {}
+STRICT_ENV = "BOSS_GITHUB_CREDENTIALS_STRICT"
+
+
+def strict() -> bool:
+    return os.environ.get(STRICT_ENV, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _untagged(token: object, target: str, where: str) -> None:
+    import logging
+
+    UNTAGGED_SENDS[where] = UNTAGGED_SENDS.get(where, 0) + 1
+    logging.getLogger("boss.github.credentials").info(
+        "github.untagged_send where=%s target=%s count=%d", where, target, UNTAGGED_SENDS[where])
+    if strict():
+        raise UntaggedGitHubCredential(
+            f"an untagged GitHub credential reached {where} (to {target}); its source must tag "
+            "it with its host (github_urls.tag)")
+
+
 def check_send(token: object, url: object, *, where: str = "http") -> None:
     """THE send-point check. Call it wherever a GitHub token is put on the wire (an HTTP request,
     a git credential header): raises :class:`CrossHostCredential` (and logs/audits it) when the
@@ -222,6 +250,8 @@ def check_send(token: object, url: object, *, where: str = "http") -> None:
     target = _netloc(str(url or ""))
     if target not in credential_hosts(credential_api_base(token)):
         _refuse(token, target, where)
+    if not isinstance(token, GitHubCredential):
+        _untagged(token, target, where)
 
 
 def account_type(raw: object) -> Optional[str]:

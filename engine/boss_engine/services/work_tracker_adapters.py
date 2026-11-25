@@ -705,6 +705,7 @@ class GitHubIssuesWorkTrackerAdapter:
             "/"
         )
         token = _github_tracker_token(token, base, configuration)
+        github_urls.check_send(token, base, where="github_issues")
         if not (token and owner and repo):
             return {
                 "ok": False,
@@ -753,6 +754,7 @@ class GitHubIssuesWorkTrackerAdapter:
             "/"
         )
         token = _github_tracker_token(token, base, configuration)
+        github_urls.check_send(token, base, where="github_issues")
         if not (token and owner and repo):
             return None
         try:

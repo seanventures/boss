@@ -259,6 +259,14 @@ class GitHubAppAdapter:
         return jwt.encode(payload, pem, algorithm="RS256")
 
     # -- the installation's account -----------------------------------------
+    def _check_jwt_host(self) -> None:
+        """THE SEND POINT for the App's JWT (BOSSAPP-1286): the install's App belongs to the
+        install's GitHub host; its JWT is never sent to another (a GHES connection's base)."""
+        from ..identity import github_urls
+
+        github_urls.check_send(github_urls.tag("app-jwt", ""), self.api_base_url,
+                               where="github_app_jwt")
+
     def installation_account(self, installation_id: Optional[str] = None) -> Optional[dict]:
         """Who the App is installed on ({login, type, permissions}), from GET
         /app/installations/{id} with the App JWT; None when GitHub did not answer. Repo creation
@@ -270,6 +278,7 @@ class GitHubAppAdapter:
         try:
             headers = {"Accept": "application/vnd.github+json", "Authorization": f"Bearer {self._app_jwt()}",
                        "X-GitHub-Api-Version": "2022-11-28"}
+            self._check_jwt_host()
             with httpx.Client(timeout=15) as client:
                 resp = client.get(f"{self.api_base_url}/app/installations/{inst}", headers=headers)
             if resp.status_code != 200:
@@ -318,6 +327,7 @@ class GitHubAppAdapter:
             "Authorization": f"Bearer {self._app_jwt()}",
             "X-GitHub-Api-Version": "2022-11-28",
         }
+        self._check_jwt_host()
         url = f"{self.api_base_url}/app/installations/{inst}/access_tokens"
         with httpx.Client(timeout=20) as client:
             resp = client.post(url, headers=headers, json=body or None)

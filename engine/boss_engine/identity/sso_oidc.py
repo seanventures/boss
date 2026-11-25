@@ -761,6 +761,10 @@ def _github_identity(tokens: dict[str, Any]) -> FederatedIdentity:
     access = tokens.get("access_token")
     if not isinstance(access, str) or not access:
         raise SsoError("token_failed")
+    # GitHub as a sign-in provider is github.com itself: its token goes there only (BOSSAPP-1286).
+    access = github_urls.tag(access, github_urls.PUBLIC_API)
+    for endpoint in (PRESETS["github"]["user_endpoint"], PRESETS["github"]["emails_endpoint"]):
+        github_urls.check_send(access, endpoint, where="sso_github")
     headers = {"Authorization": f"Bearer {access}", "Accept": "application/vnd.github+json"}
     try:
         user = _json(_fetch("GET", PRESETS["github"]["user_endpoint"], headers=headers,

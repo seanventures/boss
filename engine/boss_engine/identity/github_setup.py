@@ -544,6 +544,12 @@ def store_org_token(*, token: str, repos: Iterable[str], org_id: str, db: Any, b
     token, as it always did. `keep_others=True` (Setup › Add GitHub account): it is ANOTHER
     account — only an older token of the same GitHub login is retired (its repos carry over), so
     a second account never takes the first one's repositories away."""
+    # The org store is the INSTALL's GitHub credential store: everything read back from it is
+    # tagged as the install's host. A credential of another host is refused here, first, so
+    # storage can never re-label (launder) it (BOSSAPP-1286).
+    if isinstance(token, github_urls.GitHubCredential) and token.api_base != github_urls.api_base():
+        raise GitHubSetupError("token_for_other_host", 422,
+                               message="This token belongs to another GitHub host.")
     require_org_credentials_authority(org_id, db=db)
     token = (token or "").strip()
     if not token or len(token) > 400 or any(c.isspace() for c in token):
@@ -738,12 +744,13 @@ def control_plane_token(db: Any, owner: str, repo: str) -> Optional[str]:
             tok = github_app.mint_installation_token([full], control_plane_permissions(db, full),
                                                      db=db)
             _account_for(replace(tok, kind=github_app.CONTROL_PLANE_KIND))
-            return tok.token
+            return github_urls.tag(tok.token, "")          # the install's App: its host
         except github_app.GitHubRefused:
             pass
     token = org_token_for(db, full)
     if token is not None:
-        return vault.org_github_token(token["id"], db=db)
+        # The org store only ever holds install-host tokens (store_org_token refuses others).
+        return github_urls.tag(vault.org_github_token(token["id"], db=db), "")
     return None
 
 

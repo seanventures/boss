@@ -73,6 +73,10 @@ def clone_url_for(host: str, owner: str, repo: str, token: str = "", *, web_base
     if kind == "github":
         web = _github_web(web_base)
         if token:
+            # THE SEND POINT for a token-in-URL (BOSSAPP-1286).
+            from ..identity import github_urls
+
+            github_urls.check_send(token, web, where="clone_url")
             scheme, _, rest = web.partition("://")
             return f"{scheme}://x-access-token:{token}@{rest}/{owner}/{repo}.git"
         return f"{web}/{owner}/{repo}.git"

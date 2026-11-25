@@ -27,6 +27,14 @@ _LABEL_TYPES = {"bug": "bug", "enhancement": "story", "feature": "story", "epic"
 
 class GitHubIssuesTicketAdapter(GitHubIssuesWorkTrackerAdapter, TicketAdapterBase):
     def auth_headers(self, conn: TicketConnection, token: str) -> dict[str, str]:
+        # THE SEND POINT (BOSSAPP-1286): this ticket connection's token goes to its own API base
+        # (the tracker token rule: pasted -> that base; a host env reference -> install only).
+        from ....identity import github_urls
+        from ....services.work_tracker_adapters import _github_tracker_token
+
+        base = github_urls.api_base(self.api_base(conn))
+        token = _github_tracker_token(token, base, dict(conn.configuration or {}))
+        github_urls.check_send(token, base, where="github_issues_tickets")
         return {"Authorization": f"Bearer {token}", "X-GitHub-Api-Version": "2022-11-28"}
 
     def _repo(self, conn: Optional[TicketConnection]) -> tuple[str, str]:

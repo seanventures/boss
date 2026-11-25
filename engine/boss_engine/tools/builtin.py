@@ -9887,9 +9887,8 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
                 and github_urls.api_base(_gh_api) == github_urls.api_base():
             token = getattr(ctx.settings, "github_token", "") or ""
 
-        github_urls.check_send(token, _gh_api, where="read_pull_request")
-
         def get(path: str):
+            github_urls.check_send(token, _gh_api, where="read_pull_request")
             req = _ureq.Request(
                 f"{_gh_api}{path}",
                 headers={"Accept": "application/vnd.github+json",

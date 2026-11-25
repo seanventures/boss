@@ -74,6 +74,21 @@ class CreateRepoResult:
                 "exists": self.exists, "url": self.url, "words": self.words, "reason": self.reason}
 
 
+def _send_base(token: Any, api_base_url: str) -> tuple[str, str]:
+    """(REST base, refusal words). The CREDENTIAL'S OWN host when it carries one, else the base
+    asked for — and the send-point check (BOSSAPP-1286): a token never goes to another host."""
+    from ..identity import github_urls
+
+    base = (github_urls.credential_api_base(token) if isinstance(token, github_urls.GitHubCredential)
+            else github_urls.api_base(api_base_url)).rstrip("/")
+    try:
+        github_urls.check_send(token, base, where="local_publish")
+    except github_urls.CrossHostCredential:
+        return base, ("The credential BOSS holds for this is for another GitHub host; connect a "
+                      "credential for this host in Setup › GitHub access.")
+    return base, ""
+
+
 def create_repository(*, owner: str, name: str, private: bool = True, token: str,
                       api_base_url: str = "", token_kind: str = "app",
                       description: str = "", client: Optional[httpx.Client] = None) -> CreateRepoResult:
@@ -88,7 +103,9 @@ def create_repository(*, owner: str, name: str, private: bool = True, token: str
         return CreateRepoResult(False, full, reason="not_allowed",
                                 words="A GitHub owner is letters, digits and hyphens; a repository "
                                       "name is letters, digits, '.', '_' and '-'.")
-    base = api_base_url.rstrip("/")
+    base, refused = _send_base(token, api_base_url)
+    if refused:
+        return CreateRepoResult(False, full, reason="credential_host_mismatch", words=refused)
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
                "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "boss-publish"}
     own = client or httpx.Client(timeout=20)
@@ -178,7 +195,9 @@ def check_repository(*, owner: str, name: str, token: Optional[str], purpose: st
     if not token:
         return {**out, "reason": "no_github_credential",
                 "words": credential_words or NO_CREDENTIAL_WORDS}
-    base = api_base_url.rstrip("/")
+    base, refused = _send_base(token, api_base_url)
+    if refused:
+        return {**out, "reason": "credential_host_mismatch", "words": refused}
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
                "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "boss-publish"}
     own = client or httpx.Client(timeout=15)
