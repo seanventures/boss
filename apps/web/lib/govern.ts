@@ -180,7 +180,10 @@ export type SubscriptionSource = {
   at_limit: { does: string; words: string };
   windows: SubscriptionWindow[]; jobs: string[];
   freshness: { as_of: string | null; stale: boolean };
-  pool: { id: string; name: string; position: number; size: number } | null;
+  /** The account pool this account is a seat of (BOSSAPP-1343), or null for a single login. */
+  pool: { id: string; name: string; position: number; size: number; scope?: "project" | "org"; primary?: boolean } | null;
+  /** The seat a new build is given now (the pool's own choice). */
+  taking_new_work?: boolean;
 };
 export type SubscriptionAlert = { id: string; kind: string; severity: string; title: string; detail: string };
 export type SubscriptionsView = { project_id: string; sources: SubscriptionSource[]; alerts: SubscriptionAlert[] };

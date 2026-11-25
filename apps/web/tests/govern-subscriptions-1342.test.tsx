@@ -61,6 +61,35 @@ describe("Govern › Subscriptions", () => {
     expect($("[data-testid=gv-sub-age-claude_code]")!.textContent).toBe("last reported 5 h ago");
   });
 
+  it("a pool's accounts sit under the pool: primary marked, the one taking new work named", async () => {
+    const pool = { id: "spool_1", name: "Claude Code pool", size: 2, scope: "org" };
+    (g.view as Record<string, unknown>).subscriptions = { project_id: "p1", alerts: [], sources: [
+      source({ key: "claude_code:pool:b", label: "Claude Code · Account 2", state: "plenty", state_label: "Plenty", left_pct: 80,
+               windows: [], pool: { ...pool, position: 1, primary: false }, taking_new_work: true }),
+      source({ key: "claude_code:pool:a", label: "Claude Code · Account 1", pool: { ...pool, position: 0, primary: true },
+               taking_new_work: false, at_limit: { does: "next_account", words: "Moves to the next Claude Code account: Account 2." } }),
+      source({ key: "codex:install", engine: "codex", label: "Codex", state: "plenty", state_label: "Plenty", left_pct: 50, windows: [] }),
+    ] };
+    await mount(<GovernHome projectId="p1" actor="ceo" />);
+    await click($("[data-testid=gv-tab-subscriptions]"));
+    const box = $("[data-testid=gv-sub-pool-claude_code]")!;
+    expect(box.querySelector("h3")!.textContent).toBe("Claude Code pool");
+    expect($("[data-testid=gv-sub-pool-size-claude_code]")!.textContent).toBe("2 accounts · whole org");
+    // seat order inside the pool, whatever the state order outside it
+    expect([...box.querySelectorAll(".gv-sub .gv-sub-name")].map((h) => h.textContent))
+      .toEqual(["Claude Code · Account 1", "Claude Code · Account 2"]);
+    expect($("[data-testid=gv-sub-primary-claude_code-0]")!.textContent).toBe("Primary");
+    expect($("[data-testid=gv-sub-next-claude_code-1]")!.textContent).toBe("Takes new work");
+    expect($("[data-testid=gv-sub-next-claude_code-0]")).toBeNull();
+    expect($("[data-testid=gv-sub-atlimit-claude_code-0]")!.textContent).toMatch(/next Claude Code account: Account 2/);
+    const manage = $("[data-testid=gv-sub-pool-manage-claude_code]") as HTMLAnchorElement;
+    expect(manage.className).toMatch(/\bag-btn\b/);
+    expect(manage.querySelector("svg")).not.toBeNull();
+    expect(new URL(manage.href, "http://x").searchParams.get("area")).toBe("setup");
+    // a single login stays its own card, outside any pool
+    expect(box.contains($("[data-testid=gv-sub-codex]"))).toBe(false);
+  });
+
   it("no plan connected says where to connect one", async () => {
     (g.view as Record<string, unknown>).subscriptions = { project_id: "p1", sources: [], alerts: [] };
     await mount(<GovernHome projectId="p1" actor="ceo" />);
