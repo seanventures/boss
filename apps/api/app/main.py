@@ -2291,6 +2291,9 @@ async def one_effect_per_idempotency_key(request: Request, call_next):
                     if conversation["actor"] != who:
                         raise HTTPException(status_code=404, detail="No such conversation.")
                     _conversation_authority(request, project).check_work()
+                elif intent_family == "metatron_turn":
+                    effective_actor = claimed or str(request_actor_or_principal() or "")
+                    require_project_actor(connection, project, effective_actor, "agent_chat")
                 else:
                     require_project_write_actor(connection, project, claimed, "role_review")
         except identity_guard.AccessRefused as error:
@@ -2823,6 +2826,84 @@ async def require_transport_auth_for_v1(request: Request, call_next):
         current_api_principal.reset(principal_token)
         current_transport_authenticated.reset(authenticated_token)
         current_auth_method.reset(auth_method_token)
+
+
+def _parse_metatron_client_semver(raw: str) -> Optional[tuple[int, int, int]]:
+    s = str(raw or "").strip()
+    if not s:
+        return None
+    if "/" in s:
+        _, _, s = s.partition("/")
+    token = s.split()[0].strip().lstrip("v")
+    core = token.split("-", 1)[0].split("+", 1)[0]
+    parts = core.split(".")
+    if len(parts) < 2:
+        return None
+    try:
+        major = int(parts[0])
+        minor = int(parts[1])
+        patch = int(parts[2]) if len(parts) > 2 else 0
+        return (major, minor, patch)
+    except ValueError:
+        return None
+
+
+@app.middleware("http")
+async def metatron_contract_versioning(request: Request, call_next):
+    """Emit X-Boss-Version on /v1/ responses; enforce X-Metatron-Client / X-Boss-Contract only when present."""
+    from boss_engine.services.metatron_server import (
+        MIN_BOSS_CONTRACT,
+        MIN_METATRON_CLIENT,
+        MIN_METATRON_CLIENT_STR,
+    )
+
+    route_path = _route_relative_path(request)
+    if route_path.startswith("/v1/"):
+        raw_client = request.headers.get("X-Metatron-Client")
+        if raw_client is not None:
+            parsed = _parse_metatron_client_semver(raw_client)
+            if parsed is None or parsed < MIN_METATRON_CLIENT:
+                return JSONResponse(
+                    status_code=426,
+                    content={
+                        "error": {
+                            "code": "client_too_old",
+                            "message": (
+                                f"Metatron client {raw_client!r} is unsupported; "
+                                f"minimum required is {MIN_METATRON_CLIENT_STR}."
+                            ),
+                            "retryable": False,
+                            "min_client": MIN_METATRON_CLIENT_STR,
+                        }
+                    },
+                    headers={"X-Boss-Version": app.version},
+                )
+        raw_contract = request.headers.get("X-Boss-Contract")
+        if raw_contract is not None:
+            try:
+                contract_num = int(raw_contract.strip())
+            except ValueError:
+                contract_num = -1
+            if contract_num < MIN_BOSS_CONTRACT:
+                return JSONResponse(
+                    status_code=426,
+                    content={
+                        "error": {
+                            "code": "client_too_old",
+                            "message": (
+                                f"BOSS contract {raw_contract!r} is unsupported; "
+                                f"minimum required is {MIN_BOSS_CONTRACT}."
+                            ),
+                            "retryable": False,
+                            "min_client": MIN_METATRON_CLIENT_STR,
+                        }
+                    },
+                    headers={"X-Boss-Version": app.version},
+                )
+    response = await call_next(request)
+    if route_path.startswith("/v1/"):
+        response.headers.setdefault("X-Boss-Version", app.version)
+    return response
 
 
 def project_summary_from_row(row) -> ProjectSummary:
@@ -33451,6 +33532,7 @@ def conversation_close_endpoint(conversation_id: str, payload: open_bodies.Proje
 # IDENTITY API (docs/product/IDENTITY.md §10). Always enforced: router keys starting `identity`.
 from .routers.identity_me import build_identity_me_router  # noqa: E402
 from .routers.identity_auth import build_identity_auth_router  # noqa: E402  (identity S1)
+from .routers.identity_metatron_auth import build_identity_metatron_auth_router  # noqa: E402  (MT-10)
 from .routers.identity_people import build_identity_people_router  # noqa: E402  (identity S1)
 from .routers.identity_sso import build_identity_sso_router  # noqa: E402  (identity S1)
 from .routers.identity_scim import build_identity_scim_router  # noqa: E402  (identity S1)
@@ -33462,6 +33544,7 @@ from boss_engine.identity.request_ids import RequestIdMiddleware  # noqa: E402  
 
 app.include_router(build_identity_me_router())
 app.include_router(build_identity_auth_router())
+app.include_router(build_identity_metatron_auth_router())
 app.include_router(build_identity_people_router())
 app.include_router(build_identity_sso_router())
 app.include_router(build_identity_scim_router())

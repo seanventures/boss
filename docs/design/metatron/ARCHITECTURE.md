@@ -261,11 +261,11 @@ Example flow (resolve a customer ticket): read ticket via `boss_*`, `ssh_run sar
 | MCP registry | `engine/boss_engine/services/mcp_registry.py`, `docs/community/MCP.md` |
 | Skills | `list_skills`, `draft_skill`, `role_skills` grants |
 
-### 6.2 MT-10 DRAFT: streaming agent turn with client-side tools
+### 6.2 MT-10: streaming agent turn with client-side tools
 
-**Status: DRAFT proposal. Names, paths and shapes are not final. The MT-10 author owns the final contract, writes it into `docs/community/` (API contract) and the OpenAPI, and updates this section.** Principle: the model runs on BOSS (gateway, budget, receipts). The client declares tools it can run; BOSS streams `tool_call` events; the client runs them after approval and posts results; BOSS continues the same turn.
+**Status: Implemented (`MT-10`). Canonical contract lives in [`docs/community/METATRON_PROTOCOL.md`](../../community/METATRON_PROTOCOL.md).** Principle: the model runs on BOSS (gateway, budget, receipts). The client declares tools it can run; BOSS streams `tool_call` events; the client runs them after approval and posts results; BOSS continues the same turn.
 
-Versioning: every request carries `X-Metatron-Client: metatron/<semver> (<os>; <arch>)` and `X-Boss-Contract: <n>`. Responses carry `X-Boss-Version`. Server answers `426` with `{error:{code:"client_too_old", min_client}}` when too old. The client refuses mutating tools against a server that lacks the policy/audit endpoints.
+Versioning: requests may carry `X-Metatron-Client: metatron/<semver> (<os>; <arch>)` and `X-Boss-Contract: <n>`. Every `/v1/` response carries `X-Boss-Version`. When `X-Metatron-Client` or `X-Boss-Contract` is present and below minimum (`min_client: "0.1.0"`, `min_contract: 1`), the server answers `426 Upgrade Required` with `{error:{code:"client_too_old", message, retryable:false, min_client:"0.1.0"}}`. Absent headers pass through cleanly so legacy TUI and console callers stay unaffected. The client refuses mutating tools against a server that lacks the policy/audit endpoints.
 
 #### Auth (device-code login, modelled on RFC 8628)
 | Step | Request | Response |
@@ -295,7 +295,7 @@ Tokens are stored in the OS keychain (file fallback 0600 only with an explicit f
   ]
 }
 ```
-Server rules: authenticate and authorise the principal; filter `client_tools` by role/policy (a forbidden tool is dropped, and the response says which); merge with BOSS server tools; reserve budget, then call the model through the gateway. The idempotency semantics are those of `CONVERSATION_STREAMS.md` (409 on concurrent retry, byte replay of a complete response, refusal if the same key carries a different body).
+Server rules: authenticate and authorise the principal; filter `client_tools` by role/policy (a forbidden tool is dropped, and `turn.started.dropped` says which); merge with BOSS server tools; commit `jobs`, `BudgetGovernor.reserve`, `model_gateway_leases`, `model_gateway_invocations`, and `receipts` before calling the model through the gateway. Idempotency follows `CONVERSATION_STREAMS.md`: `409` on concurrent in-progress retry, `422` if the same `Idempotency-Key` carries a changed body, exact SSE byte replay of a complete bounded response (after rechecking current permissions -> `403` if revoked).
 
 #### SSE events
 Each event has `id: <turn_id>:<seq>` so a client can resume. Heartbeat: a comment line `: ping` every 15 s.
@@ -344,14 +344,14 @@ The client refuses an unsigned or expired bundle for mutating tools; offline it 
 #### Reviewer (act-on-my-behalf)
 `POST /v1/metatron/approvals/review` `{session_id, turn_id, call:{tool, argv_redacted, host, domain, risk_class}, mode}` -> `{decision:"approve|deny|escalate", reason, reviewer_receipt_id}`. Runs through the agent path (budgeted, audited). `escalate` means ask the person. Grants are time-boxed: `POST /v1/metatron/grants` `{scope, ttl_s}` creates, `DELETE /v1/metatron/grants/{id}` revokes.
 
-#### Hosts and credential leases (TODO: inspect the vault API; this may need new server work)
-`GET /v1/metatron/hosts` lists hosts the person may use. `POST /v1/metatron/hosts/{id}/credential-lease` `{purpose, ttl_s, session_id}` -> `{lease_id, kind:"ssh_key", expires_at, material}` where `material` is delivered once over TLS, held in memory or a 0600 temp file removed after use, and the lease use is audited. If the vault will not lend key material, the alternative is a short-lived SSH certificate. Decide in MT-10/MT-3.
+#### Hosts and credential leases
+`GET /v1/metatron/hosts` lists hosts the person may use (including `host_key_known_hosts` and `host_key_fingerprint`). `POST /v1/metatron/hosts/{id}/credential-lease` (`{purpose, ttl_s, session_id}`, bounded `15..300` s) -> `{lease_id, host_id, kind:"ssh_key", expires_at, host_key_known_hosts, host_key_fingerprint, material}` with `Cache-Control: no-store`, backed by `resolve_secret_ref` (`secret_access_events` + `run_secret_redaction`), `receipts`, and `metatron_credential_leases`. Under `BOSS_AUTHZ_MODE=enforce`, `host:exec` is `step_up=True`: a `boss_pat_` token from device login requires a fresh MFA session, `HUMAN_CONFIRMED` replay, or a `boss_sak_` service-account key. Short-lived SSH user-CA certificates remain a future enterprise enhancement (see §12 #2).
 
 #### Audit ingest
 `POST /v1/metatron/audit` `{session_id, events:[{event_id, ts, kind, tool, risk_class, argv_redacted, host, domain, cookie_names, method, path, status, decision, decided_by, rule_id, exit_code, bytes, duration_ms}]}` -> `{accepted:[event_id], rejected:[{event_id, reason}]}`. Idempotent by `event_id` (client-generated UUID). The client buffers on disk and retries. Events attach to the ticket or incident when `ticket_id` is set. Never included: cookie or token values, file contents, unredacted argv secrets.
 
 #### Errors
-`{ "error": { "code": "…", "message": "…", "retryable": bool } }`. Status use: 401 unauthenticated or expired (client refreshes once), 403 policy or permission, 409 idempotency conflict, 413 too large, 426 client too old, 429 rate or budget, 5xx retryable with backoff. Codes to define: `budget_exhausted`, `tool_result_timeout`, `policy_denied`, `client_too_old`, `unresolved_receipt`.
+`{ "error": { "code": "…", "message": "…", "retryable": bool } }`. Status use: 401 unauthenticated, expired, or `step_up_required` (client refreshes once), 403 policy or permission, 409 idempotency in-progress conflict or terminal turn conflict, 413 tool result > 64 KiB (`tool_result_too_large`), 422 reused key with changed body / invalid rule examples / invalid input, 426 client too old (`client_too_old`), 429 rate or budget (`budget_exhausted`), 5xx retryable with backoff. Codes: `budget_exhausted`, `tool_result_timeout`, `tool_result_too_large`, `policy_denied`, `client_too_old`, `unresolved_receipt`.
 
 #### Types
 Generate Rust types from BOSS's OpenAPI for the typed calls; keep a generic `/op` passthrough for the long tail. Contract tests live next to the server and run against the Rust client in CI.
@@ -469,11 +469,11 @@ Dependency order: MT-0 -> MT-10 -> MT-2 / MT-1 -> MT-7 -> MT-3 -> MT-9 -> MT-4 -
 - Server (Python): follow the repo's test practice: run the tests the change touches, one file at a time, against the test database (named like a test one, for example `boss_test`); full suites once as the final gate.
 - Contract: one shared fixture set of SSE transcripts used by both the server tests and the Rust client tests.
 
-## 12. Open questions
-1. Server-side loop (recommended) vs a client-side loop calling the gateway directly: confirm.
-2. Can the vault lend an ssh key to a local process, and for how long? Or use short-lived SSH certificates?
+## 12. Decisions and open questions
+1. **Decided (`MT-10`):** Server-side turn loop (`POST /v1/metatron/turns` with `BudgetReservation` + `jobs` + `model_gateway_leases` + `receipts` per model step, pausing cleanly without holding DB locks or model leases during `awaiting_tool_result`).
+2. **Decided (`MT-10`):** Short-lived (`15..300` s), single-use TLS vault lease (`POST /v1/metatron/hosts/{host_id}/credential-lease`) backed by `resolve_secret_ref` (`secret_access_events` + `run_secret_redaction`), `receipts`, and `metatron_credential_leases` (`Cache-Control: no-store`). Target hosts do not need `TrustedUserCAKeys` pre-provisioned; SSH user-CA certificates remain a future enterprise option. Note on `step_up`: `P.HOST_EXEC` is `step_up=True`, so under `BOSS_AUTHZ_MODE=enforce`, `boss_pat_` keys from device login require `HUMAN_CONFIRMED` replay or a `boss_sak_` / fresh MFA session.
 3. Offline use: proposed read-only local analysis only.
 4. Windows: not in v1.
 5. Rule format: Codex Starlark `execpolicy` vs a simpler TOML (decide in MT-7).
-6. Where the Rust code lives: proposed `metatron/` in this repo (section 3); confirm.
+6. **Decided (`MT-0`):** `metatron/` Cargo workspace in this repository.
 7. Legal review of vendoring; Firefox/Safari cookie sources; verify `core/src/exec_policy.rs` default rules.

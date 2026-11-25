@@ -13404,6 +13404,8 @@ CREATE TABLE IF NOT EXISTS tool_policies_v2 (
   hit_count BIGINT NOT NULL DEFAULT 0,
   last_hit_at TIMESTAMPTZ,
   status TEXT NOT NULL DEFAULT 'active',
+  hard BOOLEAN NOT NULL DEFAULT FALSE,
+  examples JSONB,
   created_by TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -16864,3 +16866,148 @@ ALTER TABLE agent_wakeups ADD COLUMN IF NOT EXISTS purpose TEXT;
 -- One daily journeys wake per install (service.arm_daily also takes an advisory lock).
 CREATE UNIQUE INDEX IF NOT EXISTS agent_wakeups_one_golden_journeys
   ON agent_wakeups ((1)) WHERE purpose = 'golden_journeys' AND status = 'active';
+
+-- METATRON CLI SERVER PROTOCOL (BOSSAPP-1381 / MT-10): streaming agent turns, ordered SSE event
+-- replay, client tool results, act-on-my-behalf TTL grants, audit batch ingest, and single-use
+-- host credential leases. Also extends tool_policies_v2 with `hard` and `examples` for signed
+-- policy bundles.
+ALTER TABLE tool_policies_v2 ADD COLUMN IF NOT EXISTS hard BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE tool_policies_v2 ADD COLUMN IF NOT EXISTS examples JSONB;
+
+CREATE TABLE IF NOT EXISTS metatron_turns (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  thread_id TEXT NOT NULL REFERENCES agent_threads(id) ON DELETE CASCADE,
+  principal_id TEXT NOT NULL,
+  actor TEXT NOT NULL,
+  agent_role TEXT NOT NULL DEFAULT '',
+  mode TEXT NOT NULL DEFAULT 'ask'
+    CHECK (mode IN ('read-only', 'ask', 'risky-only', 'act-on-my-behalf')),
+  status TEXT NOT NULL DEFAULT 'queued'
+    CHECK (status IN ('queued', 'running', 'awaiting_tool_result', 'completed', 'failed', 'cancelled')),
+  idempotency_key TEXT,
+  request_hash TEXT,
+  user_message_id TEXT,
+  reply_message_id TEXT,
+  act_id TEXT,
+  model TEXT,
+  tools_offered JSONB NOT NULL DEFAULT '[]'::jsonb,
+  tools_dropped JSONB NOT NULL DEFAULT '[]'::jsonb,
+  client_tools JSONB NOT NULL DEFAULT '[]'::jsonb,
+  messages JSONB NOT NULL DEFAULT '[]'::jsonb,
+  pending_tool_calls JSONB NOT NULL DEFAULT '[]'::jsonb,
+  stop_reason TEXT,
+  error_code TEXT,
+  error_message TEXT,
+  retryable BOOLEAN NOT NULL DEFAULT FALSE,
+  usage JSONB NOT NULL DEFAULT '{}'::jsonb,
+  owner TEXT,
+  tool_deadline_at TIMESTAMPTZ,
+  cancel_requested_at TIMESTAMPTZ,
+  heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finished_at TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_metatron_turns_principal_key
+  ON metatron_turns (principal_id, idempotency_key) WHERE idempotency_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_metatron_turns_thread
+  ON metatron_turns (project_id, thread_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_metatron_turns_live
+  ON metatron_turns (project_id, heartbeat_at)
+  WHERE status IN ('queued', 'running', 'awaiting_tool_result');
+CREATE INDEX IF NOT EXISTS idx_metatron_turns_tool_deadline
+  ON metatron_turns (tool_deadline_at)
+  WHERE status = 'awaiting_tool_result' AND tool_deadline_at IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS metatron_turn_events (
+  id BIGSERIAL PRIMARY KEY,
+  turn_id TEXT NOT NULL REFERENCES metatron_turns(id) ON DELETE CASCADE,
+  seq INTEGER NOT NULL,
+  event_id TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (turn_id, seq),
+  UNIQUE (event_id)
+);
+CREATE INDEX IF NOT EXISTS idx_metatron_turn_events_turn_seq
+  ON metatron_turn_events (turn_id, seq);
+
+CREATE TABLE IF NOT EXISTS metatron_turn_tool_results (
+  turn_id TEXT NOT NULL REFERENCES metatron_turns(id) ON DELETE CASCADE,
+  call_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('ok', 'error', 'denied', 'cancelled')),
+  output JSONB NOT NULL DEFAULT '{}'::jsonb,
+  decision JSONB NOT NULL DEFAULT '{}'::jsonb,
+  received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (turn_id, call_id)
+);
+
+CREATE TABLE IF NOT EXISTS metatron_grants (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  principal_id TEXT NOT NULL,
+  scope JSONB NOT NULL DEFAULT '{}'::jsonb,
+  allowed_tools TEXT[] NOT NULL DEFAULT '{}',
+  max_risk_class TEXT,
+  ttl_seconds INTEGER NOT NULL CHECK (ttl_seconds > 0),
+  expires_at TIMESTAMPTZ NOT NULL,
+  revoked_at TIMESTAMPTZ,
+  revoked_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_metatron_grants_principal_project
+  ON metatron_grants (principal_id, project_id, expires_at)
+  WHERE revoked_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS metatron_audit_events (
+  event_id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  session_id TEXT NOT NULL,
+  turn_id TEXT,
+  ticket_id TEXT,
+  principal_id TEXT NOT NULL,
+  ts TIMESTAMPTZ NOT NULL,
+  kind TEXT NOT NULL,
+  tool TEXT,
+  risk_class TEXT,
+  argv_redacted JSONB,
+  host TEXT,
+  domain TEXT,
+  cookie_names TEXT[],
+  method TEXT,
+  path TEXT,
+  status INTEGER,
+  decision TEXT,
+  decided_by TEXT,
+  rule_id TEXT,
+  exit_code INTEGER,
+  bytes BIGINT,
+  duration_ms INTEGER,
+  recorded_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_metatron_audit_events_project_ts
+  ON metatron_audit_events (project_id, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_metatron_audit_events_session
+  ON metatron_audit_events (session_id, ts);
+
+CREATE TABLE IF NOT EXISTS metatron_credential_leases (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  host_id TEXT NOT NULL REFERENCES deployment_hosts(id) ON DELETE CASCADE,
+  secret_ref_id TEXT NOT NULL,
+  principal_id TEXT NOT NULL,
+  session_id TEXT,
+  purpose TEXT NOT NULL,
+  ttl_seconds INTEGER NOT NULL CHECK (ttl_seconds > 0),
+  expires_at TIMESTAMPTZ NOT NULL,
+  redeemed_at TIMESTAMPTZ,
+  receipt_id TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_metatron_credential_leases_host
+  ON metatron_credential_leases (host_id, created_at DESC);

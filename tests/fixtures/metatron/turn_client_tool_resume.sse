@@ -1,0 +1,26 @@
+id: mturn_fixture_03:1
+event: turn.started
+data: {"turn_id":"mturn_fixture_03","thread_id":"athr_fixture_03","model":"gpt-4o","mode":"ask","tools":["ssh_run"],"dropped":[]}
+
+id: mturn_fixture_03:2
+event: usage
+data: {"input_tokens":22,"output_tokens":12,"cost":{"amount":0.00019,"currency":"USD","source":"gpt-4o"}}
+
+id: mturn_fixture_03:3
+event: tool_call
+data: {"call_id":"call_cli_1","name":"ssh_run","arguments":{"host":"web-1","argv":["sar","-u","1","5"]},"risk_hint":"remote-read","deadline_s":900}
+
+: ping
+
+id: mturn_fixture_03:4
+event: text.delta
+data: {"text":"CPU idle is 94.2% on web-1."}
+
+id: mturn_fixture_03:5
+event: usage
+data: {"input_tokens":48,"output_tokens":14,"cost":{"amount":0.00031,"currency":"USD","source":"gpt-4o"}}
+
+id: mturn_fixture_03:6
+event: turn.completed
+data: {"turn_id":"mturn_fixture_03","stop_reason":"end_turn"}
+

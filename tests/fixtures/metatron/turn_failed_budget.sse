@@ -1,0 +1,8 @@
+id: mturn_fixture_06:1
+event: turn.started
+data: {"turn_id":"mturn_fixture_06","thread_id":"athr_fixture_06","model":"gpt-4o","mode":"ask","tools":[],"dropped":[]}
+
+id: mturn_fixture_06:2
+event: turn.failed
+data: {"turn_id":"mturn_fixture_06","code":"budget_exhausted","message":"Project daily budget cap reached.","retryable":false}
+

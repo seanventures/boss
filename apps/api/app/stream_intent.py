@@ -8,6 +8,7 @@ import re
 
 VOICE_ROUTES = re.compile(r"^/v1/agents/[^/]+/(?:test|persona/draft)$")
 CONVERSATION_ROUTES = re.compile(r"^/v1/conversations/[^/]+/(?:turns|summary|propose)$")
+METATRON_TURN_ROUTES = re.compile(r"^/v1/metatron/turns$")
 
 
 def family(method: str, path: str) -> str | None:
@@ -17,6 +18,8 @@ def family(method: str, path: str) -> str | None:
         return "voice"
     if CONVERSATION_ROUTES.fullmatch(path):
         return "conversation"
+    if METATRON_TURN_ROUTES.fullmatch(path):
+        return "metatron_turn"
     return None
 
 
