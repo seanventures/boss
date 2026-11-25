@@ -177,24 +177,43 @@ def _session_home(prefix: str, state_home: str, sandbox: Any, *,
     filled at 0700 and opened to the run's uid only at the end. Removed when the session ends
     (model_proxy.on_session_end), through the same parent fd; a sandbox's also with its run."""
     files = files or {}
+    state_fd: Optional[int] = None
     if sandbox is not None:
-        parent_fd = sandbox.sessions_fd()
+        # A DUP of the run's held fd: release() closes the original; this one lives exactly as
+        # long as the cleanup that needs it.
+        parent_fd = os.dup(sandbox.sessions_fd())
         name = prefix + secrets.token_hex(8)
-        os.mkdir(name, 0o700, dir_fd=parent_fd)
-        home_fd = os.open(name, _DIR_FLAGS, dir_fd=parent_fd)
         path = os.path.join(str(sandbox.sessions_dir), name)
-        state_fd = _open_state(sandbox, os.path.basename(state_home))
-        cleanup = lambda: shutil.rmtree(name, dir_fd=parent_fd, ignore_errors=True)  # noqa: E731
+
+        def cleanup() -> None:
+            try:
+                shutil.rmtree(name, dir_fd=parent_fd, ignore_errors=True)
+            finally:
+                with contextlib.suppress(OSError):
+                    os.close(parent_fd)
+        try:
+            os.mkdir(name, 0o700, dir_fd=parent_fd)
+        except BaseException:
+            os.close(parent_fd)
+            raise
     else:
         _sweep_stale_session_homes()
         path = tempfile.mkdtemp(prefix=prefix)
-        home_fd = os.open(path, _DIR_FLAGS)
-        try:
-            state_fd = os.open(state_home, _DIR_FLAGS) if os.path.isdir(state_home) else None
-        except OSError:
-            state_fd = None
         cleanup = lambda: shutil.rmtree(path, ignore_errors=True)  # noqa: E731
+    # Registered FIRST: a failure while the home is filled still removes it.
+    scoped = model_proxy.on_session_end(cleanup)
+    home_fd: Optional[int] = None
     try:
+        if sandbox is not None:
+            home_fd = os.open(name, _DIR_FLAGS, dir_fd=parent_fd)
+            state_fd = _open_state(sandbox, os.path.basename(state_home))
+        else:
+            home_fd = os.open(path, _DIR_FLAGS)
+            # BOSS's own tree, not the run's: a symlinked ~/.codex or CODEX_HOME is the
+            # operator's choice and is followed, so its sessions are still found.
+            real = os.path.realpath(state_home)
+            with contextlib.suppress(OSError):
+                state_fd = os.open(real, _DIR_FLAGS) if os.path.isdir(real) else None
         if not _owned_dir_fd(home_fd):
             raise OSError("the session home is not BOSS's own directory")
         _hook("session_home_made", path)
@@ -209,12 +228,20 @@ def _session_home(prefix: str, state_home: str, sandbox: Any, *,
                     # Linked BY NAME for the CLI (the run's uid) to resolve; BOSS never follows it.
                     os.symlink(os.path.join(state_home, entry), entry, dir_fd=home_fd)
         os.fchmod(home_fd, 0o2777 if sandbox is not None else 0o700)
+    except BaseException:
+        if not scoped:
+            cleanup()
+        raise
     finally:
-        os.close(home_fd)
+        if home_fd is not None:
+            os.close(home_fd)
         if state_fd is not None:
             os.close(state_fd)
-    if not model_proxy.on_session_end(cleanup):
+    if not scoped:
         log.debug("subscription shield: no session scope; %s is removed with its run", path)
+        if sandbox is not None:
+            with contextlib.suppress(OSError):
+                os.close(parent_fd)
     return path
 
 

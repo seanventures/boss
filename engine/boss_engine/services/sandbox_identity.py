@@ -333,11 +333,41 @@ class SandboxIdentity:
         only this run and BOSS can reach it (the run directory is 2770), and the run's uid must
         be able to edit what BOSS clones into it (the clone's own git runs with umask 0 —
         a per-spawn `umask` (Popen's), never the process-wide one)."""
-        import tempfile
+        return self.make_dir(prefix, 0o2777)   # setgid: what the run's uid creates stays boss's
 
-        path = Path(tempfile.mkdtemp(prefix=prefix, dir=str(self.run_dir)))
-        os.chmod(path, 0o2777)          # setgid: what the run's uid creates stays group boss
-        return path
+    def make_dir(self, prefix: str, mode: int) -> Path:
+        return make_run_dir(self, prefix, mode)
+
+
+def make_run_dir(ident: Any, prefix: str, mode: int) -> Path:
+    """THE ONE WAY BOSS MAKES A DIRECTORY IN A RUN'S DIRECTORY, which the run's uid owns and can
+    rename entries in at any moment (agents run until the run ends). A path-based mkdtemp +
+    chmod let a leftover agent swap the new directory for a link in between, and BOSS chmod-ed
+    the link's target. Now: a random name made through an fd on the run directory (whose own
+    name sits in a BOSS-owned root), opened O_NOFOLLOW, checked by fstat, and its mode set on
+    that fd — whatever the name points at afterwards."""
+    run_dir = Path(str(ident.run_dir))
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    name = f"{prefix}{os.urandom(6).hex()}"
+    run_fd = os.open(str(run_dir), flags)
+    try:
+        os.mkdir(name, 0o700, dir_fd=run_fd)
+        fd = os.open(name, flags, dir_fd=run_fd)
+    finally:
+        os.close(run_fd)
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid():
+            raise SandboxUnavailable("a new run directory is not BOSS's own")
+        _make_dir_hook(str(run_dir / name))
+        os.fchmod(fd, mode)
+    finally:
+        os.close(fd)
+    return run_dir / name
+
+
+def _make_dir_hook(path: str) -> None:
+    """Tests only: the point where a hostile run could swap the new directory's name."""
 
 
 _ACTIVE: dict[str, SandboxIdentity] = {}

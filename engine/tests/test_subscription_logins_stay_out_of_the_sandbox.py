@@ -512,3 +512,66 @@ def test_a_state_home_swapped_after_it_was_opened_is_not_followed(engine, upstre
     home = Path(env[f"{engine.upper()}_HOME"])
     assert not any("PLANTED_SECRET_VALUE" in p.read_text()
                    for p in home.iterdir() if p.is_file() and not p.is_symlink())
+
+
+# ── third review: every directory BOSS makes in a run's directory, and the laptop case ─────────
+
+@pytest.mark.parametrize("maker", ["workspace", "make_run_dir"])
+def test_a_run_directory_swapped_for_a_link_mid_creation_never_chmods_the_target(
+        maker, sandbox, tmp_path, monkeypatch):
+    secret = _secret_dir(tmp_path)
+    before = _snapshot(secret)
+    fired = []
+
+    def swap(path):
+        os.rename(path, path + ".moved")
+        os.symlink(secret, path)
+        fired.append(path)
+    monkeypatch.setattr(sandbox_identity, "_make_dir_hook", swap)
+    made = (sandbox.workspace("boss-review-copy-") if maker == "workspace"
+            else sandbox_identity.make_run_dir(sandbox, "mcp-", 0o2755))
+    assert fired and _snapshot(secret) == before          # mode and contents untouched
+    assert made.parent == sandbox.run_dir
+
+
+def test_a_symlinked_codex_home_on_an_unsandboxed_host_keeps_its_sessions(upstream, tmp_path,
+                                                                         monkeypatch,
+                                                                         control_plane):
+    """On a laptop BOSS's own tree is trusted: a CODEX_HOME that is a link (dotfiles) is followed,
+    so `codex exec resume` still finds its sessions."""
+    real = tmp_path / "dotfiles-codex"
+    (control_plane / ".codex").rename(real)
+    (real / "sessions").mkdir()
+    (control_plane / ".codex").symlink_to(real)
+    with mp.session_scope():
+        env = _codex_env(_settings())
+        home = Path(env["CODEX_HOME"])
+        assert (home / "sessions").is_symlink() and (home / "sessions").resolve() == (
+            real / "sessions").resolve()
+        assert mp.held_for(json.loads((home / "auth.json").read_text())["tokens"][
+            "access_token"]) == CODEX_ACCESS
+
+
+def test_a_session_ending_after_its_run_was_released_still_removes_its_home(upstream, sandbox):
+    """The session's cleanup holds its own dup of the run's fd: release() closing the original
+    neither breaks the cleanup nor lets it act on a reused fd number."""
+    with mp.session_scope():
+        home = Path(sandbox.env(_codex_env(_settings()))["CODEX_HOME"])
+        assert home.is_dir()
+        os.close(sandbox._sessions_fd)                  # what release() does
+        sandbox._sessions_fd = None
+    assert not home.exists()
+
+
+def test_a_session_home_that_fails_to_fill_is_removed(upstream, sandbox, monkeypatch):
+    made = []
+
+    def boom(event, path):
+        if event == "session_home_made":
+            made.append(path)
+            raise OSError("disk full")
+    monkeypatch.setattr(subscription_shield, "_hook", boom)
+    with pytest.raises(OSError):
+        with mp.session_scope():
+            _codex_env(_settings())
+    assert made and not Path(made[0]).exists()
