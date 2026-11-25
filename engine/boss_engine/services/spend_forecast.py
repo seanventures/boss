@@ -77,6 +77,18 @@ def _cap(connection: Any, org_id: str, scope_type: str, scope_id: str) -> Option
     return dict(row) if row else None
 
 
+def _project_cap(connection: Any, project_id: str) -> Optional[dict[str, Any]]:
+    """The project's own monthly cap (budget_policies, the one /v1/budget reads), if one is set."""
+    row = connection.execute(text(
+        "SELECT id, monthly_cap_usd_micros AS cap_usd_micros, soft_cap_pct AS warn_pct "
+        "FROM budget_policies WHERE scope_type = 'project' AND scope_id = :p "
+        "ORDER BY created_at DESC LIMIT 1"), {"p": project_id}).mappings().first()
+    if not row or not int(row["cap_usd_micros"] or 0):
+        return None
+    return {"id": row["id"], "cap_usd_micros": int(row["cap_usd_micros"]),
+            "warn_pct": float(row["warn_pct"] or 0.8), "hard_stop": None}
+
+
 def state_of(spent: int, forecast: int, cap: Optional[int], warn_pct: float) -> str:
     """at_cap | over_forecast | near | on_track | no_cap — the badge's one word."""
     if not cap:
@@ -151,6 +163,12 @@ def month_forecast(connection: Any, org_id: str, scope_type: str = "org", scope_
     rate = spent / max(elapsed, 1.0)
     forecast = int(round(spent + rate * left))
     policy = _cap(connection, org_id, scope_type, scope_id)
+    cap_source = "scoped_budget" if policy else None
+    if policy is None and scope_type == "project":
+        # A project with no scoped monthly budget still has its own monthly cap (Govern ›
+        # Limits, /v1/budget): the forecast is read against it.
+        policy = _project_cap(connection, scope_id)
+        cap_source = "project_budget" if policy else None
     cap = int(policy["cap_usd_micros"]) if policy else None
     warn = float(policy["warn_pct"]) if policy else 0.8
     return {
@@ -162,8 +180,9 @@ def month_forecast(connection: Any, org_id: str, scope_type: str = "org", scope_
         "run_rate_usd_micros_per_day": int(round(rate)),
         "forecast_usd_micros": forecast,
         "cap_usd_micros": cap, "warn_pct": warn,
-        "hard_stop": bool(policy["hard_stop"]) if policy else None,
-        "policy_id": policy["id"] if policy else None,
+        "hard_stop": (bool(policy["hard_stop"]) if policy and policy.get("hard_stop") is not None
+                      else None),
+        "policy_id": policy["id"] if policy else None, "cap_source": cap_source,
         "state": state_of(spent, forecast, cap, warn),
         "projects": projects,
         "by_project": by_project, "daily": daily,

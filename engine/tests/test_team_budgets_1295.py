@@ -33,8 +33,33 @@ def eng():
     engine.dispose()
 
 
+def scope_check_block() -> str:
+    from boss_engine.config import get_settings
+    from boss_engine.db import split_statements
+
+    sql = get_settings().schema_path.read_text(encoding="utf-8")
+    blocks = [s for s in split_statements(sql) if "scoped_budget_policies_scope_type_check" in s]
+    assert len(blocks) == 1, "one definition of the scoped budget scope check"
+    return blocks[0]
+
+
+def apply_scope_check(eng) -> None:
+    """Run this tree's scope check as ensure_schema does (the raw statement, no parameters).
+    The shared test server also serves suites from older trees, whose boots put back a check
+    without `team`; each test re-asserts this tree's."""
+    raw = eng.raw_connection()
+    try:
+        with raw.cursor() as cursor:
+            cursor.execute("SET lock_timeout = '10s'")
+            cursor.execute(scope_check_block())
+        raw.commit()
+    finally:
+        raw.close()
+
+
 @pytest.fixture()
 def world(eng):
+    apply_scope_check(eng)
     sb.reset_for_tests()
     sfx = uuid4().hex[:8]
     w = {"org": f"org_1295_{sfx}", "ws": f"ws_1295_{sfx}", "a": f"pa_1295_{sfx}",
@@ -65,6 +90,8 @@ def world(eng):
                       {"i": "bnd_" + uuid4().hex[:16], "o": w["org"], "st": subject_type,
                        "s": subject, "p": project})
     yield w
+    with eng.begin() as c:   # a team row left behind would fail an older schema's check rewrite
+        c.execute(text("DELETE FROM scoped_budget_policies WHERE org_id LIKE :o"), {"o": f"{w['org']}%"})
     sb.reset_for_tests()
 
 
@@ -102,6 +129,9 @@ def test_the_pilot_preset_is_a_2000_monthly_hard_stop_team_cap():
     assert body["period"] == "month" and body["hard_stop"] is True and body["warn_pct"] == 0.8
     # what the caller names wins
     assert sb.apply_preset({"preset": "pilot_2000", "cap_usd_micros": 5 * DOLLAR})["cap_usd_micros"] == 5 * DOLLAR
+    # an explicit False / 0.0 is a choice, not a blank (review M3)
+    named = sb.apply_preset({"preset": "pilot_2000", "hard_stop": False, "warn_pct": 0.5})
+    assert named["hard_stop"] is False and named["warn_pct"] == 0.5
     with pytest.raises(sb.ScopedBudgetError):
         sb.apply_preset({"preset": "nope"})
 
@@ -175,4 +205,61 @@ def test_forecast_refuses_a_project_or_team_outside_the_org(eng, world):
             sf.month_forecast(c, world["org"], "project", "p_elsewhere")
         with pytest.raises(sb.ScopedBudgetError):
             sf.month_forecast(c, world["org"], "team", "grp_elsewhere")
-        assert {t["id"]: t["members"] for t in sb.list_teams(c, world["org"])} == {world["team"]: 2}
+        teams = sb.list_teams(c, world["org"])
+    assert {t["id"]: t["members"] for t in teams} == {world["team"]: 2}
+    assert teams[0]["projects"] == sorted([world["a"], world["b"]])
+
+
+def test_team_spend_counts_only_the_orgs_projects(eng, world):
+    """A member bound to a project of ANOTHER org: that project's spend is not the team's, so
+    the cap (spent) and the forecast agree (review M4)."""
+    other_org, other_ws, other_p = (f"{world['org']}_x", f"{world['ws']}_x", f"{world['a']}_x")
+    with eng.begin() as c:
+        c.execute(text("INSERT INTO orgs (id, name) VALUES (:o, 'x')"), {"o": other_org})
+        c.execute(text("INSERT INTO workspaces (id, org_id, name) VALUES (:w, :o, 'x')"),
+                  {"w": other_ws, "o": other_org})
+        c.execute(text("INSERT INTO projects (id, workspace_id, name, slug) VALUES (:p, :w, :p, :p)"),
+                  {"p": other_p, "w": other_ws})
+        c.execute(text("INSERT INTO identity_role_bindings (id, org_id, subject_type, subject_id, role_id, "
+                       "scope_type, scope_id, granted_by) VALUES (:i, :o, 'principal', :u, 'arl_operator', "
+                       "'project', :p, 'test')"),
+                  {"i": "bnd_" + uuid4().hex[:16], "o": other_org, "u": world["ann"], "p": other_p})
+    _spend(eng, world["a"], 3)
+    _spend(eng, other_p, 500)
+    with eng.begin() as c:
+        policy = sb.set_policy(c, org_id=world["org"], scope_type="team", scope_id=world["team"],
+                               cap_usd_micros=10 * DOLLAR, actor="ceo")
+        got = sf.month_forecast(c, world["org"], "team", world["team"])
+    assert policy["spent_usd_micros"] == got["spent_usd_micros"] == 3 * DOLLAR
+
+
+def test_a_project_forecast_reads_the_projects_own_monthly_cap(eng, world):
+    with eng.begin() as c:
+        c.execute(text("INSERT INTO budget_policies (id, scope_type, scope_id, daily_cap_usd_micros, "
+                       "monthly_cap_usd_micros, burst_cap_usd_micros_per_min) VALUES (:i, 'project', :p, "
+                       "50000000, 300000000, 1000000)"), {"i": f"bp_{uuid4().hex[:8]}", "p": world["a"]})
+        got = sf.month_forecast(c, world["org"], "project", world["a"])
+        assert got["cap_usd_micros"] == 300 * DOLLAR and got["cap_source"] == "project_budget"
+        sb.set_policy(c, org_id=world["org"], scope_type="project", scope_id=world["a"],
+                      cap_usd_micros=100 * DOLLAR, actor="ceo")
+        scoped = sf.month_forecast(c, world["org"], "project", world["a"])
+    assert scoped["cap_usd_micros"] == 100 * DOLLAR and scoped["cap_source"] == "scoped_budget"
+
+
+def test_the_schema_applies_twice_with_a_team_budget_present(eng, world):
+    """ONE definition of the scope check in schema.sql, and it holds a `team` row: run twice
+    with one present it neither fails nor rewrites the constraint (review S1). (Read from the
+    file and run here, not through a whole ensure_schema: the shared test server's other
+    boots record their own failures in schema_apply_runs.)"""
+    scope_check_block()   # exactly one definition
+    with eng.begin() as c:
+        sb.set_policy(c, org_id=world["org"], scope_type="team", scope_id=world["team"],
+                      cap_usd_micros=DOLLAR, actor="ceo")
+    apply_scope_check(eng)
+    apply_scope_check(eng)
+    with eng.begin() as c:
+        check = c.execute(text(
+            "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+            "WHERE conname = 'scoped_budget_policies_scope_type_check' "
+            "AND conrelid = 'scoped_budget_policies'::regclass")).scalars().all()
+    assert len(check) == 1 and "'team'" in check[0]

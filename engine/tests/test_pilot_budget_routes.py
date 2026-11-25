@@ -25,10 +25,29 @@ def eng():
     engine.dispose()
 
 
+def _apply_scope_check(eng) -> None:
+    """This tree's scope check, as ensure_schema runs it: the shared test server also serves
+    older trees whose boots put back a check without `team`."""
+    from boss_engine.config import get_settings
+    from boss_engine.db import split_statements
+
+    sql = get_settings().schema_path.read_text(encoding="utf-8")
+    block = next(s for s in split_statements(sql) if "scoped_budget_policies_scope_type_check" in s)
+    raw = eng.raw_connection()
+    try:
+        with raw.cursor() as cursor:
+            cursor.execute("SET lock_timeout = '10s'")
+            cursor.execute(block)
+        raw.commit()
+    finally:
+        raw.close()
+
+
 @pytest.fixture()
 def world(eng):
     from boss_engine.services import scoped_budgets
 
+    _apply_scope_check(eng)
     scoped_budgets.reset_for_tests()
     sfx = uuid4().hex[:8]
     w = {"org": f"org_pr_{sfx}", "ws": f"ws_pr_{sfx}", "p": f"p_pr_{sfx}", "team": f"grp_pr_{sfx}"}
@@ -47,6 +66,8 @@ def world(eng):
         c.execute(text("INSERT INTO llm_calls (id, project_id, code_task_run_id, cost_usd_micros) "
                        "VALUES (:i, :p, 'ctr_route', 12000000)"), {"i": f"llmc_{sfx}", "p": w["p"]})
     yield w
+    with eng.begin() as c:   # a team row left behind would fail an older schema's check rewrite
+        c.execute(text("DELETE FROM scoped_budget_policies WHERE org_id = :o"), {"o": w["org"]})
     scoped_budgets.reset_for_tests()
 
 

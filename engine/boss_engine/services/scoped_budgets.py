@@ -86,18 +86,19 @@ def team_projects(connection: Any, group_id: str) -> list[str]:
 
 
 def list_teams(connection: Any, org_id: str) -> list[dict[str, Any]]:
-    """The org's teams (identity groups) with their member and project counts."""
+    """The org's teams (identity groups), each with its member count and the projects of the org
+    its spend rolls up from — one query, however many teams."""
     rows = connection.execute(text(
         "SELECT g.id, g.key, g.name, "
-        " (SELECT COUNT(*) FROM identity_group_members m WHERE m.group_id = g.id) AS members "
+        " (SELECT COUNT(*) FROM identity_group_members m WHERE m.group_id = g.id) AS members, "
+        " COALESCE((SELECT array_agg(DISTINCT x.scope_id ORDER BY x.scope_id) FROM ("
+        f"   {team_projects_sql('g.id')}) x "
+        "   JOIN projects p ON p.id = x.scope_id JOIN workspaces w ON w.id = p.workspace_id "
+        "   WHERE w.org_id = g.org_id), ARRAY[]::text[]) AS projects "
         "FROM identity_groups g WHERE g.org_id = :o ORDER BY lower(g.name), g.id"),
         {"o": org_id}).mappings().all()
-    out = []
-    for r in rows:
-        out.append({"id": r["id"], "key": r["key"], "name": r["name"],
-                    "members": int(r["members"] or 0),
-                    "projects": team_projects(connection, str(r["id"]))})
-    return out
+    return [{"id": r["id"], "key": r["key"], "name": r["name"], "members": int(r["members"] or 0),
+             "projects": [str(p) for p in (r["projects"] or [])]} for r in rows]
 
 
 def apply_preset(body: dict[str, Any]) -> dict[str, Any]:
@@ -110,7 +111,8 @@ def apply_preset(body: dict[str, Any]) -> dict[str, Any]:
         raise ScopedBudgetError(f"preset is one of {', '.join(PRESETS)}")
     out = dict(body)
     for field, value in preset.items():
-        if field != "label" and out.get(field) in (None, "", 0):
+        # A value the caller named wins, False and 0 included (hard_stop: false is a choice).
+        if field != "label" and (field not in out or out[field] is None or out[field] == ""):
             out[field] = value
     return out
 
@@ -291,7 +293,8 @@ def spent(connection: Any, policy: dict[str, Any], now: Optional[datetime] = Non
         # and its deployment (agent_runs.trigger_id / deployment_id).
         "trigger": "l.run_id IN (SELECT r.id FROM agent_runs r WHERE r.trigger_id = :s)",
         "deployment": "l.run_id IN (SELECT r.id FROM agent_runs r WHERE r.deployment_id = :s)",
-        "team": f"l.project_id IN ({team_projects_sql(':s')})",
+        # Only the org's own projects: the same set the forecast reads (spend_forecast).
+        "team": f"l.project_id IN ({team_projects_sql(':s')}) AND {in_org}",
     }[str(policy["scope_type"])]
     money = LLM_MONEY_SQL.replace("included_in_subscription", "l.included_in_subscription") \
         .replace("cost_usd_micros", "l.cost_usd_micros")

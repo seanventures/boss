@@ -109,24 +109,47 @@ def review_time(connection: Any, projects: list[str], since: datetime, until: da
 
 
 def regressions(connection: Any, projects: list[str], since: datetime, until: datetime) -> dict[str, Any]:
-    blocked = connection.execute(text(
-        "SELECT q.code_task_run_id AS run_id, q.project_id, q.created_at, q.gates_failed, r.title "
-        "FROM quality_gates q LEFT JOIN code_task_runs r ON r.id = q.code_task_run_id "
-        "WHERE q.project_id = ANY(:ids) AND q.created_at >= :since AND q.created_at < :until "
-        "AND q.status = 'fail' AND q.tests_passed = false ORDER BY q.created_at DESC"),
-        {"ids": projects, "since": since, "until": until}).mappings().all()
+    """HELD BEFORE MERGE: every build whose tests failed at a recorded gate. Read from the
+    ``quality_gate.recorded`` events — the ``quality_gates`` row is one per run and a later
+    passing gate overwrites its status, so the table alone forgets a failure a repair round
+    fixed. The table is read too, for gates recorded before their event was kept.
+    STOPPED AFTER MERGE: deploys rolled back and change sets rolled back or reverted, each
+    with its source (entity type and id)."""
+    params = {"ids": projects, "since": since, "until": until}
+    from_events = connection.execute(text(
+        "SELECT e.data->>'code_task_run_id' AS run_id, e.project_id, e.created_at AS at, "
+        " e.data->'gates_failed' AS gates_failed "
+        "FROM events e WHERE e.event_type = 'quality_gate.recorded' AND e.project_id = ANY(:ids) "
+        "AND e.created_at >= :since AND e.created_at < :until AND e.data->>'status' = 'fail' "
+        "AND COALESCE(e.data->'gates_failed', '[]'::jsonb) ? 'tests_passed' "
+        "AND e.data->>'code_task_run_id' IS NOT NULL"), params).mappings().all()
+    from_table = connection.execute(text(
+        "SELECT q.code_task_run_id AS run_id, q.project_id, q.created_at AS at, q.gates_failed "
+        "FROM quality_gates q WHERE q.project_id = ANY(:ids) AND q.created_at >= :since "
+        "AND q.created_at < :until AND q.status = 'fail' AND q.code_task_run_id IS NOT NULL "
+        "AND (q.tests_passed = false OR COALESCE(q.gates_failed, '[]'::jsonb) ? 'tests_passed')"),
+        params).mappings().all()
+    held: dict[str, dict[str, Any]] = {}
+    for r in list(from_events) + list(from_table):
+        run = str(r["run_id"])
+        seen = held.get(run)
+        if seen is None or (r["at"] is not None and r["at"] < seen["at_raw"]):
+            held[run] = {"run_id": run, "project_id": r["project_id"], "at_raw": r["at"],
+                         "gates_failed": _strings(r["gates_failed"])}
+    titles = dict(connection.execute(text(
+        "SELECT id, title FROM code_task_runs WHERE id = ANY(:r)"), {"r": list(held)}).all()) if held else {}
+    before_items = sorted(
+        ({"run_id": h["run_id"], "project_id": h["project_id"], "title": titles.get(h["run_id"]),
+          "at": _iso(h["at_raw"]), "gates_failed": h["gates_failed"]} for h in held.values()),
+        key=lambda i: i["at"] or "", reverse=True)
     after = connection.execute(text(
         "SELECT e.event_type, e.entity_type, e.entity_id, e.project_id, e.created_at "
         "FROM events e WHERE e.project_id = ANY(:ids) AND e.created_at >= :since "
         "AND e.created_at < :until AND e.event_type IN "
         "('deploy.rolled_back', 'change_set.rolled_back', 'change_set.reverted') "
-        "ORDER BY e.created_at DESC"),
-        {"ids": projects, "since": since, "until": until}).mappings().all()
-    before_items = [{"run_id": r["run_id"], "project_id": r["project_id"], "title": r["title"],
-                     "at": _iso(r["created_at"]),
-                     "gates_failed": _strings(r["gates_failed"])}
-                    for r in blocked]
-    after_items = [{"kind": r["event_type"], "run_id": r["entity_id"] if r["entity_type"] == "code_task_run" else None,
+        "ORDER BY e.created_at DESC"), params).mappings().all()
+    after_items = [{"kind": r["event_type"], "entity_type": r["entity_type"], "entity_id": r["entity_id"],
+                    "run_id": r["entity_id"] if r["entity_type"] == "code_task_run" else None,
                     "change_set_id": r["entity_id"] if r["entity_type"] == "change_set" else None,
                     "project_id": r["project_id"], "at": _iso(r["created_at"])} for r in after]
     return {"blocked_before_merge": len(before_items), "stopped_after_merge": len(after_items),
@@ -226,10 +249,32 @@ def compute(connection: Any, org_id: str, *, scope_type: str = "org", scope_id: 
     }
 
 
+#: A cell a spreadsheet would read as a formula (CSV injection): =, +, -, @, tab, CR.
+_FORMULA_LEAD = ("=", "+", "-", "@", "\t", "\r")
+
+
+def safe_cell(value: Any) -> Any:
+    """A string cell that a spreadsheet would run as a formula, made text with a leading '.
+    Numbers stay numbers. Every string cell of the export goes through here."""
+    if isinstance(value, str) and value.startswith(_FORMULA_LEAD):
+        return "'" + value
+    return value
+
+
+class _SafeWriter:
+    def __init__(self, out: io.StringIO):
+        self._w = csv.writer(out)
+
+    def writerow(self, row: list[Any]) -> None:
+        self._w.writerow([safe_cell(v) for v in row])
+
+
 def to_csv(report: dict[str, Any]) -> str:
-    """One CSV: a summary block (metric, before, after) then every counted item with its source."""
+    """One CSV: a summary block (metric, before, after) then every counted item with its source.
+    Formula-like strings are escaped (``safe_cell``): alert names, titles and URLs come from
+    outside BOSS."""
     out = io.StringIO()
-    w = csv.writer(out)
+    w = _SafeWriter(out)
     w.writerow(["section", "metric", "before", "after", "source", "project_id", "at", "detail"])
     before = report["baseline"]["values"]
     for key in BASELINE_FIELDS:
@@ -242,8 +287,8 @@ def to_csv(report: dict[str, Any]) -> str:
         w.writerow(["regressions", "blocked_before_merge", "", 1, i["run_id"], i["project_id"], i["at"],
                     ";".join(i["gates_failed"])])
     for i in report["regressions"]["after_merge_items"]:
-        w.writerow(["regressions", "stopped_after_merge", "", 1, i["run_id"] or i["change_set_id"] or "",
-                    i["project_id"], i["at"], i["kind"]])
+        w.writerow(["regressions", "stopped_after_merge", "", 1,
+                    f"{i['entity_type']}:{i['entity_id']}", i["project_id"], i["at"], i["kind"]])
     for i in report["post_deploy"]["items"]:
         w.writerow(["post_deploy", "auto_remediated" if i["auto_remediated"] else "alerted", "", 1,
                     i["incident_id"] or i["alert_id"], i["project_id"], i["fired_at"], i["alertname"]])

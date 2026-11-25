@@ -97,12 +97,25 @@ def test_regressions_before_and_after_merge(eng, world):
                            "gates_failed) VALUES (:i, :p, :r, :s, :t, CAST(:g AS JSONB))"),
                       {"i": _id("qg"), "p": p, "r": run, "s": status, "t": tests_passed,
                        "g": json.dumps([] if tests_passed else ["tests_passed"])})
+        # A gate that failed on tests, then passed after a repair round: the row now says pass,
+        # the event still remembers the failure (review M6).
+        repaired = _id("ctr")
+        c.execute(text("INSERT INTO quality_gates (id, project_id, code_task_run_id, status, tests_passed) "
+                       "VALUES (:i, :p, :r, 'pass', true)"), {"i": _id("qg"), "p": p, "r": repaired})
+        _event(c, p, "quality_gate.recorded", "quality_gate", _id("qg"),
+               {"status": "fail", "gates_failed": ["tests_passed"], "code_task_run_id": repaired}, NOW)
+        _event(c, p, "quality_gate.recorded", "quality_gate", _id("qg"),
+               {"status": "fail", "gates_failed": ["review_clean"], "code_task_run_id": _id("ctr")}, NOW)
         _event(c, p, "deploy.rolled_back", "code_task_run", "ctr_deployed", {"health": "500"}, NOW)
+        _event(c, p, "deploy.rolled_back", "deployment", "dep_7", {}, NOW)
         _event(c, p, "change_set.reverted", "change_set", "cs_1", {}, NOW)
         got = pm.regressions(c, [p], NOW - timedelta(days=30), NOW + timedelta(days=1))
-    assert got["blocked_before_merge"] == 1 and got["stopped_after_merge"] == 2 and got["total"] == 3
-    assert got["before_merge_items"][0]["gates_failed"] == ["tests_passed"]
-    assert {i["run_id"] or i["change_set_id"] for i in got["after_merge_items"]} == {"ctr_deployed", "cs_1"}
+    assert got["blocked_before_merge"] == 2 and got["stopped_after_merge"] == 3 and got["total"] == 5
+    assert repaired in {i["run_id"] for i in got["before_merge_items"]}
+    assert all(i["gates_failed"] == ["tests_passed"] for i in got["before_merge_items"])
+    # every after-merge item names its source, whatever its entity type (review M7)
+    assert {(i["entity_type"], i["entity_id"]) for i in got["after_merge_items"]} == {
+        ("code_task_run", "ctr_deployed"), ("change_set", "cs_1"), ("deployment", "dep_7")}
 
 
 def _alert(c, project, *, incident=None, notified=True, acked=None):
@@ -167,3 +180,23 @@ def test_report_and_csv_export(eng, world):
     assert summary["review_hours_median"]["before"] == "30.0" and summary["review_hours_median"]["after"] == "2.0"
     review = [r for r in rows if r["section"] == "review"]
     assert len(review) == 1 and review[0]["source"].startswith("ctr_")
+
+
+def test_the_csv_never_carries_a_formula():
+    """CSV injection (review S2): a string cell a spreadsheet would run is made text."""
+    evil = '=HYPERLINK("http://evil.test","open")'
+    report = {
+        "label": "+Team", "days": 30, "until": "2026-11-25T00:00:00+00:00",
+        "baseline": {"values": {}}, "after": {k: None for k in pm.BASELINE_FIELDS},
+        "review": {"items": [{"hours": 1.0, "run_id": "ctr_1", "project_id": "p", "opened_at": None,
+                              "pull_request_url": evil}]},
+        "regressions": {"before_merge_items": [{"run_id": "ctr_2", "project_id": "p", "at": None,
+                                                "gates_failed": ["-x"]}],
+                        "after_merge_items": []},
+        "post_deploy": {"items": [{"auto_remediated": False, "incident_id": None, "alert_id": "@a",
+                                   "project_id": "p", "fired_at": None, "alertname": "\tcmd"}]},
+    }
+    cells = [c for row in csv.reader(io.StringIO(pm.to_csv(report))) for c in row]
+    assert "'" + evil in cells and "'-x" in cells and "'@a" in cells and "'\tcmd" in cells
+    assert not any(c.startswith(("=", "+", "-", "@", "\t", "\r")) for c in cells)
+    assert pm.safe_cell(-3) == -3 and pm.safe_cell("ok") == "ok"

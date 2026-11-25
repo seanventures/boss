@@ -22,7 +22,8 @@ import type { Team } from "./scoped-budgets";
 type ReviewItem = { pull_request_url: string | null; run_id: string; project_id: string; opened_at: string | null;
   approved_at: string | null; hours: number | null };
 type BlockedItem = { run_id: string; project_id: string; title: string | null; at: string | null; gates_failed: string[] };
-type AfterItem = { kind: string; run_id: string | null; change_set_id: string | null; project_id: string; at: string | null };
+type AfterItem = { kind: string; entity_type?: string; entity_id?: string; run_id: string | null; change_set_id: string | null;
+  project_id: string; at: string | null };
 type AlertItem = { alert_id: string; project_id: string; alertname: string; fired_at: string | null; notified: boolean;
   incident_id: string | null; auto_remediated: boolean; fix_run_id: string | null; handled_by_person: boolean };
 export type BaselineKey = "review_hours_median" | "regressions_caught_per_month" | "post_deploy_alerts_per_month" | "auto_remediated_pct";
@@ -123,16 +124,16 @@ function Sources({ count, testid, children }: { count: number; testid: string; c
   );
 }
 
-function Metric({ icon, title, value, sub, keyName, report, testid, children }: {
+function Metric({ icon, title, value, sub, keyName, report, testid, tip, children }: {
   icon: React.ReactNode; title: string; value: string; sub: string; keyName: BaselineKey; report: PilotReport; testid: string;
-  children?: React.ReactNode;
+  tip?: string; children?: React.ReactNode;
 }) {
   const before = report.baseline.values[keyName];
   const vs = versus(keyName, before, report.after[keyName]);
   const unit = BASELINE_LABELS[keyName].unit;
   return (
     <section className="gv-card gv-pm-metric" data-testid={testid} aria-label={title}>
-      <h3 className="gv-sec-head">{icon}{title.toUpperCase()}</h3>
+      <h3 className="gv-sec-head" title={tip}>{icon}{title.toUpperCase()}</h3>
       <div className="gv-pm-value">
         <b data-testid={`${testid}-value`}>{value}</b>
         {vs ? (
@@ -284,6 +285,7 @@ export function PilotMetrics({ projectId, actor }: { projectId: string; actor: s
             </Metric>
             <Metric icon={<ShieldCheck size={16} aria-hidden />} title="Regressions caught" keyName="regressions_caught_per_month" report={r}
                     testid="gv-pm-regressions" value={String(r.regressions.total)}
+                    tip="Held before merge: builds whose tests failed at a gate, counted once per build. Stopped after merge: deploys rolled back, changes rolled back or reverted."
                     sub={`${r.regressions.blocked_before_merge} held before merge, ${r.regressions.stopped_after_merge} stopped after`}>
               <Share part={r.regressions.blocked_before_merge} whole={r.regressions.total} label="before merge" testid="gv-pm-reg-share" />
               <Sources count={r.regressions.before_merge_items.length + r.regressions.after_merge_items.length} testid="gv-pm-reg-items">
@@ -297,7 +299,8 @@ export function PilotMetrics({ projectId, actor }: { projectId: string; actor: s
                 {r.regressions.after_merge_items.map((i, n) => (
                   <li key={`${i.kind}-${n}`}>
                     {i.run_id ? <a className="ag-link" href={buildHref(i.run_id)}>{i.kind === "deploy.rolled_back" ? "Deploy rolled back" : "Change undone"}<ArrowSquareOut size={12} aria-hidden /></a>
-                      : <span title={i.change_set_id ?? ""}>{i.kind === "change_set.reverted" ? "Change reverted" : "Change rolled back"}</span>}
+                      : <span title={`${i.entity_type ?? ""} ${i.entity_id ?? i.change_set_id ?? ""}`.trim()}>
+                          {i.kind === "change_set.reverted" ? "Change reverted" : i.kind === "deploy.rolled_back" ? "Deploy rolled back" : "Change rolled back"}</span>}
                     <span className="gv-hbar-value">{shortDay(i.at)}</span>
                   </li>
                 ))}

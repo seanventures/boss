@@ -26,6 +26,8 @@ export type Forecast = {
   period_start: string; period_end: string; days_elapsed: number; days_left: number;
   spent_usd_micros: number; run_rate_usd_micros_per_day: number; forecast_usd_micros: number;
   cap_usd_micros: number | null; warn_pct: number; hard_stop: boolean | null;
+  /** Where the cap comes from: a scoped monthly budget, or (a project) its own monthly cap. */
+  cap_source?: "scoped_budget" | "project_budget" | null;
   state: "at_cap" | "over_forecast" | "near" | "on_track" | "no_cap";
   daily: { day: string; money_usd_micros: number }[];
   by_project: { id: string; name: string; money_usd_micros: number }[];
@@ -114,7 +116,8 @@ export function ForecastCard({ projectId }: { projectId: string }) {
               <b data-testid="gv-fc-spent">{money(data.spent_usd_micros)}</b></span>
             <span className="gv-fc-stat" title="Spent so far + today's daily average x days left">
               <span className="gv-fc-k">Forecast</span><b data-testid="gv-fc-forecast">{money(data.forecast_usd_micros)}</b></span>
-            <span className="gv-fc-stat"><span className="gv-fc-k">{data.hard_stop ? "Hard cap" : "Cap"}</span>
+            <span className="gv-fc-stat"><span className="gv-fc-k" title={data.cap_source === "project_budget" ? "The project's monthly cap in Limits" : undefined}>
+                {data.hard_stop ? "Hard cap" : data.cap_source === "project_budget" ? "Project cap" : "Cap"}</span>
               <b data-testid="gv-fc-cap">{cap ? money(cap) : "None"}</b></span>
             <span className="gv-state gv-fc-badge" data-state={badge!.tone} data-testid="gv-fc-badge"
                   title={cap ? (data.hard_stop ? "At the cap new work is refused; nobody is asked mid-build" : "Warns only") : "Set one in Limits"}>
