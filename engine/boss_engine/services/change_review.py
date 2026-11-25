@@ -999,8 +999,11 @@ class GitHubSource:
                 token = person_token()
             except Exception:  # noqa: BLE001 — no linked account: the app posts it for them
                 token = None
-        poster = person_adapter(self.adapter, token) if token else self.adapter
-        return (poster, poster is not self.adapter)
+        # A person's linked account is on the install's GitHub: as them only there (BOSSAPP-1286).
+        same_host = github_urls.api_base(getattr(self.adapter, "api_base_url", "") or "") == \
+            github_urls.api_base()
+        return (person_adapter(self.adapter, token), True) if token and same_host \
+            else (self.adapter, False)
 
     @staticmethod
     def _signed(body: str, author: str, as_person: bool, severity: Optional[str] = None) -> str:

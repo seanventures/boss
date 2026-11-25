@@ -78,6 +78,13 @@ def _github_connection(engine, pid: str) -> str:
     return cid
 
 
+
+def _tok(hub):
+    """The connection's token, tagged with the local GitHub it belongs to (BOSSAPP-1286)."""
+    from boss_engine.identity import github_urls
+
+    return github_urls.tag("gate-token", hub.api_url)
+
 def _reach(hub: LocalGitHub, connection_id, *, token_kind="app"):
     from boss_engine.services.github_adapter import GitHubAdapter
     from boss_engine.services.local_publish import GitHubReach
@@ -85,7 +92,7 @@ def _reach(hub: LocalGitHub, connection_id, *, token_kind="app"):
 
     settings = get_settings()
     return GitHubReach(
-        adapter_for=lambda o, r: GitHubAdapter(settings, owner=o, repo=r, token="gate-token",
+        adapter_for=lambda o, r: GitHubAdapter(settings, owner=o, repo=r, token=_tok(hub),
                                                api_base_url=hub.api_url),
         access_for=lambda o, r: GitAccess(hub.git_url(o, r), via="token"),
         create_token="gate-token", create_token_kind=token_kind, api_base_url=hub.api_url,
@@ -349,7 +356,7 @@ def test_a_github_outage_finishes_the_build_locally_then_pushes_and_opens_the_pr
     # The build's adapter: GitHub's, falling back to the mirror once GitHub stops answering.
     switched = []
     gh = github_outage.ResilientGitHub(
-        GitHubAdapter(settings, owner=owner, repo=repo, token="gate-token", api_base_url=hub.api_url),
+        GitHubAdapter(settings, owner=owner, repo=repo, token=_tok(hub), api_base_url=hub.api_url),
         settings=settings, project_id=pid, run_id=run_id, engine=engine,
         on_switch=switched.append)
     gh.ensure_branch(branch, "main")
@@ -389,7 +396,7 @@ def test_a_github_outage_finishes_the_build_locally_then_pushes_and_opens_the_pr
     assert waiting and waiting[0]["branch"] == branch and "waits for GitHub" in waiting[0]["words"]
 
     def github(c, s, project_id, o, r):
-        return (GitHubAdapter(s, owner=o, repo=r, token="gate-token", api_base_url=hub.api_url),
+        return (GitHubAdapter(s, owner=o, repo=r, token=_tok(hub), api_base_url=hub.api_url),
                 GitAccess(hub.git_url(o, r), via="token"))
 
     pending_id = waiting[0]["id"]

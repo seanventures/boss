@@ -461,6 +461,11 @@ def test_ci_is_read_with_the_token_clone_and_pr_use(monkeypatch):
     monkeypatch.setattr(kit_connections, "github_state",
                         lambda *a, **k: {"connected": True, "repo": "acme/shop"})
     monkeypatch.setattr(kit_connections, "github_token", lambda *a, **k: "connection-token")
+    # The connection's credential comes WITH its host now (BOSSAPP-1286).
+    from boss_engine.services import github_connections
+
+    monkeypatch.setattr(github_connections, "github_access_for",
+                        lambda *a, **k: ("connection-token", "https://api.github.com"))
     asked = []
     monkeypatch.setattr(github_app_adapter, "repo_token",
                         lambda s, o, r, **k: asked.append((o, r)) or "app-token")

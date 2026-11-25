@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from boss_engine.identity import github_urls  # noqa: E402
 import httpx
 import pytest
 
@@ -194,7 +195,7 @@ def test_branch_snapshot_compare_and_checks_use_immutable_github_reads(monkeypat
         _settings(),
         owner="octo",
         repo="project",
-        token="scoped-token",
+        token=github_urls.tag("scoped-token", "https://github.example/api/v3"),
         api_base_url="https://github.example/api/v3",
     )
 
