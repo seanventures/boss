@@ -244,6 +244,14 @@ def test_github_alias_security_filtering_loop_guard_and_dedupe(
         content=bot_raw,
         headers=_headers(bot_raw, "issues", "self-bot"),
     ).status_code == 204
+    other_bot_payload = _payload("issues", sender="dependabot[bot]")
+    other_bot_payload["sender"]["type"] = "Bot"
+    other_bot_raw = json.dumps(other_bot_payload).encode()
+    assert client.post(
+        "/v1/webhooks/github",
+        content=other_bot_raw,
+        headers=_headers(other_bot_raw, "issues", "other-bot"),
+    ).status_code == 202
 
     headers = _headers(raw, "issues", "dedupe")
     first = client.post("/v1/webhooks/github", content=raw, headers=headers)

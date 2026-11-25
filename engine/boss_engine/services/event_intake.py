@@ -1576,19 +1576,20 @@ def process_due(engine: Any, settings: Any = None, *, limit: int = PROCESSOR_BAT
                 project_id: Optional[str] = None) -> dict:
     """One pass: claim what is due (in `project_id` only, when given), process each row in its
     own transaction."""
-    from ..db import begin
+    from ..db import background, begin
 
-    settings = settings or _settings()
-    with begin(engine) as c:
-        # One clock for the claim and for the backoff written on the rows it takes.
-        now = _due_now(c, now)
-        rows = claim(c, limit=limit, holder=holder, now=now, project_id=project_id)
-    out = {"claimed": len(rows), "routed": 0, "ignored": 0, "filtered": 0, "refused": 0,
-           "failed": 0, "dead": 0, "received": 0, "deferred": 0, "digest": 0}
-    for row in rows:
-        got = process_one(engine, settings, row, now=now)
-        out[got["status"]] = out.get(got["status"], 0) + 1
-    return out
+    with background():
+        settings = settings or _settings()
+        with begin(engine) as c:
+            # One clock for the claim and for the backoff written on the rows it takes.
+            now = _due_now(c, now)
+            rows = claim(c, limit=limit, holder=holder, now=now, project_id=project_id)
+        out = {"claimed": len(rows), "routed": 0, "ignored": 0, "filtered": 0, "refused": 0,
+               "failed": 0, "dead": 0, "received": 0, "deferred": 0, "digest": 0}
+        for row in rows:
+            got = process_one(engine, settings, row, now=now)
+            out[got["status"]] = out.get(got["status"], 0) + 1
+        return out
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════

@@ -669,8 +669,11 @@ def test_every_worker_control_plane_route_and_sweep_runs_as_background_work(monk
     from boss_engine.identity import shadow_report
     from boss_engine.services import (
         backup_scheduler,
+        chat_reply,
         claude_login,
         codex_login,
+        event_intake,
+        reflection,
         run_plane,
         skill_sources,
         stop_watch,
@@ -697,6 +700,9 @@ def test_every_worker_control_plane_route_and_sweep_runs_as_background_work(monk
         skill_sources.sync_due,
         ext_jobs.run_due,
         ticket_sync.tick,
+        chat_reply.drain,
+        reflection.reflect_due,
+        event_intake.process_due,
         run_plane._HostWaiters.sweep,
         run_plane._HostWaiters.sweep_desired,
         worker_longpoll._LocalWaiters.sweep,
@@ -767,6 +773,71 @@ def test_every_worker_control_plane_route_and_sweep_runs_as_background_work(monk
         focused_router.TickAllRequest(project_id="p_test", actor="worker")
     )
     assert focused_seen == {"bg": True, "open_tx": (), "in_tx": 0}
+
+    # Direct calls to chat_reply.drain, reflection.reflect_due, and event_intake.process_due
+    # enter db.background() even outside their start() daemon loops.
+    from boss_engine.services import notify
+
+    direct_bg: dict[str, bool] = {}
+    monkeypatch.setattr(
+        notify,
+        "deliver_chat_due",
+        lambda _eng, _st: direct_bg.update(chat_reply=boss_db.in_background()) or {"sent": 0},
+    )
+    chat_reply.drain(dummy_eng, None, rounds=1)
+
+    class _ReflectConn:
+        def __enter__(self):
+            direct_bg["reflection"] = boss_db.in_background()
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def execute(self, *_a, **_kw):
+            class _Res:
+                def mappings(self):
+                    return self
+
+                def all(self):
+                    return []
+
+            return _Res()
+
+    class _ReflectEng:
+        def begin(self):
+            return _ReflectConn()
+
+    reflection.reflect_due(_ReflectEng())
+
+    monkeypatch.setattr(event_intake, "_due_now", lambda _c, now=None: now)
+    monkeypatch.setattr(
+        event_intake,
+        "claim",
+        lambda _c, **_kw: direct_bg.update(event_intake=boss_db.in_background()) or [],
+    )
+    event_intake.process_due(dummy_eng, object())
+    assert direct_bg == {"chat_reply": True, "reflection": True, "event_intake": True}
+
+    # PgCheckpointStore._enqueue async ckpt-writer inherits db.background() & resets open_transactions
+    from boss_engine.kernel.durable import ASYNC, PgCheckpointStore
+
+    ckpt_seen: dict = {}
+    store = PgCheckpointStore(dummy_eng, durability=ASYNC)
+    monkeypatch.setattr(
+        store,
+        "_write_checkpoint",
+        lambda row, own=False: ckpt_seen.update(
+            bg=boss_db.in_background(),
+            open_tx=boss_db.open_transactions(),
+            own=own,
+        ),
+    )
+    with boss_db.background():
+        with boss_db.begin(dummy_eng):
+            store._enqueue(("checkpoint", {"bytes": 1, "mode": ASYNC}))
+            store.close()
+    assert ckpt_seen == {"bg": True, "open_tx": (), "own": True}
 
 
 class _nothing_conn:

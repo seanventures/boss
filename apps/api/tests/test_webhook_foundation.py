@@ -552,6 +552,62 @@ def test_unmapped_repository_is_accepted_but_not_dispatched(
     assert jobs == 0
 
 
+def test_non_github_non_bitbucket_inbound_webhook_accepts_and_dedupes(
+    client, engine, monkeypatch
+):
+    settings = api_main.inbound_webhooks.settings
+    monkeypatch.setattr(settings, "webhook_inbound_secret", "")
+    monkeypatch.setattr(
+        settings,
+        "webhook_inbound_secrets_json",
+        json.dumps({"custom": WEBHOOK_SECRET}),
+    )
+    monkeypatch.setattr(
+        settings,
+        "webhook_project_map_json",
+        json.dumps({"example-org/boss": PROJECT_ID}),
+    )
+    raw = json.dumps(
+        {
+            "action": "opened",
+            "repository": {"full_name": "example-org/boss"},
+            "sender": {"login": "ci-bot"},
+            "pull_request": {"id": 404},
+            "number": 404,
+        },
+        separators=(",", ":"),
+    ).encode()
+    headers = _signed_headers(raw, "pull_request", "delivery-custom-1")
+
+    first = client.post("/v1/webhooks/inbound/custom", content=raw, headers=headers)
+    replay = client.post("/v1/webhooks/inbound/custom", content=raw, headers=headers)
+
+    assert first.status_code == 202
+    assert first.json()["source"] == "custom"
+    assert first.json()["duplicate"] is False
+    assert replay.status_code == 202
+    assert replay.json()["duplicate"] is True
+    assert replay.json()["inbound_webhook_id"] == first.json()["inbound_webhook_id"]
+    assert replay.json()["event_id"] == first.json()["event_id"]
+
+    with engine.begin() as connection:
+        row = (
+            connection.execute(
+                text(
+                    """
+                    SELECT id, source, delivery_key, status, event_id
+                    FROM inbound_webhooks
+                    WHERE source = 'custom' AND delivery_key = 'delivery-custom-1'
+                    """
+                )
+            )
+            .mappings()
+            .one()
+        )
+    assert row["id"] == first.json()["inbound_webhook_id"]
+    assert row["event_id"] == first.json()["event_id"]
+
+
 def test_webhook_service_has_no_budget_entitlement_or_commercial_imports():
     from apps.api.app.services import webhooks
 

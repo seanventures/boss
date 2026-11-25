@@ -915,7 +915,10 @@ class InboundWebhookService:
                 "wh_github",
                 audit_project_id,
                 "github",
-                config={"bot_login": self.settings.github_app_bot_login},
+                config={
+                    "bot_login": self.settings.github_app_bot_login,
+                    "allow_bots": True,
+                },
                 secret_resolver=lambda k: secret if k == "webhook_secret" else None,
                 app_settings=self.settings,
                 db=connection,
@@ -1057,7 +1060,7 @@ class InboundWebhookService:
             provider_event, _, action = event_key.partition(":")
             repo = str((payload.get("repository") or {}).get("full_name") or "")
             own_sender = False
-        else:
+        elif normalized_source == "github":
             from ..connectors.intake.contract import ParseRefused, StoredRaw
 
             assert gh_adapter is not None and gh_conn is not None and gh_req is not None
@@ -1105,6 +1108,11 @@ class InboundWebhookService:
                 or ""
             )
             own_sender = bool(gh_adapter.is_self(gh_conn, ev)) if ev is not None else False
+        else:
+            provider_event = headers.get("x-github-event", "").strip().lower()
+            action = str(payload.get("action") or "").strip().lower()
+            repo = str((payload.get("repository") or {}).get("full_name") or "")
+            own_sender = False
         project_id = self._project_for_repo(connection, repo)
         community_event_type = None
         if normalized_source == "bitbucket":

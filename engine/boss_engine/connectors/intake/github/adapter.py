@@ -496,7 +496,10 @@ class GitHubIntakeAdapter(IntakeAdapterBase):
                 ours = ""
         if login and ours and login == ours:
             return True
-        if ev.bossactor.kind == "bot" and login not in _csv(conn.get("allow_bots")):
+        allow = conn.get("allow_bots")
+        if allow is True:
+            return False
+        if ev.bossactor.kind == "bot" and login not in _csv(allow):
             return True
         return False
 
