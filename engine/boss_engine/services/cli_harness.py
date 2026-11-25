@@ -2035,7 +2035,9 @@ class GenericCliCodeAgent:
         try:
             return subscription_pools.assignment_for(self.spec.name, self.settings)
         except subscription_pools.PoolExhausted as full:
-            raise CliHarnessUnavailable(str(full)) from full
+            error = CliHarnessUnavailable(str(full))
+            error.retry_at = full.retry_at  # type: ignore[attr-defined]
+            raise error from full
 
     def _pool_spec(self) -> "CliHarnessSpec":
         """This harness's spec with the pool member's store name as its credential: every seam

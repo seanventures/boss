@@ -116,6 +116,11 @@ class Capability:
     #: (KG clause intake, compliance closure). A step of it acts as nobody's agent, so the consent
     #: at start does not ask for its captain (identity.consent.workflow_needs).
     is_code: bool = False
+    #: TEXT INPUTS THAT MAY CARRY OTHER STEPS' RESULTS (BOSSAPP-1171): `{steps.<id>.output.<f>}`
+    #: and `{input.<f>}` in these are filled by the runner before the tool sees them
+    #: (workflows.render_step_text) — a comment with the validation report, a notification with
+    #: the staging URL. Every other input is passed exactly as written.
+    templated_inputs: tuple[str, ...] = ()
 
 
 def _cap(**kwargs: Any) -> Capability:
@@ -679,6 +684,7 @@ CAPABILITIES: dict[str, Capability] = {
             required_inputs=("message",),
             optional_inputs=("channel", "subject"),
             produces=("posted", "channel", "receipt"),
+            templated_inputs=("message", "subject", "channel"),
             skills=("mattermost.post_real", "email.send_real"),
             typical_minutes=1,
         ),
@@ -740,6 +746,7 @@ CAPABILITIES: dict[str, Capability] = {
             required_inputs=("number", "body"),
             optional_inputs=("repository", "marker"),
             produces=("posted", "comment_url", "comment_id", "updated"),
+            templated_inputs=("body", "number"),
             requires_project=("repository",),
             typical_minutes=1,
         ),
@@ -760,6 +767,7 @@ CAPABILITIES: dict[str, Capability] = {
             optional_inputs=("repository", "base_branch", "files", "path", "content", "diff",
                              "report", "summary", "slug", "draft"),
             produces=("pull_request_url", "pull_request_number", "branch", "files"),
+            templated_inputs=("title", "summary", "report"),
             requires_project=("repository",),
             typical_minutes=2,
         ),
@@ -841,6 +849,31 @@ CAPABILITIES: dict[str, Capability] = {
             produces=("deployment_id", "deployed_url", "bundle_sha256"),
             requires_project=("deployment_target",),
             typical_minutes=3,
+            is_async=True,
+        ),
+        _cap(
+            key="rollback_config",
+            family="deploy",
+            # PUT BACK WHAT A CONFIG DEPLOY REPLACED (BOSSAPP-1173): the versions it kept are
+            # restored and the files it added removed, through a governed run of its own.
+            captain="deployment_manager",
+            label="Roll back config",
+            summary="Restore what a config deployment replaced: the kept previous versions go "
+                    "back, files it added are removed, then reload and a health check. Staging "
+                    "rolls back on its deployment's own approval; production asks a person.",
+            tool="rollback_config",
+            # UNDER THE FLOOR ON PURPOSE: the step itself asks nobody, because the risk is where
+            # it lands — the rollback run it plans asks a person for production exactly as a
+            # promotion does (config_deploy.plan_config_deployment), and a staging rollback runs
+            # on the approval the deployment it undoes ran on. A step gate on top would be a
+            # second card for one production change, and a card for every staging rollback.
+            risk_tier=1,
+            # Which deployment: `deployment_id` from this run's config_deploy step; with none
+            # bound, the run's latest succeeded config_deploy step (the runner checks either).
+            optional_inputs=("deployment_id",),
+            produces=("deployment_id", "rollback_of"),
+            requires_project=("deployment_target",),
+            typical_minutes=2,
             is_async=True,
         ),
         _cap(
@@ -1607,7 +1640,7 @@ def effective_approval(
         resolved["sla_hours"] = float(approval["sla_hours"])
     # A DEPLOY THAT LETS THE ENVIRONMENT'S POLICY ANSWER says so, and keeps saying so: without
     # it the step promises a person, and no policy answers for it (deploy_policy).
-    if capability_key == "deploy" and approval.get("follows_policy") is True:
+    if capability_key in ("deploy", "config_deploy") and approval.get("follows_policy") is True:
         resolved["follows_policy"] = True
     resolved["risk_tier"] = capability.risk_tier
     resolved["forced_manual"] = capability.risk_tier >= MANUAL_APPROVAL_RISK_FLOOR

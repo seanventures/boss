@@ -901,3 +901,48 @@ button.su-chip[aria-checked="true"] { color: var(--accent); border-color: var(--
 .su-jobcard-edit .su-job-name { display: none; }
 .su-jobcard[data-editing] { grid-column: 1 / -1; }
 @media (max-width: 640px) { .su-jobcard-change { min-height: 44px; } }
+
+/* ── Quality bar (BOSSAPP-1362): the preset, its words, each gate ─────────────────── */
+.su-qb-default { font-weight: 500; opacity: 0.8; }
+.su-qb-line { margin: 0; font-size: 0.8125rem; color: var(--ink-soft); }
+.su-qb-cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.su-qb-col {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background: var(--bg);
+  min-width: 0;
+}
+.su-qb-col ul { margin: 6px 0 0; padding-left: 18px; font-size: 0.8125rem; color: var(--muted); }
+.su-qb-col li + li { margin-top: 2px; }
+.su-qb-h { display: inline-flex; align-items: center; gap: 6px; font: 700 0.75rem/1 var(--sans); }
+.su-qb-red { color: var(--red); }
+.su-qb-blue { color: var(--blue); }
+.su-qb-always {
+  display: flex; align-items: flex-start; gap: 6px; margin: 0;
+  font-size: 0.75rem; color: var(--muted);
+}
+.su-qb-always svg { flex: none; margin-top: 2px; }
+.su-qb-gates { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.su-qb-gate {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+.su-qb-gate:first-child { border-top: 0; }
+.su-qb-floor { display: flex; flex-direction: column; gap: 6px; }
+.su-qb-floor .su-qb-h { color: var(--muted); }
+.su-qb-gname { font-weight: 600; font-size: 0.8125rem; min-width: 0; overflow-wrap: anywhere; }
+.su-qb-gname[title] { text-decoration: underline dotted; text-underline-offset: 3px; cursor: help; }
+.su-qb-levels { gap: 6px; flex-wrap: nowrap; min-height: 0; }
+.su-qb-gname-wrap { display: inline-flex; align-items: baseline; gap: 8px; min-width: 0; flex: 1 1 10rem; }
+.su-qb-now { font: 600 0.6875rem/1 var(--sans); color: var(--muted); white-space: nowrap; }
+.su-qb-now[data-level="block"] { color: var(--red); }
+.su-qb-now[data-level="follow_up"] { color: var(--blue); }
+@media (max-width: 640px) {
+  .su-qb-cols { grid-template-columns: minmax(0, 1fr); }
+}

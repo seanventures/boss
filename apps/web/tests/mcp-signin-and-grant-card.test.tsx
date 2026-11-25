@@ -93,18 +93,17 @@ describe("signing in to an MCP server", () => {
     });
     const added = vi.fn();
     await render(<AddMcpSheet projectId="p1" actor="ceo" onClose={() => {}} onAdded={added} />);
-    await click('[data-testid="kit-add-custom"]');
     const { type } = await import("./_helpers/kit-render");
     await type('[data-testid="kit-custom-name"]', "linear");
     await type('[data-testid="kit-custom-url"]', "https://mcp.linear.app/mcp");
     await click('[data-testid="kit-custom-auth-oauth"]');
     expect($('[data-testid="kit-custom-secret"]')).toBeNull();
-    await click('[data-testid="kit-custom-save"]');
+    await click('[data-testid="kit-add-save"]');
     expect(calls.some((c) => c.body?.action === "test")).toBe(false);
     expect(calls.find((c) => c.body?.action === "register")!.body!.server).toMatchObject({ auth: { type: "oauth" } });
     expect(calls.find((c) => c.body?.action === "oauth_start")!.body).toMatchObject({ server_id: "mcps_new" });
     expect(open).toHaveBeenCalled();
-    expect(added).toHaveBeenCalledWith("mcps_new");
+    expect(added).toHaveBeenCalledWith("mcps_new", "linear");
   });
 });
 

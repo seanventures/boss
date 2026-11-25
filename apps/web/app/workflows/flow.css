@@ -559,3 +559,7 @@
 .wf-lane[data-wrap="true"] .wf-node-agent-name,
 .wf-lane[data-wrap="true"] .wf-node-status { white-space: normal; overflow: visible; text-overflow: clip;
   overflow-wrap: break-word; }
+/* The MCP picker's way out: Add MCP server opens the one add sheet (BOSSAPP-1478). */
+.wf-pop-add { display: flex; align-items: center; gap: 6px; width: 100%; margin-top: 6px; padding: 7px 10px; border: 1px dashed var(--border-strong); border-radius: var(--r-sm); background: transparent; color: var(--accent-text); font: 600 0.8125rem var(--sans); cursor: pointer; }
+.wf-pop-add:hover { border-color: var(--accent); background: var(--accent-soft); }
+.wf-pop-add:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

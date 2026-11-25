@@ -10,7 +10,8 @@
                                                                accounts is refused: 422)
 
 Reading is entitlement:read; every change is entitlement:manage, attributed to the signed-in
-member (providerops_manage). A login goes IN and never comes back out.
+member (providerops_manage). A change to the ORG's pool (scope 'org', every project of the org)
+also needs entitlement:manage at org level (a handler check through the same PDP). A login goes IN and never comes back out.
 """
 from __future__ import annotations
 
@@ -47,6 +48,8 @@ class MemberPatchBody(Body):
     status: Optional[str] = Field(default=None, pattern="^(active|disabled|needs_reauth)$")
     position: Optional[int] = Field(default=None, ge=0, le=1000)
     credential: Optional[str] = Field(default=None, max_length=20000, repr=False)
+    primary: Optional[bool] = None
+    label: Optional[str] = Field(default=None, max_length=80)
 
 
 def build_subscription_pools_router(*, engine, settings: Callable[[], Any],
@@ -56,8 +59,16 @@ def build_subscription_pools_router(*, engine, settings: Callable[[], Any],
 
     router = APIRouter(tags=["subscription-pools"])
 
-    def _write(project_id: str, claimed: Optional[str], fn: Callable[[Any, str], Any]) -> Any:
+    def _write(project_id: str, claimed: Optional[str], fn: Callable[[Any, str], Any], *,
+               pool_id: Optional[str] = None, member_id: Optional[str] = None) -> Any:
         with begin(engine) as c:
+            if sp.scope_of(c, pool_id=pool_id, member_id=member_id) == "org":
+                # THE ORG'S POOL serves every project of the org: changing it needs
+                # entitlement:manage at ORG level, not a binding on one project.
+                from .identity_access import require_permission
+
+                require_permission(None, P.ENTITLEMENT_MANAGE, None,
+                                   label="subscription_pools.org")
             actor = require_write_actor(c, project_id, claimed, "providerops_manage")
             try:
                 return fn(c, actor)
@@ -77,14 +88,16 @@ def build_subscription_pools_router(*, engine, settings: Callable[[], Any],
     @permit(P.ENTITLEMENT_MANAGE, scope=Scope.project(body="project_id"))
     def create_pool(payload: PoolBody) -> dict:
         return {"pool": _write(payload.project_id, payload.actor, lambda c, actor: sp.create_pool(
-            c, payload.project_id, engine=payload.engine, name=payload.name, actor=actor))}
+            c, payload.project_id, engine=payload.engine, name=payload.name, actor=actor,
+            settings=settings()))}
 
     @router.patch("/v1/subscription-pools/{pool_id}")
     @permit(P.ENTITLEMENT_MANAGE, scope=Scope.project(body="project_id"))
     def set_pool_status(pool_id: str, payload: PoolStatusBody) -> dict:
         return {"pool": _write(payload.project_id, payload.actor, lambda c, actor:
                                sp.set_pool_status(c, payload.project_id, pool_id,
-                                                  status=payload.status, actor=actor))}
+                                                  status=payload.status, actor=actor),
+                               pool_id=pool_id)}
 
     @router.post("/v1/subscription-pools/{pool_id}/members", status_code=201)
     @permit(P.ENTITLEMENT_MANAGE, scope=Scope.project(body="project_id"))
@@ -92,7 +105,8 @@ def build_subscription_pools_router(*, engine, settings: Callable[[], Any],
         return {"member": _write(payload.project_id, payload.actor, lambda c, actor:
                                  sp.add_member(c, settings(), payload.project_id, pool_id,
                                                label=payload.label,
-                                               credential=payload.credential, actor=actor))}
+                                               credential=payload.credential, actor=actor),
+                                 pool_id=pool_id)}
 
     @router.patch("/v1/subscription-pools/members/{member_id}")
     @permit(P.ENTITLEMENT_MANAGE, scope=Scope.project(body="project_id"))
@@ -101,13 +115,15 @@ def build_subscription_pools_router(*, engine, settings: Callable[[], Any],
                                  sp.update_member(c, settings(), payload.project_id, member_id,
                                                   actor=actor, status=payload.status,
                                                   position=payload.position,
-                                                  credential=payload.credential))}
+                                                  credential=payload.credential,
+                                                  primary=payload.primary, label=payload.label),
+                                 member_id=member_id)}
 
     @router.delete("/v1/subscription-pools/members/{member_id}")
     @permit(P.ENTITLEMENT_MANAGE, scope=Scope.project(query="project_id"))
     def remove_member(member_id: str, project_id: str, actor: Optional[str] = None) -> dict:
         return _write(project_id, actor, lambda c, who: sp.remove_member(
-            c, settings(), project_id, member_id, actor=who))
+            c, settings(), project_id, member_id, actor=who), member_id=member_id)
 
     @router.delete("/v1/subscription-pools/{pool_id}")
     @permit(P.ENTITLEMENT_MANAGE, scope=Scope.project(query="project_id"))
@@ -115,6 +131,6 @@ def build_subscription_pools_router(*, engine, settings: Callable[[], Any],
         """BOSSAPP-1042: an empty pool goes; one with accounts is refused (422) so no stored
         login is ever orphaned — remove its accounts first, each with its login."""
         return _write(project_id, actor, lambda c, who: sp.delete_pool(
-            c, project_id, pool_id, actor=who))
+            c, project_id, pool_id, actor=who), pool_id=pool_id)
 
     return router

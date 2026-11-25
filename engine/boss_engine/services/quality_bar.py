@@ -73,6 +73,10 @@ _BLOCKS: dict[str, tuple[bool, bool, bool]] = {
 }
 
 
+#: A per-gate level (Setup › Advanced, a run's or a workflow's map). Absent = the preset's.
+GATE_LEVELS = ("block", "follow_up")
+
+
 def normalize(value: Any) -> Optional[str]:
     """A preset name, or None for anything that is not one."""
     word = str(value or "").strip().lower()
@@ -83,6 +87,10 @@ def normalize(value: Any) -> Optional[str]:
 #: A caller's own copy of these input keys is dropped there, so an agent's start_workflow inputs
 #: can set neither a bar nor a per-gate map.
 BY_KEY = "_quality_bar_by"
+#: Written ONLY by start_run for a run that asked for the same or a STRICTER bar than its
+#: base (no grant needed, so no person is named): the build honours it only while it is not
+#: below the base.
+RAISED_KEY = "_quality_bar_raised"
 OVERRIDE_PERMISSION = "settings:update"
 RANK = {PROTOTYPE: 0, STANDARD: 1, PRODUCTION: 2}
 
@@ -95,6 +103,19 @@ FLOOR = frozenset({"code_written", "app_serves", "template_tests", "no_committed
 
 class QualityBarOverrideRefused(PermissionError):
     """Lowering the bar (or overriding single gates) needs a person with settings:update."""
+
+
+def is_person_actor(actor: Any) -> bool:
+    """A name that may be a person's: never empty, 'boss', a job, an agent or a service."""
+    who = str(actor or "").strip()
+    return bool(who) and who.lower() not in ("boss", "system", "worker", "start_door") \
+        and not who.startswith(("agent", "agt_", "job_", "svc_", "sa_"))
+
+
+def run_base(workflow_spec: Any, project_value: Any) -> str:
+    """The bar a run is measured against before it asks for its own: the workflow's effective
+    bar over the project's (resolve_detail without a run)."""
+    return resolve_detail(workflow_spec=workflow_spec, project_value=project_value)["bar"]
 
 
 def check_override_permission(project_id: str, actor: Any) -> None:
@@ -110,8 +131,7 @@ def check_override_permission(project_id: str, actor: Any) -> None:
     an owner actor such as `ceo` can lower a bar (the project's own API keys are who may act as
     that actor). Turn identity enforcement on for the real `settings:update` decision."""
     who = str(actor or "").strip()
-    if not who or who.lower() in ("boss", "system", "worker") or who.startswith(
-            ("agent", "agt_", "job_", "svc_", "sa_")):
+    if not is_person_actor(who):
         raise QualityBarOverrideRefused("only a person may change a quality bar")
     from ..identity import lineage, viewer
 
@@ -126,47 +146,69 @@ def check_override_permission(project_id: str, actor: Any) -> None:
 
 
 def resolve_detail(*, run_spec: Any = None, workflow_spec: Any = None, run_input: Any = None,
-                   project_value: Any = None) -> dict[str, Any]:
+                   project_value: Any = None, project_gates: Any = None) -> dict[str, Any]:
     """{bar, source, lowered_by, overrides} for a run. Order: the RUN SPEC (server-owned), the
     run input (only when the server stamped it: BY_KEY, after the permission check), the
     WORKFLOW spec (it may raise the project's bar; it may LOWER it only when publish_version stamped
     it, i.e. a person with settings:update published it that way), the project setting, `standard`.
     A value that is not a preset is skipped, never an error. The per-gate map is honoured only
-    from the run spec, a stamped run input or a stamped workflow spec."""
+    from the run spec, a stamped run input or a stamped workflow spec, then the PROJECT's own map
+    (Setup › Advanced › Each gate, `quality_bar_gates`: written only through PUT /v1/settings,
+    which needs settings:update). The project's map is the project's bar, so it never counts as
+    "lowered"; a run's or a workflow's follow_up does."""
     project_bar = normalize(project_value) or DEFAULT
     spec = run_spec if isinstance(run_spec, Mapping) else {}
     inp = run_input if isinstance(run_input, Mapping) else {}
     wf = workflow_spec if isinstance(workflow_spec, Mapping) else {}
     stamped = bool(str(inp.get(BY_KEY) or "").strip())
+    # A RAISE the start door recorded without a person's grant (RAISED_KEY): honoured only as
+    # long as it is not below the bar it would replace.
+    raised = bool(inp.get(RAISED_KEY))
     by = str(spec.get(BY_KEY) or inp.get(BY_KEY) or "").strip() or None
-    bar, source = project_bar, "project" if normalize(project_value) else "default"
+    # THE BASE A RUN IS MEASURED AGAINST: the project's bar, or the workflow's own when the
+    # workflow may set it (raise freely; lower only when a person published it that way). A run
+    # below THIS is a lowering, recorded with who granted it (review of PR #335, S1).
+    base, source = project_bar, "project" if normalize(project_value) else "default"
+    wf_bar = normalize(wf.get(SETTING))
+    if wf_bar and (RANK[wf_bar] >= RANK[project_bar] or str(wf.get(BY_KEY) or "").strip()):
+        base, source = wf_bar, "workflow"
+        by = by or str(wf.get(BY_KEY) or "").strip() or None
+    bar = base
+    run_bar = normalize(inp.get(SETTING))
     if normalize(spec.get(SETTING)):
         bar, source = normalize(spec.get(SETTING)), "run_spec"
-    elif stamped and normalize(inp.get(SETTING)):
-        bar, source = normalize(inp.get(SETTING)), "run_input"
-    elif normalize(wf.get(SETTING)) and (
-            RANK[normalize(wf.get(SETTING))] >= RANK[project_bar]
-            or str(wf.get(BY_KEY) or "").strip()):
-        # A workflow may RAISE the bar freely; it may LOWER it only when a person with
-        # settings:update published it that way (stamped by publish_version, never by a caller).
-        bar, source = normalize(wf.get(SETTING)), "workflow"
-        by = by or str(wf.get(BY_KEY) or "").strip() or None
+    elif stamped and run_bar:
+        bar, source = run_bar, "run_input"
+    elif raised and run_bar and RANK[run_bar] >= RANK[base]:
+        bar, source = run_bar, "run_input"
     overrides: dict[str, str] = {}
     for src_ok, src in ((True, spec), (stamped, inp), (bool(str(wf.get(BY_KEY) or "").strip()), wf)):
         if src_ok and isinstance(src.get(OVERRIDES_KEY), Mapping):
             for gate, how in src[OVERRIDES_KEY].items():
-                if str(how) in ("block", "follow_up"):
+                if str(how) in GATE_LEVELS:
                     overrides.setdefault(str(gate), str(how))
-    lowered = RANK[bar] < RANK[project_bar] or any(
-        how == "follow_up" for how in overrides.values())
+    if raised and not stamped and isinstance(inp.get(OVERRIDES_KEY), Mapping):
+        # An unstamped run may only make single gates STRICTER.
+        for gate, how in inp[OVERRIDES_KEY].items():
+            if str(how) == "block":
+                overrides.setdefault(str(gate), "block")
+    # Below the project's bar OR the workflow's own bar, or a follow_up asked by the run or its
+    # workflow, is a lowering; a per-gate level the project set itself is not (it IS the
+    # project's bar).
+    lowered = (RANK[bar] < RANK[project_bar] or RANK[bar] < RANK[base]
+               or any(how == "follow_up" for how in overrides.values()))
+    if isinstance(project_gates, Mapping):
+        for gate, how in project_gates.items():
+            if str(how) in GATE_LEVELS:
+                overrides.setdefault(str(gate), str(how))
     return {"bar": bar, "source": source, "overrides": overrides,
             "lowered_by": (by or "server") if lowered else None}
 
 
 def resolve(*, run_spec: Any = None, workflow_spec: Any = None, run_input: Any = None,
-            project_value: Any = None) -> str:
+            project_value: Any = None, project_gates: Any = None) -> str:
     return resolve_detail(run_spec=run_spec, workflow_spec=workflow_spec, run_input=run_input,
-                          project_value=project_value)["bar"]
+                          project_value=project_value, project_gates=project_gates)["bar"]
 
 
 def _configured_review_severity(settings: Any) -> Optional[str]:
@@ -246,9 +288,22 @@ def resolve_for_run(connection: Any, settings: Any, project_id: Optional[str], *
             project_value = getattr(settings, SETTING, None)
     except Exception:  # noqa: BLE001
         project_value = getattr(settings, SETTING, None)
+    project_gates: Any = None
+    try:
+        if connection is not None and project_id:
+            from . import project_settings
+
+            with connection.begin_nested():
+                project_gates = project_settings.effective(connection, project_id, settings,
+                                                           OVERRIDES_KEY)
+        else:
+            project_gates = getattr(settings, OVERRIDES_KEY, None)
+    except Exception:  # noqa: BLE001
+        project_gates = getattr(settings, OVERRIDES_KEY, None)
     found = resolve_detail(run_spec=spec if isinstance(spec, Mapping) else None,
                            workflow_spec=workflow_spec, run_input=run_input,
-                           project_value=project_value)
+                           project_value=project_value,
+                           project_gates=clean_gate_map(project_gates, strict=False))
     info = {"source": found["source"], "lowered_by": found["lowered_by"],
             "review_severity": _configured_review_severity(settings),
             # THE WORKFLOW'S "CHECKS MUST PASS" (spec `checks_must_pass`): the repo's checkers'
@@ -278,6 +333,179 @@ def gate_blocks(gate: str, bar: str, overrides: Optional[Mapping[str, str]] = No
     if how == "follow_up":
         return False
     return row[PRESETS.index(normalize(bar) or DEFAULT)]
+
+
+#: The gates a per-gate level may change (Setup › Advanced › Each gate): every known gate
+#: outside the FLOOR. The floor is shown as "Always blocks" and refuses a level.
+ADJUSTABLE_GATES = tuple(g for g in _BLOCKS if g not in FLOOR)
+
+
+def clean_gate_map(value: Any, *, strict: bool = True) -> dict[str, str]:
+    """A per-gate map as stored: {gate: "block" | "follow_up"}. "default" (or an empty level)
+    drops the gate back to the preset. A JSON string is read. `strict` (a write): an unknown
+    gate, a floor gate, or a level that is not one is refused in words; otherwise (a read of
+    what is stored) such entries are skipped."""
+    if value in (None, ""):
+        return {}
+    if isinstance(value, str):
+        import json
+
+        try:
+            value = json.loads(value)
+        except ValueError as error:
+            if strict:
+                raise ValueError("Quality bar per gate has to be a map of gate to level.") \
+                    from error
+            return {}
+    if not isinstance(value, Mapping):
+        if strict:
+            raise ValueError("Quality bar per gate has to be a map of gate to level.")
+        return {}
+    out: dict[str, str] = {}
+    for gate, how in value.items():
+        gate, how = str(gate).strip(), str(how or "").strip().lower()
+        if how in ("", "default", "preset"):
+            continue
+        if gate in FLOOR:
+            if strict and how != "block":
+                raise ValueError(f"'{gate}' always blocks: it is part of the floor (the build, "
+                                 "the app starting, its own tests, security and secrets).")
+            continue
+        if gate not in _BLOCKS:
+            if strict:
+                raise ValueError(f"'{gate}' is not a quality gate. Gates: "
+                                 f"{', '.join(ADJUSTABLE_GATES)}.")
+            continue
+        if how not in GATE_LEVELS:
+            if strict:
+                raise ValueError(f"'{how}' is not a level for {gate}: block, follow_up or "
+                                 "default.")
+            continue
+        out[gate] = how
+    return out
+
+
+def lowers(asked_bar: Any, asked_gates: Any, project_bar: Any) -> bool:
+    """Does a run's ask LOWER the project's bar: a preset below it, or any gate set to
+    follow_up. Only a lowering needs settings:update; the same or a stricter bar is anyone's
+    who may start the work."""
+    asked = normalize(asked_bar)
+    base = normalize(project_bar) or DEFAULT
+    if asked and RANK[asked] < RANK[base]:
+        return True
+    return isinstance(asked_gates, Mapping) and any(
+        str(v).strip().lower() == "follow_up" for v in asked_gates.values())
+
+
+#: THE PRESETS IN PLAIN WORDS (Setup › Quality bar, New work's chip). One table: the console
+#: never writes its own copy of what a preset does.
+PRESET_WORDS: dict[str, dict[str, Any]] = {
+    PROTOTYPE: {
+        "label": "Prototype",
+        "line": "Fastest. Blocks only on the basics; everything else is a follow-up.",
+        "blocks": ["It doesn't build or start", "Its own tests fail", "A security issue or a "
+                   "committed secret", "Existing tests deleted or weakened"],
+        "follow_ups": ["Must-haves not met", "Review findings, even a blocker",
+                       "Broken old tests off the startup, sign-in and health paths",
+                       "Weak or missing named tests"],
+    },
+    STANDARD: {
+        "label": "Standard",
+        "line": "The default. Also blocks on a review blocker; agents fix the rest after.",
+        "blocks": ["Everything Prototype blocks on", "A review blocker",
+                   "A broken startup, sign-in or health test",
+                   "The stack the brief asked for, built in another one"],
+        "follow_ups": ["Missing or partial must-haves", "Major and minor review findings",
+                       "Other broken old tests", "The second test pass (runs alongside)"],
+    },
+    PRODUCTION: {
+        "label": "Production",
+        "line": "Strictest. Blocks on everything, and the second test pass must finish.",
+        "blocks": ["Every must-have (P1 and P2)", "Review blockers and majors",
+                   "Every test check, old tests included", "The second test pass must finish"],
+        "follow_ups": ["Minor review findings"],
+    },
+}
+
+#: Said on every surface that shows the bar: what no preset changes.
+ALWAYS_WORDS = ("Below Production nothing stops to ask you mid-build: agents fix and carry on. "
+                "A release to production always applies Production and waits for a person's "
+                "approval, whatever the preset.")
+
+#: A gate whose verdict is computed at the bar (so its row says what the preset does in words).
+_GATE_NOTES = {
+    "acceptance_met": "Below Production a gap is a follow-up; only a stack built in another "
+                      "language blocks at Standard.",
+    "nothing_broke": "Below Production only startup, sign-in and health tests block.",
+    "code_review_passed": "Standard blocks on a BLOCKER; Production on MAJOR too.",
+    "consistent": "Below Production only a security or secrets finding blocks.",
+}
+
+
+def describe(bar: Any = None, gates: Any = None) -> dict[str, Any]:
+    """What Setup and New work draw: the presets in plain words, the per-gate table (each gate,
+    what each preset does with it, the project's own level), and what no preset changes."""
+    from .factory_view import gate_label
+
+    chosen = normalize(bar) or DEFAULT
+    own = clean_gate_map(gates, strict=False)
+    rows = []
+    for gate, levels in _BLOCKS.items():
+        floor = gate in FLOOR
+        rows.append({
+            "gate": gate, "label": gate_label(gate), "floor": floor,
+            "presets": {p: ("block" if levels[i] else "follow_up")
+                        for i, p in enumerate(PRESETS)},
+            "level": "block" if floor else own.get(gate, "default"),
+            "effective": "block" if floor or gate_blocks(gate, chosen, own) else "follow_up",
+            **({"note": _GATE_NOTES[gate]} if gate in _GATE_NOTES else {}),
+        })
+    rows.sort(key=lambda r: (not r["floor"], r["label"]))
+    return {"bar": chosen, "default": DEFAULT,
+            "presets": [{"key": p, **PRESET_WORDS[p]} for p in PRESETS],
+            "gates": rows, "overrides": own, "always": ALWAYS_WORDS}
+
+
+def run_followups(state: Optional[Mapping[str, Any]]) -> Optional[dict[str, Any]]:
+    """A build's follow-ups for its RUN page (the run report): {bar, count, p1, words, items}.
+    The same list the PR's Follow-ups section prints (pr_section): the gates the bar let
+    through, flaky tests, then every deferred finding. None when there are none."""
+    state = state or {}
+    rec = state.get(KEY) if isinstance(state.get(KEY), Mapping) else {}
+    items: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def add(tier: str, severity: str, text: Any) -> None:
+        line = _one_line(text)[:400]
+        if line and line.lower() not in seen:
+            seen.add(line.lower())
+            items.append({"tier": tier, "severity": severity, "text": line})
+
+    from .factory_view import gate_label
+
+    for gate, lines in (rec.get("followups") or {}).items():
+        if lines:
+            for x in list(lines)[:30]:
+                add(P2 if f"({P2})" in str(x)[:40] else P1, "major", x)
+        else:
+            add(P1, "major", f"{gate_label(gate)} did not pass; not blocking at the "
+                             f"{rec.get('bar') or DEFAULT} bar")
+    for t in rec.get("flaky") or []:
+        add(P2, "minor", f"Flaky test (passed on retry): {t}")
+    listed = " ".join(i["text"].lower() for i in items)
+    for item in followup_items(state):
+        core = item["text"].split(" — ", 1)[-1].lower()
+        if core in listed or core.startswith(("follow-up: gate", "flaky test (passed on retry)")):
+            continue
+        add(item["tier"], item["severity"], item["text"])
+    if not items:
+        return None
+    items.sort(key=lambda i: 0 if i["tier"] == P1 else 1)
+    card = {"bar": rec.get("bar") or DEFAULT, "count": len(items),
+            "p1": sum(1 for i in items if i["tier"] == P1),
+            "handled_by": handled_by(state.get(QUEUED_KEY)), "items": items[:40]}
+    card["words"] = followup_words(card)
+    return card
 
 
 _SEVERITY_RANK = ("nit", "minor", "major", "blocker", "none")

@@ -632,6 +632,11 @@ def purge(connection: Any, settings: Any, project_id: str, *, actor: str,
     # Nothing else writes this project while it goes.
     connection.execute(text("SELECT id FROM projects WHERE id = :p FOR UPDATE"), {"p": project_id})
     connection.execute(text("SET LOCAL boss.ledger_purge = 'on'"))
+    # Subscription pools (BOSSAPP-1343): the org's pool anchored here moves to another project
+    # of the org; a pool that goes deletes its seats' stored logins (no orphaned credentials).
+    from .subscription_pools import before_project_purge
+
+    before_project_purge(connection, settings, project_id)
     cat = catalog(connection)
     preds = _Preds(cat)
     kept = _keep_others(connection, cat, preds, project_id, _rehome_target(connection, settings, project))

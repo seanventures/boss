@@ -100,6 +100,58 @@ def _open_connection(scheme: str, host: str, ip: str, port: int, timeout: float)
         raise
 
 
+#: Name suffixes that mean "inside a company network", never a public service.
+INTERNAL_SUFFIXES = (".internal", ".local", ".localdomain", ".corp", ".lan", ".intranet",
+                     ".home.arpa", ".private", ".localhost")
+
+
+def internal_looking(host: str) -> bool:
+    """A single-label name or one under an internal suffix. Behind a proxy such a name, when it
+    does not resolve here, is refused unless the operator allow-listed it
+    (BOSS_OUTBOUND_ALLOW_PRIVATE): the proxy would resolve it inside the company."""
+    host = str(host or "").lower().rstrip(".")
+    return "." not in host or host.endswith(INTERNAL_SUFFIXES)
+
+
+def _proxy_for(url: str) -> Optional[str]:
+    from ..services.outbound_proxy import proxy_for
+
+    return proxy_for(url)
+
+
+def _open_tunnel(proxy: str, host: str, port: int, timeout: float) -> socket.socket:
+    """A CONNECT tunnel through `proxy` to host:port, then TLS verified against the host NAME
+    (the company CA in SSL_CERT_FILE is trusted, as for a direct connection). Tests replace
+    this."""
+    target = urlsplit(proxy)
+    if (target.scheme or "http").lower() != "http" or not target.hostname:
+        raise OutboundRefused("the proxy must be an http:// proxy")
+    if target.username or target.password:
+        raise OutboundRefused("a proxy login is not supported; run a local authenticating proxy")
+    raw = socket.create_connection((target.hostname, target.port or 80), timeout=timeout)
+    try:
+        authority = f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
+        raw.sendall(f"CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\n\r\n"
+                    .encode("latin-1"))
+        head = b""
+        while b"\r\n\r\n" not in head:
+            chunk = raw.recv(4096)
+            if not chunk:
+                raise OutboundRefused("the proxy closed the connection")
+            head += chunk
+            if len(head) > 65536:
+                raise OutboundRefused("the proxy's answer is too long")
+        status_line = head.split(b"\r\n", 1)[0].decode("latin-1")
+        parts = status_line.split(" ", 2)
+        if len(parts) < 2 or parts[1] != "200":
+            raise OutboundRefused(f"the proxy refused the tunnel ({status_line[:80]})")
+        ctx = ssl.create_default_context()
+        return ctx.wrap_socket(raw, server_hostname=host)
+    except BaseException:
+        raw.close()
+        raise
+
+
 def _http_exchange(sock: socket.socket, method: str, host_header: str, target: str,
                    headers: Mapping[str, str], data: Optional[bytes], deadline: float
                    ) -> tuple[int, dict[str, str], bytes]:
@@ -190,6 +242,11 @@ def fetch(method: str, url: str, *, headers: Optional[Mapping[str, str]] = None,
         if scheme != "https" and not allowed_private:
             raise OutboundRefused("https is required")
         port = parts.port or (443 if scheme == "https" else 80)
+        # THE COMPANY PROXY (BOSSAPP-1476). Where the only way out is an HTTPS proxy, a direct
+        # connection never completes: an MCP server's OAuth sign-in and token refresh failed
+        # "connection failed (TimeoutError)" while the MCP calls themselves went through the
+        # proxy. HTTPS goes through it with CONNECT, by NO_PROXY (outbound_proxy, CIDR included).
+        proxy = _proxy_for(current) if scheme == "https" else None
         if host not in pinned:
             try:
                 literal = ipaddress.ip_address(host)
@@ -198,8 +255,15 @@ def fetch(method: str, url: str, *, headers: Optional[Mapping[str, str]] = None,
                 try:
                     addrs = _resolve(host, port)
                 except OSError as exc:
-                    raise OutboundRefused(f"cannot resolve host ({type(exc).__name__})") from exc
-            if not addrs:
+                    if proxy is None or (internal_looking(host) and not allowed_private):
+                        # An internal-looking name only the proxy knows could be the company's
+                        # own network: a hostile server's discovery document must not reach it.
+                        raise OutboundRefused(
+                            f"cannot resolve host ({type(exc).__name__})") from exc
+                    # Behind a proxy an outside name often does not resolve here; the proxy
+                    # resolves it. A name that DOES resolve is still judged below.
+                    addrs = []
+            if not addrs and proxy is None:
                 raise OutboundRefused("host has no address")
             private = [a for a in addrs if not _is_public(a)]
             if private and not allowed_private:
@@ -212,7 +276,7 @@ def fetch(method: str, url: str, *, headers: Optional[Mapping[str, str]] = None,
             # IPv4 first, two per family: a host whose IPv6 answer it cannot route (a container with
             # no v6) still connects. Every answer was checked public above; whichever connects is
             # pinned.
-            pinned[host] = _candidates(addrs)
+            pinned[host] = _candidates(addrs) if addrs else [host]
         target = (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
         host_header = host if parts.port is None else f"{host}:{parts.port}"
         remaining = deadline - time.monotonic()
@@ -228,7 +292,16 @@ def fetch(method: str, url: str, *, headers: Optional[Mapping[str, str]] = None,
             raise OutboundRefused(str(exc)) from None
         sock = None
         failure: Optional[BaseException] = None
-        for ip in pinned[host]:
+        if proxy is not None:
+            try:
+                sock = _open_tunnel(proxy, host, port,
+                                    min(CONNECT_TIMEOUT_SECONDS, deadline - time.monotonic()))
+            except OutboundRefused:
+                raise
+            except (OSError, ssl.SSLError) as exc:
+                raise OutboundRefused(
+                    f"connection through the proxy failed ({type(exc).__name__})") from exc
+        for ip in ([] if proxy is not None else pinned[host]):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break

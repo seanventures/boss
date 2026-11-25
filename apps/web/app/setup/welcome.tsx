@@ -8,7 +8,8 @@
  */
 import { changeHref, linkTarget } from "../../lib/repo-links";
 import React, { useState } from "react";
-import { Check, GitBranch, Lightbulb } from "@phosphor-icons/react";
+import { Check, GitBranch, Lightbulb, Plugs } from "@phosphor-icons/react";
+import { addHref } from "../skills/kit-url";
 
 import type { SetupView } from "../../lib/setup-types";
 import type { SigninStatus } from "../../lib/identity/github-signin";
@@ -232,6 +233,13 @@ export function Welcome({ onSetup }: { onSetup: () => void }) {
           <a className="su-card su-wl-card" href={NEW_PROJECT_HREF.idea} data-testid="su-wl-idea">
             <Lightbulb size={18} aria-hidden="true" />
             <span className="su-strong">Start a new app from an idea</span>
+          </a>
+          {/* CONNECT YOUR TOOLS (BOSSAPP-1478): one press to Add MCP server on Skills & MCP. */}
+          <a className="su-card su-wl-card" href={`/${addHref("mcp")}`} data-testid="su-wl-mcp"
+             title="GitHub, Jira, Slack or your own tools: anything that speaks MCP"
+             data-tip="GitHub, Jira, Slack or your own tools: anything that speaks MCP">
+            <Plugs size={18} aria-hidden="true" />
+            <span className="su-strong">Connect your tools (MCP)</span>
           </a>
         </div>
       </section>

@@ -113,8 +113,9 @@ export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permiss
   "lib/workflow-api.ts#installPack": "workflow:install",          // POST /v1/delivery-workflows/marketplace/install
   "lib/workflow-api.ts#uninstallPack": "workflow:install",        // POST /v1/delivery-workflows/marketplace/uninstall
   "lib/workflow-api.ts#updateInstalled": "workflow:install",      // POST /v1/delivery-workflows/marketplace/update
-  "lib/workflow-api.ts#publishPack": "workflow:publish",          // POST /v1/delivery-workflows/marketplace/publish
-  "lib/workflow-api.ts#unpublishPack": "workflow:publish",        // POST /v1/delivery-workflows/marketplace/unpublish
+  // Sharing to the org Library: the project's workflow:publish AND the org-level workflow:share.
+  "lib/workflow-api.ts#publishPack": ["workflow:publish", "workflow:share"],   // POST …/marketplace/publish
+  "lib/workflow-api.ts#unpublishPack": ["workflow:publish", "workflow:share"], // POST …/marketplace/unpublish
   "lib/workflow-api.ts#renameWorkflow": "workflow:create",        // PATCH /v1/delivery-workflows/{id}
   "lib/workflow-api.ts#deleteWorkflow": "workflow:delete",        // DELETE /v1/delivery-workflows/{id}
   "lib/workflow-api.ts#draftFromDescription": "workflow:create",  // POST /v1/delivery-workflows/draft
@@ -369,6 +370,9 @@ export const WRITE_OPS: Readonly<Record<string, Readonly<Record<string, WriteGat
     // add and remove a scoped budget (budget:manage at org).
     "/v1/budget-policies/scoped": "budget:manage",
     "/v1/budget-policies/scoped/": "budget:manage",
+    // Govern › More › Pilot metrics (app/govern/pilot-metrics.tsx, BOSSAPP-1292): the typed-in
+    // before-numbers (budget:manage at org).
+    "/v1/pilot-metrics/baseline": "budget:manage",
     // Skills & MCP › Rules (lib/tool-policies.ts, BOSSAPP-815): the simulate box is a read.
     "/v1/tool-policies/simulate": "mcp_server:read",
     "/v1/tool-policies": "mcp_server:review",

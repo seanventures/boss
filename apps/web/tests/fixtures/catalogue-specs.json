@@ -411,7 +411,7 @@
             "notify_channel": {
               "type": "string",
               "title": "Who to tell",
-              "description": "Where the outcome is posted: email:someone@example.com or mattermost:<channel id>. Leave blank and the notify step is skipped and says so.",
+              "description": "Where the outcome is posted: email:someone@example.com, mattermost:<channel id> or a pull request (github:#12). Leave blank and the notify step is skipped and says so.",
               "examples": [
                 "email:team@example.com"
               ]
@@ -740,7 +740,7 @@
             "notify_channel": {
               "type": "string",
               "title": "Who to tell",
-              "description": "Where the outcome is posted: email:someone@example.com or mattermost:<channel id>. Leave blank and the notify step is skipped and says so.",
+              "description": "Where the outcome is posted: email:someone@example.com, mattermost:<channel id> or a pull request (github:#12). Leave blank and the notify step is skipped and says so.",
               "examples": [
                 "email:team@example.com"
               ]
@@ -969,7 +969,7 @@
             "notify_channel": {
               "type": "string",
               "title": "Who to tell",
-              "description": "Where the outcome is posted: email:someone@example.com or mattermost:<channel id>. Leave blank and the notify step is skipped and says so.",
+              "description": "Where the outcome is posted: email:someone@example.com, mattermost:<channel id> or a pull request (github:#12). Leave blank and the notify step is skipped and says so.",
               "examples": [
                 "email:team@example.com"
               ]
@@ -1497,7 +1497,8 @@
                 "run_id": {
                   "from_step": "build",
                   "field": "code_task_run_id"
-                }
+                },
+                "skip_without_deploy_ask": true
               }
             },
             "next": [
@@ -1589,6 +1590,7 @@
                   "from_step": "more_tests",
                   "field": "code_task_run_id"
                 },
+                "skip_without_deploy_ask": true,
                 "pass_2_of": "deploy",
                 "monitoring_step": "monitoring"
               }
@@ -1655,7 +1657,7 @@
             "notify_channel": {
               "type": "string",
               "title": "Who to tell",
-              "description": "Where the outcome is posted: email:someone@example.com or mattermost:<channel id>. Leave blank and the notify step is skipped and says so.",
+              "description": "Where the outcome is posted: email:someone@example.com, mattermost:<channel id> or a pull request (github:#12). Leave blank and the notify step is skipped and says so.",
               "examples": [
                 "email:team@example.com"
               ]
@@ -4883,7 +4885,7 @@
             "notify_channel": {
               "type": "string",
               "title": "Who to tell",
-              "description": "Where the outcome is posted: email:someone@example.com or mattermost:<channel id>. Leave blank and the notify step is skipped and says so.",
+              "description": "Where the outcome is posted: email:someone@example.com, mattermost:<channel id> or a pull request (github:#12). Leave blank and the notify step is skipped and says so.",
               "examples": [
                 "email:team@example.com"
               ]
@@ -5958,7 +5960,7 @@
             "notify_channel": {
               "type": "string",
               "title": "Who to tell",
-              "description": "Where the outcome is posted: email:someone@example.com or mattermost:<channel id>. Leave blank and the notify step is skipped and says so.",
+              "description": "Where the outcome is posted: email:someone@example.com, mattermost:<channel id> or a pull request (github:#12). Leave blank and the notify step is skipped and says so.",
               "examples": [
                 "email:team@example.com"
               ]
@@ -6181,6 +6183,15 @@
               "default": 2.0,
               "title": "Budget in dollars (optional)",
               "description": "The most the scan may spend on its model, at most the project's cap. Default $2.00."
+            },
+            "directive": {
+              "type": "string",
+              "format": "textarea",
+              "title": "Anything to read for first? (optional)",
+              "description": "The Rulebook Analyst proposes every rule the document states. Upload and confirm the document in Knowledge Graph › Documents first; Extract rules there starts this workflow with it.",
+              "examples": [
+                "Read every rule card; the retired rules in the change log are not in force."
+              ]
             }
           }
         },
@@ -8099,6 +8110,15 @@
               "description": "The transaction-monitoring alert to investigate (Knowledge Graph › Documents › AML sample lists them), e.g. ALERT-1.",
               "examples": [
                 "ALERT-1"
+              ]
+            },
+            "directive": {
+              "type": "string",
+              "format": "textarea",
+              "title": "What should this investigation focus on? (optional)",
+              "description": "The alert's own evidence is always collected; say what matters most.",
+              "examples": [
+                "The payroll fan-out on Harbor Point Cafe's payroll account."
               ]
             }
           }
@@ -10137,6 +10157,15 @@
               "examples": [
                 "EXG-20261005-0003"
               ]
+            },
+            "directive": {
+              "type": "string",
+              "format": "textarea",
+              "title": "What should this investigation focus on? (optional)",
+              "description": "The exception group's own evidence is always assembled.",
+              "examples": [
+                "Principal outstanding no longer reconciles to its components."
+              ]
             }
           }
         },
@@ -10309,6 +10338,15 @@
               "examples": [
                 "2026-10-09"
               ]
+            },
+            "directive": {
+              "type": "string",
+              "format": "textarea",
+              "title": "Anything to note? (optional)",
+              "description": "The sweep covers every open incident.",
+              "examples": [
+                "Run the daily escalation sweep across every open DQ incident."
+              ]
             }
           }
         },
@@ -10383,6 +10421,15 @@
               "examples": [
                 "2026-10-07"
               ]
+            },
+            "directive": {
+              "type": "string",
+              "format": "textarea",
+              "title": "Anything to note? (optional)",
+              "description": "The DQ Monitor's latest COB is read.",
+              "examples": [
+                "Ingest the latest COB and investigate all Error exception groups."
+              ]
             }
           }
         },
@@ -10393,12 +10440,12 @@
     {
       "workflow_key": "onboard_config_file",
       "name": "Onboard a config file",
-      "description": "A file arrives — a partner's config, say. BOSS checks it with the repository's own checkers, fixes what it may, leaves you what it may not, and ships it to staging once merged.",
+      "description": "A file arrives — a partner's config, say. BOSS checks it with the repository's own checkers, fixes what it may, leaves you what it may not, ships it to staging once merged, and to production once you approve.",
       "spec": {
-        "entry_step": "build",
+        "entry_step": "fix",
         "steps": [
           {
-            "id": "build",
+            "id": "fix",
             "kind": "capability",
             "binding": {
               "capability": "build",
@@ -10435,6 +10482,7 @@
             "captain": "engineering_captain",
             "default_captain": "engineering_captain",
             "title": "Fix the file",
+            "on_error": "rejected",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -10451,10 +10499,53 @@
               "inputs": {}
             },
             "next": [
-              "merge"
+              "checks"
             ],
             "captain": "adversarial_reviewer",
             "default_captain": "adversarial_reviewer",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "checks",
+            "kind": "condition",
+            "title": "Checks pass?",
+            "expression": {
+              "not": {
+                "path": "steps.fix.output.checks_passed",
+                "op": "eq",
+                "value": false
+              }
+            },
+            "on_true": "merge",
+            "on_false": "not_passing",
+            "next": [],
+            "max_attempts": 3,
+            "binding": {}
+          },
+          {
+            "id": "not_passing",
+            "kind": "capability",
+            "binding": {
+              "capability": "notify",
+              "inputs": {
+                "message": [
+                  "Not onboarded: {input.title}\n{steps.fix.output.validation_report}\n\nThe proposed fix is {steps.fix.output.pull_request_url}: review it, change your file the same way, and push again.",
+                  "Not onboarded: {input.title}\n{steps.fix.output.validation_report}",
+                  "Not onboarded: {input.title}\nThe file could not be checked and fixed on this run; the run's record says why."
+                ],
+                "channel": {
+                  "from_input": "notify_channel"
+                }
+              }
+            },
+            "next": [],
+            "title": "Report the rejection",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -10473,6 +10564,7 @@
             "next": [
               "staging"
             ],
+            "on_error": "rejected",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -10496,14 +10588,15 @@
             "next": [
               "contract_tests"
             ],
-            "title": "Staging",
-            "max_attempts": 3,
             "approval": {
               "mode": "manual",
               "on_timeout": "block",
+              "follows_policy": true,
               "risk_tier": 2,
               "forced_manual": true
-            }
+            },
+            "title": "Staging",
+            "max_attempts": 3
           },
           {
             "id": "contract_tests",
@@ -10517,8 +10610,11 @@
                 }
               }
             },
-            "next": [],
+            "next": [
+              "production"
+            ],
             "title": "Contract tests",
+            "on_error": "roll_back",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -10526,9 +10622,165 @@
               "risk_tier": 0,
               "forced_manual": false
             }
+          },
+          {
+            "id": "production",
+            "kind": "capability",
+            "binding": {
+              "capability": "promote_config",
+              "inputs": {
+                "deployment_id": {
+                  "from_step": "staging",
+                  "field": "deployment_id"
+                },
+                "bundle_sha256": {
+                  "from_step": "staging",
+                  "field": "bundle_sha256"
+                },
+                "environment": "production"
+              }
+            },
+            "next": [
+              "report"
+            ],
+            "title": "Production",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "manual",
+              "on_timeout": "block",
+              "risk_tier": 3,
+              "forced_manual": true
+            }
+          },
+          {
+            "id": "report",
+            "kind": "capability",
+            "binding": {
+              "capability": "notify",
+              "inputs": {
+                "message": [
+                  "Onboarded: {input.title}\n{steps.fix.output.validation_report}\n\nStaging: {steps.staging.output.deployed_url} (contract tests {steps.contract_tests.output.passed}/{steps.contract_tests.output.total} passed). Production: deployed after approval.",
+                  "Onboarded: {input.title}\nStaging: {steps.staging.output.deployed_url} (contract tests {steps.contract_tests.output.passed}/{steps.contract_tests.output.total} passed). Production: deployed after approval.",
+                  "Onboarded: {input.title}\nStaging passed its contract tests and the same file is in production."
+                ],
+                "channel": {
+                  "from_input": "notify_channel"
+                }
+              }
+            },
+            "next": [],
+            "title": "Report",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "roll_back",
+            "kind": "capability",
+            "binding": {
+              "capability": "rollback_config",
+              "inputs": {
+                "deployment_id": {
+                  "from_step": "staging",
+                  "field": "deployment_id"
+                }
+              }
+            },
+            "next": [
+              "report_rollback"
+            ],
+            "title": "Roll back staging",
+            "on_error": "report_rollback_failed",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "report_rollback",
+            "kind": "capability",
+            "binding": {
+              "capability": "notify",
+              "inputs": {
+                "message": [
+                  "Rolled back from staging: {input.title}\nThe contract tests failed at {steps.staging.output.deployed_url}, so staging is back to what it served before.\n\n{steps.contract_tests.output.results_table}",
+                  "Rolled back from staging: {input.title}\nThe contract tests failed, so staging is back to what it served before."
+                ],
+                "channel": {
+                  "from_input": "notify_channel"
+                }
+              }
+            },
+            "next": [],
+            "title": "Report the rollback",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "report_rollback_failed",
+            "kind": "capability",
+            "binding": {
+              "capability": "notify",
+              "inputs": {
+                "message": [
+                  "Staging needs a person: {input.title}\nThe contract tests failed and the rollback did not finish cleanly: {steps.roll_back.output.reason}",
+                  "Staging needs a person: {input.title}\nThe contract tests failed and the rollback did not finish cleanly; the run's record says what happened."
+                ],
+                "channel": {
+                  "from_input": "notify_channel"
+                }
+              }
+            },
+            "next": [],
+            "title": "Report the failed rollback",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "rejected",
+            "kind": "capability",
+            "binding": {
+              "capability": "notify",
+              "inputs": {
+                "message": [
+                  "Not onboarded: {input.title}\n{steps.fix.output.validation_report}\n\nThe proposed fix is {steps.fix.output.pull_request_url}: review it, change your file the same way, and push again.",
+                  "Not onboarded: {input.title}\n{steps.fix.output.validation_report}",
+                  "Not onboarded: {input.title}\nThe file could not be checked and fixed on this run; the run's record says why."
+                ],
+                "channel": {
+                  "from_input": "notify_channel"
+                }
+              }
+            },
+            "next": [],
+            "title": "Report the rejection",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
           }
         ],
-        "objective": "Take the file the run was given, check it with the repository's declared checkers, and make it pass with a minimal edit. Findings the repository's rules reserve for a person stay open for that person. Once merged, the file ships to staging and the project's contract tests run against it.",
+        "objective": "Take the file the run was given, check it with the repository's declared checkers, and make it pass with a minimal edit. Findings the repository's rules reserve for a person stay open for that person. Once merged, the file ships to staging and the project's contract tests run against it; when they fail staging is rolled back, when they pass the same file goes to production after one approval. The outcome is reported where the run was asked for.",
         "workflow_name": "Onboard a config file",
         "input_schema": {
           "type": "object",
@@ -10593,6 +10845,14 @@
               "type": "string",
               "title": "Where the fixed file goes",
               "description": "Its path in the repository, e.g. config/tenants/name.yaml."
+            },
+            "notify_channel": {
+              "type": "string",
+              "title": "Who to tell",
+              "description": "Where the outcome is posted: email:someone@example.com, mattermost:<channel id> or a pull request (github:#12). Leave blank and the notify step is skipped and says so.",
+              "examples": [
+                "email:team@example.com"
+              ]
             }
           }
         },

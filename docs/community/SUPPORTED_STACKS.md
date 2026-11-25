@@ -81,3 +81,21 @@ BOSS starts the backend on `$PORT` (the command in the service's `boss.preview.c
 Go builds a server with `go build` (the module root's `package main`, else the first `./cmd/<name>`) and runs it; it listens on `$PORT`.
 
 A multi-service app is a backend and a web front end, each in its own directory with its own manifest. Data: `DATABASE_URL` (PostgreSQL) with a local SQLite file when it is unset, for local development.
+
+## Preview matrix
+
+What works today for each stack in the guided preview. **yes**: the code path exists and has tests. **partial**: it exists with the gap named. **no**: not built. No cell is a certified golden build yet; the daily golden journeys (BOSSAPP-1284) will record one per stack.
+
+| Stack | Build | Test | Preview | CI generation (GitHub Actions, Jenkins) | Deploy (Docker on an SSH host) | Kubernetes / Helm |
+|---|---|---|---|---|---|---|
+| Java / Spring, Maven | yes: `mvn -B -ntp verify` (toolchains.py) | yes: same gate | yes: jar on `$PORT` (toolchains.java_preview_command) | no: the generator refuses Java (ci_config_generator.py `_commands`) | yes: one-container `java` mode (deploy_service.py) | no |
+| Java / Spring, Gradle | partial: `gradle build` gate; unit tests only, no real build in any test | partial: same gate | partial: `gradle -x test assemble`; unit tests only | no | partial: `java` mode with a Gradle build image; no deploy test | no |
+| Go | yes: `go vet` then `go test` (toolchains.GO_GATE) | yes: `go test ./...` | partial: started for e2e checks; the console preview needs `boss.preview.command` | yes: both generated | partial: no one-container Go mode; `boss.deploy.yaml` (commands or compose) only | no |
+| Node / React (Vite) | yes: npm scripts | yes: npm test, Playwright `test:e2e` | yes: Vite build served | yes: both generated | yes: `node` or `static` mode, or compose | no |
+| Next.js | yes: npm scripts | yes: npm scripts | partial: `npm run start` on `$PORT` for e2e checks; the console preview uses the generic npm start | yes: both generated (as Node) | partial: `node` mode or compose; no Next.js deploy test | no |
+| Angular | partial: generic npm build (`node-web`, best effort) | partial: generic npm scripts | no: no start command in the registry; generic npm fallback, not on `$PORT` | partial: only when the language is given as Node | partial: generic `static` path; untested | no |
+| Python | yes: pip install; no build step | yes: pytest | yes: uvicorn, flask or django | partial: generated, but it assumes `pyproject.toml` (`pip install -e .`) | yes: `py` mode, or compose | no |
+
+CI: GitHub Actions and Jenkins files are generated for Node, Python and Go (ci_config_generator.py), and BOSS can trigger and read runs on both (pipeline_adapter.py). The generated deploy job hands build evidence to BOSS; it does not deploy. Deploy: Kubernetes, Helm, Cloudflare and Terraform are not built (deployment_connectors.py).
+
+**Out of scope.** Mobile (SwiftUI, React Native) and ML stacks (TensorFlow, LangChain apps) are out of scope for the preview. BOSS does not detect, build or test them as a stack.

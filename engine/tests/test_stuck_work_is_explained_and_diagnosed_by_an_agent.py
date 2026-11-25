@@ -263,6 +263,26 @@ def test_the_shepherd_never_fixes_one_build_for_ever(eng, project):  # noqa: F81
         _clean(eng, project)
 
 
+def test_the_shepherd_giving_up_on_an_ended_build_still_raises_its_card(eng, project):  # noqa: F811
+    """BOSSAPP-1309: the cap failure ENDED the build, the Shepherd diagnosed ask_person ("BOSS
+    tried 3 fixes … retry it or cancel it") and raised no card (card_id null)."""
+    try:
+        with eng.begin() as c:
+            rid = _run(c, project, ctx={"shepherd_fixes": stuck_work.MAX_FIXES_PER_ITEM})
+        with eng.begin() as c:
+            c.execute(text("UPDATE code_task_runs SET status = 'failed', "
+                           "error = 'Stopped: the job kept vanishing' WHERE id = :r"), {"r": rid})
+            d = stuck_work.diagnose(c, get_settings(), rid, use_model=False)
+        assert d["chosen"] == "ask_person", d
+        assert d["card_id"], "the Shepherd asked a person and raised no card"
+        # A failure the Shepherd never tried to fix stays card-free (no card per old failure).
+        with eng.begin() as c:
+            old = _run(c, project, status="failed", error="Tests failed: 3 of 40")
+            assert stuck_work.diagnose(c, get_settings(), old, use_model=False)["card_id"] is None
+    finally:
+        _clean(eng, project)
+
+
 #: Every way a build can be not-working, as the database holds it.
 def _every_state(c, pid):
     made = {}

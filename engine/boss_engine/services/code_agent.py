@@ -1052,7 +1052,16 @@ class ClaudeCodeAgent:
         # (stored_credential). No pool (the default) leaves the single login below untouched.
         from . import subscription_pools
 
-        member = subscription_pools.assignment_for("claude_code", self.settings)
+        try:
+            member = subscription_pools.assignment_for("claude_code", self.settings)
+        except subscription_pools.PoolExhausted as full:
+            # EVERY SEAT AT ITS LIMIT: the harness's own error, in limit words with the reset
+            # (subscription_pools.exhausted_words), so the at-limit policy applies — as codex.
+            from .cli_harness import CliHarnessUnavailable
+
+            error = CliHarnessUnavailable(str(full))
+            error.retry_at = full.retry_at  # type: ignore[attr-defined]
+            raise error from full
         if member is not None:
             from .claude_credential import STORED_KEY_NAME, TOKEN_NAME
             from .cli_harness import CliHarnessUnavailable, stored_credential
@@ -1138,7 +1147,11 @@ class ClaudeCodeAgent:
             return BILLING_METERED
         from . import subscription_pools
 
-        if subscription_pools.assignment_for("claude_code", self.settings) is not None:
+        try:
+            pooled = subscription_pools.assignment_for("claude_code", self.settings)
+        except subscription_pools.PoolExhausted:
+            pooled = True     # still a subscription run: it waits for the reset, never meters
+        if pooled is not None:
             from .included_spend import BILLING_SUBSCRIPTION
 
             return BILLING_SUBSCRIPTION

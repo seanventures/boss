@@ -89,6 +89,9 @@ class TicketStartBody(BaseModel):
     #: THE PROFILE THE PERSON PICKED (BOSSAPP-1334): lean | balanced | strict, carried in the run
     #: input to the build step, as New work's own start does. Empty: the project's default.
     profile: Optional[str] = Field(default=None, max_length=20)
+    #: The quality bar for this run (prototype | standard | production); checked by the start
+    #: door (below the project's bar needs settings:update).
+    quality_bar: Optional[str] = Field(default=None, max_length=20)
 
 
 # ---- helpers --------------------------------------------------------------------------------
@@ -610,6 +613,8 @@ def start_from_ticket(work_item_id: str, payload: Optional[TicketStartBody] = No
     run_input = dict(plan["input"])
     if picked_profile:
         run_input["profile"] = picked_profile
+    if (body.quality_bar or "").strip():
+        run_input["quality_bar"] = body.quality_bar.strip().lower()
     start: dict[str, Any] = {"project_id": project_id, "workflow_key": wanted,
                              "input": run_input, "actor": actor}
     for name in ("start_anyway", "accept", "dedupe_key"):
