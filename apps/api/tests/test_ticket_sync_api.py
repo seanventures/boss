@@ -189,20 +189,41 @@ def _delivery(key=STORY):
                        "issue": {"id": str(10000 + D.STORY), "key": key}}).encode()
 
 
-def test_the_ticket_webhook_is_public_and_verified_by_its_connector(client, fake, world):
+def test_the_ticket_webhook_is_public_and_verified_by_its_connector(
+        client, fake, world, engine, monkeypatch):
+    from boss_engine.connectors.tickets import http as ticket_http
+    from boss_engine.services import event_intake
+
     body = _delivery()
     good = "sha256=" + hmac.new(SECRET.encode(), body, hashlib.sha256).hexdigest()
     path = f"/v1/webhooks/tickets/{world.conn_id}"
+    real_transport = ticket_http.TRANSPORT
+
+    def no_outbound(*_args, **_kwargs):
+        raise AssertionError("ticket webhook request must make zero outbound HTTP calls (F9)")
+
+    monkeypatch.setattr(ticket_http, "TRANSPORT", no_outbound)
     with world.acting_as(None, mode="shadow"):
         bad = client.post(path, content=body, headers={"X-Hub-Signature": "sha256=00"})
         assert bad.status_code == 401
         assert client.post("/v1/webhooks/tickets/trk_nope", content=body,
                            headers={"X-Hub-Signature": good}).status_code == 404
-        # a Jira webhook registered without a secret: ?token= on its URL
+        # a Jira webhook registered without a secret: ?token= on its URL (0 outbound HTTP)
         token = client.post(path + f"?token={SECRET}", content=body)
-        assert token.status_code == 202 and token.json()["status"] == "waiting", token.text
+        assert token.status_code == 202 and token.json()["status"] == "received", token.text
         again = client.post(path, content=body, headers={"X-Hub-Signature": good})
-        assert again.status_code == 200 and again.json()["status"] == "already_asked"
+        assert again.status_code == 202 and again.json()["status"] == "duplicate", again.text
+
+    monkeypatch.setattr(ticket_http, "TRANSPORT", real_transport)
+    processed = event_intake.process_due(engine)
+    assert processed["claimed"] >= 1
+    with engine.connect() as c:
+        row = c.execute(
+            text("SELECT status, outcome FROM intake_events WHERE id = :id"),
+            {"id": token.json()["event_id"]},
+        ).mappings().one()
+    assert row["status"] == "routed", row
+    assert row["outcome"][0]["ticket_pickup"]["status"] == "waiting"
 
 
 def test_the_webhook_route_mints_a_secret_shows_it_once_and_rotates_it(
@@ -210,6 +231,8 @@ def test_the_webhook_route_mints_a_secret_shows_it_once_and_rotates_it(
     """POST /v1/ticket-systems/{id}/webhook (integration:manage): a new secret, minted into the
     secret store (the row keeps only its reference), and the URL, shown once. The public webhook
     verifies with it; rotating stops the old one at once."""
+    from boss_engine.connectors.tickets import http as ticket_http
+
     monkeypatch.delenv("BOSS_JIRA_WEBHOOK_SECRET", raising=False)
     world.owner = world.person("own")
     world.bind(world.owner, "owner", project=world.project_a)
@@ -233,18 +256,22 @@ def test_the_webhook_route_mints_a_secret_shows_it_once_and_rotates_it(
         return {"X-Hub-Signature": "sha256=" + hmac.new(secret.encode(), body,
                                                         hashlib.sha256).hexdigest()}
 
+    def no_outbound(*_args, **_kwargs):
+        raise AssertionError("ticket webhook request must make zero outbound HTTP calls (F9)")
+
+    monkeypatch.setattr(ticket_http, "TRANSPORT", no_outbound)
     hook = f"/v1/webhooks/tickets/{world.conn_id}"
     with world.acting_as(None, mode="shadow"):
         accepted = client.post(hook, content=body, headers=signed(first["secret"]))
-        assert accepted.status_code == 202, accepted.text
+        assert accepted.status_code == 202 and accepted.json()["status"] == "received", accepted.text
     with world.acting_as(world.ctx(world.owner)):
         second = client.post(path, json={}).json()
     assert second["rotated"] is True and second["secret"] != first["secret"]
     with world.acting_as(None, mode="shadow"):
         assert client.post(hook, content=body, headers=signed(first["secret"])).status_code \
             == 401
-        assert client.post(hook, content=body, headers=signed(second["secret"])).status_code \
-            == 200                                        # verified; already asked
+        dup = client.post(hook, content=body, headers=signed(second["secret"]))
+        assert dup.status_code == 202 and dup.json()["status"] == "duplicate"
 
 
 def test_the_timeline_reads_with_work_item_read_and_retry_needs_work_tracker_write(

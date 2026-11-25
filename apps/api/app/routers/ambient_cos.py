@@ -58,8 +58,11 @@ def build_ambient_cos_router(*, engine, settings: Callable[[], Any],
         work. BOSS_AMBIENT_SIGNALS / BOSS_AMBIENT_COS and every stop are honoured inside."""
         from apps.api.app.main import require_worker_principal
 
+        from boss_engine.db import background
+
         require_worker_principal()
-        return chief_of_staff.tick(engine, settings())
+        with background():
+            return chief_of_staff.tick(engine, settings())
 
     @router.post("/v1/ambient/chief-of-staff/run")
     @permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"))

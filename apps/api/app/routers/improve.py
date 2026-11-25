@@ -511,7 +511,10 @@ def build_improve_router(
     def telemetry_tick(payload: Optional[dict] = None) -> dict:
         """The worker's loop: scorecard upkeep, collector retention, the daily send if due."""
         require_worker()
-        out = improve_boss.tick(engine, settings())
+        from boss_engine.db import background
+
+        with background():
+            out = improve_boss.tick(engine, settings())
         return {"send": (out.get("send") or {}).get("why") or
                 ("sent" if (out.get("send") or {}).get("sent") else "failed"),
                 "maintained": "scorecards" in out}

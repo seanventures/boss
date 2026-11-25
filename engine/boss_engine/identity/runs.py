@@ -338,13 +338,15 @@ def renew_due(engine: Any, *, now: Optional[float] = None) -> dict[str, str]:
 def _renew_forever() -> None:  # pragma: no cover — the loop around renew_due
     import logging
     import time as _time
+    from ..db import background
 
     while True:
         _time.sleep(2)
         try:
             if _ENGINE is not None:
-                enforce_revocations(_ENGINE)
-                renew_due(_ENGINE)
+                with background():
+                    enforce_revocations(_ENGINE)
+                    renew_due(_ENGINE)
         except Exception:  # noqa: BLE001
             logging.getLogger("boss.identity.runs").warning("run supervision pass failed", exc_info=True)
 

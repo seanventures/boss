@@ -608,54 +608,57 @@ def evaluate_host(connection: Any, host_id: str) -> dict[str, Any]:
 
 
 def tick(engine: Any, settings: Any = None, *, sample_api: bool = True) -> dict[str, Any]:
+    from ..db import background
     from . import storage_cleanup, storage_incidents, system_services, work_hold
 
     report: dict[str, Any] = {"at": _now().isoformat(), "hosts": []}
     try:
-        with engine.begin() as c:
-            storage_rules.ensure_defaults(c)
-            if sample_api:
-                record_sample(c, clean_sample(collect_api_sample(c), source="api"))
-            for host_id in hosts(c, within=timedelta(minutes=10)):
-                try:
-                    with c.begin_nested():
-                        report["hosts"].append(evaluate_host(c, host_id))
-                except Exception as exc:  # noqa: BLE001 — one host never stops the others
-                    _log.warning("storage watch: host %s not evaluated", host_id, exc_info=True)
-                    report["hosts"].append({"host_id": host_id, "error": f"{type(exc).__name__}"})
-            # A stuck hold: incident gone, or the host silent for 15 min with a good last reading,
-            # or the hold older than the maximum (BOSS_STORAGE_MAX_HOLD_SECONDS, 2 h): released,
-            # the incident kept open, an alert raised.
-            hold = work_hold.state(c, fresh=True)
-            if hold.get("active"):
-                inc = storage_incidents.get(c, str(hold.get("incident_id") or ""))
-                max_seconds = int(getattr(settings, "storage_max_hold_seconds", 7200) or 7200)
-                if inc is None or inc["status"] == "resolved":
-                    work_hold.release(c, actor="boss", reason="its incident is resolved")
-                elif work_hold.expired(hold, max_seconds):
-                    storage_incidents.expire_hold(c, inc, max_seconds=max_seconds)
-                else:
-                    s = latest(c, str(hold.get("host_id") or ""), within=timedelta(days=2)) or {}
-                    at = s.get("at")
-                    th = storage_rules.thresholds(c, str(hold.get("host_id") or ""))
-                    fp = free_pct_of(s)
-                    if at is not None and (_now() - (at if at.tzinfo else at.replace(
-                            tzinfo=timezone.utc))) > STUCK_HOLD_AFTER and fp is not None \
-                            and fp >= th["target_free_pct"]:
-                        storage_incidents.resolve(c, inc["id"], reason="no reading for 15 min; "
-                                                  "the last one was above target")
-            if int(time.time()) % 600 < INTERVAL_SECONDS:
-                report["pruned"] = prune(c)
-        # Plans advance outside the sampling transaction: host jobs, receipts, cards.
-        report["advanced"] = storage_cleanup.advance_all(engine)
-        system_services.beat(engine, "storage_watch",
-                             details={"hosts": len(report["hosts"]),
-                                      "levels": {h["host_id"]: h.get("level") for h in report["hosts"]}})
+        with background():
+            with engine.begin() as c:
+                storage_rules.ensure_defaults(c)
+                if sample_api:
+                    record_sample(c, clean_sample(collect_api_sample(c), source="api"))
+                for host_id in hosts(c, within=timedelta(minutes=10)):
+                    try:
+                        with c.begin_nested():
+                            report["hosts"].append(evaluate_host(c, host_id))
+                    except Exception as exc:  # noqa: BLE001 — one host never stops the others
+                        _log.warning("storage watch: host %s not evaluated", host_id, exc_info=True)
+                        report["hosts"].append({"host_id": host_id, "error": f"{type(exc).__name__}"})
+                # A stuck hold: incident gone, or the host silent for 15 min with a good last reading,
+                # or the hold older than the maximum (BOSS_STORAGE_MAX_HOLD_SECONDS, 2 h): released,
+                # the incident kept open, an alert raised.
+                hold = work_hold.state(c, fresh=True)
+                if hold.get("active"):
+                    inc = storage_incidents.get(c, str(hold.get("incident_id") or ""))
+                    max_seconds = int(getattr(settings, "storage_max_hold_seconds", 7200) or 7200)
+                    if inc is None or inc["status"] == "resolved":
+                        work_hold.release(c, actor="boss", reason="its incident is resolved")
+                    elif work_hold.expired(hold, max_seconds):
+                        storage_incidents.expire_hold(c, inc, max_seconds=max_seconds)
+                    else:
+                        s = latest(c, str(hold.get("host_id") or ""), within=timedelta(days=2)) or {}
+                        at = s.get("at")
+                        th = storage_rules.thresholds(c, str(hold.get("host_id") or ""))
+                        fp = free_pct_of(s)
+                        if at is not None and (_now() - (at if at.tzinfo else at.replace(
+                                tzinfo=timezone.utc))) > STUCK_HOLD_AFTER and fp is not None \
+                                and fp >= th["target_free_pct"]:
+                            storage_incidents.resolve(c, inc["id"], reason="no reading for 15 min; "
+                                                      "the last one was above target")
+                if int(time.time()) % 600 < INTERVAL_SECONDS:
+                    report["pruned"] = prune(c)
+            # Plans advance outside the sampling transaction: host jobs, receipts, cards.
+            report["advanced"] = storage_cleanup.advance_all(engine)
+            system_services.beat(engine, "storage_watch",
+                                 details={"hosts": len(report["hosts"]),
+                                          "levels": {h["host_id"]: h.get("level") for h in report["hosts"]}})
     except Exception as exc:  # noqa: BLE001 — the watch keeps watching
         _log.warning("storage watch tick failed", exc_info=True)
         report["error"] = f"{type(exc).__name__}: {exc}"[:200]
         try:
-            system_services.beat(engine, "storage_watch", ok=False, error=report["error"])
+            with background():
+                system_services.beat(engine, "storage_watch", ok=False, error=report["error"])
         except Exception:  # noqa: BLE001
             pass
     _LAST.clear()

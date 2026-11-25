@@ -158,10 +158,11 @@ def build_infra_platform_router() -> APIRouter:
         """The worker hands its leased `infra.operation` job here; fenced by the lease."""
         from apps.api.app.identity_guard import require_worker_principal
         from boss_engine.config import get_settings
-        from boss_engine.db import get_engine
+        from boss_engine.db import background, get_engine
         from boss_engine.platform.operations import execute_job
         require_worker_principal()
-        return execute_job(get_engine(), get_settings(), job_id=payload.job_id,
-                           worker_id=payload.worker_id, lease_token=payload.lease_token)
+        with background():
+            return execute_job(get_engine(), get_settings(), job_id=payload.job_id,
+                               worker_id=payload.worker_id, lease_token=payload.lease_token)
 
     return router

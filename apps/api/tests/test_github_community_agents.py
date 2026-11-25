@@ -265,6 +265,65 @@ def test_github_alias_security_filtering_loop_guard_and_dedupe(
     ).status_code == 503
 
 
+def test_github_webhook_routes_through_github_intake_adapter_and_enqueues_intake_events(
+    client, engine, monkeypatch
+):
+    from boss_engine.services import event_intake
+
+    settings = api_main.inbound_webhooks.settings
+    _configure(settings, monkeypatch)
+    ic_id = "icn_gh_compat_test"
+    with engine.begin() as connection:
+        seed_default_event_subscriptions(connection, PROJECT_ID)
+        connection.execute(
+            text(
+                """
+                INSERT INTO intake_connections (
+                    id, project_id, kind, name, mode, config, secret_refs,
+                    path_token, status, created_by
+                )
+                VALUES (
+                    :id, :p, 'github', 'GitHub Compat', 'push',
+                    '{"repository":"example-org/boss"}'::jsonb, '{}'::jsonb,
+                    'pt_gh_compat_test', 'active', 'test'
+                )
+                ON CONFLICT (id) DO NOTHING
+                """
+            ),
+            {"id": ic_id, "p": PROJECT_ID},
+        )
+    raw = json.dumps(_payload("issues"), separators=(",", ":")).encode()
+    try:
+        resp = client.post(
+            "/v1/webhooks/github",
+            content=raw,
+            headers=_headers(raw, "issues", "delivery-intake-dual"),
+        )
+        assert resp.status_code == 202, resp.text
+        with engine.connect() as connection:
+            queued = connection.execute(
+                text(
+                    "SELECT id, status, dedupe_key, verify_scheme FROM intake_events "
+                    "WHERE connection_id = :c AND dedupe_key = 'github:delivery-intake-dual'"
+                ),
+                {"c": ic_id},
+            ).mappings().first()
+        assert queued is not None and queued["status"] == "received"
+        assert queued["verify_scheme"] == "github_sha256"
+        processed = event_intake.process_due(engine, get_settings())
+        assert processed["claimed"] >= 1
+        with engine.connect() as connection:
+            ev = connection.execute(
+                text("SELECT type, subject FROM intake_events WHERE id = :id"),
+                {"id": queued["id"]},
+            ).mappings().first()
+        assert ev["type"] == "com.github.issues.opened"
+        assert ev["subject"] == "example-org/boss#42"
+    finally:
+        with engine.begin() as connection:
+            connection.execute(text("DELETE FROM intake_connections WHERE id = :id"), {"id": ic_id})
+
+
 def _decides(monkeypatch, verdict):
     """A model is connected and decides the triage verdict (agent_decision)."""
     from boss_engine.services import agent_decision

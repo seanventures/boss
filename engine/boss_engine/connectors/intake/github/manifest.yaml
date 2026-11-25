@@ -26,6 +26,7 @@ dedupe: [delivery_id]
 auth_fields:
   - {name: webhook_secret, label: Webhook secret, secret: true, modes: [push], help: The secret set on the repository or App webhook (X-Hub-Signature-256). Required for push mode.}
   - {name: api_token, label: API token, secret: true, required: false, help: Optional. Reads changed-file lists and polls; without it the project's GitHub connection for the repository is used. Never handed to an agent.}
+  - {name: api_base_url, label: API base (GitHub Enterprise), required: false, placeholder: "https://api.github.com", help: "GitHub Enterprise REST API base URL (or BOSS_GITHUB_API_URL)."}
   - {name: repository, label: Repository (owner/name), required: false, modes: [poll], help: Restrict deliveries to one repository; empty accepts every repository the webhook sends. Required for poll mode.}
   - {name: poll_seconds, label: Poll every (seconds), required: false, help: Poll mode only. Default 30; at least 15.}
   - {name: poll_pushes, label: Poll branch pushes, required: false, help: Poll mode only. true (default) also turns moved branch heads into push events.}
@@ -33,5 +34,6 @@ auth_fields:
   - {name: allow_bots, label: Allowed bot logins, required: false, help: Other bots whose events may wake agents (comma-separated); every other bot is dropped.}
 default_hosts: [api.github.com, github.com]
 guard_provider: github
+operator_base_url_env: [BOSS_GITHUB_API_URL]
 self_identity: [bot_login]
 event_types: [com.github.push, com.github.pull_request.*, com.github.issues.*, com.github.issue_comment.*, com.github.pull_request_review.*, com.github.pull_request_review_comment.*, com.github.release.*, com.github.workflow_run.*, com.github.check_suite.*]

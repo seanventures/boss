@@ -29,6 +29,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import os
 import re
 from typing import Any, Callable, Mapping, Optional
 from urllib.parse import quote
@@ -84,6 +85,16 @@ _FIELD_WHITELIST = {
 
 def github_signature(secret: str, body: bytes) -> str:
     return "sha256=" + hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+
+
+def _api_base(conn: IntakeConnection) -> str:
+    raw = (
+        str(conn.get("api_base_url") or "").strip()
+        or str(getattr(conn.app_settings, "github_api_base_url", "") or "").strip()
+        or str(os.environ.get("BOSS_GITHUB_API_URL") or "").strip()
+        or API_BASE
+    )
+    return raw.rstrip("/") or API_BASE
 
 
 def _default_transport(method: str, url: str, headers: Mapping[str, str],
@@ -286,7 +297,8 @@ class GitHubIntakeAdapter(IntakeAdapterBase):
             ev.data["changed_files_source"] = "unavailable"
             return ev
         headers = _headers(conn, str(repo))
-        url = f"{API_BASE}/repos/{repo}/compare/{quote(str(before), safe='')}...{quote(str(after), safe='')}"
+        base = _api_base(conn)
+        url = f"{base}/repos/{repo}/compare/{quote(str(before), safe='')}...{quote(str(after), safe='')}"
         try:
             status, payload, _ = _transport_with_headers("GET", url, headers,
                                                          "intake.github.compare")
@@ -325,10 +337,11 @@ class GitHubIntakeAdapter(IntakeAdapterBase):
             ev.data["changed_files_source"] = "unavailable"
             return ev
         headers = _headers(conn, str(repo))
+        base = _api_base(conn)
         files: list[dict[str, Any]] = []
         page = 1
         while len(files) < MAX_CHANGED_FILES:
-            url = (f"{API_BASE}/repos/{repo}/pulls/{number}/files"
+            url = (f"{base}/repos/{repo}/pulls/{number}/files"
                    f"?per_page={PAGE_SIZE}&page={page}")
             try:
                 status, payload, _ = _transport_with_headers("GET", url, headers,
@@ -383,9 +396,10 @@ class GitHubIntakeAdapter(IntakeAdapterBase):
         since = str(state.get("since") or cursor.cursor_time or "")
         etags: dict[str, str] = dict(state.get("etags") or {})
         headers = _headers(conn, repo)
+        base = _api_base(conn)
         deliveries: list[StoredRaw] = []
 
-        pulls_url = (f"{API_BASE}/repos/{repo}/pulls?state=open&sort=updated&direction=desc"
+        pulls_url = (f"{base}/repos/{repo}/pulls?state=open&sort=updated&direction=desc"
                      f"&per_page={min(PAGE_SIZE, MAX_POLLED_PULLS)}")
         status, pulls = self._get(pulls_url, headers, etags, "pulls")
         heads: dict[str, str] = dict(state.get("pulls") or {})
@@ -409,7 +423,7 @@ class GitHubIntakeAdapter(IntakeAdapterBase):
                     "repository": (pr.get("base") or {}).get("repo") or {"full_name": repo},
                     "sender": pr.get("user") or {}}, f"pr:{repo}#{number}@{sha}"))
             heads = seen                         # a closed PR leaves the cursor
-        branches_url = f"{API_BASE}/repos/{repo}/branches?per_page={PAGE_SIZE}"
+        branches_url = f"{base}/repos/{repo}/branches?per_page={PAGE_SIZE}"
         status_b, listed = self._get(branches_url, headers, etags, "branches")
         tips: dict[str, str] = dict(state.get("branches") or {})
         pushes = str(conn.get("poll_pushes", "true")).strip().lower() not in (

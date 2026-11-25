@@ -722,7 +722,10 @@ def start(engine: Any, settings: Any) -> bool:
             _WAKE.wait(TICK_SECONDS)
             _WAKE.clear()
             try:
-                drain(engine, settings)
+                from ..db import background
+
+                with background():
+                    drain(engine, settings)
             except Exception:  # noqa: BLE001 — the next tick tries again
                 log.warning("chat outbox send failed", exc_info=True)
 

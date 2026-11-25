@@ -384,10 +384,13 @@ def start(engine: Any, settings: Any) -> None:
     _STARTED.set()
 
     def loop() -> None:
+        from ..db import background
+
         time.sleep(120)  # let the API finish booting first
         while True:
             try:
-                reflect_due(engine)
+                with background():
+                    reflect_due(engine)
             except Exception:  # noqa: BLE001 — the loop must outlive one bad tick
                 _log.warning("reflection tick failed", exc_info=True)
             time.sleep(max(60, minutes * 60))

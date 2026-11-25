@@ -411,12 +411,14 @@ def build_self_fix_router(
     @permit(P.WORKER_LEASE)
     def run_build(self_fix_id: str, payload: BuildBody) -> dict:
         require_worker()
+        from boss_engine.db import background
         from boss_engine.services import self_fix_build
 
-        return self_fix_build.execute_job(engine, settings(), self_fix_id=self_fix_id,
-                                          job_id=payload.job_id, worker_id=payload.worker_id,
-                                          lease_token=payload.lease_token,
-                                          note=payload.note or "")
+        with background():
+            return self_fix_build.execute_job(engine, settings(), self_fix_id=self_fix_id,
+                                              job_id=payload.job_id, worker_id=payload.worker_id,
+                                              lease_token=payload.lease_token,
+                                              note=payload.note or "")
 
     return router
 

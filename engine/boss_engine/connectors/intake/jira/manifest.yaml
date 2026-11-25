@@ -1,0 +1,40 @@
+key: jira
+label: Jira
+icon: jira
+description: Atlassian Jira Cloud — issue created, updated, commented, and deleted webhook events; delegates verification, parsing, and optional enrichment to the Jira ticket connector.
+docs_url: https://developer.atlassian.com/cloud/jira/platform/rest/v3/webhooks/
+adapter: JiraIntakeAdapter
+order: 45
+modes: [push]
+capabilities:
+  verify: true
+  handshake: false
+  parse: true
+  poll: false
+  subscribe: false
+  stream: false
+  reply: false
+  stream_reply: false
+  identity: true
+  conversation: true
+  health: false
+ack:
+  deadline_ms: 10000
+  success_status: 202
+  retry_signal_headers: []
+dedupe: [delivery_id, body_sha256]
+auth_fields:
+  - {name: webhook_secret, label: Webhook secret, secret: true, help: "Shared secret for X-Hub-Signature (sha256=...) or ?token=... URL query auth."}
+  - {name: base_url, label: Site URL, required: false, placeholder: "https://your-domain.atlassian.net", help: Optional Jira site URL for ticket enrichment.}
+  - {name: email, label: Atlassian account email, required: false}
+  - {name: api_token, label: API token, secret: true, required: false, help: Optional API token for ticket enrichment.}
+  - {name: project_key, label: Project key, required: false, placeholder: BOSS}
+default_hosts: ["*.atlassian.net", api.atlassian.com, auth.atlassian.com]
+guard_provider: jira
+operator_base_url_env: [JIRA_BASE_URL]
+event_types:
+  - com.atlassian.jira.issue.created
+  - com.atlassian.jira.issue.updated
+  - com.atlassian.jira.issue.commented
+  - com.atlassian.jira.issue.deleted
+  - com.atlassian.jira.issue.other

@@ -254,52 +254,57 @@ _STARTED = threading.Event()
 
 
 def _consume(engine: Any, settings: Any, connection_id: str) -> None:
-    consumer = Consumer(engine, settings, connection_id)
-    why, ok = "stopped", True
-    try:
-        while not _STOP.is_set():
-            why = consumer.run_once()
-            if why in ("not_socket", "no_app_token", "lease_lost", "stopped"):
-                break
-            if not take_lease(engine, connection_id):
-                why = "lease_lost"
-                break
-    except Exception as error:  # noqa: BLE001 — the supervisor retries on its next sweep
-        ok, why = False, f"{type(error).__name__}: {error}"[:300]
-        log.warning("slack socket %s ended: %s", connection_id, why)
-    finally:
+    from ....db import background
+
+    with background():
+        consumer = Consumer(engine, settings, connection_id)
+        why, ok = "stopped", True
         try:
-            release_lease(engine, connection_id, ok=ok, error=None if ok else why)
-        except Exception:  # noqa: BLE001
-            pass
-        with _LOCK:
-            _RUNNING.pop(connection_id, None)
+            while not _STOP.is_set():
+                why = consumer.run_once()
+                if why in ("not_socket", "no_app_token", "lease_lost", "stopped"):
+                    break
+                if not take_lease(engine, connection_id):
+                    why = "lease_lost"
+                    break
+        except Exception as error:  # noqa: BLE001 — the supervisor retries on its next sweep
+            ok, why = False, f"{type(error).__name__}: {error}"[:300]
+            log.warning("slack socket %s ended: %s", connection_id, why)
+        finally:
+            try:
+                release_lease(engine, connection_id, ok=ok, error=None if ok else why)
+            except Exception:  # noqa: BLE001
+                pass
+            with _LOCK:
+                _RUNNING.pop(connection_id, None)
 
 
 def supervise(engine: Any, settings: Any) -> list[str]:
     """One sweep: every active socket-mode Slack connection this process can lease gets a
     consumer thread. Returns the connections it started."""
+    from ....db import background
     from ....services import projects_archive
 
-    with engine.begin() as c:
-        ids = [str(r[0]) for r in c.execute(text(
-            "SELECT id FROM intake_connections WHERE kind = 'slack' AND mode = 'socket' "
-            "AND status = 'active' AND " + projects_archive.live_sql("intake_connections.project_id")
-        )).all()]
-    started = []
-    for connection_id in ids:
-        with _LOCK:
-            if connection_id in _RUNNING:
+    with background():
+        with engine.begin() as c:
+            ids = [str(r[0]) for r in c.execute(text(
+                "SELECT id FROM intake_connections WHERE kind = 'slack' AND mode = 'socket' "
+                "AND status = 'active' AND " + projects_archive.live_sql("intake_connections.project_id")
+            )).all()]
+        started = []
+        for connection_id in ids:
+            with _LOCK:
+                if connection_id in _RUNNING:
+                    continue
+            if not take_lease(engine, connection_id):
                 continue
-        if not take_lease(engine, connection_id):
-            continue
-        thread = threading.Thread(target=_consume, args=(engine, settings, connection_id),
-                                  daemon=True, name=f"boss-slack-socket-{connection_id[-6:]}")
-        with _LOCK:
-            _RUNNING[connection_id] = thread
-        thread.start()
-        started.append(connection_id)
-    return started
+            thread = threading.Thread(target=_consume, args=(engine, settings, connection_id),
+                                      daemon=True, name=f"boss-slack-socket-{connection_id[-6:]}")
+            with _LOCK:
+                _RUNNING[connection_id] = thread
+            thread.start()
+            started.append(connection_id)
+        return started
 
 
 def start(engine: Any, settings: Any) -> bool:

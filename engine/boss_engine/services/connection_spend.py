@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from threading import Event, Thread
+from threading import Event
 from time import monotonic
 from types import SimpleNamespace
 from typing import Any
@@ -371,7 +371,9 @@ class ConnectionSpend(TypedDecisionSpend):
                     errors.append(self._safe_error(error))
                     return
 
-        thread = Thread(target=heartbeat, name="connection-proof-heartbeat", daemon=True)
+        from ..db import spawn_thread
+
+        thread = spawn_thread(heartbeat, name="connection-proof-heartbeat", daemon=True, start=False)
         thread.start()
         proof = {}
         try:

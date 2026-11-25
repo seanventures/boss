@@ -399,3 +399,163 @@ def test_github_issue_comment_and_repository_filter():
 
 def test_time_helper_is_current():
     assert abs(wh.now_seconds() - time.time()) < 5
+
+
+def test_github_ghes_base_url_resolution(monkeypatch):
+    from boss_engine.connectors.intake.contract import Cursor
+
+    adapter = get_intake_adapter("github")
+    seen_urls: list[str] = []
+
+    def fake_transport(method, url, headers, body, purpose):
+        seen_urls.append(url)
+        if "pulls?" in url:
+            return 200, [{"number": 9, "updated_at": "2026-11-25T00:00:01Z",
+                          "head": {"sha": "a" * 40}, "base": {"repo": {"full_name": "northpeak/payments-api"}},
+                          "user": {"login": "alice", "id": 1}}], {}
+        if "branches?" in url:
+            return 200, [], {}
+        return 200, [{"filename": "README.md", "status": "modified", "additions": 1, "deletions": 0}], {}
+
+    monkeypatch.setattr(gh, "TRANSPORT", fake_transport)
+
+    # 1. Explicit api_base_url on connection config
+    ghes_conn = IntakeConnection(
+        "icn_ghes", "p_1", "github",
+        config={"repository": "northpeak/payments-api", "api_base_url": "https://git.corp.example/api/v3/"},
+        secret_resolver=lambda k: "tok" if k == "api_token" else "sec",
+    )
+    [pr_ev] = adapter.parse(ghes_conn, _stored(github_request("sec", "pull_request", github_pr_opened(9)), adapter, ghes_conn))
+    pr_ev = adapter.enrich(ghes_conn, pr_ev)
+    adapter.load_lazy(ghes_conn, pr_ev, "data.changed_files")
+    adapter.poll(ghes_conn, Cursor("default", None, "2026-11-25T00:00:00Z"), 10)
+    assert all(u.startswith("https://git.corp.example/api/v3/repos/northpeak/payments-api/") for u in seen_urls), seen_urls
+
+    # 2. Operator BOSS_GITHUB_API_URL env fallback when api_base_url is omitted
+    seen_urls.clear()
+    monkeypatch.setenv("BOSS_GITHUB_API_URL", "https://ghe.env.example/api/v3")
+    env_conn = IntakeConnection("icn_env", "p_1", "github", config={"repository": "northpeak/payments-api"})
+    adapter.poll(env_conn, Cursor("default", None, "2026-11-25T00:00:00Z"), 10)
+    assert all(u.startswith("https://ghe.env.example/api/v3/repos/northpeak/payments-api/") for u in seen_urls), seen_urls
+
+
+def test_jira_intake_adapter_verify_parse_and_enrich(monkeypatch):
+    adapter = get_intake_adapter("jira")
+    secret = "jira-intake-secret"
+    conn = _conn("jira", "webhook_secret", secret, base_url="https://acme.atlassian.net",
+                 email="bot@acme.test", project_key="KAN")
+    payload = {
+        "webhookEvent": "jira:issue_created",
+        "user": {"displayName": "Priya", "accountId": "acc-1", "emailAddress": "priya@acme.test"},
+        "issue": {
+            "id": "10042",
+            "key": "KAN-42",
+            "self": "https://acme.atlassian.net/rest/api/3/issue/10042",
+            "fields": {"summary": "Fix checkout", "description": "Details", "labels": ["boss"]},
+        },
+    }
+    raw_bytes = json.dumps(payload).encode("utf-8")
+    sig = "sha256=" + hmac.new(secret.encode("utf-8"), raw_bytes, hashlib.sha256).hexdigest()
+
+    # HMAC header verification
+    req_sig = RawRequest("POST", {"x-hub-signature": sig, "x-atlassian-webhook-identifier": "deliv-1"}, raw_bytes)
+    assert adapter.verify(conn, req_sig, time.time()).scheme == "jira_sha256"
+    assert adapter.dedupe_key(conn, req_sig) == "jira:deliv-1"
+
+    # ?token= query param verification
+    req_tok = RawRequest("POST", {}, raw_bytes, query={"token": secret})
+    assert adapter.verify(conn, req_tok, time.time()).scheme == "jira_token"
+    assert adapter.dedupe_key(conn, req_tok).startswith("jira:sha256:")
+
+    # Refusals
+    with pytest.raises(VerifyRefused, match="missing_signature"):
+        adapter.verify(conn, RawRequest("POST", {}, raw_bytes), time.time())
+    with pytest.raises(VerifyRefused, match="bad_signature"):
+        adapter.verify(conn, RawRequest("POST", {"x-hub-signature": "sha256=dead"}, raw_bytes), time.time())
+    with pytest.raises(VerifyRefused, match="not_configured"):
+        adapter.verify(_conn("jira", "webhook_secret", ""), req_sig, time.time())
+
+    # Parse
+    [ev] = adapter.parse(conn, _stored(req_sig, adapter, conn))
+    assert ev.type == "com.atlassian.jira.issue.created"
+    assert ev.subject == "KAN-42"
+    assert ev.data["title"] == "Fix checkout"
+    assert adapter.conversation_key(conn, ev) == "KAN-42"
+    hint = adapter.resolve_person(conn, ev.bossactor)
+    assert hint.email == "priya@acme.test" and hint.display == "Priya"
+
+    # Enrich delegates to JiraTicketAdapter when api_token + base_url configured
+    from boss_engine.connectors.tickets.contract import Ticket
+
+    enriched_conn = IntakeConnection(
+        "icn_jira", "p_1", "jira", config={"base_url": "https://acme.atlassian.net"},
+        secret_resolver=lambda k: "api-tok" if k == "api_token" else secret,
+    )
+    monkeypatch.setattr(
+        adapter._tickets,
+        "get_ticket",
+        lambda _tc, _ref: Ticket(
+            provider="jira", key="KAN-42", id="10042", title="Fix checkout enriched",
+            body_markdown="Full body", status="In Progress", status_category="doing",
+            type="bug", labels=["boss", "p0"], url="https://acme.atlassian.net/browse/KAN-42",
+        ),
+    )
+    ev = adapter.enrich(enriched_conn, ev)
+    assert ev.data["title"] == "Fix checkout enriched"
+    assert ev.data["labels"] == ["boss", "p0"]
+    assert ev.data["ticket"]["status"] == "In Progress"
+
+
+def test_plane_intake_adapter_verify_parse_and_enrich(monkeypatch):
+    adapter = get_intake_adapter("plane")
+    secret = "plane-intake-secret"
+    conn = _conn("plane", "webhook_secret", secret, api_base_url="https://plane.example.com",
+                 workspace_slug="ws", project_id="proj-uuid")
+    payload = {
+        "event": "issue",
+        "action": "created",
+        "data": {"id": "iss-99", "project": "proj-uuid", "name": "Ship P9b-4",
+                 "description_stripped": "Body text"},
+        "activity": {"actor": {"id": "u-1", "display_name": "Sean", "email": "sean@acme.test"}},
+    }
+    raw_bytes = json.dumps(payload).encode("utf-8")
+    sig = hmac.new(secret.encode("utf-8"), raw_bytes, hashlib.sha256).hexdigest()
+
+    req = RawRequest("POST", {"x-plane-signature": sig, "x-plane-delivery": "pl-deliv-1"}, raw_bytes)
+    assert adapter.verify(conn, req, time.time()).scheme == "plane_sha256"
+    assert adapter.dedupe_key(conn, req) == "plane:pl-deliv-1"
+
+    with pytest.raises(VerifyRefused, match="missing_signature"):
+        adapter.verify(conn, RawRequest("POST", {}, raw_bytes), time.time())
+    with pytest.raises(VerifyRefused, match="bad_signature"):
+        adapter.verify(conn, RawRequest("POST", {"x-plane-signature": "bad"}, raw_bytes), time.time())
+    with pytest.raises(VerifyRefused, match="not_configured"):
+        adapter.verify(_conn("plane", "webhook_secret", ""), req, time.time())
+
+    [ev] = adapter.parse(conn, _stored(req, adapter, conn))
+    assert ev.type == "so.plane.issue.created"
+    assert ev.subject == "iss-99"
+    assert ev.data["title"] == "Ship P9b-4"
+    assert adapter.conversation_key(conn, ev) == "iss-99"
+    hint = adapter.resolve_person(conn, ev.bossactor)
+    assert hint.email == "sean@acme.test" and hint.display == "Sean"
+
+    from boss_engine.connectors.tickets.contract import Ticket
+
+    enriched_conn = IntakeConnection(
+        "icn_plane", "p_1", "plane",
+        config={"api_base_url": "https://plane.example.com", "workspace_slug": "ws", "project_id": "proj-uuid"},
+        secret_resolver=lambda k: "plane-key" if k == "api_token" else secret,
+    )
+    monkeypatch.setattr(
+        adapter._tickets,
+        "get_ticket",
+        lambda _tc, _ref: Ticket(
+            provider="plane", key="BOSSAPP-1103", id="iss-99", title="Ship P9b-4",
+            body_markdown="Enriched", status="In Progress", status_category="doing",
+            type="task", labels=["boss"], url="https://plane.example.com/ws/projects/proj-uuid/issues/iss-99",
+        ),
+    )
+    ev = adapter.enrich(enriched_conn, ev)
+    assert ev.data["ticket"]["key"] == "BOSSAPP-1103"
+    assert ev.data["labels"] == ["boss"]

@@ -20,7 +20,6 @@ import shutil
 import socket
 import subprocess
 import tempfile
-import threading
 import time
 import urllib.parse
 import urllib.request
@@ -32,7 +31,7 @@ from sqlalchemy import text
 
 from ..config import Settings
 from . import owned_process
-from ..db import begin
+from ..db import begin, spawn_thread
 from .code_task_service import load_code_task_run
 from .core import emit_event, make_id
 from .verification_target import NPM_INSTALL_CMD
@@ -4034,8 +4033,8 @@ def reconcile_previews(engine, settings: Settings) -> dict[str, int]:
         if ordered and not _respawn_allowed(engine, settings):
             ordered = []
         for pid in ordered:
-            threading.Thread(target=_respawn_process_preview, args=(engine, settings, pid),
-                             daemon=True).start()
+            spawn_thread(_respawn_process_preview, args=(engine, settings, pid),
+                         daemon=True, as_background=True)
             respawned += 1
     return {"checked": len(rows), "running": alive, "stopped": stopped, "expired": expired,
             "respawning": respawned}
@@ -5223,7 +5222,7 @@ def start_preview_async(engine, settings: Settings, run_id: str, *,
         except Exception:  # noqa: BLE001 — never let log capture break the preview
             logger.debug("preview %s: log ingest failed", preview_id, exc_info=True)
 
-    threading.Thread(target=_finish, name=f"preview-{preview_id}", daemon=True).start()
+    spawn_thread(_finish, name=f"preview-{preview_id}", daemon=True, as_background=True)
     return {"id": preview_id, "status": "starting", "run_id": run_id,
             "message": "Preview is building. It appears in the previews list as it progresses."}
 

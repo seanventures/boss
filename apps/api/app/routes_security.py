@@ -268,12 +268,14 @@ def build_security_router() -> APIRouter:
     @router.post("/v1/security/scans/{scan_id}/run")
     @permit(P.WORKER_LEASE)
     def run_scan(scan_id: str) -> Any:
+        from boss_engine.db import background
         from boss_engine.security_scan import service
 
         from .identity_guard import require_worker_principal
 
         require_worker_principal()
         engine, settings = _engine_settings()
-        return service.execute_scan(engine, settings, scan_id)
+        with background():
+            return service.execute_scan(engine, settings, scan_id)
 
     return router

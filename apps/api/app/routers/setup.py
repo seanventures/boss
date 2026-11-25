@@ -14,7 +14,7 @@ from typing import Any, Callable, Optional
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from boss_engine.db import begin
+from boss_engine.db import background, begin
 
 from ..schemas_setup import (
     BudgetBody, ChecksBody, ClaudeCredentialBody, JobBody, ModelConnectBody, ReleaseHoldBody, RepositoryAppBody, RepositorySelectBody, RepositorySigninBody,
@@ -118,15 +118,16 @@ def build_setup_router(
     def post_checks(body: ChecksBody) -> dict[str, Any]:
         """Prove things now and record when: GitHub's three probes, one question per model."""
         actor = actor_for(body.actor)
-        with begin(engine) as connection:
-            require_actor(connection, body.project_id, actor, "entitlement_manage")
-            if setup_actions.first_press(body.project_id, body.idempotency_key):
-                try:
-                    setup_actions.run_checks(connection, get_settings(), body.project_id,
-                                             body.target, actor=actor)
-                except setup_actions.SetupActionError as error:
-                    fail(error)
-        return fresh_view(body.project_id)
+        with background():
+            with begin(engine) as connection:
+                require_actor(connection, body.project_id, actor, "entitlement_manage")
+                if setup_actions.first_press(body.project_id, body.idempotency_key):
+                    try:
+                        setup_actions.run_checks(connection, get_settings(), body.project_id,
+                                                 body.target, actor=actor)
+                    except setup_actions.SetupActionError as error:
+                        fail(error)
+            return fresh_view(body.project_id)
 
     @router.post("/v1/setup/subscriptions/keep-alive")
     @permit(P.SETUP_MANAGE, scope=Scope.project(body="project_id"))
@@ -136,8 +137,9 @@ def build_setup_router(
         from boss_engine.services import subscription_keepalive
 
         actor = actor_for(body.actor)
-        with begin(engine) as connection:
-            require_actor(connection, body.project_id, actor, "entitlement_manage")
+        with background():
+            with begin(engine) as connection:
+                require_actor(connection, body.project_id, actor, "entitlement_manage")
             return subscription_keepalive.sweep(engine, get_settings(), body.project_id)
 
     @router.post("/v1/setup/repository/token")
@@ -294,8 +296,9 @@ def build_setup_router(
         from boss_engine.services import engine_policy
 
         require_worker_principal()
-        return engine_policy.execute_job(engine, get_settings(), job_id=body.job_id,
-                                         worker_id=body.worker_id, lease_token=body.lease_token)
+        with background():
+            return engine_policy.execute_job(engine, get_settings(), job_id=body.job_id,
+                                             worker_id=body.worker_id, lease_token=body.lease_token)
 
     # ── Subscription sign-in inside the BOSS server (subscription_sign_in) ────────────────────
     # The ONE subscription route: the provider's own login runs here as the API process user;

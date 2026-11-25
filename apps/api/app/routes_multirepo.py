@@ -459,13 +459,16 @@ def build_multirepo_router() -> APIRouter:
         from apps.api.app.main import require_worker_principal
 
         require_worker_principal()
+        from boss_engine.db import background
+
         try:
-            with begin() as db:
-                out = merge.execute_job(db, _settings(), cs_id, job_id=str(payload.get("job_id") or ""),
-                                        worker_id=str(payload.get("worker_id") or ""),
-                                        lease_token=str(payload.get("lease_token") or ""))
-                _audit_merge(request, db, cs_id, out["project_id"], out)
-                return out
+            with background():
+                with begin() as db:
+                    out = merge.execute_job(db, _settings(), cs_id, job_id=str(payload.get("job_id") or ""),
+                                            worker_id=str(payload.get("worker_id") or ""),
+                                            lease_token=str(payload.get("lease_token") or ""))
+                    _audit_merge(request, db, cs_id, out["project_id"], out)
+                    return out
         except MultiRepoError as exc:
             return _refuse(exc)
 
