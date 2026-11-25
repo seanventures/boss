@@ -16,6 +16,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { Plus, RocketLaunch, Trash } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
+import { money } from "../../lib/govern";
 import { obsWrite } from "../observability/obs-write";
 
 type Scope = "org" | "project" | "role" | "workflow" | "team";
@@ -29,7 +30,7 @@ type Option = { value: string; label: string };
 const SCOPE_WORDS: Record<Scope, string> = { org: "Whole org", project: "This project", team: "A team", role: "An agent", workflow: "A workflow" };
 /** The `pilot_2000` preset (scoped_budgets.PRESETS): a team's $2,000 a month, hard stop. */
 export const PILOT_PRESET = { key: "pilot_2000", label: "$2,000 pilot", usd: 2000 } as const;
-const usd = (micros: number | undefined) => `$${((micros ?? 0) / 1_000_000).toFixed(2)}`;
+const usd = (micros: number | undefined) => money(micros ?? 0);
 const enc = encodeURIComponent;
 
 async function getJson<T>(path: string): Promise<T | null> {

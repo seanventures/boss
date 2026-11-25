@@ -231,7 +231,9 @@
 .gv-fc-runs li, .gv-pm-items li, .gv-pm-base-list li { display: flex; align-items: center; gap: 8px; min-height: 28px; font-size: 0.84rem; min-width: 0; }
 .gv-fc-runs li > svg { flex: 0 0 auto; color: var(--muted); }
 .gv-fc-run-name, .gv-pm-items li > :first-child { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.gv-fc-runs .gv-hbar-value, .gv-pm-items .gv-hbar-value { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; font-variant-numeric: tabular-nums; }
+.gv-fc-runs .gv-hbar-value, .gv-pm-items .gv-hbar-value { display: inline-flex; align-items: center; justify-content: flex-end; gap: 4px; margin-left: auto; font-variant-numeric: tabular-nums; }
+/* The scoped-budget rows' buttons keep their own width (a grid cell stretched Add and Remove). */
+.gv-limit-row > .ag-btn { justify-self: start; }
 .gv-fc-more, .gv-pm-sources { align-self: flex-start; }
 .gv-preset-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
 .gv-pm { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
