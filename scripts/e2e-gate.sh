@@ -16,6 +16,11 @@
 #       clean build, a failing test, a reviewer BLOCKER, a server that crashes on start and an
 #       engine that cannot run. Every engine must show the same stages, gates, fix rounds, PR,
 #       events, profile fields and failure words (tests/e2e/gate/engines.py). Same container.
+#   scripts/e2e-gate.sh journeys [--boss-root DIR] [--image IMAGE] [--keep]
+#       Tier A, no model calls: the golden journeys' runner (engine/boss_engine/services/
+#       golden_journeys, BOSSAPP-1284) plays every journey that runs on the scripted engine
+#       against BOSS's REAL API app, and each must come out green on the Acceptance Agent's
+#       verdict (tests/e2e/gate/journeys.py). Same container and world as `engines`.
 #   --inner-sandbox seccomp|seccomp+apparmor  (plumbing, engines) create the gate container with the
 #       security profiles an install with BOSS_ENGINE_INNER_SANDBOX gives its api and worker
 #       (scripts/install/compose_files.sh): BOSS's seccomp profile, plus AppArmor `boss-engine`
@@ -45,9 +50,9 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TIER="${1:-}"; shift || true
 
 case "$TIER" in
-  plumbing|engines) ;;
+  plumbing|engines|journeys) ;;
   agent) exec python3 "$ROOT/scripts/e2e_gate_agent.py" "$@" ;;
-  *) echo "usage: scripts/e2e-gate.sh plumbing|engines [--boss-root DIR] [--image IMAGE] [--keep] [--inner-sandbox MODE]" >&2
+  *) echo "usage: scripts/e2e-gate.sh plumbing|engines|journeys [--boss-root DIR] [--image IMAGE] [--keep] [--inner-sandbox MODE]" >&2
      echo "       scripts/e2e-gate.sh agent [--brief <name>] [--with-connector] [--budget-min N] [--keep]" >&2; exit 2 ;;
 esac
 
