@@ -58,6 +58,8 @@ from .local_fenced import file_bytes, safe_relative_path
 log = logging.getLogger(__name__)
 
 TARGET_KIND = "config_dir"
+#: A rollback run that restored the files but whose reload or health check then failed.
+RESTORED_UNHEALTHY = "unhealthy"
 #: A rollback run's release ref: `rollback:<the deployment it undoes>` (never a bundle hash).
 ROLLBACK_REF = "rollback:"
 OPERATION_SKILL = "config_dir.files.deploy"
@@ -820,9 +822,18 @@ def plan_config_deployment(rp: Any, connection: Connection, *, project_id: str, 
                       "target_id": cfg.id, "kind": PACKET_KIND}
     cost = {"expected_cost_usd_micros": 0, "reservation_id": reservation_id,
             "cost_confidence": "no_provider_spend"}
-    approval = pre_approval(connection, project_id, cfg.environment,
-                            gate_decision_id=approval_decision_id, person_required=person_required,
-                            gate_by_person=target_is_production(target), released=released_gate)
+    # WHICH GATE MAY ANSWER (BOSSAPP-1172): only one of the step that plans this — its
+    # capability, on this workflow run — claimed once; production only the runner's verified,
+    # person-released gate, never a decision id an argument names.
+    approval = pre_approval(
+        connection, project_id, cfg.environment,
+        gate_decision_id=None if target_is_production(target) else approval_decision_id,
+        person_required=person_required, gate_by_person=target_is_production(target),
+        released=released_gate,
+        gate_capability=("rollback_config" if rollback_of else
+                         "promote_config" if promoted_from else "config_deploy"),
+        gate_run_id=workflow_run_id or None, target_id=cfg.id,
+        bundle_sha256=None if rollback_of else release)
     if approval is None and rollback_of and restoring_approval and not target_is_production(target):
         # PUTTING BACK WHAT WAS THERE (a staging rollback) runs on the approval the deployment it
         # undoes ran on; production is never restored on anything but a person's answer.
@@ -1070,7 +1081,7 @@ def promote(engine: Any, settings: Settings, *, project_id: str, actor: str,
 
 
 def rollback(engine: Any, settings: Settings, *, project_id: str, actor: str,
-             deployment_run_id: Optional[str] = None, approval_decision_id: Optional[str] = None,
+             deployment_run_id: Optional[str] = None,
              workflow_run_id: Optional[str] = None,
              released_gate: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """`rollback_config` (BOSSAPP-1173): put back what a SUCCEEDED config deployment replaced.
@@ -1141,6 +1152,19 @@ def rollback(engine: Any, settings: Settings, *, project_id: str, actor: str,
                                         "Restore the files by hand from the kept versions.")
             target = dict(target)
             cfg = read_target(target)
+            busy = c.execute(
+                text("SELECT d.id, d.status FROM deployment_runs d "
+                     "JOIN deployment_targets t ON t.id = d.deployment_target_id "
+                     "WHERE d.id <> :i AND d.status IN ('approved', 'running') "
+                     "AND (d.deployment_target_id = :t OR t.target_ref = :ref) LIMIT 1"),
+                {"i": src["id"], "t": src["deployment_target_id"],
+                 "ref": target.get("target_ref") or ""}).mappings().first()
+            if busy:
+                # NEVER UNDER A DEPLOYMENT IN FLIGHT: restoring files another apply is writing
+                # (on this target, or another target on the same directory) races it.
+                raise ConfigDeployError(
+                    f"Deployment {busy['id']} is {busy['status']} on this directory; a rollback "
+                    "now would race it.", "Roll back once it has finished.")
             to_production = _production.target_is_production(target)
             # STAGING: the approval the deployment ran under covers putting things back as they
             # were (its gate or its person's card); production asks again (a person, or the
@@ -1149,13 +1173,12 @@ def rollback(engine: Any, settings: Settings, *, project_id: str, actor: str,
             if not to_production:
                 approver = c.execute(text("SELECT approved_by FROM changesets WHERE id = :c"),
                                      {"c": src["changeset_id"]}).scalar()
-                restoring = {"source": "restore", "decision_id": src.get("decision_id"),
+                restoring = {"source": "restore", "decision_id": None,
                              "approved_by": str(approver or src.get("created_by") or actor)}
             run = plan_config_deployment(
                 rp, c, project_id=project_id, target=target, files=files,
                 bundle_artifact_id=str(packet.get("bundle_artifact_id") or src.get("release_artifact_id") or ""),
-                actor=actor, approval_decision_id=approval_decision_id,
-                person_required=to_production, trigger="rollback", workflow_run_id=workflow_run_id,
+                actor=actor, person_required=to_production, trigger="rollback", workflow_run_id=workflow_run_id,
                 rollback_of={"deployment_run_id": str(src["id"]),
                              "previous_versions": f"{versions_root(cfg.directory)}/{src['id']}",
                              "files": sorted(paths)},
@@ -1172,17 +1195,21 @@ def is_rollback_run(row: Any) -> bool:
 
 def after_rollback(connection: Connection, row: Mapping[str, Any], status: str, actor: str) -> None:
     """A rollback that succeeded leaves the deployment it undid `rolled_back`, so nothing
-    promotes it and it is no longer the target's last good release."""
-    if status != "succeeded" or not is_rollback_run(row):
+    promotes it and it is no longer the target's last good release. One that restored the files
+    but left the target unhealthy leaves it `rollback_unhealthy`: never "last good" either."""
+    if status not in ("succeeded", RESTORED_UNHEALTHY) or not is_rollback_run(row):
         return
     packet = _loads(row.get("release_packet"), {}) or {}
     undone = str((packet.get("rollback_of") or {}).get("deployment_run_id") or "")
     if not undone:
         return
+    said = "rolled_back" if status == "succeeded" else "rollback_unhealthy"
     connection.execute(
-        text("UPDATE deployment_runs SET status = 'rolled_back', failure_reason = :r, "
+        text("UPDATE deployment_runs SET status = :s, failure_reason = :r, "
              "updated_at = now() WHERE id = :i AND status = 'succeeded'"),
-        {"i": undone, "r": f"rolled back by {row['id']}"})
+        {"i": undone, "s": said,
+         "r": f"rolled back by {row['id']}" + ("" if status == "succeeded"
+                                               else ", which left the target unhealthy")})
     emit_event(connection, row["project_id"], "deployment_run.rolled_back", actor, "deployment_run",
                undone, {"rollback_run_id": row["id"]})
 
@@ -1324,7 +1351,8 @@ def _restore_kept(rec: Any, sh: Any, cfg: "ConfigTarget", undo: Mapping[str, Any
             h.failed(failed_reload)
     if failed_reload:
         rec.finish()
-        return {"status": "failed", "reason": f"The files were restored, but {failed_reload}."}
+        return {"status": RESTORED_UNHEALTHY,
+                "reason": f"The files were restored, but {failed_reload}."}
     with rec.step("observe", label="Health check") as h:
         health = wait_healthy(str(cfg.health_url), expected=cfg.health_expected, probe_fn=probe_fn)
         say(h, health)
@@ -1332,7 +1360,7 @@ def _restore_kept(rec: Any, sh: Any, cfg: "ConfigTarget", undo: Mapping[str, Any
             h.failed(f"{cfg.health_url} answered {health['said']}, expected {cfg.health_expected}")
     rec.finish()
     if not health["healthy"]:
-        return {"status": "failed", "health": health,
+        return {"status": RESTORED_UNHEALTHY, "health": health,
                 "reason": (f"The files were restored and reloaded, but the health check failed "
                            f"({health['said']}): look at the target.")}
     where = cfg.raw.get("target_ref") or cfg.directory

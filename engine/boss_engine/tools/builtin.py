@@ -2537,7 +2537,11 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             except Exception as error:  # noqa: BLE001 — the reason belongs in the reply
                 return {"ok": False, "error": f"{type(error).__name__}: {str(error)[:300]}"}
             _ready.record_started_anyway(c, pid, actor, run.get("id") or "", readiness)
-        return {"status": "running", "run_id": run.get("id"), "workflow_key": key,
+        # A second start of the same once_per answers with that run AS IT IS (it may have
+        # finished, failed or be waiting on a person), never "running" by default.
+        return {"status": (str(run.get("status") or "running") if run.get("duplicate")
+                           else "running"),
+                "run_id": run.get("id"), "workflow_key": key,
                 "project_id": pid, "title": title,
                 **({"already_started": True} if run.get("duplicate") else {}),
                 **({"built_on_research": adopted} if adopted else {}),
@@ -3486,9 +3490,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         "its step's gate a person released); staging runs on the approval the deployment itself "
         "ran on. Planned is NOT done: a workflow step waits on the rollback run.",
         _obj({"deployment_run_id": {"type": "string",
-                                    "description": "the deprun_ of the succeeded config deployment"},
-              "approval_decision_id": {"type": "string",
-                                       "description": "set by a workflow's step only; leave empty"}},
+                                    "description": "the deprun_ of the succeeded config deployment"}},
              required=[]),
         kind="write",
         reversibility="safe", permission="deployment:create",
@@ -3504,8 +3506,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         return rollback(
             ctx.engine, ctx.settings, project_id=project_id, actor=actor,
             deployment_run_id=(str(source) if source else None),
-            approval_decision_id=(str(args["approval_decision_id"])
-                                  if args.get("approval_decision_id") else None),
+            # Its step's gate arrives only as the runner's trusted value, never an argument.
             workflow_run_id=WORKFLOW_RUN_ID.get() or None,
             released_gate=trusted_step_arg("released_gate"))
 

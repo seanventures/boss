@@ -2049,6 +2049,20 @@ CREATE INDEX IF NOT EXISTS idx_deployment_runs_project
   ON deployment_runs(project_id, status, created_at DESC);
 ALTER TABLE deployment_runs ADD COLUMN IF NOT EXISTS decision_id TEXT REFERENCES decisions(id);
 
+-- ONE USE OF A RELEASED STEP GATE (BOSSAPP-1172): a workflow step's approved gate approves
+-- exactly ONE deployment. The decision is the primary key of its use, so two plans racing on
+-- one gate cannot both ship under it; the row says where it went and which bytes.
+CREATE TABLE IF NOT EXISTS deployment_gate_uses (
+  decision_id TEXT PRIMARY KEY REFERENCES decisions(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  workflow_run_id TEXT,
+  step_id TEXT,
+  capability TEXT,
+  target_id TEXT,
+  bundle_sha256 TEXT,
+  used_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Whether a merge to this target's repo deploys by itself, and whether that is currently
 -- paused. Defaults to FALSE so that shipping this feature does not silently turn every
 -- existing target into one that deploys on merge — enabling it stays a deliberate act.

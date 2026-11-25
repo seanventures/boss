@@ -37,7 +37,7 @@ CONFINED: dict[str, dict[str, str | tuple[str, ...]]] = {
     "promote_config": {"deployment_run_id": "deployment_run", "deployment_id": "deployment_run",
                        "target_id": "deployment_target",
                        "approval_decision_id": "decision"},
-    "rollback_config": {"deployment_run_id": "deployment_run", "approval_decision_id": "decision"},
+    "rollback_config": {"deployment_run_id": "deployment_run"},
     "create_config_target": {"host_id": "deployment_host"},
     "describe_deployment_target": {"target_id": "deployment_target"},
     "describe_workflow_run": {"run_id": "workflow_run"},

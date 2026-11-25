@@ -4558,7 +4558,9 @@ def _perform_capability(
             # of the gate: the runner checks it here and hands it over as a trusted value.
             from .deploy_policy import released_gate
 
-            gate = released_gate(connection, project_id, str(context["approval_decision_id"]))
+            gate = released_gate(connection, project_id, str(context["approval_decision_id"]),
+                                 capability=key, run_id=str(context.get("run_id") or ""),
+                                 bundle_sha256=str(inputs.get("bundle_sha256") or "") or None)
             if gate:
                 trusted_step = {**trusted_step, "released_gate": gate}
         if key in _GATE_GOES_TO_THE_DEPLOYMENT and context.get("approval_decision_id"):
