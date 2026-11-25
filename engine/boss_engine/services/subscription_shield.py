@@ -41,6 +41,7 @@ import shutil
 import stat
 import tempfile
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -333,11 +334,30 @@ def codex_run_login(real: dict, token: str, *, ttl: float, now: Optional[float] 
                 "%Y-%m-%dT%H:%M:%S.%fZ")}
 
 
-def _codex_source(login_path: str) -> Callable[[], str]:
+def _codex_source(login_path: str, *,
+                  refresh: Optional[Callable[[], Any]] = None) -> Callable[[], str]:
+    """The login's CURRENT access token, read per request. With `refresh` (a pool seat's login,
+    which no background owner keeps fresh) the token is refreshed first when it is due."""
     def read() -> str:
+        if refresh is not None:
+            with contextlib.suppress(Exception):
+                refresh()
         tokens = (_read_json(login_path) or {}).get("tokens")
         return str((tokens or {}).get("access_token") or "") if isinstance(tokens, dict) else ""
     return read
+
+
+@dataclass(frozen=True)
+class CodexSeat:
+    """A pool seat's Codex login, bound when the session is shielded (subscription_pools): its
+    own home, and what to do when it refreshes (`sync`: write the new generation to THIS seat's
+    store key) or is refused (`refused`: take THIS seat out of rotation). Fixed values, so a
+    refresh during the session can only ever land on the seat the session was issued for."""
+
+    home: str
+    label: str
+    sync: Callable[[], bool]
+    refused: Callable[[], None]
 
 
 def _load_toml(path: str) -> dict:
@@ -351,11 +371,19 @@ def _load_toml(path: str) -> dict:
 
 
 def codex(env: dict, *, settings: Any = None, default_home: str = "~/.codex",
-          proxy: Optional[model_proxy.ModelProxy] = None) -> dict:
+          proxy: Optional[model_proxy.ModelProxy] = None,
+          seat: Optional[CodexSeat] = None) -> dict:
     """`env` with the Codex login it would use moved behind the proxy: a session CODEX_HOME
     holding a run-token login and a provider at the proxy. An API-key route is left to
     model_proxy.shield_env (a key kept in the login FILE is moved to OPENAI_API_KEY for it), and
-    a home with no login is left as it is (the CLI then says it is not signed in)."""
+    a home with no login is left as it is (the CLI then says it is not signed in).
+
+    `seat` marks the login as a POOL SEAT's (subscription_pools: CODEX_HOME is the seat's own
+    home). The session can never refresh (its login carries RUN_REFRESH_TOKEN), so BOSS
+    refreshes the seat's real login in the seat's home — before the session starts and, when
+    due, on a request — and the proxy attaches that seat's current token, never the single
+    login's. A transient refresh failure (no network, 5xx, 429) is retried; only a refusal takes
+    the seat out of rotation (needs_reauth), in words that name the seat."""
     if any((env.get(n) or "").strip() for n in ("OPENAI_API_KEY", "CODEX_API_KEY")):
         return env
     source_home = os.path.expanduser(env.get("CODEX_HOME") or default_home)
@@ -392,8 +420,14 @@ def codex(env: dict, *, settings: Any = None, default_home: str = "~/.codex",
             env["CODEX_HOME"] = _session_home("codex-session-", state_home, sandbox)
             return env
         _codex_before_start()
+        refresh = None
+    elif seat is not None:
+        _codex_seat_before_start(seat)
+        refresh = _codex_seat_refresher(seat)
+    else:
+        refresh = None
     issued = _issue("codex_subscription", settings=settings, proxy=proxy,
-                    source=_codex_source(login_path))
+                    source=_codex_source(login_path, refresh=refresh))
     config["model_provider"] = CODEX_PROVIDER
     providers = dict(config.get("model_providers") or {})
     providers[CODEX_PROVIDER] = {"name": "ChatGPT via BOSS", "base_url": issued.base_url,
@@ -426,6 +460,55 @@ def _codex_before_start() -> None:
     from . import codex_login
 
     codex_login.before_cli_start()
+
+
+def _codex_seat_before_start(seat: CodexSeat) -> None:
+    """Refresh a seat's login before its session starts. A recorded TRANSIENT failure is tried
+    again (nothing else retries a seat); a refusal takes the seat out of rotation and stops this
+    session with the seat's name in the words."""
+    from . import codex_login
+
+    if codex_login.refusal_stands(seat.home):
+        seat.refused()
+        raise codex_login.CodexSignInNeeded(codex_login.seat_sign_in_words(
+            seat.label, "its login was refused"))
+    try:
+        codex_login.before_cli_start(home=seat.home, after_refresh=seat.sync)
+    except codex_login.CodexSignInNeeded as dead:
+        if codex_login.refusal_stands(seat.home):
+            seat.refused()
+        why = str(dead).split(": ", 1)[-1].split(". Sign in again", 1)[0]
+        raise codex_login.CodexSignInNeeded(
+            codex_login.seat_sign_in_words(seat.label, why)) from None
+    if codex_login.refusal_stands(seat.home):
+        # Refused now, but its token still works for a while: this session runs on it, and no
+        # new run is given the seat until a person replaces its login.
+        seat.refused()
+
+
+#: While a seat's refresh keeps failing transiently, a proxied request retries it at most this
+#: often (never one token-endpoint call per model request).
+SEAT_RETRY_SECONDS = 30.0
+
+
+def _codex_seat_refresher(seat: CodexSeat) -> Callable[[], Any]:
+    """A seat's refresh while its session runs: no background thread owns a seat's login (the
+    single login's is codex_login's thread), so the proxy refreshes it when due, under the
+    seat home's lock. Cheap when fresh: one read of the file."""
+    last_failure = [0.0]
+
+    def refresh() -> Any:
+        from . import codex_login
+
+        if last_failure[0] and time.monotonic() - last_failure[0] < SEAT_RETRY_SECONDS:
+            return None
+        out = codex_login.refresh_if_due(home=seat.home, after_refresh=seat.sync)
+        if out.get("result") in ("failed", "busy", "no_refresh_token"):
+            last_failure[0] = time.monotonic()
+            if codex_login.refusal_stands(seat.home):
+                seat.refused()
+        return out
+    return refresh
 
 
 # ── Grok ──────────────────────────────────────────────────────────────────────────────────────
@@ -474,13 +557,15 @@ def grok(env: dict, *, settings: Any = None, default_home: str = "~/.grok",
 # ── one entry for every engine ────────────────────────────────────────────────────────────────
 
 def shield(engine: str, env: dict, *, settings: Any = None, default_home: str = "",
-           cli_login: bool = False, proxy: Optional[model_proxy.ModelProxy] = None) -> dict:
+           cli_login: bool = False, proxy: Optional[model_proxy.ModelProxy] = None,
+           seat: Optional[CodexSeat] = None) -> dict:
     """The one call an engine's session environment goes through (model-agnostic: the same
     guarantee for every engine). Another engine's Claude token is proxied the same way (a CLI
-    that reads it reads ANTHROPIC_BASE_URL too); any other raw login variable is dropped."""
+    that reads it reads ANTHROPIC_BASE_URL too); any other raw login variable is dropped.
+    `seat`: the run is on a pool seat's Codex login (see `codex`)."""
     if engine == "codex":
         return codex(env, settings=settings, default_home=default_home or "~/.codex",
-                     proxy=proxy)
+                     proxy=proxy, seat=seat)
     if engine == "grok":
         return grok(env, settings=settings, default_home=default_home or "~/.grok", proxy=proxy)
     claude(env, settings=settings, cli_login=cli_login and engine == "claude_code", proxy=proxy)
@@ -489,5 +574,5 @@ def shield(engine: str, env: dict, *, settings: Any = None, default_home: str = 
     return env
 
 
-__all__ = ["CODEX_PROVIDER", "RUN_REFRESH_TOKEN", "claude", "claude_cli_login_source", "codex",
+__all__ = ["CODEX_PROVIDER", "CodexSeat", "RUN_REFRESH_TOKEN", "claude", "claude_cli_login_source", "codex",
            "codex_run_login", "grok", "grok_access_token", "shield"]
