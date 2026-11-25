@@ -20,10 +20,10 @@ import time
 import pytest
 from sqlalchemy import text
 
-from boss_engine.identity import runs, tokens
-from boss_engine.identity.delegation import AUD_API, AUD_EGRESS
+from boss_engine.identity import cascade, runs, tokens
+from boss_engine.identity.delegation import AUD_API, AUD_EGRESS, CascadeTrigger
 
-from ._identity_agents_support import BASE, build_env, install_github, start, verify
+from ._identity_agents_support import BASE, build_env, install_github, session_ctx, start, verify
 
 TTL = 60          # the shortened token lifetime
 RENEW_AFTER = 40  # the supervisor renews at two thirds of it, as in production (240 of 300)
@@ -115,3 +115,49 @@ def test_a_token_that_is_not_renewed_dies_at_its_short_lifetime(env, clock):
     # under live authority, never revived from a dead token.
     with env.db() as c:
         assert _reason(lambda: runs.renew(shim, db=c, base_url=BASE)) == "expired"
+
+
+def test_a_grant_revoked_mid_run_stops_renewal_and_the_run_s_tokens(env, clock, monkeypatch):
+    """BOSSAPP-1291 review: the person revokes the grant while the run is between renewals. The
+    next renewal is refused, the supervisor lets go of the run, and its current tokens stop
+    verifying at once (they do not linger until their expiry)."""
+    install_github(monkeypatch, env)
+    g = env.grant(agents=(env.forge,), children=(), repos=("acme/web",))
+    shim = start(env, g.id, agent=env.forge, run="run_ct:crun_revoked", repos=("acme/web",))
+    mono = shim.renewed_at
+    clock[0] += RENEW_AFTER
+    mono += RENEW_AFTER
+    assert runs.renew_due(env.engine, now=mono) == {"run_ct:crun_revoked": "renewed"}
+    live = shim.tokens[AUD_API].access_token
+
+    with env.db() as c:
+        cascade.revoke_cascade(CascadeTrigger.GRANT_REVOKED, g.id, actor=session_ctx(env.alice),
+                               reason="access withdrawn", db=c)
+    assert _reason(lambda: verify(env, shim, token=live)) == "jti_revoked"
+
+    clock[0] += RENEW_AFTER
+    mono += RENEW_AFTER
+    out = runs.renew_due(env.engine, now=mono)
+    assert out.get("run_ct:crun_revoked") != "renewed", out
+    with env.db() as c:
+        assert _reason(lambda: runs.renew(shim, db=c, base_url=BASE)) in (
+            "jti_revoked", "grant_revoked", "grant_inactive")
+
+
+def test_a_grant_marked_revoked_without_its_cascade_still_refuses_renewal(env, clock, monkeypatch):
+    """Defence in depth: even if only the grant row says revoked (its cascade has not reached the
+    run's tokens yet), renewal re-checks the grant live and refuses to mint a new token."""
+    install_github(monkeypatch, env)
+    g = env.grant(agents=(env.forge,), children=(), repos=("acme/web",))
+    shim = start(env, g.id, agent=env.forge, run="run_ct:crun_row_only", repos=("acme/web",))
+    with env.db() as c:
+        c.execute(text("UPDATE identity_delegation_grants SET status = 'revoked', revoked_at = now() "
+                       "WHERE id = :g"), {"g": g.id})
+    clock[0] += RENEW_AFTER
+    with env.db() as c:
+        reason = _reason(lambda: runs.renew(shim, db=c, base_url=BASE))
+    assert reason == "grant_inactive", reason
+    with env.db() as c:
+        live = c.execute(text("SELECT count(*) FROM identity_run_credentials WHERE "
+                              "run_id = 'run_ct:crun_row_only' AND revoked_at IS NULL")).scalar()
+    assert live == len(shim.tokens)       # nothing consumed, no NEW token minted
