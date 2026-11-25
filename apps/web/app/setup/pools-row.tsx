@@ -13,10 +13,12 @@
  * kit (components/form-kit.tsx, BOSSAPP-1039) — never a hand-rolled stack of bare inputs.
  */
 import React, { useCallback, useEffect, useState } from "react";
+import { Crown, UserPlus, X } from "@phosphor-icons/react";
 
 import { Field, FormError, FormGrid } from "../../components/form-kit";
 import { GatedButton } from "../../components/gated";
 import { SectionLabel } from "../section-label";
+import { SubscriptionSignIn } from "./subscription-sign-in";
 import {
   addPoolMember, createPool, CREDENTIAL_WORDS, deletePool, ENGINE_WORDS, readPools, removePoolMember, ROOM_WORDS,
   setPoolStatus, updatePoolMember, type Pool,
@@ -87,11 +89,20 @@ export function PoolsRow({ projectId }: { projectId: string }) {
             {pool.members.map((m) => (
               <div key={m.id} className="su-line" data-testid={`pool-member-${m.id}`} data-status={m.status}>
                 <span>{m.label}</span>{" "}
+                {m.primary ? <span className="su-faint" data-testid={`pool-primary-${m.id}`}
+                                   title="Runs start here while it has plenty of room">Primary</span> : null}
                 <span className="su-faint" data-testid={`pool-room-${m.id}`}
                       title={m.room?.resets_at ? `Resets ${m.room.resets_at}` : "Nothing reported yet"}>
                   {m.status === "needs_reauth" ? "Needs a new login" : m.status === "disabled" ? "Paused"
                     : ROOM_WORDS[m.room?.state ?? "plenty"] ?? "Plenty"}</span>
                 <span className="su-line su-actions">
+                  {!m.primary && m.status === "active" ? (
+                    <GatedButton permission="entitlement:manage" projectId={projectId} className="su-link"
+                                 data-testid={`pool-member-primary-${m.id}`}
+                                 onClick={() => void act(updatePoolMember(projectId, m.id, { primary: true }, "Make primary"),
+                                                         `${m.label} is the primary.`)}>
+                      <Crown size={12} aria-hidden="true" />Make primary</GatedButton>
+                  ) : null}
                   <GatedButton permission="entitlement:manage" projectId={projectId} className="su-link"
                                data-testid={`pool-member-toggle-${m.id}`}
                                onClick={() => void act(updatePoolMember(projectId, m.id, { status: m.status === "active" ? "disabled" : "active" },
@@ -125,6 +136,7 @@ export function PoolsRow({ projectId }: { projectId: string }) {
 
 function AddAccount({ projectId, pool, onAdded }: { projectId: string; pool: Pool; onAdded: () => void }) {
   const [open, setOpen] = useState(false);
+  const [signing, setSigning] = useState(false);
   const [label, setLabel] = useState("");
   const [login, setLogin] = useState("");
   const [err, setErr] = useState<string | null>(null);
@@ -133,9 +145,25 @@ function AddAccount({ projectId, pool, onAdded }: { projectId: string; pool: Poo
     setLogin("");
     if (r.ok) { setOpen(false); setLabel(""); onAdded(); } else setErr(r.error ?? "Not saved.");
   };
+  if (signing) {
+    // BOSSAPP-1343: the same server-side sign-in (Anthropic paste-back), stored as a NEW account.
+    return (
+      <div className="su-stack" data-testid={`pool-signin-${pool.engine}`}>
+        <SubscriptionSignIn provider={pool.engine} label={ENGINE_WORDS[pool.engine]} autoStart addAccount
+                            onSession={(s) => { if (s?.state === "signed_in") { setSigning(false); onAdded(); } }} />
+        <button type="button" className="su-link" data-testid={`pool-signin-close-${pool.engine}`}
+                onClick={() => { setSigning(false); onAdded(); }}><X size={12} aria-hidden="true" />Close</button>
+      </div>
+    );
+  }
   if (!open) {
     return (
       <div className="su-line">
+        {pool.engine === "claude_code" ? (
+          <GatedButton permission="entitlement:manage" projectId={projectId} className="su-link"
+                       data-testid={`pool-signin-open-${pool.engine}`} onClick={() => setSigning(true)}>
+            <UserPlus size={12} aria-hidden="true" />Sign in another account</GatedButton>
+        ) : null}
         <GatedButton permission="entitlement:manage" projectId={projectId} className="su-link"
                      data-testid={`pool-add-open-${pool.engine}`} onClick={() => setOpen(true)}>Add account</GatedButton>
       </div>

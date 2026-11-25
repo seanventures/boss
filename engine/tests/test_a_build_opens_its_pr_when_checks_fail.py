@@ -159,7 +159,7 @@ def test_a_checks_failing_merge_is_never_silent():
     with pytest.raises(ci_gate.CiGateRefused) as plain:
         ci_gate.refuse_approval(NoDb(), _merge_card(), "ceo", identity_ctx=PERSON)
     assert plain.value.code == "checks_failing"
-    assert "Security clean" in plain.value.message and "security finding" in plain.value.message
+    assert "Security findings open" in plain.value.message and "security finding" in plain.value.message
     # Never a policy, never an agent — forced or not.
     with pytest.raises(ci_gate.CiGateRefused) as policy:
         ci_gate.refuse_approval(NoDb(), _merge_card(), "ceo", system_policy=True, force=True)
@@ -332,7 +332,7 @@ def test_a_build_parked_for_a_waiver_opens_its_pr_instead_of_asking(eng, project
         assert step["status"] == "succeeded", step
         assert step["output"]["checks_failing"]["gates"] == ["security_clean"]
         assert step["output"]["checks_failing"]["security"] is True
-        assert step["output"]["note"].startswith("PR open · checks failing: Security clean")
+        assert step["output"]["note"].startswith("PR open · checks failing: Security findings open")
     finally:
         with eng.begin() as c:
             c.execute(text("DELETE FROM code_task_runs WHERE id = :i"), {"i": awaited_id})
@@ -363,7 +363,7 @@ def test_a_parked_builds_existing_merge_card_is_told_its_checks_are_failing(eng,
     assert row["question"].startswith("Checks failing — decide the merge: ")
     rec = row["recommendation"]
     assert rec[cf.KEY]["gates"][0]["gate"] == "security_clean"
-    assert rec["summary"].startswith("CHECKS FAILING: Security clean")
+    assert rec["summary"].startswith("CHECKS FAILING: Security findings open")
     assert cf.of_decision(dict(row)) is not None
 
 
@@ -414,3 +414,19 @@ def test_a_draft_whose_checks_a_later_build_fixed_is_still_marked_ready(eng, pro
                                          pull_request_url=url + "0")
         assert sf.github.calls == [], "another PR's draft is not this one's"
         c.execute(text("DELETE FROM decisions WHERE id IN (:a, :b)"), {"a": first, "b": later})
+
+
+def test_a_failing_gate_never_reads_as_its_pass_label():
+    """BOSSAPP-1354: a re-check card read "says its checks fail (Review passed, Must-haves
+    met)". Every failing gate is named as what went wrong — including from a record stored
+    before the fix, whose `label` still carries the pass words."""
+    from boss_engine.services.factory_view import gate_label
+    from boss_engine.services.plain_words import FAILED_WORDS
+
+    for gate in FAILED_WORDS:
+        record = cf.collect([gate])
+        assert cf.headline(record) != gate_label(gate)
+        assert cf.headline(record) == FAILED_WORDS[gate]
+    stale = {"gates": [{"gate": "code_review_passed", "label": "Review passed"},
+                       {"gate": "acceptance_met", "label": "Must-haves met"}]}
+    assert cf.headline(stale) == "Review asked for changes, Must-haves not all met"

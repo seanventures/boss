@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 /**
- * A person adds one remote MCP server from the Library and sees the tool the test found.
+ * A person adds one remote MCP server from Skills & MCP's first screen and sees the tool the test found.
  * The adapter is the fake control plane: nothing is requested at the server's own URL.
  */
 import React from "react";
@@ -11,8 +11,7 @@ import { clone, installKitApi, KITS, SERVERS } from "./_helpers/kit-api";
 
 vi.mock("../lib/dock-subject", () => ({ openDockAbout: () => {} }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }) }));
-const { Library } = await import("../app/skills/library");
-const { readKitParams } = await import("../app/skills/kit-url");
+const { KitHome } = await import("../app/skills/kit-home");
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
@@ -37,13 +36,14 @@ describe("adding one remote MCP server", () => {
       }
       return undefined;
     });
-    window.history.replaceState(null, "", "/?area=skills&tab=library&lib=mcp");
-    await render(<Library projectId="p1" actor="ceo" kit={kit} crew={kit.crew ?? []} initial={readKitParams()} onKitChanged={() => {}} />);
-    await click('[data-testid="kit-lib-add-mcp"]');
-    await click('[data-testid="kit-add-custom"]');
-    await type('[data-testid="kit-custom-name"]', "orders");
+    window.history.replaceState(null, "", "/?area=skills");
+    await render(<KitHome projectId="p1" actor="ceo" />);
+    await click('[data-testid="kit-add-mcp-btn"]');
     await type('[data-testid="kit-custom-url"]', "https://mcp.example/mcp");
-    await click('[data-testid="kit-custom-save"]');
+    await type('[data-testid="kit-custom-name"]', "orders");
+    await click('[data-testid="kit-add-test"]');
+    expect($('[data-testid="kit-add-tools"]')!.textContent).toContain("lookup_order");
+    await click('[data-testid="kit-add-save"]');
     const tool = $('[data-testid="kit-tool-mcp:orders.lookup_order"]');
     expect(tool).not.toBeNull();
     expect(tool!.textContent).toContain("lookup_order");

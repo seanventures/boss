@@ -139,14 +139,15 @@ export function DrawerShell({ label, testId, onClose, children, float, over }: {
 /** A modal: always over the page (portalled), Esc closes it, focus returns to its opener. */
 export function ModalShell({ label, testId, onClose, wide, children, over }: {
   label: string; testId: string; onClose: () => void; wide?: boolean; children: React.ReactNode;
-  /** Above a full-screen page (the agent Passport), as DrawerShell's `over`. */
-  over?: boolean;
+  /** Above a full-screen page (the agent Passport), as DrawerShell's `over`; `"dialog"`: above a
+   *  wizard or the workflow inspector too (a sheet any screen can open, like Add MCP server). */
+  over?: boolean | "dialog";
 }) {
   const ref = useRef<HTMLDivElement>(null);
   useOverlayFocus(ref, onClose);
   const modal = (
     <div className="kit-modal" role="dialog" aria-modal="true" aria-label={label} data-testid={testId}
-         data-over={over ? "page" : undefined}>
+         data-over={over === "dialog" ? "dialog" : over ? "page" : undefined}>
       <div className="kit-modal-scrim" onClick={onClose} />
       <div ref={ref} className={`kit-modal-card${wide ? " kit-modal-wide" : ""}`}>{children}</div>
     </div>

@@ -462,7 +462,8 @@ def _unavailable_sentence(policy: str, principal: CredentialPrincipal) -> str:
 
 
 def _bearer_for(connection: Connection, settings: Any, project_id: str, server: dict[str, Any],
-                raw_auth: dict[str, Any], row: dict[str, Any]) -> str:
+                raw_auth: dict[str, Any], row: dict[str, Any],
+                rejected: Optional[str] = None) -> str:
     """The token of one credential row, refreshed when due (OAuth) and marked needs_reauth when
     the provider says it is gone."""
     from ..identity import vault
@@ -475,7 +476,8 @@ def _bearer_for(connection: Connection, settings: Any, project_id: str, server: 
         refresher = mcp_oauth.refresher(connection, settings, project_id, server, raw_auth)
     try:
         return vault.connection_token(row["vault_item_id"], provider=provider, db=connection,
-                                      refresher=refresher)
+                                      refresher=refresher,
+                                      rejected=rejected if row["kind"] == "oauth" else None)
     except vault.VaultNeedsReauth as gone:
         mark_needs_reauth(connection, project_id, row["id"], reason=gone.code)
         whose = {"org": "The shared sign-in", "user": "Your sign-in",
@@ -486,8 +488,8 @@ def _bearer_for(connection: Connection, settings: Any, project_id: str, server: 
 
 
 def headers_for(connection: Connection, settings: Any, project_id: str, server: dict[str, Any],
-                raw_auth: dict[str, Any], *, principal: Optional[CredentialPrincipal] = None
-                ) -> dict[str, str]:
+                raw_auth: dict[str, Any], *, principal: Optional[CredentialPrincipal] = None,
+                rejected: Optional[str] = None) -> dict[str, str]:
     """The headers one call to `server` carries, by its credential policy and the run's
     principal. A shared server with static auth is exactly `headers_for_auth` (unchanged)."""
     from .mcp_registry import headers_for_auth
@@ -503,12 +505,30 @@ def headers_for(connection: Connection, settings: Any, project_id: str, server: 
     if found.credential is None:
         return headers_for_auth(connection, settings, raw_auth)
     headers = {str(k): str(v) for k, v in (raw_auth.get("headers") or {}).items()}
-    token = _bearer_for(connection, settings, project_id, server, raw_auth, found.credential)
+    token = _bearer_for(connection, settings, project_id, server, raw_auth, found.credential,
+                        rejected=rejected)
     if kind == "header" and raw_auth.get("header_name") and found.credential["kind"] == "token":
         headers[str(raw_auth["header_name"])] = token
     else:
         headers["Authorization"] = f"Bearer {token}"
     return headers
+
+
+def refused_after_refresh(connection: Connection, project_id: str, server: dict[str, Any], *,
+                          principal: Optional[CredentialPrincipal] = None) -> None:
+    """The server answered 401 to a token BOSS had JUST refreshed: refreshing again would only
+    repeat it on every call. The credential needs a person to sign in again (needs_reauth),
+    and the call says so. Raises CredentialNeedsReauth."""
+    who = principal if principal is not None else principal_from_context(connection, project_id)
+    policy = str(server.get("credential_policy") or _policy_of(connection, server) or "shared")
+    found = resolve(connection, project_id, policy=policy, principal=who,
+                    server_id=str(server.get("id") or ""), static_shared=False)
+    if found.credential is not None:
+        mark_needs_reauth(connection, project_id, found.credential["id"],
+                          reason="refused_after_refresh")
+    raise CredentialNeedsReauth(
+        f"{server.get('name') or 'This server'} refused a freshly refreshed sign-in. "
+        "Reconnect it in Skills & MCP.")
 
 
 def _policy_of(connection: Connection, server: dict[str, Any]) -> Optional[str]:

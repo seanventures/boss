@@ -42,6 +42,7 @@ import { CONVERSE_COMMANDS } from "../lib/agent-converse";
 import { ProjectsNav } from "./projects/nav";
 import { JumpResults } from "./projects/jump";
 import { ShellCrumbs } from "./shell-crumbs";
+import { addCommandsFor, addHref, KIT_ADD_EVENT, writeKitParams } from "./skills/kit-url";
 
 import React, {
   useCallback,
@@ -88,6 +89,8 @@ import {
   Users,
   UsersThree,
   Plus,
+  Plugs,
+  Sparkle,
   Wallet,
   Wrench,
   Bandaids,
@@ -963,6 +966,19 @@ function ConsoleShellInner({
     const t = window.setTimeout(() => setLoadSlow(true), 20_000);
     return () => window.clearTimeout(t);
   }, [activeLoading, active]);
+
+  // Search's Add MCP server / Add skill: Skills & MCP with that sheet open (BOSSAPP-1478).
+  const openKitAdd = (kind: "mcp" | "skill") => {
+    setPaletteOpen(false);
+    if (routeMode || ROUTE_AREAS.skills) {
+      const org = new URLSearchParams(window.location.search).get("org");
+      window.location.assign(`/${addHref(kind)}${org ? `&org=${encodeURIComponent(org)}` : ""}`);
+      return;
+    }
+    go("skills");
+    writeKitParams({ add: kind });
+    window.dispatchEvent(new CustomEvent(KIT_ADD_EVENT, { detail: kind }));
+  };
 
   const go = useCallback((id: AreaId) => {
     // An area with its own route (Identity), or any area pressed from a route page: navigate.
@@ -2002,6 +2018,18 @@ function ConsoleShellInner({
                   </span>
                 </button>
               ) : null}
+              {/* ADD A TOOL OR A SKILL (BOSSAPP-1478): "mcp" finds Add MCP server, which opens the one
+                  add sheet on Skills & MCP. */}
+              {addCommandsFor(query).map((c) => (
+                <button key={c.kind} type="button" className="bx-palette-item" data-testid={`palette-add-${c.kind}`}
+                        onClick={() => openKitAdd(c.kind)}>
+                  {c.kind === "mcp" ? <Plugs size={17} aria-hidden /> : <Sparkle size={17} aria-hidden />}
+                  <span>
+                    <span style={{ fontWeight: 600 }}>{c.label}</span>
+                    <span style={{ display: "block", fontSize: "0.78rem", color: "var(--muted)" }}>{c.sub}</span>
+                  </span>
+                </button>
+              ))}
               {/* TALKING WITH AGENTS: talk 1:1, plan a start, open a room (lib/agent-converse). */}
               {CONVERSE_COMMANDS.filter((c) => !query.trim()
                 || c.label.toLowerCase().includes(query.trim().toLowerCase())).map((c) => (
@@ -2016,6 +2044,7 @@ function ConsoleShellInner({
                 </button>
               ))}
               {filtered.length === 0 && !"new build new project".includes(query.trim().toLowerCase())
+                && addCommandsFor(query).length === 0
                 && !CONVERSE_COMMANDS.some((c) => c.label.toLowerCase()
                 .includes(query.trim().toLowerCase())) ? (
                 <div style={{ padding: "14px 12px", color: "var(--muted)" }}>No matching area.</div>

@@ -2423,6 +2423,15 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                                    "explicitly said to start without, e.g. "
                                    "['deployment_target']. Never fill this in on your own.",
                 },
+                "once_per": {
+                    "type": "string",
+                    "description": "What started this work, when it was an event: the event id, "
+                                   "or the pull request and its head commit "
+                                   "(owner/repo#12@<sha>). The same once_per starts this "
+                                   "workflow ONCE — a second start (a retried turn, the same "
+                                   "push seen twice) answers with the run already going. Always "
+                                   "set it when a pull request or push started you.",
+                },
                 "allow_unsupported_stack": {
                     "type": "boolean",
                     "description": "Start even though the refusal said code stack_unsupported "
@@ -2548,15 +2557,23 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 run = wf.start_run(
                     c, project_id=pid, actor=actor,
                     input_data=run_input,
-                    dedupe_key=f"agent:{key}:{uuid4().hex[:12]}",
+                    # ONE EVENT, ONE RUN (BOSSAPP-1133): a start that names what started it is
+                    # keyed on that, so the same pull request event never starts two runs.
+                    dedupe_key=_start_dedupe_key(key, args.get("once_per"),
+                                                 lambda: uuid4().hex[:12]),
                     workflow_version_id=version_id,
                     adopted=adoption,
                 )
             except Exception as error:  # noqa: BLE001 — the reason belongs in the reply
                 return {"ok": False, "error": f"{type(error).__name__}: {str(error)[:300]}"}
             _ready.record_started_anyway(c, pid, actor, run.get("id") or "", readiness)
-        return {"status": "running", "run_id": run.get("id"), "workflow_key": key,
+        # A second start of the same once_per answers with that run AS IT IS (it may have
+        # finished, failed or be waiting on a person), never "running" by default.
+        return {"status": (str(run.get("status") or "running") if run.get("duplicate")
+                           else "running"),
+                "run_id": run.get("id"), "workflow_key": key,
                 "project_id": pid, "title": title,
+                **({"already_started": True} if run.get("duplicate") else {}),
                 **({"built_on_research": adopted} if adopted else {}),
                 **({"ignored_input": ignored} if ignored else {}),
                 "ignored_args": unknown_args,
@@ -3420,6 +3437,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         reversibility="safe", permission="deployment:create",
         exposure=Exposure(tags=("deploy", "config")))
     def deploy_config(ctx, *, project_id, actor, args):
+        from .registry import trusted_step_arg
         from ..services.config_deploy import deploy_files
         from ..services.github_actions import WORKFLOW_RUN_ID
 
@@ -3436,6 +3454,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
             person_required=args.get("person_required") is True,
             code_task_run_id=(str(args["code_task_run_id"]) if args.get("code_task_run_id") else None),
             source_paths=args.get("source_paths"),
+            released_gate=trusted_step_arg("released_gate"),
             # Which run deployed it, set by the runner on the server (never an argument), so a
             # promotion can be checked against the run that staged it (BOSSAPP-1167).
             workflow_run_id=WORKFLOW_RUN_ID.get() or None)
@@ -3471,6 +3490,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         reversibility="safe", permission="deployment:create",
         exposure=Exposure(tags=("deploy", "config")))
     def promote_config(ctx, *, project_id, actor, args):
+        from .registry import trusted_step_arg
         from ..services.config_deploy import promote
         from ..services.github_actions import WORKFLOW_RUN_ID
 
@@ -3488,7 +3508,37 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
             target_id=(str(args["target_id"]) if args.get("target_id") else None),
             approval_decision_id=(str(args["approval_decision_id"])
                                   if args.get("approval_decision_id") else None),
-            person_required=args.get("person_required") is True)
+            person_required=args.get("person_required") is True,
+            released_gate=trusted_step_arg("released_gate"))
+
+    @reg.tool(
+        "rollback_config",
+        "Roll back a SUCCEEDED config deployment (BOSSAPP-1173): restore the previous version of "
+        "every file it replaced and remove the files it added, reload, check health, receipt. "
+        "Name it by deployment_run_id — never guessed. Inside a workflow it "
+        "must be a deployment that run shipped. Production asks a person in Approvals (or takes "
+        "its step's gate a person released); staging runs on the approval the deployment itself "
+        "ran on. Planned is NOT done: a workflow step waits on the rollback run.",
+        _obj({"deployment_run_id": {"type": "string",
+                                    "description": "the deprun_ of the succeeded config deployment"}},
+             required=[]),
+        kind="write",
+        reversibility="safe", permission="deployment:create",
+        exposure=Exposure(tags=("deploy", "config")))
+    def rollback_config(ctx, *, project_id, actor, args):
+        from .registry import trusted_step_arg
+        from ..services.config_deploy import rollback
+        from ..services.github_actions import WORKFLOW_RUN_ID
+
+        # ONE NAME for the deployment, so the production check (object_args.PRODUCTION) reads
+        # the same argument the handler acts on.
+        source = args.get("deployment_run_id")
+        return rollback(
+            ctx.engine, ctx.settings, project_id=project_id, actor=actor,
+            deployment_run_id=(str(source) if source else None),
+            # Its step's gate arrives only as the runner's trusted value, never an argument.
+            workflow_run_id=WORKFLOW_RUN_ID.get() or None,
+            released_gate=trusted_step_arg("released_gate"))
 
     @reg.tool(
         "preflight_deployment_target",
@@ -6046,7 +6096,18 @@ def _slim_run(r: dict) -> dict:
 #: start_workflow's own arguments (its schema): never carried into the run as workflow inputs.
 _START_WORKFLOW_ARGS = frozenset({"directive", "workflow_key", "title", "from_discovery", "inputs",
                                   "start_anyway", "allow_unsupported_stack", "project_id",
-                                  PROJECT_ARG})
+                                  "once_per", PROJECT_ARG})
+
+
+def _start_dedupe_key(workflow_key: str, once_per: Any, fresh: Any) -> str:
+    """`start_workflow`'s run key: one run per (workflow, once_per) when the caller named what
+    started the work, else a fresh one. Hashed: an event id never lands in a key verbatim."""
+    import hashlib
+
+    said = " ".join(str(once_per or "").split())
+    if not said:
+        return f"agent:{workflow_key}:{fresh()}"
+    return f"agent:{workflow_key}:once:{hashlib.sha256(said.encode()).hexdigest()[:32]}"
 
 
 def _offer_button_label(label: Any, tool: str, args: Any) -> str:
@@ -10795,7 +10856,7 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     "redeploy",
     # Configuration deploys (config_deploy, BOSSAPP-1140): files into a config directory, governed
     # like a deploy; a promotion ships the same bytes to production under its rules.
-    "deploy_config", "promote_config", "create_config_target",
+    "deploy_config", "promote_config", "rollback_config", "create_config_target",
     # Removing an app: a button the person presses, governed like a deploy (app_removal).
     "remove_app",
     "start_preview",

@@ -20,6 +20,7 @@ vi.mock("../lib/dock-subject", () => ({ openDockAbout: () => {} }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }) }));
 const { Library } = await import("../app/skills/library");
 const { readKitParams } = await import("../app/skills/kit-url");
+const { McpServersSection } = await import("../app/skills/mcp-servers");
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); window.history.replaceState(null, "", "/"); });
 
@@ -27,6 +28,14 @@ async function mount(kit: KitWithCrew, search: string, on?: Parameters<typeof in
   window.history.replaceState(null, "", search);
   const calls = installKitApi(kit, on);
   await render(<Library projectId="p1" actor="ceo" kit={kit} crew={kit.crew ?? []} initial={readKitParams()} onKitChanged={() => {}} />);
+  return calls;
+}
+
+/** The MCP servers section with one server's drawer open (`&mcp=`). */
+async function mountMcp(kit: KitWithCrew, openId: string, on?: Parameters<typeof installKitApi>[1]) {
+  const calls = installKitApi(kit, on);
+  await render(<McpServersSection projectId="p1" actor="ceo" crew={kit.crew ?? []} abilities={kit.abilities} query=""
+                                  openId={openId} onOpen={() => {}} onAdd={() => {}} version={0} onKitChanged={() => {}} />);
   return calls;
 }
 
@@ -47,7 +56,7 @@ describe("skills are named and judged by the Kit (K13)", () => {
 
   it("an empty search says No matches", async () => {
     await mount(clone(KITS.fresh), "/?area=skills&tab=library");
-    await type('input[aria-label="Find"]', "zzzz-nothing");
+    await type('input[aria-label="Find a skill"]', "zzzz-nothing");
     expect($('[data-testid="kit-lib-empty"]')!.textContent).toContain("No matches");
   });
 });
@@ -76,7 +85,7 @@ describe("the MCP drawer (K12, K22)", () => {
     const docs = ability(kit, "library_docs");
     docs.mcp_names = ["context7"];
     docs.try = { field: { name: "libraryName", label: "Library", placeholder: "react" } };
-    await mount(kit, "/?area=skills&tab=library&lib=mcp&mcp=mcp_c7");
+    await mountMcp(kit, "mcp_c7");
     const agents = $$('[data-testid^="kit-mcp-agent-"][data-on]').map((li) => li.dataset.testid!.replace("kit-mcp-agent-", ""));
     const rec = docs.recommended;
     expect(agents.slice(0, rec.length).sort()).toEqual([...rec].sort());
@@ -90,7 +99,7 @@ describe("the MCP drawer (K12, K22)", () => {
     let lists = 0;
     const granted = JSON.parse(JSON.stringify(SERVERS));
     granted[1].references.agents = [{ role_key: "software_engineer", tools: [] }];
-    await mount(kit, "/?area=skills&tab=library&lib=mcp&mcp=mcp_c7", (url, _body, method) => {
+    await mountMcp(kit, "mcp_c7", (url, _body, method) => {
       if (!url.startsWith("/api/mcp") || method !== "GET" || url.includes("view=")) return undefined;
       lists += 1;
       if (lists === 2) {

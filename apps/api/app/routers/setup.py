@@ -337,13 +337,33 @@ def build_setup_router(
         # here on the server, under the org's model home, and never reaches the browser.
         store = None
         if sign_in.LOGINS[provider].captures_token:
-            from boss_engine.services.claude_credential import sign_in_store
+            if body.add_account:
+                # BOSSAPP-1343: another seat, stored as its own pool member; account 1 stays.
+                from boss_engine.services import subscription_pools as pools
 
-            store = sign_in_store(engine, get_settings(), home or body.project_id, actor)
+                # The ORG's pool needs entitlement:manage at org level; without it the new seat
+                # goes in this project's own pool (BOSSAPP-1343 review).
+                from fastapi import HTTPException as _Refused
+
+                from .identity_access import require_permission
+
+                try:
+                    require_permission(None, P.ENTITLEMENT_MANAGE, None,
+                                       label="subscription_pools.org")
+                    pool_scope = "org"
+                except _Refused:
+                    pool_scope = "project"
+                store = pools.sign_in_store(engine, get_settings(), body.project_id, actor,
+                                            provider, body.account_label, scope=pool_scope)
+            else:
+                from boss_engine.services.claude_credential import sign_in_store
+
+                store = sign_in_store(engine, get_settings(), home or body.project_id, actor)
         try:
             return sign_in.start(provider, project_id=body.project_id, actor=actor,
                                  org_id=org_id, settings=get_settings(), login_rejected=rejected,
-                                 fresh=bool(body.fresh), store=store)
+                                 fresh=bool(body.fresh), store=store,
+                                 add_account=bool(body.add_account and store is not None))
         except sign_in.SignInError as error:
             sign_in_failed(error)
         raise AssertionError("unreachable")

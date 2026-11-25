@@ -189,8 +189,9 @@ EXPECTED_PER_SURFACE = {
     # (5e27cf499) against main f375ca7f6: nothing else moved, nothing was removed.
     # +3 confluence_search, confluence_read_page, confluence_publish_page (BOSSAPP-1384): chat,
     # agent_step and mcp. NOTE: main was already +1 over the pin on chat and mcp before this.
-    "chat": 219,  # +1 collect_diagnostics (BOSSAPP-1368 MT-1); +3 create_config_target, deploy_config, promote_config (BOSSAPP-1140; chat and mcp)   # +1 transfer_to_agent (AP-P7 handoffs); +5: list/create/link/complete_work_item and ask_human (BOSSAPP-830/832); +2 wiki_read, wiki_propose (BOSSAPP-891)
-    "mcp": 218,
+    # +1 rollback_config (BOSSAPP-1173): chat and mcp, as deploy_config and promote_config.
+    "chat": 220,  # +1 collect_diagnostics (BOSSAPP-1368 MT-1); +3 create_config_target, deploy_config, promote_config (BOSSAPP-1140; chat and mcp)   # +1 transfer_to_agent (AP-P7 handoffs); +5: list/create/link/complete_work_item and ask_human (BOSSAPP-830/832); +2 wiki_read, wiki_propose (BOSSAPP-891)
+    "mcp": 219,
     # find_tools; agent steps join when K4 moves them onto the kernel. +6 the ticket tools,
     # offered to workflow agents through the tickets.read / tickets.write skills (BOSSAPP-1047 B2).
     # +4 the run filesystem's tools (AP-P6): agent_step only, so chat's and MCP's registry

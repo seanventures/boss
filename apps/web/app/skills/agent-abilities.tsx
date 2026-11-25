@@ -14,7 +14,7 @@
  */
 import { GatedButton } from "../../components/gated";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { DotsThree, FileText, Plus, Star } from "@phosphor-icons/react";
+import { DotsThree, FileText, Plugs, Plus, Sparkle, Star } from "@phosphor-icons/react";
 
 import { useIdentityVersion } from "../../lib/use-agent-identities";
 import type { Ability } from "../../lib/kit-types";
@@ -26,6 +26,8 @@ import { Pop } from "../agents/loadout-pop";
 import { AbilityIcon } from "./ability-icons";
 import { blocked } from "./agents-section";
 import { shortError, TIP, agentName } from "./kit-copy";
+import { AddMcpSheet } from "./add-mcp-sheet";
+import { addHref } from "./kit-url";
 
 export type HeldSkill = {
   skill_id: string; label: string; summary: string; source: string; behaviour_kind: string;
@@ -93,8 +95,8 @@ function openMenuOf(chip: HTMLElement): void {
 }
 
 const asks = (a: Ability) => a.tools.some((t) => t.policy === "ask" || t.tier >= 2);
-const libSkill = (id: string) => `?area=skills&tab=library&lib=skills&skill=${encodeURIComponent(id)}`;
-const libMcp = (id: string) => `?area=skills&tab=library&lib=mcp&mcp=${encodeURIComponent(id)}`;
+const libSkill = (id: string) => `?area=skills&view=all&skill=${encodeURIComponent(id)}`;
+const libMcp = (id: string) => `?area=skills&mcp=${encodeURIComponent(id)}`;
 const kitAbility = (key: string) => `?area=skills&ability=${encodeURIComponent(key)}`;
 
 export function LoadoutGrants({ projectId, roleKey, actor, canEdit, skills, available, servers, availableServers,
@@ -113,6 +115,8 @@ export function LoadoutGrants({ projectId, roleKey, actor, canEdit, skills, avai
   const [abilities, setAbilities] = useState<Ability[] | null>(initialAbilities ?? null);
   const [failed, setFailed] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  // ADD MCP SERVER, IN PLACE (BOSSAPP-1478): the same sheet as Skills & MCP, this agent pre-chosen.
+  const [addingMcp, setAddingMcp] = useState(false);
   const load = useCallback(async () => {
     const r = await kitApi.load(projectId, "none");
     setFailed(!r.ok);
@@ -259,6 +263,8 @@ export function LoadoutGrants({ projectId, roleKey, actor, canEdit, skills, avai
                                () => grantSkill(projectId, actor, roleKey, s.skill_id)); }} />
                 <button type="button" role="menuitem" data-testid="loadout-skills-from-file"
                         onClick={() => { close(); onFromFile(); }}>From file</button>
+                <a href={addHref("skill")} role="menuitem" data-testid="loadout-skills-new"
+                   data-tip="Write, import or describe a new skill"><Sparkle size={12} aria-hidden="true" /> New skill ↗</a>
               </>)}
             </Pop>
           ) : null}
@@ -286,12 +292,20 @@ export function LoadoutGrants({ projectId, roleKey, actor, canEdit, skills, avai
                     {m.server}{m.enabled ? "" : ", off"}
                   </GatedButton>
                 )) : <span className="kit-faint ld-pop-empty">None left</span>}
-                <a href="?area=skills&tab=library&lib=mcp&add=1" role="menuitem" data-testid="loadout-mcp-new">Add new ↗</a>
+                <GatedButton permission="mcp_server:review" type="button" role="menuitem" data-testid="loadout-mcp-new"
+                             data-tip={`Connect a new server and give it to ${name}`}
+                             onClick={() => { close(); setAddingMcp(true); }}>
+                  <Plugs size={12} aria-hidden="true" /> Add MCP server
+                </GatedButton>
               </>)}
             </Pop>
           ) : null}
         </div>
       </div>
+      {addingMcp ? (
+        <AddMcpSheet projectId={projectId} actor={actor} defaultAgents={[roleKey]} onClose={() => setAddingMcp(false)}
+                     onAdded={() => { setAddingMcp(false); void load(); onChanged(); }} />
+      ) : null}
     </>
   );
 }
