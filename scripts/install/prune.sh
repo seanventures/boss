@@ -35,6 +35,8 @@ ROOM=0
 CACHE_ONLY=0
 DRY=0
 THRESHOLD=75
+TARGET_FREE_GB=""
+MIN_CACHE_GB=0
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 INSTALL_DIR="${BOSS_INSTALL_DIR:-$(cd "$SCRIPT_DIR/../.." && pwd -P)}"
 while [[ $# -gt 0 ]]; do
@@ -44,10 +46,14 @@ while [[ $# -gt 0 ]]; do
     --cache-only) CACHE_ONLY=1; shift ;;
     --dry-run) DRY=1; shift ;;
     --threshold) THRESHOLD="${2:?}"; shift 2 ;;
+    --target-free) TARGET_FREE_GB="${2:?--target-free needs a number of GB}"; shift 2 ;;
+    --min-cache) MIN_CACHE_GB="${2:?--min-cache needs a number of GB}"; shift 2 ;;
     --dir) INSTALL_DIR="${2:?--dir needs a path}"; shift 2 ;;
     *) printf 'prune: unknown option %s\n' "$1" >&2; exit 2 ;;
   esac
 done
+[[ -z "$TARGET_FREE_GB" || "$TARGET_FREE_GB" =~ ^[0-9]+$ ]] || { printf 'prune: --target-free must be a whole number of GB (got %s)\n' "$TARGET_FREE_GB" >&2; exit 2; }
+[[ "$MIN_CACHE_GB" =~ ^[0-9]+$ ]] || { printf 'prune: --min-cache must be a whole number of GB (got %s)\n' "$MIN_CACHE_GB" >&2; exit 2; }
 # A setting comes from the environment, else from the install's .env, else the default.
 env_or_dotenv() {
   local value="${!1:-}"
@@ -168,6 +174,19 @@ if [[ "$CACHE_ONLY" -eq 0 && -f "$ROLLBACK_FILE" && -z "$(rb_value BOSS_PREV_EXP
   fi
 fi
 
+build_cache_gb_exact() {  # tenths of GB ("10.4"); "" when unknown
+  local size
+  size="$("${D[@]}" system df --format '{{.Type}}|{{.Size}}' 2>/dev/null | awk -F'|' '$1 ~ /Build Cache/ {print $2; exit}')" || true
+  [[ -n "$size" ]] || return 0
+  LC_ALL=C awk -v s="$size" 'BEGIN {
+    n = s; gsub(/[^0-9.]/, "", n); u = s; gsub(/[0-9. ]/, "", u); u = tolower(u)
+    if (n == "") exit
+    if (u == "b") n /= 1e9; else if (u == "kb") n /= 1e6; else if (u == "mb") n /= 1e3
+    else if (u == "tb") n *= 1e3
+    printf "%.1f\n", n }'
+}
+_cache_before="$(build_cache_gb_exact)"
+
 # 4. Build cache. The cap holds on every host: Docker keeps the newest BOSS_BUILD_CACHE_CAP_GB
 #    of cache and drops the rest, so the cache can no longer grow without bound between deploys.
 if [[ "$CACHE_CAP_GB" -gt 0 ]]; then
@@ -225,22 +244,40 @@ build_cache_gb() {  # whole GB, rounded down; "" when unknown
 }
 # The cache is Docker-wide: only a host that runs BOSS alone (--dedicated) or the installer right
 # after its own build (--room) trims below the cap.
+TARGET_FREE_GB="${TARGET_FREE_GB:-$FLOOR_GB}"
 if [[ "$CACHE_CAP_GB" -gt 0 && ( "$DEDICATED" -eq 1 || "$ROOM" -eq 1 ) ]]; then
   free_gb="$(docker_disk_free_gb)"
   if [[ -z "$free_gb" ]]; then
     printf "Docker's disk could not be measured; the build cache is kept at its cap (%s GB)\n" "$CACHE_CAP_GB"
-  elif [[ "$free_gb" -lt "$FLOOR_GB" ]]; then
+  elif [[ "$free_gb" -lt "$TARGET_FREE_GB" ]]; then
     cache_gb="$(build_cache_gb)"; cache_gb="${cache_gb:-0}"
-    keep=$(( free_gb + cache_gb - FLOOR_GB ))
-    [[ "$keep" -gt 0 ]] || keep=0
+    keep=$(( free_gb + cache_gb - TARGET_FREE_GB ))
+    [[ "$keep" -ge "$MIN_CACHE_GB" ]] || keep="$MIN_CACHE_GB"
     [[ "$keep" -le "$CACHE_CAP_GB" ]] || keep="$CACHE_CAP_GB"
-    printf "Docker's disk has %s GB free, under the %s GB floor (BOSS_DISK_FLOOR_GB): keeping %s GB of build cache\n" \
-      "$free_gb" "$FLOOR_GB" "$keep"
+    if [[ "$MIN_CACHE_GB" -gt 0 && $(( free_gb + cache_gb - MIN_CACHE_GB )) -lt "$FLOOR_GB" ]]; then
+      keep=0
+    fi
+    if [[ "$TARGET_FREE_GB" -eq "$FLOOR_GB" ]]; then
+      printf "Docker's disk has %s GB free, under the %s GB floor (BOSS_DISK_FLOOR_GB): keeping %s GB of build cache\n" \
+        "$free_gb" "$FLOOR_GB" "$keep"
+    else
+      printf "Docker's disk has %s GB free, under the %s GB upgrade target (%s GB floor + build): keeping %s GB of build cache\n" \
+        "$free_gb" "$TARGET_FREE_GB" "$FLOOR_GB" "$keep"
+    fi
     if [[ "$keep" -eq 0 ]]; then
       run "${D[@]}" builder prune -af
     else
       run "${D[@]}" builder prune -af --keep-storage "${keep}gb"
     fi
   fi
+fi
+if [[ "$DRY" -eq 0 && -n "$_cache_before" ]]; then
+  _cache_after="$(build_cache_gb_exact)"
+  if [[ -n "$_cache_after" ]]; then
+    _freed="$(LC_ALL=C awk -v b="$_cache_before" -v a="$_cache_after" 'BEGIN { d = b - a; if (d < 0) d = 0; printf "%.1f", d }')"
+    printf 'build cache: freed %s GB (before %s GB, after %s GB)\n' "$_freed" "$_cache_before" "$_cache_after"
+  fi
+elif [[ "$DRY" -eq 1 && -n "$_cache_before" ]]; then
+  printf 'build cache before: %s GB (dry run; nothing freed)\n' "$_cache_before"
 fi
 printf 'disk after: %s%% used\n' "$(used_pct)"

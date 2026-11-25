@@ -369,6 +369,29 @@ def test_backup_failure_leaves_checkout_and_credentials_untouched(install_pair):
     assert not (tmp / "docker-trace").exists()
 
 
+def test_backup_failure_reports_recovery_error_and_runs_no_docker_even_when_grafana_port_is_in_use(
+    install_pair,
+):
+    installed, old, _, env, tmp = install_pair
+    for tool, body in (
+        ("lsof", "#!/usr/bin/env bash\n[[ \"$*\" == *\":3300\"* ]] && exit 0\nexit 1\n"),
+        ("ss", "#!/usr/bin/env bash\nprintf 'LISTEN 0 128 127.0.0.1:3300 0.0.0.0:*\\n'\n"),
+    ):
+        p = tmp / "bin" / tool
+        p.write_text(body)
+        p.chmod(0o755)
+    env["BOSS_TEST_BACKUP_FAIL"] = "1"
+    prior_env = (installed / ".env").read_bytes()
+
+    result = _install(installed, env)
+
+    assert result.returncode != 0
+    assert "Recovery backup failed" in result.stderr
+    assert _git("rev-parse", "HEAD", cwd=installed) == old
+    assert (installed / ".env").read_bytes() == prior_env
+    assert not (tmp / "docker-trace").exists()
+
+
 def test_upgrade_reuses_its_valid_backup_without_a_second_snapshot(install_pair):
     installed, old, new, env, tmp = install_pair
     prior_env = (installed / ".env").read_bytes()

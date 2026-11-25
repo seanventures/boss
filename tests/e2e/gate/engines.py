@@ -147,7 +147,7 @@ class World:
 
     def __init__(self, pg_url: str, work: Path):
         self.work = work
-        url = _database(pg_url, "boss_test_e2egate_engines")
+        url = _database(pg_url, os.environ.get("BOSS_E2E_GATE_DB_NAME") or "boss_test_e2egate_engines")
         self.url = url.replace("postgresql://", "postgresql+psycopg://")
         os.environ["DATABASE_URL"] = self.url
         from sqlalchemy import create_engine, text
