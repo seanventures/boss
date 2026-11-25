@@ -1,11 +1,12 @@
 "use client";
 
 import React, { useMemo, useRef, useState } from "react";
-import { X } from "@phosphor-icons/react";
+import { Plugs, X } from "@phosphor-icons/react";
 
 import type { Palette } from "../../../../lib/workflow-editor-types";
 import { abilityOf, itemLabel, itemsByAbility, notSetUp, setUpHref, useKitAbilities } from "../../../../lib/use-kit-abilities";
 import { Popover } from "./popover";
+import { AddMcpSheet } from "../../../skills/add-mcp-sheet";
 
 const GROUP_WORD: Record<string, string> = { code: "Code", research: "Research", coordinate: "Coordinate", ship: "Ship", media: "Media" };
 
@@ -19,7 +20,7 @@ type Kind = "skill" | "mcp";
  * named agent does not hold turns amber rather than disappearing: the save would refuse it, and
  * the operator should see which one before pressing Save.
  */
-export function ScopePicker({ kind, selected, captain, palette, onChange, projectId, problem }: {
+export function ScopePicker({ kind, selected, captain, palette, onChange, projectId, problem, actor, onAdded }: {
   kind: Kind;
   selected: string[];
   captain: string | null;
@@ -29,6 +30,10 @@ export function ScopePicker({ kind, selected, captain, palette, onChange, projec
   projectId?: string;
   /** The Check's problem on this field, said in one line (the whole of it in the tooltip). */
   problem?: string | null;
+  /** Who is signed in: with it, the MCP picker offers Add MCP server (BOSSAPP-1478). */
+  actor?: string;
+  /** After a server was added (and given to the step's agent): re-read what agents hold. */
+  onAdded?: () => Promise<void> | void;
 }) {
   // ABILITIES FIRST (skills-mcp spec §3.3): what a step can use, in outcomes, each with the
   // skills or servers behind it. One not set up is red and links to where it is set up.
@@ -37,6 +42,7 @@ export function ScopePicker({ kind, selected, captain, palette, onChange, projec
   const trigger = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [adding, setAdding] = useState(false);
   const holdingsOf = (a: Palette["agents"][number]) => (kind === "skill" ? a.skills : a.mcp);
   const named = captain ? palette.agents.find((a) => a.role_key === captain) : undefined;
 
@@ -154,7 +160,24 @@ export function ScopePicker({ kind, selected, captain, palette, onChange, projec
             <div className="wf-faint wf-pop-empty">{captain ? `${whose} holds none` : "None held"}</div>
           ) : null}
         </div>
+        {kind === "mcp" && projectId && actor ? (
+          <button type="button" className="wf-pop-add" data-testid="wf-scope-add-mcp-server"
+                  title={captain ? `Connect a new server and give it to ${whose}` : "Connect a new tool server"}
+                  onClick={() => { setOpen(false); setQuery(""); setAdding(true); }}>
+            <Plugs size={14} aria-hidden="true" /> Add MCP server
+          </button>
+        ) : null}
       </Popover>
+      {adding && projectId && actor ? (
+        <AddMcpSheet projectId={projectId} actor={actor} defaultAgents={captain ? [captain] : []}
+                     onClose={() => setAdding(false)}
+                     onAdded={(_id, name) => {
+                       setAdding(false);
+                       // The step may use it at once when its agent now holds it.
+                       if (name && captain && !selected.includes(name)) onChange([...selected, name]);
+                       void onAdded?.();
+                     }} />
+      ) : null}
     </div>
   );
 }

@@ -1,14 +1,14 @@
 // @vitest-environment happy-dom
 /**
- * Add MCP › Connectors and the Gateways sheet (BOSSAPP-849..851), clicked through: picking a
- * connector pre-fills the Custom form and its tool tiers ride on the register; a stdio
+ * Add MCP server › Browse all and the Gateways sheet (BOSSAPP-849..851), clicked through: picking a
+ * connector pre-fills the one form and its tool tiers ride on the register; a stdio
  * connector without its template offers Create template (host:exec); a gateway shows its token
  * once and revokes by id.
  */
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { $, cleanup, click, render } from "./_helpers/kit-render";
+import { $, cleanup, click, render, type } from "./_helpers/kit-render";
 import { clone, installKitApi, KITS, SERVERS } from "./_helpers/kit-api";
 
 const { AddMcpSheet } = await import("../app/skills/add-mcp-sheet");
@@ -39,7 +39,7 @@ const POSTGRES = {
 const CATALOG = { catalog_version: "t", total: 2, categories: [{ key: "project", count: 1 }, { key: "data", count: 1 }],
                   items: [LINEAR, POSTGRES] };
 
-describe("Add MCP › Connectors", () => {
+describe("Add MCP server › Browse all", () => {
   it("picking a connector pre-fills the form and its tool tiers ride on the register", async () => {
     const calls = installKitApi(clone(KITS.fresh), (url, body, method) => {
       if (url.includes("view=connectors")) return CATALOG;
@@ -48,13 +48,15 @@ describe("Add MCP › Connectors", () => {
       return method === "POST" ? {} : undefined;
     });
     await render(<AddMcpSheet projectId="p1" actor="ceo" onClose={() => {}} onAdded={() => {}} />);
-    await click('[data-testid="kit-add-connectors"]');
+    await click('[data-testid="kit-add-browse"]');
     await new Promise((r) => setTimeout(r, 200));
     await click('[data-testid="kit-connector-use-linear"]');
     expect(($('[data-testid="kit-custom-url"]') as HTMLInputElement).value).toBe("https://mcp.linear.app/mcp");
     expect(($('[data-testid="kit-custom-name"]') as HTMLInputElement).value).toBe("linear");
-    expect($('[data-testid="kit-custom-picked"]')!.textContent).toContain("Sign in with Linear");
-    await click('[data-testid="kit-custom-save"]');
+    expect($('[data-testid="kit-custom-picked"]')!.innerHTML).toContain("Sign in with Linear");
+    await type('[data-testid="kit-custom-secret"]', "lin_api_1234");
+    await click('[data-testid="kit-add-test"]');
+    await click('[data-testid="kit-add-save"]');
     const register = calls.find((c) => c.body?.action === "register")!;
     expect(register.body!.server).toMatchObject({
       url: "https://mcp.linear.app/mcp", transport: "http", risk_tier: 2,
@@ -64,6 +66,28 @@ describe("Add MCP › Connectors", () => {
       expect.objectContaining({ server_id: "mcp_lin", tool: "create_issue", policy: "ask" })]);
   });
 
+  it("an OAuth connector keeps its description, data boundary and risk notes", async () => {
+    vi.stubGlobal("open", vi.fn());
+    const OAUTH = { ...LINEAR, key: "notion", prefill: { ...LINEAR.prefill, name: "notion", url: "https://mcp.notion.com/mcp",
+                                                       auth: { type: "oauth", header_name: null }, data_boundary: "confidential",
+                                                       description: "Pages", provenance: { source: "connector_catalog", connector_key: "notion" } } };
+    const calls = installKitApi(clone(KITS.fresh), (url, body) => {
+      if (url.includes("view=connectors")) return { ...CATALOG, items: [OAUTH] };
+      if (body?.action === "register") return { ...SERVERS[0], id: "mcp_n" };
+      if (body?.action === "oauth_start") return { redirect: "https://notion.example/authorize" };
+      return undefined;
+    });
+    await render(<AddMcpSheet projectId="p1" actor="ceo" onClose={() => {}} onAdded={() => {}} />);
+    await click('[data-testid="kit-add-browse"]');
+    await new Promise((r) => setTimeout(r, 200));
+    await click('[data-testid="kit-connector-use-notion"]');
+    expect($('[data-testid="kit-custom-risk"]')!.getAttribute("data-tip")).toBe("Can change issues.");
+    await click('[data-testid="kit-add-save"]');
+    expect(calls.find((c) => c.body?.action === "register")!.body!.server).toMatchObject({
+      auth: { type: "oauth" }, description: "Pages", data_boundary: "confidential",
+      provenance: { source: "connector_catalog", connector_key: "notion" } });
+  });
+
   it("a stdio connector without its template offers Create template first", async () => {
     const calls = installKitApi(clone(KITS.fresh), (url, body) => {
       if (url.includes("view=connectors")) return CATALOG;
@@ -71,7 +95,7 @@ describe("Add MCP › Connectors", () => {
       return undefined;
     });
     await render(<AddMcpSheet projectId="p1" actor="ceo" onClose={() => {}} onAdded={() => {}} />);
-    await click('[data-testid="kit-add-connectors"]');
+    await click('[data-testid="kit-add-browse"]');
     await new Promise((r) => setTimeout(r, 200));
     expect($('[data-testid="kit-connector-use-postgres"]')).toBeNull();
     await click('[data-testid="kit-connector-template-postgres"]');

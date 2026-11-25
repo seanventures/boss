@@ -1,29 +1,48 @@
 /**
- * Skills & MCP's place in the URL (spec §5.1 deep links): `&tab=kit|who|library|templates|rules`,
- * `&ability=<key>` (the Kit with that drawer open), `&lib=skills|mcp`, `&skill=<key>`,
- * `&mcp=<id>`, `&role=<key>` (Who can, that agent's row), `&setup=1` (Essentials forced open).
- * Read once on load and written with replaceState, so a link or a reload lands on the same view.
+ * Skills & MCP's place in the URL (docs/design/SKILLS_AND_MCP_HOME.md, "Old links").
+ *
+ * The page opens on one home with two sections, MCP servers and Skills. `&tab=who|templates|rules`
+ * opens those views. `&view=all` shows every skill instead of the abilities by outcome.
+ * `&section=mcp` scrolls to the servers. `&add=mcp|skill` opens that add sheet.
+ * `&ability=<key>`, `&skill=<key>`, `&mcp=<id>` open a drawer. `&role=<key>` focuses Who can.
+ * `&setup=1` forces the Essentials strip open.
+ *
+ * OLD LINKS STILL LAND. `&tab=kit` is the home. `&tab=library` is the home with All skills
+ * (`&lib=mcp`: the MCP section). `&lib=mcp&add=1` (the old agent-page link) opens Add MCP server.
+ * The URL is read once on load and written with replaceState, so a reload lands on the same view.
  */
-export type KitTab = "kit" | "who" | "library" | "templates" | "rules";
+export type KitTab = "home" | "who" | "templates" | "rules";
+export type SkillsView = "outcome" | "all";
 export type KitParams = {
-  tab: KitTab; ability: string | null; lib: "skills" | "mcp"; skill: string | null;
-  mcp: string | null; role: string | null; setup: boolean;
+  tab: KitTab; view: SkillsView; section: "mcp" | "skills" | null; add: "mcp" | "skill" | null;
+  ability: string | null; skill: string | null; mcp: string | null; role: string | null; setup: boolean;
 };
+
+/** Sent by search (⌘K) and other screens to open an add sheet on a home already mounted. */
+export const KIT_ADD_EVENT = "boss:kit-add";
 
 export function readKitParams(search?: string): KitParams {
   const p = new URLSearchParams(search ?? (typeof window !== "undefined" ? window.location.search : ""));
   const tab = p.get("tab");
   const lib = p.get("lib");
   const ability = p.get("ability");
+  const add = p.get("add");
+  const mcpAsked = lib === "mcp" || Boolean(p.get("mcp")) || p.get("section") === "mcp";
   return {
-    tab: tab === "who" || tab === "library" || tab === "templates" || tab === "rules" ? tab : (p.get("skill") || p.get("mcp") || lib) ? "library" : "kit",
+    tab: tab === "who" || tab === "templates" || tab === "rules" ? tab : "home",
+    // The old Library listed every skill: a link into it (or to one skill) shows All skills.
+    view: p.get("view") === "all" || p.get("skill") || (tab === "library" && lib !== "mcp") || lib === "skills"
+      ? "all" : "outcome",
+    section: mcpAsked ? "mcp" : p.get("section") === "skills" ? "skills" : null,
+    add: add === "mcp" || (add === "1" && lib === "mcp") ? "mcp" : add === "skill" ? "skill" : null,
     ability: ability && /^[a-z][a-z0-9_]{1,40}$/.test(ability) ? ability : null,
-    lib: lib === "mcp" || p.get("mcp") ? "mcp" : "skills",
     skill: p.get("skill"), mcp: p.get("mcp"), role: p.get("role"), setup: p.get("setup") === "1",
   };
 }
 
-export function writeKitParams(change: Partial<Record<"tab" | "ability" | "lib" | "skill" | "mcp" | "role" | "setup", string | null>>): void {
+type Key = "tab" | "view" | "section" | "add" | "lib" | "ability" | "skill" | "mcp" | "role" | "setup";
+
+export function writeKitParams(change: Partial<Record<Key, string | null>>): void {
   if (typeof window === "undefined") return;
   try {
     const url = new URL(window.location.href);
@@ -33,4 +52,19 @@ export function writeKitParams(change: Partial<Record<"tab" | "ability" | "lib" 
     }
     window.history.replaceState(null, "", `${url.pathname}${url.search}`);
   } catch { /* a sandboxed frame: the view still works, the URL just does not follow */ }
+}
+
+/** The link to open an add sheet from anywhere (a page load lands on it). */
+export const addHref = (kind: "mcp" | "skill") => `?area=skills&add=${kind}`;
+
+/** Search (⌘K) commands that open an add sheet: typing "mcp", "tools" or "skill" finds them. */
+export const ADD_COMMANDS: readonly { kind: "mcp" | "skill"; label: string; sub: string; words: string }[] = [
+  { kind: "mcp", label: "Add MCP server", sub: "Connect your tools", words: "add mcp server connect tools integration connector" },
+  { kind: "skill", label: "Add skill", sub: "Write, import or turn one on", words: "add skill new skill write import" },
+];
+
+export function addCommandsFor(query: string): typeof ADD_COMMANDS[number][] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [...ADD_COMMANDS];
+  return ADD_COMMANDS.filter((c) => q.split(/\s+/).every((w) => c.words.includes(w) || c.label.toLowerCase().includes(w)));
 }

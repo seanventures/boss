@@ -6,6 +6,7 @@
  * read; the first match decides, and with no match the action is allowed. Disable/enable and
  * revoke per row, an Add rule form, and a simulator that answers without counting a hit.
  */
+import { Check, Play, Plus, X } from "@phosphor-icons/react";
 import React, { useCallback, useEffect, useState } from "react";
 
 import { CheckGroup, CheckRow, Field, FormError, FormGrid } from "../../components/form-kit";
@@ -41,7 +42,7 @@ export function SkillAccessRules({ projectId }: { projectId: string }) {
         <span className="kit-spacer" />
         <GatedButton permission="skill:manage" projectId={projectId} className="kit-btn"
                      data-testid="skill-access-add" onClick={() => setAdding((a) => !a)}>
-          {adding ? "Close" : "Add rule"}
+          {adding ? <><X size={14} aria-hidden="true" /> Close</> : <><Plus size={14} aria-hidden="true" /> Add rule</>}
         </GatedButton>
       </div>
       {said ? <p className="tp-said" role="status" data-testid="skill-access-said">{said}</p> : null}
@@ -132,7 +133,7 @@ function AddSkillRule({ projectId, onAdded }: { projectId: string; onAdded: () =
       <Field label="Why (shown when it refuses)" wide><input aria-label="Skill rule note" value={note} onChange={(e) => setNote(e.target.value)} /></Field>
       <FormError>{err}</FormError>
       <GatedButton permission="skill:manage" projectId={projectId} className="kit-btn" data-testid="skill-access-save"
-                   onClick={() => void save()}>Save rule</GatedButton>
+                   onClick={() => void save()}><Check size={14} aria-hidden="true" /> Save rule</GatedButton>
     </FormGrid>
   );
 }
@@ -162,7 +163,7 @@ function SimulateSkillAction({ projectId }: { projectId: string }) {
           <option value="person">A person</option><option value="agent">An agent</option></select></label>
         <label>From<input aria-label="Simulate skill source" value={source} placeholder="optional" onChange={(e) => setSource(e.target.value)} /></label>
         <GatedButton permission="skill:read" projectId={projectId} className="kit-btn" data-testid="skill-access-simulate-run"
-                     disabled={!skill.trim()} onClick={() => void run()}>Simulate</GatedButton>
+                     disabled={!skill.trim()} onClick={() => void run()}><Play size={14} aria-hidden="true" /> Simulate</GatedButton>
       </div>
       {err ? <p className="tp-said">{err}</p> : null}
       {out ? (
