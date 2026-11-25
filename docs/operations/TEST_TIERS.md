@@ -23,6 +23,7 @@ owner; it is never waived to ship.
 - **Minor release (rc10.x):** `scripts/test-tier.sh changed --since <last release>`. This is P0 plus every test that touches a file changed since that ref. Then the end-to-end gate below.
 - **Every release:** `scripts/e2e-gate.sh plumbing` (tier A, about 1–2 min), `scripts/e2e-gate.sh engines` (tier A, no model: the real build pipeline end to end on the scripted conformance engine, as the poorest and the richest engine, across a clean build and four injected faults; every engine must show the same stages, gates, fix rounds, PR, events, profile fields and failure words) and `scripts/e2e-gate.sh agent` (tier B, a real build with a model). All are listed under `P0: release:` in `tests/tiers.yaml`.
 - **Every release:** `scripts/enterprise-lane.sh` (on a fresh 4 vCPU / 8 GB Linux VM; on a Mac, `scripts/enterprise-lane/lima.sh`) ends in `PASS`. Attach its report to the release notes' checklist.
+- **Weekly (macOS Colima):** Run a fresh Colima install on a real Mac per [COLIMA.md](../community/COLIMA.md#weekly-verification-checklist) and confirm `boss status`, `boss doctor`, and a sample build/preview pass.
 - **P2:** `scripts/test-tier.sh P2` when a change works in its area, or overnight.
 - **Before a release:** `scripts/test-tier.sh major` + `scripts/e2e-gate.sh plumbing` and
   `scripts/e2e-gate.sh engines` (tier A) +

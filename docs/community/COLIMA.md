@@ -144,3 +144,14 @@ docker compose -f scripts/install/community-compose.yml --env-file .env exec api
 `host.lima.internal` reaches the Mac from inside a Colima VM; try `host.docker.internal` the same
 way. The server must listen on an address the VM can reach, not only on 127.0.0.1. Connecting and
 probing a model is a separate check from bringing up the control plane.
+
+## Weekly verification checklist
+
+Run this manual check on a real macOS host once per week as part of release readiness (see
+[TEST_TIERS.md](../operations/TEST_TIERS.md#release-gates)):
+
+1. Start from a clean checkout or release tag in a fresh directory on macOS with Colima installed.
+2. Ensure Colima is running with sufficient Docker resources (`colima start boss --runtime docker --vm-type vz --cpu 4 --memory 12 --disk 100` or equivalent profile).
+3. Run `./install.sh` (or the community install script) against a fresh install prefix and wait for all services to reach healthy status.
+4. Run `boss status` and `boss doctor` and confirm every check passes with no degraded core services.
+5. Run one sample build/preview smoke against the fresh install and verify completion and teardown/cleanup leave zero stray containers or volumes.
