@@ -512,3 +512,33 @@ def test_a_networked_stdio_server_starts_with_the_company_proxy_and_mirrors(monk
     offline = {**template, "network": "none"}
     argv, _ = sup.launch_plan(offline, None, mode="docker", name="c2")
     assert "HTTPS_PROXY" not in argv and "npm_config_registry" not in argv
+
+
+def test_inside_a_coding_build_the_gateway_reaches_an_sse_server_and_says_failures_plainly(
+        db, settings, fake):
+    """Row: use inside a coding build. The harness's MCP traffic goes through BOSS's gateway,
+    which calls the upstream with BOSS's client: an HTTP+SSE server works there too, and a
+    failure reaches the coder as words, not httpx's text."""
+    from boss_engine.services import mcp_gateway
+
+    upstream = fake("sse", auth=("header", "X-API-Key", "k-1"))
+    server = _register(db, settings, "sse-srv", upstream.url,
+                       auth={"type": "header", "header_name": "X-API-Key", "secret": "k-1"})
+    broken = _register(db, settings, "down-srv", "http://127.0.0.1:9/mcp")
+    gateway = mcp_gateway.McpGateway(db=lambda: db, settings=settings, poll_interval=0.05,
+                                     keepalive=0.1, ask_timeout=5)
+    try:
+        token, base = gateway.issue(PROJECT, {
+            "sse": {"server_id": server["id"], "granted_tools": []},
+            "down": {"server_id": broken["id"], "granted_tools": []}},
+            role_key="forge", run_id="crun_conf")
+        harness = MCPClient(settings)
+        assert "echo" in [t["name"] for t in harness.list_tools(f"{base}/sse")]
+        assert harness.call_tool(f"{base}/sse", "echo", {"text": "via gateway"}) == {
+            "echo": "via gateway"}
+        with pytest.raises(MCPToolError) as failed:
+            harness.call_tool(f"{base}/down", "echo", {"text": "x"})
+        assert "connection refused" in str(failed.value)
+        assert "developer.mozilla.org" not in str(failed.value)
+    finally:
+        gateway.stop()

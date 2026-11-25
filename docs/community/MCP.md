@@ -319,6 +319,13 @@ The servers you register on **Skills and MCP** (or ask BOSS to register from the
 
 **After upgrading:** servers registered before this rule were never marked, so calls that used to run now ask first. The Skills and MCP page lists every turned-on server that needs review. Open each with **Edit**, check its address, and choose *A person has checked this server*. Changing a server's URL clears its review, including a server BOSS seeded.
 
+### Transports, long calls and the company network
+
+- **Transports.** A server URL may speak Streamable HTTP (usually `…/mcp`) or the older HTTP+SSE transport (usually `…/sse`); BOSS finds out which on the first call. A `stdio://` server runs from a launch template in its own container.
+- **Long calls.** A tool call may run for `BOSS_MCP_CALL_TIMEOUT` seconds (default 120). Past that BOSS tells the server it stopped waiting (`notifications/cancelled`) and the run reads *"… did not answer within 120s (timed out); BOSS cancelled the call"*. A slow tool does not mark its server unreachable, and a timed-out call is never retried blind.
+- **Errors.** Save & test and failed calls say what happened and the next step (a refused token, a wrong path, nothing listening, a name that does not resolve, an untrusted certificate, the proxy).
+- **Company network.** MCP calls, OAuth sign-in and token refresh follow `HTTPS_PROXY` / `NO_PROXY` (CIDR ranges included) and trust `BOSS_EXTRA_CA_FILE` (see [Enterprise network](ENTERPRISE_NETWORK.md)). A stdio template with a network gets the proxy and package-mirror settings. An OAuth token the server refuses early is refreshed once and the call made again.
+
 ### Rate limits on tool calls
 
 A rule on **Skills and MCP › Rules** with the effect **Rate limit** caps how often a tool runs: at most `max_calls` calls in `window_seconds`. The calls counted are the ones that actually ran (succeeded, deduplicated or failed) to that server and tool, read from the tool-call audit. Choose what the count is kept for:
