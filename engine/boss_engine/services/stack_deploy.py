@@ -176,6 +176,9 @@ class GitHubSource:
     def _get(self, path: str, *, accept: str = "application/vnd.github+json"):
         import httpx
 
+        from ..identity import github_urls
+
+        github_urls.check_send(self._token, self.API, where="stack_deploy")
         try:
             return httpx.get(f"{self.API}{path}", headers=self._headers(accept), timeout=30,
                              follow_redirects=True)

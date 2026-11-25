@@ -27,6 +27,20 @@ logger = logging.getLogger(__name__)
 _SSL = ssl.create_default_context()
 
 
+
+def _github_tracker_token(token: Any, base: str, configuration: dict[str, Any]) -> Any:
+    """The GitHub Issues tracker's token, tagged with ITS configuration's host (BOSSAPP-1286).
+    A token pasted for this tracker belongs to the tracker's base; a host env reference
+    (env:...) stays an install token (untagged), so the send check refuses it on a GHES base —
+    as env_refs does for every provider credential."""
+    if not token:
+        return token
+    ref = str(configuration.get("credential_ref") or "")
+    if ref.startswith("env:"):
+        github_urls.check_send(token, base, where="github_issues")
+        return token
+    return github_urls.tag(token, base)
+
 class WorkTrackerHttpError(RuntimeError):
     def __init__(self, message: str, *, status: Optional[int] = None):
         super().__init__(message)
@@ -690,6 +704,7 @@ class GitHubIssuesWorkTrackerAdapter:
         base = github_urls.api_base(configuration.get("api_base_url")).rstrip(
             "/"
         )
+        token = _github_tracker_token(token, base, configuration)
         if not (token and owner and repo):
             return {
                 "ok": False,
@@ -737,6 +752,7 @@ class GitHubIssuesWorkTrackerAdapter:
         base = github_urls.api_base(configuration.get("api_base_url")).rstrip(
             "/"
         )
+        token = _github_tracker_token(token, base, configuration)
         if not (token and owner and repo):
             return None
         try:
@@ -1048,6 +1064,8 @@ def update_issue(
         owner = str(configuration.get("owner") or "").strip()
         repo = str(configuration.get("repo") or "").strip()
         base = github_urls.api_base(configuration.get("api_base_url"))
+        token = _github_tracker_token(token, base, configuration)
+        github_urls.check_send(token, base, where="github_issues")
         headers = {"Authorization": f"Bearer {token}", "X-GitHub-Api-Version": "2022-11-28"}
         number = issue.lstrip("#")
         root = f"{base}/repos/{quote(owner)}/{quote(repo)}/issues/{quote(number)}"

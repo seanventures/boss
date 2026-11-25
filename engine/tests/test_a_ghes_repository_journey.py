@@ -34,7 +34,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 STUBS = ROOT / "tests" / "e2e" / "stubs"
-TOKEN = "ghes-token-for-the-journey"   # a placeholder, not a credential
+_RAW_TOKEN = "ghes-token-for-the-journey"   # a placeholder, not a credential
 OWNER, REPO = "platform", "gateway-onboarding"
 FULL = f"{OWNER}/{REPO}"
 
@@ -131,6 +131,10 @@ def _settings():
 
 
 def test_a_ghes_connection_is_used_for_every_step_of_the_journey(ghes, tmp_path, monkeypatch):
+    # The connection's token, as every source hands it out: tagged with the connection's host.
+    from boss_engine.identity import github_urls as _gu
+
+    TOKEN = _gu.tag(_RAW_TOKEN, ghes.api)  # noqa: N806
     from boss_engine.connectors.intake.contract import Cursor, IntakeConnection, RawRequest, StoredRaw
     from boss_engine.connectors.intake.github import adapter as intake
     from boss_engine.identity import github_urls

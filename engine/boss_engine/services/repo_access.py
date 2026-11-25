@@ -242,7 +242,11 @@ def _probe_once(token: str, owner: str, repo: str, api_base: str,
                 client: Optional[httpx.Client]) -> tuple[str, Optional[bool]]:
     own = client or httpx.Client(timeout=15)
     try:
-        got = own.get(f"{api_base.rstrip('/')}/repos/{owner}/{repo}",
+        from ..identity import github_urls
+
+        url = f"{api_base.rstrip('/')}/repos/{owner}/{repo}"
+        github_urls.check_send(token, url, where="repo_access.probe")
+        got = own.get(url,
                       headers={"Authorization": f"Bearer {token}",
                                "Accept": "application/vnd.github+json",
                                "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "boss-publish"})
@@ -301,6 +305,15 @@ def resolve(db: Any, settings: Any, project_id: str, owner: str, repo: str, *,
                               "words": "belongs to another GitHub host"})
             continue
         token = cand.mint() if cand.mint else None
+        if token:
+            # THE TOKEN KNOWS ITS HOST (github_urls.GitHubCredential): tagged here with the
+            # candidate's base, which must agree with any tag the source already gave it.
+            try:
+                token = github_urls.tag(token, cand.api_base or api)
+            except github_urls.CrossHostCredential:
+                out.tried.append({**tried, "outcome": "other_host",
+                                  "words": "belongs to another GitHub host"})
+                continue
         if not token:
             out.tried.append({**tried, "outcome": "no_token", "words": _OUTCOME_WORDS["no_token"]})
             continue

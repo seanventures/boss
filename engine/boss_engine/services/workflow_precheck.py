@@ -685,12 +685,22 @@ def _gh_get(ctx: Context, path: str) -> tuple[Optional[int], Any]:
     token = _github_token(ctx, binding)
     if not token:
         return None, "no usable token"
-    from .github_connections import api_base_for_repository
+    from ..identity import github_urls
+    from .github_connections import GitHubConnectionService
 
-    owner, _, name = str(binding.get("full_name") or "").partition("/")
-    base = ctx.savepoint(lambda: api_base_for_repository(ctx.connection, ctx.project_id, owner, name),
-                         default="") or api_base_for_repository(ctx.connection, None)
-    req = urllib.request.Request(base.rstrip("/") + path, headers={
+    # The binding's connection holds the token: tag it with THAT connection's host and send it
+    # only there (BOSSAPP-1286) — no fallback base that could disagree with the token.
+    conn_base = ctx.savepoint(lambda: GitHubConnectionService._connection_api_base(  # noqa: SLF001
+        ctx.connection, ctx.project_id, str(binding["connection_id"])), default=None)
+    if conn_base is None:
+        return None, "the connection's GitHub host could not be read"
+    token = github_urls.tag(token, conn_base)
+    url = github_urls.credential_api_base(token).rstrip("/") + path
+    try:
+        github_urls.check_send(token, url, where="precheck")
+    except github_urls.CrossHostCredential as refused:
+        return None, str(refused)
+    req = urllib.request.Request(url, headers={
         "Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
         "User-Agent": "boss-precheck"})
     try:

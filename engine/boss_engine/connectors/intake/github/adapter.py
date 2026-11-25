@@ -515,7 +515,9 @@ def _headers(conn: IntakeConnection, repo: str) -> dict[str, str]:
     connection can name any repository, and an unbound one is read anonymously or not at all.
     Never handed to an agent, never logged."""
     headers = {"Accept": "application/vnd.github+json", "User-Agent": "boss-intake"}
-    token = conn.secret("api_token")
+    base = _api_base(conn)
+    # The connection's own token belongs to the connection's host.
+    token = github_urls.tag(conn.secret("api_token"), base)
     if not token and conn.db is not None and conn.project_id:
         try:
             from ....services.github_connections import GitHubConnectionService
@@ -532,6 +534,12 @@ def _headers(conn: IntakeConnection, repo: str) -> dict[str, str]:
         except Exception:  # noqa: BLE001 — no binding: a public repository still answers
             token = ""
     if token:
+        # THE SEND POINT (BOSSAPP-1286): every intake request goes to this connection's base; a
+        # binding token of another host is refused (logged) and the read goes anonymous.
+        try:
+            github_urls.check_send(token, base, where="intake")
+        except github_urls.CrossHostCredential:
+            return headers
         headers["Authorization"] = f"Bearer {token}"
     return headers
 

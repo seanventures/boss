@@ -1120,8 +1120,12 @@ class GitHubConnectionService:
                 from boss_engine.identity import github_setup
 
                 with connection.begin_nested():
-                    return github_setup.control_plane_token(connection, owner, repo)
-            return self._resolve_connection_secret(connection, project_id, ref)
+                    return github_urls.tag(
+                        github_setup.control_plane_token(connection, owner, repo), "")
+            # Tagged with ITS connection's host (BOSSAPP-1286): a GHES token never leaves GHES.
+            return github_urls.tag(
+                self._resolve_connection_secret(connection, project_id, ref),
+                self._connection_api_base(connection, project_id, str(rows["connection_id"])))
         except (GitHubConnectionStateError, GitHubConnectionNotFoundError) as error:
             # A bound connection whose secret cannot be read here is not a reason to fail the
             # build: the environment may still have a usable token.
@@ -1143,10 +1147,24 @@ class GitHubConnectionService:
             ref = self._credential_ref(connection, project_id, connection_id)
             if str(ref) == "identity_github:app":
                 return None
-            return self._resolve_connection_secret(connection, project_id, ref)
+            return github_urls.tag(
+                self._resolve_connection_secret(connection, project_id, ref),
+                self._connection_api_base(connection, project_id, connection_id)) or None
         except (GitHubConnectionStateError, GitHubConnectionNotFoundError) as error:
             logger.debug("github: could not resolve the connection's credential: %s", error)
             return None
+
+    @staticmethod
+    def _connection_api_base(connection: Connection, project_id: str, connection_id: str) -> str:
+        """The REST base of ONE connection (its credential's host)."""
+        try:
+            with connection.begin_nested():
+                value = connection.execute(text(
+                    "SELECT api_base_url FROM github_connections WHERE id = :i"),
+                    {"i": connection_id}).scalar()
+        except Exception:  # noqa: BLE001 — an older schema: the install's host
+            value = None
+        return github_urls.api_base(value)
 
     def _resolve_connection_secret(self, connection: Connection, project_id: str, ref: str) -> str:
         """A connection's SecretRef pointer → its value (never logged). The one lookup both the
@@ -1493,6 +1511,7 @@ class GitHubConnectionService:
                         connection, project_id, github_connection["id"])),
                 connection)
             api = github_urls.api_base(github_connection.get("api_base_url"))
+            credential = github_urls.tag(credential, api)   # this connection's own token
             who = self._github_get("/user", credential, api_base=api) or {}
             login = str(who.get("login") or "").strip()
             repos = self._github_get(
@@ -1520,8 +1539,10 @@ class GitHubConnectionService:
         import urllib.error
         import urllib.request
 
+        url = f"{github_urls.api_base(api_base)}{path}"
+        github_urls.check_send(credential, url, where="github_connections")
         request = urllib.request.Request(
-            f"{github_urls.api_base(api_base)}{path}",
+            url,
             headers={"Authorization": f"Bearer {credential}",
                      "Accept": "application/vnd.github+json",
                      "User-Agent": "boss-setup-check"})
@@ -1582,10 +1603,14 @@ class GitHubConnectionService:
                         credential = github_setup.control_plane_token(connection, owner, name)
                 except Exception:  # noqa: BLE001 — the connection's credential still works
                     credential = None
+        if credential:
+            credential = github_urls.tag(credential, "")   # the Setup App: the install's host
         if not credential and self._custom_secret_resolver is None:
-            credential = self._resolve_secret(secret_ref, connection)
+            credential = github_urls.tag(self._resolve_secret(secret_ref, connection),
+                                         github_connection.get("api_base_url"))
         elif not credential:
-            credential = self.secret_resolver(secret_ref)
+            credential = github_urls.tag(self.secret_resolver(secret_ref),
+                                         github_connection.get("api_base_url"))
         if not credential:
             raise GitHubConnectionStateError(
                 "GitHub SecretRef could not be resolved by this execution node."
@@ -2134,8 +2159,10 @@ def build_credential(connection: Connection, settings: Settings, project_id: Opt
         from .github_app_adapter import repo_token
 
         try:
-            return repo_token(settings, owner, repo, connection=connection,
-                              project_id=project_id or "") or "", base
+            token = repo_token(settings, owner, repo, connection=connection,
+                               project_id=project_id or "") or ""
+            # The base the token itself belongs to (its tag), never a separately chosen one.
+            return token, github_urls.credential_api_base(token) if token else base
         except Exception:  # noqa: BLE001 — the resolver below is the fallback
             logger.debug("github: repo_token failed for %s/%s", owner, repo, exc_info=True)
     return github_access_for(connection, settings, project_id or "", owner, repo)

@@ -224,11 +224,12 @@ def _connection_for(db: Any, settings: Any, project_id: str, actor: str, *,
                     if item.get("ref_kind") == kind and item.get("ref_key") == key:
                         record = item
                         break
-                token = service._resolve_secret(record, db)  # noqa: SLF001
+                own = service.get_connection(db, project_id, cid)
+                # Each connection's token is tagged with, and probed against, ITS OWN host.
+                token = github_urls.tag(service._resolve_secret(record, db),  # noqa: SLF001
+                                        own.get("api_base_url"))
                 if not token:
                     continue
-                # Each connection's token is probed against ITS OWN host (BOSSAPP-1286).
-                own = service.get_connection(db, project_id, cid)
                 probed = setup_checks.probe_repository(
                     token, full_name, api_base=github_urls.api_base(own.get("api_base_url")))
                 if (probed.get("checks") or {}).get("read", {}).get("ok"):

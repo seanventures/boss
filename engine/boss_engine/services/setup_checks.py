@@ -146,6 +146,14 @@ def _message(answer: HttpAnswer) -> str:
     return str(body or "")[:300]
 
 
+def _send_check(token: str, base: str) -> None:
+    """THE SEND POINT for every setup probe (BOSSAPP-1286): a token tagged for another GitHub
+    host (or an untagged install token aimed at a GHES base) is refused before any request."""
+    from ..identity import github_urls
+
+    github_urls.check_send(token, base or github_urls.api_base(), where="setup_checks")
+
+
 def _gh_headers(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "boss-setup-check"}
@@ -181,6 +189,7 @@ def inspect_token(token: str, *, api_base: str = "",
     """
     http = http or default_http
     base = api_base.rstrip("/")
+    _send_check(token, base)
     who = http("GET", f"{base}/user", headers=_gh_headers(token))
     if who.status != 200:
         state = _failure_state(who, refused="token_rejected")
@@ -221,6 +230,7 @@ def probe_repository(token: str, full_name: str, *, api_base: str = "",
     """
     http = http or default_http
     base = api_base.rstrip("/")
+    _send_check(token, base)
     at = iso(now_utc())
     headers = _gh_headers(token)
     out: dict[str, Any] = {"default_branch": None, "private": None, "expires_at": None,

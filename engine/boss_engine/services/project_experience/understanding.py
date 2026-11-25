@@ -216,6 +216,9 @@ def read_issue(connection: Connection, settings: Any, project_id: str,
         headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
         if token:
             headers["Authorization"] = f"Bearer {token}"
+        from ...identity import github_urls
+
+        github_urls.check_send(token, api, where="understanding")
         got = httpx.get(f"{api}/repos/{owner}/{repo}/issues/{number}",
                         headers=headers, timeout=6.0)
         if got.status_code != 200:

@@ -259,6 +259,9 @@ def fill_merged_counts(activity: list[dict[str, Any]], *, token: str,
             continue
         merged = 0
         try:
+            from ..identity import github_urls
+
+            github_urls.check_send(token, api_base_url, where="repo_registry")   # BOSSAPP-1286
             with httpx.Client(timeout=10.0) as client:
                 for number in prs:
                     resp = client.get(

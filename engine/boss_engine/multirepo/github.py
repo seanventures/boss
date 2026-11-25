@@ -23,12 +23,14 @@ class Answer:
 
 
 def _default_transport(method: str, path: str, token: str, body: Any = None) -> Answer:
-    from ..identity import github_app
+    from ..identity import github_urls
 
-    base = github_app.api_base().rstrip("/")
-    if path == GRAPHQL and base.endswith("/api/v3"):
-        base = base[: -len("/v3")]           # GitHub Enterprise: REST at /api/v3, GraphQL at /api/graphql
-    url = base + path
+    # THE TOKEN'S OWN HOST (BOSSAPP-1286): default_token may be a GHES connection's credential,
+    # so the request goes where that credential belongs — never the install's host by default —
+    # and the send-point check refuses any mismatch.
+    base = github_urls.credential_api_base(token).rstrip("/")
+    url = github_urls.graphql_url(base) if path == GRAPHQL else base + path
+    github_urls.check_send(token, url, where="multirepo")
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method=method, headers={
         "Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
@@ -57,10 +59,11 @@ TokenFor = Callable[[Any, Any, str, str], str]
 
 
 def default_token(db: Any, settings: Any, project_id: str, full_name: str) -> str:
-    from ..services.github_app_adapter import repo_token
+    from ..services.github_connections import build_credential
 
     owner, _, name = full_name.partition("/")
-    return repo_token(settings, owner, name, connection=db, project_id=project_id)
+    # The repository's own host's credential, tagged with that host (BOSSAPP-1286).
+    return build_credential(db, settings, project_id, owner, name)[0]
 
 
 TOKEN_FOR: TokenFor = default_token

@@ -534,6 +534,9 @@ def _http_get(url: str, token: str, timeout: float = TEST_TIMEOUT_SECONDS) -> An
     """A GitHub-style read. Raises httpx.HTTPStatusError on a refusal (the status is the fact)."""
     import httpx
 
+    from ..identity import github_urls
+
+    github_urls.check_send(token, url, where="kit_http_get")   # BOSSAPP-1286: its own host only
     resp = httpx.get(url, headers={"Authorization": f"Bearer {token}",
                                    "Accept": "application/vnd.github+json",
                                    "X-GitHub-Api-Version": "2022-11-28",

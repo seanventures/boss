@@ -151,9 +151,13 @@ class GitHubAdapter:
             raise IntegrationConfigurationError(str(error)) from error
 
     def _headers(self) -> dict[str, str]:
+        token = self._auth_token()
+        # THE SEND POINT (BOSSAPP-1286): every request of this adapter goes to api_base_url (REST
+        # or its GraphQL sibling on the same host); a token of another host is refused here.
+        github_urls.check_send(token, self.api_base_url, where="github_adapter")
         return {
             "Accept": "application/vnd.github+json",
-            "Authorization": f"Bearer {self._auth_token()}",
+            "Authorization": f"Bearer {token}",
             "X-GitHub-Api-Version": "2022-11-28",
         }
 

@@ -169,6 +169,12 @@ def git_access(host: str, owner: str, repo: str, token: str = "", *, web_base: s
     url = clone_url_for(kind, owner, repo, "", web_base=web_base)
     if not token:
         return GitAccess(url, via="anonymous")
+    if kind == "github":
+        # THE GIT SEND POINT (BOSSAPP-1286): the credential header is only ever set for the host
+        # the token belongs to.
+        from ..identity import github_urls
+
+        github_urls.check_send(token, _github_web(web_base), where="git")
     basic = base64.b64encode(f"{_BASIC_USER.get(kind, 'x-access-token')}:{token}".encode()).decode()
     origin = _HOST_ORIGIN.get(kind) or _github_web(web_base) + "/"
     return GitAccess(url, git_config_env([(f"http.{origin}.extraheader", f"AUTHORIZATION: basic {basic}")]),

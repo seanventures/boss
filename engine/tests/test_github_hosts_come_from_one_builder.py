@@ -138,9 +138,12 @@ def test_clone_urls_and_the_credential_header_follow_the_host():
     assert clone_url_for("github", "o", "r", web_base=G.PUBLIC_WEB) == "https://github.com/o/r.git"
     assert clone_url_for("github", "o", "r", web_base="https://ghe.example") == \
         "https://ghe.example/o/r.git"
-    access = git_access("github", "o", "r", "t0k", web_base="https://ghe.example")
+    access = git_access("github", "o", "r", G.tag("t0k", "https://ghe.example/api/v3"),
+                        web_base="https://ghe.example")
     assert access.url == "https://ghe.example/o/r.git"
     assert "http.https://ghe.example/.extraheader" in access.env.values()
+    with pytest.raises(G.CrossHostCredential):     # an install token is never set for GHES
+        git_access("github", "o", "r", "t0k", web_base="https://ghe.example")
 
 
 def test_a_ghes_install_host_is_fenced_and_routed_by_egress(monkeypatch):
