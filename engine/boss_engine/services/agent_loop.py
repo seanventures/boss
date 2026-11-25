@@ -3278,6 +3278,8 @@ class AgentStepToolSet:
             record_reachability_quietly(connection, project_id, server, reachable=True,
                                         tools=server_tools)
             allow = set(server.get("granted_tools") or [])
+            from .tool_schema import description_for_model, for_model
+
             for t in server_tools:
                 tool_name = str(t.get("name") or "tool")
                 if allow and tool_name not in allow:
@@ -3299,8 +3301,11 @@ class AgentStepToolSet:
                                 f"[MCP · {server['name']}"
                                 + (" · UNREVIEWED server: every call waits for a person"
                                    if needs_person(server) else "")
-                                + f"] {t.get('description', '')}"),
-                            "parameters": t.get("inputSchema") or {"type": "object", "properties": {}},
+                                + f"] {description_for_model(t)}"),
+                            # AS EVERY PROVIDER ACCEPTS IT (tool_schema): an object root, local
+                            # $ref inlined, oneOf as anyOf. One server's quirky schema used to
+                            # fail the whole turn for every tool.
+                            "parameters": for_model(t.get("inputSchema")),
                         },
                     }
                 )

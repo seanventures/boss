@@ -26,8 +26,9 @@ def _admin_and_base():
     return admin, base
 
 
-def fresh_engine():
-    """A new, empty boss_test_p29b with the full schema. Returns (engine, admin_url)."""
+def fresh_engine(name: str = DB_NAME):
+    """A new, empty database (boss_test_p29b unless `name`) with the full schema. Returns
+    (engine, admin_url)."""
     import psycopg
 
     from boss_engine.db import ensure_schema
@@ -35,11 +36,11 @@ def fresh_engine():
     admin, base = _admin_and_base()
     try:
         with psycopg.connect(admin, autocommit=True) as c:
-            c.execute(f'DROP DATABASE IF EXISTS "{DB_NAME}" WITH (FORCE)')
-            c.execute(f'CREATE DATABASE "{DB_NAME}"')
+            c.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
+            c.execute(f'CREATE DATABASE "{name}"')
     except Exception as exc:  # noqa: BLE001
-        pytest.skip(f"cannot create {DB_NAME}: {type(exc).__name__}")
-    engine = create_engine(base.set(database=DB_NAME), future=True)
+        pytest.skip(f"cannot create {name}: {type(exc).__name__}")
+    engine = create_engine(base.set(database=name), future=True)
     ensure_schema(engine)
     return engine, admin
 
@@ -47,9 +48,10 @@ def fresh_engine():
 def drop(engine, admin: str) -> None:
     import psycopg
 
+    name = engine.url.database or DB_NAME
     engine.dispose()
     with psycopg.connect(admin, autocommit=True) as c:
-        c.execute(f'DROP DATABASE IF EXISTS "{DB_NAME}" WITH (FORCE)')
+        c.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
 
 
 def make_project(engine, project: str, org: str = "org_p29b") -> None:
