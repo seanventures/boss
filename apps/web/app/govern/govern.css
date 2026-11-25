@@ -253,3 +253,24 @@
   .gv-bar-fill { transition: none; }
   .gv-row[data-focused], .gv-value[data-pulsed] .gv-value-main, .gv-chip[data-passed] { animation: none; }
 }
+
+/* Govern › Journeys (BOSSAPP-1284/1285): the golden journeys and the freeze's green days. */
+.gv-jr-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; }
+.gv-jr-head .gv-card-title { margin: 0; }
+.gv-jr-icon { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: var(--r); background: var(--accent-soft); color: var(--accent-text); }
+.gv-jr-counter { padding: 2px 10px; border-radius: 999px; background: var(--surface-3); color: var(--ink-soft); font-size: var(--fs-meta); font-weight: 650; font-variant-numeric: tabular-nums; }
+.gv-jr-counter[data-lifted] { background: var(--green-soft); color: var(--green); }
+.gv-jr-head .ag-btn { display: inline-flex; align-items: center; gap: 6px; }
+.gv-jr-sub { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 0; font-size: var(--fs-body); color: var(--ink-soft); }
+.gv-jr-days { display: flex; gap: 3px; margin: 0; padding: 0; list-style: none; }
+.gv-jr-days li { flex: 1 1 0; max-width: 22px; height: 10px; border-radius: 3px; background: var(--red-soft); }
+.gv-jr-days li[data-green] { background: var(--green); }
+.gv-jr-list li { justify-content: space-between; }
+.gv-jr-name { flex: 1 1 220px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
+.gv-jr-name b { display: inline-block; min-width: 2.2em; color: var(--faint); font-weight: 700; }
+.gv-jr-hosts { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.gv-jr-chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 999px; background: var(--surface-3); color: var(--muted); font-size: var(--fs-tag); font-weight: 650; white-space: nowrap; }
+.gv-jr-chip[data-status="green"] { background: var(--green-soft); color: var(--green); }
+.gv-jr-chip[data-status="red"] { background: var(--red-soft); color: var(--red); }
+.gv-jr-chip[data-status="pending"] { background: var(--amber-soft); color: var(--amber); }
+.gv-jr-host { color: var(--ink-soft); font-weight: 600; }

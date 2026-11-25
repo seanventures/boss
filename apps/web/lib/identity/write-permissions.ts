@@ -24,6 +24,8 @@ export type WriteGate = Permission | "self";
 /** A helper (`module#export`, or `module#object.method`) → the permission(s) a press of it needs. */
 export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permission[]>> = {
   // lib/agents.ts — /v1/agents, /v1/role-skills, /v1/role-mcp-servers, /v1/workflow-mappings
+  // lib/golden-journeys.ts — Govern › Journeys (BOSSAPP-1284)
+  "lib/golden-journeys.ts#runJourneysNow": "assurance:run",       // POST /v1/golden-journeys/run
   "lib/agents.ts#createAgent": "agent:create",                    // POST /v1/agents
   "lib/agents.ts#updateAgent": "agent:update",                    // PATCH /v1/agents/{role}
   "lib/agents.ts#deleteAgent": "agent:lifecycle",                 // DELETE /v1/agents/{role}

@@ -24,6 +24,7 @@ import { SPEND_PERIODS, SpendHome, type SpendPeriod } from "./spend-home";
 import { SpendTab } from "./spend-tab";
 import { StorageCard } from "../infra/storage-card";
 import { StorageIncidentReport } from "../infra/storage-incident-report";
+import { JourneysCard } from "./journeys-card";
 
 export const GOVERN_POLL_MS = 15_000;
 /**
@@ -33,7 +34,7 @@ export const GOVERN_POLL_MS = 15_000;
  * Sharing and Self-fix. Old links keep working: ?tab=spend|envelopes|sharing|selffix open what
  * they opened, ?focus=… still lands on that row of the board.
  */
-type Tab = "overview" | "limits" | "autonomy" | "areas" | "board" | "spend" | "envelopes" | "sharing" | "selffix" | "infrastructure";
+type Tab = "overview" | "limits" | "autonomy" | "areas" | "board" | "spend" | "envelopes" | "sharing" | "selffix" | "infrastructure" | "journeys";
 const MAIN: { key: Tab; label: string; tip: string }[] = [
   { key: "overview", label: "Spend", tip: "How much, on which model and project" },
   { key: "limits", label: "Limits", tip: "Caps, what happens at them, per project" },
@@ -54,6 +55,9 @@ const MORE: { key: Tab; label: string; tip: string }[] = [
   // keep it tidy, and every storage incident's report (`?incident=`). Policy lives here; the
   // host drawer in Infra › Fleet links to the same card for one host (`?host=`).
   { key: "infrastructure", label: "Infrastructure", tip: "Storage by type, growth and forecast, retention rules, incident reports" },
+  // THE GOLDEN JOURNEYS (BOSSAPP-1284/1285): today's end-to-end checks and the green days the
+  // preview's feature freeze waits for.
+  { key: "journeys", label: "Journeys", tip: "The daily end-to-end journeys and the green-day count" },
 ];
 const TABS = new Set<Tab>([...MAIN, ...MORE].map((t) => t.key));
 
@@ -154,7 +158,7 @@ export function GovernHome({ projectId, actor }: { projectId: string; actor: str
           </span>
         </details>
       </header>
-      {tab !== "overview" && tab !== "limits" && tab !== "autonomy" && tab !== "areas" && tab !== "infrastructure" ? (
+      {tab !== "overview" && tab !== "limits" && tab !== "autonomy" && tab !== "areas" && tab !== "infrastructure" && tab !== "journeys" ? (
         <GovernMeter meter={data?.meter ?? null} error={view.error} onRetry={view.reload} />
       ) : null}
       {frozen ? (
@@ -185,6 +189,8 @@ export function GovernHome({ projectId, actor }: { projectId: string; actor: str
         <SharingTab projectId={projectId} actor={actor} paused={!live} />
       ) : tab === "selffix" ? (
         <SelfFixTab projectId={projectId} actor={actor} paused={!live} />
+      ) : tab === "journeys" ? (
+        <JourneysCard projectId={projectId} paused={!live} />
       ) : tab === "infrastructure" ? (
         incident
           ? <StorageIncidentReport projectId={projectId} incidentId={incident} />
