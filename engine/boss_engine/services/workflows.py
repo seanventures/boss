@@ -3414,11 +3414,12 @@ CHECKED_REPLACES_KEY = "_checked_replaces"
 #: Easy Mode (factory_launch.spec_first_run): the person whose start approves the panel's PRD —
 #: written only through start_run's `spec_approved_by_start`, honoured only on an Easy Mode MVP
 #: run (workflow_capability_runner._stamp_start_approval). `skip_without_host` is the Easy Mode
-#: deploy step's own binding; a caller's input never reaches a deploy step with it.
+#: deploy step's own binding; `skip_without_deploy_ask` is `fast_fix`'s own binding; a caller's
+#: input never reaches a deploy step with either.
 SPEC_BY_START_KEY = "_spec_approved_by_start"
 SERVER_ONLY_INPUTS = frozenset({"replaces", CHECKED_REPLACES_KEY, "quality_bar",
                                 "quality_bar_gates", "_quality_bar_by", SPEC_BY_START_KEY,
-                                "skip_without_host"})
+                                "skip_without_host", "skip_without_deploy_ask"})
 
 
 def start_run(
@@ -7885,6 +7886,8 @@ def waiting_on_label(step: dict[str, Any]) -> Optional[str]:
         from .repo_links import change_ref
 
         return f"{change_ref(merge.get('pull_request_url'), number)} to be merged"
+    if (step.get("output") or {}).get("waiting_on_person"):
+        return "you"
     approver = (step.get("approval") or {}).get("approver_role")
     if approver:
         return str(approver)

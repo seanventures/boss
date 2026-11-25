@@ -905,6 +905,16 @@ def _key_proof(connection: Connection, settings: Any, project_id: str, provider:
         if env_name:
             from .env_refs import assert_may_send
             assert_may_send(env_name, details["endpoint"])
+        elif not local and api_key:
+            from urllib.parse import urlsplit
+            from .env_refs import CredentialMisdirected, destination_allowed, provider_binding
+
+            host = (urlsplit(details["endpoint"]).hostname or "").lower().rstrip(".")
+            binding = provider_binding(
+                provider, [host] if provider == "custom" and host else (),
+                allow_private_http=(provider == "custom"))
+            if not destination_allowed(binding, details["endpoint"]):
+                raise CredentialMisdirected("Your model key", binding, host, details["endpoint"])
         result = setup_checks.complete_once(api=api, endpoint=details["endpoint"],
             api_key=str(bound.get("credential") or ""), model=details["model"], http=http)
         result["usage"] = {**result.get("usage", {}), "provider": provider}
@@ -1238,6 +1248,17 @@ def _connect_key(connection: Connection, settings: Any, project_id: str, provide
                 "Use the full address, starting with https:// "
                 "(for example https://api.example.com/v1).") from None
         raise SetupActionError(422, "failed", "Model", "Name the model first.") from None
+    if not local and api_key:
+        from urllib.parse import urlsplit
+        from .env_refs import CredentialMisdirected, destination_allowed, provider_binding
+
+        host = (urlsplit(details["endpoint"]).hostname or "").lower().rstrip(".")
+        binding = provider_binding(
+            provider, [host] if provider == "custom" and host else (),
+            allow_private_http=(provider == "custom"))
+        if not destination_allowed(binding, details["endpoint"]):
+            err = CredentialMisdirected("Your model key", binding, host, details["endpoint"])
+            raise SetupActionError(422, "failed", "Base URL", str(err))
     existing_id = replace_source_id or _same_connection(connection, project_id, provider,
         base_url=details["base_url"], model=details["model"]) or ""
     capacity_group = existing_id
@@ -1919,3 +1940,95 @@ def start_try(connection: Connection, settings: Any, project_id: str, directive:
                    setup_view.SETUP_TRY_WORKFLOW, {"run_id": run.get("id"),
                                                    "repository": run_input.get("repository")})
     return {"run_id": run.get("id"), "duplicate": bool(run.get("duplicate"))}
+
+
+def mark_model_refused(connection: Connection, project_id: str, *, reason_code: str,
+                       error: str = "", base_url: str = "") -> int:
+    """Clear a stale green 'Working' pill when a runtime build/panel fails on a model's URL or key.
+
+    Updates matching connected `entitlement_sources` rows (and the org model home row if mirrored)
+    so Setup stops claiming the model is Working until it is fixed and re-checked.
+    """
+    import re
+    from urllib.parse import urlsplit
+    from .env_refs import PROVIDER_HOSTS
+    from .org_models import home_project, org_of
+    from .setup_view import now_utc
+
+    if reason_code not in ("credential_plain_http", "credential_misdirected", "model_auth_rejected"):
+        return 0
+    url_match = re.search(r"https?://[^\s'\"<>]+", f"{base_url} {error}".strip())
+    extracted_url = url_match.group(0).rstrip(".,;:") if url_match else ""
+    extracted_host = (urlsplit(extracted_url).hostname or "").lower().rstrip(".") if extracted_url else ""
+    projects = [project_id]
+    try:
+        oid = org_of(connection, project_id)
+        home = home_project(connection, oid) if oid else None
+        if home and home not in projects:
+            projects.append(home)
+    except Exception:  # noqa: BLE001
+        pass
+    rows = connection.execute(text(
+        "SELECT project_id, source_id, source_kind, entitlement_kind, connection_metadata, "
+        "observed_capacity FROM entitlement_sources "
+        "WHERE project_id = ANY(:ps) AND source_id <> 'typesafe_jev' "
+        "AND (credential_secret_ref_id IS NOT NULL OR connection_status = 'connected') "
+        "AND COALESCE(connection_metadata->>'proof_only', 'false') <> 'true'"),
+        {"ps": projects}).mappings().all()
+    if not rows:
+        return 0
+
+    def _row_provider(r: Any) -> str:
+        sid = str(r["source_id"] or "")
+        for p in ("custom", "openai", "anthropic", "openrouter", "groq", "deepseek", "google",
+                  "xai", "mistral", "gemini"):
+            if p in sid.lower():
+                return "google" if p == "gemini" else p
+        return sid.lower()
+
+    matched: list[Any] = []
+    for r in rows:
+        meta = setup_view._obj(r["connection_metadata"])
+        row_url = str(meta.get("base_url") or "")
+        row_host = (urlsplit(row_url).hostname or "").lower().rstrip(".") if row_url else ""
+        if reason_code == "credential_plain_http":
+            if row_url.lower().startswith("http://") and (
+                    not extracted_host or row_host == extracted_host):
+                matched.append(r)
+        elif extracted_host:
+            prov = _row_provider(r)
+            official = PROVIDER_HOSTS.get(prov, ())
+            if row_host == extracted_host or (not row_host and extracted_host in official):
+                matched.append(r)
+        elif str(r.get("entitlement_kind") or "") == "api_key" or str(
+                r.get("source_kind") or "") == "api":
+            matched.append(r)
+    if not matched and reason_code == "credential_plain_http":
+        matched = [r for r in rows
+                   if str(setup_view._obj(r["connection_metadata"]).get("base_url") or "")
+                   .lower().startswith("http://")]
+    if not matched:
+        return 0
+
+    state = "key_rejected" if reason_code == "model_auth_rejected" else "failed"
+    at = now_utc().isoformat()
+    last = {"ok": False, "state": state, "at": at, "error": str(error or "")[:300],
+            **({"host": extracted_host} if extracted_host else {})}
+    meta_patch = json.dumps({"last_check": last, "checked_at": at,
+                             "verification_state": "failed"})
+    cap_patch = json.dumps({"credential_state": "rejected"}) if state == "key_rejected" else None
+    updated = 0
+    for r in matched:
+        connection.execute(text(
+            "UPDATE entitlement_sources SET connection_metadata = "
+            "COALESCE(connection_metadata, '{}'::jsonb) || CAST(:m AS JSONB), "
+            "updated_at = now() WHERE project_id = :p AND source_id = :s"),
+            {"m": meta_patch, "p": r["project_id"], "s": r["source_id"]})
+        if cap_patch is not None:
+            connection.execute(text(
+                "UPDATE entitlement_sources SET observed_capacity = "
+                "COALESCE(observed_capacity, '{}'::jsonb) || CAST(:c AS JSONB) "
+                "WHERE project_id = :p AND source_id = :s"),
+                {"c": cap_patch, "p": r["project_id"], "s": r["source_id"]})
+        updated += 1
+    return updated

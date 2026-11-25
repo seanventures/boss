@@ -791,7 +791,8 @@ CATALOGUE: list[dict[str, Any]] = [
             # report. And a run that stops even earlier is not left without one: the same
             # report is assembled on demand for any run, at any point, from the same evidence.
             _step("report", "report"),
-            _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
+            _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id"),
+                                       "skip_without_deploy_ask": True},
                   approver_role="release_manager"),
             _step("notify", "notify", _notify_inputs()),
         ]),

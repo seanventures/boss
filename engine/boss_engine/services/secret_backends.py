@@ -1415,8 +1415,10 @@ def _hold_to_provider(secret_ref_id: str, row, value: Optional[str]) -> None:
         except ValueError:
             metadata = {}
     hosts = metadata.get("allowed_hosts") if isinstance(metadata, dict) else None
+    prov = str(row.get("provider") or "").strip().lower()
     binding = provider_binding(row.get("provider"),
-                               hosts if isinstance(hosts, (list, tuple)) else ())
+                               hosts if isinstance(hosts, (list, tuple)) else (),
+                               allow_private_http=(prov == "custom"))
     register_host_credential(value, binding, f"The {row.get('scope_type')} secret {secret_ref_id}")
 
 

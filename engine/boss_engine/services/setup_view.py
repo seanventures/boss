@@ -1348,11 +1348,49 @@ def _accounts(connection: Connection, settings: Any, project_id: str, repository
 
 # ── The view ──────────────────────────────────────────────────────────────────────────────────
 
+def _apply_local_repo(connection: Connection, settings: Any, project_id: str,
+                      repository: dict[str, Any]) -> bool:
+    """Attach `local` and `own_local` to `repository` using the same rule across Setup and
+    Command Center, returning True when a proven/local repository is present."""
+    repos = repository.get("repos") or []
+    repo_ok = any(r["pill"]["state"] in PROVEN_REPOSITORY for r in repos)
+    need_own = any(r.get("host") == "local" for r in repos)
+    home = str(getattr(settings, "default_project_id", "") or "") == str(project_id)
+    need_home = not repo_ok and not repos and home
+    own_local = False
+    local = None
+    if need_own or need_home:
+        try:
+            ctx = connection.begin_nested() if hasattr(connection, "begin_nested") else None
+            if ctx is not None:
+                ctx.__enter__()
+            try:
+                if need_own:
+                    own_local = local_code_in_org(connection, settings, project_id, own_only=True) is not None
+                if need_home:
+                    local = local_code_in_org(connection, settings, project_id)
+                if ctx is not None:
+                    ctx.__exit__(None, None, None)
+            except Exception:  # noqa: BLE001 — stub schema or unreadable disk
+                if ctx is not None:
+                    ctx.__exit__(*(__import__("sys").exc_info()))
+                own_local = False
+                local = None
+        except Exception:  # noqa: BLE001
+            own_local = False
+            local = None
+    repository["local"] = local
+    repository["own_local"] = own_local
+    return repo_ok or own_local or local is not None
+
+
 def build_basics(connection: Connection, settings: Any, project_id: str, *,
                  now: Optional[datetime] = None) -> dict[str, Any]:
     """Only the repository and model rows — what every workflow Start asks (`basics`)."""
     now = now or now_utc()
-    return {"repository": _repository(connection, settings, project_id, now),
+    repository = _repository(connection, settings, project_id, now)
+    _apply_local_repo(connection, settings, project_id, repository)
+    return {"repository": repository,
             "models": _models(connection, settings, project_id, now, False)}
 
 
@@ -1385,20 +1423,13 @@ def _build(connection: Connection, settings: Any, project_id: str, *,
 
     # READY MEANS PROVEN (PROVEN_REPOSITORY / PROVEN_MODEL): a row a check has not answered
     # still lets a workflow start (basics), but the header does not say Ready over it.
-    repo_ok = any(r["pill"]["state"] in PROVEN_REPOSITORY for r in repository["repos"])
     # A LOCAL REPOSITORY IS A REPOSITORY (stranger test, rc10.27): after "Start a new app › This
     # machine" made one, Setup still said "2 to go" and asked for GitHub. Only what Start will
     # accept counts (workflow_readiness.check): THIS project's own local repository, when it is
     # on disk. The org's local code counts only on the install's home project with no
     # repository row at all (the first-run Setup a stranger lands on) — never over another
     # project's missing or amber repository, which keeps its own reason (review of #200).
-    own_local = any(r.get("host") == "local" for r in repository["repos"]) and \
-        local_code_in_org(connection, settings, project_id, own_only=True) is not None
-    home = str(getattr(settings, "default_project_id", "") or "") == str(project_id)
-    local = (local_code_in_org(connection, settings, project_id)
-             if not repo_ok and not repository["repos"] and home else None)
-    repository["local"] = local
-    repo_ok = repo_ok or own_local or local is not None
+    repo_ok = _apply_local_repo(connection, settings, project_id, repository)
     model_ok = any(m["pill"]["state"] in PROVEN_MODEL for m in models)
     ready = repo_ok and model_ok
     problems_list = [r["pill"] for r in repository["repos"] if r["pill"]["tone"] == "red"] \
@@ -1603,17 +1634,22 @@ def basics(view: dict[str, Any], *, router_runnable: Optional[bool] = None) -> d
     can reach one — a CLI-only install is connected for builds, not for a step's model call.
     """
     repos = view["repository"]["repos"]
+    local = view["repository"].get("local")
+    own_local = bool(view["repository"].get("own_local"))
     default = next((r for r in repos if r["default"]), repos[0] if repos else None)
     usable = any(model_working(m) for m in view["models"])
-    github = any(repository_working(r) for r in repos)
+    github = any(repository_working(r) for r in repos) or own_local or local is not None
     # SAY THE ROW'S OWN REASON. An expired token is not "no repository is connected": a
     # workflow Start names what the page's pill says ("Token expired on …. Paste a new one.").
     why_repo = None if github or not repos else f"{default['full_name']}: {default['pill']['tip']}"
     broken = [m for m in view["models"] if not model_working(m)]
     why_model = None if usable or not broken else f"{broken[0]['label']}: {broken[0]['pill']['tip']}"
+    repo_name = (default["full_name"] if default
+                 else (local.get("full_name") or local.get("project_name"))
+                 if isinstance(local, dict) else None)
     return {"github": github,
             "model": usable if router_runnable is None else (usable and router_runnable),
-            "repository": default["full_name"] if default else None,
+            "repository": repo_name,
             "repository_problem": why_repo, "model_problem": why_model}
 
 

@@ -243,10 +243,12 @@ _PERSON_RULES: tuple[tuple[str, str, str], ...] = (
      "Done — retry."),
     ("connector_login", r"\bmcp\b[^\n]{0,160}?\b401\b|\b401\b[^\n]{0,160}?\bmcp\b",
      "Reconnect the MCP server or connector it names in Setup, then press Done — retry."),
+    ("model_login", r"plain http|credential_plain_http",
+     "Change the address to https in Setup › Models, then press Done — retry."),
     ("model_login", r"not logged in|re-?authenticate|failed to authenticate|token (?:has )?expired|"
                     r"login rejected|HTTP 401|(?<![\w.])401(?![\w.])|invalid api key|"
                     r"model_auth_rejected|"
-                    r"plain http|credential_misdirected|harness_unavailable",
+                    r"credential_misdirected|harness_unavailable",
      "Sign in to the model again (or fix its key or address) in Setup › Models, then press "
      "Done — retry."),
     ("grant", r"no person's grant|no one's authority|consent_required|authority carries over|"
@@ -1311,6 +1313,17 @@ class Jobs(Surface):
             if card:
                 return Said(NEEDS_PERSON, "Its stalled-meeting card asks you.", by="meeting",
                             decision_id=str(card), reason="A stalled panel asks a person.")
+            panel_status = c.execute(text(
+                "SELECT status FROM meeting_runs WHERE id = :r AND project_id = :p"),
+                {"r": item.hints["subject"], "p": item.project_id}).scalar()
+            if panel_status == "failed":
+                panel_card = c.execute(text(
+                    "SELECT decision_id FROM failure_owners WHERE surface = 'meeting' "
+                    "AND item_id = :r AND state <> 'resolved' ORDER BY updated_at DESC LIMIT 1"),
+                    {"r": item.hints["subject"]}).scalar()
+                return Said(NEEDS_PERSON, "Its panel card asks you.", by="meeting",
+                            decision_id=str(panel_card) if panel_card else None,
+                            reason="A failed panel asks a person.")
         return None
 
     def classify(self, c, item):
@@ -1762,7 +1775,7 @@ class ConnectionHolds(Surface):
 
 #: THE REGISTRY, in processing order (a workflow run before the deployments it owns).
 SURFACES: dict[str, Surface] = {s.key: s for s in (
-    CodeTasks(), WorkflowRuns(), Deployments(), Previews(), Jobs(), Meetings(), Backups(),
+    CodeTasks(), WorkflowRuns(), Deployments(), Previews(), Meetings(), Jobs(), Backups(),
     GitHubConnections(), ConnectionHolds())}
 
 #: Tables the code writes a failure state to that are NOT a surface of their own, and why their

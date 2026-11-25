@@ -707,6 +707,9 @@ def missions(connection: Any, project_id: str, read: Mapping[str, Any],
                 state = "waiting_person"
                 waiting_role = str(approval.get("approver_role") or "") or None
                 waiting_on = waiting_role or str(current.get("decision_status") or "") or None
+            elif output.get("waiting_on_person"):
+                state = "waiting_you"
+                waiting_on = "you"
             else:
                 state = "waiting"
                 waiting_on = workflows.waiting_on_label({
