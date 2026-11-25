@@ -476,6 +476,15 @@ class ToolRegistry:
         # contract items. Every tool, one rule: unknown keys are dropped (and named in the
         # result), and BOSS's own context arrives through `internal`, never through `args`.
         safe_args, ignored = schema_args(spec, args)
+        # AN ARGUMENT THE TOOL DOES NOT TAKE IS REFUSED, NEVER DROPPED INTO A SUCCESS
+        # (BOSSAPP-1361). update_deployment_target was called with `health_check_path`, dropped
+        # it, found "nothing to change" and reported SUCCEEDED — the health check stayed wrong
+        # and the run said it was fixed. Nothing runs; the model is told what the tool takes and
+        # calls again. BOSS's own underscore keys are still dropped quietly: they are never a
+        # caller's to send, and refusing would let a forged one stop a legitimate call.
+        unknown = [k for k in ignored if not str(k).startswith("_")]
+        if unknown:
+            return unknown_args_result(spec, unknown)
         safe_args.update({k: v for k, v in (internal or {}).items() if str(k).startswith("_")})
         safe_args.pop("_operator_confirmed", None)
         # ONE ACTING PROJECT FOR THE GATE AND THE HANDLER (H1). The gate used to read
@@ -759,6 +768,21 @@ def missing_args_result(spec: "ToolSpec", missing: list[str], ignored: list[str]
     if ignored:
         out["ignored_args"] = list(ignored)
     return out
+
+
+def unknown_args_result(spec: "ToolSpec", unknown: list[str]) -> dict:
+    """The refusal for a call naming arguments the tool does not take: which ones, what it does
+    take, and that nothing ran — a result the model reads and calls again from."""
+    props = (spec.parameters or {}).get("properties") or {}
+    takes = {k: str((v or {}).get("description") or (v or {}).get("type") or "")
+             for k, v in props.items()}
+    return {
+        "ok": False, "tool": spec.name, "error": "unknown_arguments",
+        "unknown": list(unknown), "ignored_args": list(unknown), "takes": takes,
+        "message": (f"'{spec.name}' does not take " + ", ".join(repr(u) for u in unknown)
+                    + ", so nothing ran. Call it again with only the arguments it takes: "
+                    + (", ".join(sorted(takes)) or "none") + "."),
+    }
 
 
 def schema_args(spec: "ToolSpec", args: Optional[dict]) -> tuple[dict, list[str]]:

@@ -3754,6 +3754,14 @@ class AgentStepToolSet:
                 # No longer granted: the refusal is the result (not screened: nothing ran).
                 return result, None, None
             skill = current_skill
+            from .skill_executors import not_runnable_here, runs_here
+
+            if str(skill.get("source") or "") != "authored" and not runs_here(skill_id):
+                # NEVER ASK A PERSON TO APPROVE WHAT CANNOT RUN (BOSSAPP-1366). The catalogue
+                # no longer offers such a skill; this is the backstop for a run resumed with an
+                # older offer, refused before any approval card opens.
+                return {"status": "failed", "skill_id": skill_id,
+                        "reason": not_runnable_here(skill_id)}, None, None
             risk = int(skill.get("risk_tier") or 0)
             caller = str(
                 skill.get("caller")

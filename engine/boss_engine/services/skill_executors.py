@@ -213,6 +213,27 @@ def registered_executor_ids() -> tuple[str, ...]:
     return tuple(sorted(_EXECUTORS))
 
 
+def runs_here(skill_id: str) -> bool:
+    """Whether a SHIPPED skill can run on this install: an executor is registered for it.
+
+    THE ONE ANSWER to "can this skill actually run" (BOSSAPP-1366). A spec pack describes many
+    skills whose work happens elsewhere — inside a build's pipeline (`coding_pipeline.*`,
+    `software_factory.sandbox_validation`), or not at all yet — and the skill runtime refuses
+    every one of them with "No server-side executor is registered". The catalogue reads this, so
+    such a skill is never offered to an agent, never assignable, never placed in a workflow
+    design and never put in front of a person to approve. Authored skills are decided by their
+    behaviour (skill_catalogue._authored_facts), not here."""
+    return str(skill_id or "").strip() in _EXECUTORS
+
+
+def not_runnable_here(skill_id: str) -> str:
+    """Why a shipped skill without an executor cannot run, and what to use instead."""
+    return (f"'{skill_id}' has no executor on this install, so nothing can run it — it names "
+            "work BOSS does inside its own pipelines (a build runs its tests and sandbox "
+            "validation itself). Use a build step, or author a sandboxed-command skill for a "
+            "command a step must run.")
+
+
 def _as_held(context: "SkillExecutorContext", skill: dict[str, Any]) -> dict[str, Any]:
     """The authored skill as THIS caller runs it: a version pin on its grant wins
     (role_skills.pinned_version_id, BOSSAPP-842); a test run's chosen version wins over both

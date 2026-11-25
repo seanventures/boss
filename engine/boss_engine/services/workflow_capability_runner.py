@@ -2646,6 +2646,48 @@ def required_products(connection: Connection, project_id: str, step: dict[str, A
     return wanted
 
 
+def unfed_required_inputs(connection: Connection, project_id: str, step: dict[str, Any],
+                          context: dict[str, Any]) -> list[str]:
+    """The REQUIRED inputs this step reads from an earlier step that produced nothing for them.
+
+    ONE RULE FOR THE GATE AND THE RUN (BOSSAPP-1365). An agent step that did nothing used to
+    pass, and the fix-PR step after it opened its approval card on input {}: a person was asked
+    to approve a pull request with no title, no file and no report. A step whose required input
+    came through empty is never put in front of a person (the gate is not opened) and never runs
+    (execute_step refuses it, naming the input and where it should have come from).
+
+    Only references to earlier steps that have run: an input the run's start supplies, an
+    optional one, an override the run's input fills, and a source an operator skipped (that has
+    its own sentence in `_resolve_inputs`) are not this check's.
+    """
+    binding = step.get("binding") or {}
+    wiring = binding.get("inputs") or {}
+    if binding.get("agent_work") or not isinstance(wiring, dict) or not wiring:
+        return []
+    optional = _optional_inputs_of(connection, project_id, step)
+    if optional is None:
+        return []
+    from .agent_steps import _missing
+
+    run_input = context.get("input") or {}
+    steps = context.get("steps") or {}
+    skipped = context.get("skipped") or {}
+    unfed: list[str] = []
+    for name, ref in wiring.items():
+        if name in optional or not isinstance(ref, dict) or "from_step" not in ref:
+            continue
+        override = str(ref.get("override_from_input") or "")
+        if override and str((run_input or {}).get(override) or "").strip():
+            continue
+        source, field = str(ref["from_step"]), str(ref.get("field") or "")
+        if not field or source in skipped or source not in steps:
+            continue
+        produced = steps.get(source)
+        if not isinstance(produced, dict) or _missing(produced, field):
+            unfed.append(f"{name} (from {source}.{field})")
+    return unfed
+
+
 def _judged_agent_step(connection: Connection, project_id: str, step: dict[str, Any],
                        spec_steps: Optional[dict[str, dict[str, Any]]],
                        output: dict[str, Any]) -> dict[str, Any]:
@@ -2660,7 +2702,9 @@ def _judged_agent_step(connection: Connection, project_id: str, step: dict[str, 
 
     judged = agent_steps.verdict(
         output, required=required_products(connection, project_id, step, spec_steps),
-        step_name=_step_name(step))
+        step_name=_step_name(step),
+        promised=[str(f).strip() for f in ((step.get("binding") or {}).get("produces") or [])
+                  if str(f).strip()])
     output = {**output, "agent_outcome": {k: judged[k] for k in
                                           ("outcome", "reason", "needs", "declared", "missing")}}
     if judged["outcome"] == agent_steps.COMPLETED:
@@ -2694,6 +2738,11 @@ def execute_step(
     # A run started from a conversation's start card runs each step as the agent the card named
     # (step_agents.with_run_agent says which steps a card may fill).
     step = step_agents.with_run_agent(connection, project_id, step, context.get("input"))
+    unfed = unfed_required_inputs(connection, project_id, step, context)
+    if unfed:
+        raise SettledCapabilityError(
+            f"{_step_name(step)} cannot run: {', '.join(unfed)} came through empty — the step "
+            "it reads from produced nothing for it. Retry that step, or fix what it was given.")
     output = _execute_step(connection, ctx, project_id=project_id, actor=actor,
                            step=step, context=context)
     if (step.get("binding") or {}).get("agent_work") and isinstance(output, dict) \
@@ -9162,7 +9211,15 @@ def _advance_one_run(connection: Connection, ctx: Any, run: Any, *, project_id: 
                         {"i": row["id"], "k": STACK_GATE_TARGET,
                          "patch": json.dumps(waived)},
                     )
-                if subject is not None:
+                unfed = (unfed_required_inputs(connection, project_id, spec_step,
+                                               _run_context(connection, run_id))
+                         if subject is not None else [])
+                if unfed:
+                    # NO GATE OVER NOTHING (BOSSAPP-1365): left ready, the step is claimed next
+                    # and execute_step fails it with the same sentence, before any work.
+                    performed.append({"run_id": run_id, "step_id": row["step_id"],
+                                      "outcome": "gate_withheld", "unfed": unfed})
+                elif subject is not None:
                     phase = f"open the approval gate for {row['step_id']}"
                     _open_gate(
                         connection, project_id, {**dict(run), "id": run_id},

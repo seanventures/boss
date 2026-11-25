@@ -1080,6 +1080,14 @@ def assign_skill_to_role(
     if source is None:
         raise SkillDefinitionError(
             f"no skill {skill!r} in this project — author one, or enable a built-in first.")
+    if source == "builtin":
+        # A SKILL NOTHING CAN RUN IS NOT GIVEN TO AN AGENT (BOSSAPP-1366): held, it was offered,
+        # chosen for a workflow and approved by a person before failing at the call. The role
+        # spec may still NAME it (scope for governance); sync_role_skills reports it unavailable.
+        from .skill_executors import not_runnable_here, runs_here
+
+        if not runs_here(skill):
+            raise SkillDefinitionError(not_runnable_here(skill))
     # WHICH ROLES MAY HOLD WHICH SKILLS, AS DATA (BOSSAPP-890): the role checked is the one being
     # given the skill; who is giving it is the actor.
     from . import skill_policy

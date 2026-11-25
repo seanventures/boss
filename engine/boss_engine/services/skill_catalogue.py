@@ -387,7 +387,15 @@ def _build_entries(
             # already folded this into the spec (raised_tier); applied again so an entry can
             # never be lower than the spec the runtime will load.
             tier = raised_tier(tier, overrides.get(skill_id))
-        usable = bool(policy.get("usable", True)) if authored else True
+        # A SHIPPED SKILL IS USABLE ONLY IF SOMETHING CAN RUN IT (skill_executors.runs_here).
+        # It was always True, so a skill with no executor was held, offered, chosen for a
+        # workflow design and raised for approval, and only then failed (BOSSAPP-1366).
+        from .skill_executors import not_runnable_here, runs_here
+
+        runnable = runs_here(skill_id)
+        usable = bool(policy.get("usable", True)) if authored else runnable
+        reason = policy.get("unusable_reason") if authored else (
+            None if runnable else not_runnable_here(skill_id))
         out[skill_id] = {
             "skill_id": skill_id,
             "source": "authored" if authored else "builtin",
@@ -406,7 +414,7 @@ def _build_entries(
                        else bool(spec.get("system") or spec.get("enabled", True)),
             "system": bool(spec.get("system", False)),
             "usable": usable,
-            "reason": policy.get("unusable_reason"),
+            "reason": reason,
             "requires_person": policy.get("requires_person") if authored else None,
             "spec": spec,
         }
