@@ -102,7 +102,7 @@ def build_work_agreement_router(*, engine, settings, require_reader, actor_of) -
     router = APIRouter(tags=["workflows"])
 
     @router.post("/v1/delivery-workflows/agreement", response_model=AgreementResponse)
-    @permit(P.WORKFLOW_READ, scope=Scope.project(body="project_id"))
+    @permit(P.WORKFLOW_READ, scope=Scope.project(body="project_id"), readonly_post=True)
     async def preview_agreement(payload: AgreementBody, request: Request):
         actor = actor_of(payload.model_dump(exclude_none=True))
         ctx = getattr(request.state, "identity", None) or identity_guard.REQUEST_IDENTITY.get()

@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from boss_engine.db import begin, get_engine
 from boss_engine.identity import P, Scope, permit
 
-from ..identity_guard import require_host_tools_principal
+from ..identity_guard import require_host_tools_principal, writing_get
 
 router = APIRouter(tags=["infra-storage"])
 
@@ -323,7 +323,9 @@ def get_host_jobs_public_key() -> dict[str, Any]:
         return host_jobs.public_key(connection)
 
 
-@router.get("/v1/host-jobs/lease")
+# A LEASE IS A WRITE: declared a writing GET, with its POST twin at /v1/host-jobs/lease/load (the
+# method the helper moves to); the GET stays as the alias today's helpers call.
+@writing_get(router, "/v1/host-jobs/lease")
 @permit(P.SYSTEM_OPERATE, scope=Scope.org(), writes_on_get=True)
 def lease_host_job(host_id: str = Query(min_length=1, max_length=120),
                    leased_to: str = Query(default="steward", max_length=120)) -> dict[str, Any]:

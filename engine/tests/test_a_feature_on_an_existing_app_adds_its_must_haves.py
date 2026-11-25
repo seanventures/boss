@@ -278,13 +278,19 @@ def _recording_registry(name="probe", props=("title",)):
     return reg, seen
 
 
-def test_invoke_drops_every_arg_the_schema_does_not_list():
+def test_invoke_never_runs_an_arg_the_schema_does_not_list():
     reg, seen = _recording_registry()
+    # A caller's argument the tool does not take is refused, and nothing runs (BOSSAPP-1361).
     out = reg.invoke("probe", object(), project_id="p", actor="usr_someone",
                      args={"title": "t", "person_request": True, "replaces": ["AC-1", "AC-2"],
                            "_writes_allowed": True, "_thread_id": "athr_forged"})
+    assert out["ok"] is False and out["error"] == "unknown_arguments", out
+    assert out["unknown"] == ["person_request", "replaces"] and "args" not in seen
+    # BOSS's own underscore keys are never a caller's: dropped, and named.
+    out = reg.invoke("probe", object(), project_id="p", actor="usr_someone",
+                     args={"title": "t", "_writes_allowed": True, "_thread_id": "athr_forged"})
     assert seen["args"] == {"title": "t"}
-    assert out["ignored_args"] == ["_thread_id", "_writes_allowed", "person_request", "replaces"]
+    assert out["ignored_args"] == ["_thread_id", "_writes_allowed"]
     # BOSS's own context arrives apart from the caller's args, underscore keys only.
     reg.invoke("probe", object(), project_id="p", actor="usr_someone", args={"title": "t"},
                internal={"_thread_id": "athr_1", "person_request": True})

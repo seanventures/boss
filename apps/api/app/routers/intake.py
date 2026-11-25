@@ -273,7 +273,7 @@ def build_intake_router(*, engine, settings: Callable[[], Any],
                 _fail(error)
 
     @router.get("/v1/intake/connections/{connection_id}/test-message")
-    @permit(P.INTEGRATION_MANAGE, scope=Scope.of("intake_connection", path="connection_id"))
+    @permit(P.INTEGRATION_READ, scope=Scope.of("intake_connection", path="connection_id"))
     def get_intake_test_message(connection_id: str) -> dict:
         """Whether a person has answered the latest test post. Does not post again."""
         with begin(engine) as db:

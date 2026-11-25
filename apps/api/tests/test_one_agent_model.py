@@ -37,7 +37,8 @@ def _builtin_skills(client, n: int = 2) -> list[str]:
 
     items = client.get("/v1/skills", params={"project_id": PROJECT}).json()["items"]
     # Skills an agent does not already hold from birth: giving one is then a visible change.
-    ids = [i["id"] for i in items if i["id"] not in BASELINE_SKILLS]
+    # And ones that can run here: a skill with no executor is not assignable (BOSSAPP-1366).
+    ids = [i["id"] for i in items if i["id"] not in BASELINE_SKILLS and i.get("usable", True)]
     assert len(ids) >= n, "this project has too few built-in skills; the fixture changed"
     return ids[:n]
 
