@@ -791,6 +791,13 @@ def _message(trigger: Mapping[str, Any], extra: Optional[Mapping[str, Any]]) -> 
         lines.append(str(goal))
     if extra:
         lines.append("What arrived:\n" + json.dumps(dict(extra), default=str)[:4000])
+        # ONE EVENT, ONE RUN, REPORTED WHERE IT CAME FROM (BOSSAPP-1133): the keys a workflow
+        # started from this event must carry, written by the server, not left to the model.
+        from .intake_router import start_hint_words
+
+        hint = start_hint_words(extra)
+        if hint:
+            lines.append(hint)
     return "\n\n".join(lines)
 
 

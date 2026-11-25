@@ -53,6 +53,7 @@ STAGE_OF_CAPABILITY: dict[str, Optional[str]] = {
     # ship — put it somewhere a person can try it, and check it there
     "preview": "ship", "ux_review": "ship", "release_approval": "ship", "deploy": "ship",
     "redeploy": "ship", "config_deploy": "ship", "promote_config": "ship",
+    "rollback_config": "ship",
     "smoke_test": "ship", "contract_test": "ship", "teardown_preview": "ship",
     "social_publish": "ship",
     # live — production and its health
@@ -64,7 +65,8 @@ STAGE_OF_CAPABILITY: dict[str, Optional[str]] = {
 }
 
 #: Deploy steps go to Live when they deploy to production (their own input, else their id).
-_DEPLOYS = frozenset({"deploy", "redeploy", "config_deploy", "promote_config"})
+_DEPLOYS = frozenset({"deploy", "redeploy", "config_deploy", "promote_config",
+                      "rollback_config"})
 _PROD_WORDS = ("prod", "production", "live")
 
 _DONE = ("succeeded",)

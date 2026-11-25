@@ -187,6 +187,10 @@ def _promotion_binding_is_its_own_test(monkeypatch):
     is how its failures stop the run."""
     monkeypatch.setattr(runner, "_bound_promotion",
                         lambda connection, context, inputs, spec=None: inputs)
+    # The same for "roll back only what this run shipped" (BOSSAPP-1173):
+    # test_config_onboarding_chain.test_a_rollback_step_rolls_back_only_what_its_run_shipped.
+    monkeypatch.setattr(runner, "_bound_rollback",
+                        lambda connection, context, inputs, spec=None: inputs)
 
 
 #: Inputs a step is given here beyond its required ones: a contract test without `cases` reads

@@ -267,6 +267,8 @@ GATES: dict[str, Rule] = {
     **{key: _r(ASK_PROD_ONLY, "rollback_deploy", _DM, "target") for key in _DEPLOY_GATES},
     # Promoting configuration INTO production is a production release by construction.
     "promote_config": _r(ASK_PROD_RELEASE, NONE_RECORD, _DM),
+    # Rolling configuration back: staging acts, production (or unknown) asks (BOSSAPP-1173).
+    "rollback_config": _r(ASK_PROD_ONLY, NONE_RECORD, _DM),
     # A release gate a workflow's author put in front of a release: a stop a person set.
     "release_approval": _r(EXPLICIT_STOP, NONE_RECORD, _RM),
     "social_publish": _r(ASK_PROD_RELEASE, NONE_RECORD, "comms_manager"),

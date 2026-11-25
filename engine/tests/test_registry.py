@@ -135,6 +135,8 @@ _EXPECTED_TOOLS: set[str] = {
     # CONFIGURATION, NOT A BUILT APP (BOSSAPP-1140): a config_dir target, files into it
     # under a ChangeSet with the previous versions kept, and the same bytes promoted to production.
     "create_config_target", "deploy_config", "promote_config",
+    # BOSSAPP-1173: put back what a config deployment replaced, under the same governance.
+    "rollback_config",
     "cancel_job",
     "close_orphaned_runs",
     "consistency_report",
@@ -307,7 +309,7 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 230, (  # + collect_diagnostics (BOSSAPP-1368 MT-1) + confluence_search, confluence_read_page, confluence_publish_page (BOSSAPP-1384) + update_deployment_target (BOSSAPP-1358) + recheck_change (#168, re-check this change) + close_local_change, reopen_local_change (BOSSAPP-955) + create_config_target, deploy_config, promote_config (BOSSAPP-1140) + 5 storage_* and 2 work_hold_* (unpinned drift on main at f2348b85c) + github_comment, github_open_fix_pr, contract_test (BOSSAPP-1141 / 1142 / 1143, 2026-11-14) + 6 ticket tools (BOSSAPP-1047 B2, 2026-11-13) + 4 run FS tools (AP-P6) + 7 coordination tools and transfer_to_agent (AP-P7)
+    assert len(reg.names()) == 231, (  # + rollback_config (BOSSAPP-1173) + collect_diagnostics (BOSSAPP-1368 MT-1) + confluence_search, confluence_read_page, confluence_publish_page (BOSSAPP-1384) + update_deployment_target (BOSSAPP-1358) + recheck_change (#168, re-check this change) + close_local_change, reopen_local_change (BOSSAPP-955) + create_config_target, deploy_config, promote_config (BOSSAPP-1140) + 5 storage_* and 2 work_hold_* (unpinned drift on main at f2348b85c) + github_comment, github_open_fix_pr, contract_test (BOSSAPP-1141 / 1142 / 1143, 2026-11-14) + 6 ticket tools (BOSSAPP-1047 B2, 2026-11-13) + 4 run FS tools (AP-P6) + 7 coordination tools and transfer_to_agent (AP-P7)
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
     assert len(read) == 121  # + collect_diagnostics (BOSSAPP-1368 MT-1) + confluence_search, confluence_read_page (BOSSAPP-1384) + storage_inspect, storage_plan (unpinned drift on main at f2348b85c) + task, start/check/update/cancel/list_subagents, write_todos (AP-P7) + ls, read_file, grep (AP-P6 run FS) + ticket_get, ticket_search, ticket_browse (BOSSAPP-1047 B2) + wiki_read (BOSSAPP-891) + list_work_items (BOSSAPP-830) + install_restarts + + dq_platform_status + kg_neighbors, dq_rulebook_status (rulebook source G6/G7) + aml_sample_status + knowledge_project_setup (BOSSAPP-768 project flow) + find_tools (K5, BOSSAPP-961)
@@ -315,7 +317,7 @@ def test_default_registry_shape():
     #                         + wait_for (waiting for BOSS's own work) + kg_schema (what the knowledge graph holds) + code_graph_status, index_repository_code (a repository's code graph) + list_org_repositories (the org's repository registry) + list_projects, describe_project (a project's real state, any project)
     #                        + captain_goals, + 7 kg reads, + 3 self-fix reads, + read_app_logs, + my_recent_work, + system_health, + 7 template/security reads, + precheck_workflow
     #                        + query_project_data (the agent baseline's fenced row read)
-    assert len(write) == 109  # + confluence_publish_page (BOSSAPP-1384, a queued proposal) + update_deployment_target (BOSSAPP-1358) + recheck_change (#168) + close_local_change, reopen_local_change (BOSSAPP-955) + create_config_target, deploy_config, promote_config (BOSSAPP-1140) + storage_propose_rule, storage_report, storage_run_step, work_hold_release, work_hold_set (unpinned drift on main at f2348b85c) + github_comment, github_open_fix_pr, contract_test (BOSSAPP-1141 / 1142 / 1143) + transfer_to_agent (AP-P7 handoff) + write_file (AP-P6 run FS) + ticket_import, ticket_comment, ticket_transition (BOSSAPP-1047 B2) + offer_options (BOSSAPP-879), watch_work_item (880), propose_hire, request_budget_override (884), + propose_secret (BOSSAPP-871), + report_friction (BOSSAPP-889), + wiki_propose (BOSSAPP-891), + request_tool_access (BOSSAPP-848), + delete_project, + load_dq_platform + add_document_from_file (G3) + add_regulation_document, set_ontology_pack, load_aml_sample + set_project_team (BOSSAPP-768 project flow)
+    assert len(write) == 110  # + rollback_config (BOSSAPP-1173) + confluence_publish_page (BOSSAPP-1384, a queued proposal) + update_deployment_target (BOSSAPP-1358) + recheck_change (#168) + close_local_change, reopen_local_change (BOSSAPP-955) + create_config_target, deploy_config, promote_config (BOSSAPP-1140) + storage_propose_rule, storage_report, storage_run_step, work_hold_release, work_hold_set (unpinned drift on main at f2348b85c) + github_comment, github_open_fix_pr, contract_test (BOSSAPP-1141 / 1142 / 1143) + transfer_to_agent (AP-P7 handoff) + write_file (AP-P6 run FS) + ticket_import, ticket_comment, ticket_transition (BOSSAPP-1047 B2) + offer_options (BOSSAPP-879), watch_work_item (880), propose_hire, request_budget_override (884), + propose_secret (BOSSAPP-871), + report_friction (BOSSAPP-889), + wiki_propose (BOSSAPP-891), + request_tool_access (BOSSAPP-848), + delete_project, + load_dq_platform + add_document_from_file (G3) + add_regulation_document, set_ontology_pack, load_aml_sample + set_project_team (BOSSAPP-768 project flow)
     # + file_platform_gap, request_self_fix (BOSSAPP-571's doorway) + record_learning (BOSSAPP-768 S2b), + kg_propose_rule (BOSSAPP-768 S2a), + archive_project, restore_project (BOSSAPP-768 S5), + allow_repository, remove_project_repository + 5 captain writes (BOSSAPP-759), + create_project, + kg_propose_fact, + remove_app, + system_doctor_act, + run_security_scan (F4), + apply_template (F2),
     #                         + review_pull_request_again
     # the capabilities the user explicitly asked the agent to cover
@@ -614,6 +616,8 @@ _SAFE_WRITES = [
     # the previous file versions are kept for rollback), and a promotion of the same.
     # (create_config_target is grants_authority: it gives BOSS a directory to write.)
     "deploy_config", "promote_config",
+    # A config ROLLBACK (BOSSAPP-1173): a planned run of its own; production asks a person.
+    "rollback_config",
     "create_deployment_target", "deploy_app", "kg_propose_fact", "link_run_origin", "mandate_standard", "merge_apps",
     # A PROPOSED RULE IS NOT A RULE (BOSSAPP-768). kg_propose_rule writes one `inferred`, proposed
     # rule: untrusted, never given to an agent, until a person approves it in Rules review.
