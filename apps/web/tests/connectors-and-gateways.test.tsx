@@ -66,6 +66,28 @@ describe("Add MCP server › Browse all", () => {
       expect.objectContaining({ server_id: "mcp_lin", tool: "create_issue", policy: "ask" })]);
   });
 
+  it("an OAuth connector keeps its description, data boundary and risk notes", async () => {
+    vi.stubGlobal("open", vi.fn());
+    const OAUTH = { ...LINEAR, key: "notion", prefill: { ...LINEAR.prefill, name: "notion", url: "https://mcp.notion.com/mcp",
+                                                       auth: { type: "oauth", header_name: null }, data_boundary: "confidential",
+                                                       description: "Pages", provenance: { source: "connector_catalog", connector_key: "notion" } } };
+    const calls = installKitApi(clone(KITS.fresh), (url, body) => {
+      if (url.includes("view=connectors")) return { ...CATALOG, items: [OAUTH] };
+      if (body?.action === "register") return { ...SERVERS[0], id: "mcp_n" };
+      if (body?.action === "oauth_start") return { redirect: "https://notion.example/authorize" };
+      return undefined;
+    });
+    await render(<AddMcpSheet projectId="p1" actor="ceo" onClose={() => {}} onAdded={() => {}} />);
+    await click('[data-testid="kit-add-browse"]');
+    await new Promise((r) => setTimeout(r, 200));
+    await click('[data-testid="kit-connector-use-notion"]');
+    expect($('[data-testid="kit-custom-risk"]')!.getAttribute("data-tip")).toBe("Can change issues.");
+    await click('[data-testid="kit-add-save"]');
+    expect(calls.find((c) => c.body?.action === "register")!.body!.server).toMatchObject({
+      auth: { type: "oauth" }, description: "Pages", data_boundary: "confidential",
+      provenance: { source: "connector_catalog", connector_key: "notion" } });
+  });
+
   it("a stdio connector without its template offers Create template first", async () => {
     const calls = installKitApi(clone(KITS.fresh), (url, body) => {
       if (url.includes("view=connectors")) return CATALOG;

@@ -316,7 +316,7 @@ export function AgentBotWizard({ projectId, actor, onClose, onCreated }: {
                   {grantable && !grantable.mcp_servers.length ? <div className="abw-empty">No MCP servers yet</div> : null}
                 </div>
                 <button type="button" className="abw-btn abw-add-mcp" data-testid="abw-add-mcp"
-                        title="Connect a new tool server" onClick={() => setAddingMcp(true)}>
+                        data-tip="Connect a new tool server" onClick={() => setAddingMcp(true)}>
                   <Plugs size={14} aria-hidden="true" /> Add MCP server
                 </button>
               </fieldset>

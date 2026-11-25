@@ -16,7 +16,7 @@
  */
 import { GatedButton, useGate } from "../../components/gated";
 import React, { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, Check, Lock, MagnifyingGlass, PlugsConnected, Terminal, X } from "@phosphor-icons/react";
+import { ArrowLeft, Check, Lock, MagnifyingGlass, PlugsConnected, Terminal, Warning, X } from "@phosphor-icons/react";
 
 import type { McpCatalogueEntry } from "../../lib/kit-types";
 import { kitApi, mcpApi, toolOverrides, type Connector, type CrewMember, type McpAuthInput } from "../../lib/kit-api";
@@ -29,6 +29,8 @@ import { ModalShell } from "./overlay";
 const RISKS = [{ tier: 0, label: "Reads" }, { tier: 2, label: "Writes" }, { tier: 3, label: "Public" }];
 /** Agent chips shown before "All N" (a crew can be 30 agents). */
 const AGENTS_SHOWN = 8;
+/** Popular chips shown; the rest are behind "+N more" (Browse all). */
+const POPULAR_SHOWN = 8;
 const NONE: string[] = [];
 const AUTH_WORD: Record<McpAuthInput["type"], string> = { none: "None", bearer: "Token", header: "Header", oauth: "OAuth" };
 
@@ -66,8 +68,10 @@ export function AddMcpSheet({ projectId, actor, onClose, onAdded, defaultAgents 
   const [entry, setEntry] = useState<McpCatalogueEntry | null>(null);
   const [connector, setConnector] = useState<Connector | null>(null);
   const [browse, setBrowse] = useState(false);
+  // THE TOKEN AND THE OAUTH CLIENT SECRET ARE TWO FIELDS. One shared field sent a token typed
+  // under Token as the OAuth client secret after a switch to OAuth, from a field no longer shown.
   const [form, setForm] = useState({ name: "", target: "", auth: "none" as McpAuthInput["type"], header: "", secret: "",
-                                     risk: 0, clientId: "" });
+                                     risk: 0, clientId: "", clientSecret: "" });
   const [named, setNamed] = useState(false);
   const [test, setTest] = useState<TestState>(null);
   const [testing, setTesting] = useState(false);
@@ -90,7 +94,8 @@ export function AddMcpSheet({ projectId, actor, onClose, onAdded, defaultAgents 
 
   const kind = targetKind(form.target);
   const set = (change: Partial<typeof form>) => {
-    setForm((f) => ({ ...f, ...change }));
+    // A CHANGED SIGN-IN DROPS WHAT WAS TYPED FOR THE OLD ONE: nothing hidden is ever sent.
+    setForm((f) => ({ ...f, ...change, ...("auth" in change && change.auth !== f.auth ? { secret: "", clientSecret: "" } : {}) }));
     // ANYTHING THAT CHANGES WHAT IS REACHED voids the last test: Add waits for a new one.
     if ("target" in change || "auth" in change || "secret" in change || "header" in change) setTest(null);
     setError(null);
@@ -109,7 +114,7 @@ export function AddMcpSheet({ projectId, actor, onClose, onAdded, defaultAgents 
     const p = c.prefill;
     setConnector(c); setEntry(null); setNamed(true); setTest(null); setError(null); setBrowse(false);
     setForm({ name: p.name, target: p.url, auth: p.auth.type, header: p.auth.header_name ?? "", secret: "",
-              risk: p.risk_tier, clientId: "" });
+              risk: p.risk_tier, clientId: "", clientSecret: "" });
   };
 
   const auth = (): McpAuthInput => ({ type: form.auth, ...(form.auth === "header" ? { header_name: form.header } : {}),
@@ -139,6 +144,11 @@ export function AddMcpSheet({ projectId, actor, onClose, onAdded, defaultAgents 
     else if (agents.size) showToast("success", `Gave ${name} to ${plural(agents.size, "agent")}`);
   };
 
+  /** What a picked connector adds to a register, on every path (tested or OAuth). */
+  const connectorFields = (tools: string[]) => (connector ? {
+    description: connector.prefill.description, data_boundary: connector.prefill.data_boundary,
+    tool_risk_overrides: toolOverrides(connector.prefill, tools).tiers } : {});
+
   const add = async () => {
     const name = form.name.trim();
     setBusy(true); setError(null);
@@ -146,8 +156,12 @@ export function AddMcpSheet({ projectId, actor, onClose, onAdded, defaultAgents 
       // OAUTH (BOSSAPP-846): nothing to test before someone signs in. Store, then open the
       // provider's sign-in in a new tab; the server's row says when it is connected.
       const oauth: McpAuthInput = { type: "oauth", ...(form.clientId.trim() ? { oauth: { client_id: form.clientId.trim() } } : {}),
-                                    ...(form.secret ? { secret: form.secret } : {}) };
+                                    ...(form.clientSecret ? { secret: form.clientSecret } : {}) };
+      // A connector's description and data boundary ride along as on the tested path. Its tool
+      // tiers are globs matched against tool NAMES, which only a signed-in probe can list: they
+      // are applied when the drawer re-checks the server, not guessed here.
       const r = await mcpApi.register(projectId, actor, { name, url: form.target.trim(), risk_tier: form.risk, auth: oauth,
+                                                          ...connectorFields([]),
                                                           provenance: connector ? connector.prefill.provenance : { source: "custom" } });
       if (!r.ok) { setBusy(false); setError({ field: r.field ?? "name", message: r.error }); showToast("error", shortError(r.error)); return; }
       await grantAll(r.data.id, name);
@@ -176,8 +190,7 @@ export function AddMcpSheet({ projectId, actor, onClose, onAdded, defaultAgents 
     const hints = connector ? toolOverrides(connector.prefill, found) : { tiers: {}, policies: {} };
     const r = await mcpApi.register(projectId, actor, {
       name, url: form.target.trim(), risk_tier: form.risk, transport: kind === "stdio" ? "stdio" : "http", auth: auth(),
-      ...(connector ? { description: connector.prefill.description, data_boundary: connector.prefill.data_boundary,
-                        tool_risk_overrides: hints.tiers } : {}),
+      ...connectorFields(found),
       provenance: connector ? connector.prefill.provenance : { source: "custom" } });
     if (!r.ok) { setBusy(false); setError({ field: r.field ?? "name", message: r.error }); showToast("error", shortError(r.error)); return; }
     // The connector's default policies, best effort: a tool the floor holds at Ask stays Ask.
@@ -194,7 +207,8 @@ export function AddMcpSheet({ projectId, actor, onClose, onAdded, defaultAgents 
   const ordered = useMemo(() => [...crew.filter((c) => defaultAgents.includes(c.role_key)),
                                   ...crew.filter((c) => !defaultAgents.includes(c.role_key))], [crew, defaultAgents]);
   const shownCount = AGENTS_SHOWN + defaultAgents.length;
-  const popular = useMemo(() => (items ?? []).filter((e) => !e.added).slice(0, 8), [items]);
+  const notAdded = useMemo(() => (items ?? []).filter((e) => !e.added), [items]);
+  const popular = notAdded.slice(0, POPULAR_SHOWN);
   const canTest = (kind === "http" || kind === "stdio") && form.auth !== "oauth" && !testing && !busy
     && (form.auth === "none" || Boolean(form.secret)) && (form.auth !== "header" || Boolean(form.header.trim()));
   const canAdd = !busy && Boolean(form.name.trim()) && (kind === "http" || kind === "stdio")
@@ -224,6 +238,12 @@ export function AddMcpSheet({ projectId, actor, onClose, onAdded, defaultAgents 
                   {e.auth !== "none" ? <Lock size={11} aria-label="Needs a token" /> : null}{e.label}
                 </button>
               ))}
+              {notAdded.length > POPULAR_SHOWN ? (
+                <button type="button" className="kit-chip kit-chip-btn" data-testid="kit-add-more"
+                        data-tip="More servers, in the full list" onClick={() => setBrowse(true)}>
+                  +{notAdded.length - POPULAR_SHOWN} more
+                </button>
+              ) : null}
               <button type="button" className="kit-chip kit-chip-btn" data-testid="kit-add-browse"
                       data-tip="Every connector, by category" onClick={() => setBrowse(true)}>
                 <MagnifyingGlass size={11} aria-hidden="true" /> Browse all
@@ -234,6 +254,11 @@ export function AddMcpSheet({ projectId, actor, onClose, onAdded, defaultAgents 
             <div className="kit-note" data-testid="kit-custom-picked">
               <strong data-user-text>{connector.name}</strong>
               <span className="kit-faint" data-tip={connector.setup}>Connector</span>
+              {connector.risk_notes ? (
+                <span className="kit-chip" data-tone="amber" data-tip={connector.risk_notes} data-testid="kit-custom-risk">
+                  <Warning size={11} aria-hidden="true" /> Risk
+                </span>
+              ) : null}
               {connector.token_url ? <a className="kit-link" href={connector.token_url} target="_blank" rel="noreferrer noopener"
                                         data-tip={connector.scopes_tip ? `Needs: ${connector.scopes_tip}` : undefined}>Get a token ↗</a> : null}
             </div>
@@ -310,8 +335,8 @@ export function AddMcpSheet({ projectId, actor, onClose, onAdded, defaultAgents 
                 </label>
                 <label className="kit-field">
                   <span className="kit-field-label">Client secret</span>
-                  <input type="password" value={form.secret} autoComplete="new-password" data-testid="kit-custom-client-secret"
-                         onChange={(e) => set({ secret: e.target.value })} />
+                  <input type="password" value={form.clientSecret} autoComplete="new-password" data-testid="kit-custom-client-secret"
+                         onChange={(e) => set({ clientSecret: e.target.value })} />
                 </label>
               </div>
             ) : null}
@@ -370,7 +395,7 @@ export function AddMcpSheet({ projectId, actor, onClose, onAdded, defaultAgents 
           ) : null}
 
           <div className="kit-modal-foot">
-            <button type="button" className="kit-btn" onClick={onClose}>Cancel</button>
+            <button type="button" className="kit-btn" onClick={onClose}><X size={14} aria-hidden="true" /> Cancel</button>
             <GatedButton permission="mcp_server:review" type="button" className="kit-btn kit-btn-primary" data-testid="kit-add-save"
                          disabled={!canAdd} data-tip={canAdd ? undefined : form.auth === "oauth" ? "Name and URL first" : "Test the connection first"}
                          onClick={() => void add()}>

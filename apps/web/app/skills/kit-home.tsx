@@ -258,9 +258,9 @@ export function KitHome({ projectId, actor }: { projectId: string; actor: string
                     {menu ? (
                       <span className="kit-pop kit-menu" role="menu">
                         <GatedButton permission="agent_ability:assign" type="button" role="menuitem" data-tip={TIP.applyRecommended}
-                                     data-testid="kit-apply-recommended" onClick={() => { setMenu(false); void applyRecommended(); }}>Apply recommended</GatedButton>
+                                     data-testid="kit-apply-recommended" onClick={() => { setMenu(false); void applyRecommended(); }}><Sparkle size={14} weight="fill" aria-hidden="true" /> Apply recommended</GatedButton>
                         <GatedButton permission="skill:invoke" type="button" role="menuitem" data-testid="kit-menu-test-crew"
-                                     onClick={() => { setMenu(false); setCrewOpen(true); }}>Test crew</GatedButton>
+                                     onClick={() => { setMenu(false); setCrewOpen(true); }}><UsersThree size={14} aria-hidden="true" /> Test crew</GatedButton>
                       </span>
                     ) : null}
                   </span>

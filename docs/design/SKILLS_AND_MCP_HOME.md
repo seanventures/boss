@@ -196,7 +196,7 @@ Nothing is removed. Options people rarely use are folded under `⋯` or **Advanc
 | 26 | Grant to agents | MCP drawer › Agents only | **Give to agents** chips in the sheet, and the drawer |
 | 27 | MCP drawer: URL, auth, token replace, sign-in, headers, tools policy, review, agents, used in, try it, data boundary, on/off, remove | Library › MCP › row | row **Edit** (same drawer) |
 | 28 | Remove server (confirm, releases grants) | drawer `⋯` | row **Remove** (confirm) + drawer `⋯` |
-| 29 | Re-test a server | drawer Save & test | row **Test** (probes now, shows result) + drawer |
+| 29 | Re-test a server | drawer Save & test | row **Test** (probes now, shows result) + drawer. No route checks one server yet, so Test probes every enabled server through the list's `check=now` and reports this one |
 | 30 | Import MCP JSON | Library `⋯` (MCP) | MCP servers `⋯` › Import |
 | 31 | Export MCP JSON (no secrets) | Library `⋯` (MCP) | MCP servers `⋯` › Export |
 | 32 | Gateways (serve servers to Claude Code, Cursor) | Library `⋯` (MCP) | MCP servers `⋯` › Gateways |
@@ -216,6 +216,8 @@ Nothing is removed. Options people rarely use are folded under `⋯` or **Advanc
 | Add MCP tabs Catalogue / Connectors / Custom | add sheet | **Merge** into one screen: Popular chips, Browse all, URL field | There were three forms for one job |
 | Catalogue card chips "Remote", "No key/Token", "Official" | add sheet | **Shorten**: the chip shows label + key icon; Official in the tooltip | Three chips per card was noise |
 | Connector note "Needs OAuth sign-in, which is not available here yet." | add sheet | **Remove (wrong)**: OAuth is supported; the connector now preselects OAuth | Stale text |
+| Connector risk notes | add sheet | **Label + tooltip**: a "Risk" chip, the notes in its tooltip | Keeps the warning, short |
+| More curated servers than fit | add sheet | **"+N more"** chip opens Browse all | Nothing hidden |
 | Risk (Reads / Writes / Public) on add | add sheet | **Move under Advanced** | Defaults come from the catalogue; rarely changed |
 | Header name, OAuth client id/secret | add sheet | **Advanced** (header name shows when Header is picked) | Rare |
 | "Save & test" | add sheet | **Split** into **Test connection** + **Add server** | People need to see the tools before saving |

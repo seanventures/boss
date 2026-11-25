@@ -99,9 +99,37 @@ describe("row actions", () => {
   it("⋯ keeps Test all, Import, Export and Gateways", async () => {
     await home("/?area=skills", (url) => (url.includes("view=gateways") ? { items: [] } : undefined));
     await click('[data-testid="kit-mcp-more"]');
-    expect($('[data-testid="kit-mcp-menu"]')!.textContent).toBe("Test allImportExportGateways");
-    await click('[data-testid="kit-lib-gateways"]');
+    expect($$('[data-testid="kit-mcp-menu"] [role="menuitem"]').map((b) => b.textContent!.trim())).toEqual(["Test all", "Import", "Export", "Gateways"]);
+    await click('[data-testid="kit-mcp-gateways"]');
     expect($('[data-testid="kit-gw-new"]')).not.toBeNull();
+  });
+});
+
+describe("every action carries an icon (operator rule)", () => {
+  it("menus, row confirms and the sheet's buttons", async () => {
+    await home("/?area=skills", (url) => (url.includes("view=gateways") ? { items: [] } : undefined));
+    await click('[data-testid="kit-mcp-more"]');
+    const mcpItems = $$('[data-testid="kit-mcp-menu"] [role="menuitem"]');
+    expect(mcpItems.map((b) => b.dataset.testid)).toEqual(["kit-mcp-test-all", "kit-mcp-import", "kit-mcp-export", "kit-mcp-gateways"]);
+    for (const b of mcpItems) expect(b.querySelector("svg"), b.dataset.testid).not.toBeNull();
+    await click('[data-testid="kit-mcp-more"]');
+    await click('[data-testid="kit-head-more"]');
+    const skillItems = $$('.kit-sec[aria-label="Skills"] [role="menuitem"]');
+    expect(skillItems.length).toBe(2);
+    for (const b of skillItems) expect(b.querySelector("svg"), b.textContent ?? "").not.toBeNull();
+    await click('[data-testid="kit-mcp-remove-web-intel"]');
+    for (const b of $$('[data-testid="kit-mcp-remove-confirm-web-intel"] button')) expect(b.querySelector("svg"), b.textContent ?? "").not.toBeNull();
+    await click('[data-testid="kit-add-mcp-btn"]');
+    for (const b of $$('[data-testid="kit-add-mcp"] .kit-btn')) expect(b.querySelector("svg"), b.textContent ?? "").not.toBeNull();
+  });
+
+  it("the two ⋯ menus have their own test ids", async () => {
+    await home("/?area=skills&view=all");
+    await click('[data-testid="kit-mcp-more"]');
+    await click('[data-testid="kit-lib-more"]');
+    const ids = $$('[role="menuitem"]').map((b) => b.dataset.testid).filter(Boolean);
+    expect(new Set(ids).size).toBe(ids.length);
+    for (const b of $$('[data-testid="kit-lib-menu"] [role="menuitem"]')) expect(b.querySelector("svg")).not.toBeNull();
   });
 });
 

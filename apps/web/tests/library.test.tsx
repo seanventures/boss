@@ -69,7 +69,7 @@ describe("the Library", () => {
   it("Import / Export all under ⋯", async () => {
     await mount();
     await click('[data-testid="kit-lib-more"]');
-    expect($('[data-testid="kit-lib-menu"]')!.textContent).toBe("ImportExport all");
+    expect($$('[data-testid="kit-lib-menu"] [role="menuitem"]').map((b) => b.textContent!.trim())).toEqual(["Import", "Export all"]);
     await click('[data-testid="kit-lib-import"]');
     expect($('[data-testid="kit-import"]')).not.toBeNull();
   });

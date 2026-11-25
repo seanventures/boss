@@ -11,7 +11,7 @@
 import { GatedButton } from "../../components/gated";
 import { ReadFailure } from "../../components/locked-panel";
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowClockwise, DotsThree, PencilSimple, Plugs, Plus, Trash, Warning } from "@phosphor-icons/react";
+import { ArrowClockwise, DotsThree, DownloadSimple, PencilSimple, Plugs, Plus, ShareNetwork, Trash, UploadSimple, Warning, X } from "@phosphor-icons/react";
 
 import type { Ability } from "../../lib/kit-types";
 import { mcpApi, type CrewMember, type McpServer } from "../../lib/kit-api";
@@ -62,7 +62,9 @@ export function McpServersSection({ projectId, actor, crew, abilities, query, op
 
   useEffect(() => { void load(version ? "none" : "stale"); }, [load, version]);
 
-  /** Probe now (the list's `check=now`) and say what this server answered. */
+  /** Probe now and say what this server answered. The API has no single-server check yet (its
+   *  list's `check=now` probes every enabled server; `servers_with_tools(server_id=)` exists in the
+   *  engine but no route exposes it), so a row's Test asks them all and reports this one. */
   const test = async (ids: string[]) => {
     setTesting(new Set(ids));
     const items = await load("now");
@@ -109,12 +111,12 @@ export function McpServersSection({ projectId, actor, crew, abilities, query, op
           {menu ? (
             <span className="kit-pop kit-menu" role="menu" data-testid="kit-mcp-menu">
               <button type="button" role="menuitem" data-testid="kit-mcp-test-all" disabled={!servers?.length}
-                      onClick={() => { setMenu(false); void test((servers ?? []).map((s) => s.id)); }}>Test all</button>
-              <button type="button" role="menuitem" data-testid="kit-lib-import" onClick={() => { setMenu(false); setImporting(true); }}>Import</button>
-              <button type="button" role="menuitem" data-testid="kit-lib-export" onClick={() => { setMenu(false); exportServers(servers ?? []); }}>Export</button>
-              <button type="button" role="menuitem" data-testid="kit-lib-gateways"
+                      onClick={() => { setMenu(false); void test((servers ?? []).map((s) => s.id)); }}><ArrowClockwise size={14} aria-hidden="true" /> Test all</button>
+              <button type="button" role="menuitem" data-testid="kit-mcp-import" onClick={() => { setMenu(false); setImporting(true); }}><DownloadSimple size={14} aria-hidden="true" /> Import</button>
+              <button type="button" role="menuitem" data-testid="kit-mcp-export" onClick={() => { setMenu(false); exportServers(servers ?? []); }}><UploadSimple size={14} aria-hidden="true" /> Export</button>
+              <button type="button" role="menuitem" data-testid="kit-mcp-gateways"
                       data-tip="Serve chosen servers to Claude Code, Cursor and other MCP clients"
-                      onClick={() => { setMenu(false); setGateways(true); }}>Gateways</button>
+                      onClick={() => { setMenu(false); setGateways(true); }}><ShareNetwork size={14} aria-hidden="true" /> Gateways</button>
             </span>
           ) : null}
         </span>
@@ -181,7 +183,7 @@ export function McpServersSection({ projectId, actor, crew, abilities, query, op
                                        data-testid={`kit-mcp-remove-yes-${s.name}`} onClick={() => void remove(s)}>
                             <Trash size={14} aria-hidden="true" /> Remove
                           </GatedButton>
-                          <button type="button" className="kit-btn kit-btn-sm" onClick={() => setConfirm(null)}>Cancel</button>
+                          <button type="button" className="kit-btn kit-btn-sm" onClick={() => setConfirm(null)}><X size={14} aria-hidden="true" /> Cancel</button>
                         </span>
                       </span>
                     ) : null}

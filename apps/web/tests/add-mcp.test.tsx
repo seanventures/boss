@@ -119,6 +119,56 @@ describe("adding an MCP server", () => {
     expect(actions(calls)).toEqual(expect.arrayContaining(["register", "oauth_start"]));
   });
 
+  it("a token typed under Token is never sent as the OAuth client secret", async () => {
+    vi.stubGlobal("open", vi.fn());
+    const calls = installKitApi(clone(KITS.fresh), (url, body) =>
+      body?.action === "register" ? { ...SERVERS[0], id: "mcp_o", name: "o" }
+        : body?.action === "oauth_start" ? { redirect: "https://idp.example/authorize" } : undefined);
+    await render(<AddMcpSheet projectId="p1" actor="ceo" onClose={() => {}} onAdded={() => {}} />);
+    await type('[data-testid="kit-custom-url"]', "https://mcp.o.example.com/mcp");
+    await click('[data-testid="kit-custom-auth-bearer"]');
+    await type('[data-testid="kit-custom-secret"]', "personal_token_9999");
+    await click('[data-testid="kit-custom-auth-oauth"]');
+    expect(($('[data-testid="kit-custom-client-secret"]') as HTMLInputElement).value).toBe("");
+    await click('[data-testid="kit-add-save"]');
+    const sent = JSON.stringify(calls.map((c) => c.body));
+    expect(sent).not.toContain("personal_token_9999");
+    expect(calls.find((c) => c.body?.action === "register")!.body!.server).toMatchObject({ auth: { type: "oauth" } });
+    expect((calls.find((c) => c.body?.action === "register")!.body!.server as { auth: Record<string, unknown> }).auth.secret).toBeUndefined();
+  });
+
+  it("an OAuth client secret goes up as the client secret, and switching back to Token clears it", async () => {
+    vi.stubGlobal("open", vi.fn());
+    const calls = installKitApi(clone(KITS.fresh), (url, body) =>
+      body?.action === "register" ? { ...SERVERS[0], id: "mcp_o", name: "o" }
+        : body?.action === "oauth_start" ? { redirect: "https://idp.example/authorize" } : undefined);
+    await render(<AddMcpSheet projectId="p1" actor="ceo" onClose={() => {}} onAdded={() => {}} />);
+    await type('[data-testid="kit-custom-url"]', "https://mcp.o.example.com/mcp");
+    await click('[data-testid="kit-custom-auth-oauth"]');
+    await type('[data-testid="kit-custom-client-id"]', "cid");
+    await type('[data-testid="kit-custom-client-secret"]', "client_secret_1");
+    await click('[data-testid="kit-custom-auth-bearer"]');
+    expect(($('[data-testid="kit-custom-secret"]') as HTMLInputElement).value).toBe("");
+    await click('[data-testid="kit-custom-auth-oauth"]');
+    expect(($('[data-testid="kit-custom-client-secret"]') as HTMLInputElement).value).toBe("");
+    await type('[data-testid="kit-custom-client-secret"]', "client_secret_2");
+    await click('[data-testid="kit-add-save"]');
+    expect(calls.find((c) => c.body?.action === "register")!.body!.server)
+      .toMatchObject({ auth: { type: "oauth", secret: "client_secret_2", oauth: { client_id: "cid" } } });
+  });
+
+  it("more catalogue servers than chips: +N more opens the full list", async () => {
+    const many = Array.from({ length: 11 }, (_, i) => ({ key: `s${i}`, name: `s${i}`, label: `S${i}`, url: `https://s${i}.example.com/mcp`,
+                                                       auth: "none", risk_default: 0, provenance: "official", description: "x" }));
+    installKitApi(clone(KITS.fresh), (url) => (url.includes("view=catalogue") ? { items: many }
+      : url.includes("view=connectors") ? { catalog_version: "1", total: 0, categories: [], items: [] } : undefined));
+    await render(<AddMcpSheet projectId="p1" actor="ceo" onClose={() => {}} onAdded={() => {}} />);
+    expect($$('[data-testid^="kit-cat-s"]').length).toBe(8);
+    expect($('[data-testid="kit-add-more"]')!.textContent).toBe("+3 more");
+    await click('[data-testid="kit-add-more"]');
+    expect($('[data-testid="kit-connectors"]')).not.toBeNull();
+  });
+
   it("where the agent does not exist yet (the wizard), there is no Give to agents", async () => {
     installKitApi(clone(KITS.fresh));
     await render(<AddMcpSheet projectId="p1" actor="ceo" onClose={() => {}} onAdded={() => {}} grants={false} />);

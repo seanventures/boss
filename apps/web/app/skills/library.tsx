@@ -8,7 +8,7 @@
  * page's Add skill (`request`).
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { DotsThree, FileText, MagnifyingGlass } from "@phosphor-icons/react";
+import { DotsThree, DownloadSimple, FileText, MagnifyingGlass, UploadSimple } from "@phosphor-icons/react";
 
 import type { Ability, AbilityStatus } from "../../lib/kit-types";
 import { ReadFailure } from "../../components/locked-panel";
@@ -232,8 +232,8 @@ export function Library({ projectId, actor, kit, crew, initial, onKitChanged, qu
               </button>
               {menu ? (
                 <span className="kit-pop kit-menu" role="menu" data-testid="kit-lib-menu">
-                  <button type="button" role="menuitem" data-testid="kit-lib-import" onClick={() => { setMenu(false); setImporting(true); }}>Import</button>
-                  <button type="button" role="menuitem" data-testid="kit-lib-export" onClick={() => { setMenu(false); exportSkills(skills ?? []); }}>Export all</button>
+                  <button type="button" role="menuitem" data-testid="kit-lib-import" onClick={() => { setMenu(false); setImporting(true); }}><DownloadSimple size={14} aria-hidden="true" /> Import</button>
+                  <button type="button" role="menuitem" data-testid="kit-lib-export" onClick={() => { setMenu(false); exportSkills(skills ?? []); }}><UploadSimple size={14} aria-hidden="true" /> Export all</button>
                 </span>
               ) : null}
             </span>
