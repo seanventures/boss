@@ -1,0 +1,6 @@
+# Test modules that still hand RAW (untagged) placeholder GitHub tokens to senders (stubbed
+# reaches, adapters built with a plain token). They run with BOSS_GITHUB_CREDENTIALS_STRICT off.
+# A RATCHET: remove a line when its test tags its tokens; never add one. BOSSAPP-1286.
+test_local_first_console_routes.py
+test_publish_and_github_outage.py
+test_github_community_adapter.py

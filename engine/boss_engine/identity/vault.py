@@ -452,6 +452,18 @@ def _load(db: Any, item_id: str, *, for_update: bool = False) -> dict[str, Any]:
     return dict(row)
 
 
+def _open_handed_out(db: Any, row: dict) -> str:
+    """A secret as the vault HANDS IT OUT. A GitHub item (a person's sign-in, the org's token)
+    belongs to the install's GitHub host and leaves tagged with it (github_urls.GitHubCredential,
+    BOSSAPP-1286): the send points refuse it anywhere else, and storage never re-labels a host."""
+    value = _open(db, row)
+    if value and row.get("provider") == "github":
+        from .github_urls import tag
+
+        return tag(value, "")
+    return value
+
+
 def org_github_token(item_id: str, *, db: Any) -> str:
     """The org's FALLBACK GitHub token (a fine-grained PAT held as an org connection: no owner).
     Only boss-egress calls this, to act for a run whose repos the connection covers; it never
@@ -462,7 +474,7 @@ def org_github_token(item_id: str, *, db: Any) -> str:
         raise VaultForbidden("not_an_org_github_connection")
     if row["status"] != "active":
         raise VaultNeedsReauth(row["status"])
-    token = _open(db, row)
+    token = _open_handed_out(db, row)
     from ..services.env_refs import provider_binding, register_host_credential
 
     register_host_credential(token, provider_binding("github"), "The org's GitHub token")  # rc6 N-1
@@ -764,7 +776,7 @@ def get_credential(connection: ConnectionRef, purpose: CredentialPurpose, *, ctx
         if (row["kind"] != VaultItemKind.TOTP_SECRET.value or row.get("owner_principal_id") != caller_owner
                 or row["status"] != "active"):
             raise VaultForbidden("not_your_connection")
-        return ShortLivedCredential(token=_open(db, row), expires_at=_now() + timedelta(seconds=60),
+        return ShortLivedCredential(token=_open_handed_out(db, row), expires_at=_now() + timedelta(seconds=60),
                                     provider="totp", item_id=row["id"], scopes=frozenset())
     if purpose == CredentialPurpose.SSO_CLIENT:
         # An OIDC client secret, for the SSO token call identity makes itself: a system context of
@@ -775,7 +787,7 @@ def get_credential(connection: ConnectionRef, purpose: CredentialPurpose, *, ctx
         if (row["kind"] != VaultItemKind.OIDC_CLIENT_SECRET.value or row["org_id"] != ctx.principal.org_id
                 or row["status"] != "active"):
             raise VaultForbidden("wrong_kind")
-        return ShortLivedCredential(token=_open(db, row), expires_at=_now() + timedelta(seconds=60),
+        return ShortLivedCredential(token=_open_handed_out(db, row), expires_at=_now() + timedelta(seconds=60),
                                     provider=row.get("provider") or "", item_id=row["id"], scopes=frozenset())
     raise VaultForbidden("purpose_not_served_here")
 
@@ -801,7 +813,7 @@ def token_for_access_check(owner_principal_id: str, *, provider: str, db: Any) -
             row = _refresh_locked(db, found)
         except VaultNeedsReauth:
             return None
-    return _open(db, row)
+    return _open_handed_out(db, row)
 
 
 # ---- connection credentials: MCP servers and Kit connections (BOSSAPP-846/847) ---------------------

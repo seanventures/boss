@@ -133,7 +133,8 @@ def app_jwt(db: Any, *, now: Optional[int] = None) -> str:
     claims = {"iat": now - 60, "exp": now + 540, "iss": str(app_id)}
     signing_input = f"{jwks.b64u(jwks.canonical(header))}.{jwks.b64u(jwks.canonical(claims))}".encode()
     sig = key.sign(signing_input, padding.PKCS1v15(), hashes.SHA256())
-    return signing_input.decode() + "." + jwks.b64u(sig)
+    # The App's JWT belongs to the install's GitHub host (BOSSAPP-1286).
+    return github_urls.tag(signing_input.decode() + "." + jwks.b64u(sig), api_base())
 
 
 CONTROL_PLANE_KIND = "control_plane"
@@ -498,14 +499,15 @@ def _oauth_refresh(refresh_token: str) -> tuple[str, Optional[str], int]:
     if not data or data.get("error") or not data.get("access_token"):
         # bad_refresh_token = revoked, expired, or ALREADY USED (GitHub rotates): reuse detection.
         raise vault.RefreshRejected(str(data.get("error") or resp.status))
-    return str(data["access_token"]), data.get("refresh_token"), int(data.get("expires_in") or 28800)
+    return (github_urls.tag(str(data["access_token"]), api_base()), data.get("refresh_token"),
+            int(data.get("expires_in") or 28800))
 
 
 def _oauth_revoke(access_token: str, refresh_token: Optional[str]) -> None:
     cid, secret = _client_credentials()
     if not cid or not secret:
         return
-    basic = base64.b64encode(f"{cid}:{secret}".encode()).decode()
+    basic = github_urls.tag(base64.b64encode(f"{cid}:{secret}".encode()).decode(), api_base())
     _call("DELETE", f"/applications/{cid}/grant", token=basic, scheme="Basic",
           body={"access_token": access_token})
 
@@ -612,7 +614,7 @@ def complete_oauth(*, person_id: str, org_id: str, code: str, state: str, redire
     tok = resp.json() if resp.status == 200 else {}
     if not tok or tok.get("error") or not tok.get("access_token"):
         raise GitHubRefused("code_exchange_failed", 400)
-    me = _call("GET", "/user", token=str(tok["access_token"]))
+    me = _call("GET", "/user", token=github_urls.tag(str(tok["access_token"]), api_base()))
     login = (me.json() or {}).get("login") if me.status == 200 else None
     item = vault.store(org_id=org_id, owner_principal_id=person_id, kind=vault.VaultItemKind.OAUTH_USER,
                        provider="github", secret=str(tok["access_token"]), refresh=tok.get("refresh_token"),

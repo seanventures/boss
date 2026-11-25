@@ -124,6 +124,9 @@ def _senders(monkeypatch):
 
 
 def test_every_source_times_every_sender_refuses_the_other_host(monkeypatch):
+    # The matrix includes an UNTAGGED install token on purpose (production sends it as the
+    # install's own and counts it); strict mode is proven separately below.
+    monkeypatch.delenv(G.STRICT_ENV, raising=False)
     refused, allowed = [], []
     for sname, token, own in _sources():
         other = PUBLIC if own == GHES else GHES
@@ -235,3 +238,39 @@ def test_the_static_guard_sees_a_planted_builder(tmp_path):
         assert _unchecked_github_credential_builders() == ["engine/boss_engine/x.py:1 leak"]
     finally:
         globals()["_ROOT"] = old
+
+
+def test_strict_mode_refuses_an_untagged_credential_and_production_counts_it(monkeypatch):
+    """In tests and development (BOSS_GITHUB_CREDENTIALS_STRICT=1) an untagged credential at a
+    send point is a hard error: its source forgot to tag. In production it is sent as the
+    install's own (to the install's host only) and counted."""
+    monkeypatch.setenv(G.STRICT_ENV, "1")
+    with pytest.raises(G.UntaggedGitHubCredential):
+        G.check_send("raw-token", PUBLIC + "/user")
+    G.check_send(G.tag("raw-token", PUBLIC), PUBLIC + "/user")          # tagged: fine
+    monkeypatch.delenv(G.STRICT_ENV)
+    before = G.UNTAGGED_SENDS.get("count-test", 0)
+    G.check_send("raw-token", PUBLIC + "/user", where="count-test")
+    assert G.UNTAGGED_SENDS["count-test"] == before + 1
+
+
+def test_the_install_token_is_tagged_at_its_source(monkeypatch):
+    from boss_engine.config import Settings
+
+    monkeypatch.setenv("BOSS_GITHUB_TOKEN", "install-secret")
+    token = Settings(_env_file=None).github_token
+    assert isinstance(token, G.GitHubCredential) and token.api_base == G.install_api_base()
+
+
+def test_the_untagged_token_ratchet_only_shrinks():
+    """The legacy list (tests still handing raw placeholder tokens) names real files and never
+    grows. Lower CAP when you remove a line."""
+    CAP = 12  # noqa: N806
+    for name in ("engine/tests", "apps/api/tests"):
+        listed = _ROOT / name / "_untagged_token_legacy.txt"
+        if not listed.exists():
+            continue
+        rows = [r.strip() for r in listed.read_text().splitlines()
+                if r.strip() and not r.startswith("#")]
+        assert all((_ROOT / name / r).exists() for r in rows), rows
+        assert len(rows) <= CAP, f"{listed}: {len(rows)} > {CAP}: tag the tokens instead"

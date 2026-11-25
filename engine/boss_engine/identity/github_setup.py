@@ -554,6 +554,7 @@ def store_org_token(*, token: str, repos: Iterable[str], org_id: str, db: Any, b
     token = (token or "").strip()
     if not token or len(token) > 400 or any(c.isspace() for c in token):
         raise GitHubSetupError("bad_token", 422)
+    token = github_urls.tag(token, "")      # the org store's tokens are the install's host's
     wanted = _repos(repos)
     if not wanted:
         raise GitHubSetupError("repos_required", 422, message="Name the repositories this token is for.")
@@ -778,7 +779,7 @@ def installation_token_all(db: Any, installation_id: Optional[str] = None, *,
     _account_for(github_app.InstallationToken(token=token, expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
                                               repositories=(), permissions=perms,
                                               kind=github_app.CONTROL_PLANE_KIND))
-    return token
+    return github_urls.tag(token, github_app.api_base())   # the install App's host
 
 
 def installation_permissions(db: Any, installation_id: Optional[str] = None) -> Optional[dict[str, str]]:

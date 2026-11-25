@@ -339,3 +339,29 @@ def _no_real_model_cli(request, monkeypatch):
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "real_model_cli: the test may start the real claude/codex CLI")
+
+
+#: Test modules that still hand raw (untagged) placeholder tokens to GitHub senders. A RATCHET:
+#: the list only shrinks (test_the_untagged_token_ratchet_only_shrinks). Every other test runs in
+#: strict mode, where an untagged GitHub credential reaching a send point is a hard error
+#: (identity/github_urls.UntaggedGitHubCredential, BOSSAPP-1286): a source that forgot to tag
+#: fails a test, never a customer.
+UNTAGGED_TOKEN_LEGACY_FILE = "_untagged_token_legacy.txt"
+
+
+def _untagged_legacy(here) -> set[str]:
+    from pathlib import Path
+
+    path = Path(here).with_name(UNTAGGED_TOKEN_LEGACY_FILE)
+    if not path.exists():
+        return set()
+    return {line.strip() for line in path.read_text().splitlines()
+            if line.strip() and not line.startswith("#")}
+
+
+@pytest.fixture(autouse=True)
+def _github_credentials_strict(request, monkeypatch):
+    from pathlib import Path
+
+    if Path(str(request.node.fspath)).name not in _untagged_legacy(__file__):
+        monkeypatch.setenv("BOSS_GITHUB_CREDENTIALS_STRICT", "1")
