@@ -289,6 +289,75 @@ def test_a_failed_call_is_raised_in_words_and_not_retried_blind():
     assert not ambiguous_outcome({"type": "MCPCallFailed", "message": str(plain)})
 
 
+# --------------------------------------------------------------------------- schema quirks
+
+QUIRKY_TOOLS = [
+    {"name": "no_description", "inputSchema": {"type": "object"}},
+    {"name": "null_description", "description": None, "inputSchema": {}},
+    {"name": "no_type_root", "description": "properties only",
+     "inputSchema": {"properties": {"q": {"type": "string"}}, "required": ["q"]}},
+    {"name": "refs", "description": "pydantic style",
+     "inputSchema": {"$schema": "http://json-schema.org/draft-07/schema#", "type": "object",
+                     "properties": {"filter": {"$ref": "#/$defs/Filter"},
+                                    "tree": {"$ref": "#/definitions/Node"}},
+                     "$defs": {"Filter": {"type": "object", "description": "a filter",
+                                          "properties": {"field": {"type": "string"},
+                                                         "op": {"oneOf": [
+                                                             {"const": "eq"},
+                                                             {"const": "ne"}]}}}},
+                     "definitions": {"Node": {"type": "object", "properties": {
+                         "child": {"$ref": "#/definitions/Node"}}}}}},
+    {"name": "root_union", "description": "one of two shapes",
+     "inputSchema": {"oneOf": [
+         {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]},
+         {"type": "object", "properties": {"name": {"type": "string"}},
+          "required": ["name"]}]}},
+    {"name": "huge", "description": "x" * 30000, "inputSchema": {
+        "type": "object", "properties": {f"p{i}": {"type": "string", "description": "d" * 200}
+                                         for i in range(400)}}},
+]
+
+
+def _offered(schema: dict) -> None:
+    """What every provider requires of a function's parameters."""
+    import json
+
+    assert schema["type"] == "object" and isinstance(schema.get("properties"), dict)
+    text = json.dumps(schema)
+    assert '"$ref"' not in text and '"$defs"' not in text and '"definitions"' not in text
+    assert '"oneOf"' not in text
+    for name in schema.get("required") or []:
+        assert name in schema["properties"]
+
+
+def test_quirky_schemas_are_discovered_and_offered_as_every_model_accepts(fake):
+    """Row: tool discovery and schema quirks — missing/None descriptions, no object root,
+    $ref into $defs/definitions (with a cycle), oneOf, a root union, a very large schema.
+
+    FAILED BEFORE: the inputSchema went to the model untouched, so one such tool made an
+    OpenAI-compatible API refuse the whole turn ("schema must be a JSON Schema of 'type:
+    object'"), and a None description reached the model as the word "None"."""
+    from boss_engine.services import mcp_registry, tool_schema
+
+    server = fake("streamable", tools=QUIRKY_TOOLS)
+    found = mcp_registry.probe(None, server.url)
+    assert found["reachable"] and len(found["tools"]) == len(QUIRKY_TOOLS)
+    huge = next(t for t in found["tools"] if t["name"] == "huge")
+    assert len(huge["inputSchema"]["properties"]) == 400, "a large schema is kept whole"
+    for tool in MCPClient(None).list_tools(server.url):
+        _offered(tool_schema.for_model(tool.get("inputSchema")))
+        said = tool_schema.description_for_model(tool)
+        assert said and said != "None"
+    refs = tool_schema.for_model(QUIRKY_TOOLS[3]["inputSchema"])
+    assert refs["properties"]["filter"]["properties"]["field"] == {"type": "string"}
+    assert refs["properties"]["filter"]["properties"]["op"]["anyOf"]
+    assert refs["properties"]["tree"]["properties"]["child"]["type"] == "object"
+    union = tool_schema.for_model(QUIRKY_TOOLS[4]["inputSchema"])
+    assert set(union["properties"]) == {"id", "name"} and "required" not in union
+    # Pure: the stored schema (and so its hash) is untouched.
+    assert "$defs" in QUIRKY_TOOLS[3]["inputSchema"]
+
+
 # --------------------------------------------------------------------------- long calls
 
 @pytest.mark.parametrize("mode", ["streamable", "streamable_sse", "sse"])
