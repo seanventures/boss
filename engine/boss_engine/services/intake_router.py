@@ -198,6 +198,39 @@ def agent_payload(conn: IntakeConnection, event: IntakeEvent, event_id: str, *,
     return {k: v for k, v in out.items() if v not in (None, "")}
 
 
+_PR_HEAD = re.compile(r"^pr:(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(?P<n>[0-9]+)@")
+
+
+def start_hints(payload: Optional[Mapping[str, Any]]) -> dict[str, str]:
+    """WHAT A WORKFLOW STARTED FROM THIS EVENT MUST CARRY (BOSSAPP-1133): `once_per`, the
+    commit the event is about (`data.head_key`: the same by webhook and by poll) or else the
+    event id, so the event starts the workflow once however often the agent asks; and, for a
+    pull request, `notify_channel` = that pull request, so the outcome is said where it was
+    asked for. Empty for an event that is not an intake event."""
+    if not isinstance(payload, Mapping) or not payload.get("event_id"):
+        return {}
+    data = payload.get("data") if isinstance(payload.get("data"), Mapping) else {}
+    head = str(data.get("head_key") or "")
+    out = {"once_per": head or f"intake:{payload['event_id']}"}
+    pr = _PR_HEAD.match(head)
+    if pr:
+        out["notify_channel"] = f"github:{pr.group('repo')}#{pr.group('n')}"
+    return out
+
+
+def start_hint_words(payload: Optional[Mapping[str, Any]]) -> str:
+    """The hints, said to the agent the event woke (its first message)."""
+    hints = start_hints(payload)
+    if not hints:
+        return ""
+    said = (f"If you start a workflow for this, call start_workflow with "
+            f"once_per=\"{hints['once_per']}\" (this event starts it once)")
+    if hints.get("notify_channel"):
+        said += (f" and inputs.notify_channel=\"{hints['notify_channel']}\" (its outcome is "
+                 "reported on that pull request)")
+    return said + "."
+
+
 def _addressed(envelope: Mapping[str, Any]) -> bool:
     type_ = str(envelope.get("type") or "").lower()
     if type_.endswith(ADDRESSED_SUFFIXES):

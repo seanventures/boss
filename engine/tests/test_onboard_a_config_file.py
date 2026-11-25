@@ -31,13 +31,15 @@ ENTRY = next(e for e in wc.CATALOGUE if e["key"] == "onboard_config_file")
 # ── the catalogue workflow ─────────────────────────────────────────────────────────────────────
 
 def test_it_is_built_only_from_standard_steps_in_order():
-    caps = [(s.get("binding") or {}).get("capability") for s in ENTRY["steps"]]
-    assert caps == ["build", "review", "merge", "config_deploy", "contract_test",
-                    "promote_config", "notify", "rollback_config", "notify", "notify"]
+    caps = [(s.get("binding") or {}).get("capability") for s in ENTRY["steps"]
+            if s.get("kind") == "capability"]
+    assert caps == ["build", "review", "notify", "merge", "config_deploy", "contract_test",
+                    "promote_config", "notify", "rollback_config", "notify", "notify", "notify"]
     assert all(c in CAPABILITIES for c in caps)
     assert [s["title"] for s in ENTRY["steps"] if s.get("title")] == [
-        "Fix the file", "Staging", "Contract tests", "Production", "Report",
-        "Roll back staging", "Report the rollback", "Report the rejection"]
+        "Fix the file", "Checks pass?", "Report the rejection", "Staging", "Contract tests",
+        "Production", "Report", "Roll back staging", "Report the rollback",
+        "Report the failed rollback", "Report the rejection"]
 
 
 def test_every_path_ends_by_reporting_what_happened():
@@ -45,6 +47,13 @@ def test_every_path_ends_by_reporting_what_happened():
     rolls staging back and says so, a pass goes to production and says so."""
     by_id = {s["id"]: s for s in ENTRY["steps"]}
     assert by_id["fix"]["on_error"] == by_id["merge"]["on_error"] == "rejected"
+    # A file still failing its checks after the fix is rejected without waiting on a person.
+    assert by_id["review"]["next"] == ["checks"]
+    assert by_id["checks"]["kind"] == "condition"
+    assert (by_id["checks"]["on_true"], by_id["checks"]["on_false"]) == ("merge", "not_passing")
+    assert by_id["not_passing"]["binding"]["inputs"]["message"] == \
+        by_id["rejected"]["binding"]["inputs"]["message"]
+    assert by_id["roll_back"]["on_error"] == "report_rollback_failed"
     assert by_id["contract_tests"]["on_error"] == "roll_back"
     assert by_id["contract_tests"]["next"] == ["production"]
     assert by_id["production"]["next"] == ["report"]
@@ -70,8 +79,9 @@ def test_its_spec_says_checks_must_pass_and_starts_from_a_file():
     assert "start_from_content" in schema["properties"]
     build = spec["steps"][0]["binding"]["inputs"]
     assert build["start_from"] == {"from_input": "start_from"}
-    assert spec["steps"][3]["binding"]["inputs"]["source_file"] == {"from_input": "target_path"}
-    assert spec["steps"][4]["binding"]["inputs"] == {
+    steps = {s["id"]: s for s in spec["steps"]}
+    assert steps["staging"]["binding"]["inputs"]["source_file"] == {"from_input": "target_path"}
+    assert steps["contract_tests"]["binding"]["inputs"] == {
         "base_url": {"from_step": "staging", "field": "deployed_url"}}
 
 

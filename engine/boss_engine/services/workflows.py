@@ -3927,7 +3927,21 @@ _SECRET_SEGMENT = re.compile(
 #: A VALUE that is a reference to a stored secret (secret_refs, app secrets, backend refs).
 _SECRET_REF_VALUE = re.compile(
     r"^\s*(?:(?:sref|sec|secret)_[A-Za-z0-9]{8,128}|app_secret://\S+|"
-    r"(?:env|vault|local_vault|platform_secret_store|infisical|secret):[A-Za-z0-9_./:@+-]{1,200})\s*$")
+    r"(?:env|vault|local_vault|platform_secret_store|infisical|secret):[A-Za-z0-9_./:@+-]{1,200})\s*$",
+    re.M)
+#: An app secret reference anywhere in a value: masked whole, never half-shown.
+_APP_SECRET_REF = re.compile(r"app_secret://\S+")
+#: An @-mention in a value: a filled comment must not ping people a partner's file names.
+_MENTION = re.compile(r"(?<![\w.])@(?=[A-Za-z0-9_-])")
+
+
+def neutralised(value: str) -> str:
+    """A VALUE put into a step's text is data, never markup (BOSSAPP-1171 review): `<` cannot
+    open an HTML comment or tag, `[` `]` cannot make a link (a `javascript:` one included), an
+    `@name` does not mention anybody. The template's own words are the workflow author's and
+    stay as written."""
+    out = value.replace("<", "&lt;").replace("[", "\\[").replace("]", "\\]")
+    return _MENTION.sub("@\u200b", out)
 #: What a step-text placeholder looks like: a dotted path. `{X-Probe: boss}` in a YAML snippet
 #: is text, not a placeholder.
 _STEP_TEXT_PATH = re.compile(r"[A-Za-z_][\w-]*(?:\.[\w-]+)+")
@@ -4003,10 +4017,11 @@ def render_step_text(template: Any, context: Mapping[str, Any]) -> str:
         _refuse_secret_paths(candidate)
 
     def checked(path: str, said: str) -> str:
-        if _SECRET_REF_VALUE.match(said):
+        # ANY LINE that is a secret reference refuses the text (a report's cell included).
+        if _SECRET_REF_VALUE.search(said):
             raise TemplateError(
                 f"{{{path}}} is a reference to a stored secret. A step's text never carries one.")
-        return redact_secrets(said)
+        return neutralised(redact_secrets(_APP_SECRET_REF.sub("[SECRET REF]", said)))
 
     unresolved: list[str] = []
     for candidate in candidates:

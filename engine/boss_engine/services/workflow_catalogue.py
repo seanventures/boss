@@ -1717,6 +1717,12 @@ ONBOARD_REPORTS: dict[str, Any] = {
         "Not onboarded: {input.title}\nThe file could not be checked and fixed on this run; "
         "the run's record says why.",
     ],
+    "rollback_failed": [
+        "Staging needs a person: {input.title}\nThe contract tests failed and the rollback did "
+        "not finish cleanly: {steps.roll_back.output.reason}",
+        "Staging needs a person: {input.title}\nThe contract tests failed and the rollback did "
+        "not finish cleanly; the run's record says what happened.",
+    ],
     "rolled_back": [
         "Rolled back from staging: {input.title}\nThe contract tests failed at "
         "{steps.staging.output.deployed_url}, so staging is back to what it served before.\n\n"
@@ -1760,7 +1766,16 @@ def _onboard_steps() -> list[dict[str, Any]]:
             "start_from_content": _in("start_from_content"),
             "target_path": _in("target_path"),
         }, nxt=["review"]), "title": "Fix the file", "on_error": "rejected"},
-        _step("review", "review", nxt=["merge"]),
+        _step("review", "review", nxt=["checks"]),
+        # REJECTED WITHOUT WAITING ON A PERSON (review of #329): a file the repository's checkers
+        # still fail after the fix (an open P0/P1) is reported on the partner's pull request
+        # with the build's PR as the proposed fix; the run does not sit at a merge card. A
+        # build with no validation record (no checker declared) goes on to the merge as before.
+        {"id": "checks", "kind": "condition", "title": "Checks pass?",
+         "expression": {"not": {"path": "steps.fix.output.checks_passed", "op": "eq",
+                                "value": False}},
+         "on_true": "merge", "on_false": "not_passing", "next": []},
+        tell("not_passing", "Report the rejection", ONBOARD_REPORTS["rejected"]),
         {**_step("merge", "merge", nxt=["staging"]), "on_error": "rejected"},
         # Staging follows its policy: where a person set staging to ship without asking, it
         # asks nobody (the merge was the person's answer); production always asks.
@@ -1779,8 +1794,10 @@ def _onboard_steps() -> list[dict[str, Any]]:
         tell("report", "Report", ONBOARD_REPORTS["live"]),
         {**_step("roll_back", "rollback_config",
                  {"deployment_id": _from("staging", "deployment_id")}, nxt=["report_rollback"]),
-         "title": "Roll back staging"},
+         "title": "Roll back staging", "on_error": "report_rollback_failed"},
         tell("report_rollback", "Report the rollback", ONBOARD_REPORTS["rolled_back"]),
+        tell("report_rollback_failed", "Report the failed rollback",
+             ONBOARD_REPORTS["rollback_failed"]),
         tell("rejected", "Report the rejection", ONBOARD_REPORTS["rejected"]),
     ]
 

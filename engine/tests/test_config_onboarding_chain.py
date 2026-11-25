@@ -218,7 +218,7 @@ class _Ctx:
 def _publish(c, project_id):
     """The catalogue entry's own steps from Staging on, with Staging given the file inline."""
     steps = [copy.deepcopy(s) for s in ENTRY["steps"]
-             if s["id"] not in ("fix", "review", "merge", "rejected")]
+             if s["id"] not in ("fix", "review", "checks", "not_passing", "merge", "rejected")]
     for step in steps:
         if step["id"] == "staging":
             step["binding"]["inputs"] = {"files": {"from_input": "files"},
@@ -294,11 +294,6 @@ def test_staging_contract_tests_and_one_approval_to_production(eng, project, wor
                    until=lambda s: s.get("production", {}).get("status") == "waiting")
     assert steps["staging"]["status"] == "succeeded", steps["staging"]
     assert (world["staging"] / TENANT).read_text() == V1
-    with eng.begin() as c:
-        print("DEPS", [dict(r) for r in c.execute(text("SELECT id, status, failure_reason, decision_id FROM deployment_runs WHERE project_id=:p"), {"p": project}).mappings()])
-        print("JOBS", [dict(r) for r in c.execute(text("SELECT id, status, kind FROM jobs WHERE project_id=:p"), {"p": project}).mappings()])
-        print("STEPS", {k: (v["status"], v["last_error"], str(v["output"])[:300]) for k, v in steps.items()})
-        print("DEC", [dict(r) for r in c.execute(text("SELECT id, status, question FROM decisions WHERE project_id=:p"), {"p": project}).mappings()])
     assert steps["contract_tests"]["status"] == "succeeded", steps["contract_tests"]
     assert steps["contract_tests"]["output"]["passed"] == 1
     # ONE card for production: the Production step's own gate. Nothing has shipped yet.
@@ -311,15 +306,6 @@ def test_staging_contract_tests_and_one_approval_to_production(eng, project, wor
                   {"a": PERSON, "d": pending[0]["id"]})
     steps = _drive(eng, world, project, run["id"],
                    until=lambda s: s.get("report", {}).get("status") == "succeeded")
-    with eng.begin() as c:
-        print("DEPS2", [dict(r) for r in c.execute(text("SELECT id, status, failure_reason, decision_id, environment FROM deployment_runs WHERE project_id=:p"), {"p": project}).mappings()])
-        print("DEC2", [dict(r) for r in c.execute(text("SELECT id, status, question, approved_by FROM decisions WHERE project_id=:p"), {"p": project}).mappings()])
-        print("PROD", steps["production"]["output"])
-        from boss_engine.services import deploy_policy as dp
-        gid = pending[0]["id"]
-        print("SNAP", [dict(r) for r in c.execute(text("SELECT step_id, decision_id, binding_snapshot->>'released_for' AS rf, binding_snapshot->'binding'->>'capability' AS cap, binding_snapshot->>'capability' AS cap2 FROM workflow_step_runs WHERE workflow_run_id=:r AND step_id='production'"), {"r": run["id"]}).mappings()])
-        print("GATE", dp._gate_approval(c, project, gid), dp._gate_approval(c, project, gid, person_only=True))
-        print("EVT", [dict(r) for r in c.execute(text("SELECT event_type, data FROM events WHERE project_id=:p AND event_type LIKE 'tool%' ORDER BY created_at DESC LIMIT 3"), {"p": project}).mappings()])
     assert steps["production"]["status"] == "succeeded", steps["production"]
     assert (world["production"] / TENANT).read_text() == V1
     with eng.begin() as c:
@@ -483,6 +469,11 @@ def test_one_event_starts_the_workflow_once(eng, project):  # noqa: F811
     again = start("northgate/tenants#12@abc1234")
     assert first["status"] == "running" and first["run_id"]
     assert again["run_id"] == first["run_id"] and again["already_started"] is True
+    assert again["status"] == first["status"] == "running"
+    with eng.begin() as c:
+        c.execute(text("UPDATE workflow_runs SET status = 'completed' WHERE id = :r"),
+                  {"r": first["run_id"]})
+    assert start("northgate/tenants#12@abc1234")["status"] == "completed", "its real status"
     pushed = start("northgate/tenants#12@def5678")          # a new commit is new work
     assert pushed["run_id"] != first["run_id"] and "already_started" not in pushed
     assert start()["run_id"] != start()["run_id"], "without once_per every start is its own"
@@ -492,3 +483,197 @@ def test_one_event_starts_the_workflow_once(eng, project):  # noqa: F811
     assert runs == 4
     key = _start_dedupe_key("w", "  a   b ", lambda: "x")
     assert key == _start_dedupe_key("w", "a b", lambda: "y") and "a b" not in key
+
+
+# ── review of #329 ─────────────────────────────────────────────────────────────────────────────
+
+def test_a_values_markup_is_neutralised_and_secret_refs_never_pass():
+    view = {"input": {"note": "<!-- hidden --> [click](javascript:alert(1)) @everyone hi@x.com",
+                      "ref": "ok line\nsref_abcdef123456\nmore",
+                      "app": "see app_secret://prod/gw/API_KEY now"}}
+    said = workflows.render_step_text("Note: {input.note}", view)
+    assert "<!--" not in said and "&lt;!--" in said
+    assert "\\[click\\](javascript:" in said, "a link cannot form"
+    assert "@everyone" not in said and "hi@x.com" in said
+    # The template's own words are the author's and stay as written.
+    assert workflows.render_step_text("**[Docs](https://x)** <b>{input.app}</b>", view) == \
+        "**[Docs](https://x)** <b>see \\[SECRET REF\\] now</b>"
+    with pytest.raises(workflows.TemplateError, match="reference to a stored secret"):
+        workflows.render_step_text("{input.ref}", view)
+
+
+def _stage(eng, world, project_id, body=V1, run_id=None):  # noqa: F811
+    planned = config_deploy.deploy_files(eng, world["settings"], project_id=project_id,
+                                         actor=PERSON, app_name="Northgate Gateway",
+                                         environment="staging", files={TENANT: body},
+                                         workflow_run_id=run_id)
+    assert planned["status"] == "planned", planned
+    _apply_jobs(eng, world["settings"], project_id)
+    return planned
+
+
+def _close(eng, world, deployment_run_id):  # noqa: F811
+    """Close a planned deployment the way BOSS does (its ChangeSet, reservation, surface)."""
+    with eng.begin() as c:
+        row = dict(c.execute(text("SELECT * FROM deployment_runs WHERE id = :i"),
+                             {"i": deployment_run_id}).mappings().one())
+        governed_host_deploy.supersede(c, world["settings"], row, reason="test", actor=PERSON)
+
+
+def test_an_agent_cannot_reuse_a_released_gate_for_production(eng, project, world):  # noqa: F811
+    """Production takes only the runner's verified gate of ITS OWN step, run and bundle, once."""
+    from boss_engine.services import deploy_policy
+
+    from .test_workflow_capability_runner import _publish as publish_steps, _start as start_run
+
+    with eng.begin() as c:
+        _, version = publish_steps(c, project, f"gate_{uuid.uuid4().hex[:6]}", [
+            {"id": "prod", "kind": "capability", "next": [],
+             "binding": {"capability": "promote_config",
+                         "inputs": {"deployment_id": "x"}}}], "prod")
+        run = start_run(c, project, version["id"], {})
+    staged = _stage(eng, world, project, run_id=run["id"])
+    with eng.begin() as c:
+        gate = f"dec_gate_{uuid.uuid4().hex[:10]}"
+        c.execute(text("INSERT INTO decisions (id, project_id, question, status, approved_by) "
+                       "VALUES (:d, :p, 'Promote?', 'approved', :a)"),
+                  {"d": gate, "p": project, "a": PERSON})
+        c.execute(text("UPDATE workflow_step_runs SET decision_id = :d, binding_snapshot = "
+                       "COALESCE(binding_snapshot, '{}'::jsonb) || CAST(:s AS JSONB) "
+                       "WHERE workflow_run_id = :r"),
+                  {"d": gate, "s": json.dumps({"capability": "promote_config",
+                                               "released_for": gate}), "r": run["id"]})
+        mine = deploy_policy.released_gate(c, project, gate, capability="promote_config",
+                                           run_id=run["id"],
+                                           bundle_sha256=staged["bundle_sha256"])
+        assert mine and mine["run_id"] == run["id"]
+        # Another run, or another capability, does not get it.
+        assert deploy_policy.released_gate(c, project, gate, capability="promote_config",
+                                           run_id="wfr_other") is None
+        assert deploy_policy.released_gate(c, project, gate, capability="rollback_config",
+                                           run_id=run["id"]) is None
+    # An agent naming the gate as an argument, inside its own run or none: a person is asked.
+    for run_id in (None, run["id"]):
+        named = config_deploy.promote(eng, world["settings"], project_id=project,
+                                      actor="agent:deploy-lead",
+                                      deployment_run_id=staged["deployment_run_id"],
+                                      approval_decision_id=gate, workflow_run_id=run_id,
+                                      expected_bundle_sha256=staged["bundle_sha256"])
+        assert named["status"] == "planned" and named["approval"] is None, named
+        assert named["decision_id"] != gate
+        _close(eng, world, named["deployment_run_id"])
+    # A gate recorded for another bundle does not ship this one.
+    other = config_deploy.promote(eng, world["settings"], project_id=project, actor=PERSON,
+                                  deployment_run_id=staged["deployment_run_id"],
+                                  workflow_run_id=run["id"],
+                                  expected_bundle_sha256=staged["bundle_sha256"],
+                                  released_gate={**mine, "bundle_sha256": "f" * 64})
+    assert other.get("approval") is None, other
+    _close(eng, world, other["deployment_run_id"])
+    # The runner's own gate ships once; the same gate again asks a person.
+    ok = config_deploy.promote(eng, world["settings"], project_id=project, actor=PERSON,
+                               deployment_run_id=staged["deployment_run_id"],
+                               workflow_run_id=run["id"],
+                               expected_bundle_sha256=staged["bundle_sha256"], released_gate=mine)
+    assert ok["approval"] and ok["approval"]["decision_id"] == gate, ok
+    with eng.begin() as c:
+        use = c.execute(text("SELECT workflow_run_id, capability, target_id, bundle_sha256 "
+                             "FROM deployment_gate_uses WHERE decision_id = :d"),
+                        {"d": gate}).mappings().one()
+        assert use["workflow_run_id"] == run["id"] and use["capability"] == "promote_config"
+        assert use["bundle_sha256"] == staged["bundle_sha256"] and use["target_id"]
+        c.execute(text("DELETE FROM deployment_gate_uses WHERE decision_id = :d"), {"d": gate})
+    _close(eng, world, ok["deployment_run_id"])
+
+
+def test_a_file_failing_its_checks_is_rejected_on_the_pr_without_a_person(
+        eng, project, world, monkeypatch):  # noqa: F811
+    """S2: an open P0 after the fix goes straight to the rejection comment, with the report and
+    the build's PR as the proposed fix — the run never waits at a merge card."""
+    record = {"input": {"file": "config/tenants/lumen-pay.yaml"}, "validator": {"id": "gwlint"},
+              "findings": [_finding("V-01", "P0", "open", "admin route exposed", fix_kind="human")]}
+    real = runner._perform_capability
+
+    def fake(connection, ctx, *, key, **kw):
+        if key == "build":
+            return {"capability": "build", "status": "succeeded",
+                    "pull_request_url": "https://github.com/o/r/pull/7",
+                    "validation_report": validators.report_markdown(record),
+                    "checks_passed": validators.checks_passed(record), "open_findings": 1}
+        if key == "review":
+            return {"capability": "review", "status": "succeeded", "verdict": "findings"}
+        return real(connection, ctx, key=key, **kw)
+
+    monkeypatch.setattr(runner, "_perform_capability", fake)
+    steps = [copy.deepcopy(s) for s in ENTRY["steps"]
+             if s["id"] in ("fix", "review", "checks", "not_passing", "merge", "rejected")]
+    for step in steps:
+        if step["id"] == "merge":
+            step["next"] = []
+    with eng.begin() as c:
+        name = f"reject_{uuid.uuid4().hex[:6]}"
+        definition = workflows.create_definition(c, project_id=project, workflow_key=name,
+                                                 name="Onboard a config file", description=None,
+                                                 actor="test", namespace="product")
+        version = workflows.publish_version(c, project_id=project,
+                                            definition_id=definition["id"], actor="test",
+                                            spec={"entry_step": "fix", "steps": steps})
+        run = workflows.start_run(c, project_id=project, actor=PERSON,
+                                  input_data={"title": "Lumen Pay", "directive": "onboard it",
+                                              "start_from": "config/tenants/lumen-pay.yaml",
+                                              "target_path": "config/tenants/lumen-pay.yaml",
+                                              "notify_channel": "github:#12"},
+                                  dedupe_key=f"dk_{uuid.uuid4().hex[:10]}",
+                                  workflow_version_id=version["id"])
+    got = _drive(eng, world, project, run["id"],
+                 until=lambda s: s.get("not_passing", {}).get("status") == "succeeded")
+    assert got["not_passing"]["status"] == "succeeded", got
+    assert got.get("merge", {}).get("status") in (None, "skipped", "pending")
+    with eng.begin() as c:
+        assert _pending_decisions(c, project) == [], "a person was asked"
+    body = world["github"].comments[12][-1]["body"]
+    assert "Not onboarded: Lumen Pay" in body and "| V-01 | **P0** |" in body
+    assert "https://github.com/o/r/pull/7" in body
+
+
+def test_a_rollback_waits_for_a_deployment_in_flight_and_says_when_it_left_it_unhealthy(
+        eng, project, world, gateway, monkeypatch):  # noqa: F811
+    settings = world["settings"]
+    first = _stage(eng, world, project)
+    # Another deployment approved and not yet applied on the same directory: no rollback now.
+    pending = config_deploy.deploy_files(eng, settings, project_id=project, actor=PERSON,
+                                         app_name="Northgate Gateway", environment="staging",
+                                         files={"orbit.yaml": "id: orbit\n"})
+    refused = config_deploy.rollback(eng, settings, project_id=project, actor=PERSON,
+                                     deployment_run_id=first["deployment_run_id"])
+    assert refused["status"] == "failed" and "would race it" in refused["reason"], refused
+    _apply_jobs(eng, settings, project)
+    assert pending["status"] == "planned"
+    # The restore lands but the gateway stays down: the undone deployment is never "last good".
+    gateway["state"]["healthy"] = False
+    monkeypatch.setattr(config_deploy, "HEALTH_WAIT_SECONDS", 1)
+    back = config_deploy.rollback(eng, settings, project_id=project, actor=PERSON,
+                                  deployment_run_id=first["deployment_run_id"])
+    assert back["status"] == "planned", back
+    _apply_jobs(eng, settings, project)
+    gateway["state"]["healthy"] = True
+    with eng.begin() as c:
+        rows = {r["id"]: r["status"] for r in c.execute(
+            text("SELECT id, status FROM deployment_runs WHERE project_id = :p"),
+            {"p": project}).mappings()}
+    assert rows[back["deployment_run_id"]] == config_deploy.RESTORED_UNHEALTHY
+    assert rows[first["deployment_run_id"]] == "rollback_unhealthy"
+    assert not (world["staging"] / TENANT).exists()
+
+
+def test_an_intake_run_is_told_its_once_per_and_where_to_report():
+    from boss_engine.services import intake_router
+
+    pr = {"event_id": "ev1", "data": {"head_key": "pr:northgate/tenants#12@abc1234"}}
+    assert intake_router.start_hints(pr) == {"once_per": "pr:northgate/tenants#12@abc1234",
+                                             "notify_channel": "github:northgate/tenants#12"}
+    assert intake_router.start_hints({"event_id": "ev2", "data": {}}) == {"once_per": "intake:ev2"}
+    assert intake_router.start_hints({"text": "hello"}) == {}
+    words = intake_router.start_hint_words(pr)
+    assert 'once_per="pr:northgate/tenants#12@abc1234"' in words
+    assert 'inputs.notify_channel="github:northgate/tenants#12"' in words

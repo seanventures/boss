@@ -10499,10 +10499,53 @@
               "inputs": {}
             },
             "next": [
-              "merge"
+              "checks"
             ],
             "captain": "adversarial_reviewer",
             "default_captain": "adversarial_reviewer",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "checks",
+            "kind": "condition",
+            "title": "Checks pass?",
+            "expression": {
+              "not": {
+                "path": "steps.fix.output.checks_passed",
+                "op": "eq",
+                "value": false
+              }
+            },
+            "on_true": "merge",
+            "on_false": "not_passing",
+            "next": [],
+            "max_attempts": 3,
+            "binding": {}
+          },
+          {
+            "id": "not_passing",
+            "kind": "capability",
+            "binding": {
+              "capability": "notify",
+              "inputs": {
+                "message": [
+                  "Not onboarded: {input.title}\n{steps.fix.output.validation_report}\n\nThe proposed fix is {steps.fix.output.pull_request_url}: review it, change your file the same way, and push again.",
+                  "Not onboarded: {input.title}\n{steps.fix.output.validation_report}",
+                  "Not onboarded: {input.title}\nThe file could not be checked and fixed on this run; the run's record says why."
+                ],
+                "channel": {
+                  "from_input": "notify_channel"
+                }
+              }
+            },
+            "next": [],
+            "title": "Report the rejection",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -10651,6 +10694,7 @@
               "report_rollback"
             ],
             "title": "Roll back staging",
+            "on_error": "report_rollback_failed",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
@@ -10676,6 +10720,31 @@
             },
             "next": [],
             "title": "Report the rollback",
+            "max_attempts": 3,
+            "approval": {
+              "mode": "auto",
+              "on_timeout": "block",
+              "risk_tier": 1,
+              "forced_manual": false
+            }
+          },
+          {
+            "id": "report_rollback_failed",
+            "kind": "capability",
+            "binding": {
+              "capability": "notify",
+              "inputs": {
+                "message": [
+                  "Staging needs a person: {input.title}\nThe contract tests failed and the rollback did not finish cleanly: {steps.roll_back.output.reason}",
+                  "Staging needs a person: {input.title}\nThe contract tests failed and the rollback did not finish cleanly; the run's record says what happened."
+                ],
+                "channel": {
+                  "from_input": "notify_channel"
+                }
+              }
+            },
+            "next": [],
+            "title": "Report the failed rollback",
             "max_attempts": 3,
             "approval": {
               "mode": "auto",
