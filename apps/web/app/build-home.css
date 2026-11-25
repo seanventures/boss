@@ -684,7 +684,7 @@
   background: color-mix(in srgb, var(--accent) 7%, var(--surface));
   color: var(--ink);
 }
-.bh-started-icon { flex: none; margin-top: 0.15rem; color: var(--accent-text); font-size: 1.25rem; }
+.bh-started-icon { flex: none; margin-top: 0.15rem; color: var(--accent-text); font-size: var(--fs-page); }
 .bh-started-body { min-width: 0; }
 .bh-started-title { margin: 0; font-family: var(--sans); font-size: var(--fs-ui); font-weight: 700; }
 .bh-started-next { margin: 0.2rem 0 0; color: var(--muted); font-size: var(--fs-meta); }

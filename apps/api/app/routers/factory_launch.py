@@ -91,7 +91,7 @@ def factory_attachments(
     if not database_is_reachable(_engine):
         return JSONResponse({"error": "database", "message": "Postgres is not reachable."},
                             status_code=503)
-    _auth, org_id, _actor = _caller(request)
+    _auth, org_id, actor = _caller(request)
     uploads: list[tuple[str, str, str, bytes]] = []
     for kind, group in (("spec", spec), ("file", file), ("image", image)):
         for upload in group or []:
@@ -104,7 +104,8 @@ def factory_attachments(
     try:
         with begin(_engine) as connection:
             return store_attachments(
-                connection, org_id=org_id, uploads=uploads, drive_source_id=drive_source_id)
+                connection, org_id=org_id, uploads=uploads, drive_source_id=drive_source_id,
+                actor=actor)
     except FactoryLaunchError as error:
         return _failure(error)
 
@@ -152,5 +153,40 @@ def factory_launch(payload: LaunchBody, request: Request) -> Any:
         return JSONResponse({"error": "invalid_launch", "message": str(error)}, status_code=422)
     if asked is not None:
         # The flat body every console start reads (identity_agents.install_consent_handler).
+        return JSONResponse(asked.body, status_code=409)
+    return result
+
+
+@router.post("/v1/projects/{project_id}/factory/resume", status_code=201)
+@permit(P.WORKFLOW_RUN_START, scope=Scope.project(path="project_id"))
+def factory_resume(project_id: str, request: Request) -> Any:
+    """Resume a kept Easy Mode launch after the person consents to its agents."""
+    from boss_engine.services import factory_launch as launch_service
+
+    if not database_is_reachable(_engine):
+        return JSONResponse({"error": "database", "message": "Postgres is not reachable."},
+                            status_code=503)
+    auth, org_id, actor = _caller(request)
+    asked: Optional[ConsentRequired] = None
+    try:
+        with begin(_engine) as connection:
+            try:
+                result = launch_service.resume(
+                    connection, _settings, org_id=org_id, project_id=project_id,
+                    actor=actor, auth=auth, jobs=_jobs())
+            except ConsentRequired as consent_asked:
+                asked = consent_asked
+                result = {}
+            if asked is None and (not result.get("project_id") or not result.get("run_id")):
+                raise FactoryLaunchError(
+                    502, "launch_incomplete",
+                    "A launch without a project and a run is not done.")
+    except FactoryLaunchError as error:
+        return _failure(error)
+    except MultiRepoError as error:
+        return JSONResponse(error.body(), status_code=error.status)
+    except ValueError as error:
+        return JSONResponse({"error": "invalid_launch", "message": str(error)}, status_code=422)
+    if asked is not None:
         return JSONResponse(asked.body, status_code=409)
     return result

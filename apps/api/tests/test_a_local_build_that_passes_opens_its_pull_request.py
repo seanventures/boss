@@ -180,3 +180,26 @@ def test_completed_with_no_pull_request_and_no_reason_cannot_be_stored(engine, r
     opened = _bare_run(engine, pid)
     _complete(engine, opened, ", pull_request_url = 'http://boss-local/x/y/pull/1'")
     assert pull_request_owed.KEY not in _run(engine, opened)["finalize_ctx"]
+
+
+def test_unexplained_no_pull_request_clears_when_pull_request_url_arrives(engine, repo_root):
+    pid, _, _ = _local_project(engine)
+    delayed = _bare_run(engine, pid)
+    _complete(engine, delayed)
+    assert _run(engine, delayed)["finalize_ctx"][pull_request_owed.KEY]["reason"] == "unexplained"
+
+    # Once the PR URL is recorded on the already-completed row, 'unexplained' is cleared.
+    with engine.begin() as c:
+        c.execute(text("UPDATE code_task_runs SET pull_request_url = 'http://boss-local/x/y/pull/2' "
+                       "WHERE id = :id"), {"id": delayed})
+    assert pull_request_owed.KEY not in _run(engine, delayed)["finalize_ctx"]
+
+    # An explicit non-'unexplained' reason is left untouched when a PR URL is written.
+    why = pull_request_owed.owed({"open_pr": False}, {})
+    explicit = _bare_run(engine, pid)
+    _complete(engine, explicit, ", " + pull_request_owed.record_clause(),
+              {"no_pr": pull_request_owed.record_value(why)})
+    with engine.begin() as c:
+        c.execute(text("UPDATE code_task_runs SET pull_request_url = 'http://boss-local/x/y/pull/3' "
+                       "WHERE id = :id"), {"id": explicit})
+    assert _run(engine, explicit)["finalize_ctx"][pull_request_owed.KEY] == why

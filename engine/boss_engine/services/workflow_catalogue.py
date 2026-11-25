@@ -791,7 +791,8 @@ CATALOGUE: list[dict[str, Any]] = [
             # report. And a run that stops even earlier is not left without one: the same
             # report is assembled on demand for any run, at any point, from the same evidence.
             _step("report", "report"),
-            _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
+            _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id"),
+                                       "skip_without_deploy_ask": True},
                   approver_role="release_manager"),
             _step("notify", "notify", _notify_inputs()),
         ]),
@@ -2183,6 +2184,10 @@ def input_schema_for(entry: dict[str, Any]) -> dict[str, Any]:
             if field in required and text_for["title"].endswith(" (optional)"):
                 text_for["title"] = text_for["title"][: -len(" (optional)")]
             properties[field] = text_for
+    if "directive" not in properties:
+        properties["directive"] = {"type": "string", "format": "textarea", "title": title,
+                                   "description": help_text,
+                                   "examples": [brief["example"]["directive"]]}
     return {"type": "object",
             "required": [f for f in order if f in required],
             "properties": properties}

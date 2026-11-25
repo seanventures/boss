@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The deploy card says when a host is shared, beside the "runs on {host}" link.
  * host_projects stays in the title only when it is greater than 1. The sentence

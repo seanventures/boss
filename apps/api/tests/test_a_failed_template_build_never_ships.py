@@ -172,6 +172,27 @@ def test_an_ordinary_finished_run_still_completes(world, engine):
     assert _row(engine, run_id)["status"] == "completed"
 
 
+def test_shepherd_sweep_records_explicit_no_pr_reason_never_unexplained(world, engine):
+    from boss_engine.config import Settings
+    from boss_engine.services import pull_request_owed, shepherd_service
+
+    eval_run = _run(engine, world.project_a, status="running", fctx={})
+    normal_run = _run(engine, world.project_a, status="running", fctx={"work_branch": "boss/feat-1"})
+    with engine.begin() as c:
+        c.execute(text("UPDATE code_task_runs SET spec = '{\"open_pr\": false}'::jsonb WHERE id = :id"),
+                  {"id": eval_run})
+
+    shepherd_service.sweep_abandoned_runs(engine, Settings(), world.project_a)
+
+    eval_row = _row(engine, eval_run)
+    normal_row = _row(engine, normal_run)
+    assert eval_row["status"] == "completed"
+    assert eval_row["finalize_ctx"][pull_request_owed.KEY]["reason"] == "open_pr_false"
+    assert normal_row["status"] == "completed"
+    assert normal_row["finalize_ctx"][pull_request_owed.KEY]["reason"] == "shepherd_completed"
+    assert "boss/feat-1" in normal_row["finalize_ctx"][pull_request_owed.KEY]["words"]
+
+
 # ---- nothing downstream treats it as passed ----------------------------------------------------
 
 def test_deploy_build_refuses_a_build_that_did_not_pass(world, engine):

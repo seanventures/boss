@@ -26,7 +26,7 @@ import { onChanged } from "../app/changed";
 import { obsWrite } from "../app/observability/obs-write";
 import { useAreaShown } from "./area-shown";
 import { isConsoleLive, subscribeConsoleLive } from "./console-live";
-import { isHydrated, localWith, markHydrated } from "./local-time";
+import { isHydrated, localWith, markHydrated } from "./hydration-state";
 import { changeRef, isLocalRepo, repoHref } from "./repo-links";
 import { parseMachine, type MachineChecks } from "./machine-checks";
 
@@ -119,7 +119,7 @@ export type ProjectCard = {
   /** On a subscription: the week at list price (cost_words), never a bare $0.00. */
   on_subscription?: boolean; list_week?: number | null;
   /** Screen 02 (cards.extras): the ring's number, the two status lines, the live crew. */
-  status_label: string; onboarding_active: boolean; start_onboarding: Accept | null; archived: boolean;
+  status_label: string; onboarding_active: boolean; start_onboarding: Accept | null; awaiting_consent?: Accept | null; archived: boolean;
   /** Its latest build failed (engine overview.latest_failed): the card says so in red. */
   build_failed?: BuildFailed | null;
   uptime_pct: number | null; onboarding_progress: [number, number] | null; lines: string[]; line_tone: string;
@@ -192,11 +192,15 @@ function parseRelease(v: unknown): NeedsRelease | null {
  *  drawers): a finished item (done / failed) is placed by WHEN IT FINISHED (`updated_at`):
  *  "12h" within a day, "Sat" this week, else "Nov 2", in the viewer's zone; anything still
  *  open by how long since it started (`age`). Never "Sat" on one screen and "12h" on another. */
-export function workWhen(w: { state: string; age?: string; updated_at?: string | null; created_at?: string | null }, nowMs: number = Date.now()): string {
+export function workWhen(w: { state: string; age?: string; updated_at?: string | null; created_at?: string | null }, nowMs?: number): string {
   if (w.state !== "done" && w.state !== "failed") return w.age || "";
   const at = Date.parse(w.updated_at || w.created_at || "");
   if (!Number.isFinite(at)) return w.age || "";
-  const ago = Math.max(0, nowMs - at);
+  if (nowMs === undefined && !isHydrated()) {
+    return localWith(at, { month: "short", day: "numeric" });
+  }
+  const refMs = nowMs ?? Date.now();
+  const ago = Math.max(0, refMs - at);
   if (ago < 3_600_000) return `${Math.max(1, Math.floor(ago / 60_000))}m`;
   if (ago < 86_400_000) return `${Math.floor(ago / 3_600_000)}h`;
   return ago < 6 * 86_400_000 ? localWith(at, { weekday: "short" }) : localWith(at, { month: "short", day: "numeric" });
@@ -292,6 +296,7 @@ export type StageKey = "plan" | "build" | "ship" | "live";
 export type WorkStep = {
   id: string; name: string; kind: string; capability: string | null; stage: StageKey; state: StepState;
   started_at: string; completed_at: string; sub: string;
+  waiting_on_person?: boolean;
   /** The screens the step's own record opens: its panel meeting, its build, its deploy. */
   refs: { meeting?: string; build?: string; deploy?: string };
 };
@@ -354,8 +359,8 @@ export function parseStillAnswerable(raw: unknown): StillAnswerable | null {
 }
 /** "waiting since Nov 7": when the oldest still-answerable question was asked. */
 export function waitingSinceWords(since: string): string {
-  const d = new Date(since);
-  return Number.isFinite(d.getTime()) ? `waiting since ${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })}` : "waiting";
+  const formatted = localWith(since, { month: "short", day: "numeric" });
+  return formatted ? `waiting since ${formatted}` : "waiting";
 }
 export type DemoLogin = { user: string; label: string; reveal: { href: string; requires: string } | null };
 export type Overview = {
@@ -365,7 +370,9 @@ export type Overview = {
     /** The deploy moving now, or the last one that failed ("Deploying · 2/7"). */
     deploy?: DeployChip | null;
     /** The latest build failed: the header chip is red "Build failed" with its reason. */
-    build_failed?: BuildFailed | null };
+    build_failed?: BuildFailed | null;
+    /** Kept Easy Mode launch awaiting consent to resume. */
+    awaiting_consent?: Accept | null };
   journey: Node[]; needs_you: NeedsYou[];
   /** Work waiting for GitHub (BOSSAPP-922): an FYI under Needs you, never a card to act on and
    *  never counted as one — BOSS pushes it on its own. */
@@ -633,6 +640,7 @@ export const parseCard = (v: unknown): ProjectCard => {
     status_label: s(x.status_label), onboarding_active: x.onboarding_active === true, archived: x.archived === true,
     build_failed: parseBuildFailed(x.build_failed),
     start_onboarding: parseAccept(x.start_onboarding),
+    awaiting_consent: parseAccept(x.awaiting_consent),
     uptime_pct: nn(x.uptime_pct),
     onboarding_progress: Array.isArray(x.onboarding_progress) && x.onboarding_progress.length === 2
       ? [n(x.onboarding_progress[0]), n(x.onboarding_progress[1])] : null,
@@ -722,6 +730,7 @@ const parseWorkStep = (v: unknown): WorkStep => {
     id: s(x.id), name: s(x.name, s(x.id)), kind: s(x.kind, "capability"), capability: s(x.capability) || null,
     stage: oneOf(x.stage, STAGE_KEYS, "build"), state: oneOf(x.state, STEP_STATES, "todo"),
     started_at: s(x.started_at), completed_at: s(x.completed_at), sub: s(x.sub),
+    ...(x.waiting_on_person === true ? { waiting_on_person: true } : {}),
     refs: { ...(s(r.meeting) ? { meeting: s(r.meeting) } : {}), ...(s(r.build) ? { build: s(r.build) } : {}), ...(s(r.deploy) ? { deploy: s(r.deploy) } : {}) },
   };
 };
@@ -913,7 +922,8 @@ export const parseOverview = (v: unknown): Overview => {
     project: { id: s(p.id), name, initials: s(p.initials) || initialsOf(name), stage: oneOf(p.stage, STAGES, "onboarding"),
                repos: a(p.repos).map(parseRepo), live_url: s(p.live_url), status_label: s(p.status_label),
                health: oneOf(p.health ?? st.health, HEALTHS, "unknown"), health_reason: s(p.health_reason),
-               deploy: parseDeployChip(p.deploy), build_failed: parseBuildFailed(p.build_failed) },
+               deploy: parseDeployChip(p.deploy), build_failed: parseBuildFailed(p.build_failed),
+               awaiting_consent: parseAccept(p.awaiting_consent) },
     journey: a(x.journey).map(parseNode),
     roadmap_count: nn(x.roadmap_count),
     still_answerable: parseStillAnswerable(x.still_answerable),

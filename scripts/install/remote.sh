@@ -472,7 +472,7 @@ check_toolchain_drift() {
   script="cd '$DIR' || exit 0
 m() { $compose exec -T \"\$1\" cat /opt/toolchains/manifest.json </dev/null 2>/dev/null | tr -d ' \n'; }
 ref=\$(m api); [ -n \"\$ref\" ] || exit 0
-for s in worker egress runner; do
+for s in worker kg-mcp egress runner; do
   v=\$(m \$s) || continue
   [ -z \"\$v\" ] || [ \"\$v\" = \"\$ref\" ] || echo \"\$s has \$v, api has \$ref\"
 done"
@@ -564,7 +564,7 @@ cmd_update() {
   # (apps/egress/boss_egress/connect.py). An update that rebuilt api and worker alone, after the
   # default became java,go, left egress on the old image: Setup said Go was on and every Go build
   # failed at its first download. The runner builds too, so it comes along when it is running.
-  local services="api worker egress"
+  local services="api worker kg-mcp egress"
   local runner_running=0
   rshq "$REMOTE_DOCKER ps --filter name=boss-community-runner- -q | grep -q ." \
     && runner_running=1 && services="$services runner"

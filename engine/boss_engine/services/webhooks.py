@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import os
+import time
 from secrets import compare_digest
 from typing import Any, Callable, Optional
 from urllib.parse import urlparse
@@ -883,8 +884,6 @@ class InboundWebhookService:
         github_community_only: bool = False,
     ) -> dict[str, Any]:
         normalized_source = source.strip().lower()
-        signature = (headers.get("x-hub-signature-256", "")
-                     or headers.get("x-hub-signature", ""))    # Bitbucket's header name
         secret = self._secret(normalized_source)
         if not secret:
             return {
@@ -894,34 +893,85 @@ class InboundWebhookService:
                                 or headers.get("x-request-uuid", "").strip() or None),
                 "duplicate": False,
             }
-        expected = (
-            "sha256="
-            + hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
-        )
         audit_project_id = self.settings.default_project_id
         delivery_key = (headers.get("x-github-delivery", "").strip()
                         or headers.get("x-request-uuid", "").strip()      # Bitbucket delivery id
                         or headers.get("x-hook-uuid", "").strip())
-        if not signature or not compare_digest(signature, expected):
-            emit_event(
-                connection,
+        gh_adapter = None
+        gh_conn = None
+        gh_req = None
+        gh_verified = None
+        if normalized_source == "github":
+            from ..connectors.intake import get_intake_adapter
+            from ..connectors.intake.contract import (
+                IntakeConnection,
+                RawRequest,
+                VerifyRefused,
+            )
+
+            gh_adapter = get_intake_adapter("github")
+            gh_req = RawRequest(method="POST", headers=headers, body=raw_body)
+            gh_conn = IntakeConnection(
+                "wh_github",
                 audit_project_id,
-                "webhook.inbound.rejected",
-                normalized_source or "unknown",
-                "webhook_delivery",
-                delivery_key or "missing",
-                {
+                "github",
+                config={
+                    "bot_login": self.settings.github_app_bot_login,
+                    "allow_bots": True,
+                },
+                secret_resolver=lambda k: secret if k == "webhook_secret" else None,
+                app_settings=self.settings,
+                db=connection,
+            )
+            try:
+                gh_verified = gh_adapter.verify(gh_conn, gh_req, time.time())
+            except VerifyRefused:
+                emit_event(
+                    connection,
+                    audit_project_id,
+                    "webhook.inbound.rejected",
+                    normalized_source or "unknown",
+                    "webhook_delivery",
+                    delivery_key or "missing",
+                    {
+                        "source": normalized_source,
+                        "delivery_id": delivery_key or None,
+                        "reason": "invalid_signature",
+                    },
+                )
+                return {
+                    "status": "rejected",
                     "source": normalized_source,
                     "delivery_id": delivery_key or None,
-                    "reason": "invalid_signature",
-                },
+                    "duplicate": False,
+                }
+        else:
+            signature = (headers.get("x-hub-signature-256", "")
+                         or headers.get("x-hub-signature", ""))    # Bitbucket's header name
+            expected = (
+                "sha256="
+                + hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
             )
-            return {
-                "status": "rejected",
-                "source": normalized_source,
-                "delivery_id": delivery_key or None,
-                "duplicate": False,
-            }
+            if not signature or not compare_digest(signature, expected):
+                emit_event(
+                    connection,
+                    audit_project_id,
+                    "webhook.inbound.rejected",
+                    normalized_source or "unknown",
+                    "webhook_delivery",
+                    delivery_key or "missing",
+                    {
+                        "source": normalized_source,
+                        "delivery_id": delivery_key or None,
+                        "reason": "invalid_signature",
+                    },
+                )
+                return {
+                    "status": "rejected",
+                    "source": normalized_source,
+                    "delivery_id": delivery_key or None,
+                    "duplicate": False,
+                }
         if not delivery_key:
             emit_event(
                 connection,
@@ -1004,33 +1054,79 @@ class InboundWebhookService:
                 "duplicate": True,
             }
 
+        gh_handshake = False
         if normalized_source == "bitbucket":
             event_key = headers.get("x-event-key", "").strip().lower()
             provider_event, _, action = event_key.partition(":")
+            repo = str((payload.get("repository") or {}).get("full_name") or "")
+            own_sender = False
+        elif normalized_source == "github":
+            from ..connectors.intake.contract import ParseRefused, StoredRaw
+
+            assert gh_adapter is not None and gh_conn is not None and gh_req is not None
+            gh_handshake = gh_adapter.handshake(gh_conn, gh_req) is not None
+            ev = None
+            if not gh_handshake and headers.get("x-github-event", "").strip():
+                try:
+                    parsed_events = gh_adapter.parse(
+                        gh_conn,
+                        StoredRaw(
+                            body=raw_body,
+                            headers=headers,
+                            dedupe_key=gh_adapter.dedupe_key(gh_conn, gh_req),
+                        ),
+                    )
+                    ev = parsed_events[0] if parsed_events else None
+                except ParseRefused:
+                    emit_event(
+                        connection,
+                        audit_project_id,
+                        "webhook.inbound.rejected",
+                        normalized_source,
+                        "webhook_delivery",
+                        delivery_key,
+                        {
+                            "source": normalized_source,
+                            "delivery_id": delivery_key,
+                            "reason": "invalid_json",
+                        },
+                    )
+                    return {
+                        "status": "invalid",
+                        "source": normalized_source,
+                        "delivery_id": delivery_key,
+                        "duplicate": False,
+                    }
+            provider_event = str(
+                (ev.data.get("event") if ev is not None else headers.get("x-github-event")) or ""
+            ).strip().lower()
+            action = str(
+                (ev.data.get("action") if ev is not None else payload.get("action")) or ""
+            ).strip().lower()
+            repo = str(
+                (ev.data.get("repository") if ev is not None else (payload.get("repository") or {}).get("full_name"))
+                or ""
+            )
+            own_sender = bool(gh_adapter.is_self(gh_conn, ev)) if ev is not None else False
         else:
             provider_event = headers.get("x-github-event", "").strip().lower()
             action = str(payload.get("action") or "").strip().lower()
-        repo = str((payload.get("repository") or {}).get("full_name") or "")
+            repo = str((payload.get("repository") or {}).get("full_name") or "")
+            own_sender = False
         project_id = self._project_for_repo(connection, repo)
         community_event_type = None
         if normalized_source == "bitbucket":
             community_event_type = _BITBUCKET_EVENT_TYPES.get(f"{provider_event}:{action}")
-        elif action in _GITHUB_COMMUNITY_ACTIONS.get(provider_event, set()):
+        elif not gh_handshake and action in _GITHUB_COMMUNITY_ACTIONS.get(provider_event, set()):
             community_event_type = _GITHUB_COMMUNITY_EVENT_TYPES[provider_event]
         legacy_routed = (
-            not github_community_only and provider_event in _SUPPORTED_GITHUB_EVENTS
+            not gh_handshake and not github_community_only and provider_event in _SUPPORTED_GITHUB_EVENTS
         )
         reconciliation_routed = bool(
             normalized_source == "github"
+            and not gh_handshake
             and project_id
             and provider_event in _GITHUB_RECONCILIATION_EVENTS
-        )
-        sender_login = str((payload.get("sender") or {}).get("login") or "")
-        own_sender = bool(
-            normalized_source == "github"
-            and sender_login
-            and sender_login.casefold()
-            == self.settings.github_app_bot_login.strip().casefold()
         )
         community_routed = bool(
             project_id
@@ -1163,6 +1259,44 @@ class InboundWebhookService:
             text("UPDATE inbound_webhooks SET event_id = :event_id WHERE id = :id"),
             {"event_id": event_id, "id": inbound_id},
         )
+        if (
+            normalized_source == "github"
+            and project_id
+            and gh_adapter is not None
+            and gh_req is not None
+            and gh_verified is not None
+        ):
+            from . import event_intake
+
+            ic_rows = (
+                connection.execute(
+                    text(
+                        """
+                        SELECT * FROM intake_connections
+                        WHERE project_id = :project_id
+                          AND kind = 'github'
+                          AND status = 'active'
+                          AND (
+                              COALESCE(config->>'repository', '') = ''
+                              OR lower(config->>'repository') = lower(:repo)
+                          )
+                        """
+                    ),
+                    {"project_id": project_id, "repo": repo},
+                )
+                .mappings()
+                .all()
+            )
+            for ic_row in ic_rows:
+                event_intake.accept_in_tx(
+                    connection,
+                    gh_adapter,
+                    dict(ic_row),
+                    gh_req,
+                    gh_verified,
+                    settings=self.settings,
+                    handshake=True,
+                )
         return {
             "status": status,
             "source": normalized_source,

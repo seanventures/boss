@@ -3928,7 +3928,12 @@ def _parse_findings(summary: str, *, stage: str | None = None) -> list[dict]:
 
 
 def _review_gate_from_findings(
-    summary: str, verdict: str, block_severity: str = "major",
+    summary: str,
+    verdict: str,
+    block_severity: str = "major",
+    *,
+    unchanged_context: Optional[dict[str, Any]] = None,
+    bar: Optional[str] = None,
 ) -> tuple[bool, list[dict], list[dict]]:
     """Decide `code_review_passed` from graded findings instead of a single bit.
 
@@ -3954,14 +3959,35 @@ def _review_gate_from_findings(
             return True, [], [{"severity": "major", "path": None, "line": None, "stage": None,
                                "end_line": None, "bar_followup": True, "text": text}]
         return verdict == "survived", [], []
+    if unchanged_context is not None:
+        from . import review_tools
+
+        findings = review_tools.classify_unchanged_findings(
+            findings,
+            prev_files=unchanged_context.get("prev_files"),
+            curr_files=unchanged_context.get("curr_files"),
+            prior_summary=str(unchanged_context.get("prior_summary") or ""),
+            stage=unchanged_context.get("stage"),
+        )
     try:
         floor = _SEVERITY_ORDER.index((block_severity or "major").strip().lower())
     except ValueError:
         # "none" (the prototype bar): no severity blocks; anything else unknown is "major".
         floor = (len(_SEVERITY_ORDER) if str(block_severity).strip().lower() == "none"
                  else _SEVERITY_ORDER.index("major"))
-    blocking = [f for f in findings if _SEVERITY_ORDER.index(f["severity"]) >= floor]
-    non_blocking = [f for f in findings if _SEVERITY_ORDER.index(f["severity"]) < floor]
+    demote = _quality_bar.demote_newly_noticed(bar or _quality_bar.DEFAULT)
+    blocking: list[dict] = []
+    non_blocking: list[dict] = []
+    for f in findings:
+        if f.get("newly_noticed") and "newly noticed" not in str(f.get("text") or "").lower():
+            f = {**f, "text": f"[newly noticed] {f.get('text') or ''}"}
+        if _SEVERITY_ORDER.index(f["severity"]) >= floor:
+            if f.get("newly_noticed") and demote:
+                non_blocking.append(f)
+            else:
+                blocking.append(f)
+        else:
+            non_blocking.append(f)
     return (not blocking), blocking, non_blocking
 
 
@@ -5190,24 +5216,6 @@ def _guest_engine_fields(
 
         cred = resolve_claude_credential(settings, connection=connection, project_id=project_id)
         return {"engine": "claude_code", **cred.guest_fields()}
-    if engine_name == "openrouter":
-        return {"engine": "openai", "openai_api_key": key("openrouter_api_key"),
-                "openai_base_url": settings.openrouter_base_url, "model": model}
-    if engine_name == "groq":
-        return {"engine": "openai", "openai_api_key": key("groq_api_key"),
-                "openai_base_url": settings.groq_base_url, "model": model}
-    if engine_name == "deepseek":
-        return {"engine": "openai", "openai_api_key": key("deepseek_api_key"),
-                "openai_base_url": settings.deepseek_base_url, "model": model}
-    if engine_name == "ollama":
-        # Local-model lane. Note for sandboxed guests: "localhost" is the guest,
-        # not the host — point OLLAMA_BASE_URL at a host-reachable address
-        # (e.g. http://host.docker.internal:11434/v1) when tasks run in a VM.
-        return {"engine": "openai", "openai_api_key": key("ollama_api_key"),
-                "openai_base_url": settings.ollama_base_url, "model": model}
-    if engine_name == "vllm":
-        return {"engine": "openai", "openai_api_key": key("vllm_api_key"),
-                "openai_base_url": settings.vllm_base_url, "model": model}
     if engine_name == "azure":
         # Explicit Azure frontier lane in a guest VM. A routed model (azure:<deploy>)
         # overrides the default deployment; no openai_base_url so the guest can't misroute.
@@ -5215,10 +5223,33 @@ def _guest_engine_fields(
                 "azure_deployment": model or settings.azure_openai_deployment,
                 "azure_api_version": settings.azure_openai_api_version,
                 "azure_key": key("azure_openai_key")}
-    # native/openai/azure -> the platform lane, same env the simple path sends
-    return {"engine": "openai", "openai_api_key": key("openai_api_key"),
-            "openai_base_url": settings.openai_base_url,
-            "model": model or settings.openai_model,
+
+    from .code_agent import _PROVIDER_LANES, _project_api_model_binding
+
+    selected = None
+    if connection is not None and project_id:
+        lane_key = "native" if engine_name in ("native", "openai") else engine_name
+        if lane_key == "native" or lane_key in _PROVIDER_LANES:
+            selected = _project_api_model_binding(connection, settings, project_id, lane_key)
+
+    if engine_name in _PROVIDER_LANES:
+        key_field, url_field = _PROVIDER_LANES[engine_name]
+        api_key = selected[0] if selected is not None else key(key_field)
+        base_url = (selected[2] if selected is not None and selected[2]
+                    else getattr(settings, url_field, ""))
+        chosen_model = model or (selected[1] if selected is not None and selected[1] else None)
+        return {"engine": "openai", "openai_api_key": api_key,
+                "openai_base_url": base_url, "model": chosen_model}
+
+    # native/openai -> the platform lane, same env the simple path sends
+    api_key = selected[0] if selected is not None else key("openai_api_key")
+    base_url = (selected[2] if selected is not None and selected[2]
+                else getattr(settings, "openai_base_url", ""))
+    chosen_model = (model or (selected[1] if selected is not None and selected[1] else None)
+                    or getattr(settings, "openai_model", ""))
+    return {"engine": "openai", "openai_api_key": api_key,
+            "openai_base_url": base_url,
+            "model": chosen_model,
             "azure_endpoint": settings.azure_openai_endpoint,
             "azure_deployment": settings.azure_openai_deployment,
             "azure_api_version": settings.azure_openai_api_version,
@@ -5535,6 +5566,43 @@ def _hold_for_github(engine, run_id: str, result: Any) -> Any:
         return result
 
 
+def _run_flaky_reruns(
+    first_result: Any,
+    first_output: str,
+    first_command: str,
+    first_cwd: Any,
+    first_names: list[str],
+    *,
+    run_once: Callable[[], tuple[Any, str, str, Any]],
+    flaky_budget: dict[str, int],
+    flaky_tests: list[str],
+    max_total_rerun_ms: int,
+) -> tuple[Any, str, str, Any]:
+    """Run up to two immediate flaky-test confirmation passes bounded by max_total_rerun_ms.
+
+    Returns ``(result, output, command, cwd)`` matching the selected verification attempt so
+    that skipping Attempt 3 on budget never leaves Attempt 2's passing ``last_verify_output``
+    paired with Attempt 1's failing ``result``.
+    """
+    flaky_budget["checks"] += 1
+    again, again_output, again_command, again_cwd = run_once()
+    flaky_budget["rerun_ms"] += int(getattr(again, "duration_ms", 0) or 0)
+    if getattr(again, "tampered", False):
+        return again, again_output, again_command, again_cwd
+    if again.ok:
+        if (
+            flaky_budget["rerun_ms"] + int(getattr(again, "duration_ms", 0) or 0)
+            <= max_total_rerun_ms
+        ):
+            third, third_output, third_command, third_cwd = run_once()
+            flaky_budget["rerun_ms"] += int(getattr(third, "duration_ms", 0) or 0)
+            if third.ok and not getattr(third, "tampered", False):
+                flaky_tests.extend(n[:300] for n in first_names)
+            return third, third_output, third_command, third_cwd
+        return first_result, first_output, first_command, first_cwd
+    return again, again_output, again_command, again_cwd
+
+
 def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                            *, fencing_token: Optional[str] = None) -> dict:
     """One governed attempt, with the MCP servers of the agent it runs as (skills-mcp E6).
@@ -5657,11 +5725,12 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     except Exception:  # noqa: BLE001
         _log_caught(logger)
         _deploys = False
+    # Resolve the run's quality bar ONCE per build and carry (_qbar, _qover, _qinfo).
+    _qbar, _qover, _qinfo = _bar_for_run(engine, settings, project_id, spec, fctx, run_id)
     # A CHANGE TO AN EXISTING APP AT THE LIGHT LANE is scoped to its request (build_scope).
     _light_change = (_build_scope.extends_existing_app(
         str((spec or {}).get("instructions") or ""), fctx)
-        and _bar_for_run(engine, settings, project_id, spec, fctx, run_id)[0]
-        != _quality_bar.PRODUCTION)
+        and _qbar != _quality_bar.PRODUCTION)
     _scope = _build_scope.decide(
         str((spec or {}).get("title") or ""), str((spec or {}).get("instructions") or ""),
         (spec or {}).get("acceptance_criteria") or (), workflow_deploys=_deploys,
@@ -5934,6 +6003,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     from .local_repo import is_local_owner as _is_local_owner_name
 
     _pushed_branch = str(fctx.get("local_change_branch") or "")
+    parent_branch: Optional[str] = None
     if _release_target is not None:
         try:
             work_branch = _release_scope.prepare_branch(sf.github, _release_target)
@@ -5944,11 +6014,42 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # A FIX ROUND ON A PUSHED LOCAL CHANGE (BOSSAPP-948, local_review.start_fix_round): the
         # build works on the branch the person pushed, so its change set is the one refreshed.
         work_branch = _pushed_branch
-        base_branch = work_branch
+        base_branch = _pushed_branch
     else:
-        # prior attempt's code is present in the clone (build_base_branch.lineage_clone)
-        work_branch, base_branch = _bbb.lineage_clone(run_id, fctx, base_branch,
-                                                      sf.github.branch_exists)
+        _is_followup = bool(fctx.get("is_followup") or fctx.get("deferred_from_run"))
+        if (getattr(sf.github, "kind", "github") != "local"
+                and _is_followup
+                and work_branch != f"boss/code/{run_id}"):
+            _existing_wb = str(fctx.get("work_branch") or "").strip()
+            _parent_card = None
+            if not _existing_wb:
+                with _transaction(engine) as c:
+                    _parent_card = _bbb.parent_awaiting_decision(c, project_id, work_branch)
+            if _parent_card or (_existing_wb and _existing_wb != work_branch):
+                parent_branch = str(fctx.get("parent_branch") or work_branch)
+                work_branch = _existing_wb or f"boss/code/{run_id}"
+                _cut_sha = (_parent_card or {}).get("head_sha")
+                try:
+                    sf.github.ensure_branch(work_branch, parent_branch, base_sha=_cut_sha)
+                except TypeError:
+                    sf.github.ensure_branch(work_branch, parent_branch)
+                if sf.github.branch_exists(work_branch):
+                    base_branch = work_branch
+                elif sf.github.branch_exists(parent_branch):
+                    base_branch = parent_branch
+                with _transaction(engine) as c:
+                    c.execute(
+                        sql("UPDATE code_task_runs SET finalize_ctx = "
+                            "COALESCE(finalize_ctx,'{}'::jsonb) || CAST(:patch AS JSONB), "
+                            "updated_at=now() WHERE id=:id"),
+                        {"patch": json.dumps({"work_branch": work_branch,
+                                              "parent_branch": parent_branch}),
+                         "id": run_id},
+                    )
+        if parent_branch is None:
+            # prior attempt's code is present in the clone (build_base_branch.lineage_clone)
+            work_branch, base_branch = _bbb.lineage_clone(run_id, fctx, base_branch,
+                                                          sf.github.branch_exists)
     app = GitHubAppAdapter(settings)
     # Shared decision — see repo_token. Prefer the bound MC adapter's token when the
     # factory plane is mission_control_binding so clone and PR use the same credentials.
@@ -6310,6 +6411,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             template_command=_stack_ctx["template_command"],
             template_stack=_stack_ctx["template_stack"])
     _last_stack_plan: list = [None]      # the newest verify's StackPlan, for the later gates
+    _last_gate_plan: list = [None]       # the newest verify's GatePlan (local or microvm host re-plan)
     _stack_record: dict = {}
 
     def _push_held(where: str) -> bool:
@@ -6926,6 +7028,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     deleted_paths=_deleted_now(),
                     created_by_job_id=job_id, actual_usd_micros=cost,
                     pr_base=(_release_target["pr_base"] if _release_target else repo_base_branch),
+                    **({"parent_branch": parent_branch} if parent_branch else {}),
                     monitoring_removals=_monitoring_removals(spec))
                 if pr.get("status") in ("created", "succeeded"):
                     url = pr.get("pull_request_url") or pr.get("url")
@@ -7499,8 +7602,36 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         _fidelity: Optional[dict] = None
         _validation: Optional[dict] = None
         _repo_checks: list = []     # input_fidelity.repo_checks, after the implement loop
+        def _microvm_verify_commands(plan, base_root: Path) -> list[str]:
+            if getattr(plan, "runs_steps", False) and getattr(plan, "steps", None):
+                step_dirs = set()
+                for _cmd, step_dir in plan.steps:
+                    try:
+                        rel = Path(step_dir).relative_to(base_root).as_posix()
+                    except ValueError:
+                        rel = ""
+                    step_dirs.add("" if rel in ("", ".") else rel)
+                if len(step_dirs) > 1:
+                    import shlex
+
+                    scoped: list[str] = []
+                    for cmd, step_dir in plan.steps:
+                        try:
+                            rel = Path(step_dir).relative_to(base_root).as_posix()
+                        except ValueError:
+                            rel = ""
+                        if rel and rel != ".":
+                            scoped.append(f"cd {shlex.quote(rel)} && {cmd}")
+                        else:
+                            scoped.append(cmd)
+                    return scoped
+            return list(plan.commands)
+
         if _gate_plan0.source != "task":
-            verify_commands = list(_gate_plan0.commands)
+            verify_commands = (
+                _microvm_verify_commands(_gate_plan0, Path(root))
+                if use_microvm else list(_gate_plan0.commands)
+            )
             test_cmd = ((verification_target.manifest_display(root, _pinned_manifest)
                          if _gate_plan0.from_manifest else _gate_plan0.description
                          if _gate_plan0.runs_steps else " && ".join(verify_commands))
@@ -7860,35 +7991,127 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             if _needs_person[0] is not None:
                 raise _needs_person[0]
 
+        def _replan_microvm():
+            """Host-side gate re-plan for microVM stages: overlay accumulated guest writes onto the
+            base tree, resolve GatePlan against the pinned base manifest, update verify_commands
+            and _last_gate_plan[0], and halt before guest verification or PR opening if a person
+            is needed."""
+            nonlocal verify_commands, last_verify_command, last_verify_cwd
+            if not use_microvm:
+                return None
+            import shutil
+            import tempfile
+
+            base_root = Path(root)
+            with tempfile.TemporaryDirectory(prefix="boss-vm-plan-") as td:
+                overlay = Path(td)
+                if base_root.exists():
+                    shutil.copytree(
+                        base_root, overlay, dirs_exist_ok=True, symlinks=True,
+                        ignore=shutil.ignore_patterns(
+                            ".git", "node_modules", ".venv", "__pycache__"),
+                    )
+                for rel in deleted_acc:
+                    target = overlay / rel
+                    if target.is_file() or target.is_symlink():
+                        target.unlink(missing_ok=True)
+                for rel, content in accumulated.items():
+                    dest = overlay / rel
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    dest.write_text(
+                        content if isinstance(content, str) else "", encoding="utf-8")
+                plan = verification_target.resolve_gate_plan(
+                    spec, title, overlay, app_id=_app_id, changed=_changed_paths(),
+                    pinned=_pinned_manifest, layout=_stack_layout,
+                    lineage=_lineage_paths, recorded=_recorded_app, finalize_ctx=fctx)
+
+            def _rebase(p: Path) -> Path:
+                try:
+                    return base_root / p.relative_to(overlay)
+                except ValueError:
+                    return p
+
+            plan.cwd = _rebase(plan.cwd)
+            if plan.steps:
+                plan.steps = [(c, _rebase(d)) for c, d in plan.steps]
+            if plan.stack is not None:
+                plan.stack.app_dir = _rebase(plan.stack.app_dir)
+                if plan.stack.steps:
+                    plan.stack.steps = [(c, _rebase(d)) for c, d in plan.stack.steps]
+                if plan.stack.e2e_steps:
+                    plan.stack.e2e_steps = [(c, _rebase(d)) for c, d in plan.stack.e2e_steps]
+            _last_gate_plan[0] = plan
+            _last_stack_plan[0] = plan.stack if plan.source == "stack" else None
+            if plan.source != "task" and plan.commands:
+                verify_commands = _microvm_verify_commands(plan, base_root)
+            last_verify_command = (
+                plan.description if plan.runs_steps else " && ".join(plan.commands)
+            ) or last_verify_command
+            try:
+                last_verify_cwd = (
+                    str(plan.cwd.relative_to(base_root)) if plan.cwd != base_root else "."
+                )
+            except ValueError:
+                last_verify_cwd = str(plan.cwd)
+            _halt_if_needs_person(plan)
+            return plan
+
         # FLAKY TESTS NEVER BLOCK (quality_bar.py): a suite that fails, then passes on TWO
         # immediate re-runs (the test failed 1 of 3), is reported — the failing tests named — as
         # a follow-up, never a failure. One re-run that fails again is a real failure. The
         # retries are per verify call: a repair round's failure is judged the same way.
         _flaky_tests: list[str] = []
+        _flaky_budget = {"checks": 0, "rerun_ms": 0}
+        _manifest_tampered: list[Optional[str]] = [None]
 
         def _run_verify(*, record: bool = True):
             """Authoritative test command, scoped to the official app directory. BOSS's own
             install (NPM_INSTALL_CMD, the one every gate runs) is its first step."""
+            nonlocal last_verify_output, last_verify_command, last_verify_cwd
             _halt_if_needs_person()
+            if record:
+                _manifest_tampered[0] = None
             result = _run_verify_once(record=record)
             if (record and not result.ok and not verification_target.install_failure(result)
                     and not getattr(result, "timed_out", False)):
                 _first_names = [n for n in failing_tests(last_verify_output or "", limit=20)
                                 if not str(n).rstrip().endswith(":")]
-                if not _first_names:
-                    _fc = verification_target.failed_check(result) or {}
-                    _first_names = [f"{_fc.get('command') or 'the test suite'}: "
-                                    f"{_fc.get('line') or 'failed'}"]
-                _again = _run_verify_once(record=record)
-                if _again.ok:
-                    _third = _run_verify_once(record=record)
-                    if _third.ok:
-                        _flaky_tests.extend(n[:300] for n in _first_names)
-                    result = _third
-                else:
-                    result = _again
+                _allow_flaky, _flaky_skip = _quality_bar.should_rerun_flaky(
+                    tampered=bool(getattr(result, "tampered", False)),
+                    timed_out=bool(getattr(result, "timed_out", False)),
+                    install_failed=bool(verification_target.install_failure(result)),
+                    has_command=bool(str(getattr(result, "command", "") or "").strip()),
+                    missing_packages=bool(verification_target.missing_packages(last_verify_output or "")),
+                    failing_count=len(_first_names),
+                    duration_ms=int(getattr(result, "duration_ms", 0) or 0),
+                    checks_used=_flaky_budget["checks"],
+                    rerun_ms_used=_flaky_budget["rerun_ms"],
+                )
+                if _allow_flaky:
+                    if not _first_names:
+                        _fc = verification_target.failed_check(result) or {}
+                        _first_names = [f"{_fc.get('command') or 'the test suite'}: "
+                                        f"{_fc.get('line') or 'failed'}"]
+                    result, last_verify_output, last_verify_command, last_verify_cwd = (
+                        _run_flaky_reruns(
+                            result,
+                            last_verify_output,
+                            last_verify_command,
+                            last_verify_cwd,
+                            _first_names,
+                            run_once=lambda: (
+                                _run_verify_once(record=record),
+                                last_verify_output,
+                                last_verify_command,
+                                last_verify_cwd,
+                            ),
+                            flaky_budget=_flaky_budget,
+                            flaky_tests=_flaky_tests,
+                            max_total_rerun_ms=_quality_bar.FLAKY_MAX_TOTAL_RERUN_MS,
+                        )
+                    )
             env = None
-            if record and not result.ok:
+            if record and not result.ok and not getattr(result, "tampered", False):
                 # COULD THE SUITE RUN AT ALL? (suite_environment) When its failures share one
                 # environmental cause — the run's test database refused the login because the
                 # build-services server restarted empty (crun_de96bf12) — they are not the app's:
@@ -7929,9 +8152,11 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 else:
                     _ws_write(_manifest_path, _pinned_manifest.text)
                 if record:
+                    _manifest_tampered[0] = tampered_manifest
                     last_verify_output = f"[boss] {tampered_manifest}\n"
                 return CommandResult(command="", argv=[], exit_code=1, duration_ms=0,
-                                     timed_out=False, stdout="", stderr=tampered_manifest)
+                                     timed_out=False, stdout="", stderr=tampered_manifest,
+                                     tampered=True)
             plan = verification_target.resolve_gate_plan(
                 spec, title, root, app_id=_app_id, changed=_changed_paths(),
                 pinned=_pinned_manifest, layout=_stack_layout, lineage=_lineage_paths, recorded=_recorded_app,
@@ -7939,6 +8164,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # The tree turned into a stack this install cannot gate (an agent wrote a go.mod
             # while Go is off): a person's to fix, so no further repair round runs on it.
             _halt_if_needs_person(plan)
+            _last_gate_plan[0] = plan
             _last_stack_plan[0] = plan.stack if plan.source == "stack" else None
             if record:
                 last_verify_command = (plan.description if plan.runs_steps
@@ -8107,8 +8333,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         do_review = risk_tier >= 1
         # THE PRODUCTION BAR CONVENES EVERY SEAT, whatever the build's profile or tier: a tier-0
         # build is re-checked at the production bar (change_recheck) to reach it.
-        _full_panel = (_bar_for_run(engine, settings, project_id, spec, fctx, run_id)[0]
-                       == _quality_bar.PRODUCTION)
+        _full_panel = (_qbar == _quality_bar.PRODUCTION)
         if _full_panel:
             do_review = True
         # ADVISORY GATE: when True, failing quality checks are SURFACED but do NOT block the PR —
@@ -8377,7 +8602,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # THE QUALITY BAR: a prototype needs no plan sign-off (a plan a person sent back
             # still goes back to them). Standard and production keep it.
             _plan_signoff = _quality_bar.plan_signoff_required(
-                _bar_for_run(engine, settings, project_id, spec, fctx, run_id)[0], risk_tier,
+                _qbar, risk_tier,
                 bool(sensitive_markers_in({**spec, "title": title})))
             if _requires_plan_approval(risk_tier) or _gaps or _asked_again:
               if _plan_signoff or _asked_again:
@@ -8860,6 +9085,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             if use_microvm:
                 # Commit ONLY test files — anything else the QA role wrote is discarded.
                 _commit_stage(test_changes or [], f"governed: tests-first (qa) — {title[:60]}")
+                _replan_microvm()
             else:
                 _checkpoint("write_tests")
             _mark_stage_done("write_tests")
@@ -9199,6 +9425,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                               + (f" [repair {attempt}]" if attempt else ""),
                               deleted=[p for p in getattr(res2, "deleted", None) or []
                                        if not _is_test_path(p)])
+                _replan_microvm()
                 if not use_microvm:
                     _checkpoint("implement" + (f"-repair{attempt}" if attempt else ""))
                 # Same reason as the design above: state was only written at the END, so a
@@ -9750,6 +9977,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     _commit_stage(q_changes, f"governed: quality — {title[:60]}",
                                   deleted=[p for p in getattr(qres, "deleted", None) or []
                                            if not _is_test_path(p)])
+                    _replan_microvm()
                     q_ok = bool(qres.tests_passed)
                     if q_ok:
                         tests_passed = True
@@ -10019,6 +10247,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
 
             def _do_full():
                 if use_microvm:
+                    _replan_microvm()
                     # Full-suite regression runs in its OWN VM (echo engine = no agent,
                     # just clone the work branch and execute the suite).
                     set_llm_context(routes=_route_ids(), db_engine=engine, project_id=project_id, run_id=run_id,
@@ -10298,6 +10527,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                           "summary": "mutation probe not run: no deterministic mutation site "
                                      "in the targeted implementation files"}
                 elif use_microvm:
+                    _replan_microvm()
                     res5 = _guest_stage(
                         "check_tests", "check_tests", "Run the full test suite.",
                         test_cmds=[mutation_probe.apply_command(_planted)]
@@ -10373,6 +10603,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             _was_n = preexisting_test_counts.get(_p, 0)
             if _now_n < _was_n:
                 _weakened.append(f"{_p} ({_was_n} -> {_now_n} tests)")
+        if _manifest_tampered[0]:
+            _weakened.append(f"boss.verify.yaml (tampered: {_manifest_tampered[0]})")
         _halt_if_needs_person()
         gates = {
             "code_written": (bool(impl_files) or (_is_repair_iteration and tests_passed)
@@ -10395,7 +10627,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # the reason and surfaced on the PR for a human to reverse. The gate still fails
             # for UNdeclared removals — an agent quietly deleting an inconvenient test is the
             # thing this guard exists to catch, and that is unchanged.
-            "existing_tests_intact": (not _weakened) or _retirement_allowed,
+            "existing_tests_intact": (not _weakened) or (_retirement_allowed and not _manifest_tampered[0]),
             # Web/official: echo stubs and missing vite/playwright cannot ship.
             "web_package_honest": True,
             # recorded below whether allowed or not, so the PR always states what went
@@ -10403,7 +10635,6 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # THE QUALITY BAR (quality_bar.py): from here every assignment to `gates` goes through
         # the bar, so a gate that fails but does not block at this bar is a follow-up, never a
         # failure, at the first judgement and at every re-judgement after a fix round.
-        _qbar, _qover, _qinfo = _bar_for_run(engine, settings, project_id, spec, fctx, run_id)
         gates = _quality_bar.BarGates(_qbar, _qover, gates)
         gates.info = dict(_qinfo)
         if _remediation and _fidelity is not None:
@@ -10689,6 +10920,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # so it surfaced as reason_code=pipeline_exception / failure_class=infra, which reads as
         # a platform problem rather than a two-line bug.
         skipped_seats: dict[str, str] = {}
+        _prev_reviewed_files: Optional[dict[str, str]] = None
         if do_review:
             # SEVERITY-CALIBRATED: a NIT must not sink a phase the way a BLOCKER does. Findings
             # below the threshold are carried in `deferred_findings` and spawned as their own
@@ -10753,9 +10985,37 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     _acceptance_gate.prepare_contract(engine, run_id=run_id, fctx=fctx,
                                                       own_spec=spec, agent=consistency_agent,
                                                       model=consistency_model)
+                    _head_sha: Optional[str] = None
+                    _prior_acc: Optional[dict] = None
+                    if review_root is not None:
+                        try:
+                            from .git_safety import tree_git
+
+                            _hg = tree_git(review_root, "rev-parse", "HEAD", timeout=10)
+                            _dg = tree_git(review_root, "status", "--porcelain", timeout=10)
+                            if (_hg is not None and _hg.returncode == 0
+                                    and _dg is not None and _dg.returncode == 0
+                                    and not _dg.stdout.strip()):
+                                _head_sha = _hg.stdout.strip() or None
+                        except Exception:  # noqa: BLE001
+                            _head_sha = None
                     with _transaction(engine) as c:
                         _acc_spec, _source = _acceptance_gate.items_spec(
                             c, run_id=run_id, fctx=fctx, own_spec=spec)
+                        if _head_sha:
+                            from .acceptance import checks as _checks
+                            from .acceptance import ledger as _ledger
+
+                            _lin = _ledger.lineage_of(c, run_id)
+                            if _lin:
+                                _prior_acc = _checks.latest(
+                                    c, project_id=project_id,
+                                    lineage_root_run_id=_lin["lineage"],
+                                    layer="build_gate", head_sha=_head_sha)
+                    if _head_sha and _prior_acc is None:
+                        _cand = _acceptance_judged.get("record")
+                        if isinstance(_cand, dict) and str(_cand.get("head_sha") or "") == _head_sha:
+                            _prior_acc = _cand
                     _items = _acceptance_gate.acceptance_items(_acc_spec)
                     _dropped = _acceptance_gate.items_dropped(_acc_spec)
                     _stack = _acceptance_gate.stack_manifest_check(review_root, _acc_spec)
@@ -10774,6 +11034,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     return _acceptance_gate.run_check(
                         _items, title=title, stack=_stack, root=review_root, source=_source,
                         dropped=_dropped, batch_size=batch_size,
+                        prior=_prior_acc, head_sha=_head_sha,
                         # The run's own recorded test command, when it passed (AR-31).
                         checks=([{"command": test_cmd, "ok": True}]
                                 if test_cmd and tests_passed else []),
@@ -10844,6 +11105,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # point — writing to it above was a latent crash that would have fired precisely
             # when a run DID weaken an existing test, i.e. when the gate matters most.
             **({"weakened_existing_tests": _weakened[:20]} if _weakened else {}),
+            **({"tampered_verify_manifest": _manifest_tampered[0]} if _manifest_tampered[0] else {}),
             # The broken-tests check, when no failing test could be named: UNKNOWN with why
             # (the same dict, so a later re-judgement updates it).
             "old_tests": _old_tests,
@@ -11030,6 +11292,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 "consistency_check": {"verdict": cons_verdict, "summary": r6.get("summary", ""),
                                       "hollow": _hollow_seats.get("consistency_check")}},
                 reviewed=repair_review_scope.snapshot(_review_change))
+            _prev_reviewed_files = dict(_review_change.files)
 
         # ADVISORY first pass (web build, review=False): a failing quality check is SURFACED
         # (advisory_failing_gates → shown in the UI) but must NOT block. Record it and FALL THROUGH
@@ -11378,7 +11641,15 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         review_confidence = 1.0 if verdict == "survived" else 0.0
                         _rev_pass, _blocking, _deferred = _review_gate_from_findings(
                             rr.get("summary", ""), verdict,
-                            _quality_bar.review_block_severity(_qbar, _qinfo.get("review_severity")))
+                            _quality_bar.review_block_severity(_qbar, _qinfo.get("review_severity")),
+                            unchanged_context=(
+                                {"prev_files": _prev_reviewed_files,
+                                 "curr_files": _review_change.files,
+                                 "prior_summary": _rc_prior.get("summary", ""),
+                                 "stage": "review_code"}
+                                if _prev_reviewed_files is not None else None
+                            ),
+                            bar=_qbar)
                         deferred_findings = _deferred
                         # Materialise the panel's findings as comments NOW, before any fix
                         # round runs, so the implementer and the pull request read the
@@ -11404,7 +11675,35 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         cons_verdict = ("hollow" if _hollow
                                         else _parse_consistency(rc2.get("summary", "")))
                         r6 = rc2
-                        _set_consistent(cons_verdict, r6.get("summary", ""))
+                        _cons_demoted = False
+                        if (cons_verdict == "drift"
+                                and _quality_bar.demote_newly_noticed(_qbar)
+                                and _prev_reviewed_files is not None):
+                            from . import review_tools as _rt
+
+                            _cons_raw = _parse_findings(
+                                r6.get("summary", ""), stage="consistency_check")
+                            _cons_cls = _rt.classify_unchanged_findings(
+                                _cons_raw,
+                                prev_files=_prev_reviewed_files,
+                                curr_files=_review_change.files,
+                                prior_summary=_r6_prior.get("summary", ""),
+                                stage="consistency_check",
+                            )
+                            if _cons_cls and all(f.get("newly_noticed") for f in _cons_cls):
+                                _cons_tagged = [
+                                    {**f, "text": (f"[newly noticed] {f.get('text') or ''}"
+                                                   if "newly noticed" not in str(f.get("text") or "").lower()
+                                                   else f.get("text"))}
+                                    for f in _cons_cls
+                                ]
+                                deferred_findings = list(deferred_findings) + _cons_tagged
+                                _set_consistent("ok", "")
+                                gates.note_followup(
+                                    "consistent", [str(f["text"]) for f in _cons_tagged])
+                                _cons_demoted = True
+                        if not _cons_demoted:
+                            _set_consistent(cons_verdict, r6.get("summary", ""))
                     if "security_clean" in failing:
                         rs2, _hollow = _reseat["security_check"]
                         cost += int(rs2.get("cost_usd_micros") or 0)
@@ -11420,7 +11719,37 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                                "summary": rs2.get("summary", ""),
                                                "hollow": _hollow}},
                             reviewed=repair_review_scope.snapshot(_review_change))
-                        gates["security_clean"] = sec_verdict == "clean"
+                        _sec_demoted = False
+                        if (sec_verdict == "issues"
+                                and _quality_bar.demote_newly_noticed(_qbar)
+                                and _prev_reviewed_files is not None):
+                            from . import review_tools as _rt
+
+                            _sec_raw = _parse_findings(
+                                r4.get("summary", ""), stage="security_check")
+                            _sec_cls = _rt.classify_unchanged_findings(
+                                _sec_raw,
+                                prev_files=_prev_reviewed_files,
+                                curr_files=_review_change.files,
+                                prior_summary=_r4_prior.get("summary", ""),
+                                stage="security_check",
+                            )
+                            if _sec_cls and all(f.get("newly_noticed") for f in _sec_cls):
+                                _sec_tagged = [
+                                    {**f, "severity": "security",
+                                     "text": (f"[newly noticed] {f.get('text') or ''}"
+                                              if "newly noticed" not in str(f.get("text") or "").lower()
+                                              else f.get("text"))}
+                                    for f in _sec_cls
+                                ]
+                                deferred_findings = list(deferred_findings) + _sec_tagged
+                                gates["security_clean"] = True
+                                gates.note_followup(
+                                    "security_clean", [str(f["text"]) for f in _sec_tagged])
+                                _sec_demoted = True
+                        if not _sec_demoted:
+                            gates["security_clean"] = sec_verdict == "clean"
+                    _prev_reviewed_files = dict(_review_change.files)
                     if _acceptance_gate.GATE in failing:
                         _ra, _ = _reseat[_acceptance_gate.SEAT]
                         cost += int(_ra.get("cost_usd_micros") or 0)
@@ -11827,10 +12156,19 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         evidence["review_hollow"] = dict(_hollow_seats)
                         verdict = ("not_run" if _hollow
                                    else _parse_verdict(rr.get("summary", "")))
+                        _esc_prior_summary = r3.get("summary", "")
                         r3 = rr
                         _rev_pass, _blocking, _deferred = _review_gate_from_findings(
                             rr.get("summary", ""), verdict,
-                            _quality_bar.review_block_severity(_qbar, _qinfo.get("review_severity")))
+                            _quality_bar.review_block_severity(_qbar, _qinfo.get("review_severity")),
+                            unchanged_context=(
+                                {"prev_files": _prev_reviewed_files,
+                                 "curr_files": _review_change.files,
+                                 "prior_summary": _esc_prior_summary,
+                                 "stage": "review_code"}
+                                if _prev_reviewed_files is not None else None
+                            ),
+                            bar=_qbar)
                         deferred_findings = _deferred
                         # Materialise the panel's findings as comments NOW, before any fix
                         # round runs, so the implementer and the pull request read the
@@ -12382,6 +12720,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 "|| jsonb_build_object('past_last_stage_boundary', true), updated_at=now() "
                 "WHERE id=:id"), {"id": run_id})
             _abort_if_cancelled("before opening the PR", spends=False)
+            if use_microvm:
+                _replan_microvm()
             _halt_if_needs_person()  # never a PR of code no gate could run
             _pr_files = ([FileChange(path=p, content=content)
                           for p, content in accumulated.items()]
@@ -12421,6 +12761,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 created_by_job_id=job_id, actual_usd_micros=cost,
                 evidence=evidence, quality_gate_id=qg_id, run_id=run_id,
                 pr_base=(_release_target["pr_base"] if _release_target else repo_base_branch),
+                **({"parent_branch": parent_branch} if parent_branch else {}),
                 **({"checks_failing": _checks} if _checks else {}),
                 monitoring_removals=_monitoring_removals(spec))
 
@@ -12473,6 +12814,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         created_by_job_id=job_id, actual_usd_micros=cost,
                         evidence=evidence, quality_gate_id=qg_id, run_id=run_id,
                         pr_base=(_release_target["pr_base"] if _release_target else repo_base_branch),
+                        **({"parent_branch": parent_branch} if parent_branch else {}),
                         **({"checks_failing": _checks} if _checks else {}),
                         monitoring_removals=_monitoring_removals(spec))
                     status = proposal.get("status")
@@ -12814,6 +13156,13 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         from .code_task_service import classify_pipeline_exception
         from .spend_cap_failover import apply_spend_cap_failover
         fclass, rcode = classify_pipeline_exception(reason)
+        if re.search(r"\b[a-z0-9_]+_(?:base_url|api_key)\s+is\s+not\s+configured\b", reason, re.I):
+            fclass, rcode = "needs_human", "model_not_configured"
+            reason = (
+                "This model's endpoint or key is not configured for builds. "
+                "Connect or update it in Setup › Models. "
+                f"[substrate={execution_substrate}]"
+            )
         if harness is not None:
             fclass, rcode = "needs_human", "harness_unavailable"
             try:

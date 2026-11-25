@@ -29,7 +29,7 @@ import hashlib
 import json
 import re
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Iterable, Optional
 
 import yaml
 from sqlalchemy import text
@@ -204,6 +204,7 @@ def store_attachments(
     org_id: str,
     uploads: list[tuple[str, str, str, bytes]],
     drive_source_id: str = "",
+    actor: Optional[str] = None,
 ) -> dict[str, Any]:
     """Keep specs, files and images for this org. A Drive source is accepted only when that
     source is already connected here — the bytes are never fetched."""
@@ -255,14 +256,16 @@ def store_attachments(
         connection.execute(text(
             """
             INSERT INTO factory_launch_attachments (
-                id, org_id, kind, name, media_type, byte_size, text_extract, drive_source_id
+                id, org_id, kind, name, media_type, byte_size, text_extract, drive_source_id,
+                uploaded_by
             ) VALUES (
-                :id, :org, :kind, :name, :media, :size, :extract, :drive
+                :id, :org, :kind, :name, :media, :size, :extract, :drive, :uploaded_by
             )
             """),
             {"id": attachment_id, "org": org_id, "kind": item["kind"], "name": item["name"],
              "media": item["media_type"], "size": item["byte_size"],
-             "extract": item["text_extract"], "drive": item["drive_source_id"]})
+             "extract": item["text_extract"], "drive": item["drive_source_id"],
+             "uploaded_by": actor})
         rows.append({"id": attachment_id, "name": item["name"], "kind": item["kind"],
                      "byte_size": item["byte_size"], "text_extract": item["text_extract"]})
     return {"attachments": rows}
@@ -356,6 +359,34 @@ def launch(
                                      actor=actor)
         receipt_id = str(again["receipt_id"]) if again is not None else None
     title = str(spec.get("title") or "Easy Mode").strip()[:120]
+    return _launch_with_dedupe_key(
+        connection, settings, org_id=org_id, actor=actor, auth=auth,
+        dedupe_key=dedupe_key, spec=spec, project_id=project_id, workspace_id=workspace_id,
+        resources=resources, workflows=workflows, receipt_id=receipt_id,
+        again=again, builder=builder, jobs=jobs, budget=budget, allowed=allowed)
+
+
+def _launch_with_dedupe_key(
+    connection: Any,
+    settings: Any,
+    *,
+    org_id: str,
+    actor: str,
+    auth: Any,
+    dedupe_key: str,
+    spec: dict[str, Any],
+    project_id: str,
+    workspace_id: str,
+    resources: list[Any],
+    workflows: list[Any],
+    receipt_id: Optional[str],
+    again: Optional[dict[str, Any]] = None,
+    builder: Optional[Callable[..., dict[str, Any]]] = None,
+    jobs: Any = None,
+    budget: Any = None,
+    allowed: bool = False,
+) -> dict[str, Any]:
+    title = str(spec.get("title") or "Easy Mode").strip()[:120]
     # A MODEL FIRST (stranger test r3, 2026-11-18): with no model connected the launch reserved
     # the project's whole cap for a build nothing could run, and the person read "the budget
     # cap is reached" at $0.00. Nothing is made, reserved or started; the sentence says what is
@@ -394,7 +425,7 @@ def launch(
         raise _keep_for_consent(
             connection, asked, org_id=org_id, workspace_id=workspace_id, project_id=project_id,
             dedupe_key=dedupe_key, spec=spec, resources=resources, workflows=workflows,
-            receipt_id=receipt_id) from None
+            receipt_id=receipt_id, allowed=bool(allowed)) from None
     except Exception:
         # The launch is refused (personal data blocked or asked, the budget, the start itself)
         # and its transaction rolls back with the project: the repository folder made on disk
@@ -468,7 +499,7 @@ def _spec_view(spec: dict[str, Any]) -> dict[str, Any]:
 def _keep_for_consent(
     connection: Any, asked: ConsentRequired, *, org_id: str, workspace_id: str, project_id: str,
     dedupe_key: str, spec: dict[str, Any], resources: list[Any], workflows: list[Any],
-    receipt_id: Optional[str],
+    receipt_id: Optional[str], allowed: bool = False,
 ) -> ConsentRequired:
     """The build asked for consent: keep the project (its agents, Passports and workflows) and
     one in-progress receipt that remembers the launch, and answer the same 409 with the project.
@@ -501,6 +532,7 @@ def _keep_for_consent(
         "spec": spec,
         "resources": resources,
         "workflows": workflows,
+        "allowed": bool(allowed),
     }
     receipts = ReceiptService()
     if receipt_id is None:
@@ -549,6 +581,116 @@ def _kept(connection: Any, org_id: str, dedupe_key: str) -> Optional[dict[str, A
     if alive is None:
         return None
     return {**result, "receipt_id": existing.get("id")}
+
+
+def kept_for_projects(connection: Any, project_ids: Iterable[str]) -> dict[str, dict[str, Any]]:
+    """Kept Easy Mode launches waiting on consent, keyed by project_id."""
+    ids = [str(p) for p in project_ids if p]
+    if not ids:
+        return {}
+    rows = connection.execute(
+        text(
+            """
+            SELECT DISTINCT ON (project_id) id, org_id, project_id, dedupe_key, result
+            FROM receipts
+            WHERE project_id = ANY(:ids)
+              AND effect_kind = 'factory.launch'
+              AND status = 'in_progress'
+              AND result->>'awaiting' = 'consent'
+            ORDER BY project_id, created_at DESC, id DESC
+            """
+        ),
+        {"ids": ids},
+    ).mappings().all()
+    out: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        pid = str(row["project_id"])
+        result = row.get("result") or {}
+        if isinstance(result, str):
+            try:
+                result = json.loads(result)
+            except json.JSONDecodeError:
+                continue
+        if not isinstance(result, dict) or result.get("awaiting") != "consent":
+            continue
+        if str(result.get("project_id") or "") != pid or not isinstance(result.get("spec"), dict):
+            continue
+        dedupe = str(row.get("dedupe_key") or result.get("dedupe_key") or "")
+        if not dedupe:
+            continue
+        out[pid] = {
+            **result,
+            "receipt_id": str(row["id"]),
+            "org_id": str(row["org_id"]),
+            "dedupe_key": dedupe,
+        }
+    return out
+
+
+def kept_for_project(connection: Any, project_id: str) -> Optional[dict[str, Any]]:
+    """The kept Easy Mode launch waiting for consent on this project, or None."""
+    pid = str(project_id or "").strip()
+    if not pid:
+        return None
+    return kept_for_projects(connection, [pid]).get(pid)
+
+
+def resume(
+    connection: Any,
+    settings: Any,
+    *,
+    org_id: str,
+    project_id: str,
+    actor: str,
+    auth: Any = None,
+    jobs: Any = None,
+    budget: Any = None,
+    builder: Optional[Callable[..., dict[str, Any]]] = None,
+    allowed: Optional[bool] = None,
+) -> dict[str, Any]:
+    """Resume a kept Easy Mode launch for `project_id` using its stored `dedupe_key`."""
+    kept = kept_for_project(connection, project_id)
+    if kept is not None and str(kept.get("org_id") or "") == str(org_id):
+        dedupe_key = str(kept["dedupe_key"])
+        connection.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": dedupe_key})
+        previous = _reuse(connection, org_id, dedupe_key)
+        if previous is not None:
+            return previous
+        kept_now = _kept(connection, org_id, dedupe_key)
+        if kept_now is not None:
+            return _launch_with_dedupe_key(
+                connection, settings, org_id=org_id, actor=actor, auth=auth,
+                dedupe_key=dedupe_key,
+                spec=dict(kept_now["spec"]),
+                project_id=str(kept_now["project_id"]),
+                workspace_id=str(kept_now["workspace_id"]),
+                resources=list(kept_now.get("resources") or []),
+                workflows=list(kept_now.get("workflows") or []),
+                receipt_id=str(kept_now["receipt_id"]),
+                builder=builder, jobs=jobs, budget=budget,
+                allowed=bool(kept_now.get("allowed")) if allowed is None else bool(allowed),
+            )
+    # Idempotency: if the project's factory.launch receipt already succeeded and its run is live,
+    # return that launch result rather than failing on a double press.
+    row = connection.execute(
+        text(
+            """
+            SELECT dedupe_key FROM receipts
+            WHERE org_id = :org AND project_id = :pid
+              AND effect_kind = 'factory.launch' AND status = 'succeeded'
+            ORDER BY updated_at DESC, id DESC LIMIT 1
+            """
+        ),
+        {"org": org_id, "pid": project_id},
+    ).first()
+    if row is not None and row[0]:
+        previous = _reuse(connection, org_id, str(row[0]))
+        if previous is not None:
+            return previous
+    raise FactoryLaunchError(
+        409, "nothing_to_start",
+        "This project has no Easy Mode launch waiting for consent.",
+    )
 
 
 #: Said when a project ends up with no repository to build in. Raised before anything starts.

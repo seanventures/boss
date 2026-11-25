@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * A refused fix already shows its refusal, underscores as spaces, in parentheses.
  * The title is the detail or, failing that, the refusal. The detail has to be

@@ -18,9 +18,9 @@ then its repair rounds against a gate no code change can make run. Now:
 """
 from __future__ import annotations
 
-import inspect
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -243,24 +243,293 @@ def test_a_node_project_builds_on(tmp_path, go_off, monkeypatch):
 
 # ---- mid-build: every verify, and nothing may swallow it -------------------------------------------
 
-def test_every_verify_and_every_exit_toward_a_pr_honours_the_stop():
-    src = inspect.getsource(g._run_governed_code_task)
-    run_verify = src[src.index("def _run_verify("):src.index("def _run_verify_once(")]
-    assert "_halt_if_needs_person()" in run_verify  # sticky: once met, every verify re-raises
-    once = src[src.index("def _run_verify_once("):]
-    once = once[:once.index("\n        def ", 1)]
-    assert once.index("_halt_if_needs_person(plan)") < once.index("_run_manifest_verify(plan")
-    # The broad handlers around a verify re-raise it (red-first, quality, convergence, secrets).
-    assert src.count("except StackUnsupportedError:\n") >= 4
-    # A panel seat's error is recorded, not raised: the regression seat says failed, and the
-    # panel re-raises after its seats (both panel runs).
-    assert 'panel["full"] = False' in src
-    assert src.count("_halt_if_needs_person()") >= 5
-    # Before the gates are judged and before the PR opens.
-    gates = src.index("        gates = {\n")
-    assert src.rindex("_halt_if_needs_person()", 0, gates) > gates - 60
-    pr = src.index('_abort_if_cancelled("before opening the PR"')
-    assert src.index("_halt_if_needs_person()", pr) < src.index("sf.propose_pull_request(", pr)
-    # No partial PR for it.
-    exit_ = src[src.index("if isinstance(exc, StackUnsupportedError):\n            _partial_pr"):]
-    assert exit_.index("_partial_pr = None") < exit_.index("_rescue_pr(reason)")
+def _mid_build_harness(monkeypatch, repo: Path, *, spec_extra: dict | None = None,
+                       settings_extra: dict | None = None, use_microvm: bool = False):
+    from boss_engine.config import Settings
+    from boss_engine.ports.composition import EnginePorts
+    from boss_engine.schemas import FileChange
+
+    initial = set(p.relative_to(repo).as_posix() for p in repo.rglob("*") if p.is_file())
+
+    class _DiffSandbox(_Sandbox):
+        def diff(self):
+            out = []
+            for p in sorted(repo.rglob("*")):
+                if p.is_file():
+                    rel = p.relative_to(repo).as_posix()
+                    if rel not in initial:
+                        out.append(FileChange(path=rel, content=p.read_text(errors="ignore")))
+            return out
+
+        def diff_summary(self):
+            return SimpleNamespace(paths=[fc.path for fc in self.diff()])
+
+    run = {
+        "id": "crun_mid_go", "project_id": "proj_1", "task_id": "task_1",
+        "status": "running", "phase": "bootstrap", "title": "Add a route",
+        "spec": {
+            "title": "Add a route",
+            "instructions": "Add a health endpoint.",
+            "owner": "acme", "repo": "svc",
+            "acceptance_criteria": [],
+            "risk_tier": 0,
+            **(spec_extra or {}),
+        },
+        "state": {}, "usage": {}, "finalize_ctx": {"risk_tier": 0},
+        "reservation_id": None, "pull_request_url": None,
+        "pull_request_number": None, "decision_id": None, "error": None,
+    }
+    conn = _Conn()
+    settings = Settings(
+        _env_file=None, github_token="tok", github_app_id=None,
+        github_app_private_key=None, github_app_private_key_path=None,
+        github_app_installation_id=None,
+        code_agent_engine="scripted", code_review_engine="scripted",
+        **(settings_extra or {}),
+    )
+    rescued: list = []
+
+    monkeypatch.setattr(g, "load_code_task_run", lambda _c, _run_id: run)
+    monkeypatch.setattr(g, "_engine_ports", lambda: EnginePorts.oss_defaults(settings))
+    monkeypatch.setattr(g.LocalSubprocessProvider, "acquire",
+                        lambda self, *, task_id, tenant_id=None: _DiffSandbox(repo))
+    monkeypatch.setattr(g, "_provision_build_services", lambda *_a, **_k: None)
+    monkeypatch.setattr(g, "infer_risk_tier",
+                        lambda s, _p: int((s or {}).get("risk_tier", 0)))
+    monkeypatch.setattr("boss_engine.services.typed_decisions.make_decider",
+                        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("no model")))
+    monkeypatch.setattr(g, "_guest_engine_fields",
+                        lambda _settings, eng, model, **_kw: {"engine": eng, "model": model})
+    monkeypatch.setattr(g.SoftwareFactoryService, "propose_pull_request",
+                        lambda *a, **k: rescued.append(k) or {"status": "skipped"})
+    monkeypatch.setattr("boss_engine.identity.runs.start_code_task_run", lambda *_a, **_k: None)
+    monkeypatch.setattr("boss_engine.services.github_app_adapter.repo_token",
+                        lambda *_a, **_k: "tok")
+    if use_microvm:
+        fake_gh = SimpleNamespace(
+            default_branch_sha=lambda: ("main", "sha0"),
+            ensure_branch=lambda *_a, **_k: "sha_branch",
+            upsert_file=lambda *_a, **_k: "sha_commit",
+            commit_files=lambda *_a, **_k: "sha_commit",
+            delete_file=lambda *_a, **_k: "sha_commit",
+            read_text_file=lambda *_a, **_k: None,
+            branch_exists=lambda *_a, **_k: False,
+            compare_changed_files=lambda *_a, **_k: [],
+        )
+
+        def _bind(self, _c, _p, **_kw):
+            self.github = fake_gh
+            return {}
+
+        monkeypatch.setattr(g.SoftwareFactoryService, "bind_project_github", _bind)
+    else:
+        monkeypatch.setattr(g.SoftwareFactoryService, "bind_project_github",
+                            lambda self, _c, _p, **_kw: {})
+    return run, conn, settings, rescued
+
+
+def test_a_mid_build_go_mod_write_with_go_off_stops_immediately_without_repair(
+        tmp_path, go_off, monkeypatch):
+    """Real mid-build flow: base repo has only README.md; the implement agent writes svc/go.mod
+    (and even svc/package.json) while Go is off -> _run_verify resolves toolchain_missing ->
+    stops immediately as needs_human / stack_unsupported with 1 implement call and no partial PR."""
+    repo = _tree(tmp_path, {"README.md": "x\n", "svc/.keep": ""})
+    run, conn, settings, rescued = _mid_build_harness(monkeypatch, repo)
+    impl_calls: list[str] = []
+
+    class _FakeAgent:
+        local_repo = False
+        redact = False
+        budget_ceiling = None
+        command_runner = None
+
+        def run_role(self, prompt, workdir, **_kw):
+            impl_calls.append(prompt)
+            (Path(workdir) / "svc" / "go.mod").write_text(GO_MOD)
+            (Path(workdir) / "svc" / "main.go").write_text("package main\nfunc main() {}\n")
+            (Path(workdir) / "svc" / "package.json").write_text(PKG)
+            return {"summary": "wrote svc", "cost_usd_micros": 0, "usage": {}, "session_id": "s1"}
+
+    monkeypatch.setattr(g, "make_code_agent", lambda *_a, **_k: _FakeAgent())
+    result = g._run_governed_code_task(conn, settings, object(), run["id"])  # noqa: SLF001
+    assert result["failure_class"] == "needs_human", result
+    assert result["reason_code"] == "stack_unsupported", result
+    assert len(impl_calls) == 1
+    assert rescued == []
+    assert "`boss toolchains enable go`" in _error_text(conn)
+
+
+def test_use_microvm_replans_from_accumulated_and_stops_when_go_off(
+        tmp_path, go_off, monkeypatch):
+    """In use_microvm, the guest writes svc/go.mod into accumulated while Go is off -> host
+    re-plans from accumulated + pinned base manifest and halts before guest verification or PR."""
+    from boss_engine.schemas import FileChange
+
+    repo = _tree(tmp_path, {"README.md": "x\n", "svc/.keep": ""})
+    run, conn, settings, rescued = _mid_build_harness(
+        monkeypatch, repo, spec_extra={"substrate": "microvm"}, use_microvm=True)
+    guest_steps: list[tuple[str, list[str]]] = []
+
+    class _FakeVM:
+        last_sandbox_task_id = None
+
+        def __init__(self, _settings):
+            pass
+
+        def run_code_task(self, guest_spec, tenant_id=None):
+            guest_steps.append((guest_spec["task_id"], list(guest_spec["test_commands"])))
+            return SimpleNamespace(
+                diff=[
+                    FileChange(path="svc/go.mod", content=GO_MOD),
+                    FileChange(path="svc/main.go", content="package main\nfunc main() {}\n"),
+                ],
+                deleted=[],
+                cost_usd_micros=0,
+                summary="wrote go svc",
+                usage={},
+                turns=1,
+                tests_passed=True,
+                tests=[],
+                error=None,
+            )
+
+    monkeypatch.setattr(g, "MicroVMProvider", _FakeVM)
+    result = g._run_governed_code_task(conn, settings, object(), run["id"])  # noqa: SLF001
+    assert result["failure_class"] == "needs_human", result
+    assert result["reason_code"] == "stack_unsupported", result
+    assert len(guest_steps) == 1  # only implement ran; no repair / regression / mutation VM
+    assert rescued == []
+    assert "`boss toolchains enable go`" in _error_text(conn)
+
+
+def test_use_microvm_replans_verify_commands_before_guest_regression_when_go_on(
+        tmp_path, go_on, monkeypatch):
+    """In use_microvm with Go on, when implement writes svc/go.mod + svc/main.go, host re-plans
+    verify_commands to Go gate before guest regression (run_all_tests)."""
+    from boss_engine.schemas import FileChange
+
+    repo = _tree(tmp_path, {"README.md": "x\n", "svc/.keep": ""})
+    run, conn, settings, _rescued = _mid_build_harness(
+        monkeypatch, repo, spec_extra={"substrate": "microvm", "risk_tier": 1}, use_microvm=True)
+    run["finalize_ctx"] = {"risk_tier": 1}
+    guest_calls: list[tuple[str, list[str]]] = []
+
+    class _FakeVM:
+        last_sandbox_task_id = None
+
+        def __init__(self, _settings):
+            pass
+
+        def run_code_task(self, guest_spec, tenant_id=None):
+            tid = guest_spec["task_id"]
+            guest_calls.append((tid, list(guest_spec["test_commands"])))
+            if tid.endswith("-write_tests"):
+                return SimpleNamespace(
+                    diff=[FileChange(path="svc/main_test.go", content="package main\n")],
+                    deleted=[], cost_usd_micros=0, summary="wrote tests", usage={},
+                    turns=1, tests_passed=True, tests=[], error=None)
+            if tid.endswith("-implement"):
+                return SimpleNamespace(
+                    diff=[
+                        FileChange(path="svc/go.mod", content=GO_MOD),
+                        FileChange(path="svc/main.go", content="package main\nfunc main() {}\n"),
+                    ],
+                    deleted=[], cost_usd_micros=0, summary="wrote go", usage={},
+                    turns=1, tests_passed=True, tests=[], error=None)
+            return SimpleNamespace(
+                diff=[], deleted=[], cost_usd_micros=0, summary="VERDICT: SURVIVED", usage={},
+                turns=1, tests_passed=True, tests=[], error=None)
+
+    class _FakeAgent:
+        local_repo = False
+        redact = False
+        budget_ceiling = None
+        command_runner = None
+
+        def run_role(self, *_a, **_kw):
+            return {"summary": "VERDICT: SURVIVED\nSTATUS: clean\nCONSISTENCY: consistent",
+                    "cost_usd_micros": 0, "usage": {}, "session_id": "s1"}
+
+    monkeypatch.setattr(g, "MicroVMProvider", _FakeVM)
+    monkeypatch.setattr(g, "make_code_agent", lambda *_a, **_k: _FakeAgent())
+    g._run_governed_code_task(conn, settings, object(), run["id"])  # noqa: SLF001
+    reg = [cmds for tid, cmds in guest_calls if tid.endswith("-run_all_tests")]
+    assert reg == [list(toolchains.GO_GATE)], guest_calls
+
+
+def test_use_microvm_replans_multi_service_preserves_per_step_directories(
+        tmp_path, go_on, monkeypatch):
+    """BOSSAPP-1230 Challenge 3: in use_microvm, a multi-service re-plan (backend/go.mod +
+    web/package.json) preserves per-step directory scoping in verify_commands passed to
+    _guest_stage(run_all_tests)."""
+    from boss_engine.schemas import FileChange
+
+    repo = _tree(tmp_path, {"README.md": "x\n", "backend/.keep": "", "web/.keep": ""})
+    run, conn, settings, _rescued = _mid_build_harness(
+        monkeypatch, repo,
+        spec_extra={
+            "substrate": "microvm",
+            "risk_tier": 1,
+            "instructions": "Build a Go backend in backend/ and a React frontend in web/.",
+        },
+        use_microvm=True,
+    )
+    run["finalize_ctx"] = {"risk_tier": 1}
+    guest_calls: list[tuple[str, list[str]]] = []
+
+    class _FakeVM:
+        last_sandbox_task_id = None
+
+        def __init__(self, _settings):
+            pass
+
+        def run_code_task(self, guest_spec, tenant_id=None):
+            tid = guest_spec["task_id"]
+            guest_calls.append((tid, list(guest_spec["test_commands"])))
+            if tid.endswith("-write_tests"):
+                return SimpleNamespace(
+                    diff=[FileChange(path="backend/main_test.go", content="package main\n")],
+                    deleted=[], cost_usd_micros=0, summary="wrote tests", usage={},
+                    turns=1, tests_passed=True, tests=[], error=None)
+            if tid.endswith("-implement"):
+                return SimpleNamespace(
+                    diff=[
+                        FileChange(path="backend/go.mod", content=GO_MOD),
+                        FileChange(path="backend/main.go", content="package main\nfunc main() {}\n"),
+                        FileChange(path="backend/boss.preview.command", content="go run .\n"),
+                        FileChange(
+                            path="web/package.json",
+                            content=json.dumps({
+                                "name": "web",
+                                "dependencies": {"react": "^18.0.0"},
+                                "scripts": {"build": "echo ok", "test": "echo ok"},
+                            }),
+                        ),
+                    ],
+                    deleted=[], cost_usd_micros=0, summary="wrote stack", usage={},
+                    turns=1, tests_passed=True, tests=[], error=None)
+            return SimpleNamespace(
+                diff=[], deleted=[], cost_usd_micros=0, summary="VERDICT: SURVIVED", usage={},
+                turns=1, tests_passed=True, tests=[], error=None)
+
+    class _FakeAgent:
+        local_repo = False
+        redact = False
+        budget_ceiling = None
+        command_runner = None
+
+        def run_role(self, *_a, **_kw):
+            return {"summary": "VERDICT: SURVIVED\nSTATUS: clean\nCONSISTENCY: consistent",
+                    "cost_usd_micros": 0, "usage": {}, "session_id": "s1"}
+
+    monkeypatch.setattr(g, "MicroVMProvider", _FakeVM)
+    monkeypatch.setattr(g, "make_code_agent", lambda *_a, **_k: _FakeAgent())
+    g._run_governed_code_task(conn, settings, object(), run["id"])  # noqa: SLF001
+    reg = [cmds for tid, cmds in guest_calls if tid.endswith("-run_all_tests")]
+    assert reg == [[
+        "cd backend && go vet ./...",
+        "cd backend && go test ./...",
+        "cd web && npm install --include=dev --no-audit --no-fund --loglevel=error",
+        "cd web && npm run build",
+        "cd web && npm run test",
+    ]], guest_calls

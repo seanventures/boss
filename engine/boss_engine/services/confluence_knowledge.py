@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import json
 import logging
-import threading
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -148,8 +147,10 @@ def start(engine: Any, app_settings: Any, *, project_id: str, spaces: Optional[l
         emit_event(db, project_id, "knowledge.confluence_sync_started", actor, "docs_connection",
              row["id"], {"job": job["id"], "spaces": chosen, "full": full})
     if DISPATCH == "thread":
-        threading.Thread(target=_safe_run, args=(engine, app_settings, project_id, job["id"]),
-                         name="confluence-sync", daemon=True).start()
+        from ..db import spawn_thread
+
+        spawn_thread(_safe_run, args=(engine, app_settings, project_id, job["id"]),
+                     name="confluence-sync", daemon=True, as_background=True)
     return job
 
 

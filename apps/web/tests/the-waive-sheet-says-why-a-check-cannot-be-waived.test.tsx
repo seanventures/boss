@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * A check that cannot be waived says why, beside its label, not only on the title.
  * A waivable check, or a blank reason, says nothing. A sentence over six words is a paragraph.

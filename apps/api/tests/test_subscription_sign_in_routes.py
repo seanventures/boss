@@ -49,7 +49,7 @@ def _cli(tmp_path: Path, provider: str, monkeypatch) -> None:
         login.label, (str(path),), login.url_hosts, login.device_code, login.drop_env,
         pty=login.pty, captures_token=login.captures_token))
     monkeypatch.setattr(sign_in, "_signed_in_check",
-                        lambda _p, _s: (lambda: (tmp_path / "done").exists()))
+                        lambda _p, _s, **_k: (lambda: (tmp_path / "done").exists()))
 
 
 def _poll(client, sign_in_id: str, state: str) -> dict:
@@ -145,7 +145,7 @@ def test_an_expired_login_signs_in_again(client, engine, monkeypatch, tmp_path):
     as_ceo(monkeypatch)
     fakes(monkeypatch)
     _cli(tmp_path, "codex", monkeypatch)
-    monkeypatch.setattr(sign_in, "_signed_in_check", lambda _p, _s: (lambda: True))
+    monkeypatch.setattr(sign_in, "_signed_in_check", lambda _p, _s, **_k: (lambda: True))
     with engine.begin() as c:
         before = c.execute(text(
             "SELECT id, connection_metadata FROM entitlement_sources "
@@ -179,7 +179,7 @@ def test_an_expired_login_signs_in_again(client, engine, monkeypatch, tmp_path):
 def test_already_signed_in_answers_signed_in(client, monkeypatch):
     as_ceo(monkeypatch)
     fakes(monkeypatch)
-    monkeypatch.setattr(sign_in, "_signed_in_check", lambda _p, _s: (lambda: True))
+    monkeypatch.setattr(sign_in, "_signed_in_check", lambda _p, _s, **_k: (lambda: True))
     session = client.post("/v1/setup/sign-in", headers=AUTH,
                           json={"project_id": PROJECT, "provider": "grok"}).json()
     assert session["state"] == "signed_in"
@@ -196,3 +196,31 @@ def test_the_import_door_is_gone(client, monkeypatch):
     assert "/v1/setup/coding-agents/credential" not in paths
     assert {"/v1/setup/sign-in", "/v1/setup/sign-in/{sign_in_id}",
             "/v1/setup/sign-in/{sign_in_id}/code"} <= paths
+
+
+def test_cross_org_sign_in_routes_return_404(client, engine, monkeypatch, tmp_path):
+    from apps.api.tests.identity_fixtures import IdentityWorld
+
+    a, b = IdentityWorld.create(engine), IdentityWorld.create(engine)
+    a.claimed()
+    b.claimed()
+    owner_a = a.person("si-owner-a")
+    owner_b = b.person("si-owner-b")
+    a.bind(owner_a, "owner")
+    b.bind(owner_b, "owner")
+    _cli(tmp_path, "codex", monkeypatch)
+
+    with a.acting_as(a.ctx(owner_a)):
+        started = client.post("/v1/setup/sign-in",
+                              json={"project_id": a.project_a, "provider": "codex"})
+        assert started.status_code == 200, started.text
+        sid = started.json()["sign_in_id"]
+
+    with b.acting_as(b.ctx(owner_b)):
+        g = client.get(f"/v1/setup/sign-in/{sid}", params={"project_id": b.project_a})
+        assert g.status_code == 404, g.text
+        p = client.post(f"/v1/setup/sign-in/{sid}/code",
+                        json={"project_id": b.project_a, "code": "1234-56789"})
+        assert p.status_code == 404, p.text
+        d = client.delete(f"/v1/setup/sign-in/{sid}", params={"project_id": b.project_a})
+        assert d.status_code == 404, d.text

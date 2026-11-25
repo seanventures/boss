@@ -54,10 +54,12 @@ function useVisible(): boolean {
 /** How much the page may move. Exported for the tests. */
 /** The team section's line in plain words (stranger test r2: "36 configured roles, 0 observed
  *  working" read like a log). */
-export function teamSummary(agents: number, working: number, reachable: boolean): string {
+export function teamSummary(agents: number, working: number, reachable: boolean, ambientRunning = 0): string {
   const team = `Team: ${agents} agent${agents === 1 ? "" : "s"}`;
   if (!reachable) return `${team} · activity unavailable`;
-  return `${team} · ${working ? `${working} working now` : "none working now"}`;
+  if (working > 0) return `${team} · ${working} working now`;
+  if (ambientRunning > 0) return `${team} · ${ambientRunning} background ${ambientRunning === 1 ? "loop" : "loops"} running`;
+  return `${team} · none working now`;
 }
 
 export function motionOf({ paused, hidden, reachable, hostCritical, reduced, infraIncident = false }: {
@@ -346,7 +348,7 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
       </details>
       {view ? (
         <details className="cc-secondary" data-testid="cc-team-details">
-          <summary>{teamSummary(view.counts.agents, view.counts.working, reachable)}</summary>
+          <summary>{teamSummary(view.counts.agents, view.counts.working, reachable, ambient?.counts.running ?? 0)}</summary>
           <p className="cc-secondary-note">What each agent is doing now.</p>
           <Proof n={proof} orgId={orgId} />
           <TeamGrid teams={view.teams} agents={view.agents} waiting={waiting} working={working} orgId={orgId}

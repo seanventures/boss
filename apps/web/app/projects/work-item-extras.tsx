@@ -16,6 +16,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { ArrowClockwise, Bell, BellSlash, Cards, LinkSimple, Package, Trash } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
+import { localFull } from "../../lib/local-time";
 import { Who } from "../who";
 import {
   OUTPUT_WORDS, WATCH_WORDS, attachWatchdog, createCard, deleteCard, detachWatchdog, openable, readCards,
@@ -154,7 +155,7 @@ function CardView({ projectId, card, demo, onChanged }: { projectId: string; car
       <Markdown text={card.document} />
       <div className="wt-line">
         <span className="wt-faint">
-          Revision {card.revision}{card.refreshed_at ? ` · ${new Date(card.refreshed_at).toLocaleString()}` : ""}
+          Revision {card.revision}{card.refreshed_at ? ` · ${localFull(card.refreshed_at)}` : ""}
           {card.refresh_minutes ? ` · every ${card.refresh_minutes} min` : " · on close and on demand"}
         </span>
         <GatedButton permission="work_item:manage" projectId={projectId} className="px-btn" disabled={demo}

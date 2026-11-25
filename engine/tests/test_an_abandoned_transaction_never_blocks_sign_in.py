@@ -493,3 +493,371 @@ def test_a_request_is_told_to_send_again_a_tick_that_it_retries():
     assert boss_db.TransactionLost.REQUEST_ACTION in str(boss_db.TransactionLost(ValueError()))
     with boss_db.background():
         assert boss_db.TransactionLost.ACTION in str(boss_db.TransactionLost(ValueError()))
+
+
+# ── BOSSAPP-1462: spawned threads & pools inherit db.background() without leaking parent tx ──
+
+
+def test_autonomy_gate_spawned_thread_inherits_background_limits_and_defers_audit(
+        eng, project, org, monkeypatch):  # noqa: F811
+    from boss_engine.services import autonomy_gate
+    from boss_engine.services.core import create_blocking_decision
+
+    with eng.begin() as c:
+        decision_id = create_blocking_decision(
+            c, project, None, "Deploy?", {}, {}, "test", risk_tier=1
+        )
+
+    wrote, release = threading.Event(), threading.Event()
+    observed: dict = {}
+
+    def fake_decide(conn, settings, did):
+        observed["in_background"] = boss_db.in_background()
+        observed["open_transactions_is_only_child"] = boss_db.open_transactions() == (conn,)
+        observed["lock_timeout"] = str(conn.execute(text("SHOW lock_timeout")).scalar())
+        res = audit.record(_background_event(org), db=conn)
+        observed["deferred"] = res.deferred
+        wrote.set()
+        release.wait(15)
+        return {"decision_id": did}
+
+    monkeypatch.setattr(autonomy_gate, "decide", fake_decide)
+    # Trigger from inside an open parent transaction AND inside db.background():
+    # _decide_after_commit must spawn via db.spawn_thread(..., as_background=True),
+    # inherit background limits, reset _OPEN_TRANSACTIONS (so parent_conn is never leaked),
+    # and never block _sign_in.
+    with boss_db.background():
+        with boss_db.begin(eng) as parent_conn:
+            thread = autonomy_gate._decide_after_commit(decision_id, wait_s=5.0)
+            assert wrote.wait(10), "autonomy thread did not reach decide()"
+            assert observed == {
+                "in_background": True,
+                "open_transactions_is_only_child": True,
+                "lock_timeout": "30s",
+                "deferred": True,
+            }
+            assert parent_conn in boss_db.open_transactions()
+            took = _sign_in(eng, org)
+    release.set()
+    thread.join(15)
+    assert took < 2.0, f"a sign-in waited {took:.1f}s on autonomy_gate thread"
+    chain = _chain(eng, org)
+    assert [r["event_type"] for r in chain] == ["auth.mfa.succeeded", "delegation.used_first"]
+
+
+def test_thread_pool_submit_in_context_inherits_background_and_resets_open_tx(eng):  # noqa: F811
+    from concurrent.futures import ThreadPoolExecutor
+
+    def probe(idx: int) -> dict:
+        with eng.begin() as c:
+            return {
+                "idx": idx,
+                "bg": boss_db.in_background(),
+                "open_before_inner": None,
+                "lock_timeout": str(c.execute(text("SHOW lock_timeout")).scalar()),
+            }
+
+    def probe_outer_reset(idx: int) -> dict:
+        outer_seen = boss_db.open_transactions()
+        with eng.begin() as c:
+            return {
+                "idx": idx,
+                "bg": boss_db.in_background(),
+                "outer_seen": outer_seen,
+                "lock_timeout": str(c.execute(text("SHOW lock_timeout")).scalar()),
+            }
+
+    with boss_db.background():
+        with eng.begin():
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                results = [
+                    boss_db.submit_in_context(pool, probe_outer_reset, i).result()
+                    for i in range(3)
+                ]
+                mapped = boss_db.map_in_context(pool, probe, [10, 20])
+    assert all(r["bg"] is True and r["outer_seen"] == () and r["lock_timeout"] == "30s"
+               for r in results), results
+    assert all(r["bg"] is True and r["lock_timeout"] == "30s" for r in mapped), mapped
+
+
+# ── BOSSAPP-1463: every worker-called API route & in-process sweep runs as background work ───
+
+
+def _control_plane_routes() -> list[tuple[str, str]]:
+    import ast
+
+    cp_src = (ROOT / "apps/worker/boss_worker/control_plane.py").read_text(encoding="utf-8")
+    tree = ast.parse(cp_src)
+
+    def template_from_expr(node: ast.AST) -> str | None:
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value
+        if isinstance(node, ast.JoinedStr):
+            parts = []
+            for v in node.values:
+                if isinstance(v, ast.Constant):
+                    parts.append(str(v.value))
+                elif isinstance(v, ast.FormattedValue):
+                    parts.append("{_}")
+            return "".join(parts)
+        return None
+
+    found: list[tuple[str, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not (isinstance(func, ast.Attribute) and func.attr in ("get", "post", "put", "patch", "delete")
+                and isinstance(func.value, ast.Attribute) and func.value.attr == "_client"):
+            continue
+        url_node = node.args[0] if node.args else next(
+            (kw.value for kw in node.keywords if kw.arg == "url"), None
+        )
+        if url_node is None:
+            continue
+        tmpl = template_from_expr(url_node)
+        if tmpl and "/v1/" in tmpl:
+            found.append((func.attr.upper(), tmpl.split("?")[0]))
+    return sorted(set(found))
+
+
+def test_every_worker_control_plane_route_and_sweep_runs_as_background_work(monkeypatch):
+    import asyncio
+    import inspect
+    import sys
+
+    from fastapi.routing import APIRoute
+
+    api_root = str(ROOT / "apps/api")
+    if api_root not in sys.path:
+        sys.path.insert(0, api_root)
+    from app import main as api_main
+    from app.routers import focused_agents as focused_router
+    from boss_engine.identity import maintenance as id_maintenance
+    from boss_engine.services import bots, resource_reaper, subscription_keepalive, telemetry_retention
+
+    def norm(p: str) -> str:
+        return re.sub(r"\{[^}]+\}", "{_}", p)
+
+    by_method_path: dict[tuple[str, str], list[APIRoute]] = {}
+    for route in api_main.app.routes:
+        if isinstance(route, APIRoute):
+            for method in (route.methods or ()):
+                by_method_path.setdefault((method.upper(), norm(route.path)), []).append(route)
+
+    cp_routes = _control_plane_routes()
+    assert len(cp_routes) >= 68, f"expected >= 68 routes in control_plane.py, got {len(cp_routes)}"
+
+    missing: list[tuple[str, str]] = []
+    unwrapped: list[str] = []
+    for method, path in cp_routes:
+        matched = by_method_path.get((method, norm(path)), [])
+        if not matched:
+            missing.append((method, path))
+            continue
+        for route in matched:
+            src = inspect.getsource(route.endpoint)
+            if "background()" not in src:
+                unwrapped.append(f"{method} {route.path} ({route.endpoint.__name__})")
+
+    assert not missing, f"control_plane routes missing from FastAPI app: {missing}"
+    assert not unwrapped, f"worker-called routes missing db.background(): {unwrapped}"
+
+    # Verify in-process API sweeps & direct worker DB helpers are also wrapped in db.background()
+    from apps.worker.boss_worker import runner as worker_runner
+    from boss_engine.identity import runs as id_runs
+    from boss_engine.identity import shadow_report
+    from boss_engine.services import (
+        backup_scheduler,
+        chat_reply,
+        claude_login,
+        codex_login,
+        event_intake,
+        reflection,
+        run_plane,
+        skill_sources,
+        stop_watch,
+        storage_watch,
+        system_doctor,
+        ticket_sync,
+        worker_longpoll,
+    )
+    from boss_engine.extensions import jobs as ext_jobs
+
+    for target in (
+        id_maintenance.tick,
+        id_runs._renew_forever,
+        shadow_report.run_once,
+        stop_watch.tick,
+        resource_reaper.tick,
+        telemetry_retention.run_once,
+        backup_scheduler.tick,
+        backup_scheduler.prune,
+        storage_watch.tick,
+        system_doctor.tick,
+        claude_login.tick,
+        codex_login.tick,
+        skill_sources.sync_due,
+        ext_jobs.run_due,
+        ticket_sync.tick,
+        chat_reply.drain,
+        reflection.reflect_due,
+        event_intake.process_due,
+        run_plane._HostWaiters.sweep,
+        run_plane._HostWaiters.sweep_desired,
+        worker_longpoll._LocalWaiters.sweep,
+        worker_runner._execute_agent_run_here,
+        worker_runner._tick_ai_sre_overwatch,
+    ):
+        assert "background()" in inspect.getsource(target), f"{target.__qualname__} missing background()"
+
+    # Runtime verification on async worker_poll + outer-tx sweep fixes
+    poll_seen: dict = {}
+
+    async def fake_poll(_engine, *, claim, capabilities, wait_ms):
+        poll_seen["outer_bg"] = boss_db.in_background()
+        poll_seen["claim_res"] = claim()
+        return {"status": "empty", "job": None, "long_poll": False, "waited_ms": 0}
+
+    monkeypatch.setattr(api_main, "require_worker_principal", lambda: None)
+    monkeypatch.setattr(worker_longpoll, "poll", fake_poll)
+    monkeypatch.setattr(api_main, "begin", lambda _e: _nothing_conn())
+    monkeypatch.setattr(api_main.jobs, "claim_job",
+                        lambda conn, wid, caps, ttl: {"bg": boss_db.in_background(), "wid": wid})
+    res = asyncio.run(api_main.worker_poll(api_main.WorkerPollRequest(
+        worker_id="w1", capabilities=["code.task"], lease_ttl_seconds=60, wait_ms=0,
+    )))
+    assert res.status == "empty"
+    assert poll_seen["outer_bg"] is True and poll_seen["claim_res"]["bg"] is True
+
+    # Runtime verification: setup/subscriptions/keep-alive closes outer tx before sweep()
+    from app.routers.setup import build_setup_router
+    from app.schemas_setup import ChecksBody
+    from fastapi.routing import APIRoute as _APIRoute
+
+    dummy_eng = _DummyEngine()
+    setup_router = build_setup_router(
+        engine=dummy_eng,
+        get_settings=lambda: None,
+        require_actor=lambda *a, **kw: None,
+        principal=lambda: "worker",
+    )
+    keepalive_ep = next(
+        r.endpoint for r in setup_router.routes
+        if isinstance(r, _APIRoute) and r.path == "/v1/setup/subscriptions/keep-alive"
+    )
+    keepalive_seen: dict = {}
+    monkeypatch.setattr(subscription_keepalive, "sweep",
+                        lambda _eng, _st, _pid: keepalive_seen.update(
+                            bg=boss_db.in_background(), open_tx=boss_db.open_transactions(),
+                            in_tx=dummy_eng.in_tx,
+                        ) or {"swept": 0})
+    assert keepalive_ep(ChecksBody(project_id="p_test", actor="worker")) == {"swept": 0}
+    assert keepalive_seen == {"bg": True, "open_tx": (), "in_tx": 0}
+
+    # Runtime verification: focused_agents/tick-all closes outer tx before bots.tick_focused_agents
+    focused_seen: dict = {}
+    monkeypatch.setattr(focused_router, "get_engine", lambda: dummy_eng)
+    monkeypatch.setattr(focused_router, "_require", lambda conn, pid, actor: None)
+    monkeypatch.setattr(bots, "flag_on", lambda _flag: True)
+    monkeypatch.setattr(
+        bots, "tick_focused_agents",
+        lambda svc, _eng, *, project_id, actor: focused_seen.update(
+            bg=boss_db.in_background(), open_tx=boss_db.open_transactions(),
+            in_tx=dummy_eng.in_tx,
+        ) or {"ran": [], "skipped": []},
+    )
+    from boss_engine.services import projects_archive
+    monkeypatch.setattr(projects_archive, "is_archived", lambda _c, _p: False)
+    focused_router.tick_all_focused_agents(
+        focused_router.TickAllRequest(project_id="p_test", actor="worker")
+    )
+    assert focused_seen == {"bg": True, "open_tx": (), "in_tx": 0}
+
+    # Direct calls to chat_reply.drain, reflection.reflect_due, and event_intake.process_due
+    # enter db.background() even outside their start() daemon loops.
+    from boss_engine.services import notify
+
+    direct_bg: dict[str, bool] = {}
+    monkeypatch.setattr(
+        notify,
+        "deliver_chat_due",
+        lambda _eng, _st: direct_bg.update(chat_reply=boss_db.in_background()) or {"sent": 0},
+    )
+    chat_reply.drain(dummy_eng, None, rounds=1)
+
+    class _ReflectConn:
+        def __enter__(self):
+            direct_bg["reflection"] = boss_db.in_background()
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def execute(self, *_a, **_kw):
+            class _Res:
+                def mappings(self):
+                    return self
+
+                def all(self):
+                    return []
+
+            return _Res()
+
+    class _ReflectEng:
+        def begin(self):
+            return _ReflectConn()
+
+    reflection.reflect_due(_ReflectEng())
+
+    monkeypatch.setattr(event_intake, "_due_now", lambda _c, now=None: now)
+    monkeypatch.setattr(
+        event_intake,
+        "claim",
+        lambda _c, **_kw: direct_bg.update(event_intake=boss_db.in_background()) or [],
+    )
+    event_intake.process_due(dummy_eng, object())
+    assert direct_bg == {"chat_reply": True, "reflection": True, "event_intake": True}
+
+    # PgCheckpointStore._enqueue async ckpt-writer inherits db.background() & resets open_transactions
+    from boss_engine.kernel.durable import ASYNC, PgCheckpointStore
+
+    ckpt_seen: dict = {}
+    store = PgCheckpointStore(dummy_eng, durability=ASYNC)
+    monkeypatch.setattr(
+        store,
+        "_write_checkpoint",
+        lambda row, own=False: ckpt_seen.update(
+            bg=boss_db.in_background(),
+            open_tx=boss_db.open_transactions(),
+            own=own,
+        ),
+    )
+    with boss_db.background():
+        with boss_db.begin(dummy_eng):
+            store._enqueue(("checkpoint", {"bytes": 1, "mode": ASYNC}))
+            store.close()
+    assert ckpt_seen == {"bg": True, "open_tx": (), "own": True}
+
+
+class _nothing_conn:
+    def __init__(self, owner=None):
+        self._owner = owner
+
+    def __enter__(self):
+        if self._owner is not None:
+            self._owner.in_tx += 1
+        return self
+
+    def __exit__(self, *exc):
+        if self._owner is not None:
+            self._owner.in_tx -= 1
+        return False
+
+
+class _DummyEngine:
+    def __init__(self):
+        self.in_tx = 0
+
+    def begin(self):
+        return _nothing_conn(self)

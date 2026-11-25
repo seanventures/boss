@@ -505,8 +505,11 @@ CAPABILITIES: dict[str, Capability] = {
             # (monitoring_pack); under `monitoring_gate: block` it cannot ship without one.
             # `skip_without_host`: Easy Mode's deploy completes as skipped, in words, when the
             # project has no target and no usable host (the app runs as its preview).
+            # `skip_without_deploy_ask`: Fast Fix's deploy skips itself for a bug request unless
+            # the request asked to deploy.
             optional_inputs=("environment", "target_id", "host_id", "pass_2_of",
-                             "monitoring_step", "skip_without_host"),
+                             "monitoring_step", "skip_without_host",
+                             "skip_without_deploy_ask"),
             produces=("deployment_id", "deployed_url"),
             requires_project=("deployment_target",),
             typical_minutes=8,

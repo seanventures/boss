@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The paused rule says why, beside the list switch, not only on its title.
  * A blank reason says nothing. More than six words is a paragraph. Six or

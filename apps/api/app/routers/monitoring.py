@@ -819,6 +819,9 @@ def build_monitoring_router(
     @router.post("/v1/monitoring/tick")
     @permit(P.SYSTEM_OPERATE, scope=Scope.org())
     def tick():
-        return jsonable_encoder(ms.tick(engine, settings()))
+        from boss_engine.db import background
+
+        with background():
+            return jsonable_encoder(ms.tick(engine, settings()))
 
     return router

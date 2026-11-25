@@ -697,9 +697,13 @@ def sweep_abandoned_runs(engine, settings: Settings, project_id: str, *,
                     _close_as_blocked(c, rid)
                 done_blocked = len(blocked)
                 if done:
-                    c.execute(
-                        sql(f"UPDATE {table} SET status = 'completed', updated_at = now() "
-                            f"WHERE {id_col} = ANY(:ids)"), {"ids": done})
+                    complete_fn = _COMPLETE_WITH_REASON.get(table)
+                    if complete_fn is not None:
+                        complete_fn(c, done)
+                    else:
+                        c.execute(
+                            sql(f"UPDATE {table} SET status = 'completed', updated_at = now() "
+                                f"WHERE {id_col} = ANY(:ids)"), {"ids": done})
                 if stalled:
                     c.execute(
                         sql(f"UPDATE {table} SET status = 'cancelled', "
@@ -761,6 +765,70 @@ def _close_as_blocked(connection, run_id: str) -> None:
 
 #: Per run table: is a run at its last phase nevertheless NOT passed (so it ends blocked)?
 _FINISHED_NOT_PASSED = {"code_task_runs": _code_task_not_passed}
+
+
+def _json_dict(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                return parsed
+        except ValueError:
+            pass
+    return {}
+
+
+def _complete_code_task_runs(connection, done_ids: list[str]) -> None:
+    """Close finished code_task_runs as completed with a real no_pull_request reason if no PR exists."""
+    from . import pull_request_owed
+
+    rows = connection.execute(
+        sql("SELECT id, spec, state, finalize_ctx, pull_request_url "
+            "FROM code_task_runs WHERE id = ANY(:ids)"),
+        {"ids": done_ids},
+    ).mappings().all()
+    by_id = {str(r["id"]): dict(r) for r in rows}
+    for run_id in done_ids:
+        row = by_id.get(str(run_id))
+        if not row:
+            continue
+        fctx = _json_dict(row.get("finalize_ctx"))
+        pr_url = str(row.get("pull_request_url") or "").strip()
+        existing_no_pr = fctx.get(pull_request_owed.KEY)
+        has_explicit = (
+            isinstance(existing_no_pr, dict)
+            and str(existing_no_pr.get("reason") or "") not in ("", "unexplained")
+        )
+        if pr_url or has_explicit:
+            connection.execute(
+                sql("UPDATE code_task_runs SET status = 'completed', updated_at = now() WHERE id = :id"),
+                {"id": run_id},
+            )
+            continue
+        spec = _json_dict(row.get("spec"))
+        state = _json_dict(row.get("state"))
+        branch = str(fctx.get("work_branch") or fctx.get("branch") or state.get("branch") or "")
+        why = pull_request_owed.owed(spec, fctx, branch=branch)
+        if why is None:
+            on = f" Its work is on branch {branch}." if branch else ""
+            why = {
+                "reason": "shepherd_completed",
+                "words": (
+                    "This build finished its stages without a live job to open its pull request, "
+                    f"so the shepherd closed it as completed.{on}"
+                ),
+            }
+        connection.execute(
+            sql(f"UPDATE code_task_runs SET status = 'completed', updated_at = now(), "
+                f"{pull_request_owed.record_clause()} WHERE id = :id"),
+            {"id": run_id, "no_pr": pull_request_owed.record_value(why)},
+        )
+
+
+#: Per run table: custom completion updater when finishing without a live job.
+_COMPLETE_WITH_REASON = {"code_task_runs": _complete_code_task_runs}
 
 
 def _quiet_minutes(engine, job_id: str) -> float:

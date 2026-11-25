@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The agent profile says its description, under the name, not only on the title.
  * A blank description says nothing. A sentence over six words is a paragraph.

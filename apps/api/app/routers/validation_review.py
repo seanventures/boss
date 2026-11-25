@@ -201,9 +201,11 @@ def propose_validators(project_id: str, request: Request, payload: ValidatorsBod
 def run_rerun(rerun_id: str) -> Any:
     """Worker-invoked: run one leased `validation.rerun` here, where the sandbox and the
     toolchains are."""
+    from boss_engine.db import background
     from boss_engine.services import finding_overrides as fo
 
     from ..identity_guard import require_worker_principal
 
     require_worker_principal()
-    return fo.execute_rerun(_engine, _settings, rerun_id)
+    with background():
+        return fo.execute_rerun(_engine, _settings, rerun_id)

@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The workforce says why it cannot reach the control plane, beside that sentence,
  * not only on the title. Blank or whitespace says nothing. More than six words is

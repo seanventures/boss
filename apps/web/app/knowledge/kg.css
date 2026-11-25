@@ -170,7 +170,7 @@
 
 /* FULL SCREEN (round 6): the graph over the whole window, toolbar and status line included; Esc
    exits. The canvas's height is the window's less those two lines (useFitHeight). */
-.kg-graph[data-full] { position: fixed; inset: 0; z-index: 1000; border: 0; border-radius: 0; }
+.kg-graph[data-full] { position: fixed; inset: 0; z-index: var(--z-dialog); border: 0; border-radius: 0; }
 /* The area's fade-in leaves a transform (fill-mode both), which would make "fixed" mean "inside
    the card": none while the graph is full screen. */
 .panel-stack:has(.kg-graph[data-full]) { animation: none !important; transform: none !important; }

@@ -23,6 +23,8 @@ import {
 import { post } from "../workflows/delivery-api";
 import { detailText } from "../../lib/api-error";
 import { ReadinessPanel, unaccepted, type Readiness } from "../workflow-readiness-ui";
+import { isLocalRepo } from "../../lib/repo-links";
+import { localName } from "../../lib/identity/consent";
 import "./start-project.css";
 
 /** A preset's brief, when the page was opened from one (`&start_preset=<key>`). */
@@ -108,7 +110,7 @@ export function ProjectStartCard({ projectId, orgId, actor }: {
         <h2 id="spj-page-name">{view.name}</h2>
         {view.repo ? (
           <p data-testid="project-start-repo">
-            <span className="spj-mono">{view.repo.full_name}</span>, {view.repo.branch},{" "}
+            <span className="spj-mono" title={view.repo.full_name}>{isLocalRepo(view.repo.full_name) ? localName(view.repo.full_name) : view.repo.full_name}</span>, {view.repo.branch},{" "}
             <span data-done={view.repo.mapping.done || undefined} data-testid="project-start-mapped">
               {view.repo.mapping.done ? "code mapped ✓" : mappingWords(view.repo.mapping).toLowerCase()}
             </span>

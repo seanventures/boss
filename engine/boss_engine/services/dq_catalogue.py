@@ -698,12 +698,12 @@ BRIEFS: dict[str, dict[str, Any]] = {
     "dq_incident_escalation": {
         "directive": ("Anything to note? (optional)", "The sweep covers every open incident."),
         "example": {"title": "Escalation sweep", "as_of": "2026-10-09",
-                    "directive": "Daily sweep."},
+                    "directive": "Run the daily escalation sweep across every open DQ incident."},
     },
     "dq_monitor_intake": {
         "directive": ("Anything to note? (optional)", "The DQ Monitor's latest COB is read."),
         "example": {"title": "DQ Monitor intake for COB 2026-10-07", "cob": "2026-10-07",
-                    "directive": "Investigate the COB's Error groups."},
+                    "directive": "Ingest the latest COB and investigate all Error exception groups."},
     },
 }
 

@@ -9,6 +9,7 @@
  * state, a compact flow, ONE action"); they come back as compact chips with short labels — a
  * raw `crun_…` id is never the words, only the tooltip.
  */
+import { isHydrated } from "./hydration-state";
 import type { Attempt, WorkItem, WorkState } from "./project-experience";
 import { changeHref, changeRef, isLocalChangeUrl } from "./repo-links";
 import { mergeWaitOf } from "./work-next-step";
@@ -74,10 +75,12 @@ export function workLinks(w: WorkItem): WorkLink[] {
 }
 
 /** "5m ago", "3h ago", "2d ago"; "" when unknown. */
-export function agoShort(iso: string | null | undefined, now: number = Date.now()): string {
+export function agoShort(iso: string | null | undefined, now?: number | null): string {
   const t = Date.parse(iso || "");
   if (!Number.isFinite(t)) return "";
-  const s = Math.max(0, Math.floor((now - t) / 1000));
+  if (now === null || (now === undefined && !isHydrated())) return "";
+  const ref = now ?? Date.now();
+  const s = Math.max(0, Math.floor((ref - t) / 1000));
   if (s < 60) return "just now";
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
@@ -91,7 +94,7 @@ export type LatestLink = WorkLink & {
 
 /** The project's most recent Run, Build, Change and Preview across all its work (the Latest
  *  strip): for each kind, the link of the work that moved last. */
-export function latestLinks(items: WorkItem[], now: number = Date.now()): LatestLink[] {
+export function latestLinks(items: WorkItem[], now?: number | null): LatestLink[] {
   const when = (w: WorkItem) => Date.parse(w.updated_at || w.created_at || "") || 0;
   const sorted = [...items].sort((a, b) => when(b) - when(a));
   const out: LatestLink[] = [];

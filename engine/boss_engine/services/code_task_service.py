@@ -3324,6 +3324,16 @@ def _fail(
     emit_event(connection, project_id, "code_task.failed", "boss", "code_task_run", run_id,
                {"reason": reason[:300], "status": status,
                 "failure_class": failure_class, "reason_code": reason_code})
+    if not hasattr(connection, "save_run") and reason_code in (
+            "credential_plain_http", "credential_misdirected", "model_auth_rejected"):
+        try:
+            from . import setup_actions
+
+            with connection.begin_nested():
+                setup_actions.mark_model_refused(
+                    connection, project_id, reason_code=reason_code, error=reason)
+        except Exception:  # noqa: BLE001
+            pass
     return {"status": status, "done": True, "error": reason,
             "failure_class": failure_class, "reason_code": reason_code}
 

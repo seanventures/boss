@@ -69,7 +69,7 @@ from .acceptance.verdict import (  # noqa: E402,F401 — re-exported (#136's nam
     _DECL_PATH, _DOC_PATH, _KEYWORDS, _LOADED_BY, _PATHISH, _SKIP_DIRS, _STRING, _SUMMARY,
     _TEST_PATH, _advisory, _code_lines, _defines, _extensionless, _item_data_files, _refers_to,
     _resolve, _walk, batch_summary, clip, evidence_paths, findings_summary, judge,
-    parse_acceptance, passed, wiring_problem)
+    parse_acceptance, passed, pin_met_items, wiring_problem)
 
 
 def items_spec(connection: Any, *, run_id: str, fctx: Mapping[str, Any],
@@ -419,7 +419,10 @@ def keep_history(history: list, record: dict,
 def run_check(items: list[dict], *, ask: Any, title: str, stack: Mapping[str, Any], root: Any,
               source: Optional[Mapping[str, Any]] = None, dropped: int = 0,
               batch_size: Optional[int] = None,
-              checks: Any = None) -> tuple[dict[str, Any], int]:
+              checks: Any = None,
+              prior: Optional[Mapping[str, Any]] = None,
+              head_sha: Optional[str] = None,
+              prior_head_sha: Optional[str] = None) -> tuple[dict[str, Any], int]:
     """Judge EVERY item: one reviewer pass per `batch_size` (default MAX_ITEMS) batch
     (`ask(prompt) -> run_role result`), the item numbers global across passes. A pass that fails
     leaves its items unjudged, so the check is not_run — never met. A pass stopped short (its
@@ -464,7 +467,7 @@ def run_check(items: list[dict], *, ask: Any, title: str, stack: Mapping[str, An
         blocked.append(rr.get("tools_blocked"))
     rec = judge(items, "\n".join(r or "" for r in replies), stack, root=root, source=source,
                 dropped=dropped, summary_line=batch_summary(replies), over_cap=over,
-                checks=checks)
+                checks=checks, prior=prior, head_sha=head_sha, prior_head_sha=prior_head_sha)
     refused = refusal(rec, root) if items else None
     if items and not refused:
         # THE JUDGE'S TOOLS COULD NOT RUN (BOSSAPP-1350: bwrap, 30 items "could not be

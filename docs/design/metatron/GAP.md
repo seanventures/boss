@@ -5,20 +5,17 @@ Overview: [README.md](README.md). Design: [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## 1. The ssh + sar question
 
-Not possible today as asked.
+Resolved for read-only diagnostics via `MT-1` (`BOSSAPP-1368`). Free-form remote shells remain gated; bounded host diagnostics ship in Community today:
 
-| Path | Can it capture `sar`? | Why |
+| Path | Can it capture `sar`? | Why / How |
 |---|---|---|
-| Agent tool `inspect_host` (read-only SSH to a registered host) from the console agent, Metatron or the boss MCP | No | `_inspect_host_command` in `engine/boss_engine/tools/builtin.py` is an allow-list of verbs (docker ps/logs/inspect/images/stats --no-stream, `cat /etc/os-release`, systemctl status, journalctl, ss, ps aux, df, free, uptime, uname, ls, netstat, whoami). `sar`, `vmstat`, `iostat`, `top` are not on it, and pipes, `;`, `&` and redirects are rejected. |
+| Agent tool `inspect_host` (read-only SSH to a registered host) from the console agent, Metatron or the boss MCP | Yes (bounded) | `engine/boss_engine/tools/host_diagnostics_rules.py` + `_inspect_host_command` allow `sar`, `vmstat`, `iostat`, `mpstat`, and `top -b -n 1` with strict flag validation, numeric caps (`interval <= 10`, `count <= 10`, `interval * count <= 30`, no `-o`/`-f`/1-int infinite streams), and metacharacter refusal before DB/SSH. Returns structured `missing_package: "sysstat"` install hint if absent. Also exports `policy_rule_table()` for `metatron-policy`. |
+| Agent tool `collect_diagnostics` (`kind="read"`, `permission="host:exec"`) | Yes (snapshot) | Captures bounded CPU, memory, I/O, network, disk, and `top -b -n 1` sections (`interval_seconds * count <= 10`), degrades gracefully when `sysstat` is missing, redacts secrets, and returns `sections`, `ticket_markdown` (`<= 6000` chars), and `artifact_payload`. |
 | Agent tool `run_on_host` | Only if all hold | (1) a paid edition (Community is hard off); (2) `BOSS_AGENT_HOST_SHELL=true` (default false); (3) the agent cannot call it itself: it must `propose_action`, rendering a button with the exact host and command that a person clicks (in Metatron, `/pick N`); (4) the host is a registered `deployment_hosts` row with an SSH key secret and `sysstat` installed. |
 | `/op` against `/v1/deployment-hosts` | No | Register/patch operations only; no generic run-command. |
 | Plain `ssh` in your own terminal | Yes, outside BOSS | No governed record, no ticket linkage. |
 
-Smallest fixes, in order of safety:
-1. Add `sar`, `vmstat`, `iostat`, `mpstat`, `top -b -n 1` to the `inspect_host` allow-list with validated flags (`-u -r -q -n DEV -b -d`, numeric interval and count capped, no `-o`/`-f` file arguments). Read-only, works in Community. Size S. This is MT-1 (BOSSAPP-1368) and ships in the Python BOSS independently of the Rust work.
-2. A "collect diagnostics" bundle tool (sar + vmstat + iostat + df + top) returning a ticket-ready snapshot. S/M.
-3. Post-processing is done by the model, not a shell pipe, so the shell-meta ban can stay.
-4. Free-form host work through a Community-safe governed path (ChangeSet, budget, receipt). L. The Rust CLI's `ssh_run` with policy and audit (MT-3) is the long-term answer.
+Remaining long-term step: free-form host work through a Community-safe governed path (`MT-3` Rust `ssh_run` with ChangeSet, policy, and audit).
 
 ## 2. What Metatron does today
 

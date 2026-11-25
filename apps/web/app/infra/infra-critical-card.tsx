@@ -54,12 +54,12 @@ export function InfraCriticalCardView({ incident, projectId, actor, orgId, sampl
             <h2 id="icc-h">Infra Agent · {resolved ? "storage incident resolved" : "critical work in progress"}</h2>
             <span className="ia-chip" data-tone={resolved ? "green" : incident.severity === "warn" ? "amber" : "red"} data-testid="icc-sev">
               <Warning size={11} weight="bold" aria-hidden />{resolved ? "Resolved" : incident.severity === "warn" ? "Early" : "Critical"}</span>
-            {!incident.helper.reachable ? <span className="ia-chip" data-tone="amber" data-testid="icc-helper" title="The host helper has not reported for 10 minutes; nothing is deleted until it is back"><WifiSlash size={11} aria-hidden />helper unreachable</span> : null}
+            {!incident.helper.reachable ? <span className="ia-chip" data-tone="amber" data-testid="icc-helper" title="The host helper has not reported for 10 minutes; nothing is deleted until it is back"><WifiSlash size={11} aria-hidden />helper unavailable</span> : null}
             {sample ? <span className="ia-sample">Sample data</span> : null}
           </span>
           <div className="icc-cause" data-testid="icc-cause">
             Storage on <code>{incident.hostLabel}</code> fell to <b>{incident.freePctStart !== null ? `${Math.round(incident.freePctStart)} % free` : "critical"}</b>.
-            {incident.causeText ? <> Cause: <b>{incident.causeText}</b>.</> : null}
+            {incident.causeText ? <> Cause: <b>{incident.causeText.replace(/\.+$/, "")}</b>.</> : null}
           </div>
         </span>
         <span className="icc-big" data-testid="icc-freed">

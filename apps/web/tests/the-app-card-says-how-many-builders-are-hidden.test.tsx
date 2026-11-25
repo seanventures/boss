@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * Built by your team draws five faces. A sixth builder is still named, and the card says how
  * many are past those faces. Five or fewer draw no plus count.

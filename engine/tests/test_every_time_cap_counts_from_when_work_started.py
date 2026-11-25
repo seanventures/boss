@@ -290,8 +290,8 @@ def test_a_job_queued_for_hours_gets_a_full_lease_and_a_lapsed_lease_is_said(eng
 
     job_id = f"job_{uuid.uuid4().hex[:8]}"
     with eng.begin() as c:
-        c.execute(text("INSERT INTO jobs (id, project_id, kind, payload, created_at, priority) "
-                       "VALUES (:j, :p, 'r3.long_queue_probe', '{}'::jsonb, :at, 1)"),
+        c.execute(text("INSERT INTO jobs (id, project_id, kind, payload, created_at, run_after, priority) "
+                       "VALUES (:j, :p, 'r3.long_queue_probe', '{}'::jsonb, :at, :at, 1)"),
                   {"j": job_id, "p": project, "at": now_utc() - LONG_QUEUE})
     svc = JobLeaseService(Settings())
     try:
@@ -607,8 +607,8 @@ def test_a_long_stage_keeps_its_hold_on_every_heartbeat(eng, project):  # noqa: 
     job_id = f"job_{uuid.uuid4().hex[:8]}"
     held, released = f"bres_{uuid.uuid4().hex[:8]}", f"bres_{uuid.uuid4().hex[:8]}"
     with eng.begin() as c:
-        c.execute(text("INSERT INTO jobs (id, project_id, kind, payload, created_at, priority) "
-                       "VALUES (:j, :p, 'r3.long_stage_probe', '{}'::jsonb, :at, 1)"),
+        c.execute(text("INSERT INTO jobs (id, project_id, kind, payload, created_at, run_after, priority) "
+                       "VALUES (:j, :p, 'r3.long_stage_probe', '{}'::jsonb, :at, :at, 1)"),
                   {"j": job_id, "p": project, "at": now_utc() - LONG_QUEUE})
     svc = JobLeaseService(Settings())
     try:

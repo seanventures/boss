@@ -798,11 +798,13 @@ def project_onboarding_execute(body: LeasedJobBody) -> dict[str, Any]:
     """The worker hands its leased `project.onboarding` job here: GitHub's credentials, the
     code graph and the dossier are in this container. Fenced by the lease; no model call."""
     from apps.api.app.main import require_worker_principal
+    from boss_engine.db import background
     from boss_engine.services.project_experience import onboarding
 
     require_worker_principal()
-    return onboarding.execute_job(_engine, _settings, job_id=body.job_id,
-                                  worker_id=body.worker_id, lease_token=body.lease_token)
+    with background():
+        return onboarding.execute_job(_engine, _settings, job_id=body.job_id,
+                                      worker_id=body.worker_id, lease_token=body.lease_token)
 
 
 # ── §9 jump ─────────────────────────────────────────────────────────────────────────────────

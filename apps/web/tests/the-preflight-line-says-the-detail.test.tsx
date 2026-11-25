@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The preflight line says the detail, beside the label, not only on its title.
  * A blank detail falls back to the remedy. Blank, or the same as the label,

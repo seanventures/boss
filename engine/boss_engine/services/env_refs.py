@@ -23,6 +23,7 @@ resolve_target_secret, work_tracker_adapters.resolve_credential) and where a ref
 from __future__ import annotations
 
 import base64
+import ipaddress
 import os
 import re
 import threading
@@ -162,6 +163,27 @@ class Binding:
     """The provider a credential belongs to, and the hosts it may be sent to."""
     provider: str
     hosts: tuple[str, ...] = ()      # "api.github.com", "*.atlassian.net"
+    allow_private_http: bool = False
+
+
+_BLOCKED_HTTP_HOSTS = ("metadata.google.internal", "metadata", "169.254.169.254", "fd00:ec2::254")
+
+
+def _is_private_or_local_host(host: str) -> bool:
+    """True for loopback, private RFC1918/ULA IPs, single-label compose/LAN names, and
+    .local/.internal/.lan/.localhost; explicitly False for cloud metadata and link-local IPs."""
+    h = (host or "").strip().lower().rstrip(".")
+    if not h or h in _BLOCKED_HTTP_HOSTS:
+        return False
+    try:
+        addr = ipaddress.ip_address(h)
+        if addr.is_link_local or addr.is_multicast or addr.is_unspecified:
+            return False
+        return addr.is_loopback or addr.is_private
+    except ValueError:
+        pass
+    return h == "localhost" or "." not in h or h.endswith(
+        (".local", ".internal", ".lan", ".localhost"))
 
 
 #: Each provider's official endpoints (https only). `*.x` matches any subdomain of x.
@@ -323,12 +345,14 @@ def register_provider_hosts(provider: str, hosts: Iterable[str] = (), *,
         OPERATOR_BASE_URLS[key] = tuple(dict.fromkeys(OPERATOR_BASE_URLS.get(key, ()) + names))
 
 
-def provider_binding(provider: Optional[str], extra_hosts: Iterable[str] = ()) -> Binding:
+def provider_binding(provider: Optional[str], extra_hosts: Iterable[str] = (), *,
+                     allow_private_http: bool = False) -> Binding:
     """The binding of a provider by name (a reference's `provider`), plus hosts an org admin set."""
     key = (provider or "").strip().lower()
     key = _PROVIDER_ALIASES.get(key, key)
     extra = tuple(str(h).strip().lower().rstrip(".") for h in extra_hosts if str(h).strip())
-    return Binding(key or "unknown", PROVIDER_HOSTS.get(key, ()) + extra)
+    return Binding(key or "unknown", PROVIDER_HOSTS.get(key, ()) + extra,
+                   allow_private_http=allow_private_http)
 
 
 def binding_for(name: str) -> Optional[Binding]:
@@ -361,16 +385,20 @@ def _host_matches(host: str, pattern: str) -> bool:
 
 def destination_allowed(binding: Binding, url: str) -> bool:
     """May a credential with this binding be sent to `url`? Official hosts need https; a host the
-    operator configured is taken with whatever scheme the operator gave it."""
+    operator configured is taken with whatever scheme the operator gave it; custom endpoints on
+    private/loopback/single-label hosts allow http when `binding.allow_private_http` is set."""
     parts = urlsplit(url or "")
     host = (parts.hostname or "").lower().rstrip(".")
+    scheme = (parts.scheme or "").lower()
     if not host:
         return False
     if any(_host_matches(host, p) for p in _operator_hosts(binding.provider)):
         return True
-    if (parts.scheme or "").lower() not in ("https", "wss"):
-        return False
-    return any(_host_matches(host, p) for p in binding.hosts)
+    if scheme in ("https", "wss"):
+        return any(_host_matches(host, p) for p in binding.hosts)
+    if binding.allow_private_http and scheme == "http" and _is_private_or_local_host(host):
+        return any(_host_matches(host, p) for p in binding.hosts)
+    return False
 
 
 def assert_may_send(name: str, url: str) -> None:

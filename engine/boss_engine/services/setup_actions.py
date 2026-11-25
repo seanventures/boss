@@ -905,6 +905,16 @@ def _key_proof(connection: Connection, settings: Any, project_id: str, provider:
         if env_name:
             from .env_refs import assert_may_send
             assert_may_send(env_name, details["endpoint"])
+        elif not local and api_key:
+            from urllib.parse import urlsplit
+            from .env_refs import CredentialMisdirected, destination_allowed, provider_binding
+
+            host = (urlsplit(details["endpoint"]).hostname or "").lower().rstrip(".")
+            binding = provider_binding(
+                provider, [host] if provider == "custom" and host else (),
+                allow_private_http=(provider == "custom"))
+            if not destination_allowed(binding, details["endpoint"]):
+                raise CredentialMisdirected("Your model key", binding, host, details["endpoint"])
         result = setup_checks.complete_once(api=api, endpoint=details["endpoint"],
             api_key=str(bound.get("credential") or ""), model=details["model"], http=http)
         result["usage"] = {**result.get("usage", {}), "provider": provider}
@@ -1238,6 +1248,17 @@ def _connect_key(connection: Connection, settings: Any, project_id: str, provide
                 "Use the full address, starting with https:// "
                 "(for example https://api.example.com/v1).") from None
         raise SetupActionError(422, "failed", "Model", "Name the model first.") from None
+    if not local and api_key:
+        from urllib.parse import urlsplit
+        from .env_refs import CredentialMisdirected, destination_allowed, provider_binding
+
+        host = (urlsplit(details["endpoint"]).hostname or "").lower().rstrip(".")
+        binding = provider_binding(
+            provider, [host] if provider == "custom" and host else (),
+            allow_private_http=(provider == "custom"))
+        if not destination_allowed(binding, details["endpoint"]):
+            err = CredentialMisdirected("Your model key", binding, host, details["endpoint"])
+            raise SetupActionError(422, "failed", "Base URL", str(err))
     existing_id = replace_source_id or _same_connection(connection, project_id, provider,
         base_url=details["base_url"], model=details["model"]) or ""
     capacity_group = existing_id
@@ -1513,32 +1534,37 @@ def remove_model(connection: Connection, settings: Any, project_id: str, source_
 # ── Model lists (the Model picker) ────────────────────────────────────────────────────────────
 
 _LISTS: dict[str, tuple[float, list[str]]] = {}
+_LIST_PRICES: dict[str, tuple[float, dict[str, dict[str, float]]]] = {}
 
 
-def model_catalogue(connection: Connection, settings: Any, project_id: str, provider: str, *,
-                    api_key: str = "", source_id: str = "", base_url: str = "",
-                    http: Optional[Http] = None) -> list[str]:
-    """The provider's own model list for this key, cached ten minutes (never by key value)."""
+def model_catalogue_with_prices(connection: Optional[Connection], settings: Any, project_id: str,
+                                provider: str, *, api_key: str = "", source_id: str = "",
+                                base_url: str = "",
+                                http: Optional[Http] = None) -> tuple[list[str], dict[str, dict[str, float]]]:
+    """The provider's own model list (and per-1M prices when available), cached ten minutes."""
+    from . import openrouter_catalog
     from .secret_backends import resolve_secret_ref
     from .setup_service import PROVIDERS
 
     provider = (provider or "").strip().lower()
     spec = PROVIDERS.get(provider)
     if spec is None:
-        return []
+        return [], {}
     if provider in setup_view.SUBSCRIPTIONS:
         try:
             from .cli_harness import offered_models
 
-            return list(offered_models(provider))
+            return list(offered_models(provider)), {}
         except Exception:  # noqa: BLE001
-            return []
+            return [], {}
     cache_key = f"{project_id}:{provider}:{source_id or ('pasted' if api_key else '')}:{base_url}"
     hit = _LISTS.get(cache_key)
     if hit and time.monotonic() < hit[0] and not api_key:
-        return hit[1]
+        phit = _LIST_PRICES.get(cache_key)
+        cached_prices = phit[1] if phit and time.monotonic() < phit[0] else {}
+        return hit[1], cached_prices
     key = api_key
-    if not key and source_id:
+    if not key and source_id and connection is not None:
         row = connection.execute(
             text("SELECT credential_secret_ref_id, connection_metadata FROM entitlement_sources "
                  "WHERE project_id = :p AND source_id = :s"),
@@ -1556,12 +1582,47 @@ def model_catalogue(connection: Connection, settings: Any, project_id: str, prov
         base_url = ollama_base_url(settings)
     base = (base_url or spec.get("base_url") or "").strip()
     if not base:
-        return []
-    names = setup_checks.list_models(api=spec.get("api") or "openai", base_url=base, api_key=key,
-                                     local_ollama=provider == "ollama", http=http)
+        return [], {}
+    if provider == "openrouter" and setup_checks.list_models is getattr(setup_checks, "_DEFAULT_LIST_MODELS", setup_checks.list_models):
+        names, prices = setup_checks.list_models_with_prices(
+            api=spec.get("api") or "openai", base_url=base, api_key=key,
+            local_ollama=False, http=http)
+    else:
+        names = setup_checks.list_models(
+            api=spec.get("api") or "openai", base_url=base, api_key=key,
+            local_ollama=provider == "ollama", http=http)
+        prices = {}
+    if provider == "openrouter":
+        catalog_map = openrouter_catalog.cached()
+        if not catalog_map and connection is not None:
+            openrouter_catalog.load(connection)
+            catalog_map = openrouter_catalog.cached()
+        if not names and catalog_map:
+            names = sorted(catalog_map.keys())[:500]
+        if catalog_map:
+            for mid in names:
+                if mid not in prices:
+                    cm = catalog_map.get(mid)
+                    if cm is not None and cm.prompt_usd_per_mtok is not None:
+                        prices[mid] = {
+                            "prompt_usd_per_mtok": cm.prompt_usd_per_mtok,
+                            "completion_usd_per_mtok": cm.completion_usd_per_mtok or 0.0,
+                        }
     if provider in setup_view.LOCALS and names:
         setup_view.remember_local(provider, base, names)
-    _LISTS[cache_key] = (time.monotonic() + 600.0, names)
+    expires = time.monotonic() + 600.0
+    _LISTS[cache_key] = (expires, names)
+    _LIST_PRICES[cache_key] = (expires, prices)
+    return names, prices
+
+
+def model_catalogue(connection: Optional[Connection], settings: Any, project_id: str, provider: str, *,
+                    api_key: str = "", source_id: str = "", base_url: str = "",
+                    http: Optional[Http] = None) -> list[str]:
+    """The provider's own model list for this key, cached ten minutes (never by key value)."""
+    names, _ = model_catalogue_with_prices(
+        connection, settings, project_id, provider,
+        api_key=api_key, source_id=source_id, base_url=base_url, http=http)
     return names
 
 
@@ -1879,3 +1940,95 @@ def start_try(connection: Connection, settings: Any, project_id: str, directive:
                    setup_view.SETUP_TRY_WORKFLOW, {"run_id": run.get("id"),
                                                    "repository": run_input.get("repository")})
     return {"run_id": run.get("id"), "duplicate": bool(run.get("duplicate"))}
+
+
+def mark_model_refused(connection: Connection, project_id: str, *, reason_code: str,
+                       error: str = "", base_url: str = "") -> int:
+    """Clear a stale green 'Working' pill when a runtime build/panel fails on a model's URL or key.
+
+    Updates matching connected `entitlement_sources` rows (and the org model home row if mirrored)
+    so Setup stops claiming the model is Working until it is fixed and re-checked.
+    """
+    import re
+    from urllib.parse import urlsplit
+    from .env_refs import PROVIDER_HOSTS
+    from .org_models import home_project, org_of
+    from .setup_view import now_utc
+
+    if reason_code not in ("credential_plain_http", "credential_misdirected", "model_auth_rejected"):
+        return 0
+    url_match = re.search(r"https?://[^\s'\"<>]+", f"{base_url} {error}".strip())
+    extracted_url = url_match.group(0).rstrip(".,;:") if url_match else ""
+    extracted_host = (urlsplit(extracted_url).hostname or "").lower().rstrip(".") if extracted_url else ""
+    projects = [project_id]
+    try:
+        oid = org_of(connection, project_id)
+        home = home_project(connection, oid) if oid else None
+        if home and home not in projects:
+            projects.append(home)
+    except Exception:  # noqa: BLE001
+        pass
+    rows = connection.execute(text(
+        "SELECT project_id, source_id, source_kind, entitlement_kind, connection_metadata, "
+        "observed_capacity FROM entitlement_sources "
+        "WHERE project_id = ANY(:ps) AND source_id <> 'typesafe_jev' "
+        "AND (credential_secret_ref_id IS NOT NULL OR connection_status = 'connected') "
+        "AND COALESCE(connection_metadata->>'proof_only', 'false') <> 'true'"),
+        {"ps": projects}).mappings().all()
+    if not rows:
+        return 0
+
+    def _row_provider(r: Any) -> str:
+        sid = str(r["source_id"] or "")
+        for p in ("custom", "openai", "anthropic", "openrouter", "groq", "deepseek", "google",
+                  "xai", "mistral", "gemini"):
+            if p in sid.lower():
+                return "google" if p == "gemini" else p
+        return sid.lower()
+
+    matched: list[Any] = []
+    for r in rows:
+        meta = setup_view._obj(r["connection_metadata"])
+        row_url = str(meta.get("base_url") or "")
+        row_host = (urlsplit(row_url).hostname or "").lower().rstrip(".") if row_url else ""
+        if reason_code == "credential_plain_http":
+            if row_url.lower().startswith("http://") and (
+                    not extracted_host or row_host == extracted_host):
+                matched.append(r)
+        elif extracted_host:
+            prov = _row_provider(r)
+            official = PROVIDER_HOSTS.get(prov, ())
+            if row_host == extracted_host or (not row_host and extracted_host in official):
+                matched.append(r)
+        elif str(r.get("entitlement_kind") or "") == "api_key" or str(
+                r.get("source_kind") or "") == "api":
+            matched.append(r)
+    if not matched and reason_code == "credential_plain_http":
+        matched = [r for r in rows
+                   if str(setup_view._obj(r["connection_metadata"]).get("base_url") or "")
+                   .lower().startswith("http://")]
+    if not matched:
+        return 0
+
+    state = "key_rejected" if reason_code == "model_auth_rejected" else "failed"
+    at = now_utc().isoformat()
+    last = {"ok": False, "state": state, "at": at, "error": str(error or "")[:300],
+            **({"host": extracted_host} if extracted_host else {})}
+    meta_patch = json.dumps({"last_check": last, "checked_at": at,
+                             "verification_state": "failed"})
+    cap_patch = json.dumps({"credential_state": "rejected"}) if state == "key_rejected" else None
+    updated = 0
+    for r in matched:
+        connection.execute(text(
+            "UPDATE entitlement_sources SET connection_metadata = "
+            "COALESCE(connection_metadata, '{}'::jsonb) || CAST(:m AS JSONB), "
+            "updated_at = now() WHERE project_id = :p AND source_id = :s"),
+            {"m": meta_patch, "p": r["project_id"], "s": r["source_id"]})
+        if cap_patch is not None:
+            connection.execute(text(
+                "UPDATE entitlement_sources SET observed_capacity = "
+                "COALESCE(observed_capacity, '{}'::jsonb) || CAST(:c AS JSONB) "
+                "WHERE project_id = :p AND source_id = :s"),
+                {"c": cap_patch, "p": r["project_id"], "s": r["source_id"]})
+        updated += 1
+    return updated

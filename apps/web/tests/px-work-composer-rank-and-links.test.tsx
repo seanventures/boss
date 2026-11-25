@@ -167,7 +167,7 @@ describe("New work (05-01..07, 05-31)", () => {
     await type(tid("px-compose-text"), "Let agents tag tickets by product");
     await press(tid("px-compose-start"));
     const sent = calls.find((c) => c.method === "POST" && c.path === `/v1/projects/${P}/work`);
-    expect(sent?.body).toEqual({ kind: "feature", text: "Let agents tag tickets by product", workflow_key: "major_feature" });
+    expect(sent?.body).toEqual({ kind: "feature", text: "Let agents tag tickets by product", workflow_key: "major_feature", infer_app: true });
     expect(tid("px-said")!.textContent).toMatch(/Started — Juno is planning it/);
     expect(tid("px-composer")).toBeNull(); // the modal closes on Start
     // A kind change goes back to that kind's own workflow.
@@ -185,7 +185,7 @@ describe("New work (05-01..07, 05-31)", () => {
     await type(tid("px-compose-text"), "https://github.com/paramg/helpdesk-ai-demo/issues/31");
     await press(tid("px-compose-start"));
     expect(calls.find((c) => c.method === "POST" && c.path === `/v1/projects/${P}/work`)?.body)
-      .toEqual({ kind: "ticket", text: "https://github.com/paramg/helpdesk-ai-demo/issues/31" });
+      .toEqual({ kind: "ticket", text: "https://github.com/paramg/helpdesk-ai-demo/issues/31", infer_app: true });
   });
 });
 

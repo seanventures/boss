@@ -399,6 +399,39 @@ def test_a_moved_head_retries_and_says_so(engine):
     assert status == "approved" and rec["merge_failed"]["kind"] == "head_changed"
 
 
+def test_a_pinned_409_withdraws_stale_card_and_opens_fresh_pending_card(engine):
+    from boss_engine.services import merge_failures
+
+    did = _decision(engine, n=243, branch="boss/code/pinned_x", status="approved")
+    run_id = _build(engine, n=243, did=did)
+    gh = _GitHub(superseded=False)
+    gh.pull_request_snapshot = lambda _n: {"head_sha": "new_head_sha_999"}
+    service = _Service(gh)
+    with engine.begin() as c:
+        out = merge_failures.handle(
+            service, c, _pid(), did, 243, f"{REPO}/pull/243", "boss/code/pinned_x",
+            "rcpt_pinned", "409 Conflict: Head branch was modified. Review and try the merge again.",
+            pinned=True,
+        )
+    assert out["status"] == "failed"
+    assert "retryable" not in out
+    new_did = out["new_decision_id"]
+    old_status, _oq, old_rec = _status(engine, did)
+    assert old_status == "withdrawn"
+    assert old_rec["merge_failed"]["kind"] == "head_moved"
+    new_status, _nq, new_rec = _status(engine, new_did)
+    assert new_status == "pending"
+    assert new_rec["action"] == "review_pull_request"
+    assert new_rec["head_sha"] == "new_head_sha_999"
+    assert new_rec["superseded_decision_id"] == did
+    with engine.begin() as c:
+        linked_did = c.execute(
+            text("SELECT decision_id FROM code_task_runs WHERE id = :r"),
+            {"r": run_id},
+        ).scalar()
+    assert linked_did == new_did
+
+
 # ── 5. an approved merge that died silently is tried once more ──────────────────────────────
 
 def test_an_approved_merge_that_died_is_tried_once_more_on_the_tick(engine):

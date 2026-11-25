@@ -902,7 +902,12 @@ class GatePlan:
         toolchain this install lacks, or is one BOSS cannot build. A person turns it on (or
         changes the brief); a repair round never gets it, and nothing may gate it as another
         stack instead."""
-        return self.source == "toolchain_missing" and bool(self.error)
+        if self.source == "toolchain_missing" and bool(self.error):
+            return True
+        if (self.source == "stack" and bool(self.error)
+                and bool(getattr(self.stack, "toolchain_missing", False))):
+            return True
+        return False
 
     @property
     def runs_steps(self) -> bool:

@@ -125,6 +125,42 @@ def _safe_rel(rel: str) -> bool:
     return bool(rel) and not os.path.isabs(rel) and ".." not in Path(rel).parts
 
 
+def _open_parent_fd(tree: Path, rel: str) -> Optional[tuple[int, str]]:
+    """Like `workspace_perms._parent_fd`, but lets `PermissionError` propagate so callers can
+    fall back to `_run_as(uid, ...)` on `0700` app directories while still refusing symlinks."""
+    from . import workspace_perms
+
+    parts = [p for p in str(rel).replace("\\", "/").split("/") if p not in ("", ".")]
+    if not parts or ".." in parts:
+        return None
+    trusted = _trusted_root(tree)
+    fd = workspace_perms._open_dir_chain(str(tree), trusted=trusted)  # noqa: SLF001
+    if fd is None:
+        if tree.is_dir() and not tree.is_symlink() and not os.access(tree, os.R_OK | os.X_OK):
+            raise PermissionError(13, "Permission denied", str(tree))
+        return None
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    try:
+        for part in parts[:-1]:
+            try:
+                nxt = os.open(part, flags, dir_fd=fd)
+            except PermissionError:
+                os.close(fd)
+                raise
+            except OSError:
+                os.close(fd)
+                return None
+            os.close(fd)
+            fd = nxt
+        return fd, parts[-1]
+    except PermissionError:
+        raise
+    except OSError:
+        with contextlib.suppress(OSError):
+            os.close(fd)
+        return None
+
+
 def _open_regular(tree: Path, rel: str, *, owners: Optional[set[int]] = None) -> Optional[int]:
     """An fd for `tree/rel`, or None: every directory on the way opened with O_NOFOLLOW from a
     trusted root, the file itself O_NOFOLLOW|O_NONBLOCK (a FIFO never blocks), and kept only when
@@ -132,9 +168,7 @@ def _open_regular(tree: Path, rel: str, *, owners: Optional[set[int]] = None) ->
     PermissionError when BOSS may not read it (the caller may read it as the app's uid)."""
     if not _safe_rel(rel):
         return None
-    from . import workspace_perms
-
-    got = workspace_perms._parent_fd(tree, rel, trusted=_trusted_root(tree))  # noqa: SLF001
+    got = _open_parent_fd(tree, rel)
     if got is None:
         return None
     dfd, name = got
@@ -200,6 +234,27 @@ def _run_as(uid: int, script: str, *args: str, data: Optional[bytes] = None,
 #: As the app's uid, read one regular file that is not a link (its processes are stopped, so
 #: nothing swaps it between the test and the read). The uid reads only what it may read anyway.
 _READ_AS_UID = 'test -f "$1" && ! test -h "$1" && exec head -c "$2" -- "$1"'
+#: As the app's uid, list regular non-symlink files under a 0700 directory, NUL-delimited.
+_LIST_AS_UID = (
+    'walk() {\n'
+    '  d="$1"\n'
+    '  for p in "$d"/* "$d"/.[!.]* "$d"/..?*; do\n'
+    '    [ -e "$p" ] || continue\n'
+    '    [ -h "$p" ] && continue\n'
+    '    base=${p##*/}\n'
+    '    if [ -d "$p" ]; then\n'
+    '      case "$base" in\n'
+    '        node_modules|.git|.next|.nuxt|.svelte-kit|dist|build|.npm-cache|.cache|__pycache__'
+    '|.venv|venv|target|.gradle|.turbo|coverage|.pytest_cache|.npm|.config|.local) continue ;;\n'
+    '      esac\n'
+    '      walk "$p"\n'
+    '    elif [ -f "$p" ]; then\n'
+    '      printf "%s\\0" "$p"\n'
+    '    fi\n'
+    '  done\n'
+    '}\n'
+    'walk "$1"'
+)
 #: As the app's uid, write stdin to one file in its tree, 0640 (group boss: BOSS reads it back).
 _WRITE_AS_UID = ('umask 027; d=$(dirname -- "$1"); mkdir -p -- "$d" && rm -f -- "$1" '
                  '&& exec cat > "$1"')
@@ -228,7 +283,41 @@ def _candidates(tree: Path, *, owners: Optional[set[int]] = None,
     link); what is READ is opened by `_read`."""
     names: set[str] = set()
     root = str(tree)
-    for dirpath, dirnames, filenames in os.walk(root, topdown=True, followlinks=False):
+
+    def _on_walk_error(err: OSError) -> None:
+        if not isinstance(err, PermissionError) or not err.filename:
+            return
+        err_path = Path(err.filename)
+        if err_path.is_symlink():
+            return
+        try:
+            rel_dir = os.path.relpath(err.filename, root)
+        except ValueError:
+            return
+        if rel_dir != "." and (not _safe_rel(rel_dir) or any(p in SKIP_DIRS for p in Path(rel_dir).parts)):
+            return
+        if uid is None:
+            logger.warning("preview data: skipped unreadable directory %s", rel_dir)
+            return
+        listed = _run_as(uid, _LIST_AS_UID, err.filename, timeout=60)
+        if listed is None:
+            logger.warning("preview data: could not list unreadable directory %s as uid %s", rel_dir, uid)
+            return
+        for raw in listed.split(b"\x00"):
+            if not raw:
+                continue
+            fpath = raw.decode("utf-8", errors="surrogateescape")
+            try:
+                rel_file = os.path.relpath(fpath, root)
+            except ValueError:
+                continue
+            if not _safe_rel(rel_file):
+                continue
+            if any(p in SKIP_DIRS for p in Path(rel_file).parts[:-1]):
+                continue
+            names.add(rel_file)
+
+    for dirpath, dirnames, filenames in os.walk(root, topdown=True, followlinks=False, onerror=_on_walk_error):
         dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS
                        and not os.path.islink(os.path.join(dirpath, d))]
         rel_dir = os.path.relpath(dirpath, root)
@@ -337,6 +426,39 @@ def restore(tree: Path, key: str, *, uid: Optional[int] = None) -> list[str]:
     return restored
 
 
+def _mkdir_private(path: Path) -> None:
+    """Create `path` (and missing parents under `data_root`) with explicit mode 0o700."""
+    root = data_root()
+    missing: list[Path] = []
+    cur = path
+    while cur != cur.parent and not cur.exists():
+        missing.append(cur)
+        if cur == root:
+            break
+        cur = cur.parent
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    for p in reversed(missing):
+        with contextlib.suppress(OSError):
+            os.chmod(p, 0o700)
+    if root.exists():
+        with contextlib.suppress(OSError):
+            os.chmod(root, 0o700)
+    with contextlib.suppress(OSError):
+        os.chmod(path, 0o700)
+
+
+def _write_private(path: Path, content: str) -> None:
+    """Write `content` to `path` with mode 0o600, never following symlinks."""
+    _mkdir_private(path.parent)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(content)
+    finally:
+        with contextlib.suppress(OSError):
+            os.chmod(path, 0o600)
+
+
 def mark_restored(preview_id: str, tree: Path, key: str, *, uid: Optional[int] = None) -> list[str]:
     """At launch, before the app runs: note the tree's baseline, restore the app's kept data, and
     remember where this preview's tree is (BOSS's store, never the tree: the app cannot rewrite
@@ -355,9 +477,8 @@ def mark_restored(preview_id: str, tree: Path, key: str, *, uid: Optional[int] =
     restored = restore(tree, key, uid=uid)
     note = _tree_note(preview_id)
     try:
-        note.parent.mkdir(parents=True, exist_ok=True)
-        note.write_text(json.dumps({"key": key, "tree": str(tree), "baseline": baseline,
-                                    "restored": restored, "at": time.time()}), encoding="utf-8")
+        _write_private(note, json.dumps({"key": key, "tree": str(tree), "baseline": baseline,
+                                         "restored": restored, "at": time.time()}))
     except OSError as exc:
         logger.warning("preview data: %s will not be kept (%s)", preview_id, type(exc).__name__)
     if restored:
@@ -417,17 +538,16 @@ def _capture(preview_id: str, owner_uid: Optional[int]) -> dict:
     store = _store(key)
     stage = store.with_name(store.name + f".new-{os.getpid()}")
     shutil.rmtree(stage, ignore_errors=True)
-    (stage / "files").mkdir(parents=True, mode=0o700)
+    _mkdir_private(stage / "files")
     for rel, data in wrote:
         dst = stage / "files" / rel
-        dst.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        _mkdir_private(dst.parent)
         fd = os.open(dst, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         with os.fdopen(fd, "wb") as fh:
             fh.write(data)
     copied = [rel for rel, _data in wrote]
-    (stage / "manifest.json").write_text(json.dumps({
-        "files": copied, "bytes": total, "saved_at": time.time(), "preview_id": preview_id}),
-        encoding="utf-8")
+    _write_private(stage / "manifest.json", json.dumps({
+        "files": copied, "bytes": total, "saved_at": time.time(), "preview_id": preview_id}))
     old = store.with_name(store.name + f".old-{os.getpid()}")
     if store.exists():
         os.replace(store, old)

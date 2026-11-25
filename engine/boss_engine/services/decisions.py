@@ -1999,6 +1999,11 @@ class DecisionService:
 
             local_review.on_review_sent_back(connection, self.settings, row, actor=actor,
                                              note=note, jobs=self.jobs)
+        elif action == "revise" and decision_actions.is_prd_publish(row):
+            from . import meeting_service
+
+            meeting_service.revise_prd_from_decision(
+                connection, self.settings, row, actor=actor, note=note or "")
 
     def _start_code_task_after_prd(
         self,
@@ -2513,7 +2518,7 @@ class DecisionService:
         # "timed_out" is the same absence: a repo with no CI never reports a check, so the wait
         # for one always ends in a timeout. Leaving it out blocked every no-CI repo's merge AFTER
         # the person approved it (helpdesk-ai PR #2, 2026-11-05, all eleven BOSS gates green).
-        if validation_status in ("unavailable", "missing", "incomplete", "timed_out") and own:
+        if validation_status in ("unavailable", "missing", "incomplete", "timed_out", "no_ci") and own:
             _blocking = {"written_tests_pass", "nothing_broke", "existing_tests_intact"}
             _bad = sorted(_blocking.intersection(own["failed"]))
             if not _bad:

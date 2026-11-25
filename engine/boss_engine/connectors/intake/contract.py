@@ -156,6 +156,7 @@ KEPT_HEADERS = frozenset({
     "x-boss-timestamp", "x-github-delivery", "x-github-event", "x-github-hook-id",
     "x-github-hook-installation-target-id", "x-github-hook-installation-target-type",
     "x-slack-retry-num", "x-slack-retry-reason", "x-slack-request-timestamp",
+    "x-atlassian-webhook-identifier", "x-plane-delivery", "x-plane-event",
     "x-request-id", "traceparent", "ce-id", "ce-type", "ce-source", "ce-specversion",
 })
 

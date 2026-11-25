@@ -177,15 +177,17 @@ def build_ambient_learning_router(*, engine, settings: Callable[[], Any],
         from apps.api.app.main import require_worker_principal
 
         require_worker_principal()
+        from boss_engine.db import background
         from boss_engine.services.ambient import policy
 
         current = settings()
-        with begin(engine) as c:
-            mode = policy.effective_mode(c, current)
-        if not policy.learning_on(current, mode):
-            return {"skipped": "off (always-on mode is off in Govern and BOSS_AMBIENT_COS is "
-                               "unset; set BOSS_AMBIENT_LEARNING=1 to run it alone)",
-                    "outcomes": {}, "projects": {}}
-        return roadmap.tick(engine, settings=current)
+        with background():
+            with begin(engine) as c:
+                mode = policy.effective_mode(c, current)
+            if not policy.learning_on(current, mode):
+                return {"skipped": "off (always-on mode is off in Govern and BOSS_AMBIENT_COS is "
+                                   "unset; set BOSS_AMBIENT_LEARNING=1 to run it alone)",
+                        "outcomes": {}, "projects": {}}
+            return roadmap.tick(engine, settings=current)
 
     return router

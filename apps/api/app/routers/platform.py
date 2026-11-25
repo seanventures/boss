@@ -546,7 +546,6 @@ def mount_platform_routers(app: FastAPI) -> None:
     from .gap_1257 import router as gap_1257_router
     from .gap_1258 import router as gap_1258_router
     from .gap_1259 import router as gap_1259_router
-    from .gap_1260 import router as gap_1260_router
     from .gap_1261 import router as gap_1261_router
     from .gap_1262 import router as gap_1262_router
     from .gap_1263 import router as gap_1263_router
@@ -580,7 +579,6 @@ def mount_platform_routers(app: FastAPI) -> None:
     app.include_router(gap_1257_router)
     app.include_router(gap_1258_router)
     app.include_router(gap_1259_router)
-    app.include_router(gap_1260_router)
     app.include_router(gap_1261_router)
     app.include_router(gap_1262_router)
     app.include_router(gap_1263_router)

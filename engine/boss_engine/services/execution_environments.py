@@ -66,14 +66,68 @@ class EnvironmentUnusable(ValueError):
 # ── small shared helpers ─────────────────────────────────────────────────────
 
 
+def _dialect_name(connection: Any) -> str:
+    try:
+        return str(connection.engine.dialect.name or "").lower()
+    except AttributeError:  # a raw connection in tests
+        return "sqlite"
+
+
 def _jsonb(connection) -> str:
     """The bind expression for a jsonb column: CAST on Postgres, plain on the
     SQLite the unit tests run (the lineage_sandbox dialect-check precedent)."""
+    return ":%s" if _dialect_name(connection) == "sqlite" else "CAST(:%s AS JSONB)"
+
+
+def _has_org_column(connection: Any) -> bool:
     try:
-        name = connection.engine.dialect.name
-    except AttributeError:  # a raw connection in tests
-        name = "sqlite"
-    return ":%s" if name == "sqlite" else "CAST(:%s AS JSONB)"
+        if _dialect_name(connection) == "sqlite":
+            cols = connection.execute(text("PRAGMA table_info(execution_environments)")).all()
+            return any(str(c[1]) == "org_id" for c in cols)
+        return bool(connection.execute(
+            text("SELECT 1 FROM information_schema.columns "
+                 "WHERE table_schema = current_schema() "
+                 "AND table_name = 'execution_environments' AND column_name = 'org_id'")
+        ).scalar())
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _org_of_project(connection: Any, project_id: Optional[str]) -> Optional[str]:
+    if not project_id:
+        return None
+    try:
+        if _dialect_name(connection) == "sqlite":
+            has_proj = connection.execute(
+                text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='projects'")
+            ).first()
+            has_ws = connection.execute(
+                text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='workspaces'")
+            ).first()
+            if not has_proj or not has_ws:
+                return None
+            row = connection.execute(
+                text("SELECT w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+                     "WHERE p.id = :p"),
+                {"p": project_id},
+            ).first()
+            return str(row[0]) if row and row[0] else None
+        if hasattr(connection, "begin_nested"):
+            with connection.begin_nested():
+                row = connection.execute(
+                    text("SELECT w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+                         "WHERE p.id = :p"),
+                    {"p": project_id},
+                ).first()
+        else:
+            row = connection.execute(
+                text("SELECT w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+                     "WHERE p.id = :p"),
+                {"p": project_id},
+            ).first()
+        return str(row[0]) if row and row[0] else None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _parse(value: Any) -> dict:
@@ -109,6 +163,7 @@ def create_environment(
     name: str,
     driver: str,
     project_id: Optional[str] = None,
+    org_id: Optional[str] = None,
     config: Optional[dict] = None,
     secret_refs: Optional[dict] = None,
     status: str = "registered",
@@ -124,53 +179,105 @@ def create_environment(
         raise EnvironmentUnusable("an environment needs a name.")
     env_id = make_id("env")
     cast = _jsonb(connection)
-    connection.execute(
-        text(
-            "INSERT INTO execution_environments "
-            "(id, project_id, name, driver, config, secret_refs, status, created_by) "
-            f"VALUES (:i, :p, :n, :d, {cast % 'c'}, {cast % 's'}, :st, :by)"
-        ),
-        {
-            "i": env_id, "p": project_id, "n": name, "d": driver,
-            "c": json.dumps(config or {}), "s": json.dumps(secret_refs or {}),
-            "st": status, "by": actor,
-        },
-    )
-    return get_environment(connection, env_id)
+    resolved_org = org_id if org_id is not None else _org_of_project(connection, project_id)
+    if _has_org_column(connection):
+        connection.execute(
+            text(
+                "INSERT INTO execution_environments "
+                "(id, project_id, org_id, name, driver, config, secret_refs, status, created_by) "
+                f"VALUES (:i, :p, :o, :n, :d, {cast % 'c'}, {cast % 's'}, :st, :by)"
+            ),
+            {
+                "i": env_id, "p": project_id, "o": resolved_org, "n": name, "d": driver,
+                "c": json.dumps(config or {}), "s": json.dumps(secret_refs or {}),
+                "st": status, "by": actor,
+            },
+        )
+    else:
+        connection.execute(
+            text(
+                "INSERT INTO execution_environments "
+                "(id, project_id, name, driver, config, secret_refs, status, created_by) "
+                f"VALUES (:i, :p, :n, :d, {cast % 'c'}, {cast % 's'}, :st, :by)"
+            ),
+            {
+                "i": env_id, "p": project_id, "n": name, "d": driver,
+                "c": json.dumps(config or {}), "s": json.dumps(secret_refs or {}),
+                "st": status, "by": actor,
+            },
+        )
+    return get_environment(connection, env_id, org_id=resolved_org)
 
 
-def get_environment(connection, environment_id: str) -> dict:
+def get_environment(connection, environment_id: str, *, org_id: Optional[str] = None) -> dict:
     row = connection.execute(
         text("SELECT * FROM execution_environments WHERE id = :i"),
         {"i": environment_id},
     ).mappings().first()
     if row is None:
         raise EnvironmentNotFound(f"no execution environment {environment_id!r}.")
-    return _row_dict(row)
+    out = _row_dict(row)
+    if org_id is not None and _has_org_column(connection):
+        row_org = out.get("org_id")
+        if row_org is not None:
+            if str(row_org) != str(org_id):
+                raise EnvironmentNotFound(f"no execution environment {environment_id!r}.")
+        else:
+            proj_org = _org_of_project(connection, out.get("project_id"))
+            if proj_org is None or str(proj_org) != str(org_id):
+                raise EnvironmentNotFound(f"no execution environment {environment_id!r}.")
+    return out
 
 
 def list_environments(
-    connection, project_id: Optional[str] = None, *, include_org_wide: bool = True
+    connection, project_id: Optional[str] = None, *,
+    org_id: Optional[str] = None, include_org_wide: bool = True,
 ) -> list[dict]:
     """A project's environments plus (by default) the org-wide rows it may use."""
+    effective_org = org_id if org_id is not None else _org_of_project(connection, project_id)
+    has_org = _has_org_column(connection)
     if project_id is None:
-        rows = connection.execute(
-            text("SELECT * FROM execution_environments WHERE project_id IS NULL "
-                 "ORDER BY created_at DESC")
-        ).mappings().all()
+        if effective_org is not None and has_org:
+            rows = connection.execute(
+                text("SELECT * FROM execution_environments "
+                     "WHERE project_id IS NULL AND org_id = :o "
+                     "ORDER BY created_at DESC"),
+                {"o": effective_org},
+            ).mappings().all()
+        else:
+            rows = connection.execute(
+                text("SELECT * FROM execution_environments WHERE project_id IS NULL "
+                     "ORDER BY created_at DESC")
+            ).mappings().all()
     elif include_org_wide:
-        rows = connection.execute(
-            text("SELECT * FROM execution_environments "
-                 "WHERE project_id = :p OR project_id IS NULL "
-                 "ORDER BY (project_id IS NULL), created_at DESC"),
-            {"p": project_id},
-        ).mappings().all()
+        if effective_org is not None and has_org:
+            rows = connection.execute(
+                text("SELECT * FROM execution_environments "
+                     "WHERE project_id = :p OR (project_id IS NULL AND org_id = :o) "
+                     "ORDER BY (project_id IS NULL), created_at DESC"),
+                {"p": project_id, "o": effective_org},
+            ).mappings().all()
+        else:
+            rows = connection.execute(
+                text("SELECT * FROM execution_environments "
+                     "WHERE project_id = :p OR project_id IS NULL "
+                     "ORDER BY (project_id IS NULL), created_at DESC"),
+                {"p": project_id},
+            ).mappings().all()
     else:
-        rows = connection.execute(
-            text("SELECT * FROM execution_environments WHERE project_id = :p "
-                 "ORDER BY created_at DESC"),
-            {"p": project_id},
-        ).mappings().all()
+        if effective_org is not None and has_org:
+            rows = connection.execute(
+                text("SELECT * FROM execution_environments "
+                     "WHERE project_id = :p AND (org_id = :o OR org_id IS NULL) "
+                     "ORDER BY created_at DESC"),
+                {"p": project_id, "o": effective_org},
+            ).mappings().all()
+        else:
+            rows = connection.execute(
+                text("SELECT * FROM execution_environments WHERE project_id = :p "
+                     "ORDER BY created_at DESC"),
+                {"p": project_id},
+            ).mappings().all()
     return [_row_dict(r) for r in rows]
 
 
@@ -178,12 +285,13 @@ def update_environment(
     connection,
     environment_id: str,
     *,
+    org_id: Optional[str] = None,
     name: Optional[str] = None,
     config: Optional[dict] = None,
     secret_refs: Optional[dict] = None,
     status: Optional[str] = None,
 ) -> dict:
-    get_environment(connection, environment_id)  # a missing id 404s in words first
+    get_environment(connection, environment_id, org_id=org_id)  # a missing/cross-org id 404s first
     sets: list[str] = ["updated_at = CURRENT_TIMESTAMP"]
     params: dict[str, Any] = {"i": environment_id}
     cast = _jsonb(connection)
@@ -203,10 +311,15 @@ def update_environment(
         text(f"UPDATE execution_environments SET {', '.join(sets)} WHERE id = :i"),
         params,
     )
-    return get_environment(connection, environment_id)
+    return get_environment(connection, environment_id, org_id=org_id)
 
 
-def delete_environment(connection, environment_id: str) -> bool:
+def delete_environment(connection, environment_id: str, *, org_id: Optional[str] = None) -> bool:
+    if org_id is not None and _has_org_column(connection):
+        try:
+            get_environment(connection, environment_id, org_id=org_id)
+        except EnvironmentNotFound:
+            return False
     result = connection.execute(
         text("DELETE FROM execution_environments WHERE id = :i"),
         {"i": environment_id},
@@ -245,6 +358,7 @@ def resolve_environment(
     connection,
     *,
     project_id: Optional[str] = None,
+    org_id: Optional[str] = None,
     agent: Optional[str] = None,
     spec: Optional[dict] = None,
 ) -> Optional[dict]:
@@ -263,9 +377,10 @@ def resolve_environment(
     EnvironmentUnusable in words — never a silent fallback to local.
     """
     spec = spec or {}
+    effective_org = org_id if org_id is not None else _org_of_project(connection, project_id)
     env_id = str(spec.get("environment_id") or "").strip()
     if env_id:
-        row = get_environment(connection, env_id)  # missing id: words, not local
+        row = get_environment(connection, env_id, org_id=effective_org)  # missing/cross-org: words
         _require_usable(row)
         return row
 
@@ -277,7 +392,7 @@ def resolve_environment(
         # configured — a per-run local/microvm override must stay honoured.
         return None
     if substrate:
-        rows = [r for r in _candidate_rows(connection, project_id)
+        rows = [r for r in _candidate_rows(connection, project_id, org_id=effective_org)
                 if r["driver"] == substrate]
         if not rows:
             raise EnvironmentUnusable(
@@ -288,7 +403,7 @@ def resolve_environment(
             )
         return rows[0]
 
-    candidates = _candidate_rows(connection, project_id)
+    candidates = _candidate_rows(connection, project_id, org_id=effective_org)
     agent_name = str(agent or spec.get("agent") or spec.get("agent_id") or "").strip()
     if agent_name:
         for row in candidates:
@@ -304,8 +419,10 @@ def resolve_environment(
     return None
 
 
-def _candidate_rows(connection, project_id: Optional[str]) -> list[dict]:
-    rows = list_environments(connection, project_id, include_org_wide=True)
+def _candidate_rows(
+    connection, project_id: Optional[str], *, org_id: Optional[str] = None,
+) -> list[dict]:
+    rows = list_environments(connection, project_id, org_id=org_id, include_org_wide=True)
     usable = [r for r in rows if str(r.get("status") or "") in USABLE_STATUSES]
     # Project-scoped rows outrank org-wide ones at every step of the precedence.
     return sorted(usable, key=lambda r: r["project_id"] is None)
@@ -487,9 +604,12 @@ def probe_environment(connection, settings: Any, row: dict) -> dict:
     }
 
 
-def record_probe(connection, environment_id: str, result: dict) -> None:
+def record_probe(connection, environment_id: str, result: dict,
+                 *, org_id: Optional[str] = None) -> None:
     """Verified on a passing probe, degraded on a failing one — same meaning the
     deployment fleet gives those words."""
+    if org_id is not None and _has_org_column(connection):
+        get_environment(connection, environment_id, org_id=org_id)
     connection.execute(
         text("UPDATE execution_environments SET status = :s, "
              "updated_at = CURRENT_TIMESTAMP WHERE id = :i AND status != 'retired'"),

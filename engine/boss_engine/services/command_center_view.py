@@ -713,17 +713,28 @@ def systems(*, probe: Mapping[str, Any], basics: Optional[Mapping[str, Any]],
                     "href": "?area=setup&focus=models"})
 
     # REPO: connected, expiring within 3 days, failing, or none connected.
-    repos = list(((basics or {}).get("repository") or {}).get("repos") or [])
+    repo_section = (basics or {}).get("repository") or {}
+    repos = list(repo_section.get("repos") or [])
+    local_repo = repo_section.get("local")
+    own_local = bool(repo_section.get("own_local"))
     if basics is None:
         out.append({"key": "repo", "tone": "grey", "word": "Repo", "state": "Unknown",
                     "tip": "Could not read Setup", "href": "?area=setup&focus=repository"})
+    elif not repos and local_repo:
+        pname = str((local_repo or {}).get("project_name") or "").strip()
+        tip = f"On this machine ({pname})" if pname else "On this machine"
+        out.append({"key": "repo", "tone": "green", "word": "Repo", "state": "OK",
+                    "tip": _clip(tip), "href": "?area=setup&focus=repository"})
     elif not repos:
         out.append({"key": "repo", "tone": "grey", "word": "Repo", "state": "Not set up",
                     "tip": "No repository connected yet", "href": "?area=setup&focus=repository"})
     else:
         default = next((r for r in repos if r.get("default")), repos[0])
         soon = setup_view.expiring_within({"repository": basics["repository"], "models": []}, 3)
-        if not any(setup_view.repository_working(r) for r in repos):
+        if own_local and default.get("host") == "local":
+            out.append({"key": "repo", "tone": "green", "word": "Repo", "state": "OK",
+                        "tip": "On this machine", "href": "?area=setup&focus=repository"})
+        elif not any(setup_view.repository_working(r) for r in repos):
             out.append({"key": "repo", "tone": "red", "word": "Repo", "state": "Failing",
                         "tip": _clip(f"{default['full_name']}: {default['pill']['tip']}"),
                         "href": "?area=setup&focus=repository"})
@@ -871,6 +882,11 @@ def status(*, counts: Mapping[str, Any], attention: list[Mapping[str, Any]],
     if needs:
         return {"key": "needs_you", "text": f"{needs} {'needs' if needs == 1 else 'need'} you",
                 "tone": "amber", "tip": "Decisions waiting on you. Same count as Approvals."}
+    waiting_runs = int(counts.get("waiting_you_runs") or 0)
+    if waiting_runs:
+        return {"key": "needs_you",
+                "text": f"{waiting_runs} {'needs' if waiting_runs == 1 else 'need'} you",
+                "tone": "amber", "tip": "Work waiting on you to continue."}
     fresh = runs_24h == 0 and not ever and not int(counts.get("setup") or 0)
     if host.get("show") and host.get("cause") != "disk" and not fresh:
         return {"key": "host_slow", "text": "Host is slow", "tone": "amber",
@@ -1077,6 +1093,7 @@ def build(connection: Any, settings: Any, project_id: str, *, tz: Optional[str] 
     moving = sum(1 for m in board["missions"]
                  if m["state"] not in ("done", "stopped", "stalled", "waiting_you",
                                        "waiting_person"))
+    waiting_you_runs = sum(1 for m in board["missions"] if m["state"] == "waiting_you")
     runs_24h = int(today.get("runs_finished") or 0) + int(today.get("runs_failed") or 0) + moving
     old_total = _quiet(connection, "old questions", old_questions, connection, project_id, now,
                        default=None)
@@ -1088,7 +1105,8 @@ def build(connection: Any, settings: Any, project_id: str, *, tz: Optional[str] 
         "etag": "",
         "generated_at": now.isoformat(),
         "tz": zone,
-        "status": status(counts={**counts, "moving": moving}, attention=board["attention"],
+        "status": status(counts={**counts, "moving": moving, "waiting_you_runs": waiting_you_runs},
+                         attention=board["attention"],
                          budget=budget_full,
                          host=host, runs_24h=runs_24h, ever=ever,
                          last_work_at=today["last_work_at"], now=now, refusal=refusal,

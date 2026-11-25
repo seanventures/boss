@@ -27,7 +27,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ..config import Settings
-from ..db import begin
+from ..db import begin, map_in_context
 from .jobs import JOB_PRIORITY_INTERACTIVE
 from .core import stable_dedupe_key, create_artifact, create_blocking_decision, emit_event, make_id
 from .mcp_registry import (
@@ -559,7 +559,7 @@ def _ask_panel(adapter, personas: list[dict], make_prompt, seats: Optional[dict]
         return p["title"], txt
 
     with ThreadPoolExecutor(max_workers=max(1, len(personas))) as pool:
-        for title, txt in pool.map(one, personas):
+        for title, txt in map_in_context(pool, one, personas):
             out[title] = txt
     return out, cost, model
 
@@ -1307,6 +1307,17 @@ def _fail_for_person(engine, settings: Settings, run: dict, run_id: str,
             "WHERE id = :id AND status = 'running'"),
             {"e": person["words"][:500], "rc": person["reason_code"], "id": run_id})
         release_meeting_hold(c, settings, run_id, "panel stopped: " + person["words"][:200])
+        if person["reason_code"] in ("credential_plain_http", "credential_misdirected",
+                                     "model_auth_rejected"):
+            try:
+                from . import setup_actions
+
+                with c.begin_nested():
+                    setup_actions.mark_model_refused(
+                        c, str(run["project_id"]),
+                        reason_code=person["reason_code"], error=person["words"])
+            except Exception:  # noqa: BLE001
+                pass
         emit_event(c, run["project_id"], "meeting.failed", "boss", "meeting_run", run_id,
                    {"phase": run["phase"], "failure_class": "needs_human",
                     "reason_code": person["reason_code"], "words": person["words"][:300]})
@@ -1589,6 +1600,7 @@ def _finalize_meeting(connection, settings, run_id) -> dict:
     decision_id = None if security_review else create_blocking_decision(connection, project_id, task_id,
         _PRD_DECISION_QUESTION,
         {"action": "execute_agent_tool", "tool": "publish_document", "start_code_task": True,
+         "meeting_run_id": run_id,
          "args": {"title": "PRD: " + meeting_title(run.get("title"), run["directive"]), "markdown": state.get("prd_markdown") or "",
                   "subtitle": f"Drafted by a BOSS agent panel · source {run['url']}", "repo_subdir": "docs/prd"},
          "task_id": task_id,
@@ -2435,3 +2447,109 @@ def run_simulated_meeting(
         "dissent_records": standup_outputs.get("dissent_records") or [],
         "already": not created,
     }
+
+
+def revise_prd_from_decision(
+    connection,
+    settings: Settings,
+    decision_row: dict[str, Any],
+    *,
+    actor: str,
+    note: str,
+) -> str:
+    """Create a revised PRD publish decision from a person's Request changes note, update
+    meeting_runs.decision_id + state, and repoint any waiting SPEC_DECISION_KIND workflow step.
+    Always sets explicit_stop so the revised PRD is never silently auto-approved."""
+    old_decision_id = str(decision_row["id"])
+    project_id = str(decision_row["project_id"])
+    rec = decision_row.get("recommendation")
+    if isinstance(rec, str):
+        try:
+            rec = json.loads(rec)
+        except ValueError:
+            rec = {}
+    rec = dict(rec or {})
+    args = dict(rec.get("args") or {})
+    meeting_run_id = str(rec.get("meeting_run_id") or "").strip() or None
+    if not meeting_run_id:
+        found = connection.execute(
+            text("SELECT id FROM meeting_runs WHERE decision_id = :d "
+                 "ORDER BY updated_at DESC LIMIT 1"),
+            {"d": old_decision_id},
+        ).scalar()
+        if found:
+            meeting_run_id = str(found)
+    run = load_meeting_run(connection, meeting_run_id) if meeting_run_id else None
+    state = dict((run or {}).get("state") or {})
+    prev_markdown = str(state.get("prd_markdown") or args.get("markdown") or "").rstrip()
+    clean_note = str(note or "").strip()
+    revision_section = (
+        f"\n\n## Requested Changes ({actor})\n\n{clean_note}\n"
+        if clean_note else ""
+    )
+    revised_markdown = f"{prev_markdown}{revision_section}".lstrip()
+    if run and run.get("directive"):
+        from .stacks import ensure_stack_line
+
+        revised_markdown = ensure_stack_line(revised_markdown, str(run.get("directive") or ""))
+    task_id = (
+        decision_row.get("task_id")
+        or (run.get("task_id") if run else None)
+        or rec.get("task_id")
+    )
+    new_args = {**args, "markdown": revised_markdown}
+    new_rec = {
+        **rec,
+        "action": "execute_agent_tool",
+        "tool": "publish_document",
+        "start_code_task": bool(rec.get("start_code_task", True)),
+        "args": new_args,
+        **({"task_id": task_id} if task_id else {}),
+        **({"meeting_run_id": meeting_run_id} if meeting_run_id else {}),
+        "revised_from_decision_id": old_decision_id,
+        "revision_note": clean_note,
+        "explicit_stop": "Revised after requested changes — awaiting person approval",
+    }
+    new_decision_id = create_blocking_decision(
+        connection,
+        project_id,
+        task_id,
+        str(decision_row.get("question") or _PRD_DECISION_QUESTION),
+        new_rec,
+        {},
+        "meeting_prd_ready_to_publish",
+        risk_tier=2,
+    )
+    if meeting_run_id and run is not None:
+        history = list(state.get("revision_history") or [])
+        history.append({
+            "from_decision_id": old_decision_id,
+            "to_decision_id": new_decision_id,
+            "actor": actor,
+            "note": clean_note,
+        })
+        state["prd_markdown"] = revised_markdown
+        state["revision_history"] = history
+        connection.execute(
+            text("UPDATE meeting_runs SET decision_id = :d, state = CAST(:s AS JSONB), "
+                 "updated_at = now() WHERE id = :id"),
+            {"d": new_decision_id, "s": json.dumps(state), "id": meeting_run_id},
+        )
+    from .workflow_capability_runner import repoint_spec_decision
+
+    repointed = repoint_spec_decision(connection, old_decision_id, new_decision_id)
+    emit_event(
+        connection,
+        project_id,
+        "meeting.prd_revised",
+        actor,
+        "decision",
+        new_decision_id,
+        {
+            "from_decision_id": old_decision_id,
+            "meeting_run_id": meeting_run_id,
+            "note": clean_note[:500],
+            "repointed_steps": repointed,
+        },
+    )
+    return new_decision_id

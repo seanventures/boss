@@ -161,7 +161,8 @@ def wants_first_answer(message: str, evidence: Optional[SubjectEvidence],
 #: machine, so it goes to the loop, which has read_app_logs and inspect_host.
 _LIVE_READ = re.compile(
     r"\b(logs?|docker|container|journalctl|tail|stdout|stderr|running (on|now)|right now|"
-    r"currently|disk|df -h|memory|cpu|process(es)?)\b", re.IGNORECASE)
+    r"currently|disk|df -h|memory|cpu|process(es)?|sar|vmstat|iostat|mpstat|sysstat|"
+    r"diagnostics|iowait)\b", re.IGNORECASE)
 
 
 def asks_for_a_live_read(message: str) -> bool:

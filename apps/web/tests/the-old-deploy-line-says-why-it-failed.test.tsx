@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The unbound history span says "last deploy: {status}" and keeps the time.
  * Its title is the raw failure reason. The reason is also readable beside

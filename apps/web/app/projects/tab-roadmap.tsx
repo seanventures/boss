@@ -23,6 +23,8 @@ import {
 } from "../../lib/project-experience";
 import { FX_ROADMAP } from "../../lib/project-experience-fixtures";
 import { notifyChanged } from "../changed";
+import { localWith } from "../../lib/local-time";
+import { useNow } from "../agents/live-util";
 import { Drawer, Empty, Face, Flow, Ico, REC_KIND_WORDS, ReadGate, Said, Tag } from "./kit";
 import type { PxCtx } from "./project-page";
 
@@ -341,7 +343,8 @@ function RecCard({ ctx, r, i, state, onDone }: { ctx: PxCtx; r: Recommendation; 
   const [snoozing, setSnoozing] = useState(false);
   const [days, setDays] = useState(14);
   const [snoozeWhy, setSnoozeWhy] = useState("");
-  const until = new Date(Date.now() + days * 86_400_000).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  const nowMs = useNow(60_000);
+  const until = nowMs === null ? "" : localWith(nowMs + days * 86_400_000, { day: "numeric", month: "short" });
   const [reason, setReason] = useState("");
   const [said, setSaid] = useState("");
   const [menu, setMenu] = useState(false);

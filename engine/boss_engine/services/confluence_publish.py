@@ -18,7 +18,6 @@ from __future__ import annotations
 import difflib
 import json
 import logging
-import threading
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -169,11 +168,15 @@ def apply_for_decision(db: Connection, app_settings: Any, decision: dict[str, An
                                "title": consent["proposed"].get("title"),
                                "op": consent["proposed"].get("op")})
     if DISPATCH == "thread":
+        import contextvars
+        from ..db import spawn_thread
+
         engine, settings = db.engine, app_settings
+        ctx = contextvars.copy_context()
 
         def after_commit(_conn: Any) -> None:
-            threading.Thread(target=_safe_reconcile, args=(engine, settings, project_id),
-                             name="confluence-publish", daemon=True).start()
+            spawn_thread(_safe_reconcile, args=(engine, settings, project_id),
+                         name="confluence-publish", daemon=True, as_background=True, ctx=ctx)
 
         event.listen(db, "commit", after_commit, once=True)
     return {"queued": True, "consent_id": consent["id"]}

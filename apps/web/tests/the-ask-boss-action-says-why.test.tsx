@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * An Ask BOSS action already puts why on the button title and shows only the
  * label. The same why has to be readable beside that label. Blank is nothing.

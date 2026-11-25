@@ -85,7 +85,7 @@ export function needRow(item: AttentionItem, now: number | null): NeedRow {
              sub: [source, waited && (item.run ? `waiting ${waited}` : `raised ${waited} ago`)].filter(Boolean).join(", ") };
   }
   if (item.kind === "readiness") {
-    return { item, roleKey: null, icon: "Settings", primary: false, title: `Setup: ${withoutIds(item.title)}`,
+    return { item, roleKey: null, icon: "⚙", primary: false, title: `Setup: ${withoutIds(item.title)}`,
              sub: item.detail || "Builds can't start until this is done" };
   }
   if (item.kind === "system_health") {

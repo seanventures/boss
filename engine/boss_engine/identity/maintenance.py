@@ -117,47 +117,49 @@ def tick(engine: Any, *, now: Optional[datetime] = None, force: bool = False) ->
     `force`: run the hourly and daily hygiene steps now (tests, the host CLI)."""
     from sqlalchemy import text
 
+    from ..db import background
     from . import grants, hygiene, vault
 
     now = now or datetime.now(timezone.utc)
     out: dict[str, Any] = {}
-    # PER PROCESS, before the cross-process lock: the unscoped GitHub App tokens this process
-    # minted live in its own memory, so no other process can revoke them (id-sec-final2).
-    try:
-        from .github_setup import sweep_control_plane_tokens
+    with background():
+        # PER PROCESS, before the cross-process lock: the unscoped GitHub App tokens this process
+        # minted live in its own memory, so no other process can revoke them (id-sec-final2).
+        try:
+            from .github_setup import sweep_control_plane_tokens
 
-        out["control_plane_tokens"] = sweep_control_plane_tokens()
-    except Exception as exc:  # noqa: BLE001 — logged; the next pass retries
-        log.warning("identity maintenance step control_plane_tokens failed: %s", type(exc).__name__)
-        out["control_plane_tokens"] = f"failed:{type(exc).__name__}"
-    with engine.begin() as db:
-        got = db.execute(text("SELECT pg_try_advisory_xact_lock(:k)"), {"k": _LOCK_KEY}).scalar()
-        if not got:
-            return {**out, "skipped": "another process holds the maintenance lock"}
-        steps = [
-            ("expired_grants", lambda c: grants.expire_due(db=c, now=now)),
-            ("ended_workflow_grants", lambda c: end_finished_workflow_grants(db=c)),
-            ("grant_reminders", lambda c: grants.remind_expiring(db=c, now=now)),
-            ("rotated_keys", lambda c: _rotate(c)),
-            # The `oidc` family (apps' ID/access tokens, F6; D35): its own table, every org.
-            ("rotated_oidc_keys", lambda c: _rotate_oidc(c, now=now)),
-            ("provider_revocations", lambda c: vault.retry_provider_revocations(db=c)),
-            ("dpop_purged", lambda c: c.execute(text("DELETE FROM identity_dpop_replay WHERE expires_at < now()")).rowcount),
-            ("retired_permissions", lambda c: _per_org(c, hygiene.retire_removed_permissions)),
-            ("key_hygiene", lambda c: _per_org(c, hygiene.key_hygiene, now=now)
-             if hygiene.due("key_hygiene", force=force) else "not due"),
-            ("audit_retention", lambda c: _per_org(c, hygiene.audit_retention, now=now)
-             if hygiene.due("audit_retention", force=force) else "not due"),
-            ("egress_partitions", lambda c: hygiene.egress_partitions(c, now=now)
-             if hygiene.due("egress_partitions", force=force) else "not due"),
-        ]
-        for name, step in steps:
-            try:
-                with db.begin_nested():
-                    out[name] = step(db)
-            except Exception as exc:  # noqa: BLE001 — logged; the next pass retries
-                log.warning("identity maintenance step %s failed: %s", name, type(exc).__name__)
-                out[name] = f"failed:{type(exc).__name__}"
+            out["control_plane_tokens"] = sweep_control_plane_tokens()
+        except Exception as exc:  # noqa: BLE001 — logged; the next pass retries
+            log.warning("identity maintenance step control_plane_tokens failed: %s", type(exc).__name__)
+            out["control_plane_tokens"] = f"failed:{type(exc).__name__}"
+        with engine.begin() as db:
+            got = db.execute(text("SELECT pg_try_advisory_xact_lock(:k)"), {"k": _LOCK_KEY}).scalar()
+            if not got:
+                return {**out, "skipped": "another process holds the maintenance lock"}
+            steps = [
+                ("expired_grants", lambda c: grants.expire_due(db=c, now=now)),
+                ("ended_workflow_grants", lambda c: end_finished_workflow_grants(db=c)),
+                ("grant_reminders", lambda c: grants.remind_expiring(db=c, now=now)),
+                ("rotated_keys", lambda c: _rotate(c)),
+                # The `oidc` family (apps' ID/access tokens, F6; D35): its own table, every org.
+                ("rotated_oidc_keys", lambda c: _rotate_oidc(c, now=now)),
+                ("provider_revocations", lambda c: vault.retry_provider_revocations(db=c)),
+                ("dpop_purged", lambda c: c.execute(text("DELETE FROM identity_dpop_replay WHERE expires_at < now()")).rowcount),
+                ("retired_permissions", lambda c: _per_org(c, hygiene.retire_removed_permissions)),
+                ("key_hygiene", lambda c: _per_org(c, hygiene.key_hygiene, now=now)
+                 if hygiene.due("key_hygiene", force=force) else "not due"),
+                ("audit_retention", lambda c: _per_org(c, hygiene.audit_retention, now=now)
+                 if hygiene.due("audit_retention", force=force) else "not due"),
+                ("egress_partitions", lambda c: hygiene.egress_partitions(c, now=now)
+                 if hygiene.due("egress_partitions", force=force) else "not due"),
+            ]
+            for name, step in steps:
+                try:
+                    with db.begin_nested():
+                        out[name] = step(db)
+                except Exception as exc:  # noqa: BLE001 — logged; the next pass retries
+                    log.warning("identity maintenance step %s failed: %s", name, type(exc).__name__)
+                    out[name] = f"failed:{type(exc).__name__}"
     return out
 
 

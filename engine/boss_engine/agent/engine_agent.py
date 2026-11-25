@@ -403,6 +403,7 @@ def _step_label(name: str, args: dict) -> str:
         "list_code_tasks": "listing the work",
         "get_code_task": "reading the run",
         "inspect_host": "inspecting the host",
+        "collect_diagnostics": "collecting host diagnostics",
         "read_app_logs": "reading the app's logs",
         "recall_role_experience": "recalling what this role has argued here",
         "describe_role": "reading the role's remit",

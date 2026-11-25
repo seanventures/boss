@@ -364,3 +364,203 @@ def test_rescue_pr_passes_the_runs_hold_and_records_a_failure_as_an_event():
     assert "reservation_id=None" not in rescue
     assert "reservation_id=reservation_id" in rescue and "rescue_of_run=run_id" in rescue
     assert "code_task.partial_pr_failed" in rescue and "create_blocking" not in rescue
+
+
+@pytest.mark.parametrize("method", ["merge", "squash"])
+def test_a_rolled_back_caller_leaves_merge_and_guarded_retry_idempotent(
+        engine, world, repo_root, method):
+    """BOSSAPP-1239: if a caller's DB transaction rolls back after local_repo.merge mutated git
+    on disk, local_change_sets stays 'open' while main already holds the merge/squash. A retry
+    (both merge_pull_request and merge_pull_request_guarded) must record 'merged' idempotently."""
+    from boss_engine.services.github_adapter import GitHubMergeRejectedError
+
+    pid, bound, branch, run_id = _project(engine, world)
+    settings = get_settings().model_copy(update={"sandbox_merge_method": method})
+    adapter = LocalGitAdapter(settings, owner=bound["owner"], repo=bound["repo"],
+                              project_id=pid, engine=engine)
+    pr = adapter.create_pull_request(branch, f"Desk timer ({method})", "", run_id=run_id)
+    snap_before = adapter.pull_request_snapshot(pr.number)
+
+    with pytest.raises(RuntimeError, match="forced caller rollback"):
+        with boss_db.begin(engine) as c:
+            with local_repo_host.writes_on(c):
+                adapter.merge_pull_request(pr.number, f"Merge ({method})",
+                                           head_sha=snap_before["head_sha"])
+                raise RuntimeError("forced caller rollback")
+
+    assert _change(engine, bound, pr.number)["state"] == "open"
+    assert adapter.read_text_file("main", "src/app.js") == "two\n"
+
+    # Retrying via merge_pull_request_guarded with the pre-rollback expected_base_sha must succeed.
+    res = adapter.merge_pull_request_guarded(
+        pull_number=pr.number,
+        expected_head_sha=snap_before["head_sha"],
+        expected_base_sha=snap_before["base_sha"],
+        expected_head_ref=snap_before["head_ref"],
+        expected_base_ref=snap_before["base_ref"],
+        merge_method=method,
+        commit_title=f"Merge ({method})",
+    )
+    assert res["merged"] is True
+    assert _change(engine, bound, pr.number)["state"] == "merged"
+
+    # Re-calling merge_pull_request_guarded on the now-merged PR stays idempotent.
+    again = adapter.merge_pull_request_guarded(
+        pull_number=pr.number,
+        expected_head_sha=snap_before["head_sha"],
+        expected_base_sha=snap_before["base_sha"],
+        expected_head_ref=snap_before["head_ref"],
+        expected_base_ref=snap_before["base_ref"],
+        merge_method=method,
+        commit_title=f"Merge ({method})",
+    )
+    assert again["merged"] is True
+
+    # Moving base via an UNRELATED commit must still reject guarded merge.
+    pid2, bound2, branch2, run2 = _project(engine, world)
+    adapter2 = LocalGitAdapter(settings, owner=bound2["owner"], repo=bound2["repo"],
+                               project_id=pid2, engine=engine)
+    pr2 = adapter2.create_pull_request(branch2, "Other", "", run_id=run2)
+    snap2 = adapter2.pull_request_snapshot(pr2.number)
+    local_repo.commit_files(adapter2.git_dir, "main", {"other.txt": "moved\n"}, "unrelated")
+    with pytest.raises(GitHubMergeRejectedError, match="moved after it was approved"):
+        adapter2.merge_pull_request_guarded(
+            pull_number=pr2.number,
+            expected_head_sha=snap2["head_sha"],
+            expected_base_sha=snap2["base_sha"],
+            expected_head_ref=snap2["head_ref"],
+            expected_base_ref=snap2["base_ref"],
+            merge_method=method,
+            commit_title="Other",
+        )
+
+
+def test_squash_rollback_retry_succeeds_when_main_edited_other_lines_of_shared_file(
+        engine, world, repo_root):
+    """BOSSAPP-1239 Challenge 1: feat edits line 1 of shared.txt while main independently edits
+    line 10 before approval. Squash merge combines both, caller DB rolls back, and guarded retry
+    must succeed (comparing against the 3-way merge tree rather than head_sha directly)."""
+    from boss_engine.services.github_adapter import GitHubMergeRejectedError
+
+    pid, bound, branch, run_id = _project(engine, world)
+    settings = get_settings().model_copy(update={"sandbox_merge_method": "squash"})
+    adapter = LocalGitAdapter(settings, owner=bound["owner"], repo=bound["repo"],
+                              project_id=pid, engine=engine)
+    bare = adapter.git_dir
+    base_lines = [f"line{i}" for i in range(1, 11)]
+    local_repo.commit_files(bare, "main", {"shared.txt": "\n".join(base_lines) + "\n"}, "shared base")
+
+    feat_branch = f"boss/code/feat_{uuid.uuid4().hex[:8]}"
+    local_repo.ensure_branch(bare, feat_branch, "main")
+    feat_lines = list(base_lines)
+    feat_lines[0] = "LINE1_FEAT"
+    local_repo.commit_files(bare, feat_branch, {"shared.txt": "\n".join(feat_lines) + "\n"},
+                            "edit line 1")
+
+    main_lines = list(base_lines)
+    main_lines[9] = "LINE10_MAIN"
+    local_repo.commit_files(bare, "main", {"shared.txt": "\n".join(main_lines) + "\n"},
+                            "edit line 10")
+
+    pr = adapter.create_pull_request(feat_branch, "Line 1 fix", "", run_id=run_id)
+    snap_before = adapter.pull_request_snapshot(pr.number)
+
+    with pytest.raises(RuntimeError, match="forced caller rollback"):
+        with boss_db.begin(engine) as c:
+            with local_repo_host.writes_on(c):
+                adapter.merge_pull_request(pr.number, "Squash line 1",
+                                           head_sha=snap_before["head_sha"])
+                raise RuntimeError("forced caller rollback")
+
+    assert _change(engine, bound, pr.number)["state"] == "open"
+    merged_text = adapter.read_text_file("main", "shared.txt")
+    assert "LINE1_FEAT" in merged_text and "LINE10_MAIN" in merged_text
+
+    res = adapter.merge_pull_request_guarded(
+        pull_number=pr.number,
+        expected_head_sha=snap_before["head_sha"],
+        expected_base_sha=snap_before["base_sha"],
+        expected_head_ref=snap_before["head_ref"],
+        expected_base_ref=snap_before["base_ref"],
+        merge_method="squash",
+        commit_title="Squash line 1",
+    )
+    assert res["merged"] is True
+    assert _change(engine, bound, pr.number)["state"] == "merged"
+
+    # A subsequent unrelated commit on main modifying the SAME file after squash must still reject.
+    pid2, bound2, _branch2, run2 = _project(engine, world)
+    adapter2 = LocalGitAdapter(settings, owner=bound2["owner"], repo=bound2["repo"],
+                               project_id=pid2, engine=engine)
+    bare2 = adapter2.git_dir
+    local_repo.commit_files(bare2, "main", {"shared.txt": "\n".join(base_lines) + "\n"}, "shared2")
+    fb2 = f"boss/code/feat_{uuid.uuid4().hex[:8]}"
+    local_repo.ensure_branch(bare2, fb2, "main")
+    local_repo.commit_files(bare2, fb2, {"shared.txt": "\n".join(feat_lines) + "\n"}, "feat2")
+    pr2 = adapter2.create_pull_request(fb2, "Line 1 fix 2", "", run_id=run2)
+    snap2 = adapter2.pull_request_snapshot(pr2.number)
+    with pytest.raises(RuntimeError, match="forced caller rollback"):
+        with boss_db.begin(engine) as c:
+            with local_repo_host.writes_on(c):
+                adapter2.merge_pull_request(pr2.number, "Squash 2", head_sha=snap2["head_sha"])
+                raise RuntimeError("forced caller rollback")
+    # Another PR later changes line 5 of shared.txt on main.
+    later_lines = list(feat_lines)
+    later_lines[4] = "LINE5_LATER"
+    local_repo.commit_files(bare2, "main", {"shared.txt": "\n".join(later_lines) + "\n"}, "later")
+    with pytest.raises(GitHubMergeRejectedError, match="moved after it was approved"):
+        adapter2.merge_pull_request_guarded(
+            pull_number=pr2.number,
+            expected_head_sha=snap2["head_sha"],
+            expected_base_sha=snap2["base_sha"],
+            expected_head_ref=snap2["head_ref"],
+            expected_base_ref=snap2["base_ref"],
+            merge_method="squash",
+            commit_title="Squash 2",
+        )
+
+
+def test_squash_rollback_retry_succeeds_when_head_branch_deleted(engine, world, repo_root):
+    """BOSSAPP-1239 Challenge 2: if head_branch is deleted after squash merge while head_sha
+    remains in git_dir, already_squashed_into and merge_pull_request_guarded succeed without
+    LocalRepoError; missing head_sha + missing head_branch returns False cleanly."""
+    pid, bound, branch, run_id = _project(engine, world)
+    settings = get_settings().model_copy(update={"sandbox_merge_method": "squash"})
+    adapter = LocalGitAdapter(settings, owner=bound["owner"], repo=bound["repo"],
+                              project_id=pid, engine=engine)
+    pr = adapter.create_pull_request(branch, "Delete branch after squash", "", run_id=run_id)
+    snap_before = adapter.pull_request_snapshot(pr.number)
+
+    with pytest.raises(RuntimeError, match="forced caller rollback"):
+        with boss_db.begin(engine) as c:
+            with local_repo_host.writes_on(c):
+                adapter.merge_pull_request(pr.number, "Squash then delete branch",
+                                           head_sha=snap_before["head_sha"])
+                raise RuntimeError("forced caller rollback")
+
+    # Delete head_branch on disk while keeping head_sha in git_dir objects.
+    local_repo.git(["update-ref", "-d", f"refs/heads/{branch}"], git_dir=adapter.git_dir)
+    assert not local_repo.branch_exists(adapter.git_dir, branch)
+    assert local_repo.rev_parse(adapter.git_dir, snap_before["head_sha"]) == snap_before["head_sha"]
+
+    current_base = local_repo.branch_sha(adapter.git_dir, "main") or ""
+    assert local_repo.already_squashed_into(
+        adapter.git_dir, branch, snap_before["head_sha"],
+        snap_before["base_sha"], current_base, "main") is True
+
+    # Missing head_sha + missing head_branch must return False cleanly (never LocalRepoError).
+    assert local_repo.already_squashed_into(
+        adapter.git_dir, "missing/branch", "0" * 40,
+        snap_before["base_sha"], current_base, "main") is False
+
+    res = adapter.merge_pull_request_guarded(
+        pull_number=pr.number,
+        expected_head_sha=snap_before["head_sha"],
+        expected_base_sha=snap_before["base_sha"],
+        expected_head_ref=snap_before["head_ref"],
+        expected_base_ref=snap_before["base_ref"],
+        merge_method="squash",
+        commit_title="Squash then delete branch",
+    )
+    assert res["merged"] is True
+    assert _change(engine, bound, pr.number)["state"] == "merged"

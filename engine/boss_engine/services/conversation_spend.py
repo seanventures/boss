@@ -10,7 +10,7 @@ import hashlib
 import json
 import time
 from dataclasses import dataclass
-from threading import Event, Thread
+from threading import Event
 from types import SimpleNamespace
 from typing import Any, Callable
 
@@ -235,7 +235,9 @@ class ConversationCallSpend(ArchitectureSpend):
                     heartbeat_errors.append(error)
                     return
 
-        thread = Thread(target=heartbeat, name="conversation-lease-heartbeat", daemon=True)
+        from ..db import spawn_thread
+
+        thread = spawn_thread(heartbeat, name="conversation-lease-heartbeat", daemon=True, start=False)
         # The pinned provider's answer. Nothing is sent until the first `next()` below.
         iterator = produce(adapter)
         chunks, usage = [], {}

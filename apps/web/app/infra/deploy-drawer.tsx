@@ -181,7 +181,7 @@ function DeployBody({ d, projectId, actor, refresh, onOpen }: {
         <StateWord w={shownWord(row, verdict)} />{" "}
         <span data-copy="data">{verdict === "approve" ? "Approved. Starting the deploy." : row.sentence}</span>
       </div>
-      <p className="inf-muted" data-testid="inf-deploy-approver" data-copy="data">{approvalWords(row.approver, actor)}</p>
+      <span className="inf-muted" style={{ display: "block" }} data-testid="inf-deploy-approver" data-copy="data">{approvalWords(row.approver, actor)}</span>
       {verdict === null && (row.can.approve || row.can.reject) ? (
         <DrawerSection label="Needs you" testId="inf-deploy-needs">
           <div className="inf-actions">

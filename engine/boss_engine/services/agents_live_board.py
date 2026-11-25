@@ -707,6 +707,9 @@ def missions(connection: Any, project_id: str, read: Mapping[str, Any],
                 state = "waiting_person"
                 waiting_role = str(approval.get("approver_role") or "") or None
                 waiting_on = waiting_role or str(current.get("decision_status") or "") or None
+            elif output.get("waiting_on_person"):
+                state = "waiting_you"
+                waiting_on = "you"
             else:
                 state = "waiting"
                 waiting_on = workflows.waiting_on_label({
@@ -1083,9 +1086,13 @@ def compose(connection: Any, settings: Any, project_id: str, *,
             # count, Approvals' badge and Needs action: decisions only (agents-home D2).
             "needs_you": int(cc["counts"]["needs_you"]),
             "setup": int(cc["counts"]["setup"]),
-            # RUNNING IS WHAT MOVES: a run with no progress for a week is `stalled`, counted
-            # apart, never "running" (an existing install said "8 running" for a month of nothing).
-            "running": sum(1 for m in rows if m["state"] not in ("done", "stopped", "stalled")),
+            # RUNNING IS WHAT MOVES: a run with no progress for a week is `stalled`, and a run
+            # parked on a person (`waiting_you` / `waiting_person`) is counted apart, never
+            # "running" (an existing install said "8 running" for a month of nothing).
+            "running": sum(
+                1 for m in rows
+                if m["state"] not in ("done", "stopped", "stalled", "waiting_you", "waiting_person")
+            ),
             "stalled": sum(1 for m in rows if m["state"] == "stalled"),
             # What NEEDS YOU lists as stopped work, counted by the one rule (attention_counts).
             "stopped": command_center.attention_counts(attention)["stopped"],

@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The extension says its description beside the name, not only on the title.
  * A blank description says nothing. A description that only repeats the name

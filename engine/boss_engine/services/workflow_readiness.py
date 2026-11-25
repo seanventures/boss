@@ -909,7 +909,8 @@ def record_refused(connection: Connection, project_id: str, actor: str, *, door:
 
 def note_unready_start(connection: Connection, settings: Any, project_id: str, actor: str,
                        run_id: str, *, version_id: str,
-                       input_data: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
+                       input_data: Optional[Mapping[str, Any]] = None,
+                       why: str = "started by an approved build, which cannot be refused") -> dict[str, Any]:
     """For a door that must not refuse: check anyway, and put what is missing on the run.
 
     `start_project_run` starts the outer workflow for a build that an approval has ALREADY
@@ -927,7 +928,7 @@ def note_unready_start(connection: Connection, settings: Any, project_id: str, a
         emit_event(connection, project_id, "workflow.started_unready", actor, "workflow_run",
                    run_id, {"missing": _missing_record(readiness), "started_anyway": [],
                             "chosen_by": "nobody",
-                            "why": "started by an approved build, which cannot be refused"})
+                            "why": why})
     return readiness
 
 

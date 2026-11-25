@@ -203,7 +203,11 @@ export function missingWord(key: "pr" | "tests" | "changes" | "preview" | "cost"
     if (c.outputs.pr?.word) return null;
     if (running) return { word: "Held until the gates pass", tip: `BOSS opens the ${c.local ? "change set" : "PR"} after the tests, checks and review pass` };
     if (st === "cancelled") return { word: "Not opened · stopped" };
-    if (st === "failed") return { word: "Not opened · gates failed", tip: s?.gates?.failed.length ? s.gates.failed.join(", ") : undefined };
+    if (st === "failed") {
+      return s?.gates?.failed?.length
+        ? { word: "Not opened · gates failed", tip: s.gates.failed.join(", ") }
+        : { word: "Not opened · build failed" };
+    }
     return null;
   }
   if (key === "tests") {

@@ -157,7 +157,10 @@ def captain_goals_create(payload: GoalCreateRequest, request: Request) -> dict[s
 def captain_watch(payload: WatchRequest, request: Request) -> dict[str, Any]:
     if not payload.project_id.strip():
         raise HTTPException(status_code=422, detail="project_id is required")
-    return _press(request, payload.project_id, payload.actor, "captain_watch", {})
+    from boss_engine.db import background
+
+    with background():
+        return _press(request, payload.project_id, payload.actor, "captain_watch", {})
 
 
 @router.get("/v1/metatron/watch/latest")

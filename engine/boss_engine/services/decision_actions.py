@@ -417,10 +417,17 @@ def is_local_review(decision: Mapping[str, Any]) -> bool:
             and is_local_pr_url(_rec(decision).get("pull_request_url")))
 
 
+def is_prd_publish(decision: Mapping[str, Any]) -> bool:
+    """A PRD publish card (meeting_service._finalize_meeting): Request changes revises the PRD
+    from the person's note and opens a new PRD publish decision for approval."""
+    return (_action_of(decision) == "execute_agent_tool"
+            and _rec(decision).get("tool") == "publish_document")
+
+
 def consumes_revision(decision: Mapping[str, Any]) -> bool:
     """True when something reads `revision_requested` for this decision and acts on the note."""
     return (_action_of(decision) in REVISE_CONSUMED or is_ambient_card(decision)
-            or is_local_review(decision))
+            or is_local_review(decision) or is_prd_publish(decision))
 
 
 def _action(action: str, label: str, tone: str, effect: str,
@@ -1001,7 +1008,10 @@ def allowed_actions(decision: Mapping[str, Any]) -> list[dict[str, Any]]:
     if consumes_revision(decision):
         actions.append(_action(
             "revise", "Request changes", "neutral",
-            ("BOSS plans again from your note, checks the new plan against the brief, and asks "
+            ("BOSS revises the PRD with your note and asks for approval again; nothing is "
+             "published until you approve."
+             if is_prd_publish(decision) else
+             "BOSS plans again from your note, checks the new plan against the brief, and asks "
              "you again; no code is written until then."
              if _action_of(decision) == "resume_code_task" else
              "Sends the proposal back with your note; nothing is applied until it returns."),

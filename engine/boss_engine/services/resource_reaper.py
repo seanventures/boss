@@ -659,76 +659,76 @@ def reap_jobs(engine: Any, settings: Any = None) -> dict[str, int]:
 def tick(engine: Any, settings: Any = None) -> dict[str, Any]:
     """One reaper pass. Every part is independent: one failing never stops the others."""
     global _last_tables
+    from ..db import background
+
     report: dict[str, Any] = {"at": time.time()}
-    report["processes"] = _safe(lambda: reap_processes(engine))
-    if engine is not None:
-        from . import preview_service
+    with background():
+        report["processes"] = _safe(lambda: reap_processes(engine))
+        if engine is not None:
+            from . import preview_service
 
-        def _reap_previews() -> Any:
-            # Under pressure (L1+) an unwatched preview goes after 5 minutes, not 20.
-            from .admission import L1, current_level
-            with engine.begin() as c:
-                level = current_level(c)
-            return preview_service.reap_previews(
-                engine, settings, idle_minutes=5 if level >= L1 else None)
+            def _reap_previews() -> Any:
+                # Under pressure (L1+) an unwatched preview goes after 5 minutes, not 20.
+                from .admission import L1, current_level
+                with engine.begin() as c:
+                    level = current_level(c)
+                return preview_service.reap_previews(
+                    engine, settings, idle_minutes=5 if level >= L1 else None)
 
-        report["previews"] = _safe(_reap_previews)
-        report["preview_workdirs"] = _safe(
-            lambda: preview_service.sweep_preview_workdirs(engine))
-    if engine is not None:
-        report["jobs"] = _safe(lambda: reap_jobs(engine, settings))
+            report["previews"] = _safe(_reap_previews)
+            report["preview_workdirs"] = _safe(
+                lambda: preview_service.sweep_preview_workdirs(engine))
+        if engine is not None:
+            report["jobs"] = _safe(lambda: reap_jobs(engine, settings))
 
-        def _reconcile_unknown() -> Any:
-            # A job parked in unknown_outcome (an irreversible effect whose call ended without
-            # an answer, BOSSAPP-986) is only released once the provider says what happened.
-            from ..config import get_settings
-            from .durable_operations import reconcile_unknown_outcomes
+            def _reconcile_unknown() -> Any:
+                # A job parked in unknown_outcome (an irreversible effect whose call ended without
+                # an answer, BOSSAPP-986) is only released once the provider says what happened.
+                from ..config import get_settings
+                from .durable_operations import reconcile_unknown_outcomes
 
-            return reconcile_unknown_outcomes(engine, settings or get_settings())
+                return reconcile_unknown_outcomes(engine, settings or get_settings())
 
-        report["unknown_outcomes"] = _safe(_reconcile_unknown)
-    if engine is not None:
-        # A build that died without teardown must not hold an execution
-        # environment forever (BOSSAPP-824): held leases past their TTL expire.
-        from . import execution_environments
+            report["unknown_outcomes"] = _safe(_reconcile_unknown)
+        if engine is not None:
+            # A build that died without teardown must not hold an execution
+            # environment forever (BOSSAPP-824): held leases past their TTL expire.
+            from . import execution_environments
 
-        report["environment_leases"] = _safe(
-            lambda: execution_environments.reap_leases(engine, settings))
-        # Workspace snapshots past their TTL go with their objects (BOSSAPP-826).
-        # No store configured -> it returns before touching the table.
-        from . import workspace_snapshots
+            report["environment_leases"] = _safe(
+                lambda: execution_environments.reap_leases(engine, settings))
+            # Workspace snapshots past their TTL go with their objects (BOSSAPP-826).
+            # No store configured -> it returns before touching the table.
+            from . import workspace_snapshots
 
-        report["workspace_snapshots"] = _safe(
-            lambda: workspace_snapshots.reap_expired(engine, settings))
-    # Stdio MCP servers idle past their template's TTL, dead ones, and containers whose
-    # creating process is gone (BOSSAPP-850).
-    from . import mcp_stdio_supervisor
+            report["workspace_snapshots"] = _safe(
+                lambda: workspace_snapshots.reap_expired(engine, settings))
+        # Stdio MCP servers idle past their template's TTL, dead ones, and containers whose
+        # creating process is gone (BOSSAPP-850).
+        from . import mcp_stdio_supervisor
 
-    report["mcp_stdio"] = _safe(mcp_stdio_supervisor.reap_tick)
-    report["dirs"] = _safe(lambda: reap_dirs())
-    # A run that died never dropped its build-services database (build_services).
-    from . import build_services
+        report["mcp_stdio"] = _safe(mcp_stdio_supervisor.reap_tick)
+        report["dirs"] = _safe(lambda: reap_dirs())
+        # A run that died never dropped its build-services database (build_services).
+        from . import build_services
 
-    report["build_databases"] = _safe(lambda: build_services.reap_tick(engine))
-    if engine is not None and docker_available():
-        from .resource_ledger import install_id
+        report["build_databases"] = _safe(lambda: build_services.reap_tick(engine))
+        if engine is not None and docker_available():
+            from .resource_ledger import install_id
 
-        def _install() -> Optional[str]:
-            with engine.begin() as c:
-                return install_id(c)
+            def _install() -> Optional[str]:
+                with engine.begin() as c:
+                    return install_id(c)
 
-        inst = _safe(_install)
-        inst = inst if isinstance(inst, str) else None
-        report["docker"] = _safe(lambda: reap_docker(engine, install_id=inst))
-        report["disk"] = _safe(lambda: prune_disk(install_id=inst))
-    if engine is not None and time.time() - _last_tables > _TABLES_EVERY:
-        _last_tables = time.time()
-        report["tables"] = _safe(lambda: prune_tables(engine))
-        # BOSSAPP-1459: what a run or a test left behind and nothing uses any more. Background
-        # work (db.background): its transactions get the tick's lock and idle limits.
-        from ..db import background
-
-        with background():
+            inst = _safe(_install)
+            inst = inst if isinstance(inst, str) else None
+            report["docker"] = _safe(lambda: reap_docker(engine, install_id=inst))
+            report["disk"] = _safe(lambda: prune_disk(install_id=inst))
+        if engine is not None and time.time() - _last_tables > _TABLES_EVERY:
+            _last_tables = time.time()
+            report["tables"] = _safe(lambda: prune_tables(engine))
+            # BOSSAPP-1459: what a run or a test left behind and nothing uses any more. Background
+            # work (db.background): its transactions get the tick's lock and idle limits.
             report["sandbox_dirs"] = _safe(lambda: reap_sandbox_dirs(engine))
             report["test_databases"] = _safe(lambda: reap_test_databases(engine))
     _LAST.clear()

@@ -154,7 +154,7 @@ const AVATAR_STATES = new Set<AvatarState>(["idle", "thinking", "speaking", "wor
 export function toAvatarState(s: unknown): AvatarState {
   const v = str(s);
   if (v === "in_panel") return "speaking";
-  if (v === "awaiting_input") return "needs_you";
+  if (v === "awaiting_input" || v === "waiting_on_person" || v === "waiting_you") return "needs_you";
   if (v === "error") return "failed";
   if (v === "stale") return "stopped";
   return AVATAR_STATES.has(v as AvatarState) ? (v as AvatarState) : "idle";

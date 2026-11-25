@@ -3914,6 +3914,8 @@ def _perform_capability(
     monitoring_step = str(inputs.pop("monitoring_step", "") or "") if key == "deploy" else ""
     skip_without_host = key == "deploy" and str(
         inputs.pop("skip_without_host", "") or "").lower() in ("true", "1")
+    skip_without_deploy_ask = key == "deploy" and str(
+        inputs.pop("skip_without_deploy_ask", "") or "").lower() in ("true", "1")
     # A DIRECT CHANGE'S WRAPPER ENDS WITH ITS CHANGE (dry run 2, gap 9): a code task started
     # straight through POST /v1/code-tasks is one already-specified change. Once that change is
     # merged or closed, no later step of its outer run builds, extends, deploys or opens anything
@@ -3922,6 +3924,14 @@ def _perform_capability(
     if ended:
         return {"capability": key, "tool": None, "status": "not_applicable",
                 "direct_change_ended": True, "note": ended}
+    if skip_without_deploy_ask and _should_skip_bug_deploy(context.get("input")):
+        emit_event(connection, project_id, "workflow.step_skipped", actor,
+                   "workflow_run", str(context.get("run_id") or ""),
+                   {"step_id": step.get("id") if isinstance(step, dict) else None,
+                    "capability": key, "reason": NO_DEPLOY_ASK_WORDS})
+        return {"capability": key, "tool": None, "status": "skipped", "skipped": "no_deploy_ask",
+                "reason": NO_DEPLOY_ASK_WORDS, "note": NO_DEPLOY_ASK_WORDS,
+                "summary": NO_DEPLOY_ASK_WORDS}
     # EASY MODE'S OWN RULES apply only on a run of the catalogue's Easy Mode MVP workflow (never
     # a copy, never a binding someone else wrote, never a caller's input).
     easy_mode = key == "deploy" and _is_easy_mode_run(connection, str(context.get("run_id") or ""))
@@ -7205,6 +7215,52 @@ def _stamp_start_approval(connection: Connection, project_id: str, context: dict
 
 #: What an Easy Mode deploy step says when the project has nowhere to deploy.
 NO_HOST_WORDS = "Your app runs as a preview. Add a server in Infra to deploy it."
+#: What a Fast Fix deploy step says when a bug fix did not ask to deploy.
+NO_DEPLOY_ASK_WORDS = "No deploy was asked for on this bug fix."
+
+_NEGATED_DEPLOY_ASK_RE = re.compile(
+    r"\b(?:don't|do\s+not|never|not|no|skip|without)\s+(?:actually\s+)?"
+    r"(?:deploy(?:ing)?|ship(?:ping)?|releas(?:e|ing)|"
+    r"push(?:ing)?\s+to\s+(?:prod(?:uction)?|staging|live|server))\b",
+    re.I,
+)
+_DEPLOY_ASK_RE = re.compile(
+    r"(?:(?:^|(?:and|then|also|please|,|;)\s+)(?:please\s+)?(?:deploy|ship|release)\b)"
+    r"|\b(?:deploy|ship|release)\s+(?:it|this|that|the\s+fix|fix|changes?|"
+    r"to\s+(?:prod(?:uction)?|staging|live|server)|when\s+(?:ready|done))\b"
+    r"|\bpush\s+(?:it|this|the\s+fix)?\s*to\s+(?:prod(?:uction)?|staging|live)\b"
+    r"|\bneed(?:s)?\s+(?:this\s+|it\s+)?(?:deployed|shipped|released)\b",
+    re.I,
+)
+
+
+def _asks_to_deploy(run_input: Any) -> bool:
+    """True when a bug-fix request explicitly asks to deploy/ship/release (ignoring negations)."""
+    if not isinstance(run_input, dict):
+        return False
+    explicit = run_input.get("deploy")
+    if isinstance(explicit, bool):
+        return explicit
+    if isinstance(explicit, str) and explicit.strip():
+        low = explicit.strip().lower()
+        if low in ("true", "1", "yes"):
+            return True
+        if low in ("false", "0", "no"):
+            return False
+    parts = [
+        str(run_input.get(k) or "").strip()
+        for k in ("directive", "title", "instructions", "description")
+        if isinstance(run_input.get(k), str) and str(run_input.get(k) or "").strip()
+    ]
+    if not parts:
+        return False
+    cleaned = _NEGATED_DEPLOY_ASK_RE.sub(" ", " ".join(parts))
+    return bool(_DEPLOY_ASK_RE.search(cleaned))
+
+
+def _should_skip_bug_deploy(run_input: Any) -> bool:
+    return isinstance(run_input, dict) and str(run_input.get("work_kind") or "") == "bug" \
+        and not _asks_to_deploy(run_input)
 
 
 def _somewhere_to_deploy(connection: Connection, project_id: str) -> bool:
@@ -7419,6 +7475,48 @@ def _hold_for_spec(connection: Connection, *, project_id: str, run_id: str,
     return {"run_id": run_id, "step_id": step["step_id"], "outcome": "holding_for_spec",
             "awaited": SPEC_DECISION_KIND, "decision_id": decision_id,
             "meeting_run_id": meeting_run_id}
+
+
+def repoint_spec_decision(connection: Connection, old_decision_id: str,
+                          new_decision_id: str) -> int:
+    """Repoint waiting workflow_step_runs (SPEC_DECISION_KIND) from a revised PRD decision to
+    the new revised PRD decision so the workflow keeps holding on the new card."""
+    rows = connection.execute(
+        text("SELECT id, output FROM workflow_step_runs WHERE status = 'waiting'")
+    ).mappings().all()
+    updated = 0
+    for row in rows:
+        raw = row["output"]
+        output = raw if isinstance(raw, dict) else json.loads(raw or "{}")
+        if not isinstance(output, dict):
+            continue
+        await_val = output.get("await")
+        if not isinstance(await_val, dict):
+            continue
+        if await_val.get("kind") != SPEC_DECISION_KIND:
+            continue
+        matches_old = (
+            str(await_val.get("id") or "") == str(old_decision_id)
+            or str(output.get("spec_decision_id") or "") == str(old_decision_id)
+        )
+        if not matches_old:
+            continue
+        new_output = {
+            **output,
+            "await": {**await_val, "id": str(new_decision_id)},
+            "spec_decision_id": str(new_decision_id),
+            "awaited_note": (
+                f"The PRD was revised. Nothing is built until the revised spec is approved: "
+                f"decision {new_decision_id}."
+            ),
+        }
+        connection.execute(
+            text("UPDATE workflow_step_runs SET output = CAST(:o AS JSONB), updated_at = now() "
+                 "WHERE id = :i AND status = 'waiting'"),
+            {"o": json.dumps(new_output), "i": row["id"]},
+        )
+        updated += 1
+    return updated
 
 
 def _agent_runs_on_workers() -> bool:
@@ -8001,6 +8099,11 @@ def _gate_subject(
         # it was. A step that PROMISED a person (every other Deploy step) is asked, whatever
         # the policy says (D2, 2026-10-18: "Ships only when you say yes", shipped unasked).
         if policy_answers_for_step(connection, project_id, spec_step, context.get("input")):
+            return None
+        # A SMALL BUG FIX (fast_fix, BOSSAPP-1399) asks no deploy approval unless the request
+        # asked to deploy; `_perform_capability` skips the step in words.
+        if str(((binding.get("inputs") or {}).get("skip_without_deploy_ask")) or "").lower() in (
+                "true", "1") and _should_skip_bug_deploy(context.get("input")):
             return None
     capability = get_capability(key)
     if capability.is_gate:

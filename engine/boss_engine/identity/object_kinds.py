@@ -52,21 +52,30 @@ class UniqueProjectKind(ObjectKind):
     """An object found by a non-unique key (a dedupe key, a sandbox task id): it resolves only when
     every row the key matches is in ONE project; anything else is answered as not found."""
 
-    def __init__(self, kind: str, sql: str, *, refuse_ambiguous: bool = False) -> None:
+    def __init__(self, kind: str, sql: str, *, refuse_ambiguous: bool = False,
+                 org_scoped: bool = False) -> None:
         object.__setattr__(self, "kind", kind)
         object.__setattr__(self, "table", "")
         object.__setattr__(self, "id_column", "")
         object.__setattr__(self, "project", "")
         object.__setattr__(self, "_projects_sql", sql)
         object.__setattr__(self, "_refuse_ambiguous", refuse_ambiguous)
+        object.__setattr__(self, "_org_scoped", org_scoped)
 
     def sql(self) -> str:
+        org_filter = (" AND (CAST(:org_id AS TEXT) IS NULL OR w.org_id = CAST(:org_id AS TEXT))"
+                      if self._org_scoped else "")
         return ("SELECT w.org_id, p.id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
-                f"WHERE p.id IN ({self._projects_sql})")
+                f"WHERE p.id IN ({self._projects_sql}){org_filter}")
 
-    def load(self, db: Any, object_id: str) -> Optional[tuple[str, str]]:
+    def load(self, db: Any, object_id: str, *, org_id: Optional[str] = None) -> Optional[tuple[str, str]]:
+        params: dict[str, Any] = {"id": str(object_id)}
+        if self._org_scoped:
+            params["org_id"] = org_id
         with connection(db) as conn:
-            rows = conn.execute(text(self.sql()), {"id": str(object_id)}).all()
+            rows = conn.execute(text(self.sql()), params).all()
+        if self._org_scoped and org_id is not None:
+            rows = [r for r in rows if str(r[0]) == str(org_id)]
         if len(rows) == 1:
             return (str(rows[0][0]), str(rows[0][1]))
         if rows and self._refuse_ambiguous:
@@ -425,12 +434,13 @@ KINDS: tuple[ObjectKind, ...] = (
                project="(SELECT e.project_id FROM chat_endpoints e WHERE e.id = t.endpoint_id)"),
     ObjectKind("self_fix_ticket", "self_fix_tickets",
                project="(SELECT f.project_id FROM self_fixes f WHERE f.id = t.self_fix_id)"),
-    # task_voice: a transcript id is the caller's key, unique per org; the handler returns the
-    # row stored under it (task_voice._by_transcript_id), so it must be this project's
-    # task_voice: UNIQUE (org_id, transcript_id), so one id may be held in several orgs; the
-    # handler reads by org alone. An id held in more than one project is refused, never passed.
+    # task_voice: UNIQUE (org_id, transcript_id), so one id may be held in several orgs; resolve
+    # within the caller's org first. An id held in more than one project of the same org is refused.
     UniqueProjectKind("task_voice_transcript", "SELECT project_id FROM task_voice_transcripts "
-                                               "WHERE transcript_id = :id", refuse_ambiguous=True),
+                                               "WHERE transcript_id = :id "
+                                               "AND (CAST(:org_id AS TEXT) IS NULL "
+                                               "OR org_id = CAST(:org_id AS TEXT))",
+                      refuse_ambiguous=True, org_scoped=True),
     # Objects the ORGANISATION owns (OrgKind; object_rules.ORG_SHARED_KINDS for the ones a
     # project-level route may name)
     OrgKind("agent_host", "agent_hosts"),
@@ -439,6 +449,7 @@ KINDS: tuple[ObjectKind, ...] = (
     OrgKind("director_node", "director_nodes"),
     OrgKind("factory_launch_attachment", "factory_launch_attachments"),
     OrgKind("github_repo", "github_repos"),
+    OrgKind("org_execution_environment", "execution_environments", where="t.project_id IS NULL"),
     OrgKind("org_llm_gateway", "llm_gateways", where="t.project_id IS NULL"),
     OrgKind("org_skill_policy_rule", "skill_policy_rules", where="t.project_id IS NULL"),
     OrgKind("remote_agent_profile", "remote_agent_profiles"),
@@ -630,7 +641,7 @@ ID_PARAM_KINDS: dict[str, tuple[str, ...]] = {
     "dataset_id": ("dataset",),
     "example_id": ("dataset_example", "decision_example"),
     "disclosure_id": ("provider_terms_disclosure",),
-    "environment_id": ("execution_environment",),
+    "environment_id": ("execution_environment", "org_execution_environment"),
     "feedback_id": ("agent_feedback",),
     "gateway_id": ("llm_gateway", "org_llm_gateway", "mcp_gateway"),
     "goal_id": ("goal",),

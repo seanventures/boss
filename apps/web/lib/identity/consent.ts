@@ -79,7 +79,7 @@ const strs = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is st
 
 /** The sheet's request from a 409 body, or null when the body is not a consent request. */
 /** A local repository in words when the engine sent no name: `local_<project>/csv-quality-desk` → "Csv quality desk". */
-function localName(full: string): string {
+export function localName(full: string): string {
   const words = (full.split("/").pop() || full).replace(/[-_]+/g, " ").trim();
   return words ? words[0].toUpperCase() + words.slice(1) : full;
 }
