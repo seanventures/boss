@@ -57,6 +57,9 @@ def project(eng):
         c.execute(text("DELETE FROM subscription_accounts WHERE account_key = :k"),
                   {"k": accounts.account_key(c, Settings(), pid, "claude_code")})
         c.execute(text("DELETE FROM events WHERE project_id = :p"), {"p": pid})
+        from .test_subscription_headroom_levels_and_pools_1342 import forget_alerts
+
+        forget_alerts(c, pid)
         c.execute(text("DELETE FROM projects WHERE id = :p"), {"p": pid})
     accounts.reset_caches()
     store.invalidate()
@@ -134,10 +137,10 @@ def test_a_runs_limit_flips_the_account_and_raises_the_alert_event_and_card(
         assert not _alerts(c)
 
 
-def test_a_tight_account_is_a_banner_not_a_card(eng, project, claude_is_connected):
+def test_an_account_under_20_percent_is_a_banner_not_a_card(eng, project, claude_is_connected):
     settings = Settings()
     with eng.begin() as c:
-        store.observe(c, settings, project, "claude_code", event=_weekly(0.7))
+        store.observe(c, settings, project, "claude_code", event=_weekly(0.85))
         found = [f for f in sh.findings_for(sh.install_accounts(c))
                  if f["evidence"]["account_key"] == accounts.account_key(c, settings, project,
                                                                          "claude_code")]

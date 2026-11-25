@@ -17,10 +17,12 @@ model_router.store.snapshot (the windows the CLI reported on its own calls, the 
 the estimate) and a pool's members from subscription_pools.describe — nothing here asks a
 provider anything, and no new polling exists.
 
-ALERTS (BOSSAPP-1342). When an account is Tight, Near limit or at its Limit, BOSS says so where
-people govern, not only in Anthropic's settings: a system finding per account (`findings_for`;
-Govern's banner and, at the limit, a card in the Command Center saying what BOSS will do), and
-one `subscription.headroom_changed` event on each change of state. `observe_hook` raises them
+ALERTS (BOSSAPP-1342). When an account falls to 20, 10 or 5 percent of its week, or reaches its
+limit, BOSS says so where people govern, not only in Anthropic's settings: a system finding per
+account (`findings_for`; Govern's banner and, at the limit, a card in the Command Center saying
+what BOSS will do), the project's usual notification channels (`notify_channels`: a BOSS
+self-check alert, so the console and the owner's email), and one `subscription.headroom_changed`
+event on each change of state. `observe_hook` raises them
 the moment a run's call reports the limit (model_router.accounts.observe), and system_doctor's
 tick keeps them true. A reading older than `headroom.STALE_AFTER_S` says how old it is.
 """
@@ -149,66 +151,76 @@ def _at_limit(alternatives: list[str], next_seat: Optional[str], resets: Optiona
 
 
 def project_view(connection: Any, settings: Any, project_id: str, *,
-                 now: Optional[datetime] = None) -> dict[str, Any]:
-    """Govern's card and the Command Center badge: every subscription source of the project."""
+                 now: Optional[datetime] = None, lean: bool = False) -> dict[str, Any]:
+    """Govern's card and the Command Center badge: every subscription source of the project.
+    `lean` (the Command Center's header, polled every few seconds) keeps to the router's own
+    snapshot and the pool: the login reads from the router's `working` flag instead of Setup's
+    model rows, and no builds-left estimate is counted."""
     from . import subscription_pools
     from .model_router import accounts, store
     from .model_router.headroom import STATE_LABELS
     from .model_router.selection import engine_label
 
     snap = store.snapshot(connection, settings, project_id)
-    logins = _logins(connection, settings, project_id)
-    try:
-        with connection.begin_nested():
-            pools = {p["engine"]: p for p in subscription_pools.describe(connection, project_id)}
-    except Exception:  # noqa: BLE001 — no pool tables: single logins only
-        pools = {}
+    logins = {} if lean else _logins(connection, settings, project_id)
+    pools: dict[str, Any] = {}
     sources: list[dict[str, Any]] = []
     for engine, state in sorted((snap.sources or {}).items()):
         if getattr(state, "kind", "") != "subscription":
             continue
         label = engine_label(engine)
         alts = _alternatives(snap, engine)
-        login = logins.get(engine) or {"state": "unknown", "words": "Login not checked yet", "tip": ""}
+        login = logins.get(engine) or (
+            {"state": "expired", "words": "Login not working", "tip": "Sign in again in Setup."}
+            if lean and not getattr(state, "working", True) else
+            {"state": "unknown", "words": "Login not checked yet", "tip": ""})
+        # THE POOL A BUILD IS GIVEN (BOSSAPP-1343): the project's own, else its org's — the same
+        # read `subscription_pools.assign` makes, and the same choice of member.
+        if engine not in pools:
+            try:
+                with connection.begin_nested():
+                    pools[engine] = subscription_pools.routing_pool(connection, project_id, engine)
+            except Exception:  # noqa: BLE001 — no pool tables: single logins only
+                pools[engine] = None
         pool = pools.get(engine)
         members = [m for m in (pool or {}).get("members") or [] if m.get("status") != "disabled"]
         if members:
+            rooms = subscription_pools.headroom_of(connection, members, engine, now=now)
             usable = [m for m in members if m.get("status") == "active"
-                      and ((m.get("headroom") or {}).get("state") != "exhausted")]
-            # The member a new build is given (subscription_pools.assign): the most room.
-            best = max(usable, key=lambda m: ((m.get("headroom") or {}).get("left")
-                                              if (m.get("headroom") or {}).get("left") is not None
-                                              else 1.0), default=None)
+                      and rooms[m["id"]].state != "exhausted"]
+            best = subscription_pools.choose_member(usable, rooms)
             for m in members:
-                h = m.get("headroom") or {}
-                left = _pct(h.get("left"))
+                h = rooms[m["id"]]
+                left = _pct(h.left)
                 others = [o["label"] for o in usable if o["id"] != m["id"]]
                 seat_login = ({"state": "expired", "words": "Login expired",
-                               "tip": "Paste a fresh login for this account in Setup."}
+                               "tip": "Sign in to this account again in Setup."}
                               if m.get("status") == "needs_reauth" else login)
-                resets = h.get("resets_at")
-                state = "exhausted" if seat_login["state"] == "expired" else h.get("state") or "plenty"
+                resets = _iso(h.resets_at)
+                state = "exhausted" if seat_login["state"] == "expired" else h.state or "plenty"
                 sources.append({
                     "key": m["account_key"], "engine": engine, "engine_label": label,
                     "label": account_label(label, m["account_key"], m["label"]),
                     "pool": {"id": pool["id"], "name": pool["name"], "position": m["position"],
-                             "size": len(members)},
+                             "size": len(members), "scope": pool.get("scope") or "project",
+                             "primary": bool(m.get("primary"))},
                     "taking_new_work": best is not None and best["id"] == m["id"],
                     "left_pct": left, "state": state, "state_label": ("Sign-in expired" if seat_login["state"] == "expired"
                                     else STATE_LABELS.get(state, state)),
-                    "resets_at": resets, "basis": "cli" if left is not None else "unknown",
+                    "resets_at": resets, "basis": h.basis if left is not None else "unknown",
                     "login": seat_login,
                     "at_limit": _at_limit(alts, others[0] if others else None, resets, label),
                     "builds_left": None,
                     "builds_basis": "per-account builds are not counted separately yet",
-                    "windows": [], "jobs": _jobs(snap, engine),
-                    "freshness": {"as_of": None, "age_s": None, "age_label": None, "stale": False},
+                    "windows": _windows_rows(h, snap.policy.thresholds), "jobs": _jobs(snap, engine),
+                    "freshness": h.freshness(now),
                 })
             continue
         h = state.headroom
         left = _pct(h.left)
         resets = _iso(h.resets_at)
-        n, why = _builds_left(connection, engine, h.left, h.resets_at, h.basis)
+        n, why = ((None, "not counted here") if lean else
+                  _builds_left(connection, engine, h.left, h.resets_at, h.basis))
         try:
             key = accounts.account_key(connection, settings, project_id, engine)
         except Exception:  # noqa: BLE001
@@ -233,11 +245,42 @@ def project_view(connection: Any, settings: Any, project_id: str, *,
             "at": (now or datetime.now(timezone.utc)).isoformat()}
 
 
+def header_chip(connection: Any, settings: Any, project_id: str) -> Optional[dict[str, Any]]:
+    """The Command Center header's headroom chip: each account in a few words, worst first —
+    project_view's own rows, so the chip, Govern and the router never disagree. None when the
+    project has no subscription."""
+    view = project_view(connection, settings, project_id, lean=True)
+    if not view["sources"]:
+        return None
+    order = {"exhausted": 0, "near_limit": 1, "tight": 2, "plenty": 3}
+    rows = sorted(view["sources"], key=lambda s: (order.get(s["state"], 4),
+                                                  s["left_pct"] if s["left_pct"] is not None else 101))
+    return {"accounts": [{"key": s["key"], "label": s["label"], "left_pct": s["left_pct"],
+                          "state": s["state"], "state_label": s["state_label"],
+                          "resets_at": s["resets_at"], "login": s["login"]["state"],
+                          "at_limit": s["at_limit"]["words"],
+                          "taking_new_work": bool(s.get("taking_new_work")),
+                          "pool": (s.get("pool") or {}).get("name")} for s in rows]}
+
+
 # ── alerts ───────────────────────────────────────────────────────────────────────────────────
 
-#: The states that raise an alert, with the finding's severity.
-ALERT_SEVERITY = {"tight": "info", "near_limit": "warn", "exhausted": "critical"}
+#: Warn when an account's week falls to 20, 10 and 5 percent left (the operator's levels,
+#: BOSSAPP-1342), and at the limit: each crossing is said once, with its own severity.
+ALERT_LEVELS = (20, 10, 5)
+LIMIT = "limit"
+ALERT_SEVERITY = {20: "info", 10: "warn", 5: "critical", LIMIT: "critical"}
 KIND_PREFIX = "subscription_limit:"
+
+
+def alert_level(account: dict[str, Any]) -> Any:
+    """The lowest level the account has fallen to: LIMIT, 5, 10, 20 — or None (above 20%)."""
+    if account.get("state") == "exhausted":
+        return LIMIT
+    pct = account.get("left_pct")
+    if pct is None:
+        return None
+    return next((lvl for lvl in sorted(ALERT_LEVELS) if pct <= lvl), None)
 
 
 def _windows_rows(h: Any, thresholds: Any) -> list[dict[str, Any]]:
@@ -316,16 +359,17 @@ def _reset_words(resets: Optional[str]) -> str:
 
 
 def findings_for(accounts: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """system_doctor findings for the accounts at Tight / Near limit / Limit reached: a banner
-    for the first two, and a card with the choices at the limit."""
+    """system_doctor findings for the accounts at 20, 10 or 5 percent of the week left (a banner)
+    and at the limit (a card with the choices). The level is the finding's evidence `state`, so
+    each crossing counts as a change (raise_findings) and is said once."""
     out = []
     for a in accounts:
-        severity = ALERT_SEVERITY.get(a.get("state") or "")
-        if severity is None:
+        level = alert_level(a)
+        if level is None:
             continue
-        label, state = a["label"], a["state"]
+        label = a["label"]
         when = _reset_words(a.get("resets_at"))
-        if state == "exhausted":
+        if level == LIMIT:
             title = f"{label}: limit reached"
             detail = (f"{label} has no subscription window left.{when} BOSS keeps work moving by "
                       "the routing rules: it moves new work to the next account or another "
@@ -338,16 +382,85 @@ def findings_for(accounts: list[dict[str, Any]]) -> list[dict[str, Any]]:
                  "tip": "Opens Setup, where each job picks its model."},
                 {"key": "keep_going", "label": "Remind me in an hour", "tip": "BOSS asks again."}]
         else:
-            title = f"{label}: {a['state_label'].lower()}, {a.get('left_pct')}% of the week left"
-            detail = (f"{label} has {a.get('left_pct')}% of its weekly window left.{when} BOSS "
-                      "keeps routing by the project's rules and moves work away before it runs out.")
+            title = f"{label}: {a.get('left_pct')}% of the week left"
+            detail = (f"{label} is at {a.get('left_pct')}% of its weekly window (under "
+                      f"{level}%).{when} BOSS keeps routing by the project's rules and moves work "
+                      "away before it runs out.")
             options = []
-        out.append({"kind": KIND_PREFIX + a["account_key"], "severity": severity, "title": title,
-                    "detail": detail, "options": options, "needs_choice": state == "exhausted",
+        out.append({"kind": KIND_PREFIX + a["account_key"], "severity": ALERT_SEVERITY[level],
+                    "title": title, "detail": detail, "options": options,
+                    "needs_choice": level == LIMIT,
                     "evidence": {"account_key": a["account_key"], "engine": a["engine"],
-                                 "state": state, "left_pct": a.get("left_pct"),
+                                 "state": f"level_{level}", "router_state": a.get("state"),
+                                 "left_pct": a.get("left_pct"),
                                  "resets_at": a.get("resets_at")}, "auto": []})
     return out
+
+
+# ── the usual notification channels ─────────────────────────────────────────────────────────
+
+def alert_names(label: str) -> dict[Any, str]:
+    """One alert name per level, so crossing 20 -> 10 -> 5 -> the limit is a new message each
+    time and the level left behind resolves."""
+    names: dict[Any, str] = {lvl: f"{label}: {lvl}% or less of the week left"
+                             for lvl in ALERT_LEVELS}
+    names[LIMIT] = f"{label}: limit reached"
+    return names
+
+
+def projects_using(connection: Any, account: dict[str, Any]) -> list[str]:
+    """The projects told about an account: a pool seat's pool project, else the projects that
+    built on its engine in the last week (an install login serves every project)."""
+    try:
+        with connection.begin_nested():
+            pool_project = connection.execute(text(
+                "SELECT p.project_id FROM subscription_pool_members m JOIN subscription_pools p "
+                "ON p.id = m.pool_id WHERE m.account_key = :k LIMIT 1"),
+                {"k": account["account_key"]}).scalar()
+            if pool_project:
+                return [str(pool_project)]
+            return [str(r) for r in connection.execute(text(
+                "SELECT DISTINCT project_id FROM code_task_runs WHERE created_at >= now() - "
+                "interval '7 days' AND state->>'build_engine' = :e"),
+                {"e": account["engine"]}).scalars()]
+    except Exception:  # noqa: BLE001 — an older schema: nobody to tell beyond the console
+        return []
+
+
+def notify_channels(connection: Any, accounts: list[dict[str, Any]], *,
+                    project_ids: Optional[list[str]] = None,
+                    now: Optional[datetime] = None) -> int:
+    """Say each level through the project's usual notification channels: a BOSS self-check
+    alert (monitor_scheduler.meta_alert -> notify's meta route: the console and the owner's
+    email, with the outbox's retries and receipts). One alert per account and level; the level
+    the account left resolves. `project_ids` adds projects to tell (the run that observed it).
+    Returns how many alerts fired. Never raises."""
+    from .monitor_scheduler import meta_alert
+
+    now = now or datetime.now(timezone.utc)
+    fired = 0
+    for a in accounts:
+        try:
+            with connection.begin_nested():
+                level = alert_level(a)
+                names = alert_names(a["label"])
+                found = findings_for([a])
+                summary = (found[0]["title"] + ". " + found[0]["detail"]) if found else ""
+                pids = dict.fromkeys([*(project_ids or []), *projects_using(connection, a)])
+                for pid in pids:
+                    firing = set(connection.execute(text(
+                        "SELECT alertname FROM app_alerts WHERE project_id = :p AND state = "
+                        "'firing' AND alertname = ANY(:n)"),
+                        {"p": pid, "n": list(names.values())}).scalars())
+                    for lvl, name in names.items():
+                        if lvl == level and name not in firing:
+                            meta_alert(connection, pid, name, summary[:900], True, now)
+                            fired += 1
+                        elif lvl != level and name in firing:
+                            meta_alert(connection, pid, name, "", False, now)
+        except Exception:  # noqa: BLE001 — telling people never breaks the tick or the call
+            log.warning("subscription headroom notification failed (non-fatal)", exc_info=True)
+    return fired
 
 
 def observe_hook(connection: Any, settings: Any, project_id: Optional[str], account_key: str,
@@ -372,6 +485,7 @@ def _raise(connection: Any, settings: Any, project_id: Optional[str], account_ke
         if not mine:
             return
         kind = KIND_PREFIX + account_key
+        notify_channels(connection, mine, project_ids=[project_id] if project_id else None)
         found = findings_for(mine)
         if not found:
             resolve_finding(connection, kind)
@@ -415,4 +529,6 @@ def govern_payload(connection: Any, settings: Any, project_id: str, *,
     return view
 
 
-__all__ = ["govern_payload", "account_label", "findings_for", "install_accounts", "observe_hook", "project_view"]
+__all__ = ["ALERT_LEVELS", "alert_level", "alert_names", "govern_payload", "account_label", "header_chip",
+           "findings_for", "install_accounts", "notify_channels", "observe_hook", "project_view",
+           "projects_using"]

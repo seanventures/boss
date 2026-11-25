@@ -112,7 +112,7 @@ class Signals:
     #: agent_health.failing_bots(): triggers whose runs failed three times in a row (AP-P3).
     failing_bots: list[dict[str, Any]] = field(default_factory=list)
     #: subscription_headroom.install_accounts(): each subscription account's window state
-    #: (BOSSAPP-1342) — Tight / Near limit / Limit reached raise a finding.
+    #: (BOSSAPP-1342) — 20 / 10 / 5 % left and the limit raise a finding.
     subscription_accounts: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -506,8 +506,8 @@ def diagnose(sig: Signals) -> list[dict[str, Any]]:
             "needs_choice": True, "auto": [],
         })
 
-    # A SUBSCRIPTION ACCOUNT IS RUNNING OUT (BOSSAPP-1342): a banner in Govern at Tight and Near
-    # limit, a card with the choices at the limit.
+    # A SUBSCRIPTION ACCOUNT IS RUNNING OUT (BOSSAPP-1342): a banner in Govern at 20, 10 and 5
+    # percent of the week left, a card with the choices at the limit.
     if sig.subscription_accounts:
         from . import subscription_headroom
 
@@ -842,6 +842,11 @@ def tick(engine: Any, settings: Any = None, *, sig: Optional[Signals] = None) ->
         acted: list[dict[str, Any]] = []
         with engine.begin() as c:
             ids = _upsert_findings(c, found, now)
+            if sig.subscription_accounts:
+                # 20 / 10 / 5 % left and the limit, through the usual channels (BOSSAPP-1342).
+                from . import subscription_headroom
+
+                subscription_headroom.notify_channels(c, sig.subscription_accounts, now=now)
             prev = admission._state(c, "degradation")
             if prev.get("level") != level["level"]:
                 admission.set_state(c, "degradation", {"level": level["level"],

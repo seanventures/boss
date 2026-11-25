@@ -960,6 +960,9 @@ def etag_of(view: Mapping[str, Any], board_etag: str) -> str:
         "refusal": [(view.get("budget_refusal") or {}).get(k) for k in ("period", "actual_usd_micros")],
         "infra": [(view.get("infra_incident") or {}).get(k) for k in ("id", "status", "freed_gb",
                                                                       "acknowledged_by")],
+        "subscriptions": [(a["key"], a["state"], a["left_pct"], a["login"], a["resets_at"],
+                           a["taking_new_work"])
+                          for a in (view.get("subscriptions") or {}).get("accounts") or []],
     }
     digest = hashlib.sha256(json.dumps(material, sort_keys=True, default=str).encode())
     return f'"cc-{digest.hexdigest()[:24]}"'
@@ -1100,6 +1103,11 @@ def build(connection: Any, settings: Any, project_id: str, *, tz: Optional[str] 
     attention, cleanup = group_old_findings(board["attention"], now, old_total)
     # The Infra Agent's open incident (BOSSAPP-1157): the most severe one, as the strip sees it.
     infra_incident = _quiet(connection, "the infra agent", _infra_incident, connection, default=None)
+    # The header's headroom chip (BOSSAPP-1342): each subscription account, Govern's own numbers.
+    from .subscription_headroom import header_chip
+
+    headroom = _quiet(connection, "subscription headroom", header_chip, connection, settings,
+                      project_id, default=None)
     view: dict[str, Any] = {
         "project_id": project_id,
         "etag": "",
@@ -1127,6 +1135,7 @@ def build(connection: Any, settings: Any, project_id: str, *, tz: Optional[str] 
         "systems": dots,
         "budget_refusal": refusal,
         "infra_incident": infra_incident,
+        "subscriptions": headroom,
     }
     view["etag"] = etag_of(view, board["etag"])
     return view
