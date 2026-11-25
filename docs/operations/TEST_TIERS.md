@@ -11,7 +11,7 @@ matter for it.
 | **P1** | The main features of each area (Workflows, Approvals, Infra/Deploys, Activity log, Factory, agents, templates, previews) and a regression test for every bug an operator reported | ≤ 30 min (estimated 5–7 min) | Major releases |
 | **P2** | Everything else: source-text contract checks, copy budgets, rare edge cases | — | On demand, or nightly |
 
-**Release gates**
+## Release gates
 
 Before a release: **test-tier major + e2e-gate plumbing + e2e-gate agent + a green enterprise lane.**
 
