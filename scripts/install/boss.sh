@@ -758,7 +758,7 @@ cmd_toolchains() {
   local -a profile_flags=()
   [[ " $services " == *" runner "* ]] && profile_flags=(--profile runner)
   # shellcheck disable=SC2086
-  if [[ -n "${extra// /}" ]] && ! compose "${profile_flags[@]}" up -d --no-deps --no-build --force-recreate $extra </dev/null; then
+  if [[ -n "${extra// /}" ]] && ! compose ${profile_flags[@]+"${profile_flags[@]}"} up -d --no-deps --no-build --force-recreate $extra </dev/null; then
     printf '  ✗ %s were not restarted, so they still run the old toolchains; apply it with: '"$(hint_command)"' update\n' "${extra# }"
     return 1
   fi
