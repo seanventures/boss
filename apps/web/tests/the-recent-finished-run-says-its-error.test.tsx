@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * A recent finished run that failed already puts r.error on the title only.
  * The first line of that error is also visible beside the name. Blank and

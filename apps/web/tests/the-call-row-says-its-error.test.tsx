@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * A failed call shows ✗ and keeps the error only on that mark's title.
  * The row says the error beside it. Nothing when the call succeeded, or the error is blank.

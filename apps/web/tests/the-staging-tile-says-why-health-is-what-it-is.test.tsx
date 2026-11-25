@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The staging tile says why its health is what it is, in the tile, not only on the title.
  * A blank reason says nothing. A sentence over six words is a paragraph.

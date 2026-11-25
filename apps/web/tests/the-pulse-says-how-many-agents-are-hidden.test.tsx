@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The pulse draws five most-active agents. When the count is higher, a line under that list
  * says how many are not on the page. Five or fewer say nothing. The count is every agent

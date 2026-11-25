@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The people-by-access-role row names the role. The description is on the title today
  * and has to be readable in the row. Blank is nothing. More than six words is a paragraph.

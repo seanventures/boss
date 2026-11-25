@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The policy quiet-hours chip names its timezone in the text, not only the title.
  * A blank timezone stays `quiet {start}, {end}` with no trailing comma zone.

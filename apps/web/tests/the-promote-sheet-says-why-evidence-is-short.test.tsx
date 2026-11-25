@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The promote sheet says why evidence is short, beside "Not enough evidence",
  * not only on that span's title. A blank reason says nothing. More than six

@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The linked ticket says the sync error beside the status tag, not only in
  * the title. A blank or whitespace error is nothing. More than six words is

@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The database line says why Postgres was chosen, beside "Postgres for this
  * build ✓", not only in the title and data-tip. Blank reasons are nothing.

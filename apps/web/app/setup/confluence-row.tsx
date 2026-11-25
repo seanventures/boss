@@ -117,7 +117,7 @@ export function ConfluenceRow({ projectId, onSummary }: { projectId: string; onS
   return (
     <section className="su-row tk-setup" data-testid="su-row-confluence" aria-label="Confluence" id="su-confluence">
       <div className="su-row-label">
-        <SectionLabel as="span" tip="Connect Confluence once for the org. Agents search and read pages; publishing waits for your approval.">Confluence</SectionLabel>
+        <SectionLabel as="span" tip="Connect Confluence once for the org. Agents read pages; publishing waits for approval.">Confluence</SectionLabel>
       </div>
       <div className="su-row-body su-stack">
         <div className="tk-row">
@@ -145,7 +145,8 @@ export function ConfluenceRow({ projectId, onSummary }: { projectId: string; onS
 
         {read && !read.ok ? <span className="tk-faint" role="status" data-testid="cf-error">{read.error}</span> : null}
         {read?.ok && !live && !adding ? (
-          <span className="tk-faint" data-testid="cf-empty">Not connected. Connect it once and every project can search and read your pages.</span>
+          <span className="tk-faint" data-testid="cf-empty"
+                title="Connect it once and every project can search and read your pages.">Not connected.</span>
         ) : null}
 
         {live && c ? (

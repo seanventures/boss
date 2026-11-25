@@ -78,6 +78,7 @@ export const API_READ_OPS: Readonly<Record<string, ApiRead>> = {
   "/api/deployment-hosts": one("deployment-hosts"),
   "/api/deployment-targets": one("deployment-targets"),
   "/api/events/stream": one("events/stream"),
+  "/api/factory/templates": { none: "authenticated read-only template catalogue (GET /v1/factory/templates)" },
   "/api/govern": byView({ limits: "govern", spend: "govern/spend", envelopes: "govern/envelopes", daily: "budget/daily" }, "limits"),
   "/api/hardware/{...}": bySub({ places: "hardware/places", resolve: "hardware/resolve" }),
   "/api/host-advice": one("projects/{}/host-advice"),

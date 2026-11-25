@@ -24756,7 +24756,7 @@ def approve_decision_card(
             # §6.13: the first of two approvals of a tier-3 decision is recorded (this transaction
             # commits it); the decision stays pending for a second person.
             return JSONResponse(status_code=202, content=pending.body())
-        if row.get("status") == "withdrawn":
+        if row.get("status") == "withdrawn" and not row.get("noop_message"):
             # A STALE CARD'S PRESS WITHDREW IT (a re-check's Fix card, #170): nothing was
             # approved, so the answer is not 200. Returned, never raised, so this transaction
             # still commits the withdrawal and the card stops asking.

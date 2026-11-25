@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * A savings row says the action, not only in the title.
  * A blank action says nothing. A sentence over six words is a paragraph.

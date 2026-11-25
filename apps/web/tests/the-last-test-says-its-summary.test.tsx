@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The last test says its summary, beside the status word, not only on the title.
  * Blank or whitespace is nothing. The visible sentence is trimmed. More than six

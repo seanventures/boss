@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The takeover row says why, beside the title, not only on the title attribute.
  * A blank or whitespace question and reason say nothing. A question that repeats

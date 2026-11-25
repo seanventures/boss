@@ -887,12 +887,12 @@ button.su-chip[aria-checked="true"] { color: var(--accent); border-color: var(--
 
 /* Who does what as cards (BOSSAPP-1341): the same card tokens as the Workflows cards. */
 .su-whocards { display: flex; flex-direction: column; gap: 8px; }
-.su-who-title { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.su-who-title { font-size: var(--fs-meta); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
 .su-jobcards { grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); }
 .su-jobcard { align-items: stretch; gap: 8px; }
 .su-jobcard-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
-.su-jobcard-name { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; font-size: 0.8125rem; cursor: help; }
-.su-jobcard-what { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 0.8125rem; }
+.su-jobcard-name { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; font-size: var(--fs-ui); cursor: help; }
+.su-jobcard-what { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: var(--fs-ui); }
 .su-jobcard-model { min-width: 0; overflow-wrap: anywhere; }
 .su-jobcard-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .su-jobcard-change { margin-left: auto; min-height: 28px; }

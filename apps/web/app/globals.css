@@ -9541,26 +9541,26 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
   gap: 4px 8px; min-width: 0;
 }
 .wm:not(:has(.wm-step)) { display: inline-flex; flex-wrap: wrap; }
-.wm-step { color: var(--muted); font-size: 0.8125rem; }
+.wm-step { color: var(--muted); font-size: var(--fs-ui); }
 .wm-main { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
 .wm-tier {
   display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 999px;
-  border: 1px solid var(--border-strong); color: var(--ink); font: 700 0.6875rem/1 var(--sans);
+  border: 1px solid var(--border-strong); color: var(--ink); font-family: var(--sans); font-weight: 700; font-size: var(--fs-tag); line-height: 1;
 }
 .wm-fast { border-color: var(--tier-fast); background: var(--tier-fast-soft); }
 .wm-balanced { border-color: var(--tier-balanced); background: var(--tier-balanced-soft); }
 .wm-frontier { border-color: var(--tier-frontier); background: var(--tier-frontier-soft); }
-.wm-label { font-size: 0.8125rem; color: var(--ink-soft); overflow-wrap: break-word; }
+.wm-label { font-size: var(--fs-ui); color: var(--ink-soft); overflow-wrap: break-word; }
 .wm-tier { justify-self: start; }
-.wm-flag { font-size: 0.75rem; color: var(--amber); cursor: help; }
+.wm-flag { font-size: var(--fs-meta); color: var(--amber); cursor: help; }
 .wm-why-btn {
   min-height: 24px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--r-sm);
-  background: transparent; color: var(--accent-text); font: 600 0.75rem var(--sans); cursor: pointer;
+  background: transparent; color: var(--accent-text); font-family: var(--sans); font-weight: 600; font-size: var(--fs-meta); cursor: pointer;
 }
 .wm-why-btn:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 1px; }
 .wm-why {
   grid-column: 1 / -1; flex-basis: 100%; margin: 4px 0 0; padding: 8px 10px 8px 26px; border: 1px solid var(--accent-line);
-  border-radius: var(--r); background: var(--surface-2); color: var(--ink-soft); font-size: 0.8125rem;
+  border-radius: var(--r); background: var(--surface-2); color: var(--ink-soft); font-size: var(--fs-ui);
 }
 .wm-why li + li { margin-top: 2px; }
 .wm-list { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
@@ -9611,7 +9611,7 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
 .bx-project-menu-panel .bx-project-type-option input { margin: 2px 0 0; padding: 0; accent-color: var(--accent); }
 .bx-project-type-text { display: grid; gap: 2px; min-width: 0; }
 .bx-project-type-text b { color: var(--ink); font-weight: 600; }
-.bx-project-type-text small { color: var(--ink-soft); font-size: 0.72rem; line-height: 1.35; }
+.bx-project-type-text small { color: var(--ink-soft); font-size: var(--fs-meta); line-height: 1.35; }
 .bx-project-menu-panel:has(.bx-project-type) { min-width: min(340px, calc(100% - 24px)); }
 
 /* NEW PROJECT, AS A SHEET (new-project-sheet.tsx): the console's look, outside the menu. Anchored
@@ -9626,7 +9626,7 @@ details[open] > .skill-form-summary::before { transform: rotate(90deg); }
   display: grid; gap: 14px; width: min(34rem, 100%); max-height: calc(100vh - clamp(12px, 4vh, 64px) - 12px); overflow-y: auto;
   padding: 20px 22px 18px; border: 1px solid var(--border-strong); border-radius: var(--r-xl, 12px);
   background: var(--surface); color: var(--ink); box-shadow: 0 32px 90px var(--boss-c-4c46ca1826);
-  font-size: 0.875rem; line-height: 1.45; box-sizing: border-box;
+  font-size: var(--fs-body); line-height: 1.45; box-sizing: border-box;
 }
 .bx-np-title { margin: 0; font-family: var(--display); font-size: var(--fs-page); font-weight: 600; }
 .bx-np-sub { margin: -6px 0 0; color: var(--ink-soft); }

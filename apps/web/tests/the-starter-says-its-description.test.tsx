@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The starter says its description, beside the name, not only on the title.
  * A blank description says nothing. The same words as the name say nothing.

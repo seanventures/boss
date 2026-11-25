@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The backlog row says the detail, beside the label, not only on its title.
  * A blank detail says nothing. A detail that repeats the label or the why

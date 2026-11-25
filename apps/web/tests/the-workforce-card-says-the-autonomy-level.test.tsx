@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The workforce card says the agent's autonomy level beside the configured trust score.
  * A missing level adds no sentence. "Autonomy level 1." is three words, so a span is enough.

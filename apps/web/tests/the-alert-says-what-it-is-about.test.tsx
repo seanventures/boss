@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The alert says what it is about, beside the label span, not only on its title.
  * The rule button stays a button. Blank is nothing. Description wins unless it

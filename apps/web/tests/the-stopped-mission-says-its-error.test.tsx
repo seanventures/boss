@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * A stopped mission kept its error only as a tooltip. The flight row prints part
  * text and drops tips, so the error has to be one of those parts. A sentence of
