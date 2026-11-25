@@ -79,7 +79,7 @@ const LEGACY: Record<string, number> = {
   "app/project-archive.module.css": 6,
   "app/research/research.css": 98,
   "app/self-fix/self-fix.css": 26,
-  "app/setup/setup.css": 62,
+  "app/setup/setup.css": 61,
   "app/skills/kit.css": 49,
   "app/workflows/compose.css": 82,
   "app/workflows/editor.css": 16,
