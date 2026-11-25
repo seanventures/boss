@@ -97,17 +97,24 @@ export type InstalledFrom = { pack_id: string; pack_name: string; source: "boss"
   version: string | null; modified: boolean; waiting: string | null;
   update: null | { version: string | null; changes?: StandardChange[]; applies_cleanly?: boolean;
                    conflicts?: string[] } };
-/** A workflow of this project published to the org's Marketplace. */
+/** A workflow of this project shared to the org's Library. */
 export type PublishedPack = { pack_id: string; name: string; summary: string; version: string;
-  status: "published" | "unpublished" };
-/** One pack on the Marketplace screen. */
+  status: "published" | "unpublished"; tags?: string[] };
+/** One item of the shared Library (design PR #287): BOSS's or your team's. */
 export type MarketPack = { id: string; source: "boss" | "org"; name: string; summary: string;
   publisher: string; version: string; updated_at: string | null;
-  workflows: { key: string; name: string; description: string; steps: string[] }[];
+  workflows: { key: string; name: string; description: string; steps: string[];
+               step_count?: number; inputs?: string[]; objective?: string }[];
   installed: boolean; installed_version: string | null; update_available: string | null;
   waiting: string[]; published_here: boolean;
   needs: { key: string; label: string; ok: boolean; note: string | null }[];
-  agents: { key: string; name: string; present: boolean }[] };
+  agents: { key: string; name: string; present: boolean }[];
+  /** Library filter words. */
+  tags?: string[];
+  /** The org's projects it is added to. */
+  installed_in?: string[] };
+/** A project of the org a person may add a Library workflow to. */
+export type LibraryProject = { id: string; name: string };
 export type InstalledAct = "take" | "take_keep" | "dismiss";
 
 /* ── A standard edited in place (engine workflow_standards) ───────────────────────── */

@@ -1,18 +1,15 @@
 // @vitest-environment happy-dom
 /**
- * The Workflow Marketplace, mounted and pressed (approved wireframe, 2026-11-22).
+ * The shared Library (design PR #287, BOSSAPP-1296), mounted and pressed.
  *
- *     "we dont have to ship by default we should have Install button once installed it will be
- *      showing in their custom / local workflows and not in Standard ones. When people build the
- *      workflow, they can publish to the Marketplace and they can be installed into the app
- *      using Install button."
+ *     "Library is one list, labelled BOSS or Your team, with tag filters. Add to project ...
+ *      Share to Library works from a project's workflow."
  *
- * The Library stays one list with a "Marketplace ›" button; pack cards say publisher, version
- * and contents, and Install / Installed ✓ / Update; Install is confirmed ON THE PAGE (never
- * window.confirm) with what it adds, needs and brings; an installed workflow in Yours says
- * "from Marketplace · vX", offers Review update when you changed it, and Uninstall on its ⋯ menu
- * (a refusal is said on the page); a workflow of yours publishes from its ⋯ menu, the community
- * marketplace greyed for later.
+ * The Library tab has a "Shared library ›" button; the list labels each item BOSS or Your team,
+ * with search and tag filters; a row opens its card (steps, includes, input, brief) with Add to
+ * project (any project you may add to) and Edit a copy (added here, then opened in the editor).
+ * An installed workflow in Yours says "from Library · vX", offers Review update when you changed
+ * it, and Uninstall on its ⋯ menu; a workflow of yours shares from its ⋯ menu with tags.
  */
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -56,19 +53,31 @@ const PACKS = [
                 { key: "dq_monitor_intake", name: "DQ Monitor Intake", description: "", steps: [] }],
     needs: [{ key: "ontology:banking-dq", label: "Knowledge kinds", ok: true, note: "added" },
             { key: "mcp:dq-monitor", label: "Connector dq-monitor", ok: false, note: "not set up" }],
-    agents: [{ key: "dq_rca_agent", name: "DQ Investigator", present: false }] },
+    agents: [{ key: "dq_rca_agent", name: "DQ Investigator", present: false }], tags: ["data quality", "banking"] },
   { id: "sre-helpdesk", source: "boss", name: "SRE / Helpdesk", summary: "", publisher: "BOSS",
     version: "1.1", updated_at: null, installed: true, installed_version: "1.0", update_available: "1.1",
     waiting: [], published_here: false,
     workflows: [{ key: "incident_response", name: "Incident Response", description: "",
                   steps: ["Investigate", "Fix", "CI", "Report", "Approve"] }],
-    needs: [], agents: [] },
+    needs: [], agents: [], tags: ["incidents", "sre"], installed_in: ["p1"] },
   { id: "wpk_1", source: "org", name: "Gateway tenant onboarding", summary: "", publisher: "Pat",
     version: "0.3", updated_at: "2026-11-22T10:00:00Z", installed: false, installed_version: null,
     update_available: null, waiting: [], published_here: true,
     workflows: [{ key: "lumen_review", name: "Lumen Pay partner review", description: "", steps: [] }],
+    needs: [], agents: [], tags: ["gateway"] },
+  { id: "api-gateway-onboarding", source: "boss", name: "API gateway onboarding",
+    summary: "A partner's gateway config: check, fix, review, merge, staging, contract tests.", publisher: "BOSS",
+    version: "1.0", updated_at: null, installed: false, installed_version: null, update_available: null,
+    waiting: [], published_here: false, tags: ["gateway", "onboarding", "config"], installed_in: ["helpdesk"],
+    workflows: [{ key: "api_gateway_onboarding", name: "API gateway onboarding", description: "",
+                  steps: ["Fix the file", "Adversarial review", "Merge", "Staging", "Contract tests"], step_count: 5,
+                  inputs: ["Start from a file", "Where the fixed file goes"],
+                  objective: "Take the file the run was given, check it with the repository's declared checkers." }],
     needs: [], agents: [] },
 ];
+
+const PROJECTS = [{ id: "p1", name: "This project" }, { id: "helpdesk", name: "HelpDesk" },
+                  { id: "northgate", name: "Northgate gateway" }];
 
 let writes: Obj[] = [];
 let refuseUninstall = false;
@@ -79,7 +88,7 @@ function fakeFetch(input: unknown, init?: RequestInit): Promise<Response> {
   const method = (init?.method ?? "GET").toUpperCase();
   if (method === "GET") {
     const view = url.searchParams.get("view");
-    if (view === "marketplace") return Promise.resolve(Response.json({ items: PACKS }));
+    if (view === "marketplace") return Promise.resolve(Response.json({ items: PACKS, projects: PROJECTS }));
     if (view === "spec") {
       return Promise.resolve(Response.json({
         definition_id: INSTALLED.definition_id, workflow_key: INSTALLED.workflow_key, name: INSTALLED.name,
@@ -93,8 +102,8 @@ function fakeFetch(input: unknown, init?: RequestInit): Promise<Response> {
   const body = init?.body ? JSON.parse(String(init.body)) as Obj : {};
   writes.push(body);
   if (body.action === "market_install") {
-    return Promise.resolve(Response.json({ pack_id: body.pack_id, version: "1.0",
-                                           installed: [{ key: "dq_incident_rca" }] }));
+    const key = body.pack_id === "api-gateway-onboarding" ? "api_gateway_onboarding" : "dq_incident_rca";
+    return Promise.resolve(Response.json({ pack_id: body.pack_id, version: "1.0", installed: [{ key }] }));
   }
   if (body.action === "market_uninstall" && refuseUninstall) {
     return Promise.resolve(Response.json(
@@ -154,6 +163,11 @@ async function press(id: string) {
   await act(async () => { el!.click(); });
   await settle();
 }
+async function choose(id: string, value: string) {
+  const el = $(id) as HTMLSelectElement;
+  await act(async () => { el.value = value; el.dispatchEvent(new Event("change", { bubbles: true })); });
+  await settle();
+}
 async function type(id: string, value: string) {
   const el = $(id) as HTMLInputElement;
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
@@ -161,51 +175,96 @@ async function type(id: string, value: string) {
   await settle();
 }
 
-describe("the Workflow Marketplace", () => {
-  it("the Library stays one list with a Marketplace › button that opens the packs", async () => {
+describe("the shared Library (design PR #287)", () => {
+  it("the Library tab has a Shared library › button that opens one labelled list", async () => {
     await mount();
     expect($("wf-library")).not.toBeNull();
-    expect($("wf-lib-market")!.textContent).toContain("Marketplace");
+    expect($("wf-lib-market")!.textContent).toContain("Shared library");
+    expect($("wf-lib-market")!.querySelector("svg")).not.toBeNull();
     await press("wf-lib-market");
     expect(window.location.search).toContain("lib=market");
     expect($("wf-market")).not.toBeNull();
-    expect($("wf-pack-meta-banking-dq")!.textContent).toBe("BOSS · v1.0 · 3 workflows");
-    expect($("wf-pack-meta-wpk_1")!.textContent).toBe("Your org · v0.3 · 1 workflow");
-    expect($("wf-pack-sre-helpdesk")!.textContent).toContain("Incident Response: Investigate → Fix → CI");
-    expect($("wf-pack-installed-sre-helpdesk")!.textContent).toContain("Installed");
+    expect($("wf-pack-src-banking-dq")!.textContent).toBe("BOSS");
+    expect($("wf-pack-src-wpk_1")!.textContent).toBe("Your team");
+    expect($("wf-pack-line-api-gateway-onboarding")!.textContent).toBe(
+      "A partner's gateway config: check, fix, review, merge, staging, contract tests. · 5 steps · 1 project");
+    expect($("wf-pack-installed-sre-helpdesk")!.textContent).toContain("Added");
+    // The first row's card is open; a row click opens its own.
+    expect($("wf-shelf-card-banking-dq")).not.toBeNull();
+    await press("wf-pack-sre-helpdesk");
     expect($("wf-pack-update-sre-helpdesk")!.textContent).toBe("Update v1.1");
+    expect($("wf-pack-steps-sre-helpdesk")!.textContent).toContain("Investigate");
+    await press("wf-pack-wpk_1");
     expect($("wf-pack-published-wpk_1")).not.toBeNull();
     await press("wf-pack-unpublish-wpk_1");
     expect(writes).toEqual([]);                       // asked first, on the page
     expect($("wf-pack-unpublish-go-wpk_1")).not.toBeNull();
-    await press("wf-market-filter-org");
-    expect($("wf-pack-banking-dq")).toBeNull();
-    expect($("wf-pack-wpk_1")).not.toBeNull();
     await press("wf-market-back");
     expect($("wf-market")).toBeNull();
     expect($("wf-card-spd")).not.toBeNull();
   });
 
-  it("Install is confirmed on the page with what it adds, needs and brings", async () => {
+  it("search and tags narrow the one list", async () => {
     window.history.replaceState(null, "", "/?area=delivery_workflows&tab=library&lib=market");
     await mount();
-    await press("wf-pack-install-banking-dq");
-    const confirm = $("wf-market-confirm")!;
-    expect(confirm.textContent).toContain("Install Banking Data Quality v1.0?");
-    expect($("wf-market-adds")!.textContent).toBe(
-      "DQ RCA and Remediation · DQ Incident Escalation · DQ Monitor Intake");
-    expect($("wf-market-needs")!.textContent).toContain("not set up");
-    expect($("wf-market-needs")!.textContent).toContain("runs wait until it is");
-    expect($("wf-market-agents")!.textContent).toContain("DQ Investigator (added if missing)");
-    expect(writes).toEqual([]);
-    await press("wf-market-install");
-    expect(writes).toEqual([{ action: "market_install", project_id: "p1", pack_id: "banking-dq" }]);
+    await press("wf-shelf-tag-gateway");
+    expect($("wf-pack-api-gateway-onboarding")).not.toBeNull();
+    expect($("wf-pack-banking-dq")).toBeNull();
+    await press("wf-shelf-tag-all");
+    await type("wf-shelf-search", "incident");
+    expect($("wf-pack-sre-helpdesk")).not.toBeNull();
+    expect($("wf-pack-api-gateway-onboarding")).toBeNull();
+    await type("wf-shelf-search", "nothing like this");
+    expect($("wf-market-empty")!.textContent).toBe("Nothing matches.");
+  });
+
+  it("Add to project: pick a project, press Add, and it is added there", async () => {
+    window.history.replaceState(null, "", "/?area=delivery_workflows&tab=library&lib=market");
+    await mount();
+    await press("wf-pack-api-gateway-onboarding");
+    const card = $("wf-shelf-card-api-gateway-onboarding")!;
+    expect(card.textContent).toContain("Start from a file");          // Input
+    expect(card.textContent).toContain("Full brief");
+    const add = $("wf-pack-install-api-gateway-onboarding")!;
+    expect(add.className).toContain("wf-btn-primary");
+    expect(add.querySelector("svg")).not.toBeNull();
+    // Added to HelpDesk already: the button says so for that project.
+    await choose("wf-pack-project-api-gateway-onboarding", "helpdesk");
+    expect($("wf-pack-install-api-gateway-onboarding")!.textContent).toContain("Added");
+    expect(($("wf-pack-install-api-gateway-onboarding") as HTMLButtonElement).disabled).toBe(true);
+    await choose("wf-pack-project-api-gateway-onboarding", "northgate");
+    await press("wf-pack-install-api-gateway-onboarding");
+    expect(writes).toEqual([{ action: "market_install", project_id: "northgate", pack_id: "api-gateway-onboarding" }]);
+    expect($("wf-pack-said-api-gateway-onboarding")!.textContent).toContain("Added to Northgate gateway.");
     expect(confirmSpy).not.toHaveBeenCalled();
   });
 
-  it("an installed workflow is in Yours, from Marketplace, with Review update when you changed it", async () => {
+  it("Edit a copy adds it to this project and opens the copy in the editor", async () => {
+    window.history.replaceState(null, "", "/?area=delivery_workflows&tab=library&lib=market");
+    const p = props();
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    act(() => root!.render(<Library {...p} />));
+    await settle();
+    await press("wf-pack-api-gateway-onboarding");
+    const edit = $("wf-pack-edit-api-gateway-onboarding")!;
+    expect(edit.textContent).toContain("Edit a copy");
+    expect(edit.querySelector("svg")).not.toBeNull();
+    await press("wf-pack-edit-api-gateway-onboarding");
+    expect(writes).toEqual([{ action: "market_install", project_id: "p1", pack_id: "api-gateway-onboarding" }]);
+    expect(p.onOpen).toHaveBeenCalledWith("api_gateway_onboarding");
+    // Already here: Edit a copy only opens it.
+    writes = [];
+    await press("wf-pack-sre-helpdesk");
+    await press("wf-pack-edit-sre-helpdesk");
+    expect(writes).toEqual([]);
+    expect(p.onOpen).toHaveBeenLastCalledWith("incident_response");
+  });
+
+  it("an installed workflow is in Yours, from Library, with Review update when you changed it", async () => {
     await mount();
-    expect($("wf-card-from-market-incident_response")!.textContent).toBe("from Marketplace · v1.0 · Modified");
+    expect($("wf-card-from-market-incident_response")!.textContent).toBe("from Library · v1.0 · Modified");
     expect($("wf-card-incident_response")!.textContent).toContain("Yours");
     expect($("wf-card-incident_response")!.textContent).not.toContain("Standard");
     await press("wf-card-update-incident_response");
@@ -227,7 +286,7 @@ describe("the Workflow Marketplace", () => {
     expect(confirmSpy).not.toHaveBeenCalled();
   });
 
-  it("a workflow of yours publishes to your org; the community marketplace is for later", async () => {
+  it("a workflow of yours shares to your org Library; the community registry is for later", async () => {
     await mount();
     await press("wf-card-more-lumen_review");
     await press("wf-card-publish-lumen_review");
@@ -235,19 +294,21 @@ describe("the Workflow Marketplace", () => {
     expect(($("wf-publish-version") as HTMLInputElement).value).toBe("1.0");
     expect(($("wf-publish-org") as HTMLInputElement).checked).toBe(true);
     expect(($("wf-publish-community") as HTMLInputElement).disabled).toBe(true);
+    expect($("wf-publish-submit")!.querySelector("svg")).not.toBeNull();
     await type("wf-publish-name", "Gateway tenant onboarding");
     await type("wf-publish-version", "0.3");
+    await type("wf-publish-tags", "gateway, onboarding");
     await press("wf-publish-submit");
     expect(writes).toEqual([{ action: "market_publish", project_id: "p1", definition_id: "def_lumen_review",
                               name: "Gateway tenant onboarding", summary: "Check a partner's gateway config.",
-                              version: "0.3" }]);
+                              version: "0.3", tags: ["gateway", "onboarding"] }]);
   });
 
-  it("a standard has no Publish or Uninstall", async () => {
+  it("a standard has no Share or Uninstall", async () => {
     await mount();
     await press("wf-card-more-spd");
     const menu = $("wf-card-menu-spd")!.textContent ?? "";
-    expect(menu).not.toContain("Publish");
+    expect(menu).not.toContain("Share");
     expect(menu).not.toContain("Uninstall");
   });
 });

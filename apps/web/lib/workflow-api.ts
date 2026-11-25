@@ -14,7 +14,7 @@ import { apiWrite } from "./api-write";
 import { designsFrom, type DesignsInfo } from "./pipeline-model";
 import type {
   BlockDef, Capability, ControlDef, CheckResult, CustomStepDef, EditorMeta, InstalledAct, InstalledFrom,
-  MarketPack, Palette, Problem, PublishedPack, PublishRequest, PublishResult, RosterAgent, Spec, StandardAct,
+  LibraryProject, MarketPack, Palette, Problem, PublishedPack, PublishRequest, PublishResult, RosterAgent, Spec, StandardAct,
   StandardChange, StandardState, WorkflowSummary,
 } from "./workflow-editor-types";
 
@@ -389,7 +389,8 @@ function toPublished(value: unknown): PublishedPack | null {
   const p = asObj(value);
   if (!str(p.pack_id) && !str(p.id)) return null;
   return { pack_id: str(p.pack_id) || str(p.id), name: str(p.name), summary: str(p.summary),
-           version: str(p.version), status: p.status === "unpublished" ? "unpublished" : "published" };
+           version: str(p.version), status: p.status === "unpublished" ? "unpublished" : "published",
+           ...(Array.isArray(p.tags) ? { tags: strings(p.tags) } : {}) };
 }
 
 function toPack(raw: unknown): MarketPack {
@@ -401,8 +402,11 @@ function toPack(raw: unknown): MarketPack {
     workflows: list(p.workflows).map((w) => {
       const row = asObj(w);
       return { key: str(row.key), name: str(row.name) || str(row.key), description: str(row.description),
-               steps: strings(row.steps) };
+               steps: strings(row.steps),
+               step_count: typeof row.step_count === "number" ? row.step_count : strings(row.steps).length,
+               inputs: strings(row.inputs), objective: str(row.objective) };
     }),
+    tags: strings(p.tags), installed_in: strings(p.installed_in),
     installed: p.installed === true, installed_version: str(p.installed_version) || null,
     update_available: str(p.update_available) || null, waiting: strings(p.waiting),
     published_here: p.published_here === true,
@@ -419,8 +423,20 @@ function toPack(raw: unknown): MarketPack {
 
 /** Every pack this project can install: BOSS's, then its org's, newest first. */
 export async function fetchMarketplace(projectId: string): Promise<MarketPack[]> {
+  return (await fetchLibraryShelf(projectId)).items;
+}
+
+/** The shared Library: its items, and the org's projects a person may add one to. */
+export async function fetchLibraryShelf(projectId: string):
+    Promise<{ items: MarketPack[]; projects: LibraryProject[] }> {
   const body = await getView("marketplace", { project_id: projectId });
-  return list(body.items).map(toPack).filter((p) => p.id);
+  return {
+    items: list(body.items).map(toPack).filter((p) => p.id),
+    projects: list(body.projects).map((raw) => {
+      const p = asObj(raw);
+      return { id: str(p.id), name: str(p.name) || str(p.id) };
+    }).filter((p) => p.id),
+  };
 }
 
 /** Install a pack: its workflows land in Yours, each with the pack and version it came from. */
@@ -442,11 +458,13 @@ export async function updateInstalled(projectId: string, definitionId: string, a
   return toInstalled(body.marketplace);
 }
 
-/** Publish one of your workflows to the org's Marketplace (again: the next version). */
+/** Share one of your workflows to the org's Library (again: the next version). */
 export async function publishPack(projectId: string, definitionId: string,
-                                  form: { name: string; summary: string; version: string }): Promise<PublishedPack | null> {
+                                  form: { name: string; summary: string; version: string; tags?: string[] }):
+    Promise<PublishedPack | null> {
   const body = await send("POST", { action: "market_publish", project_id: projectId, definition_id: definitionId,
-                                    name: form.name, summary: form.summary, version: form.version });
+                                    name: form.name, summary: form.summary, version: form.version,
+                                    ...(form.tags ? { tags: form.tags } : {}) });
   const pack = asObj(body.pack);
   return toPublished({ ...pack, pack_id: pack.id });
 }

@@ -20,7 +20,7 @@
 import { GatedButton } from "../../components/gated";
 import React, { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
-  CalendarBlank, CaretRight, Check, Clock, CornersOut, DotsThree, ListNumbers, LockSimple, MagnifyingGlass,
+  Books, CalendarBlank, CaretRight, Check, Clock, CornersOut, DotsThree, ListNumbers, LockSimple, MagnifyingGlass,
   PencilSimple, Play, Plus, PuzzlePiece, Sparkle, Trash, Warning,
 } from "@phosphor-icons/react";
 
@@ -42,7 +42,7 @@ import { useCan } from "../../components/identity/identity-provider";
 import { uninstallPack } from "../../lib/workflow-api";
 import { couldNot, reasonOf } from "../../lib/action-result";
 import { WorkflowWizard } from "./wizard/workflow-wizard";
-import { Marketplace } from "./marketplace";
+import { SharedLibrary } from "./marketplace";
 import { PublishForm } from "./publish-form";
 import { UpdateReview } from "./update-review";
 
@@ -305,7 +305,7 @@ export type LibraryProps = {
   onScheduleShown?: () => void;
 };
 
-/** `market`: the Marketplace, where packs of workflows are installed into Yours. */
+/** `market`: the shared Library (design PR #287), where BOSS's and your team's workflows are added. */
 type LibView = "workflows" | "steps" | "market";
 
 function readLibView(): LibView {
@@ -461,8 +461,8 @@ export function Library(props: LibraryProps) {
           Build a workflow
         </button>
         <button type="button" className="wf-btn" data-testid="wf-lib-market"
-                title="Packs of workflows to install into Yours" onClick={() => setView("market")}>
-          Marketplace <CaretRight size={12} weight="bold" aria-hidden />
+                title="Workflows to reuse: BOSS's and your team's" onClick={() => setView("market")}>
+          <Books size={14} aria-hidden /> Shared library <CaretRight size={12} weight="bold" aria-hidden />
         </button>
         <button type="button" className="wf-btn wf-btn-primary" data-testid="wf-lib-new"
                 title="New workflow (N)" onClick={onNew}>
@@ -479,8 +479,8 @@ export function Library(props: LibraryProps) {
       ) : null}
 
       {view === "market" ? (
-        <Marketplace projectId={projectId} onBack={() => { setView("workflows"); void load(); }}
-                     onOpen={props.onOpen} />
+        <SharedLibrary projectId={projectId} onBack={() => { setView("workflows"); void load(); }}
+                       onOpen={props.onOpen} />
       ) : view === "steps" ? (
         <StepsTable {...props} usedIn={usedIn} />
       ) : items === null && !failed ? (
@@ -684,7 +684,7 @@ function LibraryCard(p: CardProps) {
           ) : null}
           {mine && !installed && w.published?.status === "published" ? (
             <span className="wf-tag" data-kind="from" data-testid={`wf-card-published-${w.workflow_key}`}
-                  title={`In your org's Marketplace as ${w.published.name}`}>Published v{w.published.version}</span>
+                  title={`In your org's Library as ${w.published.name}`}>Shared v{w.published.version}</span>
           ) : null}
           {w.forked_from_workflow_key && mine && !installed ? (
             <span className="wf-tag" data-kind="from" data-user-text
@@ -698,7 +698,7 @@ function LibraryCard(p: CardProps) {
       {installed ? (
         <p className="wf-card-from" data-testid={`wf-card-from-market-${w.workflow_key}`}
            title={`${installed.pack_name}${installed.modified ? ". You changed it: updates wait for you." : ". Updates by itself."}`}>
-          from Marketplace · v{installed.version ?? "?"}{installed.modified ? " · Modified" : ""}
+          from Library · v{installed.version ?? "?"}{installed.modified ? " · Modified" : ""}
         </p>
       ) : null}
       <p className="wf-card-desc" title={w.description || undefined} data-user-text>
@@ -809,9 +809,9 @@ function LibraryCard(p: CardProps) {
                   Rename
                 </button>
                 <button type="button" role="menuitem" data-testid={`wf-card-publish-${w.workflow_key}`}
-                        disabled={!w.version} title={w.version ? "Every project in your org can install it" : "Save a version first"}
+                        disabled={!w.version} title={w.version ? "Every project in your org can add it" : "Save a version first"}
                         onClick={() => pop.setOpen("publish")}>
-                  {w.published?.status === "published" ? "Publish again…" : "Publish to Marketplace…"}
+                  {w.published?.status === "published" ? "Share again…" : "Share to Library…"}
                 </button>
                 <button type="button" role="menuitem" disabled={!w.version}
                         title={w.version ? undefined : "Save a version first"}
