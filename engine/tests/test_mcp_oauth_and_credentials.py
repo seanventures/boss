@@ -465,6 +465,40 @@ def test_a_refused_refresh_leaves_the_server_needing_reconnect(eng, project, fak
     assert _headers(eng, project, sid)["Authorization"].startswith("Bearer at-")
 
 
+def _call(eng, project, sid, key):
+    with eng.begin() as c:
+        if reg.needs_person(reg.get_mcp_server(c, project, sid)):
+            reg.review_mcp_server(c, project, sid, actor="operator")
+    with eng.begin() as c:
+        server = reg.get_mcp_server(c, project, sid)
+        org = creds.org_of_project(c, project)
+        ws = c.execute(text("SELECT workspace_id FROM projects WHERE id = :p"),
+                       {"p": project}).scalar()
+        return reg.call_tool_with_receipt(c, None, project, server, "whoami", {},
+                                          dedupe_key=key, tenant_scope=(org, ws))
+
+
+def test_a_token_the_server_refuses_early_is_refreshed_once_and_the_call_made_again(
+        eng, project, fake):
+    """BOSSAPP-1476 (OAuth incl. refresh). The provider revoked the access token long before the
+    vault's clock said it expired. FAILED BEFORE: every call answered 401 until the token's
+    expiry, because the vault refreshed only on its own clock. Now one 401 on an OAuth server
+    refreshes that token (single flight) and the call is made again, once."""
+    sid = _oauth_server(eng, project, fake)
+    _sign_in(eng, project, fake, sid)
+    assert _call(eng, project, sid, "early:1")["output"]
+    fake.valid_access.discard("at-1")             # revoked at the provider, not in the vault
+    before = fake.refreshes
+    assert _call(eng, project, sid, "early:2")["output"]
+    assert fake.refreshes == before + 1
+    assert _headers(eng, project, sid)["Authorization"] == "Bearer at-2"
+    # A refresh the provider refuses leaves the server needing reconnect, in words.
+    fake.valid_access.discard("at-2")
+    fake.revoked_refresh.add("rt-2")
+    with pytest.raises(creds.CredentialNeedsReauth, match="Reconnect it"):
+        _call(eng, project, sid, "early:3")
+
+
 def test_an_expired_token_with_no_refresh_needs_reauth(eng, project, fake):
     sid = _oauth_server(eng, project, fake)
     _sign_in(eng, project, fake, sid)

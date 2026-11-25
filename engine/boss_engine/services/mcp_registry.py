@@ -453,7 +453,8 @@ def save_oauth_config(connection: Connection, project_id: str, server_id: str,
 
 
 def auth_headers(connection: Connection, settings: Any, project_id: str,
-                 server: dict[str, Any], *, principal: Any = None) -> dict[str, str]:
+                 server: dict[str, Any], *, principal: Any = None,
+                 rejected: Optional[dict[str, str]] = None) -> dict[str, str]:
     """The headers a call to `server` carries. Empty for a server that needs no sign-in.
 
     WHOSE CREDENTIAL (BOSSAPP-847): the server's `credential_policy` decides between its shared
@@ -466,7 +467,14 @@ def auth_headers(connection: Connection, settings: Any, project_id: str,
     from .connection_credentials import headers_for
 
     raw = _raw_auth(connection, project_id, str(server.get("id") or ""))
-    headers = headers_for(connection, settings, project_id, server, raw, principal=principal)
+    # `rejected`: the headers a call just carried that the server answered 401 to. An OAuth
+    # credential's token in them is refreshed now, once (vault.connection_token).
+    stale = None
+    if rejected:
+        sent = next((v for k, v in rejected.items() if k.lower() == "authorization"), "")
+        stale = sent[7:].strip() if sent.lower().startswith("bearer ") else None
+    headers = headers_for(connection, settings, project_id, server, raw, principal=principal,
+                          rejected=stale)
     # THE HEADER POLICY (BOSSAPP-873): secret static headers, and an allowlist that strips any
     # other extra header. Every road's headers come from here, so every road obeys it. A server
     # with no policy ({}) sends exactly what it sent before.
@@ -2076,9 +2084,23 @@ def call_tool_with_receipt(
             forwarded = hp.call_headers(hp.read(connection, project_id,
                                                 str(server.get("id") or "")),
                                         run_id=run_ref, agent=agent_ref)
-            output = MCPClient(settings).call_tool(
-                server["url"], tool_name, inputs, headers=headers,
-                **({"call_headers": forwarded} if forwarded else {}))
+            try:
+                output = MCPClient(settings).call_tool(
+                    server["url"], tool_name, inputs, headers=headers,
+                    **({"call_headers": forwarded} if forwarded else {}))
+            except Exception as refused:  # noqa: BLE001 — only a 401 on OAuth is retried
+                # AN OAUTH TOKEN THE SERVER REFUSED EARLY (revoked, rotated, clock skew) is
+                # refreshed once and the call made again: a 401 means it did not run. The
+                # vault only refreshed on its own clock, so the call failed until expiry.
+                if not _oauth_refused(refused, connection, project_id, server):
+                    raise
+                headers = auth_headers(connection, settings, project_id, server,
+                                       rejected=headers,
+                                       **({} if credential_principal is None
+                                          else {"principal": credential_principal}))
+                output = MCPClient(settings).call_tool(
+                    server["url"], tool_name, inputs, headers=headers,
+                    **({"call_headers": forwarded} if forwarded else {}))
     except Exception as exc:
         receipts.mark_failed(
             connection,
@@ -2204,6 +2226,19 @@ def _declared_tier(server: dict[str, Any], tool_name: str) -> Any:
             return tool.get("risk_tier", annotations.get("risk_tier")
                             if isinstance(annotations, dict) else None)
     return None
+
+
+def _oauth_refused(error: BaseException, connection: Connection, project_id: str,
+                   server: dict[str, Any]) -> bool:
+    """A 401 from a server whose sign-in is OAuth (a token BOSS can refresh)."""
+    try:
+        import httpx
+    except Exception:  # noqa: BLE001
+        return False
+    if not (isinstance(error, httpx.HTTPStatusError) and error.response.status_code == 401):
+        return False
+    return str(_raw_auth(connection, project_id, str(server.get("id") or "")).get("type")
+               or "") == "oauth"
 
 
 def _is_transport_failure(error: BaseException) -> bool:
