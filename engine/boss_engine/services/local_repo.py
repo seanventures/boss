@@ -410,9 +410,132 @@ def merge(git_dir: Path, head: str, base: str, message: str, *, method: str = "m
                 + (f": {', '.join(conflicted.split()[:8])} conflict." if conflicted.strip() else
                    f": {(done.stderr or b'').decode('utf-8', 'replace').strip()[-200:]}"))
         if method == "squash":
+            staged = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=str(wt),
+                                    capture_output=True, env=_env(), timeout=60)
+            if staged.returncode == 0:
+                return branch_sha(git_dir, base) or ""
             git(["commit", "--quiet", "-m", message], cwd=wt)
         git(["push", "--quiet", "origin", f"HEAD:refs/heads/{base}"], cwd=wt)
     return branch_sha(git_dir, base) or ""
+
+
+def _wire_alternates(wt_git: Path, git_dir: Path) -> None:
+    alt = wt_git / "objects" / "info" / "alternates"
+    alt.parent.mkdir(parents=True, exist_ok=True)
+    alt.write_text(str((git_dir / "objects").resolve()) + "\n", encoding="utf-8")
+
+
+def _matches_expected_squash_diff(git_dir: Path, expected_base_sha: str, head_sha: str,
+                                  current_base_sha: str, changed: list[str]) -> bool:
+    """True when `current_base_sha` matches the 3-way merge tree of `(expected_base_sha, head_sha)`
+    on all paths in `changed`."""
+    mt = subprocess.run(
+        ["git", "--git-dir", str(git_dir), "merge-tree", "--write-tree",
+         expected_base_sha, head_sha],
+        capture_output=True, env=_env(), timeout=120,
+    )
+    if mt.returncode == 0:
+        expected_tree = (mt.stdout or b"").decode("utf-8", "replace").splitlines()[0].strip()
+        if not expected_tree:
+            return False
+        same_files = subprocess.run(
+            ["git", "--git-dir", str(git_dir), "diff", "--quiet",
+             current_base_sha, expected_tree, "--", *changed],
+            capture_output=True, env=_env(), timeout=60,
+        )
+        return same_files.returncode == 0
+    stderr = (mt.stderr or b"").decode("utf-8", "replace").lower()
+    if mt.returncode == 1 and "usage:" not in stderr and "unknown option" not in stderr:
+        return False
+    # Fallback for Git < 2.38 without `merge-tree --write-tree`: temporary worktree 3-way merge.
+    with worktree(git_dir, None) as wt:
+        wt_git = wt / ".git"
+        if not (rev_parse(wt_git, expected_base_sha) and rev_parse(wt_git, head_sha)
+                and rev_parse(wt_git, current_base_sha)):
+            _wire_alternates(wt_git, git_dir)
+        co = subprocess.run(
+            ["git", "checkout", "--quiet", "--detach", expected_base_sha],
+            cwd=str(wt), capture_output=True, env=_env(), timeout=120,
+        )
+        if co.returncode != 0:
+            return False
+        done = subprocess.run(
+            ["git", "merge", "--squash", head_sha],
+            cwd=str(wt), capture_output=True, env=_env(), timeout=300,
+        )
+        if done.returncode != 0:
+            return False
+        wr = subprocess.run(
+            ["git", "write-tree"],
+            cwd=str(wt), capture_output=True, env=_env(), timeout=60,
+        )
+        if wr.returncode != 0:
+            return False
+        expected_tree = (wr.stdout or b"").decode("utf-8", "replace").strip()
+        if not expected_tree:
+            return False
+        same_files = subprocess.run(
+            ["git", "diff", "--quiet", current_base_sha, expected_tree, "--", *changed],
+            cwd=str(wt), capture_output=True, env=_env(), timeout=60,
+        )
+        return same_files.returncode == 0
+
+
+def already_squashed_into(git_dir: Path, head_branch: str, head_sha: str,
+                          expected_base_sha: str, current_base_sha: str,
+                          base_branch: str) -> bool:
+    """True when `expected_base_sha` moved to `current_base_sha` with `head_sha`'s changes
+    already squashed onto `base_branch` (so a retry after a DB rollback is idempotent)."""
+    if not (head_sha and expected_base_sha and current_base_sha):
+        return False
+    if current_base_sha == expected_base_sha:
+        return False
+    if merge_base(git_dir, expected_base_sha, current_base_sha) != expected_base_sha:
+        return False
+    resolved_head = rev_parse(git_dir, head_sha)
+    if not resolved_head:
+        return False
+    head_sha = resolved_head
+    mb = merge_base(git_dir, head_sha, expected_base_sha) or expected_base_sha
+    changed = [
+        p for p in git(["diff", "--name-only", "--no-renames", mb, head_sha],
+                       git_dir=git_dir).splitlines()
+        if p.strip()
+    ]
+    if not changed:
+        return False
+    if not _matches_expected_squash_diff(git_dir, expected_base_sha, head_sha,
+                                         current_base_sha, changed):
+        return False
+    with worktree(git_dir, base_branch) as wt:
+        wt_git = wt / ".git"
+        if not rev_parse(wt_git, current_base_sha):
+            _wire_alternates(wt_git, git_dir)
+        if rev_parse(wt_git, "HEAD") != current_base_sha:
+            co = subprocess.run(
+                ["git", "checkout", "--quiet", "--detach", current_base_sha],
+                cwd=str(wt), capture_output=True, env=_env(), timeout=120,
+            )
+            if co.returncode != 0:
+                return False
+        if not rev_parse(wt_git, head_sha):
+            if head_branch and branch_exists(git_dir, head_branch):
+                git(["fetch", "--quiet", "origin",
+                     f"refs/heads/{head_branch}:refs/remotes/origin/{head_branch}"],
+                    cwd=wt, check=False)
+            if not rev_parse(wt_git, head_sha):
+                _wire_alternates(wt_git, git_dir)
+                if not rev_parse(wt_git, head_sha):
+                    return False
+        done = subprocess.run(["git", "merge", "--squash", head_sha], cwd=str(wt),
+                              capture_output=True, env=_env(), timeout=300)
+        if done.returncode != 0:
+            return False
+        staged = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=str(wt),
+                                capture_output=True, env=_env(), timeout=60)
+        if staged.returncode != 0:
+            return False
+    return True
 
 
 def counts(git_dir: Path, branch: str, base: str) -> dict[str, int]:

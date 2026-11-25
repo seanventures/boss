@@ -88,8 +88,24 @@ _TRANSITION = _schema({"ref": {"type": "string", "description": "a ticket key or
 
 
 def _person(actor: Any) -> Optional[str]:
-    actor = str(actor or "")
-    return actor if actor.startswith("usr_") else None
+    actor_str = str(actor or "")
+    if actor_str.startswith("usr_"):
+        return actor_str
+    from ..identity import lineage
+
+    ctx = lineage.current_context()
+    if ctx is not None:
+        obo = getattr(ctx, "on_behalf_of", None)
+        if isinstance(obo, str) and obo.startswith("usr_"):
+            return obo
+        principal = getattr(ctx, "principal", None)
+        pid = getattr(principal, "id", None) if principal is not None else None
+        if isinstance(pid, str) and pid.startswith("usr_"):
+            return pid
+    acting = lineage.current()
+    if acting is not None and isinstance(acting.principal_id, str) and acting.principal_id.startswith("usr_"):
+        return acting.principal_id
+    return None
 
 
 def _row(db: Any, project_id: str, args: dict[str, Any]) -> Any:
@@ -229,7 +245,8 @@ def _search(ctx, *, project_id, actor, args):
             if conn is None:
                 from ..services.ticket_reach import nothing_reachable
 
-                return nothing_reachable(db, pid, provider=args.get("provider"))
+                return nothing_reachable(db, pid, provider=args.get("provider"),
+                                         person_id=_person(actor))
             found = get_ticket_adapter(conn.provider).search(
                 conn, str(args.get("query") or ""), args.get("project") or None, filters,
                 limit=int(args.get("limit") or 20))
@@ -256,7 +273,8 @@ def _browse(ctx, *, project_id, actor, args):
             if conn is None:
                 from ..services.ticket_reach import nothing_reachable
 
-                return nothing_reachable(db, pid, provider=args.get("provider"))
+                return nothing_reachable(db, pid, provider=args.get("provider"),
+                                         person_id=_person(actor))
             from ..services.ticket_reach import audit_read
 
             audit_read(db, pid, row, f"browse: {what} {args.get('project') or args.get('epic') or ''}"
@@ -299,7 +317,8 @@ def _import(ctx, *, project_id, actor, args):
                 done = ticket_sync.ticket_import_items(
                     db, getattr(ctx, "settings", None), project_id=pid,
                     items=list(args.get("items") or []), actor=str(actor or "system"),
-                    connection_id=args.get("connection_id"), provider=args.get("provider"))
+                    connection_id=args.get("connection_id"), provider=args.get("provider"),
+                    person_id=_person(actor))
     except ticket_sync.TicketSyncError as error:
         return {"ok": False, "error": error.code, "message": str(error)}
     except Exception as error:  # noqa: BLE001
@@ -321,7 +340,8 @@ def _write(ctx, project_id, actor, args, op: str, payload: dict[str, Any]):
             if conn is None:
                 from ..services.ticket_reach import nothing_reachable
 
-                return nothing_reachable(db, pid, provider=args.get("provider"))
+                return nothing_reachable(db, pid, provider=args.get("provider"),
+                                         person_id=_person(actor))
             if row.get("reach") == "org":
                 # Shared for READING. Writing into the ticket system as another project's
                 # connection is that project's to do.

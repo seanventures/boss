@@ -6411,6 +6411,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             template_command=_stack_ctx["template_command"],
             template_stack=_stack_ctx["template_stack"])
     _last_stack_plan: list = [None]      # the newest verify's StackPlan, for the later gates
+    _last_gate_plan: list = [None]       # the newest verify's GatePlan (local or microvm host re-plan)
     _stack_record: dict = {}
 
     def _push_held(where: str) -> bool:
@@ -7601,8 +7602,36 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         _fidelity: Optional[dict] = None
         _validation: Optional[dict] = None
         _repo_checks: list = []     # input_fidelity.repo_checks, after the implement loop
+        def _microvm_verify_commands(plan, base_root: Path) -> list[str]:
+            if getattr(plan, "runs_steps", False) and getattr(plan, "steps", None):
+                step_dirs = set()
+                for _cmd, step_dir in plan.steps:
+                    try:
+                        rel = Path(step_dir).relative_to(base_root).as_posix()
+                    except ValueError:
+                        rel = ""
+                    step_dirs.add("" if rel in ("", ".") else rel)
+                if len(step_dirs) > 1:
+                    import shlex
+
+                    scoped: list[str] = []
+                    for cmd, step_dir in plan.steps:
+                        try:
+                            rel = Path(step_dir).relative_to(base_root).as_posix()
+                        except ValueError:
+                            rel = ""
+                        if rel and rel != ".":
+                            scoped.append(f"cd {shlex.quote(rel)} && {cmd}")
+                        else:
+                            scoped.append(cmd)
+                    return scoped
+            return list(plan.commands)
+
         if _gate_plan0.source != "task":
-            verify_commands = list(_gate_plan0.commands)
+            verify_commands = (
+                _microvm_verify_commands(_gate_plan0, Path(root))
+                if use_microvm else list(_gate_plan0.commands)
+            )
             test_cmd = ((verification_target.manifest_display(root, _pinned_manifest)
                          if _gate_plan0.from_manifest else _gate_plan0.description
                          if _gate_plan0.runs_steps else " && ".join(verify_commands))
@@ -7962,6 +7991,71 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             if _needs_person[0] is not None:
                 raise _needs_person[0]
 
+        def _replan_microvm():
+            """Host-side gate re-plan for microVM stages: overlay accumulated guest writes onto the
+            base tree, resolve GatePlan against the pinned base manifest, update verify_commands
+            and _last_gate_plan[0], and halt before guest verification or PR opening if a person
+            is needed."""
+            nonlocal verify_commands, last_verify_command, last_verify_cwd
+            if not use_microvm:
+                return None
+            import shutil
+            import tempfile
+
+            base_root = Path(root)
+            with tempfile.TemporaryDirectory(prefix="boss-vm-plan-") as td:
+                overlay = Path(td)
+                if base_root.exists():
+                    shutil.copytree(
+                        base_root, overlay, dirs_exist_ok=True, symlinks=True,
+                        ignore=shutil.ignore_patterns(
+                            ".git", "node_modules", ".venv", "__pycache__"),
+                    )
+                for rel in deleted_acc:
+                    target = overlay / rel
+                    if target.is_file() or target.is_symlink():
+                        target.unlink(missing_ok=True)
+                for rel, content in accumulated.items():
+                    dest = overlay / rel
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    dest.write_text(
+                        content if isinstance(content, str) else "", encoding="utf-8")
+                plan = verification_target.resolve_gate_plan(
+                    spec, title, overlay, app_id=_app_id, changed=_changed_paths(),
+                    pinned=_pinned_manifest, layout=_stack_layout,
+                    lineage=_lineage_paths, recorded=_recorded_app, finalize_ctx=fctx)
+
+            def _rebase(p: Path) -> Path:
+                try:
+                    return base_root / p.relative_to(overlay)
+                except ValueError:
+                    return p
+
+            plan.cwd = _rebase(plan.cwd)
+            if plan.steps:
+                plan.steps = [(c, _rebase(d)) for c, d in plan.steps]
+            if plan.stack is not None:
+                plan.stack.app_dir = _rebase(plan.stack.app_dir)
+                if plan.stack.steps:
+                    plan.stack.steps = [(c, _rebase(d)) for c, d in plan.stack.steps]
+                if plan.stack.e2e_steps:
+                    plan.stack.e2e_steps = [(c, _rebase(d)) for c, d in plan.stack.e2e_steps]
+            _last_gate_plan[0] = plan
+            _last_stack_plan[0] = plan.stack if plan.source == "stack" else None
+            if plan.source != "task" and plan.commands:
+                verify_commands = _microvm_verify_commands(plan, base_root)
+            last_verify_command = (
+                plan.description if plan.runs_steps else " && ".join(plan.commands)
+            ) or last_verify_command
+            try:
+                last_verify_cwd = (
+                    str(plan.cwd.relative_to(base_root)) if plan.cwd != base_root else "."
+                )
+            except ValueError:
+                last_verify_cwd = str(plan.cwd)
+            _halt_if_needs_person(plan)
+            return plan
+
         # FLAKY TESTS NEVER BLOCK (quality_bar.py): a suite that fails, then passes on TWO
         # immediate re-runs (the test failed 1 of 3), is reported — the failing tests named — as
         # a follow-up, never a failure. One re-run that fails again is a real failure. The
@@ -8070,6 +8164,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # The tree turned into a stack this install cannot gate (an agent wrote a go.mod
             # while Go is off): a person's to fix, so no further repair round runs on it.
             _halt_if_needs_person(plan)
+            _last_gate_plan[0] = plan
             _last_stack_plan[0] = plan.stack if plan.source == "stack" else None
             if record:
                 last_verify_command = (plan.description if plan.runs_steps
@@ -8990,6 +9085,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             if use_microvm:
                 # Commit ONLY test files — anything else the QA role wrote is discarded.
                 _commit_stage(test_changes or [], f"governed: tests-first (qa) — {title[:60]}")
+                _replan_microvm()
             else:
                 _checkpoint("write_tests")
             _mark_stage_done("write_tests")
@@ -9329,6 +9425,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                               + (f" [repair {attempt}]" if attempt else ""),
                               deleted=[p for p in getattr(res2, "deleted", None) or []
                                        if not _is_test_path(p)])
+                _replan_microvm()
                 if not use_microvm:
                     _checkpoint("implement" + (f"-repair{attempt}" if attempt else ""))
                 # Same reason as the design above: state was only written at the END, so a
@@ -9880,6 +9977,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     _commit_stage(q_changes, f"governed: quality — {title[:60]}",
                                   deleted=[p for p in getattr(qres, "deleted", None) or []
                                            if not _is_test_path(p)])
+                    _replan_microvm()
                     q_ok = bool(qres.tests_passed)
                     if q_ok:
                         tests_passed = True
@@ -10149,6 +10247,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
 
             def _do_full():
                 if use_microvm:
+                    _replan_microvm()
                     # Full-suite regression runs in its OWN VM (echo engine = no agent,
                     # just clone the work branch and execute the suite).
                     set_llm_context(routes=_route_ids(), db_engine=engine, project_id=project_id, run_id=run_id,
@@ -10428,6 +10527,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                           "summary": "mutation probe not run: no deterministic mutation site "
                                      "in the targeted implementation files"}
                 elif use_microvm:
+                    _replan_microvm()
                     res5 = _guest_stage(
                         "check_tests", "check_tests", "Run the full test suite.",
                         test_cmds=[mutation_probe.apply_command(_planted)]
@@ -12620,6 +12720,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 "|| jsonb_build_object('past_last_stage_boundary', true), updated_at=now() "
                 "WHERE id=:id"), {"id": run_id})
             _abort_if_cancelled("before opening the PR", spends=False)
+            if use_microvm:
+                _replan_microvm()
             _halt_if_needs_person()  # never a PR of code no gate could run
             _pr_files = ([FileChange(path=p, content=content)
                           for p, content in accumulated.items()]

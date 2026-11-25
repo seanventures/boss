@@ -199,8 +199,9 @@ def may_see_project(project_id: str, *, person_id: Optional[str] = None, db: Any
     """WHAT A TICKET SYSTEM SAYS ABOUT ITS HOME (PR #140 review): ticket systems are an org-wide
     setting, but a project the caller cannot read (project:read) stays hidden, as /v1/projects
     hides it. ``person_id``: answer for THAT person (an agent's tool acting for them, so the agent
-    never tells a person names the console hides). Otherwise the request's principal; not
-    enforced (legacy mode, no request): visible, as the rest of that mode."""
+    never tells a person names the console hides). Otherwise the request's principal; when
+    identity is claimed and authz is not off, an unknown/agent principal outside an HTTP request
+    fails closed (hidden) instead of leaking project names."""
     if person_id and db is not None:
         try:
             from ..identity import authz
@@ -212,13 +213,26 @@ def may_see_project(project_id: str, *, person_id: Optional[str] = None, db: Any
                 held = authz.effective_permissions(
                     person, ResolvedScope.in_project(person.org_id, project_id), db=db).permissions
                 return "project:read" in held
-            # Not a person this install's identity knows (legacy actor): as for any caller.
+            # Unknown person_id when identity is claimed: fall through to viewer/fail-closed below.
         except Exception:  # noqa: BLE001 — cannot tell: hidden, never shown
             return False
     from ..identity import viewer
 
-    said = viewer.may(project_id, "project:read")
-    return True if said is None else bool(said)
+    said = viewer.may(project_id, "project:read", db=db)
+    if said is not None:
+        return bool(said)
+    if db is not None:
+        try:
+            from ..config import get_settings
+            from ..identity import claim
+
+            mode = str(getattr(get_settings(), "authz_mode", "enforce") or "enforce").strip().lower()
+            org = org_of(db, project_id)
+            if mode != "off" and org and claim.is_claimed(db, org_id=org):
+                return False
+        except Exception:  # noqa: BLE001 — cannot tell: hidden, never shown
+            return False
+    return True
 
 
 def home_view(db: Connection, project_id: str, *, person_id: Optional[str] = None) -> dict[str, Any]:
@@ -285,7 +299,8 @@ def org_connections(db: Connection, project_id: str) -> list[dict[str, Any]]:
     return out
 
 
-def unshared_ref(db: Connection, project_id: str, said: str) -> Optional[dict[str, Any]]:
+def unshared_ref(db: Connection, project_id: str, said: str,
+                 *, person_id: Optional[str] = None) -> Optional[dict[str, Any]]:
     """The first ticket key in ``said`` that only a connection NOT shared with this project
     knows (its project keys), as that connection's ``not_shared`` refusal with the key as
     ``ref``. Nothing is read from the ticket system: the key's prefix is matched locally."""
@@ -295,7 +310,7 @@ def unshared_ref(db: Connection, project_id: str, said: str) -> Optional[dict[st
     for token in dict.fromkeys(_KEY_IN_TEXT.findall(str(said or "")[:20_000])):
         owners = _recognised(db, hidden, token, person_id=None)
         if owners:
-            return {"ref": token, **not_shared_error(db, owners[0][0]).body()}
+            return {"ref": token, **not_shared_error(db, owners[0][0], person_id=person_id).body()}
     return None
 
 
@@ -428,8 +443,8 @@ def not_connected(project_id: str) -> dict[str, Any]:
                     "share it with the whole org."}
 
 
-def nothing_reachable(db: Connection, project_id: str, *, provider: Optional[str] = None
-                      ) -> dict[str, Any]:
+def nothing_reachable(db: Connection, project_id: str, *, provider: Optional[str] = None,
+                      person_id: Optional[str] = None) -> dict[str, Any]:
     """Why no connection can serve this project: ``not_shared`` when another project of the org
     has one that is not shared with it (so search, browse, comment and import say the same as
     ticket_get), else ``not_connected``."""
@@ -439,7 +454,7 @@ def nothing_reachable(db: Connection, project_id: str, *, provider: Optional[str
     hidden = [r for r in unshared_rows(db, project_id)
               if _reads(r) and (not wanted or str(r["provider_key"]) == wanted)]
     if hidden:
-        return {"ok": False, **not_shared_error(db, hidden[0]).body()}
+        return {"ok": False, **not_shared_error(db, hidden[0], person_id=person_id).body()}
     return not_connected(project_id)
 
 

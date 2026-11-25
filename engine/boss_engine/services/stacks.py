@@ -1511,6 +1511,7 @@ class StackPlan:
     serve_frontend: bool = False
     frontend_command: Optional[list[str]] = None
     error: Optional[str] = None
+    toolchain_missing: bool = False
 
     def dir_of(self, service: Service) -> Path:
         return self.app_dir if service.rel == "." else self.app_dir / service.rel
@@ -1558,11 +1559,13 @@ def stack_plan(app_dir: Path | str, services: Optional[list[Service]] = None) ->
     plan = StackPlan(base, services)
     bad = [s for s in services if not s.supported]
     if bad:
+        plan.toolchain_missing = True
         plan.error = verdict([s.language for s in bad], where=f"This app ({', '.join(s.rel for s in bad)})"
                              ).message
         return plan
     off = [s.language for s in services if not language_ready(s.language)]
     if off:
+        plan.toolchain_missing = True
         plan.error = verdict((), off, where="This app").message
         return plan
     order = {"backend": 0, "frontend": 1, "unknown": 2, "e2e": 3}

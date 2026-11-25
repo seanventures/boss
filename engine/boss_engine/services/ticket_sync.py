@@ -1074,7 +1074,8 @@ def _intake_row(db: Any, project_id: str, *, connection_id: Optional[str] = None
 
 def ticket_import_items(db: Any, settings: Any, *, project_id: str, items: list[dict[str, Any]],
                         actor: str, connection_id: Optional[str] = None,
-                        provider: Optional[str] = None) -> dict[str, Any]:
+                        provider: Optional[str] = None,
+                        person_id: Optional[str] = None) -> dict[str, Any]:
     """The ``ticket_import`` tool's door: a thin wrapper over B1's import
     (``ticket_intake.import_by_keys``): work items + bindings (status todo), deduped on the
     binding; an epic ``with_children`` brings its children under it."""
@@ -1082,13 +1083,15 @@ def ticket_import_items(db: Any, settings: Any, *, project_id: str, items: list[
 
     from . import ticket_reach as reach
 
+    resolved_person = person_id if person_id is not None else _person(actor)
     try:
         row = _intake_row(db, project_id, connection_id=connection_id, provider=provider)
         if row is None:
-            why = reach.nothing_reachable(db, project_id, provider=provider)
+            why = reach.nothing_reachable(db, project_id, provider=provider,
+                                          person_id=resolved_person)
             raise TicketSyncError(why["message"], status=403 if why["error"] == "not_shared"
                                   else 409, code=why["error"])
-        read = intake.read_for_import(db, row, items, person_id=_person(actor),
+        read = intake.read_for_import(db, row, items, person_id=resolved_person,
                                       project_id=project_id, reader=actor)
         row = reach.project_row_for(db, settings, project_id, row, actor=actor)
     except intake.TicketApiError as error:
