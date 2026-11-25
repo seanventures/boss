@@ -1656,6 +1656,7 @@ class GenericCliCodeAgent:
         from .agent_env import NEVER, agent_environment
 
         env = agent_environment(os.environ)
+        cli_login = False
         # A CLI signed in with its own OAuth needs its own home/config to find the session.
         for name in self.spec.env_passthrough:
             value = os.environ.get(name)
@@ -1675,9 +1676,11 @@ class GenericCliCodeAgent:
             from .claude_credential import resolve_claude_credential
 
             try:
-                from .claude_credential import resolve_for_pick
+                from .claude_credential import KIND_CLI_LOGIN, resolve_for_pick
 
-                resolve_for_pick(self.settings, getattr(self, "_pick", None)).apply(env)
+                cred = resolve_for_pick(self.settings, getattr(self, "_pick", None))
+                cred.apply(env)
+                cli_login = cred.kind == KIND_CLI_LOGIN
             except CredentialStoreUnavailable:
                 pass           # as before: what the environment holds, logged by the lookup
         elif _uses_env_route(self.spec) and not env.get(self.spec.token_env):
@@ -1711,13 +1714,22 @@ class GenericCliCodeAgent:
                                    if self.spec.home_env or self.spec.default_home else ""))
         # A PROVIDER API KEY NEVER REACHES THE CLI (model_proxy): an Anthropic, OpenAI or
         # OpenRouter key passed through above becomes a run token for the loopback proxy, with
-        # the base URL the CLI reads. A CLI's own login (a token, an auth file) is untouched.
+        # the base URL the CLI reads.
         if gateway is not None:
             try:
                 return llm_gateway.apply(env, gateway, harness=self.spec.name,
                                          settings=self.settings)
             except llm_gateway.GatewayUnavailable as refused:
                 raise CliHarnessUnavailable(str(refused)) from refused
+        # NOR DOES A SUBSCRIPTION LOGIN (subscription_shield, BOSSAPP-1480): the Claude token or
+        # CLI login, the Codex login file and the Grok session stay in the control plane; the
+        # CLI gets a run token at the proxy and a session home with no login in it.
+        from . import subscription_shield
+
+        subscription_shield.shield(
+            self.spec.name, env, settings=self.settings, cli_login=cli_login,
+            default_home=self.cli_home() if self.spec.home_env or self.spec.default_home
+            else "")
         return _model_proxy.shield_env(env, settings=self.settings)
 
     def _argv(self, prompt: str, *, read_only: bool, model: Optional[str],

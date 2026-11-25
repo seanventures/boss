@@ -1081,17 +1081,25 @@ class ClaudeCodeAgent:
             # loopback proxy's base URL; the proxy injects the key. The agent's own commands
             # inherit this environment, so what they could read is a token that only works on
             # the model API paths, for this session, and dies when it ends. A subscription login
-            # is not an API key and is not proxied (MODEL_CONNECTIONS.md).
+            # goes the same way, in _finish_child_env (subscription_shield).
             from . import model_proxy
 
             model_proxy.shield(env, "anthropic", cred.value, settings=self.settings)
         #: Who pays for this run's calls (included_spend.py), stamped on its usage.
         self._billing = cred.billing
-        return self._finish_child_env(env)
+        from .claude_credential import KIND_CLI_LOGIN
 
-    def _finish_child_env(self, env: dict) -> dict:
+        return self._finish_child_env(env, cli_login=cred.kind == KIND_CLI_LOGIN)
+
+    def _finish_child_env(self, env: dict, *, cli_login: bool = False) -> dict:
         """What every child environment gets after its credential: the MCP wait and the
         thinking cap (split out so a gateway-routed run gets exactly the same)."""
+        # A SUBSCRIPTION LOGIN NEVER REACHES THE SESSION (subscription_shield, BOSSAPP-1480):
+        # the long-lived token, a pool member's, or the CLI's own login (`cli_login`, read live
+        # by the proxy) becomes a run token at the model proxy, like an API key.
+        from . import subscription_shield
+
+        subscription_shield.claude(env, settings=self.settings, cli_login=cli_login)
         if self.mcp_harness is not None and hasattr(self.mcp_harness, "env"):
             # The MCP gateway's parked calls outlast the CLI's default tool wait (code_task_mcp).
             env.update(self.mcp_harness.env())

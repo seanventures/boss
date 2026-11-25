@@ -219,8 +219,17 @@ class SandboxIdentity:
         except Exception as exc:  # noqa: BLE001 — the image's go.env still pins proxy and sumdb
             log.warning("toolchain environment for sandbox %s not set: %s", self.key, exc)
         for name in ("CODEX_HOME", "GROK_HOME"):
-            if name in out:
+            # A session home BOSS made inside this run (subscription_shield) is kept; any other
+            # (the control plane's own, 0700 to boss) becomes the run's.
+            if name in out and not self._inside(out[name]):
                 out[name] = f"{home}/.{name.split('_')[0].lower()}"
+        # NO RAW SUBSCRIPTION LOGIN CROSSES INTO THE RUN (BOSSAPP-1480): a session's login is a
+        # model-proxy run token by now (subscription_shield); a raw value under a login's name —
+        # inherited from the control plane's environment by a step that passed none — is dropped.
+        from .model_proxy import holds_subscription_login
+
+        for name in holds_subscription_login(out):
+            out.pop(name, None)
         # The checkout is BOSS's (it cloned it); the run's uid works in it. Git refuses a repo
         # another uid owns unless told it is safe — and it is, inside this run's directory.
         if self.credential_free:
@@ -263,6 +272,13 @@ class SandboxIdentity:
             no_proxy = "localhost,127.0.0.1,::1,api,egress"
             out["NO_PROXY"] = out["no_proxy"] = no_proxy
         return out
+
+    def _inside(self, path: Any) -> bool:
+        try:
+            Path(str(path)).resolve().relative_to(self.run_dir.resolve())
+            return True
+        except (ValueError, OSError):
+            return False
 
     def cwd(self, cwd: Any) -> Optional[str]:
         """A sandboxed process can only stand inside its own run directory; a cwd outside it (a
@@ -488,7 +504,6 @@ def release(owner_id: str, *, project_id: Optional[str] = None) -> None:
                 _purge(orphan)
         return
     ident.killall()
-    _return_rotated_codex_login(ident)
     if project_id:
         with contextlib.suppress(Exception):
             from . import toolchains
@@ -524,9 +539,11 @@ def held(owner_id: str) -> Optional[SandboxIdentity]:
 
 
 def _seed_cli_logins(ident: SandboxIdentity) -> None:
-    """The coding CLIs' own logins (Codex's auth.json, Grok's), copied into the run's HOME: the
-    model credential is the one secret an agent is meant to hold (agent_env), and the control
-    plane's own CLI homes stay 0700 to the boss uid. Readable inside the run directory only."""
+    """The coding CLIs' own CONFIG (Grok's config.toml), copied into the run's HOME — and never
+    a login (BOSSAPP-1480). A subscription login stays in the control plane: each session gets a
+    run token at the model proxy and a session home with no login in it (subscription_shield).
+    Before this, Codex's auth.json, Grok's auth.json and the Claude CLI's access token were
+    copied here, readable by everything the run executed."""
     for env_name, sub in (("GROK_HOME", ".grok"),):
         src = (os.environ.get(env_name) or "").strip() or os.path.expanduser(f"~/{sub}")
         if not src or not os.path.isdir(src):
@@ -534,173 +551,55 @@ def _seed_cli_logins(ident: SandboxIdentity) -> None:
         dst = ident.home / sub
         dst.mkdir(exist_ok=True)
         os.chmod(dst, 0o2777)
-        for name in ("auth.json", "config.toml", "config.json", "credentials.json"):
+        for name in ("config.toml", "config.json"):
             path = os.path.join(src, name)
             if os.path.isfile(path):
                 shutil.copyfile(path, dst / name)
                 os.chmod(dst / name, 0o644)
-    _seed_codex_login(ident)
-    _seed_claude_login(ident)
-
-
-def _seed_codex_login(ident: SandboxIdentity) -> None:
-    """Codex's own ChatGPT login (`$CODEX_HOME/auth.json`), copied into the run's `.codex`,
-    kept fresh enough (codex_login.SEED_MIN_VALID_SECONDS) to outlive a build stage so the run's
-    own `codex` never needs to refresh — and is never trusted to. A login that cannot be made
-    fresh is NOT copied: the run's first `codex` start then fails cleanly ("not signed in"),
-    rather than seeding something that dies mid-run."""
-    from . import codex_login
-
-    src = codex_login._path(codex_login.AUTH_NAME)
-    if not os.path.isfile(src):
-        return
-    if codex_login.read_tokens() is None:
-        # Not a ChatGPT-oauth-shaped login (no tokens block, e.g. API-key mode): copy as-is,
-        # unmanaged — there is no refresh token to protect.
-        dst = ident.home / ".codex"
-        dst.mkdir(exist_ok=True)
-        os.chmod(dst, 0o2777)
-        shutil.copyfile(src, dst / "auth.json")
-        os.chmod(dst / "auth.json", 0o644)
-        return
-    ok, why = codex_login.ensure_fresh(codex_login.SEED_MIN_VALID_SECONDS)
-    if not ok:
-        log.warning("sandbox %s: the Codex login is not copied: %s", ident.key, why)
-        return
-    if codex_login.status().get("state") == codex_login.REFRESH_FAILED:
-        # A credential already flagged dead (mark_revoked) is not re-shared with a new
-        # sandbox just because its access token has not yet expired: a revoked refresh
-        # token is a person's problem to fix, not something to hand out again.
-        log.warning("sandbox %s: the Codex login is not copied: marked revoked", ident.key)
-        return
-    copy_codex_tokens(ident)
-
-
-#: What a run's copy carries in place of the real refresh token. A run must never be able to
-#: rotate the operator's Codex login: when a run's codex refreshed (it does on a 401), OpenAI
-#: rotated the token, the control plane kept the old one, and its next use revoked the whole
-#: login (boss-1, 2026-10-29 and 10-30). Measured on codex-cli 0.158.0 (boss-1, 2026-10-30),
-#: a copy with this in place of the refresh token works: `codex exec` answered with a fresh
-#: id_token (23:38 UTC) and with one expired 5 minutes (00:42 UTC), making 0 refresh attempts;
-#: a refresh it does attempt fails harmlessly with invalid_refresh_token.
-RUN_REFRESH_TOKEN = "rt_boss_run_copy_cannot_refresh"
-
-
-def copy_codex_tokens(ident: Any) -> bool:
-    """Copy the control plane's CURRENT Codex login into the run's `.codex`, replacing an
-    earlier copy, with the refresh token swapped for RUN_REFRESH_TOKEN: the run gets the access
-    and id tokens it needs and nothing that can rotate the real login. Only the control plane
-    refreshes (codex_login, under its lock). Never follows a symlink the run planted."""
-    from . import codex_login
-
-    try:
-        with open(codex_login._path(codex_login.AUTH_NAME), encoding="utf-8") as fh:
-            doc = json.load(fh)
-    except (OSError, ValueError):
-        return False
-    if not isinstance(doc, dict) or not isinstance(doc.get("tokens"), dict):
-        return False
-    doc = {**doc, "tokens": {**doc["tokens"], "refresh_token": RUN_REFRESH_TOKEN}}
-    dst = ident.home / ".codex"
-    dst.mkdir(exist_ok=True)
+    # Codex's state home (its sessions, so `codex exec resume` finds a thread across sessions):
+    # created empty; each session links to it from its own home (subscription_shield.codex).
+    codex = ident.home / ".codex"
+    codex.mkdir(exist_ok=True)
     with contextlib.suppress(OSError):
-        os.chmod(dst, 0o2777)
-    path = dst / "auth.json"
-    tmp = dst / f"auth.json.boss-{os.getpid()}-{threading.get_ident()}.tmp"
-    with contextlib.suppress(FileNotFoundError):
-        os.unlink(tmp)
-    # 0644, like every other login seeded here: the run's codex runs as the run's own uid, with
-    # no groups, and BOSS (uid boss) writes this file. 0600 left the run unable to read its own
-    # login, so codex fell back to API-key mode: "401 wss://api.openai.com/v1/responses" in every
-    # build (boss-1, 2026-10-30). The run's directory (<uid>:boss 2770) is what keeps others out.
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        json.dump(doc, fh)
-    os.chmod(tmp, 0o644)
-    os.replace(tmp, path)          # rename replaces a planted symlink itself, never its target
-    return True
+        os.chmod(codex, 0o2777)
+    _refresh_logins_ahead(ident)
 
 
-def reseed_codex_login(ident: "SandboxIdentity") -> None:
-    """Re-copy the control plane's CURRENT Codex tokens into a run's home, ahead of every
-    `codex` start inside the run (not only once at acquire()) — so a long, multi-stage build
-    follows the control plane's own refreshes rather than relying on a stale seed. A no-op
-    outside a sandboxed run."""
-    if current() is not ident:
-        return
-    from . import codex_login
+def _refresh_logins_ahead(ident: SandboxIdentity) -> None:
+    """A login about to expire is refreshed BY THE CONTROL PLANE before the run starts (the
+    proxy reads it on every request, so the run never needs a refresh of its own). Never fails
+    the run: a login that cannot be refreshed fails the first session that needs it, in words."""
+    from . import claude_login, codex_login
 
-    if codex_login.status().get("state") == codex_login.REFRESH_FAILED:
-        return
-    # Refresh an expiry- OR age-due login before copying, so a freshly reseeded run copy is never
-    # itself "due" (the same guarantee _seed_codex_login gives via ensure_fresh). Without this a
-    # reseed that ran before the background owner's tick caught an age-old login would hand the run
-    # a stale copy. ensure_fresh is a no-op when the login is already fresh.
-    codex_login.ensure_fresh(codex_login.SEED_MIN_VALID_SECONDS)
-    if codex_login.status().get("state") == codex_login.REFRESH_FAILED:
-        return
-    copy_codex_tokens(ident)
-
-
-_LOGIN_RETURN_LOCK = threading.Lock()
+    for owner, need in ((codex_login, codex_login.SEED_MIN_VALID_SECONDS),
+                        (claude_login, claude_login.SEED_MIN_VALID_SECONDS)):
+        try:
+            if owner is codex_login and codex_login.read_tokens() is None:
+                continue
+            if owner is claude_login and not _claude_cli_login_present():
+                continue
+            ok, why = owner.ensure_fresh(need)
+            if not ok:
+                log.warning("sandbox %s: %s", ident.key, why)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("sandbox %s: login refresh skipped: %s", ident.key, type(exc).__name__)
 
 
-def _return_rotated_codex_login(ident: "SandboxIdentity") -> None:
-    """A run's copy coming back rotated (a newer `last_refresh` than what was seeded) means the
-    run's own `codex` refreshed despite the guarantees in `_seed_codex_login`/`reseed_codex_login`
-    — a containment failure, never a legitimate rotation. The control plane's own file is NEVER
-    adopted from a run: that would mean trusting a refresh token a sandboxed, untrusted process
-    held. It is only ever logged and surfaced (codex_login.mark_revoked), so a login the run
-    exposed is treated as suspect rather than silently kept as current."""
-    from . import codex_login
-
-    with contextlib.suppress(Exception):
-        run_copy = ident.home / ".codex" / "auth.json"
-        target = Path(codex_login._path(codex_login.AUTH_NAME))
-        if not run_copy.is_file() or not target.is_file():
-            return
-        with _LOGIN_RETURN_LOCK:
-            ran, held = json.loads(run_copy.read_text()), json.loads(target.read_text())
-            if str(ran.get("last_refresh") or "") <= str(held.get("last_refresh") or ""):
-                return
-            log.warning("sandbox %s: codex's run copy came back rotated; containment failure, "
-                       "the control plane's login is kept as it is and the event is surfaced",
-                       ident.key)
-            codex_login.mark_revoked("run_refreshed")
-
-
-def _seed_claude_login(ident: SandboxIdentity) -> None:
-    """The Claude CLI's own login (`claude auth login` -> $CLAUDE_CONFIG_DIR/.credentials.json),
-    copied into the run's CLAUDE_CONFIG_DIR, which env() points at {home}/.claude. Without it a
-    sandboxed claude_code run on the cli_login credential starts "Not logged in".
-
-    The copy carries the access token WITHOUT the refresh token: a run that refreshed would rotate
-    the refresh token and sign the control plane's own login out. So the copy cannot refresh, and
-    must outlive a stage: a token with less than claude_login.SEED_MIN_VALID_SECONDS left is
-    refreshed first, by the one owner, under its lock (claude_login.ensure_fresh). A token that
-    cannot be made fresh is NOT copied (crun_50cf77b8 got a dead one and failed "401 OAuth access
-    token has expired"); the run's first `claude` start then fails with "Claude sign-in needed"
-    (claude_login.before_cli_start), and a run that never starts Claude is not held up by it.
-    Every later `claude` start in the run re-copies the current token, so a long build follows
-    the control plane's refreshes."""
-    from . import claude_login
+def _claude_cli_login_present() -> bool:
     from .claude_credential import cli_login_present
 
-    if not cli_login_present() or runs_on_long_lived_token():
-        # THE FALLBACK ONLY. A run on the long-lived subscription token (the console's Sign in
-        # stores it; claude_credential) gets it in its environment, ahead of any login file.
-        return
-    ok, why = claude_login.ensure_fresh(claude_login.SEED_MIN_VALID_SECONDS)
-    if not ok:
-        log.warning("sandbox %s: the Claude login is not copied: %s", ident.key, why)
-        return
-    copy_claude_access_token(ident)
+    return cli_login_present() and not runs_on_long_lived_token()
+
+
+#: What a session's Codex login carries in place of the real refresh token
+#: (subscription_shield.codex_run_login): nothing that can rotate the operator's login.
+RUN_REFRESH_TOKEN = "rt_boss_run_copy_cannot_refresh"
 
 
 def runs_on_long_lived_token() -> bool:
     """Does a `claude` child resolve to the subscription's long-lived token (kind subscription)
     rather than the CLI's own login? The same resolution the child runs. Never raises: a store
-    that did not answer is "no" (the login copy is the safe fallback)."""
+    that did not answer is "no"."""
     try:
         from ..config import get_settings
         from .claude_credential import KIND_SUBSCRIPTION, resolve_claude_credential
@@ -708,38 +607,6 @@ def runs_on_long_lived_token() -> bool:
         return resolve_claude_credential(get_settings()).kind == KIND_SUBSCRIPTION
     except Exception:  # noqa: BLE001
         return False
-
-
-def copy_claude_access_token(ident: Any) -> bool:
-    """Copy the control plane's CURRENT Claude access token (never the refresh token) into the
-    run's config dir, replacing an earlier copy. Never follows a symlink the run planted."""
-    from .claude_credential import cli_login_present
-
-    if not cli_login_present():
-        return False
-    home = os.path.expanduser(os.environ.get("CLAUDE_CONFIG_DIR", "") or "~/.claude")
-    try:
-        with open(os.path.join(home, ".credentials.json"), encoding="utf-8") as fh:
-            doc = json.load(fh)
-    except (OSError, ValueError):
-        return False
-    oauth = doc.get("claudeAiOauth") if isinstance(doc, dict) else None
-    if not isinstance(oauth, dict) or not oauth.get("accessToken"):
-        return False
-    dst = ident.home / ".claude"
-    dst.mkdir(exist_ok=True)
-    with contextlib.suppress(OSError):
-        os.chmod(dst, 0o2777)
-    path = dst / ".credentials.json"
-    tmp = dst / f".credentials.json.boss-{os.getpid()}-{threading.get_ident()}.tmp"
-    with contextlib.suppress(FileNotFoundError):
-        os.unlink(tmp)
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        json.dump({"claudeAiOauth": {k: v for k, v in oauth.items() if k != "refreshToken"}}, fh)
-    os.chmod(tmp, 0o644)
-    os.replace(tmp, path)          # rename replaces a planted symlink itself, never its target
-    return True
 
 
 def _seed_toolchains(ident: SandboxIdentity, project_id: Optional[str]) -> None:
