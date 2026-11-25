@@ -17,6 +17,7 @@ import { EnvelopesTab } from "./envelopes-tab";
 import { LimitsScreen } from "./limits-screen";
 import { GovernMeter } from "./meter";
 import { SelfFixTab } from "./self-fix-tab";
+import { PilotMetrics } from "./pilot-metrics";
 import { AutonomyPanel } from "../agent-ops/autonomy-panel";
 import { WherePeopleDecide } from "./decide-tab";
 import { SharingTab } from "./sharing-tab";
@@ -33,7 +34,7 @@ export const GOVERN_POLL_MS = 15_000;
  * Sharing and Self-fix. Old links keep working: ?tab=spend|envelopes|sharing|selffix open what
  * they opened, ?focus=… still lands on that row of the board.
  */
-type Tab = "overview" | "limits" | "autonomy" | "areas" | "board" | "spend" | "envelopes" | "sharing" | "selffix" | "infrastructure";
+type Tab = "overview" | "limits" | "autonomy" | "areas" | "board" | "spend" | "envelopes" | "sharing" | "selffix" | "infrastructure" | "pilot";
 const MAIN: { key: Tab; label: string; tip: string }[] = [
   { key: "overview", label: "Spend", tip: "How much, on which model and project" },
   { key: "limits", label: "Limits", tip: "Caps, what happens at them, per project" },
@@ -46,6 +47,9 @@ const MORE: { key: Tab; label: string; tip: string }[] = [
   // Autonomy tab; unchanged).
   { key: "areas", label: "Per-area autonomy", tip: "The A0–A3 grid per task class, always-on agents and today's agent budget" },
   { key: "spend", label: "Where the money went", tip: "By agent, by step, savings and top drivers" },
+  // PILOT METRICS (BOSSAPP-1292): review time, regressions caught, post-deploy errors fixed,
+  // before and after, with an export for the preview review.
+  { key: "pilot", label: "Pilot metrics", tip: "Review time, regressions caught, errors fixed: before and after, with export" },
   { key: "board", label: "Advanced limits", tip: "Pace, thresholds, review rounds, agents fixing failures, each build and start" },
   { key: "envelopes", label: "Envelopes", tip: "Allocations, initiatives and commitments" },
   { key: "sharing", label: "Sharing", tip: "What this install tells the BOSS project, and the switch" },
@@ -154,7 +158,7 @@ export function GovernHome({ projectId, actor }: { projectId: string; actor: str
           </span>
         </details>
       </header>
-      {tab !== "overview" && tab !== "limits" && tab !== "autonomy" && tab !== "areas" && tab !== "infrastructure" ? (
+      {tab !== "overview" && tab !== "limits" && tab !== "autonomy" && tab !== "areas" && tab !== "infrastructure" && tab !== "pilot" ? (
         <GovernMeter meter={data?.meter ?? null} error={view.error} onRetry={view.reload} />
       ) : null}
       {frozen ? (
@@ -181,6 +185,8 @@ export function GovernHome({ projectId, actor }: { projectId: string; actor: str
                       focus={focus} onSaved={view.reload} />
       ) : tab === "spend" ? (
         <SpendTab projectId={projectId} paused={!live} />
+      ) : tab === "pilot" ? (
+        <PilotMetrics projectId={projectId} actor={actor} />
       ) : tab === "sharing" ? (
         <SharingTab projectId={projectId} actor={actor} paused={!live} />
       ) : tab === "selffix" ? (
