@@ -91,6 +91,15 @@ class Probes:
 
         return check_repository(connection, settings, project_id, binding_id, actor="onboarding")
 
+    def check_repository_phased(self, engine: Any, settings: Any, project_id: str,
+                                binding_id: str) -> dict[str, Any]:
+        if type(self).check_repository is not Probes.check_repository:
+            return self.check_repository(None, settings, project_id, binding_id)  # type: ignore[arg-type]
+        from ..setup_actions import check_repository
+
+        return check_repository(None, settings, project_id, binding_id,
+                                actor="onboarding", db_engine=engine)
+
     def models_ready(self, connection: Connection, settings: Any, project_id: str
                      ) -> tuple[bool, str]:
         from .. import setup_view
@@ -454,8 +463,7 @@ def _repo_access(engine: Any, settings: Any, project_id: str, repo: Mapping[str,
     if str(repo.get("full_name") or "").startswith("local_"):
         return _local_access(engine, settings, project_id, repo)
     try:
-        with engine.begin() as c:
-            found = probes.check_repository(c, settings, project_id, repo["binding_id"])
+        found = probes.check_repository_phased(engine, settings, project_id, repo["binding_id"])
     except Exception as error:  # noqa: BLE001
         return _item("repo_access", "failed", owner="you",
                      detail=f"Could not check {repo['full_name']}: {_err(error)}",

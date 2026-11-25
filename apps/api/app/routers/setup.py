@@ -576,7 +576,7 @@ def build_setup_router(
         actor = actor_for(body.actor)
         with begin(engine) as connection:
             require_actor(connection, body.project_id, actor, "entitlement_manage")
-            openrouter_catalog.refresh(connection, get_settings(), body.project_id)
+        openrouter_catalog.refresh(None, get_settings(), body.project_id, db_engine=engine)
         from boss_engine.services.model_router import store as router_store
 
         router_store.invalidate(body.project_id)

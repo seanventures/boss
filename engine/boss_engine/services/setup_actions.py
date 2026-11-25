@@ -698,12 +698,18 @@ def _receipt(connection: Connection, project_id: str, effect_kind: str, scope: d
     return str(receipt["id"])
 
 
-def check_repository(connection: Connection, settings: Any, project_id: str,
+def check_repository(connection: Optional[Connection], settings: Any, project_id: str,
                      binding_id: str, *, actor: str = "ceo",
-                     http: Optional[Http] = None) -> dict[str, Any]:
+                     http: Optional[Http] = None, db_engine: Any = None) -> dict[str, Any]:
     """Run the three probes against one repository and record what they found."""
     from .core import emit_event
     from .receipts import ReceiptService
+
+    if connection is None:
+        if db_engine is None:
+            raise ValueError("check_repository requires either connection or db_engine")
+        return _check_repository_phased(db_engine, settings, project_id, binding_id,
+                                        actor=actor, http=http)
 
     if binding_id == "install":
         return _check_install_repository(connection, settings, project_id, actor=actor, http=http)
@@ -1485,11 +1491,17 @@ def _connect_key(connection: Connection, settings: Any, project_id: str, provide
     return {"ok": bool(proof.get("ok")), "source_id": source_id, "state": proof.get("state")}
 
 
-def check_model(connection: Connection, settings: Any, project_id: str, source_id: str, *,
-                actor: str = "ceo", http: Optional[Http] = None, prove_with=None
-                ) -> dict[str, Any]:
+def check_model(connection: Optional[Connection], settings: Any, project_id: str, source_id: str, *,
+                actor: str = "ceo", http: Optional[Http] = None, prove_with=None,
+                db_engine: Any = None) -> dict[str, Any]:
     """Ask one model source one tiny question again, and record the answer."""
     from .secret_backends import resolve_secret_ref
+
+    if connection is None:
+        if db_engine is None:
+            raise ValueError("check_model requires either connection or db_engine")
+        return _check_model_phased(db_engine, settings, project_id, source_id,
+                                   actor=actor, http=http, prove_with=prove_with)
 
     if source_id.startswith("env-"):
         provider = source_id[len("env-"):]
@@ -2166,8 +2178,7 @@ def run_checks_phased(engine: Any, settings: Any, project_id: str, target: str, 
     if target == "all":
         setup_view.forget_cached("cli")
         detect_local(settings, http=model_http)
-        with begin(engine) as c:
-            _verify_github_app(c)
+        _verify_github_app(None, db_engine=engine)
     for kind, item in todo:
         if kind == "repository":
             _check_repository_phased(engine, settings, project_id, item, actor=actor, http=http)
@@ -2212,12 +2223,20 @@ def record_flow_permissions(connection: Connection, connection_id: str, token: s
     return got
 
 
-def _verify_github_app(connection: Connection) -> None:
+def _verify_github_app(connection: Optional[Connection], *, db_engine: Any = None) -> None:
     """Test all also asks GitHub what the Setup-created App's installation actually accepted
     (identity/github_setup.verify): its answer is what GitHub access shows. Best effort: no App,
     no identity tables or GitHub down leaves the last answer standing."""
     from ..identity import github_setup
 
+    if connection is None and db_engine is not None:
+        try:
+            github_setup.verify(None, db_engine=db_engine)
+        except Exception:  # noqa: BLE001
+            pass
+        return
+
+    assert connection is not None
     point = connection.begin_nested()
     try:
         cfg = github_setup.app_config(connection)

@@ -439,8 +439,7 @@ def _openrouter_catalogue(connection: Any, settings: Any, project_id: Optional[s
 
     def run() -> None:
         try:
-            with db_engine.begin() as c:
-                cat.refresh(c, settings, project_id)
+            cat.refresh(None, settings, project_id, db_engine=db_engine)
         except Exception:  # noqa: BLE001
             log.warning("OpenRouter catalogue refresh failed", exc_info=True)
         finally:

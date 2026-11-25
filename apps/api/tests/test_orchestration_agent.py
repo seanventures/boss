@@ -424,3 +424,63 @@ def test_thread_messages_preserves_staged_offers_across_trailing_status_notes(cl
     )
     assert after_supersede.status_code == 200, after_supersede.text
     assert after_supersede.json()["proposed_actions"] == []
+
+
+def test_thread_messages_stops_offer_scan_at_new_user_turn(client, engine):
+    """BOSSAPP-1237: an unclicked offer from Turn 1 must not resurrect after Turn 2's
+    user prompt receives a plain-text assistant reply."""
+    from boss_engine.services.agent_service import AgentService
+
+    project_id = get_settings().default_project_id
+    svc = AgentService(get_settings())
+    offer = {
+        "id": "pa_turn1_1",
+        "tool": "decide",
+        "label": "Approve plan",
+        "args": {"decision_id": "dec_turn1", "action": "approve"},
+    }
+    with engine.begin() as connection:
+        thread = svc.start_or_load_thread(
+            connection, project_id=project_id, actor="executive_console",
+        )
+        thread_id = thread["id"]
+        svc.append_message(
+            connection, thread_id=thread_id, role="user",
+            content="Please revise decision dec_turn1.",
+        )
+        svc.append_message(
+            connection, thread_id=thread_id, role="assistant",
+            content="I staged an offer for dec_turn1.",
+            proposed_actions=[offer],
+        )
+        # Trailing assistant consent/status note in Turn 1 still keeps the offer alive.
+        svc.append_message(
+            connection, thread_id=thread_id, role="assistant",
+            content="Needs your consent first.",
+        )
+
+    same_turn = client.get(
+        f"/v1/agent/threads/{thread_id}/messages",
+        params={"project_id": project_id, "actor": "executive_console"},
+    )
+    assert same_turn.status_code == 200, same_turn.text
+    assert same_turn.json()["proposed_actions"] == [offer]
+
+    # Turn 2: operator moves on with a new user message and receives a plain-text reply.
+    with engine.begin() as connection:
+        svc.append_message(
+            connection, thread_id=thread_id, role="user",
+            content="Actually never mind, what is the build status?",
+        )
+        svc.append_message(
+            connection, thread_id=thread_id, role="assistant",
+            content="The build is green.",
+            proposed_actions=[],
+        )
+
+    next_turn = client.get(
+        f"/v1/agent/threads/{thread_id}/messages",
+        params={"project_id": project_id, "actor": "executive_console"},
+    )
+    assert next_turn.status_code == 200, next_turn.text
+    assert next_turn.json()["proposed_actions"] == []

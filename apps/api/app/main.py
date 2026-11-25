@@ -14620,7 +14620,12 @@ def get_agent_thread_messages_endpoint(thread_id: str, project_id: str, actor: s
         next_steps: list = []
         saw_assistant = False
         for message in reversed(history):
-            if message.get("role") != "assistant":
+            role = message.get("role")
+            if role != "assistant":
+                # A new user message ends the prior turn so unclicked offers from earlier turns
+                # never resurrect after an unrelated plain-text exchange.
+                if role == "user":
+                    break
                 continue
             if not saw_assistant:
                 # THE OTHER STANDING OFFER. A turn that stopped short ends with ONE resume press
@@ -18695,11 +18700,10 @@ def finish_channel_connection(
         # Google's own words. The commonest is access_denied, which simply means the operator
         # pressed Cancel — not a fault, and it should not read like one.
         return page("Not connected", f"Google returned: {error}", False)
-    with begin(engine) as connection:
-        try:
-            result = complete(connection, settings, code=code, state=state)
-        except ChannelOAuthError as failure:
-            return page("Could not connect", str(failure), False)
+    try:
+        result = complete(None, settings, code=code, state=state, db_engine=engine)
+    except ChannelOAuthError as failure:
+        return page("Could not connect", str(failure), False)
     channel = result.get("channel") or {}
     if channel.get("verified"):
         return page("Channel connected",
@@ -18782,11 +18786,12 @@ def disconnect_channel(
 
     with begin(engine) as connection:
         require_project_actor(connection, project_id, actor, "integration_manage")
-        try:
-            result = disconnect(connection, settings, project_id=project_id,
-                                connection_key=connection_key, actor=actor)
-        except ChannelOAuthError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
+    try:
+        result = disconnect(None, settings, project_id=project_id,
+                            connection_key=connection_key, actor=actor, db_engine=engine)
+    except ChannelOAuthError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    with begin(engine) as connection:
         _record_governed(
             connection,
             project_id=project_id,
@@ -18796,7 +18801,7 @@ def disconnect_channel(
             payload={"provider": provider, "connection_key": connection_key,
                      "status": result.get("status")},
         )
-        return result
+    return result
 
 
 @app.post("/v1/role-skills/sync")

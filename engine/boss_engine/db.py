@@ -769,11 +769,34 @@ _OPEN_TX_STACK: ContextVar[tuple[_TxFrame, ...]] = ContextVar("boss_open_tx_stac
 
 STRICT_TX_GUARD_ENV = "BOSS_STRICT_TX_GUARD"
 
-_MUTATING_SQL = re.compile(
-    r"^\s*(?:--[^\n]*\n\s*|/\*.*?\*/\s*)*"
-    r"(INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|REPLACE|MERGE|TRUNCATE)\b",
-    re.I | re.S,
+_SQL_COMMENT_OR_LITERAL = re.compile(
+    r"--[^\n]*"
+    r"|/\*.*?\*/"
+    r"|'(?:''|[^'])*'",
+    re.S,
 )
+_LEADING_MUTATING_SQL = re.compile(
+    r"^\s*(?:INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|REPLACE|MERGE|TRUNCATE)\b",
+    re.I,
+)
+_CTE_MUTATING_SQL = re.compile(
+    r"^\s*WITH\b[\s\S]*?\b(?:INSERT|UPDATE|DELETE|MERGE)\b",
+    re.I,
+)
+_LOCKING_SELECT_SQL = re.compile(
+    r"\bFOR\s+(?:NO\s+KEY\s+)?UPDATE\b",
+    re.I,
+)
+
+
+def _is_mutating_sql(statement: str) -> bool:
+    """True for DML/DDL, CTE writes (`WITH ... INSERT/UPDATE/DELETE/MERGE`), or row-locking reads."""
+    cleaned = _SQL_COMMENT_OR_LITERAL.sub(" ", statement or "")
+    return bool(
+        _LEADING_MUTATING_SQL.match(cleaned)
+        or _CTE_MUTATING_SQL.match(cleaned)
+        or _LOCKING_SELECT_SQL.search(cleaned)
+    )
 
 
 class WaitInWrittenTransactionError(RuntimeError):
@@ -813,9 +836,10 @@ def open_transactions() -> tuple:
 def begin(engine: Optional[Engine] = None):
     active_engine = engine or get_engine()
     with active_engine.begin() as connection:
-        frame = _TxFrame(connection=connection)
         _OPEN_TRANSACTIONS.set(_OPEN_TRANSACTIONS.get() + (connection,))
-        _OPEN_TX_STACK.set(_OPEN_TX_STACK.get() + (frame,))
+        stack = _OPEN_TX_STACK.get()
+        if not any(f.connection is connection for f in stack):
+            _OPEN_TX_STACK.set(stack + (_TxFrame(connection=connection),))
         try:
             yield connection
         finally:
@@ -1085,6 +1109,9 @@ def _drop_registered_in(conn, name: str) -> None:  # noqa: ANN001
 
 
 def _on_begin(conn) -> None:  # noqa: ANN001
+    stack = _OPEN_TX_STACK.get()
+    if not any(f.connection is conn for f in stack):
+        _OPEN_TX_STACK.set(stack + (_TxFrame(connection=conn),))
     if not _BACKGROUND.get() or conn.dialect.name != "postgresql":
         return
     statements = background_limits_sql()
@@ -1137,18 +1164,21 @@ def _on_commit(conn) -> None:  # noqa: ANN001
             except Exception:  # noqa: BLE001
                 pass
         raise
+    finally:
+        _OPEN_TX_STACK.set(tuple(f for f in _OPEN_TX_STACK.get() if f.connection is not conn))
     _AT_COMMIT.pop(conn, None)
 
 
 def _on_rollback(conn) -> None:  # noqa: ANN001
     _AT_COMMIT.pop(conn, None)
+    _OPEN_TX_STACK.set(tuple(f for f in _OPEN_TX_STACK.get() if f.connection is not conn))
 
 
 def _on_before_cursor_execute(conn, _cursor, statement, _parameters, _context, _executemany) -> None:  # noqa: ANN001
     stack = _OPEN_TX_STACK.get()
     if not stack:
         return
-    if _MUTATING_SQL.match(str(statement or "")):
+    if _is_mutating_sql(str(statement or "")):
         for frame in stack:
             if frame.connection is conn:
                 frame.written = True
