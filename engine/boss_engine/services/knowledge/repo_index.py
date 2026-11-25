@@ -399,16 +399,15 @@ def _checkout(engine: Any, settings: Any, *, project_id: str, repo: str, branch:
     """BOSS's own clone path (as the security scan's): the project's GitHub credential through
     identity.runs.repo_access, in git's environment only — never in the URL or .git/config."""
     from ...identity import runs as identity_runs
-    from ..github_connections import github_token_for
+    from ..github_connections import github_credential
 
     owner, _, name = repo.partition("/")
 
-    def _token() -> str:
-        with engine.begin() as c:
-            return github_token_for(c, settings, project_id, owner, name) or ""
 
     with identity_runs.repo_access(engine, host=getattr(settings, "target_repo_host", "github") or "github",
-                                   owner=owner, repo=name, project_id=project_id, token=_token) as access:
+                                   owner=owner, repo=name, project_id=project_id,
+                                   credential=github_credential(engine, settings, project_id,
+                                                                owner, name)) as access:
         return fetch_branch(access.url, branch, dest, env=access.boss_environ(), timeout=timeout)
 
 

@@ -344,7 +344,7 @@ class EphemeralSandbox:
         self, owner: str, repo: str, *, base_branch: str = "main",
         work_branch: Optional[str] = None, token: Optional[str] = None,
         repo_host: str = "github", egress: Optional[Any] = None,
-        warm_dir: Optional[Any] = None, reuse_warm: bool = False,
+        warm_dir: Optional[Any] = None, reuse_warm: bool = False, web_base: str = "",
     ) -> Path:
         """Credentialed Git sees only a private checkout, before any workload can touch it.
 
@@ -364,6 +364,7 @@ class EphemeralSandbox:
             return self._provision_warm(
                 owner, repo, base_branch=base_branch, work_branch=work_branch,
                 token=token, repo_host=repo_host, egress=egress, warm_dir=Path(warm_dir),
+                web_base=web_base,
             )
         from .sandbox_identity import current, mode
 
@@ -385,7 +386,7 @@ class EphemeralSandbox:
         self._provisioning = True
         try:
             self._provision(owner, repo, base_branch=base_branch, work_branch=work_branch,
-                            token=token, repo_host=repo_host, egress=egress)
+                            token=token, repo_host=repo_host, egress=egress, web_base=web_base)
             assert self.path is not None
             # THE TREE THIS RUN STARTS FROM (base branch, or the resumed checkpoint): the diff is
             # measured from here, so an agent's own `git commit` cannot hide its work
@@ -440,8 +441,12 @@ class EphemeralSandbox:
         token: Optional[str] = None,
         repo_host: str = "github",
         egress: Optional[Any] = None,
+        web_base: str = "",
     ) -> Path:
-        """Shallow-clone ``owner/repo`` into a fresh temp dir and check out a work
+        """``web_base`` is the GitHub web origin ``token`` belongs to (github_access_for's base,
+        through github_urls.web_base_for): required for a GitHub clone without egress.
+
+        Shallow-clone ``owner/repo`` into a fresh temp dir and check out a work
         branch. ``token`` (PAT or short-lived GitHub-App installation token) is
         used only for the clone URL and is never written to disk.
 
@@ -462,9 +467,10 @@ class EphemeralSandbox:
         # §7.10): the URL is credential-free and the token rides in the environment of this
         # object's OWN git processes only (never the agent's commands, never `.git/config`).
         from .repo_host import git_access
-        legacy_access = git_access(repo_host, owner, repo, token or "")
-        clone_url = legacy_access.url
-        self._git_env = dict(legacy_access.env)
+        legacy_access = git_access(repo_host, owner, repo, token or "", web_base=web_base) \
+            if egress is None else None
+        clone_url = legacy_access.url if legacy_access is not None else ""
+        self._git_env = dict(legacy_access.env) if legacy_access is not None else {}
         egress_config: list[str] = []
         if egress is not None:
             token = None
@@ -569,6 +575,7 @@ class EphemeralSandbox:
     def _provision_warm(
         self, owner: str, repo: str, *, base_branch: str, work_branch: Optional[str],
         token: Optional[str], repo_host: str, egress: Optional[Any], warm_dir: Path,
+        web_base: str = "",
     ) -> Path:
         """Reuse a lineage's already-cloned checkout: fetch+reset in place, no `git clone`,
         no fresh install/DB provisioning — that is the whole point of a warm sandbox."""
@@ -590,8 +597,9 @@ class EphemeralSandbox:
         self._owns_dir = False  # the lineage, not this run, owns this directory's lifetime
         self.base_branch = base_branch
         self.warm_reused = True
-        legacy_access = git_access(repo_host, owner, repo, token or "")
-        self._git_env = dict(legacy_access.env)
+        legacy_access = git_access(repo_host, owner, repo, token or "", web_base=web_base) \
+            if egress is None else None
+        self._git_env = dict(legacy_access.env) if legacy_access is not None else {}
         self._git_own_config: list[str] = []
         if egress is not None:
             token = None

@@ -994,7 +994,9 @@ def commit_export_to_repo(
     automatic path — the repo copy is a convenience mirror, not an authority."""
     from .github_adapter import GitHubAdapter
 
-    adapter = GitHubAdapter(settings)
+    from ..identity import github_urls
+
+    adapter = GitHubAdapter(settings, api_base_url=github_urls.api_base())  # the install's host
     target_path = path or f"infra/boss/{changeset_id}.tf.json"
     adapter.ensure_branch(branch)
     commit_sha = adapter.upsert_file(

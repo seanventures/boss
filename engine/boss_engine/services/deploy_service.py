@@ -28,7 +28,7 @@ from . import owned_process
 from ..db import begin
 from .code_task_service import load_code_task_run
 from .core import emit_event
-from .github_connections import github_token_for
+from .github_connections import github_access_for
 
 
 def _app_name(repo: str, name: Optional[str]) -> str:
@@ -602,7 +602,7 @@ def declared_refusal(work: Path, manifest: Optional[str]) -> Optional[str]:
 
 
 def _build_dist(settings: Settings, owner: str, repo: str, branch: str, *, token: str = "",
-                changed: Optional[list[str]] = None,
+                web_base: str, changed: Optional[list[str]] = None,
                 ref: Optional[str] = None) -> tuple[Path, str, str, Optional[str]]:
     """Prepare the deployable payload for a run's branch.
 
@@ -622,8 +622,9 @@ def _build_dist(settings: Settings, owner: str, repo: str, branch: str, *, token
     # The app's own build (npm ci, its scripts) then runs in this checkout, so the token rides
     # in git's environment only — never in the URL or `.git/config` (IDENTITY.md §7.10).
     from .repo_host import git_access  # BOSS-267: host-aware clone
+    # `web_base` is the origin `token` belongs to (github_access_for's pair, BOSSAPP-1286).
     access = git_access(getattr(settings, "target_repo_host", "github") or "github",
-                        owner, repo, token or "")
+                        owner, repo, token or "", web_base=web_base)
     url, genv = access.url, access.environ()
     work = Path(tempfile.mkdtemp(prefix="boss-deploy-"))
     if ref:
@@ -1008,14 +1009,18 @@ def deploy_ssh(engine, settings: Settings, run_id: str, *, host: str, user: str 
             changed = hint + [c for c in (changed or []) if c not in hint]
         from . import local_repo as _local_repo
 
-        _tok = ""
+        _tok, _web = "", ""
         if not _local_repo.is_local_owner(owner):
             # A local project's repository is a bare repository here (git_access gives its
-            # file:// URL): no GitHub credential exists for it, and none is asked for.
+            # file:// URL): no GitHub credential exists for it, and none is asked for. The token
+            # and its host come together (BOSSAPP-1286).
+            from ..identity import github_urls as _gu
+
             with begin(engine) as _c:
-                _tok = github_token_for(_c, settings, project_id, owner, repo)
+                _tok, _api = github_access_for(_c, settings, project_id, owner, repo)
+            _web = _gu.web_base_for(_api)
         work, mode, entry, sha = _build_dist(settings, owner, repo, branch,     # 1 build
-                                             token=_tok, changed=changed, ref=ref)
+                                             token=_tok, web_base=_web, changed=changed, ref=ref)
         # The SHA that was actually checked out, captured inside _build_dist while the clone
         # still existed. Reporting the request rather than the result is how commit_ref came to
         # name a build that was never running.

@@ -2066,6 +2066,46 @@ def github_access_for(connection: Connection, settings: Settings, project_id: st
         return "", api_base_for_repository(connection, project_id, owner, repo)
 
 
+def build_credential(connection: Connection, settings: Settings, project_id: Optional[str],
+                     owner: str, repo: str) -> tuple[str, str]:
+    """(token, REST base) a BUILD clones and pushes with. On the install's own GitHub host the
+    shared decision stays (github_app_adapter.repo_token: the App's installation token where it
+    covers the repository, else the PAT, else the project's registered credential); on any
+    other host (a GHES connection) only that host's credential, from the one resolver. The two
+    are never mixed (BOSSAPP-1286)."""
+    base = api_base_for_repository(connection, project_id, owner, repo)
+    if base == github_urls.api_base():
+        from .github_app_adapter import repo_token
+
+        try:
+            return repo_token(settings, owner, repo, connection=connection,
+                              project_id=project_id or "") or "", base
+        except Exception:  # noqa: BLE001 — the resolver below is the fallback
+            logger.debug("github: repo_token failed for %s/%s", owner, repo, exc_info=True)
+    return github_access_for(connection, settings, project_id or "", owner, repo)
+
+
+def github_credential(engine: Any, settings: Settings, project_id: Optional[str], owner: str,
+                      repo: str, *, prefer_app: bool = False) -> Callable[[], tuple[str, str]]:
+    """A deferred (token, REST base) pair for identity.runs.repo_access and the like: resolved
+    when called, in its own transaction, by github_access_for. ``prefer_app`` uses the install's
+    App installation token instead — only when the repository's host IS the install's."""
+
+    def pair() -> tuple[str, str]:
+        with engine.begin() as connection:
+            token, base = github_access_for(connection, settings, project_id or "", owner, repo)
+        if prefer_app and github_urls.api_base(base) == github_urls.api_base():
+            try:
+                from .github_app_adapter import repo_token
+
+                token = repo_token(settings, owner, repo) or token
+            except Exception:  # noqa: BLE001 — the paired token still answers
+                logger.debug("github: no App token for %s/%s", owner, repo, exc_info=True)
+        return token or "", base
+
+    return pair
+
+
 def github_token_for(connection: Connection, settings: Settings, project_id: str, owner: str,
                      repo: str) -> str:
     """The credential this project's repository is actually connected with.

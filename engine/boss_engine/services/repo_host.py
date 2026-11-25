@@ -49,17 +49,26 @@ class RepoHost(Protocol):
     def get_pull_request_diff(self, pull_number: int) -> str: ...
 
 
-def _github_web(web_base: str = "") -> str:
-    """The GitHub web origin a clone goes to: the connection's (GHES), else the install's."""
-    from ..identity import github_urls
+class MissingGitHubHost(ValueError):
+    """A GitHub git call named no host. The host comes WITH the credential (BOSSAPP-1286):
+    github_connections.github_access_for -> (token, api base) -> github_urls.web_base_for(base).
+    There is no default: a default host is how a GHES token reached github.com."""
 
-    return (web_base or github_urls.web_base()).rstrip("/")
+
+def _github_web(web_base: str) -> str:
+    """The GitHub web origin a clone goes to: the one the caller's credential belongs to."""
+    web = str(web_base or "").strip().rstrip("/")
+    if not web:
+        raise MissingGitHubHost("a GitHub clone needs the web origin its credential belongs to "
+                                "(github_urls.web_base_for(api_base)); there is no default host")
+    return web
 
 
-def clone_url_for(host: str, owner: str, repo: str, token: str = "", web_base: str = "") -> str:
+def clone_url_for(host: str, owner: str, repo: str, token: str = "", *, web_base: str) -> str:
     """The authenticated HTTPS clone URL for a host — the ONE place that knows each host's
     credential form (previously duplicated, GitHub-only, across 4+ call sites). ``web_base`` is
-    a GitHub Enterprise Server origin (``https://ghe.example``); empty means the install's."""
+    REQUIRED for GitHub: the web origin of the host ``token`` belongs to (github.com or a GHES
+    ``https://ghe.example``); it is ignored for other hosts (pass "")."""
     kind = (host or "github").strip().lower()
     if kind == "github":
         web = _github_web(web_base)
@@ -147,8 +156,9 @@ def git_config_env(pairs) -> dict:
     return env
 
 
-def git_access(host: str, owner: str, repo: str, token: str = "", web_base: str = "") -> GitAccess:
-    """The legacy (token) path, without leaking the token into the checkout or argv."""
+def git_access(host: str, owner: str, repo: str, token: str = "", *, web_base: str) -> GitAccess:
+    """The legacy (token) path, without leaking the token into the checkout or argv.
+    ``web_base`` is REQUIRED for GitHub — the origin ``token`` belongs to (see clone_url_for)."""
     import base64
 
     kind = (host or "github").strip().lower()
@@ -187,7 +197,10 @@ def make_repo_host(settings, *, host: Optional[str] = None,
 
         return LocalGitAdapter(settings, owner=str(owner or ""), repo=str(repo or ""))
     if kind == "github":
-        return GitHubAdapter(settings)
+        from ..identity import github_urls
+
+        # The settings-bound target repository: the install's credentials on the install's host.
+        return GitHubAdapter(settings, api_base_url=github_urls.api_base())
     if kind == "bitbucket":
         from .bitbucket_adapter import BitbucketAdapter
         return BitbucketAdapter(settings, workspace=owner, repo_slug=repo)

@@ -60,14 +60,15 @@ def mirror_ready(owner: str, repo: str, settings: Any = None) -> bool:
     return (local_repo.mirror_path(owner, repo, settings) / "HEAD").is_file()
 
 
-def access_for(egress: Any, owner: str, repo: str, token: Optional[str]) -> tuple[str, dict[str, str]]:
+def access_for(egress: Any, owner: str, repo: str, token: Optional[str], *,
+               web_base: str) -> tuple[str, dict[str, str]]:
     """(url, env) for BOSS's own git to fetch the repository, the way the build's clone reaches
     it: through egress (its config and BOSS's own credential helper) or with the token in git's
     environment only — never in the URL or on disk."""
     from .repo_host import git_access, git_config_env
 
     if egress is None:
-        access = git_access("github", owner, repo, token or "")
+        access = git_access("github", owner, repo, token or "", web_base=web_base)
         return access.url, dict(access.env)
     pairs = [(k, v) for k, v in (getattr(egress, "git_config", None) or []) if k != "credential.helper"]
     own = getattr(egress, "own_git", None)
@@ -210,13 +211,17 @@ GitHubFactory = Callable[[Any, str, str], tuple[Any, Any]]
 
 def _default_github(c: Any, settings: Any, project_id: str, owner: str, repo: str) -> tuple[Any, Any]:
     """GitHub's adapter for the repository and how BOSS's own git reaches it (url, env)."""
+    from ..identity import github_urls
     from .github_adapter import GitHubAdapter
-    from .github_connections import github_token_for
+    from .github_connections import github_access_for
     from .repo_host import git_access
 
-    token = github_token_for(c, settings, project_id, owner, repo)
-    adapter = GitHubAdapter(settings, owner=owner, repo=repo, token=token or None)
-    return adapter, git_access("github", owner, repo, token or "")
+    # The token and its host together (BOSSAPP-1286): the adapter and the git push go there.
+    token, api_base = github_access_for(c, settings, project_id, owner, repo)
+    adapter = GitHubAdapter(settings, owner=owner, repo=repo, token=token or None,
+                            api_base_url=api_base)
+    return adapter, git_access("github", owner, repo, token or "",
+                               web_base=github_urls.web_base_for(api_base))
 
 
 def attempt(engine: Any, settings: Any, pending_id: str, *,

@@ -97,8 +97,16 @@ class GitHubAdapter:
         owner: Optional[str] = None,
         repo: Optional[str] = None,
         token: Optional[str] = None,
-        api_base_url: str = "",
+        api_base_url: str,
     ):
+        """``api_base_url`` is REQUIRED (BOSSAPP-1286): the REST base the token belongs to —
+        github_connections.github_access_for gives the pair; the install's own credentials (no
+        ``token``: its App or BOSS_GITHUB_TOKEN) go with ``github_urls.api_base()``. There is no
+        default base, so a token can never be paired with the wrong host by omission."""
+        if not str(api_base_url or "").strip():
+            raise IntegrationConfigurationError(
+                "GitHubAdapter needs the API base its credential belongs to "
+                "(github_access_for gives the token and the base together).")
         self.settings = settings
         self.owner = (owner or settings.target_github_owner).strip()
         self.repo = (repo or settings.target_github_repo).strip()
@@ -123,10 +131,16 @@ class GitHubAdapter:
             GitHubAppAdapter, GitHubAppConfigurationError, repo_token,
         )
 
-        if self._app is None:
-            self._app = GitHubAppAdapter(self.settings, api_base_url=self.api_base_url)
         if self._token_override:
             return self._token_override
+        if self.api_base_url != github_urls.api_base():
+            # The install's App and token belong to the install's GitHub, never to another host
+            # (a GHES connection's base): no credential rather than the wrong one.
+            raise IntegrationConfigurationError(
+                f"No GitHub credential for {github_urls.web_host(self.api_base_url)} was given "
+                f"for {self.repository_full_name}; connect that host's repository in Setup.")
+        if self._app is None:
+            self._app = GitHubAppAdapter(self.settings, api_base_url=self.api_base_url)
         try:
             # One shared decision: App token where the installation covers this repo, PAT
             # where it does not. Choosing here independently is how BOSS came to be unable to

@@ -1122,17 +1122,20 @@ def _egress_git_access(access: CloneAccess) -> Any:
 
 @contextlib.contextmanager
 def repo_access(engine: Any, *, host: str, owner: str, repo: str, project_id: Optional[str],
-                token: Any = "", role_key: Optional[str] = None) -> Iterator[Any]:
+                credential: Any, role_key: Optional[str] = None) -> Iterator[Any]:
     """How BOSS-side code (an agent's shell workspace, the read tools' clones, a preview or deploy
     workdir) runs git against a repo, as a `repo_host.GitAccess`.
 
     With the egress proxy on and a delegated principal in context (a person's grant, or a run
     acting under one), the clone goes through boss-egress under a short run of its own (the
     run's agent for that person: run_<…>/git:<id>), and no GitHub token exists on this side; a
-    refused authority raises, it never falls back to the shared token. Otherwise the legacy token
-    (`token`, a string or a callable) is used — carried in git's environment only, never in the
-    URL, argv or the checkout's `.git/config`, so the code that later runs in that directory can
-    never read it."""
+    refused authority raises, it never falls back to the shared token. Otherwise the legacy
+    credential is used — carried in git's environment only, never in the URL, argv or the
+    checkout's `.git/config`, so the code that later runs in that directory can never read it.
+
+    ``credential`` is a (token, api base) PAIR, or a callable returning one
+    (github_connections.github_credential): the token and the host it belongs to come together,
+    so the clone goes to that host and nowhere else (BOSSAPP-1286). ("", base) is anonymous."""
     from . import lineage
     from ..services.repo_host import git_access
 
@@ -1142,7 +1145,7 @@ def repo_access(engine: Any, *, host: str, owner: str, repo: str, project_id: Op
 
     if kind == "local" or is_local_owner(owner):
         # BOSSAPP-918: a repository BOSS keeps on this machine — file://, no credential, no egress.
-        yield git_access("local", owner, repo, "")
+        yield git_access("local", owner, repo, "", web_base="")
         return
     if kind == "github" and engine is not None and egress_enabled() and acting is not None and acting.grant_id:
         shim = None
@@ -1193,8 +1196,9 @@ def repo_access(engine: Any, *, host: str, owner: str, repo: str, project_id: Op
             _no_authority("no grant and no system repo reader (is boss-egress configured?)",
                           task_run_id=f"git:{owner}/{repo}")
         _note_shared_token_use(engine, owner=owner, repo=repo, project_id=project_id)
-    raw = token() if callable(token) else token
-    yield git_access(kind, owner, repo, raw or "")
+    raw, api_base = credential() if callable(credential) else credential
+    yield git_access(kind, owner, repo, raw or "",
+                     web_base=github_urls.web_base_for(api_base) if kind == "github" else "")
 
 
 #: BOSS's own read-only GitHub reader: clones and reads for work that acts for nobody (previews of a

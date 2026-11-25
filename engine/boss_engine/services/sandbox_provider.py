@@ -169,6 +169,7 @@ class Sandbox(Protocol):
         token: Optional[str] = None,
         warm_dir: Optional[object] = None,
         reuse_warm: bool = False,
+        web_base: str = "",
     ) -> object: ...
 
     def run(self, command: str, *, timeout: Optional[int] = None): ...

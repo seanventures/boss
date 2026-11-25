@@ -52,7 +52,7 @@ class BitbucketAdapter:
     def clone_url(self, token: str) -> str:
         from .repo_host import clone_url_for
         return clone_url_for("bitbucket", self.workspace, self.repo_slug,
-                             token or self._token_for_clone())
+                             token or self._token_for_clone(), web_base="")
 
     def _token_for_clone(self) -> str:
         return getattr(self.settings, "bitbucket_token", "") or ""

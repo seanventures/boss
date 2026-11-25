@@ -362,7 +362,7 @@ class SSHSandbox:
         self, owner: str, repo: str, *, base_branch: str = "main",
         work_branch: Optional[str] = None, token: Optional[str] = None,
         repo_host: str = "github", egress: Optional[Any] = None,
-        warm_dir: Optional[Any] = None, reuse_warm: bool = False,
+        warm_dir: Optional[Any] = None, reuse_warm: bool = False, web_base: str = "",
     ) -> PurePosixPath:
         """Create the remote workdir and clone exactly what EphemeralSandbox
         clones locally — same credential rules (egress first, the token path's
@@ -380,7 +380,7 @@ class SSHSandbox:
         self.work_branch = work_branch or f"boss/{self.task_id}"
 
         clone_url, config_pairs, cred_env = self._clone_access(
-            owner, repo, token=token, repo_host=repo_host, egress=egress)
+            owner, repo, token=token, repo_host=repo_host, egress=egress, web_base=web_base)
         if clone_url.startswith("file://"):
             raise _setup_error(
                 f"{owner}/{repo} is a local repository on the control-plane box; "
@@ -435,7 +435,7 @@ echo BOSS_PROVISIONED
         return self.path
 
     def _clone_access(self, owner: str, repo: str, *, token: Optional[str],
-                      repo_host: str, egress: Optional[Any]):
+                      repo_host: str, egress: Optional[Any], web_base: str = ""):
         """(url, git -c pairs, credential env) — mirrors EphemeralSandbox._provision:
         egress wins (credential-free URL + the own-git helper fed by
         BOSS_EGR_CREDENTIAL in the environment), else repo_host.git_access's
@@ -451,7 +451,7 @@ echo BOSS_PROVISIONED
             return egress.clone_url, pairs, env
         from .repo_host import git_access
 
-        access = git_access(repo_host, owner, repo, token or "")
+        access = git_access(repo_host, owner, repo, token or "", web_base=web_base)
         return access.url, [], dict(access.env)
 
     # -- commands -------------------------------------------------------------

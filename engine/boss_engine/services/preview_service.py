@@ -35,7 +35,7 @@ from ..db import begin, spawn_thread
 from .code_task_service import load_code_task_run
 from .core import emit_event, make_id
 from .verification_target import NPM_INSTALL_CMD
-from .github_connections import github_token_for
+from .github_connections import github_credential, github_token_for
 from .execution_substrate import ExecutionSubstrate, normalize_build_substrate
 from .sandbox_provider import MicroVMProvider
 
@@ -3304,9 +3304,6 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
                 capture_output=True, text=True, timeout=120, env=_local_repo._env(),  # noqa: SLF001
                 **({"umask": 0} if ident is not None else {}))
 
-        def _token() -> str:
-            with begin(engine) as _c:
-                return github_token_for(_c, settings, project_id, owner, repo) or ""
 
         _run_ref = {**run, "id": run.get("id") or run_id}
         waiting_mirror = github_wait_mirror(_run_ref, settings)
@@ -3314,7 +3311,9 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
             clone = _clone_mirror(waiting_mirror)
         else:
             with _identity_runs.repo_access(engine, host=getattr(settings, "target_repo_host", "github") or "github",
-                                            owner=owner, repo=repo, project_id=project_id, token=_token) as _access:
+                                            owner=owner, repo=repo, project_id=project_id,
+                                            credential=github_credential(
+                                                engine, settings, project_id, owner, repo)) as _access:
                 clone_url = _access.url
                 clone = owned_process.boss_run(["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(workdir)],
                                    capture_output=True, text=True, timeout=120, env=_access.boss_environ(),
@@ -3672,12 +3671,11 @@ def start_container_preview(engine, settings: Settings, run_id: str, *, ttl_minu
     # §7.10) — through egress under a delegated principal, else in git's environment only.
     from boss_engine.identity import runs as _identity_runs
 
-    def _token() -> str:
-        with begin(engine) as _c:
-            return github_token_for(_c, settings, project_id, owner, repo) or ""
 
     with _identity_runs.repo_access(engine, host=getattr(settings, "target_repo_host", "github") or "github",
-                                    owner=owner, repo=repo, project_id=project_id, token=_token) as _access:
+                                    owner=owner, repo=repo, project_id=project_id,
+                                            credential=github_credential(
+                                                engine, settings, project_id, owner, repo)) as _access:
         clone_url = _access.url
         clone = owned_process.boss_run(["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(workdir)],
                            capture_output=True, text=True, timeout=120, env=_access.boss_environ())
@@ -3898,12 +3896,11 @@ def _respawn_process_preview(engine, settings: Settings, preview_id: str) -> Non
         # §7.10) — through egress under a delegated principal, else in git's environment only.
         from boss_engine.identity import runs as _identity_runs
 
-        def _token() -> str:
-            with begin(engine) as _c:
-                return github_token_for(_c, settings, project_id, owner, repo) or ""
 
         with _identity_runs.repo_access(engine, host=getattr(settings, "target_repo_host", "github") or "github",
-                                        owner=owner, repo=repo, project_id=project_id, token=_token) as _access:
+                                        owner=owner, repo=repo, project_id=project_id,
+                                            credential=github_credential(
+                                                engine, settings, project_id, owner, repo)) as _access:
             clone_url = _access.url
             clone = owned_process.run(
             ["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(workdir)],

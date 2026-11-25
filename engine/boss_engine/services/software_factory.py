@@ -10,6 +10,7 @@ from typing import Any, Optional
 
 import httpx
 
+from ..identity import github_urls
 from ..config import Settings
 from ..ports import (
     BudgetPort,
@@ -284,7 +285,9 @@ def _adapter_for(settings: Settings, owner: Optional[str], repo: Optional[str]) 
         from .local_repo_host import LocalGitAdapter
 
         return LocalGitAdapter(settings, owner=str(owner), repo=str(repo))
-    return GitHubAdapter(settings, owner=owner, repo=repo)
+    return GitHubAdapter(settings, owner=owner, repo=repo,
+                         # the install's credentials (no token given) go to the install's host
+                         api_base_url=github_urls.api_base())
 
 
 def _host_writes_on_caller(method):
@@ -454,7 +457,8 @@ class SoftwareFactoryService:
             # Registry fell back to BOSS_TARGET_GITHUB_* — still the legacy plane.
             if plane["owner"] and plane["repo"]:
                 self.github = GitHubAdapter(
-                    self.settings, owner=plane["owner"], repo=plane["repo"]
+                    self.settings, owner=plane["owner"], repo=plane["repo"],
+                    api_base_url=github_urls.api_base(),   # install credentials, install host
                 )
                 self.pipeline = make_pipeline_adapter(self.settings, github=self.github)
             self.github_plane = "legacy_env"
@@ -478,7 +482,8 @@ class SoftwareFactoryService:
             # Binding present but credentials/connection not usable — fall back honestly.
             if plane["owner"] and plane["repo"]:
                 self.github = GitHubAdapter(
-                    self.settings, owner=plane["owner"], repo=plane["repo"]
+                    self.settings, owner=plane["owner"], repo=plane["repo"],
+                    api_base_url=github_urls.api_base(),   # install credentials, install host
                 )
                 self.pipeline = make_pipeline_adapter(self.settings, github=self.github)
             self.github_plane = "legacy_env"

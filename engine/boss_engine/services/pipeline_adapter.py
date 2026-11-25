@@ -121,7 +121,10 @@ class GitHubActionsPipeline:
 
     def __init__(self, settings: Settings, github: Optional[GitHubAdapter] = None):
         self.settings = settings
-        self.github = github or GitHubAdapter(settings)
+        from ..identity import github_urls
+
+        # Without an adapter given: the install's target repo, its credentials, its host.
+        self.github = github or GitHubAdapter(settings, api_base_url=github_urls.api_base())
 
     @property
     def repository(self) -> str:

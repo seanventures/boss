@@ -61,7 +61,11 @@ class SkillExecutorContext:
 
     @property
     def github(self) -> Any:
-        return self.github_adapter or GitHubAdapter(self.settings)
+        from ..identity import github_urls
+
+        # The install's target repository: its credentials on the install's host.
+        return self.github_adapter or GitHubAdapter(self.settings,
+                                                    api_base_url=github_urls.api_base())
 
     @property
     def deployments(self) -> Any:

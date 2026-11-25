@@ -137,17 +137,16 @@ def _git(args: list[str], *, cwd: Path, env: Optional[dict] = None, timeout: int
 def fetch_github(engine: Any, settings: Any, project_id: str, loc: Locator, ref: str) -> Fetched:
     """One commit of the repository, through BOSS's clone path; the SKILL.md and its siblings."""
     from ..identity import runs as identity_runs
-    from .github_connections import github_token_for
+    from .github_connections import github_credential
 
-    def _token() -> str:
-        with engine.begin() as c:
-            return github_token_for(c, settings, project_id, loc.owner, loc.repo) or ""
 
     work = Path(tempfile.mkdtemp(prefix="boss-skill-src-"))
     try:
         with identity_runs.repo_access(
                 engine, host=getattr(settings, "target_repo_host", "github") or "github",
-                owner=loc.owner, repo=loc.repo, project_id=project_id, token=_token) as access:
+                owner=loc.owner, repo=loc.repo, project_id=project_id,
+                credential=github_credential(engine, settings, project_id, loc.owner,
+                                             loc.repo)) as access:
             env = access.boss_environ()
             _git(["init", "--quiet"], cwd=work)
             want = ref or "HEAD"

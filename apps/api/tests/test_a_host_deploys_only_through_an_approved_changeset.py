@@ -93,7 +93,7 @@ def hosted(client, engine, monkeypatch, tmp_path):
     # NARROW: only deploy_service's process runner. Patching owned_process.run itself would
     # fake every subprocess in the API (git, docker, the preview runner) for this test.
     monkeypatch.setattr(deploy_service, "owned_process", SimpleNamespace(run=host.run))
-    monkeypatch.setattr(deploy_service, "github_token_for", lambda *a, **k: "")
+    monkeypatch.setattr(deploy_service, "github_access_for", lambda *a, **k: ("", "https://api.github.com"))
 
     def build(settings, owner, repo, branch, **kwargs):
         work = Path(tmp_path) / f"work-{uuid4().hex[:6]}"

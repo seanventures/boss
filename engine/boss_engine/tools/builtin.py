@@ -6372,6 +6372,21 @@ def _role_name_candidates(wanted: str) -> list[str]:
     return out
 
 
+def _github_access_for(ctx: Any, project_id: str, repo: str = "") -> tuple[str, str]:
+    """(token, REST base) for this project's repository, chosen together by the one resolver
+    (github_connections.github_access_for, BOSSAPP-1286): a clone goes to the host the token
+    belongs to. ("", install base) when nothing resolves."""
+    from ..identity import github_urls
+    from ..services.github_connections import github_access_for
+
+    owner, _, name = (repo or "").partition("/")
+    try:
+        with ctx.begin() as connection:
+            return github_access_for(connection, ctx.settings, project_id, owner, name)
+    except Exception:  # noqa: BLE001 — no token is an answer; the clone reports it
+        return "", github_urls.api_base()
+
+
 def _github_token_for(ctx: Any, project_id: str, repo: str = "") -> str:
     """The credential this project's repository is connected with.
 
@@ -6412,8 +6427,8 @@ def _project_repository_bound(ctx: Any, project_id: str, repo: str) -> bool:
 
 
 def _repo_root(settings: Any, repo: str,
-               ref: _Optional[str] = None,
-               token: str = "") -> tuple[_Optional[str], _Optional[str]]:
+               ref: _Optional[str] = None, *,
+               credential: tuple[str, str]) -> tuple[_Optional[str], _Optional[str]]:
     """The local path for `repo` at `ref`, cloning it if we do not have it yet.
 
     `repo` is "boss" for BOSS's own source, or "owner/name" (or bare "name", which
@@ -6451,9 +6466,16 @@ def _repo_root(settings: Any, repo: str,
 
         # The checkout is what the read tools hand an agent: the token rides in git's
         # environment only, never in the URL or `.git/config` (IDENTITY.md §7.10).
+        from ..identity import github_urls
+
+        # The token and its host come together (`credential`, BOSSAPP-1286). The install's
+        # own token is a fallback only on the install's own host.
+        token, api_base = credential
+        if not token and github_urls.api_base(api_base) == github_urls.api_base():
+            token = getattr(settings, "github_token", "") or ""
         access = git_access(getattr(settings, "target_repo_host", "github") or "github",
-                            owner, short,
-                            token or (getattr(settings, "github_token", "") or ""))
+                            owner, short, token or "",
+                            web_base=github_urls.web_base_for(api_base))
         url, genv = access.url, access.environ()
         if _ABBREVIATED_SHA.fullmatch(ref):
             return _abbreviated_sha_root(dest, url, genv, ref, f"{owner}/{short}")
@@ -6667,9 +6689,15 @@ def _source_for_run(ctx: Any, run_id: str, *, project_id: str) -> tuple[
     try:
         from ..services.repo_host import git_access
 
+        from ..identity import github_urls
+
+        _owner = owner or (getattr(settings, "target_github_owner", "") or "")
+        token, api_base = _github_access_for(ctx, project_id, f"{_owner}/{short}")
+        if not token and github_urls.api_base(api_base) == github_urls.api_base():
+            token = getattr(settings, "github_token", "") or ""
         access = git_access(getattr(settings, "target_repo_host", "github") or "github",
-                            owner or (getattr(settings, "target_github_owner", "") or ""),
-                            short, getattr(settings, "github_token", "") or "")
+                            _owner, short, token or "",
+                            web_base=github_urls.web_base_for(api_base))
         for candidate in [c for c in candidates if c]:
             probe = _subprocess.run(["git", "ls-remote", "--heads", access.url, candidate],
                                     capture_output=True, text=True, timeout=60, env=access.environ())
@@ -9099,7 +9127,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         if err:
             return _source_refusal(ctx, args, project_id, err)
         root, err = _repo_root(ctx.settings, repo, ref,
-                               token=_github_token_for(ctx, project_id, repo))
+                               credential=_github_access_for(ctx, project_id, repo))
         if root is None:
             return {"ok": False, "error": err}
         base = _safe_path(args.get("path") or "", root)
@@ -9163,7 +9191,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         if err:
             return _source_refusal(ctx, args, project_id, err)
         root, err = _repo_root(ctx.settings, repo, ref,
-                               token=_github_token_for(ctx, project_id, repo))
+                               credential=_github_access_for(ctx, project_id, repo))
         if root is None:
             return {"ok": False, "error": err}
         base = _safe_path(args.get("path") or "", root)
@@ -9213,7 +9241,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         if err:
             return _source_refusal(ctx, args, project_id, err)
         root, err = _repo_root(ctx.settings, repo, ref,
-                               token=_github_token_for(ctx, project_id, repo))
+                               credential=_github_access_for(ctx, project_id, repo))
         if root is None:
             return {"ok": False, "error": err}
         path = _safe_path(args["file"], root)
@@ -10177,7 +10205,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         if err:
             return _source_refusal(ctx, args, project_id, err)
         root, err = _repo_root(ctx.settings, repo, ref,
-                               token=_github_token_for(ctx, project_id, repo))
+                               credential=_github_access_for(ctx, project_id, repo))
         if root is None:
             return {"ok": False, "error": err}
         # AN IMAGE IS NOT A CHECKOUT. BOSS's own source is COPYed into the container without

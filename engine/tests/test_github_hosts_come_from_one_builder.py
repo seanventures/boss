@@ -135,7 +135,7 @@ def test_a_ghes_host_joins_the_hosts_a_github_credential_may_reach():
 def test_clone_urls_and_the_credential_header_follow_the_host():
     from boss_engine.services.repo_host import clone_url_for, git_access
 
-    assert clone_url_for("github", "o", "r") == "https://github.com/o/r.git"
+    assert clone_url_for("github", "o", "r", web_base=G.PUBLIC_WEB) == "https://github.com/o/r.git"
     assert clone_url_for("github", "o", "r", web_base="https://ghe.example") == \
         "https://ghe.example/o/r.git"
     access = git_access("github", "o", "r", "t0k", web_base="https://ghe.example")
@@ -164,3 +164,62 @@ def test_a_ghes_install_host_is_fenced_and_routed_by_egress(monkeypatch):
         monkeypatch.delenv(G.API_BASE_ENV)
         for name in ("boss_egress.connect", "boss_egress.proxy"):
             sys.modules.pop(name, None)
+
+
+# ---- a token never travels without its host (BOSSAPP-1286 review) ----------------------------------
+
+#: call name -> the keyword that carries the host the credential belongs to.
+_HOST_KEYWORD = {"GitHubAdapter": "api_base_url", "git_access": "web_base",
+                 "clone_url_for": "web_base", "repo_access": "credential", "access_for": "web_base",
+                 "_build_dist": "web_base"}
+
+
+def _calls_missing_their_host():
+    out = []
+    for rel, path in _files():
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+            keywords = {k.arg for k in node.keywords}
+            if None in keywords:              # **kwargs: forwarded by a wrapper
+                continue
+            if name == "access_for" and not (isinstance(func, ast.Attribute)
+                                             and getattr(func.value, "id", "") == "_gho"):
+                continue                      # only github_outage.access_for
+            if name == "repo_access" and not isinstance(func, ast.Attribute):
+                continue                      # only identity.runs.repo_access (called as runs.…)
+            want = _HOST_KEYWORD.get(name)
+            if want and want not in keywords:
+                out.append(f"{rel}:{node.lineno}: {name}(...) without {want}=")
+            if name == "provision" and "token" in keywords and "web_base" not in keywords:
+                out.append(f"{rel}:{node.lineno}: provision(token=...) without web_base=")
+    return out
+
+
+def test_no_github_call_pairs_a_token_with_a_default_host():
+    """GitHubAdapter, git_access, clone_url_for, identity.runs.repo_access and a sandbox's
+    provision(token=…) must be told the host the credential belongs to; there is no default
+    (a default host is how a GHES token reached github.com and github.com's reached GHES)."""
+    missing = _calls_missing_their_host()
+    assert not missing, ("pass the host with the token (github_connections.github_access_for "
+                         "returns the pair):\n" + "\n".join(missing))
+
+
+def test_the_signatures_have_no_default_host():
+    import inspect
+
+    from boss_engine.identity import runs
+    from boss_engine.services.github_adapter import GitHubAdapter
+    from boss_engine.services.repo_host import MissingGitHubHost, clone_url_for, git_access
+
+    for fn, kw in ((GitHubAdapter.__init__, "api_base_url"), (git_access, "web_base"),
+                   (clone_url_for, "web_base"), (runs.repo_access.__wrapped__, "credential")):
+        assert inspect.signature(fn).parameters[kw].default is inspect.Parameter.empty, fn
+    with pytest.raises(MissingGitHubHost):
+        git_access("github", "o", "r", "t0k", web_base="")

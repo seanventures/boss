@@ -126,12 +126,12 @@ def _github_access(owner: str, repo: str):
     BOSS's audited system repo reader (the org's GitHub App or token; a public repository it does
     not cover is read anonymously there). Never the CONNECT proxy, which refuses GitHub by design.
     Without egress (a developer's machine) it is git straight to GitHub, anonymously."""
-    from boss_engine.identity import runs as identity_runs
+    from boss_engine.identity import github_urls, runs as identity_runs
 
     from . import main
 
     return identity_runs.repo_access(main.engine, host="github", owner=owner, repo=repo,
-                                     project_id=None, token="")
+                                     project_id=None, credential=("", github_urls.api_base()))
 
 
 def build_templates_router() -> APIRouter:
