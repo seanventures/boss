@@ -292,8 +292,14 @@ def _error_kind(status_code: int, data: dict) -> str:
 
 def refresh_if_due(min_valid: float = REFRESH_WINDOW_SECONDS, *, post: Optional[Post] = None,
                    now: Optional[Callable[[], float]] = None,
-                   lock_timeout: float = LOCK_TIMEOUT_SECONDS) -> dict[str, Any]:
+                   lock_timeout: float = LOCK_TIMEOUT_SECONDS, home: Optional[str] = None,
+                   after_refresh: Optional[Callable[[], bool]] = None) -> dict[str, Any]:
     """Refresh the control plane's Codex login if it has less than `min_valid` seconds left.
+
+    `home` names another login BOSS owns the same way — a pool seat's own CODEX_HOME
+    (subscription_pools): its session cannot refresh either, so BOSS refreshes it here, under
+    that home's lock, and `after_refresh` writes the new generation back to where that login is
+    kept (the seat's store key). Default: the single login, synced to its own store key.
 
     Also refreshes when the login's `last_refresh` is older than REFRESH_AGE_INTERVAL_SECONDS
     minus REFRESH_AGE_MARGIN_SECONDS: some codex builds refresh on last_refresh age alone, and a
@@ -302,7 +308,7 @@ def refresh_if_due(min_valid: float = REFRESH_WINDOW_SECONDS, *, post: Optional[
     Returns {"result": ...}: fresh, refreshed, failed, busy, absent, no_refresh_token.
     Never raises for a refusal."""
     clock = now or time.time
-    if read_tokens() is None:
+    if read_tokens(home) is None:
         return {"result": "absent"}
     age_due_at = REFRESH_AGE_INTERVAL_SECONDS - REFRESH_AGE_MARGIN_SECONDS
 
@@ -318,10 +324,10 @@ def refresh_if_due(min_valid: float = REFRESH_WINDOW_SECONDS, *, post: Optional[
             return True, left
         return False, left
 
-    due, left = _due(read_auth())
+    due, left = _due(read_auth(home))
     if not due:
         return {"result": "fresh"} if left is None else {"result": "fresh", "seconds_left": int(left)}
-    home = config_dir()
+    home = home or config_dir()
     with _flock(home, fcntl.LOCK_EX, lock_timeout) as mine:
         if not mine:
             return {"result": "busy"}
@@ -371,8 +377,19 @@ def refresh_if_due(min_valid: float = REFRESH_WINDOW_SECONDS, *, post: Optional[
         _write_private(_path(AUTH_NAME, home), json.dumps(doc))
         _record(home, state=OK, error=None)
         _log.info("Codex login refreshed; valid for %d minutes", int(expires_in // 60))
-        return {"result": "refreshed", "seconds_left": int(expires_in),
-                "store_synced": _store_sync_after_refresh()}
+        synced = _store_sync_after_refresh() if after_refresh is None else _sync_with(after_refresh)
+        return {"result": "refreshed", "seconds_left": int(expires_in), "store_synced": synced}
+
+
+def _sync_with(after_refresh: Callable[[], bool]) -> bool:
+    """A non-default login's write-back (a pool seat's store key). Never raises: the refresh
+    stands either way, as in _store_sync_after_refresh."""
+    try:
+        return bool(after_refresh())
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("a refreshed Codex login was NOT written back to its store key (%s)",
+                     type(exc).__name__)
+        return False
 
 
 def _store_sync_after_refresh() -> bool:
@@ -409,14 +426,16 @@ def _store_sync_after_refresh() -> bool:
 
 def ensure_fresh(min_valid: float, *, post: Optional[Post] = None,
                  now: Optional[Callable[[], float]] = None,
-                 lock_timeout: float = LOCK_TIMEOUT_SECONDS) -> tuple[bool, str]:
+                 lock_timeout: float = LOCK_TIMEOUT_SECONDS, home: Optional[str] = None,
+                 after_refresh: Optional[Callable[[], bool]] = None) -> tuple[bool, str]:
     """(True, "") when the login holds a token with at least `min_valid` seconds left —
     refreshing it under the lock when it does not — else (False, why in plain words)."""
     clock = now or time.time
-    out = refresh_if_due(min_valid, post=post, now=clock, lock_timeout=lock_timeout)
+    out = refresh_if_due(min_valid, post=post, now=clock, lock_timeout=lock_timeout, home=home,
+                         after_refresh=after_refresh)
     if out["result"] == "absent":
         return False, "Codex is not signed in on this server"
-    left = seconds_left(read_tokens(), clock())
+    left = seconds_left(read_tokens(home), clock())
     if left is None or left >= min_valid:
         return True, ""
     mins = max(0, int(left // 60))
@@ -428,16 +447,19 @@ def ensure_fresh(min_valid: float, *, post: Optional[Post] = None,
     return False, f"the Codex login's token {when} and BOSS could not refresh it: {why}"
 
 
-def before_cli_start(*, post: Optional[Post] = None) -> None:
-    """Called ahead of every control-plane `codex` start (the proof turn, a direct probe):
-    refreshes a token about to expire so `codex` never has to, and raises CodexSignInNeeded
-    instead of starting it on an expired, unrefreshable login."""
-    if read_tokens() is None:
+def before_cli_start(*, post: Optional[Post] = None, home: Optional[str] = None,
+                     after_refresh: Optional[Callable[[], bool]] = None) -> None:
+    """Called ahead of every control-plane `codex` start (the proof turn, a direct probe, a
+    shielded session — of the single login or, with `home`, a pool seat's): refreshes a token
+    about to expire so `codex` never has to, and raises CodexSignInNeeded instead of starting it
+    on an expired, unrefreshable login."""
+    if read_tokens(home) is None:
         return
-    ok, why = ensure_fresh(CLI_START_MIN_VALID_SECONDS, post=post)
-    with _flock(config_dir(), fcntl.LOCK_SH, LOCK_TIMEOUT_SECONDS):
+    ok, why = ensure_fresh(CLI_START_MIN_VALID_SECONDS, post=post, home=home,
+                           after_refresh=after_refresh)
+    with _flock(home or config_dir(), fcntl.LOCK_SH, LOCK_TIMEOUT_SECONDS):
         pass                                     # a refresh in progress finishes first
-    left = seconds_left(read_tokens())
+    left = seconds_left(read_tokens(home))
     if not ok and left is not None and left <= 0:
         raise CodexSignInNeeded(sign_in_words(why))
 

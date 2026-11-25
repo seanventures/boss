@@ -1726,10 +1726,14 @@ class GenericCliCodeAgent:
         # CLI gets a run token at the proxy and a session home with no login in it.
         from . import subscription_shield
 
+        # A POOL SEAT's login is BOSS's to refresh (its session never can), and a refresh goes
+        # back to the SEAT's store key — never the single login's.
+        seat_sync = (self.remember_rotated_credential
+                     if getattr(self, "_pool", None) is not None else None)
         subscription_shield.shield(
             self.spec.name, env, settings=self.settings, cli_login=cli_login,
             default_home=self.cli_home() if self.spec.home_env or self.spec.default_home
-            else "")
+            else "", seat_sync=seat_sync)
         return _model_proxy.shield_env(env, settings=self.settings)
 
     def _argv(self, prompt: str, *, read_only: bool, model: Optional[str],

@@ -333,8 +333,14 @@ def codex_run_login(real: dict, token: str, *, ttl: float, now: Optional[float] 
                 "%Y-%m-%dT%H:%M:%S.%fZ")}
 
 
-def _codex_source(login_path: str) -> Callable[[], str]:
+def _codex_source(login_path: str, *,
+                  refresh: Optional[Callable[[], Any]] = None) -> Callable[[], str]:
+    """The login's CURRENT access token, read per request. With `refresh` (a pool seat's login,
+    which no background owner keeps fresh) the token is refreshed first when it is due."""
     def read() -> str:
+        if refresh is not None:
+            with contextlib.suppress(Exception):
+                refresh()
         tokens = (_read_json(login_path) or {}).get("tokens")
         return str((tokens or {}).get("access_token") or "") if isinstance(tokens, dict) else ""
     return read
@@ -351,11 +357,18 @@ def _load_toml(path: str) -> dict:
 
 
 def codex(env: dict, *, settings: Any = None, default_home: str = "~/.codex",
-          proxy: Optional[model_proxy.ModelProxy] = None) -> dict:
+          proxy: Optional[model_proxy.ModelProxy] = None,
+          seat_sync: Optional[Callable[[], bool]] = None) -> dict:
     """`env` with the Codex login it would use moved behind the proxy: a session CODEX_HOME
     holding a run-token login and a provider at the proxy. An API-key route is left to
     model_proxy.shield_env (a key kept in the login FILE is moved to OPENAI_API_KEY for it), and
-    a home with no login is left as it is (the CLI then says it is not signed in)."""
+    a home with no login is left as it is (the CLI then says it is not signed in).
+
+    `seat_sync` marks the login as a POOL SEAT's (subscription_pools: CODEX_HOME is the seat's
+    own home) and writes a refreshed generation back to the seat's store key. The session can
+    never refresh (its login carries RUN_REFRESH_TOKEN), so BOSS refreshes the seat's real login
+    in the seat's home — before the session starts and, when due, on a request — and the proxy
+    attaches that seat's current token, never the single login's."""
     if any((env.get(n) or "").strip() for n in ("OPENAI_API_KEY", "CODEX_API_KEY")):
         return env
     source_home = os.path.expanduser(env.get("CODEX_HOME") or default_home)
@@ -392,8 +405,19 @@ def codex(env: dict, *, settings: Any = None, default_home: str = "~/.codex",
             env["CODEX_HOME"] = _session_home("codex-session-", state_home, sandbox)
             return env
         _codex_before_start()
+        refresh = None
+    elif seat_sync is not None:
+        seat_home = os.path.dirname(login_path)
+        if _codex_login_dead(seat_home):
+            log.warning("codex: the pool seat's login is marked refused; the session gets none")
+            env["CODEX_HOME"] = _session_home("codex-session-", state_home, sandbox)
+            return env
+        _codex_before_start(home=seat_home, after_refresh=seat_sync)
+        refresh = _codex_seat_refresher(seat_home, seat_sync)
+    else:
+        refresh = None
     issued = _issue("codex_subscription", settings=settings, proxy=proxy,
-                    source=_codex_source(login_path))
+                    source=_codex_source(login_path, refresh=refresh))
     config["model_provider"] = CODEX_PROVIDER
     providers = dict(config.get("model_providers") or {})
     providers[CODEX_PROVIDER] = {"name": "ChatGPT via BOSS", "base_url": issued.base_url,
@@ -414,18 +438,34 @@ def _default_codex_login() -> str:
     return codex_login._path(codex_login.AUTH_NAME)
 
 
-def _codex_login_dead() -> bool:
+def _codex_login_dead(home: Optional[str] = None) -> bool:
     from . import codex_login
 
-    return codex_login.failure_stands()
+    return codex_login.failure_stands(home)
 
 
-def _codex_before_start() -> None:
-    """The control plane's own login is refreshed BEFORE a session needs it (codex_login): the
-    session cannot refresh, and the proxy reads the refreshed token on each request."""
+def _codex_before_start(home: Optional[str] = None,
+                        after_refresh: Optional[Callable[[], bool]] = None) -> None:
+    """The control plane's own login (or, with `home`, a pool seat's) is refreshed BEFORE a
+    session needs it (codex_login): the session cannot refresh, and the proxy reads the
+    refreshed token on each request."""
     from . import codex_login
 
-    codex_login.before_cli_start()
+    if home is None:
+        codex_login.before_cli_start()
+    else:
+        codex_login.before_cli_start(home=home, after_refresh=after_refresh)
+
+
+def _codex_seat_refresher(home: str, after_refresh: Callable[[], bool]) -> Callable[[], Any]:
+    """A seat's refresh while its session runs: no background thread owns a seat's login (the
+    single login's is codex_login's thread), so the proxy refreshes it when due, under the
+    seat home's lock. Cheap when fresh: one read of the file."""
+    def refresh() -> Any:
+        from . import codex_login
+
+        return codex_login.refresh_if_due(home=home, after_refresh=after_refresh)
+    return refresh
 
 
 # ── Grok ──────────────────────────────────────────────────────────────────────────────────────
@@ -474,13 +514,15 @@ def grok(env: dict, *, settings: Any = None, default_home: str = "~/.grok",
 # ── one entry for every engine ────────────────────────────────────────────────────────────────
 
 def shield(engine: str, env: dict, *, settings: Any = None, default_home: str = "",
-           cli_login: bool = False, proxy: Optional[model_proxy.ModelProxy] = None) -> dict:
+           cli_login: bool = False, proxy: Optional[model_proxy.ModelProxy] = None,
+           seat_sync: Optional[Callable[[], bool]] = None) -> dict:
     """The one call an engine's session environment goes through (model-agnostic: the same
     guarantee for every engine). Another engine's Claude token is proxied the same way (a CLI
-    that reads it reads ANTHROPIC_BASE_URL too); any other raw login variable is dropped."""
+    that reads it reads ANTHROPIC_BASE_URL too); any other raw login variable is dropped.
+    `seat_sync`: the run is on a pool seat's Codex login (see `codex`)."""
     if engine == "codex":
         return codex(env, settings=settings, default_home=default_home or "~/.codex",
-                     proxy=proxy)
+                     proxy=proxy, seat_sync=seat_sync)
     if engine == "grok":
         return grok(env, settings=settings, default_home=default_home or "~/.grok", proxy=proxy)
     claude(env, settings=settings, cli_login=cli_login and engine == "claude_code", proxy=proxy)
