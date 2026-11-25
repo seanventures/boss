@@ -2798,133 +2798,137 @@ class SoftwareFactoryService:
                         )
             except Exception:  # noqa: BLE001 — non-DB / fake connection test double
                 _superseded_pending = []
-        decision_id = None if set_member else self.decisions.create_blocking(
-            connection,
-            project_id,
-            task_id,
-            (f"Checks failing — decide the merge: {_work_title} ({_ref})"
-             if card_checks else
-             f"Approve follow-up fix after #{follow_up['after']}: "
-             f"{pr_follow_up.work_name(title)} ({_ref})" if follow_up else
-             f"{_quality_bar.ready_words(_work_title, _followups)}"
-             f" ({_ref})" if _followups else
-             f"Approve code change: {_work_title} ({_ref})"),
-            {
-                # FIRST, so nothing it carries can replace the action below. Its keys are the
-                # sealed evidence keys (ui/ux/capability_evidence) and collide with none here;
-                # the decision-producer scan refuses a spread placed after "action".
-                **sealed_evidence,
-                "action": "review_pull_request",
-                "summary": (
-                    (_checks_failing.decision_summary(card_checks) + " "
-                     if card_checks else "")
-                    + (f"Ready to merge — {_quality_bar.followup_words(_followups)}. "
-                       f"{'They' if _followups['count'] != 1 else 'It'} did not block at the "
-                       f"{_followups['bar']} quality bar and "
-                       f"{'are' if _followups['count'] != 1 else 'is'} listed on the "
-                       f"{'change' if _local else 'pull request'}. "
-                       if _followups else "")
-                    + f"BOSS built “{title}” in a sandbox and opened "
-                    + (f"change #{pr.number}. " if _local else f"pull request #{pr.number}. ")
-                    + (f"{_acceptance_gate.headline(acceptance)}. "
-                       if _acceptance_gate.headline(acceptance) else "")
-                    + _acceptance_gate.card_words(card_checks, acceptance, validation_status)
-                    + (f" — {validation_summary}" if validation_summary else "")
-                    + (". Review the change in BOSS (it is on this machine), then approve to merge "
-                       "into the default branch or reject to send back."
-                       if getattr(self.github, "kind", "") == "local" else
-                       ". Review the diff on GitHub, then approve to merge or reject to send back.")
-                    + (f" {ci_changed['ci_changed_note']}" if ci_changed else "")
-                ),
-                "head_sha": branch_head_sha,
-                # What ci_gate.refuse_approval reads: a CI change needs a PERSON's approval.
-                "ci_changed": bool(ci_changed),
-                "ci_changed_files": ci_changed.get("ci_changed_files") or [],
-                "ci_findings": ci_changed.get("ci_findings") or [],
-                "requires_person_approval": bool(ci_changed),
-                "artifact_id": artifact_id,
-                "diff_artifact_id": diff_artifact_id,
-                "test_report_artifact_id": test_report_artifact_id,
-                "security_review_artifact_id": security_review_artifact_id,
-                "release_go_no_go_artifact_id": release_go_no_go_artifact_id,
-                "receipt_id": pr_receipt["id"],
-                "pull_request_url": pr.url,
-                "branch_name": branch_name,
-                # The branch the PR merges INTO (None: the host's default). An approval delegate
-                # merges only into the project's bound release branch (approval_delegations).
-                "pr_base": pr_base,
-                "title": _work_title,
-                "validation_status": validation_status,
-                "validation_summary": validation_summary,
-                "validation_sources": validation_sources,
-                "release_go_no_go_status": release_go_no_go["status"],
-                "local_validation_receipt_id": local_validation_receipt_id,
-                "agent_module_id": (
-                    module_spec.get("id") if isinstance(module_spec, dict) else None
-                ),
-                "quality_gate_id": quality_gate_id,
-                "run_id": run_id,
-                "no_auto_merge": True,
-                # What the merge card leads with, and what makes its approval a person's stated
-                # decision rather than a click (decisions.transition, checks_failing.py).
-                **({_checks_failing.KEY: {
-                    **card_checks,
-                    "draft": bool(checks_failing) and bool(
-                        getattr(self.github, "supports_draft_pull_requests", False)),
-                    "label": _checks_failing.LABEL}} if card_checks else {}),
-                # The must-have table (acceptance_gate.py): per item met/partial/missing with
-                # file evidence, from the latest acceptance check of this PR's lineage.
-                **({_acceptance_gate.KEY: {
-                    "verdict": acceptance.get("verdict"), "counts": acceptance.get("counts"),
-                    "items": [{k: i.get(k) for k in ("n", "text", "status", "evidence",
-                                                     "source", "judgement")}
-                              for i in acceptance.get("items") or []],
-                    # Judgement (taste) items answered PARTIAL: shown, never failing.
-                    "advisory": list(acceptance.get("advisory") or []),
-                    "stack": acceptance.get("stack") or {},
-                    "why": acceptance.get("why") or "",
-                    "items_dropped": int(acceptance.get("items_dropped") or 0),
-                    "table": _acceptance_gate.must_have_table(acceptance),
-                    # WORSE THAN ITS PARENT (BOSSAPP-1330): said, with the parent's verdict and
-                    # table beside this one — never quietly replaced by the worse check.
-                    **({"regressed_vs_parent": _acceptance_gate.regression_card(
-                        acceptance["regressed_vs_parent"])}
-                       if acceptance.get("regressed_vs_parent") else {})}}
-                   if isinstance(acceptance, dict) and acceptance.get("verdict")
-                   # Never checked against the root's must-haves: the card says so.
-                   else {_acceptance_gate.KEY: {"verdict": "not_checked", "items": []}}
-                   if run_id else {}),
-                # The knowledge the card is "based on": facts matched to this change's symbols
-                # (knowledge/runtime.remember_written_files). Empty when none matched.
-                "cited_fact_ids": citations,
-                # THE FOLLOW-UPS (quality_bar.merge_followups): what the card lists under its
-                # normal Merge, P1 first, and whether BOSS's follow-up build is fixing them.
-                **({_quality_bar.CARD_KEY: _followups} if _followups else {}),
-                # THE PACKET the card and the change page render (SPEC §1.4, §1.5).
-                **({_review_packet.KEY: _packet} if _packet else {}),
-                # A follow-up after the merge of #N (pr_follow_up): named, with its reason.
-                **({"follow_up_of": follow_up["after"],
-                    "follow_up_reason": follow_up.get("reason")} if follow_up else {}),
-            },
-            {},
-            "merge_decision_required",
-        )
-        if _superseded_pending and hasattr(connection, "begin_nested"):
-            try:
-                from sqlalchemy import bindparam as _bindparam
+        decision_id = None
+        try:
+            if not set_member:
+                decision_id = self.decisions.create_blocking(
+                    connection,
+                    project_id,
+                    task_id,
+                    (f"Checks failing — decide the merge: {_work_title} ({_ref})"
+                     if card_checks else
+                     f"Approve follow-up fix after #{follow_up['after']}: "
+                     f"{pr_follow_up.work_name(title)} ({_ref})" if follow_up else
+                     f"{_quality_bar.ready_words(_work_title, _followups)}"
+                     f" ({_ref})" if _followups else
+                     f"Approve code change: {_work_title} ({_ref})"),
+                    {
+                        # FIRST, so nothing it carries can replace the action below. Its keys are the
+                        # sealed evidence keys (ui/ux/capability_evidence) and collide with none here;
+                        # the decision-producer scan refuses a spread placed after "action".
+                        **sealed_evidence,
+                        "action": "review_pull_request",
+                        "summary": (
+                            (_checks_failing.decision_summary(card_checks) + " "
+                             if card_checks else "")
+                            + (f"Ready to merge — {_quality_bar.followup_words(_followups)}. "
+                               f"{'They' if _followups['count'] != 1 else 'It'} did not block at the "
+                               f"{_followups['bar']} quality bar and "
+                               f"{'are' if _followups['count'] != 1 else 'is'} listed on the "
+                               f"{'change' if _local else 'pull request'}. "
+                               if _followups else "")
+                            + f"BOSS built “{title}” in a sandbox and opened "
+                            + (f"change #{pr.number}. " if _local else f"pull request #{pr.number}. ")
+                            + (f"{_acceptance_gate.headline(acceptance)}. "
+                               if _acceptance_gate.headline(acceptance) else "")
+                            + _acceptance_gate.card_words(card_checks, acceptance, validation_status)
+                            + (f" — {validation_summary}" if validation_summary else "")
+                            + (". Review the change in BOSS (it is on this machine), then approve to merge "
+                               "into the default branch or reject to send back."
+                               if getattr(self.github, "kind", "") == "local" else
+                               ". Review the diff on GitHub, then approve to merge or reject to send back.")
+                            + (f" {ci_changed['ci_changed_note']}" if ci_changed else "")
+                        ),
+                        "head_sha": branch_head_sha,
+                        # What ci_gate.refuse_approval reads: a CI change needs a PERSON's approval.
+                        "ci_changed": bool(ci_changed),
+                        "ci_changed_files": ci_changed.get("ci_changed_files") or [],
+                        "ci_findings": ci_changed.get("ci_findings") or [],
+                        "requires_person_approval": bool(ci_changed),
+                        "artifact_id": artifact_id,
+                        "diff_artifact_id": diff_artifact_id,
+                        "test_report_artifact_id": test_report_artifact_id,
+                        "security_review_artifact_id": security_review_artifact_id,
+                        "release_go_no_go_artifact_id": release_go_no_go_artifact_id,
+                        "receipt_id": pr_receipt["id"],
+                        "pull_request_url": pr.url,
+                        "branch_name": branch_name,
+                        # The branch the PR merges INTO (None: the host's default). An approval delegate
+                        # merges only into the project's bound release branch (approval_delegations).
+                        "pr_base": pr_base,
+                        "title": _work_title,
+                        "validation_status": validation_status,
+                        "validation_summary": validation_summary,
+                        "validation_sources": validation_sources,
+                        "release_go_no_go_status": release_go_no_go["status"],
+                        "local_validation_receipt_id": local_validation_receipt_id,
+                        "agent_module_id": (
+                            module_spec.get("id") if isinstance(module_spec, dict) else None
+                        ),
+                        "quality_gate_id": quality_gate_id,
+                        "run_id": run_id,
+                        "no_auto_merge": True,
+                        # What the merge card leads with, and what makes its approval a person's stated
+                        # decision rather than a click (decisions.transition, checks_failing.py).
+                        **({_checks_failing.KEY: {
+                            **card_checks,
+                            "draft": bool(checks_failing) and bool(
+                                getattr(self.github, "supports_draft_pull_requests", False)),
+                            "label": _checks_failing.LABEL}} if card_checks else {}),
+                        # The must-have table (acceptance_gate.py): per item met/partial/missing with
+                        # file evidence, from the latest acceptance check of this PR's lineage.
+                        **({_acceptance_gate.KEY: {
+                            "verdict": acceptance.get("verdict"), "counts": acceptance.get("counts"),
+                            "items": [{k: i.get(k) for k in ("n", "text", "status", "evidence",
+                                                             "source", "judgement")}
+                                      for i in acceptance.get("items") or []],
+                            # Judgement (taste) items answered PARTIAL: shown, never failing.
+                            "advisory": list(acceptance.get("advisory") or []),
+                            "stack": acceptance.get("stack") or {},
+                            "why": acceptance.get("why") or "",
+                            "items_dropped": int(acceptance.get("items_dropped") or 0),
+                            "table": _acceptance_gate.must_have_table(acceptance),
+                            # WORSE THAN ITS PARENT (BOSSAPP-1330): said, with the parent's verdict and
+                            # table beside this one — never quietly replaced by the worse check.
+                            **({"regressed_vs_parent": _acceptance_gate.regression_card(
+                                acceptance["regressed_vs_parent"])}
+                               if acceptance.get("regressed_vs_parent") else {})}}
+                           if isinstance(acceptance, dict) and acceptance.get("verdict")
+                           # Never checked against the root's must-haves: the card says so.
+                           else {_acceptance_gate.KEY: {"verdict": "not_checked", "items": []}}
+                           if run_id else {}),
+                        # The knowledge the card is "based on": facts matched to this change's symbols
+                        # (knowledge/runtime.remember_written_files). Empty when none matched.
+                        "cited_fact_ids": citations,
+                        # THE FOLLOW-UPS (quality_bar.merge_followups): what the card lists under its
+                        # normal Merge, P1 first, and whether BOSS's follow-up build is fixing them.
+                        **({_quality_bar.CARD_KEY: _followups} if _followups else {}),
+                        # THE PACKET the card and the change page render (SPEC §1.4, §1.5).
+                        **({_review_packet.KEY: _packet} if _packet else {}),
+                        # A follow-up after the merge of #N (pr_follow_up): named, with its reason.
+                        **({"follow_up_of": follow_up["after"],
+                            "follow_up_reason": follow_up.get("reason")} if follow_up else {}),
+                    },
+                    {},
+                    "merge_decision_required",
+                )
+        finally:
+            if _superseded_pending and hasattr(connection, "begin_nested"):
+                try:
+                    from sqlalchemy import bindparam as _bindparam
 
-                with connection.begin_nested():
-                    connection.execute(
-                        sql(
-                            "UPDATE decisions SET status = 'pending' "
-                            "WHERE project_id = :p AND id IN :ids AND status = 'withdrawn'"
-                            + (" AND id <> :d" if decision_id else "")
-                        ).bindparams(_bindparam("ids", expanding=True)),
-                        {"p": project_id, "ids": _superseded_pending,
-                         **({"d": decision_id} if decision_id else {})},
-                    )
-            except Exception:  # noqa: BLE001
-                pass
+                    with connection.begin_nested():
+                        connection.execute(
+                            sql(
+                                "UPDATE decisions SET status = 'pending' "
+                                "WHERE project_id = :p AND id IN :ids AND status = 'withdrawn'"
+                                + (" AND id <> :d" if decision_id else "")
+                            ).bindparams(_bindparam("ids", expanding=True)),
+                            {"p": project_id, "ids": _superseded_pending,
+                             **({"d": decision_id} if decision_id else {})},
+                        )
+                except Exception:  # noqa: BLE001
+                    pass
         if decision_id:
             # THE NEWEST BUILD'S CARD IS THE PR'S ONE CARD (BOSSAPP-1320): the older cards for
             # this pull request are withdrawn, each with a note naming this one.

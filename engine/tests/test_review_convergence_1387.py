@@ -3,6 +3,7 @@ and label/demote newly noticed findings on unchanged lines under Standard/Protot
 from __future__ import annotations
 
 from boss_engine.services import acceptance_gate, quality_bar as qb, review_tools
+from boss_engine.services.acceptance.session import Command, CommandRecord
 from boss_engine.services.governed_code_task_service import _review_gate_from_findings
 
 
@@ -216,3 +217,98 @@ def test_review_tools_hunk_helpers_and_path_resolution():
     assert review_tools.finding_touches_changed_lines({"path": "pkg/new.py", "line": 1}, hunks, curr_files) is True
     # Unanchored finding fails closed (treated as changed)
     assert review_tools.finding_touches_changed_lines({"path": None, "line": None}, hunks, curr_files) is True
+
+
+def test_pinning_unpins_on_failed_exec_log_dict_and_command_record(tmp_path):
+    root = _make_northgate_tree(tmp_path)
+    items = _northgate_items()[:2]
+    stack = {"missing": [], "present": ["go.mod"]}
+    head_sha = "cafebabe" * 5
+
+    prior = {
+        "head_sha": head_sha,
+        "verdict": "met",
+        "items": [
+            {
+                "n": 1,
+                "id": "AC-1",
+                "text": items[0]["text"],
+                "status": "met",
+                "evidence": "cmd/gateway/main.go:5 starts proxy.Start()",
+            },
+            {
+                "n": 2,
+                "id": "AC-5",
+                "text": items[1]["text"],
+                "status": "met",
+                "evidence": "internal/proxy/server.go:4 Health() implemented",
+            },
+        ],
+    }
+    reply_fail_e1 = "\n".join([
+        "ITEM 1: MISSING — E1 exited 1",
+        "ITEM 2: MET — internal/proxy/server.go:4 Health() implemented",
+        "ACCEPTANCE: NOT MET",
+    ])
+
+    # 1) Canonical Command.to_dict() shape (exit key, not exit_code)
+    rec_dict = acceptance_gate.judge(
+        items,
+        reply_fail_e1,
+        stack,
+        root=root,
+        prior=prior,
+        head_sha=head_sha,
+        exec_log={"E1": {"id": "E1", "cmd": "pytest", "exit": 1, "timed_out": False, "stdout": "", "stderr": "fail"}},
+    )
+    assert rec_dict["verdict"] == "not_met"
+    assert rec_dict["met"] == [2]
+    assert rec_dict["missing"] == [1]
+    assert rec_dict["items"][0].get("pinned") is not True
+
+    # 2) Canonical CommandRecord(Command(...)) shape (dataclass instance without .get)
+    cr = CommandRecord()
+    cr.add(Command(id="E1", cmd="pytest", exit=1, timed_out=False, plain=True, tree_dirty=False))
+    rec_obj = acceptance_gate.judge(
+        items,
+        reply_fail_e1,
+        stack,
+        root=root,
+        prior=prior,
+        head_sha=head_sha,
+        exec_log=cr,
+    )
+    assert rec_obj["verdict"] == "not_met"
+    assert rec_obj["met"] == [2]
+    assert rec_obj["missing"] == [1]
+    assert rec_obj["items"][0].get("pinned") is not True
+
+    # 3) Timed-out Command object also unpins even if exit is None/0
+    cr_to = CommandRecord()
+    cr_to.add(Command(id="E1", cmd="pytest", exit=0, timed_out=True, plain=True, tree_dirty=False))
+    rec_to = acceptance_gate.judge(
+        items,
+        reply_fail_e1,
+        stack,
+        root=root,
+        prior=prior,
+        head_sha=head_sha,
+        exec_log=cr_to,
+    )
+    assert rec_to["verdict"] == "not_met"
+    assert rec_to["met"] == [2]
+    assert rec_to["missing"] == [1]
+
+    # 4) Fallback dict shape with exit_code still unpins
+    rec_legacy = acceptance_gate.judge(
+        items,
+        reply_fail_e1,
+        stack,
+        root=root,
+        prior=prior,
+        head_sha=head_sha,
+        exec_log={"E1": {"id": "E1", "exit_code": 2, "timed_out": False}},
+    )
+    assert rec_legacy["verdict"] == "not_met"
+    assert rec_legacy["met"] == [2]
+    assert rec_legacy["missing"] == [1]

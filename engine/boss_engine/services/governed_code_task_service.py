@@ -5566,6 +5566,43 @@ def _hold_for_github(engine, run_id: str, result: Any) -> Any:
         return result
 
 
+def _run_flaky_reruns(
+    first_result: Any,
+    first_output: str,
+    first_command: str,
+    first_cwd: Any,
+    first_names: list[str],
+    *,
+    run_once: Callable[[], tuple[Any, str, str, Any]],
+    flaky_budget: dict[str, int],
+    flaky_tests: list[str],
+    max_total_rerun_ms: int,
+) -> tuple[Any, str, str, Any]:
+    """Run up to two immediate flaky-test confirmation passes bounded by max_total_rerun_ms.
+
+    Returns ``(result, output, command, cwd)`` matching the selected verification attempt so
+    that skipping Attempt 3 on budget never leaves Attempt 2's passing ``last_verify_output``
+    paired with Attempt 1's failing ``result``.
+    """
+    flaky_budget["checks"] += 1
+    again, again_output, again_command, again_cwd = run_once()
+    flaky_budget["rerun_ms"] += int(getattr(again, "duration_ms", 0) or 0)
+    if getattr(again, "tampered", False):
+        return again, again_output, again_command, again_cwd
+    if again.ok:
+        if (
+            flaky_budget["rerun_ms"] + int(getattr(again, "duration_ms", 0) or 0)
+            <= max_total_rerun_ms
+        ):
+            third, third_output, third_command, third_cwd = run_once()
+            flaky_budget["rerun_ms"] += int(getattr(third, "duration_ms", 0) or 0)
+            if third.ok and not getattr(third, "tampered", False):
+                flaky_tests.extend(n[:300] for n in first_names)
+            return third, third_output, third_command, third_cwd
+        return first_result, first_output, first_command, first_cwd
+    return again, again_output, again_command, again_cwd
+
+
 def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                            *, fencing_token: Optional[str] = None) -> dict:
     """One governed attempt, with the MCP servers of the agent it runs as (skills-mcp E6).
@@ -7936,6 +7973,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         def _run_verify(*, record: bool = True):
             """Authoritative test command, scoped to the official app directory. BOSS's own
             install (NPM_INSTALL_CMD, the one every gate runs) is its first step."""
+            nonlocal last_verify_output, last_verify_command, last_verify_cwd
             _halt_if_needs_person()
             if record:
                 _manifest_tampered[0] = None
@@ -7960,21 +7998,24 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         _fc = verification_target.failed_check(result) or {}
                         _first_names = [f"{_fc.get('command') or 'the test suite'}: "
                                         f"{_fc.get('line') or 'failed'}"]
-                    _flaky_budget["checks"] += 1
-                    _again = _run_verify_once(record=record)
-                    _flaky_budget["rerun_ms"] += int(getattr(_again, "duration_ms", 0) or 0)
-                    if getattr(_again, "tampered", False):
-                        result = _again
-                    elif _again.ok:
-                        if (_flaky_budget["rerun_ms"] + int(getattr(_again, "duration_ms", 0) or 0)
-                                <= _quality_bar.FLAKY_MAX_TOTAL_RERUN_MS):
-                            _third = _run_verify_once(record=record)
-                            _flaky_budget["rerun_ms"] += int(getattr(_third, "duration_ms", 0) or 0)
-                            if _third.ok and not getattr(_third, "tampered", False):
-                                _flaky_tests.extend(n[:300] for n in _first_names)
-                            result = _third
-                    else:
-                        result = _again
+                    result, last_verify_output, last_verify_command, last_verify_cwd = (
+                        _run_flaky_reruns(
+                            result,
+                            last_verify_output,
+                            last_verify_command,
+                            last_verify_cwd,
+                            _first_names,
+                            run_once=lambda: (
+                                _run_verify_once(record=record),
+                                last_verify_output,
+                                last_verify_command,
+                                last_verify_cwd,
+                            ),
+                            flaky_budget=_flaky_budget,
+                            flaky_tests=_flaky_tests,
+                            max_total_rerun_ms=_quality_bar.FLAKY_MAX_TOTAL_RERUN_MS,
+                        )
+                    )
             env = None
             if record and not result.ok and not getattr(result, "tampered", False):
                 # COULD THE SUITE RUN AT ALL? (suite_environment) When its failures share one

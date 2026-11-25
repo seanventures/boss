@@ -2248,8 +2248,12 @@ def _has_contradicting_evidence(
         ev_text = str(item.get("evidence") or "")
         for claim in exec_claims(ev_text):
             rec = _lookup(exec_log, claim["ref"])
-            if rec is not None and (rec.get("timed_out") or rec.get("exit_code") not in (None, 0)):
-                return True
+            if rec is not None:
+                exit_val = _field(rec, "exit")
+                if exit_val is None:
+                    exit_val = _field(rec, "exit_code")
+                if _field(rec, "timed_out") or exit_val not in (None, 0):
+                    return True
     if stack.get("missing") and root is not None:
         dep = _deps.stack_claim(item.get("text"), root) or _deps.claim(item.get("text"), root)
         if dep is not None and dep[0] == "false":
