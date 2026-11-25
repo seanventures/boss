@@ -4,16 +4,16 @@
     scripts/golden-journeys.py list
     scripts/golden-journeys.py run --api http://localhost:8000 [--key-env BOSS_JOURNEY_KEY]
                                    [--var owner=acme --var repo=sandbox ...] [--vars-file F]
-                                   [--only J1,J5] [--record [--host laptop]] [--out results.json]
+                                   [--only J1,J5] [--out results.json]
     scripts/golden-journeys.py report --api URL [--key-env NAME]
     scripts/golden-journeys.py schedule --api URL --at 06:00 [--tz Europe/London]
 
-`run` plays the journeys against that install's API (real engine), judges each with the
-Acceptance Agent's verdict module and prints one row per journey; `--record` stores the rows on
-the install (POST /v1/golden-journeys/results): green rows are re-judged there, and only rows
-sent with the journey account's own key (BOSS_JOURNEY_PRINCIPAL) count toward the freeze. An
-install's own daily run records its rows itself and needs none of this. `schedule` arms the install's own daily run (a schedule_work wake that calls the
-run_golden_journeys tool). `report` prints today's results and the consecutive green days.
+`run` plays the journeys against an install's API from this terminal and judges each with the
+Acceptance Agent's verdict module: a dry run of the definitions, printed (and written with
+--out), never recorded. The rows that count are written by the install's OWN daily run, in its
+fixture project, as its journey account (services/golden_journeys/service.py). `schedule` arms
+that run (BOSS starts it itself when it is due; no agent turn). `report` prints today's results
+and the consecutive green days.
 
 The API key is a service account's, read from the environment variable --key-env names; it is
 held in memory only and never printed or written. Pending journeys (waiting on an open PR) are
@@ -72,14 +72,6 @@ def cmd_run(args: argparse.Namespace) -> int:
               f"{(r.get('why') or '')[:160]}")
     if args.out:
         Path(args.out).write_text(json.dumps(rows, indent=1, default=str))
-    if args.record:
-        status, body = client.call("POST", "/v1/golden-journeys/results",
-                                   {"results": rows, **({"host": args.host} if args.host else {})})
-        if status >= 300:
-            print(f"golden-journeys: the install refused the results: HTTP {status} {body}",
-                  file=sys.stderr)
-            return 2
-        print(f"recorded {len(body.get('stored') or [])} rows")
     return 0 if all(r["status"] == runner.GREEN for r in rows) else 1
 
 
@@ -116,8 +108,6 @@ def main(argv: list[str] | None = None) -> int:
             p.add_argument("--var", action="append")
             p.add_argument("--vars-file")
             p.add_argument("--only")
-            p.add_argument("--record", action="store_true")
-            p.add_argument("--host")
             p.add_argument("--out")
         if name == "schedule":
             p.add_argument("--at", required=True)

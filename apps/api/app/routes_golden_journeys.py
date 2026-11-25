@@ -12,9 +12,11 @@
 
 Nothing a caller sends chooses where journeys run or with what: the fixture project and its
 values are the operator's (BOSS_JOURNEY_PROJECT, BOSS_JOURNEY_VARS; services/golden_journeys/
-service.py). A POSTed green is believed only when BOSS's verdict, run again here over the row's
-own calls, accepts every item; and only the journey account's own rows (BOSS_JOURNEY_PRINCIPAL)
-count toward the freeze — anyone else's are shown as `posted`, never counted.
+service.py). A POSTed green is refused unless BOSS's verdict, run again here over the row's own
+calls, accepts every item — a CONSISTENCY check: it cannot prove the posted calls happened. So
+counting rests on WHO sent it: only the journey account's own rows (BOSS_JOURNEY_PRINCIPAL)
+count toward the freeze; anyone else's are stored as `posted`, shown with who sent them, never
+counted. The install's own daily run writes its rows directly and needs none of this.
 """
 from __future__ import annotations
 

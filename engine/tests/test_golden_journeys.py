@@ -259,22 +259,49 @@ _MATRIX = ROOT / "tests" / "identity" / "matrix.yaml"
 
 
 def _routes() -> list[tuple[str, re.Pattern]]:
+    return [(m, rx) for m, rx, _, _ in _declared()]
+
+
+def _declared() -> list[tuple[str, re.Pattern, str, str]]:
     out = []
     for line in _MATRIX.read_text().splitlines():
-        m = re.match(r'^"(GET|POST|PUT|PATCH|DELETE) (\S+)":', line)
+        m = re.match(r'^"(GET|POST|PUT|PATCH|DELETE) (\S+)": \["([^"]+)"', line)
         if m:
-            out.append((m.group(1), re.compile("^" + re.sub(r"\{[^}]+\}", "[^/]+", m.group(2)) + "$")))
+            out.append((m.group(1), re.compile("^" + re.sub(r"\{[^}]+\}", "[^/]+", m.group(2)) + "$"),
+                        m.group(3), m.group(2)))
     return out
 
 
-def test_every_call_of_a_runnable_journey_is_a_route_the_api_declares():
-    """A renamed route fails here, not on the first morning's run."""
+def test_the_journey_accounts_allowlist_is_exactly_what_the_journeys_call():
+    """service.ALLOWED is derived, not chosen: the project-scoped permission of every call any
+    journey makes (org-scoped ones — J7's SCIM — use another credential), plus project:read."""
+    from boss_engine.identity.catalogue import require_known
+
+    declared = _declared()
+    needed = {"project:read"}
+    for j in d.load_all():
+        for s in list(j.steps) + list(j.cleanup):
+            if not s.call:
+                continue
+            path = re.sub(r"\{\{[^}]+\}\}", "x", s.path).split("?", 1)[0]
+            hits = sorted((r for r in declared if r[0] == s.method and r[1].match(path)),
+                          key=lambda r: r[3].count("{"))
+            decl = hits[0][2]
+            m = re.match(r"permit (\S+) @ (\S+)", decl)
+            if m and m.group(2) != "org":
+                needed.add(m.group(1))
+    assert set(service.ALLOWED) == needed
+    for p in service.ALLOWED:
+        require_known(p)
+
+
+def test_every_call_of_every_journey_is_a_route_the_api_declares():
+    """A renamed route fails here, not on the first morning's run — pending journeys and
+    cleanup calls included."""
     routes = _routes()
     assert routes, "tests/identity/matrix.yaml lists no routes"
     for j in d.load_all():
-        if j.is_pending:
-            continue
-        for s in j.steps:
+        for s in list(j.steps) + list(j.cleanup):
             if not s.call:
                 continue
             path = re.sub(r"\{\{[^}]+\}\}", "x", s.path).split("?", 1)[0]
@@ -474,6 +501,8 @@ def test_a_narrow_journey_account_passes_preflight():
     (Account(projects=[{"project_id": "fixture", "permissions": [], "via": ["org"]}]), "org-wide"),
     (Account(projects=[{"project_id": "fixture", "permissions": ["deployment:production"],
                         "via": ["project"]}]), "deployment:production"),
+    (Account(projects=[{"project_id": "fixture", "permissions": ["code_task:create", "decision:approve"],
+                        "via": ["project"]}]), "decision:approve, which no journey needs"),
 ])
 def test_a_broad_journey_account_is_refused(account, words):
     with pytest.raises(service.Refused, match=re.escape(words)):

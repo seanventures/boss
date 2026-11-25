@@ -1,9 +1,11 @@
 """The daily run on an install: what the schedule's wake and Govern's "Run now" start.
 
 THE SCHEDULE IS BOSS'S OWN, AND SPENDS NO MODEL TURN. `arm_daily` writes ONE install-wide
-`schedule_work` row (agent_wakeups, kind `schedule`) marked WAKE_MARKER; when it is due,
-agent_wakeups.wake_one sees the marker and starts the run here directly instead of opening an
-agent turn. No chat turn can start a run: there is no agent tool for it.
+`schedule_work` row (agent_wakeups, kind `schedule`) and stamps it `purpose = 'golden_journeys'`
+— a column only this module writes; agent_wakeups.schedule never sets it and refuses a prompt
+that starts with WAKE_MARKER. When it is due, agent_wakeups.wake_one sees the PURPOSE (never the
+prompt) and starts the run here directly instead of opening an agent turn. No chat turn can
+start a run: there is no agent tool for it, and schedule_work cannot make this row.
 
 ONE FIXTURE PROJECT, OPERATOR-SET VALUES. Journeys always run in BOSS_JOURNEY_PROJECT (refused
 when unset) with the values in BOSS_JOURNEY_VARS (sandbox repos, ticket connection, staging
@@ -16,10 +18,8 @@ vault holds (BOSS_JOURNEY_KEY_REF; refused when unset). Before anything runs, `p
 that account through the API itself and refuses a broad one:
   * it is a service account, with no role bound at org scope;
   * it reaches exactly one project, the fixture project, and not through an org-wide binding;
-  * there it holds none of FORBIDDEN (production deploys, granting roles, identity providers,
-    secrets management, deleting projects, budgets).
-Give it a project-scoped role in the fixture project only (an operator-like custom role without
-those permissions). A production promotion therefore always waits for a person (J6 asserts the
+  * there it holds nothing outside ALLOWED (the permissions the journeys' own calls need).
+Give it a custom role holding exactly ALLOWED, bound in the fixture project only. A production promotion therefore always waits for a person (J6 asserts the
 approval card and stops there).
 
 THE RUN IS IN THE BACKGROUND, ONE AT A TIME PER INSTALL (a Postgres advisory lock), each
@@ -41,15 +41,28 @@ from . import runner as _runner
 
 log = logging.getLogger(__name__)
 
-#: The marker of the install's one daily journeys wake.
+#: Words no schedule_work prompt may start with (agent_wakeups.schedule refuses them).
 WAKE_MARKER = "[golden-journeys]"
-WAKE_PROMPT = (WAKE_MARKER + " The daily golden journeys. BOSS starts them itself when this is "
-               "due; results land on Govern › Journeys as each journey is judged.")
+#: What identifies the journeys wake: agent_wakeups.purpose, written only by arm_daily.
+PURPOSE = "golden_journeys"
+WAKE_PROMPT = ("The daily golden journeys. BOSS starts them itself when this is due; results "
+               "land on Govern › Journeys as each journey is judged.")
 #: Keys only this module sets: a journey's values can never move the run somewhere else.
 RESERVED = frozenset({"project_id", "actor", "stamp"})
-#: What the journey account must not hold in the fixture project.
-FORBIDDEN = frozenset({"deployment:production", "role_binding:assign", "identity_provider:manage",
-                       "secret:manage", "project:delete", "budget:manage"})
+#: EVERYTHING the journey account may hold in the fixture project: the permissions the journeys'
+#: own calls need (each route's catalogue permission; engine/tests/test_golden_journeys.py
+#: derives this set from tests/identity/matrix.yaml and fails when they drift) and nothing else.
+#: An account holding ANY other permission — an approval, a production deploy, a secret, a
+#: role grant, a target or an account to manage — is refused.
+ALLOWED = frozenset({
+    "project:read", "integration:read",
+    "code_task:create", "code_task:read", "code_task:steer", "github:merge",
+    "deployment:create", "deployment:read",
+    "workflow:create", "workflow:delete", "workflow_run:start", "workflow_run:read",
+    "mcp_server:register", "mcp_server:review", "agent_ability:assign",
+    "observability:read", "observability:manage", "reliability:read",
+})
+
 #: pg_try_advisory_lock key: one run per install.
 LOCK_KEY = 1284_1285
 
@@ -116,9 +129,10 @@ def preflight(client: Any, project_id: str) -> str:
     here = projects[0]
     if "org" in (here.get("via") or []):
         raise Refused("the journey account reaches the fixture project through an org-wide binding")
-    broad = sorted(FORBIDDEN & set(here.get("permissions") or []))
-    if broad:
-        raise Refused(f"the journey account holds {', '.join(broad)}; give it a narrower role")
+    extra = sorted(set(here.get("permissions") or []) - ALLOWED)
+    if extra:
+        raise Refused(f"the journey account holds {', '.join(extra)}, which no journey needs; "
+                      "give it a role with only the journeys' permissions (service.ALLOWED)")
     return str(me.get("principal_id") or "")
 
 
@@ -201,31 +215,40 @@ def start(engine: Any, settings: Any, *, actor: str, only: Optional[list[str]] =
 
 def arm_daily(connection: Any, *, project_id: str, actor: str, at_time: str,
               tz_name: str = "UTC", days: Optional[list[str]] = None) -> dict[str, Any]:
-    """The install's ONE daily wake (schedule_work's own store). Arming again — from any
-    project — stops the one before, under a transaction-scoped advisory lock."""
+    """The install's ONE daily wake (schedule_work's own store), stamped with its PURPOSE.
+    Arming again — from any project — stops the one before, under an advisory lock."""
     from sqlalchemy import text
+    from sqlalchemy.exc import IntegrityError
 
     from .. import agent_wakeups
 
     connection.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": LOCK_KEY})
     for row in connection.execute(text(
-            "SELECT id, project_id FROM agent_wakeups WHERE kind = 'schedule' "
-            "AND status = 'active' AND prompt LIKE :m"), {"m": WAKE_MARKER + "%"}).mappings().all():
+            "SELECT id, project_id FROM agent_wakeups WHERE purpose = :u AND status = 'active'"),
+            {"u": PURPOSE}).mappings().all():
         agent_wakeups.stop(connection, project_id=row["project_id"], wakeup_id=row["id"],
                            actor=actor, status="stopped",
                            reason="replaced by a new golden-journey schedule")
-    return agent_wakeups.schedule(connection, project_id=project_id, actor=actor,
+    made = agent_wakeups.schedule(connection, project_id=project_id, actor=actor,
                                   prompt=WAKE_PROMPT, at_time=at_time, days=days or [],
                                   tz_name=tz_name)
+    try:
+        with connection.begin_nested():
+            connection.execute(text("UPDATE agent_wakeups SET purpose = :u WHERE id = :i"),
+                               {"u": PURPOSE, "i": made["id"]})
+    except IntegrityError as exc:
+        raise agent_wakeups.WakeupError("another golden-journeys schedule was armed at the same "
+                                        "moment; try again") from exc
+    return {**made, "purpose": PURPOSE}
 
 
 def daily_wake(connection: Any) -> Optional[dict[str, Any]]:
     from sqlalchemy import text
 
     row = connection.execute(text(
-        "SELECT id, at_time, timezone, next_wake_at FROM agent_wakeups WHERE kind = 'schedule' "
-        "AND status = 'active' AND prompt LIKE :m ORDER BY created_at DESC LIMIT 1"),
-        {"m": WAKE_MARKER + "%"}).mappings().first()
+        "SELECT id, at_time, timezone, next_wake_at FROM agent_wakeups WHERE purpose = :u "
+        "AND status = 'active' ORDER BY created_at DESC LIMIT 1"),
+        {"u": PURPOSE}).mappings().first()
     if row is None:
         return None
     nxt = row["next_wake_at"]
@@ -234,7 +257,8 @@ def daily_wake(connection: Any) -> Optional[dict[str, Any]]:
 
 
 def is_journeys_wake(row: Any) -> bool:
-    return str((row or {}).get("prompt") or "").startswith(WAKE_MARKER)
+    """By the purpose column only — never by what the prompt says."""
+    return (row or {}).get("purpose") == PURPOSE and (row or {}).get("kind") == "schedule"
 
 
 def wake(engine: Any, settings: Any, row: Any) -> str:

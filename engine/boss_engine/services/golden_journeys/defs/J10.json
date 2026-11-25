@@ -97,7 +97,7 @@
     },
     {
       "id": "workflow",
-      "call": "POST /v1/delivery-workflows",
+      "call": "POST /v1/delivery-workflows/create",
       "expect_status": [
         200,
         201

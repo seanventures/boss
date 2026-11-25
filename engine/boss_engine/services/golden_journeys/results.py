@@ -62,7 +62,13 @@ def stored_calls(calls: Any) -> str:
 
 def rejudge(row: Mapping[str, Any], journey: d.Journey) -> tuple[bool, str]:
     """A green row is believed only if BOSS's verdict, run again here over the row's own calls
-    and reply, accepts EVERY item. (ok, why not)."""
+    and reply, accepts EVERY item. (ok, why not).
+
+    CONSISTENCY, NOT AUTHENTICITY. This proves the reply agrees with the calls the row carries;
+    it cannot prove those calls happened — a sender could invent both. So a row's call record is
+    trusted only from this install's own run (source `run`); a POSTed row counts only when the
+    journey account itself sent it (BOSS_JOURNEY_PRINCIPAL), and anyone else's is `posted`:
+    shown, never counted."""
     import tempfile
 
     from ..acceptance import verdict as _verdict

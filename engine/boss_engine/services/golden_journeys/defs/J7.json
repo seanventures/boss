@@ -8,7 +8,7 @@
   ],
   "pending": {
     "waits_for": "an Okta preview tenant and its SCIM token on the install (BOSSAPP-1294)",
-    "why": "there is no Okta tenant to sign in through yet; the SCIM and SSO routes are on main"
+    "why": "there is no Okta tenant to sign in through yet; and its SCIM calls need the SCIM bearer token Okta holds (scim:provision is org-wide), never the journey account, which is confined to the fixture project"
   },
   "needs": {
     "fixtures": [

@@ -166,11 +166,11 @@ def test_the_daily_run_is_one_install_wide_wake_and_arming_again_replaces_it(eng
     assert r.json()["project_id"] == pid           # the fixture project, never the caller's
     client.post("/v1/golden-journeys/schedule", json={"at_time": "07:30"})
     with engine.begin() as c:
-        rows = c.execute(text("SELECT kind, status, at_time, prompt FROM agent_wakeups "
+        rows = c.execute(text("SELECT kind, status, at_time, prompt, purpose FROM agent_wakeups "
                               "WHERE project_id = :p ORDER BY created_at"), {"p": pid}).mappings().all()
     assert [(r["kind"], r["status"], r["at_time"]) for r in rows] == [
         ("schedule", "stopped", "06:00"), ("schedule", "active", "07:30")]
-    assert rows[-1]["prompt"].startswith(service.WAKE_MARKER)
+    assert [r["purpose"] for r in rows] == [service.PURPOSE, service.PURPOSE]
     body = client.get("/v1/golden-journeys").json()
     assert body["schedule"]["at_time"] == "07:30"
 
@@ -225,3 +225,36 @@ def test_a_due_wake_starts_the_run_without_a_model_turn(engine, monkeypatch):
     out = agent_wakeups.wake_one(get_settings(), engine, due)
     assert called == []                                   # no agent turn
     assert "BOSS_JOURNEY_KEY_REF" in out["error"]         # refused: never unauthenticated
+
+
+def test_schedule_work_cannot_make_or_imitate_the_journeys_wake(engine, monkeypatch):
+    """An agent's schedule_work (autopilot:operate) must never start a journeys run: the marker
+    prompt is refused, and a row that only SAYS the marker is an ordinary agent wake."""
+    from boss_engine.services import agent_wakeups
+    from boss_engine.tools.builtin import build_default_registry
+
+    pid = get_settings().default_project_id
+    with engine.begin() as c:
+        with pytest.raises(agent_wakeups.WakeupError, match="reserved"):
+            agent_wakeups.schedule(c, project_id=pid, actor="ceo", prompt="[golden-journeys] go",
+                                   at_time="06:00")
+    spec = build_default_registry().get("schedule_work")
+    from boss_engine.context import EngineContext
+
+    out = spec.handler(EngineContext.create(), project_id=pid, actor="ceo",
+                       args={"prompt": "  [Golden-Journeys] run them", "at_time": "06:00"})
+    assert out["ok"] is False and "reserved" in out["error"]
+    with engine.begin() as c:
+        assert c.execute(text("SELECT count(*) FROM agent_wakeups")).scalar() == 0
+        # a row written around schedule() with the marker in its words, but no purpose
+        c.execute(text(
+            "INSERT INTO agent_wakeups (id, project_id, kind, actor, prompt, at_time, days, "
+            "timezone, next_wake_at, max_cycles, created_by) VALUES ('wake_fake', :p, 'schedule', "
+            "'ceo', '[golden-journeys] x', '06:00', '[]'::jsonb, 'UTC', now(), 0, 'ceo')"), {"p": pid})
+        due = dict(c.execute(text("SELECT * FROM agent_wakeups WHERE id = 'wake_fake'")).mappings().one())
+    started = []
+    monkeypatch.setattr(service, "start", lambda *a, **k: started.append(1) or {"ok": True, "started": []})
+    monkeypatch.setattr("boss_engine.services.agent_service.AgentService.chat",
+                        lambda *a, **k: {"reply": "an ordinary turn"})
+    agent_wakeups.wake_one(get_settings(), engine, due)
+    assert started == []
