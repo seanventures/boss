@@ -93,3 +93,13 @@ def test_an_input_the_run_overrides_or_a_skipped_source_is_not_this_checks():
     assert runner.unfed_required_inputs(None, "p", step, ctx) == []
     skipped = {**_context({}), "skipped": {"validate": {"reason": "operator"}}}
     assert runner.unfed_required_inputs(None, "p", FIX_PR, skipped) == []
+
+
+def test_an_empty_list_is_an_answer_not_a_missing_input():
+    """`findings: []` is "nothing found", which a later step may need to be told."""
+    step = {"id": "file", "binding": {"capability": "fix_pr", "inputs": {
+        "title": {"from_step": "validate", "field": "findings"}}}}
+    assert runner.unfed_required_inputs(None, "p", step, _context({"findings": []})) == []
+    assert runner.unfed_required_inputs(None, "p", step, _context({"findings": {}})) == []
+    assert runner.unfed_required_inputs(None, "p", step, _context({"findings": None})) == [
+        "title (from validate.findings)"]

@@ -1896,9 +1896,14 @@ def execute_repo_read(context: "SkillExecutorContext", inputs: dict[str, Any]) -
     ctx = EngineContext(settings=context.settings, engine=context.connection.engine)
     # THE SAME FILTER AS EVERY OTHER DOOR (registry.schema_args): only what the tool's schema
     # lists reaches the handler, so a step's inputs cannot set a key the tool never offered.
-    from ..tools.registry import schema_args
+    from ..tools.registry import schema_args, unknown_args_result, unknown_caller_args
 
     args, ignored = schema_args(spec, args)
+    unknown = unknown_caller_args(ignored)
+    if unknown:
+        # REFUSED, NOT DROPPED (BOSSAPP-1361): the same rule as registry.invoke, so an agent
+        # step's call with a wrong argument name fails saying what the tool takes.
+        raise ValueError(unknown_args_result(spec, unknown)["message"])
     out = spec.handler(ctx, project_id=context.project_id, actor=context.actor, args=args)
     out = out if isinstance(out, dict) else {"value": out}
     if ignored:

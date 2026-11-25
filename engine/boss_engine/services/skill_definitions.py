@@ -1046,6 +1046,44 @@ def _skill_exists(connection: Connection, project_id: str, skill_id: str) -> Opt
     return "authored" if found["source"] == "authored" else "builtin"
 
 
+def cannot_run_here(connection: Connection, project_id: str, skill_id: str) -> Optional[str]:
+    """Why a SHIPPED skill cannot be held here (no executor on this install), or None.
+
+    The one test every grant path asks — a hand grant, a role sync, an agent spec published, an
+    import — so the ones that must not fail whole (a publish, an import, a sync) skip the grant
+    and report this sentence instead (BOSSAPP-1366)."""
+    from .skill_executors import not_runnable_here, runs_here
+
+    skill = str(skill_id or "").strip()
+    if not skill or runs_here(skill):
+        return None
+    if _skill_exists(connection, project_id, skill) != "builtin":
+        return None
+    return not_runnable_here(skill)
+
+
+def drop_unrunnable_grants(connection: Connection, project_id: str,
+                           actor: str = "system") -> list[dict[str, str]]:
+    """Take every grant of a shipped skill nothing here can run off its agent, once, on the
+    record (`skill.unrunnable_grant_removed`). Installs granted them before BOSSAPP-1366; held,
+    they are unrunnable rows that read as capability in Agent Studio. Not a seed exclusion: if
+    an executor ships later, the next role sync grants the skill again."""
+    rows = connection.execute(
+        text("SELECT id, role_key, skill_id FROM role_skills WHERE project_id = :p "
+             "AND source = 'builtin'"), {"p": project_id}).mappings().all()
+    removed: list[dict[str, str]] = []
+    for row in rows:
+        why = cannot_run_here(connection, project_id, str(row["skill_id"]))
+        if not why:
+            continue
+        connection.execute(text("DELETE FROM role_skills WHERE id = :i"), {"i": row["id"]})
+        emit_event(connection, project_id, "skill.unrunnable_grant_removed", actor, "role_skill",
+                   str(row["id"]), {"role_key": row["role_key"], "skill_id": row["skill_id"],
+                                    "reason": why})
+        removed.append({"role_key": str(row["role_key"]), "skill_id": str(row["skill_id"])})
+    return removed
+
+
 def assign_skill_to_role(
     connection: Connection,
     *,
@@ -1084,10 +1122,9 @@ def assign_skill_to_role(
         # A SKILL NOTHING CAN RUN IS NOT GIVEN TO AN AGENT (BOSSAPP-1366): held, it was offered,
         # chosen for a workflow and approved by a person before failing at the call. The role
         # spec may still NAME it (scope for governance); sync_role_skills reports it unavailable.
-        from .skill_executors import not_runnable_here, runs_here
-
-        if not runs_here(skill):
-            raise SkillDefinitionError(not_runnable_here(skill))
+        why = cannot_run_here(connection, project_id, skill)
+        if why:
+            raise SkillDefinitionError(why)
     # WHICH ROLES MAY HOLD WHICH SKILLS, AS DATA (BOSSAPP-890): the role checked is the one being
     # given the skill; who is giving it is the actor.
     from . import skill_policy

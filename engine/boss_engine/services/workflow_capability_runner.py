@@ -2667,7 +2667,13 @@ def unfed_required_inputs(connection: Connection, project_id: str, step: dict[st
     optional = _optional_inputs_of(connection, project_id, step)
     if optional is None:
         return []
-    from .agent_steps import _missing
+    def _unfed(produced: Any, field: str) -> bool:
+        # ABSENT, NULL OR BLANK TEXT only. An empty list or object is an answer ("no findings")
+        # a step may legitimately hand on, and refusing it would fail a clean run.
+        if not isinstance(produced, dict) or field not in produced:
+            return True
+        value = produced[field]
+        return value is None or (isinstance(value, str) and not value.strip())
 
     run_input = context.get("input") or {}
     steps = context.get("steps") or {}
@@ -2682,8 +2688,7 @@ def unfed_required_inputs(connection: Connection, project_id: str, step: dict[st
         source, field = str(ref["from_step"]), str(ref.get("field") or "")
         if not field or source in skipped or source not in steps:
             continue
-        produced = steps.get(source)
-        if not isinstance(produced, dict) or _missing(produced, field):
+        if _unfed(steps.get(source), field):
             unfed.append(f"{name} (from {source}.{field})")
     return unfed
 

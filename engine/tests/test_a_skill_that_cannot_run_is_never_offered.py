@@ -144,3 +144,57 @@ def test_every_assignable_skill_has_an_executor(eng, project):
     assert not [s for s in granted if s not in executors], granted
     unavailable = {u["skill_id"] for u in report["unavailable"]}
     assert NO_EXECUTOR in unavailable
+
+
+def test_an_older_grant_comes_off_once_on_the_record(eng, project):
+    """Installs that granted it before the fix: the boot's cleanup takes it off, audited."""
+    with eng.begin() as c:
+        _role(c, project, "backend_engineer", [])
+        for skill in (NO_EXECUTOR, "repo.read"):
+            c.execute(text("INSERT INTO role_skills (id, project_id, role_key, skill_id, source) "
+                           "VALUES (:i, :p, 'backend_engineer', :s, 'builtin')"),
+                      {"i": f"rs_{uuid.uuid4().hex[:10]}", "p": project, "s": skill})
+        removed = sd.drop_unrunnable_grants(c, project, actor="test")
+        assert removed == [{"role_key": "backend_engineer", "skill_id": NO_EXECUTOR}]
+        left = {r[0] for r in c.execute(text(
+            "SELECT skill_id FROM role_skills WHERE project_id = :p"), {"p": project})}
+        assert left == {"repo.read"}
+        audited = c.execute(text(
+            "SELECT count(*) FROM events WHERE project_id = :p "
+            "AND event_type = 'skill.unrunnable_grant_removed'"), {"p": project}).scalar()
+        assert audited == 1
+        assert sd.drop_unrunnable_grants(c, project, actor="test") == []
+
+
+def test_publishing_an_agent_spec_that_names_it_skips_it_and_says_so(eng, project):
+    """A spec written before the skill lost its executor still publishes; the grant is skipped
+    and reported, never the reason the whole publish fails."""
+    from boss_engine.agents import versions
+
+    key = f"auditor_{uuid.uuid4().hex[:6]}"
+    with eng.begin() as c:
+        _role(c, project, key, [])
+        saved = versions.save(c, project, {
+            "apiVersion": "boss.agent/v1", "kind": "Agent",
+            "metadata": {"key": key, "name": "Auditor"},
+            "spec": {"mission": "Audit.", "tools": {"skills": [NO_EXECUTOR, "repo.read"]}}},
+            actor="ceo", source="operator")
+        out = versions.publish(c, project, key, int(saved["version"]), actor="ceo")
+        held = {r[0] for r in c.execute(text(
+            "SELECT skill_id FROM role_skills WHERE project_id = :p AND role_key = :r"),
+            {"p": project, "r": key})}
+    assert NO_EXECUTOR not in held
+    assert [u["skill_id"] for u in out["changed"]["skills_unavailable"]] == [NO_EXECUTOR]
+
+
+def test_an_import_skips_it_and_says_so(eng, project):
+    from boss_engine.services import portability
+
+    with eng.begin() as c:
+        _role(c, project, "backend_engineer", [])
+        out = portability._apply_op(  # noqa: SLF001
+            c, Settings(), project,
+            {"section": "role_skills", "key": f"backend_engineer/{NO_EXECUTOR}",
+             "data": {"role_key": "backend_engineer", "skill_id": NO_EXECUTOR}},
+            "test", "create")
+    assert out["result"] == "kept" and "no executor" in out["note"]

@@ -77,6 +77,22 @@ def test_cheap_or_reversible_actions_still_run_directly(tool):
         f"{tool} behind a button would make BOSS ask permission to do its job")
 
 
+def test_every_costly_chat_tool_is_a_button():
+    """A chat-reachable tool that costs money or cannot be undone is offered, never pressed by
+    the model: PROPOSE_ONLY, or a reversibility the model may never press itself. recheck_change
+    became reachable from chat (BOSSAPP-1359) without it — a full gate re-run on a sentence."""
+    from boss_engine.tools.registry import NEVER_SELF_EXECUTE
+
+    reg = build_default_registry()
+    loose = sorted(
+        name for name in _DISCUSS_OPERATIONS_TOOLS if name in reg.names()
+        and reg.get(name).reversibility in {"costs_money", "irreversible"}
+        and name not in EngineAgent.PROPOSE_ONLY
+        and reg.get(name).reversibility not in NEVER_SELF_EXECUTE
+        and not reg.get(name).operator_only)
+    assert not loose, loose
+
+
 def test_propose_only_is_a_subset_of_what_boss_may_run():
     """Offering something BOSS cannot execute produces a dead button."""
     assert EngineAgent.PROPOSE_ONLY <= set(_DISCUSS_OPERATIONS_TOOLS)

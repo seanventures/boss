@@ -550,7 +550,7 @@ class ToolRegistry:
         # calls again. After every gate, like a missing argument (a refusal there says more).
         # Dropped quietly as before: BOSS's own underscore keys (never a caller's to send) and a
         # claimed `actor` (the acting identity is the session's, whatever a caller claims).
-        unknown = [k for k in ignored if not str(k).startswith("_") and k not in QUIET_ARGS]
+        unknown = unknown_caller_args(ignored)
         if unknown:
             return unknown_args_result(spec, unknown)
         missing = missing_required(spec, safe_args)
@@ -773,6 +773,13 @@ def missing_args_result(spec: "ToolSpec", missing: list[str], ignored: list[str]
 
 #: Caller keys a tool that does not list them drops without refusing the call (see `invoke`).
 QUIET_ARGS = frozenset({"actor"})
+
+
+def unknown_caller_args(ignored: list[str]) -> list[str]:
+    """Of the keys `schema_args` dropped, the ones a caller sent that the tool does not take —
+    refused at every door (registry.invoke, the agent-step tool bundles), never dropped into a
+    success. Underscore keys and QUIET_ARGS are not a caller's to send and stay dropped."""
+    return [k for k in ignored if not str(k).startswith("_") and k not in QUIET_ARGS]
 
 
 def unknown_args_result(spec: "ToolSpec", unknown: list[str]) -> dict:

@@ -42,3 +42,22 @@ def test_every_tool_refuses_the_same_way():
                          actor="usr_someone", operator_confirmed=True,
                          args={"definitely_not_an_argument": 1})
         assert out.get("error") == "unknown_arguments", (name, out)
+
+
+def test_an_agent_steps_tool_calls_refuse_the_same_way(monkeypatch):
+    """The agent-step doors (a baseline bundle, repo.read) call handlers directly, not through
+    registry.invoke: the same rule holds there, before the handler runs."""
+    import pytest
+
+    from boss_engine.services import agent_baseline, kit_connections, skill_executors
+    from boss_engine.services.agent_baseline import BUNDLE_TOOL_KEY
+
+    context = SimpleNamespace(settings=None, project_id="p", actor="agent",
+                              connection=SimpleNamespace(engine=None))
+    with pytest.raises(ValueError, match="does not take 'filter_by'"):
+        agent_baseline.run_bundled_tool(context, "boss.fundamentals",
+                                        {BUNDLE_TOOL_KEY: "list_skills", "filter_by": "x"})
+    monkeypatch.setattr(kit_connections, "github_state", lambda *a, **k: {"repo": "acme/app"})
+    with pytest.raises(ValueError, match="does not take 'branch_name'"):
+        skill_executors.execute_repo_read(context, {"tool": "read_code", "path": "README.md",
+                                                    "branch_name": "main"})

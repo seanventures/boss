@@ -229,6 +229,8 @@ P1:
     - engine/tests/test_an_agent_step_that_did_nothing_fails.py
     - engine/tests/test_a_tool_call_with_an_unknown_argument_is_refused.py
     - engine/tests/test_a_draft_is_reviewed_against_its_requirement.py
+    # A re-check starts only with steer; its preview is a read
+    - engine/tests/test_a_change_can_be_rechecked.py
   api:
     # GETs are declared as reads; a read-permission POST says it writes nothing (BOSSAPP-1359)
     - apps/api/tests/test_identity_authz_read_only.py
