@@ -32,6 +32,16 @@ from boss_engine.tools.builtin import (
     build_discuss_read_registry,
 )
 
+#: The repository root. The source checks below name files from it ("apps/web/app/page.tsx");
+#: they read them from here wherever pytest was started (engine/ or the root), so the file never
+#: passes from one directory and fails from the other.
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+
+
+@pytest.fixture(autouse=True)
+def _from_the_repo_root(monkeypatch):
+    monkeypatch.chdir(REPO_ROOT)
+
 
 # --------------------------------------------------------------------------- #
 # Starting expensive work is always an OFFER
@@ -359,7 +369,7 @@ def test_ordinary_tables_are_not_mistaken_for_offers():
 
 def test_the_prompt_forbids_the_table_that_pretends_to_be_a_button():
     """The recovery above is a safety net, not the plan: the model should call the tool."""
-    from engine.tests._source import prompt_text
+    from ._source import prompt_text
     from boss_engine.services import intent_router
     text = prompt_text(intent_router).lower()
     assert "that table is not a button" in text
@@ -369,7 +379,7 @@ def test_the_prompt_forbids_the_table_that_pretends_to_be_a_button():
 def test_the_operator_correction_outranks_the_pinned_run():
     """"No, use the latest working one — the preview works fine" was ignored twice: the app
     context block ended with "use your tools with run_id X", which reads as a restriction."""
-    from engine.tests._source import prompt_text
+    from ._source import prompt_text
     from boss_engine.services import intent_router
     text = prompt_text(intent_router).lower()
     assert "the correction wins" in text

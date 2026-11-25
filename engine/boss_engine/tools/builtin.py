@@ -10790,14 +10790,32 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     "captain_drive",
     "captain_overwatch",
     "captain_theater",
+    # ASKING A PERSON, FROM CHAT (BOSSAPP-1359). Each opens a card in Needs you and changes
+    # nothing until a person answers; registered for chat (Exposure surfaces) and unreachable
+    # from it until now, so the agent could only describe the card it was meant to raise.
+    "offer_options", "propose_hire", "propose_secret", "request_budget_override",
+    "request_tool_access", "watch_work_item",
+    # Re-checking a finished change: costs money, so it is offered as a button, never run.
+    "recheck_change",
+    # The project's Knowledge Graph from chat: proposals a person reviews (documents, sections)
+    # and the case-study samples, gated on knowledge:manage like the console's own buttons.
+    "add_document_from_file", "add_regulation_document", "set_ontology_pack",
+    "load_aml_sample", "load_dq_platform",
+    # The Infra Agent's storage incident, from chat as from its own steps: words on the incident,
+    # one notch of the deterministic cleanup, a rule proposal, the install-wide work hold. Tier 3
+    # still always goes to a person; each is gated on system:operate.
+    "storage_report", "storage_run_step", "storage_propose_rule",
+    "work_hold_set", "work_hold_release",
 })
 
 #: REGISTERED, AND DELIBERATELY NOT REACHABLE FROM CHAT.
 #:
 #: The workflow's `research` and `meeting` steps need these tools, but a chat must start a
 #: workflow so the run and its outcome stay linked. The separate raw SQL hold below protects
-#: project-pinned chat until the database enforces project scope.
-_WORKFLOW_ONLY_TOOLS = frozenset({"create_discovery", "request_meeting"})
+#: project-pinned chat until the database enforces project scope. `write_file` writes an agent
+#: step's own /scratch notes and /memories (Exposure surface agent_step only): a chat turn has no
+#: run scratch to write to.
+_WORKFLOW_ONLY_TOOLS = frozenset({"create_discovery", "request_meeting", "write_file"})
 _DISCUSS_UNSCOPED_WRITE_TOOLS = frozenset({"write_db"})
 
 #: Tables raw SQL may never write: every identity table (bindings, roles, seats, credentials, the
