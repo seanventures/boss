@@ -50,6 +50,16 @@ If your change can spend money or write outside BOSS, include tests that cover t
 
 Installing an agent definition or example workflow starts no work, and docs and code should describe it that way.
 
+## Feature freeze for the guided preview
+
+Until every golden journey has been green **5 days in a row** on both preview hosts, `main` takes
+only preview-readiness work: fixes, tests, journey checks, docs and security fixes (the full rule:
+`docs/preview/FREEZE.md`). The counter is on Govern › More › Journeys and at
+`GET /v1/golden-journeys` (`green_days`); a red journey, or one that did not run, resets it. The
+journeys are defined in `engine/boss_engine/services/golden_journeys/defs/` and run with
+`scripts/golden-journeys.py`. A bug a journey finds gets a fix ticket that links the journey run,
+and the fix adds a permanent acceptance item to that journey's definition.
+
 ## Review
 
 Maintainers review each pull request for scope, safety, tests, and documentation before merging. An acknowledged issue or a draft plan is not approval to start the work, so check in on the issue before a large change.
