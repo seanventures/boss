@@ -275,6 +275,10 @@ def test_the_shepherd_giving_up_on_an_ended_build_still_raises_its_card(eng, pro
             d = stuck_work.diagnose(c, get_settings(), rid, use_model=False)
         assert d["chosen"] == "ask_person", d
         assert d["card_id"], "the Shepherd asked a person and raised no card"
+        # A failure the Shepherd never tried to fix stays card-free (no card per old failure).
+        with eng.begin() as c:
+            old = _run(c, project, status="failed", error="Tests failed: 3 of 40")
+            assert stuck_work.diagnose(c, get_settings(), old, use_model=False)["card_id"] is None
     finally:
         _clean(eng, project)
 
