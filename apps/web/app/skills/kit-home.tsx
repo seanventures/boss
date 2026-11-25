@@ -73,6 +73,21 @@ export function KitHome({ projectId, actor }: { projectId: string; actor: string
     setDismissed(!params.setup && (readFlag(dismissKey(projectId)) || readFlag(crewKey(projectId))));
   }, [projectId]);
 
+  // A LINK FOLLOWED INSIDE THE CONSOLE (Get started's "Connect your tools", the agent page's
+  // "New skill") is a pushState + popstate on a page already mounted: honour what it asks.
+  useEffect(() => {
+    const on = () => {
+      const here = new URLSearchParams(window.location.search);
+      if (here.get("area") !== "skills") return;
+      const params = readKitParams();
+      if (params.add) { setTab("home"); setAdding(params.add); }
+      if (params.mcp) { setTab("home"); setOpenMcp(params.mcp); }
+      if (params.tab !== "home") setTab(params.tab);
+    };
+    window.addEventListener("popstate", on);
+    return () => window.removeEventListener("popstate", on);
+  }, []);
+
   const load = useCallback(async (check: "stale" | "none" = "stale") => {
     const r = await kitApi.load(projectId, check);
     if (!r.ok) { setError(r.error); setErrorStatus(r.status ?? 0); return; }

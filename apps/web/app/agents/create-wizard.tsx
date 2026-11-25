@@ -9,6 +9,8 @@ import {
   type Grantable, type McpGrant,
 } from "../../lib/agents";
 import { HelpTip } from "../help-tip";
+import { AddMcpSheet } from "../skills/add-mcp-sheet";
+import { Plugs } from "@phosphor-icons/react";
 import "./create-wizard.css";
 
 type Step = "kind" | "name" | "grants" | "wake" | "review";
@@ -73,6 +75,9 @@ export function AgentBotWizard({ projectId, actor, onClose, onCreated }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [made, setMade] = useState("");
+  // ADD MCP SERVER WITHOUT LEAVING (BOSSAPP-1478): the same sheet as Skills & MCP. The agent does
+  // not exist yet, so the sheet grants nothing; the new server is ticked here and granted on Create.
+  const [addingMcp, setAddingMcp] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -85,10 +90,11 @@ export function AgentBotWizard({ projectId, actor, onClose, onCreated }: {
   }, [projectId]);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !busy) onClose(); };
+    // The Add MCP server sheet on top takes its own Esc.
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !busy && !addingMcp) onClose(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [busy, onClose]);
+  }, [busy, onClose, addingMcp]);
 
   const steps = stepsFor(kind);
   const refused = !mayCreate.allowed || (kind === "bot" && !mayDeploy.allowed);
@@ -309,6 +315,10 @@ export function AgentBotWizard({ projectId, actor, onClose, onCreated }: {
                   })}
                   {grantable && !grantable.mcp_servers.length ? <div className="abw-empty">No MCP servers yet</div> : null}
                 </div>
+                <button type="button" className="abw-btn abw-add-mcp" data-testid="abw-add-mcp"
+                        title="Connect a new tool server" onClick={() => setAddingMcp(true)}>
+                  <Plugs size={14} aria-hidden="true" /> Add MCP server
+                </button>
               </fieldset>
             </div>
           ) : step === "wake" ? (
@@ -407,6 +417,14 @@ export function AgentBotWizard({ projectId, actor, onClose, onCreated }: {
           )}
         </footer>
       </section>
+      {addingMcp ? (
+        <AddMcpSheet projectId={projectId} actor={actor} grants={false} onClose={() => setAddingMcp(false)}
+                     onAdded={(id) => {
+                       setAddingMcp(false);
+                       setServers((now) => ({ ...now, [id]: "" }));
+                       void loadGrantable(projectId).then((r) => { if (r.ok) setGrantable(r.data); });
+                     }} />
+      ) : null}
     </div>
   );
 }

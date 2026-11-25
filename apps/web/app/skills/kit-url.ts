@@ -56,3 +56,15 @@ export function writeKitParams(change: Partial<Record<Key, string | null>>): voi
 
 /** The link to open an add sheet from anywhere (a page load lands on it). */
 export const addHref = (kind: "mcp" | "skill") => `?area=skills&add=${kind}`;
+
+/** Search (⌘K) commands that open an add sheet: typing "mcp", "tools" or "skill" finds them. */
+export const ADD_COMMANDS: readonly { kind: "mcp" | "skill"; label: string; sub: string; words: string }[] = [
+  { kind: "mcp", label: "Add MCP server", sub: "Connect your tools", words: "add mcp server connect tools integration connector" },
+  { kind: "skill", label: "Add skill", sub: "Write, import or turn one on", words: "add skill new skill write import" },
+];
+
+export function addCommandsFor(query: string): typeof ADD_COMMANDS[number][] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [...ADD_COMMANDS];
+  return ADD_COMMANDS.filter((c) => q.split(/\s+/).every((w) => c.words.includes(w) || c.label.toLowerCase().includes(w)));
+}

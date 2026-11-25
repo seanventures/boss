@@ -401,3 +401,5 @@
   .kit-srv-err { grid-column: 1 / -1; grid-row: auto; }
   .kit-page-head > .kit-btn-primary, .kit-page-head > [data-testid="kit-add-skill-btn"] { flex: 1 1 auto; justify-content: center; }
 }
+/* A sheet any screen opens (Add MCP server): above wizards and the workflow inspector. */
+.kit-modal[data-over="dialog"] { z-index: calc(var(--z-dialog) + 10); }

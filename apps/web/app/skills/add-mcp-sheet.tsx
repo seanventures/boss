@@ -201,7 +201,7 @@ export function AddMcpSheet({ projectId, actor, onClose, onAdded, defaultAgents 
     && (form.auth === "oauth" || test?.ok === true);
 
   return (
-    <ModalShell label="Add MCP server" testId="kit-add-mcp" onClose={onClose} wide>
+    <ModalShell label="Add MCP server" testId="kit-add-mcp" onClose={onClose} wide over="dialog">
       <header className="kit-modal-head">
         <h3>{browse ? "Browse connectors" : "Add MCP server"}</h3>
         <button type="button" className="kit-icon-btn" aria-label="Close" data-tip="Close" onClick={onClose}><X size={16} /></button>
