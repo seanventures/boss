@@ -261,6 +261,12 @@ BOSS uses the install's own (`BOSS_GITHUB_API_URL`, or `BOSS_GITHUB_WEB_URL` + `
 when neither is set does it fall back to github.com. To point the whole install at GHES, set the
 host values in [GitHub Enterprise](IDENTITY_ADMIN.md#github-enterprise).
 
+**A token never leaves its host.** Every GitHub credential BOSS holds is marked with the
+GitHub it was issued by (github.com, or one GHES host). Each place that sends a credential
+(API calls, git, the egress proxy) checks that mark and refuses to send it anywhere else; the
+refusal is logged as `github.cross_host_refused`, naming both hosts and never the token. The
+install's own token (`BOSS_GITHUB_TOKEN`) and App belong to the install's host.
+
 **Custom CA.** A GHES server usually has a certificate from the company's own CA. Give BOSS that
 root CA as `BOSS_EXTRA_CA_FILE` (see [The company's CA](#the-companys-ca-tls-inspection)). The same
 bundle is used for API calls and for git.
