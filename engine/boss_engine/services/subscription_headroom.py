@@ -186,16 +186,22 @@ def project_view(connection: Any, settings: Any, project_id: str, *,
         members = [m for m in (pool or {}).get("members") or [] if m.get("status") != "disabled"]
         if members:
             rooms = subscription_pools.headroom_of(connection, members, engine, now=now)
-            usable = [m for m in members if m.get("status") == "active"
+            # The seats that may take work (routable: an adopted install login whose login is
+            # refused may not), as `assign` reads them.
+            may = {m["id"] for m in subscription_pools.routable(connection, settings, project_id,
+                                                                  engine, members)}
+            usable = [m for m in members if m["id"] in may
                       and rooms[m["id"]].state != "exhausted"]
             best = subscription_pools.choose_member(usable, rooms)
             for m in members:
                 h = rooms[m["id"]]
                 left = _pct(h.left)
                 others = [o["label"] for o in usable if o["id"] != m["id"]]
+                refused = m.get("status") == "needs_reauth" or (
+                    m.get("status") == "active" and m["id"] not in may)
                 seat_login = ({"state": "expired", "words": "Login expired",
                                "tip": "Sign in to this account again in Setup."}
-                              if m.get("status") == "needs_reauth" else login)
+                              if refused else login)
                 resets = _iso(h.resets_at)
                 state = "exhausted" if seat_login["state"] == "expired" else h.state or "plenty"
                 sources.append({
