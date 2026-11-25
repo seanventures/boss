@@ -4,6 +4,14 @@
     POST   /v1/budget-policies/scoped               {project_id, scope_type, scope_id?, cap_usd_micros,
                                                      period?, warn_pct?, hard_stop?, role_project_id?}
     DELETE /v1/budget-policies/scoped/{policy_id}?project_id=
+    GET    /v1/budget-policies/scoped/teams?project_id=     the org's teams (identity groups), with
+                                                     the projects each one's spend rolls up from
+    GET    /v1/budget-policies/scoped/forecast?project_id=&scope_type=org|team|project&scope_id=
+                                                     this month: spent, run-rate, forecast, cap,
+                                                     by project and the costliest runs (BOSSAPP-1295)
+
+POST also takes `preset` (scoped_budgets.PRESETS, e.g. `pilot_2000`: a team's $2,000 a month with
+a hard stop); what the body names explicitly wins over the preset.
 
 A scoped budget reaches across projects (an org cap, an agent everywhere), so writing one needs
 budget:manage at ORG scope; reading needs budget:read there. `project_id` names the project the
@@ -71,6 +79,7 @@ def build_scoped_budgets_router(engine_getter: Optional[Callable[[], Any]] = Non
     def set_scoped_budget(request: Request, payload: dict = Body(...)) -> Any:
         body = payload or {}
         try:
+            body = scoped_budgets.apply_preset(body)
             with _engine().begin() as c:
                 org = _org(c, request, body.get("project_id"))
                 if not org:
@@ -86,6 +95,31 @@ def build_scoped_budgets_router(engine_getter: Optional[Callable[[], Any]] = Non
                     actor=_actor(request))
         except (scoped_budgets.ScopedBudgetError, ValueError, TypeError) as refused:
             return _refuse(422, "scoped_budget_refused", str(refused))
+
+    @router.get("/v1/budget-policies/scoped/teams")
+    @permit(P.BUDGET_READ, scope=Scope.org())
+    def list_budget_teams(request: Request, project_id: Optional[str] = None) -> Any:
+        with _engine().begin() as c:
+            org = _org(c, request, project_id)
+            if not org:
+                return _refuse(404, "org_not_found")
+            return {"teams": scoped_budgets.list_teams(c, org),
+                    "presets": [{"key": k, **v} for k, v in scoped_budgets.PRESETS.items()]}
+
+    @router.get("/v1/budget-policies/scoped/forecast")
+    @permit(P.BUDGET_READ, scope=Scope.org())
+    def scoped_forecast(request: Request, project_id: Optional[str] = None, scope_type: str = "org",
+                        scope_id: Optional[str] = None) -> Any:
+        from boss_engine.services import spend_forecast
+
+        try:
+            with _engine().begin() as c:
+                org = _org(c, request, project_id)
+                if not org:
+                    return _refuse(404, "org_not_found")
+                return spend_forecast.month_forecast(c, org, scope_type, str(scope_id or ""))
+        except scoped_budgets.ScopedBudgetError as refused:
+            return _refuse(422, "forecast_refused", str(refused))
 
     @router.delete("/v1/budget-policies/scoped/{policy_id}")
     @permit(P.BUDGET_MANAGE, scope=Scope.org())

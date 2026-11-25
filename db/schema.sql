@@ -15337,6 +15337,13 @@ DO $$ BEGIN
   ALTER TABLE scoped_budget_policies ADD CONSTRAINT scoped_budget_policies_scope_type_check
     CHECK (scope_type IN ('org', 'project', 'role', 'workflow', 'trigger', 'deployment'));
 END $$;
+-- SCOPED BUDGETS gain `team` (BOSSAPP-1295): an identity group; its spend is the spend of the
+-- projects the group or its members hold a project-scope role binding on.
+DO $$ BEGIN
+  ALTER TABLE scoped_budget_policies DROP CONSTRAINT IF EXISTS scoped_budget_policies_scope_type_check;
+  ALTER TABLE scoped_budget_policies ADD CONSTRAINT scoped_budget_policies_scope_type_check
+    CHECK (scope_type IN ('org', 'project', 'role', 'workflow', 'trigger', 'deployment', 'team'));
+END $$;
 -- THE LOCAL WORKER'S WAKE (§8.2, P9a-5): a long-polling /v1/worker/poll waits on an in-memory
 -- hub fed by this channel, so a queued job is claimed within milliseconds of its commit and an
 -- idle worker costs Postgres nothing. The payload is the job's identity only (kind, target,
