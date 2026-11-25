@@ -274,6 +274,8 @@ export type SetupView = {
   /** "Build speed": parallel sub-agents per build (project setting build_speed). Absent on an older API. */
   build_speed?: { key: string; mode: "balanced" | "fastest"; parallelism: number; machine: number;
                   asks?: Record<string, number>; source: "project" | "default"; permission: string } | null;
+  /** Setup › Quality bar (quality_bar.describe): the preset, each gate's level. Absent on an older API. */
+  quality_bar?: QualityBarView | null;
   /** Setup › Embedding model, the org's (knowledge/embedding_slot.py). Absent on an older API. */
   embedding_model?: EmbeddingModel | null;
   /** Whose models these are (org_models.view): the org's, its model home, this project's pins. */
@@ -405,9 +407,25 @@ export type TokenFound = {
 };
 
 /** Rows on the board. */
+export type QualityPreset = "prototype" | "standard" | "production";
+export type GateLevel = "block" | "follow_up";
+/** One gate on Setup › Advanced › Each gate: what each preset does with it, the project's level. */
+export type QualityGate = {
+  gate: string; label: string; floor: boolean; presets: Record<QualityPreset, GateLevel>;
+  level: GateLevel | "default"; effective: GateLevel; note?: string;
+};
+export type QualityBarView = {
+  key: string; gates_key: string; bar: QualityPreset; default: QualityPreset;
+  source: "project" | "default"; permission: string; always: string;
+  presets: { key: QualityPreset; label: string; line: string; blocks: string[]; follow_ups: string[] }[];
+  gates: QualityGate[]; overrides: Record<string, GateLevel>;
+};
+
 export type RowKey = "github" | "repository" | "models" | "capacity" | "jobs" | "budget" | "try"
   /** Advanced: the rows folded under it (`focus=` opens the fold on that row). */
   | "advanced" | "github_app" | "repositories" | "ci" | "build_database" | "build_speed" | "toolchains" | "public_url"
+  /** Setup › Quality bar, and its per-gate levels under Advanced. */
+  | "quality_bar" | "quality_gates"
   | "embedding_model"
   /** Setup › Ticket systems (BOSSAPP-1047), Documents (Confluence) and Events: sections of the board. */
   | "ticket_systems" | "documents" | "events";

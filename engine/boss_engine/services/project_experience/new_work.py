@@ -619,7 +619,24 @@ def defaults(connection: Connection, project_id: str) -> dict[str, Any]:
     staging = next((t for t in found if not t["prod"]), None)
     return {"tracker": tracker(connection, project_id), "targets": found,
             "target": staging["id"] if staging else None, "tell": tell(connection, project_id),
-            "priority": "normal"}
+            "priority": "normal", "quality_bar": quality_bar(connection, project_id)}
+
+
+def quality_bar(connection: Connection, project_id: str) -> dict[str, Any]:
+    """New work's Quality chip (BOSSAPP-1362): the project's bar and the presets in plain words.
+    The chip opens on the project's bar; a lower one for this run needs settings:update (the
+    start door checks it)."""
+    from ...config import get_settings
+    from .. import project_settings, quality_bar as qb
+
+    try:
+        with connection.begin_nested():
+            bar = project_settings.effective(connection, project_id, get_settings(), qb.SETTING)
+    except Exception:  # noqa: BLE001 — the chip still opens, on the default
+        bar = None
+    view = qb.describe(bar)
+    return {"bar": view["bar"], "always": view["always"],
+            "presets": [{k: p[k] for k in ("key", "label", "line")} for p in view["presets"]]}
 
 
 def plan(connection: Connection, project_id: str, kind: str = "feature",

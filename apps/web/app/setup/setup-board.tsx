@@ -29,6 +29,7 @@ import {
 import type { RowKey, SetupView } from "../../lib/setup-types";
 import { BuildDatabaseRow } from "./build-database-row";
 import { BuildSpeedRow } from "./build-speed-row";
+import { QualityBarRow, QualityGatesRow } from "./quality-bar-row";
 import { AgentCapacityRow } from "./agent-capacity-row";
 import { EmbeddingModelRow } from "./embedding-model-row";
 import { CapacityRow } from "./capacity-row";
@@ -70,6 +71,8 @@ const ADVANCED: Record<string, { line: string; tip: string }> = {
         tip: "Off by default. Asked for only when a build needs to change CI." },
   build_database: { line: "Postgres for builds that need it", tip: "Auto, Always or Never." },
   build_speed: { line: "How many agents write a build at once", tip: "Balanced or Fastest." },
+  quality_gates: { line: "Each check: preset, blocks or follow-up",
+                   tip: "Over the Quality bar's preset. The floor always blocks." },
   toolchains: { line: "What builds can compile and run", tip: "Python and Node always; others on the host." },
   adapters: { line: "Skills and MCP reach it",
               tip: "An installed agent receives MCP servers and skills on each run." },
@@ -378,6 +381,8 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
           <div className="su-adv-item" ref={ref("ci")}><Why id="ci" /><CiPermission /></div>
           <div className="su-adv-item" ref={ref("build_database")}><Why id="build_database" /><BuildDatabaseRow /></div>
           <div className="su-adv-item" ref={ref("build_speed")}><Why id="build_speed" /><BuildSpeedRow /></div>
+          {/* EACH GATE (BOSSAPP-1362): every check's level over the Quality bar's preset. */}
+          <div className="su-adv-item" ref={ref("quality_gates")}><Why id="quality_gates" /><QualityGatesRow /></div>
           <div className="su-adv-item"><AgentCapacityRow /></div>
           <div className="su-adv-item" ref={ref("toolchains")}><Why id="toolchains" /><ToolchainsRow /></div>
           {view.harness_adapters?.length ? (
@@ -474,6 +479,12 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
         <div><EventsRow projectId={projectId} /></div>
         {/* AUTONOMY (BOSSAPP-1441): one line; it is set in Govern › Where people decide. */}
         <div><AutonomySetupRow projectId={projectId} /></div>
+        {/* QUALITY BAR (BOSSAPP-1362): what blocks a build and what becomes a follow-up. */}
+        <div ref={ref("quality_bar")} data-focused={focus === "quality_bar" || undefined}>
+          <QualityBarRow onEachGate={() => {
+            setAdvancedOpen(true);
+            window.setTimeout(() => refs.current.quality_gates?.scrollIntoView?.({ behavior: "smooth", block: "start" }), 50);
+          }} /></div>
         {/* NO TRY IT HERE (operator, 2026-11-04: "Why trying out sample project is in Repos and
             Models"): Setup is connections only. The sample and the one-sentence PR live on the
             Welcome (step 3); `focus=try` opens it. */}

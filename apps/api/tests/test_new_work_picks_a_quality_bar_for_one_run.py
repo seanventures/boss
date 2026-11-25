@@ -17,10 +17,16 @@ from apps.api.tests.test_new_work_goes_through_the_one_start_door import (  # no
 def _start(client, project, body):  # noqa: F811
     """Through consent and readiness, as the console does (the start door's own answers)."""
     r = client.post(f"/v1/projects/{project}/work", json=body)
-    for _ in range(3):
+    for _ in range(4):
         if r.status_code == 200:
             break
-        if _consent(client, r):
+        try:
+            consented = _consent(client, r)
+        except AssertionError:
+            # An agent named in the consent body was re-seeded meanwhile (unknown_agent):
+            # ask again, as the console's consent sheet does.
+            consented = True
+        if consented:
             r = client.post(f"/v1/projects/{project}/work", json=body)
             continue
         missing = _missing(r)
@@ -59,13 +65,6 @@ def test_a_stricter_bar_is_anyones_who_may_start_and_is_stamped(world, client, e
     from boss_engine.identity import grants
 
     monkeypatch.setattr(grants, "repo_guard_active", lambda *a, **k: False)
-    starter = _start_only(world, project, "qb-start-strict")
-    with world.acting_as(world.ctx(starter)):
-        r = client.post(f"/v1/projects/{project}/work",
-                        json={"kind": "feature", "text": "Add a route.",
-                              "quality_bar": "production"})
-    # Consent or readiness may still answer (the start door's own); never the bar's refusal.
-    assert not (r.status_code == 403 and "quality bar" in r.text), r.text
     with world.acting_as(world.ctx(world.owner)):
         r = _start(client, project, {"kind": "feature", "text": "Add a route.",
                                      "quality_bar": "production"})
@@ -73,6 +72,13 @@ def test_a_stricter_bar_is_anyones_who_may_start_and_is_stamped(world, client, e
     stamped = _stamped(engine, r.json()["run_id"])
     assert stamped.get("quality_bar") == "production"
     assert stamped.get("_quality_bar_by")
+    starter = _start_only(world, project, "qb-start-strict")
+    with world.acting_as(world.ctx(starter)):
+        r = client.post(f"/v1/projects/{project}/work",
+                        json={"kind": "feature", "text": "Add a stricter route.",
+                              "quality_bar": "production"})
+    # Consent or readiness may still answer (the start door's own); never the bar's refusal.
+    assert not (r.status_code == 403 and "quality bar" in r.text), r.text
 
 
 def test_an_owner_may_lower_it_and_a_word_that_is_no_bar_is_refused(world, client, engine, project,  # noqa: F811
@@ -108,3 +114,15 @@ def test_the_projects_gate_levels_are_a_setting_with_the_floor_refused(world, cl
         refused = client.put("/v1/settings/quality_bar_gates",
                              json={"project_id": project, "value": {"consistent": "block"}})
     assert refused.status_code == 403, refused.text
+
+
+def test_new_works_plan_offers_the_projects_bar_in_words(world, client, project):  # noqa: F811
+    with world.acting_as(world.ctx(world.owner)):
+        client.put("/v1/settings/quality_bar", json={"project_id": project, "value": "production"})
+        r = client.get(f"/v1/projects/{project}/work/plan?kind=feature&detail=true")
+        client.put("/v1/settings/quality_bar", json={"project_id": project, "value": None})
+    assert r.status_code == 200, r.text
+    qb = r.json()["defaults"]["quality_bar"]
+    assert qb["bar"] == "production"
+    assert [p["key"] for p in qb["presets"]] == ["prototype", "standard", "production"]
+    assert "approval" in qb["always"]

@@ -43,7 +43,7 @@ import {
 import { FX_WORK_PLAN } from "../../lib/project-experience-fixtures";
 import {
   MAX_BRIEF_CHARS, PRIORITIES, PRIORITY_WORDS, addToNext, anchorWords, briefLength, issueIsBug, issueLinkIn, newDraftId, parsePlanDetail, planDetailPath, readDraft, startNewWork,
-  readingWords, understand, writeDraft, type Brief, type ChatMsg, type IssueChoice, type IssueRead, type PlanDetail, type Priority, type Understanding,
+  QUALITY_RANK, readingWords, understand, writeDraft, type Brief, type QualityPresetKey, type ChatMsg, type IssueChoice, type IssueRead, type PlanDetail, type Priority, type Understanding,
 } from "../../lib/new-work";
 import { BriefCard, Marked, type BriefRow } from "./brief-card";
 import { Face, Flow, Said } from "./kit";
@@ -52,6 +52,7 @@ import { changeWords, projectIsLocal } from "../../lib/repo-links";
 import { importAndStart, ticketWorkflow } from "../../lib/tickets";
 import { RUN_PROFILES, profileWords, useDefaultProfile, type RunProfile } from "../../lib/run-profiles";
 import { NewWorkTicket, RecognisesLine, useResolvedTicket } from "./new-work-ticket";
+import { PRESET_ICON } from "../setup/quality-bar-row";
 import "./new-work.css";
 
 export type Kind = WorkKind;
@@ -177,6 +178,10 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
   const defaultProfile = useDefaultProfile(pid, !ctx.demo);
   const [profilePick, setProfilePick] = useState<RunProfile | null>(null);
   const runProfile = profilePick ?? defaultProfile;
+  // THE QUALITY BAR FOR THIS RUN (BOSSAPP-1362): opens on the project's; a lower one needs
+  // settings:update (the start door checks it too), the same or stricter is anyone's.
+  const [barPick, setBarPick] = useState<QualityPresetKey | null>(null);
+  const lowerGate = useGate("settings:update", pid);
   const tk = resolved.state === "ready" ? resolved.ticket : null;
 
   // ── Helm's plan for this kind (and the picked workflow), with the chips' defaults ──────────
@@ -383,6 +388,7 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
     ...(wfKey ? { workflow_key: wfKey } : {}), ...(anyway.length ? { start_anyway: anyway } : {}),
     ...(newApp ? { new_app: true } : anchorApp || p?.anchor?.runId ? { app: anchorApp || p?.anchor?.runId } : { infer_app: true }),
     ...(runProfile ? { profile: runProfile } : {}),
+    ...(barPick && barPick !== projectBar ? { quality_bar: barPick } : {}),
   });
   const locked = Boolean(refusal) && unaccepted(refusal, startAnyway).length > 0;
   // THE BRIEF'S LENGTH (AR-21): never cut; a counter near the limit, Start held past it.
@@ -398,7 +404,8 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
       // FROM A TICKET: one press imports it (unless BOSS has it) and starts it from the ticket.
       try {
         if (!tkGate.allowed) { setSaid({ text: tkGate.reason, tone: "red" }); return; }
-        const r = await importAndStart(pid, tk, picked.v || tkSuggested || undefined, startAnyway, runProfile);
+        const r = await importAndStart(pid, tk, picked.v || tkSuggested || undefined, startAnyway, runProfile,
+                                       barPick && barPick !== projectBar ? barPick : null);
         // NOT READY: the same checklist and "Start anyway" ticks as a start without a ticket.
         if (!r.ok && r.readiness) { setRefusal(r.readiness); return; }
         if (!r.ok) { setSaid({ text: r.error ?? "It didn't start.", tone: "red" }); return; }
@@ -475,6 +482,9 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
   const approvals = steps.filter((s) => s.you);
   const nodes = p?.nodes.length ? p.nodes : TYPICAL;
   const d = p?.defaults ?? null;
+  const qbar = d?.qualityBar ?? null;
+  const projectBar: QualityPresetKey = qbar?.bar ?? "standard";
+  const runBar: QualityPresetKey = barPick ?? projectBar;
   const target = d?.targets.find((t) => t.id === d.target) ?? d?.targets.find((t) => !t.prod) ?? null;
   const prod = d?.targets.find((t) => t.prod) ?? null;
   const repo = ctx.overview.project.repos[0];
@@ -704,6 +714,34 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
           </div>
         ),
       })}
+      {qbar ? chip("quality", {
+        label: "Quality", title: "What blocks this build and what becomes a follow-up. It opens on this project's bar.",
+        value: <span className="px-row" style={{ gap: 4 }} data-testid="px-nw-quality">{(() => { const I = PRESET_ICON[runBar]; return <I size={13} aria-hidden />; })()}
+          {qbar.presets.find((x) => x.key === runBar)?.label ?? runBar}</span>,
+        sub: barPick && barPick !== projectBar ? "you set it" : "project bar",
+        popover: (
+          <>
+            <div role="radiogroup" aria-label="Quality bar" className="px-nw-radios">
+              {qbar.presets.map((x) => {
+                const I = PRESET_ICON[x.key];
+                const lower = QUALITY_RANK[x.key] < QUALITY_RANK[projectBar];
+                const held = lower && !lowerGate.allowed;
+                return (
+                  <button key={x.key} type="button" role="radio" aria-checked={runBar === x.key} className="px-nw-opt"
+                          disabled={held} data-testid={`px-nw-quality-${x.key}`}
+                          title={held ? `Lower than the project's bar: ${lowerGate.reason || "needs settings:update"}` : x.line}
+                          onClick={() => { setBarPick(x.key); setPop(null); }}>
+                    <I size={13} weight={runBar === x.key ? "fill" : "regular"} aria-hidden />
+                    <b>{x.label}</b>{x.key === projectBar ? <span className="px-faint"> · project bar</span> : null}
+                    <small>{held ? "Lower than the project's bar: needs an owner or admin" : x.line}</small>
+                  </button>
+                );
+              })}
+            </div>
+            {qbar.always ? <p className="px-faint" style={{ margin: "6px 2px 0", fontSize: ".54rem" }} data-testid="px-nw-quality-always">{qbar.always}</p> : null}
+          </>
+        ),
+      }) : null}
       {chip("estimate", {
         label: "Estimate", noPop: true, title: est ? minutesTitle : "BOSS prices a workflow from its own runs in this project",
         value: est ? (
@@ -938,5 +976,9 @@ const DEMO_DETAIL = {
   defaults: { tracker: { provider: "github_issues", name: "GitHub", where: "paramg/helpdesk-ai-demo", connected: true },
               targets: [{ id: "dt_s", label: "Staging", environment: "staging", app: "helpdesk", url: "http://10.0.0.5:8004", port: 8004, prod: false },
                         { id: "dt_p", label: "Production", environment: "production", app: "helpdesk", url: "", port: null, prod: true }],
-              target: "dt_s", tell: { routes: [{ event: "needs_you", label: "Needs you", words: "Email" }, { event: "pr_ready", label: "PR ready", words: "Email" }] }, priority: "normal" },
+              target: "dt_s", tell: { routes: [{ event: "needs_you", label: "Needs you", words: "Email" }, { event: "pr_ready", label: "PR ready", words: "Email" }] }, priority: "normal",
+              quality_bar: { bar: "standard", always: "A release to production always waits for a person's approval.",
+                             presets: [{ key: "prototype", label: "Prototype", line: "Fastest. Blocks only on the basics." },
+                                       { key: "standard", label: "Standard", line: "The default. Also blocks on a review blocker." },
+                                       { key: "production", label: "Production", line: "Strictest. Blocks on everything." }] } },
 };
