@@ -96,6 +96,19 @@
   100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0);}
 }
 .cc-area-name .cc-chip { letter-spacing: 0; text-transform: none; font-family: inherit;}
+/* The headroom chip (BOSSAPP-1342): a link, toned by the account closest to its limit. */
+.cc-headroom { text-decoration: none; max-width: min(340px, 100%); cursor: pointer; padding: 0; overflow: hidden;
+  transition: border-color .15s ease, background-color .15s ease; }
+.cc-headroom-in { display: inline-flex; align-items: center; gap: 5px; height: 100%; padding: 0 8px; min-width: 0; color: var(--green); }
+.cc-headroom-in[data-tone="amber"] { color: var(--amber); }
+.cc-headroom-in[data-tone="red"] { color: var(--red); }
+.cc-headroom:has([data-tone="amber"]) { border-color: var(--amber); background: var(--amber-soft); }
+.cc-headroom:has([data-tone="red"]) { border-color: var(--red); background: var(--red-soft); }
+.cc-headroom:hover { border-color: var(--ink); }
+.cc-headroom:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+.cc-headroom-in svg { flex: none; }
+.cc-headroom-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.cc-headroom-more { flex: none; color: var(--muted); }
 .cc-help { position: relative; margin-left: 4px; letter-spacing: 0; text-transform: none; }
 .cc-help-btn {
   width: 24px; height: 24px; border-radius: 50%; border: 1px solid var(--border-strong);

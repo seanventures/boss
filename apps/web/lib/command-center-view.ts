@@ -142,7 +142,31 @@ export type CommandCenterView = {
   /** The Infra Agent's open storage incident (contract §9): null when none, `undefined` from an
    *  API that does not carry the field yet (the page then reads the shell's poll instead). */
   infraIncident?: StorageIncident | null;
+  /** Each subscription account's headroom, worst first (BOSSAPP-1342): Govern's own numbers,
+   *  for the header chip. null when the project has no subscription. */
+  subscriptions?: HeadroomChipView | null;
 };
+
+export type HeadroomState = "plenty" | "tight" | "near_limit" | "exhausted";
+export type HeadroomAccount = {
+  key: string; label: string; leftPct: number | null; state: HeadroomState; stateLabel: string;
+  resetsAt: string | null; login: string; atLimit: string; takingNewWork: boolean; pool: string | null;
+};
+export type HeadroomChipView = { accounts: HeadroomAccount[] };
+const HEADROOM_STATES = new Set(["plenty", "tight", "near_limit", "exhausted"]);
+
+/** The header chip's accounts; anything malformed is dropped, never drawn as a broken row. */
+export function parseHeadroomChip(w: unknown): HeadroomChipView | null {
+  if (!w || typeof w !== "object") return null;
+  const accounts = arr((w as W).accounts).map(obj).filter((a) => typeof a.key === "string").map((a) => ({
+    key: str(a.key), label: str(a.label), leftPct: typeof a.left_pct === "number" ? a.left_pct : null,
+    state: (HEADROOM_STATES.has(str(a.state)) ? str(a.state) : "plenty") as HeadroomState,
+    stateLabel: str(a.state_label), resetsAt: typeof a.resets_at === "string" ? a.resets_at : null,
+    login: str(a.login, "unknown"), atLimit: str(a.at_limit), takingNewWork: a.taking_new_work === true,
+    pool: typeof a.pool === "string" ? a.pool : null,
+  }));
+  return accounts.length ? { accounts } : null;
+}
 
 /** What the page holds: the last good view (or none) and whether the API answered last time. */
 export type ViewState = {
@@ -272,6 +296,7 @@ export function parseCommandCenterView(w: unknown): CommandCenterView {
             ...(typeof h.cause === "string" ? { cause: h.cause } : {}) },
     systems: arr(o.systems).map(parseSystem),
     ...("infra_incident" in o ? { infraIncident: parseIncident(o.infra_incident) } : {}),
+    ...("subscriptions" in o ? { subscriptions: parseHeadroomChip(o.subscriptions) } : {}),
     budgetRefusal: (() => {
       const r = obj(o.budget_refusal);
       return o.budget_refusal ? {

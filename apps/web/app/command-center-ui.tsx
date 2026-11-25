@@ -27,6 +27,7 @@ import { InfraCriticalCardView } from "./infra/infra-critical-card";
 import { useInfraIncident, withInfraStatus } from "../lib/infra-storage";
 import { OnboardingHelpRows } from "./onboarding-help-card";
 import { HelpPopover } from "./command-center/help-popover";
+import { HeadroomChip } from "./command-center/headroom-chip";
 import { nextAction } from "./command-center/next-action";
 import { announcePainted } from "../lib/area-painted";
 import { ReturningBrief } from "./command-center/returning-brief";
@@ -296,6 +297,7 @@ export function CommandCenter({ projectId, orgId, actor, initial: given, initial
               <><span aria-hidden>·</span><span data-testid="cc-status-text">{status.text}</span></>
             ) : null}
             {lastWorkWord && reachable ? <><span aria-hidden>·</span><span data-testid="cc-last-work">{lastWorkWord}</span></> : null}
+            {reachable ? <HeadroomChip view={view?.subscriptions} orgId={orgId} /> : null}
             {status.paused ? (
               <span className="cc-chip" data-testid="cc-paused" title="Live updates are paused. Press Live in the top bar.">Paused</span>
             ) : null}

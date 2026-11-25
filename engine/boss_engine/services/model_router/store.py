@@ -40,8 +40,18 @@ class PolicyConflict(RuntimeError):
         self.current = current
 
 
+#: Bumped on every invalidate: a reader that memoises what it built from a snapshot (the
+#: Command Center's headroom chip) keys on it, so a changed account shows at once.
+_GENERATION = [0]
+
+
+def generation() -> int:
+    return _GENERATION[0]
+
+
 def invalidate(project_id: Optional[str] = None) -> None:
     with _SNAP_LOCK:
+        _GENERATION[0] += 1
         if project_id is None:
             _SNAPS.clear()
             _MODES.clear()

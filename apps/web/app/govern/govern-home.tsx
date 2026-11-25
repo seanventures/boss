@@ -16,6 +16,7 @@ import { ControlBoard } from "./control-board";
 import { EnvelopesTab } from "./envelopes-tab";
 import { LimitsScreen } from "./limits-screen";
 import { GovernMeter } from "./meter";
+import { SubscriptionBanner, SubscriptionsTab } from "./subscriptions-tab";
 import { SelfFixTab } from "./self-fix-tab";
 import { PilotMetrics } from "./pilot-metrics";
 import { AutonomyPanel } from "../agent-ops/autonomy-panel";
@@ -35,10 +36,12 @@ export const GOVERN_POLL_MS = 15_000;
  * Sharing and Self-fix. Old links keep working: ?tab=spend|envelopes|sharing|selffix open what
  * they opened, ?focus=… still lands on that row of the board.
  */
-type Tab = "overview" | "limits" | "autonomy" | "areas" | "board" | "spend" | "envelopes" | "sharing" | "selffix" | "infrastructure" | "journeys" | "pilot";
+type Tab = "overview" | "limits" | "subscriptions" | "autonomy" | "areas" | "board" | "spend" | "envelopes" | "sharing" | "selffix" | "infrastructure" | "pilot" | "journeys";
 const MAIN: { key: Tab; label: string; tip: string }[] = [
   { key: "overview", label: "Spend", tip: "How much, on which model and project" },
   { key: "limits", label: "Limits", tip: "Caps, what happens at them, per project" },
+  // BOSSAPP-1342: each connected plan's 5-hour / weekly window, so nobody opens the provider's settings.
+  { key: "subscriptions", label: "Subscriptions", tip: "Each plan's usage windows, % left, resets and what BOSS does at the limit" },
   // WHERE PEOPLE DECIDE (agentic-factory wireframe 1): the compliance list, the only decisions
   // that wait for a person, and the stop switch. Keeps the `autonomy` key so old links land here.
   { key: "autonomy", label: "Where people decide", tip: "The 7 decisions that wait for a person; agents do the rest" },
@@ -119,6 +122,7 @@ export function GovernHome({ projectId, actor }: { projectId: string; actor: str
     },
   });
   const data = view.data;
+  const subs = data?.subscriptions ?? null;
   // Links that keep who you are (org=) are built from the URL, so only after mount: a server
   // render has no URL, and an href that differs between the two is a hydration mismatch.
   const [links, setLinks] = useState<{ changes: string; stopped: string }>({ changes: "", stopped: "" });
@@ -172,7 +176,10 @@ export function GovernHome({ projectId, actor }: { projectId: string; actor: str
           <a className="ag-link" href={links.stopped || undefined}>Stopped</a>
         </div>
       ) : null}
-      {tab === "overview" && !ready ? (
+      {tab !== "subscriptions" ? <SubscriptionBanner view={subs} onOpen={() => go("subscriptions")} /> : null}
+      {tab === "subscriptions" ? (
+        <SubscriptionsTab view={subs} error={view.error} />
+      ) : tab === "overview" && !ready ? (
         <div className="gv-skel" aria-busy="true" />
       ) : tab === "overview" ? (
         <SpendHome view={data} viewError={view.error} onRetry={view.reload} projectId={projectId} paused={!live}
