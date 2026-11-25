@@ -25,7 +25,7 @@ so it can never drag down the other two.
 from __future__ import annotations
 
 import json
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -818,6 +818,15 @@ def workflow_markdown(report: dict[str, Any]) -> str:
         # the exact claim a reader repeats to somebody else.
         lines += ["> Not verified against the build — nothing in this run tested them.", ""]
 
+    # 5b. FOLLOW-UPS: what the quality bar let through (the PR lists the same).
+    followups = (product.get("build") or {}).get("followups") or {}
+    if followups.get("items"):
+        lines += [f"## Follow-ups (quality bar: {followups.get('bar')})", "",
+                  f"{followups.get('words') or ''}. These did not block this build.", ""]
+        for item in followups["items"]:
+            lines.append(f"- **{item['tier']}** — {item['text']}")
+        lines.append("")
+
     # 6. WHAT TO DO NEXT
     steps_next = report.get("next_steps") or []
     if steps_next:
@@ -1065,6 +1074,9 @@ def _product_and_build(
                     "consistency": state.get("consistency_verdict"),
                 },
                 "deferred_findings": list(state.get("deferred_findings") or []),
+                # WHAT DID NOT BLOCK, ON THE RUN (quality_bar.run_followups): the same list the
+                # PR's Follow-ups section prints, never dropped (BOSSAPP-1362).
+                "followups": _quality_followups(state),
                 "has_e2e": bool(_as_dict(state.get("ux_evidence")).get("has_e2e")),
                 "pull_request_url": row["pull_request_url"],
             }
@@ -1091,6 +1103,15 @@ def _product_and_build(
         ).mappings().first()
         out["preview_status"] = row["status"] if row else None
     return out
+
+
+def _quality_followups(state: Mapping[str, Any]) -> Optional[dict[str, Any]]:
+    from .quality_bar import run_followups
+
+    try:
+        return run_followups(state)
+    except Exception:  # noqa: BLE001 — a report without this section is still a report
+        return None
 
 
 def next_steps(product: dict[str, Any], findings_so_far: list[dict[str, str]]

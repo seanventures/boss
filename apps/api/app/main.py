@@ -28476,19 +28476,26 @@ def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = Non
         extends["preview_id"] = preview_id
     # THE CONTRACT ITEMS THIS CHANGE REPLACES (a picker's ids, never read from the words):
     # only with extends_run_id, only a person allowed to revise (BOSSAPP-1322, PR #161 C1).
-    # THE QUALITY BAR (quality_bar.py): a bar below the project's, or a per-gate map, is a
-    # PERSON's call with settings:update, checked here and recorded by start_run.
+    # THE QUALITY BAR FOR ONE RUN (quality_bar.py; New work's Quality chip): validated here;
+    # start_run decides it against the version that runs (workflows._quality_bar_inputs): the
+    # same or a stricter bar than the WORKFLOW's effective bar is anyone's who may start the
+    # work; below it, or a gate set to follow_up, is a PERSON's call with settings:update,
+    # refused there (403 below) and recorded (`_quality_bar_by`, the quality_bar.lowered event).
     bar_override = None
     _asked_bar = run_input.pop("quality_bar", None)
     _asked_gates = run_input.pop("quality_bar_gates", None)
     if _asked_bar or _asked_gates:
         from boss_engine.services import quality_bar as _quality_bar
 
+        if _asked_bar and not _quality_bar.normalize(_asked_bar):
+            raise HTTPException(status_code=422, detail=(
+                f"'{_asked_bar}' is not a quality bar: prototype, standard or production"))
         try:
-            _quality_bar.check_override_permission(project_id, actor)
-        except _quality_bar.QualityBarOverrideRefused as error:
-            raise HTTPException(status_code=403, detail=str(error)) from error
-        bar_override = {"bar": _asked_bar, "gates": _asked_gates, "by": actor}
+            _asked_gates = _quality_bar.clean_gate_map(_asked_gates) or None
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        if _asked_bar or _asked_gates:
+            bar_override = {"bar": _quality_bar.normalize(_asked_bar), "gates": _asked_gates}
     picked_items = run_input.pop("replaces", None)
     checked_items: list[str] = []
     if picked_items:
@@ -28629,6 +28636,14 @@ def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = Non
             raise HTTPException(status_code=422, detail=str(error)) from error
         except workflow_runtime.WorkflowBindingBlockedError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
+        except PermissionError as error:
+            # A bar below the workflow's (or the project's) without settings:update
+            # (quality_bar.QualityBarOverrideRefused, raised by start_run).
+            from boss_engine.services import quality_bar as _qb_refused
+
+            if isinstance(error, _qb_refused.QualityBarOverrideRefused):
+                raise HTTPException(status_code=403, detail=str(error)) from error
+            raise
         from boss_engine.services.workflow_readiness import record_started_anyway
 
         if ticket and not run.get("duplicate"):
