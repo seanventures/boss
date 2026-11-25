@@ -12,7 +12,6 @@
     ],
     "defaults": {
       "base_branch": "main",
-      "actor": "ceo",
       "profile": "balanced",
       "model_config": null,
       "title": "Add a version endpoint",
@@ -44,8 +43,7 @@
         "open_pr": true,
         "profile": "{{profile}}",
         "risk_tier": 1,
-        "model_config": "{{model_config}}",
-        "actor": "{{actor}}"
+        "model_config": "{{model_config}}"
       },
       "save": {
         "run_id": "run_id"

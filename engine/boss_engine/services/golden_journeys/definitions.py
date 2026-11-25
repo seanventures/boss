@@ -110,6 +110,10 @@ class Journey:
     pending: Optional[dict[str, str]] = None
     needs: dict[str, Any] = field(default_factory=dict)
     source: str = ""
+    #: Calls that undo what the journey made (a provisioned user, a registered server, a
+    #: grant): run after the steps however they ended, each only when its values exist; never
+    #: judged. A journey that creates anything outside its own sandbox must have them.
+    cleanup: tuple[Step, ...] = ()
 
     @property
     def is_pending(self) -> bool:
@@ -191,12 +195,21 @@ def parse(raw: dict[str, Any], source: str = "") -> Journey:
             every_s=float(s.get("every_s") or 10), only=only, fake=s.get("fake")))
     if not steps:
         raise _fail(source, "a journey needs at least one step")
+    cleanup: list[Step] = []
+    for i, s in enumerate(raw.get("cleanup") or []):
+        sid = str(s.get("id") or "")
+        if not sid or sid in seen or not _CALL.match(str(s.get("call") or "")):
+            raise _fail(source, f"cleanup {i + 1} needs a unique id and a call 'METHOD /path'")
+        seen.add(sid)
+        cleanup.append(Step(id=sid, call=s["call"], body=s.get("body"),
+                            expect_status=tuple(int(x) for x in (s.get("expect_status") or ()))))
+    main_ids = {st.id for st in steps}
     items: list[Item] = []
     for n, a in enumerate(raw.get("acceptance") or [], start=1):
         text = str(a.get("text") or "").strip()
         if not text:
             raise _fail(source, f"acceptance item {n} needs text")
-        if a.get("step") not in seen:
+        if a.get("step") not in main_ids:
             raise _fail(source, f"acceptance item {n} names step {a.get('step')!r}, not a step here")
         kind = next((k for k in EXPECTS if k in a), None)
         if a.get("path") and kind is None:
@@ -213,7 +226,7 @@ def parse(raw: dict[str, Any], source: str = "") -> Journey:
     return Journey(id=jid, title=str(raw["title"]).strip(), summary=str(raw["summary"]).strip(),
                    ticket=str(raw["ticket"]).strip(), modes=modes, steps=tuple(steps),
                    acceptance=tuple(items), pending=dict(pending) if pending else None,
-                   needs=needs, source=source)
+                   needs=needs, source=source, cleanup=tuple(cleanup))
 
 
 def _check_expect(source: str, where: str, spec: dict[str, Any]) -> None:

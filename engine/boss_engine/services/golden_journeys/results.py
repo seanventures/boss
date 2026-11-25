@@ -29,6 +29,61 @@ FREEZE_DAYS = 5
 #: How far back the history (and the counter) looks.
 WINDOW_DAYS = 30
 STATUSES = ("green", "red", "pending", "not_run")
+#: `run`: judged by this install's own run (counts). `posted`: sent to POST .../results by a
+#: caller that is not the journey account — shown on the card, never counted.
+SOURCES = ("run", "posted")
+#: The most of one recorded call's answer kept in a row (the verdict already read all of it).
+CALL_CAP = 4000
+MAX_CALLS = 200
+
+
+def _clip(text: str, cap: int = CALL_CAP) -> str:
+    text = str(text or "")
+    if len(text) <= cap:
+        return text
+    half = cap // 2
+    return f"{text[:half]}\n…[{len(text) - cap} characters trimmed]…\n{text[-half:]}"
+
+
+def stored_calls(calls: Any) -> str:
+    """The calls as JSON that is always valid: each answer clipped BEFORE serialising (cutting
+    the serialised string made invalid JSON, and the row was lost)."""
+    out = []
+    for c in list(calls or [])[:MAX_CALLS]:
+        if not isinstance(c, dict):
+            continue
+        c = dict(c)
+        for k in ("stdout", "stderr", "body"):
+            if isinstance(c.get(k), str):
+                c[k] = _clip(c[k])
+        out.append(c)
+    return json.dumps(out, default=str)
+
+
+def rejudge(row: Mapping[str, Any], journey: d.Journey) -> tuple[bool, str]:
+    """A green row is believed only if BOSS's verdict, run again here over the row's own calls
+    and reply, accepts EVERY item. (ok, why not)."""
+    import tempfile
+
+    from ..acceptance import verdict as _verdict
+    from ..acceptance.session import CommandRecord
+
+    reply = str(row.get("reply") or "")
+    calls = row.get("calls") or []
+    if not reply or not calls:
+        return False, "a green result must carry its calls and its reply"
+    try:
+        rec = CommandRecord(calls)
+    except Exception as exc:  # noqa: BLE001
+        return False, f"its calls cannot be read ({type(exc).__name__})"
+    with tempfile.TemporaryDirectory(prefix="boss-journey-") as tree:
+        judged = _verdict.judge([i.as_contract() for i in journey.acceptance], reply, {},
+                                root=tree, exec_log=rec)
+    items = judged.get("items") or []
+    if judged.get("verdict") != "met" or len(items) != len(journey.acceptance) or any(
+            i.get("status") != _verdict.MET for i in items):
+        return False, (judged.get("why") or "the verdict does not accept every item")
+    return True, ""
 
 
 def this_host() -> str:
@@ -48,8 +103,11 @@ def today(now: Optional[datetime] = None) -> date:
 
 
 def record(connection: Connection, result: Mapping[str, Any], *, host: Optional[str] = None,
-           day: Optional[date] = None, actor: str = "journeys") -> dict[str, Any]:
+           day: Optional[date] = None, actor: str = "journeys",
+           source: str = "run") -> dict[str, Any]:
     """Store one journey's result for its day. A red already stored that day stays red."""
+    if source not in SOURCES:
+        raise ValueError(f"source must be one of {list(SOURCES)}")
     status = str(result.get("status") or "")
     if status not in STATUSES:
         raise ValueError(f"status must be one of {list(STATUSES)}, got {status!r}")
@@ -59,15 +117,20 @@ def record(connection: Connection, result: Mapping[str, Any], *, host: Optional[
     host = (host or result.get("host") or this_host())[:64]
     day = day or today()
     prior = connection.execute(text(
-        "SELECT id, status, why, runs FROM golden_journey_results "
+        "SELECT id, status, why, runs, source FROM golden_journey_results "
         "WHERE host = :h AND day = :d AND journey_id = :j"),
         {"h": host, "d": day, "j": jid}).mappings().first()
     row = {"h": host, "d": day, "j": jid, "t": str(result.get("title") or "")[:200],
            "m": str(result.get("mode") or "real")[:16], "s": status,
            "v": result.get("verdict"), "w": str(result.get("why") or "")[:2000],
            "i": json.dumps(result.get("items") or [], default=str),
-           "c": json.dumps(result.get("calls") or [], default=str)[:200_000],
+           "c": stored_calls(result.get("calls")), "src": source,
            "sec": float(result.get("seconds") or 0), "a": actor[:120]}
+    if prior is not None and prior["source"] == "run" and source == "posted":
+        raise ValueError(f"{jid} was already judged by this install's own run on {day}; "
+                         "a posted result does not replace it")
+    if prior is not None and prior["source"] == "posted" and source == "run":
+        prior = dict(prior, status=row["s"])          # the install's own run replaces it
     if prior is not None and prior["status"] == RED and status != RED:
         # The day stays red; say that it was run again and what the later run found.
         row.update(s=RED, w=(f"{prior['why']} (run again: {status})")[:2000])
@@ -75,14 +138,14 @@ def record(connection: Connection, result: Mapping[str, Any], *, host: Optional[
         row["id"] = make_id("gjr")
         connection.execute(text(
             "INSERT INTO golden_journey_results (id, host, day, journey_id, title, mode, status, "
-            "verdict, why, items, calls, seconds, recorded_by) VALUES (:id, :h, :d, :j, :t, :m, "
-            ":s, :v, :w, CAST(:i AS JSONB), CAST(:c AS JSONB), :sec, :a)"), row)
+            "verdict, why, items, calls, seconds, recorded_by, source) VALUES (:id, :h, :d, :j, :t, "
+            ":m, :s, :v, :w, CAST(:i AS JSONB), CAST(:c AS JSONB), :sec, :a, :src)"), row)
     else:
         row["id"] = prior["id"]
         connection.execute(text(
             "UPDATE golden_journey_results SET title = :t, mode = :m, status = :s, verdict = :v, "
             "why = :w, items = CAST(:i AS JSONB), calls = CAST(:c AS JSONB), seconds = :sec, "
-            "recorded_by = :a, runs = runs + 1, updated_at = now() WHERE id = :id"), row)
+            "recorded_by = :a, source = :src, runs = runs + 1, updated_at = now() WHERE id = :id"), row)
     return {"id": row["id"], "host": host, "day": day.isoformat(), "journey_id": jid,
             "status": row["s"]}
 
@@ -90,7 +153,7 @@ def record(connection: Connection, result: Mapping[str, Any], *, host: Optional[
 def _rows(connection: Connection, since: date) -> list[dict[str, Any]]:
     return [dict(r) for r in connection.execute(text(
         "SELECT host, day, journey_id, title, mode, status, verdict, why, items, seconds, runs, "
-        "updated_at FROM golden_journey_results WHERE day >= :since ORDER BY day, journey_id"),
+        "updated_at, recorded_by, source FROM golden_journey_results WHERE day >= :since ORDER BY day, journey_id"),
         {"since": since}).mappings()]
 
 
@@ -100,7 +163,7 @@ def day_states(rows: Iterable[Mapping[str, Any]], expected: Iterable[str], hosts
     expected, hosts = list(expected), list(hosts)
     by_day: dict[date, dict[tuple[str, str], str]] = {}
     for r in rows:
-        if str(r.get("mode") or "real") != "real":
+        if str(r.get("mode") or "real") != "real" or str(r.get("source") or "run") != "run":
             continue
         day = r["day"] if isinstance(r["day"], date) else date.fromisoformat(str(r["day"]))
         by_day.setdefault(day, {})[(r["host"], r["journey_id"])] = r["status"]
@@ -134,7 +197,8 @@ def summary(connection: Connection, *, journeys: Optional[list[d.Journey]] = Non
     journeys = journeys if journeys is not None else d.load_all()
     day0 = today(now)
     rows = _rows(connection, day0 - timedelta(days=WINDOW_DAYS))
-    hosts = counted_hosts(r["host"] for r in rows if r.get("mode", "real") == "real")
+    hosts = counted_hosts(r["host"] for r in rows
+                          if r.get("mode", "real") == "real" and r.get("source", "run") == "run")
     expected = [j.id for j in journeys]
     states = day_states(rows, expected, hosts)
     streak = green_streak(states, day0)
@@ -147,6 +211,7 @@ def summary(connection: Connection, *, journeys: Optional[list[d.Journey]] = Non
             r = todays.get((h, j.id))
             per_host[h] = ({"status": r["status"], "why": r["why"], "verdict": r["verdict"],
                             "seconds": r["seconds"], "runs": r["runs"], "mode": r["mode"],
+                            "recorded_by": r.get("recorded_by"), "source": r.get("source"),
                             "items": r["items"],
                             "at": r["updated_at"].isoformat() if r.get("updated_at") else None}
                            if r else {"status": "not_run", "why": "no run today yet"})

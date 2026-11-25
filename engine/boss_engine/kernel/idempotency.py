@@ -109,7 +109,7 @@ _declare(IRREVERSIBLE,
          "extend_code_task", "generate_image", "publish_document", "redeploy", "remove_app",
          "request_meeting", "request_self_fix", "retry_code_task", "review_pull_request_again",
          "recheck_change",
-         "run_golden_journeys", "run_on_host", "start_workflow",
+         "run_on_host", "start_workflow",
          # sends whatever a case says (POST, DELETE) to a deployed API
          "contract_test", "system_doctor_act", "ticket_comment", "waive_gates",
          "write_db")

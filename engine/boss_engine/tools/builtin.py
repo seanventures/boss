@@ -7086,31 +7086,6 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
                 "note": "Scheduled. Say when the first run lands, in their timezone."}
 
     @reg.tool(
-        "run_golden_journeys",
-        "Start today's golden journeys (the preview's end-to-end checks, BOSSAPP-1284): each "
-        "journey runs against this install's API and is judged by the Acceptance Agent's "
-        "verdict; results land on Govern › Journeys as each finishes. Returns at once. The "
-        "daily schedule's wake calls this; a person may ask for a run too.",
-        _obj({"journeys": {"type": "array", "items": {"type": "string"},
-                           "description": "ids like J1, J5; omit for all"},
-              "variables": {"type": "object",
-                            "description": "journey values (sandbox repo, ticket key...), "
-                                           "over the install's BOSS_JOURNEY_VARS"},
-              "project_id": {"type": "string"}}),
-        kind="write",
-        reversibility="costs_money", permission="assurance:run",
-        exposure=Exposure(tags=("watch", "schedule")))
-    def run_golden_journeys(ctx, *, project_id, actor, args):
-        from ..services.golden_journeys import service as _journeys
-
-        variables = args.get("variables") if isinstance(args.get("variables"), dict) else None
-        out = _journeys.start(ctx.engine, ctx.settings,
-                              project_id=args.get("project_id") or project_id, actor=actor,
-                              variables=variables,
-                              only=[str(j) for j in (args.get("journeys") or [])] or None)
-        return _json_safe(out)
-
-    @reg.tool(
         "stop_watching",
         "End a monitor or a schedule. Call it with finished=true from inside a monitor's own "
         "wake when the exit condition has been met — that is how a loop finishes rather than "
@@ -10688,8 +10663,6 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
         # "Keep an eye on this" is said in a conversation, so it has to be armable from one.
     "watch",
     "schedule_work",
-    # The daily golden journeys (BOSSAPP-1284): the schedule's wake starts them from a turn.
-    "run_golden_journeys",
     "stop_watching",
 "remember",
     "forget",

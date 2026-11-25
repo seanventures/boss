@@ -14,9 +14,7 @@
     "fixtures": [
       "a deployed app target (app_target) with an error-rate alert rule and a runbook"
     ],
-    "defaults": {
-      "actor": "ceo"
-    }
+    "defaults": {}
   },
   "steps": [
     {

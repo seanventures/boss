@@ -2,16 +2,15 @@
   "id": "J6",
   "title": "Approval gate, deploy to staging, promote",
   "ticket": "BOSSAPP-1284",
-  "summary": "A deployment of an app to its staging target stops at its approval; once approved it deploys and reports healthy, and the staging run is then promoted to production through the second gate.",
+  "summary": "A deployment of an app to its staging target in the journeys' fixture project stops at its approval card: the journey asserts the card is waiting for a person and stops there. The journey account never approves its own deploy, and a production promotion always waits for a separate person (the account holds no deployment:production).",
   "modes": [
     "real"
   ],
   "needs": {
     "fixtures": [
-      "an app with an active staging and an active production deployment target (staging_target)"
+      "a sandbox app in the fixture project with an active staging deployment target (staging_target)"
     ],
     "defaults": {
-      "actor": "ceo",
       "ref": "main"
     }
   },
@@ -43,69 +42,24 @@
       "save": {
         "decision_id": "decision_id"
       }
-    },
-    {
-      "id": "approve",
-      "call": "POST /v1/decisions/{{decision_id}}/approve",
-      "body": {
-        "actor": "{{actor}}",
-        "note": "golden journey J6"
-      },
-      "expect_status": [
-        200
-      ]
-    },
-    {
-      "id": "staged",
-      "call": "GET /v1/delivery/deployments/{{deployment_run_id}}",
-      "until": {
-        "path": "status",
-        "in": [
-          "succeeded",
-          "deployed",
-          "completed",
-          "failed",
-          "rolled_back"
-        ]
-      },
-      "timeout_s": 1800,
-      "every_s": 15
-    },
-    {
-      "id": "promote",
-      "call": "POST /v1/deployments/{{deployment_run_id}}/promote",
-      "body": {
-        "actor": "{{actor}}",
-        "note": "golden journey J6"
-      }
     }
   ],
   "acceptance": [
     {
-      "text": "The staging deployment waited for its approval",
+      "text": "The staging deployment was planned",
+      "step": "plan",
+      "status": 200
+    },
+    {
+      "text": "The staging deployment waits at its approval card for a person",
       "step": "waiting",
       "path": "waiting",
       "equals": true
     },
     {
-      "text": "The approval was recorded",
-      "step": "approve",
-      "status": 200
-    },
-    {
-      "text": "The staging deployment finished healthy",
-      "step": "staged",
-      "path": "status",
-      "in": [
-        "succeeded",
-        "deployed",
-        "completed"
-      ]
-    },
-    {
-      "text": "The staging run was promoted to production",
-      "step": "promote",
-      "path": "promoted_from",
+      "text": "The approval card exists",
+      "step": "waiting",
+      "path": "decision_id",
       "present": true
     }
   ]

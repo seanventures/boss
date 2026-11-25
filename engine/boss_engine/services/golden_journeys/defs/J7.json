@@ -94,5 +94,23 @@
       "path": "groups",
       "at_least": 1
     }
+  ],
+  "cleanup": [
+    {
+      "id": "deprovision",
+      "call": "PATCH /scim/v2/Users/{{user_id}}",
+      "body": {
+        "schemas": [
+          "urn:ietf:params:scim:api:messages:2.0:PatchOp"
+        ],
+        "Operations": [
+          {
+            "op": "replace",
+            "path": "active",
+            "value": false
+          }
+        ]
+      }
+    }
   ]
 }

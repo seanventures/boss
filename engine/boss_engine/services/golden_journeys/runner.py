@@ -151,6 +151,9 @@ def _call(client: Client, run: Run, step: d.Step, held: Mapping[str, str],
         attempts += 1
         try:
             status, answer = client.call(step.method, path, body)
+            # A held value an answer echoes back is not kept either (the record, the judge's
+            # quotes and the stored row all read this redacted answer).
+            answer = _redacted(answer, held)
         except Exception as exc:  # noqa: BLE001 — a call that cannot reach BOSS is the record's
             _record_call(run, step, shown_path, template, None, None, started,
                          attempts=attempts, error=f"{type(exc).__name__}: {exc}"[:400])
@@ -211,6 +214,27 @@ def _action(client: Client, run: Run, step: d.Step, fakes: Mapping[str, Any]) ->
         run.answers[step.id] = (cmd, log)
         return None
     return f"{step.id}: unknown action {step.do}"
+
+
+def _cleanup(client: Client, run: Run, held: Mapping[str, str]) -> list[dict[str, Any]]:
+    """Undo what the journey made: each cleanup call whose values exist, whatever happened."""
+    out = []
+    env = {**run.env, **{f"secret.{k}": v for k, v in held.items()}}
+    for step in run.journey.cleanup:
+        try:
+            path = d.render(step.path, env)
+            body = d.render(step.body, env) if step.body is not None else None
+        except d.MissingVariable as exc:
+            out.append({"step": step.id, "skipped": f"no {exc.args[0]}"})
+            continue
+        try:
+            status, _ = client.call(step.method, path, body)
+        except Exception as exc:  # noqa: BLE001 — a failed cleanup is said, never fatal
+            out.append({"step": step.id, "error": type(exc).__name__})
+            continue
+        ok = status in step.expect_status if step.expect_status else status < 400
+        out.append({"step": step.id, "status": status, "ok": ok})
+    return out
 
 
 # ── The judge ────────────────────────────────────────────────────────────────────────────────
@@ -322,6 +346,7 @@ def run_journey(journey: d.Journey, client: Client, *, variables: Optional[Mappi
             if why:
                 run.stopped = why
                 break
+    cleaned = _cleanup(client, run, held)
     reply = judge(run)
     with tempfile.TemporaryDirectory(prefix="boss-journey-") as tree:
         record = _verdict.judge([i.as_contract() for i in journey.acceptance], reply, {},
@@ -335,7 +360,7 @@ def run_journey(journey: d.Journey, client: Client, *, variables: Optional[Mappi
             "items": [{"n": i["n"], "text": i["text"], "status": i["status"],
                        "evidence": str(i.get("evidence") or "")[:400]}
                       for i in record.get("items") or []],
-            "calls": run.record.to_list(), "reply": reply}
+            "calls": run.record.to_list(), "reply": reply, "cleanup": cleaned}
 
 
 def run_all(journeys: list[d.Journey], client: Client, *,

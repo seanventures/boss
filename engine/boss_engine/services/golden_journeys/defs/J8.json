@@ -15,7 +15,6 @@
       "examples/api-gateway-onboarding installed as a workflow (onboarding_workflow) on a sandbox repo with a bad partner file"
     ],
     "defaults": {
-      "actor": "ceo",
       "onboarding_workflow": "api_gateway_onboarding"
     }
   },

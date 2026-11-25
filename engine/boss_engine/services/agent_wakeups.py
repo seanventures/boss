@@ -497,6 +497,20 @@ def wake_one(settings: Any, engine: Any, row: Any) -> dict[str, Any]:
         if row["kind"] == "monitor"
         else SCHEDULE_BRIEF.format(prompt=row["prompt"])
     )
+    from .golden_journeys import service as _journeys
+
+    if row["kind"] == "schedule" and _journeys.is_journeys_wake(row):
+        # THE DAILY GOLDEN JOURNEYS (BOSSAPP-1284) are started by BOSS itself, not by a model
+        # turn: no chat turn may start a run, and a daily run should not cost a turn to begin.
+        try:
+            reply = _journeys.wake(engine, settings, row)
+            ok = True
+        except Exception as error:  # noqa: BLE001 — recorded against the wakeup
+            reply, ok = f"{type(error).__name__}: {str(error)[:400]}", False
+        with engine.begin() as connection:
+            outcome = advance(connection, wakeup_id=row["id"], ok=ok, result=reply)
+        return {"project_id": row["project_id"], "kind": row["kind"], **outcome,
+                **({} if ok else {"error": reply})}
     try:
         # THE CONNECTION IS THE FIRST POSITIONAL ARGUMENT, and omitting it meant every
         # single wake raised TypeError before any model call — the feature was 100%

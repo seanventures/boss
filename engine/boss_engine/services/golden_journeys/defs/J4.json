@@ -15,7 +15,6 @@
       "a multi-repo app (app_key) whose components are a Java library and a service depending on it"
     ],
     "defaults": {
-      "actor": "ceo",
       "title": "Add a currency field to the shared payment DTO",
       "instructions": "Add `currency` (ISO 4217) to PaymentDto in the library, and have the service set and return it.",
       "criteria": [
@@ -79,8 +78,7 @@
       "id": "merge",
       "call": "POST /v1/change-sets/{{cs_id}}/merge",
       "body": {
-        "project_id": "{{project_id}}",
-        "actor": "{{actor}}"
+        "project_id": "{{project_id}}"
       }
     },
     {

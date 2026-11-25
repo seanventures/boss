@@ -16,7 +16,6 @@
       "mcp_http"
     ],
     "defaults": {
-      "actor": "ceo",
       "role_key": "software_engineer"
     }
   },
@@ -117,6 +116,9 @@
             }
           ]
         }
+      },
+      "save": {
+        "workflow_id": "id|definition_id|workflow_key"
       }
     },
     {
@@ -188,6 +190,24 @@
       "step": "fake",
       "path": "calls[tool=ledger_lookup].authorized",
       "equals": true
+    }
+  ],
+  "cleanup": [
+    {
+      "id": "drop_workflow",
+      "call": "DELETE /v1/delivery-workflows/{{workflow_id}}?project_id={{project_id}}"
+    },
+    {
+      "id": "drop_step",
+      "call": "DELETE /v1/delivery-workflows/custom-steps/{{step_key}}?project_id={{project_id}}"
+    },
+    {
+      "id": "revoke",
+      "call": "DELETE /v1/role-mcp-servers?project_id={{project_id}}&role_key={{role_key}}&mcp_server_id={{server_id}}&actor={{actor}}"
+    },
+    {
+      "id": "drop_server",
+      "call": "DELETE /v1/mcp/servers/{{server_id}}?project_id={{project_id}}"
     }
   ]
 }

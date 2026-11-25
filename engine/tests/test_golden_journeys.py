@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from boss_engine.services.golden_journeys import definitions as d
-from boss_engine.services.golden_journeys import fakes, results, runner
+from boss_engine.services.golden_journeys import fakes, results, runner, service
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -277,7 +277,7 @@ def test_every_call_of_a_runnable_journey_is_a_route_the_api_declares():
         for s in j.steps:
             if not s.call:
                 continue
-            path = re.sub(r"\{\{[^}]+\}\}", "x", s.path)
+            path = re.sub(r"\{\{[^}]+\}\}", "x", s.path).split("?", 1)[0]
             assert any(m == s.method and rx.match(path) for m, rx in routes), \
                 f"{j.id} step {s.id}: {s.call} is not a route the API declares"
 
@@ -382,3 +382,157 @@ def test_counted_hosts_come_from_the_setting_first(monkeypatch):
     assert results.counted_hosts(["x"]) == ["laptop", "boss-1"]
     monkeypatch.delenv("BOSS_JOURNEY_HOSTS")
     assert results.counted_hosts(["b", "a", "a"]) == ["a", "b"]
+
+
+# ── Cleanup and redaction ─────────────────────────────────────────────────────────────────────
+
+def test_cleanup_runs_after_a_red_journey_and_skips_what_was_never_made():
+    api = FakeApi(lint=False)
+    j = journey(cleanup=[{"id": "drop", "call": "DELETE /v1/things/{{thing_id}}"},
+                         {"id": "drop_other", "call": "DELETE /v1/other/{{never_saved}}"}])
+    r = run(j, api)
+    assert r["status"] == runner.RED
+    assert ("DELETE", "/v1/things/t1", None) in api.calls
+    assert r["cleanup"][1] == {"step": "drop_other", "skipped": "no never_saved"}
+
+
+def test_an_acceptance_item_cannot_name_a_cleanup_step():
+    with pytest.raises(d.DefinitionError, match="not a step here"):
+        journey(cleanup=[{"id": "drop", "call": "DELETE /v1/x"}],
+                acceptance=[{"text": "t", "step": "drop", "status": 200}])
+
+
+def test_an_answer_that_echoes_a_held_value_is_redacted_in_the_record():
+    class Echo(FakeApi):
+        def call(self, method, path, body=None):
+            return 201, {"id": "s1", "echo": body}
+
+    class Holder:
+        url = "http://127.0.0.1:1/mcp"
+        held = {"key": "s3cr3t-value-123"}
+
+        def log(self):
+            return {}
+
+    j = d.parse({"id": "J93", "title": "Echo", "summary": "Echo.", "ticket": "BOSSAPP-1479",
+                 "modes": ["scripted"], "needs": {"fakes": ["mcp_http"]},
+                 "steps": [{"id": "add", "call": "POST /v1/x",
+                            "body": {"secret": "{{secret.mcp_http.key}}"}}],
+                 "acceptance": [{"text": "Added", "step": "add", "status": 201}]}, "J93")
+    r = runner.run_journey(j, Echo(), fakes={"mcp_http": Holder()}, sleep=lambda s: None)
+    assert "s3cr3t-value-123" not in json.dumps(r, default=str)
+
+
+def test_cleanup_is_written_for_every_journey_that_makes_something_outside_its_sandbox():
+    by_id = {j.id: j for j in d.load_all()}
+    assert {s.id for s in by_id["J7"].cleanup} == {"deprovision"}
+    assert {s.id for s in by_id["J10"].cleanup} == {"drop_workflow", "drop_step", "revoke", "drop_server"}
+
+
+def test_no_journey_names_an_actor_of_its_own():
+    """The account the run uses is the actor; a journey never claims to be someone (\"ceo\")."""
+    for j in d.load_all():
+        assert "actor" not in (j.needs.get("defaults") or {}), j.id
+        assert '"ceo"' not in json.dumps([s.body for s in j.steps]), j.id
+
+
+def test_j6_stops_at_the_approval_card_and_never_approves_or_promotes():
+    j6 = {j.id: j for j in d.load_all()}["J6"]
+    calls = [s.call for s in j6.steps]
+    assert not any("approve" in c or "promote" in c for c in calls), calls
+    assert any(i.path == "waiting" and i.value is True for i in j6.acceptance)
+
+
+# ── The service: one fixture project, operator values, a narrow account ──────────────────────
+
+class Account:
+    """The API as the journey account sees itself (GET /v1/identity/me, /me/projects)."""
+
+    def __init__(self, *, kind="service_account", org_roles=(), projects=None):
+        self.me = {"principal_id": "sa_journeys", "kind": kind, "access_roles": list(org_roles)}
+        self.projects = projects if projects is not None else [
+            {"project_id": "fixture", "permissions": ["code_task:create", "project:read"], "via": ["project"]}]
+
+    def call(self, method, path, body=None):
+        if path == "/v1/identity/me":
+            return 200, self.me
+        if path == "/v1/identity/me/projects":
+            return 200, {"projects": self.projects}
+        return 404, {}
+
+
+def test_a_narrow_journey_account_passes_preflight():
+    assert service.preflight(Account(), "fixture") == "sa_journeys"
+
+
+@pytest.mark.parametrize("account, words", [
+    (Account(kind="user"), "not a service account"),
+    (Account(org_roles=["admin"]), "roles at org scope"),
+    (Account(projects=[{"project_id": "fixture", "permissions": [], "via": ["project"]},
+                       {"project_id": "customer", "permissions": [], "via": ["project"]}]),
+     "only the fixture project"),
+    (Account(projects=[{"project_id": "fixture", "permissions": [], "via": ["org"]}]), "org-wide"),
+    (Account(projects=[{"project_id": "fixture", "permissions": ["deployment:production"],
+                        "via": ["project"]}]), "deployment:production"),
+])
+def test_a_broad_journey_account_is_refused(account, words):
+    with pytest.raises(service.Refused, match=re.escape(words)):
+        service.preflight(account, "fixture")
+
+
+def test_an_unknown_key_is_refused():
+    class Anon:
+        def call(self, *a, **k):
+            return 401, {"error": "unauthenticated"}
+    with pytest.raises(service.Refused, match="not accepted"):
+        service.preflight(Anon(), "fixture")
+
+
+def test_start_refuses_without_a_fixture_project_or_a_key(monkeypatch):
+    monkeypatch.delenv("BOSS_JOURNEY_PROJECT", raising=False)
+    out = service.start(None, None, actor="x")
+    assert not out["ok"] and "BOSS_JOURNEY_PROJECT" in out["error"]
+    monkeypatch.setenv("BOSS_JOURNEY_PROJECT", "fixture")
+    monkeypatch.delenv("BOSS_JOURNEY_KEY_REF", raising=False)
+    out = service.start(None, None, actor="x")
+    assert not out["ok"] and "BOSS_JOURNEY_KEY_REF" in out["error"]
+
+
+def test_operator_values_can_never_set_the_reserved_keys(monkeypatch):
+    monkeypatch.setenv("BOSS_JOURNEY_VARS", json.dumps(
+        {"project_id": "customer", "actor": "ceo", "stamp": "x", "repo": "sandbox"}))
+    assert service.configured_variables() == {"repo": "sandbox"}
+
+
+def test_the_service_offers_no_way_to_pass_values_or_a_project():
+    import inspect
+    params = inspect.signature(service.start).parameters
+    assert "variables" not in params and "project_id" not in params
+
+
+def test_no_agent_tool_can_start_a_run():
+    from boss_engine.tools.builtin import build_default_registry
+    assert not [n for n in build_default_registry().names() if "journey" in n]
+
+
+# ── What a row keeps, and who it counts for ──────────────────────────────────────────────────
+
+def test_a_huge_answer_is_clipped_before_it_is_serialised():
+    calls = [{"id": "E1", "cmd": "GET /x", "stdout": "x" * 500_000 + '"\\', "kind": "http"}]
+    text = results.stored_calls(calls)
+    back = json.loads(text)                      # always valid JSON
+    assert len(back[0]["stdout"]) < 5000 and "characters trimmed" in back[0]["stdout"]
+
+
+def test_a_posted_green_is_believed_only_on_the_verdict():
+    j = journey()
+    r = run(j, FakeApi())
+    assert results.rejudge(r, j) == (True, "")
+    forged = dict(r, reply=r["reply"].replace('"status": "done"', '"status": "fine"'))
+    assert results.rejudge(forged, j)[0] is False
+    assert results.rejudge(dict(r, calls=[]), j)[0] is False
+
+
+def test_posted_rows_never_count():
+    rows = [dict(row, source="posted") for row in rows_for({0: ALL_GREEN, 1: ALL_GREEN})]
+    assert streak(rows) == 0
