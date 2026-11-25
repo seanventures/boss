@@ -2597,13 +2597,19 @@ def rollback_approval(connection: Connection, project_id: str, authority: dict[s
                  "AND status IN ('pending', 'approved')"),
             {"d": decision_id, "p": project_id}).scalar()
         rec = rec if isinstance(rec, dict) else json.loads(rec or "null") if rec else None
-        if not rec or rec.get("action") != "incident_squad.mitigate":
+        runbook_ok = bool(rec) and rec.get("kind") == "sre_runbook" \
+            and rec.get("step_action") == "rollback_deployment" \
+            and str((rec.get("params") or {}).get("deployment_id") or "") == rollback_of \
+            and authority.get("source") == "sre_runbook" and connection.execute(
+                text("SELECT 1 FROM decisions WHERE id = :d AND status = 'approved'"),
+                {"d": decision_id}).first() is not None
+        if not rec or (rec.get("action") != "incident_squad.mitigate" and not runbook_ok):
             return None
         if connection.execute(text("SELECT 1 FROM stack_deployments WHERE decision_id = :d "
                                    "LIMIT 1"), {"d": decision_id}).first():
             return None
-    return {"source": "incident_squad", "decision_id": decision_id or None,
-            "approved_by": approved_by}
+    source = "sre_runbook" if authority.get("source") == "sre_runbook" else "incident_squad"
+    return {"source": source, "decision_id": decision_id or None, "approved_by": approved_by}
 
 
 def rollback_stack_deploy(engine, settings: Settings, *, deployment_id: str,

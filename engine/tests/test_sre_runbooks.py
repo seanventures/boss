@@ -39,6 +39,16 @@ class _Result:
     def mappings(self):
         return _Mappings(self._rows)
 
+    def scalar(self):
+        row = self._rows[0] if self._rows else None
+        return next(iter(row.values()), None) if isinstance(row, dict) else row
+
+    def first(self):
+        return self._rows[0] if self._rows else None
+
+    def all(self):
+        return list(self._rows)
+
 
 class FakeConn:
     """In-memory stand-in for the SQL the runbook service emits."""
@@ -52,6 +62,17 @@ class FakeConn:
 
     def begin_nested(self):
         return self
+
+    # A savepoint's API (the decision hooks open one): nothing to undo in memory.
+    def rollback(self):
+        return None
+
+    def commit(self):
+        return None
+
+    @property
+    def is_active(self):
+        return True
 
     def __enter__(self):
         return self
@@ -314,3 +335,74 @@ def test_missing_runbook_is_visible(monkeypatch):
         assert err.status_code == 404
     else:
         raise AssertionError("expected SreRunbookError")
+
+
+# ── BOSSAPP-1293: diagnostics and approval-gated remediation ───────────────────────────────
+
+def _remediation_book(svc, conn, effects_log, *, ok=True):
+    def rollback(connection, project_id, params, *, actor, approval=None):
+        effects_log.append({"params": params, "approval": approval, "actor": actor})
+        return {"ok": ok, "deployment_id": "sdep_new", **({} if ok else {"error": "refused"})}
+
+    svc.effects["rollback_deployment"] = rollback
+    return svc.create_runbook(conn, PID, name="orders_5xx", actor="operator", steps=[
+        {"id": "look", "action": "query_telemetry",
+         "params": {"capability": "logs", "query": "",
+                    "source": {"kind": "memory"}}},
+        # The author's "safe" is ignored: BOSS classifies the step.
+        {"id": "rollback", "action": "rollback_deployment", "kind": "safe",
+         "params": {"deployment_id": "sdep_1"}},
+    ])
+
+
+def test_a_remediation_step_holds_until_a_person_approves(monkeypatch):
+    conn = FakeConn()
+    svc = _svc(monkeypatch, conn)
+    done: list[dict] = []
+    book = _remediation_book(svc, conn, done)
+    assert [s["kind"] for s in book["steps"]] == ["safe", "remediation"]
+    assert classify_step({"action": "rollback_deployment"}) == "remediation"
+
+    held = svc.execute_run(conn, PID, book["id"], INCIDENT, actor="agent:sre", force=True)
+    assert held["status"] == "held" and held["step"] == "rollback" and done == []
+    assert [s["action"] for s in held["steps"]] == ["query_telemetry"]   # the read ran
+    decision = conn.decisions[held["decision_id"]]
+    assert decision["default_action"] == "hold"
+    assert decision["recommendation"]["step_action"] == "rollback_deployment"
+    assert decision["recommendation"]["params"] == {"deployment_id": "sdep_1"}
+
+    decision["status"] = "approved"
+    decision["approved_by"] = "person:ops-lead"
+    run = svc.execute_run(conn, PID, book["id"], INCIDENT, actor="agent:sre")
+    assert run["status"] == "completed" and run["applied"] is True
+    assert done == [{"params": {"deployment_id": "sdep_1"}, "actor": "agent:sre",
+                     "approval": {"source": "sre_runbook", "decision_id": decision["id"],
+                                  "approved_by": "person:ops-lead"}}]
+    receipt = conn.receipts[run["receipt_id"]]
+    assert receipt["status"] == "succeeded"
+    assert receipt["result"]["approved_by"] == "person:ops-lead"
+    assert receipt["result"]["result"]["deployment_id"] == "sdep_new"
+
+
+def test_a_failed_remediation_is_recorded_as_failed(monkeypatch):
+    conn = FakeConn()
+    svc = _svc(monkeypatch, conn)
+    done: list[dict] = []
+    book = _remediation_book(svc, conn, done, ok=False)
+    held = svc.execute_run(conn, PID, book["id"], INCIDENT, actor="agent:sre")
+    conn.decisions[held["decision_id"]]["status"] = "approved"
+    run = svc.execute_run(conn, PID, book["id"], INCIDENT, actor="agent:sre")
+    assert run["status"] == "failed" and run["reason"] == "step_failed" and len(done) == 1
+    assert conn.receipts[run["receipt_id"]]["status"] == "failed"
+
+
+def test_a_read_only_diagnostic_runs_without_approval(monkeypatch):
+    conn = FakeConn()
+    svc = _svc(monkeypatch, conn)
+    book = svc.create_runbook(conn, PID, name="look", actor="operator", steps=[
+        {"id": "q", "action": "query_telemetry",
+         "params": {"capability": "alerts", "source": {"kind": "memory"}}}])
+    run = svc.execute_run(conn, PID, book["id"], INCIDENT, actor="agent:sre")
+    assert run["status"] == "completed" and not run.get("decision_id")
+    assert run["applied"] is False and run["result"]["source"] == "memory"
+    assert conn.decisions == {}
