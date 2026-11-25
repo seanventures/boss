@@ -1726,14 +1726,10 @@ class GenericCliCodeAgent:
         # CLI gets a run token at the proxy and a session home with no login in it.
         from . import subscription_shield
 
-        # A POOL SEAT's login is BOSS's to refresh (its session never can), and a refresh goes
-        # back to the SEAT's store key — never the single login's.
-        seat_sync = (self.remember_rotated_credential
-                     if getattr(self, "_pool", None) is not None else None)
         subscription_shield.shield(
             self.spec.name, env, settings=self.settings, cli_login=cli_login,
             default_home=self.cli_home() if self.spec.home_env or self.spec.default_home
-            else "", seat_sync=seat_sync)
+            else "", seat=self._codex_seat())
         return _model_proxy.shield_env(env, settings=self.settings)
 
     def _argv(self, prompt: str, *, read_only: bool, model: Optional[str],
@@ -2042,6 +2038,25 @@ class GenericCliCodeAgent:
             error = CliHarnessUnavailable(str(full))
             error.retry_at = full.retry_at  # type: ignore[attr-defined]
             raise error from full
+
+    def _codex_seat(self):
+        """The pool seat this session runs on, as FIXED values (subscription_shield.CodexSeat):
+        its home, its spec (its store key) and its member id are bound now, so a refresh later
+        in the session can only ever save to — or take out of rotation — the seat it was issued
+        for, whatever this harness is assigned afterwards. None when the run is not on a seat."""
+        pool = getattr(self, "_pool", None)
+        if pool is None or self.spec.name != "codex":
+            return None
+        from .subscription_pools import mark_needs_reauth
+        from .subscription_shield import CodexSeat
+
+        spec, settings, home = self._pool_spec(), self.settings, self.cli_home()
+        member_id = pool.member_id
+        return CodexSeat(
+            home=home, label=str(pool.label),
+            sync=lambda: sync_rotated_credential(spec, settings,
+                                                 cli_home=home).get("synced", False),
+            refused=lambda: mark_needs_reauth(settings, member_id))
 
     def _pool_spec(self) -> "CliHarnessSpec":
         """This harness's spec with the pool member's store name as its credential: every seam

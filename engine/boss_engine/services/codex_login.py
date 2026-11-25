@@ -86,6 +86,19 @@ def sign_in_words(reason: str) -> str:
             "(Codex, Sign in) or run `boss connect codex`.")
 
 
+def seat_sign_in_words(label: str, reason: str) -> str:
+    """The same, for a pool seat: the seat's login is the one to replace, not the install's."""
+    return (f"The Codex pool account {label!r} needs a new sign-in: {reason}. Replace its "
+            "login in Setup › Models › pool accounts; the pool's other accounts carry on.")
+
+
+def _transient(status_code: int, kind: str) -> bool:
+    """A refresh that failed for a reason that passes by itself (no network, the endpoint busy
+    or down) — retried, never a reason to ask a person to sign in again."""
+    return (status_code == 0 or status_code == 429 or status_code >= 500
+            or kind.startswith("network_"))
+
+
 def config_dir() -> str:
     return os.path.expanduser(os.environ.get("CODEX_HOME", "") or "~/.codex")
 
@@ -187,9 +200,9 @@ def mark_revoked(error: str) -> None:
     # a dead credential must still be recorded.
     try:
         with _flock(home, fcntl.LOCK_EX, 5.0):
-            _record(home, state=REFRESH_FAILED, error=str(error)[:200])
+            _record(home, state=REFRESH_FAILED, error=str(error)[:200], transient=False)
     except OSError:
-        _record(home, state=REFRESH_FAILED, error=str(error)[:200])
+        _record(home, state=REFRESH_FAILED, error=str(error)[:200], transient=False)
 
 
 def failure_stands(home: Optional[str] = None, now: Optional[float] = None) -> bool:
@@ -213,6 +226,13 @@ def failure_stands(home: Optional[str] = None, now: Optional[float] = None) -> b
     # `age` is how old the login was when the failure was recorded; negative = the login was
     # issued AFTER the failure, so the failure belongs to a login that no longer exists.
     return not (age is not None and age < 0)
+
+
+def refusal_stands(home: Optional[str] = None, now: Optional[float] = None) -> bool:
+    """failure_stands, but only for a REFUSAL (invalid_grant, a revoked login, no refresh token):
+    a transient failure (no network, 5xx, 429) is retried by the next refresh, never a person's
+    problem. Used for pool seats, which no background thread retries."""
+    return failure_stands(home, now) and not _read_state(home).get("transient")
 
 
 def status(now: Optional[float] = None) -> dict[str, Any]:
@@ -342,7 +362,7 @@ def refresh_if_due(min_valid: float = REFRESH_WINDOW_SECONDS, *, post: Optional[
             return {"result": "fresh"}
         refresh_token = str(tokens.get("refresh_token") or "")
         if not refresh_token:
-            _record(home, state=REFRESH_FAILED, error="no_refresh_token")
+            _record(home, state=REFRESH_FAILED, error="no_refresh_token", transient=False)
             return {"result": "no_refresh_token"}
         body = {"grant_type": "refresh_token", "refresh_token": refresh_token,
                 "client_id": CLIENT_ID, "scope": "openid profile email"}
@@ -357,9 +377,14 @@ def refresh_if_due(min_valid: float = REFRESH_WINDOW_SECONDS, *, post: Optional[
             expires_in = 0.0
         if status_code != 200 or not access or expires_in <= 0:
             kind = _error_kind(status_code, data) if status_code else str(data.get("error"))
-            _record(home, state=REFRESH_FAILED, error=kind)
-            _log.error("Codex login refresh failed (%s); the login is kept as it is, "
-                       "the operator is asked to sign in again", kind)
+            transient = _transient(status_code, kind)
+            _record(home, state=REFRESH_FAILED, error=kind, transient=transient)
+            if transient:
+                _log.warning("Codex login refresh failed (%s); retried on the next refresh",
+                             kind)
+            else:
+                _log.error("Codex login refresh failed (%s); the login is kept as it is, "
+                           "the operator is asked to sign in again", kind)
             return {"result": "failed", "error": kind}
         doc = _read_doc(home) or {}
         current = doc.get("tokens") if isinstance(doc.get("tokens"), dict) else {}
@@ -375,7 +400,7 @@ def refresh_if_due(min_valid: float = REFRESH_WINDOW_SECONDS, *, post: Optional[
         doc["tokens"] = new
         doc["last_refresh"] = datetime.now(timezone.utc).isoformat()
         _write_private(_path(AUTH_NAME, home), json.dumps(doc))
-        _record(home, state=OK, error=None)
+        _record(home, state=OK, error=None, transient=None)
         _log.info("Codex login refreshed; valid for %d minutes", int(expires_in // 60))
         synced = _store_sync_after_refresh() if after_refresh is None else _sync_with(after_refresh)
         return {"result": "refreshed", "seconds_left": int(expires_in), "store_synced": synced}

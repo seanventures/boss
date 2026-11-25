@@ -12,6 +12,7 @@ login is refreshed by BOSS in the member's home, since its session cannot refres
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import http.client
 import json
 import os
@@ -390,3 +391,114 @@ def test_an_empty_pool_deletes_one_with_accounts_is_refused(eng, project, store)
         other = f"p_{uuid.uuid4().hex[:10]}"
         with pytest.raises(LookupError):                        # another project's id: not found
             sp.delete_pool(c, other, sp.get_pool(c, project, "claude_code")["id"], actor="operator")
+
+
+def _codex_seats(eng, project, monkeypatch, tmp_path, *seats):
+    """A codex pool of `seats` (login documents), the single login beside it, and an agent."""
+    from boss_engine.services.cli_harness import GenericCliCodeAgent, load_specs
+
+    base = tmp_path / "codex"
+    base.mkdir()
+    (base / "auth.json").write_text(_codex_login(
+        DEFAULT_ACCESS, "rt_default", expires_in=86400, last_refresh="2026-11-20T00:00:00Z"))
+    monkeypatch.setenv("CODEX_HOME", str(base))
+    with eng.begin() as c:
+        _pool_, members = _pool(c, project, engine="codex", logins=seats)
+    set_llm_context(project_id=project, run_id=f"crun_{uuid.uuid4().hex[:6]}", db_engine=eng)
+    settings = Settings()
+    return GenericCliCodeAgent(settings, load_specs(settings)["codex"]), members
+
+
+def _status(eng, member) -> str:
+    with eng.begin() as c:
+        return c.execute(text("SELECT status FROM subscription_pool_members WHERE id = :i"),
+                         {"i": member["id"]}).scalar()
+
+
+def test_a_transient_seat_refresh_failure_is_retried_never_a_sign_in(
+        eng, project, store, upstream, monkeypatch, tmp_path):
+    """A 503 from the token endpoint is a blip: the seat stays in rotation, the next session
+    tries the refresh again and gets the new token — no person is asked to sign in."""
+    from boss_engine.services import codex_login
+    from boss_engine.services import model_proxy as mp
+
+    stub, proxy = upstream
+    answers = [(503, {"error": "server_error"}),
+               (200, {"access_token": SEAT_ACCESS_2, "refresh_token": "rt_seat_2",
+                      "expires_in": 864000})]
+    monkeypatch.setattr(codex_login, "_http_post", lambda url, body: answers.pop(0))
+    agent, (member,) = _codex_seats(eng, project, monkeypatch, tmp_path, _codex_login(
+        SEAT_ACCESS, "rt_seat", expires_in=300, last_refresh="2026-11-10T00:00:00Z"))
+    agent._preflight(read_only=False)
+    with mp.session_scope():
+        agent._env()                                    # the refresh answers 503
+    assert _status(eng, member) == "active", "a blip never takes a seat out of rotation"
+    assert len(answers) == 1
+
+    agent._preflight(read_only=False)
+    with mp.session_scope():
+        env = agent._env()                               # tried again: refreshed
+        token = json.loads(open(os.path.join(env["CODEX_HOME"], "auth.json")).read())[
+            "tokens"]["access_token"]
+        assert _through_proxy(proxy, "/codex_subscription/responses", token) == 200
+    assert not answers
+    assert stub.calls[-1]["headers"]["authorization"] == f"Bearer {SEAT_ACCESS_2}"
+    assert _status(eng, member) == "active"
+
+
+def test_a_refused_seat_login_names_the_seat_and_leaves_rotation(
+        eng, project, store, upstream, monkeypatch, tmp_path):
+    """invalid_grant on an expired seat: the words name THE SEAT (not the install's login) and
+    where to replace it, and the seat goes to needs_reauth so the pool's others carry on."""
+    from boss_engine.services import codex_login
+    from boss_engine.services import model_proxy as mp
+
+    monkeypatch.setattr(codex_login, "_http_post",
+                        lambda url, body: (400, {"error": "invalid_grant"}))
+    agent, (member,) = _codex_seats(eng, project, monkeypatch, tmp_path, _codex_login(
+        SEAT_ACCESS, "rt_seat", expires_in=-60, last_refresh="2026-11-10T00:00:00Z"))
+    agent._preflight(read_only=False)
+    with mp.session_scope(), pytest.raises(codex_login.CodexSignInNeeded) as dead:
+        agent._env()
+    words = str(dead.value)
+    assert "seat 0" in words and "Setup › Models" in words and "boss connect" not in words
+    assert _status(eng, member) == "needs_reauth"
+
+
+def test_a_seat_refresh_saves_only_to_the_seat_the_session_was_issued_for(
+        eng, project, store, upstream, monkeypatch, tmp_path):
+    """The seat is bound when the session is shielded: even if the harness is assigned another
+    seat afterwards, a refresh during the session lands on the ORIGINAL seat's store key."""
+    from boss_engine.services import codex_login
+    from boss_engine.services import model_proxy as mp
+
+    stub, proxy = upstream
+    monkeypatch.setattr(codex_login, "_http_post", lambda url, body: (
+        200, {"access_token": SEAT_ACCESS_2, "refresh_token": "rt_seat_2",
+              "expires_in": 864000}))
+    # 20 minutes left: no refresh at start (needs 10), due on a request (window 30).
+    first = _codex_login(SEAT_ACCESS, "rt_seat", expires_in=1200,
+                         last_refresh=datetime.now(timezone.utc).isoformat())
+    other = _codex_login("eyJother." + "o" * 40 + ".sig", "rt_other", expires_in=86400,
+                         last_refresh="2026-11-11T00:00:00Z")
+    agent, (a, b) = _codex_seats(eng, project, monkeypatch, tmp_path, first, other)
+    agent._preflight(read_only=False)
+    issued_for = agent._pool.member_id
+    with mp.session_scope():
+        env = agent._env()
+        token = json.loads(open(os.path.join(env["CODEX_HOME"], "auth.json")).read())[
+            "tokens"]["access_token"]
+        assert not stub.calls and json.loads(store.held[sp._store_key(sp.secret_name_for(
+            "codex", issued_for))])["tokens"]["access_token"] == SEAT_ACCESS, \
+            "not refreshed yet: the refresh happens on the request below"
+        # The harness moves on to the other seat while this session is still running.
+        moved_to = b["id"] if issued_for == a["id"] else a["id"]
+        agent._pool = dataclasses.replace(agent._pool, member_id=moved_to,
+                                          secret_name=sp.secret_name_for("codex", moved_to))
+        assert _through_proxy(proxy, "/codex_subscription/responses", token) == 200
+    assert stub.calls[-1]["headers"]["authorization"] == f"Bearer {SEAT_ACCESS_2}"
+    held = {m["id"]: store.held[sp._store_key(sp.secret_name_for("codex", m["id"]))]
+            for m in (a, b)}
+    other_id = b["id"] if issued_for == a["id"] else a["id"]
+    assert json.loads(held[issued_for])["tokens"]["access_token"] == SEAT_ACCESS_2
+    assert json.loads(held[other_id])["tokens"]["refresh_token"] != "rt_seat_2"
