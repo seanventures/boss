@@ -596,3 +596,17 @@ def test_bosss_own_sentence_about_the_deploy_machine_is_not_a_request():
     # A request in the brief itself is still read.
     asked = stacks.check_build("Rewrite the server in Ruby on Rails.\n\n" + directive)
     assert not asked.ok and "Ruby" in asked.message
+
+
+def test_the_preview_matrix_says_yes_partial_or_no_in_every_cell():
+    """BOSSAPP-1288: every preview stack has one row, every cell starts with its verdict, and the
+    mobile/ML scope line is in the doc."""
+    stacks_named = [s for s, _ in stacks.PREVIEW_MATRIX]
+    for wanted in ("Maven", "Gradle", "Go", "React", "Next.js", "Angular", "Python"):
+        assert any(wanted in s for s in stacks_named), wanted
+    for stack, cells in stacks.PREVIEW_MATRIX:
+        assert len(cells) == len(stacks.PREVIEW_MATRIX_COLUMNS), stack
+        for cell in cells:
+            assert cell.split(":")[0] in ("yes", "partial", "no"), (stack, cell)
+    doc = stacks.render_supported_stacks_md()
+    assert "## Preview matrix" in doc and "SwiftUI" in doc and "TensorFlow" in doc
