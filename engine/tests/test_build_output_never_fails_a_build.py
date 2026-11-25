@@ -120,6 +120,22 @@ def test_a_tracked_file_over_the_cap_still_refuses_in_words(tmp_path):
     assert said.startswith("data.csv is ") and "Git already tracks it" in said
 
 
+def test_a_tracked_file_matching_gitignore_over_the_cap_is_never_silently_dropped(tmp_path):
+    """BOSSAPP-1391: a file git already tracks that matches .gitignore and exceeds 2 MB must
+    refuse loudly with RepoFileRefused rather than being silently unstaged and dropped."""
+    box, git = _repo(tmp_path)
+    (tmp_path / "data.csv").write_text("a,b\n")
+    git("add", "-A")
+    git("commit", "-qm", "tracked csv")
+    box.diff_base_sha = git("rev-parse", "HEAD").strip()
+    (tmp_path / ".gitignore").write_text("data.csv\n")
+    (tmp_path / "data.csv").write_text("a,b\n" + "1,2\n" * (MAX_FILE_BYTES // 4 + 10))
+    with pytest.raises(RepoFileRefused) as refused:
+        box.diff()
+    said = str(refused.value)
+    assert said.startswith("data.csv is ") and "Git already tracks it" in said
+
+
 def test_a_node_projects_bin_cli_reaches_the_diff(tmp_path):
     """bin/ is source in a Node project: never ignored by the shared scaffold, never left out."""
     box, git = _repo(tmp_path)

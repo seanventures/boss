@@ -2817,16 +2817,17 @@ def _project_api_model_binding(
     providers = ("openai", "custom") if lane == "native" else (lane,)
     # Every connection of the lane's provider (`setup-<p>` and `setup-<p>-<n>`): one source per
     # connection. Newest first, but a connection whose last check was refused never wins over
-    # one that works.
-    rows = [row for row in connection.execute(text(
+    # one that works. Include connected keyless local models (vllm, ollama).
+    mappings_res = connection.execute(text(
         "SELECT source_id, credential_secret_ref_id, supported_models, connection_metadata, "
         "observed_capacity "
         "FROM entitlement_sources WHERE project_id=:project_id "
         "AND source_id LIKE 'setup-%' "
-        "AND credential_secret_ref_id IS NOT NULL "
+        "AND (credential_secret_ref_id IS NOT NULL OR connection_status = 'connected') "
         "ORDER BY updated_at DESC NULLS LAST, source_id"
-    ), {"project_id": project_id}).mappings().all()
-        if api_source_provider(row["source_id"]) in providers]
+    ), {"project_id": project_id}).mappings()
+    raw_rows = mappings_res.all() if hasattr(mappings_res, "all") else []
+    rows = [row for row in raw_rows if api_source_provider(row["source_id"]) in providers]
     rows.sort(key=lambda row: last_check_broken(row["connection_metadata"],
                                                 row["observed_capacity"]))
 
@@ -2848,8 +2849,27 @@ def _project_api_model_binding(
     metadata = object_value(row["connection_metadata"], dict)
     model = next((item.strip() for item in models if isinstance(item, str) and item.strip()), "")
     base_url = metadata.get("base_url")
-    return (resolve_secret_ref(connection, row["credential_secret_ref_id"], settings),
-            model, base_url.strip() if isinstance(base_url, str) else "")
+    cred_ref_id = row.get("credential_secret_ref_id")
+    if cred_ref_id:
+        key = resolve_secret_ref(connection, cred_ref_id, settings)
+    else:
+        from .credential_resolve import resolve_project_credential
+        from .model_rate_limiter import provider_of
+
+        key_field = _PROVIDER_LANES[lane][0] if lane in _PROVIDER_LANES else "openai_api_key"
+        prov = api_source_provider(row["source_id"]) or provider_of(lane)
+        key = (
+            resolve_project_credential(
+                connection,
+                settings,
+                project_id=project_id,
+                provider=prov,
+                env_fallback_attr=key_field,
+            )
+            or str(getattr(settings, key_field, "") or "")
+            or (prov if prov in ("vllm", "ollama") else "")
+        )
+    return (key, model, base_url.strip() if isinstance(base_url, str) else "")
 
 
 def _build_azure_agent(settings: Settings) -> CodeAgent:

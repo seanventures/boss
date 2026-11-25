@@ -577,6 +577,11 @@ class SoftwareFactoryService:
                 "Review the diff and approval context before merge.",
                 "Proceed to merge approval only if the review packet also looks correct.",
             ]
+        if status == "no_ci":
+            return [
+                "No hosted CI is configured for this repository; review the diff and BOSS sandbox checks before merge.",
+                "Proceed to merge approval only if the review packet and sandbox evidence look correct.",
+            ]
         if status == "failed":
             return [
                 "Fix the failing sandbox validation before merge approval.",
@@ -598,6 +603,8 @@ class SoftwareFactoryService:
     def _review_confidence_for_status(self, status: str) -> str:
         if status == "passed":
             return "ci-passed-manual-review-required"
+        if status == "no_ci":
+            return "ci-none-manual-review-required"
         if status == "failed":
             return "ci-failed-review-required"
         return "ci-incomplete-review-required"
@@ -608,6 +615,8 @@ class SoftwareFactoryService:
     def _review_recommendation_for_status(self, status: str) -> str:
         if status == "passed":
             return "Review the draft PR and merge manually after approval."
+        if status == "no_ci":
+            return "No hosted CI configured; review the diff and sandbox checks before approving merge."
         if status == "failed":
             return "Do not merge until the failing sandbox validation evidence is fixed."
         return "Do not merge until GitHub validation completes successfully."
@@ -1053,7 +1062,7 @@ class SoftwareFactoryService:
     ) -> dict:
         blockers: list[str] = []
         warnings: list[str] = []
-        if validation_status != "passed":
+        if validation_status not in ("passed", "no_ci"):
             blockers.append("ci_or_sandbox_validation_not_passed")
         if security_dependency_review["status"] == "failed":
             blockers.append("security_dependency_review_failed")
@@ -1392,17 +1401,19 @@ class SoftwareFactoryService:
 
     def _after_merge_failure(self, connection: Any, project_id: str, decision_id: str,
                              pull_request_number: int, pull_request_url: str,
-                             branch_name: Optional[str], receipt_id: str, message: str) -> dict:
+                             branch_name: Optional[str], receipt_id: str, message: str,
+                             *, pinned: bool = False) -> dict:
         """A failed merge, classified and acted on in words (merge_failures)."""
         from . import merge_failures
 
         return merge_failures.handle(self, connection, project_id, decision_id,
                                      pull_request_number, pull_request_url, branch_name,
-                                     receipt_id, message)
+                                     receipt_id, message, pinned=pinned)
 
     def _merge_after_restack(self, connection: Any, project_id: str, pull_request_number: int,
                              title: str, branch_name: Optional[str], receipt_id: str,
-                             pull_request_url: str) -> Any:
+                             pull_request_url: str,
+                             *, approved_head: Optional[str] = None) -> Any:
         """Tier 1b of conflict recovery (pr_follow_up): the merge result, or None."""
         merged_of = getattr(self.github, "last_merged_pull_request", None)
         restack = getattr(self.github, "restack_after_merge", None)
@@ -1416,6 +1427,20 @@ class SoftwareFactoryService:
                            number=int(earlier["number"]))
             if not done.get("restacked"):
                 return None
+            restacked_head = str(done.get("head_sha") or "").strip()
+            if not restacked_head and callable(getattr(self.github, "pull_request_snapshot", None)):
+                restacked_head = str(
+                    (self.github.pull_request_snapshot(pull_request_number) or {}).get("head_sha")
+                    or ""
+                ).strip()
+            if approved_head and not restacked_head:
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "merge_after_restack: restacked head unreadable for %s; refusing unpinned merge",
+                    pull_request_url,
+                )
+                return None
             self.events.emit(
                 connection, project_id, "software_factory.pull_request_restacked",
                 "release_manager", "receipt", receipt_id,
@@ -1423,7 +1448,12 @@ class SoftwareFactoryService:
                  "paths": done.get("paths") or [],
                  "why": f"its branch still carried #{earlier['number']}'s merged commits; put "
                         "it back on its base with only the follow-up change, then merged"})
-            return self.github.merge_pull_request(pull_request_number, title)
+            restack_pin = (
+                {"head_sha": restacked_head}
+                if restacked_head and _accepts_kwarg(self.github.merge_pull_request, "head_sha")
+                else {}
+            )
+            return self.github.merge_pull_request(pull_request_number, title, **restack_pin)
         except Exception:  # noqa: BLE001 — falls through to the failure path, in words
             import logging
 
@@ -1492,11 +1522,18 @@ class SoftwareFactoryService:
         """The head commit a merge decision was raised for (its recommendation's `head_sha`),
         or None when it names none."""
         try:
-            value = connection.execute(sql(
-                "SELECT recommendation->>'head_sha' FROM decisions "
-                "WHERE id = :d AND project_id = :p"),
-                {"d": decision_id, "p": project_id}).scalar()
-        except Exception:  # noqa: BLE001 — unread: the merge proceeds as before, unpinned
+            if hasattr(connection, "begin_nested"):
+                with connection.begin_nested():
+                    value = connection.execute(sql(
+                        "SELECT recommendation->>'head_sha' FROM decisions "
+                        "WHERE id = :d AND project_id = :p"),
+                        {"d": decision_id, "p": project_id}).scalar()
+            else:
+                value = connection.execute(sql(
+                    "SELECT recommendation->>'head_sha' FROM decisions "
+                    "WHERE id = :d AND project_id = :p"),
+                    {"d": decision_id, "p": project_id}).scalar()
+        except Exception:  # noqa: BLE001 — unread: caller logs/emits pin-drop event
             return None
         value = str(value or "").strip()
         return value if re.fullmatch(r"[0-9a-f]{7,64}", value) else None
@@ -2067,9 +2104,10 @@ class SoftwareFactoryService:
         checks_failing: Optional[dict] = None,
         pr_base: Optional[str] = None,
         monitoring_removals: Optional[list[str]] = None,
-        settle_run_id: Optional[str] = None,
+            settle_run_id: Optional[str] = None,
         rescue_of_run: Optional[str] = None,
         deleted_paths: Optional[list[str]] = None,
+        parent_branch: Optional[str] = None,
     ) -> dict:
         """Open the change's pull request and its merge decision.
 
@@ -2275,14 +2313,22 @@ class SoftwareFactoryService:
 
         follow_up: Optional[dict] = None
         try:
-            self.github.ensure_branch(branch_name)
+            if parent_branch and parent_branch != branch_name:
+                self.github.ensure_branch(branch_name, parent_branch)
+                opened_fn = getattr(self.github, "open_pull_request_for", None)
+                if callable(opened_fn) and opened_fn(parent_branch):
+                    # Stacked PR while parent PR is still open: GitHub retargets when parent merges.
+                    pr_base = parent_branch
+            else:
+                self.github.ensure_branch(branch_name)
             # ONE PULL REQUEST PER PIECE OF WORK (pr_follow_up): an open PR on this branch is
             # updated in place; after an earlier PR from it merged, this is a named follow-up
             # on a branch put back on its base, so it shows only its own change.
             from . import pr_follow_up
 
             follow_up = pr_follow_up.prepare_branch(
-                self.github, branch_name, base=pr_base, paths=[f.path for f in files])
+                self.github, branch_name, base=pr_base, paths=[f.path for f in files],
+                parent_branch=parent_branch)
             if follow_up:
                 reason = pr_follow_up.follow_up_reason(title, follow_up["after"],
                                                        follow_up.get("paths") or [])
@@ -2717,6 +2763,41 @@ class SoftwareFactoryService:
                                                     exc_info=True)
         _work_title = ((_packet or {}).get("work") or {}).get("title") \
             or _review_packet.work_title(title)
+        _superseded_pending: list[str] = []
+        if not set_member and run_id and getattr(pr, "url", None) and hasattr(connection, "begin_nested"):
+            try:
+                from sqlalchemy import bindparam as _bindparam
+
+                from .run_decisions import normalize_pr_url as _norm_pr_url
+
+                _want_pr = _norm_pr_url(pr.url)
+                with connection.begin_nested():
+                    _cand = connection.execute(
+                        sql(
+                            "SELECT id, recommendation->>'pull_request_url' AS u "
+                            "FROM decisions "
+                            "WHERE project_id = :p "
+                            "AND recommendation->>'action' = 'review_pull_request' "
+                            "AND recommendation->>'run_id' IS DISTINCT FROM :r "
+                            "AND status = 'pending'"
+                        ),
+                        {"p": project_id, "r": run_id},
+                    ).mappings().all()
+                    _superseded_pending = [
+                        str(row["id"])
+                        for row in _cand
+                        if row["u"] and _norm_pr_url(row["u"]) == _want_pr
+                    ]
+                    if _superseded_pending:
+                        connection.execute(
+                            sql(
+                                "UPDATE decisions SET status = 'withdrawn' "
+                                "WHERE project_id = :p AND id IN :ids AND status = 'pending'"
+                            ).bindparams(_bindparam("ids", expanding=True)),
+                            {"p": project_id, "ids": _superseded_pending},
+                        )
+            except Exception:  # noqa: BLE001 — non-DB / fake connection test double
+                _superseded_pending = []
         decision_id = None if set_member else self.decisions.create_blocking(
             connection,
             project_id,
@@ -2828,6 +2909,22 @@ class SoftwareFactoryService:
             {},
             "merge_decision_required",
         )
+        if _superseded_pending and hasattr(connection, "begin_nested"):
+            try:
+                from sqlalchemy import bindparam as _bindparam
+
+                with connection.begin_nested():
+                    connection.execute(
+                        sql(
+                            "UPDATE decisions SET status = 'pending' "
+                            "WHERE project_id = :p AND id IN :ids AND status = 'withdrawn'"
+                            + (" AND id <> :d" if decision_id else "")
+                        ).bindparams(_bindparam("ids", expanding=True)),
+                        {"p": project_id, "ids": _superseded_pending,
+                         **({"d": decision_id} if decision_id else {})},
+                    )
+            except Exception:  # noqa: BLE001
+                pass
         if decision_id:
             # THE NEWEST BUILD'S CARD IS THE PR'S ONE CARD (BOSSAPP-1320): the older cards for
             # this pull request are withdrawn, each with a note naming this one.
@@ -3173,6 +3270,25 @@ class SoftwareFactoryService:
         # commit (the local repo host) merges that head; later commits stay on the branch and
         # open their own change (pr_follow_up.prepare_branch restacks them onto the base).
         approved_head = self._approved_head_sha(connection, project_id, decision_id)
+        if approved_head is None and decision_id:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "software_factory: merge head pin dropped for decision %s (%s)",
+                decision_id, pull_request_url,
+            )
+            self.events.emit(
+                connection,
+                project_id,
+                "software_factory.merge_head_pin_dropped",
+                "release_manager",
+                "decision",
+                decision_id,
+                {
+                    "pull_request_url": pull_request_url,
+                    "reason": "head_sha_unreadable_or_missing",
+                },
+            )
         pin = ({"head_sha": approved_head}
                if approved_head and _accepts_kwarg(self.github.merge_pull_request, "head_sha")
                else {})
@@ -3223,6 +3339,15 @@ class SoftwareFactoryService:
             # return after GitHub already merged left BOSS recording failure / skipping
             # deploy follow-on — merge succeeded on GitHub, BOSS said it failed.
             _msg = str(error)
+            if isinstance(error, httpx.HTTPStatusError) and error.response is not None and error.response.status_code == 409:
+                try:
+                    _body = error.response.json()
+                    if isinstance(_body, dict) and _body.get("message"):
+                        _detail = str(_body["message"]).strip()
+                        if _detail and _detail not in _msg:
+                            _msg = f"{_msg}: {_detail}"
+                except Exception:  # noqa: BLE001
+                    pass
             merge = None
             # ONE classifier decides what counts as a conflict (merge_failures.classify):
             # GitHub says "405"/"not mergeable", a LOCAL change set says "does not merge
@@ -3235,6 +3360,8 @@ class SoftwareFactoryService:
             # the tip: both tiers below merge whatever the branch holds, which is exactly what
             # the pin keeps out. Its conflict goes to the failure path (a new approval).
             moved = bool(pin) and self._head_moved_past(pull_request_number, approved_head)
+            if moved:
+                _msg = "The change moved after approval; nothing was merged."
             if not moved and _mf.classify(_msg) == _mf.NOT_MERGEABLE and hasattr(
                     self.github, "update_pull_request_branch"):
                 try:
@@ -3246,8 +3373,40 @@ class SoftwareFactoryService:
                             {"pull_request_url": pull_request_url,
                              "why": "base branch had moved; merged base into head and retrying"},
                         )
-                        merge = self.github.merge_pull_request(pull_request_number, title)
-                        recovered_from_stale_base = True
+                        tier1_pin: dict[str, Any] = {}
+                        tier1_valid = True
+                        if pin:
+                            snap = (
+                                self.github.pull_request_snapshot(pull_request_number)
+                                if callable(getattr(self.github, "pull_request_snapshot", None))
+                                else None
+                            )
+                            updated_head = str((snap or {}).get("head_sha") or "").strip()
+                            tier1_valid = False
+                            if updated_head:
+                                if (updated_head.startswith(approved_head)
+                                        or approved_head.startswith(updated_head)):
+                                    tier1_valid = True
+                                elif callable(getattr(self.github, "commit_identity", None)):
+                                    ident = self.github.commit_identity(updated_head) or {}
+                                    parents = [str(p or "") for p in (ident.get("parents") or [])]
+                                    tier1_valid = any(
+                                        p and (p.startswith(approved_head)
+                                               or approved_head.startswith(p))
+                                        for p in parents
+                                    )
+                            if tier1_valid:
+                                tier1_pin = {"head_sha": updated_head}
+                            else:
+                                _msg = (
+                                    "The change moved after approval while updating the branch; "
+                                    "nothing was merged."
+                                )
+                        if tier1_valid:
+                            merge = self.github.merge_pull_request(
+                                pull_request_number, title, **tier1_pin
+                            )
+                            recovered_from_stale_base = True
                 except Exception as retry_error:  # noqa: BLE001
                     _msg = f"{_msg} | retry after branch update: {retry_error}"
                     merge = None
@@ -3257,7 +3416,8 @@ class SoftwareFactoryService:
                 # holding only what changed after that merge, then merge once more.
                 merge = self._merge_after_restack(connection, project_id, pull_request_number,
                                                   title, branch_name, merge_receipt["id"],
-                                                  pull_request_url)
+                                                  pull_request_url,
+                                                  approved_head=approved_head)
                 if merge is not None:
                     recovered_from_stale_base = True
                 else:
@@ -3285,7 +3445,8 @@ class SoftwareFactoryService:
                 # conflict goes to the build agent, a moved head or a GitHub hiccup retries.
                 return self._after_merge_failure(
                     connection, project_id, decision_id, pull_request_number,
-                    pull_request_url, branch_name, merge_receipt["id"], _msg)
+                    pull_request_url, branch_name, merge_receipt["id"], _msg,
+                    pinned=bool(pin))
 
         artifact_id = create_artifact(
             connection,

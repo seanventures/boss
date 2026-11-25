@@ -21,7 +21,7 @@ VERDICTS = ("met", "not_met", "not_run", "no_items")
 
 #: What a check row keeps of each item (the judge's record has more: tags, sources).
 _ITEM_KEYS = ("id", "n", "text", "source", "status", "evidence", "evidence_refs", "judgement",
-              "replayed", "unverified", "flaky")
+              "replayed", "unverified", "flaky", "pinned")
 
 
 def _j(value: Any, default: Any) -> Any:
