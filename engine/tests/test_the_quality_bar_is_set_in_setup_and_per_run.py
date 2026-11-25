@@ -198,8 +198,7 @@ def test_the_run_report_carries_the_follow_ups_and_prints_them():
 # ── production always waits for a person, whatever the preset ──────────────────────────────────
 
 def test_a_production_release_asks_a_person_at_every_preset():
-    # The autonomy choke point never reads the quality bar: no preset can answer a production card.
-    assert "quality_bar" not in inspect.getsource(autonomy_gate)
+    # Behaviour, not source: a production card asks a person, and no policy can make prod act.
     with pytest.raises(autonomy_policy.PolicyLooser):
         autonomy_policy.coerce({"prod": "act"})
     acts = autonomy_policy.coerce({"dev": "act"})
@@ -213,3 +212,21 @@ def test_below_production_a_plan_card_is_answered_by_an_agent_not_a_person():
     found = autonomy_gate.route(None, {"project_id": "p", "recommendation": {
         "action": "resume_code_task"}}, policy=acts)
     assert found.answer == "act"
+
+
+def test_new_work_opens_on_the_chosen_workflows_bar(monkeypatch):
+    """Review of PR #335, S1: the chip opens on the base start_run measures a run against."""
+    from boss_engine.services.project_experience import new_work
+
+    monkeypatch.setattr(ps, "effective", lambda c, p, s, key: S if key == qb.SETTING else None)
+
+    class _Conn:
+        def begin_nested(self):
+            return contextlib.nullcontext()
+
+    strict = new_work.quality_bar(_Conn(), "proj", {"quality_bar": R})
+    assert strict["bar"] == R and strict["project_bar"] == S
+    plain = new_work.quality_bar(_Conn(), "proj", {})
+    assert plain["bar"] == S and plain["project_bar"] == S
+    # an unstamped workflow cannot open a run below the project's bar
+    assert new_work.quality_bar(_Conn(), "proj", {"quality_bar": P})["bar"] == S

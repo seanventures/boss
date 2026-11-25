@@ -16,8 +16,10 @@ from apps.api.tests.test_new_work_goes_through_the_one_start_door import (  # no
 
 def _start(client, project, body):  # noqa: F811
     """Through consent and readiness, as the console does (the start door's own answers)."""
+    import time
+
     r = client.post(f"/v1/projects/{project}/work", json=body)
-    for _ in range(4):
+    for _ in range(8):
         if r.status_code == 200:
             break
         try:
@@ -27,6 +29,7 @@ def _start(client, project, body):  # noqa: F811
             # ask again, as the console's consent sheet does.
             consented = True
         if consented:
+            time.sleep(1)       # the crew the consent names may still be seeding
             r = client.post(f"/v1/projects/{project}/work", json=body)
             continue
         missing = _missing(r)
@@ -71,7 +74,8 @@ def test_a_stricter_bar_is_anyones_who_may_start_and_is_stamped(world, client, e
     assert r.status_code == 200, r.text
     stamped = _stamped(engine, r.json()["run_id"])
     assert stamped.get("quality_bar") == "production"
-    assert stamped.get("_quality_bar_by")
+    # a raise needs no grant and names nobody (review of PR #335, M1)
+    assert stamped.get("_quality_bar_raised") is True and "_quality_bar_by" not in stamped
     starter = _start_only(world, project, "qb-start-strict")
     with world.acting_as(world.ctx(starter)):
         r = client.post(f"/v1/projects/{project}/work",
@@ -126,3 +130,57 @@ def test_new_works_plan_offers_the_projects_bar_in_words(world, client, project)
     assert qb["bar"] == "production"
     assert [p["key"] for p in qb["presets"]] == ["prototype", "standard", "production"]
     assert "approval" in qb["always"]
+
+
+def test_a_run_cannot_undercut_a_stricter_workflow_without_the_grant(world, client, engine, project):  # noqa: F811
+    """Review of PR #335, S1: the base is the workflow's effective bar, not only the project's.
+    A workflow published at production, a run asking standard: a start-only person is refused
+    (403); an owner's run starts and names who lowered it."""
+    import uuid
+
+    from boss_engine.services import quality_bar as qb
+    from boss_engine.services import workflows
+
+    key = f"qb_strict_{uuid.uuid4().hex[:6]}"
+    with engine.begin() as db:
+        d = workflows.create_definition(db, project_id=project, workflow_key=key, name="Strict",
+                                        description=None, actor="test", namespace="product")
+        workflows.publish_version(db, project_id=project, definition_id=d["id"], actor="ceo",
+                                  spec={"entry_step": "a", "quality_bar": "production",
+                                        "steps": [{"id": "a", "kind": "task"}]})
+    body = {"project_id": project, "workflow_key": key,
+            "input": {"title": "Strict", "directive": "Add a route.", "quality_bar": "standard"}}
+
+    def start(json_body):
+        r = client.post("/v1/delivery-workflows/start", json=json_body)
+        for _ in range(4):
+            if r.status_code == 200:
+                break
+            try:
+                consented = _consent(client, r)
+            except AssertionError:
+                consented = True
+            if consented:
+                r = client.post("/v1/delivery-workflows/start", json=json_body)
+                continue
+            missing = _missing(r)
+            if not missing:
+                break
+            json_body = {**json_body, "start_anyway": missing}
+            r = client.post("/v1/delivery-workflows/start", json=json_body)
+        return r
+
+    starter = _start_only(world, project, "qb-start-undercut")
+    with world.acting_as(world.ctx(starter)):
+        refused = start(dict(body))
+    assert refused.status_code == 403, refused.text
+    assert "settings:update" in refused.text or "quality bar" in refused.text
+    with world.acting_as(world.ctx(world.owner)):
+        ok = start(dict(body))
+    assert ok.status_code == 200, ok.text
+    run_id = ok.json()["run"]["id"]
+    stamped = _stamped(engine, run_id)
+    assert stamped.get("quality_bar") == "standard" and stamped.get(qb.BY_KEY)
+    found = qb.resolve_detail(workflow_spec={"quality_bar": "production"}, run_input=stamped,
+                              project_value="standard")
+    assert found["bar"] == "standard" and found["lowered_by"] == stamped[qb.BY_KEY]

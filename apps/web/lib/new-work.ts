@@ -147,7 +147,9 @@ export type NwDefaults = {
 };
 export type QualityPresetKey = "prototype" | "standard" | "production";
 export const QUALITY_RANK: Record<QualityPresetKey, number> = { prototype: 0, standard: 1, production: 2 };
-export type NwQualityBar = { bar: QualityPresetKey; always: string;
+/** `bar`: what this work runs at unless the person picks another — the chosen workflow's bar
+ *  over the project's (engine quality_bar.run_base); `fromWorkflow` when the workflow set it. */
+export type NwQualityBar = { bar: QualityPresetKey; fromWorkflow: boolean; always: string;
   presets: { key: QualityPresetKey; label: string; line: string }[] };
 const asPreset = (v: unknown): QualityPresetKey | null => {
   const x = s(v);
@@ -159,7 +161,8 @@ export function parseQualityBar(v: unknown): NwQualityBar | null {
   if (!bar) return null;
   const presets = a(x.presets).map((p) => ({ key: asPreset(o(p).key), label: s(o(p).label), line: s(o(p).line) }))
     .filter((p): p is { key: QualityPresetKey; label: string; line: string } => Boolean(p.key && p.label));
-  return presets.length ? { bar, always: s(x.always), presets } : null;
+  const project = asPreset(x.project_bar);
+  return presets.length ? { bar, fromWorkflow: Boolean(project && project !== bar), always: s(x.always), presets } : null;
 }
 /** THE APP NEW WORK BUILDS ONTO (AR-20), as the engine resolved the door's `app=`: the build the
  *  change continues, the app's name, its lineage branch and its change / PR. */

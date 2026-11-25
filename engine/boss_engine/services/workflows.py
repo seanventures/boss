@@ -3418,8 +3418,40 @@ CHECKED_REPLACES_KEY = "_checked_replaces"
 #: input never reaches a deploy step with either.
 SPEC_BY_START_KEY = "_spec_approved_by_start"
 SERVER_ONLY_INPUTS = frozenset({"replaces", CHECKED_REPLACES_KEY, "quality_bar",
-                                "quality_bar_gates", "_quality_bar_by", SPEC_BY_START_KEY,
+                                "quality_bar_gates", "_quality_bar_by", "_quality_bar_raised",
+                                SPEC_BY_START_KEY,
                                 "skip_without_host", "skip_without_deploy_ask"})
+
+
+def _quality_bar_inputs(connection: Connection, project_id: str, spec: Mapping[str, Any],
+                        actor: Any, asked: Mapping[str, Any]) -> dict[str, Any]:
+    """The run-input keys for a bar a run asked for (quality_bar.py), decided HERE, against the
+    version that will run: its base is the WORKFLOW's effective bar over the project's (review of
+    PR #335, S1: comparing to the project alone let a run undercut a stricter workflow). Below
+    the base, or a gate set to follow_up, needs a PERSON with settings:update
+    (check_override_permission raises QualityBarOverrideRefused) and names them (BY_KEY). The
+    same or a stricter bar needs no grant and names nobody (RAISED_KEY)."""
+    from ..config import get_settings
+    from . import project_settings
+    from . import quality_bar as _qb
+
+    bar = _qb.normalize(asked.get("bar"))
+    gates = _qb.clean_gate_map(asked.get("gates"))
+    if not bar and not gates:
+        return {}
+    project_bar = project_settings.effective(connection, project_id, get_settings(), _qb.SETTING)
+    base = _qb.run_base(spec, project_bar)
+    out: dict[str, Any] = {}
+    if bar:
+        out[_qb.SETTING] = bar
+    if gates:
+        out[_qb.OVERRIDES_KEY] = gates
+    if _qb.lowers(bar, gates, base):
+        _qb.check_override_permission(project_id, actor)
+        out[_qb.BY_KEY] = str(actor)
+    else:
+        out[_qb.RAISED_KEY] = True
+    return out
 
 
 def start_run(
@@ -3488,15 +3520,6 @@ def start_run(
                   and str(k) != PRECHECK_KEY and str(k) not in SERVER_ONLY_INPUTS}
     if checked_replaces:
         input_data[CHECKED_REPLACES_KEY] = [str(x) for x in checked_replaces]
-    if quality_bar_override and quality_bar_override.get("by"):
-        from . import quality_bar as _qb
-
-        if _qb.normalize(quality_bar_override.get("bar")):
-            input_data[_qb.SETTING] = _qb.normalize(quality_bar_override["bar"])
-        if isinstance(quality_bar_override.get("gates"), dict):
-            input_data[_qb.OVERRIDES_KEY] = {str(k): str(v) for k, v in
-                                             quality_bar_override["gates"].items()}
-        input_data[_qb.BY_KEY] = str(quality_bar_override["by"])
     if precheck_record:
         input_data[PRECHECK_KEY] = dict(precheck_record)
     if str(spec_approved_by_start or "").strip():
@@ -3538,6 +3561,9 @@ def start_run(
     version = _version_row(connection, project_id, str(workflow_version_id))
     spec = _published_spec(version["spec"], project_roster(connection, project_id))
     _hold_new_typed_decision_work(spec)
+    if quality_bar_override:
+        input_data.update(_quality_bar_inputs(connection, project_id, spec, actor,
+                                              quality_bar_override))
     version_namespace = connection.execute(
         text(
             "SELECT COALESCE(d.namespace, 'system') FROM workflow_definitions d "

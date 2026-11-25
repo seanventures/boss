@@ -178,8 +178,9 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
   const defaultProfile = useDefaultProfile(pid, !ctx.demo);
   const [profilePick, setProfilePick] = useState<RunProfile | null>(null);
   const runProfile = profilePick ?? defaultProfile;
-  // THE QUALITY BAR FOR THIS RUN (BOSSAPP-1362): opens on the project's; a lower one needs
-  // settings:update (the start door checks it too), the same or stricter is anyone's.
+  // THE QUALITY BAR FOR THIS RUN (BOSSAPP-1362): opens on the chosen workflow's effective bar
+  // (over the project's); a lower one needs settings:update (start_run checks it against the
+  // same base), the same or stricter is anyone's.
   const [barPick, setBarPick] = useState<QualityPresetKey | null>(null);
   const lowerGate = useGate("settings:update", pid);
   const tk = resolved.state === "ready" ? resolved.ticket : null;
@@ -718,7 +719,7 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
         label: "Quality", title: "What blocks this build and what becomes a follow-up. It opens on this project's bar.",
         value: <span className="px-row" style={{ gap: 4 }} data-testid="px-nw-quality">{(() => { const I = PRESET_ICON[runBar]; return <I size={13} aria-hidden />; })()}
           {qbar.presets.find((x) => x.key === runBar)?.label ?? runBar}</span>,
-        sub: barPick && barPick !== projectBar ? "you set it" : "project bar",
+        sub: barPick && barPick !== projectBar ? "you set it" : qbar.fromWorkflow ? "workflow's bar" : "project bar",
         popover: (
           <>
             <div role="radiogroup" aria-label="Quality bar" className="px-nw-radios">
@@ -729,11 +730,11 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
                 return (
                   <button key={x.key} type="button" role="radio" aria-checked={runBar === x.key} className="px-nw-opt"
                           disabled={held} data-testid={`px-nw-quality-${x.key}`}
-                          title={held ? `Lower than the project's bar: ${lowerGate.reason || "needs settings:update"}` : x.line}
+                          title={held ? `Lower than this work's bar: ${lowerGate.reason || "needs settings:update"}` : x.line}
                           onClick={() => { setBarPick(x.key); setPop(null); }}>
                     <I size={13} weight={runBar === x.key ? "fill" : "regular"} aria-hidden />
-                    <b>{x.label}</b>{x.key === projectBar ? <span className="px-faint"> · project bar</span> : null}
-                    <small>{held ? "Lower than the project's bar: needs an owner or admin" : x.line}</small>
+                    <b>{x.label}</b>{x.key === projectBar ? <span className="px-faint"> · {qbar.fromWorkflow ? "workflow's bar" : "project bar"}</span> : null}
+                    <small>{held ? "Lower than this work's bar: needs an owner or admin" : x.line}</small>
                   </button>
                 );
               })}

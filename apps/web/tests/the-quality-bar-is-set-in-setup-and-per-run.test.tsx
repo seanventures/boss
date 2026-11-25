@@ -145,14 +145,14 @@ const type = async (el: Element | null, value: string) => {
   });
 };
 
-function engine(bar = "standard") {
+function engine(bar = "standard", projectBar = bar) {
   return stubFetch((c: Call) => {
     if (c.path === "/v1/tickets/resolve") return { body: { refs: [], tickets: [], errors: [], connected: 0 } };
     if (c.path === "/v1/pipeline-profiles") return { body: { default: "balanced", items: [] } };
     if (c.method === "POST" && c.path === `/v1/projects/${P}/work/understand`) return { body: { status: "empty" } };
     if (c.method === "GET" && c.path === `/v1/projects/${P}/work/plan`) {
       return { body: { ...FX_WORK_PLAN, defaults: { tracker: null, targets: [], target: null, tell: { routes: [] }, priority: "normal",
-                                                    quality_bar: { bar, always: ALWAYS, presets: PRESETS } } } };
+                                                    quality_bar: { bar, project_bar: projectBar, always: ALWAYS, presets: PRESETS } } } };
     }
     if (c.method !== "GET") return { body: { ok: true, run_id: "wfr_new" } };
     const m = c.path.match(/^\/v1\/projects\/([^/]+)\/(overview|work|knowledge|deployments|onboarding|settings|health|captain)$/);
@@ -200,6 +200,20 @@ describe("New work › Quality", () => {
     await type(tid("px-compose-text"), "Add a health route that reports the pool");
     await press(tid("px-compose-start"));
     expect(sentWork(calls)?.quality_bar).toBe("production");
+  });
+
+  it("opens on the chosen workflow's bar when it is stricter than the project's", async () => {
+    const calls = engine("production", "standard");
+    await openNewWork("operator");
+    expect(tid("px-nw-quality")?.textContent).toContain("Production");
+    await press(tid("px-nw-chip-quality"));
+    expect(tid("px-nw-quality-production")?.textContent).toContain("workflow's bar");
+    // Standard is below this work's bar: held for a person without settings:update
+    expect((tid("px-nw-quality-standard") as HTMLButtonElement).disabled).toBe(true);
+    await press(tid("px-nw-quality-production"));
+    await type(tid("px-compose-text"), "Add a health route that reports the pool");
+    await press(tid("px-compose-start"));
+    expect(sentWork(calls)?.quality_bar).toBeUndefined();     // kept: nothing to send
   });
 
   it("holds a lower bar for a person without settings:update, never a stricter one", async () => {

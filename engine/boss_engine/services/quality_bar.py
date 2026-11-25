@@ -87,6 +87,10 @@ def normalize(value: Any) -> Optional[str]:
 #: A caller's own copy of these input keys is dropped there, so an agent's start_workflow inputs
 #: can set neither a bar nor a per-gate map.
 BY_KEY = "_quality_bar_by"
+#: Written ONLY by start_run for a run that asked for the same or a STRICTER bar than its
+#: base (no grant needed, so no person is named): the build honours it only while it is not
+#: below the base.
+RAISED_KEY = "_quality_bar_raised"
 OVERRIDE_PERMISSION = "settings:update"
 RANK = {PROTOTYPE: 0, STANDARD: 1, PRODUCTION: 2}
 
@@ -99,6 +103,19 @@ FLOOR = frozenset({"code_written", "app_serves", "template_tests", "no_committed
 
 class QualityBarOverrideRefused(PermissionError):
     """Lowering the bar (or overriding single gates) needs a person with settings:update."""
+
+
+def is_person_actor(actor: Any) -> bool:
+    """A name that may be a person's: never empty, 'boss', a job, an agent or a service."""
+    who = str(actor or "").strip()
+    return bool(who) and who.lower() not in ("boss", "system", "worker", "start_door") \
+        and not who.startswith(("agent", "agt_", "job_", "svc_", "sa_"))
+
+
+def run_base(workflow_spec: Any, project_value: Any) -> str:
+    """The bar a run is measured against before it asks for its own: the workflow's effective
+    bar over the project's (resolve_detail without a run)."""
+    return resolve_detail(workflow_spec=workflow_spec, project_value=project_value)["bar"]
 
 
 def check_override_permission(project_id: str, actor: Any) -> None:
@@ -114,8 +131,7 @@ def check_override_permission(project_id: str, actor: Any) -> None:
     an owner actor such as `ceo` can lower a bar (the project's own API keys are who may act as
     that actor). Turn identity enforcement on for the real `settings:update` decision."""
     who = str(actor or "").strip()
-    if not who or who.lower() in ("boss", "system", "worker") or who.startswith(
-            ("agent", "agt_", "job_", "svc_", "sa_")):
+    if not is_person_actor(who):
         raise QualityBarOverrideRefused("only a person may change a quality bar")
     from ..identity import lineage, viewer
 
@@ -145,29 +161,42 @@ def resolve_detail(*, run_spec: Any = None, workflow_spec: Any = None, run_input
     inp = run_input if isinstance(run_input, Mapping) else {}
     wf = workflow_spec if isinstance(workflow_spec, Mapping) else {}
     stamped = bool(str(inp.get(BY_KEY) or "").strip())
+    # A RAISE the start door recorded without a person's grant (RAISED_KEY): honoured only as
+    # long as it is not below the bar it would replace.
+    raised = bool(inp.get(RAISED_KEY))
     by = str(spec.get(BY_KEY) or inp.get(BY_KEY) or "").strip() or None
-    bar, source = project_bar, "project" if normalize(project_value) else "default"
+    # THE BASE A RUN IS MEASURED AGAINST: the project's bar, or the workflow's own when the
+    # workflow may set it (raise freely; lower only when a person published it that way). A run
+    # below THIS is a lowering, recorded with who granted it (review of PR #335, S1).
+    base, source = project_bar, "project" if normalize(project_value) else "default"
+    wf_bar = normalize(wf.get(SETTING))
+    if wf_bar and (RANK[wf_bar] >= RANK[project_bar] or str(wf.get(BY_KEY) or "").strip()):
+        base, source = wf_bar, "workflow"
+        by = by or str(wf.get(BY_KEY) or "").strip() or None
+    bar = base
+    run_bar = normalize(inp.get(SETTING))
     if normalize(spec.get(SETTING)):
         bar, source = normalize(spec.get(SETTING)), "run_spec"
-    elif stamped and normalize(inp.get(SETTING)):
-        bar, source = normalize(inp.get(SETTING)), "run_input"
-    elif normalize(wf.get(SETTING)) and (
-            RANK[normalize(wf.get(SETTING))] >= RANK[project_bar]
-            or str(wf.get(BY_KEY) or "").strip()):
-        # A workflow may RAISE the bar freely; it may LOWER it only when a person with
-        # settings:update published it that way (stamped by publish_version, never by a caller).
-        bar, source = normalize(wf.get(SETTING)), "workflow"
-        by = by or str(wf.get(BY_KEY) or "").strip() or None
+    elif stamped and run_bar:
+        bar, source = run_bar, "run_input"
+    elif raised and run_bar and RANK[run_bar] >= RANK[base]:
+        bar, source = run_bar, "run_input"
     overrides: dict[str, str] = {}
     for src_ok, src in ((True, spec), (stamped, inp), (bool(str(wf.get(BY_KEY) or "").strip()), wf)):
         if src_ok and isinstance(src.get(OVERRIDES_KEY), Mapping):
             for gate, how in src[OVERRIDES_KEY].items():
                 if str(how) in GATE_LEVELS:
                     overrides.setdefault(str(gate), str(how))
-    # A follow_up asked by the run or its workflow lowers the project's bar; one the project
-    # set itself does not (it IS the project's bar).
-    lowered = RANK[bar] < RANK[project_bar] or any(
-        how == "follow_up" for how in overrides.values())
+    if raised and not stamped and isinstance(inp.get(OVERRIDES_KEY), Mapping):
+        # An unstamped run may only make single gates STRICTER.
+        for gate, how in inp[OVERRIDES_KEY].items():
+            if str(how) == "block":
+                overrides.setdefault(str(gate), "block")
+    # Below the project's bar OR the workflow's own bar, or a follow_up asked by the run or its
+    # workflow, is a lowering; a per-gate level the project set itself is not (it IS the
+    # project's bar).
+    lowered = (RANK[bar] < RANK[project_bar] or RANK[bar] < RANK[base]
+               or any(how == "follow_up" for how in overrides.values()))
     if isinstance(project_gates, Mapping):
         for gate, how in project_gates.items():
             if str(how) in GATE_LEVELS:
