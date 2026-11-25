@@ -337,9 +337,17 @@ def build_setup_router(
         # here on the server, under the org's model home, and never reaches the browser.
         store = None
         if sign_in.LOGINS[provider].captures_token:
-            from boss_engine.services.claude_credential import sign_in_store
+            if body.add_account:
+                # BOSSAPP-1343: another seat, stored as its own pool member; account 1 stays.
+                from boss_engine.services import subscription_pools as pools
 
-            store = sign_in_store(engine, get_settings(), home or body.project_id, actor)
+                store = pools.sign_in_store(engine, get_settings(), body.project_id, actor,
+                                            provider, body.account_label)
+                body.fresh = True
+            else:
+                from boss_engine.services.claude_credential import sign_in_store
+
+                store = sign_in_store(engine, get_settings(), home or body.project_id, actor)
         try:
             return sign_in.start(provider, project_id=body.project_id, actor=actor,
                                  org_id=org_id, settings=get_settings(), login_rejected=rejected,
