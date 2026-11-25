@@ -1999,6 +1999,11 @@ class DecisionService:
 
             local_review.on_review_sent_back(connection, self.settings, row, actor=actor,
                                              note=note, jobs=self.jobs)
+        elif action == "revise" and decision_actions.is_prd_publish(row):
+            from . import meeting_service
+
+            meeting_service.revise_prd_from_decision(
+                connection, self.settings, row, actor=actor, note=note or "")
 
     def _start_code_task_after_prd(
         self,

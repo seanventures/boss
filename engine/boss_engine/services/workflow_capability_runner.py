@@ -7421,6 +7421,48 @@ def _hold_for_spec(connection: Connection, *, project_id: str, run_id: str,
             "meeting_run_id": meeting_run_id}
 
 
+def repoint_spec_decision(connection: Connection, old_decision_id: str,
+                          new_decision_id: str) -> int:
+    """Repoint waiting workflow_step_runs (SPEC_DECISION_KIND) from a revised PRD decision to
+    the new revised PRD decision so the workflow keeps holding on the new card."""
+    rows = connection.execute(
+        text("SELECT id, output FROM workflow_step_runs WHERE status = 'waiting'")
+    ).mappings().all()
+    updated = 0
+    for row in rows:
+        raw = row["output"]
+        output = raw if isinstance(raw, dict) else json.loads(raw or "{}")
+        if not isinstance(output, dict):
+            continue
+        await_val = output.get("await")
+        if not isinstance(await_val, dict):
+            continue
+        if await_val.get("kind") != SPEC_DECISION_KIND:
+            continue
+        matches_old = (
+            str(await_val.get("id") or "") == str(old_decision_id)
+            or str(output.get("spec_decision_id") or "") == str(old_decision_id)
+        )
+        if not matches_old:
+            continue
+        new_output = {
+            **output,
+            "await": {**await_val, "id": str(new_decision_id)},
+            "spec_decision_id": str(new_decision_id),
+            "awaited_note": (
+                f"The PRD was revised. Nothing is built until the revised spec is approved: "
+                f"decision {new_decision_id}."
+            ),
+        }
+        connection.execute(
+            text("UPDATE workflow_step_runs SET output = CAST(:o AS JSONB), updated_at = now() "
+                 "WHERE id = :i AND status = 'waiting'"),
+            {"o": json.dumps(new_output), "i": row["id"]},
+        )
+        updated += 1
+    return updated
+
+
 def _agent_runs_on_workers() -> bool:
     from .agent_loop import agent_runs_on_workers
 
