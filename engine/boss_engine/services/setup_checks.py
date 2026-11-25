@@ -146,6 +146,13 @@ def _message(answer: HttpAnswer) -> str:
     return str(body or "")[:300]
 
 
+def _base(api_base: str) -> str:
+    """The REST base to probe: the one given, else the install's (never a relative URL)."""
+    from ..identity import github_urls
+
+    return github_urls.api_base(api_base)
+
+
 def _send_check(token: str, base: str) -> None:
     """THE SEND POINT for every setup probe (BOSSAPP-1286): a token tagged for another GitHub
     host (or an untagged install token aimed at a GHES base) is refused before any request."""
@@ -188,7 +195,7 @@ def inspect_token(token: str, *, api_base: str = "",
     Returns {ok, state, account_login, expires_at, repos, retry_at}. Never includes the token.
     """
     http = http or default_http
-    base = api_base.rstrip("/")
+    base = _base(api_base)
     _send_check(token, base)
     who = http("GET", f"{base}/user", headers=_gh_headers(token))
     if who.status != 200:
@@ -229,7 +236,7 @@ def probe_repository(token: str, full_name: str, *, api_base: str = "",
     retry_at}. `state` is the one pill for the repository; each check is {ok, state, at}.
     """
     http = http or default_http
-    base = api_base.rstrip("/")
+    base = _base(api_base)
     _send_check(token, base)
     at = iso(now_utc())
     headers = _gh_headers(token)

@@ -114,6 +114,14 @@ def _service(settings: Any):
     return GitHubConnectionService(settings)
 
 
+def _tag(token: Any, api_base: str) -> Any:
+    """A setup token tagged with the host of the connection it is for (BOSSAPP-1286); a token
+    already tagged keeps its own host (a mismatch is refused, never re-pointed)."""
+    from ..identity import github_urls
+
+    return github_urls.tag(token, api_base) if token else token
+
+
 def _api_base(settings: Any) -> str:
     from ..identity import github_urls
 
@@ -149,6 +157,8 @@ def repository_token(connection: Connection, settings: Any, project_id: str, tok
         raise SetupActionError(422, "token_rejected", "Paste token", "Paste a GitHub token.")
     # THE DECISION FIRST: nothing is sent anywhere until the operator has agreed where it lives.
     require_store(connection, settings, project_id, accept_database_fallback, actor)
+    # The pasted token is for the connection this creates, on _api_base(settings): its host.
+    token = _tag(token, _api_base(settings))
     found = setup_checks.inspect_token(token, api_base=_api_base(settings), http=http)
     if not found["ok"]:
         from .setup_pills import REPOSITORY, pill
@@ -359,6 +369,7 @@ def connection_repos(connection: Connection, settings: Any, project_id: str,
     except Exception:  # noqa: BLE001 — an unreadable token is one to replace
         raise SetupActionError(422, "token_rejected", "Token rejected",
                                "Paste a new token.") from None
+    token = _tag(token, _api_base(settings))
     found = setup_checks.inspect_token(token, api_base=_api_base(settings), http=http)
     if not found["ok"]:
         raise SetupActionError(422, found["state"], "Token rejected", "Paste a new token.")
@@ -697,7 +708,9 @@ def check_repository(connection: Connection, settings: Any, project_id: str,
         ref = service.secret_refs.require_usable(
             connection, project_id=project_id,
             credential_ref=service._credential_ref(connection, project_id, row["connection_id"]))
-        token = service._resolve_secret(ref, connection)
+        # The binding's connection's own token: its connection's host (BOSSAPP-1286).
+        token = _tag(service._resolve_secret(ref, connection),
+                     row["api_base_url"] or _api_base(settings))
     except Exception:  # noqa: BLE001 — an unreadable token is a token GitHub cannot accept
         token = ""
     receipt_id = _receipt(connection, project_id, "github.repository.check",
@@ -797,6 +810,7 @@ def _check_install_repository(connection: Connection, settings: Any, project_id:
     full = f"{owner}/{name}"
     receipt_id = _receipt(connection, project_id, "github.repository.check",
                           {"repository": full, "source": "install"})
+    token = _tag(token, _api_base(settings))      # the install's own repository and token
     found = setup_checks.probe_repository(token, full, api_base=_api_base(settings), http=http)
     login = None
     if found["state"] == "working":

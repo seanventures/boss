@@ -54,10 +54,18 @@ def _content(bare: Path, sha: str) -> str:
                           capture_output=True, text=True, check=True).stdout
 
 
+
+def _token(local_github):
+    """The connection's token, tagged with the host it belongs to (as every source hands it out;
+    an untagged token is the install's and is never sent to this local GitHub, BOSSAPP-1286)."""
+    from boss_engine.identity import github_urls
+
+    return github_urls.tag("ghp_local_token", local_github.api_url)
+
 def test_the_repository_proof_writes_a_real_object_and_moves_no_ref(local_github):
     bare = local_github.seed("acme", "app", {"README.md": "# app\n"})
     refs_before, blobs_before = _refs(bare), _blobs(bare)
-    found = setup_checks.probe_repository("ghp_local_token", "acme/app",
+    found = setup_checks.probe_repository(_token(local_github), "acme/app",
                                           api_base=local_github.api_url)
     assert found["state"] == "working", found
     assert all(found["checks"][k]["ok"] for k in ("read", "write", "pull_requests")), found
@@ -74,7 +82,7 @@ def test_a_github_that_cannot_take_the_write_is_not_reported_working(local_githu
     local_github.seed("acme", "app", {"README.md": "# app\n"})
     # The write (and only the write) gets GitHub's bad moment.
     local_github.blip("api", times=1, match="POST /api/repos/acme/app/git/blobs")
-    found = setup_checks.probe_repository("ghp_local_token", "acme/app",
+    found = setup_checks.probe_repository(_token(local_github), "acme/app",
                                           api_base=local_github.api_url)
     assert found["checks"]["read"]["ok"] is True
     assert found["checks"]["write"]["ok"] is not True, found

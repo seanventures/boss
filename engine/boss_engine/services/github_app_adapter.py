@@ -113,11 +113,11 @@ def repo_token(settings, owner: str, repo: str, *, api_base_url: str = "", app=N
             token, missing = app.usable_token_for_repo(
                 owner, repo, extra=scope_for_repo(owner, repo, connection))
             if not missing:
-                return _tagged(token, app.api_base_url)
+                return _tagged(token, getattr(app, "api_base_url", ""))
             # The App is installed here but was not granted enough to do the work. Without
             # this branch the token is used anyway and dies at push time with a bare 403.
             if not getattr(settings, "github_token", ""):
-                return _tagged(token, app.api_base_url)
+                return _tagged(token, getattr(app, "api_base_url", ""))
             logging.getLogger(__name__).warning(
                 "github: App installation for %s/%s is missing %s; using the configured "
                 "token instead", owner, repo, ", ".join(missing))

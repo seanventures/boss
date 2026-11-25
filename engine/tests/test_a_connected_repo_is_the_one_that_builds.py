@@ -61,7 +61,7 @@ def test_both_build_paths_pass_the_project_through():
     for module in (code_task_service, governed_code_task_service):
         source = inspect.getsource(module)
         assert "build_credential(c, settings, project_id, owner, repo)" in source, module.__name__
-    assert "connection=connection,\n                              project_id=project_id" in \
+    assert "connection=connection,\n                               project_id=project_id" in \
         inspect.getsource(github_connections.build_credential)
 
 

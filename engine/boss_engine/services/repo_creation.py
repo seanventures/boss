@@ -91,9 +91,10 @@ def pat_abilities(token: str, *, api_base: str = "", http: Any = None) -> dict[s
      can_create: True|False|None, words}. A classic token says its scopes in `X-OAuth-Scopes`;
     a fine-grained token has no such header and GitHub only tells at the attempt, so `can_create`
     is None (unverified) with the words saying what it would need. Never includes the token."""
-    from .setup_checks import _gh_headers, _send_check, default_http
+    from .setup_checks import _base, _gh_headers, _send_check, default_http
 
     http = http or default_http
+    api_base = _base(api_base)
     _send_check(token, api_base)
     who = http("GET", f"{api_base.rstrip('/')}/user", headers=_gh_headers(token))
     shape = "fine_grained" if _FINE_GRAINED.match(token or "") else "classic" if _CLASSIC.match(token or "") else "unknown"
@@ -344,8 +345,9 @@ def _abilities_cached(token: str, api_base: str) -> dict[str, Any]:
 
 
 def _org_member(token: str, owner: str, api_base: str) -> bool:
-    from .setup_checks import _gh_headers, _send_check, default_http
+    from .setup_checks import _base, _gh_headers, _send_check, default_http
 
+    api_base = _base(api_base)
     _send_check(token, api_base)
     got = default_http("GET", f"{api_base.rstrip('/')}/user/memberships/orgs/{owner}", headers=_gh_headers(token))
     return got.status == 200 and isinstance(got.body, dict) and str(got.body.get("state") or "") == "active"
