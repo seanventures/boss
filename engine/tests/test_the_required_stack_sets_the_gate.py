@@ -324,3 +324,76 @@ def test_a_base_node_app_with_a_stray_go_mod_stays_npm_with_go_on(tmp_path, go_o
     plan = _plan({"instructions": "Add a page."}, repo, pinned=vt.pin_verify_manifest(repo),
                  changed=["src/page.ts"])
     assert plan.commands and plan.commands[0].startswith("npm ")
+
+
+# ---- BOSSAPP-1230: workflow_precheck pins the base manifest ------------------------------------
+
+def test_workflow_precheck_passes_pinned_base_to_resolve_gate_plan(tmp_path, go_off):
+    from boss_engine.services import workflow_precheck as wp
+
+    repo = _tree(tmp_path, {"go.mod": GO_MOD, "package.json": PKG, "src/app.ts": "export {}\n"})
+    ctx = wp.Context(connection=None, settings=None, project_id="p1", actor="t", spec={},
+                     run_input={"title": "Docs site"}, build_run_id="", app_dir=repo)
+    res = wp.check_test_plan(ctx, {})
+    assert res["verdict"] in ("ready", "fixable"), res
+    assert "toolchain_missing" not in res["evidence"]
+
+
+# ---- BOSSAPP-1238: multi-service stack plans, missing toolchain vs missing preview command -----
+
+def test_multi_service_go_and_web_with_go_off_needs_human(tmp_path, go_off):
+    repo = _tree(tmp_path, {
+        "backend/go.mod": GO_MOD,
+        "backend/main.go": "package main\nfunc main() {}\n",
+        "web/package.json": WEB_PKG,
+        "web/src/main.tsx": "export {}\n",
+    })
+    plan = _plan({"instructions": "Build fullstack app."}, repo,
+                 changed=["backend/main.go", "web/src/main.tsx"])
+    assert plan.source == "stack"
+    assert plan.needs_human is True
+    assert "`boss toolchains enable go`" in (plan.error or "")
+
+
+def test_multi_service_go_and_web_missing_preview_command_does_not_need_human(tmp_path, go_on):
+    go_sub = tmp_path / "go_app"
+    go_sub.mkdir()
+    repo = _tree(go_sub, {
+        "backend/go.mod": GO_MOD,
+        "backend/main.go": "package main\nfunc main() {}\n",
+        "backend/boss.preview.report": "{bad json",
+        "web/package.json": WEB_PKG,
+        "web/src/main.tsx": "export {}\n",
+    })
+    plan = _plan({"instructions": "Build fullstack app."}, repo,
+                 changed=["backend/go.mod", "web/src/main.tsx"])
+    assert plan.source == "stack"
+    assert plan.error and "boss.preview.report" in plan.error
+    assert plan.needs_human is False
+    # Also Python backend missing boss.preview.command -> needs_human is False
+    py_sub = tmp_path / "py_app"
+    py_sub.mkdir()
+    py_repo = _tree(py_sub, {
+        "backend/requirements.txt": "fastapi\n",
+        "backend/worker.py": "x = 1\n",
+        "web/package.json": WEB_PKG,
+        "web/src/main.tsx": "export {}\n",
+    })
+    py_plan = _plan({"instructions": "Build fullstack app."}, py_repo,
+                    changed=["backend/worker.py", "web/src/main.tsx"])
+    assert py_plan.source == "stack"
+    assert py_plan.error and "boss.preview.command" in py_plan.error
+    assert py_plan.needs_human is False
+
+
+def test_multi_service_go_and_web_subfolder_change_gates_only_that_folder(tmp_path, go_on):
+    repo = _tree(tmp_path, {
+        "backend/go.mod": GO_MOD,
+        "backend/main.go": "package main\nfunc main() {}\n",
+        "web/package.json": WEB_PKG,
+        "web/src/main.tsx": "export {}\n",
+    })
+    plan = _plan({"instructions": "Fix backend handler."}, repo, changed=["backend/main.go"])
+    assert plan.source == "toolchain"
+    assert plan.cwd == repo / "backend"
+    assert plan.commands == list(toolchains.GO_GATE)

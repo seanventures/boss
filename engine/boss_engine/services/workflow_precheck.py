@@ -1705,7 +1705,9 @@ def check_test_plan(ctx: Context, step: dict[str, Any]) -> dict[str, Any]:
             spec = raw if isinstance(raw, dict) else json.loads(raw or "{}")
             title = str(row["title"] or title)
     try:
-        plan = vt.resolve_gate_plan(spec, title, ctx.app_dir, app_id=None, changed=None)
+        pinned = vt.pin_verify_manifest(ctx.app_dir)
+        plan = vt.resolve_gate_plan(
+            spec, title, ctx.app_dir, app_id=None, changed=None, pinned=pinned)
         plan_txt = f"gate plan ({plan.source}): {plan.description[:200]}"
         finding = getattr(plan, "finding", None) or plan.error
     except Exception as exc:  # noqa: BLE001
