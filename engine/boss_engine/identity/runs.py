@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterator, Mapping, Optional
 
-from . import dpop, tokens
+from . import dpop, github_urls, tokens
 from .delegation import (
     AUD_API,
     AUD_EGRESS,
@@ -759,7 +759,9 @@ def egress_access(shim: Shim, *, owner: str, repo: str) -> CloneAccess:
                  env={"BOSS_EGR_CREDENTIAL": shim.egress_credential or ""})
     return CloneAccess(
         run_id=shim.run_id, clone_url=f"{base}/github/{owner}/{repo}.git",
-        git_config=((f"url.{base}/github/.insteadOf", "https://github.com/"),
+        git_config=((f"url.{base}/github/.insteadOf", github_urls.PUBLIC_WEB + "/"),
+                    *(((f"url.{base}/github/.insteadOf", github_urls.web_base() + "/"),)
+                      if github_urls.web_base() != github_urls.PUBLIC_WEB else ()),
                     ("credential.helper", ""), ("credential.helper", helper),
                     ("credential.useHttpPath", "true")),
         helper_env={"BOSS_SHIM_SOCKET": socket_path}, own_git=own)

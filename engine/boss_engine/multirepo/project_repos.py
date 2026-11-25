@@ -210,7 +210,8 @@ def _connection_for(db: Any, settings: Any, project_id: str, actor: str, *,
                              "Connect GitHub for this project first (Setup › GitHub access).")
     if full_name:
         from ..services import setup_checks
-        from ..services.github_connections import GitHubConnectionService, api_base_for_repository
+        from ..identity import github_urls
+        from ..services.github_connections import GitHubConnectionService
 
         service = GitHubConnectionService(settings)
         for row in rows:
@@ -226,9 +227,10 @@ def _connection_for(db: Any, settings: Any, project_id: str, actor: str, *,
                 token = service._resolve_secret(record, db)  # noqa: SLF001
                 if not token:
                     continue
+                # Each connection's token is probed against ITS OWN host (BOSSAPP-1286).
+                own = service.get_connection(db, project_id, cid)
                 probed = setup_checks.probe_repository(
-                    token, full_name,
-                    api_base=api_base_for_repository(db, project_id, *full_name.split("/", 1)))
+                    token, full_name, api_base=github_urls.api_base(own.get("api_base_url")))
                 if (probed.get("checks") or {}).get("read", {}).get("ok"):
                     return cid
             except Exception:  # noqa: BLE001 — a connection that cannot be probed cannot reach it either

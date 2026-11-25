@@ -45,6 +45,10 @@ class Candidate:
     project_name: str = ""
     mint: Optional[Callable[[], Optional[str]]] = field(default=None, repr=False)
     token_kind: str = "user"           # "app" | "user"
+    #: The REST base this credential belongs to (its connection's, or the install's). A token is
+    #: only ever sent to its own base (BOSSAPP-1286): a GHES token never to api.github.com, an
+    #: install/env/App token never to a GHES host.
+    api_base: str = ""
 
 
 @dataclass
@@ -62,6 +66,8 @@ class RepoAccess:
     reason: str = ""                   # "" | no_github_credential | not_visible | read_only | failed
     words: str = ""
     tried: list[dict[str, Any]] = field(default_factory=list)
+    #: The REST base the token was checked against and must be used with.
+    api_base: str = ""
 
     @property
     def full_name(self) -> str:
@@ -107,15 +113,20 @@ def _app_candidates(db: Any, owner: str, repo: str) -> list[Candidate]:
             log.debug("repo access: the App's installation token was not minted", exc_info=True)
             return None
 
+    from ..identity import github_urls
+
     return [Candidate("app", f"the {name} (its installation on {owner})", mint=mint,
-                      token_kind="app")]
+                      token_kind="app", api_base=github_urls.api_base())]
 
 
 def _binding_candidates(db: Any, settings: Any, project_id: str, owner: str,
                         repo: str, *, check_bound: bool = True) -> list[Candidate]:
     from .github_connections import GitHubConnectionService
 
+    from .github_connections import api_base_for_repository
+
     service = GitHubConnectionService(settings)
+    base = api_base_for_repository(db, project_id, owner, repo)
 
     def mint() -> Optional[str]:
         try:
@@ -125,7 +136,7 @@ def _binding_candidates(db: Any, settings: Any, project_id: str, owner: str,
 
     if not check_bound:     # token_for_repository holds the exact-binding rule itself
         return [Candidate("binding", f"this project's connection for {owner}/{repo}",
-                          project_id=project_id, mint=mint)]
+                          project_id=project_id, mint=mint, api_base=base)]
     try:
         from sqlalchemy import text
 
@@ -139,11 +150,13 @@ def _binding_candidates(db: Any, settings: Any, project_id: str, owner: str,
     if not bound:
         return []
     return [Candidate("binding", f"this project's connection for {owner}/{repo}",
-                      project_id=project_id, project_name=_project_name(db, project_id), mint=mint)]
+                      project_id=project_id, project_name=_project_name(db, project_id), mint=mint,
+                      api_base=base)]
 
 
 def _connection_candidates(db: Any, settings: Any, project_id: str,
                            actor: Optional[str] = None) -> list[Candidate]:
+    from ..identity import github_urls
     from .github_connections import GitHubConnectionService
     from .repo_creation import _connection_rows, token_label
 
@@ -162,7 +175,7 @@ def _connection_candidates(db: Any, settings: Any, project_id: str,
         out.append(Candidate("connection", token_label(row),
                              project_id=str(row.get("project_id")) if visible else None,
                              project_name=str(row.get("project_name") or "") if visible else "",
-                             mint=mint))
+                             mint=mint, api_base=github_urls.api_base(row.get("api_base_url"))))
     return out
 
 
@@ -170,7 +183,10 @@ def _install_candidates(settings: Any) -> list[Candidate]:
     token = str(getattr(settings, "github_token", "") or "").strip()
     if not token:
         return []
-    return [Candidate("install", "the server's token (BOSS_GITHUB_TOKEN)", mint=lambda: token)]
+    from ..identity import github_urls
+
+    return [Candidate("install", "the server's token (BOSS_GITHUB_TOKEN)", mint=lambda: token,
+                      api_base=github_urls.api_base())]
 
 
 def candidates(db: Any, settings: Any, project_id: str, owner: str, repo: str, *,
@@ -178,7 +194,10 @@ def candidates(db: Any, settings: Any, project_id: str, owner: str, repo: str, *
     """Every credential that might reach owner/repo, in the order they are tried."""
     if bound_only:
         env = str(getattr(settings, "github_token", "") or "").strip()
-        out = [Candidate("env", "the server's token (BOSS_GITHUB_TOKEN)", mint=lambda: env)] if env else []
+        from ..identity import github_urls
+
+        out = [Candidate("env", "the server's token (BOSS_GITHUB_TOKEN)", mint=lambda: env,
+                         api_base=github_urls.api_base())] if env else []
         return out + _binding_candidates(db, settings, project_id, owner, repo, check_bound=False)
     out: list[Candidate] = []
     for source in (lambda: _app_candidates(db, owner, repo),
@@ -265,13 +284,23 @@ def resolve(db: Any, settings: Any, project_id: str, owner: str, repo: str, *,
     owner, repo = str(owner or "").strip(), str(repo or "").strip()
     from ..identity import github_urls
 
-    api = github_urls.api_base(api_base_url or getattr(settings, "github_api_base_url", ""))
-    out = RepoAccess(owner, repo, False)
+    from .github_connections import api_base_for_repository
+
+    # THE REPOSITORY'S HOST decides which credentials may be tried: the base of the connection
+    # owner/repo is bound through, else the install's (or the caller's explicit one). A
+    # credential of another host is never minted or sent there (BOSSAPP-1286).
+    api = github_urls.api_base(api_base_url) if api_base_url else \
+        api_base_for_repository(db, project_id, owner, repo)
+    out = RepoAccess(owner, repo, False, api_base=api)
     found = candidates(db, settings, project_id, owner, repo, bound_only=bound_only, actor=actor)
     read_only: Optional[tuple[Candidate, str]] = None
     for cand in found:
-        token = cand.mint() if cand.mint else None
         tried = {"source": cand.source, "label": cand.label, "project_id": cand.project_id}
+        if github_urls.api_base(cand.api_base) != api:
+            out.tried.append({**tried, "outcome": "other_host",
+                              "words": "belongs to another GitHub host"})
+            continue
+        token = cand.mint() if cand.mint else None
         if not token:
             out.tried.append({**tried, "outcome": "no_token", "words": _OUTCOME_WORDS["no_token"]})
             continue
@@ -279,7 +308,7 @@ def resolve(db: Any, settings: Any, project_id: str, owner: str, repo: str, *,
             out.tried.append({**tried, "outcome": "used", "words": "used without asking GitHub"})
             return RepoAccess(owner, repo, True, token=token, token_kind=cand.token_kind,
                               source=cand.source, label=cand.label, project_id=cand.project_id,
-                              words=f"Uses {cand.label}.", tried=out.tried)
+                              words=f"Uses {cand.label}.", tried=out.tried, api_base=api)
         outcome, push = _probe(token, owner, repo, api, client)
         out.tried.append({**tried, "outcome": outcome,
                           "words": _OUTCOME_WORDS.get(outcome, f"GitHub did not answer ({outcome[7:]})")})
@@ -288,7 +317,7 @@ def resolve(db: Any, settings: Any, project_id: str, owner: str, repo: str, *,
                               source=cand.source, label=cand.label, project_id=cand.project_id,
                               exists=True, can_push=push if push is not None else (need == "push"),
                               words=f"BOSS reaches {owner}/{repo} with {cand.label}.",
-                              tried=out.tried)
+                              tried=out.tried, api_base=api)
         if outcome == "read_only" and read_only is None:
             read_only = (cand, token)
     said = "; ".join(f"{t['label']} {t['words']}" for t in out.tried)
@@ -299,9 +328,10 @@ def resolve(db: Any, settings: Any, project_id: str, owner: str, repo: str, *,
                      f"Give {cand.label} write access to {owner}/{repo} (Contents: Read and write), "
                      "or add a token that can push to it, in Setup › GitHub access.")
         return out
-    if not found:
+    if all(t["outcome"] == "other_host" for t in out.tried):
         out.reason = "no_github_credential"
-        out.words = (f"BOSS holds no GitHub credential that could reach {owner}/{repo}. Install the "
+        out.words = (f"BOSS holds no GitHub credential for {github_urls.web_host(api)} that could "
+                     f"reach {owner}/{repo}. Install the "
                      f"BOSS GitHub App on {owner} with access to {repo}, or add a personal access "
                      f"token for {owner} that can reach it, in Setup › GitHub access.")
         return out

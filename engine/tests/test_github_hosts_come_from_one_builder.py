@@ -141,3 +141,26 @@ def test_clone_urls_and_the_credential_header_follow_the_host():
     access = git_access("github", "o", "r", "t0k", web_base="https://ghe.example")
     assert access.url == "https://ghe.example/o/r.git"
     assert "http.https://ghe.example/.extraheader" in access.env.values()
+
+
+def test_a_ghes_install_host_is_fenced_and_routed_by_egress(monkeypatch):
+    """M5: with the install pointed at GHES, the egress CONNECT tunnel never reaches the GHES
+    host (its credential is added only by the host route), and the host route routes it as
+    GitHub; a run's git rewrites the GHES web origin to egress too."""
+    import importlib
+    import sys
+
+    monkeypatch.setenv(G.API_BASE_ENV, "https://ghe.example/api/v3")
+    monkeypatch.syspath_prepend(str(ROOT / "apps" / "egress"))
+    for name in ("boss_egress.connect", "boss_egress.proxy"):
+        sys.modules.pop(name, None)
+    connect = importlib.import_module("boss_egress.connect")
+    proxy = importlib.import_module("boss_egress.proxy")
+    try:
+        assert "ghe.example" in connect.NEVER
+        assert proxy.GIT_HOSTS.get("ghe.example") == "github"
+        assert proxy.API_HOSTS.get("ghe.example") == "github-api"
+    finally:
+        monkeypatch.delenv(G.API_BASE_ENV)
+        for name in ("boss_egress.connect", "boss_egress.proxy"):
+            sys.modules.pop(name, None)

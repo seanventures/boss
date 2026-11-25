@@ -99,8 +99,11 @@ def toolchain_hosts() -> tuple[str, ...]:
 
 
 #: Never through the tunnel, whatever the allowlist says.
+#: A GitHub Enterprise Server host the install is pointed at (BOSS_GITHUB_API_URL / _WEB_URL) is
+#: fenced the same way: its credential is only ever added by the host route, never tunnelled.
 NEVER = (github_urls.PUBLIC_WEB_HOST, "*.github.com", "*.githubusercontent.com",
-         github_urls.PUBLIC_API_HOST)
+         github_urls.PUBLIC_API_HOST) + tuple(
+             h for h in github_urls.github_hosts() if h not in github_urls.PUBLIC_HOSTS)
 MAX_HEADER = 8192
 
 

@@ -498,8 +498,13 @@ def github_adapter_for(c: Any, settings: Any, project_id: str, binding_id: str) 
 
 
 def person_adapter(base: Any, token: str) -> Any:
-    """The same repository, as the person (their linked GitHub account's token)."""
+    """The same repository, as the person (their linked GitHub account's token). A person's
+    linked account is on the INSTALL's GitHub: on another host (a GHES connection) their token
+    is never sent there, and the app posts instead (BOSSAPP-1286)."""
     from .github_adapter import GitHubAdapter
+
+    if github_urls.api_base(getattr(base, "api_base_url", "") or "") != github_urls.api_base():
+        return base
 
     return GitHubAdapter(base.settings, owner=base.owner, repo=base.repo, token=token,
                          api_base_url=getattr(base, "api_base_url", "") or "")
@@ -994,7 +999,8 @@ class GitHubSource:
                 token = person_token()
             except Exception:  # noqa: BLE001 — no linked account: the app posts it for them
                 token = None
-        return (person_adapter(self.adapter, token), True) if token else (self.adapter, False)
+        poster = person_adapter(self.adapter, token) if token else self.adapter
+        return (poster, poster is not self.adapter)
 
     @staticmethod
     def _signed(body: str, author: str, as_person: bool, severity: Optional[str] = None) -> str:

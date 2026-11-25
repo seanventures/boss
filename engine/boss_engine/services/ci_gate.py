@@ -951,7 +951,7 @@ class UnreadableCi:
 def reader_for_project(connection: Any, settings: Any, project_id: str,
                        repository: Optional[str] = None) -> HttpCiReader:
     """The project's GitHub, as Setup connected it. Tests replace this function."""
-    from .kit_connections import github_state, github_token
+    from .kit_connections import github_state
     from .local_repo import is_local
 
     if is_local(repository):
@@ -969,9 +969,17 @@ def reader_for_project(connection: Any, settings: Any, project_id: str,
         raise CiSettingError("github_not_connected", 409,
                              "This project has no GitHub repository connected. Connect it in Setup.")
     repo = repository or state["repo"]
-    return HttpCiReader(state.get("api_base") or "", repo,
-                        ci_token(connection, settings, project_id, repo)
-                        or github_token(connection, settings, project_id, repo))
+    # The token and the base come TOGETHER (BOSSAPP-1286): the repository's own host, and a
+    # credential of that host. The install's App token is tried only when that host is the
+    # install's GitHub; it never goes to a GHES connection's base.
+    from ..identity import github_urls
+    from .github_connections import github_access_for
+
+    owner, _, name = str(repo).partition("/")
+    token, base = github_access_for(connection, settings, project_id, owner, name)
+    if github_urls.api_base(base) == github_urls.api_base():
+        token = ci_token(connection, settings, project_id, repo) or token
+    return HttpCiReader(base, repo, token)
 
 
 def ci_token(connection: Any, settings: Any, project_id: str, repository: str) -> str:

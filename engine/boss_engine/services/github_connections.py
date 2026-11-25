@@ -1570,7 +1570,11 @@ class GitHubConnectionService:
             # repository from a fixed set, which is wider than the work. None here (no Setup
             # App, or it does not cover the repository): the connection's credential, as before.
             owner, _, name = str(binding.get("full_name") or "").partition("/")
-            if owner and name:
+            # The Setup App lives on the INSTALL's GitHub; its token never goes to another host
+            # (a GHES connection's API base) and vice versa (BOSSAPP-1286).
+            same_host = github_urls.api_base(github_connection.get("api_base_url")) == \
+                github_urls.api_base()
+            if owner and name and same_host:
                 try:
                     from boss_engine.identity import github_setup
 
@@ -2018,35 +2022,48 @@ def can_create_repos(granted: Any, missing: Any) -> dict[str, Any]:
 
 def api_base_for_repository(connection: Connection, project_id: Optional[str], owner: str = "",
                             repo: str = "") -> str:
-    """THE REST base for a project's repository (BOSSAPP-1286): the ``api_base_url`` of the
-    connection owner/repo is bound through (a GitHub Enterprise Server connection answers
-    ``https://<host>/api/v3``), else the project's primary connection's, else the install's
-    (github_urls.api_base()). Never a literal api.github.com."""
-    if project_id:
-        wanted = f"{owner}/{repo}".strip("/").lower()
+    """THE REST base for a repository (BOSSAPP-1286): the ``api_base_url`` of the connection
+    owner/repo is BOUND through (a GitHub Enterprise Server connection answers
+    ``https://<host>/api/v3``), else the install's (github_urls.api_base()). Never another
+    connection's base: the base and the token must come from the same place (repo_access.resolve
+    pairs them), so there is no "primary/newest connection" fallback here."""
+    wanted = f"{owner}/{repo}".strip("/").lower()
+    if project_id and "/" in wanted:
         try:
-            row = connection.execute(text(
-                """
-                SELECT c.api_base_url
-                FROM github_repository_bindings b
-                JOIN github_connections c ON c.id = b.connection_id
-                WHERE b.project_id = :p AND b.status = 'active'
-                  AND c.status IN ('configured', 'active')
-                  AND (:want = '' OR LOWER(b.full_name) = :want OR b.role = 'primary')
-                ORDER BY (LOWER(b.full_name) = :want) DESC, (b.role = 'primary') DESC,
-                         b.updated_at DESC
-                LIMIT 1
-                """), {"p": project_id, "want": wanted if "/" in wanted else ""}).first()
-            if row is None:
+            with connection.begin_nested():
                 row = connection.execute(text(
-                    "SELECT api_base_url FROM github_connections WHERE project_id = :p "
-                    "AND status IN ('configured', 'active') ORDER BY updated_at DESC LIMIT 1"),
-                    {"p": project_id}).first()
+                    """
+                    SELECT c.api_base_url
+                    FROM github_repository_bindings b
+                    JOIN github_connections c ON c.id = b.connection_id
+                    WHERE b.project_id = :p AND b.status = 'active'
+                      AND c.status IN ('configured', 'active')
+                      AND LOWER(b.full_name) = :want
+                    ORDER BY (b.role = 'primary') DESC, b.updated_at DESC
+                    LIMIT 1
+                    """), {"p": project_id, "want": wanted}).first()
             if row is not None and row[0]:
                 return github_urls.api_base(row[0])
-        except Exception as error:  # noqa: BLE001 — an older schema falls back to the install's
+        except Exception as error:  # noqa: BLE001 — an older schema: the install's base
             logger.debug("github: api base lookup failed: %s", type(error).__name__)
     return github_urls.api_base()
+
+
+def github_access_for(connection: Connection, settings: Settings, project_id: str, owner: str,
+                      repo: str) -> tuple[str, str]:
+    """(token, REST base) for owner/repo, chosen TOGETHER by the one resolver under the build's
+    rule (github_token_for): the token is only ever sent to the base it belongs to. ("", base)
+    when no credential of that host is held."""
+    try:
+        from .repo_access import resolve
+
+        got = resolve(connection, settings, project_id, owner, repo, bound_only=True,
+                      verify=False)
+        return got.token or "", got.api_base or api_base_for_repository(connection, project_id,
+                                                                        owner, repo)
+    except Exception:  # noqa: BLE001 — no token is an answer; the caller reports it
+        logger.debug("no usable GitHub credential for %s", project_id, exc_info=True)
+        return "", api_base_for_repository(connection, project_id, owner, repo)
 
 
 def github_token_for(connection: Connection, settings: Settings, project_id: str, owner: str,

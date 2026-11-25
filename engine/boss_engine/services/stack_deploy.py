@@ -448,8 +448,11 @@ class MirroredSource:
 def github_source(connection: Connection, settings: Settings, project_id: str,
                   owner: str, repo: str) -> GitHubSource:
     """GitHub's reader with the token this project registered for owner/repo, falling back to
-    its connection. Only `source_for` calls this: every deploy reads code through that."""
-    from .github_connections import GitHubConnectionService, github_token_for
+    its connection. Only `source_for` calls this: every deploy reads code through that. The
+    token and the API base are chosen TOGETHER (BOSSAPP-1286): the registered token goes to its
+    binding's base; the fallback is the one resolver's (token, base) pair."""
+    from .github_connections import (GitHubConnectionService, api_base_for_repository,
+                                     github_access_for)
 
     token = None
     try:
@@ -457,11 +460,10 @@ def github_source(connection: Connection, settings: Settings, project_id: str,
             connection, project_id=project_id, owner=owner, repo=repo)
     except Exception:  # noqa: BLE001 — no token is an answer; a public repo needs none
         log.debug("stack deploy: no registered token for %s/%s", owner, repo, exc_info=True)
-    if not token:
-        token = github_token_for(connection, settings, project_id, owner, repo)
-    from .github_connections import api_base_for_repository
-
-    return GitHubSource(token or "", api_base_for_repository(connection, project_id, owner, repo))
+    if token:
+        return GitHubSource(token, api_base_for_repository(connection, project_id, owner, repo))
+    token, base = github_access_for(connection, settings, project_id, owner, repo)
+    return GitHubSource(token or "", base)
 
 
 def source_for(connection: Connection, settings: Settings, project_id: str,

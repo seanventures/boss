@@ -305,7 +305,7 @@ def default_reach(c: Any, settings: Any, project_id: str, *, connection_id: Opti
     installation on `owner` when it holds administration, the environment App, a project
     connection's token for its own account, the install token — in that order, with the reason."""
     from .github_adapter import GitHubAdapter
-    from .github_connections import api_base_for_repository, github_token_for
+    from .github_connections import api_base_for_repository, github_access_for
     from .repo_creation import repo_creation_credential
     from .repo_host import git_access
     from ..identity import github_urls
@@ -326,16 +326,22 @@ def default_reach(c: Any, settings: Any, project_id: str, *, connection_id: Opti
                 reached[key] = None
         return reached[key]
 
-    def token(o: str, r: str) -> str:
-        """The credential that REACHES o/r to push and open pull requests (repo_access.resolve),
-        else the project's bound one: never the creating credential borrowed for a read or a
-        push (BOSSAPP-1338)."""
+    def access(o: str, r: str) -> tuple[str, str]:
+        """(token, REST base) that REACH o/r to push and open pull requests
+        (repo_access.resolve), else the project's bound pair: never the creating credential
+        borrowed for a read or a push (BOSSAPP-1338), and never a token on another host's base
+        (BOSSAPP-1286: the resolver chooses both together)."""
         got = resolved(o, r)
-        return (getattr(got, "token", None) or "") or github_token_for(c, settings, project_id, o, r) or ""
+        if getattr(got, "token", None):
+            return got.token, got.api_base or api_base_for_repository(c, project_id, o, r)
+        return github_access_for(c, settings, project_id, o, r)
+
+    def token(o: str, r: str) -> str:
+        return access(o, r)[0] or ""
 
     def adapter(o: str, r: str) -> Any:
-        return GitHubAdapter(settings, owner=o, repo=r, token=token(o, r) or None,
-                             api_base_url=api_base_for_repository(c, project_id, o, r))
+        tok, base = access(o, r)
+        return GitHubAdapter(settings, owner=o, repo=r, token=tok or None, api_base_url=base)
 
     create_token, kind, label, words, reason = None, "app", "", "", ""
     if owner:
@@ -361,8 +367,8 @@ def default_reach(c: Any, settings: Any, project_id: str, *, connection_id: Opti
 
     return GitHubReach(adapter_for=adapter, reach_words_for=reach_words,
                        access_for=lambda o, r: git_access(
-                           "github", o, r, token(o, r),
-                           web_base=github_urls.web_base_for(api_base_for_repository(c, project_id, o, r))),
+                           "github", o, r, access(o, r)[0],
+                           web_base=github_urls.web_base_for(access(o, r)[1])),
                        create_token=create_token, create_token_kind=kind,
                        api_base_url=api_base_for_repository(c, project_id, owner, repo),
                        connection_id=conn_id, create_label=label, create_words=words, create_reason=reason)

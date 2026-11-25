@@ -9848,15 +9848,16 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
                     "changed_files": len(listed), "files": listed,
                     **({"diff": diff[:20000]} if diff else {}),
                     "view": change_view_path(meta.get("url"))}
-        if _community_restricted(ctx.settings):
-            token = _github_token_for(ctx, pid, repo_full)
-        else:
-            token = getattr(ctx.settings, "github_token", "") or ""
-
-        from boss_engine.services.github_connections import api_base_for_repository
+        # The token and the API base come TOGETHER (BOSSAPP-1286): the repository's host and a
+        # credential of that host; the install's token only on the install's own GitHub.
+        from boss_engine.identity import github_urls
+        from boss_engine.services.github_connections import github_access_for
 
         with ctx.engine.connect() as _c:
-            _gh_api = api_base_for_repository(_c, pid, *repo_full.split("/", 1))
+            token, _gh_api = github_access_for(_c, ctx.settings, pid, *repo_full.split("/", 1))
+        if not _community_restricted(ctx.settings) and not token \
+                and github_urls.api_base(_gh_api) == github_urls.api_base():
+            token = getattr(ctx.settings, "github_token", "") or ""
 
         def get(path: str):
             req = _ureq.Request(
