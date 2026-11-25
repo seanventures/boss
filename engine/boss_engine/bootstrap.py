@@ -624,6 +624,13 @@ def seed() -> None:
             entitlements=entitlements, members=members, specpack=specpack,
             budget_policy_id="bp_boss_default",
         )
+        try:
+            from .services.deployment_fleet import ensure_local_host
+
+            with connection.begin_nested():
+                ensure_local_host(connection, settings.default_project_id, actor="bootstrap")
+        except Exception:  # noqa: BLE001 — schema-partial unit tests or remote installs
+            _log.debug("local_host_ensure_skipped", exc_info=True)
 
 
 def main() -> None:

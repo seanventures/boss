@@ -91,6 +91,7 @@ WORDS: dict[str, dict[str, Word]] = {
         "clone_failed": {"word": "Clone failed", "tone": "red"},
         "command_missing": {"word": "No start command", "tone": "red"},
         "boot_crash": {"word": "Crashed on boot", "tone": "red"},
+        "migration_needed": {"word": "Needs DB migration", "tone": "amber"},
         "port_timeout": {"word": "Port never opened", "tone": "red"},
         "no_page_at_root": {"word": "No page at /", "tone": "red"},
         "no_health_route": {"word": "No health route", "tone": "red"},
@@ -1632,11 +1633,13 @@ def _shape_rows(connection: Any, settings: Any, project_id: str, raw: list[dict[
                 and status in WAITING_STATES):
             state = "awaiting_approval"
         # THE ONE READING (deploy_status): word, sentence, the step running now, the app link.
+        from .deploy_truth import _prefer_target_address
+
+        target_url = _app_url(r.get("target_url") or ((_json(r.get("target_domains")) or [None])[0]))
         seen = deploy_status(
             state, decision_status=r.get("decision_status"), steps=r.get("steps"),
             health=r.get("health"),
-            url=r.get("open_url") or r.get("target_url")
-            or ((_json(r.get("target_domains")) or [None])[0]),
+            url=_prefer_target_address(_app_url(r.get("open_url")), target_url),
             failure=r.get("failure_reason"), newest_for_target=r["ref"] in live_refs,
             success_means_healthy=r["kind"] == "stack", fixed_later=bool(r.get("fixed_later")))
         if seen["phase"] == "superseded":
@@ -1947,6 +1950,18 @@ def deploy_detail(connection: Any, settings: Any, project_id: str, ref: str) -> 
         error = _json(full["error"]) or {}
         err_text = (error.get("headline") if isinstance(error, dict) else str(error)) \
             or full["failure_reason"]
+        from .deploy_truth import _prefer_target_address
+        from .stack_deploy import ACTIVE_STATES as STACK_ACTIVE_STATES, get_stack_deployment
+
+        open_url = full["open_url"]
+        if raw["status"] in STACK_ACTIVE_STATES:
+            live_dep = get_stack_deployment(connection, ident)
+            if live_dep and live_dep.get("open_url"):
+                open_url = live_dep["open_url"]
+        elif open_url:
+            target_url = _app_url(
+                raw.get("target_url") or ((_json(raw.get("target_domains")) or [None])[0]))
+            open_url = _prefer_target_address(_app_url(open_url), target_url)
         body: dict[str, Any] = {
             "row": row,
             "steps": [{"title": _step_title(s), "state": step_state(s.get("status")),
@@ -1964,7 +1979,7 @@ def deploy_detail(connection: Any, settings: Any, project_id: str, ref: str) -> 
             "progress": _stack_progress(steps_raw, raw["status"], full["log_tail"]),
             "health_check_results": [],
             "promotion": None,
-            "open_url": full["open_url"],
+            "open_url": open_url,
             "changeset_id": full["changeset_id"],
         }
     else:
