@@ -38,9 +38,40 @@ sys.path.insert(0, str(ROOT))
 from apps.egress.boss_egress.proxy import EgressProxy, EgressRequest, EgressResponse  # noqa: E402
 
 
+def _table_cols(c, table: str) -> set[str]:
+    rows = c.execute(
+        text("SELECT column_name FROM information_schema.columns "
+             "WHERE table_schema = current_schema() AND table_name = :t"),
+        {"t": table},
+    ).scalars().all()
+    return set(rows)
+
+
+def _ensure_workspace_and_project(built_env) -> None:
+    with built_env.db() as c:
+        ws_cols = _table_cols(c, "workspaces")
+        if "name" in ws_cols:
+            c.execute(text("INSERT INTO workspaces (id, org_id, name) VALUES ('ws_boss', 'org_boss', 'BOSS') "
+                           "ON CONFLICT DO NOTHING"))
+        else:
+            c.execute(text("INSERT INTO workspaces (id, org_id) VALUES ('ws_boss', 'org_boss') "
+                           "ON CONFLICT DO NOTHING"))
+        prj_cols = _table_cols(c, "projects")
+        if "slug" in prj_cols:
+            c.execute(text("INSERT INTO projects (id, workspace_id, name, slug) "
+                           "VALUES (:p, 'ws_boss', 'Web', :s) ON CONFLICT DO NOTHING"),
+                      {"p": built_env.project, "s": built_env.project})
+        else:
+            c.execute(text("INSERT INTO projects (id, workspace_id) VALUES (:p, 'ws_boss') "
+                           "ON CONFLICT DO NOTHING"),
+                      {"p": built_env.project})
+
+
 @pytest.fixture()
 def env(monkeypatch):
-    return build_env(monkeypatch)
+    built = build_env(monkeypatch)
+    _ensure_workspace_and_project(built)
+    return built
 
 
 class Upstream:
@@ -344,9 +375,24 @@ def test_a51_a_prompt_injected_agent_finds_no_token_to_leak(env, monkeypatch, tm
 def test_a60_j9_revoking_a_grant_mid_run_halts_it_within_5s_and_revokes_the_github_token(env, monkeypatch):
     hub, g, shim, up, proxy = _setup(env, monkeypatch)
     with env.db() as c:
-        c.execute(text("INSERT INTO code_task_runs (id, project_id) VALUES ('task1', :p)"), {"p": env.project})
-        c.execute(text("INSERT INTO workflow_schedules (id, input) VALUES ('sch1', CAST(:i AS JSONB))"),
-                  {"i": json.dumps({"_identity": {"grant_id": g.id, "on_behalf_of": env.alice}})})
+        ct_cols = _table_cols(c, "code_task_runs")
+        if "title" in ct_cols:
+            c.execute(text("INSERT INTO code_task_runs (id, project_id, title) VALUES ('task1', :p, 'Task 1')"),
+                      {"p": env.project})
+        else:
+            c.execute(text("INSERT INTO code_task_runs (id, project_id) VALUES ('task1', :p)"),
+                      {"p": env.project})
+        ws_cols = _table_cols(c, "workflow_schedules")
+        if "project_id" in ws_cols:
+            c.execute(text("INSERT INTO workflow_schedules "
+                           "(id, project_id, workflow_key, name, cadence, minute, actor, next_run_at, input) "
+                           "VALUES ('sch1', :p, 'wf_test', 'Test schedule', 'daily', 0, 'alice', now(), "
+                           "CAST(:i AS JSONB))"),
+                      {"p": env.project,
+                       "i": json.dumps({"_identity": {"grant_id": g.id, "on_behalf_of": env.alice}})})
+        else:
+            c.execute(text("INSERT INTO workflow_schedules (id, input) VALUES ('sch1', CAST(:i AS JSONB))"),
+                      {"i": json.dumps({"_identity": {"grant_id": g.id, "on_behalf_of": env.alice}})})
     forge = spawn(env, shim, env.vera, "vera", scope=("code_task:read",))
     assert _git(proxy, shim, "GET", "/acme/web.git/info/refs", "service=git-upload-pack").status == 200
     install_token = hub.issued[0]
@@ -400,9 +446,9 @@ def test_a_disabled_person_suspends_their_grants_and_kills_their_runs(env):
 def test_revoking_a_passport_suspends_its_whole_born_by_subtree(env):
     env.world.grant(env.alice, {"agent_passport:revoke"})
     with env.db() as c:
-        c.execute(text("INSERT INTO roles (id, role_key, agent_id, born_by) VALUES "
-                       "('r1','vera',:v,:fb), ('r2','rook',:r,:vb)"),
-                  {"v": env.vera, "fb": f"agent:{env.forge}", "r": env.rook, "vb": f"agent:{env.vera}"})
+        c.execute(text("INSERT INTO roles (id, project_id, role_key, display_name, agent_id, born_by) VALUES "
+                       "('r1',:p,'vera','Vera',:v,:fb), ('r2',:p,'rook','Rook',:r,:vb)"),
+                  {"p": env.project, "v": env.vera, "fb": f"agent:{env.forge}", "r": env.rook, "vb": f"agent:{env.vera}"})
     g = env.grant(agents=(env.forge,), permissions=("code_task:read",), children=())
     with env.db() as c:
         report = passports.revoke(session_ctx(env.alice), env.forge, reason="compromised", db=c)
@@ -584,7 +630,9 @@ def test_a_code_task_runs_as_its_delegated_principal_and_clones_through_egress(e
     g = env.grant(agents=(env.forge,), children=(), repos=("acme/web",))
     who = lineage.Acting(principal_id=env.alice, org_id="org_boss", grant_id=g.id)
     with env.db() as c:
-        c.execute(text("INSERT INTO roles (id, role_key, agent_id) VALUES ('r-forge', 'forge', :a)"), {"a": env.forge})
+        c.execute(text("INSERT INTO roles (id, project_id, role_key, display_name, agent_id) "
+                       "VALUES ('r-forge', :p, 'forge', 'Forge', :a)"),
+                  {"p": env.project, "a": env.forge})
         c.execute(text("INSERT INTO jobs (id, project_id, kind, payload) VALUES ('job_1', :p, 'code.task', "
                        "CAST(:pl AS JSONB))"), {"p": env.project, "pl": json.dumps(lineage.stamp_job({}, who))})
     started = runs.start_code_task_run(env.engine, task_run_id="ct42", project_id=env.project, owner="acme",

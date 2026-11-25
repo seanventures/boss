@@ -10,6 +10,7 @@
 P0:
   engine:
     # First run and install
+    - engine/tests/test_schema_applies_clean.py
     - engine/tests/test_first_run_setup.py
     - engine/tests/test_a_fresh_install_can_press_build.py
     # Secrets never leave

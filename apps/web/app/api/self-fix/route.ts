@@ -11,7 +11,7 @@ import { rawRequestUrl } from "../../../lib/raw-request-url";
  * read and op is NAMED in lib/self-fix-ops.ts: the browser cannot reach an arbitrary API path with
  * the console's credentials. The patch export passes through as bytes.
  *
- * GET  ?view=list|one|diff|settings|upstream|patch|autonomy|run_autonomy
+ * GET  ?view=exists|list|one|diff|settings|upstream|patch|autonomy|run_autonomy|recommendations
  * POST {op, ...}
  */
 export const dynamic = "force-dynamic";

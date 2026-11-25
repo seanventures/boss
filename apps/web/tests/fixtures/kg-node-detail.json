@@ -794,7 +794,8 @@
  "usage": {
   "shown": 0,
   "consulted_runs": 0,
-  "reused_runs": 0
+  "reused_runs": 0,
+  "incidents": []
  },
  "provenance": {
   "created_by": "system",
