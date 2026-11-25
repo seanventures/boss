@@ -131,6 +131,7 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
   const [baseUrl, setBaseUrl] = useState("");
   const [model, setModel] = useState("");
   const [models, setModels] = useState<string[]>([]);
+  const [prices, setPrices] = useState<Record<string, { prompt_usd_per_mtok: number; completion_usd_per_mtok?: number | null }>>({});
   const [consent, setConsent] = useState(false);
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState<SetupRefusal | null>(null);
@@ -156,7 +157,7 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
 
   useEffect(() => {
     // A new provider is a new form: nothing typed for the last one carries over.
-    setSecret(""); setModels([]); setRefusal(null); setResult(null);
+    setSecret(""); setModels([]); setPrices({}); setRefusal(null); setResult(null);
     setAgain(startSignIn && provider === initialProvider);
     // REPLACE ASKS FOR THE KEY ONLY: the model and URL of the connection it replaces stay.
     const replacing = view.models.find((m) => m.source_id === replaceSourceId
@@ -165,16 +166,21 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
     setBaseUrl(replacing?.base_url
                ?? (provider === "ollama" ? (detected?.base_url ?? "") : ""));
     if (provider === "ollama" && detected?.found === "found") void list("", detected.base_url ?? "");
+    if (provider === "openrouter") void list("", "");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [provider]);
 
   const list = async (key: string, url: string) => {
     try {
-      const answer = await setupWrite<{ models: string[] }>(projectId, "model_catalogue", {
+      const answer = await setupWrite<{
+        models?: string[];
+        prices?: Record<string, { prompt_usd_per_mtok: number; completion_usd_per_mtok?: number | null }>;
+      }>(projectId, "model_catalogue", {
         provider, kind: tile, api_key: key || undefined, base_url: url || undefined,
       }, { label: "Model", background: true });
       setModels(answer.models ?? []);
-    } catch { setModels([]); }
+      setPrices(answer.prices ?? {});
+    } catch { setModels([]); setPrices({}); }
   };
   const onKey = (value: string) => {
     setSecret(value);
@@ -394,8 +400,25 @@ export function AddModelPanel({ initialTile, initialProvider, onDone, replaceSou
                    title={entry?.model_optional ? "Empty uses the provider's own routing. Each job's model is chosen in Who does what." : undefined}
                    onChange={(e) => setModel(e.target.value)} />
             <datalist id="su-model-options">
-              {models.map((m) => <option key={m} value={m} />)}
+              {models.map((m) => {
+                const p = prices[m];
+                const fmt = (n: number) => (n >= 0.01 ? `$${n.toFixed(2)}` : `$${Number(n.toPrecision(2))}`);
+                const label = p
+                  ? (p.prompt_usd_per_mtok === 0 && (p.completion_usd_per_mtok ?? 0) === 0
+                    ? "Free"
+                    : `${fmt(p.prompt_usd_per_mtok)} / ${fmt(p.completion_usd_per_mtok ?? 0)} per 1M`)
+                  : undefined;
+                return <option key={m} value={m} label={label} />;
+              })}
             </datalist>
+            {provider === "openrouter" && prices[model.trim()] ? (() => {
+              const p = prices[model.trim()];
+              const fmt = (n: number) => (n >= 0.01 ? `$${n.toFixed(2)}` : `$${Number(n.toPrecision(2))}`);
+              const text = p.prompt_usd_per_mtok === 0 && (p.completion_usd_per_mtok ?? 0) === 0
+                ? "Free"
+                : `${fmt(p.prompt_usd_per_mtok)} / ${fmt(p.completion_usd_per_mtok ?? 0)} per 1M`;
+              return <span className="su-faint" data-testid="su-model-price">{text}</span>;
+            })() : null}
           </label>
         ) : null}
         {entry?.key_url ? <Out href={entry.key_url}>Get a key</Out> : null}

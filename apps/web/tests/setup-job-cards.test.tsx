@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { board } from "./_helpers/setup-fixtures";
-import { click, mountBoard, q, type Mounted } from "./_helpers/setup-board";
+import { click, flush, mountBoard, q, type, type Mounted } from "./_helpers/setup-board";
 import type { SetupView } from "../lib/setup-types";
 
 let mounted: Mounted | null = null;
@@ -76,5 +76,34 @@ describe("OpenRouter in Add a model", () => {
     expect(field).not.toBeNull();
     expect(field!.value).toBe("");
     expect(field!.placeholder).toMatch(/provider picks/i);
+  });
+
+  it("shows OpenRouter model prices in picker options and beside the chosen model", async () => {
+    const view = board();
+    vi.stubGlobal("fetch", vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      const body = typeof init?.body === "string" ? JSON.parse(init.body) : {};
+      if (body.op === "model_catalogue") {
+        return new Response(JSON.stringify({
+          models: ["openai/gpt-5", "deepseek/deepseek-chat"],
+          prices: {
+            "openai/gpt-5": { prompt_usd_per_mtok: 2.5, completion_usd_per_mtok: 10.0 },
+            "deepseek/deepseek-chat": { prompt_usd_per_mtok: 0.14, completion_usd_per_mtok: 0.28 },
+          },
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return new Response(JSON.stringify(view),
+        { status: 200, headers: { "Content-Type": "application/json" } });
+    }));
+    mounted = await mountBoard(view, "?area=setup&add=openrouter", true, "setup");
+    await flush();
+    const opts = Array.from(document.querySelectorAll("#su-model-options option"));
+    expect(opts.map((o) => o.getAttribute("label"))).toEqual([
+      "$2.50 / $10.00 per 1M",
+      "$0.14 / $0.28 per 1M",
+    ]);
+    expect(q(document.body, "su-model-price")).toBeNull();
+    const field = q(document.body, "su-model-name") as HTMLInputElement;
+    await type(field, "openai/gpt-5");
+    expect(q(document.body, "su-model-price")!.textContent).toBe("$2.50 / $10.00 per 1M");
   });
 });

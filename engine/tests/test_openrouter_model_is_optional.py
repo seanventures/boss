@@ -1,7 +1,8 @@
 """BOSSAPP-1340: Add a model > OpenRouter pre-fills nothing; empty means OpenRouter's own routing."""
 import pytest
 
-from boss_engine.services import setup_service, setup_view
+from boss_engine.services import openrouter_catalog, setup_actions, setup_checks, setup_service, setup_view
+from boss_engine.services.setup_checks import HttpAnswer
 from boss_engine.services.setup_service import SetupError, model_key_details
 
 
@@ -25,3 +26,29 @@ def test_other_providers_still_need_a_model_when_they_have_none_to_default_to():
     with pytest.raises(SetupError):
         model_key_details(provider="custom", base_url="https://x.example/v1")
     assert "openrouter" in setup_service.PROVIDERS
+
+
+def test_openrouter_model_catalogue_returns_per_million_prices():
+    setup_actions._LISTS.clear()
+    setup_actions._LIST_PRICES.clear()
+    openrouter_catalog.remember([])
+
+    def fake_http(method, url, *, headers=None, json=None, timeout=10):
+        return HttpAnswer(200, {}, {
+            "data": [
+                {"id": "openai/gpt-5", "pricing": {"prompt": "0.0000025", "completion": "0.00001"}},
+                {"id": "deepseek/deepseek-chat", "pricing": {"prompt": "0.00000014", "completion": "0.00000028"}},
+            ]
+        })
+
+    names, prices = setup_checks.list_models_with_prices(
+        api="openai", base_url="https://openrouter.ai/api/v1", http=fake_http)
+    assert names == ["deepseek/deepseek-chat", "openai/gpt-5"]
+    assert prices["openai/gpt-5"] == {"prompt_usd_per_mtok": 2.5, "completion_usd_per_mtok": 10.0}
+    assert prices["deepseek/deepseek-chat"] == {"prompt_usd_per_mtok": 0.14, "completion_usd_per_mtok": 0.28}
+
+    cat_names, cat_prices = setup_actions.model_catalogue_with_prices(
+        None, object(), "p_1", "openrouter", http=fake_http)
+    assert cat_names == names
+    assert cat_prices == prices
+    assert setup_actions.model_catalogue(None, object(), "p_1", "openrouter", http=fake_http) == names
