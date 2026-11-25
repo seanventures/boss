@@ -210,7 +210,8 @@ def test_an_owner_credential_says_which_project_it_comes_from(monkeypatch, own, 
         "own": own, "visible": True,
         "id": "ghconn_1", "project_id": "fxquote" if own else "boss-dogfood",
         "project_name": "FXQuote" if own else "BOSS dogfood", "connection_label": "x",
-        "account_login": "paramg", "api_base_url": "https://api.github.test",
+        # the install's host: a connection of another host is never a candidate (BOSSAPP-1286)
+        "account_login": "paramg", "api_base_url": "https://api.github.com",
         "granted_permissions": [], "missing_permissions": [], "last_test_status": None}])
     monkeypatch.setattr(github_connections, "GitHubConnectionService",
                         lambda s: types.SimpleNamespace(token_for_connection=lambda *a, **k: "pat"))

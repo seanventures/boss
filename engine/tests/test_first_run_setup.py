@@ -190,6 +190,12 @@ def test_and_its_last_check_is_what_the_row_says(conn):
 
 # ── What the install runs on is checked, not assumed ─────────────────────────────────────────
 
+
+#: The install's own token, tagged at its source as Settings tags it (BOSSAPP-1286).
+from boss_engine.identity import github_urls as _github_urls  # noqa: E402
+
+_T = _github_urls.tag("t", "")
+
 class FakeGitHub:
     """A fine-grained token's answers, per permission profile (fixtures from GitHub's REST docs:
     blobs need Contents: write, pulls need Pull requests: write)."""
@@ -225,7 +231,7 @@ def test_what_the_install_already_runs_on_is_checked_not_assumed():
     green "Can push" could still fail at push or PR time. So the check WRITES (a blob nobody
     sees) and ASKS TO OPEN A PR (with a head that does not exist)."""
     fake = FakeGitHub()
-    found = setup_checks.probe_repository("t", "o/r", http=fake)
+    found = setup_checks.probe_repository(_T, "o/r", http=fake)
     assert found["state"] == "working"
     assert [m for m, _ in fake.calls] == ["GET", "POST", "POST"]
     assert found["expires_at"].startswith("2099-01-02")
@@ -233,24 +239,24 @@ def test_what_the_install_already_runs_on_is_checked_not_assumed():
 
 def test_a_read_only_token_is_not_reported_as_connected():
     """It looks connected and produces a pull request that never opens."""
-    found = setup_checks.probe_repository("t", "o/r", http=FakeGitHub(contents_write=False))
+    found = setup_checks.probe_repository(_T, "o/r", http=FakeGitHub(contents_write=False))
     assert found["state"] == "cant_write"
     assert found["checks"]["read"]["ok"] is True and found["checks"]["write"]["ok"] is False
 
 
 def test_nor_one_that_cannot_open_pull_requests():
-    found = setup_checks.probe_repository("t", "o/r", http=FakeGitHub(pull_requests=False))
+    found = setup_checks.probe_repository(_T, "o/r", http=FakeGitHub(pull_requests=False))
     assert found["state"] == "cant_open_prs"
 
 
 def test_a_revoked_token_says_so():
-    found = setup_checks.probe_repository("t", "o/r", http=FakeGitHub(status=401))
+    found = setup_checks.probe_repository(_T, "o/r", http=FakeGitHub(status=401))
     assert found["state"] == "token_rejected"
 
 
 def test_the_credential_itself_never_leaves():
     """No part of a token or key in anything a check returns."""
-    token = "github_pat_" + "Z" * 40
+    token = _github_urls.tag("github_pat_" + "Z" * 40, "")
     fake = FakeGitHub()
     found = setup_checks.probe_repository(token, "o/r", http=fake)
     blob = json.dumps(found)
