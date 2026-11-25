@@ -10,8 +10,11 @@ paginates. The process-wide outbound guard (env_refs.check_outbound) still runs 
 
 from __future__ import annotations
 
+import functools
+import http.client
 import ipaddress
 import json
+import socket
 import ssl
 import time
 import urllib.error
@@ -66,16 +69,31 @@ class _SameHostRedirects(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
+def _proxied(url: str) -> bool:
+    parts = urllib.parse.urlsplit(url)
+    proxies = urllib.request.getproxies()
+    return bool(proxies.get(parts.scheme)) and not urllib.request.proxy_bypass(parts.hostname or "")
+
+
 def _urllib_transport(method: str, url: str, headers: dict[str, str], data: Optional[bytes],
                       timeout: float, context: Optional[ssl.SSLContext]) -> Response:
+    """The real send. The host's resolved addresses are judged and the connection is PINNED to
+    the checked one (redirects stay on the same host, so the pin holds for them too). Through an
+    outbound proxy the proxy connects; the addresses are still judged here first."""
+    pinned = checked_address(url)
     request = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
         kwargs: dict[str, Any] = {"timeout": timeout}
-        if url.lower().startswith("https://"):
+        https = url.lower().startswith("https://")
+        if https:
             kwargs["context"] = context or ssl.create_default_context()
-        opener = urllib.request.build_opener(
-            _SameHostRedirects(),
-            *([urllib.request.HTTPSHandler(context=kwargs["context"])] if "context" in kwargs else []))
+        if _proxied(url):
+            handlers = [urllib.request.HTTPSHandler(context=kwargs["context"])] if https else []
+        elif https:
+            handlers = [_PinnedHTTPSHandler(pinned, kwargs["context"])]
+        else:
+            handlers = [_PinnedHTTPHandler(pinned)]
+        opener = urllib.request.build_opener(_SameHostRedirects(), *handlers)
         with opener.open(request, timeout=timeout) as response:  # noqa: S310 — host checked
             return Response(response.status, {k.lower(): v for k, v in response.headers.items()},
                             response.read())
@@ -86,8 +104,11 @@ def _urllib_transport(method: str, url: str, headers: dict[str, str], data: Opti
 
 TRANSPORT: Callable[..., Response] = _urllib_transport
 
-#: Never sent to, whatever a configuration says: cloud metadata endpoints.
-_BLOCKED_HOSTS = ("metadata.google.internal", "metadata", "169.254.169.254", "fd00:ec2::254")
+#: Never sent to, whatever a configuration says: cloud metadata endpoints (GCP, AWS IPv4 and
+#: IPv6, Alibaba) and the names that resolve to them.
+_BLOCKED_HOSTS = ("metadata.google.internal", "metadata", "169.254.169.254", "fd00:ec2::254",
+                  "100.100.100.200", "instance-data")
+_BLOCKED_SUFFIXES = (".metadata.google.internal", ".instance-data")
 
 
 def _host_matches(host: str, pattern: str) -> bool:
@@ -151,8 +172,27 @@ def ip_literal(host: str) -> Optional[ipaddress._BaseAddress]:  # noqa: SLF001
                         number = number * 256 + v
                     number = number * 256 ** (4 - len(head)) + last
                     address = ipaddress.IPv4Address(number)
-    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
-        address = address.ipv4_mapped
+    return unwrap(address) if address is not None else None
+
+
+_NAT64 = ipaddress.ip_network("64:ff9b::/96")
+
+
+def unwrap(address: ipaddress._BaseAddress) -> ipaddress._BaseAddress:  # noqa: SLF001
+    """The IPv4 address an IPv6 address carries, judged as that IPv4: IPv4-mapped
+    (``::ffff:a.b.c.d``), NAT64 (``64:ff9b::a.b.c.d``), 6to4 (``2002:AABB:CCDD::``) and the old
+    IPv4-compatible form (``::a.b.c.d``). Anything else is returned as it is."""
+    if not isinstance(address, ipaddress.IPv6Address):
+        return address
+    if address.ipv4_mapped is not None:
+        return address.ipv4_mapped
+    if address in _NAT64:
+        return ipaddress.IPv4Address(int(address) & 0xFFFFFFFF)
+    if address.sixtofour is not None:
+        return address.sixtofour
+    number = int(address)
+    if number >> 32 == 0 and number > 1:          # ::a.b.c.d (not :: and not ::1)
+        return ipaddress.IPv4Address(number)
     return address
 
 
@@ -171,6 +211,105 @@ def _loopback(host: str) -> bool:
 def _link_local(host: str) -> bool:
     address = ip_literal(host)
     return address is not None and any(address in network for network in _LINK_LOCAL_NETWORKS)
+
+
+def _blocked_name(host: str) -> bool:
+    return host in _BLOCKED_HOSTS or host.startswith("instance-data.") \
+        or host.endswith(_BLOCKED_SUFFIXES)
+
+
+def _blocked_address(address: ipaddress._BaseAddress) -> bool:  # noqa: SLF001
+    address = unwrap(address)
+    return str(address) in _BLOCKED_HOSTS or any(address in n for n in _LINK_LOCAL_NETWORKS)
+
+
+#: Where a ``*.ts.net`` name must resolve for plain http: the tailnet's own ranges.
+_TAILNET_NETWORKS = tuple(ipaddress.ip_network(n) for n in ("100.64.0.0/10", "fd7a:115c:a1e0::/48"))
+
+
+def _resolve(host: str, port: int) -> list[str]:
+    infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    return list(dict.fromkeys(str(info[4][0]).split("%", 1)[0] for info in infos))
+
+
+#: Seam for tests: (host, port) -> the addresses the name resolves to.
+RESOLVE: Callable[[str, int], list[str]] = _resolve
+
+
+def checked_address(url: str, provider: str = "") -> str:
+    """Resolve the URL's host and judge EVERY address it resolves to, the way check_host judged
+    the name: never a metadata or link-local address (in any embedded-IPv4 spelling); over plain
+    http, a ``*.ts.net`` name only inside the tailnet's ranges and any other non-public name only
+    to non-public addresses. Returns the address to CONNECT to, so the connection is pinned to
+    what was checked (a second lookup — DNS rebinding — can not swap it)."""
+    parts = urllib.parse.urlsplit(url or "")
+    host = (parts.hostname or "").lower().rstrip(".")
+    scheme = (parts.scheme or "").lower()
+    port = parts.port or (443 if scheme == "https" else 80)
+    literal = ip_literal(host)
+    if literal is not None:
+        found = [str(literal)]
+    else:
+        found = RESOLVE(host, port)      # an OSError is a network failure: retried, then typed
+    if not found:
+        raise HostNotAllowed(f"{provider}: {host} resolves to no address", provider=provider)
+    addresses = [unwrap(ipaddress.ip_address(a)) for a in found]
+    if any(_blocked_address(a) for a in addresses):
+        raise HostNotAllowed(f"{provider}: {host} resolves to an address that is never a ticket "
+                             "system", provider=provider)
+    if scheme == "http":
+        if literal is None and host.endswith(".ts.net"):
+            inside = all(any(a in n for n in _TAILNET_NETWORKS) for a in addresses)
+        else:
+            inside = all(any(a in n for n in _NON_PUBLIC_NETWORKS) for a in addresses)
+        if not inside:
+            raise HostNotAllowed(f"{provider}: {host} resolves to a public address; a credential "
+                                 "is only sent over https to a public host.", provider=provider)
+    return str(addresses[0])
+
+
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    def __init__(self, host, *args, pinned: str, **kwargs):  # noqa: ANN001
+        super().__init__(host, *args, **kwargs)
+        self._pinned = pinned
+
+    def connect(self) -> None:
+        self.sock = CONNECT((self._pinned, self.port), self.timeout, self.source_address)
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """TLS to the pinned address, with SNI and certificate checks for the NAME."""
+
+    def __init__(self, host, *args, pinned: str, **kwargs):  # noqa: ANN001
+        super().__init__(host, *args, **kwargs)
+        self._pinned = pinned
+
+    def connect(self) -> None:
+        sock = CONNECT((self._pinned, self.port), self.timeout, self.source_address)
+        self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
+
+
+class _PinnedHTTPHandler(urllib.request.HTTPHandler):
+    def __init__(self, pinned: str):
+        super().__init__()
+        self._pinned = pinned
+
+    def http_open(self, req):  # noqa: ANN001
+        return self.do_open(functools.partial(_PinnedHTTPConnection, pinned=self._pinned), req)
+
+
+class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    def __init__(self, pinned: str, context: ssl.SSLContext):
+        super().__init__(context=context)
+        self._pinned = pinned
+
+    def https_open(self, req):  # noqa: ANN001
+        return self.do_open(functools.partial(_PinnedHTTPSConnection, pinned=self._pinned), req,
+                            context=self._context)
+
+
+#: Seam for tests: opens the TCP connection (address, timeout, source address) -> socket.
+CONNECT: Callable[..., socket.socket] = socket.create_connection
 
 
 def allowed_hosts(conn: TicketConnection, default_hosts: tuple[str, ...] = (),
@@ -196,8 +335,7 @@ def check_host(url: str, official: tuple[str, ...], configured: tuple[str, ...],
     if not host or scheme not in ("http", "https"):
         raise HostNotAllowed(f"{provider}: not an http(s) URL", provider=provider)
     literal = ip_literal(host)
-    if host in _BLOCKED_HOSTS or (literal is not None and str(literal) in _BLOCKED_HOSTS) \
-            or _link_local(host):
+    if _blocked_name(host) or (literal is not None and _blocked_address(literal)):
         raise HostNotAllowed(f"{provider}: {host} is never a ticket system", provider=provider)
     if scheme == "http" and not _loopback(host):
         raise HostNotAllowed(f"{provider}: refusing a plain-http request to {host}; a credential "
