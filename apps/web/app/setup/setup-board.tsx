@@ -24,7 +24,7 @@ import { ArrowClockwise, BookOpen, CaretDown, Cpu, GitBranch, Lightning, Sliders
 
 import { fetchSetup, SetupFailure, setupWrite } from "../../lib/setup-client";
 import {
-  ADVANCED_ROWS, defaultAdd, readParams, rowMode, SETUP_BADGE_EVENT, stepNumber, summarize, type SetupParams,
+  ADVANCED_ROWS, defaultAdd, readParams, rowMode, SETUP_BADGE_EVENT, SETUP_MODEL_READY_EVENT, stepNumber, summarize, type SetupParams,
 } from "../../lib/setup-stepper";
 import type { RowKey, SetupView } from "../../lib/setup-types";
 import { BuildDatabaseRow } from "./build-database-row";
@@ -242,7 +242,9 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
   useEffect(() => {
     if (!view) return;
     try {
-      window.dispatchEvent(new CustomEvent(SETUP_BADGE_EVENT, { detail: summarize(view).badge }));
+      const summary = summarize(view);
+      window.dispatchEvent(new CustomEvent(SETUP_BADGE_EVENT, { detail: summary.badge }));
+      window.dispatchEvent(new CustomEvent(SETUP_MODEL_READY_EVENT, { detail: Boolean(summary.has_model) }));
     } catch { /* no window */ }
   }, [view]);
 
@@ -647,13 +649,14 @@ const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
 const worst = (tones: string[]): "green" | "amber" | "red" | "grey" =>
   tones.includes("red") ? "red" : tones.includes("amber") ? "amber" : tones.length ? "green" : "grey";
 
-/** "2 repos · 1 GitHub account" — or what is missing. */
+/** "2 repos · 1 GitHub account" — or what is missing / local-only. */
 export function repoSummary(view: SetupView): string {
   const repos = view.repository.repos.length;
   const accounts = accountsOf(view).length;
-  if (!repos && !accounts) return "No GitHub account yet";
+  if (!repos && !accounts) return view.repository.local ? "On this machine · no GitHub account yet" : "No GitHub account yet";
   if (!repos) return `${plural(accounts, "GitHub account")} · no repo yet`;
-  return `${plural(repos, "repo")} · ${plural(accounts || 1, "GitHub account")}`;
+  if (!accounts) return `${plural(repos, "repo")}${view.repository.local ? " · on this machine" : ""}`;
+  return `${plural(repos, "repo")} · ${plural(accounts, "GitHub account")}`;
 }
 export const repoTone = (view: SetupView) => worst(view.repository.repos.map((r) => r.pill.tone));
 

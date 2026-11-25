@@ -57,7 +57,17 @@ export function RetryBuildButton({ runId, projectId, actor, onDone, testid, size
   );
 }
 
-export function SeeWhatHappened({ href, testid }: { href: string; testid?: string }) {
+const isSetupHref = (href?: string) => /(?:^|[?&])area=setup(?:&|$)/i.test(href ?? "");
+
+export function SeeWhatHappened({ href, onSee, testid }: { href?: string; onSee?: () => void; testid?: string }) {
+  if ((!href || isSetupHref(href)) && onSee) {
+    return (
+      <button type="button" className="px-btn" data-size="s" data-testid={testid ?? "px-failed-see"}
+              title="See what failed and why" onClick={(e) => { e.stopPropagation(); onSee(); }}>
+        See what happened
+      </button>
+    );
+  }
   if (!href) return null;
   const to = pxHref(href);
   return (
@@ -96,9 +106,9 @@ export function FixAction({ fix, testid }: { fix: FailureFix; testid?: string })
 /** EVERY ANSWER A FAILURE OFFERS, in one place: the fix first when a person must act (Retry
  *  beside it, secondary, for after the fix); Retry alone when retrying is the answer; why there
  *  is no Retry when it cannot help; then See what happened. Retry is always a POST. */
-export function FailedActions({ retry, fix, retryReason, seeHref, projectId, actor, testid, onDone }: {
+export function FailedActions({ retry, fix, retryReason, seeHref, onSee, projectId, actor, testid, onDone }: {
   retry?: { run_id: string } | null; fix?: FailureFix | null; retryReason?: string; seeHref?: string;
-  projectId: string; actor: string; testid: string; onDone?: () => void;
+  onSee?: () => void; projectId: string; actor: string; testid: string; onDone?: () => void;
 }) {
   return (
     <span className="px-row" style={{ gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }} data-testid={`${testid}-actions`}>
@@ -106,7 +116,7 @@ export function FailedActions({ retry, fix, retryReason, seeHref, projectId, act
       {retry ? <RetryBuildButton runId={retry.run_id} key={retry.run_id} projectId={projectId} actor={actor} testid={`${testid}-retry`} secondary={!!fix}
                                  onDone={() => onDone?.()} /> : null}
       {!retry && retryReason ? <small className="px-faint" data-testid={`${testid}-no-retry`}>{retryReason}</small> : null}
-      {seeHref ? <SeeWhatHappened href={seeHref} testid={`${testid}-see`} /> : null}
+      {seeHref || onSee ? <SeeWhatHappened href={seeHref} onSee={onSee} testid={`${testid}-see`} /> : null}
     </span>
   );
 }

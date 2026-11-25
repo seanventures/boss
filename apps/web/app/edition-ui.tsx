@@ -31,7 +31,7 @@ export function EditionChip({ editionId }: { editionId?: string | null }) {
   const name = editionDisplayName(editionId);
   return (
     <span
-      className="bx-chip hide-sm"
+      className="bx-chip"
       data-testid="edition-chip"
       data-edition={editionDisplayName(editionId).toLowerCase()}
       title={`BOSS edition: ${name}`}

@@ -110,7 +110,7 @@ def _state(got: Mapping[str, Any]) -> str:
         return "skipped"
     if status in _DONE:
         return "done"
-    if got.get("gate_open"):
+    if got.get("gate_open") or got.get("waiting_on_person"):
         return "waiting"
     if status in _LIVE:
         return "now"
@@ -161,6 +161,7 @@ def step_list(spec: Mapping[str, Any], steps: Mapping[str, Mapping[str, Any]], *
         rows.append({
             "id": str(spec_step.get("id") or ""), "name": step_name(spec_step), "kind": kind,
             "capability": cap or None, "stage": stage_of(spec_step, got), "state": _state(got),
+            "waiting_on_person": bool(got.get("waiting_on_person")),
             "started_at": iso(got.get("started_at")), "completed_at": iso(got.get("completed_at")),
             "sub": clip(_words(got.get("output") or {}), 120) or None,
             "refs": _refs(project_id, cap, got),

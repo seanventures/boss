@@ -304,19 +304,23 @@ def assemble(*, project_id: str, runs: list[Mapping[str, Any]],
 
         if status in LIVE_RUN:
             current = next((s for s in run_steps if s.get("status") in CURRENT_STEP), None)
-            spec_step = spec.get(str(current.get("step_id")), {}) if current else {}
-            since = _aware((current or {}).get("started_at")) or _aware(run.get("created_at"))
-            running.append({
-                **base,
-                "step_id": current.get("step_id") if current else None,
-                "step_label": (step_label(spec_step, str(current.get("step_id")))
-                               if current else None),
-                "step_status": current.get("status") if current else None,
-                "agent": step_agent(spec_step, current, names) if current else None,
-                "since": _iso(since),
-                "elapsed_seconds": (int((now - since).total_seconds()) if since else None),
-                "blocked_reason": _first_line(run.get("blocked_reason")) or None,
-            })
+            current_out = _output_of(current) if current else {}
+            if current and current.get("status") == "waiting" and current_out.get("waiting_on_person"):
+                current = None
+            else:
+                spec_step = spec.get(str(current.get("step_id")), {}) if current else {}
+                since = _aware((current or {}).get("started_at")) or _aware(run.get("created_at"))
+                running.append({
+                    **base,
+                    "step_id": current.get("step_id") if current else None,
+                    "step_label": (step_label(spec_step, str(current.get("step_id")))
+                                   if current else None),
+                    "step_status": current.get("status") if current else None,
+                    "agent": step_agent(spec_step, current, names) if current else None,
+                    "since": _iso(since),
+                    "elapsed_seconds": (int((now - since).total_seconds()) if since else None),
+                    "blocked_reason": _first_line(run.get("blocked_reason")) or None,
+                })
 
         updated = _aware(run.get("updated_at")) or _aware(run.get("created_at"))
         # THE ONE RULE FOR "A STEP FAILED AND SOMEBODY HAS TO DECIDE" is

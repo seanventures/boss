@@ -840,6 +840,10 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
     if job.kind == "meeting.step":
         result = client.run_meeting_step({"run_id": job.payload["run_id"]})
         if result.get("status") == "failed":
+            # A person-side failure (HTTP 200 needs_human, done=True) already failed the panel
+            # cleanly and released its hold; retrying the job would deadletter into a duplicate card.
+            if result.get("failure_class") == "needs_human" or result.get("done") is True:
+                return result
             raise RuntimeError(result.get("error") or "Meeting step failed.")
         return result
     if job.kind == "code.task":

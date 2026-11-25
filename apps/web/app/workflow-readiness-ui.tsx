@@ -168,46 +168,61 @@ export function ReadinessPanel({ readiness, accepted, onAccept }: {
     );
   }
   const open = unaccepted(readiness, accepted);
+  const immediate = missing.filter((m) => !m.after_a_person);
+  const later = missing.filter((m) => m.after_a_person);
+  const renderNeed = (need: ReadinessNeed) => (
+    <li key={need.key} data-testid={`dw-readiness-missing-${need.key}`}
+        data-accepted={accepted.includes(need.key) || undefined}>
+      <strong>{need.label}</strong>
+      {need.after_a_person ? (
+        <span className="dw-ready-when" data-testid={`dw-readiness-later-${need.key}`}> ({laterWords(need)})</span>
+      ) : null}
+      {/* Keep the prerequisite visible; instructions and step context are one press away. */}
+      <details className="dw-ready-why">
+        <summary>Setup details</summary>
+        <span className="dw-ready-fix">{need.fix}</span>
+        <span className="detail">
+          {neededByWords(need)}
+        </span>
+        {need.after_a_person ? (
+          <span className="detail dw-ready-later">
+            {" "}The run stops for you before {need.first_step_label}, so this can be added
+            while it runs.
+          </span>
+        ) : null}
+      </details>
+      <span className="dw-ready-fix">
+        {/* Only an area the console has: the API names it as a string, and a link to an area
+            that is gone did nothing when clicked (console-b, lib/area-ids.ts). */}
+        {/* The fix's own landing (`?area=setup&focus=repository`, `?area=skills&ability=email`)
+            when the API names one; the shell keeps the org and switches in place. */}
+        {need.href && isAreaId(need.area) ? (
+          <a href={withOrg(need.href, org)} data-testid={`dw-readiness-fix-${need.key}`} aria-label={`Open setup for ${need.label}`}>Open setup</a>
+        ) : isAreaId(need.area) ? (
+          <AreaLink area={need.area} title={`Open setup for ${need.label}`}>Open setup</AreaLink>
+        ) : null}
+      </span>
+    </li>
+  );
   return (
     <section className="dw-ready" data-testid="dw-readiness" aria-label="What this needs first">
       <h4>Setup needed</h4>
       <ReadinessNotes notes={readiness.notes} />
-      <ul className="dw-ready-list">
-        {missing.map((need) => (
-          <li key={need.key} data-testid={`dw-readiness-missing-${need.key}`}
-              data-accepted={accepted.includes(need.key) || undefined}>
-            <strong>{need.label}</strong>
-            {need.after_a_person ? (
-              <span className="dw-ready-when" data-testid={`dw-readiness-later-${need.key}`}> ({laterWords(need)})</span>
-            ) : null}
-            {/* Keep the prerequisite visible; instructions and step context are one press away. */}
-            <details className="dw-ready-why">
-              <summary>Setup details</summary>
-              <span className="dw-ready-fix">{need.fix}</span>
-              <span className="detail">
-                {neededByWords(need)}
-              </span>
-              {need.after_a_person ? (
-                <span className="detail dw-ready-later">
-                  {" "}The run stops for you before {need.first_step_label}, so this can be added
-                  while it runs.
-                </span>
-              ) : null}
-            </details>
-            <span className="dw-ready-fix">
-              {/* Only an area the console has: the API names it as a string, and a link to an area
-                  that is gone did nothing when clicked (console-b, lib/area-ids.ts). */}
-              {/* The fix's own landing (`?area=setup&focus=repository`, `?area=skills&ability=email`)
-                  when the API names one; the shell keeps the org and switches in place. */}
-              {need.href && isAreaId(need.area) ? (
-                <a href={withOrg(need.href, org)} data-testid={`dw-readiness-fix-${need.key}`} aria-label={`Open setup for ${need.label}`}>Open setup</a>
-              ) : isAreaId(need.area) ? (
-                <AreaLink area={need.area} title={`Open setup for ${need.label}`}>Open setup</AreaLink>
-              ) : null}
-            </span>
-          </li>
-        ))}
-      </ul>
+      {immediate.length ? (
+        <ul className="dw-ready-list">
+          {immediate.map(renderNeed)}
+        </ul>
+      ) : null}
+      {later.length ? (
+        <>
+          <p className="detail dw-ready-later" data-testid="dw-readiness-later-group">
+            Needed later (can be added while the run waits for you):
+          </p>
+          <ul className="dw-ready-list">
+            {later.map(renderNeed)}
+          </ul>
+        </>
+      ) : null}
       {/* STARTING ANYWAY IS A CHOICE MADE OUT LOUD. The keys go with the start request and the
           run records that it began without them; anything missing that was not on this list
           still refuses. */}
@@ -255,15 +270,19 @@ export function StartRefusal({ refusal, projectId = "", busy = false, onDismiss 
 }) {
   const [accepted, setAccepted] = useState<string[]>([]);
   const open = unaccepted(refusal.readiness, accepted);
+  const immediateCount = refusal.readiness.missing.filter((m) => !m.after_a_person).length;
+  const laterCount = refusal.readiness.missing.filter((m) => m.after_a_person).length;
   return (
     <div className="dw-refusal" data-testid="start-refusal" role="alert">
       {/* ONE SHORT LINE; the list below names each thing and its fix. The API's whole sentence
           stays one hover away. */}
       <p className="dw-new-error" title={refusal.message}>
         {refusal.label}, not started.{" "}
-        {refusal.readiness.missing.length
-          ? `${refusal.readiness.missing.length} ${refusal.readiness.missing.length === 1 ? "thing" : "things"} missing.`
-          : refusal.message}
+        {immediateCount > 0
+          ? `${immediateCount} ${immediateCount === 1 ? "thing" : "things"} missing${laterCount > 0 ? ` · ${laterCount} needed later` : ""}.`
+          : laterCount > 0
+            ? `${laterCount} ${laterCount === 1 ? "thing" : "things"} needed later.`
+            : refusal.message}
       </p>
       <ReadinessPanel readiness={refusal.readiness} accepted={accepted}
                       onAccept={setAccepted} projectId={projectId} />

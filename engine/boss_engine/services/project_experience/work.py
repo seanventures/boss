@@ -115,7 +115,7 @@ def stages(spec: Mapping[str, Any], steps: Mapping[str, Mapping[str, Any]], *,
             state = "skipped"
         elif any(s in _FAILED_STEP for s in statuses):
             state = "failed"
-        elif any(s.get("gate_open") for s in got):
+        elif any(s.get("gate_open") or s.get("waiting_on_person") for s in got):
             state = "waiting"
         elif all(s in _DONE_STEP for s in statuses):
             state = "skipped" if all(s == "skipped" for s in statuses) else "done"
@@ -374,6 +374,8 @@ def _steps(connection: Connection, run_ids: list[str]) -> dict[str, dict[str, di
             "decision_id": r["decision_id"],
             "gate_open": bool(r["decision_id"] and r["status"] == "waiting"
                               and r["decision_status"] in OPEN_STATUSES),
+            "waiting_on_person": bool(r["status"] == "waiting"
+                                      and output.get("waiting_on_person")),
             "started_at": r["started_at"], "completed_at": r["completed_at"]}
     return out
 
@@ -975,6 +977,7 @@ def _run_items(connection: Connection, project_id: str, limit: int,
         latest = group.pop("latest")
         gate_id = next((sid for sid, st in run_steps.items() if st["gate_open"]), None)
         gate = run_steps.get(gate_id) if gate_id else None
+        waiting_step = next((st for st in run_steps.values() if st.get("waiting_on_person")), None)
         merge = next((b for b in reversed(members) if b.get("merge_open")), None)
         # A gate that only waits for the merge IS the merge (one next step, one action).
         merge_held = _waits_on_merge(gate, merge) and merge is not None
@@ -994,7 +997,7 @@ def _run_items(connection: Connection, project_id: str, limit: int,
         # and the row read "Cancelled"): the work's status is the change's.
         if status == "cancelled" and merge_links["merged_pr"] and merge is None:
             status = "merged"
-        state = run_state(status, gate is not None or merge is not None)
+        state = run_state(status, gate is not None or merge is not None or waiting_step is not None)
         since = None
         if latest is not None and latest["_state"] == "stalled" and state == "running":
             # The run waits on a build that stopped moving, and nothing else in the run moved.
@@ -1071,7 +1074,8 @@ def _run_items(connection: Connection, project_id: str, limit: int,
             # The one action a person takes here, named for what it does (never "Merge" on a
             # deploy approval): Merge · Approve deploy · Approve plan · Decide.
             "action_label": ("Merge" if merge is not None and gate is None
-                             else _gate_word(spec, gate_id) if gate is not None else None),
+                             else _gate_word(spec, gate_id) if gate is not None
+                             else ("Fix model" if waiting_step is not None else None)),
             # THE CHANGE'S OWN PREVIEW, beside its merge: verify before merging.
             "preview_app": _preview_app(preview_rows, members, merge),
             "agents": faces[:4], "cost_usd": round(cost / 1_000_000, 2),
@@ -1099,7 +1103,9 @@ def _run_items(connection: Connection, project_id: str, limit: int,
             },
             "decision_ids": [d for d in ((gate or {}).get("decision_id"),
                                          (merge or {}).get("decision_id")) if d],
-            "detail": (r["directive"] or r["error"] or r["blocked_reason"] or r["workflow"]),
+            "detail": (str((waiting_step["output"] or {}).get("waiting_on_person") or "")
+                       if waiting_step is not None and gate is None and merge is None
+                       else (r["directive"] or r["error"] or r["blocked_reason"] or r["workflow"])),
             "workflow": r["workflow"],
             "build_id": str(build["id"]) if build else None,
             "href": project_href(project_id, tab="work", drawer=f"run:{rid}"),

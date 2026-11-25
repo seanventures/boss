@@ -28,7 +28,7 @@ const FLOW = ["Idea", "Plan (you approve)", "Build", "Review", "Pull request", "
 
 export type WelcomeState = {
   /** `local`: the org keeps code on this machine (no GitHub needed to build; GitHub is for PRs on GitHub). */
-  github: { done: boolean; login: string | null; repos: number; local: { full_name: string; project_name: string } | null };
+  github: { done: boolean; login: string | null; repos: number; local: { full_name: string; project_id?: string | null; project_name: string } | null };
   model: { done: boolean; label: string | null; kind: string | null };
   /** `project`: the org's live sample project, once it exists (Open the sample). */
   sample: { done: boolean; project: { project_id: string; name: string } | null };
@@ -49,7 +49,7 @@ export function welcomeState(view: SetupView, signin?: SigninStatus | null): Wel
   return {
     github: { done: Boolean(green) || repoWorks || Boolean(local), login: green?.login ?? green?.name ?? null,
               repos: reposOf(view).length,
-              local: local && !green && !repoWorks ? { full_name: local.full_name, project_name: local.project_name } : null },
+              local: local && !green && !repoWorks ? { full_name: local.full_name, project_id: local.project_id ?? null, project_name: local.project_name } : null },
     model: { done: Boolean(model), label: model?.label ?? null, kind: model?.kind ?? null },
     // TICKED ONLY FOR A REAL FIRST PR from the sample / Try it run (walk 2026-11-04: a green tick
     // with no sample run). Other PRs in the project make the install established, not this step.
@@ -119,7 +119,7 @@ function SetupLink({ focus, className, testid, children }: {
 }
 
 export function Welcome({ onSetup }: { onSetup: () => void }) {
-  const { view, signin } = useBoard();
+  const { view, signin, projectId } = useBoard();
   const [quickOpen, setQuickOpen] = useState<boolean>(() => {
     try { return new URLSearchParams(window.location.search).get("focus") === "try"; } catch { return false; }
   });
@@ -147,7 +147,9 @@ export function Welcome({ onSetup }: { onSetup: () => void }) {
             <span className="su-strong">{state.github.local ? "Code on this machine" : "Connect GitHub"}</span>
             {state.github.local ? (
               <span className="su-faint" data-testid="su-wl-github-local">
-                {state.github.local.project_name} keeps its code here. GitHub is optional: connect it for PRs on GitHub.
+                {state.github.local.project_id && state.github.local.project_id === projectId
+                  ? `${state.github.local.project_name} keeps its code here.`
+                  : "Projects keep their code on this machine."} GitHub is optional: connect it for PRs on GitHub.
               </span>
             ) : state.github.done ? (
               <span className="su-faint" data-testid="su-wl-github-done">

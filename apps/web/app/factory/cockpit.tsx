@@ -520,7 +520,19 @@ function CockpitView({ c, projectId, runId, actor, onClose, onOpenBuild, refresh
                         tone={c.ticket.syncStatus === "failed" ? "red" : c.ticket.syncStatus === "paused" ? "amber" : "green"}
                         testid="fx-ticket" />
           ) : null}
-          {!stoppable ? <RateIt projectId={projectId} actor={actor} subject="build" id={c.run.id} testId="fx-rate" /> : null}
+          {(() => {
+            const hasArtifact = Boolean(
+              c.run.prUrl || c.outputs.pr?.url || c.outputs.pr?.number
+              || (c.outputs.changes?.filesChanged ?? 0) > 0
+              || (c.outputs.changes?.code?.length ?? 0) > 0
+              || (c.outputs.changes?.tests?.length ?? 0) > 0,
+            );
+            const failedEmpty = (c.state.state === "failed" || c.state.state === "cancelled"
+              || c.run.status === "failed" || c.run.status === "cancelled") && !hasArtifact;
+            return !stoppable && !failedEmpty
+              ? <RateIt projectId={projectId} actor={actor} subject="build" id={c.run.id} testId="fx-rate" />
+              : null;
+          })()}
           <span className="fx-spacer" />
           {c.agents.length ? <AgFaceStack roleKeys={c.agents.map((a) => a.roleKey)} size={24} max={6} states={faceStates} /> : null}
           <CreditsButton chain={chain} runId={c.run.id} projectId={projectId} viewer={actor} title={c.app}

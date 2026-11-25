@@ -15,6 +15,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { BookOpenText, ArrowsClockwise, Plus } from "@phosphor-icons/react";
 
 import { GatedButton, useGate } from "../../components/gated";
+import { localFull } from "../../lib/local-time";
 import { SectionLabel } from "../section-label";
 import {
   connectDocs, disconnectDocs, docsSummary, readDocsConnections, readDocsSpaces, saveDocsSpaces, siteHost,
@@ -157,7 +158,7 @@ export function ConfluenceRow({ projectId, onSummary }: { projectId: string; onS
               {c.reach === "org" ? ` · Shared · added in ${c.home_project.name}` : " · Shared with the whole org"}
             </span>
             <span className="tk-faint" data-testid="cf-tested">
-              {c.last_test_ok === false ? "The last test failed. Reconnect Confluence." : c.last_tested_at ? `Last tested ${new Date(c.last_tested_at).toLocaleString()}` : "Not tested yet"}
+              {c.last_test_ok === false ? "The last test failed. Reconnect Confluence." : c.last_tested_at ? `Last tested ${localFull(c.last_tested_at)}` : "Not tested yet"}
             </span>
             <label className="tk-faint" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
               Default spaces

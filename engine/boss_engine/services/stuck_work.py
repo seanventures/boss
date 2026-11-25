@@ -746,7 +746,12 @@ def triage(ev: Mapping[str, Any]) -> dict[str, Any]:
                  reason.get("detail") or "", ["wait"], "wait",
                  "Nothing: its own next attempt is working on it.", "boss")
     if run.get("status") in ENDED_STATUSES:
-        return t("failed", "It failed: " + _clip(run.get("error") or "no reason recorded", 120),
+        raw_err = str(run.get("error") or "no reason recorded").strip()
+        for prefix in ("It failed: ", "Failed: "):
+            if raw_err.startswith(prefix):
+                raw_err = raw_err[len(prefix):].strip()
+                break
+        return t("failed", _clip(raw_err or "no reason recorded", 120),
                  _clip(run.get("error") or "", 300), ["ask_person"], "ask_person",
                  "Read the failure and press Retry, or change the request.", "you")
     # NO RULE MATCHED. Never "no recorded cause": investigate what the run, its job, its job

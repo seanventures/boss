@@ -43,6 +43,7 @@ export {
   DeploymentLine, appOrigin, failingGatesOf, fromInteractiveControl, isRetryable, latestPreviewFor,
   leadLine, pickBuiltRun,
 } from "./factory/legacy-build-parts";
+import { isLocalRepo, repoHostLabel } from "../lib/repo-links";
 import { useAreaKeydown } from "../lib/area-keys";
 
 type View = "floor" | "apps" | "lab" | "repositories" | "components";
@@ -241,6 +242,7 @@ function githubBindingUnconfigured(plane?: string | null, repo?: string | null):
 }
 
 function githubTip(plane?: string | null, label?: string | null, repo?: string | null): string {
+  if (isLocalRepo(repo)) return `Local repository on this machine${repo ? `: ${repo}` : ""}.`;
   if (githubBindingUnconfigured(plane, repo)) return "GitHub binding is unconfigured.";
   const source = plane === "mission_control_binding"
     ? `Project GitHub binding${repo ? ` for ${repo}` : ""}.`
@@ -390,7 +392,7 @@ export function CodeTasksHome({ projectId, orgId, codeTasks, codeTaskTotal, apiR
           </span>
         ) : null}
         <span className="fx-muted fx-head-gh" data-testid="fx-github-plane" title={githubTip(githubPlane, githubPlaneLabel, githubRepository)}>
-          GitHub, {githubRepository ? <span data-user-text>{githubRepository}</span> : githubUnconfigured ? "unconfigured" : "Repository unknown"}
+          {repoHostLabel(githubRepository)}, {githubRepository ? <span data-user-text>{githubRepository}</span> : githubUnconfigured ? "unconfigured" : "Repository unknown"}
         </span>
         {previewBlockedReason ? (
           <span className="fx-err" role="status" data-testid="fx-preview-list-error" title={previewBlockedReason}>Previews unavailable</span>

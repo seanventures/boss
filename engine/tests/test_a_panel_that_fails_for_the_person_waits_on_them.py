@@ -184,3 +184,84 @@ def test_a_hold_for_a_panel_that_ended_never_blocks(eng, project, ended):  # noq
         said = c.execute(text("SELECT data->>'reason' FROM events WHERE entity_id = :r AND "
                               "event_type = 'budget.reservation_released'"), {"r": hold}).scalar()
     assert f"has ended ({ended})" in said
+
+
+def test_worker_does_not_raise_on_needs_human_meeting_step():
+    from boss_worker.control_plane import LeasedJob
+    from boss_worker.runner import execute_job
+
+    class _Client:
+        def __init__(self, reply):
+            self._reply = reply
+
+        def run_meeting_step(self, _payload):
+            return dict(self._reply)
+
+    job = LeasedJob(
+        id="job_m_1",
+        project_id="p_1",
+        task_id="tsk_1",
+        kind="meeting.step",
+        payload={"run_id": "mrun_1"},
+        attempt=1,
+        max_attempts=3,
+        lease_token="tok_1",
+        lease_expires_at="2026-12-01T00:00:00Z",
+    )
+    res = execute_job(
+        job,
+        _Client({"status": "failed", "done": True, "failure_class": "needs_human",
+                 "reason_code": "credential_plain_http", "words": PLAIN_HTTP}),
+    )
+    assert res["status"] == "failed" and res["failure_class"] == "needs_human"
+
+    with pytest.raises(RuntimeError, match="boom"):
+        execute_job(job, _Client({"status": "failed", "error": "boom"}))
+
+
+def test_plain_http_panel_folds_job_deadletter_into_one_card_and_clears_green_working(
+        eng, project, monkeypatch):  # noqa: F811
+    from boss_engine.services import setup_view
+
+    with eng.begin() as c:
+        c.execute(text(
+            "INSERT INTO entitlement_sources (id, project_id, source_id, provider, source_kind, "
+            "entitlement_kind, owner_type, owner_id, cost_mode, auth_method, connection_status, "
+            "status, connection_metadata, observed_capacity) VALUES (:id, :p, 'setup-custom-1', "
+            "'custom', 'api', 'api_key', 'project', :p, 'usage_based_api', 'api_key', 'connected', "
+            "'active', CAST(:meta AS JSONB), CAST('{}' AS JSONB))"),
+            {"id": f"es_{uuid4().hex[:12]}", "p": project,
+             "meta": json.dumps({
+                 "base_url": "http://10.0.0.7:8080/v1",
+                 "last_check": {"ok": True, "state": "working",
+                                "at": datetime.now(timezone.utc).isoformat()},
+             })})
+        before = setup_view.source_pills(c, _settings(), project)
+        assert before["setup-custom-1"]["state"] == "working"
+
+    def phase(engine, settings, jobs, run, run_id, phase):
+        raise RuntimeError(f"the seat's turn ended failed: {PLAIN_HTTP}")
+
+    monkeypatch.setattr(meeting_service, "_advance_phase", phase)
+    with eng.begin() as c:
+        hold = _hold(c, project)
+        rid = _meeting(c, project, reservation=hold)
+        _, dl = _dead_job(c, project, "meeting.step", "Meeting step failed.",
+                          payload={"run_id": rid}, principal="usr_ceo")
+
+    meeting_service.advance_meeting_run(eng, _settings(), JobLeaseService(_settings()), rid)
+    fo.sweep(eng, _settings(), project_id=project)
+
+    with eng.begin() as c:
+        m_row = _owner(c, "meeting", rid)
+        j_row = _owner(c, "job", f"meeting.step:{rid}")
+        open_cards = c.execute(text(
+            "SELECT id FROM decisions WHERE project_id = :p AND status = 'pending'"),
+            {"p": project}).scalars().all()
+        after = setup_view.source_pills(c, _settings(), project)
+
+    assert m_row["action"] == "Change the address to https in Setup › Models, then press Done — retry."
+    assert j_row["owned_by"] == "meeting"
+    assert j_row["decision_id"] == m_row["decision_id"]
+    assert len(open_cards) == 1
+    assert after["setup-custom-1"]["state"] == "failed"

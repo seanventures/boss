@@ -1307,6 +1307,17 @@ def _fail_for_person(engine, settings: Settings, run: dict, run_id: str,
             "WHERE id = :id AND status = 'running'"),
             {"e": person["words"][:500], "rc": person["reason_code"], "id": run_id})
         release_meeting_hold(c, settings, run_id, "panel stopped: " + person["words"][:200])
+        if person["reason_code"] in ("credential_plain_http", "credential_misdirected",
+                                     "model_auth_rejected"):
+            try:
+                from . import setup_actions
+
+                with c.begin_nested():
+                    setup_actions.mark_model_refused(
+                        c, str(run["project_id"]),
+                        reason_code=person["reason_code"], error=person["words"])
+            except Exception:  # noqa: BLE001
+                pass
         emit_event(c, run["project_id"], "meeting.failed", "boss", "meeting_run", run_id,
                    {"phase": run["phase"], "failure_class": "needs_human",
                     "reason_code": person["reason_code"], "words": person["words"][:300]})

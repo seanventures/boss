@@ -26880,39 +26880,71 @@ def get_delivery_workflow_asks(project_id: str) -> dict:
 
 @app.get("/v1/delivery-workflows/runs")
 @permit(P.WORKFLOW_READ, scope=Scope.project(query="project_id"))
-def list_delivery_runs(project_id: str, limit: int = 25, include_test: bool = False) -> dict:
+def list_delivery_runs(
+    request: Request,
+    project_id: str,
+    limit: int = 25,
+    include_test: bool = False,
+    scope: str = "project",
+) -> dict:
     """Live and recent delivery runs, each with where it has got to.
 
     TEST RUNS (workflow_test_runs) are left out unless `include_test`; each run says its `mode`
-    and, for a run started from a step of another, `rerun_of`.
+    and, for a run started from a step of another, `rerun_of`. When `scope == "org"`, returns
+    runs across every visible project in the same org where the caller has `workflow:read`.
 
     One query for the list and one for the steps, rather than a call per run: a project with
     twenty workflows in flight should cost two round trips to render, not twenty-one.
     """
+    project_ids = [project_id]
+    if scope == "org":
+        from boss_engine.identity import viewer as _viewer
+
+        visible = visible_project_rows(request)
+        target_org = next(
+            (str(r.get("org_id") or "") for r in visible if str(r["id"]) == project_id),
+            None,
+        )
+        if target_org:
+            scoped_ids = [
+                str(r["id"])
+                for r in visible
+                if str(r.get("org_id") or "") == target_org
+                and _viewer.may(str(r["id"]), P.WORKFLOW_READ.value) is not False
+            ]
+            if project_id not in scoped_ids:
+                scoped_ids.insert(0, project_id)
+        else:
+            scoped_ids = [project_id]
+        project_ids = scoped_ids
+
     with begin(engine) as connection:
         runs = connection.execute(
             text(
                 """
-                SELECT r.id, r.project_id, r.dedupe_key, r.status, r.actor, r.input, r.blocked_reason, r.error,
+                SELECT r.id, r.project_id, p.name AS project_name,
+                       r.dedupe_key, r.status, r.actor, r.input, r.blocked_reason, r.error,
                        r.created_at, r.updated_at, r.completed_at, r.mode, r.rerun_of,
                        d.workflow_key, d.name AS workflow_name, v.version, v.spec
                 FROM workflow_runs r
+                JOIN projects p ON p.id = r.project_id
                 JOIN workflow_definitions d ON d.id = r.workflow_definition_id
                 JOIN workflow_versions v ON v.id = r.workflow_version_id
-                WHERE r.project_id = :project_id
+                WHERE r.project_id = ANY(:project_ids)
                   AND COALESCE(d.namespace, 'system') = 'product'
                   AND (CAST(:include_test AS BOOLEAN) OR r.mode <> 'test')
                 ORDER BY r.updated_at DESC
                 LIMIT :limit
                 """
             ),
-            {"project_id": project_id, "limit": max(1, min(100, limit)),
+            {"project_ids": project_ids, "limit": max(1, min(100, limit)),
              "include_test": bool(include_test)},
         ).mappings().all()
         if not runs:
             return {"project_id": project_id, "runs": []}
 
         ids = [r["id"] for r in runs]
+        run_project_by_id = {r["id"]: str(r["project_id"]) for r in runs}
         steps = connection.execute(
             text(
                 """
@@ -26940,9 +26972,10 @@ def list_delivery_runs(project_id: str, limit: int = 25, include_test: bool = Fa
 
         _blockers = {}
         for _s in steps:
+            _run_pid = run_project_by_id.get(_s["workflow_run_id"], project_id)
             try:
                 _blockers[(_s["workflow_run_id"], _s["step_id"])] = _blocker_status(
-                    connection, project_id, dict(_s))
+                    connection, _run_pid, dict(_s))
             except Exception:  # noqa: BLE001 — a re-check must never fail the page
                 _blockers[(_s["workflow_run_id"], _s["step_id"])] = None
 
@@ -26951,7 +26984,12 @@ def list_delivery_runs(project_id: str, limit: int = 25, include_test: bool = Fa
         # (workflow_run_actions.require), so a button cannot be shown that its endpoint refuses.
         from boss_engine.services import workflow_run_actions as _run_actions
 
-        _actions = _run_actions.actions_for(connection, project_id, ids)
+        _actions: dict[str, list] = {}
+        _ids_by_project: dict[str, list[str]] = {}
+        for _rid, _pid in run_project_by_id.items():
+            _ids_by_project.setdefault(_pid, []).append(_rid)
+        for _pid, _pids in _ids_by_project.items():
+            _actions.update(_run_actions.actions_for(connection, _pid, _pids))
 
         # A DEPLOY STEP THAT SHIPS TO A STACK TARGET IS THAT DEPLOYMENT'S APPROVAL.
         #
@@ -26976,9 +27014,10 @@ def list_delivery_runs(project_id: str, limit: int = 25, include_test: bool = Fa
             if ((_spec_step.get("binding") or {}).get("capability") != "deploy"
                     or _s["step_kind"] != "capability"):
                 continue
+            _run_pid = run_project_by_id.get(_s["workflow_run_id"], project_id)
             try:
                 _found = _stack_deploy_for_step(
-                    connection, project_id, run_id=_s["workflow_run_id"],
+                    connection, _run_pid, run_id=_s["workflow_run_id"],
                     spec_step=_spec_step, status=str(_s["status"] or ""),
                     output=_s["output"], default_owner=_owner)
             except Exception:  # noqa: BLE001 — the page renders without it
@@ -27182,6 +27221,7 @@ def list_delivery_runs(project_id: str, limit: int = 25, include_test: bool = Fa
         out.append({
             "id": run["id"],
             "project_id": run["project_id"],
+            "project_name": run["project_name"],
             "dedupe_key": run["dedupe_key"],
             "status": run["status"],
             # A TEST RUN says so, and a re-run says where it came from (workflow_test_runs).

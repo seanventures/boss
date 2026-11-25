@@ -25,6 +25,8 @@ import {
   type Attempt, type NeedsYou, type WorkItem, type WorkState,
 } from "../../lib/project-experience";
 import { localWith, stampLocal, whenLocal } from "../../lib/local-time";
+import { useNow } from "../agents/live-util";
+import { waitsOnPerson } from "../../lib/work-stages";
 import { Empty, Flow, Loading, Failed, EngineNotReady, Said } from "./kit";
 import { NewWorkBar } from "./new-work";
 import { RowChipsProvider, RowTicket, TicketWorkBand, useRowChips, useTicketConnections, useTicketsParam } from "./ticket-work";
@@ -233,6 +235,8 @@ const TAB_EMPTY: Record<TaskTab, string> = {
   stopped: "Nothing stopped.", planned: "Nothing planned.",
 };
 
+const normReason = (s?: string | null) => tidyIds(s ?? "").trim().replace(/[.?!\s]+$/g, "").replace(/\s+/g, " ").toLowerCase();
+
 /** A Needs-you card that is no piece of work's (Pick a prod host, a setup gap): its own row, the
  *  bar's same item, opening the same drawer. */
 function NeedsCardRow({ card, ctx }: { card: NeedsYou; ctx: PxCtx }) {
@@ -241,6 +245,7 @@ function NeedsCardRow({ card, ctx }: { card: NeedsYou; ctx: PxCtx }) {
   // build's own row. (It used to be the Overview's card; the Overview now links here.)
   const failed = card.kind === "failed";
   const openIt = () => (failed && card.work_id ? ctx.open("work", card.work_id) : ctx.open("needs", card.id));
+  const showFixDetail = Boolean(failed && card.fix?.detail && normReason(card.fix.detail) !== normReason(card.detail));
   const tid = `px-work-needs-${card.id}`;
   return (
     <div className="px-wk px-wk-card" data-s="needs_you" data-failed={failed || undefined} data-testid={tid}
@@ -252,13 +257,14 @@ function NeedsCardRow({ card, ctx }: { card: NeedsYou; ctx: PxCtx }) {
         {/* Its few steps (a deploy: PR merged → Staging · you → Smoke test), what the Overview drew. */}
         {!failed && card.mini.length ? <Flow nodes={card.mini.map((m) => ({ ...m, icon: m.state === "waiting" ? <Lock size={10} weight="fill" aria-hidden /> : undefined }))} testid={`${tid}-flow`} />
           : <span className="px-wk-sub">{card.detail ? <span className="px-ell" data-testid={failed ? `${tid}-why` : undefined} title={card.detail}>{tidyIds(card.detail)}</span> : null}</span>}
-        {failed && card.fix?.detail ? <span className="px-wk-sub" data-testid={`${tid}-fixwhy`}>{card.fix.detail}</span> : null}
+        {showFixDetail ? <span className="px-wk-sub" data-testid={`${tid}-fixwhy`}>{card.fix!.detail}</span> : null}
       </span>
       <span className="px-hide-phone" />
       <span className="px-faces" />
       <span className="px-wk-links" />
       {failed ? (
-        <FailedActions retry={card.retry} fix={card.fix} retryReason={card.retry_reason} seeHref={card.see_href} projectId={ctx.projectId} actor={ctx.actor}
+        <FailedActions retry={card.retry} fix={card.fix} retryReason={card.retry_reason} seeHref={card.see_href}
+                       onSee={() => ctx.open("needs", card.id)} projectId={ctx.projectId} actor={ctx.actor}
                        testid={tid} onDone={() => { ctx.refreshWork(); ctx.refreshOverview?.(); }} />
       ) : (
         <span className="px-row">
@@ -378,9 +384,9 @@ type Chip = { word: string; tone?: "green" | "red" | "teal" | "blue" | "violet";
 export function statusChip(w: WorkItem, local = false): Chip {
   const setup = w.kind === "setup" && w.source === "onboarding";
   const why = w.why?.words ? tidyIds(w.why.words) : undefined;
-  if (w.state === "needs_you") {
+  if (w.state === "needs_you" || waitsOnPerson(w)) {
     const next = setup ? null : workNextStep(w);
-    return { word: setup ? (w.action_label || "Decide") : next?.label || w.action_label || "Decide", title: next?.hint || why };
+    return { word: setup ? (w.action_label || "Decide") : next?.label || w.action_label || "Needs you", title: next?.hint || why };
   }
   if (w.state === "running") { const at = whereNow(w, local).split(" · ")[0]; return { word: at ? `Running · ${at}` : "Running", tone: "teal", title: why }; }
   if (w.state === "stalled") return { word: "Stalled", title: w.stalled_since ? `No progress since ${stampLocal(w.stalled_since)}` : why };
@@ -566,14 +572,16 @@ const LATEST_DOT: Record<WorkState, string | undefined> = { ...DOT, needs_you: u
  *  piece of work carries a preview link, the project's own app preview (Overview's Your app) is
  *  the Preview. Dots: green, teal, red or neutral; never amber (the tab badge carries Needs you). */
 export function LatestStrip({ items, now, app = null }: { items: WorkItem[]; now?: number; app?: YourApp | null }) {
+  const clientNow = useNow(60_000);
+  const effectiveNow = now ?? clientNow;
   const latest: LatestLink[] = useMemo(() => {
-    const out = latestLinks(items, now);
+    const out = latestLinks(items, effectiveNow);
     if (!out.some((l) => l.key === "preview") && app?.href && app.state !== "none" && app.state !== "failed") {
       out.push({ key: "preview", label: "Preview", href: app.href, title: `The running preview · ${app.version_label}`, external: /^https?:\/\//.test(app.href),
                  work_id: "", work_label: app.version_label, state: app.state === "running" ? "done" : "planned", at: "", ago: "" });
     }
     return out;
-  }, [items, now, app]);
+  }, [items, effectiveNow, app]);
   if (!latest.length) return null;
   return (
     <div className="wl-latest" role="group" aria-label="Latest" data-testid="px-work-latest">
