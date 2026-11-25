@@ -5425,6 +5425,11 @@ def _block_for_plan_approval(engine, budget, *, run_id, project_id, task_id, res
         c.execute(sql("UPDATE code_task_runs SET status='blocked', phase='awaiting_plan_approval', "
                        "decision_id=:d, updated_at=now() WHERE id=:id"),
                   {"d": dec_id, "id": run_id})
+        # PARKED ON A PERSON, OWNED BY NOBODY (BOSSAPP-1364): this execution ends here, so the
+        # approval's resume claims a free run instead of being fenced by this one's token.
+        from .run_fencing import release_run
+
+        release_run(c, run_id)
         on_status_written(c, run_id)
     return {"status": "blocked", "done": True, "awaiting_plan_approval": True, "decision_id": dec_id}
 

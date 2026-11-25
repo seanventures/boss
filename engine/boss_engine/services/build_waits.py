@@ -14,6 +14,7 @@ from .decision_actions import ATTENTION_CANDIDATE_STATUSES
 #: shows (decision_actions), so a build and its card never disagree about whose move it is.
 OPEN_DECISION = frozenset(ATTENTION_CANDIDATE_STATUSES)
 _GONE = frozenset({"cancelled", "failed", "simulated"})
+_ANSWERED_YES = frozenset({"approved", "executed"})
 
 
 def waits_on_person(status: Any, phase: Any, decision_status: Any) -> bool:
@@ -21,7 +22,9 @@ def waits_on_person(status: Any, phase: Any, decision_status: Any) -> bool:
     if str(status or "") in _GONE:
         return False
     if str(phase or "").startswith("awaiting_"):
-        return True
+        # A PERSON WHO ALREADY SAID YES IS NOT BEING WAITED ON (BOSSAPP-1364): a run still at
+        # its gate after its decision was approved is BOSS's move (the resume did not take).
+        return str(decision_status or "") not in _ANSWERED_YES
     return str(decision_status or "") in OPEN_DECISION
 
 

@@ -98,16 +98,20 @@ def claim_run(connection, run_id: str, token_hash: Optional[str]) -> bool:
     """
     if not token_hash:
         return False
-    live = connection.execute(
+    # THIS EXECUTION'S OWN LEASE, not "the newest live job for the run" (BOSSAPP-1364). Two live
+    # rows can name one run: the job a person's approval enqueued, and a stale one from before
+    # the run parked (a redelivery joined while the laptop slept, its lease lapsing since).
+    # Picking the newest by updated_at let the stale row decide who owns the run.
+    live_jobs = connection.execute(
         sql(
-            "SELECT lease_token_hash, fence_epoch FROM jobs "
-            "WHERE kind = 'code.task' AND payload->>'run_id' = :run_id "
-            "  AND status IN ('leased', 'running') "
-            "ORDER BY updated_at DESC LIMIT 1"
+            "SELECT id, lease_token_hash, fence_epoch, "
+            "       (lease_expires_at IS NULL OR lease_expires_at > now()) AS current "
+            "FROM jobs WHERE kind = 'code.task' AND payload->>'run_id' = :run_id "
+            "  AND status IN ('leased', 'running')"
         ),
         {"run_id": run_id},
-    ).mappings().first()
-    if live is None:
+    ).mappings().all()
+    if not live_jobs:
         # No live lease (a direct API run, a dev path): the old last-claimer rule stands.
         n = connection.execute(
             sql("UPDATE code_task_runs SET owner_token = :t, updated_at = now() "
@@ -115,14 +119,21 @@ def claim_run(connection, run_id: str, token_hash: Optional[str]) -> bool:
             {"t": token_hash, "id": run_id},
         ).rowcount
         return bool(n)
-    if live["lease_token_hash"] and live["lease_token_hash"] != token_hash:
+    mine = next((j for j in live_jobs if j["lease_token_hash"] == token_hash), None)
+    if mine is None:
         # The job has been re-leased: this execution's lease is not the current one.
         raise RunFenced(run_id, "claim")
-    epoch = int(live["fence_epoch"] or 0)
+    epoch = int(mine["fence_epoch"] or 0)
+    # A run whose epoch is NEWER than this lease was claimed by a successor — unless no
+    # successor is alive any more: every other live job for it has an expired lease. That
+    # owner is stale (its worker slept or died), and the current lease TAKES OVER instead of
+    # being fenced by a ghost; the run keeps the larger epoch, so it never moves backwards.
+    rival_alive = any(j["id"] != mine["id"] and j["current"] for j in live_jobs)
     n = connection.execute(
-        sql("UPDATE code_task_runs SET owner_token = :t, fence_epoch = :e, "
-            "updated_at = now() WHERE id = :id AND fence_epoch <= :e"),
-        {"t": token_hash, "e": epoch, "id": run_id},
+        sql("UPDATE code_task_runs SET owner_token = :t, "
+            "fence_epoch = GREATEST(fence_epoch, :e), updated_at = now() "
+            "WHERE id = :id AND (fence_epoch <= :e OR NOT :rival)"),
+        {"t": token_hash, "e": epoch, "id": run_id, "rival": rival_alive},
     ).rowcount
     if n:
         return True
@@ -133,6 +144,17 @@ def claim_run(connection, run_id: str, token_hash: Optional[str]) -> bool:
         # The run carries a NEWER epoch than this execution's lease: claimed by a successor.
         raise RunFenced(run_id, "claim")
     return False
+
+
+def release_run(connection, run_id: str) -> None:
+    """A run that parks on a person gives up its owner (BOSSAPP-1364).
+
+    The execution that parked it is over — its job ends done — so nothing may keep owning the
+    run while it waits. The approval's resume then claims a free run, and a straggler of the
+    parked execution writes to nothing: its guarded writes match `owner_token = :mine`, 0 rows.
+    """
+    connection.execute(
+        sql("UPDATE code_task_runs SET owner_token = NULL WHERE id = :id"), {"id": run_id})
 
 
 def is_owner(connection, run_id: str, token_hash: Optional[str]) -> bool:

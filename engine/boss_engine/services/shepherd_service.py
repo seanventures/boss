@@ -671,6 +671,18 @@ def sweep_abandoned_runs(engine, settings: Settings, project_id: str, *,
                         f"LIMIT 200 FOR UPDATE OF r"),
                     {"p": project_id, "working": list(working),
                      "m": ORPHAN_AFTER_MINUTES}).mappings().all()
+                # AN APPROVED PLAN IS RESUMED, NEVER CLOSED AS ABANDONED (BOSSAPP-1364). A run
+                # whose plan a person approved, still at the plan gate with no job, is a resume
+                # that did not take (it was fenced, or its job was lost) — not an orphan. The
+                # person's Yes is the instruction: queue the resume again, or ask once.
+                approved_of = _APPROVED_NOT_RESUMED.get(table)
+                if approved_of is not None:
+                    approved = approved_of(c, [r["id"] for r in rows])
+                    rows = [r for r in rows if r["id"] not in approved]
+                    resumed = sum(_resume_approved(c, project_id, rid) for rid in approved)
+                    if approved:
+                        closed.append({"table": table, "resumed": resumed,
+                                       "asked": len(approved) - resumed, "count": 0})
                 # THE PHASE SAYS WHICH TERMINAL STATE IS TRUE.
                 #
                 # Eight runs sat at status='running' with phase='done': they had finished
@@ -726,6 +738,59 @@ def sweep_abandoned_runs(engine, settings: Settings, project_id: str, *,
     return {"project_id": project_id, "closed_total": total, "detail": closed}
 
 
+#: How many times the Shepherd re-queues an approved plan's resume before asking a person.
+APPROVED_RESUME_MAX_REQUEUES = 3
+
+
+def _approved_but_not_resumed(connection, run_ids: list[str]) -> set[str]:
+    """Runs still parked at their plan gate whose plan decision a person already APPROVED.
+
+    Approving flips the run to running and queues its resume (decisions.resume_code_task);
+    the resume's first move is to leave the gate. A run still at the gate with no job left is
+    therefore an approval whose resume never took, whatever happened to that job."""
+    if not run_ids:
+        return set()
+    rows = connection.execute(sql(
+        "SELECT r.id FROM code_task_runs r JOIN decisions d ON d.id = r.decision_id "
+        "WHERE r.id = ANY(:ids) AND r.phase = 'awaiting_plan_approval' "
+        "  AND d.status = 'approved' "
+        "  AND d.recommendation->>'action' = 'resume_code_task'"),
+        {"ids": list(run_ids)}).all()
+    return {str(r[0]) for r in rows}
+
+
+def _resume_approved(connection, project_id: str, run_id: str) -> int:
+    """Queue an approved run's resume again (1), or ask a person once when it keeps failing to
+    take (0). Never cancels it: a person said Yes to this work."""
+    from .jobs import JOB_PRIORITY_INTERACTIVE, enqueue_job
+
+    row = connection.execute(sql(
+        "SELECT task_id, COALESCE((finalize_ctx->>'approved_resume_requeues')::int, 0) AS n "
+        "FROM code_task_runs WHERE id = :i"), {"i": run_id}).mappings().first()
+    if row is None:
+        return 0
+    tries = int(row["n"] or 0)
+    if tries >= APPROVED_RESUME_MAX_REQUEUES:
+        open_question(
+            connection, project_id=project_id, task_ref=run_id,
+            question=(f"This build's plan was approved, but it could not resume after {tries} "
+                      "tries. Retry it, or leave it?"),
+            options=["retry", "leave"],
+            evidence={"reason": "approved_resume_did_not_take", "requeues": tries})
+        return 0
+    connection.execute(sql(
+        "UPDATE code_task_runs SET status = 'running', owner_token = NULL, "
+        "finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb) "
+        "|| jsonb_build_object('approved_resume_requeues', CAST(:n AS INT)), "
+        "updated_at = now() WHERE id = :i"), {"i": run_id, "n": tries + 1})
+    enqueue_job(connection, project_id, "code.task", {"run_id": run_id},
+                task_id=row["task_id"], priority=JOB_PRIORITY_INTERACTIVE)
+    emit_event(connection, project_id, "shepherd.approved_run_resumed", SHEPHERD_ACTOR,
+               "code_task_run", run_id,
+               {"why": "the plan was approved but its resume never took", "try": tries + 1})
+    return 1
+
+
 def _code_task_not_passed(connection, row: dict) -> bool:
     from .run_fencing import template_hold
 
@@ -762,6 +827,9 @@ def _close_as_blocked(connection, run_id: str) -> None:
         {"e": error, "h": json.dumps(held) if held is not None else None, "i": run_id})
     on_status_written(connection, run_id)
 
+
+#: Per run table: which of these runs are an approved plan whose resume never took?
+_APPROVED_NOT_RESUMED = {"code_task_runs": _approved_but_not_resumed}
 
 #: Per run table: is a run at its last phase nevertheless NOT passed (so it ends blocked)?
 _FINISHED_NOT_PASSED = {"code_task_runs": _code_task_not_passed}
