@@ -70,6 +70,7 @@ def _run(code: str) -> None:
     env = os.environ.copy()
     env["BOSS_EDITION"] = "community"
     env["BOSS_REQUIRE_API_AUTH"] = "false"
+    env["BOSS_AUTHZ_MODE"] = "off"
     env["PYTHONPATH"] = os.pathsep.join(
         (str(ROOT), str(ROOT / "apps/api"), str(ROOT / "engine"))
     )

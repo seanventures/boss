@@ -1750,6 +1750,10 @@ if [[ -d scripts/install/initdb ]]; then
   chmod 755 scripts/install/initdb
   find scripts/install/initdb -type f -name '*.sql' -exec chmod 644 {} +
 fi
+if [[ -d scripts/install/monitoring ]]; then
+  find scripts/install/monitoring -type d -exec chmod 755 {} +
+  find scripts/install/monitoring -type f -exec chmod 644 {} +
+fi
 
 # BOSS's own source mirror for self-fixes (docs/product/BOSS_FIXES_ITSELF.md §6.1): the
 # directory exists before Compose mounts it, so Docker never creates it as root. Empty until

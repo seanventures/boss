@@ -1859,10 +1859,16 @@ def run_dq_monitor_intake(connection: Connection, settings: Any, project_id: str
                             "why": "already investigated" if existing else
                             "the RCA workflow is not installed"})
             continue
+        from ..workflow_readiness import note_unready_start
+
         run = workflows.start_run(connection, project_id=project_id, actor=actor,
                                   input_data={"exception_group_id": g["group_id"]},
                                   dedupe_key=f"dq_intake_{g['group_id']}_{uuid.uuid4().hex[:6]}",
                                   workflow_version_id=version)
+        note_unready_start(connection, settings, project_id, actor, str(run.get("id") or ""),
+                           version_id=str(version),
+                           input_data={"exception_group_id": g["group_id"]},
+                           why="spawned by DQ Monitor intake sweep")
         started.append({"group_id": g["group_id"], "run_id": run["id"]})
     statement = (f"DQ Monitor, COB {cob}: {len(errors)} exception group(s) graded Error; started "
                  f"{len(started)} investigation(s)"

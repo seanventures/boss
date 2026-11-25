@@ -539,9 +539,13 @@ def test_installer_makes_initdb_readable_before_the_database_starts() -> None:
     text = (ROOT / "install.sh").read_text(encoding="utf-8")
     assert "umask 077" in text
     fix = text.index("chmod 755 scripts/install/initdb")
+    mon_fix = text.index("find scripts/install/monitoring -type f -exec chmod 644")
     first_up = text.index("up -d --no-build db api")
-    assert fix < first_up
+    assert fix < first_up and mon_fix < first_up
     assert "-name '*.sql' -exec chmod 644" in text
+    assert "find scripts/install/monitoring -type d -exec chmod 755" in text
     compose = (ROOT / "scripts/install/community-compose.yml").read_text(encoding="utf-8")
     mounts = re.findall(r"^\s+- (\./[^:]+):", compose, re.MULTILINE)
-    assert mounts == ["./initdb"], "a new bind mount needs the same readable-permissions step"
+    assert mounts == ["./initdb", "./monitoring/prometheus.yml", "./monitoring/grafana/provisioning"], (
+        "a new bind mount needs the same readable-permissions step"
+    )
