@@ -223,7 +223,7 @@ describe("Helm's understanding and Talk it through", () => {
     expect(tid("px-ub")!.getAttribute("data-state")).toBe("fallback");
     expect(tid("px-ub")!.textContent).toContain("Start uses your words as written");
     await press(tid("px-compose-start"));
-    expect(posts(calls, `/v1/projects/${P}/work`)[0].body).toEqual({ kind: "feature", text: WORDS });
+    expect(posts(calls, `/v1/projects/${P}/work`)[0].body).toEqual({ kind: "feature", text: WORDS, infer_app: true });
   });
 
   it("Open in Ask Helm carries the draft to the captain, never sent", async () => {
@@ -268,7 +268,7 @@ describe("Picked for you, Add to Next", () => {
     await press(tid("px-nw-chip-issue"));
     await press(tid("px-nw-issue-create"));
     await press(tid("px-nw-next"));
-    expect(posts(calls, `/v1/projects/${P}/plan`)[0].body).toEqual({ kind: "feature", text: "Export swaps as CSV", priority: "urgent", issue: { mode: "create" } });
+    expect(posts(calls, `/v1/projects/${P}/plan`)[0].body).toEqual({ kind: "feature", text: "Export swaps as CSV", priority: "urgent", issue: { mode: "create" }, infer_app: true });
     expect(posts(calls, `/v1/projects/${P}/work`)).toHaveLength(0);
     expect(tid("px-composer")).toBeNull();
     expect(tid("px-said")!.textContent).toMatch(/Added to Next \(#1\)/);

@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The deploy tag says why it is not live, beside the word, not only on
  * the tag title. A blank reason says nothing. More than six words is a

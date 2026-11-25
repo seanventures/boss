@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The plugin says its description, beside the name, not only on the title.
  * Blank is nothing. The same words as the name are nothing. A different

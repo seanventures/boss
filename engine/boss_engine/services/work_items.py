@@ -678,12 +678,19 @@ def start_or_resume(connection: Connection, settings: Any = None, *, project_id:
         deferred = None                          # still waits on a blocker: its wake starts it
     if isinstance(deferred, dict) and deferred.get("workflow_version_id"):
         try:
+            from .workflow_readiness import note_unready_start
+
             with connection.begin_nested():
                 run = wf.start_run(
                     connection, project_id=project_id, actor=actor,
                     input_data={**(deferred.get("input") or {}), "work_item_id": item_id},
                     dedupe_key=f"work_item:{item_id}:{make_id('start')}",
                     workflow_version_id=str(deferred["workflow_version_id"]))
+                note_unready_start(
+                    connection, settings, project_id, actor, str(run.get("id") or ""),
+                    version_id=str(deferred["workflow_version_id"]),
+                    input_data=deferred.get("input") or {},
+                    why="deferred start woken after blockers cleared")
             out.append({"kind": "workflow_run", "id": run.get("id"), "action": "started"})
             connection.execute(text(
                 "UPDATE work_items SET execution_state = execution_state - 'deferred_start' "
@@ -722,10 +729,15 @@ def defer_start(connection: Connection, *, project_id: str, item_id: str,
         emit_event(connection, project_id, "work_item.start_deferred", actor, "work_item",
                    item_id, {"workflow_version_id": workflow_version_id})
         return {"status": "deferred", "blocked_by": open_blockers(connection, item_id)}
+    from .workflow_readiness import note_unready_start
+
     run = wf.start_run(connection, project_id=project_id, actor=actor,
                        input_data={**dict(input_data or {}), "work_item_id": item_id},
                        dedupe_key=f"work_item:{item_id}:{make_id('start')}",
                        workflow_version_id=workflow_version_id)
+    note_unready_start(connection, None, project_id, actor, str(run.get("id") or ""),
+                       version_id=workflow_version_id, input_data=input_data,
+                       why="started from work item")
     connection.execute(text(
         "UPDATE work_items SET status = 'active', updated_at = now() WHERE id = :id "
         "AND status IN ('backlog', 'todo')"), {"id": item_id})

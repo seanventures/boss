@@ -986,7 +986,12 @@ function SchedulePopover({ workflow, schedules, projectId, busy, inputSchema, on
                 const said = scheduleMissSentence(s);
                 if (!said) return null;
                 // A sentence longer than six words is a paragraph; shorter stays a text node.
-                return said.trim().split(/\s+/).filter(Boolean).length > 6 ? <p>{said}</p> : said;
+                // Dynamic failure/missing text is marked data-user-text (copy-budget skips it).
+                return (
+                  <span data-user-text>
+                    {said.trim().split(/\s+/).filter(Boolean).length > 6 ? <p>{said}</p> : said}
+                  </span>
+                );
               })()}
               <GatedButton permission="workflow_schedule:manage" type="button" className="wf-link" disabled={!!busy}
                       data-testid={`wf-schedule-toggle-${s.id}`}

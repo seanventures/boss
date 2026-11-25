@@ -2183,6 +2183,10 @@ def input_schema_for(entry: dict[str, Any]) -> dict[str, Any]:
             if field in required and text_for["title"].endswith(" (optional)"):
                 text_for["title"] = text_for["title"][: -len(" (optional)")]
             properties[field] = text_for
+    if "directive" not in properties:
+        properties["directive"] = {"type": "string", "format": "textarea", "title": title,
+                                   "description": help_text,
+                                   "examples": [brief["example"]["directive"]]}
     return {"type": "object",
             "required": [f for f in order if f in required],
             "properties": properties}

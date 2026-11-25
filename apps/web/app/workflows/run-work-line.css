@@ -1,7 +1,7 @@
 /* THE RUN SCREEN'S HEADER LINE (run-work-line.tsx): Change · Preview · Staging · Prod · Your move.
    One line that wraps on a phone; tokens only, light and dark. */
 .rwl { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.rwl-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; font-size: var(--fs-meta, 0.8125rem); color: var(--muted); }
+.rwl-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; font-size: var(--fs-meta); color: var(--muted); }
 .rwl-link { display: inline-flex; align-items: center; gap: 4px; color: var(--accent-text); font-weight: 600; text-decoration: none; white-space: nowrap; }
 .rwl-link:hover, .rwl-link:focus-visible { text-decoration: underline; }
 .rwl-env { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
@@ -11,12 +11,12 @@
 .rwl-env[data-s="bad"] i { background: var(--red); }
 .rwl-move { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; color: var(--ink); font-weight: 600; white-space: nowrap; }
 .rwl-btn { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; }
-.rwl-checks { display: flex; flex-wrap: wrap; gap: 4px 12px; font-family: var(--mono); font-size: var(--fs-tag, 0.75rem); color: var(--muted); }
+.rwl-checks { display: flex; flex-wrap: wrap; gap: 4px 12px; font-family: var(--mono); font-size: var(--fs-tag); color: var(--muted); }
 @media (max-width: 640px) {
   .rwl-move { margin-left: 0; width: 100%; }
 }
 
 /* "Full brief" under a build step: one toggle, the directive only when asked for. */
-.dw-brief { margin-top: 8px; font-size: var(--fs-meta, 0.8125rem); color: var(--muted); }
+.dw-brief { margin-top: 8px; font-size: var(--fs-meta); color: var(--muted); }
 .dw-brief > summary { cursor: pointer; color: var(--accent-text); font-weight: 600; width: max-content; }
-.dw-detail-wrap .dw-brief > p { margin: 6px 0 0; white-space: pre-wrap; line-height: 1.5; color: var(--ink); max-width: 80ch; font-size: var(--fs-body, 0.875rem); }
+.dw-detail-wrap .dw-brief > p { margin: 6px 0 0; white-space: pre-wrap; line-height: 1.5; color: var(--ink); max-width: 80ch; font-size: var(--fs-body); }

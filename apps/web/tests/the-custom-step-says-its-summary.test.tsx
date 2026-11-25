@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The custom step says its summary, beside the label, not only on its title.
  * A blank summary says nothing. The same words as the label are not repeated.

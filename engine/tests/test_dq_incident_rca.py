@@ -590,8 +590,8 @@ class ScriptedAgents:
                                 "confidence": 0.82, "evidence": ids + changes,
                                 "precedents": ids, "confidence_lift": {ids[0]: 0.3}}]}
 
-    def _cause_check_agent(self, prompt):
-        cand = self._section(prompt, "CANDIDATES FOR THIS CAUSE CHECK:")
+    def _swimlane_agent(self, prompt):
+        cand = self._section(prompt, "CANDIDATES FOR THIS SWIMLANE:")
         cited = re.findall(r"— cites (.*)$", cand, re.M)
         evidence = [x.strip() for x in cited[0].split(",")] if cited else []
         return {"verdict": "Confirmed" if evidence else "CannotVerify",
@@ -609,7 +609,7 @@ class ScriptedAgents:
                                "unit": found.group(3)},
                 "rationale": "scripted", "evidence": evidence}
 
-    def _fix_planner(self, prompt):
+    def _corrective_action(self, prompt):
         owner = re.search(r"rule owner: .*? — (OWN-[A-Z]+) \((NPB-[A-Z-]+)\)", prompt)
         steward = re.search(r"CDE steward: .*? — (P-[A-Z]+)", prompt)
         fix = re.search(r"durable fix — (.*?);", prompt)

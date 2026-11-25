@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The deploy card says why health is what it is, beside the health tag,
  * not only on the tag title. A blank reason says nothing. More than six

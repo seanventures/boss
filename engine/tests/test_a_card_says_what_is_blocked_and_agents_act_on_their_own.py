@@ -738,9 +738,10 @@ def test_a_spent_budget_card_withdraws_once_its_item_is_moot(eng, project):  # n
 
 
 def test_a_read_phase_past_its_spend_cap_still_answers(eng, project, monkeypatch):  # noqa: F811
-    from boss_engine.services import workflow_precheck_agent
+    from boss_engine.services import openai_adapter, workflow_precheck_agent
 
     monkeypatch.setattr(workflow_precheck_agent, "_turn_cost", lambda usage: 200_000)
+    monkeypatch.setattr(openai_adapter, "estimate_cost_usd_micros", lambda usage: 200_000)
     with eng.begin() as c:
         item = _restarts_item(c, project)
         _grant(c, project, "infra_steward")

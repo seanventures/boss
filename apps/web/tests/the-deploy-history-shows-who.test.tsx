@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * Deploy history names who ran it, as words on the row, not only a tooltip on the face.
  * An agent run still shows that name. A row with no name invents none, and the face stays.

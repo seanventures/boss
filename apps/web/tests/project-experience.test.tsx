@@ -473,7 +473,7 @@ describe("Work (screens 5, 5b)", () => {
       box.dispatchEvent(new Event("input", { bubbles: true }));
     });
     await press(tid("px-compose-start"));
-    expect(calls.find((c) => c.method === "POST" && c.path === `/v1/projects/${P}/work`)?.body).toEqual({ kind: "bug", text: "SLA ignores weekends" });
+    expect(calls.find((c) => c.method === "POST" && c.path === `/v1/projects/${P}/work`)?.body).toEqual({ kind: "bug", text: "SLA ignores weekends", infer_app: true });
     expect(tid("px-said")!.textContent).toMatch(/Started/);
     // THE ROW (design #287): Workflow #N · Build · Change #N as short chips; BOSSAPP-954: a GitHub
     // PR opens BOSS's change page for it.

@@ -33,7 +33,7 @@ const post = (body: Record<string, unknown>) =>
 describe("the self-fix proxy", () => {
   it("names its reads and ops, and approval is not one of them", () => {
     expect(Object.keys(SELF_FIX_READS).sort()).toEqual(
-      ["autonomy", "diff", "list", "one", "patch", "recommendations", "run_autonomy", "settings", "upstream"]);
+      ["autonomy", "diff", "exists", "list", "one", "patch", "recommendations", "run_autonomy", "settings", "upstream"]);
     expect(Object.keys(SELF_FIX_OPS).sort()).toEqual(
       ["cancel", "edit_preview", "fork", "preview", "remove", "remove_all", "send", "settings", "start"]);
     expect(Object.keys(SELF_FIX_OPS).some((k) => /approve|decide|ticket/.test(k))).toBe(false);
@@ -49,10 +49,12 @@ describe("the self-fix proxy", () => {
 
   it("each read goes to its own /v1 path", async () => {
     const calls = upstream();
+    await get("view=exists&project_id=p1");
     await get("view=one&project_id=p1&id=sfx_1");
     await get("view=autonomy&project_id=p1&window=7d");
     await get("view=run_autonomy&project_id=p1&run_id=wfr_1");
     expect(calls.map((c) => c.url)).toEqual([
+      "http://boss-api/v1/self-fixes/exists?project_id=p1",
       "http://boss-api/v1/self-fixes/sfx_1?project_id=p1",
       "http://boss-api/v1/autonomy?project_id=p1&window=7d",
       "http://boss-api/v1/autonomy/runs/wfr_1?project_id=p1",

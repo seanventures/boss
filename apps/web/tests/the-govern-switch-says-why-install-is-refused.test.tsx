@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The govern switch says why install is refused, beside "Can't install here ⓘ",
  * not only on that span's title. A blank reason says nothing. More than six

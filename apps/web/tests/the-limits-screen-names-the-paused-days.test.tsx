@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /**
  * The limits screen names the paused days beside the count.
  * Blanks are dropped. A line of more than six words is a paragraph.
