@@ -1,0 +1,30 @@
+# Lumen Pay's tenant file after review: every rule passes.
+tenant: lumen-pay
+owner: "Lumen Pay Platform Team"
+contact: "platform@lumenpay.example"
+tier: standard
+data_classification: pii
+pii_fields: ["customer_email", "card_last4"]
+routes:
+  - path: /v1/payments
+    description: "List recent payments for the authenticated merchant."
+    methods: ["GET"]
+    upstream: lumen-pay-core
+    max_body_bytes: 1048576
+    rate_limit:
+      rps: 10
+      burst: 10
+    auth:
+      type: jwt
+      issuer: "https://issuer.lumenpay.example"
+      audience: "northgate"
+      scopes: ["payments.read"]
+      jwks_url: "https://issuer.lumenpay.example/.well-known/jwks.json"
+      api_key_ref: "secret://northgate/tenants/lumen-pay/api-key"
+    cors:
+      allow_origins: ["https://dashboard.lumenpay.example"]
+      allow_credentials: true
+upstreams:
+  lumen-pay-core:
+    url: "https://lumen-pay-core.internal.example"
+    timeout_ms: 2000
