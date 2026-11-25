@@ -1,0 +1,120 @@
+{
+  "id": "J4",
+  "title": "One feature across two repositories (Java library and service)",
+  "ticket": "BOSSAPP-1363",
+  "summary": "One requirement changes a shared Java library and the service that depends on it: BOSS plans one change set, builds the library lane, then the service lane against the library's unmerged branch, runs the cross-repo check, takes one approval and merges in order.",
+  "modes": [
+    "real"
+  ],
+  "pending": {
+    "waits_for": "BOSSAPP-1363 (sample repos bank-common + bank-payments-service; the service lane built against the library branch)",
+    "why": "the multi-repo change set has never run end to end on an install: no sample repos and no proof that the service sandbox builds against the library's unmerged branch"
+  },
+  "needs": {
+    "fixtures": [
+      "a multi-repo app (app_key) whose components are a Java library and a service depending on it"
+    ],
+    "defaults": {
+      "actor": "ceo",
+      "title": "Add a currency field to the shared payment DTO",
+      "instructions": "Add `currency` (ISO 4217) to PaymentDto in the library, and have the service set and return it.",
+      "criteria": [
+        "PaymentDto carries currency",
+        "the service's payment response includes currency"
+      ]
+    }
+  },
+  "steps": [
+    {
+      "id": "start",
+      "call": "POST /v1/apps/{{app_key}}/change-sets",
+      "expect_status": [
+        201
+      ],
+      "body": {
+        "project_id": "{{project_id}}",
+        "title": "{{title}}",
+        "instructions": "{{instructions}}",
+        "acceptance_criteria": "{{criteria}}",
+        "remember": true
+      },
+      "save": {
+        "cs_id": "id"
+      }
+    },
+    {
+      "id": "work",
+      "do": "drain"
+    },
+    {
+      "id": "built",
+      "call": "GET /v1/change-sets/{{cs_id}}",
+      "until": {
+        "path": "state",
+        "in": [
+          "awaiting_approval",
+          "ready",
+          "failed",
+          "stopped"
+        ]
+      },
+      "timeout_s": 5400,
+      "every_s": 30
+    },
+    {
+      "id": "prs",
+      "call": "GET /v1/change-sets/{{cs_id}}/prs",
+      "expect_status": [
+        200
+      ]
+    },
+    {
+      "id": "check",
+      "call": "POST /v1/change-sets/{{cs_id}}/cross-check",
+      "body": {
+        "project_id": "{{project_id}}"
+      }
+    },
+    {
+      "id": "merge",
+      "call": "POST /v1/change-sets/{{cs_id}}/merge",
+      "body": {
+        "project_id": "{{project_id}}",
+        "actor": "{{actor}}"
+      }
+    },
+    {
+      "id": "merged",
+      "call": "GET /v1/change-sets/{{cs_id}}",
+      "until": {
+        "path": "state",
+        "in": [
+          "merged",
+          "failed",
+          "stopped"
+        ]
+      },
+      "timeout_s": 1800,
+      "every_s": 20
+    }
+  ],
+  "acceptance": [
+    {
+      "text": "BOSS planned one change set across both repositories",
+      "step": "prs",
+      "path": "prs",
+      "at_least": 2
+    },
+    {
+      "text": "The cross-repo check passed",
+      "step": "check",
+      "status": 200
+    },
+    {
+      "text": "Both pull requests merged in dependency order",
+      "step": "merged",
+      "path": "state",
+      "equals": "merged"
+    }
+  ]
+}

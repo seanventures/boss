@@ -1,0 +1,80 @@
+{
+  "id": "J8",
+  "title": "API gateway onboarding, end to end",
+  "ticket": "BOSSAPP-1284",
+  "summary": "A partner's gateway config file is onboarded: a bad file is rejected by the linter with the reason, a fix PR makes it pass, it deploys to staging, the contract tests pass, one approval promotes it to production and the report lands on the PR.",
+  "modes": [
+    "real"
+  ],
+  "pending": {
+    "waits_for": "PR #329 (the config onboarding chain: rollback_config, one approval, report on the PR)",
+    "why": "the onboarding chain's steps after the lint are not on main yet"
+  },
+  "needs": {
+    "fixtures": [
+      "examples/api-gateway-onboarding installed as a workflow (onboarding_workflow) on a sandbox repo with a bad partner file"
+    ],
+    "defaults": {
+      "actor": "ceo",
+      "onboarding_workflow": "api_gateway_onboarding"
+    }
+  },
+  "steps": [
+    {
+      "id": "start",
+      "call": "POST /v1/delivery-workflows/start",
+      "expect_status": [
+        200
+      ],
+      "body": {
+        "project_id": "{{project_id}}",
+        "workflow_key": "{{onboarding_workflow}}",
+        "input": {
+          "partner_file": "{{partner_file}}"
+        },
+        "actor": "{{actor}}"
+      },
+      "save": {
+        "run_id": "run_id|workflow_run_id"
+      }
+    },
+    {
+      "id": "work",
+      "do": "drain"
+    },
+    {
+      "id": "done",
+      "call": "GET /v1/workflow-runs/{{run_id}}",
+      "until": {
+        "path": "status",
+        "in": [
+          "completed",
+          "failed",
+          "cancelled"
+        ]
+      },
+      "timeout_s": 3600,
+      "every_s": 30
+    }
+  ],
+  "acceptance": [
+    {
+      "text": "The onboarding run finished as completed",
+      "step": "done",
+      "path": "status",
+      "equals": "completed"
+    },
+    {
+      "text": "The bad file was rejected with the linter's reason",
+      "step": "done",
+      "path": "steps[step_key=lint].status",
+      "equals": "failed"
+    },
+    {
+      "text": "Production was reached after one approval",
+      "step": "done",
+      "path": "steps[step_key=promote].status",
+      "equals": "completed"
+    }
+  ]
+}

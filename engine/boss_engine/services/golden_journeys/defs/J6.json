@@ -1,0 +1,112 @@
+{
+  "id": "J6",
+  "title": "Approval gate, deploy to staging, promote",
+  "ticket": "BOSSAPP-1284",
+  "summary": "A deployment of an app to its staging target stops at its approval; once approved it deploys and reports healthy, and the staging run is then promoted to production through the second gate.",
+  "modes": [
+    "real"
+  ],
+  "needs": {
+    "fixtures": [
+      "an app with an active staging and an active production deployment target (staging_target)"
+    ],
+    "defaults": {
+      "actor": "ceo",
+      "ref": "main"
+    }
+  },
+  "steps": [
+    {
+      "id": "plan",
+      "call": "POST /v1/delivery/deploy",
+      "expect_status": [
+        200
+      ],
+      "body": {
+        "target_id": "{{staging_target}}",
+        "ref": "{{ref}}",
+        "actor": "{{actor}}"
+      },
+      "save": {
+        "deployment_run_id": "deployment_run_id"
+      }
+    },
+    {
+      "id": "waiting",
+      "call": "GET /v1/delivery/deployments/{{deployment_run_id}}",
+      "until": {
+        "path": "waiting",
+        "equals": true
+      },
+      "timeout_s": 600,
+      "every_s": 10,
+      "save": {
+        "decision_id": "decision_id"
+      }
+    },
+    {
+      "id": "approve",
+      "call": "POST /v1/decisions/{{decision_id}}/approve",
+      "body": {
+        "actor": "{{actor}}",
+        "note": "golden journey J6"
+      },
+      "expect_status": [
+        200
+      ]
+    },
+    {
+      "id": "staged",
+      "call": "GET /v1/delivery/deployments/{{deployment_run_id}}",
+      "until": {
+        "path": "status",
+        "in": [
+          "succeeded",
+          "deployed",
+          "completed",
+          "failed",
+          "rolled_back"
+        ]
+      },
+      "timeout_s": 1800,
+      "every_s": 15
+    },
+    {
+      "id": "promote",
+      "call": "POST /v1/deployments/{{deployment_run_id}}/promote",
+      "body": {
+        "actor": "{{actor}}",
+        "note": "golden journey J6"
+      }
+    }
+  ],
+  "acceptance": [
+    {
+      "text": "The staging deployment waited for its approval",
+      "step": "waiting",
+      "path": "waiting",
+      "equals": true
+    },
+    {
+      "text": "The approval was recorded",
+      "step": "approve",
+      "status": 200
+    },
+    {
+      "text": "The staging deployment finished healthy",
+      "step": "staged",
+      "path": "status",
+      "in": [
+        "succeeded",
+        "deployed",
+        "completed"
+      ]
+    },
+    {
+      "text": "The staging run was promoted to production",
+      "step": "promote",
+      "path": "promoted_from",
+      "present": true
+    }
+  ]
+}

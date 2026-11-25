@@ -1,0 +1,80 @@
+{
+  "id": "J9",
+  "title": "Post-deploy error, alert, runbook remediation",
+  "ticket": "BOSSAPP-1284",
+  "summary": "After a deploy the app starts failing; BOSS's alert fires from the app's metrics, the triage names the runbook, and the runbook's remediation brings the app back without a person.",
+  "modes": [
+    "real"
+  ],
+  "pending": {
+    "waits_for": "PR #330 (CloudWatch signal source) and BOSSAPP-1293 (runbook remediation)",
+    "why": "alerts exist on main, but the CloudWatch source and the runbook remediation from an alert do not"
+  },
+  "needs": {
+    "fixtures": [
+      "a deployed app target (app_target) with an error-rate alert rule and a runbook"
+    ],
+    "defaults": {
+      "actor": "ceo"
+    }
+  },
+  "steps": [
+    {
+      "id": "rules",
+      "call": "GET /v1/apps/{{app_target}}/alert-rules",
+      "expect_status": [
+        200
+      ]
+    },
+    {
+      "id": "alerts",
+      "call": "GET /v1/apps/{{app_target}}/alerts",
+      "until": {
+        "path": "alerts",
+        "at_least": 1
+      },
+      "timeout_s": 1800,
+      "every_s": 30,
+      "save": {
+        "alert_id": "alerts[0].id"
+      }
+    },
+    {
+      "id": "triage",
+      "call": "POST /v1/apps/{{app_target}}/alerts/{{alert_id}}/triage",
+      "body": {
+        "actor": "{{actor}}"
+      },
+      "expect_status": [
+        200,
+        201
+      ]
+    },
+    {
+      "id": "runs",
+      "call": "GET /v1/ai-sre/runbooks/runs",
+      "expect_status": [
+        200
+      ]
+    }
+  ],
+  "acceptance": [
+    {
+      "text": "The alert fired after the bad deploy",
+      "step": "alerts",
+      "path": "alerts",
+      "at_least": 1
+    },
+    {
+      "text": "Triage was recorded for the alert",
+      "step": "triage",
+      "status": 200
+    },
+    {
+      "text": "A runbook remediation ran",
+      "step": "runs",
+      "path": "runs",
+      "at_least": 1
+    }
+  ]
+}

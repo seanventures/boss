@@ -1,0 +1,193 @@
+{
+  "id": "J10",
+  "title": "An MCP server with a vault-held key, used by an agent's workflow step",
+  "ticket": "BOSSAPP-1479",
+  "summary": "A fake HTTP MCP server that refuses calls without its bearer key is added with the key held in BOSS's vault, tested, granted to an agent, and a workflow step bound to one of its tools calls it; the fake proves the call arrived with the vault's key, and the key never appears in a recorded call.",
+  "modes": [
+    "scripted",
+    "real"
+  ],
+  "pending": {
+    "waits_for": "PR #331 (MCP conformance: private hosts, vault-held keys across transports) and PR #327 (Add MCP server from everywhere)",
+    "why": "a vault-held key on an HTTP MCP server and a private-network address are what #331 fixes"
+  },
+  "needs": {
+    "fakes": [
+      "mcp_http"
+    ],
+    "defaults": {
+      "actor": "ceo",
+      "role_key": "software_engineer"
+    }
+  },
+  "steps": [
+    {
+      "id": "test",
+      "call": "POST /v1/mcp/servers/test",
+      "expect_status": [
+        200
+      ],
+      "body": {
+        "project_id": "{{project_id}}",
+        "url": "{{fake.mcp_http.url}}",
+        "transport": "http",
+        "auth": {
+          "type": "bearer",
+          "secret": "{{secret.mcp_http.key}}"
+        }
+      }
+    },
+    {
+      "id": "add",
+      "call": "POST /v1/mcp/servers",
+      "expect_status": [
+        201
+      ],
+      "body": {
+        "project_id": "{{project_id}}",
+        "name": "journey-ledger-{{stamp}}",
+        "url": "{{fake.mcp_http.url}}",
+        "transport": "http",
+        "auth": {
+          "type": "bearer",
+          "secret": "{{secret.mcp_http.key}}"
+        },
+        "actor": "{{actor}}"
+      },
+      "save": {
+        "server_id": "id"
+      }
+    },
+    {
+      "id": "grant",
+      "call": "POST /v1/role-mcp-servers",
+      "expect_status": [
+        200,
+        201
+      ],
+      "body": {
+        "project_id": "{{project_id}}",
+        "role_key": "{{role_key}}",
+        "mcp_server_id": "{{server_id}}",
+        "actor": "{{actor}}"
+      }
+    },
+    {
+      "id": "step",
+      "call": "POST /v1/delivery-workflows/custom-steps",
+      "expect_status": [
+        200,
+        201
+      ],
+      "body": {
+        "project_id": "{{project_id}}",
+        "label": "Ledger lookup {{stamp}}",
+        "actor": "{{actor}}",
+        "binding": {
+          "kind": "mcp_tool",
+          "mcp_server_id": "{{server_id}}",
+          "tool": "ledger_lookup",
+          "arguments": {
+            "account": "ACC-1001"
+          }
+        }
+      },
+      "save": {
+        "step_key": "step_key"
+      }
+    },
+    {
+      "id": "workflow",
+      "call": "POST /v1/delivery-workflows",
+      "expect_status": [
+        200,
+        201
+      ],
+      "body": {
+        "project_id": "{{project_id}}",
+        "workflow_key": "journey_ledger_{{stamp}}",
+        "name": "Journey ledger {{stamp}}",
+        "actor": "{{actor}}",
+        "spec": {
+          "steps": [
+            {
+              "id": "lookup",
+              "step_key": "{{step_key}}",
+              "agent": "{{role_key}}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "start",
+      "call": "POST /v1/delivery-workflows/start",
+      "expect_status": [
+        200
+      ],
+      "body": {
+        "project_id": "{{project_id}}",
+        "workflow_key": "journey_ledger_{{stamp}}",
+        "input": {},
+        "actor": "{{actor}}"
+      },
+      "save": {
+        "run_id": "run_id|workflow_run_id"
+      }
+    },
+    {
+      "id": "work",
+      "do": "drain"
+    },
+    {
+      "id": "done",
+      "call": "GET /v1/workflow-runs/{{run_id}}",
+      "until": {
+        "path": "status",
+        "in": [
+          "completed",
+          "failed",
+          "cancelled"
+        ]
+      },
+      "timeout_s": 900,
+      "every_s": 10
+    },
+    {
+      "id": "fake",
+      "do": "fake_log",
+      "fake": "mcp_http"
+    }
+  ],
+  "acceptance": [
+    {
+      "text": "The server answered BOSS's test with its tools",
+      "step": "test",
+      "path": "tools[name=ledger_lookup].name",
+      "equals": "ledger_lookup"
+    },
+    {
+      "text": "The server was added with its key held in the vault",
+      "step": "add",
+      "status": 201
+    },
+    {
+      "text": "The agent was granted the server",
+      "step": "grant",
+      "path": "mcp_server_id",
+      "present": true
+    },
+    {
+      "text": "The workflow run finished as completed",
+      "step": "done",
+      "path": "status",
+      "equals": "completed"
+    },
+    {
+      "text": "The step's tool call reached the server with the vault's key",
+      "step": "fake",
+      "path": "calls[tool=ledger_lookup].authorized",
+      "equals": true
+    }
+  ]
+}
