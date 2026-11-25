@@ -6,7 +6,7 @@
 import { aaRead, type ReadResult } from "./ambient";
 import { obsWrite, type WriteResult } from "../app/observability/obs-write";
 
-export type PoolMember = { id: string; label: string; status: "active" | "disabled" | "needs_reauth"; position: number;
+export type PoolMember = { id: string; label: string; status: "active" | "disabled" | "needs_reauth"; position: number; primary: boolean;
   room: { state: string; left: number | null; resets_at: string | null } | null };
 export type Pool = { id: string; engine: "claude_code" | "codex"; name: string; status: "active" | "disabled";
   members: PoolMember[] };
@@ -23,7 +23,7 @@ export function parsePools(w: unknown): Pool[] {
     members: arr(p.members).map(obj).map((m) => {
       const h = m.headroom ? obj(m.headroom) : null;
       const status = m.status === "disabled" || m.status === "needs_reauth" ? m.status : "active";
-      return { id: str(m.id), label: str(m.label), status, position: Number(m.position) || 0,
+      return { id: str(m.id), label: str(m.label), status, position: Number(m.position) || 0, primary: m.primary === true,
                room: h ? { state: str(h.state) || "plenty", left: typeof h.left === "number" ? h.left : null,
                            resets_at: str(h.resets_at) || null } : null } as PoolMember;
     }),

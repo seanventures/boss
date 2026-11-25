@@ -33,6 +33,9 @@ RESERVED = {
                        "top of the route's app_secret:write (APP_TEMPLATES_AND_SECURITY_LOOP.md §2.6)",
     "oidc_app:sign_in": "checked by the OIDC authorize endpoint for a workforce-pool sign-in; the "
                         "route itself is public:oidc_provider_endpoint (§6.3)",
+    "workflow:share": "checked at the org inside POST /v1/delivery-workflows/marketplace/publish "
+                      "and /unpublish, on top of the route's project workflow:publish (sharing to "
+                      "the org Library, BOSSAPP-1296)",
 }
 
 

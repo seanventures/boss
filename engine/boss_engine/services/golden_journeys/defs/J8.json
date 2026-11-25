@@ -1,21 +1,18 @@
 {
   "id": "J8",
-  "title": "API gateway onboarding, end to end",
+  "title": "API gateway onboarding: a bad partner file fixed and held for its merge",
   "ticket": "BOSSAPP-1284",
-  "summary": "A partner's gateway config file is onboarded: a bad file is rejected by the linter with the reason, a fix PR makes it pass, it deploys to staging, the contract tests pass, one approval promotes it to production and the report lands on the PR.",
+  "summary": "A partner's gateway config file that breaks the repository's rules starts \"Onboard a config file\" (onboard_config_file, #329): BOSS runs the repository's checker, fixes what the ruleset lets an agent fix, reviews it, and stops at the merge card for a person. The journey account never approves, so the chain after the merge (staging, contract tests, the production approval) runs only once a person merges; covering it daily needs a separate approver principal for the fixture project, not the journey account.",
   "modes": [
     "real"
   ],
-  "pending": {
-    "waits_for": "PR #329 (the config onboarding chain: rollback_config, one approval, report on the PR)",
-    "why": "the onboarding chain's steps after the lint are not on main yet"
-  },
   "needs": {
     "fixtures": [
-      "examples/api-gateway-onboarding installed as a workflow (onboarding_workflow) on a sandbox repo with a bad partner file"
+      "examples/api-gateway-onboarding reset onto a fixture repo the fixture project builds (reset.sh), with config/tenants/lumen-pay.yaml as target_path and the bad file as start_from"
     ],
     "defaults": {
-      "onboarding_workflow": "api_gateway_onboarding"
+      "target_path": "config/tenants/lumen-pay.yaml",
+      "start_from": "partner/lumen-pay.bad.yaml"
     }
   },
   "steps": [
@@ -27,14 +24,15 @@
       ],
       "body": {
         "project_id": "{{project_id}}",
-        "workflow_key": "{{onboarding_workflow}}",
+        "workflow_key": "onboard_config_file",
         "input": {
-          "partner_file": "{{partner_file}}"
+          "target_path": "{{target_path}}",
+          "start_from": "{{start_from}}"
         },
-        "actor": "{{actor}}"
+        "dedupe_key": "journey-j8-{{stamp}}"
       },
       "save": {
-        "run_id": "run_id|workflow_run_id"
+        "run_id": "run.id"
       }
     },
     {
@@ -42,14 +40,17 @@
       "do": "drain"
     },
     {
-      "id": "done",
-      "call": "GET /v1/workflow-runs/{{run_id}}",
+      "id": "held",
+      "call": "GET /v1/workflow-runs/{{run_id}}?project_id={{project_id}}",
       "until": {
         "path": "status",
         "in": [
+          "waiting",
+          "blocked",
           "completed",
           "failed",
-          "cancelled"
+          "cancelled",
+          "deadlettered"
         ]
       },
       "timeout_s": 3600,
@@ -58,22 +59,27 @@
   ],
   "acceptance": [
     {
-      "text": "The onboarding run finished as completed",
-      "step": "done",
-      "path": "status",
-      "equals": "completed"
+      "text": "The onboarding run started",
+      "step": "start",
+      "status": 200
     },
     {
-      "text": "The bad file was rejected with the linter's reason",
-      "step": "done",
-      "path": "steps[step_key=lint].status",
-      "equals": "failed"
+      "text": "The fixed file passes the repository's checker",
+      "step": "held",
+      "path": "steps[step_id=fix].output.checks_passed",
+      "equals": true
     },
     {
-      "text": "Production was reached after one approval",
-      "step": "done",
-      "path": "steps[step_key=promote].status",
-      "equals": "completed"
+      "text": "The fix was reviewed",
+      "step": "held",
+      "path": "steps[step_id=review].status",
+      "equals": "succeeded"
+    },
+    {
+      "text": "The run waits at the merge for a person",
+      "step": "held",
+      "path": "steps[step_id=merge].status",
+      "equals": "waiting"
     }
   ]
 }

@@ -157,11 +157,22 @@ KNOBS: dict[str, dict[str, Any]] = {
         "label": "Quality bar",
         "help": "prototype: blocks only when the app does not build or start, the tests it wrote "
                 "fail, or a security issue is found; everything else becomes a follow-up. "
-                "standard: also blocks on the must-haves that matter (P1), a review blocker and "
-                "broken existing tests; the rest becomes a follow-up. production: blocks on "
+                "standard (the default): also blocks on a review blocker and a broken startup, "
+                "sign-in or health test; the rest becomes a follow-up. production: blocks on "
                 "everything, and a production release refuses a build that passed at a lighter "
                 "bar. A workflow or a single run may set its own.",
         "kind": "choice", "choices": ["prototype", "standard", "production"],
+    },
+    # EACH GATE'S LEVEL (Setup › Advanced › Each gate, BOSSAPP-1362 phase 2): the project's own
+    # per-gate map over its preset. The floor (build, start, own tests, security, secrets)
+    # always blocks and refuses a level (quality_bar.clean_gate_map).
+    "quality_bar_gates": {
+        "attr": "quality_bar_gates",
+        "label": "Quality bar per gate",
+        "help": "Per gate, over the preset: {\"<gate>\": \"block\" | \"follow_up\"}. "
+                "A gate left out follows the preset. The floor (the build, the app starting, "
+                "its own tests, security, secrets) always blocks.",
+        "kind": "gate_map",
     },
     # OPEN THE PR WHEN CHECKS FAIL (checks_failing.py): after its repair rounds a build whose
     # checks still fail opens a draft PR labelled `checks failing` instead of waiting for a waiver.
@@ -611,6 +622,8 @@ def allowed_values_said(spec: dict[str, Any]) -> str:
         return "a chat engine"
     if str(choices or "").startswith(("models_for:", "models_for_harness:")):
         return "a model name"
+    if kind == "gate_map":
+        return '{"<gate>": "block"|"follow_up"}'
     return "a value"
 
 
@@ -752,6 +765,10 @@ def coerce(key: str, value: Any) -> Any:
         from .call_classes import coerce_policy
 
         return coerce_policy(value)
+    if spec["kind"] == "gate_map":
+        from .quality_bar import clean_gate_map
+
+        return clean_gate_map(value)
     return value
 
 

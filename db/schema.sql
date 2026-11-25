@@ -2049,6 +2049,20 @@ CREATE INDEX IF NOT EXISTS idx_deployment_runs_project
   ON deployment_runs(project_id, status, created_at DESC);
 ALTER TABLE deployment_runs ADD COLUMN IF NOT EXISTS decision_id TEXT REFERENCES decisions(id);
 
+-- ONE USE OF A RELEASED STEP GATE (BOSSAPP-1172): a workflow step's approved gate approves
+-- exactly ONE deployment. The decision is the primary key of its use, so two plans racing on
+-- one gate cannot both ship under it; the row says where it went and which bytes.
+CREATE TABLE IF NOT EXISTS deployment_gate_uses (
+  decision_id TEXT PRIMARY KEY REFERENCES decisions(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  workflow_run_id TEXT,
+  step_id TEXT,
+  capability TEXT,
+  target_id TEXT,
+  bundle_sha256 TEXT,
+  used_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Whether a merge to this target's repo deploys by itself, and whether that is currently
 -- paused. Defaults to FALSE so that shipping this feature does not silently turn every
 -- existing target into one that deploys on merge — enabling it stays a deliberate act.
@@ -4352,8 +4366,11 @@ CREATE TABLE IF NOT EXISTS workflow_packs (
   published_by TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- The Library's filter words (workflow_marketplace._tags): ["gateway", "onboarding"].
+  tags JSONB NOT NULL DEFAULT '[]'::jsonb,
   UNIQUE(source_definition_id)
 );
+ALTER TABLE workflow_packs ADD COLUMN IF NOT EXISTS tags JSONB NOT NULL DEFAULT '[]'::jsonb;
 CREATE INDEX IF NOT EXISTS idx_workflow_packs_org ON workflow_packs(org_id, status, updated_at DESC);
 CREATE TABLE IF NOT EXISTS workflow_pack_versions (
   id TEXT PRIMARY KEY,
@@ -13864,6 +13881,25 @@ CREATE TABLE IF NOT EXISTS subscription_pool_members (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (pool_id, label)
 );
+-- 1343: a pool is the ORG's (scope 'org': org_id set, anchored on the org's home project, applies to
+-- every project in the org) or one project's (scope 'project': overrides the org's for it alone).
+ALTER TABLE subscription_pools ADD COLUMN IF NOT EXISTS scope TEXT NOT NULL DEFAULT 'project';
+ALTER TABLE subscription_pools ADD COLUMN IF NOT EXISTS org_id TEXT;
+ALTER TABLE subscription_pools DROP CONSTRAINT IF EXISTS subscription_pools_project_id_engine_key;
+CREATE UNIQUE INDEX IF NOT EXISTS subscription_pools_project_scope_uq
+  ON subscription_pools (project_id, engine) WHERE scope = 'project';
+CREATE UNIQUE INDEX IF NOT EXISTS subscription_pools_org_scope_uq
+  ON subscription_pools (org_id, engine) WHERE scope = 'org';
+-- the last proof of the account's login (ok, at, error: the refusal in words; never a credential)
+ALTER TABLE subscription_pool_members ADD COLUMN IF NOT EXISTS last_proof JSONB;
+-- 1343: one member per pool may be the PRIMARY (leads while it has plenty of room).
+ALTER TABLE subscription_pool_members ADD COLUMN IF NOT EXISTS is_primary BOOLEAN NOT NULL DEFAULT FALSE;
+-- ONE primary per pool (BOSSAPP-1343 review): an older row set with two keeps the first seat's.
+UPDATE subscription_pool_members m SET is_primary = FALSE WHERE m.is_primary AND EXISTS (
+  SELECT 1 FROM subscription_pool_members o WHERE o.pool_id = m.pool_id AND o.is_primary
+  AND (o.position, o.id) < (m.position, m.id));
+CREATE UNIQUE INDEX IF NOT EXISTS subscription_pool_members_one_primary_uq
+  ON subscription_pool_members (pool_id) WHERE is_primary;
 CREATE TABLE IF NOT EXISTS subscription_pool_pins (
   pool_id TEXT NOT NULL REFERENCES subscription_pools(id) ON DELETE CASCADE,
   task_ref TEXT NOT NULL,
@@ -15331,11 +15367,20 @@ ALTER TABLE chat_identity_links ADD COLUMN IF NOT EXISTS method TEXT NOT NULL DE
 ALTER TABLE chat_identity_links ADD COLUMN IF NOT EXISTS external_email TEXT;
 ALTER TABLE chat_identity_links ADD COLUMN IF NOT EXISTS idp_subject TEXT;
 ALTER TABLE chat_identity_links ADD COLUMN IF NOT EXISTS attested_by TEXT;
--- SCOPED BUDGETS gain `trigger` (one route) and `deployment` (one deployed agent) (§7.4).
+-- SCOPED BUDGETS gain `trigger` (one route) and `deployment` (one deployed agent) (§7.4), and
+-- `team` (BOSSAPP-1295: an identity group; its spend is the spend of the projects the group or
+-- its members hold a project-scope role binding on). ONE definition of the check, rewritten only
+-- when the live one lacks a scope: no ACCESS EXCLUSIVE lock on a boot that changes nothing, and
+-- no second, narrower definition that a row of a newer scope would make fail.
 DO $$ BEGIN
-  ALTER TABLE scoped_budget_policies DROP CONSTRAINT IF EXISTS scoped_budget_policies_scope_type_check;
-  ALTER TABLE scoped_budget_policies ADD CONSTRAINT scoped_budget_policies_scope_type_check
-    CHECK (scope_type IN ('org', 'project', 'role', 'workflow', 'trigger', 'deployment'));
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                 WHERE conname = 'scoped_budget_policies_scope_type_check'
+                   AND conrelid = 'scoped_budget_policies'::regclass
+                   AND strpos(pg_get_constraintdef(oid), '''team''') > 0) THEN
+    ALTER TABLE scoped_budget_policies DROP CONSTRAINT IF EXISTS scoped_budget_policies_scope_type_check;
+    ALTER TABLE scoped_budget_policies ADD CONSTRAINT scoped_budget_policies_scope_type_check
+      CHECK (scope_type IN ('org', 'project', 'role', 'workflow', 'trigger', 'deployment', 'team'));
+  END IF;
 END $$;
 -- THE LOCAL WORKER'S WAKE (§8.2, P9a-5): a long-polling /v1/worker/poll waits on an in-memory
 -- hub fed by this channel, so a queued job is claimed within milliseconds of its commit and an

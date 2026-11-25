@@ -1,0 +1,2 @@
+This repository is the API gateway onboarding demo's tenant repo. reset.sh force-resets it, and
+refuses any repository without this file on main.

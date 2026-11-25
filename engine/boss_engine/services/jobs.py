@@ -95,6 +95,40 @@ def job_run_id(kind: str, payload: dict[str, Any]) -> Optional[str]:
     return current if current is not None else legacy
 
 
+# A RUN'S EPOCH OUTLIVES THE JOB THAT STAMPED IT (BOSSAPP-1364). fence_epoch counted per JOB, but
+# the run row keeps the highest epoch any of its jobs ever reached. A build whose first job was
+# reclaimed once (epoch 2) parks on a plan; approving it enqueues a NEW job, whose first lease
+# was epoch 1 — older than the run's 2 — so run_fencing.claim_run fenced the approved resume
+# every time and the Shepherd later closed the run as abandoned. The next epoch of a code.task
+# job is therefore one past the larger of its own and its run's: epochs stay comparable across
+# every job that ever drives the run, and each handover still moves strictly forward.
+_NEXT_EPOCH_SQL = (
+    "GREATEST(jobs.fence_epoch, COALESCE((SELECT r.fence_epoch FROM code_task_runs r "
+    "WHERE jobs.kind = 'code.task' AND r.id = jobs.payload->>'run_id'), 0)) + 1"
+)
+
+
+def stamp_run_epoch(connection, kind: str, payload: dict[str, Any], epoch: int) -> None:
+    """OWNERSHIP OF THE RUN CHANGES HANDS WITH THE LEASE (BOSSAPP-986). The run row carries the
+    epoch of the lease that owns it, stamped where the lease is granted — monotonically, so a
+    late write from an older claim can never move it back. run_fencing.claim_run then refuses an
+    executor whose epoch is older than this."""
+    if kind != "code.task":
+        return
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except ValueError:
+            payload = {}
+    run_ref = job_run_id(kind, payload if isinstance(payload, dict) else {})
+    if run_ref:
+        connection.execute(
+            text("UPDATE code_task_runs SET fence_epoch = :epoch "
+                 "WHERE id = :run_id AND fence_epoch < :epoch"),
+            {"run_id": run_ref, "epoch": int(epoch)},
+        )
+
+
 def run_job_match_sql(table: str, run_ref: str) -> str:
     """Fixed-kind linkage for internal SQL; callers supply their own project predicate."""
     if table == "security_scans":
@@ -905,7 +939,7 @@ class JobLeaseService:
                         lease_expires_at = :lease_expires_at,
                         heartbeat_at = :now_utc,
                         attempt = jobs.attempt + 1,
-                        fence_epoch = jobs.fence_epoch + 1,
+                        fence_epoch = """ + _NEXT_EPOCH_SQL + """,
                         updated_at = :now_utc
                     WHERE id = :job_id
                     RETURNING
@@ -940,14 +974,8 @@ class JobLeaseService:
             # the epoch of the lease that owns it, stamped where the lease is granted —
             # monotonically, so a late write from an older claim can never move it back.
             # run_fencing.claim_run then refuses an executor whose epoch is older than this.
-            if row["kind"] == "code.task":
-                run_ref = job_run_id(row["kind"], row["payload"] or {})
-                if run_ref:
-                    connection.execute(
-                        text("UPDATE code_task_runs SET fence_epoch = :epoch "
-                             "WHERE id = :run_id AND fence_epoch < :epoch"),
-                        {"run_id": run_ref, "epoch": int(row["fence_epoch"])},
-                    )
+            stamp_run_epoch(connection, row["kind"], row["payload"] or {},
+                            int(row["fence_epoch"]))
 
             event_type = (
                 "job.lease_reclaimed"
@@ -1096,7 +1124,7 @@ class JobLeaseService:
                     lease_expires_at = :lease_expires_at,
                     heartbeat_at = :now_utc,
                     attempt = jobs.attempt + 1,
-                    fence_epoch = jobs.fence_epoch + 1,
+                    fence_epoch = """ + _NEXT_EPOCH_SQL + """,
                     updated_at = :now_utc
                 WHERE id = :job_id
                 RETURNING id, kind, payload, data_boundary, workload_class,
@@ -1111,6 +1139,8 @@ class JobLeaseService:
                 "now_utc": current_time,
             },
         ).mappings().one()
+        stamp_run_epoch(connection, updated["kind"], updated["payload"] or {},
+                        int(updated["fence_epoch"]))
         emit_event(
             connection,
             project_id,

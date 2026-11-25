@@ -165,6 +165,7 @@ export function StepInspector({ state, step, palette, dispatch, projectId, actor
           <div className="wf-sub-label">MCP</div>
           <ScopePicker kind="mcp" selected={scopedMcp(step)} captain={captain} palette={palette}
                        projectId={projectId} onChange={(mcp) => patch({ mcp })}
+                       actor={actor} onAdded={refreshPalette}
                        problem={problems.find((p) => p.field === "mcp")?.message ?? null} />
         </Section>
       ) : usesOf(step, palette).length ? (

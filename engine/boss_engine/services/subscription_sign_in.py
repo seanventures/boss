@@ -185,6 +185,9 @@ class _Session:
     #: returned; dropped when the session ends.
     screen: Any = field(default=None, repr=False)
     code_sent_at: Optional[float] = None
+    #: True for "Add another account" (BOSSAPP-1343): its token becomes a new pool member, so it
+    #: never signs the install's login out and is never handed to a plain sign-in (or back).
+    add_account: bool = False
     #: The organisation the sign-in is for: its token lands in that org's model home, so only
     #: that org's projects may see, answer or cancel it (identity.object_kinds), and a start from
     #: another org is refused while it is live (start).
@@ -837,7 +840,7 @@ def _cannot_keep_token(provider: str, settings: Any) -> Optional[str]:
 
 def start(provider: str, *, project_id: str, actor: str, settings: Any = None,
           org_id: Optional[str] = None,
-          login_rejected: bool = False, fresh: bool = False,
+          login_rejected: bool = False, fresh: bool = False, add_account: bool = False,
           signed_in: Optional[Callable[[], bool]] = None,
           argv: Optional[tuple[str, ...]] = None,
           logout_argv: Optional[tuple[str, ...]] = None,
@@ -853,8 +856,11 @@ def start(provider: str, *, project_id: str, actor: str, settings: Any = None,
     `store(token, valid_days=…)` receives the token a `captures_token` login (Claude Code's
     `claude setup-token`) prints, on the server (the API passes
     claude_credential.store_long_lived_token bound to its connection and project).
+    `add_account` (Add another account, BOSSAPP-1343) only skips the "already signed in"
+    shortcut — the install's own session is never signed out and another person's sign-in in
+    progress is never cancelled; a plain sign-in already running answers "busy".
     """
-    replace = login_rejected or fresh
+    replace = (login_rejected or fresh) and not add_account
     name = normalize_provider(provider)
     login = LOGINS[name]
     check = signed_in or _call_signed_in_check(name, settings, org_id)
@@ -872,6 +878,12 @@ def start(provider: str, *, project_id: str, actor: str, settings: Any = None,
             raise SignInError(
                 409, f"{login.label} sign-in is busy right now",
                 f"A {login.label} sign-in is already in progress. Try again in a few minutes.")
+        if live is not None and live.add_account != add_account:
+            # A sign-in of the OTHER kind is running (replace vs add): neither is handed the
+            # other's session (its token would land in the wrong place) nor cancelled.
+            raise SignInError(
+                409, f"{login.label} sign-in is busy right now",
+                f"A {login.label} sign-in is already in progress. Try again in a few minutes.")
         if live is not None:
             with live.lock:
                 # NEVER HAND BACK A STUCK SESSION. A code that went in and got no answer, or an
@@ -886,8 +898,9 @@ def start(provider: str, *, project_id: str, actor: str, settings: Any = None,
             _kill(old)
         session = _Session(sign_in_id=f"si_{secrets.token_hex(10)}", provider=name,
                            project_id=project_id, actor=actor, started=now,
-                           expires=now + SESSION_TTL_SECONDS, org_id=org_id)
-        if not replace and _safe(check):
+                           expires=now + SESSION_TTL_SECONDS, org_id=org_id,
+                           add_account=add_account)
+        if not replace and not add_account and _safe(check):
             session.state = "signed_in"
             session.expires = None
             session.finished = now

@@ -1048,6 +1048,10 @@ def _finalize(connection: Connection, settings: Settings, *, row: dict, token: s
 
     if is_removal(row):
         after_removal(connection, row, status, actor)
+    from .config_deploy import after_rollback
+
+    # A config ROLLBACK that succeeded marks the deployment it undid (config_deploy.rollback).
+    after_rollback(connection, row, status, actor)
     emit_event(connection, row["project_id"], f"delivery.{status}", actor, "deployment_run",
                row["id"], {"changeset_id": row["changeset_id"], "resource_receipt_id": receipt_id,
                            "governed": True, "url": outcome.get("url")})

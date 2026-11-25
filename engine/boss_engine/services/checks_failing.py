@@ -224,9 +224,12 @@ def stop_or_open(action: str, failing: Iterable[str], *,
 
 
 def _gate_label(gate: str) -> str:
-    from .factory_view import gate_label
+    """A FAILING gate in words, as what went wrong ("Review asked for changes"). Never its pass
+    label: this record exists only for gates that FAILED, and "Review passed, Must-haves met"
+    in a card titled "its checks fail" read as success (BOSSAPP-1354)."""
+    from .plain_words import gate_failed_words
 
-    return gate_label(gate)
+    return gate_failed_words(gate)
 
 
 def _ordered(gates: Iterable[str]) -> list[str]:
@@ -298,9 +301,12 @@ def gate_names(record: Optional[Mapping[str, Any]]) -> list[str]:
 
 
 def headline(record: Optional[Mapping[str, Any]]) -> str:
-    """One line: "Security clean, New tests pass" — security first, as everywhere."""
-    labels = [str(g.get("label") or g.get("gate")) for g in (record or {}).get("gates") or []]
-    return ", ".join(labels)
+    """One line of what failed: "Security findings open, New tests fail" — security first."""
+    # From the gate KEY, never the stored label: a record written before BOSSAPP-1354 carries
+    # the pass label ("Review passed"), and reading it here put it back in every card title.
+    labels = [_gate_label(str(g.get("gate"))) if g.get("gate") else str(g.get("label") or "")
+              for g in (record or {}).get("gates") or [] if isinstance(g, Mapping)]
+    return ", ".join(x for x in labels if x)
 
 
 def for_work(raw: Any) -> Optional[dict[str, Any]]:

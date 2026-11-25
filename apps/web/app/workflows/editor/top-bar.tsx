@@ -337,7 +337,7 @@ export function TopBar(p: {
             {p.publishForm ? (
               <li role="none"><Btn role="menuitem" className="wf-menu-item" blocked={p.publishBlocked}
                                    onClick={() => setPop("publish")} testId="wf-menu-publish">
-                {meta.published?.status === "published" ? "Publish again…" : "Publish to Marketplace…"}</Btn></li>
+                {meta.published?.status === "published" ? "Share again…" : "Share to Library…"}</Btn></li>
             ) : null}
             {meta.marketplace && p.onUninstall ? (
               <li role="none"><Btn role="menuitem" className="wf-menu-item wf-menu-danger" blocked={p.uninstallBlocked}

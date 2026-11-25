@@ -78,7 +78,7 @@ def test_results_post_and_today_reads_them_back(client, monkeypatch):
     assert today["J5"]["status"] == "red" and "AC-2" in today["J5"]["why"]
     assert today["J3"]["status"] == "not_run"
     assert body["needed"] == 5 and body["green_days"] == 0
-    assert {p["id"] for p in body["pending"]} >= {"J2", "J4", "J7", "J8", "J9", "J10"}
+    assert {p["id"] for p in body["pending"]} >= {"J2", "J4", "J7", "J9", "J10"}
 
 
 def test_a_posted_green_the_verdict_does_not_accept_is_refused(client):

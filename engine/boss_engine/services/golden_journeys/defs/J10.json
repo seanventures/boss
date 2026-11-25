@@ -8,8 +8,8 @@
     "real"
   ],
   "pending": {
-    "waits_for": "PR #331 (MCP conformance: private hosts, vault-held keys across transports) and PR #327 (Add MCP server from everywhere)",
-    "why": "a vault-held key on an HTTP MCP server and a private-network address are what #331 fixes"
+    "waits_for": "a workflow saved with steps by the journey account (BOSSAPP-1479)",
+    "why": "#331 and #327 are merged, but /v1/delivery-workflows/create makes an empty definition and saving its steps as a version needs workflow:publish, which the journey account's allowlist does not hold; the step that saves the version, and a run proving the fake is reachable from the install, are still to write"
   },
   "needs": {
     "fakes": [
@@ -82,13 +82,11 @@
         "project_id": "{{project_id}}",
         "label": "Ledger lookup {{stamp}}",
         "actor": "{{actor}}",
-        "binding": {
-          "kind": "mcp_tool",
-          "mcp_server_id": "{{server_id}}",
-          "tool": "ledger_lookup",
-          "arguments": {
-            "account": "ACC-1001"
-          }
+        "binding_kind": "mcp_tool",
+        "mcp_server_id": "{{server_id}}",
+        "mcp_tool_name": "ledger_lookup",
+        "inputs": {
+          "account": "ACC-1001"
         }
       },
       "save": {
@@ -134,7 +132,7 @@
         "actor": "{{actor}}"
       },
       "save": {
-        "run_id": "run_id|workflow_run_id"
+        "run_id": "run.id"
       }
     },
     {
@@ -143,7 +141,7 @@
     },
     {
       "id": "done",
-      "call": "GET /v1/workflow-runs/{{run_id}}",
+      "call": "GET /v1/workflow-runs/{{run_id}}?project_id={{project_id}}",
       "until": {
         "path": "status",
         "in": [

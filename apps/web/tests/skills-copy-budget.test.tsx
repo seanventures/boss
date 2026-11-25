@@ -12,7 +12,7 @@ import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { overBudget } from "./_helpers/copy-budget";
-import { $, $$, cleanup, click, render } from "./_helpers/kit-render";
+import { $, $$, cleanup, click, render, type } from "./_helpers/kit-render";
 import { clone, installKitApi, KITS, SERVERS } from "./_helpers/kit-api";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }) }));
@@ -85,19 +85,29 @@ describe("the Skills & MCP copy budget", () => {
     clean(audit());
   });
 
-  it("the Library: skills, a new skill, internal shown; MCP and Import", async () => {
+  it("All skills, a new skill, internal shown; MCP servers with their menus; Add skill", async () => {
     installKitApi();
     window.history.replaceState(null, "", "/?area=skills&tab=library");
     await render(<KitHome projectId="p1" actor="ceo" />);
     await click('[data-testid="kit-lib-internal"]');
-    await click('[data-testid="kit-lib-new-skill"]');
+    await click('[data-testid="kit-add-skill-btn"]');
     clean(audit());
-    await click('[data-testid="kit-lib-mcp"]');
+    await click('[data-testid="kit-add-skill-write"]');
+    clean(audit());
+    await click('[data-testid="kit-mcp-more"]');
     await click('[data-testid="kit-lib-more"]');
+    await click('[data-testid="kit-mcp-remove-web-intel"]');
     clean(audit());
   });
 
-  it("Add MCP (both tabs), an MCP drawer, Test crew and Import", async () => {
+  it("the Rules view", async () => {
+    installKitApi();
+    window.history.replaceState(null, "", "/?area=skills&tab=rules");
+    await render(<KitHome projectId="p1" actor="ceo" />);
+    expect($('[data-testid="kit-rules"]')!.textContent).toContain("Tool rules");
+  });
+
+  it("Add MCP server (form, tested, browse), an MCP drawer, Test crew and Import", async () => {
     installKitApi();
     await render(<div>
       <AddMcpSheet projectId="p1" actor="ceo" onClose={() => {}} onAdded={() => {}} />
@@ -107,10 +117,15 @@ describe("the Skills & MCP copy budget", () => {
                      onOpenAbility={() => {}} />
       <ImportSheet projectId="p1" actor="ceo" onClose={() => {}} onImported={() => {}} />
     </div>);
-    await click('[data-testid="kit-cat-add-linear"]');
+    await click('[data-testid="kit-cat-linear"]');
     clean(audit());
-    await click('[data-testid="kit-add-custom"]');
+    await click('[data-testid="kit-cat-context7"]');
+    await click('[data-testid="kit-add-test"]');
+    clean(audit());
+    await type('[data-testid="kit-custom-url"]', "https://mcp.example.com/mcp");
     await click('[data-testid="kit-custom-auth-header"]');
+    clean(audit());
+    await type('[data-testid="kit-custom-url"]', "npx -y @acme/server");
     clean(audit());
   });
 });

@@ -834,3 +834,77 @@ def set_change(f: dict) -> dict:
 def _kind_of_hunk(f: dict, lines: Sequence[Mapping[str, Any]]) -> None:
     mine = [ln for ln in lines if ln["hunk_id"] == f["hunk_id"]]
     f["fix_kind"] = "auto" if mine and all(x["kind"] == "auto" for x in mine) else "agent"
+
+
+# ── the record, said on a pull request (BOSSAPP-1131 / 1171) ───────────────────────────────────
+
+#: Severities that block "checks must pass" (quality_bar: an open P0/P1 blocks the merge).
+BLOCKING = ("P0", "P1")
+#: Rows a report lists at most; the rest are counted, never dropped silently.
+REPORT_ROWS = 40
+
+
+def open_blocking(rec: Optional[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    """The findings still open at P0/P1 (a suppressed or fixed one is not)."""
+    return [f for f in (rec or {}).get("findings") or []
+            if isinstance(f, Mapping) and f.get("status") == "open"
+            and f.get("severity") in BLOCKING]
+
+
+def checks_passed(rec: Optional[Mapping[str, Any]]) -> bool:
+    """The record's verdict: no open P0/P1 and no error (a guard that refused the run)."""
+    return bool(rec) and not (rec or {}).get("error") and not open_blocking(rec)
+
+
+def _cell(value: Any) -> str:
+    return " ".join(str(value if value is not None else "").split()).replace("|", "\\|")[:160]
+
+
+def _status_words(f: Mapping[str, Any]) -> str:
+    status = str(f.get("status") or "open")
+    if status == "fixed":
+        return f"fixed ({f.get('fix_kind') or 'agent'})"
+    if status == "open" and (f.get("fix_kind") == "human" or f.get("held")
+                             or f.get("fixed_if_released")):
+        return "open: needs a person"
+    return status
+
+
+def report_markdown(rec: Optional[Mapping[str, Any]]) -> str:
+    """A ``boss.validation/v1`` record as a short PR comment: the verdict first, then one row per
+    finding (P0/P1 first, in bold). Only masked text from the record; never the file itself."""
+    if not rec:
+        return ""
+    findings = [f for f in rec.get("findings") or [] if isinstance(f, Mapping)]
+    blocking = open_blocking(rec)
+    fixed = sum(1 for f in findings if f.get("status") == "fixed")
+    file_ = (rec.get("input") or {}).get("file") or rec.get("target") or "the file"
+    checker = (rec.get("validator") or {}).get("id") or "the repository's checker"
+    if rec.get("error"):
+        head = f"**Not validated:** {_cell(rec.get('error'))}"
+    elif blocking:
+        head = (f"**{len(blocking)} blocking finding{'s' if len(blocking) != 1 else ''} "
+                f"(P0/P1) open**")
+    else:
+        head = "**Checks pass**"
+    lines = [f"### Validation of `{_cell(file_)}`", "",
+             f"{head} · {len(findings)} found by {_cell(checker)} · {fixed} fixed", ""]
+    if findings:
+        order = {level: n for n, level in enumerate(PLEVELS)}
+        rows = sorted(findings, key=lambda f: (f.get("status") != "open",
+                                               order.get(str(f.get("severity")), 9)))
+        lines += ["| ID | Level | Rule | Line | Finding | Status |",
+                  "|---|---|---|---|---|---|"]
+        for f in rows[:REPORT_ROWS]:
+            level = str(f.get("severity") or "")
+            loc = f.get("location") or {}
+            lines.append("| {id} | {lvl} | {rule} | {line} | {title} | {status} |".format(
+                id=_cell(f.get("id")),
+                lvl=f"**{level}**" if level in BLOCKING else _cell(level),
+                rule=_cell((f.get("source") or {}).get("rule_id")),
+                line=_cell(loc.get("partner_line") or loc.get("target_line") or ""),
+                title=_cell(mask(str(f.get("title") or ""))),
+                status=_cell(_status_words(f))))
+        if len(rows) > REPORT_ROWS:
+            lines.append(f"\n…and {len(rows) - REPORT_ROWS} more on the run's record.")
+    return "\n".join(lines).strip()

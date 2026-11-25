@@ -59,6 +59,9 @@ const OPS: Record<string, Op> = {
   build_database: { method: "PUT", path: () => "/v1/settings/build_services" },
   // "Build speed": the project setting build_speed (Owner/Admin).
   build_speed: { method: "PUT", path: () => "/v1/settings/build_speed" },
+  // Setup › Quality bar: the preset, and each gate's level (Advanced). Owner/Admin.
+  quality_bar: { method: "PUT", path: () => "/v1/settings/quality_bar" },
+  quality_bar_gates: { method: "PUT", path: () => "/v1/settings/quality_bar_gates" },
   // Setup › Embedding model (the org's): save (the key in the body, into the vault), check, remove.
   embedding_model: { method: "POST", path: () => "/v1/setup/embedding-model" },
   embedding_model_check: { method: "POST", path: () => "/v1/setup/embedding-model/check" },

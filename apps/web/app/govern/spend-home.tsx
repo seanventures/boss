@@ -19,6 +19,7 @@ import { usePolledRead } from "../../lib/log-stream";
 import { DailyBars } from "./cap-preview";
 import { LegacyHolds } from "./meter";
 import { ReconciliationCard } from "./reconciliation-card";
+import { ForecastCard } from "./forecast-card";
 
 export type SpendPeriod = "today" | "week" | "month";
 export const SPEND_PERIODS: { key: SpendPeriod; label: string }[] = [
@@ -242,6 +243,8 @@ export function SpendHome({ view, viewError, onRetry, projectId, paused, period,
               </span>
             ) : days.length ? <span className="gv-axis" data-testid="gv-days-axis" aria-hidden="true"><span>{shortDay(days[0].day)}</span></span> : null}
           </section>
+          {/* BOSSAPP-1295: this month for the org, a team or this project: forecast, cap, runs. */}
+          <ForecastCard projectId={projectId} />
           {/* BOSSAPP-864: estimated, reconciled to invoices, seat fees. */}
           <ReconciliationCard projectId={projectId} />
           <div className="gv-pair">

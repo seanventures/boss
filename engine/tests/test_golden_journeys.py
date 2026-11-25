@@ -244,13 +244,20 @@ def test_every_plan_journey_is_defined_and_the_mcp_journey_too():
     assert "J10" in ids
 
 
+def test_the_onboarding_chain_journey_runs_now_that_its_pr_merged():
+    """#329 is on main: J8 runs, as far as the journey account may take it (the merge card)."""
+    j8 = {j.id: j for j in d.load_all()}["J8"]
+    assert not j8.is_pending and "real" in j8.modes
+    assert any(i.path == "steps[step_id=merge].status" and i.value == "waiting" for i in j8.acceptance)
+
+
 def test_at_least_two_journeys_run_on_the_scripted_engine():
     assert len([j for j in d.load_all() if j.runnable_in("scripted")]) >= 2
 
 
 def test_every_journey_on_an_open_pr_is_pending_and_says_on_what():
     by_id = {j.id: j for j in d.load_all()}
-    for jid, waits in (("J2", "#330"), ("J8", "#329"), ("J9", "#330"), ("J10", "#331"),
+    for jid, waits in (("J2", "#330"), ("J9", "#330"), ("J10", "BOSSAPP-1479"),
                        ("J4", "1363")):
         assert by_id[jid].is_pending and waits in by_id[jid].pending["waits_for"], jid
 
