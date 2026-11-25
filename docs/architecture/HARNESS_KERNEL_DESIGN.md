@@ -32,7 +32,7 @@ The review found six tool loops, a chat brain that switches off Claude's native 
 
 
 > **Decisions (operator, 2026-11-10):**
-> - **D1:** subscription chat uses the unmodified `claude` program with BOSS tools over MCP (K8). Confirm the carve-out with Anthropic, and review `_seed_claude_login`.
+> - **D1:** subscription chat uses the unmodified `claude` program with BOSS tools over MCP (K8). Confirm the carve-out with Anthropic, including the model proxy attaching the subscription token (BOSSAPP-1480).
 > - **D2:** add the `anthropic` package (default taken).
 > - **D3:** builds move to the worker; the worker gets root + NET_ADMIN like `api`.
 > - **D4:** Claude/Codex coding on Delegate, every other engine Scaffold-heavy, until the benchmark decides.
@@ -555,7 +555,7 @@ What follows from this:
 2. **Direct Messages API calls with an OAuth token are out.** The API's auth page lists only API keys, Workload Identity Federation and App Attest.
 3. **The only native path on a subscription is the operator's own login in the unmodified `claude` binary,** which is what BOSS's coding and chat already shell out to. This design does not change *how* the credential is held.
 
-**Honest caveat.** BOSS today copies an OAuth access token into the sandbox HOME (`_seed_claude_login`, sandbox_identity.py:535), and its installer runs the login flow. Whether "BOSS, self-hosted by the subscriber, launching their signed-in CLI" falls inside the carve-out is **not documented**. That is decision D1: ask Anthropic, and in the meantime keep subscription use to the operator's own install, which is the community model today. This design does not make the exposure larger. It makes chat use the same mechanism coding already uses.
+**Honest caveat.** BOSS's model proxy attaches the subscription's OAuth token to the unmodified CLI's model calls (BOSSAPP-1480; before that the token was copied into the sandbox HOME), and its installer runs the login flow. Whether "BOSS, self-hosted by the subscriber, launching their signed-in CLI" falls inside the carve-out is **not documented**. That is decision D1: ask Anthropic, and in the meantime keep subscription use to the operator's own install, which is the community model today. This design does not make the exposure larger. It makes chat use the same mechanism coding already uses.
 
 **The `ClaudeChatSession` contract:**
 - **One process per chat turn**, with a **multi-turn conversation via `--resume <session_id>`**. The session id is stored on the thread. Multi-turn over stdin in one long-lived process is implied by the docs but not stated, so it is a spike and not a dependency.
@@ -1148,7 +1148,7 @@ Today `SIGNS` (L24-31) cannot see the coding family (inventory §1.2). The chang
 
 - **The risk.** Anthropic's policy language above. Native chat on subscriptions depends on the "unmodified binary, own subscription" carve-out. If Anthropic says BOSS's shape is not covered, **subscription installs lose model-backed chat and agent steps**, not just native chat, because the current text protocol uses the same credential the same way.
 - **Mitigation.** Ask now. Keep the API-key path first-class (K7 before K8). The scripted engine and OpenAI-compatible lanes keep working.
-- **Out of scope but noted.** `_seed_claude_login` copying the OAuth token into a sandbox HOME (sandbox_identity.py:535) is the piece most likely to read as "storing or intermediating" a session token. A review of that is recommended.
+- **Out of scope but noted.** Since BOSSAPP-1480 no OAuth token is copied into a sandbox HOME: the unmodified `claude` gets a run token and BOSS's loopback model proxy swaps it for the subscription's bearer on `/v1/messages` (`subscription_shield.py`, `model_proxy.py`). That swap is the piece most likely to read as "intermediating" a session token; it belongs in the D1 question.
 
 ### 9.2 Python 3.11 in the images
 
