@@ -7,7 +7,7 @@ from enum import StrEnum
 from .catalogue import AccessRoleMeta, PassportPreset, PermissionMeta, SystemPrincipalMeta
 
 CATALOGUE_VERSION = 1
-CATALOGUE_FINGERPRINT = "45b4bb5d229dba94"
+CATALOGUE_FINGERPRINT = "557ac2fd429b1402"
 
 
 class Permission(StrEnum):
@@ -96,6 +96,7 @@ class Permission(StrEnum):
     WORKFLOW_CREATE = "workflow:create"
     WORKFLOW_PUBLISH = "workflow:publish"
     WORKFLOW_INSTALL = "workflow:install"
+    WORKFLOW_SHARE = "workflow:share"
     WORKFLOW_DELETE = "workflow:delete"
     WORKFLOW_RUN_READ = "workflow_run:read"
     WORKFLOW_RUN_START = "workflow_run:start"
@@ -315,6 +316,7 @@ PERMISSION_META: dict[str, PermissionMeta] = {
     "workflow:create": PermissionMeta(key="workflow:create", title="Create workflows", description="Draft, save, fork and wire workflows and custom steps.", category="Workflows and work", roles=('owner', 'admin', 'operator'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
     "workflow:publish": PermissionMeta(key="workflow:publish", title="Publish workflows", description="Publish a workflow version so it can run.", category="Workflows and work", roles=('owner', 'admin', 'operator'), scope='project', step_up=True, delegable=False, critical=False, system_only=False, readonly_post=False),
     "workflow:install": PermissionMeta(key="workflow:install", title="Install workflows", description="Install a workflow from the catalogue.", category="Workflows and work", roles=('owner', 'admin', 'operator'), scope='project', step_up=False, delegable=False, critical=False, system_only=False, readonly_post=False),
+    "workflow:share": PermissionMeta(key="workflow:share", title="Share workflows to the org Library", description="Share one of a project's workflows to the org-wide Library, where every project in the org can add it; unshare it.", category="Workflows and work", roles=('owner', 'admin'), scope='org', step_up=False, delegable=False, critical=False, system_only=False, readonly_post=False),
     "workflow:delete": PermissionMeta(key="workflow:delete", title="Delete workflows", description="Delete a workflow definition.", category="Workflows and work", roles=('owner', 'admin'), scope='project', step_up=True, delegable=False, critical=False, system_only=False, readonly_post=False),
     "workflow_run:read": PermissionMeta(key="workflow_run:read", title="View workflow runs", description="See workflow runs, steps, reports and chains.", category="Workflows and work", roles=('owner', 'admin', 'operator', 'viewer', 'auditor'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
     "workflow_run:start": PermissionMeta(key="workflow_run:start", title="Start workflow runs", description="Start a workflow run.", category="Workflows and work", roles=('owner', 'admin', 'operator'), scope='project', step_up=False, delegable=True, critical=False, system_only=False, readonly_post=False),
@@ -462,7 +464,7 @@ ACCESS_ROLES: dict[str, AccessRoleMeta] = {
 
 #: Built-in role -> its permissions. Derived ONLY from each entry's `roles`.
 ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
-    "owner": frozenset({  # 205
+    "owner": frozenset({  # 206
         "directory:read",
         "user:read",
         "user:invite",
@@ -545,6 +547,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "workflow:create",
         "workflow:publish",
         "workflow:install",
+        "workflow:share",
         "workflow:delete",
         "workflow_run:read",
         "workflow_run:start",
@@ -669,7 +672,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "knowledge:manage",
         "knowledge:review",
     }),
-    "admin": frozenset({  # 196
+    "admin": frozenset({  # 197
         "directory:read",
         "user:read",
         "user:invite",
@@ -746,6 +749,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "workflow:create",
         "workflow:publish",
         "workflow:install",
+        "workflow:share",
         "workflow:delete",
         "workflow_run:read",
         "workflow_run:start",
