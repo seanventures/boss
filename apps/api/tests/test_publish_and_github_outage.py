@@ -28,6 +28,14 @@ if str(_GATE) not in sys.path:
 from remote import LocalGitHub  # noqa: E402  (tests/e2e/gate/remote.py)
 
 
+def _gh(token, api_base):
+    """A placeholder token, tagged with the (fake) GitHub it belongs to, as every real source
+    hands one out (BOSSAPP-1286)."""
+    from boss_engine.identity import github_urls
+
+    return github_urls.tag(token, api_base)
+
+
 @pytest.fixture(scope="module")
 def world(engine) -> IdentityWorld:
     return IdentityWorld.create(engine)
@@ -95,7 +103,7 @@ def _reach(hub: LocalGitHub, connection_id, *, token_kind="app"):
         adapter_for=lambda o, r: GitHubAdapter(settings, owner=o, repo=r, token=_tok(hub),
                                                api_base_url=hub.api_url),
         access_for=lambda o, r: GitAccess(hub.git_url(o, r), via="token"),
-        create_token="gate-token", create_token_kind=token_kind, api_base_url=hub.api_url,
+        create_token=_gh("gate-token", hub.api_url), create_token_kind=token_kind, api_base_url=hub.api_url,
         connection_id=connection_id)
 
 
@@ -241,7 +249,7 @@ def test_creating_a_repository_answers_in_words_for_each_case():
             return httpx.Response(201, json={"full_name": "acme/new", "html_url": "https://x/acme/new"})
         return httpx.Response(500)
 
-    out = create_repository(owner="acme", name="new", private=True, token="t",
+    out = create_repository(owner="acme", name="new", private=True, token=_gh("t", "http://gh"),
                             api_base_url="http://gh", client=_api(org))
     assert out.ok and out.created and made == [{"name": "new", "private": True, "auto_init": False,
                                                 "description": ""}]
@@ -251,7 +259,7 @@ def test_creating_a_repository_answers_in_words_for_each_case():
             return httpx.Response(200, json={"type": "User"})
         return httpx.Response(404, json={"message": "Not Found"})
 
-    out = create_repository(owner="me", name="new", token="t", api_base_url="http://gh",
+    out = create_repository(owner="me", name="new", token=_gh("t", "http://gh"), api_base_url="http://gh",
                             client=_api(personal))
     assert not out.ok and out.reason == "personal_account" and "personal" in out.words
 
@@ -262,14 +270,14 @@ def test_creating_a_repository_answers_in_words_for_each_case():
             return httpx.Response(403, json={"message": "Resource not accessible by integration"})
         return httpx.Response(404, json={"message": "Not Found"})
 
-    out = create_repository(owner="acme", name="new", token="t", api_base_url="http://gh",
+    out = create_repository(owner="acme", name="new", token=_gh("t", "http://gh"), api_base_url="http://gh",
                             client=_api(no_admin))
     assert not out.ok and out.reason == "no_admin_permission" and "Administration" in out.words
 
     def exists(request):
         return httpx.Response(200, json={"html_url": "https://x/acme/new", "private": True})
 
-    out = create_repository(owner="acme", name="new", token="t", api_base_url="http://gh",
+    out = create_repository(owner="acme", name="new", token=_gh("t", "http://gh"), api_base_url="http://gh",
                             client=_api(exists))
     assert out.ok and out.exists and not out.created
 
