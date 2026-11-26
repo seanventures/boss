@@ -1585,7 +1585,6 @@ if ! NO_PROXY="$(env_value BOSS_UPSTREAM_NO_PROXY)" boss_tls_diagnose "$(env_val
     die "Image builds cannot verify these downloads. Set BOSS_EXTRA_CA_FILE as shown above (or BOSS_TLS_PREFLIGHT=warn to try anyway)."
   fi
 fi
-ui_ok "Network: TLS to the package registries verifies"
 # Debian's mirror is plain http: it goes through a proxy only when BOSS_UPSTREAM_HTTP_PROXY
 # names one, so a proxy-only network passed the TLS check and then failed the build with
 # "Unable to locate package gcc" (BOSSAPP-1446).

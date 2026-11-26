@@ -378,3 +378,15 @@ def test_the_installer_checks_the_mirror_before_the_build():
     check = install.index('boss_apt_diagnose "$(env_value BOSS_UPSTREAM_HTTP_PROXY)" "$(env_value BOSS_UPSTREAM_PROXY)"')
     assert check < build
     assert "BOSS_APT_PREFLIGHT" in install
+
+
+def test_registry_success_summary_requires_every_tls_probe_to_verify(intercepting_server, tmp_path):
+    ca, port = intercepting_server
+    verified = "TLS to the package registries verifies"
+    ok = _diagnose(tmp_path, str(ca), f"localhost:{port}")
+    assert ok.returncode == 0 and verified in ok.stdout
+    partial = _diagnose(tmp_path, str(ca), f"localhost:{port}", "localhost:1")
+    assert partial.returncode == 0 and "not reachable" in partial.stdout
+    assert verified not in partial.stdout
+    # The caller must not turn an inconclusive probe into a green installer step.
+    assert verified not in (ROOT / "install.sh").read_text()
