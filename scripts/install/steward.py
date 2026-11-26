@@ -667,20 +667,20 @@ def verb_prune_build_cache(env: Env, args: dict, *, dry_run: bool, runner: Calla
 
 #: How long `boss rollback`'s images stay after a healthy upgrade (prune.sh, disk_budget; BOSSAPP-1459).
 ROLLBACK_KEEP_HOURS = 72.0
+ROLLBACK_LABEL = "boss.rollback_install_id"
+ROLLBACK_REPOS = {"boss-community-" + service for service in ("api", "worker", "mcp-tools", "egress", "web")}
+
+
+def _rollback_record(env: Env) -> dict[str, str]:
+    return env._read_dotenv(env.install_dir / ".boss-rollback")
+
 
 
 def rollback_expired(env: Env, runner: Callable, now: Optional[_dt.datetime] = None) -> bool:
     """The prev-<tag> rollback point is past its window: .boss-rollback was written more than
     BOSS_ROLLBACK_KEEP_HOURS ago, was not already dropped, and the API is healthy now (an
     unhealthy release keeps its way back)."""
-    record: dict[str, str] = {}
-    try:
-        for line in (env.install_dir / ".boss-rollback").read_text().splitlines():
-            k, sep, v = line.partition("=")
-            if sep and not k.startswith("#"):
-                record[k.strip()] = v.strip()
-    except OSError:
-        return False
+    record = _rollback_record(env)
     if record.get("BOSS_PREV_EXPIRED_AT") or record.get("BOSS_PREV_IMAGE_TAG") != f"prev-{env.image_tag}":
         return False
     try:
@@ -723,24 +723,48 @@ def verb_remove_images(env: Env, args: dict, *, dry_run: bool, runner: Callable)
             continue
         items.append(ref)
         size += _parse_size(row.get("Size") or "0")
+    # Build labels follow every alias of an image. Limit the rollback label to the
+    # specific old tag and repositories recorded by this install's upgrade.
+    record = _rollback_record(env) if expired else {}
+    recorded = {f"{repo}:{prev}" for repo in record.get("BOSS_PREV_IMAGES", "").split()
+                if repo in ROLLBACK_REPOS and record.get("BOSS_IMAGE_TAG") == env.image_tag}
+    rollback_items = set()
+    if recorded and env.install_id:
+        inventory = runner([*env.docker, "images", "--filter", f"label={ROLLBACK_LABEL}={env.install_id}",
+                            "--format", "{{json .}}"])
+        if inventory.returncode:
+            raise Refused("could not read the rollback image inventory")
+        for line in (inventory.stdout or "").splitlines():
+            row = json.loads(line)
+            ref = f"{row.get('Repository')}:{row.get('Tag')}"
+            if ref in recorded and ref not in in_use:
+                rollback_items.add(ref)
+                if ref not in items:
+                    items.append(ref)
+                    size += _parse_size(row.get("Size") or "0")
     if dry_run:
         return items, size
-    done, freed = [], 0.0
+    if not items:
+        return [], 0.0
+    before = docker_df(env, runner).get("images", 0.0)
+    done = []
     for ref in items:
-        # THE LABEL GATE, AGAIN, per item at the moment of removal.
-        if _inspect_label(env, runner, "image", ref) != env.install_id:
+        if ref in recorded and (_rollback_record(env) != record or not rollback_expired(env, runner)):
+            continue
+        label = ROLLBACK_LABEL if ref in rollback_items else LABEL
+        if _inspect_label(env, runner, "image", ref, label) != env.install_id:
             continue
         res = runner([*env.docker, "rmi", ref], timeout=300)
         if res.returncode == 0:
             done.append(ref)
-    if expired and any(r.endswith(f":{prev}") for r in done):
-        still = [r for r in items if r.endswith(f":{prev}") and runner(
-            [*env.docker, "image", "inspect", r]).returncode == 0]
-        if not still:            # only when every kept image is really gone
-            _mark_rollback_expired(env)
-    after = docker_df(env, runner)
-    freed = size if done else 0.0
-    return done, freed if after else freed
+    if recorded and any(ref in recorded for ref in done):
+        remaining = runner([*env.docker, "images", "--format", "{{.Repository}}:{{.Tag}}"])
+        if remaining.returncode == 0 and not recorded.intersection((remaining.stdout or "").splitlines()):
+            if _rollback_record(env) == record:
+                _mark_rollback_expired(env)
+    # Removing a tag can release zero bytes when another alias or layer still uses the image.
+    after = docker_df(env, runner).get("images", 0.0) if done else 0.0
+    return done, max(0.0, before - after) if after > 0 else 0.0
 
 
 def verb_remove_orphan_volumes(env: Env, args: dict, *, dry_run: bool, runner: Callable) -> tuple[list[str], float]:
