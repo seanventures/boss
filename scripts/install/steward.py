@@ -36,6 +36,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import runpy
 import time
 import urllib.error
 import urllib.request
@@ -496,6 +497,19 @@ def collect(env: Env, runner: Callable = run_cmd) -> dict[str, Any]:
                          # until they are relabelled. `volumes` above is every volume on the disk.
                          "volumes_reclaimable": gb(reclaimable),
                          "volumes_needs_relabel_n": float(len(relabel))}
+    # The budget prices the layers of this release and its rollback set. The whole
+    # daemon footprint above is still used by host pressure and cleanup decisions.
+    budget_module = Path(__file__).resolve().parents[2] / "engine/boss_engine/services/disk_budget.py"
+    if budget_module.is_file():
+        budget = runpy.run_path(str(budget_module))
+        for key, value in budget["measure_docker"](env.docker, project=env.compose_project,
+                                                   tag=env.image_tag, run=runner).items():
+            if value is not None:
+                sample["by_type"][f"budget_{key}"] = value
+        age = budget["rollback_age_hours"](env.install_dir)
+        if age is not None:
+            sample["by_type"]["rollback_age_hours"] = age
+            sample["by_type"]["rollback_keep_hours"] = budget["rollback_keep_hours"](env.dotenv)
     return sample
 
 

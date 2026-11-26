@@ -281,6 +281,8 @@ def measure_images(docker: Sequence[str], *, tag: str, run: Runner = _run) -> di
     for the current release when any current (or running) image holds it, else for the rollback
     set. Docker's own list counts a shared layer once per image (the "~30 GB" of the report)."""
     res = run([*docker, "images", "--format", "{{json .}}"])
+    if res.returncode != 0:
+        return {}
     rows = [r for r in _json_lines(res.stdout) if isinstance(r, dict)]
     current, rollback = [], []
     for r in rows:
@@ -447,8 +449,10 @@ def _lines(report: Mapping[str, Any]) -> list[str]:
     for r in report["rows"]:
         if r["level"] in ("near", "over"):
             out.append(f"warn disk: {r['what']} {r['action']}")
-        elif r["level"] == "unknown":
-            continue
+        elif r["gb"] is None:
+            out.append(f"note disk: {r['label']}: measurement unavailable")
+        else:
+            out.append(f"ok disk: {r['label']}: {r['gb']:g} GB / {r['budget_gb']:g} GB")
     measured = [r for r in report["rows"] if r["gb"] is not None]
     if measured:
         biggest = sorted(measured, key=lambda r: -(r["gb"] or 0))[:4]

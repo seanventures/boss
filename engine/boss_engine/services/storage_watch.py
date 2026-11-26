@@ -496,8 +496,13 @@ def budget(connection: Any, sample: Mapping[str, Any]) -> dict[str, Any]:
     except Exception:  # noqa: BLE001
         app_backups = None
     host_backups = _f(sample.get("backups_gb")) if sample.get("source") == "steward" else None
+    host = sample.get("by_type") or {}
     measured: dict[str, Optional[float]] = {
-        "images": _f(sample.get("images_gb")),
+        # Older helpers only know total Docker image size. It cannot price this release.
+        "images": _f(host.get("budget_images")),
+        "rollback_images": _f(host.get("budget_rollback_images")),
+        "volumes_other": _f(host.get("budget_volumes_other")),
+        "dangling_volumes": _f(host.get("budget_dangling_volumes")),
         "build_cache": _f(sample.get("cache_gb")),
         "logs": _f(sample.get("logs_gb")),
         "db_records": db["db_records"], "db_knowledge": db["db_knowledge"],
@@ -507,7 +512,12 @@ def budget(connection: Any, sample: Mapping[str, Any]) -> dict[str, Any]:
         "sandboxes": _sandboxes_gb(),
     }
     test_server = test_server_present()
-    rows = disk_budget.evaluate(measured, test_server=test_server)
+    tv = _f(host.get("budget_test_volumes"))
+    if tv is not None:
+        measured["test_data"] = (measured["test_data"] or 0.0) + tv
+    rows = disk_budget.evaluate(measured, test_server=test_server,
+                                rollback_age_hours=_f(host.get("rollback_age_hours")),
+                                keep_hours=_f(host.get("rollback_keep_hours")) or disk_budget.ROLLBACK_KEEP_HOURS_DEFAULT)
     return {"rows": rows, "total": disk_budget.total(rows), "test_server": test_server,
             "warn_at_pct": round(100 * disk_budget.WARN_AT)}
 

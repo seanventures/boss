@@ -104,6 +104,14 @@ def test_a_category_warns_at_eighty_percent_and_unmeasured_is_unknown():
     assert problems(what=rows["images"]["what"], action=rows["images"]["action"]) == []
 
 
+def test_doctor_lists_each_healthy_budget_and_does_not_price_an_unavailable_measurement():
+    rows = dbu.evaluate({"images": 6.5, "rollback_images": 6.8, "backups": 0})
+    lines = dbu._lines({"rows": rows, "total": dbu.total(rows)})
+    assert any("Rollback images: 6.8 GB" in line for line in lines)
+    assert any("Backups: 0 GB" in line for line in lines)
+    assert any("Test databases: measurement unavailable" in line for line in lines)
+
+
 def test_rollback_images_past_their_window_are_over_whatever_their_size():
     rows = {r["key"]: r for r in dbu.evaluate({"rollback_images": 2.0}, rollback_age_hours=100)}
     assert rows["rollback_images"]["level"] == "over"
