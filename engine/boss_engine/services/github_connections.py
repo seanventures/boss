@@ -1167,9 +1167,13 @@ class GitHubConnectionService:
             return value
         kind, name = _ref_origin(ref)
         if kind == "env":
-            from .env_refs import assert_may_send
+            from .env_refs import assert_may_send, binding_for
 
-            assert_may_send(name, github_urls.api_base(conn_base))
+            # A GitHub-bound host credential is judged here, by name, before any re-tag (rc6
+            # N-1); any other allowlisted env name keeps the process-wide outbound guard's rule.
+            binding = binding_for(name)
+            if binding is not None and binding.provider == "github":
+                assert_may_send(name, github_urls.api_base(conn_base))
             return github_urls.tag(value, "")
         return github_urls.tag(value, conn_base)
 
