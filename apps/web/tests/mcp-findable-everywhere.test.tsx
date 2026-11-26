@@ -17,6 +17,7 @@ import { clone, installKitApi, KITS, SERVERS } from "./_helpers/kit-api";
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }) }));
 const { LoadoutGrants } = await import("../app/skills/agent-abilities");
 const { AgentBotWizard } = await import("../app/agents/create-wizard");
+const { AgentQuickCreate } = await import("../app/agent-quick-create");
 const { ScopePicker } = await import("../app/workflows/editor/inspector/scope-picker");
 const { addCommandsFor, addHref } = await import("../app/skills/kit-url");
 
@@ -71,6 +72,39 @@ describe("Add MCP server in at most two clicks", () => {
     expect($('[data-testid="agent-bot-wizard"]')).not.toBeNull();
   });
 
+  it("New agent (the dialog Agent Studio's New agent opens): one click under MCP; the new server is ticked", async () => {
+    const many = { ...GRANTABLE, skills: Array.from({ length: 10 }, (_, i) => ({
+      skill_id: `s.${i}`, label: `S ${i}`, summary: "", risk_tier: 0, enabled: true })) };
+    const calls = installKitApi(clone(KITS.fresh), (url, body) =>
+      url.includes("/v1/agents/grantable") ? many
+        : body?.action === "test" ? { ok: true, tools: [{ name: "t" }], latency_ms: 1 }
+        : body?.action === "register" ? { ...SERVERS[0], id: "mcp_2", name: "two" } : undefined);
+    await render(<AgentQuickCreate projectId="p1" actor="ceo" onClose={() => {}} onCreated={() => {}} />);
+    // THE CONSOLE'S OWN CONTROLS: the search field with its icon, styled checkboxes, an icon close.
+    const filter = $('[data-testid="aq-skill-filter"]')!;
+    expect(filter.closest(".wf-lib-search")!.querySelector("svg")).not.toBeNull();
+    expect($('[data-testid="aq-skill-s.0"]')!.classList.contains("aq-check")).toBe(true);
+    expect($('[data-testid="aq-close"]')!.querySelector("svg")).not.toBeNull();
+    expect($('[data-testid="aq-close"]')!.textContent).toBe("");
+    const add = $('[data-testid="aq-add-mcp"]')!;
+    expect(add.classList.contains("wf-btn")).toBe(true);
+    expect(add.querySelector("svg")).not.toBeNull();
+    await click('[data-testid="aq-add-mcp"]');                // 1
+    expect($('[data-testid="kit-add-mcp"]')).not.toBeNull();
+    expect($('[data-testid="kit-add-agents"]')).toBeNull();
+    await type('[data-testid="kit-custom-url"]', "https://mcp.two.example.com/mcp");
+    await click('[data-testid="kit-add-test"]');
+    await click('[data-testid="kit-add-save"]');
+    expect(calls.some((c) => c.body?.action === "grant")).toBe(false);
+    expect(calls.some((c) => c.body?.action === "register")).toBe(true);
+    expect($('[data-testid="kit-add-mcp"]')).toBeNull();
+    expect($('[data-testid="agent-quick-create"]')).not.toBeNull();
+    // Ticked: the GitHub row the grantable list carries is unticked, the new one is counted.
+    expect($('[data-testid="aq-mcp-mcp_1"]')).not.toBeNull();
+    expect(($('[data-testid="aq-mcp-mcp_1"]') as HTMLInputElement).checked).toBe(false);
+    expect($('[data-testid="aq-mcp"]')!.closest("fieldset")!.querySelector("legend")!.textContent).toContain("· 1");
+  });
+
   it("the workflow step editor: + MCP › Add MCP server, the step's agent pre-chosen, the server scoped", async () => {
     const change = vi.fn();
     const added = vi.fn();
@@ -114,7 +148,7 @@ describe("Add MCP server in at most two clicks", () => {
 
   it("every place opens the one sheet: no second form", () => {
     for (const f of ["app/skills/kit-home.tsx", "app/skills/agent-abilities.tsx", "app/agents/create-wizard.tsx",
-                     "app/workflows/editor/inspector/scope-picker.tsx"]) {
+                     "app/agent-quick-create.tsx", "app/workflows/editor/inspector/scope-picker.tsx"]) {
       expect(codeOnly(f), f).toContain("<AddMcpSheet");
     }
     // Only the sheet tests a typed server.

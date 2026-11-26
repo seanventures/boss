@@ -61,7 +61,7 @@ const LEGACY: Record<string, number> = {
   "app/command-center/returning-brief.module.css": 3,
   "app/design-system.css": 169,
   "app/factory/security/security.css": 37,
-  "app/globals.css": 698,
+  "app/globals.css": 697,
   "app/govern/govern.css": 63,
   "app/identity/identity-account.css": 5,
   "app/identity/identity-agents.css": 13,
