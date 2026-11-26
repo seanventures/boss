@@ -8,6 +8,8 @@
  */
 import React, { useEffect, useState } from "react";
 
+import { Plus, Wrench } from "@phosphor-icons/react";
+
 import { GatedButton } from "../../components/gated";
 import { mcpApi, type Connector, type ConnectorCatalog } from "../../lib/kit-api";
 import { showToast } from "../client-forms";
@@ -70,7 +72,9 @@ export function ConnectorsTab({ projectId, actor, onPick }: {
               <h4 className="kit-card-label" data-tip={c.description}>{c.name}</h4>
               <span className="kit-chip" data-tip={c.risk_notes}>Tier {c.default_tier}</span>
             </div>
-            <div className="kit-card-row">
+            {/* THE ACTION WRAPS UNDER THE CHIPS when the card is narrow (three columns at 1440 and
+                1024): "Create template" ran past the card's edge and was cut off. */}
+            <div className="kit-card-row kit-cat-acts">
               <span className="kit-chip" data-tip={c.transport === "stdio" ? "Runs in its own sandboxed container" : "Reached over HTTP"}>
                 {c.transport === "stdio" ? "Local (stdio)" : "Remote"}</span>
               <span className="kit-chip" data-tip={c.auth_kind === "oauth" && c.prefill.oauth?.token_fallback
@@ -79,10 +83,11 @@ export function ConnectorsTab({ projectId, actor, onPick }: {
               {c.added ? <span className="kit-faint">Added</span> : c.transport === "stdio" && !c.template_ready ? (
                 <GatedButton permission="host:exec" type="button" className="kit-btn kit-btn-sm" disabled={busy === c.key}
                              data-testid={`kit-connector-template-${c.key}`} data-tip="Runs a command on BOSS's host: Owner or Admin"
-                             onClick={() => void createTemplate(c)}>{busy === c.key ? "Creating…" : "Create template"}</GatedButton>
+                             onClick={() => void createTemplate(c)}>
+                  <Wrench size={12} aria-hidden />{busy === c.key ? "Creating…" : "Create template"}</GatedButton>
               ) : (
                 <button type="button" className="kit-btn kit-btn-sm kit-btn-primary" data-testid={`kit-connector-use-${c.key}`}
-                        onClick={() => onPick(c)}>Use</button>
+                        onClick={() => onPick(c)}><Plus size={12} aria-hidden />Use</button>
               )}
             </div>
           </article>

@@ -6,6 +6,8 @@
  * once and revokes by id.
  */
 import React from "react";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { $, cleanup, click, render, type } from "./_helpers/kit-render";
@@ -98,6 +100,12 @@ describe("Add MCP server › Browse all", () => {
     await click('[data-testid="kit-add-browse"]');
     await new Promise((r) => setTimeout(r, 200));
     expect($('[data-testid="kit-connector-use-postgres"]')).toBeNull();
+    // An icon button on a row that wraps, so a narrow card never cuts it off (walk of rc10.36).
+    const make = $('[data-testid="kit-connector-template-postgres"]')!;
+    expect(make.querySelector("svg")).not.toBeNull();
+    expect(make.closest(".kit-card-row")!.classList.contains("kit-cat-acts")).toBe(true);
+    const css = readFileSync(join(__dirname, "../app/skills/kit.css"), "utf8");
+    expect(css).toMatch(/\.kit-cat-acts \{[^}]*flex-wrap: wrap/);
     await click('[data-testid="kit-connector-template-postgres"]');
     expect(calls.find((c) => c.body?.action === "stdio_template_create")!.body!.template)
       .toMatchObject({ name: "postgres", env_from_auth: "DATABASE_URI", network: "bridge" });
