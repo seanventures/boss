@@ -210,6 +210,21 @@ def build_plan(connection: Any, incident: Mapping[str, Any], sample: Mapping[str
     return steps
 
 
+def request_safe_cleanup(connection: Any, incident_id: str, sample: Mapping[str, Any]) -> None:
+    """Start a fresh tier-one dry run on explicit request. A second click joins live work."""
+    incident, previous = _plan(connection, incident_id)
+    if not incident or incident["status"] == "resolved":
+        return
+    if any(step["state"] not in TERMINAL for step in previous):
+        return
+    # Preserve higher-tier decisions and refusals. Receipts for earlier attempts remain in
+    # storage_actions; each fresh host operation obtains its own inventory and plan hash.
+    retained = [s for s in previous if s["tier"] != 1 or s["state"] == "refused"]
+    protected = {s["tool"] for s in retained}
+    fresh = build_plan(connection, incident, sample, max_tier=1)
+    _save_plan(connection, incident_id, [s for s in fresh if s["tool"] not in protected] + retained)
+
+
 def dry_run_matches(step: Mapping[str, Any], items: Sequence[str], host_id: str) -> bool:
     return bool(step.get("plan_hash")) and plan_hash(str(step["tool"]), host_id, step.get("args") or {},
                                                        items) == step["plan_hash"]

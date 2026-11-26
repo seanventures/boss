@@ -207,25 +207,19 @@ def clean_now(request: Request, payload: Optional[CleanBody] = None) -> dict[str
 
             inc_id = make_id("si")
             free_now = storage_watch.free_pct_of(sample)
-            connection.execute(text("""
+            incident_id = connection.execute(text("""
                 INSERT INTO storage_incidents (id, host_id, host_label, status, severity, opened_at,
                        cause_key, cause_text, free_pct_start, free_pct_now, target_pct, project_id)
                 VALUES (:id, :h, :hl, 'warn', 'warn', :now, 'operator.clean_now',
-                        'Cleanup asked for from the console.', :fp, :fp, :t, :p)"""),
+                        'Cleanup asked for from the console.', :fp, :fp, :t, :p)
+                ON CONFLICT (host_id) WHERE status <> 'resolved' DO UPDATE SET host_id = EXCLUDED.host_id
+                RETURNING id"""),
                 {"id": inc_id, "h": host_id, "hl": sample.get("host_label"),
                  "now": datetime.now(timezone.utc), "fp": free_now, "t": th["target_free_pct"],
-                 "p": storage_incidents.default_project(connection)})
-            inc = storage_incidents.get(connection, inc_id)
-        plan = storage_cleanup.build_plan(connection, inc, sample, max_tier=1,
-                                          keep=(inc.get("plan") or []))
-        from sqlalchemy import text as _text
-
-        import json as _json
-
-        connection.execute(_text("UPDATE storage_incidents SET plan = CAST(:p AS JSONB) WHERE id = :id"),
-                           {"p": _json.dumps(plan, default=str), "id": inc["id"]})
-        storage_incidents.refresh_flow(connection, inc["id"])
-        incident_id = inc["id"]
+                 "p": storage_incidents.default_project(connection)}).scalar_one()
+        else:
+            incident_id = inc["id"]
+        storage_cleanup.request_safe_cleanup(connection, incident_id, sample)
     if not body.dry_run:
         storage_cleanup.advance(engine, incident_id, actor=_actor(request, body.actor))
     with begin(engine) as connection:
