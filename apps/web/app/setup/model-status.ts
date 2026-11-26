@@ -8,6 +8,7 @@
  * proves it without signing anything out; Sign in (which replaces the login) is never the
  * default while the CLI says it is signed in.
  */
+import { localWith } from "../../lib/hydration-state";
 import type { Detected, ModelEntry, Pill, SetupView } from "../../lib/setup-types";
 
 /** States whose last proof refused the login or key. */
@@ -71,6 +72,12 @@ const NEEDS: Record<string, string> = {
 };
 export function needsSentence(pill: Pill): string {
   if (pill.state === "no_credit") return "Top up at the provider.";
+  // A PLAN LIMIT IS NOT AN ERROR: it reopens by itself, and the pill's `at` says when (the
+  // viewer's clock). The provider's own sentence rides in the tooltip (the pill's tip).
+  if (pill.state === "rate_limited") {
+    const when = pill.at ? localWith(pill.at, { weekday: "short", hour: "numeric", minute: "2-digit" }) : "";
+    return when ? `Limit resets ${when}.` : "Plan limit reached.";
+  }
   if (pill.action === "fix_link") return "Fix it at the provider.";
   return NEEDS[pill.action ?? ""] ?? "Not usable yet.";
 }

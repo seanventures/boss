@@ -64,6 +64,8 @@ export type ModelEntry = {
    *  a failing one backs off), and why then. Re-check always proves now. */
   next_check_at?: string | null;
   next_check_why?: string | null;
+  /** What the provider said at the last check that did not work (short, redacted). */
+  reason?: string | null;
   /** Where a key or local model points (no userinfo): Replace keeps it. */
   base_url?: string | null;
   /** The org's connection (every project holds it) or one this project made itself. */

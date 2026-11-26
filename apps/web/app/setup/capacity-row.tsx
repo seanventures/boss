@@ -600,6 +600,7 @@ function SourceRow({ item, sessions, onBoard, formOpen, onForm, actions }: {
           {entry?.used_for.length ? <><dt>Used for</dt><dd>{entry.used_for.join(", ")}</dd></> : null}
           {said?.billing ? <><dt>Billing</dt><dd>{said.billing}</dd></> : null}
           {entry?.checked_at ? <><dt>Checked</dt><dd>{ageLabel(entry.checked_at)} ago</dd></> : null}
+          {entry?.reason ? <><dt>Said</dt><dd data-user-text data-testid="su-model-reason">{entry.reason}</dd></> : null}
           {entry?.next_check_at ? <><dt>Next check</dt><dd>
             <Tip tip={entry.next_check_why ?? "BOSS proves this connection again then; Re-check tries now."}>
               {lt.full(entry.next_check_at)}
