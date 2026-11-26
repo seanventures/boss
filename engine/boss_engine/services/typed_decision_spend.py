@@ -183,6 +183,14 @@ def capacity_after_failure(error: BaseException) -> dict:
     only Claude subscription out of routing until something marked it available again.
     """
     text_ = str(error).lower()
+    # THE ONE LIMIT DETECTOR (model_router.headroom): a per-minute rate limit is rate_limited;
+    # a closed plan window ("You've hit your weekly limit · resets …", which the keyword list
+    # below read as "available") or a spend/credit limit takes the source out until it reopens.
+    from .model_router.headroom import MINUTE, windows_from_limit_message
+
+    windows = windows_from_limit_message(str(error))
+    if windows:
+        return {"capacity_state": "rate_limited" if set(windows) == {MINUTE} else "unavailable"}
     if any(term in text_ for term in ("rate limit", "rate_limit", " 429", "too many requests")):
         return {"capacity_state": "rate_limited"}
     if any(term in text_ for term in ("quota", "usage limit", "limit reached", "overloaded",

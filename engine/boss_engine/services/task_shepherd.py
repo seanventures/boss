@@ -181,7 +181,19 @@ def classify(error: Optional[str], *, gates_failed: Optional[list[str]] = None,
     for cls, phrases in _SIGNATURES:
         if any(p in text for p in phrases):
             return cls
+        if cls == SPEND_CAP and _is_limit_message(text):
+            # Claude's own wording ("You've hit your weekly limit · resets …") has none of the
+            # phrases above; the one limit detector (model_router.headroom) knows every form.
+            return cls
     return UNKNOWN
+
+
+def _is_limit_message(text: str) -> bool:
+    """A plan or spend limit sentence. A bare "429" is left to the phrases above: in a
+    shepherd's text it can as well be a line number."""
+    from .model_router.headroom import windows_from_limit_message
+
+    return any(w.get("source") == "limit" for w in windows_from_limit_message(text).values())
 
 
 # --------------------------------------------------------------------------- #

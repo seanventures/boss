@@ -950,6 +950,17 @@ _NOT_SERVED = re.compile(
     r"not logged in|invalid api key|authentication", re.I)
 
 
+def _not_served(said: str) -> bool:
+    """The provider said it served nothing: a rejected login, or ANY limit sentence the one
+    limit detector (model_router.headroom) knows — "5-hour limit reached", "Opus weekly limit
+    reached", "usage limit reached|<epoch>" that the pattern above alone does not."""
+    if _NOT_SERVED.search(said):
+        return True
+    from .model_router.headroom import is_limit_message
+
+    return is_limit_message(said)
+
+
 def agent_settle(c, settings, project_id: str, receipt_id: str, *, actor: str) -> dict:
     """BOSS's agent settles a held proof itself (failure_owner, the org default that agents fix
     failures with the starter's authority): when the provider's own words say it served nothing
@@ -974,7 +985,7 @@ def agent_settle(c, settings, project_id: str, receipt_id: str, *, actor: str) -
               or (isinstance(status, int) and 200 <= status < 300)
               or "replied ok" in str(outcome.get("summary") or "").lower())
     if outcome.get("kind") == "unknown" and not served \
-            and _NOT_SERVED.search(str(outcome.get("provider_error") or "")):
+            and _not_served(str(outcome.get("provider_error") or "")):
         prior = _result_of(dict(rows[0]))
         outcome.update(kind="refused", summary=describe_outcome({**outcome, "kind": "refused"},
                                                                 fact["provider_label"]))

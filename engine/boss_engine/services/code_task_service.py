@@ -3166,6 +3166,12 @@ def person_side_reason(reason: str) -> Optional[str]:
     return _person_side(str(reason or "").lower())
 
 
+def _is_limit_message(reason: str) -> bool:
+    from .model_router.headroom import is_limit_message
+
+    return is_limit_message(reason)
+
+
 def classify_pipeline_exception(reason: str) -> tuple[str, str]:
     """Map a pipeline exception onto the failure taxonomy. Most unexpected exceptions ARE infra
     (platform's fault) — but an agent that exhausted its turn cap is a RECOVERABLE task-shaped
@@ -3211,7 +3217,9 @@ def classify_pipeline_exception(reason: str) -> tuple[str, str]:
             "overloaded",
             "throttl",
         )
-    ):
+    ) or _is_limit_message(r):
+        # The keywords above miss Claude's own wording ("You've hit your weekly limit",
+        # "5-hour limit reached"); the one limit detector (model_router.headroom) knows it.
         return "needs_human", "model_rate_limit"
     if any(
         sig in r

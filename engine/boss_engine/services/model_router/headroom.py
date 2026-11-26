@@ -206,7 +206,7 @@ def windows_from_rate_limit_event(event: Mapping[str, Any]) -> dict[str, dict[st
 
 _ZONE = r"(?:\s*\((?P<tz>[A-Za-z_]+(?:/[A-Za-z_+\-]+)*|UTC|GMT)\))?"
 _RESET = (r"(?:[^\n]*?(?:resets?|reset at|will reset at|try again (?:at|after))\s+"
-          r"(?P<when>[^\n(·∙|]+?)" + _ZONE + r"\s*(?:$|[\n·∙.|]))?")
+          r"(?P<when>[^\n(·∙|]+?)" + _ZONE + r"\s*(?:$|[\n·∙.|)]))?")
 _WINDOW_WORDS = {
     "session": SESSION, "5-hour": SESSION, "five-hour": SESSION, "5 hour": SESSION,
     "weekly": WEEKLY, "opus": "seven_day_opus", "opus weekly": "seven_day_opus",
@@ -319,10 +319,15 @@ def windows_from_limit_message(text: Optional[str], now: Optional[datetime] = No
     out: dict[str, dict[str, Any]] = {}
 
     def close(kind: str, resets: Optional[datetime], source: str = "limit") -> None:
+        # `reset_known`: the provider SAID when it reopens; else the reset is the window's span
+        # from now, an estimate the router may plan with but a person must never be shown.
+        known = resets is not None
+        if not known and out.get(kind, {}).get("reset_known"):
+            return                       # the same limit said twice: keep the reset it named
         if resets is None:
             resets = now + WINDOW_SPAN.get(kind, timedelta(hours=5))
         out[kind] = {"used": 1.0, "resets_at": resets.isoformat(), "status": "rejected",
-                     "source": source}
+                     "source": source, "reset_known": known}
 
     for pattern in _LIMIT_PATTERNS:
         for match in pattern.finditer(body):
@@ -347,9 +352,46 @@ def windows_from_limit_message(text: Optional[str], now: Optional[datetime] = No
     if not out and _RATE.search(body):
         # A per-minute rate limit (429, "Rate limit reached for gpt-4o … try again in 20s"): a
         # short window — the provider is fine, this minute is spent.
-        seconds = retry_after_seconds(body) or 60.0
-        close(MINUTE, now + timedelta(seconds=min(max(seconds, 1.0), 3600.0)), "rate")
+        seconds = retry_after_seconds(body)
+        close(MINUTE, now + timedelta(seconds=min(max(seconds or 60.0, 1.0), 3600.0)), "rate")
+        out[MINUTE]["reset_known"] = seconds is not None
     return out
+
+
+#: The Setup pill states a limit can mean. A monthly spend or credit limit is lifted by a
+#: person (top up, raise the cap), never by a clock: Out of credit. Every other window — the
+#: session, the week, one model family, this minute — reopens by itself: Limited · <reset>.
+NO_CREDIT, RATE_LIMITED = "no_credit", "rate_limited"
+
+
+@dataclass(frozen=True)
+class LimitVerdict:
+    state: str                           # no_credit | rate_limited
+    windows: tuple[str, ...]
+    #: When the provider said it reopens (the earliest such window); None when it did not say.
+    retry_at: Optional[datetime] = None
+
+
+def limit_verdict(text: Optional[str], now: Optional[datetime] = None
+                  ) -> Optional[LimitVerdict]:
+    """THE ONE LIMIT DETECTOR for every keyword check outside the router (Setup's model check,
+    a failed decision call, a settled proof, a build's failure class): the provider's own
+    sentence → Out of credit or Limited, with the reset it named. None for anything that is not
+    a capacity limit. test_one_limit_detector.py feeds every corpus sentence through both this
+    and windows_from_limit_message, so the two cannot drift apart."""
+    windows = windows_from_limit_message(text, now)
+    if not windows:
+        return None
+    if MONTHLY in windows:
+        return LimitVerdict(NO_CREDIT, tuple(sorted(windows)))
+    said = [_utc(w["resets_at"]) for w in windows.values() if w.get("reset_known")]
+    said = [when for when in said if when is not None]
+    return LimitVerdict(RATE_LIMITED, tuple(sorted(windows)), min(said) if said else None)
+
+
+def is_limit_message(text: Optional[str]) -> bool:
+    """Is this the provider saying a usage, rate, spend or credit limit was hit?"""
+    return bool(windows_from_limit_message(text))
 
 
 # ── The verdict ────────────────────────────────────────────────────────────────────────────────
