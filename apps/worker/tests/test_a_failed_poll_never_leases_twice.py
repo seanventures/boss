@@ -54,3 +54,34 @@ def test_the_wait_never_exceeds_the_poll_interval_or_the_api_ceiling():
                                                poll_interval_seconds=60)) == 25000
     assert runner.poll_wait_ms(SimpleNamespace(long_poll=False, long_poll_wait_ms=5000,
                                                poll_interval_seconds=15)) == 0
+
+
+def test_extra_slot_waits_after_a_failed_cycle_then_resumes(monkeypatch):
+    from apps.worker.boss_worker import main
+    import httpx
+
+    settings = _settings(control_plane_url="http://qa.invalid", api_key=None)
+    settings.model_copy = lambda update: SimpleNamespace(**{**vars(settings), **update})
+    client = SimpleNamespace(long_polled=True, close=lambda: None)
+    monkeypatch.setattr(main, "ControlPlaneClient", lambda *args, **kwargs: client)
+    monkeypatch.setattr(main, "worker_slots", lambda *args: 2)
+    monkeypatch.setattr(main, "SLOTS_RECHECK_SECONDS", 0)
+    monkeypatch.setattr(main, "_SLOTS", {"total": 2})
+    monkeypatch.setattr(main, "_STOPPING", False)
+    calls = []
+    waits = []
+
+    def cycle(_client, _settings):
+        calls.append(_settings.worker_id)
+        if len(calls) == 1:
+            raise httpx.ConnectError("API unavailable")
+        if len(calls) == 3:
+            main._STOPPING = True
+            return True
+        return False  # A successful long poll already waited.
+
+    monkeypatch.setattr(main, "run_worker_cycle", cycle)
+    monkeypatch.setattr(main, "idle_wait", waits.append)
+    main._extra_lease_loop(settings, 1)
+    assert calls == ["w-s1"] * 3
+    assert waits == [15, 0]
