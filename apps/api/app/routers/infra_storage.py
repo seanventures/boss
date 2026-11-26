@@ -196,7 +196,7 @@ def clean_now(request: Request, payload: Optional[CleanBody] = None) -> dict[str
     with begin(engine) as connection:
         host_id = body.host_id or (storage_watch.hosts(connection) or [storage_watch.local_host_id()])[0]
         inc = storage_incidents.current_for_host(connection, host_id)
-        sample = storage_watch.latest(connection, host_id) or {"host_id": host_id}
+        sample = storage_watch.host_disk_sample(connection, host_id) or {"host_id": host_id}
         th = storage_rules.thresholds(connection, host_id)
         if inc is None:
             from datetime import datetime, timezone

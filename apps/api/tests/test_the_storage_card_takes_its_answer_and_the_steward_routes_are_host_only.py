@@ -109,11 +109,11 @@ def test_the_owner_token_is_refused_on_the_steward_routes(client):
 
 def test_offline_host_keeps_its_disk_reading_after_many_container_samples(engine):
     from datetime import datetime, timedelta, timezone
-    from boss_engine.services import storage_watch
+    from boss_engine.services import storage_cleanup, storage_watch
 
     host = f"qa-outage-{uuid4().hex[:8]}"
     now = datetime.now(timezone.utc)
-    with engine.begin() as c:
+    with engine.connect() as c:
         def record(source, at, free, total):
             row = storage_watch.clean_sample(
                 {"host_id": host, "host_label": source, "free_gb": free, "total_gb": total},
@@ -128,7 +128,17 @@ def test_offline_host_keeps_its_disk_reading_after_many_container_samples(engine
         assert view["helper_overdue"] and view["stale"]
         assert view["host_label"] == "steward" and view["disk"]["free_pct"] == 8
         assert len(view["trend"]) == 1 and view["trend"][0]["free_gb"] == 8
+        incident = {"host_id": host, "target_pct": 25}
+        assert not storage_cleanup.target_reached(c, incident)
+        event_id = f"si_qa_{uuid4().hex[:8]}"
+        c.execute(text("INSERT INTO storage_incidents (id, host_id, status, severity) "
+                       "VALUES (:id, :host, 'critical', 'critical')"), {"id": event_id, "host": host})
+        result = storage_watch.evaluate_host(c, host)
+        assert result["readings"] == 0 and result["level"] == "critical"
+        assert c.execute(text("SELECT status FROM storage_incidents WHERE id=:id"),
+                         {"id": event_id}).scalar_one() == "critical"
         record("steward", now, 11, 100)
         view = storage_watch.summary(c, host)
         assert not view["stale"] and not view["helper_overdue"]
         assert view["disk"]["free_pct"] == 11
+        assert not storage_cleanup.target_reached(c, incident)

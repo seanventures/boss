@@ -362,11 +362,11 @@ def disk_source(connection: Any, host_id: str) -> str:
     return str(source or "api")
 
 
-def last_two(connection: Any, host_id: str) -> list[dict[str, Any]]:
+def last_two(connection: Any, host_id: str, *, source: Optional[str] = None) -> list[dict[str, Any]]:
     """The two newest DISK readings (rows that carry free_gb), oldest first."""
     rows = connection.execute(text(
         "SELECT * FROM storage_samples WHERE host_id = :h AND free_gb IS NOT NULL AND source = :source "
-        "ORDER BY at DESC LIMIT 2"), {"h": host_id, "source": disk_source(connection, host_id)}).mappings().all()
+        "ORDER BY at DESC LIMIT 2"), {"h": host_id, "source": source or disk_source(connection, host_id)}).mappings().all()
     return [dict(r) for r in reversed(rows)]
 
 
@@ -522,7 +522,7 @@ def budget(connection: Any, sample: Mapping[str, Any]) -> dict[str, Any]:
             "warn_at_pct": round(100 * disk_budget.WARN_AT)}
 
 
-def _display_sample(connection: Any, host_id: str) -> dict[str, Any]:
+def host_disk_sample(connection: Any, host_id: str, *, fresh_only: bool = False) -> dict[str, Any]:
     """Keep a registered host's disk and timestamp together when API sampling continues."""
     sample = latest(connection, host_id, within=timedelta(days=2)) or {}
     host = connection.execute(text(
@@ -533,6 +533,8 @@ def _display_sample(connection: Any, host_id: str) -> dict[str, Any]:
         # The API can still measure the database while the host helper is offline.
         for key in ("total_gb", "free_gb", "used_pct", "at", "source", "host_label"):
             sample[key] = host[key]
+    if fresh_only and (not sample.get("at") or _now() - sample["at"] > STALE_AFTER):
+        return {}
     return sample
 
 
@@ -543,7 +545,7 @@ def summary(connection: Any, host_id: Optional[str] = None) -> dict[str, Any]:
     host_id = host_id or (hosts(connection) or [local_host_id()])[0]
     th = storage_rules.thresholds(connection, host_id)
     rules = storage_rules.list_rules(connection, host_id)
-    sample = _display_sample(connection, host_id)
+    sample = host_disk_sample(connection, host_id)
     series = used_series(connection, host_id, source=sample.get("source"))
     fc = forecast([(t, u) for t, u, _ in series], _f(sample.get("free_gb")),
                   rules_reclaim_gb=rules_reclaim_gb(sample, rules))
@@ -569,7 +571,7 @@ def summary(connection: Any, host_id: Optional[str] = None) -> dict[str, Any]:
         disk_budget = None
     host_rows = []
     for h in hosts(connection):
-        s = sample if h == host_id else _display_sample(connection, h)
+        s = sample if h == host_id else host_disk_sample(connection, h)
         ser = used_series(connection, h, days=7, max_points=24, source=s.get("source"))
         f = forecast([(t, u) for t, u, _ in ser], _f(s.get("free_gb")))
         fp = free_pct_of(s)
@@ -612,18 +614,20 @@ def evaluate_host(connection: Any, host_id: str) -> dict[str, Any]:
     from . import storage_incidents
 
     th = storage_rules.thresholds(connection, host_id)
-    pair = last_two(connection, host_id)
+    incident = storage_incidents.current_for_host(connection, host_id)
+    previous = storage_incidents.level_of(incident)
+    merged = host_disk_sample(connection, host_id, fresh_only=True)
+    if not merged:
+        return {"host_id": host_id, "level": previous, "readings": 0}
+    pair = last_two(connection, host_id, source=merged.get("source"))
     if not pair:
         return {"host_id": host_id, "level": "ok", "readings": 0}
-    merged = latest(connection, host_id, within=timedelta(days=2)) or pair[-1]
-    series = used_series(connection, host_id, days=FORECAST_WINDOW_DAYS, max_points=400)
+    series = used_series(connection, host_id, days=FORECAST_WINDOW_DAYS, max_points=400, source=merged.get("source"))
     fc = forecast([(t, u) for t, u, _ in series], _f(merged.get("free_gb")))
     readings = []
     for s in pair:
         s2 = {**merged, **{k: v for k, v in s.items() if v is not None}}
         readings.append((s2, fc.days_until_full))
-    incident = storage_incidents.current_for_host(connection, host_id)
-    previous = storage_incidents.level_of(incident)
     level = next_level(previous, readings, th)
     floor = at_floor(readings[-1][0], th)
     outcome = storage_incidents.on_level(connection, host_id=host_id, level=level,
@@ -663,7 +667,7 @@ def tick(engine: Any, settings: Any = None, *, sample_api: bool = True) -> dict[
                     elif work_hold.expired(hold, max_seconds):
                         storage_incidents.expire_hold(c, inc, max_seconds=max_seconds)
                     else:
-                        s = latest(c, str(hold.get("host_id") or ""), within=timedelta(days=2)) or {}
+                        s = host_disk_sample(c, str(hold.get("host_id") or ""))
                         at = s.get("at")
                         th = storage_rules.thresholds(c, str(hold.get("host_id") or ""))
                         fp = free_pct_of(s)

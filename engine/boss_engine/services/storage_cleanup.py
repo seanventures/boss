@@ -331,9 +331,9 @@ def _emit(connection: Any, inc: Mapping[str, Any], event_type: str, data: dict[s
 # ── stop when enough ────────────────────────────────────────────────────────────────────────
 
 def target_reached(connection: Any, inc: Mapping[str, Any]) -> bool:
-    from .storage_watch import free_pct_of, latest
+    from .storage_watch import free_pct_of, host_disk_sample
 
-    s = latest(connection, str(inc["host_id"]))
+    s = host_disk_sample(connection, str(inc["host_id"]), fresh_only=True)
     fp = free_pct_of(s or {})
     return fp is not None and fp >= _f(inc.get("target_pct") or 25)
 
@@ -396,10 +396,10 @@ def advance(engine: Any, incident_id: str, *, actor: str = "agent:infra") -> dic
                 return _start(c, engine, inc, plan, step, actor=actor)
             if state in ("queued", "running"):
                 return _poll(c, engine, inc, plan, step, actor=actor)
-        from .storage_watch import latest, STALE_AFTER
+        from .storage_watch import host_disk_sample
 
-        sample = latest(c, str(inc["host_id"]))
-        if sample and sample.get("at") and _now() - sample["at"] <= STALE_AFTER:
+        sample = host_disk_sample(c, str(inc["host_id"]), fresh_only=True)
+        if sample:
             extended = extend_exhausted_plan(c, inc, sample, plan)
             if len(extended) > len(plan):
                 _save_plan(c, incident_id, extended)
