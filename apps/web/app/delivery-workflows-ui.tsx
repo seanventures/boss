@@ -52,6 +52,7 @@ import { DefineStepForm } from "./workflows/define-step-form";
 import { CaptainCanRunIt } from "./workflows/captain-can-run-it";
 import { Library, type Schedule } from "./workflows/library";
 import { get, post } from "./workflows/delivery-api";
+import { useIdentity } from "../components/identity/identity-provider";
 import { NewProjectComposer } from "./workflows/new-project-composer";
 import { DossierCompact } from "./discoveries-ui";
 import { MeetingCompact } from "./meeting-room-ui";
@@ -903,9 +904,13 @@ export function DeliveryWorkflows({ projectId, actor, homeProjectId }: { project
   // holds; when it does not, this puts the step back without being asked. Safe to be
   // automatic: `recheck` re-queues ONLY steps whose blocker has actually cleared.
   const rechecked = useRef<Set<string>>(new Set());
+  const { check } = useIdentity();
   useEffect(() => {
+    // ONLY RUNS THE VIEWER MAY CONTROL, in the run's own project: a recheck they may not send
+    // is refused every poll, for nothing.
     const stale = runs.filter((r) => (r.steps ?? []).some(
-      (st) => (st as RunStep & { blocker?: { cleared?: boolean } }).blocker?.cleared));
+      (st) => (st as RunStep & { blocker?: { cleared?: boolean } }).blocker?.cleared)
+      && check(RUN_ANSWER_PERMISSION, runProject(r, projectId)).allowed);
     const todo = stale.filter((r) => !rechecked.current.has(r.id));
     if (!todo.length) return;
     // Once per run per mount. Without the guard the reload below re-triggers this effect and
@@ -915,9 +920,12 @@ export function DeliveryWorkflows({ projectId, actor, homeProjectId }: { project
       // ALL AT ONCE, AND NOT A PRESS. These are background writes: no press scope, so one run's
       // recheck cannot refuse another's, and none can refuse a button the operator presses.
       const results = await Promise.all(todo.map((r) =>
-        post("recheck", { project_id: projectId, actor, run_id: r.id })));
-      // A recheck that did not get through is tried again on the next poll.
-      results.forEach((r, i) => { if (!r.ok) rechecked.current.delete(todo[i].id); });
+        post("recheck", { project_id: runProject(r, projectId), actor, run_id: r.id })));
+      // A recheck that did not get through is tried again on the next poll, unless it was
+      // REFUSED: a 401/403 will be refused again, so that run is not asked about again.
+      results.forEach((r, i) => {
+        if (!r.ok && !(r.status === 401 || r.status === 403)) rechecked.current.delete(todo[i].id);
+      });
       const moved = results.reduce((n, r) => n + (
         (r.ok ? ((r.data as { requeued?: unknown[] })?.requeued ?? []).length : 0)), 0);
       if (moved) {
@@ -926,7 +934,7 @@ export function DeliveryWorkflows({ projectId, actor, homeProjectId }: { project
         await load();
       }
     })();
-  }, [runs, projectId, actor, load]);
+  }, [runs, projectId, actor, load, check]);
 
   // KEEP ASKING, EVEN WHEN NOTHING IS RUNNING. A console cannot know that work has STARTED
   // without asking: a project kicked off from the Command Center, the Factory form, or by
@@ -1041,6 +1049,7 @@ export function DeliveryWorkflows({ projectId, actor, homeProjectId }: { project
   // `dedupeFromPress`: a start that must be a NEW run per press, and the same run for its
   // duplicates, gets `dedupe_key: <prefix>:<press key>`, minted from the press INSIDE it, so
   // it is not part of what the press is recognised by (review of 6ca9119).
+  const runsRef = useRef<Run[]>([]);
   const actRef = useRef<((label: string, action: string, payload: Record<string, unknown>,
                           dedupeFromPress?: string) => Promise<unknown>) | null>(null);
   const act = useCallback((label: string, action: string, payload: Record<string, unknown>,
@@ -1048,8 +1057,10 @@ export function DeliveryWorkflows({ projectId, actor, homeProjectId }: { project
     pressOn(label, [action, payload], async (key) => {
       setNotice(null);
       setRefusal(null);
+      // A RUN'S WRITE GOES TO THE RUN'S PROJECT: the list can hold runs of every project in
+      // the org (scope=org), and the page's project 404s for those.
       const result = await post(action, {
-        project_id: projectId, actor, ...payload,
+        project_id: projectForPayload(payload, runsRef.current, projectId), actor, ...payload,
         ...(dedupeFromPress ? { dedupe_key: `${dedupeFromPress}:${key}` } : {}),
       }, key);
       // A START REFUSED FOR WHAT THE PROJECT LACKS gets the checklist and "<label> anyway",
@@ -1075,6 +1086,7 @@ export function DeliveryWorkflows({ projectId, actor, homeProjectId }: { project
       return result;
     }), [pressOn, projectId, actor, load]);
   actRef.current = act;
+  runsRef.current = runs;
 
   // OPEN THE ONE THAT WANTS YOU. A page whose every run is collapsed makes an operator click
   // to find out whether anything needs them, which is the question the page exists to answer.
@@ -1339,7 +1351,7 @@ export function DeliveryWorkflows({ projectId, actor, homeProjectId }: { project
               for (const run of open) {
                 // One press, one key: the server derives each request's key from the press AND
                 // its body, so every run is re-checked once however often Advance is pressed.
-                const r = await post("recheck", { project_id: projectId, actor, run_id: run.id },
+                const r = await post("recheck", { project_id: runProject(run, projectId), actor, run_id: run.id },
                                      key);
                 if (!r.ok) failed.push(r.error ?? "refused");
                 else requeued += ((r.data as { requeued?: unknown[] })?.requeued ?? []).length;
@@ -1390,7 +1402,7 @@ export function DeliveryWorkflows({ projectId, actor, homeProjectId }: { project
               await pressOn("Remove", run.id, async (key) => {
                 setNotice(null);
                 const query = new URLSearchParams({
-                  project_id: projectId, actor, run_id: run.id,
+                  project_id: runProject(run, projectId), actor, run_id: run.id,
                 });
                 const response = await apiWrite(`/api/delivery-workflows?${query}`,
                                                 { method: "DELETE" }, { key });
@@ -1738,6 +1750,7 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
                 </p>
                 <FailedStepActions key={stopped.step_id} step={stopped}
                                    capability={stoppedCapability} busy={busy}
+                                   projectId={runProject(run, projectId)}
                                    actions={stepActions(run, stopped.step_id)}
                                    idPrefix="dw-run-stopped"
                                    onRetry={(note) => onRetryStep(run.id, stopped.step_id, note)}
@@ -1775,7 +1788,7 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
                         onPrepareTarget={(hostId) => onPrepareTarget(run.id, hostId)}
                         onRunPreview={onRunPreview}
                         onBound={onBound}
-                        projectId={projectId}
+                        projectId={runProject(run, projectId)}
                         previewStarting={previewStarting} />
   );
 
@@ -1828,7 +1841,7 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
             </span>
           ) : null}
           {/* THE HEADER LINE: Change #N · Preview · Staging · Prod · "Your move: <button>". */}
-          <div className="dw-full-work"><RunWorkLine projectId={projectId} runId={fullRun.id} actor={actor} /></div>
+          <div className="dw-full-work"><RunWorkLine projectId={runProject(fullRun, projectId)} runId={fullRun.id} actor={actor} /></div>
           <button type="button" className="wf-btn wf-btn-ghost dw-full-exit" data-testid="exit-full-page"
                   title="Back to the list, with this run open"
                   onClick={() => onFullPage?.(null)}>
@@ -1836,7 +1849,7 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
           </button>
         </header>
         {noticeFor(fullRun)}
-        <LearnedStrip people projectId={projectId} actor={actor} runId={fullRun.id}
+        <LearnedStrip people projectId={runProject(fullRun, projectId)} actor={actor} runId={fullRun.id}
                       live={!/^(succeeded|completed|failed|cancelled|canceled|deadlettered)$/.test(fullRun.status)} />
         {pathFor(fullRun, true)}
       </div>
@@ -1959,7 +1972,7 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
               ) : null}
             </button>
             {noticeFor(run)}
-            {open ? <LearnedStrip people projectId={projectId} actor={actor} runId={run.id} live={!/^(succeeded|completed|failed|cancelled|canceled|deadlettered)$/.test(run.status)} /> : null}
+            {open ? <LearnedStrip people projectId={runProject(run, projectId)} actor={actor} runId={run.id} live={!/^(succeeded|completed|failed|cancelled|canceled|deadlettered)$/.test(run.status)} /> : null}
             {open ? pathFor(run) : null}
           </article>
         );
@@ -2009,6 +2022,35 @@ export const DID_NOTHING =
  *  Exported because "which one is the important one" is a rule worth testing, not a detail of
  *  a render.
  */
+/**
+ * THE PROJECT A RUN BELONGS TO, for every read and write about it. The Runs list can hold runs of
+ * every project in the org (scope=org); asking for one of those under the page's project is a 404
+ * on each panel (activity, decisions, autonomy, report, chain), which is what the default open run
+ * did whenever it belonged to another project.
+ */
+export function runProject(run: { project_id?: string | null }, pageProject: string): string {
+  return run.project_id || pageProject;
+}
+
+/** The keys a payload names a run by: the run acted on, or the run a new one starts from. */
+const RUN_KEYS = ["run_id", "rerun_of", "replaces_run", "from_run"] as const;
+
+/**
+ * The project a write goes to: the project of the run it names (retry, skip, stop, recheck by
+ * `run_id`; re-run, stop-and-run-again and build-on-this by `rerun_of`, `replaces_run`,
+ * `from_run`, so the new run starts in the run's project), else the page's.
+ */
+export function projectForPayload(payload: Record<string, unknown>,
+                                  runs: { id: string; project_id?: string | null }[],
+                                  pageProject: string): string {
+  for (const k of RUN_KEYS) {
+    const id = payload[k];
+    const run = typeof id === "string" ? runs.find((r) => r.id === id) : undefined;
+    if (run) return runProject(run, pageProject);
+  }
+  return pageProject;
+}
+
 export function runToOpen(runs: Run[]): string | null {
   if (!runs.length) return null;
   // An open approval OR a step the run stopped at, the same rule the "Needs you" bucket reads.
@@ -2576,8 +2618,10 @@ export function RunActionsBar({ run, busy, handlers }: {
  * environment and a free port, and the button that makes one also points the run at it.
  */
 function DeployWhere({ targets, hosts, runInput, buildRunId, busy, bound, hostName, live,
-                      onSetTarget, onPrepareTarget, onBound }: {
+                      onSetTarget, onPrepareTarget, onBound, projectId }: {
   targets: DeployTarget[]; hosts: DeployHost[]; runInput: Record<string, unknown>;
+  /** The run's project, for the gates. */
+  projectId?: string;
   /** The code task whose build is being shipped, the app the target binds to. */
   buildRunId: string;
   busy: string | null;
@@ -2662,7 +2706,7 @@ function DeployWhere({ targets, hosts, runInput, buildRunId, busy, bound, hostNa
   if (hosts.length) {
     return (
       <>
-        <BindToHost hosts={hosts} appName={appName} buildRunId={buildRunId} busy={busy}
+        <BindToHost hosts={hosts} appName={appName} buildRunId={buildRunId} busy={busy} projectId={projectId}
                     onPrepareTarget={onPrepareTarget}
                     onBound={() => { setChanging(false); onBound(); }} />
         {changing ? (
@@ -2749,7 +2793,7 @@ function ShipNow({ projectId, buildRunId, target, again, onDone }: {
 
   return (
     <div className="dw-ship" data-testid="dw-ship">
-      <GatedButton permission="deployment:create" type="button" className={`cap-btn${again ? "" : " primary"}`}
+      <GatedButton permission="deployment:create" projectId={projectId} type="button" className={`cap-btn${again ? "" : " primary"}`}
               disabled={state !== "idle"} onClick={ship} data-testid="dw-ship-now"
               title={`Asks for approval, then ships ${target.app_name}, ${target.environment}${
                 target.domains?.[0] ? ` to ${target.domains[0]}` : ""}`}>
@@ -3000,8 +3044,10 @@ export function ReviewAndDecide({ step, projectId = "", actor = "" }: { step: Ru
  *  Same three fields, same explicit button, same endpoint the project card posts to. The
  *  operator sets the target and THEN approves the release; nothing is chosen on their behalf.
  */
-function BindToHost({ hosts, appName, buildRunId, busy, onPrepareTarget, onBound }: {
+function BindToHost({ hosts, appName, buildRunId, busy, onPrepareTarget, onBound, projectId }: {
   hosts: DeployHost[]; appName: string; buildRunId: string; busy: string | null;
+  /** The run's project, for the gate. */
+  projectId?: string;
   onPrepareTarget: (hostId: string) => void;
   /** Re-read the runs once the binding lands, so the step SHOWS what it is bound to. */
   onBound: () => void;
@@ -3066,7 +3112,7 @@ function BindToHost({ hosts, appName, buildRunId, busy, onPrepareTarget, onBound
       <input name="app_port" placeholder="port (auto)" data-testid="dw-deploy-port"
              aria-label="App port, blank lets BOSS pick a free one"
              style={{ width: 96, fontSize: 12 }} />
-      <GatedButton permission="deployment_target:manage" className="cap-btn" type="submit" disabled={saving || !!busy}
+      <GatedButton permission="deployment_target:manage" projectId={projectId} className="cap-btn" type="submit" disabled={saving || !!busy}
               data-testid="dw-deploy-settarget">
         {saving ? "Saving…" : "Set target"}
       </GatedButton>
@@ -3204,8 +3250,10 @@ export function retryExample(capability: string): string {
 }
 
 export function FailedStepActions({ step, capability, actions, busy, onRetry, onSkip,
-                            idPrefix = "dw-step" }: {
+                            idPrefix = "dw-step", projectId }: {
   step: RunStep; capability?: Capability; busy: string | null;
+  /** The RUN's project: its buttons are greyed on what the viewer may do there (runProject). */
+  projectId?: string;
   /** This step's Try again and Skip, as the server decided them (`stepActions`). Whichever is
    *  absent is not rendered; whichever is disabled says why. Nothing here reads a status. */
   actions: { retry?: RunAction; skip?: RunAction };
@@ -3230,7 +3278,7 @@ export function FailedStepActions({ step, capability, actions, busy, onRetry, on
     <div className="dw-step-decide" data-testid={`${idPrefix}-decide`}>
       {panelOpen ? null : retry ? (
         <>
-          <GatedButton permission="workflow_run:control" type="button" className="cap-btn primary"
+          <GatedButton permission="workflow_run:control" projectId={projectId} type="button" className="cap-btn primary"
                   onClick={() => setRetryOpen(true)}
                   disabled={!!busy || retryOpen || !retry.enabled} title={retry.reason ?? undefined}
                   data-testid={`${idPrefix}-retry`}>
@@ -3244,7 +3292,7 @@ export function FailedStepActions({ step, capability, actions, busy, onRetry, on
         </>
       ) : null}
       {skip && !panelOpen ? (
-        <GatedButton permission="workflow_run:control" type="button" className="cap-btn" onClick={() => setSkipOpen(true)}
+        <GatedButton permission="workflow_run:control" projectId={projectId} type="button" className="cap-btn" onClick={() => setSkipOpen(true)}
                 disabled={!!busy || skipOpen || !skip.enabled} title={skip.reason ?? undefined}
                 data-testid={`${idPrefix}-skip`}>
           {busy === "Skip" ? "Skipping…" : skip.label}
@@ -3478,7 +3526,7 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
   const name = appIdentity(runInput as AppRun).name;
   const lastDeploy = useNewestDeploy(isDeployStep(step, capability) && !stackDeploy ? buildRunId : null, name);
   const targetControl = (
-    <DeployWhere targets={targets} hosts={hosts} runInput={runInput}
+    <DeployWhere targets={targets} hosts={hosts} runInput={runInput} projectId={projectId}
                  buildRunId={buildRunId ?? ""} busy={busy}
                  bound={shippedTo} hostName={boundHostName} live={!!lastDeploy?.openUrl}
                  onSetTarget={onSetTarget} onPrepareTarget={onPrepareTarget}
@@ -3901,7 +3949,7 @@ function StepDetail({ step, stepIndex, capability, targets, hosts, runInput, onR
           KEYED BY THE STEP, so a reason half-typed for one step is not still open, pre-filled,
           when the operator clicks a different failed step in the rail. */}
       <FailedStepActions key={step.step_id} step={step} capability={capability} busy={busy}
-                         actions={actions} onRetry={onRetry} onSkip={onSkip} />
+                         projectId={projectId} actions={actions} onRetry={onRetry} onSkip={onSkip} />
 
       {/* BOSS IS FIXING ITSELF (docs/product/BOSS_FIXES_ITSELF.md §10.1): a step parked on a bug
           in BOSS's own code says what BOSS is doing about it, live, from the step's own output. */}

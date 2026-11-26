@@ -13,7 +13,7 @@
  * A cap never asks anyone mid-build: it warns, then refuses new work at a hard stop.
  */
 import React, { useCallback, useEffect, useState } from "react";
-import { Plus, RocketLaunch, Trash } from "@phosphor-icons/react";
+import { ArrowUpRight, Plus, RocketLaunch, Trash } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
 import { money } from "../../lib/govern";
@@ -26,6 +26,9 @@ export type ScopedBudget = {
 };
 export type Team = { id: string; key: string; name: string; members: number; projects: string[] };
 type Option = { value: string; label: string };
+
+/** Where teams are made: a team is an identity group (BOSSAPP-1295). */
+export const TEAMS_HREF = "/identity/groups";
 
 const SCOPE_WORDS: Record<Scope, string> = { org: "Whole org", project: "This project", team: "A team", role: "An agent", workflow: "A workflow" };
 /** The `pilot_2000` preset (scoped_budgets.PRESETS): a team's $2,000 a month, hard stop. */
@@ -76,6 +79,10 @@ export function ScopedBudgetsCard({ projectId, actor }: { projectId: string; act
   }, [projectId, reload]);
 
   const teamOptions: Option[] = teams.map((t) => ({ value: t.id, label: t.name }));
+  // ONE TEAM IS THE TEAM: picked for you, so "$2,000 pilot" is one press the moment it exists.
+  useEffect(() => {
+    if (scope === "team" && !target && teams.length === 1) setTarget(teams[0].id);
+  }, [scope, target, teams]);
   const choices = scope === "role" ? agents : scope === "workflow" ? workflows : scope === "team" ? teamOptions : [];
   const names = Object.fromEntries([...agents, ...workflows, ...teamOptions].map((o) => [o.value, o.label]));
   const capNumber = Number(cap);
@@ -160,9 +167,18 @@ export function ScopedBudgetsCard({ projectId, actor }: { projectId: string; act
         <div className="gv-preset-row" data-testid="gv-scoped-preset-row">
           <GatedButton permission="budget:manage" type="button" className="ag-btn" disabled={busy || !target}
                        data-testid="gv-scoped-preset"
-                       title={target ? "$2,000 a month for this team, warn at 80%, hard stop" : "Pick a team first"}
+                       title={target ? "$2,000 a month for this team, warn at 80%, hard stop" : teams.length ? "Pick a team first" : "Make a team first"}
                        onClick={() => void addPilot()}><RocketLaunch size={14} aria-hidden />{PILOT_PRESET.label}</GatedButton>
-          <span className="gv-muted">A team spends what its people&apos;s projects spend.</span>
+          {teams.length ? (
+            <span className="gv-muted">A team spends what its people&apos;s projects spend.</span>
+          ) : (
+            // NO TEAMS: say where they come from, never a disabled button with no way forward.
+            <span className="gv-muted" data-testid="gv-scoped-no-teams">
+              A team is a group of people.{" "}
+              <a className="ag-link" href={TEAMS_HREF} data-testid="gv-scoped-make-team">
+                Make one in Identity <ArrowUpRight size={12} aria-hidden /></a>
+            </span>
+          )}
         </div>
       ) : null}
       {said ? <span className="gv-field-error" role="alert" data-testid="gv-scoped-error">{said}</span> : null}

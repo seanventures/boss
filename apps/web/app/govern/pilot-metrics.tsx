@@ -306,7 +306,8 @@ export function PilotMetrics({ projectId, actor }: { projectId: string; actor: s
                 ))}
               </Sources>
             </Metric>
-            <Metric icon={<Siren size={16} aria-hidden />} title="Post-deploy errors" keyName="auto_remediated_pct" report={r}
+            <Metric icon={<Siren size={16} aria-hidden />} title="Errors fixed without a person" keyName="auto_remediated_pct" report={r}
+                    tip="Post-deploy alerts BOSS fixed with no person, as a share of all alerts"
                     testid="gv-pm-errors" value={fmt(r.post_deploy.auto_remediated_pct, "%")}
                     sub={`${r.post_deploy.auto_remediated} of ${r.post_deploy.alerted} alerts fixed without a person`}>
               <Share part={r.post_deploy.auto_remediated} whole={r.post_deploy.alerted} label="fixed by BOSS" testid="gv-pm-err-share" />
