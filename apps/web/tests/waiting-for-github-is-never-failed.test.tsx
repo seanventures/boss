@@ -74,7 +74,8 @@ describe("every surface draws it through WhyLine", () => {
   });
 
   it("Project › Work, Agents at work, the build page and Needs you all use WhyLine or GitHubWait", () => {
-    for (const f of ["app/projects/tab-work.tsx", "app/projects/drawers.tsx", "app/command-center/agents-at-work.tsx",
+    // The Work drawer is gone (a0ec2e770: a row opens its Workflow run), so the row itself carries the reason.
+    for (const f of ["app/projects/tab-work.tsx", "app/command-center/agents-at-work.tsx",
                      "app/agent-ops/agent-ops-home.tsx", "app/factory/cockpit.tsx"]) {
       expect(readFileSync(join(ROOT, f), "utf8"), f).toMatch(/<WhyLine /);
     }

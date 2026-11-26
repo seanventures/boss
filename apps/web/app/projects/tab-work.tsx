@@ -34,6 +34,7 @@ import { TicketImportPage } from "./ticket-import";
 import type { Connection } from "../../lib/tickets";
 import type { PxCtx } from "./project-page";
 import { FailedActions } from "./build-failed";
+import { WhyLine } from "../../components/stuck-work";
 import { workNextStep } from "../../lib/work-next-step";
 import type { YourApp } from "../../lib/your-app";
 import { finishedAt, iterationLinks, latestLinks, tidyIds, workLinks, type LatestLink, type WorkLink } from "../../lib/work-links";
@@ -475,7 +476,13 @@ export function WorkRow({ w, ctx, fresh = false, rank = null, task = null, quiet
           ) : null}
           <RowTicket w={w} />
         </span>
-        <span className="wl-status"><span className="px-tag" data-tone={chip.tone} title={chip.title} data-testid={`px-work-status-${w.id}`}>{chip.word}</span></span>
+        <span className="wl-status">
+          <span className="px-tag" data-tone={chip.tone} title={chip.title} data-testid={`px-work-status-${w.id}`}>{chip.word}</span>
+          {/* WAITING FOR WHAT (stuck_work.wait_reason): a stalled or waiting build says why, through
+              the one WhyLine every surface uses (a GitHub wait draws as GitHubWait, never Failed). */}
+          {w.why?.words && (w.state === "stalled" || w.state === "running")
+            ? <WhyLine why={{ ...w.why, words: tidyIds(w.why.words) }} testId={`px-work-why-${w.id}`} compact /> : null}
+        </span>
         <span className="wl-time" data-testid={`px-work-kicked-${w.id}`} title="Kicked off">{dateTime(w.created_at) || "—"}</span>
         <span className="wl-time" data-testid={`px-work-finished-${w.id}`} title="Finished">{dateTime(finishedAt(w)) || "—"}</span>
         {w.state === "planned" ? (

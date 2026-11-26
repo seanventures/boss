@@ -543,6 +543,7 @@ describe("My account", () => {
   });
 
   it("security, sessions and agents render within the copy budget", async () => {
+    routes({ "GET /v1/me/ticket-identities": { body: { identities: [] } } });
     const sessions = F.sessions(NOW).usr_sam;
     const el = await mount(asOperator(
       <>

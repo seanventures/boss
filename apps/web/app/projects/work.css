@@ -72,7 +72,10 @@
 .wl-n { font-family: var(--mono); font-size: var(--fs-tag); color: var(--faint); white-space: nowrap; }
 button.wl-n { border: 0; background: none; padding: 0; cursor: pointer; }
 button.wl-n:hover, button.wl-n:focus-visible { color: var(--accent-text); text-decoration: underline; }
-.wl-status { min-width: 0; }
+.wl-status { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 0.125rem; }
+/* A stalled or waiting row's reason (WhyLine): one line under the chip, the full words on hover. */
+.wl-status .sw-why { flex-wrap: nowrap; max-width: min(100%, 14rem); font-size: var(--fs-tag); }
+.wl-status .sw-why-words { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .wl-status .px-tag { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .wl-time { font-family: var(--mono); font-size: var(--fs-tag); color: var(--muted); white-space: nowrap; }
 .wl-iters { background: var(--surface-2); }
