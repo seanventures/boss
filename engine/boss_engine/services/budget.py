@@ -675,6 +675,10 @@ class BudgetGovernor:
             "SELECT r.id, r.project_id, r.category, r.reason, r.amount_usd_micros FROM budget_reservations r "
             "WHERE r.status='active' AND r.amount_usd_micros > 0 AND r.expires_at <= :now_utc "
             "AND (CAST(:project_id AS text) IS NULL OR r.project_id=:project_id) "
+            # A provider apply owns its reservation through final settlement, including when
+            # contact succeeded but the response or settlement was lost.
+            "AND NOT EXISTS (SELECT 1 FROM changesets cs WHERE cs.project_id=r.project_id "
+            "    AND cs.reservation_id=r.id AND cs.status IN ('applying','needs_reconciliation')) "
             # New holds, and holds a card still asks about (one per reservation, or the group
             # card of before 2026-11-07). A hold a person already answered is left as answered.
             "AND (NOT EXISTS (SELECT 1 FROM events e WHERE e.entity_id=r.id "
