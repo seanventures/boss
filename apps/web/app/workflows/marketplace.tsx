@@ -64,6 +64,9 @@ export function shelfMatches(p: MarketPack, query: string): boolean {
   return words.every((w) => hay.includes(w));
 }
 
+/** Where the shelf drops to one column (library.css, `.wf-shelf`). */
+export const SHELF_ONE_COLUMN = "(max-width: 860px)";
+
 export function SharedLibrary({ projectId, onBack, onOpen }: {
   projectId: string;
   onBack: () => void;
@@ -103,6 +106,9 @@ export function SharedLibrary({ projectId, onBack, onOpen }: {
   const shown = useMemo(() => (packs ?? []).filter(
     (p) => (!tag || (p.tags ?? []).includes(tag)) && shelfMatches(p, query)), [packs, tag, query]);
   const current = shown.find((p) => p.id === picked) ?? shown[0] ?? null;
+  // OPENS AT THE TOP: search and tags first, never under the sticky header. The page arrives
+  // wherever the Library list was scrolled to.
+  useEffect(() => { window.scrollTo?.({ top: 0 }); }, []);
 
   return (
     <section className="wf-market" data-testid="wf-market" aria-label="Shared library">
@@ -149,6 +155,7 @@ export function SharedLibrary({ projectId, onBack, onOpen }: {
           </div>
           {current ? (
             <ShelfCard key={current.id} pack={current} projectId={projectId} projects={projects}
+                       reveal={picked === current.id}
                        installBlocked={installGate.allowed ? null : installGate.reason}
                        shareBlocked={unshareBlocked}
                        onOpen={onOpen} onChanged={load} />
@@ -188,14 +195,21 @@ function ShelfRow({ pack: p, selected, here, onPick }: {
   );
 }
 
-function ShelfCard({ pack: p, projectId, projects, installBlocked, shareBlocked, onOpen, onChanged }: {
+function ShelfCard({ pack: p, projectId, projects, installBlocked, shareBlocked, onOpen, onChanged, reveal = false }: {
   pack: MarketPack; projectId: string; projects: LibraryProject[];
+  /** Picked by the person (not the first card shown by default): bring it into view. */
+  reveal?: boolean;
   installBlocked: string | null; shareBlocked: string | null;
   onOpen?: (key: string) => void; onChanged: () => Promise<void>;
 }) {
   const ref = useRef<HTMLElement | null>(null);
-  // Picked on a phone (one column): bring the card into view.
-  useEffect(() => { ref.current?.scrollIntoView?.({ block: "nearest" }); }, [p.id]);
+  // PICKED ON A PHONE (one column): bring the card into view. Only a pick: the default card
+  // scrolling itself into view on arrival is what landed the page 126-577px down, the search
+  // and tags under the sticky header. And only one column: beside the list it is already there.
+  useEffect(() => {
+    if (!reveal || !window.matchMedia?.(SHELF_ONE_COLUMN).matches) return;
+    ref.current?.scrollIntoView?.({ block: "nearest" });
+  }, [p.id, reveal]);
   const choices = projects.length ? projects : [{ id: projectId, name: "This project" }];
   const [target, setTarget] = useState(choices.some((c) => c.id === projectId) ? projectId : choices[0].id);
   const [busy, setBusy] = useState<"add" | "edit" | "unshare" | null>(null);
