@@ -3935,7 +3935,7 @@ declareAction(reliabilityDiagnoseAction, "reliability:respond");
 declareAction(reliabilityFeedbackAction, "reliability:respond");
 declareAction(reliabilityRemediateAction, "reliability:respond");
 declareAction(createPreviewFixtureAction, "preview:manage");
-declareAction(metatronCaptainTurnAction, "autopilot:operate");
+declareAction(metatronCaptainTurnAction, "assistant:chat");
 declareAction(metatronCaptainWatchAction, "autopilot:operate");
 declareAction(metatronCaptainDriveAction, "autopilot:operate");
 declareAction(metatronCaptainAddGoalAction, "autopilot:operate");

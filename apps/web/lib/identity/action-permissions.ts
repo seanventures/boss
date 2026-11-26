@@ -183,7 +183,7 @@ export const ACTION_PERMISSIONS: Readonly<Record<string, Permission>> = {
   "app/actions.ts#reliabilityFeedbackAction": "reliability:respond",
   "app/actions.ts#reliabilityRemediateAction": "reliability:respond",
   "app/actions.ts#createPreviewFixtureAction": "preview:manage",
-  "app/actions.ts#metatronCaptainTurnAction": "autopilot:operate",
+  "app/actions.ts#metatronCaptainTurnAction": "assistant:chat",
   "app/actions.ts#metatronCaptainWatchAction": "autopilot:operate",
   "app/actions.ts#metatronCaptainDriveAction": "autopilot:operate",
   "app/actions.ts#metatronCaptainAddGoalAction": "autopilot:operate",
