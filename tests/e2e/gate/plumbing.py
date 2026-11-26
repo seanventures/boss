@@ -973,12 +973,17 @@ def check_deploy(g: Gate) -> str:
     # Its commands run from its own directory, as the real deploy plans it (stack_deploy).
     rendered["workdir"] = adm.manifest_workdir(manifest_path)
 
+    # This local fixture represents the configured enterprise target. npm reads its own
+    # configuration names; BOSS_NPM_REGISTRY alone is only meaningful to BOSS.
+    from boss_engine.services.enterprise_network import package_environment
+
+    target_env = {**os.environ, **package_environment(os.environ)}
     class LocalHost:
         def stack_exec(self, *, command: str, timeout: int = 120, stdin_text=None, stdin_path=None, **_: Any):
             data = stdin_text.encode() if stdin_text is not None else (
                 Path(stdin_path).read_bytes() if stdin_path else None)
             return subprocess.run(["bash", "-c", command], input=data, capture_output=True,
-                                  timeout=timeout, cwd=str(g.work))
+                                  timeout=timeout, cwd=str(g.work), env=target_env)
 
     access = stack_deploy.HostAccess(host="127.0.0.1", user="boss", port=22, key_material="",
                                      adapter=_TextHost(LocalHost()))
