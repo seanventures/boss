@@ -1006,3 +1006,22 @@ def test_an_install_without_the_repos_volume_still_backs_up(install_pair):
     manifest = json.loads((backup / "manifest.json").read_text())
     assert "repos_volume" not in manifest and "repos.tar" not in manifest["files"]
     assert not (backup / "repos.tar").exists()
+
+
+@pytest.mark.parametrize("missing", ["BOSS_API_KEY", "BOSS_DB_PASSWORD"])
+def test_partial_install_env_identifies_the_missing_key_without_replacing_it(install_pair, missing):
+    installed, old, _, env, _ = install_pair
+    env["BOSS_REPO_REF"] = old
+    config = installed / ".env"
+    original = "".join(line for line in config.read_text().splitlines(keepends=True)
+                       if not line.startswith(missing + "="))
+    config.write_text(original)
+
+    result = _install(installed, env)
+
+    assert result.returncode != 0
+    message = result.stdout + result.stderr
+    assert f".env is missing {missing}" in message
+    assert "backup" in message.lower()
+    assert "private-test-fixture" not in message
+    assert config.read_text() == original
