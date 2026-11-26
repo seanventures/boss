@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run the enterprise lane (scripts/enterprise-lane.sh) from a Mac, in a dedicated Lima VM.
 #
-#   scripts/enterprise-lane/lima.sh [--vm NAME] [--keep-running] [-- LANE ARGS...]
+#   scripts/enterprise-lane/lima.sh [--vm NAME] [--adopt] [--keep-running] [-- LANE ARGS...]
 #
 # The VM (default `boss-ent-lane`) is the enterprise box's size: Ubuntu 24.04 (AppArmor 4),
 # 4 vCPU, 8 GiB, 30 GiB, in Lima's plain mode (no host mounts, no port forwards), so nothing in it
@@ -16,10 +16,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 VM=boss-ent-lane
 KEEP=0
+ADOPT=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --vm) VM="${2:?--vm needs a name}"; shift 2 ;;
     --keep-running) KEEP=1; shift ;;
+    --adopt) ADOPT=1; shift ;;
     --) shift; break ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -31,8 +33,19 @@ free_gb=$(df -Pk "$HOME" | awk 'NR==2 {print int($4/1048576)}')
 if ! limactl list -q 2>/dev/null | grep -qx "$VM"; then
   limactl create --name="$VM" --tty=false --cpus=4 --memory=8 --disk=30 --vm-type=vz --plain \
     template:ubuntu-24.04
+  ADOPT=1   # made here, so it is the lane's own
 fi
 [ "$(limactl list --format '{{.Status}}' "$VM")" = Running ] || limactl start --tty=false "$VM"
+# The lane removes every container and the checkout in its VM, so it runs only in a VM it made:
+# marked when created here, or adopted once with --adopt. Any other VM is refused untouched.
+MARK=.boss-ent-lane-vm
+if [ "$ADOPT" = 1 ]; then
+  limactl shell "$VM" -- bash -lc "touch ~/$MARK"
+elif ! limactl shell "$VM" -- bash -lc "test -f ~/$MARK"; then
+  echo "VM '$VM' was not made by this lane (no ~/$MARK): it would lose its containers and ~/boss-src." >&2
+  echo "Use a lane VM (the default boss-ent-lane), or pass --adopt if this VM is a throwaway." >&2
+  exit 2
+fi
 
 BUNDLE="$(mktemp -d)/boss.bundle"
 git -C "$ROOT" bundle create "$BUNDLE" HEAD >/dev/null 2>&1
@@ -48,7 +61,8 @@ limactl shell "$VM" -- bash -lc "
   # cannot remove, and the clone then fails to write over them (Permission denied).
   # The previous run's containers restart when the VM boots and bind-mount paths under the
   # checkout; between the rm and the clone they recreate them as root (clone: Permission denied).
-  # This VM is the lane's own throwaway box, so remove them first.
+  # This VM is the lane's own throwaway box (checked above: ~/$MARK), so remove them first.
+  test -f ~/$MARK
   if command -v docker >/dev/null; then sudo docker ps -aq | xargs -r sudo docker rm -f >/dev/null; fi
   sudo rm -rf ~/boss-src
   git clone -q /tmp/boss.bundle ~/boss-src
