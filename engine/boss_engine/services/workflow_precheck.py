@@ -660,7 +660,11 @@ def _github_token(ctx: Context, binding: Mapping[str, Any]) -> str:
             ctx.connection, project_id=ctx.project_id,
             credential_ref=service._credential_ref(ctx.connection, ctx.project_id,  # noqa: SLF001
                                                    binding["connection_id"]))
-        return str(service._resolve_secret(ref, ctx.connection) or "")  # noqa: SLF001
+        # Tagged by where the secret lives (BOSSAPP-1286), with the binding connection's base.
+        return service._tag_by_origin(  # noqa: SLF001
+            service._resolve_secret(ref, ctx.connection), ref,  # noqa: SLF001
+            service._connection_api_base(ctx.connection, ctx.project_id,  # noqa: SLF001
+                                         str(binding["connection_id"]))) or ""
     token = ctx.once("gh_token", lambda: ctx.savepoint(read, default="")) or ""
     if not token:
         try:
@@ -694,7 +698,10 @@ def _gh_get(ctx: Context, path: str) -> tuple[Optional[int], Any]:
         ctx.connection, ctx.project_id, str(binding["connection_id"])), default=None)
     if conn_base is None:
         return None, "the connection's GitHub host could not be read"
-    token = github_urls.tag(token, conn_base)
+    try:
+        token = github_urls.tag(token, conn_base)
+    except github_urls.CrossHostCredential as refused:
+        return None, str(refused)
     url = github_urls.credential_api_base(token).rstrip("/") + path
     try:
         github_urls.check_send(token, url, where="precheck")

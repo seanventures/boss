@@ -226,8 +226,8 @@ def _connection_for(db: Any, settings: Any, project_id: str, actor: str, *,
                         break
                 own = service.get_connection(db, project_id, cid)
                 # Each connection's token is tagged with, and probed against, ITS OWN host.
-                token = github_urls.tag(service._resolve_secret(record, db),  # noqa: SLF001
-                                        own.get("api_base_url"))
+                token = service._tag_by_origin(  # noqa: SLF001 — where the secret lives decides
+                    service._resolve_secret(record, db), record, own.get("api_base_url"))  # noqa: SLF001
                 if not token:
                     continue
                 probed = setup_checks.probe_repository(

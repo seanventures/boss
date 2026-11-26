@@ -37,6 +37,7 @@ def _github_tracker_token(token: Any, base: str, configuration: dict[str, Any]) 
         return token
     ref = str(configuration.get("credential_ref") or "")
     if ref.startswith("env:"):
+        token = github_urls.tag(token, "")     # the install's own credential (where it lives)
         github_urls.check_send(token, base, where="github_issues")
         return token
     return github_urls.tag(token, base)

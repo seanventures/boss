@@ -264,7 +264,12 @@ class GitHubAppAdapter:
         install's GitHub host; its JWT is never sent to another (a GHES connection's base)."""
         from ..identity import github_urls
 
-        github_urls.check_send(github_urls.tag("app-jwt", ""), self.api_base_url,
+        # The JWT is signed with the App's private key: it belongs to the host that key was
+        # stored for (a GHES connection's own App), else the install's.
+        key = getattr(self.settings, "github_app_private_key", None)
+        host = github_urls.credential_api_base(key) if isinstance(key, github_urls.GitHubCredential) \
+            else github_urls.api_base()
+        github_urls.check_send(github_urls.tag("app-jwt", host), self.api_base_url,
                                where="github_app_jwt")
 
     def installation_account(self, installation_id: Optional[str] = None) -> Optional[dict]:

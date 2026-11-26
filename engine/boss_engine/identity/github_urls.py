@@ -233,7 +233,7 @@ def _untagged(token: object, target: str, where: str) -> None:
     import logging
 
     UNTAGGED_SENDS[where] = UNTAGGED_SENDS.get(where, 0) + 1
-    logging.getLogger("boss.github.credentials").info(
+    logging.getLogger("boss.github.credentials").warning(
         "github.untagged_send where=%s target=%s count=%d", where, target, UNTAGGED_SENDS[where])
     if strict():
         raise UntaggedGitHubCredential(

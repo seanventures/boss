@@ -1215,6 +1215,23 @@ def pick_default_backend(settings: Settings) -> tuple[str, list[str]]:
     return "database", passed_over
 
 
+def _tag_github_by_origin(value: Any, row: Any) -> Any:
+    """A GitHub credential's host comes from WHERE THE SECRET LIVES (BOSSAPP-1286): a host
+    environment variable bound to GitHub (BOSS_GITHUB_TOKEN, a *_GITHUB_TOKEN…) is the
+    install's own credential and leaves tagged with the install's host, whatever connection names
+    it; a secret stored for a connection is tagged by that connection's code."""
+    if not value or str(row.get("ref_kind") or "") != "env":
+        return value
+    from .env_refs import binding_for
+
+    binding = binding_for(str(row.get("ref_key") or ""))
+    if binding is None or binding.provider != "github":
+        return value
+    from ..identity import github_urls
+
+    return github_urls.tag(value, "")
+
+
 def resolve_secret_ref(connection, secret_ref_id: str, settings: Settings,
                        project_id: Optional[str] = None, *,
                        principal: Optional[str] = None) -> str:
@@ -1271,7 +1288,7 @@ def resolve_secret_ref(connection, secret_ref_id: str, settings: Settings,
     from .run_secret_redaction import register as _register_known
 
     _register_known(value)
-    return value
+    return _tag_github_by_origin(value, row)
 
 
 #: The principal a read BOSS makes for itself is recorded under (secret_access_events.principal):

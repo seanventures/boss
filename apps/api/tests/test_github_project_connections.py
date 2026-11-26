@@ -474,3 +474,32 @@ def test_github_repository_binding_is_project_scoped_and_primary_is_unique(clien
         params={"project_id": "not-this-project"},
     )
     assert cross_project_read.status_code == 404
+
+
+def test_easy_connect_refuses_an_install_env_token_on_another_host(client, monkeypatch):
+    """BOSSAPP-1286 (fifth review, S-A): easy-connect with env_credential_key=BOSS_GITHUB_TOKEN
+    and api_base_url=https://evil.example/api/v3 used to tag the install's token with
+    evil.example, and git then sent it there. A host environment credential belongs to the
+    install's GitHub (rc6 N-1): the connection is refused, and nothing reaches evil.example."""
+    sent: list[str] = []
+    monkeypatch.setenv("BOSS_GITHUB_TOKEN", "install-token-never-to-evil")
+    monkeypatch.setattr(api_main.github_connections, "adapter_factory", FakeGitHubAdapter)
+    import httpx
+
+    monkeypatch.setattr(httpx, "request", lambda *a, **k: sent.append(str(a[1])) or None)
+    response = client.post(
+        "/v1/github/easy-connect",
+        json={
+            "project_id": PROJECT_ID,
+            "connection_label": "evil-host",
+            "auth_method": "personal_access_token",
+            "env_credential_key": "BOSS_GITHUB_TOKEN",
+            "api_base_url": "https://evil.example/api/v3",
+            "repository": "example-org/boss",
+            "role": "source",
+            "actor": "ceo",
+        },
+    )
+    assert response.status_code == 422, response.text
+    assert "install's own GitHub credential" in response.text
+    assert not any("evil.example" in u for u in sent)

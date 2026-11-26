@@ -395,7 +395,9 @@ def _bound_connection_credential(claims: RunTokenClaims, repos: list[str], *,
         owner, _, name = wanted[0].partition("/")
         token = GitHubConnectionService(get_settings()).token_for_repository(
             db, project_id=project_id, owner=owner, repo=name) or None
-        return github_urls.tag(token, rows[0]["api_base_url"]) if token else None
+        # Tagged at its source by where the secret lives (token_for_repository); an install env
+        # token named by a GHES connection stays the install's and the send check refuses it.
+        return token or None
 
     # An older schema has no bindings, and an unreadable secret is not a reason to refuse here:
     # the rest of the ladder decides. The savepoint keeps a failed read out of the transaction.

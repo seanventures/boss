@@ -157,9 +157,12 @@ class GitHubAdapter:
 
         if self._token_override:
             return self._token_override
-        if self.api_base_url != github_urls.api_base():
+        key = getattr(self.settings, "github_app_private_key", None)
+        own_app = isinstance(key, github_urls.GitHubCredential) and key.api_base == self.api_base_url
+        if self.api_base_url != github_urls.api_base() and not own_app:
             # The install's App and token belong to the install's GitHub, never to another host
-            # (a GHES connection's base): no credential rather than the wrong one.
+            # (a GHES connection's base): no credential rather than the wrong one. A GHES
+            # connection's OWN App (its private key tagged with that host) mints there.
             raise IntegrationConfigurationError(
                 f"No GitHub credential for {github_urls.web_host(self.api_base_url)} was given "
                 f"for {self.repository_full_name}; connect that host's repository in Setup.")

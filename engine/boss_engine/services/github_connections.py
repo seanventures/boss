@@ -243,6 +243,7 @@ class GitHubConnectionService:
             raise ValueError(
                 "auth_method must be one of: " + ", ".join(sorted(self.AUTH_METHODS)) + ".")
         self.secret_refs.parse_credential_ref(credential_ref)
+        _refuse_env_ref_on_another_host(credential_ref, api_base_url)
         connection.execute(
             text("""
                 UPDATE github_connections
@@ -305,6 +306,7 @@ class GitHubConnectionService:
         )
         if secret_ref["provider"] not in {None, "github"}:
             raise ValueError("GitHub connections require a GitHub SecretRef.")
+        _refuse_env_ref_on_another_host(secret_ref, safe_api_base)
         if method == "github_app":
             if not (app_id and app_id.strip()):
                 raise ValueError("github_app connections require app_id.")
@@ -1123,8 +1125,8 @@ class GitHubConnectionService:
                     return github_urls.tag(
                         github_setup.control_plane_token(connection, owner, repo), "")
             # Tagged with ITS connection's host (BOSSAPP-1286): a GHES token never leaves GHES.
-            return github_urls.tag(
-                self._resolve_connection_secret(connection, project_id, ref),
+            return self._tag_by_origin(
+                self._resolve_connection_secret(connection, project_id, ref), ref,
                 self._connection_api_base(connection, project_id, str(rows["connection_id"])))
         except (GitHubConnectionStateError, GitHubConnectionNotFoundError) as error:
             # A bound connection whose secret cannot be read here is not a reason to fail the
@@ -1147,12 +1149,29 @@ class GitHubConnectionService:
             ref = self._credential_ref(connection, project_id, connection_id)
             if str(ref) == "identity_github:app":
                 return None
-            return github_urls.tag(
-                self._resolve_connection_secret(connection, project_id, ref),
+            return self._tag_by_origin(
+                self._resolve_connection_secret(connection, project_id, ref), ref,
                 self._connection_api_base(connection, project_id, connection_id)) or None
         except (GitHubConnectionStateError, GitHubConnectionNotFoundError) as error:
             logger.debug("github: could not resolve the connection's credential: %s", error)
             return None
+
+    @staticmethod
+    def _tag_by_origin(value: Any, ref: Any, conn_base: Any) -> Any:
+        """A resolved credential tagged with the host of WHERE THE SECRET LIVES (BOSSAPP-1286),
+        never with whatever the connection naming it says. A host environment reference
+        (``env:NAME`` / a SecretRef of kind env) is the INSTALL's credential: tagged with the
+        install's host, after env_refs.assert_may_send refuses it for a foreign base (rc6 N-1).
+        Only a secret stored FOR this connection takes the connection's base."""
+        if not value:
+            return value
+        kind, name = _ref_origin(ref)
+        if kind == "env":
+            from .env_refs import assert_may_send
+
+            assert_may_send(name, github_urls.api_base(conn_base))
+            return github_urls.tag(value, "")
+        return github_urls.tag(value, conn_base)
 
     @staticmethod
     def _connection_api_base(connection: Connection, project_id: str, connection_id: str) -> str:
@@ -1504,14 +1523,11 @@ class GitHubConnectionService:
                 f"repository that is what a token without access returns — it is a scope "
                 f"answer, not a missing repository.")
         try:
-            credential = self._resolve_secret(
-                self.secret_refs.require_usable(
-                    connection, project_id=project_id,
-                    credential_ref=self._credential_ref(
-                        connection, project_id, github_connection["id"])),
-                connection)
+            record = self.secret_refs.require_usable(
+                connection, project_id=project_id,
+                credential_ref=self._credential_ref(connection, project_id, github_connection["id"]))
             api = github_urls.api_base(github_connection.get("api_base_url"))
-            credential = github_urls.tag(credential, api)   # this connection's own token
+            credential = self._tag_by_origin(self._resolve_secret(record, connection), record, api)
             who = self._github_get("/user", credential, api_base=api) or {}
             login = str(who.get("login") or "").strip()
             repos = self._github_get(
@@ -1606,11 +1622,11 @@ class GitHubConnectionService:
         if credential:
             credential = github_urls.tag(credential, "")   # the Setup App: the install's host
         if not credential and self._custom_secret_resolver is None:
-            credential = github_urls.tag(self._resolve_secret(secret_ref, connection),
-                                         github_connection.get("api_base_url"))
+            credential = self._tag_by_origin(self._resolve_secret(secret_ref, connection),
+                                             secret_ref, github_connection.get("api_base_url"))
         elif not credential:
-            credential = github_urls.tag(self.secret_resolver(secret_ref),
-                                         github_connection.get("api_base_url"))
+            credential = self._tag_by_origin(self.secret_resolver(secret_ref), secret_ref,
+                                             github_connection.get("api_base_url"))
         if not credential:
             raise GitHubConnectionStateError(
                 "GitHub SecretRef could not be resolved by this execution node."
@@ -2099,6 +2115,26 @@ def ghes_hosts(db: Any) -> dict[str, str]:
                 out.setdefault(host, api)
     _GHES_HOSTS_CACHE["hosts"] = (now + GHES_HOSTS_TTL_S, out)
     return dict(out)
+
+
+def _ref_origin(ref: Any) -> tuple[str, str]:
+    """(kind, key) of where a credential reference's secret lives: a SecretRef record
+    (``ref_kind``/``ref_key``) or a ``kind:key`` string such as ``env:BOSS_GITHUB_TOKEN``."""
+    if isinstance(ref, dict):
+        return str(ref.get("ref_kind") or "").lower(), str(ref.get("ref_key") or "")
+    kind, _, key = str(ref or "").partition(":")
+    return kind.lower(), key
+
+
+def _refuse_env_ref_on_another_host(ref: Any, api_base_url: Any) -> None:
+    """A host environment credential (env:NAME) belongs to the INSTALL's GitHub: a connection
+    may not pair it with another API base (BOSSAPP-1286, rc6 N-1) — the token would otherwise be
+    sent to whatever host the connection names."""
+    kind, name = _ref_origin(ref)
+    if kind == "env" and github_urls.api_base(api_base_url) != github_urls.api_base():
+        raise ValueError(
+            f"{name or 'This environment credential'} is the install's own GitHub credential; it "
+            f"goes only to {github_urls.web_host()}. Paste a token for the other host instead.")
 
 
 def api_base_for_repository(connection: Connection, project_id: Optional[str], owner: str = "",

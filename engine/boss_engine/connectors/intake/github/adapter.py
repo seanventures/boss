@@ -516,8 +516,13 @@ def _headers(conn: IntakeConnection, repo: str) -> dict[str, str]:
     Never handed to an agent, never logged."""
     headers = {"Accept": "application/vnd.github+json", "User-Agent": "boss-intake"}
     base = _api_base(conn)
-    # The connection's own token belongs to the connection's host.
-    token = github_urls.tag(conn.secret("api_token"), base)
+    # The connection's own token belongs to the connection's host — unless it lives in the host
+    # environment (an install credential, tagged at resolution): then it is refused here, never
+    # re-labelled onto this connection's host (BOSSAPP-1286).
+    try:
+        token = github_urls.tag(conn.secret("api_token"), base)
+    except github_urls.CrossHostCredential:
+        token = ""
     if not token and conn.db is not None and conn.project_id:
         try:
             from ....services.github_connections import GitHubConnectionService

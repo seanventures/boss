@@ -201,7 +201,7 @@ def _read_ghes_hosts() -> set[str]:
     with engine.connect() as conn:
         # A schema with no connections table holds no connections: only the install's own GHES
         # host (static fence). A table that exists but cannot be read is a failure (closed).
-        if conn.execute(text("SELECT to_regclass('public.github_connections')")).scalar() is None:
+        if conn.execute(text("SELECT to_regclass('github_connections')")).scalar() is None:
             return set()
         conn.execute(text("SELECT api_base_url FROM github_connections LIMIT 1"))
     return set(ghes_hosts(engine))

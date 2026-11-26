@@ -649,7 +649,9 @@ class EgressProxy:
                 db, project_id=project, owner=owner, repo=name)
         if not token:
             raise github_app.GitHubRefused("ghes_not_connected", 403)
-        return github_urls.tag(token, bound)   # this host's credential, and only this host's
+        # Tagged at its source by where the secret lives (token_for_repository): an install env
+        # token a GHES connection names stays the install's; the upstream check refuses it.
+        return token
 
     def _installation_token(self, claims: RunTokenClaims, db: Any) -> str:
         cached = github_app.cached_for_run(claims.task.run_id)
