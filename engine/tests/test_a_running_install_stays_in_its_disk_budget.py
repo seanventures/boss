@@ -636,6 +636,7 @@ def test_development_cap_uses_autonomy_for_scheduled_dumps_only(db, tmp_path, mo
         row = c.execute(text("SELECT * FROM decisions WHERE recommendation->>'tool'=:t"),
                         {"t": bs.CAP_TOOL}).mappings().one()
         assert row["risk_tier"] == 2 and row["recommendation"]["autonomy"]["route"] == "act"
+        assert "deleted storage" in row["recommendation"]["autonomy"]["undo"]
         assert autonomy_gate.decide(c, get_settings(), row["id"])["decided"]
     with engine.begin() as c:
         approved = c.execute(text("SELECT approved_by FROM decisions WHERE id=:d"), {"d": row["id"]}).scalar_one()

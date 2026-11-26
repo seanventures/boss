@@ -214,7 +214,7 @@ ACTIONS: dict[str, Rule] = {
     "self_fix.remove": _r(ACT, NONE_RECORD, _EM),
     "self_improvement.begin_canary": _r(ASK_PROD_ONLY, NONE_VERSION, _EM, "install"),
     "self_improvement.rollout": _r(ASK_PROD_ONLY, NONE_VERSION, _EM, "install"),
-    "storage_delete": _r(ASK_PROD_ONLY, NONE_RECORD, _INF, "install"),
+    "storage_delete": _r(ASK_PROD_ONLY, "none:deleted storage cannot be restored by undoing this decision", _INF, "install"),
     "storage_rule": _r(ACT, NONE_RECORD, _INF),
     # G. credentials, external channels, data boundary
     "provide_github_token": _r(ASK_CREDENTIAL, NONE_RECORD, _EM),
