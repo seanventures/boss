@@ -563,8 +563,13 @@ cmd_prune() {
     bash "$INSTALL_DIR/scripts/install/prune.sh" "$@"
   # The test Postgres's volume, when no container uses it (BOSSAPP-1459): the steward, whose
   # label gate is the one place BOSS removes a volume.
-  local dry=()
-  [[ " $* " == *" --dry-run "* ]] && dry=(--dry-run)
+  local dry=() arg
+  for arg in "$@"; do
+    case "$arg" in
+      --cache-only) return 0 ;;
+      --dry-run) dry=(--dry-run) ;;
+    esac
+  done
   python3 "$INSTALL_DIR/scripts/install/steward.py" --install-dir "$INSTALL_DIR" --test-leftovers \
     ${dry[@]+"${dry[@]}"} </dev/null || printf 'boss: test leftovers not checked\n' >&2
 }

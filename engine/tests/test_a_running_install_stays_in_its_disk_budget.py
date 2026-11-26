@@ -643,3 +643,16 @@ def test_development_cap_uses_autonomy_for_scheduled_dumps_only(db, tmp_path, mo
         assert approved.startswith(autonomy_gate.ACTOR_PREFIX)
         assert not c.execute(text("SELECT 1 FROM retention_rules WHERE kind='scheduled_backups'")).first()
     assert [p.exists() for p in paths] == [True, True, True, False, False, True]
+
+def test_cli_cache_only_never_reaches_volume_cleanup():
+    source = (INSTALL / "boss.sh").read_text().split("cmd_prune() {", 1)[1].split("\n}", 1)[0]
+    script = """
+need_install() { :; }
+env_value() { :; }
+bash() { printf 'cache-tool\n'; }
+python3() { printf 'volume-tool\n'; }
+cmd_prune() {""" + source + "\n}\ncmd_prune \"$@\""
+    def run(*args):
+        return subprocess.check_output(["bash", "-c", script, "probe", *args], text=True).splitlines()
+    assert run("--dry-run", "--cache-only", "--room") == ["cache-tool"]
+    assert run("--dry-run") == ["cache-tool", "volume-tool"]
