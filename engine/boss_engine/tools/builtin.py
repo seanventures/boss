@@ -1790,6 +1790,21 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                                    "— the label and hint the start form shows. required "
                                    "defaults to true.",
                 },
+                "requirement": {
+                    "type": "string",
+                    "description": "The requirement this workflow is designed from (a ticket, "
+                                   "the person's words), verbatim. When you design from one, "
+                                   "pass it and map it in `coverage`: the draft is checked "
+                                   "against it before it publishes, and the check is recorded."},
+                "coverage": {
+                    "type": "array",
+                    "items": {"type": "object"},
+                    "description": "Your self-review of the draft against `requirement`: one "
+                                   "entry per clause of it, {clause, step} naming the step id "
+                                   "that does it, or {clause, gap} saying plainly what this "
+                                   "design does NOT do. Every clause, including the ones the "
+                                   "design misses (a rejection, a test the requirement names, "
+                                   "an input it needs). Required with `requirement`."},
                 "project_id": {"type": "string"},
             },
             ["name", "steps"],
@@ -1826,6 +1841,9 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         spec = _spec_from_steps(args.get("steps") or [], args)
         if isinstance(spec, dict) and spec.get("ok") is False:
             return spec
+        review = requirement_review(args.get("requirement"), args.get("coverage"), spec)
+        if review.get("ok") is False:
+            return review
         with ctx.begin() as c:
             def _exists(k: str) -> bool:
                 return bool(c.execute(
@@ -1910,6 +1928,15 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                     c, project_id=pid, definition_id=definition_id, spec=spec, actor=actor)
             except Exception as error:  # noqa: BLE001 — the reason belongs in the reply
                 return {"ok": False, "error": f"{type(error).__name__}: {str(error)[:300]}"}
+            if review.get("checked"):
+                # THE CHECK, ON THE RECORD: which clause each step does and what the design
+                # leaves out, beside the version it was made for.
+                from ..services.core import emit_event
+
+                emit_event(c, pid, "workflow.requirement_review", actor, "workflow_version",
+                           str(published.get("id") or definition_id),
+                           {"workflow_key": key, "version": published.get("version"),
+                            **{k: review[k] for k in ("requirement", "coverage", "gaps")}})
             work_class = str(args.get("work_class") or "").strip()
             mapped = None
             # BUILD POSTS ONLY work_class=project.new. Mapping that slot — or the
@@ -1932,6 +1959,9 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                     mapped = {"note": f"published, but not mapped: {str(error)[:160]}"}
         return {"status": "published", "workflow_key": key, "definition_id": definition_id,
                 "version": published.get("version"), "steps": len(spec["steps"]),
+                **({"requirement_review": {"clauses": len(review["coverage"]),
+                                           "gaps": review["gaps"]}}
+                   if review.get("checked") else {}),
                 **({"note": f"published as version {published.get('version')} of the existing "
                             f"workflow {key}"} if existing else {}),
                 # Named, because a step BOSS defined on the operator's behalf is something they
@@ -2393,6 +2423,15 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                                    "explicitly said to start without, e.g. "
                                    "['deployment_target']. Never fill this in on your own.",
                 },
+                "once_per": {
+                    "type": "string",
+                    "description": "What started this work, when it was an event: the event id, "
+                                   "or the pull request and its head commit "
+                                   "(owner/repo#12@<sha>). The same once_per starts this "
+                                   "workflow ONCE — a second start (a retried turn, the same "
+                                   "push seen twice) answers with the run already going. Always "
+                                   "set it when a pull request or push started you.",
+                },
                 "allow_unsupported_stack": {
                     "type": "boolean",
                     "description": "Start even though the refusal said code stack_unsupported "
@@ -2518,15 +2557,23 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 run = wf.start_run(
                     c, project_id=pid, actor=actor,
                     input_data=run_input,
-                    dedupe_key=f"agent:{key}:{uuid4().hex[:12]}",
+                    # ONE EVENT, ONE RUN (BOSSAPP-1133): a start that names what started it is
+                    # keyed on that, so the same pull request event never starts two runs.
+                    dedupe_key=_start_dedupe_key(key, args.get("once_per"),
+                                                 lambda: uuid4().hex[:12]),
                     workflow_version_id=version_id,
                     adopted=adoption,
                 )
             except Exception as error:  # noqa: BLE001 — the reason belongs in the reply
                 return {"ok": False, "error": f"{type(error).__name__}: {str(error)[:300]}"}
             _ready.record_started_anyway(c, pid, actor, run.get("id") or "", readiness)
-        return {"status": "running", "run_id": run.get("id"), "workflow_key": key,
+        # A second start of the same once_per answers with that run AS IT IS (it may have
+        # finished, failed or be waiting on a person), never "running" by default.
+        return {"status": (str(run.get("status") or "running") if run.get("duplicate")
+                           else "running"),
+                "run_id": run.get("id"), "workflow_key": key,
                 "project_id": pid, "title": title,
+                **({"already_started": True} if run.get("duplicate") else {}),
                 **({"built_on_research": adopted} if adopted else {}),
                 **({"ignored_input": ignored} if ignored else {}),
                 "ignored_args": unknown_args,
@@ -3390,6 +3437,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         reversibility="safe", permission="deployment:create",
         exposure=Exposure(tags=("deploy", "config")))
     def deploy_config(ctx, *, project_id, actor, args):
+        from .registry import trusted_step_arg
         from ..services.config_deploy import deploy_files
         from ..services.github_actions import WORKFLOW_RUN_ID
 
@@ -3406,6 +3454,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
             person_required=args.get("person_required") is True,
             code_task_run_id=(str(args["code_task_run_id"]) if args.get("code_task_run_id") else None),
             source_paths=args.get("source_paths"),
+            released_gate=trusted_step_arg("released_gate"),
             # Which run deployed it, set by the runner on the server (never an argument), so a
             # promotion can be checked against the run that staged it (BOSSAPP-1167).
             workflow_run_id=WORKFLOW_RUN_ID.get() or None)
@@ -3441,6 +3490,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         reversibility="safe", permission="deployment:create",
         exposure=Exposure(tags=("deploy", "config")))
     def promote_config(ctx, *, project_id, actor, args):
+        from .registry import trusted_step_arg
         from ..services.config_deploy import promote
         from ..services.github_actions import WORKFLOW_RUN_ID
 
@@ -3458,7 +3508,37 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
             target_id=(str(args["target_id"]) if args.get("target_id") else None),
             approval_decision_id=(str(args["approval_decision_id"])
                                   if args.get("approval_decision_id") else None),
-            person_required=args.get("person_required") is True)
+            person_required=args.get("person_required") is True,
+            released_gate=trusted_step_arg("released_gate"))
+
+    @reg.tool(
+        "rollback_config",
+        "Roll back a SUCCEEDED config deployment (BOSSAPP-1173): restore the previous version of "
+        "every file it replaced and remove the files it added, reload, check health, receipt. "
+        "Name it by deployment_run_id — never guessed. Inside a workflow it "
+        "must be a deployment that run shipped. Production asks a person in Approvals (or takes "
+        "its step's gate a person released); staging runs on the approval the deployment itself "
+        "ran on. Planned is NOT done: a workflow step waits on the rollback run.",
+        _obj({"deployment_run_id": {"type": "string",
+                                    "description": "the deprun_ of the succeeded config deployment"}},
+             required=[]),
+        kind="write",
+        reversibility="safe", permission="deployment:create",
+        exposure=Exposure(tags=("deploy", "config")))
+    def rollback_config(ctx, *, project_id, actor, args):
+        from .registry import trusted_step_arg
+        from ..services.config_deploy import rollback
+        from ..services.github_actions import WORKFLOW_RUN_ID
+
+        # ONE NAME for the deployment, so the production check (object_args.PRODUCTION) reads
+        # the same argument the handler acts on.
+        source = args.get("deployment_run_id")
+        return rollback(
+            ctx.engine, ctx.settings, project_id=project_id, actor=actor,
+            deployment_run_id=(str(source) if source else None),
+            # Its step's gate arrives only as the runner's trusted value, never an argument.
+            workflow_run_id=WORKFLOW_RUN_ID.get() or None,
+            released_gate=trusted_step_arg("released_gate"))
 
     @reg.tool(
         "preflight_deployment_target",
@@ -6016,7 +6096,18 @@ def _slim_run(r: dict) -> dict:
 #: start_workflow's own arguments (its schema): never carried into the run as workflow inputs.
 _START_WORKFLOW_ARGS = frozenset({"directive", "workflow_key", "title", "from_discovery", "inputs",
                                   "start_anyway", "allow_unsupported_stack", "project_id",
-                                  PROJECT_ARG})
+                                  "once_per", PROJECT_ARG})
+
+
+def _start_dedupe_key(workflow_key: str, once_per: Any, fresh: Any) -> str:
+    """`start_workflow`'s run key: one run per (workflow, once_per) when the caller named what
+    started the work, else a fresh one. Hashed: an event id never lands in a key verbatim."""
+    import hashlib
+
+    said = " ".join(str(once_per or "").split())
+    if not said:
+        return f"agent:{workflow_key}:{fresh()}"
+    return f"agent:{workflow_key}:once:{hashlib.sha256(said.encode()).hexdigest()[:32]}"
 
 
 def _offer_button_label(label: Any, tool: str, args: Any) -> str:
@@ -10800,7 +10891,7 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     "redeploy",
     # Configuration deploys (config_deploy, BOSSAPP-1140): files into a config directory, governed
     # like a deploy; a promotion ships the same bytes to production under its rules.
-    "deploy_config", "promote_config", "create_config_target",
+    "deploy_config", "promote_config", "rollback_config", "create_config_target",
     # Removing an app: a button the person presses, governed like a deploy (app_removal).
     "remove_app",
     "start_preview",
@@ -10825,14 +10916,32 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     "captain_drive",
     "captain_overwatch",
     "captain_theater",
+    # ASKING A PERSON, FROM CHAT (BOSSAPP-1359). Each opens a card in Needs you and changes
+    # nothing until a person answers; registered for chat (Exposure surfaces) and unreachable
+    # from it until now, so the agent could only describe the card it was meant to raise.
+    "offer_options", "propose_hire", "propose_secret", "request_budget_override",
+    "request_tool_access", "watch_work_item",
+    # Re-checking a finished change: costs money, so it is offered as a button, never run.
+    "recheck_change",
+    # The project's Knowledge Graph from chat: proposals a person reviews (documents, sections)
+    # and the case-study samples, gated on knowledge:manage like the console's own buttons.
+    "add_document_from_file", "add_regulation_document", "set_ontology_pack",
+    "load_aml_sample", "load_dq_platform",
+    # The Infra Agent's storage incident, from chat as from its own steps: words on the incident,
+    # one notch of the deterministic cleanup, a rule proposal, the install-wide work hold. Tier 3
+    # still always goes to a person; each is gated on system:operate.
+    "storage_report", "storage_run_step", "storage_propose_rule",
+    "work_hold_set", "work_hold_release",
 })
 
 #: REGISTERED, AND DELIBERATELY NOT REACHABLE FROM CHAT.
 #:
 #: The workflow's `research` and `meeting` steps need these tools, but a chat must start a
 #: workflow so the run and its outcome stay linked. The separate raw SQL hold below protects
-#: project-pinned chat until the database enforces project scope.
-_WORKFLOW_ONLY_TOOLS = frozenset({"create_discovery", "request_meeting"})
+#: project-pinned chat until the database enforces project scope. `write_file` writes an agent
+#: step's own /scratch notes and /memories (Exposure surface agent_step only): a chat turn has no
+#: run scratch to write to.
+_WORKFLOW_ONLY_TOOLS = frozenset({"create_discovery", "request_meeting", "write_file"})
 _DISCUSS_UNSCOPED_WRITE_TOOLS = frozenset({"write_db"})
 
 #: Tables raw SQL may never write: every identity table (bindings, roles, seats, credentials, the
@@ -10893,6 +11002,52 @@ def action_unavailable(name: str, settings: Any) -> str | None:
                                          _UNAVAILABLE_DETAIL[key])
         return _UNAVAILABLE_SAID[key]
     return None
+
+
+def requirement_review(requirement: Any, coverage: Any, spec: dict) -> dict:
+    """The authoring turn's self-review of a draft against the requirement it was made from
+    (BOSSAPP-1361).
+
+    A workflow designed from a ticket published ~8 times before it ran, and still never
+    rejected a non-conforming config and tested only /healthz — two things the ticket asked
+    for. The model maps the requirement; this holds the map to the draft: every clause names a
+    step that EXISTS in it or says plainly what the design does not do. Nothing here judges the
+    words (the model does); it refuses a review that is missing, points at a step the draft does
+    not have, or leaves a clause with neither."""
+    said = str(requirement or "").strip()
+    if not said:
+        return {"checked": False}
+    entries = coverage if isinstance(coverage, list) else []
+    if not entries:
+        return {"ok": False, "error": (
+            "a draft made from a requirement is reviewed against it before it publishes: pass "
+            "coverage — one {clause, step} or {clause, gap} per clause of the requirement.")}
+    steps = {str(s.get("id")) for s in spec.get("steps") or [] if isinstance(s, dict)}
+    problems: list[str] = []
+    mapped: list[dict] = []
+    gaps: list[str] = []
+    for n, entry in enumerate(entries, 1):
+        entry = entry if isinstance(entry, dict) else {}
+        clause = str(entry.get("clause") or "").strip()
+        step = str(entry.get("step") or "").strip()
+        gap = str(entry.get("gap") or "").strip()
+        if not clause:
+            problems.append(f"coverage entry {n} names no clause")
+        elif step and step not in steps:
+            problems.append(f"clause {clause[:60]!r} names step {step!r}, which this draft does "
+                            f"not have (steps: {', '.join(sorted(steps))})")
+        elif not step and not gap:
+            problems.append(f"clause {clause[:60]!r} has neither a step that does it nor a gap "
+                            "saying it is not done")
+        else:
+            mapped.append({"clause": clause[:400], **({"step": step} if step else {}),
+                           **({"gap": gap[:400]} if gap else {})})
+            if gap and not step:
+                gaps.append(f"{clause[:120]}: {gap[:200]}")
+    if problems:
+        return {"ok": False, "error": "the draft's review against the requirement is incomplete: "
+                                      + "; ".join(problems[:4])}
+    return {"checked": True, "requirement": said[:4000], "coverage": mapped, "gaps": gaps}
 
 
 def build_discuss_read_registry(*, edition: str | None = None) -> ToolRegistry:

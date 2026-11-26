@@ -1294,6 +1294,9 @@ class EngineAgent:
         "generate_image",
         # Arbitrary shell on a registered host always needs a visible button press.
         "run_on_host",
+        # EVERY CHAT-REACHABLE `costs_money` TOOL (test_every_costly_chat_tool_is_a_button):
+        # re-running a change's gates, a second review of a PR, building from a template.
+        "recheck_change", "review_pull_request_again", "apply_template",
     })
 
     #: THROWS AWAY WORK, OR REMOVES A SAFEGUARD. Always offered, never executed by the model.

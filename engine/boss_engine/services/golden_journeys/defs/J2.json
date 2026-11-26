@@ -1,0 +1,115 @@
+{
+  "id": "J2",
+  "title": "Ticket to pull request on an Enterprise Server repo, in Go",
+  "ticket": "BOSSAPP-1284",
+  "summary": "The J1 job on a Go service whose repository lives on GitHub Enterprise Server (the preview team's own host), built and tested with go test, ending in a pull request on that server.",
+  "modes": [
+    "real"
+  ],
+  "pending": {
+    "waits_for": "PR #330 (GHES routing, BOSSAPP-1286)",
+    "why": "builds on a GitHub Enterprise Server repository route through the server's own API only once #330 lands"
+  },
+  "needs": {
+    "fixtures": [
+      "a Go service repository on the install's GitHub Enterprise Server connection (ghes_owner, ghes_repo)"
+    ],
+    "defaults": {
+      "base_branch": "main",
+      "profile": "balanced",
+      "model_config": null,
+      "title": "Add a /healthz endpoint",
+      "instructions": "Add GET /healthz answering 200 with {\"status\":\"ok\"} to the HTTP server, with a test.",
+      "criteria": [
+        "GET /healthz answers 200 with {\"status\":\"ok\"}",
+        "go test ./... passes"
+      ]
+    }
+  },
+  "steps": [
+    {
+      "id": "start",
+      "call": "POST /v1/code-tasks",
+      "expect_status": [
+        200
+      ],
+      "body": {
+        "project_id": "{{project_id}}",
+        "title": "{{title}}",
+        "instructions": "{{instructions}}",
+        "acceptance_criteria": "{{criteria}}",
+        "test_commands": [
+          "go test ./..."
+        ],
+        "owner": "{{ghes_owner}}",
+        "repo": "{{ghes_repo}}",
+        "base_branch": "{{base_branch}}",
+        "open_pr": true,
+        "profile": "{{profile}}",
+        "risk_tier": 1,
+        "model_config": "{{model_config}}"
+      },
+      "save": {
+        "run_id": "run_id"
+      }
+    },
+    {
+      "id": "work",
+      "do": "drain"
+    },
+    {
+      "id": "done",
+      "call": "GET /v1/code-tasks/{{run_id}}",
+      "until": {
+        "path": "status",
+        "in": [
+          "completed",
+          "failed",
+          "blocked",
+          "cancelled"
+        ]
+      },
+      "timeout_s": 3600,
+      "every_s": 20
+    },
+    {
+      "id": "gates",
+      "call": "GET /v1/code-tasks/{{run_id}}/gates",
+      "expect_status": [
+        200
+      ]
+    }
+  ],
+  "acceptance": [
+    {
+      "text": "The build finished as completed",
+      "step": "done",
+      "path": "status",
+      "equals": "completed"
+    },
+    {
+      "text": "A pull request was opened for the change",
+      "step": "done",
+      "path": "pull_request_url",
+      "present": true
+    },
+    {
+      "text": "The old tests still pass on the final gate",
+      "step": "gates",
+      "path": "gates[name=existing_tests_intact].ok",
+      "equals": true
+    },
+    {
+      "text": "BOSS's acceptance check found every must-have met",
+      "step": "gates",
+      "path": "gates[name=acceptance_met].ok",
+      "equals": true
+    },
+    {
+      "text": "The pull request is on the Enterprise Server host",
+      "step": "done",
+      "path": "pull_request_url",
+      "present": true
+    }
+  ]
+}

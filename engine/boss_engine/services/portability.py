@@ -590,8 +590,12 @@ def _apply_op(connection: Connection, settings: Any, project_id: str, op: dict[s
             return {"result": "applied",
                     "needs_secret": (data["auth"]["secret"].get(PLACEHOLDER_KEY) or {}).get("name")}
     elif section == "role_skills":
-        from .skill_definitions import assign_skill_to_role
+        from .skill_definitions import assign_skill_to_role, cannot_run_here
 
+        why = cannot_run_here(connection, project_id, data["skill_id"])
+        if why:
+            # Skipped and said, not an error that fails the import (BOSSAPP-1366).
+            return {"result": "kept", "note": f"not granted: {why}"}
         assign_skill_to_role(connection, project_id=project_id, actor=actor,
                              role_key=data["role_key"], skill_id=data["skill_id"])
     elif section == "role_mcp":

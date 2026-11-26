@@ -53,12 +53,27 @@ listener over the same rules. With BOSS_MODEL_PROXY_VIA_GATEWAY=1 (and BOSS_MODE
 a local session's handle is issued at that gateway instead, so both lanes run one code path.
 Off by default: nothing changes for `runtime: local`.
 
-WHAT IS NOT COVERED
--------------------
-A subscription login (CLAUDE_CODE_OAUTH_TOKEN, the Codex ChatGPT login file, a Grok session) is
-not an API key and is not proxied: those CLIs authenticate their own way, and their credential
-stays in the session as before. A micro-VM guest receives its credential through guest_spec
-(sandbox_contract); it has no loopback shared with BOSS. docs/community/MODEL_CONNECTIONS.md.
+SUBSCRIPTION LOGINS TOO (BOSSAPP-1480)
+-------------------------------------
+A subscription login (the Claude long-lived token or CLI login, the Codex ChatGPT login, a Grok
+session) is a credential like a key, and it is held the same way: the proxy keeps it, the session
+gets a run token on one of SUBSCRIPTION_ADAPTERS, and each CLI is pointed at the proxy through a
+base URL it honours (measured against the binaries, not taken from docs alone):
+
+  * Claude Code 2.1: CLAUDE_CODE_OAUTH_TOKEN=<run token> + ANTHROPIC_BASE_URL. The CLI sends
+    `Authorization: Bearer <token>` with its oauth beta header to `<base>/v1/messages` only.
+  * Codex 0.154: a ChatGPT-mode login whose access token is the run token, and a model provider
+    with `requires_openai_auth = true` and the proxy's base URL (OPENAI_BASE_URL is ignored in
+    ChatGPT mode). Codex sends `/responses` and `/models` there over HTTP, with its account id.
+  * Grok Build 1.0: GROK_CLI_CHAT_PROXY_BASE_URL + GROK_AUTH_PROVIDER_COMMAND printing the run
+    token (the CLI's documented external-auth contract).
+
+A grant's credential may be a SOURCE read per request (`issue(..., source=)`), so a login the
+control plane refreshes (claude_login, codex_login) is followed without the session ever holding
+it. subscription_shield builds each engine's session; sandbox_identity no longer copies any login
+into a run. A micro-VM guest on contract v1.1 receives handles only (sandbox_contract); the
+legacy v1.0 lane still carries a Claude token, and is refused by name on strict hosts.
+docs/community/MODEL_CONNECTIONS.md.
 """
 from __future__ import annotations
 
@@ -96,6 +111,43 @@ from .streaming_model_gateway import (  # noqa: E402
     ADAPTERS, ANTHROPIC, HOP_HEADERS as _HOP, KEY_ENV_PROVIDER, OPENAI, OPENROUTER, GatewayClient,
     PlaceholderRefused, ProviderAdapter, UsageReader as _UsageReader, outbound_headers)
 
+# ── Subscription logins (BOSSAPP-1480) ────────────────────────────────────────────────────────
+#: The model paths each subscription CLI calls, and nothing else: a run token on one of these
+#: cannot reach an account page, a settings fetch or a token endpoint.
+_SUB_MODEL_ID = r"[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}"
+#: The Claude subscription (long-lived token or CLI login): the Anthropic API with an OAuth
+#: bearer. The CLI adds its own `anthropic-beta: oauth-…` header; the proxy only swaps the bearer.
+#: Like ANTHROPIC, it follows an ANTHROPIC_BASE_URL set in the INSTALL's environment (an
+#: operator's corporate gateway): that gateway then receives the subscription token, exactly as
+#: the CLI sent it there before the proxy existed. Unset, it is api.anthropic.com.
+CLAUDE_SUBSCRIPTION = ProviderAdapter(
+    name="claude_subscription", upstream=ANTHROPIC.upstream, paths=ANTHROPIC.paths,
+    header="authorization", header_format="Bearer {}",
+    key_env=("CLAUDE_CODE_OAUTH_TOKEN",), base_env=(("ANTHROPIC_BASE_URL", ""),),
+    upstream_env=("ANTHROPIC_BASE_URL",))
+#: The Codex ChatGPT login: ChatGPT's Codex backend. Codex reads its token from auth.json, not
+#: the environment (subscription_shield writes a run-token login), so there is no key_env.
+CODEX_SUBSCRIPTION = ProviderAdapter(
+    name="codex_subscription", upstream="https://chatgpt.com/backend-api/codex",
+    paths=(("POST", r"/responses"), ("POST", r"/responses/compact"), ("GET", r"/models")),
+    header="authorization", header_format="Bearer {}", key_env=(), base_env=())
+#: The Grok Build session: xAI's CLI chat proxy (GROK_CLI_CHAT_PROXY_BASE_URL is `<base>/v1`).
+GROK_SUBSCRIPTION = ProviderAdapter(
+    name="grok_subscription", upstream="https://cli-chat-proxy.grok.com",
+    paths=(("POST", r"/v1/chat/completions"), ("POST", r"/v1/responses"),
+           ("POST", r"/v1/messages"), ("GET", r"/v1/models"),
+           ("GET", rf"/v1/models/{_SUB_MODEL_ID}")),
+    header="authorization", header_format="Bearer {}", key_env=(),
+    base_env=(("GROK_CLI_CHAT_PROXY_BASE_URL", "/v1"),))
+SUBSCRIPTION_ADAPTERS: dict[str, ProviderAdapter] = {
+    a.name: a for a in (CLAUDE_SUBSCRIPTION, CODEX_SUBSCRIPTION, GROK_SUBSCRIPTION)}
+#: Every adapter this proxy serves: the API-key providers (shared with the central gateway) and
+#: the subscription logins (this proxy only).
+_ADAPTERS: dict[str, ProviderAdapter] = {**ADAPTERS, **SUBSCRIPTION_ADAPTERS}
+#: The environment names a subscription login travels under in a CLI's environment. A raw value
+#: under one of these never reaches a sandboxed process (sandbox_identity.env).
+SUBSCRIPTION_ENV: tuple[str, ...] = ("CLAUDE_CODE_OAUTH_TOKEN", "CODEX_ACCESS_TOKEN", "GROK_AUTH")
+
 
 # ── Grants ────────────────────────────────────────────────────────────────────────────────────
 
@@ -115,6 +167,8 @@ class Grant:
     run_id: Optional[str] = None
     project_id: Optional[str] = None
     credential: str = field(default="", repr=False)
+    #: A login the control plane refreshes: read on every request instead of `credential`.
+    source: Optional[Callable[[], str]] = field(default=None, repr=False)
     revoked: bool = False
     usage: dict = field(default_factory=lambda: {
         "requests": 0, "refused": 0, "input_tokens": 0, "output_tokens": 0,
@@ -122,6 +176,18 @@ class Grant:
 
     def live(self, now: Optional[float] = None) -> bool:
         return not self.revoked and (now or time.time()) < self.expires_at
+
+    def current_credential(self) -> str:
+        """The credential to attach now: the source's current value, else the held one."""
+        if self.source is not None:
+            try:
+                value = (self.source() or "").strip()
+            except Exception:  # noqa: BLE001 — an unreadable login is "unavailable", never a crash
+                value = ""
+            if value:
+                _register_redaction(value)
+            return value
+        return self.credential
 
 
 @dataclass(frozen=True)
@@ -205,17 +271,19 @@ class ModelProxy:
     # ---- grants ----------------------------------------------------------------------------------
     def issue(self, provider: str, credential: str, *, ttl: float,
               run_id: Optional[str] = None, project_id: Optional[str] = None,
-              upstream: Optional[str] = None) -> Issued:
-        adapter = ADAPTERS[provider]
-        if not credential:
+              upstream: Optional[str] = None,
+              source: Optional[Callable[[], str]] = None) -> Issued:
+        adapter = _ADAPTERS[provider]
+        if not credential and source is None:
             raise ValueError("no credential to proxy")
         token = TOKEN_PREFIX + secrets.token_hex(32)
         _register_redaction(token)
-        _register_redaction(credential)
+        if credential:
+            _register_redaction(credential)
         grant = Grant(token_hash=_hash(token), provider=provider,
                       upstream=adapter.resolve_upstream(upstream),
                       expires_at=time.time() + max(1.0, float(ttl)), run_id=run_id,
-                      project_id=project_id, credential=credential)
+                      project_id=project_id, credential=credential, source=source)
         base = self.base_url(provider)
         with self._lock:
             self._sweep()
@@ -236,7 +304,7 @@ class ModelProxy:
             if grant is None:
                 return {}
             grant.revoked = True
-            grant.credential = ""
+            grant.credential, grant.source = "", None
             return dict(grant.usage)
 
     def revoke_run(self, run_id: str) -> int:
@@ -245,7 +313,7 @@ class ModelProxy:
         with self._lock:
             for grant in self._grants.values():
                 if grant.run_id == run_id and not grant.revoked:
-                    grant.revoked, grant.credential = True, ""
+                    grant.revoked, grant.credential, grant.source = True, "", None
                     n += 1
         return n
 
@@ -269,7 +337,7 @@ class ModelProxy:
     def authorise(self, provider: str, path: str, method: str,
                   headers: Mapping[str, str]) -> tuple[int, str, Optional[Grant]]:
         """(status, reason, grant): 200 with the grant when the request may go upstream."""
-        adapter = ADAPTERS.get(provider)
+        adapter = _ADAPTERS.get(provider)
         if adapter is None:
             return 404, "unknown_provider", None
         token = _presented(headers)
@@ -295,7 +363,7 @@ class ModelProxy:
                         url: str = "", body: bytes = b"") -> dict[str, str]:
         """The shared rewrite (streaming_model_gateway.outbound_headers): every client
         credential header dropped, the real one attached (or the request signed)."""
-        return outbound_headers(ADAPTERS[grant.provider], headers, grant.credential,
+        return outbound_headers(_ADAPTERS[grant.provider], headers, grant.current_credential(),
                                 method=method, url=url, body=body)
 
     def tally(self, grant: Grant, usage: Mapping[str, int]) -> None:
@@ -320,6 +388,19 @@ def _refusal(provider: str, status: int, reason: str) -> bytes:
         "permission_error" if status == 403 else "not_found_error")
     return json.dumps({"type": "error", "error": {
         "type": kind, "message": f"boss model proxy: {_say(reason)}"}}).encode()
+
+
+_SUBSCRIPTION_NAMES = {"claude_subscription": "Claude Code", "codex_subscription": "Codex",
+                       "grok_subscription": "Grok Build"}
+
+
+def _subscription_refused(provider: str) -> bytes:
+    name = _SUBSCRIPTION_NAMES.get(provider, "subscription")
+    return json.dumps({"type": "error", "error": {
+        "type": "authentication_error", "code": "subscription_login_refused",
+        "message": (f"boss model proxy: the {name} subscription login was refused by the "
+                    "provider (expired, revoked, or mid-refresh). BOSS refreshes it on its own; "
+                    f"if this repeats, sign {name} in again in Setup > Models.")}}).encode()
 
 
 def _say(reason: str) -> str:
@@ -386,6 +467,13 @@ def _handler_for(proxy: ModelProxy):
             try:
                 with proxy.upstream(self.command, url, out_headers, body) as (code, resp_headers,
                                                                                chunks):
+                    if int(code) == 401 and grant.provider in SUBSCRIPTION_ADAPTERS:
+                        # The LOGIN was refused, not the run token. Say so in BOSS's words: the
+                        # CLI's own reaction (Codex tries its dummy refresh token) would
+                        # otherwise be the error a person reads.
+                        log.warning("model proxy: the %s login was refused upstream (401)",
+                                    grant.provider)
+                        return self._send(401, _subscription_refused(grant.provider))
                     reader = _UsageReader(str({k.lower(): v for k, v in resp_headers.items()}
                                               .get("content-type", "")))
                     self.send_response(int(code))
@@ -466,6 +554,16 @@ def _current_scope_add(proxy: ModelProxy, token: str) -> None:
         scope.append((proxy, token))
 
 
+def on_session_end(cleanup: Callable[[], None]) -> bool:
+    """Run `cleanup` when the current session scope ends (a session's run-token login home is
+    removed with its token). False when no scope is open: the caller cleans up itself."""
+    scope = _SCOPE.get()
+    if scope is None:
+        return False
+    scope.append((None, cleanup))
+    return True
+
+
 @contextlib.contextmanager
 def session_scope() -> Iterator[list]:
     """Every token issued inside is revoked when the block ends, however it ends. Yields the
@@ -478,10 +576,18 @@ def session_scope() -> Iterator[list]:
     finally:
         _SCOPE.reset(reset)
         total: dict[str, int] = {}
+        tokens = 0
         for proxy, token in issued:
+            if proxy is None:
+                try:
+                    token()
+                except Exception:  # noqa: BLE001 — a cleanup never fails the session's result
+                    log.debug("model proxy: a session cleanup failed", exc_info=True)
+                continue
+            tokens += 1
             for k, v in proxy.revoke(token).items():
                 total[k] = total.get(k, 0) + int(v)
-        if issued:
+        if tokens:
             out.append(total)
 
 
@@ -594,6 +700,24 @@ def holds_provider_key(env: Mapping[str, str]) -> list[str]:
                   and not str(env.get(n)).startswith(TOKEN_PREFIX))
 
 
-__all__ = ["ADAPTERS", "ANTHROPIC", "Grant", "Issued", "ModelProxy", "OPENAI", "OPENROUTER",
-           "ProviderAdapter", "ProxyUnavailable", "TOKEN_PREFIX", "get", "holds_provider_key",
-           "scoped", "session_scope", "session_ttl", "set_proxy", "shield", "shield_env"]
+def held_for(token: str, proxy: Optional[ModelProxy] = None) -> str:
+    """The credential the proxy attaches for a live run token ("" for none): what a session's
+    token stands for, for checks that a run got the login or key it should. Never log it."""
+    grant = (proxy or get()).grant_for(str(token or ""))
+    return grant.current_credential() if grant is not None and grant.live() else ""
+
+
+def holds_subscription_login(env: Mapping[str, str]) -> list[str]:
+    """The names in `env` that carry a subscription login rather than a run token (BOSSAPP-1480):
+    the guard every engine's session environment is held to, beside holds_provider_key."""
+    return sorted(n for n in SUBSCRIPTION_ENV
+                  if (env.get(n) or "").strip()
+                  and not str(env.get(n)).strip().startswith(TOKEN_PREFIX))
+
+
+__all__ = ["ADAPTERS", "ANTHROPIC", "CLAUDE_SUBSCRIPTION", "CODEX_SUBSCRIPTION",
+           "GROK_SUBSCRIPTION", "Grant", "Issued", "ModelProxy", "OPENAI", "OPENROUTER",
+           "ProviderAdapter", "ProxyUnavailable", "SUBSCRIPTION_ADAPTERS", "SUBSCRIPTION_ENV",
+           "TOKEN_PREFIX", "get", "held_for", "holds_provider_key", "holds_subscription_login",
+           "on_session_end", "scoped", "session_scope", "session_ttl", "set_proxy", "shield",
+           "shield_env"]

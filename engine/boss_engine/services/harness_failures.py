@@ -362,6 +362,14 @@ def reset(run_id: Optional[str]) -> None:
 def trip(verdict: HarnessVerdict) -> HarnessFailure:
     """Remember the verdict for the current run (its first one stands) and return the error to
     raise. Outside a governed run nothing is remembered."""
+    if verdict.kind == "auth_refused":
+        # A multi-account pool member's refused login leaves rotation (BOSSAPP-1343).
+        try:
+            from .subscription_pools import mark_refused_from_context
+
+            mark_refused_from_context()
+        except Exception:  # noqa: BLE001
+            pass
     run_id = _RUN.get()
     if run_id:
         with _LOCK:

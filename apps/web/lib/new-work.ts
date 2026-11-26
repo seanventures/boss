@@ -142,7 +142,28 @@ export type NwDefaults = {
   targets: Target[]; target: string | null;
   tell: { routes: { event: string; label: string; words: string }[] };
   priority: Priority;
+  /** The project's quality bar and the presets in words (New work's Quality chip). */
+  qualityBar: NwQualityBar | null;
 };
+export type QualityPresetKey = "prototype" | "standard" | "production";
+export const QUALITY_RANK: Record<QualityPresetKey, number> = { prototype: 0, standard: 1, production: 2 };
+/** `bar`: what this work runs at unless the person picks another — the chosen workflow's bar
+ *  over the project's (engine quality_bar.run_base); `fromWorkflow` when the workflow set it. */
+export type NwQualityBar = { bar: QualityPresetKey; fromWorkflow: boolean; always: string;
+  presets: { key: QualityPresetKey; label: string; line: string }[] };
+const asPreset = (v: unknown): QualityPresetKey | null => {
+  const x = s(v);
+  return x === "prototype" || x === "standard" || x === "production" ? x : null;
+};
+export function parseQualityBar(v: unknown): NwQualityBar | null {
+  const x = o(v);
+  const bar = asPreset(x.bar);
+  if (!bar) return null;
+  const presets = a(x.presets).map((p) => ({ key: asPreset(o(p).key), label: s(o(p).label), line: s(o(p).line) }))
+    .filter((p): p is { key: QualityPresetKey; label: string; line: string } => Boolean(p.key && p.label));
+  const project = asPreset(x.project_bar);
+  return presets.length ? { bar, fromWorkflow: Boolean(project && project !== bar), always: s(x.always), presets } : null;
+}
 /** THE APP NEW WORK BUILDS ONTO (AR-20), as the engine resolved the door's `app=`: the build the
  *  change continues, the app's name, its lineage branch and its change / PR. */
 export type Anchor = {
@@ -224,6 +245,7 @@ export const parsePlanDetail = (v: unknown): PlanDetail => {
       target: s(d.target) || null,
       tell: { routes: a(o(d.tell).routes).map((r) => ({ event: s(o(r).event), label: s(o(r).label), words: s(o(r).words, "Console") })) },
       priority: (PRIORITIES as string[]).includes(s(d.priority)) ? (s(d.priority) as Priority) : "normal",
+      qualityBar: parseQualityBar(d.quality_bar),
     } : null,
   };
 };
@@ -243,6 +265,8 @@ export type StartFields = {
   infer_app?: boolean;
   /** The profile it runs on (BOSSAPP-1334): lean | balanced | strict. */
   profile?: string;
+  /** This run's quality bar (BOSSAPP-1362), only when the person picked one other than the project's. */
+  quality_bar?: string;
 };
 
 /** The body Start and Add to Next send: the words, the confirmed brief, the chips. */
@@ -259,6 +283,7 @@ export function workBody(kind: WorkKind, text: string, f: StartFields): R {
     ...(f.new_app ? { new_app: true } : {}),
     ...(f.infer_app ? { infer_app: true } : {}),
     ...(f.profile ? { profile: f.profile } : {}),
+    ...(f.quality_bar ? { quality_bar: f.quality_bar } : {}),
   };
 }
 

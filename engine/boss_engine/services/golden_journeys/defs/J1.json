@@ -1,0 +1,130 @@
+{
+  "id": "J1",
+  "title": "Ticket to pull request (Node/React, GitHub cloud)",
+  "ticket": "BOSSAPP-1284",
+  "summary": "A ticket from the install's ticket connector becomes a build: plan, tests, code, review, acceptance check, and a pull request on GitHub. On the scripted engine the gate gives the ticket's words; on an install they are read from the ticket.",
+  "modes": [
+    "scripted",
+    "real"
+  ],
+  "needs": {
+    "fixtures": [
+      "a Node/React sandbox repository the install can push to (owner, repo)",
+      "a ticket in the install's ticket connector (ticket_connection, ticket_key)"
+    ],
+    "defaults": {
+      "base_branch": "main",
+      "profile": "balanced",
+      "model_config": null
+    },
+    "scripted": {
+      "faults": "",
+      "vars": {
+        "ticket_title": "Slug service",
+        "ticket_body": "Build a tiny plain Node ESM service at the repository root: slug(text) in src/slug.js and an HTTP server in src/server.js answering GET /?q=<text> with {\"slug\": ...} on $PORT. Tests under node --test.",
+        "ticket_criteria": [
+          "slug lowercases and joins words with hyphens",
+          "GET /?q= answers the slug as JSON"
+        ]
+      }
+    }
+  },
+  "steps": [
+    {
+      "id": "ticket",
+      "only": "real",
+      "call": "GET /v1/ticket-systems/{{ticket_connection}}/tickets/{{ticket_key}}",
+      "expect_status": [
+        200
+      ],
+      "save": {
+        "ticket_title": "ticket.title",
+        "ticket_body": "ticket.body",
+        "ticket_criteria": "ticket.acceptance_criteria"
+      }
+    },
+    {
+      "id": "start",
+      "call": "POST /v1/code-tasks",
+      "expect_status": [
+        200
+      ],
+      "body": {
+        "project_id": "{{project_id}}",
+        "title": "{{ticket_title}}",
+        "instructions": "{{ticket_body}}",
+        "acceptance_criteria": "{{ticket_criteria}}",
+        "test_commands": [
+          "npm test"
+        ],
+        "owner": "{{owner}}",
+        "repo": "{{repo}}",
+        "base_branch": "{{base_branch}}",
+        "open_pr": true,
+        "profile": "{{profile}}",
+        "risk_tier": 1,
+        "model_config": "{{model_config}}"
+      },
+      "save": {
+        "run_id": "run_id"
+      }
+    },
+    {
+      "id": "work",
+      "do": "drain"
+    },
+    {
+      "id": "done",
+      "call": "GET /v1/code-tasks/{{run_id}}",
+      "until": {
+        "path": "status",
+        "in": [
+          "completed",
+          "failed",
+          "blocked",
+          "cancelled"
+        ]
+      },
+      "timeout_s": 2700,
+      "every_s": 20
+    },
+    {
+      "id": "gates",
+      "call": "GET /v1/code-tasks/{{run_id}}/gates",
+      "expect_status": [
+        200
+      ]
+    }
+  ],
+  "acceptance": [
+    {
+      "text": "The build was accepted and queued",
+      "step": "start",
+      "status": 200
+    },
+    {
+      "text": "The build finished as completed",
+      "step": "done",
+      "path": "status",
+      "equals": "completed"
+    },
+    {
+      "text": "A pull request was opened for the change",
+      "step": "done",
+      "path": "pull_request_url",
+      "present": true
+    },
+    {
+      "text": "The code review gate passed",
+      "step": "gates",
+      "path": "gates[name=code_review_passed].ok",
+      "equals": true
+    },
+    {
+      "text": "BOSS's acceptance check found every must-have met",
+      "step": "gates",
+      "path": "gates[name=acceptance_met].ok",
+      "equals": true
+    }
+  ]
+}

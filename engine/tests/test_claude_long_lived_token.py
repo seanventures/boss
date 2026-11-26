@@ -125,18 +125,26 @@ def test_the_long_lived_token_wins_over_the_cli_login(store, tmp_path, monkeypat
     assert cc.resolve_claude_credential(cred.bind(Settings())).kind == cc.KIND_SUBSCRIPTION
 
 
-def test_the_token_reaches_a_sandboxed_child(store, tmp_path, monkeypatch):
+def test_the_token_reaches_a_sandboxed_child_only_as_a_run_token(store, tmp_path, monkeypatch):
+    """BOSSAPP-1480: the sandbox boundary passes a run token for the login, never the login."""
+    from boss_engine.services import model_proxy, subscription_shield
     from boss_engine.services.sandbox_identity import SandboxIdentity
 
     _boss_token(store)
     env = cc.resolve_claude_credential(Settings()).apply({"PATH": "/bin"})
     ident = SandboxIdentity(key="t", uid=61000, run_dir=tmp_path / "run")
-    child = ident.env(env)
-    assert child[cc.TOKEN_NAME] == TOKEN
+    assert cc.TOKEN_NAME not in ident.env(env)            # a raw login is dropped at the boundary
+    proxy = model_proxy.ModelProxy()
+    try:
+        child = ident.env(subscription_shield.claude(env, proxy=proxy))
+        assert child[cc.TOKEN_NAME].startswith(model_proxy.TOKEN_PREFIX)
+        assert model_proxy.held_for(child[cc.TOKEN_NAME], proxy) == TOKEN
+    finally:
+        proxy.stop()
     assert child["CLAUDE_CONFIG_DIR"] == f"{ident.home}/.claude"
 
 
-def test_a_sandbox_on_the_token_gets_no_login_copy(store, tmp_path, monkeypatch):
+def test_no_sandbox_gets_a_login_copy_on_either_credential(store, tmp_path, monkeypatch):
     from dataclasses import dataclass
 
     from boss_engine.services import sandbox_identity
@@ -147,34 +155,17 @@ def test_a_sandbox_on_the_token_gets_no_login_copy(store, tmp_path, monkeypatch)
         key: str = "t"
 
     _cli_login(tmp_path, monkeypatch)
-    monkeypatch.setattr(sandbox_identity, "get_settings", Settings, raising=False)
-    home = tmp_path / "run-home"
-    home.mkdir()
-    _boss_token(store)
-    assert sandbox_identity.runs_on_long_lived_token() is True
-    sandbox_identity._seed_claude_login(_Ident(home))
-    assert not (home / ".claude").exists()
-
-
-def test_without_the_token_the_cli_login_is_the_fallback(store, tmp_path, monkeypatch):
-    from dataclasses import dataclass
-
-    from boss_engine.services import claude_login, sandbox_identity
-
-    @dataclass
-    class _Ident:
-        home: Path
-        key: str = "t"
-
-    _cli_login(tmp_path, monkeypatch)
-    cred = cc.resolve_claude_credential(Settings())
-    assert cred.kind == cc.KIND_CLI_LOGIN
+    monkeypatch.setattr(sandbox_identity, "_refresh_logins_ahead", lambda ident: None)
+    assert cc.resolve_claude_credential(Settings()).kind == cc.KIND_CLI_LOGIN
     assert sandbox_identity.runs_on_long_lived_token() is False
-    monkeypatch.setattr(claude_login, "ensure_fresh", lambda _n: (True, ""))
-    home = tmp_path / "run-home"
-    home.mkdir()
-    sandbox_identity._seed_claude_login(_Ident(home))
-    assert (home / ".claude" / ".credentials.json").exists()
+    for name in ("before", "after"):
+        if name == "after":
+            _boss_token(store)
+            assert sandbox_identity.runs_on_long_lived_token() is True
+        home = tmp_path / f"run-home-{name}"
+        home.mkdir()
+        sandbox_identity._seed_cli_logins(_Ident(home))
+        assert not (home / ".claude").exists()
 
 
 # ── storing it: origin and dates recorded, no part of the value ─────────────────────────────

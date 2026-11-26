@@ -1495,6 +1495,9 @@ def _build(connection: Connection, settings: Any, project_id: str, *,
         "harness_adapters": harness_adapters(),
         "build_database": build_database(connection, settings, project_id),
         "build_speed": build_speed(connection, settings, project_id),
+        # THE QUALITY BAR (quality_bar.describe): the project's preset in plain words, each
+        # gate's level (Advanced), and what no preset changes.
+        "quality_bar": quality_bar_view(connection, settings, project_id),
         # The embedding model, its own slot (knowledge/embedding_slot.py): only that a key is
         # held, never the key; whether meaning-based search is on, and why not in words.
         "embedding_model": embedding_model(connection, settings, project_id),
@@ -1588,6 +1591,27 @@ def embedding_model(connection: Connection, settings: Any, project_id: str) -> O
             return embedding_slot.status(connection, settings, project_id)
     except Exception:  # noqa: BLE001
         return None
+
+
+def quality_bar_view(connection: Connection, settings: Any, project_id: str
+                     ) -> Optional[dict[str, Any]]:
+    """Setup › Quality bar: the project's preset (`quality_bar`) and its per-gate map
+    (`quality_bar_gates`), with where each came from. Both are written through PUT
+    /v1/settings (settings:update). None only when it cannot be read."""
+    from . import project_settings, quality_bar
+
+    try:
+        with connection.begin_nested():
+            own = project_settings.get_own(connection, project_id)
+            bar = project_settings.effective(connection, project_id, settings, quality_bar.SETTING)
+            gates = project_settings.effective(connection, project_id, settings,
+                                               quality_bar.OVERRIDES_KEY)
+    except Exception:  # noqa: BLE001 — the rest of Setup still renders
+        return None
+    view = quality_bar.describe(bar, gates)
+    return {**view, "key": quality_bar.SETTING, "gates_key": quality_bar.OVERRIDES_KEY,
+            "source": "project" if quality_bar.SETTING in own else "default",
+            "permission": "settings:update"}
 
 
 def build_speed(connection: Connection, settings: Any, project_id: str) -> dict[str, Any]:

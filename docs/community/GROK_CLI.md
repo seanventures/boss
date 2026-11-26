@@ -2,7 +2,7 @@
 
 Connect an existing Grok Build subscription so BOSS can drive the [official Grok Build CLI](https://docs.x.ai/build/cli/headless-scripting) as a coding harness on a machine you administer. BOSS records this source as `xai_grok_build`, scoped to the operator and single-tenant work.
 
-The CLI session stays in the service user's `GROK_HOME`, which is `/home/boss/.grok` in the BOSS images. BOSS never extracts, copies, or uploads `auth.json`, and it never substitutes `XAI_API_KEY` for a subscription. To use an xAI API key instead, see [model connections](MODEL_CONNECTIONS.md).
+The CLI session stays in the service user's `GROK_HOME`, which is `/home/boss/.grok` in the BOSS images. BOSS never copies or uploads `auth.json`, and it never substitutes `XAI_API_KEY` for a subscription. A build's Grok session gets a session `GROK_HOME` with no login in it and a run token through BOSS's model proxy (`GROK_CLI_CHAT_PROXY_BASE_URL`, `GROK_AUTH_PROVIDER_COMMAND`); the proxy reads the session token from this `auth.json` and adds it to each model call ([model connections](MODEL_CONNECTIONS.md#agents-never-hold-your-api-key-or-your-subscription-login)). To use an xAI API key instead, see [model connections](MODEL_CONNECTIONS.md).
 
 ## Install the CLI
 

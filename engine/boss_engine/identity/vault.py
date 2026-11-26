@@ -604,8 +604,8 @@ def _mark_needs_reauth(db: Any, row: Mapping[str, Any], reason: str) -> None:
 
 
 def _refresh_locked(db: Any, item_id: str,
-                    refresher: Optional[Callable[[str], tuple[str, Optional[str], int]]] = None
-                    ) -> dict[str, Any]:
+                    refresher: Optional[Callable[[str], tuple[str, Optional[str], int]]] = None,
+                    *, rejected: Optional[str] = None) -> dict[str, Any]:
     """Single flight, in the vault's OWN transaction: lock the row, re-read, refresh only if
     another caller has not already, and COMMIT the rotated refresh token before returning — so the
     caller's transaction rolling back afterwards cannot lose it (#12). A refusal marks the row
@@ -620,7 +620,12 @@ def _refresh_locked(db: Any, item_id: str,
         if row["status"] != "active":
             raise VaultNeedsReauth(row["status"])
         exp = row.get("access_expires_at")
-        if exp is None or exp - _now() > REFRESH_LEEWAY:
+        if rejected is not None:
+            # THE PROVIDER REFUSED A TOKEN THE VAULT STILL DATES AS GOOD (revoked early, rotated,
+            # clock skew): refresh now — unless another caller already replaced that token.
+            if _open(own, row) != rejected:
+                return row
+        elif exp is None or exp - _now() > REFRESH_LEEWAY:
             return row                               # someone else refreshed while we waited
         refresher = refresher or refresher_for(row.get("provider"))
         if row.get("refresh_enc") is None or refresher is None:
@@ -835,8 +840,8 @@ def _connection_row(db: Any, item_id: str, provider: str) -> dict[str, Any]:
 
 
 def connection_token(item_id: str, *, provider: str, db: Any,
-                     refresher: Optional[Callable[[str], tuple[str, Optional[str], int]]] = None
-                     ) -> str:
+                     refresher: Optional[Callable[[str], tuple[str, Optional[str], int]]] = None,
+                     rejected: Optional[str] = None) -> str:
     """The token of one MCP server / Kit connection credential, refreshed first when it has less
     than REFRESH_LEEWAY left (single flight: `_refresh_locked`, in the vault's own transaction).
 
@@ -850,7 +855,10 @@ def connection_token(item_id: str, *, provider: str, db: Any,
     if row["status"] != "active":
         raise VaultNeedsReauth(row["status"])
     exp = row.get("access_expires_at")
-    if exp is not None and exp - _now() <= REFRESH_LEEWAY:
+    if rejected is not None and row.get("refresh_enc") is not None and refresher is not None:
+        # `rejected`: the token the server just answered 401 to. Refreshed once, single flight.
+        row = _refresh_locked(db, item_id, refresher=refresher, rejected=rejected)
+    elif exp is not None and exp - _now() <= REFRESH_LEEWAY:
         if row.get("refresh_enc") is None or refresher is None:
             if exp <= _now():
                 _mark_needs_reauth(db, row, "expired_without_refresh")
@@ -858,8 +866,14 @@ def connection_token(item_id: str, *, provider: str, db: Any,
         else:
             row = _refresh_locked(db, item_id, refresher=refresher)
     token = _open(db, row)
-    db.execute(text("UPDATE identity_vault_items SET last_used_at = now() WHERE id = :id"),
-               {"id": row["id"]})
+    # BOOKKEEPING IN ITS OWN TRANSACTION. Written on the caller's, this row lock was held until
+    # the caller committed — so a second read in the same business transaction that had to
+    # refresh (_refresh_locked locks the row in the vault's own transaction) waited on its own
+    # caller until the statement timeout: a token the server refused could never be refreshed
+    # mid-call (BOSSAPP-1476).
+    with _own_transaction(db) as own:
+        own.execute(text("UPDATE identity_vault_items SET last_used_at = now() WHERE id = :id"),
+                    {"id": row["id"]})
     return token
 
 

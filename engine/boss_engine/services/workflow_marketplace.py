@@ -27,12 +27,24 @@ as its BASELINE in the same columns a standard uses (workflow_standards), so:
 UNINSTALL removes the pack's workflows (retired when they have runs, so history stays readable)
 and is refused while any of them has a run going.
 
+THE LIBRARY (design PR #287) is this list as the console shows it: one list, each item labelled
+BOSS or Your team, with tags and search. "Add to project" is Install into any project of the org;
+"Edit a copy" is Install then open the copy in the editor; "Share to Library" is Publish, which
+runs the same publish-time checks a Save runs (`workflows.spec_problems`) and needs the org-level
+`workflow:share` permission at the API.
+
+A TEMPLATE is a pack workflow derived from a standard under its own key ("API gateway
+onboarding" from "Onboard a config file"): the standard keeps being seeded everywhere as it was,
+and the template installs as an editable copy that follows the standard's steps while it is
+unmodified (`PackTemplate`).
+
 A pack workflow whose prerequisites are missing (a connector the DQ pipeline calls) is installed
 WAITING: the definition is there, with `marketplace_waiting` saying why, and it is published the
 moment the project gains what it lacks (`publish_waiting`, called wherever a project gains it).
 """
 from __future__ import annotations
 
+import copy
 import json
 import re
 from dataclasses import dataclass
@@ -48,6 +60,18 @@ BOSS_PUBLISHER = "BOSS"
 
 
 @dataclass(frozen=True)
+class PackTemplate:
+    """A pack workflow made from a standard catalogue entry under a key of its own, so the
+    standard stays seeded as it is and the template installs as the project's editable copy.
+    Its steps ARE the standard's (one construction: a change to the standard reaches an
+    unmodified copy at the next sync, and is offered to a modified one)."""
+    key: str
+    name: str
+    description: str
+    source_key: str
+
+
+@dataclass(frozen=True)
 class ShippedPack:
     pack_id: str
     name: str
@@ -56,6 +80,10 @@ class ShippedPack:
     workflow_keys: tuple[str, ...]
     #: The ontology pack its step contracts read kinds from; installing the pack adds it.
     ontology_pack: Optional[str] = None
+    #: Library filter words, lower case.
+    tags: tuple[str, ...] = ()
+    #: Workflows made from a standard under their own key (see PackTemplate).
+    templates: tuple[PackTemplate, ...] = ()
 
 
 #: BOSS's own packs. Bump `version` when a pack's workflows change in a way a person should see.
@@ -65,18 +93,43 @@ SHIPPED_PACKS: dict[str, ShippedPack] = {
         summary="Find the root cause of a data quality exception, fix it, escalate what stays open.",
         version="1.0",
         workflow_keys=("dq_incident_rca", "dq_incident_escalation", "dq_monitor_intake"),
-        ontology_pack="banking-dq"),
+        ontology_pack="banking-dq", tags=("data quality", "banking")),
     "sre-helpdesk": ShippedPack(
         pack_id="sre-helpdesk", name="SRE / Helpdesk",
         summary="Answer an app's alert: investigate, fix, ship, prove recovery.",
         version="1.0",
         # Incident Response carries its investigation step (investigate_incident) with it.
-        workflow_keys=("incident_response",)),
+        workflow_keys=("incident_response",),
+        tags=("incidents", "sre")),
+    # API GATEWAY ONBOARDING (BOSSAPP-1296): "Onboard a config file" as the team's editable
+    # template. The standard stays seeded in every project; this is the copy a team changes.
+    "api-gateway-onboarding": ShippedPack(
+        pack_id="api-gateway-onboarding", name="API gateway onboarding",
+        summary="A partner's gateway config: check, fix, review, merge, staging, contract tests.",
+        version="1.0", workflow_keys=(),
+        tags=("gateway", "onboarding", "config"),
+        templates=(PackTemplate(
+            key="api_gateway_onboarding", name="API gateway onboarding",
+            description="A partner's gateway config arrives. BOSS checks it with the "
+                        "repository's own checkers, fixes what it may, leaves you what it may "
+                        "not, and ships it to staging once merged. Your team's editable copy "
+                        "of Onboard a config file.",
+            source_key="onboard_config_file"),)),
 }
 
 #: workflow_key -> the BOSS pack it ships in. The catalogue seed skips these keys.
 PACK_OF_KEY: dict[str, str] = {key: pack.pack_id for pack in SHIPPED_PACKS.values()
                                for key in pack.workflow_keys}
+#: template key -> the BOSS pack it ships in (a template is not a catalogue entry: nothing seeds
+#: it, and its standard is seeded as before).
+TEMPLATE_OF_KEY: dict[str, str] = {t.key: pack.pack_id for pack in SHIPPED_PACKS.values()
+                                   for t in pack.templates}
+
+
+def pack_of_key(workflow_key: Any) -> Optional[str]:
+    """The BOSS pack a workflow key ships in (a catalogue entry or a template), or None."""
+    key = str(workflow_key or "")
+    return PACK_OF_KEY.get(key) or TEMPLATE_OF_KEY.get(key)
 
 _VERSION = re.compile(r"^\d{1,4}(\.\d{1,4}){0,2}$")
 #: A run that has not ended (anything but these) keeps its workflow from being uninstalled.
@@ -118,6 +171,19 @@ def _json(raw: Any, default: Any) -> Any:
     return raw if raw is not None else default
 
 
+_TAG = re.compile(r"[^a-z0-9 \-]+")
+
+
+def _tags(raw: Any) -> list[str]:
+    """Library filter words: lower case, letters, digits, spaces and dashes, at most 6 of 24."""
+    out: list[str] = []
+    for tag in _json(raw, []) if not isinstance(raw, (list, tuple)) else raw:
+        word = _TAG.sub("", str(tag or "").strip().lower())[:24].strip()
+        if word and word not in out:
+            out.append(word)
+    return out[:6]
+
+
 def _org_of(connection: Connection, project_id: str) -> str:
     org = connection.execute(
         text("SELECT w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
@@ -133,10 +199,21 @@ def _present_roles(connection: Connection, project_id: str) -> frozenset[str]:
 
 
 def _entries(pack: ShippedPack) -> list[dict[str, Any]]:
+    """The pack's workflows as catalogue entries: its own, then its templates (each the
+    standard's entry under the template's key, name and description; `brief_key` keeps the
+    standard's start form)."""
     from .workflow_catalogue import CATALOGUE
 
     by_key = {e["key"]: e for e in CATALOGUE}
-    return [by_key[k] for k in pack.workflow_keys if k in by_key]
+    out = [by_key[k] for k in pack.workflow_keys if k in by_key]
+    for t in pack.templates:
+        source = by_key.get(t.source_key)
+        if source is None:
+            continue
+        out.append({**copy.deepcopy(source), "key": t.key, "name": t.name,
+                    "description": t.description, "brief_key": t.source_key,
+                    "template_of": t.source_key})
+    return out
 
 
 def _staff(spec: dict[str, Any], present: frozenset[str]) -> dict[str, Any]:
@@ -175,7 +252,7 @@ def _pack_contents(connection: Connection, project_id: str, pack_id: str,
         return {
             "id": shipped.pack_id, "source": "boss", "name": shipped.name,
             "summary": shipped.summary, "publisher": BOSS_PUBLISHER, "version": shipped.version,
-            "shipped": shipped, "row": None,
+            "tags": list(shipped.tags), "shipped": shipped, "row": None,
             "workflows": [{"key": e["key"], "name": e["name"], "description": e["description"],
                            "spec": entry_spec(_staffed_for(e, present)), "entry": e}
                           for e in _entries(shipped)],
@@ -185,7 +262,8 @@ def _pack_contents(connection: Connection, project_id: str, pack_id: str,
         raise MarketplaceNotFound(f"There is no pack '{pack_id}' in this org's Marketplace.")
     return {
         "id": row["id"], "source": "org", "name": row["name"], "summary": row.get("summary") or "",
-        "publisher": row["publisher"], "version": row["version"], "shipped": None, "row": row,
+        "publisher": row["publisher"], "version": row["version"],
+        "tags": _tags(row.get("tags")), "shipped": None, "row": row,
         "workflows": [{"key": w["workflow_key"], "name": w.get("name") or w["workflow_key"],
                        "description": w.get("description") or "",
                        "spec": _staff(_json(w.get("spec"), {}), present), "entry": None}
@@ -333,9 +411,24 @@ def _step_line(spec: dict[str, Any], limit: int = 5) -> list[str]:
     return [workflows._step_label(s, str(s.get("id") or "")) for s in steps[:limit]]
 
 
-def list_packs(connection: Connection, project_id: str) -> list[dict[str, Any]]:
+def _inputs(spec: dict[str, Any]) -> list[str]:
+    """What Start asks for, by title (the Library's "Input"): the required fields, or the first
+    three when none is required. Short on purpose: the full form is the workflow's own."""
+    schema = spec.get("input_schema") or {}
+    props = schema.get("properties") if isinstance(schema, dict) else None
+    if not isinstance(props, dict):
+        return []
+    order = [k for k in schema.get("required") or [] if k in props] or list(props)[:3]
+    return [str((props[k] or {}).get("title") or k).replace(" (optional)", "")
+            for k in order][:6]
+
+
+def list_packs(connection: Connection, project_id: str, *,
+               visible_to: Optional[set[str]] = None) -> list[dict[str, Any]]:
     """Every pack this project can install: BOSS's, then this org's (newest first), each with
-    whether it is installed here, at which version, and whether an update waits for a person."""
+    whether it is installed here, at which version, and whether an update waits for a person.
+    `visible_to`: the project ids the caller may see; `installed_in` names only those (the
+    count, `used_count`, is the whole org's)."""
     installed: dict[str, list[dict[str, Any]]] = {}
     for row in _installed_rows(connection, project_id):
         installed.setdefault(str(row["marketplace_pack_id"]), []).append(row)
@@ -343,6 +436,15 @@ def list_packs(connection: Connection, project_id: str) -> list[dict[str, Any]]:
     pack_ids = list(SHIPPED_PACKS) + [str(r) for r in connection.execute(
         text("SELECT id FROM workflow_packs WHERE org_id = :o AND status = 'published' "
              "ORDER BY updated_at DESC, id"), {"o": org_id}).scalars()]
+    # WHERE EACH PACK IS ALREADY, across the org (the Library's "Added" for the project a person
+    # picks under Add to project, and how many projects use it).
+    installed_in: dict[str, list[str]] = {}
+    for pack_id, where in connection.execute(
+            text("SELECT DISTINCT d.marketplace_pack_id, d.project_id FROM workflow_definitions d "
+                 "JOIN projects p ON p.id = d.project_id JOIN workspaces w ON w.id = p.workspace_id "
+                 "WHERE w.org_id = :o AND d.marketplace_pack_id IS NOT NULL "
+                 "AND d.status <> 'retired' ORDER BY d.project_id"), {"o": org_id}).all():
+        installed_in.setdefault(str(pack_id), []).append(str(where))
     out = []
     for pack_id in pack_ids:
         contents = _pack_contents(connection, project_id, pack_id)
@@ -360,7 +462,17 @@ def list_packs(connection: Connection, project_id: str) -> list[dict[str, Any]]:
             "version": contents["version"],
             "updated_at": row["updated_at"].isoformat() if row.get("updated_at") else None,
             "workflows": [{"key": w["key"], "name": w["name"], "description": w["description"],
-                           "steps": _step_line(w["spec"])} for w in contents["workflows"]],
+                           "steps": _step_line(w["spec"]),
+                           "step_count": len(_step_line(w["spec"], limit=1000)),
+                           "inputs": _inputs(w["spec"]),
+                           "objective": str(w["spec"].get("objective") or "")[:1200]}
+                          for w in contents["workflows"]],
+            "tags": contents["tags"],
+            # Every org project it is in, counted; the ids are narrowed by the API to the
+            # projects the person may add to (`visible_to`).
+            "used_count": len(installed_in.get(contents["id"], [])),
+            "installed_in": [p for p in installed_in.get(contents["id"], [])
+                             if visible_to is None or p in visible_to],
             "installed": bool(rows),
             "installed_version": versions[0] if versions else None,
             "update_available": contents["version"] if updates else None,
@@ -643,6 +755,7 @@ def publish_waiting(connection: Connection, project_id: str, actor: str = "boss"
 def _pack_out(connection: Connection, row: dict[str, Any]) -> dict[str, Any]:
     return {"id": row["id"], "name": row["name"], "summary": row.get("summary") or "",
             "publisher": row["publisher"], "version": row["version"], "status": row["status"],
+            "tags": _tags(row.get("tags")),
             "source_definition_id": row["source_definition_id"],
             "updated_at": row["updated_at"].isoformat() if row.get("updated_at") else None}
 
@@ -656,12 +769,25 @@ def published_from(connection: Connection, project_id: str,
     return _pack_out(connection, dict(row)) if row else None
 
 
+def publish_problems(connection: Connection, project_id: str,
+                     spec: dict[str, Any]) -> list[dict[str, Any]]:
+    """THE PUBLISH-TIME CHECKS, as a Save runs them (`workflows.spec_problems`): shape, binding,
+    and whether each step's agent can do its work (a step whose agent holds no skill that can
+    run here is refused). Run again at share time: what was saved weeks ago may not run now,
+    and a shared workflow that cannot run is copied into every project that adds it."""
+    _normal, shape, blocked = workflows.spec_problems(
+        connection, project_id, spec, namespace=workflows.PRODUCT_NAMESPACE)
+    return list(shape) + list(blocked)
+
+
 def publish(connection: Connection, project_id: str, definition_id: str, actor: str, *,
             name: Optional[str] = None, summary: Optional[str] = None,
-            version: Optional[str] = None, publisher: Optional[str] = None) -> dict[str, Any]:
+            version: Optional[str] = None, publisher: Optional[str] = None,
+            tags: Optional[list[str]] = None) -> dict[str, Any]:
     """Publish one of this project's own workflows as a pack every project in the org can
     install. Republishing bumps the version (it must be later than the last) and offers it to
-    every installed copy (each project takes it when it chooses)."""
+    every installed copy (each project takes it when it chooses). Refused, with every problem,
+    when the publish-time checks fail (`publish_problems`)."""
     from .workflow_standards import _clean
 
     definition = workflows.require_namespace(connection, project_id, definition_id,
@@ -680,6 +806,11 @@ def publish(connection: Connection, project_id: str, definition_id: str, actor: 
     if not active:
         raise MarketplaceError(f"Save '{definition['name']}' first: it has no version to publish.")
     spec = _clean(_json(active["spec"], {}))
+    problems = publish_problems(connection, project_id, spec)
+    if problems:
+        raise workflows.WorkflowBindingBlockedError(
+            f"'{definition['name']}' cannot be shared: " + workflows.problems_sentence(problems),
+            problems=problems)
     org_id = _org_of(connection, project_id)
     existing = connection.execute(
         text("SELECT * FROM workflow_packs WHERE source_definition_id = :d FOR UPDATE"),
@@ -692,6 +823,7 @@ def publish(connection: Connection, project_id: str, definition_id: str, actor: 
     if not _VERSION.match(wanted):
         raise workflows.WorkflowValidationError("A version is numbers and dots, like 1.0 or 0.3.")
     who = (publisher or "").strip()[:120] or actor
+    pack_tags = _tags(tags if tags is not None else (existing or {}).get("tags"))
     item = {"workflow_key": definition["workflow_key"], "name": definition["name"],
             "description": definition.get("description") or "", "spec": spec,
             "content_hash": active["content_hash"]}
@@ -701,18 +833,19 @@ def publish(connection: Connection, project_id: str, definition_id: str, actor: 
         pack_id = str(existing["id"])
         connection.execute(
             text("UPDATE workflow_packs SET name = :n, summary = :s, version = :v, "
-                 "status = 'published', publisher = :pub, published_by = :a, updated_at = now() "
-                 "WHERE id = :id"),
+                 "status = 'published', publisher = :pub, published_by = :a, "
+                 "tags = CAST(:t AS JSONB), updated_at = now() WHERE id = :id"),
             {"n": pack_name, "s": pack_summary, "v": wanted, "pub": who, "a": actor,
-             "id": pack_id})
+             "t": json.dumps(pack_tags), "id": pack_id})
     else:
         pack_id = make_id("wpk")
         connection.execute(
             text("INSERT INTO workflow_packs (id, org_id, name, summary, publisher, version, "
-                 "source_project_id, source_definition_id, published_by) VALUES (:id, :o, :n, "
-                 ":s, :pub, :v, :p, :d, :a)"),
+                 "source_project_id, source_definition_id, published_by, tags) VALUES (:id, :o, "
+                 ":n, :s, :pub, :v, :p, :d, :a, CAST(:t AS JSONB))"),
             {"id": pack_id, "o": org_id, "n": pack_name, "s": pack_summary, "pub": who,
-             "v": wanted, "p": project_id, "d": definition_id, "a": actor})
+             "v": wanted, "p": project_id, "d": definition_id, "a": actor,
+             "t": json.dumps(pack_tags)})
     connection.execute(
         text("INSERT INTO workflow_pack_versions (id, pack_id, version, workflows, published_by) "
              "VALUES (:id, :p, :v, CAST(:w AS JSONB), :a)"),
@@ -729,13 +862,18 @@ def publish(connection: Connection, project_id: str, definition_id: str, actor: 
         try:
             with connection.begin_nested():
                 result = _resync(connection, dict(row), actor, offer_only=True)
-        except workflows.WorkflowError:
+        except workflows.WorkflowError as blocked:
+            # SAID, NEVER DROPPED: that project keeps running the version it has, and the person
+            # sharing is told which project could not take this one, and why.
+            updated.append({"project_id": row["project_id"], "offered": False,
+                            "blocked": str(blocked)[:500]})
             continue
         if result:
             updated.append({"project_id": row["project_id"], "offered": result.get("offered")})
     pack = connection.execute(text("SELECT * FROM workflow_packs WHERE id = :id"),
                               {"id": pack_id}).mappings().one()
-    return {"pack": _pack_out(connection, dict(pack)), "installed_copies": updated}
+    return {"pack": _pack_out(connection, dict(pack)), "installed_copies": updated,
+            "blocked": [u for u in updated if u.get("blocked")]}
 
 
 def unpublish(connection: Connection, project_id: str, pack_id: str,

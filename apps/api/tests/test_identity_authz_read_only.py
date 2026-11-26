@@ -27,6 +27,14 @@ GET_NOT_READ = {
                   "answers and tools over the run plane (P8a); no person holds it",
     "role_binding:assign": "a project's bindings, for the Admin who manages that project's access "
                            "(role_binding:read is org-only)",
+    "secret:manage": "a demo login's password, revealed (step-up, audited): showing a secret is "
+                     "managing it",
+    "instance:manage": "an extension's webhooks carry their signing secrets",
+    "model_provider:manage": "a provider sign-in in progress (its login link and code) belongs to "
+                             "whoever may connect the provider",
+    "project:update": "a project export is the whole project, gated like the import it feeds",
+    "org:update": "an org export is every project of the org, gated like the import it feeds",
+    "self_fix:ticket_read": "the read of self-fix tickets, named for the ticket store",
 }
 
 #: GETs the review found writing (IDENTITY_PERMISSIONS.md §9 note 6). Shrinking list. Each one
@@ -44,6 +52,8 @@ GETS_THAT_WRITE = {
     "GET /v1/elastic/instances", "GET /v1/provider-usage", "GET /v1/provider-usage/summary",
     # "Connect with Atlassian" records a single-use pending sign-in, then redirects (BOSSAPP-1047).
     "GET /v1/ticket-systems/{connection_id}/oauth/start",
+    # The host helper's pull: a lease is a write (POST twin /v1/host-jobs/lease/load).
+    "GET /v1/host-jobs/lease",
 }
 
 

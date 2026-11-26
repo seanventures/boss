@@ -61,27 +61,38 @@ def test_a_failure_after_the_login_still_stands(tmp_path, monkeypatch):
     assert codex_login.status()["state"] == codex_login.REFRESH_FAILED
 
 
+def _session_login(monkeypatch, home: Path):
+    """What a run's Codex session gets (subscription_shield, BOSSAPP-1480): a session home whose
+    login carries a run token, the proxy holding the real one — or no login at all."""
+    from boss_engine.services import model_proxy, subscription_shield
+
+    monkeypatch.setattr(subscription_shield, "_codex_before_start", lambda: None)
+    proxy = model_proxy.ModelProxy()
+    monkeypatch.setattr(model_proxy, "_PROXY", proxy)
+    env = subscription_shield.codex({"CODEX_HOME": str(home)}, proxy=proxy)
+    path = Path(env["CODEX_HOME"]) / "auth.json"
+    return proxy, (json.loads(path.read_text()) if path.exists() else None)
+
+
 def test_a_run_is_seeded_after_the_operator_signs_in_again(tmp_path, monkeypatch):
     home = _home(tmp_path, monkeypatch, last_refresh=_iso(60))
     (home / codex_login.STATE_NAME).write_text(json.dumps(
         {"state": "refresh_failed", "error": "http_401", "at": _iso(10 * 86400)}))
-    run_home = tmp_path / "run"
-    run_home.mkdir()
-    ident = SimpleNamespace(home=run_home, key="k")
-    sandbox_identity._seed_codex_login(ident)
-    seeded = json.loads((run_home / ".codex" / "auth.json").read_text())
-    assert seeded["tokens"]["access_token"] == "AT", "the run got the current login"
+    proxy, seeded = _session_login(monkeypatch, home)
+    from boss_engine.services import model_proxy
+
+    assert seeded is not None, "the run got a login"
+    token = seeded["tokens"]["access_token"]
+    assert model_proxy.held_for(token, proxy) == "AT", "standing for the current login"
     assert seeded["tokens"]["refresh_token"] == sandbox_identity.RUN_REFRESH_TOKEN, \
         "and never the real refresh token"
 
 
 def test_a_login_flagged_dead_after_it_was_issued_is_still_not_handed_out(tmp_path, monkeypatch):
-    _home(tmp_path, monkeypatch, last_refresh=_iso(3600))
+    home = _home(tmp_path, monkeypatch, last_refresh=_iso(3600))
     codex_login.mark_revoked("refresh token was revoked")
-    run_home = tmp_path / "run"
-    run_home.mkdir()
-    sandbox_identity._seed_codex_login(SimpleNamespace(home=run_home, key="k"))
-    assert not (run_home / ".codex" / "auth.json").exists()
+    _, seeded = _session_login(monkeypatch, home)
+    assert seeded is None
 
 
 # -- 2. write-back: newest wins ----------------------------------------------------------------

@@ -152,18 +152,37 @@ def _as_noun(field: str) -> str:
     return f"{noun} ({field})" if noun != field else field
 
 
+def _did_nothing(output: dict[str, Any], promised: list[str] | tuple[str, ...]) -> bool:
+    """The agent made no tool call and every output the step promised is empty: nothing was
+    done, whatever the agent then said about it (BOSSAPP-1365, wfr_eb7b35a1: "completed", 0
+    tool calls, no report, no diff — and a fix-PR gate opened on input {})."""
+    if not promised or "tool_calls" not in output:
+        # Only judged where the run's own count is on the output (agent_steps.run): evidence
+        # read back after an approval has no count, and an absent count is not zero.
+        return False
+    try:
+        calls = int(output.get("tool_calls") or 0)
+    except (TypeError, ValueError):
+        calls = 0
+    used = output.get("skills_used") or []
+    return calls == 0 and not used and all(_missing(output, f) for f in promised)
+
+
 def verdict(output: dict[str, Any], *, required: list[str] | tuple[str, ...] = (),
-            step_name: str = "this step") -> dict[str, Any]:
+            step_name: str = "this step",
+            promised: list[str] | tuple[str, ...] = ()) -> dict[str, Any]:
     """Whether an agent step's work HAPPENED. Every agent step is judged here.
 
     Returns {"outcome": completed|blocked|failed, "reason", "needs", "declared", "missing",
     "error"}. `error` is the one line the run card shows when the outcome is not completed.
 
-    Three rules, in order:
+    Four rules, in order:
       1. The agent said failed or blocked → that is the outcome, with its reason (and need).
       2. Anything a later step depends on (`required`) is absent → failed, whatever the agent
          said, because the next step cannot run on it and a gate must not open over it.
-      3. Otherwise completed.
+      3. The step promised outputs (`promised`, its `produces`), the agent made no tool call
+         and every one of them is empty → failed, whatever the agent said: no work happened.
+      4. Otherwise completed.
     """
     stated = output.get("agent_outcome")
     if not isinstance(stated, dict) or not stated.get("declared"):
@@ -181,6 +200,11 @@ def verdict(output: dict[str, Any], *, required: list[str] | tuple[str, ...] = (
     elif missing:
         outcome = FAILED
         error = (f"{step_name} produced no {', '.join(_as_noun(f) for f in missing)}: {why}")
+    elif _did_nothing(output, promised):
+        outcome = FAILED
+        missing = [str(f) for f in promised]
+        error = (f"{step_name} did nothing: its agent made no tool call and produced none of "
+                 f"{', '.join(_as_noun(f) for f in promised)}: {why}")
     else:
         outcome = COMPLETED
     return {"outcome": outcome, "reason": reason, "needs": needs,
@@ -316,7 +340,8 @@ def scope_problem(role: str, wanted: list[str], held: dict[str, list[str]]) -> O
     if cannot_run:
         return (f"{role} holds {', '.join(cannot_run)}, but an agent step cannot offer "
                 f"{'it' if len(cannot_run) == 1 else 'them'} as a tool on this project — not "
-                "in the skill catalogue, or turned off. An authored skill runs as a custom step "
+                "in the skill catalogue, turned off, or with no executor on this install. An "
+                "authored skill runs as a custom step "
                 "(Add step → your skills); otherwise turn it on, or take it off the step.")
     return None
 
@@ -326,7 +351,8 @@ def empty_handed_problem(role: str, held: dict[str, list[str]]) -> str:
     publish check for the same reason as `scope_problem`."""
     if held.get("unrunnable"):
         return (f"{role} holds only {', '.join(held['unrunnable'])}, which an agent step cannot "
-                "offer as tools on this project — not in the skill catalogue, or turned off. "
+                "offer as tools on this project — not in the skill catalogue, turned off, or "
+                "with no executor on this install. "
                 f"Give {role} a skill it can use in Agent Studio, or run that skill as a "
                 "custom step.")
     return (f"{role} holds no skills and no MCP servers, so it cannot do anything. Open the "

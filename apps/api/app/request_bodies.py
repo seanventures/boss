@@ -1189,6 +1189,8 @@ class WorkflowPackPublishBody(ProjectBody):
     name: str | None = None
     summary: str | None = None
     version: str | None = None
+    #: The Library's filter words (lower-cased and trimmed by the engine; at most 6).
+    tags: list[str] | None = None
 
 
 class WorkflowRenameBody(ProjectBody):

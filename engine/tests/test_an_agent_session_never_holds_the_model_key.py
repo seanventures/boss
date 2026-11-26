@@ -321,13 +321,20 @@ def test_no_engine_child_env_holds_a_stored_provider_credential(upstream, monkey
     assert {"claude_code", "claude_agent_sdk", "aider"} <= set(checked)
 
 
-def test_a_subscription_login_is_not_proxied(upstream, monkeypatch):
-    """Not covered, on purpose and in writing: the Claude subscription's login is the CLI's own
-    OAuth session, not an API key (MODEL_CONNECTIONS.md)."""
+def test_a_subscription_login_is_proxied_too(upstream, monkeypatch):
+    """BOSSAPP-1480: the Claude subscription's login is held like a key — the session gets a run
+    token on the subscription route, the proxy attaches the login as a bearer upstream
+    (test_subscription_logins_stay_out_of_the_sandbox covers every engine)."""
+    stub, proxy = upstream
     _store(monkeypatch, CLAUDE_CODE_OAUTH_TOKEN=TOKEN)
     env = ca.ClaudeCodeAgent(_settings())._child_env()
-    assert env["CLAUDE_CODE_OAUTH_TOKEN"] == TOKEN
-    assert "ANTHROPIC_API_KEY" not in env and "ANTHROPIC_BASE_URL" not in env
+    assert env["CLAUDE_CODE_OAUTH_TOKEN"].startswith(mp.TOKEN_PREFIX)
+    assert env["ANTHROPIC_BASE_URL"] == proxy.base_url("claude_subscription")
+    assert "ANTHROPIC_API_KEY" not in env and TOKEN not in json.dumps(env)
+    status, _, _ = _request(proxy, "POST", "/claude_subscription/v1/messages", body=b"{}",
+                            headers={"authorization": f"Bearer {env['CLAUDE_CODE_OAUTH_TOKEN']}"})
+    assert status == 200
+    assert stub.calls[-1]["headers"]["authorization"] == f"Bearer {TOKEN}"
 
 
 # ── end to end: a fake `claude` calls the proxy with what it was given ───────────────────────

@@ -648,6 +648,57 @@ def certification_evidence(records: Iterable[Mapping[str, Any]], adapter_id: str
     return out
 
 
+#: THE PREVIEW MATRIX (BOSSAPP-1288): stack x (build, test, preview, CI generation, deploy) as the
+#: code stands, rendered into SUPPORTED_STACKS.md. "yes" means the code path exists and is tested
+#: at unit level; no cell is a certified golden build yet (none is recorded; see PROMOTION_RULE).
+#: Change a cell only with the code that makes it true.
+PREVIEW_MATRIX_COLUMNS = ("Build", "Test", "Preview", "CI generation (GitHub Actions, Jenkins)",
+                          "Deploy (Docker on an SSH host)", "Kubernetes / Helm")
+PREVIEW_MATRIX: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("Java / Spring, Maven", (
+        "yes: `mvn -B -ntp verify` (toolchains.py)",
+        "yes: same gate",
+        "yes: jar on `$PORT` (toolchains.java_preview_command)",
+        "no: the generator refuses Java (ci_config_generator.py `_commands`)",
+        "yes: one-container `java` mode (deploy_service.py)",
+        "no")),
+    ("Java / Spring, Gradle", (
+        "partial: `gradle build` gate; unit tests only, no real build in any test",
+        "partial: same gate",
+        "partial: `gradle -x test assemble`; unit tests only",
+        "no",
+        "partial: `java` mode with a Gradle build image; no deploy test",
+        "no")),
+    ("Go", (
+        "yes: `go vet` then `go test` (toolchains.GO_GATE)",
+        "yes: `go test ./...`",
+        "partial: started for e2e checks; the console preview needs `boss.preview.command`",
+        "yes: both generated",
+        "partial: no one-container Go mode; `boss.deploy.yaml` (commands or compose) only",
+        "no")),
+    ("Node / React (Vite)", (
+        "yes: npm scripts", "yes: npm test, Playwright `test:e2e`", "yes: Vite build served",
+        "yes: both generated", "yes: `node` or `static` mode, or compose", "no")),
+    ("Next.js", (
+        "yes: npm scripts", "yes: npm scripts",
+        "partial: `npm run start` on `$PORT` for e2e checks; the console preview uses the generic npm start",
+        "yes: both generated (as Node)", "partial: `node` mode or compose; no Next.js deploy test",
+        "no")),
+    ("Angular", (
+        "partial: generic npm build (`node-web`, best effort)", "partial: generic npm scripts",
+        "no: no start command in the registry; generic npm fallback, not on `$PORT`",
+        "partial: only when the language is given as Node", "partial: generic `static` path; untested",
+        "no")),
+    ("Python", (
+        "yes: pip install; no build step", "yes: pytest", "yes: uvicorn, flask or django",
+        "partial: generated, but it assumes `pyproject.toml` (`pip install -e .`)",
+        "yes: `py` mode, or compose", "no")),
+)
+PREVIEW_OUT_OF_SCOPE = (
+    "Mobile (SwiftUI, React Native) and ML stacks (TensorFlow, LangChain apps) are out of scope "
+    "for the preview. BOSS does not detect, build or test them as a stack.")
+
+
 def render_supported_stacks_md() -> str:
     """docs/community/SUPPORTED_STACKS.md, from the registry. Not per install (no "ready")."""
     lines = [
@@ -709,6 +760,21 @@ def render_supported_stacks_md() -> str:
     lines += ["A multi-service app is a backend and a web front end, each in its own "
               "directory with its own manifest. Data: `DATABASE_URL` (PostgreSQL) with a local "
               "SQLite file when it is unset, for local development.", ""]
+    lines += ["## Preview matrix", "",
+              "What works today for each stack in the guided preview. **yes**: the code path "
+              "exists and has tests. **partial**: it exists with the gap named. **no**: not "
+              "built. No cell is a certified golden build yet; the daily golden journeys "
+              "(BOSSAPP-1284) will record one per stack.", "",
+              "| Stack | " + " | ".join(PREVIEW_MATRIX_COLUMNS) + " |",
+              "|---|" + "---|" * len(PREVIEW_MATRIX_COLUMNS)]
+    for stack, cells in PREVIEW_MATRIX:
+        lines.append(f"| {stack} | " + " | ".join(cells) + " |")
+    lines += ["", "CI: GitHub Actions and Jenkins files are generated for Node, Python and Go "
+              "(ci_config_generator.py), and BOSS can trigger and read runs on both "
+              "(pipeline_adapter.py). The generated deploy job hands build evidence to BOSS; it "
+              "does not deploy. Deploy: Kubernetes, Helm, Cloudflare and Terraform are not built "
+              "(deployment_connectors.py).", "",
+              f"**Out of scope.** {PREVIEW_OUT_OF_SCOPE}", ""]
     return "\n".join(lines)
 
 

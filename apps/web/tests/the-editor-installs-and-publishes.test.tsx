@@ -78,7 +78,7 @@ describe("the editor and the Marketplace", () => {
     await mount("incident_response");
     expect(byTest("wf-kind")!.textContent).toBe("Yours");
     expect(byTest("wf-standard")).toBeNull();
-    expect(byTest("wf-market-line")!.textContent).toBe("From Marketplace · SRE / Helpdesk v1.0 · Modified");
+    expect(byTest("wf-market-line")!.textContent).toBe("From Library · SRE / Helpdesk v1.0 · Modified");
     await press("wf-market-review");
     expect(byTest("wf-update-changes")!.textContent).toContain("Investigate: name changed");
     await press("wf-update-take-keep");
@@ -103,7 +103,7 @@ describe("the editor and the Marketplace", () => {
     await mount("lumen_review");
     expect(byTest("wf-market-strip")).toBeNull();
     await press("wf-more");
-    expect(byTest("wf-menu-publish")!.textContent).toBe("Publish again…");
+    expect(byTest("wf-menu-publish")!.textContent).toBe("Share again…");
     await press("wf-menu-publish");
     expect((byTest("wf-publish-name") as HTMLInputElement).value).toBe("Gateway tenant onboarding");
     expect((byTest("wf-publish-version") as HTMLInputElement).value).toBe("0.4");

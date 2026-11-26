@@ -40,8 +40,18 @@ class PolicyConflict(RuntimeError):
         self.current = current
 
 
+#: Bumped on every invalidate: a reader that memoises what it built from a snapshot (the
+#: Command Center's headroom chip) keys on it, so a changed account shows at once.
+_GENERATION = [0]
+
+
+def generation() -> int:
+    return _GENERATION[0]
+
+
 def invalidate(project_id: Optional[str] = None) -> None:
     with _SNAP_LOCK:
+        _GENERATION[0] += 1
         if project_id is None:
             _SNAPS.clear()
             _MODES.clear()
@@ -292,6 +302,20 @@ def _subscription_windows(connection: Any, settings: Any, project_id: Optional[s
     from . import accounts
 
     keys = {e: accounts.account_key(connection, settings, project_id, e) for e in engines}
+    # A PROJECT THAT ROUTES THROUGH A POOL reads the pool's seat (subscription_pools.router_account),
+    # unless this call is a run already spending on one seat (its key rides on the context).
+    for e in engines:
+        if ":pool:" in keys[e]:
+            continue
+        try:
+            from ..subscription_pools import router_account
+
+            with connection.begin_nested():
+                seat = router_account(connection, settings, project_id, e)
+            if seat:
+                keys[e] = seat
+        except Exception:  # noqa: BLE001 — no pool tables: the single login, as before
+            pass
     rows = accounts.load(connection, list(set(keys.values()))) if keys else {}
     return {e: (k, rows.get(k) or {}) for e, k in keys.items()}
 

@@ -217,6 +217,27 @@ def registered_executor_ids() -> tuple[str, ...]:
     return tuple(sorted(_EXECUTORS))
 
 
+def runs_here(skill_id: str) -> bool:
+    """Whether a SHIPPED skill can run on this install: an executor is registered for it.
+
+    THE ONE ANSWER to "can this skill actually run" (BOSSAPP-1366). A spec pack describes many
+    skills whose work happens elsewhere — inside a build's pipeline (`coding_pipeline.*`,
+    `software_factory.sandbox_validation`), or not at all yet — and the skill runtime refuses
+    every one of them with "No server-side executor is registered". The catalogue reads this, so
+    such a skill is never offered to an agent, never assignable, never placed in a workflow
+    design and never put in front of a person to approve. Authored skills are decided by their
+    behaviour (skill_catalogue._authored_facts), not here."""
+    return str(skill_id or "").strip() in _EXECUTORS
+
+
+def not_runnable_here(skill_id: str) -> str:
+    """Why a shipped skill without an executor cannot run, and what to use instead."""
+    return (f"'{skill_id}' has no executor on this install, so nothing can run it — it names "
+            "work BOSS does inside its own pipelines (a build runs its tests and sandbox "
+            "validation itself). Use a build step, or author a sandboxed-command skill for a "
+            "command a step must run.")
+
+
 def _as_held(context: "SkillExecutorContext", skill: dict[str, Any]) -> dict[str, Any]:
     """The authored skill as THIS caller runs it: a version pin on its grant wins
     (role_skills.pinned_version_id, BOSSAPP-842); a test run's chosen version wins over both
@@ -1879,9 +1900,14 @@ def execute_repo_read(context: "SkillExecutorContext", inputs: dict[str, Any]) -
     ctx = EngineContext(settings=context.settings, engine=context.connection.engine)
     # THE SAME FILTER AS EVERY OTHER DOOR (registry.schema_args): only what the tool's schema
     # lists reaches the handler, so a step's inputs cannot set a key the tool never offered.
-    from ..tools.registry import schema_args
+    from ..tools.registry import schema_args, unknown_args_result, unknown_caller_args
 
     args, ignored = schema_args(spec, args)
+    unknown = unknown_caller_args(ignored)
+    if unknown:
+        # REFUSED, NOT DROPPED (BOSSAPP-1361): the same rule as registry.invoke, so an agent
+        # step's call with a wrong argument name fails saying what the tool takes.
+        raise ValueError(unknown_args_result(spec, unknown)["message"])
     out = spec.handler(ctx, project_id=context.project_id, actor=context.actor, args=args)
     out = out if isinstance(out, dict) else {"value": out}
     if ignored:

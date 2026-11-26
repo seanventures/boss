@@ -484,7 +484,7 @@ export const parseWebhook = (v: unknown): WebhookSecret => {
  * (a work item + binding), then started on the workflow its type calls for (or the one picked).
  */
 export async function importAndStart(projectId: string, t: Pick<Ticket, "key" | "connection_id" | "in_boss" | "type" | "provider"> & { connection_reach?: string }, workflowKey?: string,
-                                     startAnyway: readonly string[] = [], profile?: string | null,
+                                     startAnyway: readonly string[] = [], profile?: string | null, qualityBar?: string | null,
 ): Promise<{ ok: boolean; error: string | null; workItemId: string; runId: string; note: string; readiness: Readiness | null }> {
   let workItemId = t.in_boss?.work_item_id ?? "";
   if (!workItemId) {
@@ -496,7 +496,8 @@ export async function importAndStart(projectId: string, t: Pick<Ticket, "key" | 
   }
   const st = await startFromTicket(workItemId, { project_id: projectId, workflow_key: workflowKey || ticketWorkflow(t),
                                                  ...(startAnyway.length ? { start_anyway: [...startAnyway] } : {}),
-                                                 ...(profile ? { profile } : {}) });
+                                                 ...(profile ? { profile } : {}),
+                                                 ...(qualityBar ? { quality_bar: qualityBar } : {}) });
   if (!st.ok) return { ok: false, error: st.error, workItemId, runId: "", note: "", readiness: refusalReadiness(st.refusal) };
   const b = o(st.body);
   return { ok: true, error: null, workItemId, runId: s(b.run_id) || s(o(b.run).id), note: s(b.note), readiness: null };

@@ -113,8 +113,66 @@ def set_approval_policy(connection: Connection, *, project_id: str, environment:
     return policy
 
 
-def _gate_approval(connection: Connection, project_id: str,
-                   decision_id: str) -> Optional[dict[str, Any]]:
+def _by_a_person(connection: Connection, project_id: str, approved_by: Any) -> bool:
+    """WHERE ONLY A PERSON MAY ANSWER (production configuration): a gate counts only when a
+    person released it — never an agent, a policy or a timeout."""
+    from .agent_identity import is_person
+
+    return is_person(str(approved_by or ""), connection, project_id)
+
+
+def _gate_used(connection: Connection, decision_id: str) -> bool:
+    """Once: a gate approves ONE deployment. A second deployment naming it asks again."""
+    return connection.execute(
+        text("SELECT 1 FROM deployment_runs WHERE decision_id = :d "
+             "UNION ALL SELECT 1 FROM stack_deployments WHERE decision_id = :d "
+             "UNION ALL SELECT 1 FROM deployment_gate_uses WHERE decision_id = :d LIMIT 1"),
+        {"d": decision_id}).first() is not None
+
+
+def _claim_gate(connection: Connection, project_id: str, gate: dict[str, Any], *,
+                target_id: Optional[str], bundle_sha256: Optional[str]) -> bool:
+    """ONE USE, BY CONSTRAINT (BOSSAPP-1172): the gate's decision is the primary key of its use,
+    so two plans racing on one gate cannot both ship under it. Records where it went (target)
+    and what (bundle). In the plan's own transaction: a refused plan gives the claim back."""
+    with connection.begin_nested():
+        claimed = connection.execute(
+            text("INSERT INTO deployment_gate_uses (decision_id, project_id, workflow_run_id, "
+                 "step_id, capability, target_id, bundle_sha256) VALUES (:d, :p, :r, :s, :c, "
+                 ":t, :b) ON CONFLICT (decision_id) DO NOTHING RETURNING decision_id"),
+            {"d": gate["decision_id"], "p": project_id, "r": gate.get("run_id"),
+             "s": gate.get("step_id"), "c": gate.get("capability"), "t": target_id,
+             "b": bundle_sha256}).scalar()
+    return claimed is not None
+
+
+def released_gate(connection: Connection, project_id: str, decision_id: Optional[str], *,
+                  capability: str, run_id: str,
+                  bundle_sha256: Optional[str] = None) -> Optional[dict[str, Any]]:
+    """The step's released gate as the RUNNER sees it, on the transaction that released it
+    (BOSSAPP-1172), bound to THIS run, THIS capability and (when the step knows it) THIS
+    bundle. A config tool plans in a transaction of its own, which cannot see the release yet;
+    the runner hands it this through the step's trusted values (registry.TRUSTED_STEP_ARGS),
+    never as an argument anybody could write."""
+    if not decision_id or not run_id:
+        return None
+    gate = _gate_approval(connection, project_id, str(decision_id), capabilities=(capability,),
+                          run_id=run_id)
+    if gate and bundle_sha256:
+        gate["bundle_sha256"] = str(bundle_sha256)
+    return gate
+
+
+#: The step capabilities whose released gate approves the deployment the step starts: one card
+#: per deployment, not a step gate and then the deployment's own (BOSSAPP-1172).
+GATED_DEPLOYS = ("deploy", "config_deploy", "promote_config", "rollback_config")
+
+
+def _gate_approval(connection: Connection, project_id: str, decision_id: str, *,
+                   person_only: bool = False, capabilities: tuple[str, ...] = ("deploy",),
+                   run_id: Optional[str] = None) -> Optional[dict[str, Any]]:
+    """A step's released gate that may approve a deployment: approved, released for this very
+    decision, on a step of one of `capabilities` — and of workflow run `run_id` when named."""
     row = connection.execute(
         text("SELECT status, approved_by FROM decisions WHERE id = :d AND project_id = :p"),
         {"d": decision_id, "p": project_id}).mappings().first()
@@ -123,27 +181,35 @@ def _gate_approval(connection: Connection, project_id: str,
     # A DEPLOY STEP'S OWN GATE, released for this very decision — not any approved decision
     # somebody (or a model filling a tool argument) names.
     gate = connection.execute(
-        text("SELECT 1 FROM workflow_step_runs WHERE project_id = :p AND decision_id = :d "
+        text("SELECT workflow_run_id, step_id, COALESCE(binding_snapshot->'binding'->>'capability', "
+             "binding_snapshot->>'capability', '') AS capability "
+             "FROM workflow_step_runs WHERE project_id = :p AND decision_id = :d "
              "AND binding_snapshot->>'released_for' = :d "
              "AND COALESCE(binding_snapshot->'binding'->>'capability', "
-             "             binding_snapshot->>'capability', '') = 'deploy' LIMIT 1"),
-        {"p": project_id, "d": decision_id}).first()
+             "             binding_snapshot->>'capability', '') = ANY(:caps) "
+             "AND (CAST(:r AS TEXT) IS NULL OR workflow_run_id = :r) LIMIT 1"),
+        {"p": project_id, "d": decision_id, "caps": list(capabilities), "r": run_id}
+    ).mappings().first()
     if gate is None:
         return None
-    # Once: a gate approves ONE deployment. A second deployment naming it asks again.
-    used = connection.execute(
-        text("SELECT 1 FROM deployment_runs WHERE decision_id = :d "
-             "UNION ALL SELECT 1 FROM stack_deployments WHERE decision_id = :d LIMIT 1"),
-        {"d": decision_id}).first()
-    if used is not None:
+    if person_only and not _by_a_person(connection, project_id, row["approved_by"]):
+        return None
+    if _gate_used(connection, decision_id):
         return None
     return {"source": "gate", "decision_id": decision_id,
-            "approved_by": str(row["approved_by"] or "unknown")}
+            "approved_by": str(row["approved_by"] or "unknown"),
+            "run_id": str(gate["workflow_run_id"]), "step_id": str(gate["step_id"]),
+            "capability": str(gate["capability"])}
+
+
+#: Steps that ship to an environment and may follow its policy: a Deploy, and a config deploy
+#: (BOSSAPP-1172). Promotions and rollbacks never follow one (production is a person's).
+_POLICY_DEPLOYS = ("deploy", "config_deploy")
 
 
 def _is_deploy(spec_step: Any) -> bool:
     binding = spec_step.get("binding") if isinstance(spec_step, dict) else None
-    return isinstance(binding, dict) and binding.get("capability") == "deploy"
+    return isinstance(binding, dict) and binding.get("capability") in _POLICY_DEPLOYS
 
 
 def follows_policy(spec_step: Any) -> bool:
@@ -224,16 +290,48 @@ def step_answer(connection: Connection, project_id: str, spec_step: Any,
 
 def pre_approval(connection: Connection, project_id: str, environment: Any, *,
                  gate_decision_id: Optional[str] = None,
-                 person_required: bool = False) -> Optional[dict[str, Any]]:
+                 person_required: bool = False,
+                 gate_by_person: bool = False,
+                 released: Optional[dict[str, Any]] = None,
+                 gate_capability: Optional[str] = None,
+                 gate_run_id: Optional[str] = None,
+                 target_id: Optional[str] = None,
+                 bundle_sha256: Optional[str] = None) -> Optional[dict[str, Any]]:
     """How this deploy is already approved — {source, decision_id, approved_by, policy?} — or
     None, when a person must be asked. The gate first (it is a person's answer), then policy.
 
     `person_required`: the workflow step that started this deploy promised a person
-    (promises_a_person), so only a person's answer counts — never the environment's policy."""
-    if gate_decision_id:
-        found = _gate_approval(connection, project_id, str(gate_decision_id))
+    (promises_a_person), so only a person's answer counts — never the environment's policy.
+
+    A CONFIG DEPLOYMENT'S GATE (BOSSAPP-1172), `gate_capability` set: only a gate of that
+    capability on workflow run `gate_run_id` counts, it is CLAIMED once by constraint
+    (deployment_gate_uses, with the target and bundle it shipped), and a gate the runner
+    recorded a bundle for approves only that bundle. `gate_by_person` (production
+    configuration): ONLY the runner's verified `released` gate counts, and only when a person
+    released it — a decision id passed as an argument is never production's answer."""
+    if gate_capability is not None:
+        found = None
+        if released and released.get("source") == "gate" and released.get("decision_id") \
+                and released.get("capability") == gate_capability and gate_run_id \
+                and released.get("run_id") == gate_run_id \
+                and (not released.get("bundle_sha256") or not bundle_sha256
+                     or released["bundle_sha256"] == bundle_sha256) \
+                and not _gate_used(connection, str(released["decision_id"])) \
+                and (not gate_by_person or _by_a_person(connection, project_id,
+                                                        released.get("approved_by"))):
+            found = dict(released)
+        elif gate_decision_id and gate_run_id and not gate_by_person:
+            found = _gate_approval(connection, project_id, str(gate_decision_id),
+                                   capabilities=(gate_capability,), run_id=gate_run_id)
+        if found and _claim_gate(connection, project_id, found, target_id=target_id,
+                                 bundle_sha256=bundle_sha256):
+            return {"source": "gate", "decision_id": str(found["decision_id"]),
+                    "approved_by": str(found.get("approved_by") or "unknown")}
+    elif gate_decision_id:
+        found = _gate_approval(connection, project_id, str(gate_decision_id),
+                               person_only=gate_by_person)
         if found:
-            return found
+            return {k: found[k] for k in ("source", "decision_id", "approved_by")}
     if person_required:
         return None
     policy = deploy_policy(connection, project_id, environment)

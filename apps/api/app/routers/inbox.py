@@ -67,13 +67,15 @@ def build_inbox_router(*, engine, require_reader: Callable[..., None],
             include_archived=include_archived, kinds=kinds, limit=limit))
 
     @router.post("/v1/inbox/read")
-    @permit(P.WORK_ITEM_READ, scope=Scope.project(body="project_id"))
+    # The caller's OWN read and snooze marks: nothing of the project's changes, so anyone who
+    # may read the inbox may mark it.
+    @permit(P.WORK_ITEM_READ, scope=Scope.project(body="project_id"), readonly_post=True)
     def mark_read(payload: ReadBody) -> dict:
         return _run(payload.project_id, lambda c, who: svc.mark_read(
             c, payload.project_id, actor=who, item_keys=payload.item_keys, read=payload.read))
 
     @router.post("/v1/inbox/snooze")
-    @permit(P.WORK_ITEM_READ, scope=Scope.project(body="project_id"))
+    @permit(P.WORK_ITEM_READ, scope=Scope.project(body="project_id"), readonly_post=True)
     def snooze(payload: SnoozeBody) -> dict:
         return _run(payload.project_id, lambda c, who: svc.snooze(
             c, payload.project_id, actor=who, item_key=payload.item_key,

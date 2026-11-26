@@ -533,7 +533,9 @@ class WorkingCopyBody(BaseModel):
 
 
 @router.post("/v1/projects/{project_id}/local-repo/working-copies")
-@permit(P.REPOSITORY_READ, scope=Scope.project(path="project_id"))
+# A WRITE: it records the working copy on the change page. A working copy is where a person
+# changes the code, so it is declared at the permission that pushes it back.
+@permit(P.REPOSITORY_PUSH, scope=Scope.project(path="project_id"))
 def local_repo_working_copy(project_id: str, request: Request, payload: WorkingCopyBody) -> Any:
     """`boss clone` says where it cloned, so the change page lists the working copy."""
     from boss_engine.services import local_review

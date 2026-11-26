@@ -1251,6 +1251,8 @@ class Settings(BaseSettings):
     open_pr_when_checks_fail: int = Field(default=1, alias="BOSS_OPEN_PR_WHEN_CHECKS_FAIL")
     # THE QUALITY BAR (services/quality_bar.py): prototype | standard | production.
     quality_bar: str = Field(default="standard", alias="BOSS_QUALITY_BAR")
+    # Each gate's level over the preset (project setting `quality_bar_gates`).
+    quality_bar_gates: Optional[dict] = Field(default=None, alias="BOSS_QUALITY_BAR_GATES")
     # THE RUN SUPERVISOR (L2a, services/run_supervisor.py) — three independently toggle-able
     # flags, each read at the point it would act, so flipping one takes effect on a project's
     # very next repair round with no restart. 1 on, 0 off; all default on.

@@ -1,0 +1,25 @@
+# An existing tenant that already passes every rule.
+tenant: orbit-maps
+owner: "Orbit Maps API Team"
+contact: "api@orbitmaps.example"
+tier: standard
+data_classification: internal
+routes:
+  - path: /v1/tiles
+    description: "Map tiles for the partner's web app."
+    methods: ["GET"]
+    upstream: orbit-tiles
+    max_body_bytes: 65536
+    rate_limit:
+      rps: 50
+      burst: 100
+    auth:
+      type: jwt
+      issuer: "https://issuer.orbitmaps.example"
+      audience: "northgate"
+      scopes: ["tiles.read"]
+      jwks_url: "https://issuer.orbitmaps.example/.well-known/jwks.json"
+upstreams:
+  orbit-tiles:
+    url: "https://tiles.orbitmaps.example"
+    timeout_ms: 1500

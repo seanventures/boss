@@ -1,0 +1,105 @@
+{
+  "id": "J3",
+  "title": "A Java/Spring service with Maven",
+  "ticket": "BOSSAPP-1284",
+  "summary": "A small change to a Java/Spring Boot service built and tested with Maven in BOSS's sandbox toolchain, ending in a pull request with its gates green.",
+  "modes": [
+    "real"
+  ],
+  "needs": {
+    "fixtures": [
+      "a Spring Boot service repository built with Maven (owner, java_repo)"
+    ],
+    "defaults": {
+      "base_branch": "main",
+      "profile": "balanced",
+      "model_config": null,
+      "title": "Add a version endpoint",
+      "instructions": "Add GET /version answering 200 with {\"version\":\"<the project version>\"} to the Spring Boot service, with a MockMvc test.",
+      "criteria": [
+        "GET /version answers 200 with the project version as JSON",
+        "mvn -q test passes"
+      ]
+    }
+  },
+  "steps": [
+    {
+      "id": "start",
+      "call": "POST /v1/code-tasks",
+      "expect_status": [
+        200
+      ],
+      "body": {
+        "project_id": "{{project_id}}",
+        "title": "{{title}}",
+        "instructions": "{{instructions}}",
+        "acceptance_criteria": "{{criteria}}",
+        "test_commands": [
+          "mvn -q test"
+        ],
+        "owner": "{{owner}}",
+        "repo": "{{java_repo}}",
+        "base_branch": "{{base_branch}}",
+        "open_pr": true,
+        "profile": "{{profile}}",
+        "risk_tier": 1,
+        "model_config": "{{model_config}}"
+      },
+      "save": {
+        "run_id": "run_id"
+      }
+    },
+    {
+      "id": "work",
+      "do": "drain"
+    },
+    {
+      "id": "done",
+      "call": "GET /v1/code-tasks/{{run_id}}",
+      "until": {
+        "path": "status",
+        "in": [
+          "completed",
+          "failed",
+          "blocked",
+          "cancelled"
+        ]
+      },
+      "timeout_s": 3600,
+      "every_s": 20
+    },
+    {
+      "id": "gates",
+      "call": "GET /v1/code-tasks/{{run_id}}/gates",
+      "expect_status": [
+        200
+      ]
+    }
+  ],
+  "acceptance": [
+    {
+      "text": "The build finished as completed",
+      "step": "done",
+      "path": "status",
+      "equals": "completed"
+    },
+    {
+      "text": "A pull request was opened for the change",
+      "step": "done",
+      "path": "pull_request_url",
+      "present": true
+    },
+    {
+      "text": "The old tests still pass on the final gate",
+      "step": "gates",
+      "path": "gates[name=existing_tests_intact].ok",
+      "equals": true
+    },
+    {
+      "text": "BOSS's acceptance check found every must-have met",
+      "step": "gates",
+      "path": "gates[name=acceptance_met].ok",
+      "equals": true
+    }
+  ]
+}

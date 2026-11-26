@@ -419,6 +419,14 @@ def _project(connection: Connection, project_id: str, version: dict[str, Any], *
 
         added += [s for s in BASELINE_SKILLS if s not in added
                   and agent_svc._baseline_available(connection, project_id, s)]  # noqa: SLF001
+    # A SHIPPED SKILL NOTHING HERE CAN RUN IS SKIPPED AND REPORTED, never the reason a whole
+    # publish fails (BOSSAPP-1366): a spec written before it lost its executor still publishes.
+    from ..services.skill_definitions import cannot_run_here
+
+    unavailable = [{"skill_id": s, "reason": why} for s in added
+                   if (why := cannot_run_here(connection, project_id, s))]
+    skipped = {u["skill_id"] for u in unavailable}
+    added = [s for s in added if s not in skipped]
     for skill in added:
         try:
             assign_skill_to_role(connection, project_id=project_id, actor=actor, role_key=key, skill_id=skill)
@@ -438,6 +446,7 @@ def _project(connection: Connection, project_id: str, version: dict[str, Any], *
         agent_svc.revoke_mcp(connection, project_id, actor=actor, role_key=key,
                              mcp_server_id=have[name]["server_id"])
     return {"skills_added": added, "skills_removed": removed,
+            **({"skills_unavailable": unavailable} if unavailable else {}),
             "mcp": sorted(g.server for g in compiled.mcp)}
 
 

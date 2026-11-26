@@ -794,11 +794,16 @@ def allowed_actions(decision: Mapping[str, Any]) -> list[dict[str, Any]]:
     if _action_of(decision) == "start_recheck_followup":
         # A RE-CHECK'S FINDINGS (change_recheck): nothing is built until a person says so.
         usd = (_rec(decision).get("estimate") or {}).get("usd")
+        n = len(_rec(decision).get("findings") or [])
+        # WHAT PRESSING IT DOES, in numbers (BOSSAPP-1354): the card's follow-on line is this.
+        build = (f"a follow-up build of {n} item{'s' if n != 1 else ''}" if n
+                 else "a follow-up build")
         return [
             _action("approve", f"Fix these (about ${float(usd):.2f})" if usd is not None
                     else "Fix these", "approve",
-                    "Starts a follow-up build on this change's branch that fixes the re-check's "
-                    "findings. Needs the Steer builds permission."),
+                    f"Starts {build} on this change's branch"
+                    + (f", about ${float(usd):.2f}" if usd is not None else "")
+                    + ", that fixes the re-check's findings. Needs the Steer builds permission."),
             _action("reject", "Not now", "reject",
                     "Nothing is built. The findings stay open in the ledger."),
             _delegate(),

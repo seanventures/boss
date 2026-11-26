@@ -1,0 +1,85 @@
+{
+  "id": "J8",
+  "title": "API gateway onboarding: a bad partner file fixed and held for its merge",
+  "ticket": "BOSSAPP-1284",
+  "summary": "A partner's gateway config file that breaks the repository's rules starts \"Onboard a config file\" (onboard_config_file, #329): BOSS runs the repository's checker, fixes what the ruleset lets an agent fix, reviews it, and stops at the merge card for a person. The journey account never approves, so the chain after the merge (staging, contract tests, the production approval) runs only once a person merges; covering it daily needs a separate approver principal for the fixture project, not the journey account.",
+  "modes": [
+    "real"
+  ],
+  "needs": {
+    "fixtures": [
+      "examples/api-gateway-onboarding reset onto a fixture repo the fixture project builds (reset.sh), with config/tenants/lumen-pay.yaml as target_path and the bad file as start_from"
+    ],
+    "defaults": {
+      "target_path": "config/tenants/lumen-pay.yaml",
+      "start_from": "partner/lumen-pay.bad.yaml"
+    }
+  },
+  "steps": [
+    {
+      "id": "start",
+      "call": "POST /v1/delivery-workflows/start",
+      "expect_status": [
+        200
+      ],
+      "body": {
+        "project_id": "{{project_id}}",
+        "workflow_key": "onboard_config_file",
+        "input": {
+          "target_path": "{{target_path}}",
+          "start_from": "{{start_from}}"
+        },
+        "dedupe_key": "journey-j8-{{stamp}}"
+      },
+      "save": {
+        "run_id": "run.id"
+      }
+    },
+    {
+      "id": "work",
+      "do": "drain"
+    },
+    {
+      "id": "held",
+      "call": "GET /v1/workflow-runs/{{run_id}}?project_id={{project_id}}",
+      "until": {
+        "path": "status",
+        "in": [
+          "waiting",
+          "blocked",
+          "completed",
+          "failed",
+          "cancelled",
+          "deadlettered"
+        ]
+      },
+      "timeout_s": 3600,
+      "every_s": 30
+    }
+  ],
+  "acceptance": [
+    {
+      "text": "The onboarding run started",
+      "step": "start",
+      "status": 200
+    },
+    {
+      "text": "The fixed file passes the repository's checker",
+      "step": "held",
+      "path": "steps[step_id=fix].output.checks_passed",
+      "equals": true
+    },
+    {
+      "text": "The fix was reviewed",
+      "step": "held",
+      "path": "steps[step_id=review].status",
+      "equals": "succeeded"
+    },
+    {
+      "text": "The run waits at the merge for a person",
+      "step": "held",
+      "path": "steps[step_id=merge].status",
+      "equals": "waiting"
+    }
+  ]
+}

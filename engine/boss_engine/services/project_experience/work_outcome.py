@@ -26,7 +26,8 @@ from .common import aware, face, iso
 
 #: Capabilities that change an app: a workflow with any of them is code-delivery work.
 CODE_CAPS = frozenset({"build", "retry_build", "fix_pr", "more_tests", "preview", "deploy",
-                       "redeploy", "config_deploy", "promote_config", "wait_for_ci",
+                       "redeploy", "config_deploy", "promote_config", "rollback_config",
+                       "wait_for_ci",
                        "release_approval", "smoke_test", "teardown_preview", "security_fix"})
 #: Step kinds that route or wait, never work: left out of the drawn flow.
 CONTROL_KINDS = frozenset({"condition", "timer", "for_each", "bounded_loop", "join", "parallel"})

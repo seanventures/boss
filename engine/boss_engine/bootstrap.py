@@ -289,9 +289,11 @@ def _seed_project_defaults(
     # AND GIVE THE AGENTS THEIR SKILLS. Roles declare `allowed_skills`; the runtime grants on
     # `role_skills`; nothing joined them, so every install had agents holding nothing. Runs
     # after seed_system_skills because it can only assign skills the project actually has.
-    from .services.skill_definitions import sync_role_skills
+    from .services.skill_definitions import drop_unrunnable_grants, sync_role_skills
 
     try:
+        # A GRANT NOTHING CAN RUN, made before BOSSAPP-1366, comes off first (audited).
+        drop_unrunnable_grants(connection, project_id, actor=actor)
         sync_role_skills(connection, project_id=project_id, actor=actor)
     except Exception:  # noqa: BLE001 — a fresh project must still come up
         _log.warning("role_skill_sync_failed", exc_info=True)

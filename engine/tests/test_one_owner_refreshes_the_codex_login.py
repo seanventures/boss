@@ -16,10 +16,16 @@ from pathlib import Path
 from boss_engine.services import codex_login, sandbox_identity
 
 
-@dataclass
-class _Ident:
-    home: Path
-    key: str = "run-key"
+class _Ident(sandbox_identity.SandboxIdentity):
+    """A run identity whose HOME is the given folder (its run directory is the parent)."""
+
+    def __init__(self, home: Path, key: str = "run-key") -> None:
+        super().__init__(key=key, uid=61001, run_dir=Path(home).parent)
+        self._home = Path(home)
+
+    @property
+    def home(self) -> Path:  # type: ignore[override]
+        return self._home
 
 
 def _login(tmp_path: Path, monkeypatch, *, expires_in: float, refresh: str = "REFRESH_1",
@@ -65,36 +71,34 @@ def _iso(seconds_ago: float) -> str:
     return (datetime.now(timezone.utc) - timedelta(seconds=seconds_ago)).isoformat()
 
 
+def _session(monkeypatch, ident=None):
+    """What a run's Codex session gets (subscription_shield, BOSSAPP-1480): (env, proxy, the
+    session's login doc or None). The control plane's login is read, never copied."""
+    from boss_engine.services import model_proxy, subscription_shield
+
+    monkeypatch.setattr(sandbox_identity, "current", lambda: ident)
+    proxy = model_proxy.ModelProxy()
+    env = subscription_shield.codex({"CODEX_HOME": os.environ["CODEX_HOME"]}, proxy=proxy)
+    path = Path(env["CODEX_HOME"]) / "auth.json"
+    return env, proxy, (json.loads(path.read_text()) if path.exists() else None)
+
+
+def _held(proxy, doc) -> str:
+    from boss_engine.services import model_proxy
+
+    return model_proxy.held_for(doc["tokens"]["access_token"], proxy)
+
+
 # P1 (criterion 2, UNVERIFIED and defensive; see codex_login's docstring): codex may refresh its
 # own ChatGPT login on last_refresh age alone (around 8 days old), not only on the access token's
-# expiry. refresh_if_due must cover that trigger too, with a safety margin,
-# so a login the control plane just seeded never still looks "due" to the run's own codex.
-def test_p1_refresh_if_due_also_covers_last_refresh_age_like_codex_does(tmp_path, monkeypatch):
-    src = _login(tmp_path, monkeypatch, expires_in=5 * 3600,
-                 last_refresh=_iso(codex_login.REFRESH_AGE_INTERVAL_SECONDS -
-                                    codex_login.REFRESH_AGE_MARGIN_SECONDS + 60))
-    endpoint = _Endpoint()
-    out = codex_login.refresh_if_due(post=endpoint)
-
-    assert out["result"] == "refreshed"
-    assert len(endpoint.calls) == 1
-    new = _tokens(src)
-    assert new["access_token"] == "ACCESS_2"
-
-
-def test_p1_a_freshly_seeded_copy_never_looks_due_on_age_to_a_codex_that_refreshes_on_it(
+# expiry. A session's login is written fresh for each session, so it never looks due on age.
+def test_p1_a_session_login_never_looks_due_on_age_to_a_codex_that_refreshes_on_it(
         tmp_path, monkeypatch):
-    """A fake codex that refreshes whenever last_refresh is older than the real interval: after
-    the control plane's own background owner refreshes an age-due login (refresh_if_due, the
-    same tick `start_all`'s refresher runs) and then seeds (reseed_codex_login), the run's copy
-    must never cross that line. Starting from an already-fresh login would pass even if seeding
-    never refreshed anything; starting age-due exercises the actual refresh path."""
-    from boss_engine.services import sandbox_identity
-
     src = _login(tmp_path, monkeypatch, expires_in=5 * 3600,
                  last_refresh=_iso(codex_login.REFRESH_AGE_INTERVAL_SECONDS -
                                     codex_login.REFRESH_AGE_MARGIN_SECONDS + 60))
     endpoint = _Endpoint()
+    monkeypatch.setattr(codex_login, "_http_post", endpoint)
     out = codex_login.refresh_if_due(post=endpoint)
     assert out["result"] == "refreshed"
     assert len(endpoint.calls) == 1
@@ -102,13 +106,8 @@ def test_p1_a_freshly_seeded_copy_never_looks_due_on_age_to_a_codex_that_refresh
 
     run_home = tmp_path / "run-home"
     run_home.mkdir()
-    ident = _Ident(run_home)
-    monkeypatch.setattr(sandbox_identity, "current", lambda: ident)
-    sandbox_identity.reseed_codex_login(ident)
-
-    copy = run_home / ".codex" / "auth.json"
-    doc = json.loads(copy.read_text())
-    assert doc["tokens"]["access_token"] == "ACCESS_2"
+    _env, proxy, doc = _session(monkeypatch, _Ident(run_home))
+    assert _held(proxy, doc) == "ACCESS_2"
 
     def _fake_codex_refreshes() -> bool:
         age = time.time() - __import__("datetime").datetime.fromisoformat(
@@ -116,6 +115,7 @@ def test_p1_a_freshly_seeded_copy_never_looks_due_on_age_to_a_codex_that_refresh
         return age > codex_login.REFRESH_AGE_INTERVAL_SECONDS
 
     assert _fake_codex_refreshes() is False
+    proxy.stop()
 
 
 # P0: the core refresh contract — the real refresh token only ever leaves via the owner's call,
@@ -158,87 +158,82 @@ def test_p1_two_refreshers_at_once_refresh_exactly_once(tmp_path, monkeypatch):
 
 # P1 (criterion 3): a run's seeded copy keeps the shape codex needs to report a ChatGPT login,
 # not API-key fallback — the refresh token field survives the seed.
-def test_p1_the_seeded_run_copy_keeps_the_chatgpt_login_shape(tmp_path, monkeypatch):
+def test_p1_a_run_starts_on_a_refreshed_login_in_the_chatgpt_shape(tmp_path, monkeypatch):
     src = _login(tmp_path, monkeypatch, expires_in=5 * 3600,
                  last_refresh=_iso(codex_login.REFRESH_AGE_INTERVAL_SECONDS -
                                     codex_login.REFRESH_AGE_MARGIN_SECONDS + 60))
     endpoint = _Endpoint()
     monkeypatch.setattr(codex_login, "_http_post", endpoint)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "no-claude"))
     run_home = tmp_path / "run-home"
     run_home.mkdir()
 
-    sandbox_identity._seed_codex_login(_Ident(run_home))
-
+    sandbox_identity._seed_cli_logins(_Ident(run_home))       # the control plane refreshes first
     assert len(endpoint.calls) == 1
-    copied = json.loads((run_home / ".codex" / "auth.json").read_text())
-    assert copied["auth_mode"] == "chatgpt"
-    assert copied["tokens"]["access_token"] == "ACCESS_2"
+    assert not (run_home / ".codex" / "auth.json").exists()   # and copies nothing
+
+    _env, proxy, doc = _session(monkeypatch, _Ident(run_home))
+    assert doc["auth_mode"] == "chatgpt"
+    assert _held(proxy, doc) == "ACCESS_2"
     # the run never holds the real refresh token (only the control plane does)
-    assert copied["tokens"]["refresh_token"] == sandbox_identity.RUN_REFRESH_TOKEN
+    assert doc["tokens"]["refresh_token"] == sandbox_identity.RUN_REFRESH_TOKEN
     assert _tokens(src)["access_token"] == "ACCESS_2"
     assert _tokens(src)["refresh_token"] == "REFRESH_2"
+    proxy.stop()
 
 
 def test_a_run_can_never_rotate_the_operators_codex_login(tmp_path, monkeypatch):
     """When a run's codex refreshed (it does on a 401), OpenAI rotated the token, the control
     plane kept the old one, and its next use revoked the whole login (boss-1, 10-29 and 10-30).
-    A run's copy, seeded or reseeded, carries a refresh token that cannot rotate anything; every
-    other field codex needs (access and id tokens, account, auth mode) is the real one."""
+    A session's login holds a run token and a refresh token that cannot rotate anything; the
+    account and auth mode codex needs are the real ones; no real token is in it at all."""
     src = _login(tmp_path, monkeypatch, expires_in=5 * 3600, refresh="REAL_REFRESH")
     real = json.loads(src.read_text())
     run_home = tmp_path / "run-home"
     run_home.mkdir()
-    ident = _Ident(run_home)
-
-    for seed in (lambda: sandbox_identity._seed_codex_login(ident),
-                 lambda: sandbox_identity.copy_codex_tokens(ident)):
-        seed()
-        copied = json.loads((run_home / ".codex" / "auth.json").read_text())
-        assert "REAL_REFRESH" not in json.dumps(copied)
-        assert copied["tokens"]["refresh_token"] == sandbox_identity.RUN_REFRESH_TOKEN
-        for key in ("access_token", "id_token", "account_id"):
-            assert copied["tokens"].get(key) == real["tokens"].get(key)
-        assert copied["auth_mode"] == real["auth_mode"]
+    _env, proxy, doc = _session(monkeypatch, _Ident(run_home))
+    text = json.dumps(doc)
+    assert "REAL_REFRESH" not in text and "ACCESS_1" not in text
+    assert doc["tokens"]["refresh_token"] == sandbox_identity.RUN_REFRESH_TOKEN
+    assert doc["tokens"]["account_id"] == real["tokens"]["account_id"]
+    assert doc["auth_mode"] == real["auth_mode"]
     assert json.loads(src.read_text())["tokens"]["refresh_token"] == "REAL_REFRESH"
+    proxy.stop()
 
 
-def test_the_seeded_copy_is_readable_by_the_runs_own_uid(tmp_path, monkeypatch):
-    """The run's codex runs as the run's uid with no groups; BOSS writes the copy as itself. A
-    0600 copy left codex unable to read its login, and it fell back to API-key mode: "401
-    wss://api.openai.com/v1/responses" in every build (boss-1, 2026-10-30). Seeding and every
-    reseed must leave it world-readable, like the other seeded logins."""
+def test_the_session_login_is_readable_by_the_runs_own_uid(tmp_path, monkeypatch):
+    """The run's codex runs as the run's uid with no groups; BOSS writes the login as itself. A
+    0600 file left codex unable to read its login (boss-1, 2026-10-30). It holds only a run
+    token, so it is world-readable inside the run's own directory."""
     import stat
 
     _login(tmp_path, monkeypatch, expires_in=5 * 3600)
     run_home = tmp_path / "run-home"
     run_home.mkdir()
-    ident = _Ident(run_home)
-
-    sandbox_identity._seed_codex_login(ident)
-    seeded = run_home / ".codex" / "auth.json"
-    assert stat.S_IMODE(seeded.stat().st_mode) & stat.S_IROTH
-
-    os.chmod(seeded, 0o600)                       # a reseed restores it
-    assert sandbox_identity.copy_codex_tokens(ident)
-    assert stat.S_IMODE(seeded.stat().st_mode) & stat.S_IROTH
+    env, proxy, _doc = _session(monkeypatch, _Ident(run_home))
+    login = Path(env["CODEX_HOME"]) / "auth.json"
+    assert stat.S_IMODE(login.stat().st_mode) & stat.S_IROTH
+    assert Path(env["CODEX_HOME"]).parent == run_home.parent / ".boss-sessions"
+    proxy.stop()
 
 
-# P1 (criterion 4): a run's copy coming back rotated is a containment failure, never a
-# legitimate rotation — the control plane's own file must not move.
-def test_p1_a_rotated_run_copy_is_never_adopted_by_the_control_plane(tmp_path, monkeypatch):
+# P1 (criterion 4): whatever a run's codex writes into its session login stays there and is
+# removed with the session — the control plane's own file never moves.
+def test_p1_a_rewritten_session_login_is_never_adopted_by_the_control_plane(tmp_path,
+                                                                           monkeypatch):
+    from boss_engine.services import model_proxy
+
     held = _login(tmp_path, monkeypatch, expires_in=5 * 3600)
-    run_home = tmp_path / "run-home"
-    run_home.mkdir()
-    (run_home / ".codex").mkdir()
-    (run_home / ".codex" / "auth.json").write_text(json.dumps({
-        "auth_mode": "chatgpt", "last_refresh": _iso(60),
-        "tokens": {"access_token": "A2", "refresh_token": "R2", "expires_at":
-                   int(time.time() + 3600)}}))
-
     before = held.read_text()
-    sandbox_identity._return_rotated_codex_login(_Ident(run_home, key="run-x"))
-
+    with model_proxy.session_scope():
+        env, proxy, _doc = _session(monkeypatch, None)
+        home = Path(env["CODEX_HOME"])
+        (home / "auth.json").write_text(json.dumps({
+            "auth_mode": "chatgpt", "last_refresh": _iso(60),
+            "tokens": {"access_token": "A2", "refresh_token": "R2"}}))
+    assert not home.exists()
     assert held.read_text() == before
+    proxy.stop()
 
 
 # P1 (criterion 5): codex's own words for a dead credential flip the login state to the
@@ -254,54 +249,45 @@ def test_p1_a_revoked_token_error_flips_state_without_waiting_for_a_tick(tmp_pat
     assert "ACCESS" not in json.dumps(st) and "REFRESH" not in json.dumps(st)
 
 
-# P1 (criterion 6): a long, multi-stage build follows the control plane's own refresh — each
-# codex start re-seeds from the current tokens rather than relying on the run's stale copy.
+# P1 (criterion 6): a long, multi-stage build follows the control plane's own refresh — the
+# proxy reads the current tokens on every request; nothing in the run goes stale.
 def test_p1_a_long_build_follows_the_control_planes_refresh(tmp_path, monkeypatch):
     _login(tmp_path, monkeypatch, expires_in=5 * 3600, access="ACCESS_1", refresh="REFRESH_1")
     run_home = tmp_path / "run-home"
     run_home.mkdir()
-    ident = _Ident(run_home)
-    sandbox_identity._seed_codex_login(ident)
-    copy = run_home / ".codex" / "auth.json"
-    assert json.loads(copy.read_text())["tokens"]["access_token"] == "ACCESS_1"
-
+    _env, proxy, doc = _session(monkeypatch, _Ident(run_home))
+    assert _held(proxy, doc) == "ACCESS_1"
     _login(tmp_path, monkeypatch, expires_in=8 * 3600, access="ACCESS_9", refresh="REFRESH_9")
-    monkeypatch.setattr(sandbox_identity, "current", lambda: ident)
-    sandbox_identity.reseed_codex_login(ident)
-
-    assert json.loads(copy.read_text())["tokens"]["access_token"] == "ACCESS_9"
+    assert _held(proxy, doc) == "ACCESS_9"
+    proxy.stop()
 
 
-# P1: a credential already flagged dead (mark_revoked) must not be handed to a NEW sandbox just
-# because its access token has not yet expired — sharing a known-revoked login is the one thing
-# mark_revoked exists to prevent, not just a label on the control plane's own file.
-def test_p1_a_revoked_login_is_not_seeded_into_a_new_sandbox(tmp_path, monkeypatch):
+# P1: a credential already flagged dead (mark_revoked) is not handed to a new session — not
+# even by proxy — just because its access token has not yet expired.
+def test_p1_a_revoked_login_is_not_handed_to_a_new_session(tmp_path, monkeypatch):
     _login(tmp_path, monkeypatch, expires_in=5 * 3600)
     codex_login.mark_revoked("invalidated oauth token")
     run_home = tmp_path / "run-home"
     run_home.mkdir()
+    _env, proxy, doc = _session(monkeypatch, _Ident(run_home))
+    assert doc is None
+    proxy.stop()
 
-    sandbox_identity._seed_codex_login(_Ident(run_home))
 
-    assert not (run_home / ".codex" / "auth.json").is_file()
-
-
-# P1: the same credential, already seeded before it was revoked, must not be re-copied into a
-# run's home on a later reseed (ahead of a later `codex` start in a long, multi-stage build).
-def test_p1_a_revoked_login_is_not_reseeded_into_a_running_sandbox(tmp_path, monkeypatch):
+# P1: a login revoked mid-build is not handed to the build's next session either.
+def test_p1_a_revoked_login_is_not_handed_to_a_running_builds_next_session(tmp_path,
+                                                                          monkeypatch):
     _login(tmp_path, monkeypatch, expires_in=5 * 3600)
     run_home = tmp_path / "run-home"
     run_home.mkdir()
     ident = _Ident(run_home)
-    sandbox_identity._seed_codex_login(ident)
-    copy = run_home / ".codex" / "auth.json"
-    before = copy.read_text()
-
+    _env, proxy, first = _session(monkeypatch, ident)
+    assert first is not None
     codex_login.mark_revoked("invalidated oauth token")
-    monkeypatch.setattr(sandbox_identity, "current", lambda: ident)
-    sandbox_identity.reseed_codex_login(ident)
-
-    assert copy.read_text() == before
+    _env, proxy2, second = _session(monkeypatch, ident)
+    assert second is None
+    proxy.stop()
+    proxy2.stop()
 
 
 # The one owner is started where builds run: start_all (system_threads) launches the Codex

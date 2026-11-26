@@ -24,6 +24,8 @@ export type WriteGate = Permission | "self";
 /** A helper (`module#export`, or `module#object.method`) → the permission(s) a press of it needs. */
 export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permission[]>> = {
   // lib/agents.ts — /v1/agents, /v1/role-skills, /v1/role-mcp-servers, /v1/workflow-mappings
+  // lib/golden-journeys.ts — Govern › Journeys (BOSSAPP-1284)
+  "lib/golden-journeys.ts#runJourneysNow": "assurance:run",       // POST /v1/golden-journeys/run
   "lib/agents.ts#createAgent": "agent:create",                    // POST /v1/agents
   "lib/agents.ts#updateAgent": "agent:update",                    // PATCH /v1/agents/{role}
   "lib/agents.ts#deleteAgent": "agent:lifecycle",                 // DELETE /v1/agents/{role}
@@ -113,8 +115,9 @@ export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permiss
   "lib/workflow-api.ts#installPack": "workflow:install",          // POST /v1/delivery-workflows/marketplace/install
   "lib/workflow-api.ts#uninstallPack": "workflow:install",        // POST /v1/delivery-workflows/marketplace/uninstall
   "lib/workflow-api.ts#updateInstalled": "workflow:install",      // POST /v1/delivery-workflows/marketplace/update
-  "lib/workflow-api.ts#publishPack": "workflow:publish",          // POST /v1/delivery-workflows/marketplace/publish
-  "lib/workflow-api.ts#unpublishPack": "workflow:publish",        // POST /v1/delivery-workflows/marketplace/unpublish
+  // Sharing to the org Library: the project's workflow:publish AND the org-level workflow:share.
+  "lib/workflow-api.ts#publishPack": ["workflow:publish", "workflow:share"],   // POST …/marketplace/publish
+  "lib/workflow-api.ts#unpublishPack": ["workflow:publish", "workflow:share"], // POST …/marketplace/unpublish
   "lib/workflow-api.ts#renameWorkflow": "workflow:create",        // PATCH /v1/delivery-workflows/{id}
   "lib/workflow-api.ts#deleteWorkflow": "workflow:delete",        // DELETE /v1/delivery-workflows/{id}
   "lib/workflow-api.ts#draftFromDescription": "workflow:create",  // POST /v1/delivery-workflows/draft
@@ -369,6 +372,9 @@ export const WRITE_OPS: Readonly<Record<string, Readonly<Record<string, WriteGat
     // add and remove a scoped budget (budget:manage at org).
     "/v1/budget-policies/scoped": "budget:manage",
     "/v1/budget-policies/scoped/": "budget:manage",
+    // Govern › More › Pilot metrics (app/govern/pilot-metrics.tsx, BOSSAPP-1292): the typed-in
+    // before-numbers (budget:manage at org).
+    "/v1/pilot-metrics/baseline": "budget:manage",
     // Skills & MCP › Rules (lib/tool-policies.ts, BOSSAPP-815): the simulate box is a read.
     "/v1/tool-policies/simulate": "mcp_server:read",
     "/v1/tool-policies": "mcp_server:review",

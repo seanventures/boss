@@ -453,7 +453,8 @@ def save_oauth_config(connection: Connection, project_id: str, server_id: str,
 
 
 def auth_headers(connection: Connection, settings: Any, project_id: str,
-                 server: dict[str, Any], *, principal: Any = None) -> dict[str, str]:
+                 server: dict[str, Any], *, principal: Any = None,
+                 rejected: Optional[dict[str, str]] = None) -> dict[str, str]:
     """The headers a call to `server` carries. Empty for a server that needs no sign-in.
 
     WHOSE CREDENTIAL (BOSSAPP-847): the server's `credential_policy` decides between its shared
@@ -466,7 +467,14 @@ def auth_headers(connection: Connection, settings: Any, project_id: str,
     from .connection_credentials import headers_for
 
     raw = _raw_auth(connection, project_id, str(server.get("id") or ""))
-    headers = headers_for(connection, settings, project_id, server, raw, principal=principal)
+    # `rejected`: the headers a call just carried that the server answered 401 to. An OAuth
+    # credential's token in them is refreshed now, once (vault.connection_token).
+    stale = None
+    if rejected:
+        sent = next((v for k, v in rejected.items() if k.lower() == "authorization"), "")
+        stale = sent[7:].strip() if sent.lower().startswith("bearer ") else None
+    headers = headers_for(connection, settings, project_id, server, raw, principal=principal,
+                          rejected=stale)
     # THE HEADER POLICY (BOSSAPP-873): secret static headers, and an allowlist that strips any
     # other extra header. Every road's headers come from here, so every road obeys it. A server
     # with no policy ({}) sends exactly what it sent before.
@@ -1460,23 +1468,16 @@ def probe(settings: Any, url: str, *, timeout: float = PROBE_TIMEOUT_SECONDS,
     except Exception as error:  # noqa: BLE001 — the reason IS the result
         return {"reachable": False, "tools": [], "latency_ms":
                 int((_time.monotonic() - started) * 1000),
-                "error": _said(error)[:500]}
+                "error": _said(error, url)[:500]}
 
 
-def _said(error: BaseException) -> str:
-    """An error as an operator reads it: an HTTP status with its reason, not a traceback name."""
-    try:
-        import httpx
+def _said(error: BaseException, url: str = "") -> str:
+    """An error as an operator reads it: what happened in plain words and the next step
+    (mcp_client.describe_failure), the HTTP status first when there is one — never a traceback
+    name like "ConnectError: [Errno 61]" or "ReadTimeout"."""
+    from .mcp_client import describe_failure
 
-        if isinstance(error, httpx.HTTPStatusError):
-            return f"{error.response.status_code} {error.response.reason_phrase}".strip()
-        if isinstance(error, httpx.ConnectError):
-            return f"ConnectError: {error}"
-        if isinstance(error, httpx.TimeoutException):
-            return "Timed out"
-    except Exception:  # noqa: BLE001
-        pass
-    return f"{type(error).__name__}: {error}"
+    return describe_failure(error, url)
 
 
 #: Save & test and the register that follows it are two requests. The probe stays in this
@@ -2083,22 +2084,62 @@ def call_tool_with_receipt(
             forwarded = hp.call_headers(hp.read(connection, project_id,
                                                 str(server.get("id") or "")),
                                         run_id=run_ref, agent=agent_ref)
-            output = MCPClient(settings).call_tool(
-                server["url"], tool_name, inputs, headers=headers,
-                **({"call_headers": forwarded} if forwarded else {}))
+            try:
+                output = MCPClient(settings).call_tool(
+                    server["url"], tool_name, inputs, headers=headers,
+                    **({"call_headers": forwarded} if forwarded else {}))
+            except Exception as refused:  # noqa: BLE001 — only a 401 on OAuth is retried
+                # AN OAUTH TOKEN THE SERVER REFUSED EARLY (revoked, rotated, clock skew) is
+                # refreshed once and the call made again: a 401 means it did not run. The
+                # vault only refreshed on its own clock, so the call failed until expiry.
+                if not _oauth_refused(refused, connection, project_id, server):
+                    raise
+                headers = auth_headers(connection, settings, project_id, server,
+                                       rejected=headers,
+                                       **({} if credential_principal is None
+                                          else {"principal": credential_principal}))
+                try:
+                    output = MCPClient(settings).call_tool(
+                        server["url"], tool_name, inputs, headers=headers,
+                        **({"call_headers": forwarded} if forwarded else {}))
+                except Exception as again:  # noqa: BLE001
+                    if not _oauth_refused(again, connection, project_id, server):
+                        raise
+                    # Refused again with the token just refreshed: never a refresh per call.
+                    from .connection_credentials import refused_after_refresh
+
+                    refused_after_refresh(
+                        connection, project_id, server,
+                        **({} if credential_principal is None
+                           else {"principal": credential_principal}))
     except Exception as exc:
+        from .mcp_client import failed_call as _failed_call
+
+        _said_failure = _failed_call(exc, str(server.get("url") or ""))
         receipts.mark_failed(
             connection,
             receipt["id"],
-            {"type": type(exc).__name__, "message": str(exc)},
+            # `code: unknown_outcome` is the structured mark durable_operations reads first: a
+            # call that may have run is never classified from words.
+            {"type": type(exc).__name__, "message": str(exc),
+             **({"code": "unknown_outcome"}
+                if getattr(_said_failure, "outcome", None) == "unknown_outcome" else {})},
         )
         if _is_transport_failure(exc):
             record_reachability_quietly(connection, project_id, server, reachable=False,
-                                        error=f"{type(exc).__name__}: {exc}")
+                                        error=_said(exc, str(server.get("url") or ""))[:500])
         _audit_tool_call(
             "failed", policy, latency_ms=max(0, int((time.monotonic() - started) * 1000))
         )
-        raise
+        # IN WORDS, WITH THE NEXT STEP (BOSSAPP-1476): the agent, the run and the gateway all
+        # read str(exc). It used to be httpx's own text ("Client error '401 Unauthorized' for
+        # url ... For more information check: https://developer.mozilla.org/...").
+        from .mcp_client import failed_call
+
+        plain = failed_call(exc, str(server.get("url") or ""))
+        if plain is exc:
+            raise
+        raise plain from exc
     elapsed_ms = max(0, int((time.monotonic() - started) * 1000))
     receipts.mark_succeeded(
         connection,
@@ -2167,7 +2208,8 @@ def call_tool_unattended(
     if tool_policy(server, tool_name, _declared_tier(server, tool_name)) != "allow":
         # Nobody is present on this road to ask, so Ask is refused like Off.
         raise McpToolOff(f"Did not call {tool_name}: it is not set to run without asking.")
-    client = MCPClient(settings) if timeout is None else MCPClient(settings, timeout=timeout)
+    client = MCPClient(settings) if timeout is None else MCPClient(
+        settings, timeout=timeout, call_timeout=timeout)
     return client.call_tool(server["url"], tool_name, inputs, headers=headers or {})
 
 
@@ -2202,6 +2244,19 @@ def _declared_tier(server: dict[str, Any], tool_name: str) -> Any:
             return tool.get("risk_tier", annotations.get("risk_tier")
                             if isinstance(annotations, dict) else None)
     return None
+
+
+def _oauth_refused(error: BaseException, connection: Connection, project_id: str,
+                   server: dict[str, Any]) -> bool:
+    """A 401 from a server whose sign-in is OAuth (a token BOSS can refresh)."""
+    try:
+        import httpx
+    except Exception:  # noqa: BLE001
+        return False
+    if not (isinstance(error, httpx.HTTPStatusError) and error.response.status_code == 401):
+        return False
+    return str(_raw_auth(connection, project_id, str(server.get("id") or "")).get("type")
+               or "") == "oauth"
 
 
 def _is_transport_failure(error: BaseException) -> bool:

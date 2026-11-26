@@ -2679,9 +2679,10 @@ def _proof_tree(workdir: Path) -> Path:
             run_dir = Path(ident.run_dir)
     except Exception:  # noqa: BLE001 — not isolated: the old place
         run_dir = None
-    proof = Path(tempfile.mkdtemp(prefix="boss-serve-proof-", dir=str(run_dir) if run_dir else None))
-    if run_dir is not None:
-        os.chmod(proof, 0o2777)
+    # In the run's directory through the one safe maker (SandboxIdentity.make_dir): never a
+    # path-based mkdtemp + chmod the run's uid can race.
+    proof = (sandbox_identity.make_run_dir(ident, "boss-serve-proof-", 0o2777) if run_dir is not None
+             else Path(tempfile.mkdtemp(prefix="boss-serve-proof-")))
     from .resource_ledger import claim_dir
     claim_dir(proof)
     # workspace_perms.copy_tree, never a bare copytree: the copy is BOSS's and the app runs as
