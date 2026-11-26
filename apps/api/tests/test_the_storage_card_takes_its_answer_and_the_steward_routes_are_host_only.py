@@ -105,3 +105,30 @@ def test_the_owner_token_is_refused_on_the_steward_routes(client):
     # the console's own reads stay open to the owner
     current = client.get("/v1/infra/storage/incidents/current")
     assert current.status_code == 200, current.text
+
+
+def test_offline_host_keeps_its_disk_reading_after_many_container_samples(engine):
+    from datetime import datetime, timedelta, timezone
+    from boss_engine.services import storage_watch
+
+    host = f"qa-outage-{uuid4().hex[:8]}"
+    now = datetime.now(timezone.utc)
+    with engine.begin() as c:
+        def record(source, at, free, total):
+            row = storage_watch.clean_sample(
+                {"host_id": host, "host_label": source, "free_gb": free, "total_gb": total},
+                source=source)
+            row["at"] = at
+            storage_watch.record_sample(c, row)
+
+        record("steward", now - timedelta(hours=1), 8, 100)
+        for seconds in range(45, 0, -1):
+            record("api", now - timedelta(seconds=seconds), 40, 64)
+        view = storage_watch.summary(c, host)
+        assert view["helper_overdue"] and view["stale"]
+        assert view["host_label"] == "steward" and view["disk"]["free_pct"] == 8
+        assert len(view["trend"]) == 1 and view["trend"][0]["free_gb"] == 8
+        record("steward", now, 11, 100)
+        view = storage_watch.summary(c, host)
+        assert not view["stale"] and not view["helper_overdue"]
+        assert view["disk"]["free_pct"] == 11

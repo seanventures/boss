@@ -371,12 +371,12 @@ def last_two(connection: Any, host_id: str) -> list[dict[str, Any]]:
 
 
 def used_series(connection: Any, host_id: str, *, days: int = KEEP_DAYS,
-                max_points: int = 240) -> list[tuple[datetime, float, float]]:
+                max_points: int = 240, source: Optional[str] = None) -> list[tuple[datetime, float, float]]:
     """(at, used_gb, free_gb), oldest first, downsampled to ≤ max_points."""
     rows = connection.execute(text(
         "SELECT at, total_gb, free_gb FROM storage_samples WHERE host_id = :h "
         "AND free_gb IS NOT NULL AND total_gb IS NOT NULL AND source = :source AND at >= :since ORDER BY at"),
-        {"h": host_id, "source": disk_source(connection, host_id), "since": _now() - timedelta(days=days)}).all()
+        {"h": host_id, "source": source or disk_source(connection, host_id), "since": _now() - timedelta(days=days)}).all()
     pts = [(r[0] if r[0].tzinfo else r[0].replace(tzinfo=timezone.utc),
             float(r[1]) - float(r[2]), float(r[2])) for r in rows]
     if len(pts) > max_points:
@@ -522,6 +522,20 @@ def budget(connection: Any, sample: Mapping[str, Any]) -> dict[str, Any]:
             "warn_at_pct": round(100 * disk_budget.WARN_AT)}
 
 
+def _display_sample(connection: Any, host_id: str) -> dict[str, Any]:
+    """Keep a registered host's disk and timestamp together when API sampling continues."""
+    sample = latest(connection, host_id, within=timedelta(days=2)) or {}
+    host = connection.execute(text(
+        "SELECT * FROM storage_samples WHERE host_id = :h AND source IN ('steward','hostd') "
+        "AND total_gb IS NOT NULL AND free_gb IS NOT NULL ORDER BY at DESC LIMIT 1"),
+        {"h": host_id}).mappings().first()
+    if host:
+        # The API can still measure the database while the host helper is offline.
+        for key in ("total_gb", "free_gb", "used_pct", "at", "source", "host_label"):
+            sample[key] = host[key]
+    return sample
+
+
 def summary(connection: Any, host_id: Optional[str] = None) -> dict[str, Any]:
     """`GET /v1/infra/storage/summary` (docs/infra/INFRA_AGENT_API.md §4)."""
     from . import storage_incidents
@@ -529,8 +543,8 @@ def summary(connection: Any, host_id: Optional[str] = None) -> dict[str, Any]:
     host_id = host_id or (hosts(connection) or [local_host_id()])[0]
     th = storage_rules.thresholds(connection, host_id)
     rules = storage_rules.list_rules(connection, host_id)
-    sample = latest(connection, host_id, within=timedelta(days=2)) or {}
-    series = used_series(connection, host_id)
+    sample = _display_sample(connection, host_id)
+    series = used_series(connection, host_id, source=sample.get("source"))
     fc = forecast([(t, u) for t, u, _ in series], _f(sample.get("free_gb")),
                   rules_reclaim_gb=rules_reclaim_gb(sample, rules))
     at = sample.get("at")
@@ -555,8 +569,8 @@ def summary(connection: Any, host_id: Optional[str] = None) -> dict[str, Any]:
         disk_budget = None
     host_rows = []
     for h in hosts(connection):
-        s = latest(connection, h, within=timedelta(days=2)) or {}
-        ser = used_series(connection, h, days=7, max_points=24)
+        s = sample if h == host_id else _display_sample(connection, h)
+        ser = used_series(connection, h, days=7, max_points=24, source=s.get("source"))
         f = forecast([(t, u) for t, u, _ in ser], _f(s.get("free_gb")))
         fp = free_pct_of(s)
         host_rows.append({"host_id": h, "host_label": s.get("host_label") or h,
@@ -566,6 +580,8 @@ def summary(connection: Any, host_id: Optional[str] = None) -> dict[str, Any]:
                           "spark": [round(fr, 1) for _, _, fr in ser]})
     return {"host_id": host_id, "host_label": sample.get("host_label") or local_host_label(),
             "sampled_at": _iso(at), "source": sample.get("source"), "stale": stale,
+            "helper_overdue": bool(sample.get("source") in ("steward", "hostd") and at
+                                   and _now() - at >= HELPER_UNREACHABLE_AFTER),
             "disk": {"total_gb": round(_f(sample.get("total_gb")) or 0.0, 2),
                      "free_gb": round(_f(sample.get("free_gb")) or 0.0, 2),
                      "used_pct": round(100.0 - free_pct, 2) if free_pct is not None else None,

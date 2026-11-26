@@ -115,7 +115,7 @@ export type HostStorageRow = { hostId: string; label: string; freePct: number; f
 export type Thresholds = { warnPct: number; criticalPct: number; targetPct: number; floorPct: number; floorGb: number | null; warnDays: number | null; criticalDays: number | null };
 
 export type StorageSummary = {
-  hostId: string; hostLabel: string; sampledAt: string | null; source: string | null; stale: boolean;
+  hostId: string; hostLabel: string; sampledAt: string | null; source: string | null; stale: boolean; helperOverdue?: boolean;
   totalGb: number; freeGb: number; freePct: number; usedPct: number;
   byType: StorageType[];
   /** 7-day growth, GB per day; "full in N days" (null = not growing) and with the rules. */
@@ -406,7 +406,7 @@ export function parseSummary(w: unknown): StorageSummary | null {
   const hostId = str(o.host_id, "this host");
   const unreclaimed = byType.find((t) => t.key === "docker_vm_unreclaimed");
   return {
-    hostId, hostLabel: str(o.host_label) || hostId, sampledAt: optStr(o.sampled_at), source: optStr(o.source), stale: o.stale === true,
+    hostId, hostLabel: str(o.host_label) || hostId, sampledAt: optStr(o.sampled_at), source: optStr(o.source), stale: o.stale === true, helperOverdue: o.helper_overdue === true,
     totalGb, freeGb, freePct: num(disk.free_pct, totalGb > 0 ? Math.round((freeGb / totalGb) * 100) : 0), usedPct: num(disk.used_pct, totalGb > 0 ? Math.round(((totalGb - freeGb) / totalGb) * 100) : 0),
     byType,
     growthGbPerDay: num(fc.growth_gb_per_day), fullInDays: optNum(fc.days_until_full), fullAt: optStr(fc.full_at),

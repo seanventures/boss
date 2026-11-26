@@ -45,6 +45,15 @@ describe("the disk budget on the Storage card", () => {
     expect(rows[2].querySelector('[data-testid="sc-budget-action"]')).toBeNull();
   });
 
+  it("marks an overdue host sample and explains how to recover the helper", async () => {
+    const s = parseSummary({ ...wire, stale: true, helper_overdue: true, sampled_at: "2026-11-25T18:00:00Z" })!;
+    await mount(<StorageCardView s={s} projectId="p1" {...noop} />);
+    const alert = $('[data-testid="sc-helper-offline"]')!.textContent;
+    expect(alert).toContain("boss steward status");
+    expect(alert).toContain("boss steward install");
+    expect($('[data-testid="sc-tile-free"]')!.textContent).toContain("Last reported free space");
+  });
+
   it("leaves out what nobody measured, and says all within when nothing is near", () => {
     const b = parseBudget({ ...wire.budget, rows: [wire.budget.rows[0], wire.budget.rows[3]] })!;
     expect(budgetRows(b).map((r) => r.key)).toEqual(["images"]);
