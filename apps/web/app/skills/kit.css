@@ -204,6 +204,8 @@
 .kit-crew-name { flex: 0 1 auto; }
 .kit-crew-holders { display: inline-flex; gap: 2px; }
 .kit-catalogue { display: grid; grid-template-columns: repeat(auto-fill, minmax(11.57895rem, 1fr)); gap: 10px; }
+.kit-cat-acts { flex-wrap: wrap; row-gap: 6px; }
+.kit-cat-acts > .kit-btn { margin-left: auto; flex: none; }
 .kit-cat-card { display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--bg); }
 
 /* ── Who can: the matrix; a list on a phone ─────────────────────────────────────────────── */

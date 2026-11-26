@@ -32,6 +32,9 @@ import { GatedButton } from "../components/gated";
 import { useCan } from "../components/identity/identity-provider";
 import { createStudioAgent, seedStudioCatalog } from "./agent-studio-actions";
 import { HelpTip } from "./help-tip";
+import { AddMcpSheet } from "./skills/add-mcp-sheet";
+import { MagnifyingGlass, Plugs, X } from "@phosphor-icons/react";
+import "./agent-quick-create.css";
 import type { AgentIdentity, AvatarSpec, Persona } from "../lib/agent-world-types";
 import {
   ARCHETYPE_KEYS, CAST_KEYS, DISCLOSURE, askAgent, draftPersonaField, identityOf, newSeed, resolveAvatar,
@@ -153,6 +156,8 @@ export function AgentQuickCreate({ projectId, actor, onClose, onCreated, orphans
   /** The agent a profile attempt already made. POST /v1/agents refuses an existing key, so a
    *  retry after the profile failed must target this agent instead of making it again. */
   const [made, setMade] = useState("");
+  /** The shared Add MCP server sheet (BOSSAPP-1478), open on top of this dialog. */
+  const [addingMcp, setAddingMcp] = useState(false);
 
   /** Play the birth, then hand over: the Passport opens and the agent introduces itself. */
   const born = (roleKey: string, agentId: string, displayName: string, persona?: Persona) => {
@@ -181,10 +186,11 @@ export function AgentQuickCreate({ projectId, actor, onClose, onCreated, orphans
   }, [projectId]);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !busy) onClose(); };
+    // The Add MCP server sheet on top takes its own Esc.
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !busy && !addingMcp) onClose(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [busy, onClose]);
+  }, [busy, onClose, addingMcp]);
 
   const shownSkills = useMemo(() => {
     const q = skillFilter.trim().toLowerCase();
@@ -287,7 +293,10 @@ export function AgentQuickCreate({ projectId, actor, onClose, onCreated, orphans
             <button type="button" role="tab" aria-selected={tab === "archetype"} data-active={tab === "archetype"}
                     data-testid="aq-tab-archetype" onClick={() => setTab("archetype")}>From archetype</button>
           </div>
-          <button className="aw-close" onClick={onClose} disabled={busy} aria-label="Close">×</button>
+          <button type="button" className="aw-close" onClick={onClose} disabled={busy} aria-label="Close"
+                  title="Close (Esc)" data-testid="aq-close">
+            <X size={16} weight="bold" aria-hidden />
+          </button>
         </header>
 
         {tab === "template" ? (
@@ -354,8 +363,12 @@ export function AgentQuickCreate({ projectId, actor, onClose, onCreated, orphans
               <legend>Skills <span className="detail">· {skills.length}</span>{" "}
                 <HelpTip label="Skills" text="Granted now. A step can then use them." /></legend>
               {(grantable?.skills ?? []).length > 8 ? (
-                <input type="search" className="aq-filter" placeholder="Find a skill"
-                       value={skillFilter} onChange={(e) => setSkillFilter(e.target.value)} />
+                <label className="wf-lib-search aq-search">
+                  <MagnifyingGlass size={14} aria-hidden />
+                  <input type="search" className="aq-filter" placeholder="Find a skill" aria-label="Find a skill"
+                         data-testid="aq-skill-filter"
+                         value={skillFilter} onChange={(e) => setSkillFilter(e.target.value)} />
+                </label>
               ) : null}
               <div className="aw-skill-list aq-list" data-testid="aq-skills">
                 {shownSkills.map((s) => {
@@ -365,7 +378,7 @@ export function AgentQuickCreate({ projectId, actor, onClose, onCreated, orphans
                            title={[s.summary || s.label,
                                    s.risk_tier >= 2 ? `Risk ${s.risk_tier}, needs approval each time` : "",
                                    !s.enabled ? "Not enabled in this project" : ""].filter(Boolean).join(", ")}>
-                      <input type="checkbox" checked={on}
+                      <input type="checkbox" className="aq-check" checked={on}
                              data-testid={`aq-skill-${s.skill_id}`}
                              onChange={() => setSkills(on ? skills.filter((x) => x !== s.skill_id)
                                : [...skills, s.skill_id])} />
@@ -388,7 +401,7 @@ export function AgentQuickCreate({ projectId, actor, onClose, onCreated, orphans
                     <label key={m.mcp_server_id} className={on ? "selected" : ""}
                            title={[m.description || m.url, !m.enabled ? "Disabled in this project" : ""]
                              .filter(Boolean).join(", ")}>
-                      <input type="checkbox" checked={on}
+                      <input type="checkbox" className="aq-check" checked={on}
                              data-testid={`aq-mcp-${m.mcp_server_id}`}
                              onChange={() => {
                                const next = { ...servers };
@@ -412,6 +425,10 @@ export function AgentQuickCreate({ projectId, actor, onClose, onCreated, orphans
                   <p className="aw-empty-line">No MCP servers yet</p>
                 ) : null}
               </div>
+              <button type="button" className="wf-btn wf-btn-sm aq-add-mcp" data-testid="aq-add-mcp"
+                      title="Connect a new tool server" onClick={() => setAddingMcp(true)}>
+                <Plugs size={14} aria-hidden /> Add MCP server
+              </button>
             </fieldset>
 
             <details className="aq-advanced" open={advancedOpen} data-testid="aq-advanced"
@@ -480,6 +497,16 @@ export function AgentQuickCreate({ projectId, actor, onClose, onCreated, orphans
           </form>
         )}
       </section>
+      {addingMcp ? (
+        // THE SAME SHEET AS SKILLS & MCP, never a second form. The agent does not exist yet, so
+        // the sheet grants nothing: the new server is ticked here and granted on Create.
+        <AddMcpSheet projectId={projectId} actor={actor} grants={false} onClose={() => setAddingMcp(false)}
+                     onAdded={(id) => {
+                       setAddingMcp(false);
+                       setServers((now) => ({ ...now, [id]: now[id] ?? "" }));
+                       void loadGrantable(projectId).then((r) => { if (r.ok) setGrantable(r.data); });
+                     }} />
+      ) : null}
     </div>
   );
 }

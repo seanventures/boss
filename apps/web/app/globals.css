@@ -5248,7 +5248,7 @@ fieldset.field { border: 0; margin: 0; padding: 0; min-width: 0; }
 .aq-list small { white-space: normal; }
 .aq-group { margin: 0; padding: 0; border: 0; display: grid; gap: 6px; }
 .aq-group legend { font-size: 0.68rem; font-weight: 600; margin-bottom: 4px; }
-.aq-filter, .aq-tools { width: 100%; margin-top: 4px; font-size: 0.6rem; }
+.aq-filter, .aq-tools { width: 100%; margin-top: 4px; font-size: var(--fs-meta); }
 .aq-bad { color: var(--danger, var(--boss-c-ff8a8a)); font-size: 0.66rem; margin: 0; }
 .ad-edit { display: grid; gap: 10px; max-width: var(--page-max-narrow); }
 .ad-edit label { display: grid; gap: 4px; font-size: 0.66rem; }

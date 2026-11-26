@@ -55,13 +55,42 @@ describe("team budgets and the pilot preset", () => {
     await mount(<ScopedBudgetsCard projectId="p1" actor="ceo" />);
     set($('[data-testid="gv-scoped-scope"]') as HTMLSelectElement, "team");
     await settle();
-    expect(($('[data-testid="gv-scoped-preset"]') as HTMLButtonElement).disabled).toBe(true);
-    set($('[data-testid="gv-scoped-target"]') as HTMLSelectElement, "grp_1");
-    await settle();
+    // ONE TEAM IS THE TEAM: picked for you, the preset is one press.
+    expect(($('[data-testid="gv-scoped-target"]') as HTMLSelectElement).value).toBe("grp_1");
+    expect(($('[data-testid="gv-scoped-preset"]') as HTMLButtonElement).disabled).toBe(false);
     ($('[data-testid="gv-scoped-preset"]') as HTMLButtonElement).click();
     await settle();
     expect(posts).toEqual([expect.objectContaining({ project_id: "p1", preset: "pilot_2000", scope_type: "team", scope_id: "grp_1" })]);
     expectStyledButtons($('[data-testid="gv-scoped-budgets"]'));
+  });
+
+  async function teamScopeWith(teams: unknown[]) {
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      if (String(url).startsWith("/v1/budget-policies/scoped/teams")) return json({ teams });
+      if (String(url).startsWith("/v1/budget-policies/scoped")) return json({ policies: [] });
+      return json({ items: [] });
+    }));
+    await mount(<ScopedBudgetsCard projectId="p1" actor="ceo" />);
+    set($('[data-testid="gv-scoped-scope"]') as HTMLSelectElement, "team");
+    await settle();
+  }
+
+  it("with no teams, says where teams are made and links there (walk of rc10.36)", async () => {
+    await teamScopeWith([]);
+    expect(($('[data-testid="gv-scoped-preset"]') as HTMLButtonElement).disabled).toBe(true);
+    expect($('[data-testid="gv-scoped-no-teams"]')!.textContent).toContain("A team is a group of people");
+    const link = $('[data-testid="gv-scoped-make-team"]') as HTMLAnchorElement;
+    expect(link.getAttribute("href")).toBe("/identity/groups");
+    expect(link.querySelector("svg")).toBeTruthy();
+  });
+
+  it("with several teams, the preset waits for a pick", async () => {
+    await teamScopeWith([...TEAMS.teams, { id: "grp_2", key: "ops", name: "Ops", members: 3, projects: ["p1"] }]);
+    expect($('[data-testid="gv-scoped-no-teams"]')).toBeNull();
+    expect(($('[data-testid="gv-scoped-preset"]') as HTMLButtonElement).disabled).toBe(true);
+    set($('[data-testid="gv-scoped-target"]') as HTMLSelectElement, "grp_2");
+    await settle();
+    expect(($('[data-testid="gv-scoped-preset"]') as HTMLButtonElement).disabled).toBe(false);
   });
 });
 
@@ -143,6 +172,8 @@ describe("pilot metrics", () => {
     expect($('[data-testid="gv-pm-review-vs"]')?.getAttribute("data-state")).toBe("green");
     expect($('[data-testid="gv-pm-regressions-value"]')?.textContent).toBe("3");
     expect($('[data-testid="gv-pm-errors-value"]')?.textContent).toBe("50%");
+    // THE LABEL SAYS WHAT THE NUMBER IS: the share fixed without a person, not an error rate.
+    expect($('[data-testid="gv-pm-errors"]')?.getAttribute("aria-label")).toBe("Errors fixed without a person");
     expect($('[data-testid="gv-pm-review-chart"]')).toBeTruthy();
     ($('[data-testid="gv-pm-review-items-toggle"]') as HTMLButtonElement).click();
     await settle();

@@ -185,6 +185,32 @@ async function type(id: string, value: string) {
 }
 
 describe("the shared Library (design PR #287)", () => {
+  it("opens at the top: the default card never scrolls itself into view; a pick does, on one column only", async () => {
+    const scrolled: string[] = [];
+    const proto = HTMLElement.prototype as unknown as { scrollIntoView?: unknown };
+    const before = proto.scrollIntoView;
+    proto.scrollIntoView = function (this: HTMLElement) { scrolled.push(this.dataset.testid ?? "?"); };
+    const toTop = vi.fn();
+    vi.stubGlobal("scrollTo", toTop);
+    let narrow = false;
+    vi.stubGlobal("matchMedia", (q: string) => ({ matches: narrow && q === "(max-width: 860px)", media: q,
+      addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} }));
+    try {
+      await mount();
+      await press("wf-lib-market");
+      expect($("wf-shelf-card-banking-dq")).not.toBeNull();
+      expect(scrolled).toEqual([]);
+      expect(toTop).toHaveBeenCalledWith({ top: 0 });
+      await press("wf-pack-sre-helpdesk");             // two columns: the card is beside the list
+      expect(scrolled).toEqual([]);
+      narrow = true;
+      await press("wf-pack-wpk_1");                    // one column: bring the picked card into view
+      expect(scrolled).toEqual(["wf-shelf-card-wpk_1"]);
+    } finally {
+      proto.scrollIntoView = before;
+    }
+  });
+
   it("the Library tab has a Shared library › button that opens one labelled list", async () => {
     await mount();
     expect($("wf-library")).not.toBeNull();

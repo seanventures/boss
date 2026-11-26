@@ -36,7 +36,7 @@ describe("a workflow is started once per press", () => {
   });
 
   it("the automatic recheck is not a press: it goes out without a press scope or key", () => {
-    expect(UI).toMatch(/post\("recheck", \{ project_id: projectId, actor, run_id: r\.id \}\)\)/);
+    expect(UI).toMatch(/post\("recheck", \{ project_id: runProject\(r, projectId\), actor, run_id: r\.id \}\)\)/);
   });
 
   it("names the run being replaced, so a second press returns the same replacement", () => {

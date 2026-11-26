@@ -43,7 +43,7 @@ async function post(action: string, payload: Record<string, unknown>, key?: stri
     }
     // A start refused for what the project lacks carries the checklist, so the form can draw it.
     return r.ok ? { ok: true as const, data: body }
-      : { ok: false as const, error: body?.error,
+      : { ok: false as const, error: body?.error, status: r.status,
           readiness: (body?.readiness ?? undefined) as Readiness | undefined };
   } catch (e) {
     return { ok: false as const, error: String((e as Error)?.message ?? e) };
