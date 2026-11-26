@@ -264,6 +264,7 @@ export type System = {
     gauges: Record<string, number>;
   };
   build: { sha7: string | null; builtAt: string | null };
+  compose?: { at: string; services: { name: string; service: string; state: string }[] };
   oomKillsNew: number | null;
   work: { queue: number; leased: number; running: number; inFlight: number; buildsAtOnce: string | null };
   stalls: { strip: number[]; rows: { at: string; word: string; subject: string | null; did: string | null; shadow: boolean; runId: string | null }[]; total: number };
@@ -294,6 +295,11 @@ export function parseSystem(w: unknown): System {
     machine: { scope: optStr(m.scope), scopeLabel: optStr(m.scope_label), level: num(m.level), levelLabel: optStr(m.level_label),
                bands: { memory: parseBand(b.memory), cpu: parseBand(b.cpu), disk: parseBand(b.disk), swap: parseBand(b.swap) }, gauges: g },
     build: { sha7: optStr(bu.sha7), builtAt: optStr(bu.built_at) },
+    ...(optStr(obj(o.compose).at) ? { compose: { at: str(obj(o.compose).at),
+      services: arr(obj(o.compose).services).map((row) => {
+        const x = obj(row);
+        return { name: str(x.name), service: str(x.service), state: str(x.state) };
+      }) } } : {}),
     oomKillsNew: optNum(o.oom_kills_new),
     work: { queue: num(wk.queue), leased: num(wk.leased), running: num(wk.running), inFlight: num(wk.in_flight),
             buildsAtOnce: optStr(obj(wk.builds_at_once).label) },

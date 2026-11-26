@@ -471,6 +471,28 @@ def walk_backups(env: Env) -> list[dict[str, Any]]:
     return out
 
 
+def compose_service_states(env: Env, runner: Callable) -> Optional[list[dict[str, str]]]:
+    """A read-only snapshot of this Compose project. Exclude one-off commands."""
+    fmt = '{{.Names}}|{{.Label "com.docker.compose.service"}}|{{.State}}|{{.Status}}'
+    try:
+        res = runner([*env.docker, "ps", "-a", "--filter", f"label={COMPOSE_PROJECT_LABEL}={env.compose_project}",
+                      "--filter", "label=com.docker.compose.oneoff=False", "--format", fmt], timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if res.returncode:
+        return None
+    items = []
+    for line in res.stdout.splitlines():
+        parts = line.split("|", 3)
+        if len(parts) != 4:
+            return None
+        name, service, state, status = parts
+        if service and name:
+            health = "unhealthy" if "(unhealthy)" in status else "starting" if "(health: starting)" in status else ""
+            items.append({"name": name, "service": service, "state": health or state})
+    return sorted(items, key=lambda item: (item["service"], item["name"]))
+
+
 def collect(env: Env, runner: Callable = run_cmd) -> dict[str, Any]:
     usage = shutil.disk_usage("/")
     df = docker_df(env, runner)
@@ -486,6 +508,9 @@ def collect(env: Env, runner: Callable = run_cmd) -> dict[str, Any]:
         "backups_gb": gb(sum(b["bytes"] for b in backups)), "backups_n": len(backups),
         "steward_version": VERSION,
     }
+    services = compose_service_states(env, runner)
+    if services is not None:
+        sample["compose_services"] = services
     if alloc is not None:
         sample["docker_alloc_gb"] = gb(alloc)
         sample["docker_used_gb"] = gb(docker_used)

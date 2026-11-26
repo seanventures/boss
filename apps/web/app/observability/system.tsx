@@ -201,6 +201,19 @@ export function SystemTab({ projectId, actor, orgId, system }: ObsTabProps) {
         ) : null}
       </section>
 
+      <section className="obs-zone" aria-labelledby="obs-services-head" data-testid="obs-compose-services">
+        <ZoneHead id="obs-services-head" label="SERVICES" count={s.compose?.services.length}>
+          {s.compose && <time dateTime={s.compose.at} className="inf-faint" title={lt.full(s.compose.at)}>
+            Last reported {lt.full(s.compose.at)}
+          </time>}
+        </ZoneHead>
+        {s.compose?.services.length ? (
+          <ul className="obs-work-chips">{s.compose.services.map((row) => (
+            <li key={row.name} title={row.name}><b>{row.service}</b> {row.state}</li>
+          ))}</ul>
+        ) : <span className="inf-muted">{s.compose ? "No service containers reported" : "Awaiting a host reading"}</span>}
+      </section>
+
       <section className="obs-zone" aria-labelledby="obs-work-head" data-testid="obs-work">
         <ZoneHead id="obs-work-head" label="WORK">
           <a className="inf-link" href="?area=overview" onClick={(e) => { if (plainClick(e)) { e.preventDefault(); leaveTo("?area=overview"); } }}>Command Center ↗</a>

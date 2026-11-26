@@ -735,3 +735,17 @@ def test_release_rollback_label_can_only_remove_a_recorded_unused_previous_tag(e
     assert steward.verb_remove_images(env, {}, dry_run=False, runner=run)[0] == [expected]
     assert busy in entries and "private:archive" in entries
     assert "BOSS_PREV_EXPIRED_AT" not in (env.install_dir / ".boss-rollback").read_text()
+
+
+def test_compose_service_snapshot_excludes_oneoff_containers_and_distinguishes_unknown(env):
+    def listed(argv, **_):
+        assert f"label={steward.COMPOSE_PROJECT_LABEL}={env.compose_project}" in argv
+        assert "label=com.docker.compose.oneoff=False" in argv
+        return subprocess.CompletedProcess(argv, 0,
+            "private-web-1|web|running|Up an hour\nprivate-api-1|api|running|Up 2 minutes (unhealthy)\n"
+            "private-db-1|db|exited|Exited (1) 3 seconds ago\n", "")
+    rows = steward.compose_service_states(env, listed)
+    assert [(r["service"], r["state"]) for r in rows] == [
+        ("api", "unhealthy"), ("db", "exited"), ("web", "running")]
+    assert steward.compose_service_states(env, lambda *a, **kw: subprocess.CompletedProcess([], 1, "", "")) is None
+    assert steward.compose_service_states(env, lambda *a, **kw: subprocess.CompletedProcess([], 0, "", "")) == []

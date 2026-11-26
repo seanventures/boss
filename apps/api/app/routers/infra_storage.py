@@ -70,12 +70,19 @@ class RulesBody(BaseModel):
     actor: Optional[str] = None
 
 
+class ComposeService(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    service: str = Field(min_length=1, max_length=255)
+    state: str = Field(min_length=1, max_length=40)
+
+
 class SampleBody(BaseModel):
     """One reading from `boss steward` (docs/infra/INFRA_AGENT_API.md §10)."""
     model_config = ConfigDict(extra="allow")
     host_id: Optional[str] = Field(default=None, max_length=120)
     host_label: Optional[str] = Field(default=None, max_length=80)
     source: str = Field(default="steward", max_length=20)
+    compose_services: Optional[list[ComposeService]] = Field(default=None, max_length=1024)
     at: Optional[str] = None
 
 
@@ -299,6 +306,11 @@ def post_sample(payload: SampleBody) -> dict[str, Any]:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     with begin(get_engine()) as connection:
         storage_watch.record_sample(connection, sample)
+        if source == "steward" and payload.compose_services is not None and sample["host_id"] == storage_watch.local_host_id():
+            from boss_engine.services import admission
+            admission.set_state(connection, "compose_service_snapshot", {
+                "at": sample["at"].isoformat(), "services": [x.model_dump() for x in payload.compose_services],
+            })
         inc = storage_incidents.current_for_host(connection, sample["host_id"])
         th = storage_rules.thresholds(connection, sample["host_id"])
         level = storage_watch.raw_level(sample, None, th)

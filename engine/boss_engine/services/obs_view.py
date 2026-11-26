@@ -173,6 +173,7 @@ class System(TypedDict, total=False):
     machine: dict[str, Any]  # GET /v1/system/health body: scope, scope_label, level, level_label,
                              # gauges{...}, plus bands{memory,swap,cpu,disk:{value,unit,band,word}}
     build: dict[str, Any]    # {sha7, built_at}
+    compose: dict[str, Any]
     oom_kills_new: Optional[int]
     work: dict[str, Any]     # queue, leased, running, in_flight, builds_at_once{label}
     stalls: dict[str, Any]   # {strip:[n×96], rows:[≤8 {at, word, subject, did, shadow, run_id}], total}
@@ -1411,6 +1412,7 @@ def system(connection: Any, settings: Any, project_id: str) -> System:
         "reason": reason, "machine": machine,
         "build": {"sha7": sha[:7] if sha else None, "built_at": stamp.get("built_at")},
         "oom_kills_new": oom_new,
+        "compose": guarded("services", lambda: admission._state(connection, "compose_service_snapshot"), {}),
         "work": {**q, "in_flight": flying,
                  "builds_at_once": {"label": adm.get("label"),
                                     "value": (adm.get("builds_at_once") or {}).get("value")}},
