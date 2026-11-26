@@ -66,8 +66,16 @@ if docker info >/dev/null 2>&1; then D=(docker)
 elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then D=(sudo -n docker)
 else printf 'prune: Docker is unavailable to this user\n' >&2; exit 1; fi
 
-run() { if [[ "$DRY" -eq 1 ]]; then printf '  would run: %s\n' "$*"; else "$@" >/dev/null 2>&1 || true; fi; }
-used_pct() { df -P / | awk 'NR==2 {gsub("%","",$5); print $5}'; }
+failed=0
+run() {
+  if [[ "$DRY" -eq 1 ]]; then
+    printf '  would run: %s\n' "$*"
+  elif ! "$@" >/dev/null; then
+    failed=1
+    printf 'prune: could not complete %s\n' "$*" >&2
+  fi
+}
+used_pct() { df -P "$INSTALL_DIR" | awk 'NR==2 {gsub("%","",$5); print $5}'; }
 
 before=$(used_pct)
 printf 'disk before: %s%% used\n' "$before"
@@ -227,6 +235,21 @@ build_cache_gb() {  # whole GB, rounded down; "" when unknown
 # after its own build (--room) trims below the cap.
 if [[ "$CACHE_CAP_GB" -gt 0 && ( "$DEDICATED" -eq 1 || "$ROOM" -eq 1 ) ]]; then
   free_gb="$(docker_disk_free_gb)"
+  # A Colima or Desktop VM grows a sparse disk on the Mac. It can still report
+  # free blocks when the backing filesystem is already below the build floor.
+  context="${DOCKER_CONTEXT:-}"
+  if [[ -z "$context" ]]; then context="$("${D[@]}" context show 2>/dev/null || true)"; fi
+  case "$(uname -s):$context" in
+    Darwin:colima|Darwin:colima-*|Darwin:desktop-linux)
+      host_kb="$(df -Pk "$INSTALL_DIR" 2>/dev/null | awk 'NR==2 {print $4}')" || host_kb=""
+      if [[ -z "${DOCKER_HOST:-}" && "$host_kb" =~ ^[0-9]+$ && "$free_gb" =~ ^[0-9]+$ ]] &&
+         (( host_kb / 1048576 < FLOOR_GB && host_kb / 1048576 < free_gb )); then
+        printf "The Mac backing this install has %s GiB free, under the %s GiB floor. Releasing unused build cache.\n" "$((host_kb / 1048576))" "$FLOOR_GB"
+        run "${D[@]}" builder prune -af
+        # The VM disk may still need trimming before the Mac recovers the freed blocks.
+        free_gb="$(docker_disk_free_gb)"
+      fi ;;
+  esac
   if [[ -z "$free_gb" ]]; then
     printf "Docker's disk could not be measured; the build cache is kept at its cap (%s GB)\n" "$CACHE_CAP_GB"
   elif [[ "$free_gb" -lt "$FLOOR_GB" ]]; then
@@ -244,3 +267,4 @@ if [[ "$CACHE_CAP_GB" -gt 0 && ( "$DEDICATED" -eq 1 || "$ROOM" -eq 1 ) ]]; then
   fi
 fi
 printf 'disk after: %s%% used\n' "$(used_pct)"
+exit "$failed"

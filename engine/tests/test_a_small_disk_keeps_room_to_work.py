@@ -107,3 +107,18 @@ def test_a_shared_machine_keeps_other_projects_cache_unless_asked(tmp_path):
     assert not any("prune -af" in c for c in w["calls"]), w["out"]
     d = _world(tmp_path, free_gb=5, room=False, BOSS_DEDICATED_HOST="1")
     assert "docker builder prune -af" in d["calls"]
+
+
+def test_colima_releases_cache_when_mac_backing_disk_is_tight(tmp_path):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for name, body in {"uname": "echo Darwin",
+                       "df": "printf 'Filesystem 1024-blocks Used Available Capacity Mounted\\n/dev/data 50000000 40000000 10000000 80%% /data\\n'"}.items():
+        exe = bin_dir / name
+        exe.write_text("#!/bin/sh\n" + body + "\n")
+        exe.chmod(0o755)
+    local = _world(tmp_path, free_gb=30, DOCKER_CONTEXT="colima-qa", DOCKER_HOST="")
+    assert "docker builder prune -af" in local["calls"]
+    assert "The Mac backing this install" in local["out"]
+    remote = _world(tmp_path, free_gb=30, DOCKER_CONTEXT="qa-remote", DOCKER_HOST="")
+    assert "docker builder prune -af" not in remote["calls"]
