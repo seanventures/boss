@@ -46,6 +46,10 @@ limactl shell "$VM" -- bash -lc "
   # (21 runs, 2.5 GB), disk the install then lacked. The tenth run starts like the first.
   # sudo: the previous run's install leaves root-owned files in the checkout, which a plain rm
   # cannot remove, and the clone then fails to write over them (Permission denied).
+  # The previous run's containers restart when the VM boots and bind-mount paths under the
+  # checkout; between the rm and the clone they recreate them as root (clone: Permission denied).
+  # This VM is the lane's own throwaway box, so remove them first.
+  if command -v docker >/dev/null; then sudo docker ps -aq | xargs -r sudo docker rm -f >/dev/null; fi
   sudo rm -rf ~/boss-src
   git clone -q /tmp/boss.bundle ~/boss-src
   rm -f /tmp/boss.bundle

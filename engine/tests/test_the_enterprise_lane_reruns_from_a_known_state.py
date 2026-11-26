@@ -243,6 +243,14 @@ def test_every_run_starts_from_a_fresh_checkout():
     assert "fetch -q /tmp/boss.bundle" not in lima
 
 
+def test_the_old_install_is_stopped_before_its_checkout_is_removed():
+    """The previous run's containers restart with the VM and bind-mount paths under ~/boss-src;
+    left running, they recreate them as root between the rm and the clone (Permission denied)."""
+    lima = (REPO / "scripts" / "enterprise-lane" / "lima.sh").read_text()
+    stop = lima.index("docker rm -f")
+    assert stop < lima.index("rm -rf ~/boss-src") < lima.index("git clone -q /tmp/boss.bundle")
+
+
 def test_a_daemon_still_holding_a_proxy_with_a_clean_file_gets_one_restart(tmp_path):
     w = World(tmp_path)
     (w.fake / "daemon-proxy").write_text("http://10.77.0.10:8080\n")   # file clean, daemon not
