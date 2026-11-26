@@ -915,7 +915,7 @@ export function DeliveryWorkflows({ projectId, actor, homeProjectId }: { project
       // ALL AT ONCE, AND NOT A PRESS. These are background writes: no press scope, so one run's
       // recheck cannot refuse another's, and none can refuse a button the operator presses.
       const results = await Promise.all(todo.map((r) =>
-        post("recheck", { project_id: projectId, actor, run_id: r.id })));
+        post("recheck", { project_id: runProject(r, projectId), actor, run_id: r.id })));
       // A recheck that did not get through is tried again on the next poll.
       results.forEach((r, i) => { if (!r.ok) rechecked.current.delete(todo[i].id); });
       const moved = results.reduce((n, r) => n + (
@@ -1041,6 +1041,7 @@ export function DeliveryWorkflows({ projectId, actor, homeProjectId }: { project
   // `dedupeFromPress`: a start that must be a NEW run per press, and the same run for its
   // duplicates, gets `dedupe_key: <prefix>:<press key>`, minted from the press INSIDE it, so
   // it is not part of what the press is recognised by (review of 6ca9119).
+  const runsRef = useRef<Run[]>([]);
   const actRef = useRef<((label: string, action: string, payload: Record<string, unknown>,
                           dedupeFromPress?: string) => Promise<unknown>) | null>(null);
   const act = useCallback((label: string, action: string, payload: Record<string, unknown>,
@@ -1048,8 +1049,12 @@ export function DeliveryWorkflows({ projectId, actor, homeProjectId }: { project
     pressOn(label, [action, payload], async (key) => {
       setNotice(null);
       setRefusal(null);
+      // A RUN'S WRITE GOES TO THE RUN'S PROJECT: the list can hold runs of every project in
+      // the org (scope=org), and the page's project 404s for those.
+      const runOf = typeof payload.run_id === "string"
+        ? runsRef.current.find((r) => r.id === payload.run_id) : undefined;
       const result = await post(action, {
-        project_id: projectId, actor, ...payload,
+        project_id: runOf ? runProject(runOf, projectId) : projectId, actor, ...payload,
         ...(dedupeFromPress ? { dedupe_key: `${dedupeFromPress}:${key}` } : {}),
       }, key);
       // A START REFUSED FOR WHAT THE PROJECT LACKS gets the checklist and "<label> anyway",
@@ -1075,6 +1080,7 @@ export function DeliveryWorkflows({ projectId, actor, homeProjectId }: { project
       return result;
     }), [pressOn, projectId, actor, load]);
   actRef.current = act;
+  runsRef.current = runs;
 
   // OPEN THE ONE THAT WANTS YOU. A page whose every run is collapsed makes an operator click
   // to find out whether anything needs them, which is the question the page exists to answer.
@@ -1775,7 +1781,7 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
                         onPrepareTarget={(hostId) => onPrepareTarget(run.id, hostId)}
                         onRunPreview={onRunPreview}
                         onBound={onBound}
-                        projectId={projectId}
+                        projectId={runProject(run, projectId)}
                         previewStarting={previewStarting} />
   );
 
@@ -1828,7 +1834,7 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
             </span>
           ) : null}
           {/* THE HEADER LINE: Change #N · Preview · Staging · Prod · "Your move: <button>". */}
-          <div className="dw-full-work"><RunWorkLine projectId={projectId} runId={fullRun.id} actor={actor} /></div>
+          <div className="dw-full-work"><RunWorkLine projectId={runProject(fullRun, projectId)} runId={fullRun.id} actor={actor} /></div>
           <button type="button" className="wf-btn wf-btn-ghost dw-full-exit" data-testid="exit-full-page"
                   title="Back to the list, with this run open"
                   onClick={() => onFullPage?.(null)}>
@@ -1836,7 +1842,7 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
           </button>
         </header>
         {noticeFor(fullRun)}
-        <LearnedStrip people projectId={projectId} actor={actor} runId={fullRun.id}
+        <LearnedStrip people projectId={runProject(fullRun, projectId)} actor={actor} runId={fullRun.id}
                       live={!/^(succeeded|completed|failed|cancelled|canceled|deadlettered)$/.test(fullRun.status)} />
         {pathFor(fullRun, true)}
       </div>
@@ -1959,7 +1965,7 @@ export function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilit
               ) : null}
             </button>
             {noticeFor(run)}
-            {open ? <LearnedStrip people projectId={projectId} actor={actor} runId={run.id} live={!/^(succeeded|completed|failed|cancelled|canceled|deadlettered)$/.test(run.status)} /> : null}
+            {open ? <LearnedStrip people projectId={runProject(run, projectId)} actor={actor} runId={run.id} live={!/^(succeeded|completed|failed|cancelled|canceled|deadlettered)$/.test(run.status)} /> : null}
             {open ? pathFor(run) : null}
           </article>
         );
@@ -2009,6 +2015,16 @@ export const DID_NOTHING =
  *  Exported because "which one is the important one" is a rule worth testing, not a detail of
  *  a render.
  */
+/**
+ * THE PROJECT A RUN BELONGS TO, for every read and write about it. The Runs list can hold runs of
+ * every project in the org (scope=org); asking for one of those under the page's project is a 404
+ * on each panel (activity, decisions, autonomy, report, chain), which is what the default open run
+ * did whenever it belonged to another project.
+ */
+export function runProject(run: { project_id?: string | null }, pageProject: string): string {
+  return run.project_id || pageProject;
+}
+
 export function runToOpen(runs: Run[]): string | null {
   if (!runs.length) return null;
   // An open approval OR a step the run stopped at, the same rule the "Needs you" bucket reads.
