@@ -243,6 +243,26 @@ def test_every_run_starts_from_a_fresh_checkout():
     assert "fetch -q /tmp/boss.bundle" not in lima
 
 
+def test_the_old_install_is_stopped_before_its_checkout_is_removed():
+    """The previous run's containers restart with the VM and bind-mount paths under ~/boss-src;
+    left running, they recreate them as root between the rm and the clone (Permission denied)."""
+    lima = (REPO / "scripts" / "enterprise-lane" / "lima.sh").read_text()
+    stop = lima.index("docker rm -f")
+    assert stop < lima.index("rm -rf ~/boss-src") < lima.index("git clone -q /tmp/boss.bundle")
+
+
+def test_the_lane_cleans_only_a_vm_it_made():
+    """--vm takes any name; removing every container and ~/boss-src is safe only in the lane's own
+    throwaway VM: one this script created (marked) or one adopted with --adopt. Others are refused."""
+    lima = (REPO / "scripts" / "enterprise-lane" / "lima.sh").read_text()
+    mark = lima.index("MARK=.boss-ent-lane-vm")
+    refuse = lima.index("was not made by this lane")
+    assert mark < refuse < lima.index("docker rm -f")
+    assert "ADOPT=1   # made here" in lima and "--adopt) ADOPT=1" in lima
+    # and the clean step itself re-checks the mark inside the VM, before it touches anything
+    assert lima.index("test -f ~/$MARK") < lima.index("docker rm -f") < lima.index("rm -rf ~/boss-src")
+
+
 def test_a_daemon_still_holding_a_proxy_with_a_clean_file_gets_one_restart(tmp_path):
     w = World(tmp_path)
     (w.fake / "daemon-proxy").write_text("http://10.77.0.10:8080\n")   # file clean, daemon not
