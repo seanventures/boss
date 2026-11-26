@@ -614,3 +614,31 @@ def test_compaction_rewrites_a_table_that_kept_its_size_after_its_rows_went(db, 
     assert done["disk_churn"]["after"] < done["disk_churn"]["bytes"] / 5
     with engine.begin() as c:
         assert c.execute(text("SELECT count(*) FROM disk_churn")).scalar() == 20
+
+
+def test_development_cap_uses_autonomy_for_scheduled_dumps_only(db, tmp_path, monkeypatch):
+    from boss_engine.config import get_settings
+    from boss_engine.services import autonomy_gate
+
+    engine, _ = db
+    monkeypatch.setenv("BOSS_INSTALL_TIER", "dev")
+    monkeypatch.setenv("BOSS_AUTONOMY_IMMEDIATE", "0")
+    with engine.begin() as c:
+        c.execute(text("DELETE FROM backups"))
+        c.execute(text("DELETE FROM retention_rules WHERE kind = 'scheduled_backups'"))
+        c.execute(text("DELETE FROM decisions WHERE recommendation->>'tool' = :t"), {"t": bs.CAP_TOOL})
+    paths = _backups(engine, tmp_path, 6, 2.0)
+    # The operator's separate copy must survive both the age policy and the byte cap.
+    with engine.begin() as c:
+        c.execute(text("UPDATE backups SET kind='manual' WHERE path=:p"), {"p": str(paths[-1])})
+    bs.prune(engine, _settings())
+    with engine.begin() as c:
+        row = c.execute(text("SELECT * FROM decisions WHERE recommendation->>'tool'=:t"),
+                        {"t": bs.CAP_TOOL}).mappings().one()
+        assert row["risk_tier"] == 2 and row["recommendation"]["autonomy"]["route"] == "act"
+        assert autonomy_gate.decide(c, get_settings(), row["id"])["decided"]
+    with engine.begin() as c:
+        approved = c.execute(text("SELECT approved_by FROM decisions WHERE id=:d"), {"d": row["id"]}).scalar_one()
+        assert approved.startswith(autonomy_gate.ACTOR_PREFIX)
+        assert not c.execute(text("SELECT 1 FROM retention_rules WHERE kind='scheduled_backups'")).first()
+    assert [p.exists() for p in paths] == [True, True, True, False, False, True]

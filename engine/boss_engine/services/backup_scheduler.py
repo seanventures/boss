@@ -354,9 +354,10 @@ def prune(engine: Any, settings: Any = None, *,
     with background():
         with engine.begin() as c:
             rows = [dict(r) for r in c.execute(text(
-                "SELECT id, path, object_key, started_at, bytes FROM backups WHERE status = 'verified'"
+                "SELECT id, path, object_key, started_at, bytes FROM backups WHERE status = 'verified' AND kind = 'scheduled'"
             )).mappings()]
         keep = retention_keep(rows, Policy.from_settings(settings))
+        keep.update(r["id"] for r in sorted(rows, key=lambda r: r["started_at"], reverse=True)[:CAP_FLOOR])
         pruned: list[str] = []
         for row in rows:
             if str(row["id"]) in keep:
@@ -441,7 +442,7 @@ def ask_over_cap(engine: Any, over: list[Mapping[str, Any]], *, max_count: int,
     not raised again while one is open or for a day after a "Not now"."""
     import json
 
-    from . import storage_cleanup, storage_incidents, storage_watch
+    from . import production, storage_cleanup, storage_incidents, storage_watch
     from .core import create_blocking_decision
     from .decision_actions import OPEN_STATUSES
     from .typed_forms import normalize_form
@@ -459,6 +460,7 @@ def ask_over_cap(engine: Any, over: list[Mapping[str, Any]], *, max_count: int,
         project_id = storage_incidents.default_project(c)
         if not project_id:
             return None
+        development = production.install_tier() == "dev"
         proposed = {"keep_newest": int(max_count), "cap_gb": float(cap_gb)}
         question = (f"Delete {len(over)} old database backups ({gb:.1f} GB)? "
                     f"The newest {max(CAP_FLOOR, kept_n)} stay.")
@@ -474,13 +476,13 @@ def ask_over_cap(engine: Any, over: list[Mapping[str, Any]], *, max_count: int,
                "items": len(over), "gb": round(gb, 2), "keeps": int(max_count),
                "to_delete": ids[:500], "kept": [],
                "already_done_gb": 0.0, "free_pct_now": None, "target_pct": None, "paused_runs": 0,
-               "rule_proposal": {"kind": CAP_RULE_KIND, "rule": proposed, "preticked": True},
+               "rule_proposal": {"kind": CAP_RULE_KIND, "rule": proposed, "preticked": not development},
                "alternatives": [], "never_automatic": ["unlabelled", "data volumes",
                                                        "non-scratch databases"],
                "left_alone": list(storage_cleanup.LEFT_ALONE), "ui": "StorageDeleteDecision"}
         decision_id = create_blocking_decision(c, project_id, None, question, rec,
                                                {"estimated_cost_usd": 0.0}, reason,
-                                               risk_tier=3, default_action="hold")
+                                               risk_tier=2 if development else 3, default_action="hold")
         c.execute(text("UPDATE decisions SET form_schema = CAST(:f AS JSONB) WHERE id = :id"),
                   {"f": json.dumps(normalize_form(storage_cleanup.ASK_FORM)), "id": decision_id})
     return str(decision_id)
@@ -515,7 +517,7 @@ def on_cap_decision(connection: Any, decision: Mapping[str, Any], *, verdict: st
         # "Keep 20 instead": only what is STILL past the cap with the person's numbers goes —
         # never a backup the card listed that the new numbers keep.
         current = [dict(r) for r in connection.execute(text(
-            "SELECT id, started_at, bytes FROM backups WHERE status = 'verified'")).mappings()]
+            "SELECT id, started_at, bytes FROM backups WHERE status = 'verified' AND kind = 'scheduled'")).mappings()]
         try:
             still = {str(r["id"]) for r in over_cap(
                 current, max_count=max(CAP_FLOOR, int(rule.get("keep_newest") or CAP_FLOOR)),
@@ -525,10 +527,10 @@ def on_cap_decision(connection: Any, decision: Mapping[str, Any], *, verdict: st
         ids = [i for i in ids if i in still]
     rows = [dict(r) for r in connection.execute(text(
         "SELECT id, path, object_key, started_at, bytes FROM backups "
-        "WHERE status = 'verified' AND id = ANY(:ids)"), {"ids": ids}).mappings()]
+        "WHERE status = 'verified' AND kind = 'scheduled' AND id = ANY(:ids)"), {"ids": ids}).mappings()]
     # Never one of the newest CAP_FLOOR, even if they moved since the card was raised.
     newest = {str(r[0]) for r in connection.execute(text(
-        "SELECT id FROM backups WHERE status = 'verified' ORDER BY started_at DESC LIMIT :n"),
+        "SELECT id FROM backups WHERE status = 'verified' AND kind = 'scheduled' ORDER BY started_at DESC LIMIT :n"),
         {"n": CAP_FLOOR}).all()}
     remover = s3_remover(_settings(None))
     removed: list[str] = []
