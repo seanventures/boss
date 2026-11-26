@@ -984,14 +984,67 @@ export function popAlign(chip: { left: number; right: number }, popWidth: number
   return overEnd < overStart ? "end" : "start";
 }
 
-/** Place a chip's popover as it mounts (before paint): see popAlign. */
-function placePop(el: HTMLDivElement | null) {
+/** The gap between a chip and its menu (new-work.css: `top: calc(100% + 6px)`). */
+const POP_GAP = 6;
+
+export type PopVertical = { side: "down" | "up"; scrollBy: number; maxHeight: number | null };
+
+/**
+ * WHERE A CHIP'S MENU OPENS VERTICALLY, so all of it is visible inside the dialog's scrolling
+ * body. Below the chip when it fits; above when it fits there instead; otherwise below, with the
+ * body scrolled up by what is missing, and capped to the body's height when the menu is taller
+ * than the body itself. The Quality menu opened 316px tall with 258px left below its chip and was
+ * cut off at the body's bottom edge, hiding Production (re-walk of rc10.36).
+ */
+export function popVertical(chip: { top: number; bottom: number }, popHeight: number,
+                            box: { top: number; bottom: number }): PopVertical {
+  // A gap between chip and menu, and the same gap kept from the body's edge.
+  const below = box.bottom - chip.bottom - 2 * POP_GAP;
+  const above = chip.top - box.top - 2 * POP_GAP;
+  if (popHeight <= below) return { side: "down", scrollBy: 0, maxHeight: null };
+  if (popHeight <= above) return { side: "up", scrollBy: 0, maxHeight: null };
+  const room = box.bottom - box.top - 2 * POP_GAP;
+  const height = Math.min(popHeight, room);
+  return { side: "down", scrollBy: Math.ceil(height - below), maxHeight: popHeight > room ? Math.floor(room) : null };
+}
+
+/** Place a chip's popover as it mounts (before paint): popAlign across, popVertical up/down. */
+export function placePop(el: HTMLDivElement | null) {
   const chip = el?.parentElement;
   if (!el || !chip) return;
   const dialog = el.closest(".px-nw") ?? document.documentElement;
   const c = chip.getBoundingClientRect();
   const d = dialog.getBoundingClientRect();
-  el.dataset.align = popAlign(c, el.getBoundingClientRect().width, d);
+  const p = el.getBoundingClientRect();
+  el.dataset.align = popAlign(c, p.width, d);
+  // A phone draws the menu as a fixed sheet over the footer: nothing to place.
+  if (getComputedStyle(el).position === "fixed") return;
+  const body = el.closest<HTMLElement>(".px-nw-body");
+  if (!body) return;
+  const b = body.getBoundingClientRect();
+  // A CHIP HALF UNDER THE BODY'S EDGE is brought fully into view first: its menu is placed
+  // against where the chip IS, and the chip cannot be read off-screen.
+  const into = c.bottom > b.bottom - POP_GAP ? c.bottom - b.bottom + POP_GAP
+    : c.top < b.top + POP_GAP ? c.top - b.top - POP_GAP : 0;
+  if (into) body.scrollTop += into;
+  const v = popVertical(into ? chip.getBoundingClientRect() : c, p.height, b);
+  el.dataset.side = v.side;
+  if (v.maxHeight !== null) el.style.setProperty("--px-nw-pop-max", `${v.maxHeight}px`);
+  if (v.scrollBy > 0) body.scrollTop += v.scrollBy;
+  // MEASURED AGAIN, AFTER: a body that could not scroll that far leaves the menu's end below its
+  // edge, so the menu is capped to what shows and scrolls inside (whole px, never a 1px clip).
+  // Read from the CHIP, not the menu: the menu is still rising into place (px-rise translates it
+  // 6px on its first frame), so its own box is not where it will rest.
+  // TWICE AT MOST: the menu is part of what the body scrolls, so capping it shortens the body's
+  // scroll range, which can pull the scroll back and the menu down by what was cut.
+  let height = Math.min(p.height, v.maxHeight ?? p.height);
+  for (let i = 0; v.side === "down" && i < 2; i += 1) {
+    const top = chip.getBoundingClientRect().bottom + POP_GAP;
+    const edge = body.getBoundingClientRect().bottom - POP_GAP;
+    if (top + height <= edge) break;
+    height = Math.max(120, Math.floor(edge - top));
+    el.style.setProperty("--px-nw-pop-max", `${height}px`);
+  }
 }
 
 /** Sample mode: the chips' defaults as the wireframe draws them. */

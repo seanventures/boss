@@ -108,6 +108,9 @@
   display: flex; flex-direction: column; gap: 10px; animation: px-rise .12s ease-out; font-size: var(--fs-meta); }
 /* Which edge it hangs from is measured as it opens (new-work.tsx, popAlign). */
 .px-nw-pop[data-align="end"] { left: auto; right: 0; }
+/* Up or down, and how tall, is measured as it opens too (popVertical): always all visible. */
+.px-nw-pop[data-side="up"] { top: auto; bottom: calc(100% + 6px); }
+.px-nw-pop { max-height: var(--px-nw-pop-max, none); overflow-y: auto; }
 .px-nw-pop-h { display: flex; align-items: center; gap: 8px; }
 .px-nw-pop-h b { font-family: var(--display); font-size: var(--fs-ui); }
 .px-nw-pop-h .px-faint { margin-left: auto; font-size: var(--fs-tag); }
