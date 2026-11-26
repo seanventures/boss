@@ -166,7 +166,7 @@ def test_the_providers_own_retry_at_wins_over_the_backoff(connection):
         {"ok": False, "state": "rate_limited", "checked_at": NOW.isoformat(),
          "retry_at": reset_at.isoformat()}, "system")
     schedule = _schedule(connection, source_id)
-    assert setup_view.parse_time(schedule["next_at"]) == reset_at
+    assert setup_view.parse_time(schedule["next_at"]) == reset_at + proof_schedule.RESET_GRACE
 
 
 def test_bosss_own_not_now_leaves_the_schedule_alone(connection):
