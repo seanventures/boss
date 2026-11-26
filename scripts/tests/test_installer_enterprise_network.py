@@ -155,15 +155,16 @@ def test_a_missing_credential_helper_is_caught_before_the_first_pull(tmp_path, s
     config = tmp_path / "docker"
     config.mkdir()
     (config / "config.json").write_text(json.dumps({"auths": {}, "credsStore": store}))
-    env = {"PATH": "/usr/bin:/bin", "DOCKER_CONFIG": str(config), "HOME": str(tmp_path)}
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "python3").symlink_to(sys.executable)
+    env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "DOCKER_CONFIG": str(config), "HOME": str(tmp_path)}
     result = subprocess.run(["bash", "-c", f'set -euo pipefail; . "{PREFLIGHT}"; boss_docker_credential_helper_check'],
                             env=env, capture_output=True, text=True, timeout=10)
     assert result.returncode == 1 and expect in result.stdout
-    helper = tmp_path / "bin" / f"docker-credential-{store}"
-    helper.parent.mkdir()
+    helper = bin_dir / f"docker-credential-{store}"
     helper.write_text("#!/bin/sh\n")
     helper.chmod(0o755)
-    env["PATH"] = f"{helper.parent}:/usr/bin:/bin"
     assert subprocess.run(["bash", "-c", f'. "{PREFLIGHT}"; boss_docker_credential_helper_check'],
                           env=env, capture_output=True, timeout=10).returncode == 0
 

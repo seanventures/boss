@@ -215,6 +215,18 @@ def install_pair(tmp_path: Path) -> tuple[Path, str, str, dict[str, str], Path]:
 
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
+    # This fixture exercises Git, backup and configuration handling up to the fake Docker
+    # build. The shell network probes have their own local HTTP and TLS endpoint tests.
+    curl = bin_dir / "curl"
+    curl.write_text(
+        "#!/usr/bin/env bash\n"
+        "case \"${!#}\" in\n"
+        "  https://registry.npmjs.org/|https://pypi.org/|https://registry-1.docker.io/) exit 0 ;;\n"
+        "  http://deb.debian.org/debian/dists/bookworm/InRelease) printf 200; exit 0 ;;\n"
+        "esac\n"
+        "exit 1\n"
+    )
+    curl.chmod(0o755)
     # Free disk as df -Pk prints it: upgrade.sh checks the disk before it builds (storage
     # hygiene layer 1), and the machine running the tests is not what is under test here.
     df = bin_dir / "df"
