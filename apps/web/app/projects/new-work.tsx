@@ -615,7 +615,7 @@ export function NewWorkModal({ ctx, prefill, onClose, onDone }: {
         <span className="px-nw-v">{props.value}</span>
         {props.sub ? <span className="px-nw-s">{props.sub}</span> : null}
       </button>
-      {isOpen && props.popover ? <div className="px-nw-pop" role="dialog" aria-label={typeof props.label === "string" ? props.label : key}>{props.popover}</div> : null}
+      {isOpen && props.popover ? <div className="px-nw-pop" ref={placePop} role="dialog" aria-label={typeof props.label === "string" ? props.label : key}>{props.popover}</div> : null}
     </div>
     );
   };
@@ -967,6 +967,31 @@ function TellPop({ routes, value, onChange, projectId }: { routes: { event: stri
       <div className="px-nw-pop-f"><a className="px-linkbtn" href={`?project_id=${encodeURIComponent(projectId)}&area=project&tab=settings&section=notifications`}>Project notifications</a></div>
     </>
   );
+}
+
+/**
+ * WHICH EDGE OF ITS CHIP A POPOVER HANGS FROM, so it stays inside the dialog. It opens from the
+ * chip's left edge; when that runs past the dialog's right edge it hangs from the chip's right
+ * edge instead, whichever overflows less. Measured, not counted: the old nth-child rule assumed
+ * four chips a row, and the wide Workflow chip moved Quality to the first column, where its
+ * right-hung menu was cut off by the dialog's left edge (walk of rc10.36).
+ */
+export function popAlign(chip: { left: number; right: number }, popWidth: number,
+                         box: { left: number; right: number }): "start" | "end" {
+  const overStart = Math.max(0, chip.left + popWidth - box.right);
+  if (!overStart) return "start";
+  const overEnd = Math.max(0, box.left - (chip.right - popWidth));
+  return overEnd < overStart ? "end" : "start";
+}
+
+/** Place a chip's popover as it mounts (before paint): see popAlign. */
+function placePop(el: HTMLDivElement | null) {
+  const chip = el?.parentElement;
+  if (!el || !chip) return;
+  const dialog = el.closest(".px-nw") ?? document.documentElement;
+  const c = chip.getBoundingClientRect();
+  const d = dialog.getBoundingClientRect();
+  el.dataset.align = popAlign(c, el.getBoundingClientRect().width, d);
 }
 
 /** Sample mode: the chips' defaults as the wireframe draws them. */
