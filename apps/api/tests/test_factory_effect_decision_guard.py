@@ -126,3 +126,26 @@ def test_production_deployment_decision_requires_rollback_plan(engine):
             assert "rollback plan" in str(error)
         else:
             raise AssertionError("Production deployment without a rollback plan was allowed")
+
+
+def test_repaired_change_gets_new_merge_decision_for_its_head(engine):
+    from boss_engine.services.core import create_blocking_decision
+    from sqlalchemy import text
+
+    with engine.begin() as db:
+        project = db.execute(text("SELECT id FROM projects ORDER BY id LIMIT 1")).scalar_one()
+        rec = {"action": "review_pull_request", "pull_request_url": "http://boss-local/qa/pull/1",
+               "head_sha": "1" * 40, "run_id": "first-build"}
+        def ask(recommendation):
+            return create_blocking_decision(db, project, None, "Review QA change", recommendation, {},
+                                            "merge_decision_required")
+
+        original = ask({**rec, "checks_failing": {"failing_gates": ["web_package_honest"]}})
+        repaired = {**rec, "head_sha": "2" * 40, "run_id": "repair"}
+        current = ask(repaired)
+        assert current != original
+        assert ask(repaired) == current
+        evidence = db.execute(text("SELECT recommendation FROM decisions WHERE id = :id"),
+                              {"id": current}).scalar_one()
+        assert evidence["head_sha"] == repaired["head_sha"]
+        assert "checks_failing" not in evidence

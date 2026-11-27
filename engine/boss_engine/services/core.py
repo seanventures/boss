@@ -593,13 +593,20 @@ def _create_blocking_decision_postgres(
                    OR recommendation->>'step_id' IS NOT DISTINCT FROM :gate_step)
               AND recommendation->>'deployment_run_id' IS NOT DISTINCT FROM :subject_run
               AND recommendation->>'interrupt_id' IS NOT DISTINCT FROM :interrupt
+              AND (CAST(:merge_review AS boolean) = false
+                   OR (recommendation->>'action' = 'review_pull_request'
+                       AND recommendation->>'pull_request_url' IS NOT DISTINCT FROM :pr_url
+                       AND recommendation->>'head_sha' IS NOT DISTINCT FROM :pr_head
+                       AND recommendation->>'run_id' IS NOT DISTINCT FROM :review_run))
             ORDER BY created_at DESC
             LIMIT 1
             """
         ),
         {"project_id": project_id, "question": question, "task_id": task_id,
          "gate_run": gate_run, "gate_step": gate_step, "subject_run": subject_run,
-         "interrupt": interrupt},
+         "interrupt": interrupt, "merge_review": rec_in.get("action") == "review_pull_request",
+         "pr_url": rec_in.get("pull_request_url"), "pr_head": rec_in.get("head_sha"),
+         "review_run": rec_in.get("run_id")},
     ).mappings().first()
     if existing:
         prior = existing["recommendation"] or {}
