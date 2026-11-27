@@ -1267,8 +1267,16 @@ if [ -f "$ENV_FILE" ]; then
     ui_warn "Moving this install's API and web bind back to loopback; use an SSH tunnel or HTTPS reverse proxy."
   fi
   _existing() { grep -E "^$1=" "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2-; }
-  _keep_db="$(_existing BOSS_DB_PASSWORD)"
-  _keep_api="$(_existing BOSS_API_KEY)"
+  # Both are required and never regenerated: a new database password locks the install out of
+  # its own data. A key that is absent or present but empty is the same broken .env.
+  _required() {
+    local value
+    value="$(_existing "$1")" && [ -n "$value" ] ||
+      die "Existing .env is missing $1. Restore the complete .env from this install's private backup. For a fresh install choose an empty install directory."
+    printf '%s' "$value"
+  }
+  _keep_db="$(_required BOSS_DB_PASSWORD)" || exit 1
+  _keep_api="$(_required BOSS_API_KEY)" || exit 1
   _keep_kg="$(_existing BOSS_KG_MCP_HTTP_TOKEN || true)"
   if [ -n "$_keep_kg" ]; then BOSS_KG_MCP_HTTP_TOKEN="$_keep_kg"; fi
   # NEVER REPLACED once written: secrets in the database were encrypted with it.
@@ -1583,7 +1591,6 @@ if ! NO_PROXY="$(env_value BOSS_UPSTREAM_NO_PROXY)" boss_tls_diagnose "$(env_val
     die "Image builds cannot verify these downloads. Set BOSS_EXTRA_CA_FILE as shown above (or BOSS_TLS_PREFLIGHT=warn to try anyway)."
   fi
 fi
-ui_ok "Network: TLS to the package registries verifies"
 # Debian's mirror is plain http: it goes through a proxy only when BOSS_UPSTREAM_HTTP_PROXY
 # names one, so a proxy-only network passed the TLS check and then failed the build with
 # "Unable to locate package gcc" (BOSSAPP-1446).

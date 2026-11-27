@@ -60,14 +60,16 @@ def server():
     srv = uvicorn.Server(uvicorn.Config(main.app, host="127.0.0.1", port=port, log_level="warning"))
     thread = threading.Thread(target=srv.run, daemon=True)
     thread.start()
-    for _ in range(200):
-        if srv.started:
-            break
-        time.sleep(0.05)
-    yield f"http://127.0.0.1:{port}"
-    srv.should_exit = True
-    thread.join(timeout=10)
-    settings.authz_mode, settings.authz_router_modes = saved
+    try:
+        deadline = time.monotonic() + 180
+        while thread.is_alive() and not srv.started and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert srv.started, "local Git test API did not finish startup within 180 seconds"
+        yield f"http://127.0.0.1:{port}"
+    finally:
+        srv.should_exit = True
+        thread.join(timeout=10)
+        settings.authz_mode, settings.authz_router_modes = saved
 
 
 def _token(engine, world, who, scopes) -> str:

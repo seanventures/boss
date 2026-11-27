@@ -107,5 +107,40 @@ def test_the_engines_gate_runs_every_scenario_on_every_engine_profile():
     for name, exp in engines.SCENARIOS.items():
         for fault in filter(None, exp["faults"].split(",")):
             assert fault in doc, f"{name}: the scripted engine does not play {fault!r}"
-    assert '"$IMAGE" python3 "/gate-src/tests/e2e/gate/$TIER.py"' in (
+    assert 'python3 "/gate-src/tests/e2e/gate/$TIER.py"' in (
         ROOT / "scripts" / "e2e-gate.sh").read_text()
+
+
+def test_release_gate_uses_container_results_and_fails_closed(tmp_path):
+    import json
+    import os
+    import subprocess
+
+    docker = tmp_path / "docker"
+    docker.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = cp ]; then\n'
+        '  [ -s "$REPORT" ] || exit 1\n'
+        '  cp "$REPORT" "$3/results.json"\n'
+        'fi\n'
+        'if [ "$1" = run ]; then\n'
+        '  case " $* " in *" -d "*) exit 0;; esac\n'
+        '  exit "$CONTAINER_RC"\n'
+        'fi\n'
+        'exit 0\n'
+    )
+    docker.chmod(0o755)
+    report = tmp_path / "fixture.json"
+    env = {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}", "REPORT": str(report)}
+    for body, container_rc, expected in (
+        ("", 0, 1), ("invalid", 0, 1), ([], 0, 1), (["SKIP"], 0, 1),
+        (["FAIL"], 0, 1), (["PASS"], 1, 1), (["PASS"], 0, 0),
+    ):
+        if isinstance(body, list):
+            body = json.dumps({"results": [{"check": "fixture", "status": s, "seconds": 0}
+                                           for s in body]})
+        report.write_text(body)
+        result = subprocess.run(["bash", str(ROOT / "scripts/e2e-gate.sh"), "plumbing",
+                                 "--image", "qa-fixture"], env={**env, "CONTAINER_RC": str(container_rc)},
+                                capture_output=True, text=True, timeout=20)
+        assert result.returncode == expected, (body, result.stdout, result.stderr)
