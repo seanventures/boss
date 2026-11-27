@@ -1,0 +1,41 @@
+{
+  "status": "proposed",
+  "source": "marker",
+  "workspace_root": ".",
+  "selected_root_path": ".",
+  "shared_paths": [],
+  "apps": [
+    {
+      "app_key": "09-go-cmd-multi-binary",
+      "root_path": ".",
+      "workspace_root": ".",
+      "stack": {
+        "language": "go",
+        "framework": "chi",
+        "role": "backend",
+        "package_manager": "go modules",
+        "entrypoints": [
+          "cmd/server",
+          "cmd/worker"
+        ]
+      },
+      "commands": {
+        "lint": "go vet ./...",
+        "test": "go test ./...",
+        "build": "go build ./..."
+      },
+      "run": {
+        "entrypoints": [
+          "cmd/server",
+          "cmd/worker"
+        ],
+        "command": "go run ./cmd/server"
+      },
+      "manifests": [
+        "go.mod"
+      ],
+      "shared_paths": [],
+      "provenance_source": "marker"
+    }
+  ]
+}

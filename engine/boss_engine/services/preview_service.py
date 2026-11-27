@@ -713,9 +713,23 @@ def _app_dir_of_plan(workdir: Path, plan: Optional["AppRun"]) -> Path:
     return workdir if rel in ("", ".") else workdir / rel
 
 
-def app_dir_of(workdir: Path, changed: Optional[list[str]] = None) -> Path:
+def app_dir_of(workdir: Path, changed: Optional[list[str]] = None, *,
+               app_map: Any = None, require_map: bool = False) -> Path:
     """The directory of the app a runner starts (where its .env.example and boss.deploy.yaml
-    live): the declared command's directory, a resolved Node/static app's, else the root."""
+    live): the stored App Map's `root_path` when supplied (never falling back to root for a
+    subfolder app), else the declared command's directory, a resolved Node/static app's, else
+    the root (refusing when `require_map=True`)."""
+    from . import app_map as _app_map
+
+    entry = _app_map.coerce_entry(app_map)
+    if entry is not None:
+        return entry.resolved_dir(workdir)
+    if require_map:
+        res = _app_map.resolve_for_stage(workdir, require_map=True)
+        if res.path is None:
+            raise _app_map.AppMapRequiredError(res.refusal or _app_map.NO_MAP_REFUSAL,
+                                               candidates=list(res.candidates))
+        return res.path
     try:
         plan = how_app_runs(workdir, changed)
     except Exception:  # noqa: BLE001 — an ambiguous repo is the launcher's to report
@@ -1690,7 +1704,8 @@ class AppRun:
         return shlex.join(argv)
 
 
-def how_app_runs(workdir: Path, changed: Optional[list[str]] = None) -> Optional[AppRun]:
+def how_app_runs(workdir: Path, changed: Optional[list[str]] = None, *,
+                 app_map: Any = None, require_map: bool = False) -> Optional[AppRun]:
     """THE answer to "what command runs this lineage's app". Every runner asks this function.
 
     WHY ONE FUNCTION. The serve proof (prove_app_serves) asked find_run_declaration about this
@@ -1706,8 +1721,53 @@ def how_app_runs(workdir: Path, changed: Optional[list[str]] = None) -> Optional
     package module) — running a declared preview command in a production container broke
     apps that needed devDependencies (fourth review).
 
-    Raises AmbiguousAppError rather than guessing (see _detect_command's history).
+    When `app_map` is supplied (BOSSAPP-555), detection is scoped strictly to `app_map.root_path`
+    — never reading the repository root for a subfolder app. Raises AmbiguousAppError or
+    AppMapRequiredError rather than guessing.
     """
+    from . import app_map as _app_map
+
+    entry_map = _app_map.coerce_entry(app_map)
+    if entry_map is None and require_map:
+        res = _app_map.resolve_for_stage(workdir, require_map=True)
+        if res.entry is None:
+            raise _app_map.AppMapRequiredError(res.refusal or _app_map.NO_MAP_REFUSAL,
+                                               candidates=list(res.candidates))
+        entry_map = res.entry
+
+    if entry_map is not None:
+        rel = entry_map.root_path
+        target = entry_map.resolved_dir(workdir)
+        declared_cmd = str((entry_map.run or {}).get("command") or "").strip()
+        if declared_cmd:
+            cmd = (
+                ["sh", "-lc", declared_cmd]
+                if rel == "."
+                else ["sh", "-lc", f"cd {shlex.quote(rel)} && {declared_cmd}"]
+            )
+            return AppRun(cmd, "app_map", declared_in=rel, declared_command=declared_cmd)
+        if not target.is_dir():
+            return None
+        scoped_changed = _changed_inside(changed, rel) if rel != "." else changed
+        inner = how_app_runs(target, scoped_changed or None)
+        if inner is None:
+            return None
+        if rel == ".":
+            return inner
+        inner_cmd = inner.command
+        if inner_cmd:
+            shell_str = inner_cmd[2] if inner_cmd[:2] == ["sh", "-lc"] and len(inner_cmd) == 3 else shlex.join(inner_cmd)
+            prefix = f"cd {shlex.quote(rel)} && "
+            if not shell_str.startswith(prefix):
+                shell_str = prefix + shell_str
+            inner_cmd = ["sh", "-lc", shell_str]
+        declared_in = rel if not inner.declared_in or inner.declared_in == "." else f"{rel}/{inner.declared_in}"
+        scoped_entry = inner.entry
+        if scoped_entry and scoped_entry[1]:
+            val = rel if scoped_entry[1] in ("", ".") else f"{rel}/{scoped_entry[1]}"
+            scoped_entry = (scoped_entry[0], val)
+        return AppRun(inner_cmd, inner.source, scoped_entry, declared_in=declared_in,
+                      declared_command=inner.declared_command)
     # HOW THE BUILD SAID TO RUN IT beats everything, including which app BOSS derived: the
     # build wrote the command and proved it served before it passed (find_run_declaration).
     run_declaration = find_run_declaration(workdir, changed)
@@ -1797,11 +1857,15 @@ def named_app_directory(run: Optional[dict], connection=None) -> Optional[str]:
     """
     if not run:
         return None
+    from . import app_map as _app_map
     from .app_root import clean_rel, recorded_app_dir
     from .verification_target import app_scope
 
     spec = run.get("spec") if isinstance(run.get("spec"), dict) else {}
     fctx = run.get("finalize_ctx") if isinstance(run.get("finalize_ctx"), dict) else {}
+    stored = _app_map.entry_from_run_context(run, spec=spec, finalize_ctx=fctx)
+    if stored is not None:
+        return stored.rel_or_none()
     named = clean_rel(app_scope(spec, fctx)) or clean_rel(fctx.get("app_dir"))
     if named or connection is None:
         return named

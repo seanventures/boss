@@ -1,0 +1,83 @@
+{
+  "status": "ambiguous",
+  "source": "marker",
+  "workspace_root": ".",
+  "selected_root_path": null,
+  "shared_paths": [],
+  "apps": [
+    {
+      "app_key": "helpdesk-ai",
+      "root_path": "helpdesk-ai",
+      "workspace_root": ".",
+      "stack": {
+        "language": "node",
+        "framework": "express",
+        "role": "backend",
+        "package_manager": "npm"
+      },
+      "commands": {
+        "install": "npm install --include=dev --no-audit --no-fund --loglevel=error",
+        "test": "npm test"
+      },
+      "run": {
+        "command": "npm start"
+      },
+      "manifests": [
+        "helpdesk-ai/package.json",
+        "package.json",
+        "pom.xml"
+      ],
+      "shared_paths": [],
+      "provenance_source": "marker"
+    },
+    {
+      "app_key": "notes-lite",
+      "root_path": "notes-lite",
+      "workspace_root": ".",
+      "stack": {
+        "language": "python",
+        "framework": "flask",
+        "role": "backend",
+        "package_manager": "pip"
+      },
+      "commands": {
+        "install": "python3 -m pip install --user --disable-pip-version-check --no-input -q -r requirements.txt",
+        "test": "python3 -m pytest -q"
+      },
+      "run": {
+        "command": "python3 -m flask --app app run --host 0.0.0.0 --port \"$PORT\""
+      },
+      "manifests": [
+        "notes-lite/requirements.txt",
+        "package.json",
+        "pom.xml"
+      ],
+      "shared_paths": [],
+      "provenance_source": "marker"
+    },
+    {
+      "app_key": "web-portal",
+      "root_path": "web-portal",
+      "workspace_root": ".",
+      "stack": {
+        "language": "node",
+        "framework": "react",
+        "role": "frontend",
+        "package_manager": "npm"
+      },
+      "commands": {
+        "install": "npm install --include=dev --no-audit --no-fund --loglevel=error",
+        "build": "npm run build",
+        "test": "npm test"
+      },
+      "run": {},
+      "manifests": [
+        "package.json",
+        "pom.xml",
+        "web-portal/package.json"
+      ],
+      "shared_paths": [],
+      "provenance_source": "marker"
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "status": "proposed",
+  "source": "descriptor",
+  "workspace_root": ".",
+  "selected_root_path": "services/portal",
+  "shared_paths": [],
+  "apps": [
+    {
+      "app_key": "portal",
+      "root_path": "services/portal",
+      "workspace_root": ".",
+      "stack": {
+        "language": "node",
+        "framework": "hono",
+        "role": "backend",
+        "package_manager": "npm"
+      },
+      "commands": {
+        "install": "npm install --include=dev --no-audit --no-fund --loglevel=error",
+        "test": "npm test"
+      },
+      "run": {
+        "command": "node index.js"
+      },
+      "manifests": [
+        "services/portal/Dockerfile",
+        "services/portal/Procfile",
+        "services/portal/package.json"
+      ],
+      "shared_paths": [],
+      "provenance_source": "descriptor"
+    }
+  ]
+}

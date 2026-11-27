@@ -1,0 +1,67 @@
+{
+  "status": "ambiguous",
+  "source": "workspace_graph:nx",
+  "workspace_root": ".",
+  "selected_root_path": null,
+  "shared_paths": [
+    "libs/shared"
+  ],
+  "apps": [
+    {
+      "app_key": "admin",
+      "root_path": "apps/admin",
+      "workspace_root": ".",
+      "stack": {
+        "language": "node",
+        "framework": "react",
+        "role": "frontend",
+        "package_manager": "npm",
+        "workspace_tool": "nx"
+      },
+      "commands": {
+        "install": "npm install --include=dev --no-audit --no-fund --loglevel=error",
+        "build": "npx nx build admin",
+        "test": "npx nx test admin"
+      },
+      "run": {},
+      "manifests": [
+        "apps/admin/package.json",
+        "apps/admin/project.json",
+        "nx.json",
+        "package.json"
+      ],
+      "shared_paths": [
+        "libs/shared"
+      ],
+      "provenance_source": "workspace_graph"
+    },
+    {
+      "app_key": "storefront",
+      "root_path": "apps/storefront",
+      "workspace_root": ".",
+      "stack": {
+        "language": "node",
+        "framework": "react",
+        "role": "frontend",
+        "package_manager": "npm",
+        "workspace_tool": "nx"
+      },
+      "commands": {
+        "install": "npm install --include=dev --no-audit --no-fund --loglevel=error",
+        "build": "npx nx build storefront",
+        "test": "npx nx test storefront"
+      },
+      "run": {},
+      "manifests": [
+        "apps/storefront/package.json",
+        "apps/storefront/project.json",
+        "nx.json",
+        "package.json"
+      ],
+      "shared_paths": [
+        "libs/shared"
+      ],
+      "provenance_source": "workspace_graph"
+    }
+  ]
+}

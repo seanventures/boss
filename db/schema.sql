@@ -10086,26 +10086,50 @@ CREATE TABLE IF NOT EXISTS repo_layouts (
 -- Order = the topological sort of depends_on (component names of the same app); cycles are
 -- refused on save. kind deploy_config is read only: BOSS plans deploys from it, never builds it.
 CREATE TABLE IF NOT EXISTS app_components (
-  id           TEXT PRIMARY KEY,
-  project_id   TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  app_key      TEXT NOT NULL,
-  app_name     TEXT,
-  name         TEXT NOT NULL,
-  binding_id   TEXT NOT NULL REFERENCES github_repository_bindings(id),
-  path         TEXT NOT NULL DEFAULT '/',
-  access       TEXT NOT NULL DEFAULT 'write',
-  kind         TEXT NOT NULL DEFAULT 'code',
-  depends_on   TEXT[] NOT NULL DEFAULT '{}',
-  ship_target  JSONB NOT NULL DEFAULT '{}'::jsonb,
-  position     INTEGER NOT NULL DEFAULT 0,
-  created_by   TEXT,
-  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  id             TEXT PRIMARY KEY,
+  project_id     TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  app_key        TEXT NOT NULL,
+  app_name       TEXT,
+  name           TEXT NOT NULL,
+  binding_id     TEXT NOT NULL REFERENCES github_repository_bindings(id),
+  path           TEXT NOT NULL DEFAULT '/',
+  access         TEXT NOT NULL DEFAULT 'write',
+  kind           TEXT NOT NULL DEFAULT 'code',
+  depends_on     TEXT[] NOT NULL DEFAULT '{}',
+  ship_target    JSONB NOT NULL DEFAULT '{}'::jsonb,
+  position       INTEGER NOT NULL DEFAULT 0,
+  root_path      TEXT,
+  workspace_root TEXT,
+  stack          JSONB NOT NULL DEFAULT '{}'::jsonb,
+  commands       JSONB NOT NULL DEFAULT '{}'::jsonb,
+  run            JSONB NOT NULL DEFAULT '{}'::jsonb,
+  manifests      JSONB NOT NULL DEFAULT '[]'::jsonb,
+  shared_paths   JSONB NOT NULL DEFAULT '[]'::jsonb,
+  provenance     JSONB NOT NULL DEFAULT '{}'::jsonb,
+  fingerprint    TEXT,
+  baseline       JSONB NOT NULL DEFAULT '{}'::jsonb,
+  map_status     TEXT NOT NULL DEFAULT 'proposed',
+  created_by     TEXT,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (project_id, app_key, name),
   CHECK (access IN ('write', 'read')),
-  CHECK (kind IN ('code', 'deploy_config'))
+  CHECK (kind IN ('code', 'deploy_config')),
+  CHECK (map_status IN ('proposed', 'confirmed', 'stale', 'ambiguous'))
 );
+ALTER TABLE app_components ADD COLUMN IF NOT EXISTS root_path TEXT;
+ALTER TABLE app_components ADD COLUMN IF NOT EXISTS workspace_root TEXT;
+ALTER TABLE app_components ADD COLUMN IF NOT EXISTS stack JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE app_components ADD COLUMN IF NOT EXISTS commands JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE app_components ADD COLUMN IF NOT EXISTS run JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE app_components ADD COLUMN IF NOT EXISTS manifests JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE app_components ADD COLUMN IF NOT EXISTS shared_paths JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE app_components ADD COLUMN IF NOT EXISTS provenance JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE app_components ADD COLUMN IF NOT EXISTS fingerprint TEXT;
+ALTER TABLE app_components ADD COLUMN IF NOT EXISTS baseline JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE app_components ADD COLUMN IF NOT EXISTS map_status TEXT NOT NULL DEFAULT 'proposed';
 CREATE INDEX IF NOT EXISTS app_components_app ON app_components (project_id, app_key);
+CREATE INDEX IF NOT EXISTS app_components_app_root ON app_components (project_id, app_key, root_path);
 -- What a run of a multi-repo app may touch: EXACTLY its app's repositories, recorded when the
 -- person consents (who, which repositories, which access) and checked at every token mint.
 CREATE TABLE IF NOT EXISTS repo_run_grants (

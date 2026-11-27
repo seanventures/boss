@@ -28,6 +28,7 @@ import { useNow } from "../agents/live-util";
 import { areaHref } from "../factory/cockpit-util";
 import { showToast } from "../client-forms";
 import { ComponentRows, Lang, RepoName, TipQ, rowKey, rowsToInput, type MapRow } from "./parts";
+import { AppMapCard } from "./app-map-card";
 
 /** Code components in build order (the server's `order`, else a topological sort here). */
 export function inBuildOrder(cs: AppComponent[]): AppComponent[] {
@@ -229,6 +230,10 @@ export function AppComponentsView({ projectId, appKey, onBack }: { projectId: st
           <span className="mr-ui-pill" data-tone="warn">Read only</span>
         </div>
       ))}
+
+      {!editing ? (
+        <AppMapCard projectId={projectId} appKey={data.app_key || appKey} appName={app} onConfirmed={() => void load()} />
+      ) : null}
 
       <div className="mr-ui-grid2">
         <div className="mr-ui-card">

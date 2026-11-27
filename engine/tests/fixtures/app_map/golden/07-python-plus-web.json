@@ -1,0 +1,42 @@
+{
+  "status": "proposed",
+  "source": "marker",
+  "workspace_root": ".",
+  "selected_root_path": ".",
+  "shared_paths": [],
+  "apps": [
+    {
+      "app_key": "07-python-plus-web",
+      "root_path": ".",
+      "workspace_root": ".",
+      "stack": {
+        "language": "multi",
+        "languages": [
+          "python",
+          "node"
+        ],
+        "role": "fullstack",
+        "services": [
+          {
+            "dir": "backend",
+            "language": "python",
+            "role": "backend"
+          },
+          {
+            "dir": "frontend",
+            "language": "node",
+            "role": "frontend"
+          }
+        ]
+      },
+      "commands": {},
+      "run": {},
+      "manifests": [
+        "backend/pyproject.toml",
+        "frontend/package.json"
+      ],
+      "shared_paths": [],
+      "provenance_source": "marker"
+    }
+  ]
+}

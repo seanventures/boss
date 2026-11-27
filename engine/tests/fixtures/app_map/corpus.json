@@ -1,0 +1,224 @@
+{
+  "version": 1,
+  "repos": [
+    {
+      "id": "01-root-node-app",
+      "shape": "root_app",
+      "inspired_by": "expressjs/express",
+      "pinned_ref": "4.21.2",
+      "license": "MIT",
+      "runnable_baseline": true,
+      "target_root_path": ".",
+      "synthetic_diffs": {
+        "in_app": [
+          "src/server.js"
+        ],
+        "outside_app": [],
+        "manifest_change": "package.json"
+      }
+    },
+    {
+      "id": "02-multi-app-stray-root",
+      "shape": "multi_app_stray_root_manifests",
+      "inspired_by": "paramg/boss-sandbox",
+      "pinned_ref": "incident-2026-10-14",
+      "license": "Apache-2.0",
+      "runnable_baseline": false,
+      "target_root_path": "helpdesk-ai",
+      "synthetic_diffs": {
+        "in_app": [
+          "helpdesk-ai/src/server.js"
+        ],
+        "outside_app": [
+          "pom.xml",
+          "src/main/java/Demo.java",
+          "notes-lite/app.py"
+        ],
+        "manifest_change": "helpdesk-ai/package.json"
+      }
+    },
+    {
+      "id": "03-pnpm-turbo-monorepo",
+      "shape": "workspaces_turbo",
+      "inspired_by": "vercel/turborepo",
+      "pinned_ref": "v2.3.0",
+      "license": "MIT",
+      "runnable_baseline": false,
+      "target_root_path": "apps/web",
+      "synthetic_diffs": {
+        "in_app": [
+          "apps/web/src/page.tsx",
+          "packages/ui/button.tsx"
+        ],
+        "outside_app": [
+          "apps/api/src/index.ts",
+          "turbo.json"
+        ],
+        "manifest_change": "apps/web/package.json"
+      }
+    },
+    {
+      "id": "04-nx-monorepo",
+      "shape": "nx_monorepo",
+      "inspired_by": "nrwl/nx-examples",
+      "pinned_ref": "v20.0.0",
+      "license": "MIT",
+      "runnable_baseline": false,
+      "target_root_path": "apps/storefront",
+      "synthetic_diffs": {
+        "in_app": [
+          "apps/storefront/src/app.tsx",
+          "libs/shared/index.ts"
+        ],
+        "outside_app": [
+          "apps/admin/src/index.tsx"
+        ],
+        "manifest_change": "apps/storefront/project.json"
+      }
+    },
+    {
+      "id": "05-maven-multi-module",
+      "shape": "maven_multi_module",
+      "inspired_by": "spring-projects/spring-petclinic",
+      "pinned_ref": "3.4.0",
+      "license": "Apache-2.0",
+      "runnable_baseline": false,
+      "target_root_path": ".",
+      "synthetic_diffs": {
+        "in_app": [
+          "service-api/src/Main.java"
+        ],
+        "outside_app": [],
+        "manifest_change": "pom.xml"
+      }
+    },
+    {
+      "id": "06-gradle-multi-project",
+      "shape": "gradle_multi_project",
+      "inspired_by": "ktorio/ktor-samples",
+      "pinned_ref": "3.0.0",
+      "license": "Apache-2.0",
+      "runnable_baseline": false,
+      "target_root_path": ".",
+      "synthetic_diffs": {
+        "in_app": [
+          "server/src/App.kt"
+        ],
+        "outside_app": [],
+        "manifest_change": "settings.gradle.kts"
+      }
+    },
+    {
+      "id": "07-python-plus-web",
+      "shape": "python_plus_web",
+      "inspired_by": "fastapi/full-stack-fastapi-template",
+      "pinned_ref": "0.8.0",
+      "license": "MIT",
+      "runnable_baseline": false,
+      "target_root_path": ".",
+      "synthetic_diffs": {
+        "in_app": [
+          "backend/main.py",
+          "frontend/src/App.tsx"
+        ],
+        "outside_app": [],
+        "manifest_change": "backend/pyproject.toml"
+      }
+    },
+    {
+      "id": "08-polyglot-microservices",
+      "shape": "polyglot_microservices",
+      "inspired_by": "GoogleCloudPlatform/microservices-demo",
+      "pinned_ref": "v0.10.2",
+      "license": "Apache-2.0",
+      "runnable_baseline": false,
+      "target_root_path": "services/billing",
+      "synthetic_diffs": {
+        "in_app": [
+          "services/billing/main.py"
+        ],
+        "outside_app": [
+          "services/orders/cmd/orders/main.go",
+          "services/gateway/index.js"
+        ],
+        "manifest_change": "services/billing/requirements.txt"
+      }
+    },
+    {
+      "id": "09-go-cmd-multi-binary",
+      "shape": "go_cmd_multi_binary",
+      "inspired_by": "hashicorp/vault",
+      "pinned_ref": "v1.18.0",
+      "license": "MPL-2.0",
+      "runnable_baseline": false,
+      "target_root_path": ".",
+      "synthetic_diffs": {
+        "in_app": [
+          "cmd/server/main.go",
+          "internal/store/store.go"
+        ],
+        "outside_app": [],
+        "manifest_change": "go.mod"
+      }
+    },
+    {
+      "id": "10-decoys-and-stray-manifests",
+      "shape": "decoys_and_stray_manifests",
+      "inspired_by": "boss-synthetic/decoys",
+      "pinned_ref": "v1.0.0",
+      "license": "Apache-2.0",
+      "runnable_baseline": true,
+      "target_root_path": "app",
+      "synthetic_diffs": {
+        "in_app": [
+          "app/calc.py"
+        ],
+        "outside_app": [
+          "docs/package.json",
+          "examples/demo/package.json",
+          "fixtures/sample/pom.xml"
+        ],
+        "manifest_change": "app/pyproject.toml"
+      }
+    },
+    {
+      "id": "11-boss-apps-yaml-override",
+      "shape": "boss_apps_yaml_override",
+      "inspired_by": "boss-synthetic/apps-yaml",
+      "pinned_ref": "v1.0.0",
+      "license": "Apache-2.0",
+      "runnable_baseline": true,
+      "target_root_path": "services/billing",
+      "synthetic_diffs": {
+        "in_app": [
+          "services/billing/test_billing.py",
+          "libs/contracts/schema.py"
+        ],
+        "outside_app": [
+          "pom.xml",
+          "other-app/package.json"
+        ],
+        "manifest_change": ".boss/apps.yaml"
+      }
+    },
+    {
+      "id": "12-descriptor-dockerfile-ci",
+      "shape": "descriptor_dockerfile_ci",
+      "inspired_by": "boss-synthetic/descriptors",
+      "pinned_ref": "v1.0.0",
+      "license": "Apache-2.0",
+      "runnable_baseline": false,
+      "target_root_path": "services/portal",
+      "synthetic_diffs": {
+        "in_app": [
+          "services/portal/index.js"
+        ],
+        "outside_app": [
+          "AGENTS.md",
+          ".github/workflows/ci.yml"
+        ],
+        "manifest_change": "services/portal/package.json"
+      }
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "name": "@acme/ui",
+  "main": "index.ts",
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  }
+}

@@ -43,6 +43,24 @@ from ..ports import sql as sql_text
 SecretRequirement = dict[str, Any]  # {"name", "kind", "required", "purpose"}
 
 
+def resolve_deploy_app_folder(target: dict, *, app_map: Any = None) -> Optional[str]:
+    """Resolve the repository-relative app folder for deployment connectors from the canonical
+    App Map (BOSSAPP-555), falling back to target['app_root'] if explicitly configured.
+    Never guesses the repository root when an App Map places the app in a subfolder."""
+    from . import app_map as _app_map
+
+    entry = _app_map.coerce_entry(app_map) or _app_map.coerce_entry(
+        (target or {}).get("app_map") if isinstance(target, dict) else None
+    )
+    if entry is not None:
+        return entry.rel_or_none()
+    if isinstance(target, dict) and target.get("app_root"):
+        from .app_root import clean_rel
+
+        return clean_rel(target.get("app_root"))
+    return None
+
+
 class DeploymentConnector(Protocol):
     kind: str
 

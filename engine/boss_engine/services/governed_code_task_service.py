@@ -2260,23 +2260,43 @@ def _app_run_declarations(engine, run: dict) -> tuple[dict, dict]:
         return {}, {}
 
 
-def _precheck_app_env(engine, run: dict, root, changed: list) -> Optional[dict]:
+def _precheck_app_env(engine, run: dict, root, changed: list, *, app_map: Any = None,
+                      require_map: bool = False) -> Optional[dict]:
     """Run the pre-check's app_env checks on the build's tree and record them as
-    `code_task.precheck_app_env` (services.workflow_precheck). Never raises."""
+    `code_task.precheck_app_env` (services.workflow_precheck). Resolves the app directory via
+    the canonical App Map (BOSSAPP-555) rather than ad-hoc root fallbacks. Never raises."""
     from pathlib import Path as _Path
 
     from ..templates import gate as template_gate
-    from . import workflow_precheck
-    from .preview_service import find_run_declaration
+    from . import app_map as _app_map, workflow_precheck
+    from .verification_target import app_scope
 
     try:
         base = _Path(str(root))
-        declared = find_run_declaration(base, [str(c) for c in changed or []])
-        if declared:
-            app_dir = base if declared[0] in ("", ".") else base / declared[0]
-        else:
-            pkgs = sorted(str(c) for c in changed or [] if str(c).endswith("package.json"))
-            app_dir = (base / pkgs[0]).parent if pkgs else base
+        spec = (run or {}).get("spec") if isinstance((run or {}).get("spec"), dict) else {}
+        fctx = (run or {}).get("finalize_ctx") if isinstance((run or {}).get("finalize_ctx"), dict) else {}
+        resolved = _app_map.resolve_for_stage(
+            base,
+            app_map=app_map,
+            run=run,
+            spec=spec,
+            finalize_ctx=fctx,
+            app_id=app_scope(spec, fctx),
+            changed=[str(c) for c in (changed or [])],
+            require_map=require_map,
+        )
+        if resolved.path is None:
+            refused = {
+                "ok": False,
+                "status": "refused",
+                "reason": resolved.refusal or _app_map.NO_MAP_REFUSAL,
+                "source": resolved.source,
+            }
+            with _transaction(engine) as c:
+                emit_event(c, run["project_id"], "code_task.precheck_app_env", "boss",
+                           "code_task_run", run["id"], refused)
+            return refused
+        app_dir = resolved.path
         with _transaction(engine) as c:
             applied = template_gate.applied_template(c, run) or {}
             found = workflow_precheck.app_env_on_tree(
@@ -6676,6 +6696,45 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         except Exception:  # noqa: BLE001 — a note never fails the build
             _log_caught(logger)
 
+    _app_map_entry: list = [None]
+
+    def _guard_write_boundary(stage: str, paths: list[str]) -> None:
+        """BOSSAPP-555: enforce or report writes outside the app's App Map root_path.
+
+        When a subfolder app has a stored App Map (or resolved app folder), emit
+        `code_task.write_outside_app` for any files outside `root_path` (+ `shared_paths` +
+        BOSS-owned root files). In enforce mode (confirmed App Map or explicit env
+        BOSS_APP_MAP_WRITE_BOUNDARY=enforce), refuse before pushing/committing."""
+        from . import app_root as _app_root
+
+        entry = _app_map_entry[0]
+        app_rel = entry.rel_or_none() if entry is not None else (_app_root.clean_rel(_app_id or _app_scope))
+        if not app_rel:
+            return
+        shared = entry.shared_paths if entry is not None else ()
+        outside = _app_root.files_outside_app(paths, app_rel, shared=shared)
+        if not outside:
+            return
+        env_mode = str(os.environ.get("BOSS_APP_MAP_WRITE_BOUNDARY") or "").strip().lower()
+        if env_mode in ("enforce", "refuse", "report", "off"):
+            mode = env_mode
+        else:
+            mode = "enforce" if (entry is not None and entry.status == "confirmed") else "report"
+        if mode == "off":
+            return
+        try:
+            with _transaction(engine) as c:
+                emit_event(
+                    c, project_id, "code_task.write_outside_app", "boss",
+                    "code_task_run", run_id,
+                    {"stage": stage, "app_root": app_rel, "offending_paths": outside[:50],
+                     "count": len(outside), "mode": mode},
+                )
+        except Exception:  # noqa: BLE001
+            _log_caught(logger)
+        if mode in ("enforce", "refuse"):
+            raise _app_root.WriteBoundaryViolation(app_rel, outside, shared=shared)
+
     def _commit_stage(files, message: str, deleted=()) -> None:
         """Commit a stage's returned files to the work branch (control-plane-only git;
         requires the task repo to be the deployment's configured target repo). `deleted`: the
@@ -6683,6 +6742,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         nonlocal guest_base
         if not files and not deleted:
             return
+        _guard_write_boundary(
+            "stage_commit",
+            [fc.path for fc in (files or [])] + [str(p) for p in (deleted or ())],
+        )
         if _push_held("stage_commit"):
             return
         sf.github.ensure_branch(work_branch, base_branch)
@@ -7288,6 +7351,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         _note_left_out(sandbox)
         if not files and not gone:
             return 0
+        _guard_write_boundary(
+            f"checkpoint:{label}",
+            [fc.path for fc in (files or [])] + [str(p) for p in (gone or [])],
+        )
         try:
             sf.github.ensure_branch(work_branch, base_branch)  # deletions too (with_deletions)
             commit_change(sf.github, work_branch, with_deletions(files, gone),
@@ -7527,10 +7594,17 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         _lineage_paths: list[str] = []
         _recorded_app: Optional[str] = None
         try:
-            from . import app_root as _app_root
+            from . import app_map as _app_map_mod, app_root as _app_root
 
             _lineage_paths[:] = [str(p) for p in (_app_root.identity_paths(engine, run) or [])]
             with _transaction(engine) as _c:
+                # Seed or load the canonical App Map record (BOSSAPP-555) and keep it on this run.
+                _seeded_map = _app_map_mod.seed_app_map(
+                    root, db=_c, project_id=project_id, run=run, spec=spec, finalize_ctx=fctx,
+                    lineage=_lineage_paths, actor="boss", persist=True,
+                )
+                if _seeded_map.entry is not None:
+                    _app_map_entry[0] = _seeded_map.entry
                 # The record only where THIS tree bears it out (app_root.home_on_tree): a stale
                 # `schema/` record never outranks the Go module at the root (BOSSAPP-1323).
                 _recorded_app = _app_root.home_on_tree(root, _app_root.recorded_app_dir(_c, run))
@@ -7541,7 +7615,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         _gate_plan0 = verification_target.resolve_gate_plan(
             spec, title, root, app_id=_app_id, pinned=_pinned_manifest, layout=_stack_layout,
             lineage=_lineage_paths, recorded=_recorded_app,
-            finalize_ctx=fctx)
+            finalize_ctx=fctx, app_map=_app_map_entry[0])
         # RECORD THE APP'S FOLDER once BOSS knows it, so every later attempt of this app reads it
         # (app_root.recorded_app_dir) instead of re-deriving it from its own diff.
         try:
@@ -7838,8 +7912,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         def _gate_app_dir(changed=None) -> Path:
             """THE APP'S DIRECTORY for a gate that runs before (or without) a recorded verify
             directory — the template gates, the web package check. The same identity every
-            plan uses (app_root.app_dir): the named app, this run's paths, the lineage's files.
-            Never the shared repository root for an app in a subfolder (crun_7768e91e)."""
+            plan uses (app_root.app_dir): the stored App Map, the named app, this run's paths,
+            the lineage's files. Never the shared repository root for an app in a subfolder."""
             from . import app_root
 
             # None = BOSS cannot place the app in a shared repository: the gate plan already
@@ -7847,7 +7921,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # template gate here only needs a directory to report against, never to test.
             return app_root.gate_dir(root, app_id=_app_id or _app_scope,
                                      changed=sorted(set(list(changed or []) + _changed_paths())),
-                                     lineage=_lineage_paths, recorded=_recorded_app) or Path(root)
+                                     lineage=_lineage_paths, recorded=_recorded_app,
+                                     app_map=_app_map_entry[0]) or Path(root)
 
         def _review_change_now() -> review_input.ChangeUnderReview:
             """THE change every reviewer seat judges (review_input.build): the live diff, plus
@@ -12730,6 +12805,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 try:
                     _files = (list(accumulated.items()) if use_microvm
                               else [(fc.path, fc.content) for fc in sandbox.diff()])
+                    if _files:
+                        _guard_write_boundary("repair_handoff", [p for p, _ in _files])
                     if _files and not _push_held("repair_handoff"):
                         sf.github.ensure_branch(work_branch, base_branch)
                         for _path, _content in _files:
@@ -13168,6 +13245,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             None if (_recheck or _checks) else _gate_tracker.verified_changes_digest
         )
         _abort_if_cancelled("before opening the PR", spends=False)
+        _guard_write_boundary(
+            "propose_pull_request",
+            [f.path for f in (_pr_files or [])] + [str(p) for p in (_pr_deleted or [])],
+        )
         proposal = sf.propose_pull_request(
             None, project_id, task_id, reservation_id=reservation_id,
             dedupe_key=f"code:task:{run_id}", title=_change_title,
@@ -13220,6 +13301,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 _pr_trailers = agent_acts.pr_trailers(c, run_id)
             _abort_if_cancelled("before retrying the PR", spends=False)
             try:
+                _guard_write_boundary(
+                    "propose_pull_request",
+                    [f.path for f in (_pr_files or [])] + [str(p) for p in (_pr_deleted or [])],
+                )
                 proposal = sf.propose_pull_request(
                     None, project_id, task_id, reservation_id=reservation_id,
                     dedupe_key=f"code:task:{run_id}", title=_change_title,
