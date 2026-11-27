@@ -16,8 +16,8 @@ from ._identity_agents_support import ROOT
 from .test_identity_github_setup import PAT, _clone, _connect_app, _injected, _run, env  # noqa: F401 — the fixture
 
 B_TOKEN = "github_pat_SECONDACCOUNTBOUND00000000000"
-B_ENV = "BOSS_KAAPPU_GITHUB_TOKEN"
-REPO_B = "paramg-kaapppu/kaappu-org"
+B_ENV = "BOSS_EXAMPLE_ORG_GITHUB_TOKEN"
+REPO_B = "example-org/example-repo"
 
 
 @pytest.fixture(autouse=True)
@@ -56,7 +56,7 @@ def _second_account_world(c) -> None:
         c.execute(text("INSERT INTO projects (id, workspace_id) VALUES ('prj_web', 'ws_boss') ON CONFLICT DO NOTHING"))
     c.execute(text(
         "INSERT INTO github_connections (id, project_id, connection_label, auth_method, credential_ref, "
-        "status, account_login, created_by, api_base_url) VALUES ('ghconn_b', 'prj_web', 'Kaappu org', "
+        "status, account_login, created_by, api_base_url) VALUES ('ghconn_b', 'prj_web', 'Example Org', "
         "'personal_access_token', :ref, 'active', 'paramg-kaapppu', 'usr_alice', :api)"),
         # On the install's own GitHub (the env fixture's api.github.test): a connection on ANOTHER
         # host is refused on the install's route (BOSSAPP-1286).
