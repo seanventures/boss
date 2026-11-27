@@ -147,6 +147,15 @@ def burst_retry_after_seconds(frees_in: object) -> int:
 #: knowable here, so the caller looks again in a minute. Read by model_failures.explain.
 HEADROOM_MESSAGE = "Budget headroom is held by other work's active reservations. Retry shortly."
 HEADROOM_RETRY_AFTER_SECONDS = 60
+
+
+def stopped_at_limit_message(period: dict[str, Any]) -> str:
+    """The words for a cap the operator chose to stop at (spend_limits `stop`)."""
+    return (f"Stopped at the limit: {cap_used_sentence(period)}. "
+            f"Nothing runs until it resets at {period.get('resets_at_label') or '00:00 UTC'}, "
+            f"or raise the {period.get('cap_name') or 'cap'} in Govern › Limits.")
+
+
 ADMISSION_BUSY_MESSAGE = "Budget admission is busy with another transaction. Retry shortly."
 #: How a busy admission is retried before it is answered "busy": a few short pauses, never a
 #: blocking wait (a caller may hold its transaction across work, and a wait could queue behind
@@ -1019,6 +1028,46 @@ class BudgetGovernor:
             return None
         return next((r for r in refusals if r["kind"] == "cap"), refusals[0])
 
+    def money_check(self, connection: Connection, project_id: str, amount_usd_micros: int,
+                    snapshot: dict) -> dict[str, Any]:
+        """THE ONE ANSWER TO "DOES THIS MONEY FIT?", read by quote and reserve alike (ENT-REC-46:
+        a one-cent daily hard stop quoted a two-cent request as allowed, and reserve refused it).
+        In reserve's order: the tightest matching hard scoped budget (scoped_budgets), every
+        period cap of the project's policy, its monthly limit (spend_limits) and the operator's
+        at-limit choice. Reads only: reserve adds the decision, events and records of a refusal.
+
+        {"allowed", "scoped" (its refusal or None), "scoped_limit" ((policy, remaining) or None),
+         "period" (cap_refusal's answer or None), "choice", "limit_period"}. `allowed` is what
+        reserve does with it: no scoped refusal, and no period refusal unless it is a cap the
+        operator chose to pass on cheaper models."""
+        from . import spend_limits
+        from .scoped_budgets import refusal_for_limit, reservation_limit
+
+        scoped_limit = reservation_limit(connection, project_id) if amount_usd_micros > 0 else None
+        scoped = refusal_for_limit(scoped_limit, amount_usd_micros)
+        period = self.cap_refusal(snapshot, amount_usd_micros)
+        limit_period = spend_limits.limit_period(connection, project_id, snapshot)
+        if period is None and limit_period is not None:
+            period = self.cap_refusal({"periods": {"project": limit_period}}, amount_usd_micros)
+        choice = spend_limits.at_limit(connection, self.settings, project_id)
+        if period is None and choice == "stop":
+            period = spend_limits.reached_period(snapshot, limit_period)
+        allowed = scoped is None and (
+            period is None or (period["kind"] == "cap" and choice == "cheaper"))
+        message = None
+        if scoped is not None:
+            message = scoped["message"]
+        elif not allowed and period["kind"] == "cap" and choice == "stop":
+            message = stopped_at_limit_message(period)
+        elif not allowed and period["kind"] == "headroom":
+            message = HEADROOM_MESSAGE
+        elif not allowed:
+            message = (f"Budget cap exceeded: {cap_refusal_sentence(period, amount_usd_micros)}. "
+                       f"{resets_sentence(period)}")
+        return {"allowed": allowed, "scoped": scoped, "scoped_limit": scoped_limit,
+                "period": period, "choice": choice, "limit_period": limit_period,
+                "message": message}
+
     def set_intensity(
         self, connection: Connection, scope_type: str, scope_id: str, intensity: int,
         actor: str = "ceo",
@@ -1213,37 +1262,33 @@ class BudgetGovernor:
         reason: str,
     ) -> dict[str, Any]:
         snapshot = self.status_for_project(connection, project_id)
-        # Every period's cap must fit the request; the post-reservation numbers are those of
-        # the period it leaves nearest its cap.
+        check = self.money_check(connection, project_id, amount_usd_micros, snapshot)
+        # The post-reservation numbers are those of the cap the request leaves nearest: a
+        # period of the policy, the monthly limit, or the tightest hard scoped budget.
+        periods = list((snapshot.get("periods") or {}).values())
+        if check["limit_period"] is not None:
+            periods.append(check["limit_period"])
         after = []
-        for period in (snapshot.get("periods") or {}).values():
+        for period in periods:
             cap = int(period.get("cap_usd_micros") or 0)
             if not cap:
                 continue
             total_after = period["committed_usd_micros"] + amount_usd_micros
             after.append((total_after / cap, cap, total_after))
-        allowed = all(total <= cap for _, cap, total in after)
         if after:
             _, post_cap, post_total = max(after)
             post_available = max(post_cap - post_total, 0)
         else:
             post_cap, post_total, post_available = 0, 0, 0
-        from .scoped_budgets import refusal_for_limit, reservation_limit
-
         cap = snapshot["cap_usd_micros"]
         available = snapshot["available_usd_micros"]
-        limit = reservation_limit(connection, project_id)
-        if limit is not None:
-            policy, remaining = limit
+        if check["scoped_limit"] is not None:
+            policy, remaining = check["scoped_limit"]
             if not after or remaining <= min(c - (total - amount_usd_micros) for _, c, total in after):
                 cap = post_cap = int(policy["cap_usd_micros"])
                 available = max(0, remaining)
                 post_total = post_cap - remaining + amount_usd_micros
                 post_available = max(0, remaining - amount_usd_micros)
-            refusal = refusal_for_limit(limit, amount_usd_micros)
-            if refusal:
-                allowed = False
-                reason = refusal["message"]
         post_state = self._state_for_totals(
             post_cap,
             post_total,
@@ -1252,9 +1297,11 @@ class BudgetGovernor:
             snapshot["freeze_provisioning_pct"],
         )
         return {
-            "allowed": allowed,
+            "allowed": check["allowed"],
             "category": category,
             "reason": reason,
+            # The words reserve would refuse this request with; None while it fits.
+            "refusal": check["message"],
             "requested_usd_micros": amount_usd_micros,
             "budget_state": snapshot["budget_state"],
             "post_reservation_budget_state": post_state,
@@ -1440,10 +1487,9 @@ class BudgetGovernor:
             return refused
         # BOSSAPP-863: every matching org / project / agent / workflow budget (scoped_budgets),
         # not only this project's policy. A no-op while none is set.
-        from .scoped_budgets import reserve_refusal
-
-        scoped = reserve_refusal(connection, project_id, amount_usd_micros) \
-            if amount_usd_micros > 0 else None
+        # The money check quote shows is the one applied here (money_check).
+        check = self.money_check(connection, project_id, amount_usd_micros, snapshot)
+        scoped = check["scoped"]
         if scoped is not None:
             scoped["budget_state"] = snapshot["budget_state"]
             emit_event(connection, project_id, "budget.reservation_denied", "budget_governor",
@@ -1492,19 +1538,11 @@ class BudgetGovernor:
             record_refusal(connection, project_id, refused, category=category, reason=reason,
                            amount_usd_micros=amount_usd_micros, snapshot=snapshot)
             return refused
-        refusal = self.cap_refusal(snapshot, amount_usd_micros)
         # BOSSAPP-807: the project's monthly limit (a project envelope, spend_limits) refuses
         # like a cap, and the operator's choice for a reached limit decides what a refusal on
         # money means: pause (the decision below), cheaper (go on — the red budget routes build
         # steps to low-cost models) or stop (refused, even $0 work, and nobody is asked).
-        from . import spend_limits
-
-        limit_period = spend_limits.limit_period(connection, project_id, snapshot)
-        if refusal is None and limit_period is not None:
-            refusal = self.cap_refusal({"periods": {"project": limit_period}}, amount_usd_micros)
-        choice = spend_limits.at_limit(connection, self.settings, project_id)
-        if refusal is None and choice == "stop":
-            refusal = spend_limits.reached_period(snapshot, limit_period)
+        refusal, choice = check["period"], check["choice"]
         if refusal is not None and refusal["kind"] == "cap" and choice == "cheaper":
             emit_event(connection, project_id, "budget.cap_passed_cheaper", "budget_governor",
                        "project", project_id,
@@ -1531,10 +1569,7 @@ class BudgetGovernor:
                 "decision_id": None, "budget_state": snapshot["budget_state"],
                 "period": refusal["period"], "resets_at": refusal.get("resets_at"),
                 "at_limit": "stop",
-                "message": (f"Stopped at the limit: {cap_used_sentence(refusal)}. "
-                            f"Nothing runs until it resets at "
-                            f"{refusal.get('resets_at_label') or '00:00 UTC'}, "
-                            f"or raise the {refusal.get('cap_name') or 'cap'} in Govern › Limits."),
+                "message": check["message"],
             }
             record_refusal(connection, project_id, refused, category=category, reason=reason,
                            amount_usd_micros=amount_usd_micros, period=refusal)
@@ -1635,9 +1670,7 @@ class BudgetGovernor:
                 "resets_at": refusal["resets_at"],
                 # "Budget cap exceeded: today's budget is 98% used ($9.80 of $10). It resets
                 # at 00:00 UTC, or raise the daily cap in Govern › Limits. Decision created."
-                "message": (f"Budget cap exceeded: "
-                            f"{cap_refusal_sentence(refusal, amount_usd_micros)}. "
-                            f"{resets_sentence(refusal)} Decision created."),
+                "message": f"{check['message']} Decision created.",
             }
             record_refusal(connection, project_id, refused, category=category, reason=reason,
                            amount_usd_micros=amount_usd_micros, period=refusal)

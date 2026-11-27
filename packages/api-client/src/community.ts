@@ -1952,6 +1952,7 @@ export type BudgetQuoteResponse = {
   cap_usd_micros: number;
   available_usd_micros: number;
   post_reservation_available_usd_micros: number;
+  refusal?: string | null;
 };
 
 export type BudgetReleaseRequest = {

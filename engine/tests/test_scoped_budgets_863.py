@@ -139,13 +139,77 @@ def test_project_cap_quote_agrees_with_reservation_and_release(eng, world):
         assert attempt["post_reservation_available_usd_micros"] == 0
         refusal = reserve(20_000)
         assert refusal["status"] == "denied"
-        assert refusal["message"] == attempt["reason"]
+        assert refusal["message"] == attempt["refusal"]
+        assert attempt["reason"] == "QA estimate", "the request's own reason is echoed unchanged"
 
         assert sb.remove_policy(c, org_id=world["org"], policy_id=policy["id"])
         assert quote(20_000)["allowed"]
         approved = reserve(20_000)
         assert approved["status"] == "reserved"
         governor.release(c, project, approved["reservation_id"], "QA complete")
+
+
+@pytest.mark.parametrize("setup, amount, fits", [
+    ("scoped_day_cent", 10_000, True),
+    ("scoped_day_cent", 20_000, False),
+    ("monthly_limit_cent", 10_000, True),
+    ("monthly_limit_cent", 20_000, False),
+    ("monthly_limit_cent_cheaper", 20_000, True),
+    ("monthly_limit_cent_stop", 20_000, False),
+    ("spent_monthly_limit_stop", 1, False),
+    ("none", 20_000, True),
+])
+def test_quote_and_reserve_give_one_answer(eng, world, setup, amount, fits):
+    """ENT-REC-46: the quote is the reservation's answer, asked early. Both read
+    BudgetGovernor.money_check, so for every money limit the quote allows exactly what reserve
+    reserves, and refuses with the same words (reserve adds only that it raised a card)."""
+    from boss_engine.config import get_settings
+    from boss_engine.services import spend_limits
+    from boss_engine.services.budget import BudgetGovernor
+
+    project = world["p"]
+    with eng.begin() as c:
+        if setup.startswith("scoped"):
+            sb.set_policy(c, org_id=world["org"], scope_type="project", scope_id=project,
+                          cap_usd_micros=10_000, actor="ceo", period="day")
+        if "monthly_limit" in setup:
+            spend_limits.set_project_limit(c, project, 10_000, actor="t")
+        if setup.endswith(("_cheaper", "_stop")):
+            c.execute(text("INSERT INTO project_settings (project_id, key, value) VALUES "
+                           "(:p, :k, CAST(:v AS jsonb))"),
+                      {"p": project, "k": spend_limits.AT_LIMIT_KNOB,
+                       "v": json.dumps(setup.rsplit("_", 1)[1])})
+    if setup.startswith("spent"):
+        with eng.begin() as c:   # this month's money already at the limit
+            c.execute(text("INSERT INTO cost_receipts (id, project_id, category, skill_or_model_id, "
+                           "estimated_usd_micros, actual_usd_micros, status) VALUES "
+                           "(:i, :p, 'model', 'qa', 10000, 10000, 'settled')"),
+                      {"i": f"cr_{uuid4().hex[:12]}", "p": project})
+    governor = BudgetGovernor(get_settings())
+    with eng.begin() as c:
+        quote = governor.quote(c, project, "model", amount, "QA estimate")
+        reserved = governor.reserve(c, project, "model", amount, "QA estimate", 5)
+        assert quote["allowed"] is fits
+        assert (reserved["status"] == "reserved") is fits, reserved
+        if fits:
+            assert quote["refusal"] is None
+            governor.release(c, project, reserved["reservation_id"], "QA complete")
+        else:
+            assert reserved["message"].removesuffix(" Decision created.") == quote["refusal"]
+
+
+def test_quote_and_reserve_share_the_money_check():
+    """Wiring, at the source: neither path computes the money answer on its own."""
+    import inspect
+
+    from boss_engine.services.budget import BudgetGovernor
+
+    for path in (BudgetGovernor.quote, BudgetGovernor.reserve):
+        src = inspect.getsource(path)
+        assert "self.money_check(" in src, path.__name__
+        for own in ("self.cap_refusal(", "reservation_limit(", "reserve_refusal(",
+                    "spend_limits.limit_period(", "spend_limits.at_limit("):
+            assert own not in src, f"{path.__name__} computes {own} itself"
 
 
 def test_a_soft_policy_never_refuses(eng, world):

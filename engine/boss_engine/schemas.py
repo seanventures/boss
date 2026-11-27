@@ -1041,6 +1041,9 @@ class BudgetQuoteResponse(BaseModel):
     cap_usd_micros: int
     available_usd_micros: int
     post_reservation_available_usd_micros: int
+    #: The words reserve would refuse this request with (BudgetGovernor.money_check); None
+    #: while it fits.
+    refusal: Optional[str] = None
 
 
 class BudgetReleaseRequest(BaseModel):
