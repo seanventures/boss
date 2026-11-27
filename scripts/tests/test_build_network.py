@@ -67,7 +67,11 @@ def _env(tmp_path, ca: Path, **extra) -> dict:
                  "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "PIP_CERT", "GIT_SSL_CAINFO", "HTTPS_PROXY",
                  "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy", "BOSS_NPM_REGISTRY",
                  "BOSS_PIP_INDEX_URL", "BOSS_UPSTREAM_PROXY", "BOSS_UPSTREAM_NO_PROXY",
-                 "BOSS_PLAYWRIGHT_DOWNLOAD_HOST", "npm_config_registry", "BOSS_UPSTREAM_HTTP_PROXY"):
+                 "BOSS_PLAYWRIGHT_DOWNLOAD_HOST", "npm_config_registry", "YARN_NPM_REGISTRY_SERVER",
+                 "BOSS_UPSTREAM_HTTP_PROXY", "BOSS_TOOLCHAIN_MIRROR_URL", "BOSS_JDK_DOWNLOAD_BASE_URL",
+                 "BOSS_MAVEN_DOWNLOAD_BASE_URL", "BOSS_GRADLE_DOWNLOAD_BASE_URL", "BOSS_GO_DOWNLOAD_BASE_URL",
+                 "BOSS_BUILD_NPMRC_SECRET", "BOSS_BUILD_PIP_CONF_SECRET",
+                 "npm_config_userconfig", "PIP_CONFIG_FILE"):
         environment.pop(name, None)
     environment["BOSS_BUILD_CA_SECRET"] = str(ca)
     environment["BOSS_BUILD_NETWORK_DIR"] = str(tmp_path / "net")
@@ -138,6 +142,9 @@ def test_curl_trusts_the_ca_and_the_public_roots_are_kept(tls_endpoint, tmp_path
 
 
 @pytest.mark.parametrize("name", ["BOSS_NPM_REGISTRY", "BOSS_PIP_INDEX_URL", "BOSS_PLAYWRIGHT_DOWNLOAD_HOST",
+                                  "BOSS_TOOLCHAIN_MIRROR_URL", "BOSS_JDK_DOWNLOAD_BASE_URL",
+                                  "BOSS_MAVEN_DOWNLOAD_BASE_URL", "BOSS_GRADLE_DOWNLOAD_BASE_URL",
+                                  "BOSS_GO_DOWNLOAD_BASE_URL",
                                   "BOSS_UPSTREAM_PROXY", "BOSS_UPSTREAM_HTTP_PROXY"])
 @pytest.mark.parametrize("value", [f"https://user:{SECRET}@mirror.example.com/x/",
                                    f"https://mirror.example.com/x/?token={SECRET}",
@@ -160,8 +167,9 @@ def test_a_private_key_is_never_used_as_the_ca(tmp_path):
 
 def test_sourced_it_sets_the_mirrors_and_proxy_without_changing_the_shell(tmp_path):
     script = (f'. "{WRAPPER}" && case $- in *e*) echo errexit-leaked;; esac; '
-              'echo "$npm_config_registry|$npm_config_strict_ssl|$PIP_INDEX_URL|$PLAYWRIGHT_DOWNLOAD_HOST|'
-              '$HTTPS_PROXY|${http_proxy-unset}|$NO_PROXY"; echo "${UNSET_VAR_OK:-unset-is-fine}"')
+              'echo "$npm_config_registry|$npm_config_strict_ssl|$YARN_NPM_REGISTRY_SERVER|$PIP_INDEX_URL|'
+              '$PLAYWRIGHT_DOWNLOAD_HOST|$HTTPS_PROXY|${http_proxy-unset}|$NO_PROXY"; '
+              'echo "${UNSET_VAR_OK:-unset-is-fine}"')
     env = _env(tmp_path, tmp_path / "none", BOSS_NPM_REGISTRY="https://npm.example.com/r/",
                BOSS_PIP_INDEX_URL="https://pypi.example.com/simple",
                BOSS_PLAYWRIGHT_DOWNLOAD_HOST="https://pw.example.com/",
@@ -169,8 +177,8 @@ def test_sourced_it_sets_the_mirrors_and_proxy_without_changing_the_shell(tmp_pa
     result = subprocess.run(["sh", "-c", script], env=env, text=True, capture_output=True, timeout=10)
     assert result.returncode == 0, result.stderr
     assert result.stdout.splitlines() == [
-        "https://npm.example.com/r/|true|https://pypi.example.com/simple|https://pw.example.com|"
-        "http://proxy.example.com:8080|unset|.example.com", "unset-is-fine"]
+        "https://npm.example.com/r/|true|https://npm.example.com/r/|https://pypi.example.com/simple|"
+        "https://pw.example.com|http://proxy.example.com:8080|unset|.example.com", "unset-is-fine"]
     explicit = subprocess.run(["sh", "-c", f'. "{WRAPPER}" && echo "$HTTP_PROXY|$http_proxy"'],
                               env=_env(tmp_path, tmp_path / "none", BOSS_UPSTREAM_HTTP_PROXY="http://p.example.com:3128"),
                               text=True, capture_output=True, timeout=10)
@@ -178,6 +186,56 @@ def test_sourced_it_sets_the_mirrors_and_proxy_without_changing_the_shell(tmp_pa
     empty = subprocess.run(["sh", "-c", f'. "{WRAPPER}" && echo "[${{HTTPS_PROXY-unset}}][${{npm_config_registry-unset}}]"'],
                            env=_env(tmp_path, tmp_path / "none"), text=True, capture_output=True, timeout=10)
     assert empty.stdout.strip() == "[unset][unset]"           # an empty setting never reaches a tool
+
+
+def test_build_registry_secrets_are_exported_only_when_non_empty(tmp_path):
+    npmrc = tmp_path / "npmrc"
+    pipconf = tmp_path / "pip.conf"
+    npmrc.write_text("//npm.example.com/:_authToken=tok\n")
+    pipconf.write_text("[global]\nindex-url = https://pypi.example.com/simple\n")
+    script = f'. "{WRAPPER}" && echo "${{npm_config_userconfig-unset}}|${{PIP_CONFIG_FILE-unset}}"'
+    res = subprocess.run(
+        ["sh", "-c", script],
+        env=_env(tmp_path, tmp_path / "none",
+                 BOSS_BUILD_NPMRC_SECRET=str(npmrc), BOSS_BUILD_PIP_CONF_SECRET=str(pipconf)),
+        text=True, capture_output=True, timeout=10,
+    )
+    assert res.returncode == 0, res.stderr
+    assert res.stdout.strip() == f"{npmrc}|{pipconf}"
+
+    empty_npmrc = tmp_path / "empty-npmrc"
+    empty_npmrc.touch()
+    res_empty = subprocess.run(
+        ["sh", "-c", script],
+        env=_env(tmp_path, tmp_path / "none",
+                 BOSS_BUILD_NPMRC_SECRET=str(empty_npmrc),
+                 BOSS_BUILD_PIP_CONF_SECRET=str(tmp_path / "missing-pip.conf")),
+        text=True, capture_output=True, timeout=10,
+    )
+    assert res_empty.returncode == 0, res_empty.stderr
+    assert res_empty.stdout.strip() == "unset|unset"
+
+
+def test_toolchain_mirror_args_and_registry_buildkit_secrets_in_dockerfile():
+    text = DOCKERFILE.read_text()
+    stage = lambda name: text.split(f" AS {name}\n", 1)[1].split("\nFROM ", 1)[0]  # noqa: E731
+    java_stage = stage("toolchains-java")
+    go_stage = stage("toolchains-go")
+    base_stage = stage("python-base")
+    for arg in ("BOSS_TOOLCHAIN_MIRROR_URL", "BOSS_JDK_DOWNLOAD_BASE_URL",
+                "BOSS_MAVEN_DOWNLOAD_BASE_URL", "BOSS_GRADLE_DOWNLOAD_BASE_URL"):
+        assert f"ARG {arg}=" in java_stage
+        assert arg not in base_stage
+    for arg in ("BOSS_TOOLCHAIN_MIRROR_URL", "BOSS_GO_DOWNLOAD_BASE_URL"):
+        assert f"ARG {arg}=" in go_stage
+        assert arg not in base_stage
+    assert "sha256sum -c -" in java_stage and "sha512sum -c -" in java_stage
+    assert "sha256sum -c -" in go_stage
+    assert not re.search(r"^(ARG|ENV) .*(NPMRC|PIP_CONF|boss_build_npmrc|boss_build_pip_conf)", text, re.M)
+    for stage_name in ("pydeps", "pydeps-agent", "python-browser", "toolchains-security"):
+        assert "--mount=type=secret,id=boss_build_pip_conf" in stage(stage_name), stage_name
+    for stage_name in ("python-runtime", "web-builder", "web"):
+        assert "--mount=type=secret,id=boss_build_npmrc" in stage(stage_name), stage_name
 
 
 # ---- the Dockerfile, as a class -------------------------------------------------------------------

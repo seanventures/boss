@@ -25,7 +25,8 @@ from typing import Any, Iterable, Mapping, Optional
 
 GITHUB = "github"
 BITBUCKET = "bitbucket"
-PROVIDERS = (GITHUB, BITBUCKET)
+GITLAB = "gitlab"
+PROVIDERS = (GITHUB, BITBUCKET, GITLAB)
 
 
 def _norm(repo: str) -> str:
@@ -45,8 +46,26 @@ def bitbucket_registry() -> frozenset[str]:
     return frozenset(out)
 
 
+def gitlab_registry() -> frozenset[str]:
+    """The install's registered GitLab repositories (`group[/sub]/repo` or project id, lower-cased)."""
+    out: set[str] = set()
+    pid = (os.environ.get("BOSS_GITLAB_PROJECT_ID") or "").strip()
+    if pid:
+        out.add(_norm(pid))
+    for item in (os.environ.get("BOSS_GITLAB_REPOS") or "").split(","):
+        if "/" in item and item.strip():
+            out.add(_norm(item))
+    return frozenset(out)
+
+
 def _bitbucket_grant(grant: Any) -> frozenset[str]:
     block = ((getattr(grant, "resources", None) or {}).get(BITBUCKET)) if grant is not None else None
+    repos = block.get("repos") if isinstance(block, Mapping) else None
+    return frozenset(_norm(r) for r in (repos or ()) if isinstance(r, str))
+
+
+def _gitlab_grant(grant: Any) -> frozenset[str]:
+    block = ((getattr(grant, "resources", None) or {}).get(GITLAB)) if grant is not None else None
     repos = block.get("repos") if isinstance(block, Mapping) else None
     return frozenset(_norm(r) for r in (repos or ()) if isinstance(r, str))
 
@@ -67,6 +86,10 @@ def refusal(db: Any, *, provider: str, org_id: Optional[str], run_id: str, grant
 
         if repo_registry.mint_allowed(db, org_id, repos):
             return "repo_not_allowed"
+    elif provider == GITLAB:
+        registered = gitlab_registry()
+        if any(_norm(r) not in registered for r in repos):
+            return "repo_not_allowed"
     else:
         registered = bitbucket_registry()
         if any(_norm(r) not in registered for r in repos):
@@ -80,6 +103,9 @@ def refusal(db: Any, *, provider: str, org_id: Optional[str], run_id: str, grant
             # exactly as the GitHub mint always judged it: the grant's GitHub block, verbatim
             if not set(repos) <= set(grants.github_resources(grant).get("repos") or ()):
                 return "repo_outside_grant"
+        elif provider == GITLAB:
+            if any(_norm(r) not in _gitlab_grant(grant) for r in repos):
+                return "repo_outside_grant"
         elif any(_norm(r) not in _bitbucket_grant(grant) for r in repos):
             return "repo_outside_grant"
     return None
@@ -89,11 +115,11 @@ def granted(db: Any, *, provider: str, org_id: Optional[str], run_id: str, grant
             repos: Iterable[str]) -> tuple[str, ...]:
     """The repositories of `repos` the run may reach — each judged alone by `refusal`. A refused
     one is simply not in the run's scope, so every call to it is `repo_outside_run`."""
-    # Bitbucket names are stored NORMALISED (BOSSAPP-1185): the registry and grants compare `_norm`
+    # Bitbucket/GitLab names are stored NORMALISED (BOSSAPP-1185): the registry and grants compare `_norm`
     # forms, and egress compares the token's names exactly, so `acme/API.git/` must enter the
     # token as `acme/api` or a repo the mint allowed is refused at egress. GitHub keeps its names
     # verbatim (its obo check has always been exact).
-    names = (_norm(r) for r in repos) if provider == BITBUCKET else (str(r) for r in repos)
+    names = (_norm(r) for r in repos) if provider in (BITBUCKET, GITLAB) else (str(r) for r in repos)
     out = []
     for repo in dict.fromkeys(names):
         try:

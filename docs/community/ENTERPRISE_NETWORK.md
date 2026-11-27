@@ -6,7 +6,9 @@ with a setting in `.env`:
 | What the network does | What breaks without a setting | The setting |
 |---|---|---|
 | A TLS-inspecting gateway re-signs HTTPS with the company's own CA | image builds (`UNABLE_TO_VERIFY_LEAF_SIGNATURE`, `CERTIFICATE_VERIFY_FAILED`, `x509`), then every model call, package install and git fetch at run time | `BOSS_EXTRA_CA_FILE` |
-| Public package registries are blocked; an internal mirror (Artifactory, Nexus) serves them | `npm install`, `pip install`, `go mod download`, Maven, the Playwright browser download | `BOSS_NPM_REGISTRY`, `BOSS_PIP_INDEX_URL`, `BOSS_GOPROXY` (+ `BOSS_GOSUMDB`, `BOSS_GONOSUMDB`), `BOSS_MAVEN_MIRROR`, `BOSS_PLAYWRIGHT_DOWNLOAD_HOST` |
+| Public package registries are blocked; an internal mirror (Artifactory, Nexus) serves them | `npm install`, `pip install`, `go mod download`, Maven, Gradle, Yarn Berry, the Playwright browser download, JDK/Go toolchain builds | `BOSS_NPM_REGISTRY`, `BOSS_PIP_INDEX_URL`, `BOSS_GOPROXY` (+ `BOSS_GOSUMDB`, `BOSS_GONOSUMDB`), `BOSS_MAVEN_MIRROR`, `BOSS_PLAYWRIGHT_DOWNLOAD_HOST`, `BOSS_TOOLCHAIN_MIRROR_URL` |
+| Internal registries require credentials | `401 Unauthorized` without exposing tokens to sandboxes or `docker history` | `BOSS_NPM_CREDENTIAL_REF`, `BOSS_PIP_CREDENTIAL_REF`, `BOSS_MAVEN_CREDENTIAL_REF`, `BOSS_BUILD_NPMRC_FILE`, `BOSS_BUILD_PIP_CONF_FILE` |
+| Source code lives on GitHub Enterprise Server or self-hosted GitLab | sandboxes cannot clone/push through `boss-egress` | `BOSS_GITHUB_WEB_URL`, `BOSS_GITHUB_API_URL`, `BOSS_GITHUB_GIT_URL`, `BOSS_GITLAB_BASE_URL`, `BOSS_GITLAB_REPOS` |
 | The only way out is an HTTP proxy | everything that leaves the machine | `BOSS_UPSTREAM_PROXY`, `BOSS_UPSTREAM_NO_PROXY` |
 | Internal hosts sit on private addresses and odd ports | BOSS's sandbox fence refuses them | `BOSS_EGRESS_CONNECT_ALLOW`, `BOSS_EGRESS_PRIVATE_ALLOW` |
 
@@ -43,8 +45,9 @@ or fragment. A credential in a URL ends up in places that are hard to clean: an 
 argument is kept in `docker history`, and environment values show in process listings and logs.
 The installer refuses such a value before it writes `.env`, and the image build refuses it again
 (a `.env` edited by hand never reaches an image history). Messages name the setting, never the
-value. Registry credentials are not supported through these settings (see
-[Not covered yet](#not-covered-yet)).
+value. Registry credentials never go in URLs or build arguments; use `BOSS_*_CREDENTIAL_REF`
+at run time and BuildKit secret files (`BOSS_BUILD_NPMRC_FILE`, `BOSS_BUILD_PIP_CONF_FILE`) at
+image build time.
 
 ## The company's CA (TLS inspection)
 
@@ -102,13 +105,40 @@ verification off would undo that.
 
 | Setting | Used by | Notes |
 |---|---|---|
-| `BOSS_NPM_REGISTRY` | npm, pnpm, yarn v1 | `npm_config_registry`, with `npm_config_strict_ssl=true` forced. Yarn Berry reads its own `npmRegistryServer` and is not covered. |
+| `BOSS_NPM_REGISTRY` | npm, pnpm, yarn v1, yarn berry | Sets `npm_config_registry`, `npm_config_strict_ssl=true`, and `YARN_NPM_REGISTRY_SERVER` (Yarn Berry). |
 | `BOSS_PIP_INDEX_URL` | pip | `PIP_INDEX_URL`; an inherited `PIP_EXTRA_INDEX_URL` or `PIP_TRUSTED_HOST` is dropped. |
 | `BOSS_GOPROXY` | go | Replaces `proxy.golang.org` for sandboxed runs. There is still no `direct` fallback: modules come only from the proxy. |
 | `BOSS_GOSUMDB` | go | `sum.golang.org` (default), optionally followed by the URL of a proxy for it (`sum.golang.org https://artifacts.example.com/api/go/gosumdb`). It cannot be `off`. |
 | `BOSS_GONOSUMDB` | go | Module path patterns of internal modules the public checksum database does not know (`git.example.com/*`). They still come through `BOSS_GOPROXY`. |
-| `BOSS_MAVEN_MIRROR` | Maven | A `<mirror>` of `*` in each sandboxed run's `settings.xml`. Gradle builds keep the repositories their build files name. |
+| `BOSS_MAVEN_MIRROR` | Maven, Gradle | A `<mirror>` of `*` in each sandboxed run's `.m2/settings.xml`, plus `.gradle/init.d/boss-mirror.gradle` redirecting Maven repositories (including `pluginManagement` and `dependencyResolutionManagement`). |
 | `BOSS_PLAYWRIGHT_DOWNLOAD_HOST` | Playwright | The browser download at image build and in runs. |
+| `BOSS_TOOLCHAIN_MIRROR_URL` | Image builds (JDK, Maven, Gradle, Go) | Base mirror URL (`/jdk`, `/maven`, `/gradle`, `/go`) for checksum-pinned toolchain archives during image builds (`BOSS_JDK_DOWNLOAD_BASE_URL`, `BOSS_MAVEN_DOWNLOAD_BASE_URL`, `BOSS_GRADLE_DOWNLOAD_BASE_URL`, `BOSS_GO_DOWNLOAD_BASE_URL` override individual archives). SHA-256/SHA-512 verification remains enforced. |
+
+### Authenticated registries (never held by sandboxes)
+
+When a private npm, PyPI, or Maven mirror requires authentication, set `BOSS_NPM_CREDENTIAL_REF`,
+`BOSS_PIP_CREDENTIAL_REF`, or `BOSS_MAVEN_CREDENTIAL_REF` to `secret_ref:<id>`, `store:<key>`, or
+`env` (with `BOSS_<KIND>_TOKEN` or `BOSS_<KIND>_USERNAME` + `BOSS_<KIND>_PASSWORD` passed only to
+the `egress` service). Sandboxed runs then talk to `http://egress:8090/{npm,pypi,maven}/` instead
+of dialing the upstream directly, and `boss-egress` injects credentials in-process while rewriting
+tarball/wheel links and stripping `Authorization` on cross-origin redirects.
+
+For authenticated image builds, point `BOSS_BUILD_NPMRC_FILE` and `BOSS_BUILD_PIP_CONF_FILE` at
+local `.npmrc` / `pip.conf` files; Compose mounts them as BuildKit secrets (`boss_build_npmrc`,
+`boss_build_pip_conf`) so credentials never enter image layers or `docker history`.
+
+## Self-hosted Git (GHES and GitLab)
+
+To route repositories on GitHub Enterprise Server or self-hosted GitLab through `boss-egress`:
+
+* **GHES:** set `BOSS_GITHUB_WEB_URL`, `BOSS_GITHUB_API_URL`, and optionally `BOSS_GITHUB_GIT_URL`.
+* **GitLab:** set `BOSS_GITLAB_BASE_URL`, `BOSS_GITLAB_REPOS` (comma-separated `group[/sub]/repo`
+  allowlist), and `BOSS_GITLAB_TOKEN` (on `egress` only).
+
+Configured self-hosted Git hosts are automatically blocked from raw `CONNECT` tunnels alongside
+`github.com` / `*.github.com`, forcing traffic through `boss-egress`'s credential-injecting proxy.
+When `BOSS_EXTRA_CA_FILE` is set, `with-extra-ca` exports `GIT_SSL_CAINFO` and `SSL_CERT_FILE` so
+`boss-egress` and `git` verify your internal Git host's certificate.
 
 The npm, pip and Playwright settings apply to the image build and to every sandboxed run (code
 agents, verification, previews, the console agent shell). Go and Maven apply to sandboxed runs.
@@ -282,27 +312,16 @@ branch heads from the GHES API (see [Connect GitHub](CONNECT_GITHUB.md#events-fr
 
 **What is proven, and what is not yet.**
 
-* Proven by tests, against a local GHES fake (`engine/tests/test_a_ghes_repository_journey.py`):
-  REST under `/api/v3`, git on the GHES host, connect, clone, pull request, check runs, a signed
-  webhook and the poller. Another test (`test_github_hosts_come_from_one_builder.py`) fails if new
-  code adds an `api.github.com` default.
+* Proven by tests, against a local GHES fake (`engine/tests/test_a_ghes_repository_journey.py`)
+  and local TLS git remotes (`engine/tests/test_egress_self_hosted_git.py`):
+  REST under `/api/v3`, git on the GHES host (including sandboxed git through `boss-egress`),
+  connect, clone, pull request, check runs, a signed webhook and the poller. Another test
+  (`test_github_hosts_come_from_one_builder.py`) fails if new code adds an `api.github.com`
+  default.
 * Not proven yet (needs a GHES sandbox: its URL, its version and a token, from the operator):
   differences in a real GHES version's API, its TLS chain under a company CA, and GHES through
   an outbound proxy.
-* Agents' sandboxed git through the egress fence still routes only github.com (see below). For
-  now, give a GHES project a token on its connection.
 
-## Not covered yet
-
-* **Registry credentials.** These settings work with mirrors that allow anonymous reads. A
-  token in a URL is refused, and a run never receives one (`npm_config_//host/:_authToken` is
-  withheld from agents as credential-shaped). Authenticated registries will need the same design
-  as GitHub: the fence adds the credential, so a sandbox never holds it.
-* **Self-hosted Git** (GitHub Enterprise Server, GitLab) through the fence: only github.com and
-  Bitbucket are routed today. BOSS's own GitHub calls already follow a GHES connection (see
-  [GitHub Enterprise Server](#github-enterprise-server)).
-* A download mirror for the JDK, Maven, Gradle and Go toolchain archives at image build (they
-  are checksum-pinned, so a mirror would be safe; today they need the proxy and the CA).
-* Yarn Berry's registry, and a Gradle repository mirror.
+## Notes
 
 Keep company URLs, certificates and `.env` files out of public issues and patches.

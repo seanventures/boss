@@ -67,14 +67,22 @@ def _default_transport(method: str, url: str, headers: Mapping[str, str], body: 
         r = http.fetch(method, url, headers=headers, data=body, purpose="github")
         return Response(r.status, r.body)
     except NotImplementedError:
-        host = (urlsplit(url).hostname or "").lower()
-        if host not in (github_urls.PUBLIC_API_HOST, github_urls.PUBLIC_WEB_HOST) \
-                or urlsplit(url).scheme != "https":
+        parts = urlsplit(url)
+        host = (parts.hostname or "").lower()
+        api_host = (urlsplit(api_base()).hostname or "").lower()
+        allowed_hosts = {github_urls.PUBLIC_API_HOST, github_urls.PUBLIC_WEB_HOST}
+        if api_host:
+            allowed_hosts.add(api_host)
+        if host not in allowed_hosts or parts.scheme != "https":
             raise GitHubRefused("outbound_client_unavailable", 503)
+        import ssl
+
         import httpx
 
+        ca = (os.environ.get("SSL_CERT_FILE") or os.environ.get("GIT_SSL_CAINFO") or "").strip()
+        verify: Any = ssl.create_default_context(cafile=ca) if ca else True
         resp = httpx.request(method, url, headers=dict(headers), content=body, timeout=10.0,
-                             follow_redirects=False)
+                             follow_redirects=False, verify=verify)
         return Response(resp.status_code, resp.content)
 
 

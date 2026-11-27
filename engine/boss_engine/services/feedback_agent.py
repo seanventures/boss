@@ -301,12 +301,13 @@ def get_feedback_thread(engine, run_id: str) -> dict:
 def submit_preview_feedback(engine, preview_id: str, payload: dict) -> dict:
     with begin(engine) as connection:
         row = connection.execute(text(
-            "SELECT run_id,status FROM app_previews WHERE id=:id"
+            "SELECT run_id,status,failure_kind FROM app_previews WHERE id=:id"
         ), {"id": preview_id}).mappings().first()
     if row is None or not row["run_id"]:
         raise ValueError("preview not found")
     if row["status"] != "running":
-        raise ValueError("preview is not running")
+        fk = row.get("failure_kind")
+        raise ValueError(f"preview is not running ({fk})" if fk else "preview is not running")
     return submit_feedback(
         engine, row["run_id"], message=str(payload.get("message") or ""),
         expected=str(payload.get("expected") or ""), anchor=str(payload.get("anchor") or ""),

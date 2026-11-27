@@ -23,9 +23,13 @@ from __future__ import annotations
 import json as _json
 import os
 import shlex
+import shutil
+import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any, Optional, Protocol
 
 from ..config import Settings
@@ -1172,11 +1176,465 @@ class SSHContainerConnector:
                 _discard_key_file(ephemeral)
 
 
+class LocalHostConnector:
+    """Deploy and observe an app on BOSS's built-in `'this machine'` host without SSH or Docker.
+
+    Uses `owned_process` and `settings.artifact_root / 'local-deploys'` so local-only
+    installs (including containers without docker.sock) can deploy end-to-end under full
+    Resource Plane governance (ChangeSet, BudgetReservation, Decision, ResourceReceipt).
+    """
+
+    kind = "local"
+
+    def required_secrets(self) -> list[SecretRequirement]:
+        return []
+
+    def _local_base(self, settings: Settings) -> Path:
+        return Path(settings.artifact_root) / "local-deploys"
+
+    def _local_dir(self, target: dict, settings: Settings) -> Path:
+        from .deploy_service import _app_name
+
+        app = _app_name(target.get("repo") or "", target.get("app_name"))
+        return self._local_base(settings) / app
+
+    def _source_for(self, target: dict, settings: Settings, run_id: str,
+                    ref: Optional[str] = None) -> Optional[dict]:
+        return SSHContainerConnector()._source_for(target, settings, run_id, ref)
+
+    def _resolve_source(self, engine, target: dict, settings: Settings, run_id: str,
+                        ref: Optional[str] = None) -> Optional[dict]:
+        source = self._source_for(target, settings, run_id, ref)
+        if not source:
+            return None
+        from ..db import begin
+        from . import local_repo as _local_repo
+        from .local_projects import local_binding
+
+        project_id = str(source.get("project_id") or target.get("project_id") or "")
+        repo_raw = str(target.get("repo") or "")
+        if project_id and "/" not in repo_raw and not _resource(target, "repo_owner"):
+            repo_name = str(source.get("repo") or repo_raw)
+            local_owner = _local_repo.owner_for(project_id)
+            if repo_name and _local_repo.exists(local_owner, repo_name, settings):
+                source = {**source, "owner": local_owner}
+            else:
+                try:
+                    with begin(engine) as c:
+                        bound = local_binding(c, project_id)
+                    if bound and (not repo_name or bound.get("name") == repo_name):
+                        source = {**source, "owner": bound["owner"],
+                                  "repo": repo_name or bound["name"]}
+                except Exception:  # noqa: BLE001 — fallback to configured source
+                    pass
+        return source
+
+    def _ensure_port(self, engine, settings: Settings, target: dict,
+                     connection=None) -> dict:
+        return SSHContainerConnector()._ensure_port(engine, settings, target, connection)
+
+    def validate(self, target: dict, settings: Settings, connection=None) -> list[str]:
+        from .deployment_fleet import this_machine_names
+
+        problems: list[str] = []
+        _user, host, _port = _split_ref(target.get("target_ref", ""))
+        if not host:
+            domains = target.get("domains") or []
+            if domains:
+                host = str(domains[0]).split(":")[0]
+        allowed = this_machine_names()
+        if not host or host.lower() not in allowed:
+            problems.append(f"local target host {host!r} does not refer to this machine")
+        if not (target.get("domains") or []):
+            problems.append("target has no domain, so health cannot be observed")
+        if not (target.get("health_checks") or []):
+            problems.append("target declares no health_checks; observe() would have no verdict")
+        if not _app_port(target, default=0):
+            problems.append("target has no app_port configured")
+        base = self._local_base(settings)
+        try:
+            base.mkdir(parents=True, exist_ok=True)
+            if not os.access(base, os.W_OK):
+                problems.append(f"local deploy directory {base} is not writable")
+        except OSError as exc:
+            problems.append(f"cannot prepare local deploy directory {base}: {exc}")
+        return problems
+
+    def bootstrap(self, target: dict, settings: Settings, connection=None) -> dict[str, Any]:
+        app_dir = self._local_dir(target, settings)
+        data_dir = app_dir / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        chosen = _app_port(target, default=0) or None
+        if not chosen and connection is not None:
+            from .deployment_fleet import _first_free_port
+
+            chosen = _first_free_port(connection, "127.0.0.1", start=8000, end=8999)
+        return {"ok": True, "problems": [], "changed": [f"ensured {data_dir}"],
+                "app_dir": str(app_dir), "suggested_port": chosen, "ports_in_use": []}
+
+    def destroy(self, target: dict, settings: Settings, connection=None, *,
+                include_data: bool = False, stop_only: bool = False) -> dict[str, Any]:
+        from . import owned_process
+        from .deploy_service import _app_name
+
+        app = _app_name(target.get("repo") or "", target.get("app_name"))
+        local_dir = self._local_dir(target, settings)
+        owner_id = f"local-deploy:{target.get('id') or app}"
+        ended = owned_process.terminate_owner(owner_id, reason="destroy", grace=2.0)
+        removed: list[str] = []
+        if ended.get("ended"):
+            removed.append(f"process {owner_id}")
+        if not stop_only:
+            for sub in ("dist", "dist.prev"):
+                p = local_dir / sub
+                if p.exists():
+                    shutil.rmtree(p, ignore_errors=True)
+                    removed.append(str(p))
+            if include_data and local_dir.exists():
+                shutil.rmtree(local_dir, ignore_errors=True)
+                removed.append(f"{local_dir} including data")
+        return {"ok": True, "app": app, "host": "127.0.0.1", "stop_only": stop_only,
+                "data_removed": include_data, "removed": removed, "refused": []}
+
+    def plan(self, engine, settings: Settings, target: dict, run_id: str,
+             ref: Optional[str] = None) -> dict:
+        from ..db import begin
+        from .code_task_service import load_code_task_run
+        from .deploy_service import _app_name
+
+        source = self._resolve_source(engine, target, settings, run_id, ref)
+        if source:
+            owner = source.get("owner") or settings.target_github_owner
+            repo = source.get("repo") or settings.target_github_repo
+            branch = source.get("ref") or "main"
+        else:
+            with begin(engine) as c:
+                run = load_code_task_run(c, run_id)
+            if run is None:
+                raise ValueError(f"code task run not found: {run_id}")
+            spec = run.get("spec") or {}
+            owner = spec.get("owner") or settings.target_github_owner
+            repo = spec.get("repo") or settings.target_github_repo
+            fctx = run.get("finalize_ctx") or {}
+            branch = fctx.get("work_branch") or f"boss/code/{fctx.get('root_run_id') or run_id}"
+        app = _app_name(repo, target.get("app_name"))
+        port = _app_port(target, default=8000)
+        local_dir = self._local_dir(target, settings)
+        return {
+            "run_id": run_id,
+            "app": app,
+            "repo": f"{owner}/{repo}",
+            "branch": branch,
+            "strategy": "local-process — owned_process serving directly on 127.0.0.1 (no SSH/Docker)",
+            "target": {"host": "127.0.0.1", "user": "local", "ssh_port": 0, "app_port": port,
+                       "url": f"http://127.0.0.1:{port}/"},
+            "steps": [
+                {"n": 1, "step": "build", "where": "this machine",
+                 "cmd": f"build/prepare {owner}/{repo}@{branch}"},
+                {"n": 2, "step": "stage", "where": str(local_dir),
+                 "cmd": f"stage {local_dir}/dist (previous -> dist.prev)"},
+                {"n": 3, "step": "launch", "where": "this machine (owned_process)",
+                 "cmd": f"start app on 127.0.0.1:{port}"},
+                {"n": 4, "step": "health check", "where": "this machine",
+                 "cmd": f"probe http://127.0.0.1:{port}/"},
+            ],
+            "rollback": {
+                "when": "health check fails",
+                "how": "restore dist.prev and restart previous process",
+                "cmd": f"restore {local_dir}/dist.prev",
+            },
+            "connector": self.kind,
+            "domains": target.get("domains") or [],
+            "mode": "dry_run",
+        }
+
+    def _start_local_process(self, *, owner_id: str, project_id: Optional[str],
+                             dist_dir: Path, data_dir: Path, log_path: Path,
+                             mode: str, entry: str, app_port: int,
+                             app_env: Optional[dict[str, str]] = None) -> subprocess.Popen:
+        from . import owned_process
+        from .preview_service import app_environment
+
+        env = app_environment(dist_dir, app_port, app_env)
+        env.update({"HOST": "127.0.0.1", "DATA_DIR": str(data_dir),
+                    "PYTHONDONTWRITEBYTECODE": "1"})
+        py_bin_dir = str(Path(sys.executable).parent)
+        cur_path = env.get("PATH") or os.defpath
+        if py_bin_dir not in cur_path.split(os.pathsep):
+            env["PATH"] = f"{py_bin_dir}{os.pathsep}{cur_path}"
+
+        if mode == "static":
+            argv: list[str] = [sys.executable, "-m", "http.server", str(app_port),
+                               "--bind", "127.0.0.1", "--directory", str(dist_dir)]
+        elif mode == "py":
+            argv = ["sh", "-lc", entry]
+        elif mode == "node":
+            argv = ["sh", "-lc",
+                    "if [ ! -d node_modules ]; then "
+                    "(npm ci --omit=dev --no-audit --no-fund 2>/dev/null "
+                    "|| npm install --omit=dev --no-audit --no-fund); fi && npm start"]
+        elif mode == "java":
+            argv = ["sh", "-lc",
+                    f"exec java -Dserver.port={int(app_port)} -jar {shlex.quote(str(dist_dir / 'app.jar'))}"]
+        else:
+            argv = [sys.executable, "-m", "http.server", str(app_port),
+                    "--bind", "127.0.0.1", "--directory", str(dist_dir)]
+
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        logf = os.fdopen(
+            os.open(str(log_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w"
+        )
+        try:
+            return owned_process.popen(
+                argv, cwd=str(dist_dir), env=env, stdout=logf,
+                stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                owner=owned_process.Owner("deploy", owner_id, project_id),
+                resource="process_group",
+            )
+        finally:
+            logf.close()
+
+    def apply(self, engine, settings: Settings, target: dict, run_id: str,
+              plan: dict, ref: Optional[str] = None, *,
+              governance: Optional[dict] = None,
+              app_env: Optional[dict] = None) -> dict:
+        from ..db import begin
+        from . import local_repo as _local_repo
+        from . import owned_process
+        from .code_task_service import load_code_task_run
+        from .core import emit_event
+        from .deploy_service import (
+            _app_name, _build_dist, _resolve_repo_branch, _app_env_text,
+        )
+        from .github_connections import github_access_for
+        from .governed_host_deploy import check_governed, ungoverned_refusal
+        from .preview_service import lineage_impl_files
+
+        if governance is not None:
+            try:
+                check_governed(engine, governance)
+            except PermissionError as refused:
+                return {"status": "blocked", "problems": [str(refused)]}
+        else:
+            return {"status": "blocked", "problems": [
+                ungoverned_refusal("Local host deployment")]}
+
+        with begin(engine) as c:
+            problems = self.validate(target, settings, c)
+        if problems:
+            return {"status": "blocked", "problems": problems}
+
+        target = self._ensure_port(engine, settings, target)
+        app_port = _app_port(target, default=0)
+        if not app_port:
+            return {"status": "blocked", "problems": ["app_port is required before deployment"]}
+
+        run = None
+        source = self._resolve_source(engine, target, settings, run_id, ref)
+        if source:
+            owner = source.get("owner") or settings.target_github_owner
+            repo = source.get("repo") or settings.target_github_repo
+            branch = source.get("ref") or "main"
+            project_id = source.get("project_id") or target.get("project_id") or ""
+        else:
+            with begin(engine) as c:
+                run = load_code_task_run(c, run_id)
+            if run is None:
+                raise ValueError(f"code task run not found: {run_id}")
+            owner, repo, branch = _resolve_repo_branch(run, settings)
+            project_id = run["project_id"]
+
+        app = _app_name(repo, target.get("app_name"))
+        entry_hint = _app_entry(target) or (source or {}).get("app_entry")
+        changed = lineage_impl_files(engine, run) if run is not None else None
+        if entry_hint:
+            e = str(entry_hint).strip().rstrip("/") or "."
+            hint = [e, f"{e}/index.html" if e != "." else "index.html"]
+            changed = hint + [c for c in (changed or []) if c not in hint]
+
+        tok, web_base = "", ""
+        if not _local_repo.is_local_owner(owner):
+            from ..identity import github_urls as _gu
+
+            with begin(engine) as c:
+                tok, _api = github_access_for(c, settings, project_id, owner, repo)
+            web_base = _gu.web_base_for(_api)
+
+        work: Optional[Path] = None
+        local_dir = self._local_dir(target, settings)
+        dist_dir = local_dir / "dist"
+        prev_dir = local_dir / "dist.prev"
+        data_dir = local_dir / "data"
+        boss_dir = local_dir / ".boss"
+        owner_id = f"local-deploy:{target.get('id') or app}"
+        host = _split_ref(target.get("target_ref", ""))[1] or "127.0.0.1"
+        prev_meta: Optional[dict[str, Any]] = None
+        try:
+            work, mode, entry, sha = _build_dist(
+                settings, owner, repo, branch, token=tok, web_base=web_base,
+                changed=changed, ref=ref)
+            deployed_sha = sha or ref or branch
+            data_dir.mkdir(parents=True, exist_ok=True)
+            boss_dir.mkdir(parents=True, exist_ok=True)
+            if (boss_dir / "launch.json").is_file():
+                try:
+                    prev_meta = _json.loads((boss_dir / "launch.json").read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    prev_meta = None
+            if dist_dir.exists():
+                shutil.rmtree(prev_dir, ignore_errors=True)
+                shutil.copytree(dist_dir, prev_dir)
+            shutil.rmtree(dist_dir, ignore_errors=True)
+            shutil.copytree(work / "dist", dist_dir)
+            if app_env:
+                env_file = boss_dir / "app.env"
+                env_file.write_text(_app_env_text(app_env), encoding="utf-8")
+                os.chmod(env_file, 0o600)
+            (boss_dir / "launch.json").write_text(
+                _json.dumps({"mode": mode, "entry": entry, "app_port": app_port}),
+                encoding="utf-8",
+            )
+            owned_process.terminate_owner(owner_id, reason="redeploy", grace=2.0)
+            log_path = boss_dir / "app.log"
+            proc = self._start_local_process(
+                owner_id=owner_id, project_id=project_id,
+                dist_dir=dist_dir, data_dir=data_dir, log_path=log_path,
+                mode=mode, entry=entry, app_port=app_port, app_env=app_env,
+            )
+            deadline = time.monotonic() + 30.0
+            healthy = False
+            last_health: dict[str, Any] = {}
+            while True:
+                last_health = self.observe(target, settings)
+                if last_health.get("healthy") is True:
+                    healthy = True
+                    break
+                if proc.poll() is not None or time.monotonic() >= deadline:
+                    break
+                time.sleep(0.25)
+            if not healthy:
+                owned_process.terminate_owner(owner_id, reason="health_failed", grace=2.0)
+                tail = ""
+                if log_path.is_file():
+                    tail = log_path.read_text(errors="ignore")[-400:]
+                if prev_dir.exists():
+                    shutil.rmtree(dist_dir, ignore_errors=True)
+                    shutil.copytree(prev_dir, dist_dir)
+                    if prev_meta:
+                        self._start_local_process(
+                            owner_id=owner_id, project_id=project_id,
+                            dist_dir=dist_dir, data_dir=data_dir, log_path=log_path,
+                            mode=str(prev_meta.get("mode") or "static"),
+                            entry=str(prev_meta.get("entry") or ""),
+                            app_port=int(prev_meta.get("app_port") or app_port),
+                            app_env=app_env,
+                        )
+                with begin(engine) as c:
+                    emit_event(c, project_id, "deploy.rolled_back", "boss",
+                               "deployment_target", str(target.get("id") or app),
+                               {"app": app, "host": host, "health": last_health})
+                return {
+                    "status": "rolled_back", "connector": self.kind, "app": app, "host": host,
+                    "detail": (f"health check failed on 127.0.0.1:{app_port}; rolled back. "
+                               + (tail or "")).strip()[:400],
+                }
+            url = f"http://{host}:{app_port}/"
+            with begin(engine) as c:
+                emit_event(c, project_id, "deploy.succeeded", "boss",
+                           "deployment_target", str(target.get("id") or app),
+                           {"app": app, "host": host, "url": url, "connector": self.kind})
+            return {
+                "status": "deployed",
+                "connector": self.kind,
+                "app": app,
+                "host": host,
+                "url": url,
+                "provider_ref": f"local://{host}:{app_port}/{app}",
+                "resource_type": "local_host.app",
+                "deployed_sha": deployed_sha,
+                "owner_id": owner_id,
+                "pid": proc.pid,
+                "rollback_point": {
+                    "local_dir": str(local_dir), "mode": mode, "entry": entry,
+                    "app_port": app_port, "owner_id": owner_id,
+                    "project_id": project_id, "prev_meta": prev_meta,
+                },
+            }
+        finally:
+            if work is not None:
+                shutil.rmtree(work, ignore_errors=True)
+
+    def _why_unreachable(self, target: dict, settings: Settings, probed_url: str = "") -> str:
+        from . import owned_process
+
+        app_port = _app_port(target, default=0)
+        local_dir = self._local_dir(target, settings)
+        owner_id = f"local-deploy:{target.get('id') or ''}"
+        live = owner_id in owned_process.live_owner_ids("deploy")
+        if not live:
+            log_path = local_dir / ".boss" / "app.log"
+            tail = log_path.read_text(errors="ignore")[-200:] if log_path.is_file() else ""
+            return f"no local process is running for {target.get('app_name') or 'this app'} on port {app_port}. {tail}".strip()
+        return f"local process is running for {target.get('app_name') or 'this app'} but {probed_url or f'127.0.0.1:{app_port}'} did not answer as expected"
+
+    def observe(self, target: dict, settings: Settings) -> dict:
+        checks = target.get("health_checks") or []
+        domains = target.get("domains") or []
+        declares_url = any(isinstance(c, dict) and str(c.get("url") or "").startswith(
+            ("http://", "https://")) for c in checks)
+        if not domains and not declares_url:
+            return {"healthy": None, "reason": "no domain declared"}
+        if not checks:
+            checks = [{"kind": "tcp"}]
+        return observe_declared(
+            {**target, "health_checks": checks},
+            app_port=_app_port(target, default=0) or None,
+            diagnose=lambda url: self._why_unreachable(target, settings, url),
+        )
+
+    def rollback(self, engine, settings: Settings, target: dict, to: dict, *,
+                 governance: Optional[dict] = None) -> dict:
+        from . import owned_process
+        from .governed_host_deploy import check_governed, ungoverned_refusal
+
+        if governance is not None:
+            try:
+                check_governed(engine, governance)
+            except PermissionError as refused:
+                return {"status": "failed", "error": str(refused)}
+        else:
+            return {"status": "failed", "error": ungoverned_refusal("Local host rollback")}
+
+        local_dir = Path(str((to or {}).get("local_dir") or self._local_dir(target, settings)))
+        dist_dir = local_dir / "dist"
+        prev_dir = local_dir / "dist.prev"
+        if not prev_dir.exists():
+            return {"status": "unavailable",
+                    "reason": "no previous local release was staged before this deployment"}
+        owner_id = str((to or {}).get("owner_id") or f"local-deploy:{target.get('id')}")
+        owned_process.terminate_owner(owner_id, reason="rollback", grace=2.0)
+        shutil.rmtree(dist_dir, ignore_errors=True)
+        shutil.copytree(prev_dir, dist_dir)
+        meta = (to or {}).get("prev_meta") or to or {}
+        self._start_local_process(
+            owner_id=owner_id,
+            project_id=(to or {}).get("project_id") or target.get("project_id"),
+            dist_dir=dist_dir,
+            data_dir=local_dir / "data",
+            log_path=local_dir / ".boss" / "app.log",
+            mode=str(meta.get("mode") or "static"),
+            entry=str(meta.get("entry") or ""),
+            app_port=int(meta.get("app_port") or _app_port(target, default=8000)),
+        )
+        return {"status": "rolled_back", "to": to}
+
+
 # The registry. `target_kind` selects an implementation; adding a connector is a registry
 # entry, never a branch in the pipeline.
 _CONNECTORS: dict[str, DeploymentConnector] = {
     "ssh": SSHContainerConnector(),
     "container": SSHContainerConnector(),
+    "local": LocalHostConnector(),
 }
 
 
