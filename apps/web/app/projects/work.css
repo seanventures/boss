@@ -75,7 +75,8 @@ button.wl-n:hover, button.wl-n:focus-visible { color: var(--accent-text); text-d
 .wl-status { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 0.125rem; }
 /* A stalled or waiting row's reason (WhyLine): one line under the chip, the full words on hover. */
 .wl-status .sw-why { flex-wrap: nowrap; max-width: min(100%, 14rem); font-size: var(--fs-tag); }
-.wl-status .sw-why-words { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.wl-status .sw-why-words, .wl-status .gw-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.wl-status .gw-detail { display: none; } /* the row says "Waiting for GitHub"; the rest is the title */
 .wl-status .px-tag { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .wl-time { font-family: var(--mono); font-size: var(--fs-tag); color: var(--muted); white-space: nowrap; }
 .wl-iters { background: var(--surface-2); }
@@ -98,7 +99,8 @@ button.wl-n:hover, button.wl-n:focus-visible { color: var(--accent-text); text-d
 @media (max-width: 760px) {
   .wl-head { display: none; }
   .px-wk.wl-row { grid-template-columns: 1rem minmax(0, 1fr) auto; row-gap: 0.25rem; }
-  .px-wk.wl-row > .wl-status { grid-column: 3; grid-row: 1; }
+  .px-wk.wl-row > .wl-status { grid-column: 3; grid-row: 1; align-items: flex-end; }
+  .wl-status .sw-why { max-width: 9rem; }
   .px-wk.wl-row > .wl-time { grid-column: 2; grid-row: 2; }
   .px-wk.wl-row > .wl-time + .wl-time { grid-column: 3; text-align: right; }
   .px-wk.wl-row > .wl-time + .wl-time::before { content: "→ "; color: var(--faint); }

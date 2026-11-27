@@ -244,7 +244,7 @@ export function Enrol({
       <AuthStage label="Authenticator app">
         <Logo host={host} />
         <h1>Add an authenticator</h1>
-        <p className="idn-s" data-copy="prose">Scan the code with your authenticator app, then enter the 6 digits it shows. The key is shown only now.</p>
+        {signInAgain ? null : <p className="idn-s" data-copy="prose">Scan the code with your authenticator app, then enter the 6 digits it shows. The key is shown only now.</p>}
         {noPasskey ? <div className="idn-note" data-copy="prose" data-testid="no-passkey-here">{noPasskey}</div> : null}
         {signInAgain ? <SignInAgain next={target} /> : (
           <TotpStep onDone={(issued) => { toCodes(issued).catch((e) => setError(sayAuth(e))); }} onRefused={refused} />
