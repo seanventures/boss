@@ -333,11 +333,12 @@ class Caps:
     answer_prompt_when: PromptWhen = "always"
     fallback_text: str = ""
     version: str = "stop@1"
+    reserve_format_retry: bool = False
 
     def decide(self, state: RunState) -> Optional[StopReason]:
         spent = state.usage.cost_usd_micros
         if self.max_usd_micros is not None and spent >= self.max_usd_micros:
-            if self.on_cost == "stop":
+            if self.on_cost == "stop" or (self.reserve_format_retry and state.reasks):
                 return StopReason("stop", "cost")
             if state.step < self.max_steps:
                 return StopReason("answer", "cost")
@@ -351,7 +352,11 @@ class Caps:
             return StopReason("answer", "deadline")
         if self.turn_budget is not None and self.turn_budget.must_answer_now():
             return StopReason("answer", "budget")
-        if self.answer == "within" and state.step == self.max_steps - 1:
+        # A workflow repair must have room to correct one malformed final decision.
+        # The correction uses an existing turn and has no further read tools.
+        answer_at = self.max_steps - (2 if self.reserve_format_retry else 1)
+        correcting = self.reserve_format_retry and state.reasks > 0
+        if self.answer == "within" and (state.step >= answer_at or correcting):
             return StopReason("answer", "steps")
         if (self.cost_lookahead and self.max_usd_micros is not None and state.step > 0
                 and spent + state.last_cost > self.max_usd_micros):

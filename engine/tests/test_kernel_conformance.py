@@ -186,7 +186,8 @@ def engine_agent_kernel_tools():
     return kernel_tools()
 
 
-def decide_reading(adapter, *, max_turns=4, max_usd=300_000, candidates=None, check=None):
+def decide_reading(adapter, *, max_turns=4, max_usd=300_000, candidates=None, check=None,
+                   reserve_format_retry=False):
     from boss_engine.services import agent_decision as ad
 
     candidates = candidates or [ad.Candidate("fix", "fix it"), ad.Candidate("ask", "ask")]
@@ -195,12 +196,13 @@ def decide_reading(adapter, *, max_turns=4, max_usd=300_000, candidates=None, ch
                                                  "description": "Read a run's logs.",
                                                  "parameters": READ_SCHEMA}}],
         run=lambda name, args: read_logs_result(args), max_turns=max_turns,
-        max_usd_micros=max_usd)
+        max_usd_micros=max_usd, reserve_format_retry=reserve_format_retry)
     return ad._ask_reading(adapter, SYSTEM, ASK, read=read, candidates=candidates,
                            check=check, corpus="CORPUS")
 
 
-def decision_policies(*, max_turns=4, max_usd=300_000, candidates=None, check=None):
+def decision_policies(*, max_turns=4, max_usd=300_000, candidates=None, check=None,
+                      reserve_format_retry=False):
     from boss_engine.services import agent_decision as ad
 
     candidates = candidates or [ad.Candidate("fix", "fix it"), ad.Candidate("ask", "ask")]
@@ -210,7 +212,8 @@ def decision_policies(*, max_turns=4, max_usd=300_000, candidates=None, check=No
         answer, why = ad._accept(raw, candidates, check, corpus)
         return Acceptance(ok=answer is not None, why=why, structured=answer)
 
-    return presets.decision(max_turns=max_turns, max_usd_micros=max_usd, accept=accept)
+    return presets.decision(max_turns=max_turns, max_usd_micros=max_usd, accept=accept,
+                            reserve_format_retry=reserve_format_retry)
 
 
 def run_precheck(adapter, *, max_turns=8, max_usd=500_000, max_wait=180.0, sleeps=None):
@@ -781,6 +784,32 @@ class TestDecisionReask:
         same_requests(old, new)
         assert got["answer"]["action"] == new_result.structured["action"] == "fix"
         assert old.requests[1]["messages"][-1]["content"].startswith("Refused: 'panic' is not")
+
+    def test_recovery_reserves_a_correction_after_its_last_read(self):
+        for final_answer in (FIX, "still malformed"):
+            script = [Call("read_logs", {"run": "r1"}), Call("read_logs", {"run": "r2"}),
+                      Say("not a structured decision"), Say(final_answer)]
+            old = ScriptedEngine(list(script))
+            got = decide_reading(old, reserve_format_retry=True)
+            result, new = kernel_run(script, decision_policies(reserve_format_retry=True))
+            same_requests(old, new)
+            assert len(new.requests) == 4
+            assert not any(r.get("tools") for r in new.requests[-2:])
+            assert "JSON" in new.requests[-1]["messages"][-1]["content"]
+            if final_answer == FIX:
+                assert got["answer"]["action"] == result.structured["action"] == "fix"
+            else:
+                assert got["answer"] is None and result.status == "failed"
+
+    def test_recovery_does_not_spend_past_the_cap_to_correct_a_reply(self):
+        script = [Say("not a decision"), Say(FIX)]
+        old = ScriptedEngine(list(script), cost_usd_micros=10)
+        got = decide_reading(old, max_usd=10, reserve_format_retry=True)
+        engine = ScriptedEngine(list(script), cost_usd_micros=10)
+        result, new = kernel_run(script, decision_policies(max_usd=10, reserve_format_retry=True),
+                                 engine=engine)
+        assert got["answer"] is None and result.status != "completed"
+        assert len(old.requests) == len(new.requests) == 1
 
     def test_twice_refused_is_the_end_on_both_sides(self):
         bad = json.dumps({"action": "panic"})
