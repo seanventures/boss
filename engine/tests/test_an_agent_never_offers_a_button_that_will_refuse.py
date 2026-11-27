@@ -15,14 +15,13 @@ def _settings(**over):
     return SimpleNamespace(**{"boss_edition": "community", "agent_host_shell": False, **over})
 
 
-def test_community_never_runs_a_host_shell_and_says_why():
+def test_host_shell_off_refuses_identically_across_editions():
     said = action_unavailable("run_on_host", _settings())
-    assert said.startswith("This edition doesn't let agents run commands on your hosts")
-    # The governance plumbing is for the log, never the sentence a person is read.
+    assert "`BOSS_AGENT_HOST_SHELL`" in said, "a setting name is written as code, not prose"
     for jargon in ("ChangeSet", "ResourceReceipt", "budget reservation", "Resource Plane"):
         assert jargon not in said
-    off = action_unavailable("run_on_host", _settings(boss_edition="enterprise"))
-    assert "`BOSS_AGENT_HOST_SHELL`" in off, "a setting name is written as code, not prose"
+    assert action_unavailable("run_on_host", _settings(boss_edition="enterprise")) == said
+    assert action_unavailable("run_on_host", _settings(agent_host_shell=True)) is None
     assert action_unavailable("redeploy", _settings()) is None
 
 

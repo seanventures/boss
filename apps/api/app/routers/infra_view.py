@@ -170,8 +170,7 @@ def build_infra_router(
         return value
 
     def _refuse_in_community() -> None:
-        if infra_view.community(settings()):
-            raise HTTPException(status_code=409, detail=infra_view.PAUSED_IN_COMMUNITY)
+        return None
 
     @router.post("/v1/infra/targets/{target_id}/deploy")
     @permit(P.DEPLOYMENT_CREATE, scope=Scope.project(body="project_id"),
@@ -211,8 +210,7 @@ def build_infra_router(
                 raise _stack_error(exc)
             return {"ref": f"stack:{deployment['id']}", "kind": "stack",
                     "deployment": deployment}
-        # A registry run stays paused in Community, as the console has always said (`Paused in
-        # Community`). A deploy to an SSH host does not: it is planned as a governed ChangeSet
+        # A deploy to an SSH host is planned as a governed ChangeSet
         # and runs only once a person approves it (governed_host_deploy.py).
         if not infra_view.governed_host(target):
             _refuse_in_community()

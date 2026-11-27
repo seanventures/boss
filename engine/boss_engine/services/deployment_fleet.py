@@ -42,41 +42,25 @@ EXPIRED_PASSWORD_MARKERS = (
 )
 
 
-_DIRECT_HOST_WRITE_EDITIONS = frozenset({
-    "enterprise", "enterprise_cloud", "enterprise_self_hosted", "cloud",
-})
-_COMMUNITY_HOST_WRITE_DENIAL = (
-    "Direct deployment-host changes are disabled in Community until they use an "
-    "approved Resource Plane ChangeSet, budget reservation, and ResourceReceipt."
-)
-
-
 def outward_ssh_allowed(settings: Settings) -> bool:
     """May BOSS open an SSH session at all — to VERIFY a host, or to apply a GOVERNED change?
 
     Two different questions used to share one switch. BOSS_SSH_HOST_DEPLOY_ALLOWED gates the
     legacy direct writes (key install, docker provisioning, retire, the per-app container
-    deploy) and defaults off, so a fresh Community install could not even run `echo` on the VM
-    it had just been handed: the Infra panel hid "Add a VM" behind a note telling the operator
-    to edit the BOSS host's environment. A read-only probe and a ChangeSet-approved stack
-    deployment carry their own governance, so they need only this, which defaults on.
+    deploy) and defaults off. A read-only probe and a ChangeSet-approved stack deployment carry
+    their own governance, so they need only this, which defaults on.
     """
     return (bool(getattr(settings, "ssh_outward_allowed", True))
             or bool(getattr(settings, "ssh_host_deploy_allowed", False)))
 
 
 def direct_host_writes_allowed(settings: Settings) -> bool:
-    """Unknown editions and a disabled outward-SSH switch fail closed."""
-    edition = str(getattr(settings, "boss_edition", "community")).strip().lower()
-    return (edition in _DIRECT_HOST_WRITE_EDITIONS
-            and bool(getattr(settings, "ssh_host_deploy_allowed", False)))
+    """A disabled host-deploy switch fails closed uniformly across all installs."""
+    return bool(getattr(settings, "ssh_host_deploy_allowed", False))
 
 
 def require_direct_host_write_policy(settings: Settings) -> None:
     """Guard the service itself so callers cannot skip the HTTP route's check."""
-    edition = str(getattr(settings, "boss_edition", "community")).strip().lower()
-    if edition not in _DIRECT_HOST_WRITE_EDITIONS:
-        raise PermissionError(_COMMUNITY_HOST_WRITE_DENIAL)
     if not bool(getattr(settings, "ssh_host_deploy_allowed", False)):
         raise PermissionError(
             "BOSS_SSH_HOST_DEPLOY_ALLOWED is false — direct host changes are disabled."

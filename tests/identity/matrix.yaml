@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 2462 operations.
+# 2472 operations.
 "GET /.well-known/agent-card.json": ["public:jwks", "OAPVU"]
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /.well-known/boss-mcp-client.json": ["public:jwks", "OAPVU"]
@@ -1848,6 +1848,7 @@
 "POST /v1/projects/{project_id}/task-copies/{copy_id}/work": ["permit work_item:manage @ project(path=project_id)", "OAP"]
 "POST /v1/projects/{project_id}/task-copy-boards": ["permit work_item:manage @ project(path=project_id)", "OAP"]
 "GET /v1/projects/{project_id}/task-copy-boards/{board_id}": ["permit work_item:read @ project(path=project_id)", "OAPVU"]
+"POST /v1/projects/{project_id}/terraform-drift-reconcile": ["permit infra:provision @ project(path=project_id)", "OA"]
 "POST /v1/projects/{project_id}/tickets/import": ["permit work_tracker:write @ project(path=project_id)", "OAP"]
 "GET /v1/projects/{project_id}/tickets/waiting": ["permit integration:read @ project(path=project_id)", "OAPVU"]
 "POST /v1/projects/{project_id}/unarchive": ["permit project:delete @ org", "O"]
@@ -2090,6 +2091,15 @@
 "POST /v1/self-fixes/{self_fix_id}/upstream/preview": ["permit improvement:manage @ project(body=project_id)", "OA"]
 "PUT /v1/self-fixes/{self_fix_id}/upstream/preview": ["permit improvement:manage @ project(body=project_id)", "OA"]
 "POST /v1/self-fixes/{self_fix_id}/upstream/send": ["permit improvement:manage @ project(body=project_id)", "OA"]
+"GET /v1/self-improvement/proposals": ["permit improvement:read @ project(query=project_id)", "OAPVU"]
+"POST /v1/self-improvement/proposals": ["permit improvement:manage @ project(body=project_id)", "OA"]
+"GET /v1/self-improvement/proposals/{proposal_id}": ["permit improvement:read @ self_improvement_proposal(path=proposal_id)", "OAPVU"]
+"POST /v1/self-improvement/proposals/{proposal_id}/canary": ["permit improvement:manage @ self_improvement_proposal(path=proposal_id)", "OA"]
+"POST /v1/self-improvement/proposals/{proposal_id}/rollback": ["permit improvement:manage @ self_improvement_proposal(path=proposal_id)", "OA"]
+"POST /v1/self-improvement/proposals/{proposal_id}/rollout": ["permit improvement:manage @ self_improvement_proposal(path=proposal_id)", "OA"]
+"POST /v1/self-improvement/proposals/{proposal_id}/rollout/advance": ["permit improvement:manage @ self_improvement_proposal(path=proposal_id)", "OA"]
+"POST /v1/self-improvement/proposals/{proposal_id}/rollout/start": ["permit improvement:manage @ self_improvement_proposal(path=proposal_id)", "OA"]
+"POST /v1/self-improvement/proposals/{proposal_id}/run-canary": ["permit improvement:manage @ self_improvement_proposal(path=proposal_id)", "OA"]
 "GET /v1/self/diagnostics": ["permit system:read @ org", "OAPVU"]
 "POST /v1/self/host-sample": ["permit system:operate @ org", "OA"]
 "POST /v1/self/host-stall": ["permit worker:lease @ org", "-"]

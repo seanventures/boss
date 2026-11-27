@@ -62,52 +62,24 @@ export type SelfImprovementFeed = {
   programsBlockedReason?: string;
 };
 
-/** Paid editions that mount `/v1/self-improvement/*` (see edition routers). */
-const PAID_EDITION_IDS = new Set([
-  "cloud",
-  "enterprise",
-  "enterprise_cloud",
-  "enterprise_self_hosted",
-]);
-
-export function isPaidSelfImprovementEdition(editionId?: string | null): boolean {
-  if (!editionId) return false;
-  return PAID_EDITION_IDS.has(editionId) || editionId.startsWith("enterprise");
+export function isPaidSelfImprovementEdition(_editionId?: string | null): boolean {
+  return true;
 }
 
 /**
  * Build operator-facing copy when SIM proposals are not usable.
- * Prefer edition honesty over a bare "API returned 404".
  */
 export function selfImprovementUnavailableReason(input: {
   editionId?: string;
   status?: number;
   errorMessage?: string;
 }): { reason: string; enterpriseOnly: boolean } {
-  const editionId = input.editionId?.trim() || undefined;
-  const community =
-    !isPaidSelfImprovementEdition(editionId) &&
-    (editionId === "community" ||
-      editionId === undefined ||
-      input.status === 404);
-
-  if (community && (input.status === 404 || editionId === "community")) {
-    const label = editionId ?? "community";
-    return {
-      enterpriseOnly: true,
-      reason:
-        `Self-improvement proposals (create, canary, staged rollout) are an Enterprise ` +
-        `feature. This instance runs the ${label} edition, where /v1/self-improvement/* is ` +
-        `not mounted — proposal CTAs are hidden so the console does not look broken.`,
-    };
-  }
-
   if (input.status === 404) {
     return {
-      enterpriseOnly: true,
+      enterpriseOnly: false,
       reason:
         "Self-improvement proposal API is not mounted on this control plane " +
-        "(/v1/self-improvement/* returned 404). Proposal CTAs are hidden.",
+        "(/v1/self-improvement/* returned 404).",
     };
   }
 
@@ -283,15 +255,9 @@ export async function fetchSelfImprovementFeed(
         error instanceof Error ? error.message : "Unknown API error",
     });
 
-    // Community edition: treat SIM as enterprise-only even before a probe fails,
-    // so we never advertise create/canary/rollout CTAs that 404.
-    const forcedEnterpriseOnly =
-      enterpriseOnly ||
-      (!isPaidSelfImprovementEdition(editionId) && editionId === "community");
-
     return emptySelfImprovementFeed(reason, resolved, {
       editionId,
-      enterpriseOnly: forcedEnterpriseOnly,
+      enterpriseOnly,
       surfaceAvailable: false,
       improvementPrograms: programs.items,
       programsApiReachable: programs.apiReachable,

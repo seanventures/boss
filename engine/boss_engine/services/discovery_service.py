@@ -37,9 +37,9 @@ COMMUNITY_DISCOVERY_BLOCK_REASON = (
 
 
 def _research_runs_as_a_job(settings: Settings) -> bool:
-    """Community runs Discovery as a governed worker job. Other editions keep the legacy
-    in-process path until they are qualified separately (DISCOVERY_COMMUNITY_GA_BLOCKER.md)."""
-    return str(settings.boss_edition).strip().lower() in {"community", "oss", "local"}
+    """Every install runs Discovery as a durable governed `discovery.run` job."""
+    _ = settings
+    return True
 
 
 #: The one reason a workflow's research step stands aside instead of commissioning research.

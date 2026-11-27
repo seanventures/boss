@@ -67,17 +67,16 @@ from .core import create_blocking_decision, emit_event
 _log = logging.getLogger(__name__)
 
 COMMUNITY_INVESTIGATION_BLOCK_REASON = (
-    "Live investigations are unavailable in Community until model calls use durable "
-    "worker leases, budget reservations, and reconciled receipts. Host and database "
-    "writes also require governed effect records."
+    "Live investigations require durable worker leases, budget reservations, "
+    "and reconciled receipts. Host and database writes also require governed effect records."
 )
-#: COMMUNITY RUNS A READ-ONLY INVESTIGATION AS GOVERNED WORK (BOSSAPP-571's doorway). Its one
-#: model call is spent under the worker's lease of its `investigation.run` job, a budget
+#: Every install runs a read-only investigation as governed work (BOSSAPP-571's doorway). Its
+#: one model call is spent under the worker's lease of its `investigation.run` job, a budget
 #: reservation and a model lease, with a receipt settled at the actual cost (InvestigationSpend,
 #: the same governed stage as Discovery's). What stays closed is what still has no governed
 #: effect record: a FIXING investigation (host shell writes, BOSS's operations).
 COMMUNITY_FIX_BLOCK_REASON = (
-    "A fixing investigation is unavailable in Community: it changes the host or BOSS's data, "
+    "A fixing investigation is blocked: it changes the host or BOSS's data, "
     "and those writes require governed effect records, which investigations do not have yet. "
     "Run it read-only "
     "(leave fix unset): a read-only investigation's model call runs under the worker's lease, "
@@ -85,28 +84,17 @@ COMMUNITY_FIX_BLOCK_REASON = (
 )
 COMMUNITY_UNGOVERNED_REASON = (
     "This investigation was not opened as governed work (no worker lease of its own job), so "
-    "Community will not run it: its model call needs a durable worker lease, a budget "
+    "BOSS will not run it: its model call needs a durable worker lease, a budget "
     "reservation and a reconciled receipt. Open it again."
 )
-_QUALIFIED_INVESTIGATION_EDITIONS = frozenset({
-    "cloud", "enterprise", "enterprise_cloud", "enterprise_self_hosted",
-})
-
-
 class InvestigationExecutionBlocked(ValueError):
-    """An investigation would start ungoverned model or host effects in Community."""
-
-
-def _community_investigations_paused(settings: Settings) -> bool:
-    """Community (and any unknown spelling): every model call governed, no host or data write.
-    Unknown spellings do not silently acquire an unbudgeted model or host shell."""
-    return str(settings.boss_edition).strip().lower() not in _QUALIFIED_INVESTIGATION_EDITIONS
+    """An investigation would start ungoverned model or host effects."""
 
 
 def require_investigation_runtime(settings: Settings, *, allow_fix: bool = False) -> None:
-    """Refuse what this edition cannot govern, before a row or a job exists: in Community, a
-    fixing investigation (its host and data writes have no governed effect record yet)."""
-    if _community_investigations_paused(settings) and allow_fix:
+    """Refuse what lacks governed effect records before a row or a job exists."""
+    _ = settings
+    if allow_fix:
         raise InvestigationExecutionBlocked(COMMUNITY_FIX_BLOCK_REASON)
 
 
@@ -491,7 +479,7 @@ def run_on_investigation_host(*, host: str, command: str, project_id: str,
     from ..config import get_settings
 
     settings = get_settings()
-    if _community_investigations_paused(settings) and allow_write:
+    if allow_write:
         # A READ on a host is not an effect; a write is, and has no governed record yet.
         return {"ok": False, "error": COMMUNITY_FIX_BLOCK_REASON}
 
@@ -942,16 +930,14 @@ def block_community_investigation(
     connection, settings: Settings, investigation_id: str, *,
     lease: Optional[dict[str, Any]] = None,
 ) -> Optional[dict[str, Any]]:
-    """In Community, retire a run that cannot be governed before it reaches the model or a host:
+    """Retire an investigation run that cannot be governed before it reaches the model or a host:
     a fixing one (no governed effect records for its writes), or one with no worker lease of
-    its own job (opened before investigations were governed, or called without the lease). A
-    read-only one under the lease of the job it names runs (None).
+    its own job. A read-only one under the lease of the job it names runs (None).
 
     A legacy running row might already have spent money before an upgrade. It needs an
     operator decision to reconcile that uncertain spend; replaying it would compound it.
     """
-    if not _community_investigations_paused(settings):
-        return None
+    _ = settings
     row = connection.execute(
         sql("SELECT id, project_id, status, allow_fix, job_id, thread_id FROM investigations "
             "WHERE id = :i FOR UPDATE"),
@@ -1281,13 +1267,7 @@ def run_operation(ctx, record: dict, tool: str, args: dict) -> dict[str, Any]:
                 "error": f"{tool!r} requires its own operator click; describe the action "
                          "and let the operator run it from the console.",
                 "available": available}
-    from ..config import get_settings
-
-    if _community_investigations_paused(getattr(ctx, "settings", None) or get_settings()):
-        return {"ok": False, "error": COMMUNITY_INVESTIGATION_BLOCK_REASON}
-    return registry.invoke(
-        spec.name, ctx, project_id=str(record["project_id"]), actor=str(record["actor"]),
-        args=args or {})
+    return {"ok": False, "error": COMMUNITY_INVESTIGATION_BLOCK_REASON}
 
 
 def get_investigation(connection, *, project_id: str,

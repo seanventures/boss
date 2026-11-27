@@ -782,6 +782,8 @@ export const READ_ROUTES: ReadonlyArray<readonly [string, Permission]> = [
   ["self-fixes/{}/diff", "improvement:read"],
   ["self-fixes/{}/patch", "improvement:read"],
   ["self-fixes/{}/upstream", "improvement:read"],
+  ["self-improvement/proposals", "improvement:read"],
+  ["self-improvement/proposals/{}", "improvement:read"],
   ["self/diagnostics", "system:read"],
   ["servers/{}/setup", "host:read"],
   ["settings", "settings:read"],

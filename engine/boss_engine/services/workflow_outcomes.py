@@ -393,12 +393,12 @@ FAILURE_SHAPES: dict[str, tuple[dict[str, Any], ...]] = {
         {"url": "http://127.0.0.1:9/", "status": 503, "ms": 3, "body_excerpt": "down"},
         {"url": "http://127.0.0.1:9/", "status": None, "ms": 1,
          "error": "URLError: <urlopen error [Errno 61] Connection refused>"},
-        # Community refuses URL probes outright.
-        {"ok": False, "error": "Community URL probes require a project-bound destination and "
-                               "a network policy; use recorded deployment health."},
+        # SSRF / invalid-URL refusal.
+        {"ok": False, "error": "refused: 169.254.169.254 is a metadata or link-local address; a "
+                               "contract test never sends there."},
     ),
     # tools/builtin.py contract_test: cases that cannot be run as written; a run where a case
-    # failed (the tool ran, `ok` is True, the contract did not hold); Community's refusal.
+    # failed (the tool ran, `ok` is True, the contract did not hold); permission/SSRF refusal.
     "contract_test": (
         {"ok": False, "error": "cases must be a non-empty list of case objects."},
         {"ok": True, "total": 1, "passed": 0, "failed": 1,
@@ -408,8 +408,8 @@ FAILURE_SHAPES: dict[str, tuple[dict[str, Any], ...]] = {
                     "body_excerpt": "down"}],
          "results_table": "| Case | Request | Status | Time | Result |",
          "failed_cases": ["health"]},
-        {"ok": False, "error": "Community URL probes require a project-bound destination and "
-                               "a network policy; use recorded deployment health."},
+        {"ok": False, "error": "Not allowed to contract test: mutating methods need "
+                               "observability:manage."},
     ),
     # tools/github_tools.py github_comment: no repository bound to the project.
     "github_comment": (

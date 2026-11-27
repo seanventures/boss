@@ -24,17 +24,22 @@ def _host(client, suffix: str) -> str:
     return created.json()["id"]
 
 
-@pytest.mark.parametrize("edition", ["community", "oss", "local", "unknown"])
+@pytest.mark.parametrize(
+    "edition", ["community", "oss", "local", "unknown", "enterprise_self_hosted"],
+)
 def test_fleet_service_blocks_before_any_database_or_host_access(edition):
-    settings = SimpleNamespace(boss_edition=edition, ssh_host_deploy_allowed=True)
-    assert not deployment_fleet.direct_host_writes_allowed(settings)
+    allowed_settings = SimpleNamespace(boss_edition=edition, ssh_host_deploy_allowed=True)
+    assert deployment_fleet.direct_host_writes_allowed(allowed_settings)
+
+    blocked_settings = SimpleNamespace(boss_edition=edition, ssh_host_deploy_allowed=False)
+    assert not deployment_fleet.direct_host_writes_allowed(blocked_settings)
     for service in (
         deployment_fleet.install_generated_key,
         deployment_fleet.provision_host,
         deployment_fleet.retire_host,
     ):
-        with pytest.raises(PermissionError, match="Direct deployment-host changes"):
-            service(object(), settings, host_id="dh_nonexistent")
+        with pytest.raises(PermissionError, match="BOSS_SSH_HOST_DEPLOY_ALLOWED"):
+            service(object(), blocked_settings, host_id="dh_nonexistent")
 
 
 def test_fleet_service_requires_explicit_outward_ssh_switch():
@@ -51,13 +56,13 @@ def test_fleet_service_requires_explicit_outward_ssh_switch():
             service(object(), settings, host_id="dh_nonexistent")
 
 
-@pytest.mark.parametrize("edition", ["community", "oss", "local"])
+@pytest.mark.parametrize("edition", ["community", "oss", "local", "enterprise_self_hosted"])
 def test_community_fleet_routes_have_zero_service_or_host_effects(
     client, engine, monkeypatch, edition,
 ):
     host_id = _host(client, uuid4().hex[:10])
     monkeypatch.setattr(api_main.settings, "boss_edition", edition)
-    monkeypatch.setattr(api_main.settings, "ssh_host_deploy_allowed", True)
+    monkeypatch.setattr(api_main.settings, "ssh_host_deploy_allowed", False)
     effects = []
     for method in ("install_generated_key", "provision_host", "retire_host"):
         monkeypatch.setattr(
@@ -77,7 +82,7 @@ def test_community_fleet_routes_have_zero_service_or_host_effects(
             f"/v1/deployment-hosts/{host_id}/{action}", json={"actor": "ceo"},
         )
         assert denied.status_code == 409, (action, denied.text)
-        assert "Direct deployment-host changes" in denied.text
+        assert "BOSS_SSH_HOST_DEPLOY_ALLOWED" in denied.text
     with engine.begin() as connection:
         after_host = connection.execute(
             text("SELECT status, key_secret_ref, key_public FROM deployment_hosts WHERE id=:i"),

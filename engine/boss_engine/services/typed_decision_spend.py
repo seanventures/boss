@@ -161,17 +161,12 @@ def consumer_for(connection, project_id: str, source_id: Optional[str], actor: s
              "WHERE project_id = :p AND source_id = :s"),
         {"p": project_id, "s": source_id},
     ).mappings().first()
+    _ = settings
     if row and row["owner_type"] == "workspace_operator" and row["owner_id"]:
         return str(row["owner_id"])
-    # COMMUNITY HAS ONE OPERATOR AND NO IDENTITY LAYER. Telling one person's subscription from
-    # another's needs users BOSS can tell apart, which Community does not have yet — so the
-    # owner of an owner-scoped source was whichever principal last pressed Connect (on boss-1
-    # the console's own "executive_console"), and research the member "ceo" started was
-    # refused as "pooling" the only subscription on the install. In Community the project's
-    # connected subscription serves the project's work. Editions with real identities keep the
-    # per-person check.
-    edition = str(getattr(settings, "boss_edition", "community") or "community").strip().lower()
-    if row and row["owner_id"] and edition in {"community", "oss", "local"}:
+    # The console's own single-operator connect identity ("executive_console") serves the
+    # project's work; another person's personal subscription stays isolated to that actor.
+    if row and row["owner_id"] == "executive_console":
         return str(row["owner_id"])
     return actor
 

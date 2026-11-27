@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { areaVisibilityCss } from "../lib/area-visibility";
 import { AREA_IDS } from "../lib/area-ids";
+import { isCommunityPrimaryNavVisible } from "../lib/edition";
 import { codeOnly } from "./_helpers/source";
 import { $, $$, cleanup, click, render, type } from "./_helpers/kit-render";
 import { clone, installKitApi, KITS, SERVERS } from "./_helpers/kit-api";
@@ -33,7 +34,8 @@ describe("the area exists in all the places an area has to exist", () => {
     expect(codeOnly("app/ConsoleShell.tsx")).toContain('{ id: "skills", label: "Skills & MCP"');
     expect(codeOnly("app/page.tsx")).toContain('data-area="skills"');
     expect(areaVisibilityCss(["skills"])).toContain('.bx-content[data-active="skills"]');
-    expect(codeOnly("lib/edition.ts")).toContain('"skills"');
+    expect(isCommunityPrimaryNavVisible("skills", "community")).toBe(true);
+    expect(isCommunityPrimaryNavVisible("skills", "enterprise_self_hosted")).toBe(true);
   });
 });
 

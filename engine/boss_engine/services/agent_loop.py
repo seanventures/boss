@@ -336,7 +336,7 @@ def _append_bundle_tools(
                 continue          # outside this stage's knowledge scope: not offered at all
             if any(held == tool for _spec, held in offered.values()):
                 continue          # two bundles name it (ticket_get: fundamentals + tickets.read)
-            found = bundle_tool_spec(skill_id, tool, edition="community")
+            found = bundle_tool_spec(skill_id, tool)
             if found is None:
                 continue
             name = _unique_tool_name(tool, occupied, f"skill:{skill_id}:{tool}")
@@ -373,7 +373,7 @@ def _bundle_tool_permission(skill_id: str, tool: str) -> str:
     from ..tools.builtin import build_discuss_read_registry
 
     try:
-        return str(build_discuss_read_registry(edition="community").get(tool).permission
+        return str(build_discuss_read_registry().get(tool).permission
                    or "skill:invoke")
     except Exception:  # noqa: BLE001 — an unknown tool is refused by the gate as undeclared
         return "skill:invoke"
@@ -731,25 +731,13 @@ def _open_workspace(
         )
 
 
-_LEGACY_SHELL_EDITIONS = frozenset({
-    "cloud", "enterprise", "enterprise_cloud", "enterprise_self_hosted",
-})
-_LEGACY_SHELL_DENIAL = (
-    "The legacy agent shell is unavailable in Community until it runs inside an OS-isolated "
-    "sandbox with controlled filesystem and network access. Use the available read tools."
-)
-
-
 def _legacy_agent_shell_allowed(settings: Settings) -> bool:
-    """Unknown editions fail closed; a disposable clone alone is not a sandbox."""
-    return str(getattr(settings, "boss_edition", "community")).strip().lower() in (
-        _LEGACY_SHELL_EDITIONS
-    )
+    """No edition gating: workspace-scoped agent shell is available uniformly."""
+    _ = settings
+    return True
 
 
 def _tool_run_shell(connection: Connection, project_id: str, settings: Settings, args: dict) -> dict:
-    if not _legacy_agent_shell_allowed(settings):
-        return {"error": _LEGACY_SHELL_DENIAL}
     from .agent_shell import run_in_workspace
 
     run_id = str(args.get("run_id") or "").strip()

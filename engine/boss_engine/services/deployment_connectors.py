@@ -952,16 +952,14 @@ class SSHContainerConnector:
         """
         from .governed_host_deploy import check_governed, ungoverned_refusal
 
-        community = str(getattr(settings, "boss_edition", "community")).strip().lower() \
-            in {"community", "oss", "local"}
         if governance is not None:
             try:
                 check_governed(engine, governance)
             except PermissionError as refused:
                 return {"status": "blocked", "problems": [str(refused)]}
-        elif community:
+        else:
             return {"status": "blocked", "problems": [
-                ungoverned_refusal("Community SSH deployment")]}
+                ungoverned_refusal("Direct SSH deployment")]}
         from ..db import begin
 
         with begin(engine) as c:
@@ -1140,9 +1138,8 @@ class SSHContainerConnector:
                 check_governed(engine, governance)
             except PermissionError as refused:
                 return {"status": "failed", "error": str(refused)}
-        elif str(getattr(settings, "boss_edition", "community")).strip().lower() \
-                in {"community", "oss", "local"}:
-            return {"status": "failed", "error": ungoverned_refusal("Community SSH rollback")}
+        else:
+            return {"status": "failed", "error": ungoverned_refusal("Direct SSH rollback")}
         from .deploy_service import (
             _app_name, _discard_key_file, _materialise_key, _rollback_remote, _ssh_key_file,
         )

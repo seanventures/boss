@@ -102,8 +102,8 @@ describe("createImprovementProgramAction", () => {
   });
 });
 
-describe("Community improvement programs panel", () => {
-  it("renders the create form and keeps promote/adopt disabled", () => {
+describe("Improvement programs panel (no edition gate)", () => {
+  it("renders the create form and enables promote/adopt uniformly", () => {
     const html = renderToStaticMarkup(
       <ImprovementProgramsPanel
         programs={[
@@ -132,18 +132,18 @@ describe("Community improvement programs panel", () => {
     expect(html).toContain('type="hidden"');
     expect(html).toContain("routing-baseline");
     expect(html).toContain("Hold routing quality");
-    expect(html).toMatch(
+    expect(html).not.toMatch(
       /<button\b[^>]*\bdisabled\b[^>]*data-testid="improvement-program-promote"|<button\b[^>]*data-testid="improvement-program-promote"[^>]*\bdisabled\b/,
     );
-    expect(html).toMatch(
+    expect(html).not.toMatch(
       /<button\b[^>]*\bdisabled\b[^>]*data-testid="improvement-program-adopt-baseline"|<button\b[^>]*data-testid="improvement-program-adopt-baseline"[^>]*\bdisabled\b/,
     );
-    expect(html).toContain(
+    expect(html).not.toContain(
       "Promote is an enterprise SIM step, Community records trials only.",
     );
   });
 
-  it("keeps the Community write form when the list is empty", () => {
+  it("keeps the write form when the list is empty", () => {
     const html = renderToStaticMarkup(
       <ImprovementProgramsPanel
         programs={[]}
@@ -155,7 +155,7 @@ describe("Community improvement programs panel", () => {
 
     expect(html).toContain('data-testid="improvement-program-create-form"');
     expect(html).toContain("No improvement programs recorded yet.");
-    expect(html).toMatch(
+    expect(html).not.toMatch(
       /<button\b[^>]*\bdisabled\b[^>]*data-testid="improvement-program-promote"|<button\b[^>]*data-testid="improvement-program-promote"[^>]*\bdisabled\b/,
     );
   });

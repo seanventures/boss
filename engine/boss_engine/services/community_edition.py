@@ -263,8 +263,14 @@ class CloudConnectAdapter:
 
 
 class CommunityEditionService:
-    EDITION_PACKS = {"community": "community_edition.yaml"}
-    DISPLAY_NAMES = {"community": "BOSS Community"}
+    EDITION_PACKS = {
+        "community": "community_edition.yaml",
+        "enterprise_self_hosted": "community_edition.yaml",
+    }
+    DISPLAY_NAMES = {
+        "community": "BOSS Community",
+        "enterprise_self_hosted": "BOSS Enterprise Self-Hosted",
+    }
 
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -281,7 +287,8 @@ class CommunityEditionService:
         return normalized
 
     def _pack_path(self, edition_id: str) -> Path:
-        return self.settings.specpack_root / "packs" / self.EDITION_PACKS[edition_id]
+        filename = self.EDITION_PACKS.get(edition_id, "community_edition.yaml")
+        return self.settings.specpack_root / "packs" / filename
 
     def _load_pack(self, edition_id: str) -> dict[str, Any]:
         # Parsed once per version of the file (yaml_files); it was read on every agent seeded.
@@ -386,12 +393,12 @@ class CommunityEditionService:
         return {
             "project_id": project_id,
             "edition_id": edition_id,
-            "display_name": self.DISPLAY_NAMES[edition_id],
+            "display_name": self.DISPLAY_NAMES.get(edition_id, "BOSS"),
             "status": effective_status,
             "account_connect_required": account_connect_required,
             "account_connect_status": account_connect_status,
             "account_connect_org": active_link,
-            "local_auth_allowed": edition_id in {"community", "enterprise_self_hosted"},
+            "local_auth_allowed": True,
             "hosted_auth_required": account_connect_required,
             "connection_mode": active_link["connection_mode"]
             if active_link
@@ -403,7 +410,7 @@ class CommunityEditionService:
             "blocked_reason": "account_connect_required"
             if effective_status == "blocked_account_connect_required"
             else None,
-            "source_pack": self.EDITION_PACKS[edition_id],
+            "source_pack": self.EDITION_PACKS.get(edition_id, "community_edition.yaml"),
         }
 
     def list_license_entitlements(
@@ -1286,8 +1293,7 @@ class CommunityEditionService:
     def _commercial_capabilities(
         self, edition_id: str, pack: dict[str, Any]
     ) -> list[str]:
-        if edition_id == "community":
-            return []
+        _ = edition_id
         return pack.get("includes", []) or []
 
     def _account_connect_org_from_row(self, row: dict[str, Any]) -> dict[str, Any]:

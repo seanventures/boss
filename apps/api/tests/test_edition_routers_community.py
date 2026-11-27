@@ -19,14 +19,15 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 def test_community_mount_keeps_shared_routes_and_omits_paid_routes() -> None:
-    app = FastAPI()
-    app.get("/v1/code-tasks")(lambda: {"surface": "community"})
-    app.get("/v1/account-connect/link")(lambda: {"surface": "paid"})
-    mount_edition_routers(app, "community")
+    for edition in ("community", "oss", "local", "enterprise_self_hosted"):
+        app = FastAPI()
+        app.get("/v1/code-tasks")(lambda: {"surface": "community"})
+        app.get("/v1/account-connect/link")(lambda: {"surface": "paid"})
+        mount_edition_routers(app, edition)
 
-    client = TestClient(app)
-    assert client.get("/v1/code-tasks").status_code == 200
-    assert client.get("/v1/account-connect/link").status_code == 404
+        client = TestClient(app)
+        assert client.get("/v1/code-tasks").status_code == 200
+        assert client.get("/v1/account-connect/link").status_code == 200
 
 
 @pytest.mark.parametrize(

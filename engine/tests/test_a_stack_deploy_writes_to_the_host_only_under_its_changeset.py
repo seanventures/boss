@@ -219,19 +219,17 @@ def test_a_full_deployment_host_gets_read_only_disk_inspection_guidance():
     assert "boss prune" not in advice["action"]
 
 
-@pytest.mark.parametrize("edition", ["community", "oss", "local"])
-def test_community_keeps_the_ungoverned_one_container_ssh_deploy_closed(edition):
+@pytest.mark.parametrize("edition", ["community", "oss", "local", "enterprise_self_hosted"])
+def test_ungoverned_one_container_ssh_deploy_requires_explicit_switch(edition):
     from boss_engine.services.deploy_service import deploy_ssh
     from boss_engine.services.deployment_connectors import SSHContainerConnector
 
-    settings = SimpleNamespace(boss_edition=edition, ssh_host_deploy_allowed=True)
+    settings = SimpleNamespace(boss_edition=edition, ssh_host_deploy_allowed=False)
     blocked = SSHContainerConnector().apply(object(), settings, {"target_ref": "u@h"}, "crun",
                                             {})
     assert blocked["status"] == "blocked"
-    # The refusal points at the governed path that now exists (governed_host_deploy.py).
     assert "approved Resource Plane ChangeSet" in blocked["problems"][0]
-    assert "Approvals" in blocked["problems"][0]
-    with pytest.raises(PermissionError, match="ChangeSet"):
+    with pytest.raises(PermissionError, match="BOSS_SSH_HOST_DEPLOY_ALLOWED"):
         deploy_ssh(object(), settings, "crun", host="203.0.113.9")
 
 

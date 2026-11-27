@@ -833,8 +833,7 @@ class ResourcePlaneService:
         backend_key = (backend or "local_vault").strip().lower() or "local_vault"
         if backend_key not in self.COMMUNITY_EASY_CONNECT_BACKENDS:
             raise ValueError(
-                "Community paste-and-connect uses local_vault only; "
-                "hosted KMS is not available on this edition."
+                f"Unsupported paste-and-connect backend {backend_key!r}; expected local_vault."
             )
         normalized_provider = self._normalize_provider(provider)
         normalized_label = self._require_text(account_label, "account_label")
