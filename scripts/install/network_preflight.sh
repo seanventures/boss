@@ -34,17 +34,16 @@ boss_tls_cn() {
 
 boss_tls_diagnose() {
   local ca="$1" proxy="$2"; shift 2
-  local target rc issuer cn failed=0 reached=0
+  local target rc issuer cn failed=0 all_verified=1
   local -a intercepted=()
   for target in "$@"; do
     rc=0
     curl -sS -o /dev/null --max-time 10 ${proxy:+--proxy "$proxy"} "https://$target/" >/dev/null 2>&1 || rc=$?
     case "$rc" in
-      0|22) reached=1; continue ;;
+      0|22) continue ;;
       60|77|51|58|83|90|91)
         # A certificate the public CAs do not vouch for. (35, a reset handshake, is not here: a
         # firewall that drops the connection proves nothing about a gateway.)
-        reached=1
         if [ -n "$ca" ] && curl -sS -o /dev/null --max-time 10 --cacert "$ca" ${proxy:+--proxy "$proxy"} \
              "https://$target/" >/dev/null 2>&1; then
           printf '  ✓ %s: trusted through BOSS_EXTRA_CA_FILE\n' "$target"
@@ -52,16 +51,23 @@ boss_tls_diagnose() {
         fi
         issuer="$(boss_tls_issuer "$target" "$proxy")"
         if [ -z "$issuer" ]; then
+          all_verified=0
           printf '  ! %s: TLS failed (curl exit %s) and no certificate could be read; check the network to it.\n' "$target" "$rc"
           continue
         fi
         intercepted+=("$target|$issuer")
         failed=1 ;;
       *)
+        all_verified=0
         printf '  ! %s: not reachable from this machine (curl exit %s). If this network reaches the internet only through a proxy, set BOSS_UPSTREAM_PROXY.\n' "$target" "$rc" ;;
     esac
   done
-  [ "$failed" -eq 1 ] || return 0
+  if [ "$failed" -eq 0 ]; then
+    if [ "$all_verified" -eq 1 ] && [ "$#" -gt 0 ]; then
+      printf '  ✓ Network: TLS to the package registries verifies\n'
+    fi
+    return 0
+  fi
   printf '\n  ✗ TLS to these hosts is intercepted: the certificate they present is not issued by a public CA.\n'
   local item first_cn=""
   for item in "${intercepted[@]}"; do

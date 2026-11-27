@@ -1264,8 +1264,16 @@ if [ -f "$ENV_FILE" ]; then
     ui_warn "Moving this install's API and web bind back to loopback; use an SSH tunnel or HTTPS reverse proxy."
   fi
   _existing() { grep -E "^$1=" "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2-; }
-  _keep_db="$(_existing BOSS_DB_PASSWORD)"
-  _keep_api="$(_existing BOSS_API_KEY)"
+  # Both are required and never regenerated: a new database password locks the install out of
+  # its own data. A key that is absent or present but empty is the same broken .env.
+  _required() {
+    local value
+    value="$(_existing "$1")" && [ -n "$value" ] ||
+      die "Existing .env is missing $1. Restore the complete .env from this install's private backup. For a fresh install choose an empty install directory."
+    printf '%s' "$value"
+  }
+  _keep_db="$(_required BOSS_DB_PASSWORD)" || exit 1
+  _keep_api="$(_required BOSS_API_KEY)" || exit 1
   _keep_kg="$(_existing BOSS_KG_MCP_HTTP_TOKEN || true)"
   if [ -n "$_keep_kg" ]; then BOSS_KG_MCP_HTTP_TOKEN="$_keep_kg"; fi
   # NEVER REPLACED once written: secrets in the database were encrypted with it.
@@ -1591,7 +1599,6 @@ if ! NO_PROXY="$(env_value BOSS_UPSTREAM_NO_PROXY)" boss_tls_diagnose "$(env_val
     die "Image builds cannot verify these downloads. Set BOSS_EXTRA_CA_FILE as shown above (or BOSS_TLS_PREFLIGHT=warn to try anyway)."
   fi
 fi
-ui_ok "Network: TLS to the package registries verifies"
 # Debian's mirror is plain http: it goes through a proxy only when BOSS_UPSTREAM_HTTP_PROXY
 # names one, so a proxy-only network passed the TLS check and then failed the build with
 # "Unable to locate package gcc" (BOSSAPP-1446).
@@ -1683,16 +1690,23 @@ fi
 # proxy settings are not enough: on a box whose only way out is BOSS_UPSTREAM_PROXY, the build
 # failed at "failed to fetch anonymous token" (enterprise lane, BOSSAPP-1430). Give the build
 # command the proxy explicitly; sudo resets the environment, so it goes after sudo.
+# BOSS'S OWN BUILDER: with BOSS_BUILDX_BUILDER set, the images build in it (BUILDX_BUILDER), so
+# its cache is BOSS's and prune.sh / the steward may clear it (review of the enterprise port).
 _BUILD_CMD=("${COMPOSE[@]}")
-_up_proxy="" _up_extra=""
+_up_proxy="" _up_extra="" _up_builder=""
 if declare -F env_value >/dev/null; then
   _up_proxy="$(env_value BOSS_UPSTREAM_PROXY || true)"
   _up_extra="$(env_value BOSS_UPSTREAM_NO_PROXY || true)"
+  _up_builder="$(env_value BOSS_BUILDX_BUILDER || true)"
 fi
-if [[ -n "$_up_proxy" ]]; then
-  _up_no_proxy="localhost,127.0.0.1"
-  [[ -z "$_up_extra" ]] || _up_no_proxy="$_up_no_proxy,$_up_extra"
-  _proxy_env=(env "HTTPS_PROXY=$_up_proxy" "https_proxy=$_up_proxy" "NO_PROXY=$_up_no_proxy" "no_proxy=$_up_no_proxy")
+if [[ -n "$_up_proxy" || -n "$_up_builder" ]]; then
+  _proxy_env=(env)
+  if [[ -n "$_up_proxy" ]]; then
+    _up_no_proxy="localhost,127.0.0.1"
+    [[ -z "$_up_extra" ]] || _up_no_proxy="$_up_no_proxy,$_up_extra"
+    _proxy_env+=("HTTPS_PROXY=$_up_proxy" "https_proxy=$_up_proxy" "NO_PROXY=$_up_no_proxy" "no_proxy=$_up_no_proxy")
+  fi
+  [[ -z "$_up_builder" ]] || _proxy_env+=("BUILDX_BUILDER=$_up_builder")
   if [[ "${COMPOSE[0]}" == sudo ]]; then
     # sudo and its own options (the scoped fallback passes -n), then env, then docker.
     _i=1
@@ -1704,7 +1718,7 @@ if [[ -n "$_up_proxy" ]]; then
   fi
   unset _proxy_env _up_no_proxy
 fi
-unset _up_proxy _up_extra
+unset _up_proxy _up_extra _up_builder
 # IMAGES OF ONE FAMILY BUILD TOGETHER (BOSSAPP-1458). The list above is grouped by the stage the
 # images grow from (the Python services share python-base; the console is its own), so each family
 # builds while its cache is warm. Between families, on a disk under BOSS_DISK_FLOOR_GB free, the
@@ -1980,15 +1994,18 @@ chmod 600 "$INSTALL_DIR/boss-community.env.sh"
 # left 5 GB free. The same retention every upgrade runs (prune.sh): old BOSS tags go, the cache is
 # capped, and on a small Docker disk it is trimmed to keep BOSS_DISK_FLOOR_GB free. Best effort.
 if [[ -f "$INSTALL_DIR/scripts/install/prune.sh" ]]; then
-  if _prune_out="$(bash "$INSTALL_DIR/scripts/install/prune.sh" --dir "$INSTALL_DIR" --room </dev/null 2>&1)"; then
-    while IFS= read -r _l; do
-      case "$_l" in *"build cache"*|*"could not be measured"*) ui_info "$_l" ;; esac
-    done <<< "$_prune_out"
-    ui_ok "Old images and build cache pruned"
+  _prune_ok=1
+  _prune_out="$(bash "$INSTALL_DIR/scripts/install/prune.sh" --dir "$INSTALL_DIR" --room </dev/null 2>&1)" || _prune_ok=0
+  # Docker's own before/after reading of the build cache, whichever way it went (ENT-DISK-02).
+  while IFS= read -r _l; do
+    case "$_l" in *"build cache"*|*"could not be measured"*|"prune: "*) ui_info "$_l" ;; esac
+  done <<< "$_prune_out"
+  if [[ "$_prune_ok" -eq 1 ]]; then
+    ui_ok "Old images pruned; build cache within its cap"
   else
-    ui_warn "The build cache was not trimmed; run: boss prune"
+    ui_warn "Pruning did not finish (see above); run: boss prune"
   fi
-  unset _prune_out _l
+  unset _prune_out _prune_ok _l
 fi
 
 # ---- models and subscriptions already on this machine ----------------------

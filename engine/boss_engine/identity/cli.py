@@ -73,15 +73,10 @@ def _sql(statement: str):
 
 
 def _origin(db: Any, org_id: str, explicit: Optional[str]) -> str:
-    import os
-    from .policy import get_policy
     if explicit:
         return explicit.rstrip("/")
-    env = os.environ.get("BOSS_PUBLIC_URL", "").strip()
-    if env:
-        return env.rstrip("/")
-    from .authn_support import local_console_origin
-    return (get_policy(org_id, db=db).public_origin or local_console_origin()).rstrip("/")
+    from .authn_support import console_origin
+    return console_origin(db, org_id).rstrip("/")
 
 
 def recover_owner(email: str, *, db: Any, origin: Optional[str] = None,

@@ -24,7 +24,7 @@ A typical install: one to three projects, used daily. The budget is the warn lin
 |---|---|---|
 | BOSS images | 10 GB | One image set per release; old tags are pruned after every upgrade. The image size itself is BOSSAPP-1458's budget. |
 | Rollback images | 10 GB, for 72 h | One previous set only (the next upgrade replaces it). Dropped once the upgrade has run `BOSS_ROLLBACK_KEEP_HOURS` (72) with a healthy API. |
-| Build cache | 10 GB | `BOSS_BUILD_CACHE_CAP_GB`, applied by every prune. |
+| Build cache | 10 GB | `BOSS_BUILD_CACHE_CAP_GB`, applied by every prune. Counts what Docker can free (`docker system df` Reclaimable); cache layers installed images still use are theirs, shown as a note with nothing to run. Every prune prints Docker's before/after. Beyond Docker's plain capped prune, BOSS clears cache only on a Docker that runs only BOSS (`BOSS_DEDICATED_HOST=1`) or in its own buildx builder (`BOSS_BUILDX_BUILDER`), and fails there if it is still over the cap; on a shared Docker it prints the reading and the command and leaves it to you. |
 | Database: records | 3 GB | The live records. Deleting a project takes its rows. |
 | Database: knowledge graph | 3 GB | One graph per project, rebuilt in place; deleting a project drops it. Bloated tables are compacted hourly. About 1 GB per 100,000 indexed nodes. |
 | Database: telemetry | 2 GB | Per-table retention, hourly (`telemetry_retention.POLICIES` and `RETENTION_OWNERS`). |

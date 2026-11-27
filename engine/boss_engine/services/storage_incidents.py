@@ -82,7 +82,10 @@ def explain_cause(sample: Mapping[str, Any], forecast: Any,
     backups_n = int(sample.get("backups_n") or 0)
     pg_temp = _f(sample.get("pg_temp_gb")) or 0.0
     images = _f(sample.get("images_gb")) or 0.0
-    cache = _f(sample.get("cache_gb")) or 0.0
+    from .storage_watch import cache_freeable_gb
+
+    # Only the cache a prune can free: the part installed images share is not avoidable.
+    cache = cache_freeable_gb(sample) or 0.0
     logs = _f(sample.get("logs_gb")) or 0.0
     alloc, used = _f(sample.get("docker_alloc_gb")), _f(sample.get("docker_used_gb"))
     unreclaimed = (alloc - used) if alloc is not None and used is not None else 0.0

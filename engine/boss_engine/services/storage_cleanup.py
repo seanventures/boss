@@ -119,9 +119,21 @@ def _volumes_reclaimable(s: Mapping[str, Any]) -> float:
     return _f((s.get("by_type") or {}).get("volumes_reclaimable"))
 
 
+def _cache_over_cap(s: Mapping[str, Any], r: Mapping[str, Any]) -> float:
+    from .storage_watch import cache_freeable_gb, cache_owned
+
+    # A shared Docker's cache is not BOSS's to clear: the helper refuses it, so it is no step;
+    # the Storage card's budget row tells the person, with the command.
+    if cache_owned(s) is False:
+        return 0.0
+    return _f(cache_freeable_gb(s)) - _f(r.get("build_cache", {}).get("cap_gb", 10))
+
+
 TOOLS: tuple[ToolDef, ...] = (
     ToolDef("storage.prune_build_cache", "Prune build cache", "host", "safe", "prune_build_cache",
-            "build_cache", applies=lambda s, r: _f(s.get("cache_gb")) > 0.5,
+            # Only what Docker can free, past the cap: a cache held by installed images is not a
+            # step that could free anything (ENT-SETUP-01).
+            "build_cache", applies=lambda s, r: _cache_over_cap(s, r) > 0.5,
             args_of=lambda s, r: {"keep_storage_gb": int(r.get("build_cache", {}).get("cap_gb", 10))}),
     ToolDef("storage.remove_images", "Remove old images", "host", "safe", "remove_images", "images",
             applies=lambda s, r: _f(s.get("images_gb")) > 1.0,
@@ -208,6 +220,21 @@ def build_plan(connection: Any, incident: Mapping[str, Any], sample: Mapping[str
         extra["state"] = "skipped"
         extra["reason"] = "one question at a time; asked after the first is answered"
     return steps
+
+
+def request_safe_cleanup(connection: Any, incident_id: str, sample: Mapping[str, Any]) -> None:
+    """Start a fresh tier-one dry run on explicit request. A second click joins live work."""
+    incident, previous = _plan(connection, incident_id)
+    if not incident or incident["status"] == "resolved":
+        return
+    if any(step["state"] not in TERMINAL for step in previous):
+        return
+    # Preserve higher-tier decisions and refusals. Receipts for earlier attempts remain in
+    # storage_actions; each fresh host operation obtains its own inventory and plan hash.
+    retained = [s for s in previous if s["tier"] != 1 or s["state"] == "refused"]
+    protected = {s["tool"] for s in retained}
+    fresh = build_plan(connection, incident, sample, max_tier=1)
+    _save_plan(connection, incident_id, [s for s in fresh if s["tool"] not in protected] + retained)
 
 
 def dry_run_matches(step: Mapping[str, Any], items: Sequence[str], host_id: str) -> bool:
@@ -316,9 +343,9 @@ def _emit(connection: Any, inc: Mapping[str, Any], event_type: str, data: dict[s
 # ── stop when enough ────────────────────────────────────────────────────────────────────────
 
 def target_reached(connection: Any, inc: Mapping[str, Any]) -> bool:
-    from .storage_watch import free_pct_of, latest
+    from .storage_watch import free_pct_of, host_disk_sample
 
-    s = latest(connection, str(inc["host_id"]))
+    s = host_disk_sample(connection, str(inc["host_id"]), fresh_only=True)
     fp = free_pct_of(s or {})
     return fp is not None and fp >= _f(inc.get("target_pct") or 25)
 
@@ -381,10 +408,10 @@ def advance(engine: Any, incident_id: str, *, actor: str = "agent:infra") -> dic
                 return _start(c, engine, inc, plan, step, actor=actor)
             if state in ("queued", "running"):
                 return _poll(c, engine, inc, plan, step, actor=actor)
-        from .storage_watch import latest, STALE_AFTER
+        from .storage_watch import host_disk_sample
 
-        sample = latest(c, str(inc["host_id"]))
-        if sample and sample.get("at") and _now() - sample["at"] <= STALE_AFTER:
+        sample = host_disk_sample(c, str(inc["host_id"]), fresh_only=True)
+        if sample:
             extended = extend_exhausted_plan(c, inc, sample, plan)
             if len(extended) > len(plan):
                 _save_plan(c, incident_id, extended)

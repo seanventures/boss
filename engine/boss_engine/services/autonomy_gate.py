@@ -78,6 +78,7 @@ NONE_SPEND = "none:spend cannot be recalled; lower the top-up in the autonomy po
 NONE_RETRY = "none:a retry only re-ran the work; there is nothing to take back"
 NONE_VERSION = "none:the previous version stays in its history; restore it from there"
 NONE_PUBLISH = "none:a draft or page can be edited or deleted where it was written"
+NONE_DELETE = "none:deleted storage cannot be restored by undoing this decision"
 
 
 @dataclass(frozen=True)
@@ -216,7 +217,7 @@ ACTIONS: dict[str, Rule] = {
     "self_fix.remove": _r(ACT, NONE_RECORD, _EM),
     "self_improvement.begin_canary": _r(ACT, "rollback_self_improvement", _EM),
     "self_improvement.rollout": _r(ACT, "rollback_self_improvement", _EM),
-    "storage_delete": _r(ASK_PROD_ONLY, NONE_RECORD, _INF, "install"),
+    "storage_delete": _r(ASK_PROD_ONLY, NONE_DELETE, _INF, "install"),
     "storage_rule": _r(ACT, NONE_RECORD, _INF),
     # G. credentials, external channels, data boundary
     "provide_github_token": _r(ASK_CREDENTIAL, NONE_RECORD, _EM),

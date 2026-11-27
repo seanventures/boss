@@ -92,7 +92,12 @@ def _subject(git_dir: Any, sha: str) -> str:
 
 
 def _change_url(console: str, project_id: str, number: int) -> str:
-    base = (console or "http://localhost:3000").rstrip("/")
+    if not console:
+        # The hook inherits the API's environment, BOSS_WEB_PORT included.
+        from ..identity.authn_support import local_console_origin
+
+        console = local_console_origin()
+    base = console.rstrip("/")
     return f"{base}/changes/{project_id}/{int(number)}"
 
 

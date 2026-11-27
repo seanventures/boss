@@ -115,12 +115,19 @@ class RulesBody(BaseModel):
     actor: Optional[str] = None
 
 
+class ComposeService(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    service: str = Field(min_length=1, max_length=255)
+    state: str = Field(min_length=1, max_length=40)
+
+
 class SampleBody(BaseModel):
     """One reading from `boss steward` (docs/infra/INFRA_AGENT_API.md §10)."""
     model_config = ConfigDict(extra="allow")
     host_id: Optional[str] = Field(default=None, max_length=120)
     host_label: Optional[str] = Field(default=None, max_length=80)
     source: str = Field(default="steward", max_length=20)
+    compose_services: Optional[list[ComposeService]] = Field(default=None, max_length=1024)
     at: Optional[str] = None
 
 
@@ -264,7 +271,7 @@ def clean_now(request: Request, payload: Optional[CleanBody] = None) -> dict[str
         _require_install_operator(connection, request)
         host_id = body.host_id or (storage_watch.hosts(connection) or [storage_watch.local_host_id()])[0]
         inc = storage_incidents.current_for_host(connection, host_id)
-        sample = storage_watch.latest(connection, host_id) or {"host_id": host_id}
+        sample = storage_watch.host_disk_sample(connection, host_id) or {"host_id": host_id}
         th = storage_rules.thresholds(connection, host_id)
         if inc is None:
             from datetime import datetime, timezone
@@ -275,25 +282,19 @@ def clean_now(request: Request, payload: Optional[CleanBody] = None) -> dict[str
 
             inc_id = make_id("si")
             free_now = storage_watch.free_pct_of(sample)
-            connection.execute(text("""
+            incident_id = connection.execute(text("""
                 INSERT INTO storage_incidents (id, host_id, host_label, status, severity, opened_at,
                        cause_key, cause_text, free_pct_start, free_pct_now, target_pct, project_id)
                 VALUES (:id, :h, :hl, 'warn', 'warn', :now, 'operator.clean_now',
-                        'Cleanup asked for from the console.', :fp, :fp, :t, :p)"""),
+                        'Cleanup asked for from the console.', :fp, :fp, :t, :p)
+                ON CONFLICT (host_id) WHERE status <> 'resolved' DO UPDATE SET host_id = EXCLUDED.host_id
+                RETURNING id"""),
                 {"id": inc_id, "h": host_id, "hl": sample.get("host_label"),
                  "now": datetime.now(timezone.utc), "fp": free_now, "t": th["target_free_pct"],
-                 "p": storage_incidents.default_project(connection)})
-            inc = storage_incidents.get(connection, inc_id)
-        plan = storage_cleanup.build_plan(connection, inc, sample, max_tier=1,
-                                          keep=(inc.get("plan") or []))
-        from sqlalchemy import text as _text
-
-        import json as _json
-
-        connection.execute(_text("UPDATE storage_incidents SET plan = CAST(:p AS JSONB) WHERE id = :id"),
-                           {"p": _json.dumps(plan, default=str), "id": inc["id"]})
-        storage_incidents.refresh_flow(connection, inc["id"])
-        incident_id = inc["id"]
+                 "p": storage_incidents.default_project(connection)}).scalar_one()
+        else:
+            incident_id = inc["id"]
+        storage_cleanup.request_safe_cleanup(connection, incident_id, sample)
     if not body.dry_run:
         storage_cleanup.advance(engine, incident_id, actor=_actor(request, body.actor))
     with begin(engine) as connection:
@@ -376,6 +377,11 @@ def post_sample(payload: SampleBody) -> dict[str, Any]:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     with begin(get_engine()) as connection:
         storage_watch.record_sample(connection, sample)
+        if source == "steward" and payload.compose_services is not None and sample["host_id"] == storage_watch.local_host_id():
+            from boss_engine.services import admission
+            admission.set_state(connection, "compose_service_snapshot", {
+                "at": sample["at"].isoformat(), "services": [x.model_dump() for x in payload.compose_services],
+            })
         inc = storage_incidents.current_for_host(connection, sample["host_id"])
         th = storage_rules.thresholds(connection, sample["host_id"])
         level = storage_watch.raw_level(sample, None, th)

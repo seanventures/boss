@@ -413,7 +413,13 @@ def test_a_full_disk_is_noticed_explained_cleaned_safely_asked_resumed_reported_
     view = client.get("/v1/command-center/view", params={"project_id": project})
     assert view.status_code == 200, view.text
     assert view.json()["status"]["key"] == "infra_incident", view.json()["status"]
-    assert view.json()["status"]["text"] == "Infra Agent is cleaning"
+    assert view.json()["status"]["text"] == "Cleanup queued"
+    # Complete the signed dry run. The resulting real cleanup job now owns the running step.
+    dry_run = _helper_turn(engine, world)
+    assert dry_run and dry_run["result"]["ok"] and dry_run["result"]["dry_run"]
+    storage_cleanup.advance_all(engine)
+    active = client.get("/v1/command-center/view", params={"project_id": project})
+    assert active.json()["status"]["text"] == "Infra Agent is cleaning"
     assert view.json()["infra_incident"]["id"] == inc["id"]
 
     # ── 4. it cleans what is safe, by itself, and asks ONE question for the rest ──

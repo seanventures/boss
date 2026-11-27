@@ -82,7 +82,8 @@ export type CreateSpec = {
   arch?: string; admin_identity_file?: string; role: Role; port_min?: number; port_max?: number; max_apps?: number;
   access: { mode: AccessMode; backend: string; private_key?: string; secret_ref_id?: string };
   setup: { docker: boolean; exporter: boolean; caddy: boolean };
-  watch: { host_health: boolean; disk_pct: number; prune_cache: boolean };
+  /** dedicated: the server runs only what BOSS deploys, so all its unused build cache is BOSS's to clear. */
+  watch: { host_health: boolean; disk_pct: number; prune_cache: boolean; dedicated?: boolean };
   probe?: Record<string, unknown>;
 };
 

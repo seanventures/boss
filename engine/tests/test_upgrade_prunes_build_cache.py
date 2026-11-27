@@ -88,7 +88,7 @@ echo "SIM_INSTALLER_BUILT $REF"
     installed = tmp_path / "installed"
     _git("clone", str(origin), str(installed), cwd=tmp_path)
     (installed / ".env").write_text(
-        "COMPOSE_PROJECT_NAME=boss-community\nBOSS_COMMUNITY_IMAGE_TAG=boss-community\n",
+        "COMPOSE_PROJECT_NAME=boss-community\nBOSS_COMMUNITY_IMAGE_TAG=boss-community\nBOSS_DEDICATED_HOST=1\n",
         encoding="utf-8",
     )
     (installed / ".boss-release").write_text("BOSS_RELEASE_REF=main\n", encoding="utf-8")
@@ -161,8 +161,12 @@ if cmd == "run":
     print(f"overlay 62914560 1 {kb} 70% /")
     sys.exit(0)
 if cmd == "system" and len(args) > 1 and args[1] == "df":
-    print("Images|12.0GB")
-    print(f"Build Cache|{st['cache_gb']:.1f}GB")
+    if "Reclaimable" in joined:
+        print("Images|12.0GB|0B (0%)")
+        print(f"Build Cache|{st['cache_gb']:.1f}GB|{st['cache_gb']:.1f}GB (100%)")
+    else:
+        print("Images|12.0GB")
+        print(f"Build Cache|{st['cache_gb']:.1f}GB")
     sys.exit(0)
 if cmd == "builder" and len(args) > 1 and args[1] == "prune":
     m = re.search(r"--keep-storage\\s+(\\d+)gb", joined)
@@ -200,12 +204,10 @@ sys.exit(0)
         )
         assert res.returncode == 0, f"upgrade {idx} failed:\nSTDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}"
         assert _git("rev-parse", "HEAD", cwd=installed) == target_commit
-        assert "build cache: freed " in res.stdout, res.stdout
-        # Must report freed > 0 before disk_check (10.0 -> 5.0 GB) AND after build (15.0 -> 10.0 GB).
-        freed_lines = [ln for ln in res.stdout.splitlines() if ln.startswith("build cache: freed ")]
-        assert len(freed_lines) == 2, f"expected pre- and post-build prune output on run {idx}: {res.stdout}"
-        assert "freed 5.0 GB (before 10.0 GB, after 5.0 GB)" in freed_lines[0]
-        assert "freed 5.0 GB (before 15.0 GB, after 10.0 GB)" in freed_lines[1]
+        cache_lines = [ln for ln in res.stdout.splitlines() if ln.startswith("build cache: ")]
+        assert len(cache_lines) == 2, f"expected pre- and post-build prune output on run {idx}: {res.stdout}"
+        assert "10.0 GB before (10.0 GB Docker can free), 5.0 GB after (5.0 GB Docker can free)" in cache_lines[0]
+        assert "15.0 GB before (15.0 GB Docker can free), 10.0 GB after (10.0 GB Docker can free)" in cache_lines[1]
         assert "incremental build" in res.stdout
         calls = docker_log.read_text(encoding="utf-8").splitlines()
         prune_indices = [i for i, c in enumerate(calls) if c.startswith("builder prune ")]

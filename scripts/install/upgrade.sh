@@ -572,10 +572,14 @@ if [[ -n "$STACK_REF" && -f "$SELF_FIX" ]]; then
 fi
 # IMAGE AND BUILD-CACHE RETENTION (BOSSAPP-1147): the new release runs, so only its images and
 # the prev-<tag> rollback point stay; the build cache is capped. Best effort, from the new
-# checkout's prune.sh (an older release without it simply skips this).
+# checkout's prune.sh (an older release without it simply skips this). --room, as install.sh
+# after its build: this upgrade just built, so a small Docker disk (or the Mac disk under a
+# Colima/Desktop VM) is trimmed to keep BOSS_DISK_FLOOR_GB free. An rc10.34→rc10.35 upgrade said
+# it pruned and left 17.2 GB against the 10 GB cap (ENT-DISK-02): prune.sh now prints Docker's
+# own before/after reading of the build cache, and fails when it is still over the cap.
 if [[ -x "$INSTALL_DIR/scripts/install/prune.sh" ]]; then
   bash "$INSTALL_DIR/scripts/install/prune.sh" --dir "$INSTALL_DIR" --room </dev/null ||
-    echo 'Old images and build cache were not pruned; run boss prune later.' >&2
+    echo 'Pruning did not finish (the lines above say what was left); run boss prune later.' >&2
 fi
 # VOLUME LABELS (BOSSAPP-1193): the Infra Agent removes an orphan volume only when it carries
 # this install's boss.install_id and a rebuildable boss.kind, and Docker cannot add a label to a

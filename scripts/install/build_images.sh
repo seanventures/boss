@@ -31,6 +31,18 @@ while [[ $# -gt 0 ]]; do
 done
 [[ $# -gt 0 ]] || { printf 'build_images: give the compose command after --\n' >&2; exit 2; }
 COMPOSE=("$@")
+# BOSS'S OWN BUILDER (BOSS_BUILDX_BUILDER): the images build in it, which is what makes its cache
+# BOSS's to clear (prune.sh, the steward). sudo resets the environment, so env goes after sudo.
+BUILDER="${BOSS_BUILDX_BUILDER:-$(grep -m 1 '^BOSS_BUILDX_BUILDER=' "$DIR/.env" 2>/dev/null | cut -d= -f2- | tr -d "\"'" || true)}"
+if [[ -n "$BUILDER" ]]; then
+  if [[ "${COMPOSE[0]}" == sudo ]]; then
+    i=1
+    while [[ $i -lt ${#COMPOSE[@]} && "${COMPOSE[$i]}" == -* ]]; do i=$((i + 1)); done
+    COMPOSE=("${COMPOSE[@]:0:$i}" env "BUILDX_BUILDER=$BUILDER" "${COMPOSE[@]:$i}")
+  else
+    COMPOSE=(env "BUILDX_BUILDER=$BUILDER" "${COMPOSE[@]}")
+  fi
+fi
 
 # The profiles the compose command selects, for build_order's profile filter.
 PROFILES=()
