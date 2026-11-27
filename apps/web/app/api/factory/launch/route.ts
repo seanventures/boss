@@ -13,9 +13,14 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "describe what to build first" }, { status: 400 });
   }
   try {
-    const r = await apiWrite(`${API_URL}/v1/factory/launch`, {
+    const { target_project_id: target, ...launch } = body;
+    if (target !== undefined && (typeof target !== "string" || !/^[a-zA-Z0-9_-]+$/.test(target))) {
+      return NextResponse.json({ error: "Choose a valid project." }, { status: 400 });
+    }
+    const endpoint = target ? `/v1/projects/${encodeURIComponent(target)}/factory/launch` : "/v1/factory/launch";
+    const r = await apiWrite(`${API_URL}${endpoint}`, {
       method: "POST", headers: authHeaders({ "Content-Type": "application/json" }),
-      body: JSON.stringify(body), cache: "no-store",
+      body: JSON.stringify(launch), cache: "no-store",
     });
     const data = await r.json().catch(() => ({}));
     // A CONSENT REQUEST PASSES THROUGH AS THE API SENT IT: the console's consent sheet reads

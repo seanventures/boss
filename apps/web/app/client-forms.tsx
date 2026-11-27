@@ -321,6 +321,8 @@ export function ProviderEasyConnectForm({ children, className }: { children: Rea
     startTransition(async () => {
       try {
         const result = await callAction(easyConnectProviderAction, undefined, "model_provider:manage")(formData);
+        // Consent declined: the refusal stands, in words, and nothing was connected.
+        if (!("secret_ref_id" in result)) throw new Error(result.error);
         formRef.current?.reset();
         setSecretRefId(result.secret_ref_id);
         showToast("success", pasteConnectSuccessCopy(result.secret_ref_id));

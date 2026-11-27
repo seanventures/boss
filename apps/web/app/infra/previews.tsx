@@ -10,6 +10,7 @@
  */
 import { GatedButton } from "../../components/gated";
 import React, { useState } from "react";
+import { ArrowClockwise, ArrowSquareOut, Scroll, StopCircle } from "@phosphor-icons/react";
 
 import { showToast } from "../client-forms";
 import { buildHref, usePreviews, type PreviewRow } from "../../lib/infra-view";
@@ -18,6 +19,7 @@ import type { InfraTabProps } from "./infra-home";
 import { afterWrite, restartPreview, stopPreview } from "./infra-actions";
 import { ago, inWords, localTime, useNow } from "./infra-util";
 import { couldNot } from "../../lib/action-result";
+import { previewOpenHref } from "../../lib/browser-links";
 import { Empty, Skeleton, StateWord, ZoneHead } from "./kit";
 import { PreviewLogDrawer } from "./preview-log";
 import "./deploys.css";
@@ -97,26 +99,27 @@ function PreviewRowView({ row, projectId, actor, now, onLog, onChanged, live }: 
       {live && now !== null ? <TtlBar row={row} now={now} /> : <span className="inf-ttl" aria-hidden />}
       <span className="inf-pv-act">
         {row.can.open && row.url ? (
-          <a className="ag-btn" href={row.url} target="_blank" rel="noreferrer" data-testid="inf-preview-open">Open ↗</a>
+          <a className="ag-btn" href={previewOpenHref(row.id, row.url)} target="_blank" rel="noreferrer" data-testid="inf-preview-open">
+            <ArrowSquareOut size={13} aria-hidden /> Open</a>
         ) : null}
         {row.can.log ? (
-          <button type="button" className="ag-btn" data-testid="inf-preview-log-btn" onClick={() => onLog(row.id)}>Log</button>
+          <button type="button" className="ag-btn" data-testid="inf-preview-log-btn" onClick={() => onLog(row.id)}><Scroll size={13} aria-hidden /> Log</button>
         ) : null}
         {row.can.restart ? (
           <GatedButton permission="preview:manage" type="button" className="ag-btn" disabled={busy !== null} data-testid="inf-preview-restart"
                   title="Start it again with the same build" onClick={() => void act("restart")}>
-            {busy === "restart" ? "Restarting…" : "Restart"}</GatedButton>
+            <ArrowClockwise size={13} aria-hidden /> {busy === "restart" ? "Restarting…" : "Restart"}</GatedButton>
         ) : row.restartWhy ? (
           <>
             <GatedButton permission="preview:manage" type="button" className="ag-btn" disabled data-testid="inf-preview-restart"
-                    title={row.restartWhy} aria-description={row.restartWhy}>Restart</GatedButton>
+                    title={row.restartWhy} aria-description={row.restartWhy}><ArrowClockwise size={13} aria-hidden /> Restart</GatedButton>
             <RestartWhy reason={row.restartWhy} />
           </>
         ) : null}
         {row.can.stop ? (
           <GatedButton permission="preview:manage" type="button" className="ag-btn" disabled={busy !== null} data-testid="inf-preview-stop"
                   title="Stops the preview now. Start it again from the build." onClick={() => void act("stop")}>
-            {busy === "stop" ? "Stopping…" : "Stop"}</GatedButton>
+            <StopCircle size={13} aria-hidden /> {busy === "stop" ? "Stopping…" : "Stop"}</GatedButton>
         ) : null}
         {row.runId ? (
           <a className="inf-link" href={buildHref(row.runId)} title="Open the build that made this" data-testid="inf-preview-build"

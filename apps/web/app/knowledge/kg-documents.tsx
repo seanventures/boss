@@ -23,6 +23,7 @@ import {
 } from "../../lib/kg-view";
 import { SCAN_START } from "../../lib/kg-view";
 import { post } from "../workflows/delivery-api";
+import { StartRefusal, asReadiness, type PendingRefusal } from "../workflow-readiness-ui";
 import { AmlSample } from "./kg-aml-sample";
 import { DqPlatformSample } from "./kg-dq-platform";
 import { DqRulebookSample } from "./kg-dq-sample";
@@ -51,9 +52,10 @@ function CheckCompliance({ w, documentId, clauseId, archived }: {
   const [linkChosen, setLinkChosen] = useState<string | "">("");
   const [ruleQuery, setRuleQuery] = useState("");
   const [searching, setSearching] = useState(false);
+  const [refusal, setRefusal] = useState<PendingRefusal | null>(null);
 
-  const start = useCallback(async (subjectId?: string | null) => {
-    setBusy(true); setMsg(null);
+  const start = useCallback(async (subjectId?: string | null, startAnyway: string[] = []): Promise<void> => {
+    setBusy(true); setMsg(null); setRefusal(null);
     setPendingSubjectId(subjectId ?? null);
     const input: Record<string, unknown> = { document_id: documentId };
     if (subjectId) input.subject_id = subjectId;
@@ -61,8 +63,16 @@ function CheckCompliance({ w, documentId, clauseId, archived }: {
       project_id: w.projectId, workflow_key: "banking_regulatory_compliance", actor: w.actor, input,
       // The project's own copy (e.g. with its bank's agent added) when it has one.
       prefer_project_copy: true,
+      ...(startAnyway.length ? { start_anyway: startAnyway } : {}),
     });
     setBusy(false);
+    // A start refused for what the project lacks: the shared checklist and "Check anyway".
+    const readiness = r.ok ? null : asReadiness(r.readiness);
+    if (readiness) {
+      setRefusal({ label: "Check compliance", message: String(r.error ?? ""), readiness,
+                   retry: (keys) => start(subjectId, keys) });
+      return;
+    }
     if (r.ok) {
       setPicking(false); setNeedsInstall(false); setNeedsSubject(false);
       setMsg({ ok: true, text: "Compliance check started. Its run opens in Workflows." });
@@ -138,6 +148,7 @@ function CheckCompliance({ w, documentId, clauseId, archived }: {
   };
 
   return (
+    <>
     <span className="kg-doc-check">
       <GatedButton permission={SCAN_START} className="ag-btn" data-testid="kg-doc-check" disabled={archived || busy}
                    title="Start the banking regulatory compliance pipeline for this clause"
@@ -175,6 +186,8 @@ function CheckCompliance({ w, documentId, clauseId, archived }: {
       ) : null}
       {msg ? <span className={msg.ok ? "kg-ok" : "kg-inline-err"} role={msg.ok ? "status" : "alert"} data-testid="kg-doc-check-msg">{msg.text}</span> : null}
     </span>
+    {refusal ? <StartRefusal refusal={refusal} projectId={w.projectId} busy={busy} onDismiss={() => setRefusal(null)} /> : null}
+    </>
   );
 }
 

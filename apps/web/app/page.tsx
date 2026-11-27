@@ -1115,7 +1115,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="ov-cc" data-area="overview" aria-label="Command center">
           {/* First once setup is ready and no area was asked for. Projects and Repo and models
               still own a first run — landingArea does not point those here. */}
-          <BuildHome modelReady={setupSummary?.has_model} />
+          <BuildHome modelReady={setupSummary?.has_model}
+                     projects={projects.items.filter((p) => p.orgId === activeOrgId && p.projectType === "app").map((p) => ({ id: p.id, name: p.name }))} />
           {/* The monthly check-in: renders nothing unless it is this person's month (≤ once in 30 days). */}
           <CheckinCard projectId={activeProjectId} actor={activeActorId} />
           {/* THE PROJECT PAGE (BOSSAPP-810): "What should we add?" for a project of its own (not the
