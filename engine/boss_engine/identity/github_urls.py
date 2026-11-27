@@ -156,14 +156,47 @@ def api_base_of(value: object) -> str:
     return value.rstrip("/") if value else install_api_base()
 
 
+#: sha256 digests of the install's own GitHub credentials (Settings.github_token — from the
+#: environment or the .env file — and anything else registered as the install's). An UNTAGGED
+#: copy of one (a str() or strip() dropped its tag) can never be tagged for another host.
+_INSTALL_DIGESTS: set[str] = set()
+_INSTALL_ENV_NAMES = ("BOSS_GITHUB_TOKEN", "GITHUB_TOKEN", "GH_TOKEN")
+
+
+def _digest(value: object) -> str:
+    import hashlib
+
+    return hashlib.sha256(str(value).strip().encode("utf-8")).hexdigest()
+
+
+def register_install_credential(value: object) -> None:
+    """Record a value as one of the install's own GitHub credentials (never stores the value)."""
+    if value:
+        _INSTALL_DIGESTS.add(_digest(value))
+
+
+def is_install_credential(value: object) -> bool:
+    if not value:
+        return False
+    d = _digest(value)
+    if d in _INSTALL_DIGESTS:
+        return True
+    return any(os.environ.get(n) and _digest(os.environ[n]) == d for n in _INSTALL_ENV_NAMES)
+
+
 def tag(token: object, api_base: object) -> "GitHubCredential | str":
-    """``token`` tagged with its host ("" stays ""). A token already tagged for ANOTHER host is
-    refused: re-tagging must never launder a credential onto a new host."""
+    """``token`` tagged with its host ("" stays ""). Refused (never re-labelled): a token
+    already tagged for ANOTHER host, and an UNTAGGED copy of one of the install's own
+    credentials aimed at any host but the install's — a str()/strip() that dropped the tag must
+    not let it be laundered onto a connection's host (BOSSAPP-1286)."""
     if not token:
         return ""
     base = api_base_of(api_base)
-    if isinstance(token, GitHubCredential) and token.api_base != base:
-        _refuse(token, base, "re-tag")
+    if isinstance(token, GitHubCredential):
+        if token.api_base != base:
+            _refuse(token, base, "re-tag")
+    elif base != install_api_base() and is_install_credential(token):
+        _refuse(GitHubCredential(token, install_api_base()), base, "re-tag install credential")
     return GitHubCredential(token, base)
 
 

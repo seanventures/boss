@@ -243,7 +243,14 @@ class GitHubConnectionService:
             raise ValueError(
                 "auth_method must be one of: " + ", ".join(sorted(self.AUTH_METHODS)) + ".")
         self.secret_refs.parse_credential_ref(credential_ref)
-        _refuse_env_ref_on_another_host(credential_ref, api_base_url)
+        # The SAME checks as create (BOSSAPP-1286): a normalised API base, a usable GitHub
+        # SecretRef of the right kind, and a credential that may belong to that host.
+        api_base_url = self._normalize_api_base_url(api_base_url)
+        secret_ref = self.secret_refs.require_usable(
+            connection, project_id=project_id, credential_ref=credential_ref)
+        self._check_connection_secret(secret_ref, method, app_id or current.get("app_id"),
+                                      installation_id or current.get("installation_id"),
+                                      api_base_url, project_id)
         connection.execute(
             text("""
                 UPDATE github_connections
@@ -304,22 +311,8 @@ class GitHubConnectionService:
             project_id=project_id,
             credential_ref=credential_ref,
         )
-        if secret_ref["provider"] not in {None, "github"}:
-            raise ValueError("GitHub connections require a GitHub SecretRef.")
-        _refuse_env_ref_on_another_host(secret_ref, safe_api_base)
-        if method == "github_app":
-            if not (app_id and app_id.strip()):
-                raise ValueError("github_app connections require app_id.")
-            if not (installation_id and installation_id.strip()):
-                raise ValueError("github_app connections require installation_id.")
-            if secret_ref["secret_kind"] not in {"private_key", "client_secret"}:
-                raise ValueError(
-                    "github_app connections require a private_key SecretRef."
-                )
-        elif secret_ref["secret_kind"] not in {"api_token", "access_key", "session"}:
-            raise ValueError(
-                "personal_access_token connections require an api_token SecretRef."
-            )
+        self._check_connection_secret(secret_ref, method, app_id, installation_id,
+                                      safe_api_base, project_id)
         permissions = self._normalize_permissions(required_permissions or ["pull"])
         safe_metadata = self.secret_refs._validate_metadata(metadata)
         duplicate = connection.execute(
@@ -1127,7 +1120,8 @@ class GitHubConnectionService:
             # Tagged with ITS connection's host (BOSSAPP-1286): a GHES token never leaves GHES.
             return self._tag_by_origin(
                 self._resolve_connection_secret(connection, project_id, ref), ref,
-                self._connection_api_base(connection, project_id, str(rows["connection_id"])))
+                self._connection_api_base(connection, project_id, str(rows["connection_id"])),
+                connection=connection, project_id=project_id)
         except (GitHubConnectionStateError, GitHubConnectionNotFoundError) as error:
             # A bound connection whose secret cannot be read here is not a reason to fail the
             # build: the environment may still have a usable token.
@@ -1151,31 +1145,70 @@ class GitHubConnectionService:
                 return None
             return self._tag_by_origin(
                 self._resolve_connection_secret(connection, project_id, ref), ref,
-                self._connection_api_base(connection, project_id, connection_id)) or None
+                self._connection_api_base(connection, project_id, connection_id),
+                connection=connection, project_id=project_id) or None
         except (GitHubConnectionStateError, GitHubConnectionNotFoundError) as error:
             logger.debug("github: could not resolve the connection's credential: %s", error)
             return None
 
-    @staticmethod
-    def _tag_by_origin(value: Any, ref: Any, conn_base: Any) -> Any:
+    def _tag_by_origin(self, value: Any, ref: Any, conn_base: Any, *,
+                       connection: Optional[Connection] = None,
+                       project_id: Optional[str] = None) -> Any:
         """A resolved credential tagged with the host of WHERE THE SECRET LIVES (BOSSAPP-1286),
-        never with whatever the connection naming it says. A host environment reference
-        (``env:NAME`` / a SecretRef of kind env) is the INSTALL's credential: tagged with the
-        install's host, after env_refs.assert_may_send refuses it for a foreign base (rc6 N-1).
-        Only a secret stored FOR this connection takes the connection's base."""
+        never with whatever the connection naming it says — an ALLOW-LIST
+        (credential_host_for): only a project-scoped secret in one of BOSS's own stores, stored
+        for this connection's project (and naming this host when it lists allowed_hosts), takes
+        the connection's base. Everything else — the host environment, a host file, an org or
+        workspace reference, the Setup App, any backend added later — is the INSTALL's. A
+        GitHub-bound env name is judged by env_refs.assert_may_send first (rc6 N-1)."""
         if not value:
             return value
-        kind, name = _ref_origin(ref)
+        record = ref if isinstance(ref, dict) and "storage_backend" in ref else None
+        if record is None and connection is not None and project_id and isinstance(ref, str):
+            try:
+                with connection.begin_nested():
+                    record = self.secret_refs.get_by_credential_ref(
+                        connection, project_id=project_id, credential_ref=ref)
+            except Exception:  # noqa: BLE001 — unknown origin: the install's host (below)
+                record = None
+        kind, name = _ref_origin(record if record is not None else ref)
         if kind == "env":
             from .env_refs import assert_may_send, binding_for
 
-            # A GitHub-bound host credential is judged here, by name, before any re-tag (rc6
-            # N-1); any other allowlisted env name keeps the process-wide outbound guard's rule.
             binding = binding_for(name)
             if binding is not None and binding.provider == "github":
                 assert_may_send(name, github_urls.api_base(conn_base))
-            return github_urls.tag(value, "")
-        return github_urls.tag(value, conn_base)
+        owner_project = project_id or (record or {}).get("project_id")
+        return github_urls.tag(value, credential_host_for(record, conn_base, owner_project))
+
+    @staticmethod
+    def _check_connection_secret(secret_ref: dict[str, Any], method: str, app_id: Any,
+                                 installation_id: Any, api_base: str, project_id: str) -> None:
+        """THE checks a connection's credential passes, at create AND repoint: a GitHub
+        SecretRef of the right kind, and — on a host other than the install's — one the
+        allow-list lets belong to that host (credential_host_for): never an env reference, a
+        host file, an org/workspace reference or the Setup App (BOSSAPP-1286)."""
+        if secret_ref.get("provider") not in {None, "github"}:
+            raise ValueError("GitHub connections require a GitHub SecretRef.")
+        _refuse_env_ref_on_another_host(secret_ref, api_base)
+        if github_urls.api_base(api_base) != github_urls.api_base() and \
+                credential_host_for(secret_ref, api_base, project_id) != github_urls.api_base(api_base):
+            raise ValueError(
+                "This credential is not stored for this project, so it cannot be used for "
+                f"{github_urls.web_host(api_base)}. Paste that host's token for this connection.")
+        if method == "github_app":
+            if not (app_id and str(app_id).strip()):
+                raise ValueError("github_app connections require app_id.")
+            if not (installation_id and str(installation_id).strip()):
+                raise ValueError("github_app connections require installation_id.")
+            if secret_ref.get("secret_kind") not in {"private_key", "client_secret"}:
+                raise ValueError(
+                    "github_app connections require a private_key SecretRef."
+                )
+        elif secret_ref.get("secret_kind") not in {"api_token", "access_key", "session"}:
+            raise ValueError(
+                "personal_access_token connections require an api_token SecretRef."
+            )
 
     @staticmethod
     def _connection_api_base(connection: Connection, project_id: str, connection_id: str) -> str:
@@ -1531,7 +1564,8 @@ class GitHubConnectionService:
                 connection, project_id=project_id,
                 credential_ref=self._credential_ref(connection, project_id, github_connection["id"]))
             api = github_urls.api_base(github_connection.get("api_base_url"))
-            credential = self._tag_by_origin(self._resolve_secret(record, connection), record, api)
+            credential = self._tag_by_origin(self._resolve_secret(record, connection), record, api,
+                                             project_id=project_id)
             who = self._github_get("/user", credential, api_base=api) or {}
             login = str(who.get("login") or "").strip()
             repos = self._github_get(
@@ -1627,10 +1661,12 @@ class GitHubConnectionService:
             credential = github_urls.tag(credential, "")   # the Setup App: the install's host
         if not credential and self._custom_secret_resolver is None:
             credential = self._tag_by_origin(self._resolve_secret(secret_ref, connection),
-                                             secret_ref, github_connection.get("api_base_url"))
+                                             secret_ref, github_connection.get("api_base_url"),
+                                             project_id=project_id)
         elif not credential:
             credential = self._tag_by_origin(self.secret_resolver(secret_ref), secret_ref,
-                                             github_connection.get("api_base_url"))
+                                             github_connection.get("api_base_url"),
+                                             project_id=project_id)
         if not credential:
             raise GitHubConnectionStateError(
                 "GitHub SecretRef could not be resolved by this execution node."
@@ -2119,6 +2155,49 @@ def ghes_hosts(db: Any) -> dict[str, str]:
                 out.setdefault(host, api)
     _GHES_HOSTS_CACHE["hosts"] = (now + GHES_HOSTS_TTL_S, out)
     return dict(out)
+
+
+#: The stores BOSS writes a reference's material THROUGH to (put_secret / store_token_credential).
+#: A secret there can belong to a connection's own host only when its key is the one BOSS names
+#: for that project (secrets_service.ref_key_for) or the reference's own ``db/<id>`` slot — i.e. it
+#: was written FOR this project, not pointed at someone else's material. Every other origin
+#: (environment, local_runner host files, identity_github, unknown) is the install's.
+OWN_SECRET_STORES = frozenset({"vault", "local_vault", "database", "platform_secret_store",
+                               "infisical"})
+
+
+def credential_host_for(record: Any, conn_base: Any, project_id: Optional[str]) -> str:
+    """THE ALLOW-LIST (BOSSAPP-1286): the REST base a resolved credential belongs to. A
+    connection's base ONLY for a project-scoped secret in one of BOSS's own stores
+    (``storage_backend`` — the field the resolver itself uses), stored for that connection's
+    project, and — when the reference lists ``metadata.allowed_hosts`` — one that names this
+    host. Anything else (environment, local_runner host files, platform/infisical, org or
+    workspace scope, identity_github, unknown or missing) is the install's: ``""``."""
+    if not isinstance(record, dict):
+        return ""
+    backend = str(record.get("storage_backend") or "").strip().lower()
+    if backend not in OWN_SECRET_STORES:
+        return ""
+    if str(record.get("scope_type") or "").lower() != "project":
+        return ""
+    owner = str(record.get("project_id") or "")
+    if not project_id or owner != str(project_id) or str(record.get("scope_id") or owner) != owner:
+        return ""
+    from .secrets_service import ref_key_for
+
+    key = str(record.get("ref_key") or "")
+    own_prefix = ref_key_for(owner, "x")[:-1]           # "BOSS_<PROJECT>_"
+    if not (key.startswith(own_prefix) or (record.get("id") and key == f"db/{record['id']}")):
+        return ""
+    base = github_urls.api_base(conn_base)
+    allowed = (record.get("metadata") or {}).get("allowed_hosts") if isinstance(
+        record.get("metadata"), dict) else None
+    if allowed:
+        names = {str(h).lower().strip() for h in (allowed if isinstance(allowed, (list, tuple))
+                                                   else [allowed])}
+        if not ({github_urls._netloc(base), github_urls.web_host(base)} & names):  # noqa: SLF001
+            return ""
+    return base
 
 
 def _ref_origin(ref: Any) -> tuple[str, str]:

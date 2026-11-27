@@ -1215,6 +1215,31 @@ def pick_default_backend(settings: Settings) -> tuple[str, list[str]]:
     return "database", passed_over
 
 
+#: BOSS's own stores with ONE GLOBAL key space (secret_material.ref_key is the primary key; the
+#: local vault is one file). A reference may read only material that is ITS OWN: the master key
+#: never, and never a key an OLDER reference of another project, org or workspace already names —
+#: naming someone else's key is how a project would read their secret (BOSSAPP-1286).
+_GLOBAL_KEY_STORES = frozenset({"database", "local_vault"})
+
+
+def _material_belongs_to(connection: Any, row: Any, secret_ref_id: str) -> bool:
+    backend = str(row.get("storage_backend") or row.get("ref_kind") or "").lower()
+    if backend not in _GLOBAL_KEY_STORES:
+        return True
+    key = str(row.get("ref_key") or "")
+    if key == "__boss_master_key__":
+        return False
+    if key.startswith("db/"):
+        return key == f"db/{secret_ref_id}"
+    older = connection.execute(sql(
+        "SELECT 1 FROM secret_refs o, secret_refs me WHERE me.id = :i AND o.id <> me.id "
+        "AND o.ref_key = me.ref_key AND COALESCE(o.storage_backend, o.ref_kind) = :b "
+        "AND (o.scope_type, o.scope_id) IS DISTINCT FROM (me.scope_type, me.scope_id) "
+        "AND o.created_at < me.created_at LIMIT 1"),
+        {"i": secret_ref_id, "b": backend}).first()
+    return older is None
+
+
 def _tag_github_by_origin(value: Any, row: Any) -> Any:
     """A GitHub credential's host comes from WHERE THE SECRET LIVES (BOSSAPP-1286): a host
     environment variable bound to GitHub (BOSS_GITHUB_TOKEN, a *_GITHUB_TOKEN…) is the
@@ -1274,6 +1299,9 @@ def resolve_secret_ref(connection, secret_ref_id: str, settings: Settings,
     subject = _access.scope_admits(row, who)
     if subject is not None:
         raise _refuse(subject, f"secret ref {secret_ref_id} is {subject}")
+    if not _material_belongs_to(connection, row, secret_ref_id):
+        raise _refuse("material of another scope",
+                      f"secret ref {secret_ref_id} names material it was not written for")
     backend = backend_for(row["storage_backend"] or row["ref_kind"], settings)
     try:
         value = backend.get(row["ref_key"])

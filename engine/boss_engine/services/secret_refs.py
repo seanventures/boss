@@ -191,14 +191,17 @@ class SecretRefService:
             scope_type=normalized_scope_type,
             scope_id=normalized_scope_id,
         )
-        # rc6 N-1: an `env` reference names the HOST's credential, and an org or workspace scope
-        # hands the reference to every project there: both need integration:manage at the org.
-        if ref_kind == "env" or normalized_scope_type in ("org", "workspace"):
+        # rc6 N-1: an `env` reference names the HOST's credential, a `local_runner` reference a
+        # file ON THE HOST (an App key, a token file: BOSSAPP-1286), and an org or workspace
+        # scope hands the reference to every project there: all need integration:manage at the
+        # org.
+        if ref_kind in ("env", "local_runner") or normalized_scope_type in ("org", "workspace"):
             from .env_refs import require_host_credential_authority
 
             require_host_credential_authority(
                 connection, project_id,
                 f"An env reference ({ref_key})" if ref_kind == "env"
+                else f"A host file reference ({ref_key})" if ref_kind == "local_runner"
                 else f"A reference scoped to the {normalized_scope_type}")
         normalized_secret_kind = secret_kind.strip().lower()
         if normalized_secret_kind not in self.ALLOWED_SECRET_KINDS:

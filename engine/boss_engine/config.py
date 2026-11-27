@@ -715,6 +715,7 @@ class Settings(BaseSettings):
             return value
         from .identity import github_urls
 
+        github_urls.register_install_credential(value)
         return github_urls.tag(value, "")
     # Webhook routing and target-repository setup must never assume a developer's repo.
     # A new installation starts unbound until its operator connects a repository.

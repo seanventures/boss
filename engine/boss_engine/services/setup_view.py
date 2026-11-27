@@ -490,7 +490,12 @@ def install_repository(settings: Any) -> tuple[str, str, str]:
              or str(getattr(settings, "github_owner", "") or "").strip())
     name = (str(getattr(settings, "target_github_repo", "") or "").strip()
             or str(getattr(settings, "github_repo", "") or "").strip())
-    token = str(getattr(settings, "github_token", "") or "").strip()
+    # The install's own token, tagged with the install's host (BOSSAPP-1286): str()/strip()
+    # would drop that tag and let a caller re-label it.
+    from ..identity import github_urls
+
+    raw = getattr(settings, "github_token", "") or ""
+    token = github_urls.tag(str(raw).strip(), "") if raw else ""
     return owner, name, token
 
 
