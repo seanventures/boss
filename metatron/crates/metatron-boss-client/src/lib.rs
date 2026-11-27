@@ -14,11 +14,13 @@ use std::time::Duration;
 use futures_util::{Stream, StreamExt};
 use metatron_protocol::{
     ApprovalReviewRequest, ApprovalReviewResponse, AuditBatchRequest, AuditBatchResponse,
-    BOSS_CONTRACT_VERSION, BossErrorEnvelope, CapabilitiesResponse, ClientInfo,
-    CredentialLeaseRequest, CredentialLeaseResponse, DeviceCodeRequest, DeviceCodeResponse,
-    DeviceTokenError, DeviceTokenRequest, GrantCreateRequest, GrantRecord, JwksDocument,
+    BOSS_CONTRACT_VERSION, BossErrorEnvelope, BossSkillRecord, CapabilitiesResponse, ClientInfo,
+    CodeTaskHandoffRequest, CodeTaskHandoffResponse, CredentialLeaseRequest,
+    CredentialLeaseResponse, DeviceCodeRequest, DeviceCodeResponse, DeviceTokenError,
+    DeviceTokenRequest, GrantCreateRequest, GrantRecord, JwksDocument, McpServerRecord,
     RefreshTokenRequest, RegisteredHost, RevokeTokenRequest, SignedPolicyResponse, SseEvent,
-    SseFrame, TokenResponse, ToolResultSubmission, TurnRequest,
+    SseFrame, TicketFindingRequest, TicketFindingResponse, TokenResponse, ToolResultSubmission,
+    TurnRequest, WebSearchRequest, WebSearchResponse,
 };
 use reqwest::header::{ACCEPT, AUTHORIZATION, HeaderMap, HeaderName, HeaderValue, IF_NONE_MATCH};
 use reqwest::{Method, StatusCode};
@@ -737,6 +739,101 @@ impl BossClient {
         let path = format!("/v1/metatron/hosts/{host_id}/credential-lease");
         let payload = serde_json::to_value(req)?;
         self.send_json(Method::POST, &path, Some(&payload), None)
+            .await
+    }
+
+    // --- Wave D: MCP Registry, Skills, Ticket Findings, Code Task Handoff, Gateway Search ---
+
+    /// Fetch BOSS admin-approved MCP servers (`MT-9`).
+    pub async fn list_mcp_servers(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<McpServerRecord>, BossClientError> {
+        let path = format!("/v1/mcp/servers?project_id={}", url_encode(project_id));
+        let val: Value = self.send_json(Method::GET, &path, None, None).await?;
+        if let Some(arr) = val.get("servers").or_else(|| val.get("items")) {
+            Ok(serde_json::from_value(arr.clone())?)
+        } else if val.is_array() {
+            Ok(serde_json::from_value(val)?)
+        } else {
+            Ok(Vec::new())
+        }
+    }
+
+    /// Fetch BOSS-granted skills for the project (`MT-9`).
+    pub async fn list_skills(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<BossSkillRecord>, BossClientError> {
+        let path = format!("/v1/skills?project_id={}", url_encode(project_id));
+        let val: Value = self.send_json(Method::GET, &path, None, None).await?;
+        if let Some(arr) = val.get("skills").or_else(|| val.get("items")) {
+            Ok(serde_json::from_value(arr.clone())?)
+        } else if val.is_array() {
+            Ok(serde_json::from_value(val)?)
+        } else {
+            Ok(Vec::new())
+        }
+    }
+
+    /// Post investigation findings and redacted evidence manifest to a BOSS ticket (`MT-4`).
+    pub async fn post_ticket_finding(
+        &self,
+        req: &TicketFindingRequest,
+    ) -> Result<TicketFindingResponse, BossClientError> {
+        let path = match req.ticket_id.as_deref().filter(|s| !s.trim().is_empty()) {
+            Some(tid) => format!("/v1/tasks/{}/findings", url_encode(tid)),
+            None => "/v1/tasks".to_string(),
+        };
+        let payload = serde_json::to_value(req)?;
+        let mut extra = HeaderMap::new();
+        extra.insert(
+            HeaderName::from_static(HEADER_IDEMPOTENCY),
+            HeaderValue::from_str(&req.dedupe_key)
+                .map_err(|e| BossClientError::Http(e.to_string()))?,
+        );
+        self.send_json(Method::POST, &path, Some(&payload), Some(extra))
+            .await
+    }
+
+    /// Fetch a BOSS ticket/task by ID (`MT-4`).
+    pub async fn get_ticket(&self, ticket_id: &str) -> Result<Value, BossClientError> {
+        let path = format!("/v1/tasks/{}", url_encode(ticket_id));
+        self.send_json(Method::GET, &path, None, None).await
+    }
+
+    /// Create a governed BOSS code task from Metatron investigation findings (`MT-5`).
+    pub async fn create_code_task(
+        &self,
+        req: &CodeTaskHandoffRequest,
+    ) -> Result<CodeTaskHandoffResponse, BossClientError> {
+        let payload = serde_json::to_value(req)?;
+        let mut extra = HeaderMap::new();
+        extra.insert(
+            HeaderName::from_static(HEADER_IDEMPOTENCY),
+            HeaderValue::from_str(&req.dedupe_key)
+                .map_err(|e| BossClientError::Http(e.to_string()))?,
+        );
+        self.send_json(Method::POST, "/v1/code-tasks", Some(&payload), Some(extra))
+            .await
+    }
+
+    /// Query status of a handed-off BOSS code task (`MT-5`).
+    pub async fn get_code_task(
+        &self,
+        run_id: &str,
+    ) -> Result<CodeTaskHandoffResponse, BossClientError> {
+        let path = format!("/v1/code-tasks/{}", url_encode(run_id));
+        self.send_json(Method::GET, &path, None, None).await
+    }
+
+    /// Execute web search through BOSS's model gateway / search endpoint (`MT-9`).
+    pub async fn web_search(
+        &self,
+        req: &WebSearchRequest,
+    ) -> Result<WebSearchResponse, BossClientError> {
+        let payload = serde_json::to_value(req)?;
+        self.send_json(Method::POST, "/v1/metatron/search", Some(&payload), None)
             .await
     }
 

@@ -15,10 +15,11 @@ use metatron_boss_client::{
     AuthMethod, BossClient, BossClientConfig, BossClientError, DevicePollResult, PolicyFetchResult,
 };
 use metatron_core::{
-    ApprovalPromptRequest, ApprovalPrompter, BossReviewerClient, HumanApproval, MetatronConfig,
-    ResolvedProfile, ToolCtx, ToolOrchestrator, TurnDriverOptions, drive_turn,
-    turn::TurnDriverError,
+    ApprovalPromptRequest, ApprovalPrompter, BossReviewerClient, HookRunner, HumanApproval,
+    MetatronConfig, ResolvedProfile, SkillRegistry, SkillSource, ToolCtx, ToolOrchestrator,
+    TurnDriverOptions, drive_turn, turn::TurnDriverError,
 };
+use metatron_mcp::McpClient;
 use metatron_policy::{
     GrantStore, LocalPolicyConfig, PolicyEvaluator, verify_signed_policy_bundle,
 };
@@ -27,6 +28,7 @@ use metatron_remote::RemoteRunner;
 use metatron_sandbox::detect_backend;
 use metatron_secrets::{FileSecretStore, KeyringSecretStore, SecretStore, StoredAuth};
 use metatron_session::{HistoryStore, SessionStore};
+use metatron_tools::{HttpSessionConfig, register_default_tools};
 use metatron_tui::{TuiApp, run_interactive, run_plain};
 
 #[derive(Debug, Parser)]
@@ -116,6 +118,23 @@ enum Commands {
     },
     /// List registered BOSS hosts and local ~/.ssh/config hosts
     Hosts,
+    /// Manage and inspect BOSS admin-approved MCP servers (`MT-9`, `MT-5`)
+    Mcp {
+        #[command(subcommand)]
+        action: McpAction,
+    },
+    /// List BOSS-granted and local SKILL.md skills (metadata only, policy-filtered)
+    Skills,
+    /// Print the versioned JSONL event JSON Schema for SDK/IDE consumers (`MT-5`)
+    Schema,
+}
+
+#[derive(Debug, Subcommand)]
+enum McpAction {
+    /// List admin-approved MCP servers from BOSS
+    List,
+    /// Probe an approved MCP server's tool catalog (refuses unapproved servers)
+    Probe { server: String },
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -457,6 +476,7 @@ async fn cmd_doctor(resolved: &ResolvedProfile, store: &dyn SecretStore) -> Exit
 
 #[allow(clippy::too_many_arguments)]
 async fn cmd_exec(
+    cfg: &MetatronConfig,
     resolved: &ResolvedProfile,
     store: &dyn SecretStore,
     prompt_arg: Option<String>,
@@ -525,7 +545,9 @@ async fn cmd_exec(
     let data_dir = MetatronConfig::default_data_dir();
     let sessions_dir = data_dir.join("sessions");
     let scratch_dir = data_dir.join("scratch");
+    let evidence_dir = data_dir.join("evidence");
     let _ = std::fs::create_dir_all(&scratch_dir);
+    let _ = std::fs::create_dir_all(&evidence_dir);
     let session_store = match SessionStore::new(sessions_dir) {
         Ok(s) => s,
         Err(e) => {
@@ -551,26 +573,47 @@ async fn cmd_exec(
 
     let evaluator = load_evaluator(&client, &project_id, mode).await;
     let effective_mode = evaluator.effective_mode();
+    let cookie_policy = evaluator.cookie_mode();
     let prompter = Arc::new(StdioPrompter { non_interactive });
     let reviewer = Arc::new(BossReviewerClient::new(client.clone()));
-    let orchestrator = ToolOrchestrator::new(
+    let mut orchestrator = ToolOrchestrator::new(
         evaluator,
-        prompter,
+        prompter.clone(),
         Some(reviewer),
         audit,
         Some(session_store.clone()),
     );
+    let http_cfg = Arc::new(HttpSessionConfig::new(cookie_policy, prompter));
+    register_default_tools(&mut orchestrator, http_cfg);
 
+    // Best-effort load of BOSS admin-approved MCP servers (cached tool metadata).
+    let mcp_client = McpClient::from_boss_registry(&client, &project_id)
+        .await
+        .ok()
+        .map(Arc::new);
+    if let Some(ref mcp) = mcp_client {
+        for srv in mcp.approved_servers() {
+            if let Ok(tools) = mcp.cached_tools(&srv.name) {
+                orchestrator.register_mcp_tools(Arc::clone(mcp), tools);
+            }
+        }
+    }
+
+    let hooks = (!cfg.hooks.is_empty()).then(|| Arc::new(HookRunner::new(cfg.hooks.clone())));
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let tool_ctx = ToolCtx {
         project_id: project_id.clone(),
         session_id: session_id.clone(),
         cwd: cwd.clone(),
         scratch_dir,
+        evidence_dir,
         allowed_read_roots: vec![cwd.clone()],
         allow_unsandboxed_retry: false,
         boss_client: Some(client.clone()),
         remote_runner: RemoteRunner::default(),
+        ticket_id: None,
+        mcp_client,
+        hooks,
         cancel_rx: None,
     };
 
@@ -596,7 +639,7 @@ async fn cmd_exec(
         &prompt,
         |ev| {
             if json_mode {
-                if let Ok(line) = serde_json::to_string(ev) {
+                if let Ok(line) = serde_json::to_string(&ev.to_versioned()) {
                     let _ = writeln!(stdout, "{line}");
                     let _ = stdout.flush();
                 }
@@ -642,7 +685,7 @@ async fn cmd_exec(
 async fn main() {
     let cli = Cli::parse();
 
-    // Completion needs no config/network access.
+    // Completion and schema need no config/network access.
     if let Some(Commands::Completion { shell }) = cli.command {
         let mut cmd = Cli::command();
         let target = match shell {
@@ -651,6 +694,12 @@ async fn main() {
             CompletionShell::Fish => Shell::Fish,
         };
         generate(target, &mut cmd, "metatron", &mut io::stdout());
+        return;
+    }
+    if matches!(cli.command, Some(Commands::Schema)) {
+        if let Ok(pretty) = serde_json::to_string_pretty(&ExecEvent::jsonl_schema_v1()) {
+            println!("{pretty}");
+        }
         return;
     }
 
@@ -701,6 +750,7 @@ async fn main() {
             non_interactive,
         }) => {
             cmd_exec(
+                &cfg,
                 &resolved,
                 store.as_ref(),
                 prompt,
@@ -817,7 +867,79 @@ async fn main() {
                 }
             }
         }
-        Some(Commands::Login { .. } | Commands::Completion { .. }) => ExitCode::Ok,
+        Some(Commands::Mcp { action }) => {
+            let auth = resolve_auth(store.as_ref(), &resolved.profile_name);
+            let Ok(client) = BossClientConfig::new(&resolved.url, auth).and_then(BossClient::new)
+            else {
+                eprintln!("Invalid URL: {}", resolved.url);
+                process::exit(ExitCode::UsageOrConfig.as_i32());
+            };
+            match McpClient::from_boss_registry(&client, &resolved.project).await {
+                Ok(mcp) => match action {
+                    McpAction::List => {
+                        for srv in mcp.approved_servers() {
+                            println!(
+                                "{:<24} {:<8} tier={} enabled={} {}",
+                                srv.name, srv.transport, srv.risk_tier, srv.enabled, srv.url
+                            );
+                        }
+                        ExitCode::Ok
+                    }
+                    McpAction::Probe { server } => match mcp.discover_tools(&server).await {
+                        Ok(tools) => {
+                            for t in tools {
+                                println!(
+                                    "{:<36} policy={} risk={} exposure={:?}",
+                                    t.namespaced_name, t.policy_key, t.risk_class, t.exposure
+                                );
+                            }
+                            ExitCode::Ok
+                        }
+                        Err(e) => {
+                            eprintln!("MCP probe failed: {e}");
+                            ExitCode::PolicyDenied
+                        }
+                    },
+                },
+                Err(e) => {
+                    eprintln!("Failed to load BOSS MCP registry: {e}");
+                    ExitCode::RuntimeError
+                }
+            }
+        }
+        Some(Commands::Skills) => {
+            let auth = resolve_auth(store.as_ref(), &resolved.profile_name);
+            let client = BossClientConfig::new(&resolved.url, auth)
+                .and_then(BossClient::new)
+                .ok();
+            let evaluator = if let Some(ref c) = client {
+                load_evaluator(c, &resolved.project, resolved.mode).await
+            } else {
+                PolicyEvaluator::offline_readonly(LocalPolicyConfig::default())
+            };
+            let mut reg = SkillRegistry::new();
+            if let Some(ref c) = client
+                && let Ok(boss_skills) = c.list_skills(&resolved.project).await
+            {
+                reg.load_boss_skills(boss_skills);
+            }
+            if let Some(cfg_dir) = MetatronConfig::default_config_path().parent() {
+                let _ = reg.load_local_dir(&cfg_dir.join("skills"), SkillSource::LocalUser);
+            }
+            if let Ok(cwd) = std::env::current_dir() {
+                let _ = reg.load_local_dir(&cwd.join(".agents/skills"), SkillSource::LocalRepo);
+            }
+            for meta in reg.prompt_metadata_catalog(&evaluator) {
+                println!(
+                    "${:<24} [{:?}] {}",
+                    meta.name, meta.source, meta.description
+                );
+            }
+            ExitCode::Ok
+        }
+        Some(Commands::Login { .. } | Commands::Completion { .. } | Commands::Schema) => {
+            ExitCode::Ok
+        }
         None => {
             // Default interactive TUI (or plain REPL if --plain or non-TTY).
             let auth = resolve_auth(store.as_ref(), &resolved.profile_name);
@@ -857,30 +979,53 @@ async fn main() {
                 }
             };
             let evaluator = load_evaluator(&client, &resolved.project, resolved.mode).await;
+            let cookie_policy = evaluator.cookie_mode();
             let prompter = Arc::new(StdioPrompter {
                 non_interactive: false,
             });
             let reviewer = Arc::new(BossReviewerClient::new(client.clone()));
             let mut orchestrator = ToolOrchestrator::new(
                 evaluator,
-                prompter,
+                prompter.clone(),
                 Some(reviewer),
                 audit,
                 Some(session_store.clone()),
             );
+            let http_cfg = Arc::new(HttpSessionConfig::new(cookie_policy, prompter));
+            register_default_tools(&mut orchestrator, http_cfg);
 
+            let mcp_client = McpClient::from_boss_registry(&client, &resolved.project)
+                .await
+                .ok()
+                .map(Arc::new);
+            if let Some(ref mcp) = mcp_client {
+                for srv in mcp.approved_servers() {
+                    if let Ok(tools) = mcp.cached_tools(&srv.name) {
+                        orchestrator.register_mcp_tools(Arc::clone(mcp), tools);
+                    }
+                }
+            }
+
+            let hooks =
+                (!cfg.hooks.is_empty()).then(|| Arc::new(HookRunner::new(cfg.hooks.clone())));
             let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
             let scratch_dir = data_dir.join("scratch");
+            let evidence_dir = data_dir.join("evidence");
             let _ = std::fs::create_dir_all(&scratch_dir);
+            let _ = std::fs::create_dir_all(&evidence_dir);
             let tool_ctx = ToolCtx {
                 project_id: resolved.project.clone(),
                 session_id: session_id.clone(),
                 cwd: cwd.clone(),
                 scratch_dir,
+                evidence_dir,
                 allowed_read_roots: vec![cwd],
                 allow_unsandboxed_retry: false,
                 boss_client: Some(client.clone()),
                 remote_runner: RemoteRunner::default(),
+                ticket_id: None,
+                mcp_client,
+                hooks,
                 cancel_rx: None,
             };
 

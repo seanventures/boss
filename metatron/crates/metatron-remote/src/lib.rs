@@ -171,11 +171,12 @@ pub fn load_user_ssh_config(path: Option<&Path>) -> Vec<SshConfigHost> {
         .unwrap_or_default()
 }
 
-/// Runner for `ssh_run` targeting registered BOSS hosts (with vault-lent keys) or
-/// user `~/.ssh/config` hosts (flagged `outside_boss_vault`).
+/// Runner for `ssh_run` and `scp` transfers targeting registered BOSS hosts (with vault-lent keys)
+/// or user `~/.ssh/config` hosts (flagged `outside_boss_vault`).
 #[derive(Debug, Clone)]
 pub struct RemoteRunner {
     pub ssh_binary: String,
+    pub scp_binary: String,
     pub lease_ttl_s: u64,
     pub timeout: Duration,
     pub ssh_config_path: Option<PathBuf>,
@@ -185,6 +186,7 @@ impl Default for RemoteRunner {
     fn default() -> Self {
         Self {
             ssh_binary: "ssh".to_string(),
+            scp_binary: "scp".to_string(),
             lease_ttl_s: 60,
             timeout: Duration::from_secs(60),
             ssh_config_path: None,
@@ -349,6 +351,181 @@ impl RemoteRunner {
             }
         }
     }
+
+    /// Download a remote file into a local path via `scp` using a vault-lent ephemeral key
+    /// (for registered BOSS hosts) or `~/.ssh/config` (`MT-4`).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn scp_download(
+        &self,
+        client: Option<&BossClient>,
+        host: &ResolvedHost,
+        remote_path: &str,
+        local_dest: &Path,
+        session_id: Option<&str>,
+        purpose: &str,
+        cwd: &Path,
+        cancel_rx: Option<watch::Receiver<bool>>,
+    ) -> Result<RemoteExecOutput, RemoteError> {
+        self.scp_transfer(
+            client,
+            host,
+            remote_path,
+            local_dest,
+            false,
+            session_id,
+            purpose,
+            cwd,
+            cancel_rx,
+        )
+        .await
+    }
+
+    /// Upload a local file to a remote host via `scp` (`MT-4`, gated behind hard approval).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn scp_upload(
+        &self,
+        client: Option<&BossClient>,
+        host: &ResolvedHost,
+        local_src: &Path,
+        remote_path: &str,
+        session_id: Option<&str>,
+        purpose: &str,
+        cwd: &Path,
+        cancel_rx: Option<watch::Receiver<bool>>,
+    ) -> Result<RemoteExecOutput, RemoteError> {
+        self.scp_transfer(
+            client,
+            host,
+            remote_path,
+            local_src,
+            true,
+            session_id,
+            purpose,
+            cwd,
+            cancel_rx,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn scp_transfer(
+        &self,
+        client: Option<&BossClient>,
+        host: &ResolvedHost,
+        remote_path: &str,
+        local_path: &Path,
+        is_upload: bool,
+        session_id: Option<&str>,
+        purpose: &str,
+        cwd: &Path,
+        cancel_rx: Option<watch::Receiver<bool>>,
+    ) -> Result<RemoteExecOutput, RemoteError> {
+        if remote_path.trim().is_empty() {
+            return Err(RemoteError::EmptyCommand);
+        }
+        let local_str = local_path.to_string_lossy().into_owned();
+
+        match host {
+            ResolvedHost::Registered(reg) => {
+                let boss = client.ok_or_else(|| {
+                    RemoteError::HostNotFound(format!(
+                        "BOSS client required to lease key for registered host '{}'",
+                        reg.name
+                    ))
+                })?;
+                let lease = boss
+                    .lease_host_credential(
+                        &reg.id,
+                        &CredentialLeaseRequest {
+                            purpose: purpose.to_string(),
+                            ttl_s: self.lease_ttl_s,
+                            session_id: session_id.map(ToString::to_string),
+                        },
+                    )
+                    .await?;
+                let known_hosts = lease
+                    .host_key_known_hosts
+                    .as_deref()
+                    .or(reg.host_key_known_hosts.as_deref());
+                let key_file = EphemeralKeyFile::write(&lease.material, known_hosts)?;
+
+                let mut scp_args = vec![
+                    "-o".to_string(),
+                    "BatchMode=yes".to_string(),
+                    "-o".to_string(),
+                    "IdentitiesOnly=yes".to_string(),
+                    "-o".to_string(),
+                    "ConnectTimeout=15".to_string(),
+                    "-i".to_string(),
+                    key_file.key_path().to_string_lossy().into_owned(),
+                    "-P".to_string(),
+                    reg.ssh_port.to_string(),
+                ];
+                if let Some(kh_path) = key_file.known_hosts_path() {
+                    scp_args.push("-o".to_string());
+                    scp_args.push("StrictHostKeyChecking=yes".to_string());
+                    scp_args.push("-o".to_string());
+                    scp_args.push(format!("UserKnownHostsFile={}", kh_path.display()));
+                } else {
+                    scp_args.push("-o".to_string());
+                    scp_args.push("StrictHostKeyChecking=accept-new".to_string());
+                }
+                let remote_spec = format!("{}@{}:{remote_path}", reg.ssh_user, reg.address);
+                if is_upload {
+                    scp_args.push(local_str);
+                    scp_args.push(remote_spec);
+                } else {
+                    scp_args.push(remote_spec);
+                    scp_args.push(local_str);
+                }
+
+                let mut req = ExecRequest::new(&self.scp_binary, scp_args, cwd.to_path_buf());
+                req.timeout = self.timeout;
+                let exec = run_command(req, cancel_rx).await?;
+                drop(key_file);
+
+                Ok(RemoteExecOutput {
+                    host: reg.name.clone(),
+                    origin: HostOrigin::BossVault,
+                    lease_id: Some(lease.lease_id),
+                    warning: REMOTE_SANDBOX_WARNING,
+                    exec,
+                })
+            }
+            ResolvedHost::UserSshConfig(cfg) => {
+                let mut scp_args = vec![
+                    "-o".to_string(),
+                    "BatchMode=yes".to_string(),
+                    "-o".to_string(),
+                    "ConnectTimeout=15".to_string(),
+                ];
+                if let Some(ref cfg_path) = self.ssh_config_path {
+                    scp_args.push("-F".to_string());
+                    scp_args.push(cfg_path.to_string_lossy().into_owned());
+                }
+                let remote_spec = format!("{}:{remote_path}", cfg.alias);
+                if is_upload {
+                    scp_args.push(local_str);
+                    scp_args.push(remote_spec);
+                } else {
+                    scp_args.push(remote_spec);
+                    scp_args.push(local_str);
+                }
+
+                let mut req = ExecRequest::new(&self.scp_binary, scp_args, cwd.to_path_buf());
+                req.timeout = self.timeout;
+                let exec = run_command(req, cancel_rx).await?;
+
+                Ok(RemoteExecOutput {
+                    host: cfg.alias.clone(),
+                    origin: HostOrigin::UserSshConfig,
+                    lease_id: None,
+                    warning: REMOTE_SANDBOX_WARNING,
+                    exec,
+                })
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -462,6 +639,7 @@ Host staging-db
 
         let runner = RemoteRunner {
             ssh_binary: fake_ssh.to_string_lossy().into_owned(),
+            scp_binary: "scp".to_string(),
             lease_ttl_s: 60,
             timeout: Duration::from_secs(10),
             ssh_config_path: Some(tmp.path().join("nonexistent_ssh_config")),
@@ -525,6 +703,7 @@ Host staging-db
 
         let runner = RemoteRunner {
             ssh_binary: fake_ssh.to_string_lossy().into_owned(),
+            scp_binary: "scp".to_string(),
             lease_ttl_s: 60,
             timeout: Duration::from_secs(10),
             ssh_config_path: Some(cfg_path),

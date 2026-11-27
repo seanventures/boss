@@ -138,6 +138,9 @@ pub fn classify_command_argv(argv: &[String], is_remote: bool) -> VerbVerdict {
             justification: "packet capture requires explicit human approval".to_string(),
         };
     }
+    if verb == "tshark" {
+        return classify_tshark(&argv[1..], is_remote);
+    }
 
     // 3. Hard-prompt app-control verbs (`osascript`, `shortcuts`).
     if matches!(verb, "osascript" | "shortcuts") {
@@ -150,6 +153,19 @@ pub fn classify_command_argv(argv: &[String], is_remote: bool) -> VerbVerdict {
                 "app-control command '{verb}' runs unsandboxed and requires human approval"
             ),
         };
+    }
+
+    // 3b. Media processing verb rules (`ffmpeg`, `ffprobe`) — MT-9 (`ARCHITECTURE.md` §8).
+    if !is_remote && verb == "ffmpeg" {
+        return classify_ffmpeg(&argv[1..]);
+    }
+    if !is_remote && verb == "ffprobe" {
+        return classify_ffprobe(&argv[1..]);
+    }
+
+    // 3c. File transfer verbs (`scp`, `sftp`) — MT-9 / MT-4.
+    if matches!(verb, "scp" | "sftp") {
+        return classify_transfer_verb(verb, &argv[1..]);
     }
 
     let read_class = if is_remote {
@@ -193,21 +209,11 @@ pub fn classify_command_argv(argv: &[String], is_remote: bool) -> VerbVerdict {
         };
     }
 
-    // 6. Local read-only analysis helpers (`ffprobe`, `head`, `tail`, `wc`, `grep`, `rg`, `stat`, `file`, `echo`, `pwd`).
+    // 6. Local read-only analysis helpers (`head`, `tail`, `wc`, `grep`, `rg`, `stat`, `file`, `echo`, `pwd`).
     if !is_remote
         && matches!(
             verb,
-            "ffprobe"
-                | "head"
-                | "tail"
-                | "wc"
-                | "grep"
-                | "rg"
-                | "stat"
-                | "file"
-                | "echo"
-                | "pwd"
-                | "cat"
+            "head" | "tail" | "wc" | "grep" | "rg" | "stat" | "file" | "echo" | "pwd" | "cat"
         )
     {
         return VerbVerdict {
@@ -248,6 +254,284 @@ fn is_destructive_verb(verb: &str) -> bool {
             | "halt"
             | "init"
     ) || verb.starts_with("mkfs.")
+}
+
+fn has_unsafe_ffmpeg_input_scheme(val: &str) -> bool {
+    let lower = val.to_ascii_lowercase();
+    for prefix in [
+        "http://", "https://", "ftp://", "rtmp://", "rtsp://", "tcp://", "udp://", "pipe:",
+        "concat:", "subfile:", "crypto:", "data:", "file://", "fd:", "lavfi",
+    ] {
+        if lower.starts_with(prefix) {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_scratch_output_path(path: &str) -> bool {
+    let p = path.trim();
+    if p.is_empty() || p.contains("..") {
+        return false;
+    }
+    p.starts_with("scratch/") || p.starts_with("./scratch/") || p.contains("/scratch/")
+}
+
+/// Classify `ffmpeg` invocations (`MT-9`, `ARCHITECTURE.md` §8):
+/// - Rejects/prompts inputs that can read arbitrary files (`-f lavfi`, `movie=`, `amovie=`,
+///   `concat:`, network URLs, or `..` traversal).
+/// - Auto-allows (`WriteScratch`) ONLY when all outputs target the session scratch dir.
+/// - Prompts (`WriteLocal`) when writing outside scratch.
+fn classify_ffmpeg(args: &[String]) -> VerbVerdict {
+    if args.is_empty() {
+        return VerbVerdict {
+            rule_id: "builtin-ffmpeg-prompt".to_string(),
+            decision: PolicyDecision::Prompt,
+            risk_class: RiskClass::WriteLocal,
+            hard: false,
+            justification: "ffmpeg requires explicit inputs and a scratch output path".to_string(),
+        };
+    }
+
+    let mut i = 0usize;
+    let mut outputs: Vec<&str> = Vec::new();
+    while i < args.len() {
+        let tok = args[i].as_str();
+        let lower = tok.to_ascii_lowercase();
+
+        // Catch lavfi / movie= / amovie= / sendcmd= / script= arbitrary file readers anywhere in filters.
+        if lower.contains("movie=")
+            || lower.contains("amovie=")
+            || lower.contains("sendcmd=")
+            || lower.contains("lavfi")
+        {
+            return VerbVerdict {
+                rule_id: "builtin-ffmpeg-unsafe-filter".to_string(),
+                decision: PolicyDecision::Prompt,
+                risk_class: RiskClass::WriteLocal,
+                hard: false,
+                justification: format!(
+                    "ffmpeg argument '{tok}' can read arbitrary files outside allowed inputs"
+                ),
+            };
+        }
+
+        if tok == "-f" {
+            if let Some(fmt) = args.get(i + 1) {
+                if fmt.eq_ignore_ascii_case("lavfi") || fmt.eq_ignore_ascii_case("concat") {
+                    return VerbVerdict {
+                        rule_id: "builtin-ffmpeg-unsafe-format".to_string(),
+                        decision: PolicyDecision::Prompt,
+                        risk_class: RiskClass::WriteLocal,
+                        hard: false,
+                        justification: format!(
+                            "ffmpeg format '-f {fmt}' can read arbitrary files and requires approval"
+                        ),
+                    };
+                }
+                i += 2;
+                continue;
+            }
+            i += 1;
+            continue;
+        }
+
+        if tok == "-i" {
+            if let Some(inp) = args.get(i + 1) {
+                if has_unsafe_ffmpeg_input_scheme(inp) || inp.contains("..") {
+                    return VerbVerdict {
+                        rule_id: "builtin-ffmpeg-unsafe-input".to_string(),
+                        decision: PolicyDecision::Prompt,
+                        risk_class: RiskClass::Network,
+                        hard: false,
+                        justification: format!(
+                            "ffmpeg input '{inp}' uses an unsafe or network URI scheme"
+                        ),
+                    };
+                }
+                i += 2;
+                continue;
+            }
+            i += 1;
+            continue;
+        }
+
+        // Common value flags that consume one argument.
+        if matches!(
+            tok,
+            "-ss"
+                | "-to"
+                | "-t"
+                | "-filter_complex"
+                | "-vf"
+                | "-af"
+                | "-c:v"
+                | "-c:a"
+                | "-vcodec"
+                | "-acodec"
+                | "-crf"
+                | "-preset"
+                | "-b:v"
+                | "-b:a"
+                | "-r"
+                | "-s"
+                | "-vframes"
+                | "-frames:v"
+                | "-map"
+                | "-pix_fmt"
+                | "-movflags"
+                | "-loglevel"
+                | "-v"
+        ) {
+            if let Some(val) = args.get(i + 1) {
+                let vl = val.to_ascii_lowercase();
+                if vl.contains("movie=") || vl.contains("amovie=") || vl.contains("sendcmd=") {
+                    return VerbVerdict {
+                        rule_id: "builtin-ffmpeg-unsafe-filter".to_string(),
+                        decision: PolicyDecision::Prompt,
+                        risk_class: RiskClass::WriteLocal,
+                        hard: false,
+                        justification: format!(
+                            "ffmpeg filter '{val}' can read arbitrary files and requires approval"
+                        ),
+                    };
+                }
+                i += 2;
+                continue;
+            }
+            i += 1;
+            continue;
+        }
+
+        if tok.starts_with('-') {
+            i += 1;
+            continue;
+        }
+
+        outputs.push(tok);
+        i += 1;
+    }
+
+    if outputs.is_empty() {
+        return VerbVerdict {
+            rule_id: "builtin-ffmpeg-no-output".to_string(),
+            decision: PolicyDecision::Prompt,
+            risk_class: RiskClass::WriteLocal,
+            hard: false,
+            justification: "ffmpeg invocation missing output path".to_string(),
+        };
+    }
+
+    if outputs.iter().all(|o| is_scratch_output_path(o)) {
+        VerbVerdict {
+            rule_id: "builtin-ffmpeg-scratch".to_string(),
+            decision: PolicyDecision::Allow,
+            risk_class: RiskClass::WriteScratch,
+            hard: false,
+            justification: "ffmpeg writing strictly to session scratch dir with local inputs"
+                .to_string(),
+        }
+    } else {
+        VerbVerdict {
+            rule_id: "builtin-ffmpeg-write-local".to_string(),
+            decision: PolicyDecision::Prompt,
+            risk_class: RiskClass::WriteLocal,
+            hard: false,
+            justification: "ffmpeg output writes outside session scratch dir".to_string(),
+        }
+    }
+}
+
+fn classify_ffprobe(args: &[String]) -> VerbVerdict {
+    for tok in args {
+        if has_unsafe_ffmpeg_input_scheme(tok) || tok.contains("..") {
+            return VerbVerdict {
+                rule_id: "builtin-ffprobe-unsafe-input".to_string(),
+                decision: PolicyDecision::Prompt,
+                risk_class: RiskClass::Network,
+                hard: false,
+                justification: format!("ffprobe input '{tok}' uses a network or unsafe URI"),
+            };
+        }
+    }
+    VerbVerdict {
+        rule_id: "builtin-local-read-ffprobe".to_string(),
+        decision: PolicyDecision::Allow,
+        risk_class: RiskClass::ReadLocal,
+        hard: false,
+        justification: "read-only local ffprobe inspection".to_string(),
+    }
+}
+
+/// Classify `tshark`: offline `-r <file>` analysis is safe read-only; live capture (`-i`) or
+/// writing captures (`-w`) is hard-prompt `Capture`.
+fn classify_tshark(args: &[String], is_remote: bool) -> VerbVerdict {
+    let has_read_file = args.iter().any(|a| a == "-r");
+    let has_live_or_write = args
+        .iter()
+        .any(|a| a == "-i" || a == "-w" || a.starts_with("-i") || a.starts_with("-w"));
+    if has_read_file && !has_live_or_write {
+        VerbVerdict {
+            rule_id: "builtin-tshark-offline-read".to_string(),
+            decision: PolicyDecision::Allow,
+            risk_class: if is_remote {
+                RiskClass::RemoteRead
+            } else {
+                RiskClass::ReadLocal
+            },
+            hard: false,
+            justification: "offline read-only tshark analysis of a capture file".to_string(),
+        }
+    } else {
+        VerbVerdict {
+            rule_id: "builtin-hard-tshark".to_string(),
+            decision: PolicyDecision::Prompt,
+            risk_class: RiskClass::Capture,
+            hard: true,
+            justification: "live packet capture with tshark requires explicit human approval"
+                .to_string(),
+        }
+    }
+}
+
+/// Classify `scp` / `sftp`: uploads (`host:path` as destination) are hard-prompt `RemoteWrite`;
+/// downloads (`host:path` as source) are `RemoteRead` prompt (or allowed via transfer tool).
+fn classify_transfer_verb(verb: &str, args: &[String]) -> VerbVerdict {
+    if verb == "sftp" {
+        return VerbVerdict {
+            rule_id: "builtin-sftp-prompt".to_string(),
+            decision: PolicyDecision::Prompt,
+            risk_class: RiskClass::RemoteRead,
+            hard: false,
+            justification: "sftp file transfer requires approval".to_string(),
+        };
+    }
+    let positionals: Vec<&str> = args
+        .iter()
+        .filter(|a| !a.starts_with('-'))
+        .map(String::as_str)
+        .collect();
+    let dst_is_remote = positionals
+        .last()
+        .is_some_and(|p| p.contains(':') && !p.starts_with('/'));
+    if dst_is_remote {
+        VerbVerdict {
+            rule_id: "builtin-scp-upload".to_string(),
+            decision: PolicyDecision::Prompt,
+            risk_class: RiskClass::RemoteWrite,
+            hard: true,
+            justification: "scp upload writes to a remote host and requires human approval"
+                .to_string(),
+        }
+    } else {
+        VerbVerdict {
+            rule_id: "builtin-scp-download".to_string(),
+            decision: PolicyDecision::Prompt,
+            risk_class: RiskClass::RemoteRead,
+            hard: false,
+            justification: "scp download from remote host".to_string(),
+        }
+    }
 }
 
 fn parse_positive_u64(token: &str) -> Option<u64> {
@@ -692,5 +976,145 @@ mod tests {
             assert_eq!(v.decision, PolicyDecision::Forbidden);
             assert!(v.hard);
         }
+    }
+
+    #[test]
+    fn mt9_verb_rule_pack_covers_ffmpeg_ffprobe_osascript_tshark_and_scp() {
+        // ffmpeg writing to scratch -> allowed WriteScratch
+        let ok_ffmpeg = classify_command_argv(
+            &[
+                "ffmpeg",
+                "-ss",
+                "12",
+                "-to",
+                "100",
+                "-i",
+                "demo.mov",
+                "-i",
+                "logo.png",
+                "-filter_complex",
+                "overlay=10:10",
+                "-vf",
+                "scale=-2:1080",
+                "-c:v",
+                "libx264",
+                "-crf",
+                "20",
+                "scratch/demo_cut.mp4",
+            ]
+            .map(str::to_string),
+            false,
+        );
+        assert_eq!(ok_ffmpeg.decision, PolicyDecision::Allow);
+        assert_eq!(ok_ffmpeg.risk_class, RiskClass::WriteScratch);
+
+        // ffmpeg with -f lavfi or movie= -> MUST prompt (can read arbitrary files)
+        let lavfi_ffmpeg = classify_command_argv(
+            &[
+                "ffmpeg",
+                "-f",
+                "lavfi",
+                "-i",
+                "movie=/etc/passwd",
+                "scratch/out.mp4",
+            ]
+            .map(str::to_string),
+            false,
+        );
+        assert_eq!(lavfi_ffmpeg.decision, PolicyDecision::Prompt);
+
+        let movie_filter = classify_command_argv(
+            &[
+                "ffmpeg",
+                "-i",
+                "demo.mov",
+                "-vf",
+                "movie=/etc/hosts[ov];[in][ov]overlay",
+                "scratch/out.mp4",
+            ]
+            .map(str::to_string),
+            false,
+        );
+        assert_eq!(movie_filter.decision, PolicyDecision::Prompt);
+
+        // ffmpeg writing outside scratch -> Prompt WriteLocal
+        let outside_ffmpeg = classify_command_argv(
+            &["ffmpeg", "-i", "demo.mov", "/Users/alice/Movies/out.mp4"].map(str::to_string),
+            false,
+        );
+        assert_eq!(outside_ffmpeg.decision, PolicyDecision::Prompt);
+        assert_eq!(outside_ffmpeg.risk_class, RiskClass::WriteLocal);
+
+        // ffmpeg with network URL input -> Prompt Network
+        let net_ffmpeg = classify_command_argv(
+            &[
+                "ffmpeg",
+                "-i",
+                "https://evil.example/stream.m3u8",
+                "scratch/out.mp4",
+            ]
+            .map(str::to_string),
+            false,
+        );
+        assert_eq!(net_ffmpeg.decision, PolicyDecision::Prompt);
+
+        // ffprobe local -> Allow ReadLocal; ffprobe network -> Prompt
+        let ok_ffprobe = classify_command_argv(
+            &["ffprobe", "-v", "error", "-show_format", "demo.mov"].map(str::to_string),
+            false,
+        );
+        assert_eq!(ok_ffprobe.decision, PolicyDecision::Allow);
+        assert_eq!(ok_ffprobe.risk_class, RiskClass::ReadLocal);
+
+        let net_ffprobe = classify_command_argv(
+            &["ffprobe", "http://169.254.169.254/latest/meta-data"].map(str::to_string),
+            false,
+        );
+        assert_eq!(net_ffprobe.decision, PolicyDecision::Prompt);
+
+        // osascript & shortcuts -> hard prompt AppControl
+        for verb in ["osascript", "shortcuts"] {
+            let v = classify_command_argv(
+                &[verb.to_string(), "-e".to_string(), "beep".to_string()],
+                false,
+            );
+            assert_eq!(v.decision, PolicyDecision::Prompt);
+            assert_eq!(v.risk_class, RiskClass::AppControl);
+            assert!(v.hard);
+        }
+
+        // tshark offline -r -> Allow ReadLocal; tshark live -i -> hard prompt Capture
+        let offline_tshark = classify_command_argv(
+            &["tshark", "-r", "evidence/cap.pcap", "-c", "20"].map(str::to_string),
+            false,
+        );
+        assert_eq!(offline_tshark.decision, PolicyDecision::Allow);
+        assert_eq!(offline_tshark.risk_class, RiskClass::ReadLocal);
+        assert!(!offline_tshark.hard);
+
+        let live_tshark = classify_command_argv(
+            &["tshark", "-i", "en0", "-c", "20"].map(str::to_string),
+            false,
+        );
+        assert_eq!(live_tshark.decision, PolicyDecision::Prompt);
+        assert_eq!(live_tshark.risk_class, RiskClass::Capture);
+        assert!(live_tshark.hard);
+
+        // scp upload -> hard prompt RemoteWrite; scp download -> RemoteRead Prompt
+        let scp_up = classify_command_argv(
+            &["scp", "scratch/a.txt", "ops@web-1:/tmp/a.txt"].map(str::to_string),
+            false,
+        );
+        assert_eq!(scp_up.decision, PolicyDecision::Prompt);
+        assert_eq!(scp_up.risk_class, RiskClass::RemoteWrite);
+        assert!(scp_up.hard);
+
+        let scp_down = classify_command_argv(
+            &["scp", "ops@web-1:/var/log/sar.bin", "evidence/sar.bin"].map(str::to_string),
+            false,
+        );
+        assert_eq!(scp_down.decision, PolicyDecision::Prompt);
+        assert_eq!(scp_down.risk_class, RiskClass::RemoteRead);
+        assert!(!scp_down.hard);
     }
 }

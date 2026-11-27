@@ -17,12 +17,14 @@ clap_complete.workspace = true
 metatron-audit.workspace = true
 metatron-boss-client.workspace = true
 metatron-core.workspace = true
+metatron-mcp.workspace = true
 metatron-policy.workspace = true
 metatron-protocol.workspace = true
 metatron-remote.workspace = true
 metatron-sandbox.workspace = true
 metatron-secrets.workspace = true
 metatron-session.workspace = true
+metatron-tools.workspace = true
 metatron-tui.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "signal"] }

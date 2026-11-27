@@ -1584,12 +1584,14 @@ dependencies = [
  "metatron-audit",
  "metatron-boss-client",
  "metatron-core",
+ "metatron-mcp",
  "metatron-policy",
  "metatron-protocol",
  "metatron-remote",
  "metatron-sandbox",
  "metatron-secrets",
  "metatron-session",
+ "metatron-tools",
  "metatron-tui",
  "rand 0.8.8",
  "serde_json",
@@ -1609,6 +1611,7 @@ dependencies = [
  "metatron-audit",
  "metatron-boss-client",
  "metatron-exec",
+ "metatron-mcp",
  "metatron-policy",
  "metatron-protocol",
  "metatron-remote",
@@ -1623,6 +1626,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "toml",
+ "url",
  "uuid",
 ]
 
@@ -1642,6 +1646,19 @@ dependencies = [
 [[package]]
 name = "metatron-mcp"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "metatron-boss-client",
+ "metatron-protocol",
+ "metatron-secrets",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "url",
+]
 
 [[package]]
 name = "metatron-policy"
@@ -1697,14 +1714,21 @@ dependencies = [
 name = "metatron-secrets"
 version = "0.1.0"
 dependencies = [
+ "aes",
+ "base64 0.22.1",
+ "cbc",
  "chrono",
  "codex-keyring-store",
+ "hex",
+ "hmac",
  "metatron-protocol",
  "regex",
  "serde",
  "serde_json",
+ "sha1",
  "tempfile",
  "thiserror 2.0.21",
+ "url",
  "zeroize",
 ]
 
@@ -1725,6 +1749,35 @@ dependencies = [
 [[package]]
 name = "metatron-tools"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "ed25519-dalek",
+ "hex",
+ "metatron-audit",
+ "metatron-boss-client",
+ "metatron-core",
+ "metatron-exec",
+ "metatron-mcp",
+ "metatron-policy",
+ "metatron-protocol",
+ "metatron-remote",
+ "metatron-sandbox",
+ "metatron-secrets",
+ "metatron-session",
+ "rand 0.8.8",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "shell-words",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "url",
+ "uuid",
+]
 
 [[package]]
 name = "metatron-tui"

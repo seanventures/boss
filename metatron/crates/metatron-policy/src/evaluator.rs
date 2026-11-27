@@ -233,6 +233,50 @@ impl PolicyEvaluator {
         self.bundle.as_ref().map(|b| &b.bundle)
     }
 
+    /// Return the BOSS-governed cookie mode policy (default OFF when offline or unspecified).
+    pub fn cookie_mode(&self) -> metatron_protocol::CookieModePolicy {
+        self.bundle
+            .as_ref()
+            .map(|b| b.bundle.cookie_mode.clone())
+            .unwrap_or_default()
+    }
+
+    /// Returns true if `tool_name` is permitted by BOSS `tools_allowed` and not unconditionally forbidden.
+    /// Supports both plain tool names and MCP policy keys (`mcp__server__tool` / `mcp:server:tool`).
+    pub fn is_tool_allowed(&self, tool_name: &str) -> bool {
+        let Some(ref verified) = self.bundle else {
+            return matches!(
+                tool_name,
+                "shell_local"
+                    | "pyrun"
+                    | "dashboard"
+                    | "view_image"
+                    | "update_plan"
+                    | "tool_search"
+            );
+        };
+        if !verified.bundle.tools_allowed.is_empty()
+            && !verified
+                .bundle
+                .tools_allowed
+                .iter()
+                .any(|t| tool_spec_matches_pattern(tool_name, t))
+        {
+            return false;
+        }
+        !verified.bundle.rules.iter().any(|r| {
+            r.decision == PolicyDecision::Forbidden
+                && r.matcher
+                    .tool
+                    .as_deref()
+                    .is_some_and(|pat| tool_spec_matches_pattern(tool_name, pat))
+                && r.matcher.argv_prefix.is_none()
+                && r.matcher.host.is_none()
+                && r.matcher.domain.is_none()
+                && r.matcher.conditions.is_empty()
+        })
+    }
+
     /// Step 1: filter client tools before advertising them to the model.
     pub fn filter_tools(&self, tools: &[ClientToolSpec]) -> Vec<ClientToolSpec> {
         let mode = self.effective_mode();
@@ -245,14 +289,17 @@ impl PolicyEvaluator {
                             .bundle
                             .tools_allowed
                             .iter()
-                            .any(|t| t == &spec.name)
+                            .any(|t| tool_spec_matches_pattern(&spec.name, t))
                     {
                         return false;
                     }
                     // Hide tools unconditionally forbidden by BOSS rules (no argv/host filter).
                     let unconditionally_forbidden = verified.bundle.rules.iter().any(|r| {
                         r.decision == PolicyDecision::Forbidden
-                            && r.matcher.tool.as_deref() == Some(spec.name.as_str())
+                            && r.matcher
+                                .tool
+                                .as_deref()
+                                .is_some_and(|pat| tool_spec_matches_pattern(&spec.name, pat))
                             && r.matcher.argv_prefix.is_none()
                             && r.matcher.host.is_none()
                             && r.matcher.domain.is_none()
@@ -303,7 +350,7 @@ impl PolicyEvaluator {
                 .bundle
                 .tools_allowed
                 .iter()
-                .any(|t| t == "*" || t == &ctx.tool)
+                .any(|t| tool_spec_matches_pattern(&ctx.tool, t))
         {
             return EvaluationDecision::Deny {
                 decided_by: DecisionSource::Policy,
@@ -554,11 +601,52 @@ fn non_empty(s: &str, fallback: &str) -> String {
     }
 }
 
+/// Convert a namespaced MCP tool name `mcp__<server>__<tool>` into its canonical
+/// policy key `mcp:<server>:<tool>` (`MT-9`, `ARCHITECTURE.md` §8).
+pub fn mcp_policy_key(tool_name: &str) -> Option<(String, String, String)> {
+    let rest = tool_name.strip_prefix("mcp__")?;
+    let (server, tool) = rest.split_once("__")?;
+    if server.is_empty() || tool.is_empty() {
+        return None;
+    }
+    Some((
+        server.to_string(),
+        tool.to_string(),
+        format!("mcp:{server}:{tool}"),
+    ))
+}
+
+fn tool_spec_matches_pattern(tool_name: &str, pattern: &str) -> bool {
+    if pattern == "*" || pattern == tool_name {
+        return true;
+    }
+    if let Some((server, tool, policy_key)) = mcp_policy_key(tool_name)
+        && (pattern == policy_key
+            || pattern == format!("mcp:{server}:*")
+            || pattern == format!("mcp__{server}__*")
+            || pattern == "mcp:*"
+            || pattern == "mcp__*"
+            || pattern == tool)
+    {
+        return true;
+    }
+    false
+}
+
 fn rule_matches_call(rule: &PolicyRule, ctx: &ToolCallContext) -> bool {
     let m = &rule.matcher;
+    if let Some(ref server) = m.server
+        && server != "*"
+    {
+        let Some((call_server, _, _)) = mcp_policy_key(&ctx.tool) else {
+            return false;
+        };
+        if &call_server != server {
+            return false;
+        }
+    }
     if let Some(ref tool) = m.tool
-        && tool != "*"
-        && tool != &ctx.tool
+        && !tool_spec_matches_pattern(&ctx.tool, tool)
     {
         return false;
     }

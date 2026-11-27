@@ -137,6 +137,10 @@ impl AuditBuffer {
             host,
             host_origin,
             domain,
+            cookie_names: Vec::new(),
+            method: None,
+            path: None,
+            http_status: None,
             status,
             decision: redact_secrets(decision),
             decided_by,
@@ -145,6 +149,48 @@ impl AuditBuffer {
             bytes,
             duration_ms,
             ticket_id: None,
+        }
+    }
+
+    /// Build a redacted HTTP/cookie audit event (`MT-6`): records cookie NAMES only, NEVER values!
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_http_event(
+        tool: &str,
+        risk_class: RiskClass,
+        domain: &str,
+        cookie_names: Vec<String>,
+        method: &str,
+        path: &str,
+        http_status: Option<u16>,
+        decision: &str,
+        decided_by: DecisionSource,
+        rule_id: Option<String>,
+        bytes: usize,
+        duration_ms: u64,
+        ticket_id: Option<String>,
+    ) -> AuditEvent {
+        AuditEvent {
+            event_id: Uuid::new_v4().to_string(),
+            ts: Utc::now(),
+            kind: "http_session".to_string(),
+            tool: tool.to_string(),
+            risk_class,
+            argv_redacted: vec![method.to_string(), format!("{domain}{path}")],
+            host: None,
+            host_origin: None,
+            domain: Some(domain.to_string()),
+            cookie_names,
+            method: Some(method.to_string()),
+            path: Some(path.to_string()),
+            http_status,
+            status: http_status.map(|s| s.to_string()),
+            decision: redact_secrets(decision),
+            decided_by,
+            rule_id,
+            exit_code: None,
+            bytes,
+            duration_ms,
+            ticket_id,
         }
     }
 

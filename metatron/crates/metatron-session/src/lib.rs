@@ -6,7 +6,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
-use metatron_protocol::{ApprovalMode, DecisionSource};
+use metatron_protocol::{ApprovalMode, DecisionSource, DroppedTool};
 use metatron_secrets::{is_credential_history_line, redact_secrets};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -78,6 +78,14 @@ pub enum SessionItem {
         ts: DateTime<Utc>,
         compacted_items: usize,
         summary: String,
+    },
+    /// Per-step tool list confirmed by the server in `turn.started` (`MT-9`).
+    TurnTools {
+        ts: DateTime<Utc>,
+        turn_id: String,
+        tools: Vec<String>,
+        #[serde(default)]
+        dropped: Vec<DroppedTool>,
     },
 }
 
@@ -382,6 +390,19 @@ impl SessionStore {
                 } => {
                     out.push_str(&format!(
                         "## Summary ({compacted_items} compacted items)\n\n{summary}\n\n"
+                    ));
+                }
+                SessionItem::TurnTools {
+                    turn_id,
+                    tools,
+                    dropped,
+                    ..
+                } => {
+                    out.push_str(&format!(
+                        "> Turn `{turn_id}` visible tools ({}): `{}` (dropped: {})\n\n",
+                        tools.len(),
+                        tools.join(", "),
+                        dropped.len()
                     ));
                 }
             }
