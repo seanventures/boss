@@ -2535,6 +2535,11 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             # `start_run` now drops them for every caller; they are named here so the reply
             # says what was ignored rather than dropping it in silence.
             ignored = sorted(k for k in run_input if str(k).startswith(wf.ADOPT_PREFIX))
+            # NOR THAT IT IS A NEW APP (app_scope.NEW_APP_KEY): only a person's door declares one,
+            # and a declared new app is never stopped beside another app's unmerged code.
+            if "new_app" in run_input:
+                run_input.pop("new_app")
+                ignored = sorted({*ignored, "new_app"})
             adoption: dict = {}
             if adopted:
                 # The same research rule the console's start uses: a COMPLETED dossier WITH

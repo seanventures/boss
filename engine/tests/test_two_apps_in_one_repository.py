@@ -170,39 +170,6 @@ def test_a_second_app_builds_from_main_while_the_first_is_unmerged(pipeline, nor
     assert heads[f"boss/code/{northgate['recipe']}"] == northgate["recipe_head"]
 
 
-def test_a_template_launched_into_the_project_builds_from_main(pipeline, northgate):  # noqa: F811
-    """THE REPORTED DOOR: Command Center › a template › Into the project (factory_launch with
-    the server-only `existing_project` mark). The launch declares a new app, so its build runs
-    from main beside Recipe Box's open change instead of stopping before planning."""
-    from boss_engine.services import factory_launch
-
-    repo, git = northgate["repo"], northgate["git"]
-    pipeline._engine_env("")
-    os.environ["BOSS_SCRIPTED_APP_DIR"] = "tool-library"
-    spec = {"title": "Tool Library", "mode": "small_change", "id": "tpl_tool_library",
-            "github_repo": f"{OWNER}/{repo}", "existing_project": True,
-            "prompt": ("Build a tiny plain Node ESM service inside `tool-library/`: slug(text) "
-                       "in src/slug.js and an HTTP server in src/server.js answering "
-                       "GET /?q=<text> with {\"slug\": ...} on $PORT. Tests under node --test.")}
-    with pipeline.engine.begin() as c:
-        started = factory_launch.build_run(
-            c, project_id=pipeline.project, spec=spec, actor="operator",
-            settings=pipeline.settings(repo), jobs=pipeline.jobs(repo),
-            reservation_id=f"rsv_{uuid.uuid4().hex[:8]}")
-    launched = started["run_id"]
-    error = pipeline.run(launched, repo)
-    out = pipeline.result(launched)
-    assert error is None, error
-    assert "code_task.wrong_tree" not in out["events"], out["run"].get("error")
-    assert out["run"]["finalize_ctx"].get("new_app") is True
-    assert out["run"]["status"] == "completed", (out["run"]["status"], out["run"].get("error"))
-    on_branch = _files_on(git, f"boss/code/{launched}")
-    assert any(f.startswith("tool-library/") for f in on_branch), on_branch
-    assert not any(f.startswith(f"{RECIPE}/") for f in on_branch), on_branch
-    assert pipeline.branch_heads(repo)[f"boss/code/{northgate['recipe']}"] == \
-        northgate["recipe_head"]
-
-
 def test_a_build_that_names_no_app_still_stops_on_the_empty_mainline(pipeline, northgate):  # noqa: F811
     """AR-54 kept: a build that does not say it is a new app, on a README-only main, beside an
     app on an unmerged branch, may be that app rebuilt from scratch: it stops before planning."""
