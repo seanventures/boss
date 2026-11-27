@@ -85,3 +85,30 @@ def test_extra_slot_waits_after_a_failed_cycle_then_resumes(monkeypatch):
     main._extra_lease_loop(settings, 1)
     assert calls == ["w-s1"] * 3
     assert waits == [15, 0]
+
+
+def test_a_failed_poll_forgets_the_earlier_long_poll():
+    """The flag the idle wait trusts belongs to the poll that just ran: a poll that raised
+    never answered, so the loop gets its full poll-interval sleep, whoever caught the error."""
+    import httpx
+    from apps.worker.boss_worker import main
+    from apps.worker.boss_worker.control_plane import ControlPlaneClient
+
+    answers = iter([httpx.Response(200, json={"status": "idle", "long_poll": True}),
+                    httpx.ConnectError("API unavailable")])
+
+    def handler(request):
+        answer = next(answers)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    client = ControlPlaneClient("http://qa.invalid")
+    client._client = httpx.Client(base_url="http://qa.invalid",
+                                  transport=httpx.MockTransport(handler))
+    settings = _settings()
+    assert client.poll("w", [], 60, wait_ms=15000) is None
+    assert main.idle_seconds(client, settings) == 0.0
+    with pytest.raises(httpx.ConnectError):
+        client.poll("w", [], 60, wait_ms=15000)
+    assert main.idle_seconds(client, settings) == 15.0
