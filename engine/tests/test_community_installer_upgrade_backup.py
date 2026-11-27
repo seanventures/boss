@@ -215,6 +215,18 @@ def install_pair(tmp_path: Path) -> tuple[Path, str, str, dict[str, str], Path]:
 
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
+    # This fixture exercises Git, backup and configuration handling up to the fake Docker
+    # build. The shell network probes have their own local HTTP and TLS endpoint tests.
+    curl = bin_dir / "curl"
+    curl.write_text(
+        "#!/usr/bin/env bash\n"
+        "case \"${!#}\" in\n"
+        "  https://registry.npmjs.org/|https://pypi.org/|https://registry-1.docker.io/) exit 0 ;;\n"
+        "  http://deb.debian.org/debian/dists/bookworm/InRelease) printf 200; exit 0 ;;\n"
+        "esac\n"
+        "exit 1\n"
+    )
+    curl.chmod(0o755)
     # Free disk as df -Pk prints it: upgrade.sh checks the disk before it builds (storage
     # hygiene layer 1), and the machine running the tests is not what is under test here.
     df = bin_dir / "df"
@@ -1006,3 +1018,24 @@ def test_an_install_without_the_repos_volume_still_backs_up(install_pair):
     manifest = json.loads((backup / "manifest.json").read_text())
     assert "repos_volume" not in manifest and "repos.tar" not in manifest["files"]
     assert not (backup / "repos.tar").exists()
+
+
+@pytest.mark.parametrize("empty", [False, True], ids=["absent", "empty"])
+@pytest.mark.parametrize("missing", ["BOSS_API_KEY", "BOSS_DB_PASSWORD"])
+def test_partial_install_env_identifies_the_missing_key_without_replacing_it(install_pair, missing, empty):
+    installed, old, _, env, _ = install_pair
+    env["BOSS_REPO_REF"] = old
+    config = installed / ".env"
+    blank = missing + "=\n" if empty else ""
+    original = "".join(blank if line.startswith(missing + "=") else line
+                       for line in config.read_text().splitlines(keepends=True))
+    config.write_text(original)
+
+    result = _install(installed, env)
+
+    assert result.returncode != 0
+    message = result.stdout + result.stderr
+    assert f".env is missing {missing}" in message
+    assert "backup" in message.lower()
+    assert "private-test-fixture" not in message
+    assert config.read_text() == original

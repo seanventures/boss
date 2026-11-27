@@ -51,6 +51,11 @@ x-boss-enterprise-build-args: &boss-enterprise-build-args
   BOSS_UPSTREAM_HTTP_PROXY: ${BOSS_UPSTREAM_HTTP_PROXY:-}
   BOSS_UPSTREAM_NO_PROXY: ${BOSS_UPSTREAM_NO_PROXY:-}
 
+# The host steward may expire only this install's recorded rollback tags. A separate
+# image label keeps other aliases, including the live release, out of ordinary cleanup.
+x-boss-rollback-labels: &boss-rollback-labels
+  boss.rollback_install_id: ${BOSS_INSTALL_ID:-}
+
 services:
   db:
     # PostgreSQL 16 on Alpine with pgvector and Apache AGE compiled in (db-image/Dockerfile;
@@ -387,6 +392,7 @@ services:
       context: ../..
       dockerfile: Dockerfile.community
       target: api
+      labels: *boss-rollback-labels
       secrets:
         - boss_build_ca
       args:
@@ -810,6 +816,7 @@ services:
       context: ../..
       dockerfile: Dockerfile.community
       target: worker
+      labels: *boss-rollback-labels
       secrets:
         - boss_build_ca
       args:
@@ -1120,6 +1127,7 @@ services:
       context: ../..
       dockerfile: Dockerfile.community
       target: mcp-tools
+      labels: *boss-rollback-labels
       secrets:
         - boss_build_ca
       args:
@@ -1183,6 +1191,7 @@ services:
       context: ../..
       dockerfile: Dockerfile.community
       target: worker
+      labels: *boss-rollback-labels
       secrets:
         - boss_build_ca
       args:
@@ -1235,6 +1244,7 @@ services:
       context: ../..
       dockerfile: Dockerfile.community
       target: egress
+      labels: *boss-rollback-labels
       secrets:
         - boss_build_ca
       args:
@@ -1459,6 +1469,7 @@ services:
       context: ../..
       dockerfile: Dockerfile.community
       target: web
+      labels: *boss-rollback-labels
       secrets:
         - boss_build_ca
       args:

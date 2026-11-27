@@ -43,7 +43,7 @@ import shlex
 import socket
 import subprocess
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Mapping, Optional
 
 from sqlalchemy import text
 
@@ -437,7 +437,10 @@ def create(connection, settings: Settings, *, project_id: str, actor: str,
         disk_pct = DISK_ALERT_PCT
     watch = {"host_health": bool(watch_in.get("host_health", True)),
              "disk_pct": max(50, min(95, disk_pct)),
-             "prune_cache": bool(watch_in.get("prune_cache", True))}
+             "prune_cache": bool(watch_in.get("prune_cache", True)),
+             # The person says the server runs only what BOSS deploys: only then is all of its
+             # unused build cache BOSS's to clear (`cache_prune`).
+             "dedicated": bool(watch_in.get("dedicated", False))}
     try:
         port_min = int(spec.get("port_min") or 8000)
         port_max = int(spec.get("port_max") or 8999)
@@ -816,6 +819,22 @@ def free_ports(connection, host: dict[str, Any], facts: Optional[dict[str, Any]]
 
 # ── 5 · the Infra agent's watch ────────────────────────────────────────────────────────────
 
+#: What a server's build cache is capped at when it may run more than BOSS (prune.sh's default).
+SHARED_CACHE_CAP_GB = 10
+
+
+def cache_prune(watch: Mapping[str, Any]) -> tuple[str, str]:
+    """(the command the Infra agent runs alone, the one it leaves to the person or "").
+
+    THE CACHE BOSS MAY CLEAR is the rule prune.sh and the steward use: a machine that runs only
+    BOSS. An added server may run the person's own workloads, so unless they said it runs only
+    what BOSS deploys (watch.dedicated) the agent keeps Docker's newest cache up to the cap — the
+    plain capped prune — and names the full prune for the person instead of running it."""
+    if watch.get("dedicated"):
+        return "docker builder prune -af >/dev/null 2>&1; true", ""
+    return (f"docker builder prune -f --keep-storage {SHARED_CACHE_CAP_GB}gb >/dev/null 2>&1; true",
+            "docker builder prune -af")
+
 def watch_one(connection, settings: Settings, host_id: str) -> dict[str, Any]:
     """Read one watched server's health; act alone below the line (prune build cache), say it."""
     from .deployment_fleet import direct_host_writes_allowed, get_host, run_on_host
@@ -846,12 +865,18 @@ def watch_one(connection, settings: Settings, host_id: str) -> dict[str, Any]:
         if (s["watch"] or {}).get("prune_cache", True) and direct_host_writes_allowed(settings) \
                 and facts.get("docker"):
             # BUILD CACHE ONLY: cache, not data — never images in use, volumes or containers.
+            command, left = cache_prune(s["watch"] or {})
             try:
-                run_on_host(connection, settings, host, "docker builder prune -af >/dev/null 2>&1; true",
-                            timeout=300)
+                run_on_host(connection, settings, host, command, timeout=300)
                 after = read_machine(connection, settings, host)
                 _log(connection, host_id, f"Pruned Docker build cache alone: disk {pct}% → "
                                           f"{after.get('disk_pct')}% (cache, not data)")
+                if left:
+                    _log(connection, host_id, f"Kept the newest {SHARED_CACHE_CAP_GB} GB of build cache: this "
+                                              "server may run more than BOSS, so the rest may not be BOSS's. "
+                                              f"To clear it: `{left}` on the server, or mark it as running only "
+                                              "what BOSS deploys.")
+                    out["left_to_you"] = left
                 emit_event(connection, host["project_id"], "server.cache_pruned", "agent:infra",
                            "deployment_host", host_id,
                            {"host": host["name"], "before": pct, "after": after.get("disk_pct")})
