@@ -362,7 +362,8 @@ def github_merge(project_id: str, owner: str, repo: str, number: int, request: R
         if meta.get("merged") or str(meta.get("state")) != "open":
             return JSONResponse({"error": "not_open", "message": f"PR #{number} is not open."},
                                 status_code=409)
-        found["decision"] = change_review._decision_for(c, s.url)  # noqa: SLF001
+        found["decision"] = change_review._decision_for(c, project_id, s.url)  # noqa: SLF001
+        found["head"] = str(meta.get("head_sha") or "")
         return None
     refused = _run(project_id, number, owner, repo, go)
     if refused is not None:
@@ -371,6 +372,9 @@ def github_merge(project_id: str, owner: str, repo: str, number: int, request: R
     if decision is None or decision["status"] != "pending":
         return JSONResponse({"error": "no_review_decision", "message":
                              f"PR #{number} has no review waiting for a decision."}, status_code=409)
+    stale = change_review.stale_card_words(decision, found.get("head"))
+    if stale:
+        return JSONResponse({"error": "stale_head", "message": stale}, status_code=409)
     return approve_decision_card(decision["id"], DecisionActionRequest(
         actor=_actor(request), note=payload.note or f"Merge PR #{number}", force=payload.force))
 

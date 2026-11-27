@@ -378,7 +378,47 @@ def _label(policy: dict[str, Any]) -> str:
             "trigger": f"route {policy['scope_id']}",
             "deployment": f"deployment {policy['scope_id']}",
             "team": f"team {policy.get('scope_name') or policy['scope_id']}"}[str(policy["scope_type"])]
-    return f"{noun}'s {policy.get('period') or 'month'}ly budget"
+    period = "daily" if policy.get("period") == "day" else "monthly"
+    return f"{noun}'s {period} budget"
+
+
+def reservation_limit(connection: Any, project_id: str, *, role: Optional[str] = None,
+                      workflow_run_id: Optional[str] = None) -> Optional[tuple[dict[str, Any], int]]:
+    """The matching hard policy with the least money remaining before a reservation."""
+    if not _any_active(connection):
+        return None
+    ctx_role, ctx_wf = _who()
+    role, workflow_run_id = role or ctx_role, workflow_run_id or ctx_wf
+    tightest = None
+    for policy in matching(connection, project_id, role=role, workflow_run_id=workflow_run_id):
+        if not policy["hard_stop"]:
+            continue
+        remaining = int(policy["cap_usd_micros"]) - spent(connection, policy)
+        if tightest is None or remaining < tightest[1]:
+            tightest = (policy, remaining)
+    return tightest
+
+
+def refusal_for_limit(limit: Optional[tuple[dict[str, Any], int]], amount_usd_micros: int
+                      ) -> Optional[dict[str, Any]]:
+    if limit is None:
+        return None
+    policy, remaining = limit
+    if max(0, amount_usd_micros) <= remaining:
+        return None
+    cap = int(policy["cap_usd_micros"])
+    used = cap - remaining
+    from .budget import budget_period
+
+    bounds = budget_period(str(policy["period"]))
+    return {"status": "denied", "refusal": "scoped_cap_exceeded", "transient": False,
+            "decision_id": None, "policy_id": policy["id"],
+            "scope_type": policy["scope_type"], "scope_id": policy["scope_id"],
+            "cap_usd_micros": cap, "spent_usd_micros": used,
+            "resets_at": bounds["end"].isoformat() if hasattr(bounds["end"], "isoformat") else None,
+            "message": (f"Refused: this request would exceed {_label(policy)} "
+                        f"(${used / 1e6:,.2f} spent of ${cap / 1e6:,.2f}). Raise it in Govern › "
+                        "Limits, or wait for the period to reset.")}
 
 
 def reserve_refusal(connection: Any, project_id: str, amount_usd_micros: int, *,
@@ -386,28 +426,8 @@ def reserve_refusal(connection: Any, project_id: str, amount_usd_micros: int, *,
                     ) -> Optional[dict[str, Any]]:
     """The refusal BudgetGovernor.reserve returns when a hard-stop policy would be passed, else
     None. Role and workflow default to the model-call context the reservation is made in."""
-    if not _any_active(connection):
-        return None
-    ctx_role, ctx_wf = _who()
-    role, workflow_run_id = role or ctx_role, workflow_run_id or ctx_wf
-    for policy in matching(connection, project_id, role=role, workflow_run_id=workflow_run_id):
-        if not policy["hard_stop"]:
-            continue
-        used = spent(connection, policy)
-        cap = int(policy["cap_usd_micros"])
-        if used + max(0, int(amount_usd_micros or 0)) > cap:
-            from .budget import budget_period
-
-            bounds = budget_period(str(policy["period"]))
-            return {"status": "denied", "refusal": "scoped_cap_exceeded", "transient": False,
-                    "decision_id": None, "policy_id": policy["id"],
-                    "scope_type": policy["scope_type"], "scope_id": policy["scope_id"],
-                    "cap_usd_micros": cap, "spent_usd_micros": used,
-                    "resets_at": bounds["end"].isoformat() if hasattr(bounds["end"], "isoformat") else None,
-                    "message": (f"Refused: {_label(policy)} is spent "
-                                f"(${used / 1e6:,.2f} of ${cap / 1e6:,.2f}). Raise it in Govern › "
-                                "Limits, or wait for the period to reset.")}
-    return None
+    limit = reservation_limit(connection, project_id, role=role, workflow_run_id=workflow_run_id)
+    return refusal_for_limit(limit, amount_usd_micros)
 
 
 # ── mid-stage ──────────────────────────────────────────────────────────────────────────────

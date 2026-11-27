@@ -791,7 +791,9 @@ def _extra_lease_loop(settings, index: int) -> None:
                 ran = run_worker_cycle(client, slot_settings)
             except Exception:  # noqa: BLE001
                 LOGGER.exception("worker_slot_cycle_failed worker_id=%s", slot_settings.worker_id)
-                ran = False
+                # A previous long poll may have waited, but this cycle failed.
+                idle_wait(max(1, slot_settings.poll_interval_seconds))
+                continue
             if not ran:
                 idle_wait(idle_seconds(client, slot_settings))
     finally:
@@ -941,7 +943,7 @@ def main() -> None:
                     settings.worker_id,
                     settings.control_plane_url,
                 )
-                time.sleep(settings.poll_interval_seconds)
+                idle_wait(max(1, settings.poll_interval_seconds))
                 continue
             _tick_metatron_watch(client, settings)
             _tick_focused_agents(client, settings)
