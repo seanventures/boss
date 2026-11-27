@@ -463,7 +463,10 @@ function SourceRow({ item, sessions, onBoard, formOpen, onForm, actions }: {
 
   // ONE PRIMARY ACTION, only when the row needs something.
   let primary: React.ReactNode = null;
-  if (!busy && !editing && entry && staleGreen && !red && pill.tone !== "amber") {
+  // A PLAN LIMIT IS NOT A LOGIN PROBLEM: Sign in would replace a working login and change
+  // nothing (2026-11-26, Claude's weekly limit offered Sign in). It offers Test, like a stale green.
+  const limited = !!entry && entry.pill.state === "rate_limited";
+  if (!busy && !editing && entry && ((staleGreen && !red && pill.tone !== "amber") || limited)) {
     // WORKING, JUST NOT RECENTLY PROVEN: Test, never a blue "Sign in" beside a green "Working"
     // (boss-1, 2026-11-05: a long-lived token that renews in 2027 offered Sign in).
     primary = <GatedButton permission="setup:check" type="button" className="su-btn su-btn-sm"

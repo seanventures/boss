@@ -44,6 +44,15 @@ SENTENCES = [message for message, _window, _resets in CORPUS] + [
 NOT_LIMITS = ["API Error: 529 Overloaded", "syntax error near line 3", "claude CLI not found",
               "Traceback: KeyError 'user_id'", "the agent exited non-zero"]
 
+#: An app's own test output or an agent's reply quoting limit-like words: not a provider
+#: limit. The callers that read build, test and agent output (strict) must not take them.
+APP_OUTPUT = [
+    "AssertionError: expected 'Weekly limit reached' to be visible",
+    "You've hit your limit of 5 free projects",
+    "FAILED tests/test_plan.py::test_banner - expected 'You've hit your weekly limit' banner",
+    "Opus weekly limit reached banner renders",
+]
+
 
 def _expected(windows: dict) -> str:
     return "no_credit" if MONTHLY in windows else "rate_limited"
@@ -60,6 +69,24 @@ def test_setup_and_the_router_read_every_limit_sentence_the_same(message, subscr
     for status in (-1, 200, 400, 429):
         got = setup_checks.classify_model_failure(status, message, subscription=subscription)
         assert got == expected, (status, message, got)
+    # A refusal that names its own cause keeps it unless the words are a plan/credit sentence.
+    for status in (401, 403, 404):
+        got = setup_checks.classify_model_failure(status, message, subscription=subscription)
+        if verdict.plan:
+            assert got == expected, (status, message, got)
+        else:
+            assert got not in ("rate_limited",), (status, message, got)
+
+
+@pytest.mark.parametrize(("status", "message", "state"), [
+    (404, "model gpt-4-429 not found", "model_not_found"),
+    (404, "The model `claude-x` does not exist (request 429)", "model_not_found"),
+    (401, "invalid x-api-key (trace 429)", "key_rejected"),
+    (403, "permission denied for org-429", "key_rejected"),
+    (404, "You've hit your weekly limit · resets Nov 27, 7pm (UTC)", "rate_limited"),
+])
+def test_a_named_refusal_is_not_read_as_a_rate_limit_from_a_stray_429(status, message, state):
+    assert setup_checks.classify_model_failure(status, message) == state
 
 
 @pytest.mark.parametrize("message", NOT_LIMITS)
@@ -89,19 +116,111 @@ def test_a_header_retry_after_still_wins():
     assert retry is not None and setup_checks.parse_time(retry) < RECEIPT_RESET
 
 
-@pytest.mark.parametrize("message", SENTENCES)
-def test_every_other_keyword_check_knows_every_limit_sentence(message):
+def _callers():
     from boss_engine.services import task_shepherd
     from boss_engine.services.code_task_service import classify_pipeline_exception
     from boss_engine.services.connection_spend import _not_served
     from boss_engine.services.typed_decision_spend import capacity_after_failure
 
-    assert capacity_after_failure(RuntimeError(message))["capacity_state"] != "available"
-    assert _not_served(message)
-    assert classify_pipeline_exception(message.lower()) == ("needs_human", "model_rate_limit"), \
-        message
-    if any(w["source"] == "limit" for w in windows_from_limit_message(message).values()):
-        assert task_shepherd.classify(message) == task_shepherd.SPEND_CAP, message
+    return {
+        "decision_capacity": lambda m: capacity_after_failure(RuntimeError(m))["capacity_state"]
+        != "available",
+        "build_failure_class": lambda m: classify_pipeline_exception(m.lower())
+        == ("needs_human", "model_rate_limit"),
+        "shepherd": lambda m: task_shepherd.classify(m) == task_shepherd.SPEND_CAP,
+        "proof_settle": _not_served,
+    }
+
+
+#: The callers that read text beyond the provider's own error line (build/test/agent output).
+STRICT_CALLERS = ("decision_capacity", "build_failure_class", "shepherd")
+
+
+@pytest.mark.parametrize("message", SENTENCES)
+def test_every_other_keyword_check_knows_every_limit_sentence(message):
+    """Every caller takes every sentence the one detector takes; the strict callers take every
+    sentence the strict detector takes (a named reset, or a spend/credit limit)."""
+    callers = _callers()
+    assert callers["proof_settle"](message), message
+    strict = limit_verdict(message, strict=True)
+    if strict is not None:
+        for name in STRICT_CALLERS:
+            if name == "shepherd" and not strict.plan:
+                continue                 # a bare 429 is left to the shepherd's own phrases
+            assert callers[name](message), (name, message)
+
+
+@pytest.mark.parametrize("message", APP_OUTPUT)
+def test_app_or_test_output_is_not_a_limit_for_any_strict_caller(message):
+    assert limit_verdict(message, strict=True) is None
+    callers = _callers()
+    for name in STRICT_CALLERS:
+        assert not callers[name](message), (name, message)
+
+
+@pytest.mark.parametrize("message", NOT_LIMITS)
+def test_a_plain_failure_is_not_a_limit_for_the_detector_driven_callers(message):
+    callers = _callers()
+    assert not callers["shepherd"](message), message
+    if "overloaded" not in message.lower():  # an overload is a capacity wait by design
+        assert not callers["decision_capacity"](message), message
+        assert not callers["build_failure_class"](message), message
+    assert not limit_verdict(message, strict=True)
+
+
+# ── a recorded limit lapses at its reset; a green Setup check reopens it ──────────────────────
+
+def _broker():
+    from boss_engine.services.entitlements import EntitlementBrokerService
+
+    return EntitlementBrokerService.__new__(EntitlementBrokerService)
+
+
+def test_a_failed_calls_limit_lapses_once_its_reset_has_passed():
+    from boss_engine.services.typed_decision_spend import capacity_after_failure
+
+    broker = _broker()
+    future = capacity_after_failure(RuntimeError(
+        "You've hit your weekly limit · resets Nov 27, 7pm (UTC)"))
+    assert future["capacity_state"] == "unavailable" and future["reset_at"]
+    ahead = {**future, "reset_at": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()}
+    assert broker._capacity_policy_denial({"observed_capacity": ahead}) == "capacity_exhausted"
+    passed = {**future, "reset_at": (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()}
+    assert broker._capacity_policy_denial({"observed_capacity": passed}) is None
+    minute = capacity_after_failure(RuntimeError("HTTP 429 Too Many Requests"))
+    assert minute["capacity_state"] == "rate_limited" and minute["reset_at"]
+    assert broker._capacity_policy_denial({"observed_capacity": {
+        **minute, "reset_at": (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()}}) \
+        is None
+    # A person's own block never lapses on a clock.
+    assert broker._capacity_policy_denial({"observed_capacity": {
+        "capacity_state": "blocked", "reset_at": "2020-01-01T00:00:00+00:00"}}) == "capacity_blocked"
+    # No reset recorded: the old behaviour (denied until something clears it).
+    assert broker._capacity_policy_denial({"observed_capacity": {
+        "capacity_state": "unavailable"}}) == "capacity_exhausted"
+
+
+def test_a_named_reset_far_off_or_rolled_into_next_year_is_capped():
+    from boss_engine.services import proof_schedule
+
+    rolled = NOW.replace(year=2027, month=11, day=24)
+    schedule = proof_schedule.after_check(ok=False, state="rate_limited", failures_before=0,
+                                          now=NOW, retry_at=rolled.isoformat())
+    assert setup_checks.parse_time(schedule["next_at"]) == NOW + proof_schedule.RESET_CAP
+    soon = proof_schedule.after_check(ok=False, state="rate_limited", failures_before=0,
+                                      now=NOW, retry_at=RECEIPT_RESET.isoformat())
+    assert setup_checks.parse_time(soon["next_at"]) == RECEIPT_RESET + proof_schedule.RESET_GRACE
+
+
+def test_provider_limits_reads_the_reset_from_the_one_parser():
+    from boss_engine.services.provider_limits import classify_limit
+
+    signal = classify_limit("You've hit your usage limit. Upgrade to Pro or try again at "
+                            "Sep 22nd, 2026 10:06 PM.")
+    assert signal is not None and signal.retry_at == datetime(2026, 9, 22, 22, 6,
+                                                              tzinfo=timezone.utc)
+    iso = classify_limit("Rate limit exceeded; try again at 2026-12-01T10:00:00")
+    assert iso is not None and iso.retry_at == datetime(2026, 12, 1, 10, 0, tzinfo=timezone.utc)
 
 
 # ── the Setup check itself: state, retry_at and the provider's words ──────────────────────────
@@ -139,6 +258,10 @@ def test_a_subscription_check_on_a_plan_limit_is_limited_with_its_reset(monkeypa
 def test_the_reason_is_short_redacted_and_names_the_limit_line():
     from boss_engine.services.setup_actions import REASON_CHARS, check_reason
 
+    multi = check_reason({"ok": False, "provider_error":
+                          "You've hit your weekly limit\nAuthorization: Bearer sk-ant-oat01-"
+                          + "B" * 40})
+    assert "BBBBBBBBBB" not in multi
     key = "sk-ant-api03-" + "A" * 40
     said = check_reason({"ok": False, "provider_error":
                          f"Welcome banner\nYou've hit your weekly limit · resets 7pm (UTC) {key}"
@@ -241,3 +364,38 @@ def test_the_setup_check_records_retry_at_and_the_reason(connection):
     assert setup_checks.parse_time(schedule["next_at"]) == \
         RECEIPT_RESET + proof_schedule.RESET_GRACE
     assert "resets Nov 27 19:00" in schedule["why"]
+
+
+def test_a_green_setup_check_reopens_a_limit_a_failed_call_recorded(connection):
+    import json
+
+    from sqlalchemy import text
+
+    from boss_engine.services import setup_actions
+    from boss_engine.services.typed_decision_spend import capacity_after_failure
+
+    source_id = f"src_{uuid.uuid4().hex[:8]}"
+    failed = capacity_after_failure(RuntimeError(
+        "You've hit your weekly limit · resets Nov 27, 7pm (UTC)"))
+    failed["reset_at"] = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
+    connection.execute(text(
+        "INSERT INTO entitlement_sources (id, project_id, provider, source_id, source_kind,"
+        " entitlement_kind, owner_type, owner_id, auth_method, connection_status,"
+        " observed_capacity)"
+        " VALUES (:id, :p, 'anthropic_claude_code', :sid, 'subscription', 'quota', 'project',"
+        " :p, 'oauth_subscription', 'connected', CAST(:c AS JSONB))"),
+        {"id": f"ent_{uuid.uuid4().hex[:8]}", "p": connection.project_id, "sid": source_id,
+         "c": json.dumps(failed)})
+    broker = _broker()
+
+    def capacity():
+        return connection.execute(text(
+            "SELECT observed_capacity FROM entitlement_sources WHERE project_id = :p "
+            "AND source_id = :s"), {"p": connection.project_id, "s": source_id}).scalar()
+
+    assert broker._capacity_policy_denial({"observed_capacity": capacity()}) == \
+        "capacity_exhausted"
+    setup_actions._record_model_check(connection, connection.project_id, source_id,
+                                      {"ok": True, "state": "working"}, "system")
+    assert capacity()["capacity_state"] == "available"
+    assert broker._capacity_policy_denial({"observed_capacity": capacity()}) is None
