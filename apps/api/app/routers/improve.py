@@ -85,6 +85,23 @@ class ShareRunBody(Body):
     note: Optional[str] = None
 
 
+class PrecheckProposeBody(Body):
+    run_id: str = ""
+    run_kind: str = "code_task"
+    error: str
+    engine: Optional[str] = None
+    source_id: Optional[str] = None
+    failure_class: Optional[str] = None
+    reason_code: Optional[str] = None
+    stage: Optional[str] = None
+    context: Optional[dict[str, Any]] = None
+
+
+class PrecheckReviewBody(Body):
+    status: str
+    note: str = ""
+
+
 _RESOLVED: dict[str, tuple[float, list[str]]] = {}
 
 
@@ -248,6 +265,83 @@ def build_improve_router(
                 boss_recommendations.list_recommendations(c, pid))
         return PlainTextResponse(body, media_type="text/markdown", headers={
             "Content-Disposition": f'attachment; filename="{boss_recommendations.FILE_NAME}"'})
+
+    # ------------------------------------------- failure pre-check proposals (BOSSAPP-541)
+    # Deterministic pre-check proposals generated from run failures, linked to
+    # boss_recommendations. Proposals are artifacts only: never self-modifying without approval.
+    @router.get("/v1/precheck-proposals")
+    @permit(P.IMPROVEMENT_READ, scope=Scope.project(query="project_id"))
+    def list_precheck_proposals(
+        project_id: str,
+        status: Optional[str] = None,
+        run_id: Optional[str] = None,
+        cause_class: Optional[str] = None,
+    ) -> dict:
+        from boss_engine.services import precheck_proposals
+
+        pid = _reader(project_id)
+        with begin(engine) as c:
+            require_reader(c, pid)
+            try:
+                items = precheck_proposals.list_proposals(
+                    c, pid, status=status or None, run_id=run_id or None,
+                    cause_class=cause_class or None,
+                )
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+        return {
+            "proposals": items,
+            "cards": [precheck_proposals.proposal_card(i) for i in items],
+            "count": len(items),
+        }
+
+    @router.post("/v1/precheck-proposals/propose", status_code=201)
+    @permit(P.IMPROVEMENT_MANAGE, scope=Scope.project(body="project_id"))
+    def create_precheck_proposal(payload: PrecheckProposeBody) -> dict:
+        from boss_engine.services import precheck_proposals
+
+        pid = _reader(payload.project_id)
+        with begin(engine) as c:
+            actor = require_write_actor(c, pid, payload.actor, "workflow_manage")
+            rec = precheck_proposals.record_failure_proposal(
+                c,
+                settings(),
+                project_id=pid,
+                run_id=payload.run_id,
+                error=payload.error,
+                run_kind=payload.run_kind,
+                engine=payload.engine,
+                source_id=payload.source_id,
+                failure_class=payload.failure_class,
+                reason_code=payload.reason_code,
+                stage=payload.stage,
+                context=payload.context,
+                actor=actor,
+            )
+        return rec
+
+    @router.post("/v1/precheck-proposals/{proposal_id}/review")
+    @permit(P.IMPROVEMENT_MANAGE, scope=Scope.project(body="project_id"))
+    def review_precheck_proposal(proposal_id: str, payload: PrecheckReviewBody) -> dict:
+        from boss_engine.services import precheck_proposals
+
+        pid = _reader(payload.project_id)
+        with begin(engine) as c:
+            actor = require_write_actor(c, pid, payload.actor, "workflow_manage")
+            try:
+                updated = precheck_proposals.review_proposal(
+                    c,
+                    project_id=pid,
+                    proposal_id=proposal_id,
+                    status=payload.status,
+                    actor=actor,
+                    note=payload.note,
+                )
+            except LookupError as error:
+                raise HTTPException(status_code=404, detail=str(error)) from error
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+        return {"proposal": updated, "card": precheck_proposals.proposal_card(updated)}
 
     @router.post("/v1/scorecards/backfill")
     @permit(P.SYSTEM_OPERATE, scope=Scope.org())

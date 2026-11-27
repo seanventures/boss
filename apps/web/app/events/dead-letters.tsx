@@ -13,7 +13,7 @@ import { ArrowSquareOut, CheckCircle, Lightning, Warning } from "@phosphor-icons
 
 import { GatedButton } from "../../components/gated";
 import { Field } from "../../components/form-kit";
-import { readDeadLetters, replayEvents, type DeadLetter } from "../../lib/intake";
+import { labelOfKind, readDeadLetters, replayEvents, type DeadLetter } from "../../lib/intake";
 import { EvFrame, useEv } from "./frame";
 import { Empty, ReadState, Said, SourceMark, goEvents, useRead } from "./parts";
 
@@ -108,12 +108,22 @@ export function DeadLettersTab() {
               </div>
             </section>
           ) : null}
-          {calm.map((c) => (
-            <section key={c.connection_id} className="ev-card" aria-label={`${c.name || c.kind} has no dead letters`} data-testid={`ev-calm-${c.connection_id}`}>
-              <span className="ev-calm"><CheckCircle size={20} aria-hidden /><b>{c.name || c.kind}: nothing stuck</b></span>
-              <span className="ev-faint">Every event from it reached its agent.</span>
-            </section>
-          ))}
+          {calm.map((c) => {
+            const kindLabel = labelOfKind(c.kind) || c.kind;
+            return (
+              <section key={c.connection_id} className="ev-card" data-kind={c.kind} aria-label={`${kindLabel} ${c.name || c.kind} has no dead letters`} data-testid={`ev-calm-${c.connection_id}`}>
+                <span className="ev-calm">
+                  <SourceMark kind={c.kind} size="sm" />
+                  <CheckCircle size={18} aria-hidden />
+                  <span className="ev-row-main">
+                    <span className="ev-faint" data-testid={`ev-calm-kind-${c.connection_id}`}>{kindLabel}</span>
+                    <b>{c.name || kindLabel}: nothing stuck</b>
+                  </span>
+                </span>
+                <span className="ev-faint">Every event from it reached its agent.</span>
+              </section>
+            );
+          })}
         </aside>
       </div>
     </EvFrame>

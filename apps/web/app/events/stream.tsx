@@ -99,8 +99,8 @@ export function StreamTab() {
           {PERIODS.map((p) => <option key={p.hours} value={p.hours}>{p.word}</option>)}
         </select>
       </div>
-      <div className="ev-split">
-        <section aria-labelledby="ev-list-h" className="ev-form">
+      <div className="ev-split ev-stream-split" data-lead="aside" data-selected={ev ? "true" : undefined} data-testid="ev-stream-split">
+        <section aria-labelledby="ev-list-h" className="ev-form ev-stream-list">
           <h2 id="ev-list-h" className="ev-sec-title">Events</h2>
           <ReadState read={read} what="Events" onRetry={() => setTick((x) => x + 1)} testId="ev-stream" />
           {list?.search_truncated ? (
@@ -130,14 +130,14 @@ export function StreamTab() {
             </div>
           ) : null}
         </section>
-        <EventPanel id={ev || items[0]?.id || ""} projectId={projectId} />
+        <EventPanel id={ev || items[0]?.id || ""} projectId={projectId} explicit={Boolean(ev)} />
       </div>
     </EvFrame>
   );
 }
 
 /** One event in full: who, where and the words; the flow; then the details behind a fold. */
-export function EventPanel({ id, projectId }: { id: string; projectId: string }) {
+export function EventPanel({ id, projectId, explicit = false }: { id: string; projectId: string; explicit?: boolean }) {
   const [read, setRead] = useState<Read<EventDetail> | null>(null);
   const [runDone, setRunDone] = useState<boolean | null>(null);
   useEffect(() => {
@@ -169,6 +169,11 @@ export function EventPanel({ id, projectId }: { id: string; projectId: string })
   const env = e.envelope as { data?: Record<string, unknown>; source?: string; bossconversation?: Record<string, unknown> };
   return (
     <aside className="ev-card ev-detail" aria-labelledby="ev-detail-h" data-testid="ev-detail">
+      {explicit ? (
+        <button type="button" className="ev-link ev-mobile-back" onClick={() => goEvents({ ev: null }, "replace")} data-testid="ev-detail-back">
+          ← Back to events
+        </button>
+      ) : null}
       <div className="ev-detail-head">
         {e.actor.display ? <Face name={e.actor.display} size="lg" /> : <SourceMark kind={e.kind} />}
         <div><h2 id="ev-detail-h" className="ev-h2">{eventTitle(e)}</h2>{e.text ? <span className="ev-quote">“{e.text}”</span> : null}</div>

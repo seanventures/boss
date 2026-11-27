@@ -194,7 +194,7 @@ export function ConnectionsTab() {
             );
           })}
           {COMING.filter((x) => !known.has(x.kind) && !items.some((c) => c.kind === x.kind)).map((x) => (
-            <article key={x.kind} className="ev-card" data-dashed="" data-testid={`ev-coming-${x.kind}`}>
+            <article key={x.kind} className="ev-card ev-card-coming" data-dashed="true" data-testid={`ev-coming-${x.kind}`}>
               <div className="ev-src-head"><SourceMark kind={x.kind} /><div className="ev-src-name"><b>{x.label}</b><span className="ev-faint">{x.line}</span></div></div>
               <div><Chip tone="grey" tip={`Planned for phase ${x.phase}`}><Clock size={12} aria-hidden /> Coming</Chip></div>
               <span className="ev-faint">You can wire it today with a generic webhook.</span>

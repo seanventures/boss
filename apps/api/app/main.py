@@ -31701,6 +31701,58 @@ def platform_standards_apply(
     )
 
 
+@app.get("/v1/rules-book")
+@permit(P.POLICY_READ, scope=Scope.project_or_org(query="project_id"))
+def get_rules_book(
+    project_id: str = "",
+    category: str = "",
+    role: str = "",
+    enforcement: str = "",
+    q: str = "",
+) -> dict:
+    """Read-only unified BOSS rules book generated from code (BOSSAPP-572)."""
+    from boss_engine.services.rules_book import list_rules
+
+    if project_id:
+        with begin() as connection:
+            return list_rules(
+                connection=connection,
+                project_id=project_id,
+                category=category or None,
+                role=role or None,
+                enforcement_kind=enforcement or None,
+                q=q or None,
+            )
+    return list_rules(
+        category=category or None,
+        role=role or None,
+        enforcement_kind=enforcement or None,
+        q=q or None,
+    )
+
+
+@app.get("/v1/rules-book/for-role/{role_key}")
+@permit(P.POLICY_READ, scope=Scope.project_or_org(query="project_id"))
+def get_rules_book_for_role(
+    role_key: str,
+    project_id: str = "",
+    max_tokens: int = 1200,
+) -> dict:
+    """Role-scoped rules book slice within a token budget (BOSSAPP-572)."""
+    from boss_engine.services.rules_book import rules_for_role
+
+    bounded = max(64, min(int(max_tokens or 1200), 16000))
+    if project_id:
+        with begin() as connection:
+            return rules_for_role(
+                role_key,
+                connection=connection,
+                project_id=project_id,
+                max_tokens=bounded,
+            )
+    return rules_for_role(role_key, max_tokens=bounded)
+
+
 @app.post("/v1/telemetry/mine", response_model=TelemetryMineResponse)
 @permit(P.RELIABILITY_READ, scope=Scope.org(), readonly_post=True)
 def telemetry_mine(payload: TelemetryMineRequest) -> TelemetryMineResponse:
