@@ -948,19 +948,31 @@ class ClaudeCliAdapter(CliChatBrain):
                 break
         primary = (primary or (next(iter(model_usage), None)) or self.model_override
                    or getattr(self.settings, "claude_cli_model", None) or "claude-cli")
+        from .openai_adapter import list_price_cost_usd_micros
+
         cost = data.get("total_cost_usd")
+        total_tokens = prompt_tokens + cache_read + cache_write + completion
         usage = {
             "model": primary,
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion,
             "cache_read_tokens": cache_read,
             "cache_write_tokens": cache_write,
-            "total_tokens": prompt_tokens + cache_read + cache_write + completion,
+            "total_tokens": total_tokens,
         }
-        if cost is not None:
-            # `total_cost_usd` is the call's API LIST-PRICE value, reported on a subscription
-            # too; `billing` says whether it is money (included_spend.py).
-            usage["cost_usd_micros"] = int(round(float(cost) * 1_000_000))
+        # BOSSAPP-782: price CLI calls at list from tokens when token counts and list price are
+        # known (Claude CLI reports Sonnet 5 at ~1.8x list price). Preserve the CLI's reported
+        # figure for auditability and fall back to it only when tokens are absent or unpriced.
+        list_micros, price_known = list_price_cost_usd_micros(usage)
+        cli_micros = int(round(float(cost) * 1_000_000)) if cost is not None else None
+        if cli_micros is not None:
+            usage["cli_reported_cost_usd_micros"] = cli_micros
+        if total_tokens > 0 and price_known:
+            usage["cost_usd_micros"] = list_micros
+        elif cli_micros is not None:
+            usage["cost_usd_micros"] = cli_micros
+        elif total_tokens > 0:
+            usage["cost_usd_micros"] = list_micros
         usage["billing"] = getattr(self, "_billing", None) or BILLING_SUBSCRIPTION
         return usage
 

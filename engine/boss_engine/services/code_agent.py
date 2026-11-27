@@ -250,10 +250,17 @@ def read_only_timeout(settings: Any, timeout: int, stage: Optional[str] = None) 
 
 
 def _current_effort() -> Optional[str]:
-    """The effort for the stage this thread is running (llm_telemetry context)."""
+    """The effort for the stage this thread is running (llm_telemetry context).
+
+    BOSSAPP-780: honors `effort_override` set by the model router's effort-first escalation lever
+    before falling back to the project's static per-stage effort.
+    """
     from .llm_telemetry import get_llm_context
 
     ctx = get_llm_context()
+    override = str(ctx.get("effort_override") or "").strip().lower()
+    if override in EFFORT_LEVELS:
+        return override
     return stage_effort(ctx.get("stage"), ctx.get("effort_writing"))
 
 
@@ -1611,17 +1618,32 @@ class ClaudeCodeAgent:
         primary = primary or next(iter(model_usage), None) or (
             getattr(settings, "claude_cli_model", None) or "claude-code"
         )
+        from .openai_adapter import list_price_cost_usd_micros
+
         cost = data.get("total_cost_usd")
-        cost_micros = int(round(float(cost) * 1_000_000)) if cost is not None else 0
+        total_tokens = prompt_tokens + cache_read + cache_write + completion
         usage = {
             "model": primary,
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion,
             "cache_read_tokens": cache_read,
             "cache_write_tokens": cache_write,
-            "total_tokens": prompt_tokens + cache_read + cache_write + completion,
-            "cost_usd_micros": cost_micros,
+            "total_tokens": total_tokens,
         }
+        # BOSSAPP-782: price CLI calls at list from tokens when token counts and list price are
+        # known (avoiding CLI ~1.8x inflation on Sonnet 5); fall back to total_cost_usd only when
+        # tokens are zero or model is unpriced.
+        list_micros, price_known = list_price_cost_usd_micros(usage)
+        cli_micros = int(round(float(cost) * 1_000_000)) if cost is not None else None
+        if cli_micros is not None:
+            usage["cli_reported_cost_usd_micros"] = cli_micros
+        if total_tokens > 0 and price_known:
+            cost_micros = list_micros
+        elif cli_micros is not None:
+            cost_micros = cli_micros
+        else:
+            cost_micros = list_micros
+        usage["cost_usd_micros"] = cost_micros
         if isinstance(data.get("_rate_limit"), dict):
             usage["rate_limit"] = data["_rate_limit"]
         if data.get("_billing"):

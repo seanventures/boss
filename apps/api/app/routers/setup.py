@@ -597,6 +597,25 @@ def build_setup_router(
                     (None, project_id)]
         return {"unit_id": unit_id, "routes": rows}
 
+    @router.get("/v1/setup/routing/outcomes")
+    @permit(P.MODEL_PROVIDER_READ, scope=Scope.project(query="project_id"))
+    def get_routing_outcomes(project_id: str, days: int = 30,
+                             repo: Optional[str] = None) -> dict[str, Any]:
+        """BOSSAPP-779/781: per-stage, per-task-type outcome priors table and shadow
+        counterfactual summary for this project."""
+        from boss_engine.services.model_router.outcomes import outcome_table_report
+        from boss_engine.services.model_router.savings import shadow_summary
+
+        days = max(1, min(365, int(days)))
+        with begin(engine) as connection:
+            if require_reader is not None:
+                require_reader(connection, project_id)
+            else:
+                require_actor(connection, project_id, actor_for(None), "entitlement_manage")
+            outcomes = outcome_table_report(connection, project_id, days=days, repo=repo)
+            shadow = shadow_summary(connection, project_id, days=days)
+        return {"project_id": project_id, "days": days, "outcomes": outcomes, "shadow": shadow}
+
     @router.put("/v1/setup/budget", response_model=SetupView, response_model_by_alias=True)
     @permit(P.BUDGET_MANAGE, scope=Scope.project(body="project_id"))
     def put_budget(body: BudgetBody, request: Request) -> dict[str, Any]:

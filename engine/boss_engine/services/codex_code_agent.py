@@ -178,7 +178,7 @@ class CodexCodeAgent(GenericCliCodeAgent):
                metered: bool) -> tuple[dict[str, Any], int]:
         """Codex's numbers in BOSS's split, as the Codex chat adapter maps them."""
         from .included_spend import BILLING_METERED, BILLING_SUBSCRIPTION
-        from .openai_adapter import estimate_cost_usd_micros
+        from .openai_adapter import list_price_cost_usd_micros
 
         u = parser.usage
         cache_read = int(u.get("cached_input_tokens") or 0)
@@ -193,11 +193,10 @@ class CodexCodeAgent(GenericCliCodeAgent):
             # A ChatGPT login is a subscription; an API key in the child's environment is money.
             "billing": BILLING_METERED if metered else BILLING_SUBSCRIPTION,
         }
-        # The list-price value of those tokens, as Claude's CLI reports its own; whether it is
-        # money is the `billing` stamp's call (included_spend), never this number's.
-        cost = int(estimate_cost_usd_micros({k: v for k, v in usage.items() if k != "billing"}))
-        usage["cost_usd_micros"] = cost
-        return usage, cost
+        # BOSSAPP-782: list-price value of Codex tokens, consistent with Claude CLI token pricing.
+        cost, _ = list_price_cost_usd_micros(usage)
+        usage["cost_usd_micros"] = int(cost)
+        return usage, int(cost)
 
     def _codex_argv(self, *, read_only: bool, model: Optional[str], resume: Optional[str],
                     final_path: str, by_copy: bool = False,

@@ -52,6 +52,8 @@ class TaskSignal:
     risk_tier: Optional[int] = None
     #: A build's spec, so the rules read it exactly as infer_risk_tier does.
     spec: Optional[dict] = None
+    #: BOSSAPP-781: optional historical stage-outcome rates fed to Jev / model classifier.
+    prior_hint: str = ""
 
     @property
     def group(self) -> str:
@@ -394,7 +396,8 @@ class Classifier:
             where += f"; task kind: {signal.task_kind}"
         if signal.repo_files is not None:
             where += f"; repo files: {signal.repo_files}"
-        return f"{words[:8000]}\n\n{where})"
+        extra = f"\n{signal.prior_hint}" if signal.prior_hint else ""
+        return f"{words[:8000]}\n\n{where}){extra}"
 
 
 CLASSIFIER = Classifier()

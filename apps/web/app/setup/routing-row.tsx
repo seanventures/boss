@@ -31,8 +31,10 @@ const STATE_TONE: Record<string, string> = {
 };
 const MODE_TIP = {
   smart: "Picks a tier per step from the task, then a source with headroom.",
+  shadow: "Logs Smart decisions beside Fixed without acting.",
   fixed: "Each job runs where you pinned it, as before.",
 };
+const MODE_LABEL = { smart: "Smart", shadow: "Shadow", fixed: "Fixed" } as const;
 const enc = (t: { engine: string; model: string | null }) => `${t.engine}::${t.model ?? ""}`;
 const dec = (v: string) => {
   const [engine, model] = v.split("::");
@@ -423,11 +425,70 @@ function Pins({ open, onToggle, routing }: {
   );
 }
 
+function ShadowCounterfactual({ routing }: { routing: Routing }) {
+  const sh = routing.shadow;
+  if (!sh || !sh.routes) return null;
+  const total = TIERS.reduce((n, t) => n + (sh.shadow_tiers[t] ?? 0), 0);
+  const mix = TIERS.map((t) => `${TIER_LABEL[t]} ${total ? Math.round(((sh.shadow_tiers[t] ?? 0) / total) * 100) : 0}%`).join(", ");
+  const agree = sh.agreement_rate != null ? `${Math.round(sh.agreement_rate * 100)}%` : "—";
+  return (
+    <div className="mr-section" data-testid="mr-shadow">
+      <span className="mr-sub" title="Counterfactual Smart mix vs Fixed.">Shadow ({sh.days}d)</span>
+      <div className="mr-line">
+        <span className="mr-mix" role="img" aria-label={`Shadow mix: ${mix}`} title={mix} data-tip={mix}>
+          {total ? TIERS.map((t) => (
+            <i key={t} className={`mr-${t}`} style={{ width: `${((sh.shadow_tiers[t] ?? 0) / total) * 100}%` }} />
+          )) : <i className="mr-none" />}
+        </span>
+        <span className="mr-stat"><strong>{sh.routes}</strong> <span className="su-faint">shadowed</span></span>
+        <span className="mr-stat"><strong>{agree}</strong> <span className="su-faint">agreed</span></span>
+        <Tip tip="Projected saving if Smart had run instead of Fixed." className="mr-stat">
+          <strong>${sh.projected_saving_usd < 10 ? sh.projected_saving_usd.toFixed(2) : sh.projected_saving_usd.toFixed(0)}</strong> <span className="su-faint">projected saved</span>
+        </Tip>
+      </div>
+    </div>
+  );
+}
+
+function OutcomePriors({ routing }: { routing: Routing }) {
+  const oc = routing.outcomes;
+  if (!oc || !oc.rows.length) return null;
+  return (
+    <div className="mr-section" data-testid="mr-outcomes">
+      <details className="mr-criteria">
+        <summary>
+          Stage outcomes ({oc.rows.length})
+          {oc.projected_saving_usd > 0 ? <span className="su-faint">, save ≈ ${oc.projected_saving_usd.toFixed(2)}</span> : null}
+        </summary>
+        <div className="mr-outcomes-list">
+          {oc.rows.slice(0, 12).map((row) => (
+            <div key={`${row.task_type}:${row.stage}`} className="mr-line" data-testid={`mr-outcome-${row.task_type}-${row.stage}`}>
+              <strong>{row.stage_label}</strong>
+              <span className="su-faint">{row.task_type}</span>
+              {TIERS.map((t) => {
+                const stats = row.tiers[t];
+                return stats ? (
+                  <span key={t} className={`mr-chip mr-chip-${t}`}>
+                    {TIER_LABEL[t]} {Math.round(stats.pass_rate * 100)}% ({stats.samples})
+                  </span>
+                ) : null;
+              })}
+              {row.recommendation ? (
+                <span className="su-faint">→ {TIER_LABEL[row.recommendation.to_tier]}</span>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      </details>
+    </div>
+  );
+}
+
 function Summary({ routing }: { routing: Routing }) {
   const tight = routing.headroom.find((h) => h.state !== "plenty");
   return (
     <>
-      <span className="mr-chip" data-testid="mr-mode-chip">{routing.mode === "smart" ? "Smart" : "Fixed"}</span>
+      <span className="mr-chip" data-testid="mr-mode-chip">{MODE_LABEL[routing.mode] ?? "Fixed"}</span>
       {routing.mode === "smart" ? routing.tiers.map((t) => (
         <Tip key={t.tier} tip={`${t.label}: ${t.targets.map((x) => x.label).join(", then ") || "none"}`}
              className="mr-chip"><TierDot tier={t.tier} />{t.targets[0]?.model ?? t.targets[0]?.label ?? "—"}</Tip>
@@ -451,6 +512,7 @@ export const RoutingRow = forwardRef<HTMLElement, { mode: string; focused: boole
     const { save, busy, gate } = useSave();
     const collapsed = mode === "collapsed" && !open && !focused;
     const smart = routing?.mode === "smart";
+    const shadow = routing?.mode === "shadow";
     const none = view.models.length === 0;
     return (
       <SetupRow ref={ref} row="jobs" label="Routing" mode={collapsed ? "collapsed" : "open"}
@@ -469,18 +531,18 @@ export const RoutingRow = forwardRef<HTMLElement, { mode: string; focused: boole
           <div className="mr-body" data-testid="mr-body" data-mode={routing.mode}>
             <div className="mr-line">
               <div className="mr-seg" role="group" aria-label="Routing">
-                {(["smart", "fixed"] as const).map((m) => (
+                {(["smart", "shadow", "fixed"] as const).map((m) => (
                   <GatedButton permission="setup:manage" key={m} type="button" aria-pressed={routing.mode === m} disabled={none} aria-busy={busy || undefined}
                           data-testid={`mr-mode-${m}`} title={MODE_TIP[m]} data-tip={MODE_TIP[m]}
                           onClick={() => routing.mode !== m && void save({ mode: m },
-                            m === "smart" ? "Smart routing" : "Fixed routing")}>
-                    {m === "smart" ? "Smart" : "Fixed"}
+                            `${MODE_LABEL[m]} routing`)}>
+                    {MODE_LABEL[m]}
                   </GatedButton>
                 ))}
               </div>
-              <span className="su-faint">{none ? "Connect a model first" : smart ? "Picks per step" : "As pinned per job"}</span>
+              <span className="su-faint">{none ? "Connect a model first" : smart ? "Picks per step" : shadow ? "Logs Smart, acts Fixed" : "As pinned per job"}</span>
             </div>
-            {smart ? (
+            {smart || shadow ? (
               <div className="mr-section">
                 <span className="mr-sub" title="What each tier runs on, then its fallback.">Tiers</span>
                 <div className="mr-tiers">
@@ -488,11 +550,13 @@ export const RoutingRow = forwardRef<HTMLElement, { mode: string; focused: boole
                 </div>
               </div>
             ) : null}
-            <Floors routing={routing} smart={smart} />
+            <Floors routing={routing} smart={smart || shadow} />
             <Headroom routing={routing} metersOnly={!smart} />
-            {smart ? <Classifier routing={routing} /> : null}
+            {smart || shadow ? <Classifier routing={routing} /> : null}
             <Pins routing={routing} open={pins ?? (focused || !smart)}
                   onToggle={() => setPins((v) => !(v ?? (focused || !smart)))} />
+            <ShadowCounterfactual routing={routing} />
+            <OutcomePriors routing={routing} />
             <Week routing={routing} />
           </div>
         )}

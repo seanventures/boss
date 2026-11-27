@@ -146,8 +146,23 @@ export type RoutingHeadroom = {
   as_of?: string | null; age_label?: string | null; stale?: boolean;
 };
 export type HeadroomRule = { source: string; when: string; tiers: Tier[]; to: string };
+export type RoutingShadowSummary = {
+  days: number; routes: number; agreed: number; agreement_rate: number | null;
+  actual_tiers: Record<Tier, number>; shadow_tiers: Record<Tier, number>;
+  actual_list_usd: number; shadow_projected_usd: number;
+  projected_saving_usd: number; projected_saving_pct: number | null;
+};
+export type RoutingOutcomeRow = {
+  task_type: string; stage: string; stage_label: string; dominant_tier: Tier;
+  tiers: Partial<Record<Tier, { samples: number; passed: number; pass_rate: number; avg_list_cost_usd: number }>>;
+  recommendation: { direction: "down" | "up"; from_tier: Tier; to_tier: Tier; reason: string } | null;
+  projected_saving_usd: number;
+};
+export type RoutingOutcomesSummary = {
+  days: number; rows: RoutingOutcomeRow[]; projected_saving_usd: number;
+};
 export type Routing = {
-  mode: "fixed" | "smart";
+  mode: "fixed" | "shadow" | "smart";
   version: number;
   tiers: { tier: Tier; label: string; criteria: string; targets: RouteTarget[] }[];
   floors: RoutingFloor[];
@@ -171,8 +186,10 @@ export type Routing = {
   /** Jobs whose pin is "Always use, even when limited"; any other pin is a preference. */
   hard_pins?: string[];
   frontier_allows_local?: boolean;
-  week: { routes: number; smart_routes: number; tiers: Record<Tier, number>;
+  week: { routes: number; smart_routes: number; shadow_routes?: number; tiers: Record<Tier, number>;
           escalations: number; moved: number; saved_usd: number };
+  shadow?: RoutingShadowSummary;
+  outcomes?: RoutingOutcomesSummary;
 };
 
 export type Budget = {

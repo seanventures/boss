@@ -9479,6 +9479,50 @@ CREATE TABLE IF NOT EXISTS model_routes (
 CREATE INDEX IF NOT EXISTS model_routes_unit ON model_routes (unit_id, created_at);
 CREATE INDEX IF NOT EXISTS model_routes_project ON model_routes (project_id, created_at DESC);
 
+-- BOSSAPP-779/780/781: shadow counterfactual decisions, effort lever, cache-loss pricing,
+-- and stage-outcome learning table (additive, idempotent).
+ALTER TABLE model_routes ADD COLUMN IF NOT EXISTS effort TEXT;
+ALTER TABLE model_routes ADD COLUMN IF NOT EXISTS escalation_strategy TEXT;
+ALTER TABLE model_routes ADD COLUMN IF NOT EXISTS cache_loss_usd_micros BIGINT;
+ALTER TABLE model_routes ADD COLUMN IF NOT EXISTS shadow_tier TEXT;
+ALTER TABLE model_routes ADD COLUMN IF NOT EXISTS shadow_engine TEXT;
+ALTER TABLE model_routes ADD COLUMN IF NOT EXISTS shadow_model TEXT;
+ALTER TABLE model_routes ADD COLUMN IF NOT EXISTS shadow_reason TEXT;
+ALTER TABLE model_routes ADD COLUMN IF NOT EXISTS shadow_classified_tier TEXT;
+ALTER TABLE model_routes ADD COLUMN IF NOT EXISTS shadow_classifier TEXT;
+ALTER TABLE model_routes ADD COLUMN IF NOT EXISTS shadow_confidence NUMERIC;
+ALTER TABLE model_routes ADD COLUMN IF NOT EXISTS shadow_rules JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+CREATE TABLE IF NOT EXISTS model_route_outcomes (
+  route_id              TEXT PRIMARY KEY,
+  project_id            TEXT NOT NULL,
+  unit_id               TEXT,
+  repo                  TEXT,
+  task_type             TEXT NOT NULL DEFAULT 'unknown',
+  stage                 TEXT NOT NULL,
+  tier                  TEXT NOT NULL,
+  engine                TEXT,
+  model                 TEXT,
+  mode                  TEXT NOT NULL DEFAULT 'fixed',
+  tests_passed          BOOLEAN,
+  review_verdict        TEXT,
+  merged                BOOLEAN,
+  stage_passed          BOOLEAN NOT NULL,
+  escalated             BOOLEAN NOT NULL DEFAULT false,
+  escalation_signal     TEXT,
+  escalation_strategy   TEXT,
+  escalation_rescued    BOOLEAN,
+  cost_usd_micros       BIGINT NOT NULL DEFAULT 0,
+  list_cost_usd_micros  BIGINT NOT NULL DEFAULT 0,
+  tokens_in             BIGINT NOT NULL DEFAULT 0,
+  tokens_out            BIGINT NOT NULL DEFAULT 0,
+  recorded_at           TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS model_route_outcomes_project_stage
+  ON model_route_outcomes (project_id, stage, task_type, tier, recorded_at DESC);
+CREATE INDEX IF NOT EXISTS model_route_outcomes_unit
+  ON model_route_outcomes (unit_id) WHERE unit_id IS NOT NULL;
+
 ALTER TABLE llm_calls ADD COLUMN IF NOT EXISTS route_id TEXT;
 ALTER TABLE run_scorecards ADD COLUMN IF NOT EXISTS route_mode TEXT;
 ALTER TABLE run_scorecards ADD COLUMN IF NOT EXISTS route_tier TEXT;
