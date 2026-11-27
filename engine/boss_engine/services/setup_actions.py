@@ -13,6 +13,7 @@ import re
 import threading
 import time
 import uuid
+from datetime import timedelta
 from typing import Any, Optional
 
 from sqlalchemy import text
@@ -885,6 +886,15 @@ def _record_model_check(connection: Connection, project_id: str, source_id: str,
             "at": result.get("checked_at") or iso(now_utc()), "latency_ms": result.get("latency_ms"),
             "retry_at": result.get("retry_at"), "host": result.get("host"),
             "receipt_id": result.get("receipt_id")}
+    if last["retry_at"]:
+        # A reset already past (an old epoch, "try again at 2020-…") is no reset: the limit
+        # was just seen, so it holds for the half-open probe window instead.
+        from .model_router.headroom import LIMIT_PROBE_S
+
+        checked = setup_view.parse_time(last["at"]) or now_utc()
+        said = setup_view.parse_time(last["retry_at"])
+        if said is None or said <= checked:
+            last["retry_at"] = iso(checked + timedelta(seconds=LIMIT_PROBE_S))
     # WHAT THE PROVIDER SAID, KEPT: Details and the pill's tooltip show it, so a check BOSS has
     # the words for never reads as a bare "failed".
     reason = check_reason(result)
@@ -934,10 +944,15 @@ def _record_model_check(connection: Connection, project_id: str, source_id: str,
         capacity = None
     if capacity is not None:
         connection.execute(
+            # entitlements.merge_capacity's rule in SQL: a write that sets capacity_state
+            # clears the reset an earlier state left.
             text("UPDATE entitlement_sources SET observed_capacity = "
-                 "COALESCE(observed_capacity, '{}'::jsonb) || CAST(:c AS JSONB) "
+                 "(COALESCE(observed_capacity, '{}'::jsonb) - "
+                 "CASE WHEN CAST(:sets_state AS BOOLEAN) THEN 'capacity_reset_at' ELSE '' END) "
+                 "|| CAST(:c AS JSONB) "
                  "WHERE project_id = :p AND source_id = :s"),
-            {"c": json.dumps(capacity), "p": project_id, "s": source_id})
+            {"c": json.dumps(capacity), "p": project_id, "s": source_id,
+             "sets_state": "capacity_state" in capacity})
     emit_event(connection, project_id, "setup.model_checked", actor, "model_source", source_id,
                last)
 

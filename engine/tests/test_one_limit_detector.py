@@ -182,22 +182,90 @@ def test_a_failed_calls_limit_lapses_once_its_reset_has_passed():
     broker = _broker()
     future = capacity_after_failure(RuntimeError(
         "You've hit your weekly limit · resets Nov 27, 7pm (UTC)"))
-    assert future["capacity_state"] == "unavailable" and future["reset_at"]
-    ahead = {**future, "reset_at": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()}
+    assert future["capacity_state"] == "unavailable" and future["capacity_reset_at"]
+    ahead = {**future, "capacity_reset_at": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()}
     assert broker._capacity_policy_denial({"observed_capacity": ahead}) == "capacity_exhausted"
-    passed = {**future, "reset_at": (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()}
+    passed = {**future, "capacity_reset_at": (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()}
     assert broker._capacity_policy_denial({"observed_capacity": passed}) is None
     minute = capacity_after_failure(RuntimeError("HTTP 429 Too Many Requests"))
-    assert minute["capacity_state"] == "rate_limited" and minute["reset_at"]
+    assert minute["capacity_state"] == "rate_limited" and minute["capacity_reset_at"]
     assert broker._capacity_policy_denial({"observed_capacity": {
-        **minute, "reset_at": (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()}}) \
+        **minute, "capacity_reset_at": (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()}}) \
         is None
     # A person's own block never lapses on a clock.
     assert broker._capacity_policy_denial({"observed_capacity": {
-        "capacity_state": "blocked", "reset_at": "2020-01-01T00:00:00+00:00"}}) == "capacity_blocked"
+        "capacity_state": "blocked", "capacity_reset_at": "2020-01-01T00:00:00+00:00"}}) == "capacity_blocked"
     # No reset recorded: the old behaviour (denied until something clears it).
     assert broker._capacity_policy_denial({"observed_capacity": {
         "capacity_state": "unavailable"}}) == "capacity_exhausted"
+
+
+@pytest.mark.parametrize("message", [
+    "Claude AI usage limit reached|1600000000",
+    "You've hit your usage limit. Upgrade to Pro or try again at 2020-01-01T00:00:00.",
+])
+def test_a_reset_already_past_never_lifts_the_denial_at_once(message):
+    """A: an old epoch or a past ISO time would store a 2020 reset, the denial would pass at
+    once and every decision would go back to the source that just refused it."""
+    from boss_engine.services.typed_decision_spend import capacity_after_failure
+
+    got = capacity_after_failure(RuntimeError(message))
+    assert got["capacity_state"] == "unavailable", got
+    reset = setup_checks.parse_time(got["capacity_reset_at"])
+    assert reset > datetime.now(timezone.utc) + timedelta(minutes=5)
+    assert _broker()._capacity_policy_denial({"observed_capacity": got}) == "capacity_exhausted"
+
+
+def test_an_old_reset_never_lifts_a_newer_denial():
+    """B: writes merge, so a reset left by an earlier limit used to survive under a newer
+    state. One key, written and cleared by the write that sets capacity_state."""
+    from boss_engine.services.entitlements import EntitlementBrokerService as Broker
+
+    past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    old = {"capacity_state": "unavailable", "capacity_reset_at": past,
+           "reset_at": past, "retry_at": past, "rate_limit_reset_at": past}
+    newer = Broker.merge_capacity(old, {"capacity_state": "exhausted"})
+    assert "capacity_reset_at" not in newer
+    assert _broker()._capacity_policy_denial({"observed_capacity": newer}) == "capacity_exhausted"
+    # A write that does not set the state keeps the pair together.
+    kept = Broker.merge_capacity(old, {"credential_state": "ok"})
+    assert kept["capacity_reset_at"] == past
+    # A new limit with its own reset lapses after it, and not before.
+    soon = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
+    limited = Broker.merge_capacity(newer, {"capacity_state": "rate_limited",
+                                            "capacity_reset_at": soon})
+    assert _broker()._capacity_policy_denial({"observed_capacity": limited}) == \
+        "capacity_rate_limited"
+    lapsed = {**limited, "capacity_reset_at": past}
+    assert _broker()._capacity_policy_denial({"observed_capacity": lapsed}) is None
+
+
+def test_out_of_credit_never_lapses_on_a_clock():
+    """C: a spend or credit limit is lifted by a person, not a clock."""
+    from boss_engine.services.typed_decision_spend import capacity_after_failure
+
+    for message in ("Your credit balance is too low to access the Anthropic API.",
+                    "You've hit your org's monthly spend limit"):
+        got = capacity_after_failure(RuntimeError(message))
+        assert got == {"capacity_state": "unavailable"}, got
+        assert _broker()._capacity_policy_denial({"observed_capacity": got}) == \
+            "capacity_exhausted"
+
+
+def test_a_setup_check_with_a_past_reset_waits_the_probe_window(monkeypatch):
+    """A, in Setup: a past retry_at becomes the check time plus the half-open probe window."""
+    from boss_engine.services import core, setup_actions
+    from boss_engine.services.model_router.headroom import LIMIT_PROBE_S
+
+    seen = []
+    monkeypatch.setattr(core, "emit_event", lambda *a, **k: seen.append(a[-1]))
+    for retry_at in ("2020-01-01T00:00:00+00:00", None):
+        setup_actions._record_model_check(
+            object(), "proj", "env-claude_code",
+            {"ok": False, "state": "rate_limited", "checked_at": NOW.isoformat(),
+             "retry_at": retry_at}, "system")
+    assert setup_checks.parse_time(seen[0]["retry_at"]) == NOW + timedelta(seconds=LIMIT_PROBE_S)
+    assert seen[1]["retry_at"] is None
 
 
 def test_a_named_reset_far_off_or_rolled_into_next_year_is_capped():
@@ -377,7 +445,7 @@ def test_a_green_setup_check_reopens_a_limit_a_failed_call_recorded(connection):
     source_id = f"src_{uuid.uuid4().hex[:8]}"
     failed = capacity_after_failure(RuntimeError(
         "You've hit your weekly limit · resets Nov 27, 7pm (UTC)"))
-    failed["reset_at"] = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
+    failed["capacity_reset_at"] = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
     connection.execute(text(
         "INSERT INTO entitlement_sources (id, project_id, provider, source_id, source_kind,"
         " entitlement_kind, owner_type, owner_id, auth_method, connection_status,"
@@ -398,4 +466,5 @@ def test_a_green_setup_check_reopens_a_limit_a_failed_call_recorded(connection):
     setup_actions._record_model_check(connection, connection.project_id, source_id,
                                       {"ok": True, "state": "working"}, "system")
     assert capacity()["capacity_state"] == "available"
+    assert "capacity_reset_at" not in capacity()
     assert broker._capacity_policy_denial({"observed_capacity": capacity()}) is None
