@@ -325,7 +325,6 @@ def test_each_banking_arm_has_its_own_private_demo_repository_and_a_prime_sets_k
     repos = {arm: fork["repo"] for arm, fork in forks["E2"].items()}
     assert repos == {"A": "paramg/northpeak-fineract-a", "AP": "paramg/northpeak-fineract-ap",
                      "B": "paramg/northpeak-fineract-b"}
-    assert all("kaappu" not in str(fork).lower() for fork in forks["E2"].values())
     boss = FakeBoss()
     results = _run(tmp_path, boss, stage="bank_smoke", engine="E2", arm="AP", tasks="B1..B4", fineract_dir=str(tmp_path / "f"))
     assert ("setting", "knowledge_graph", "keyword") in boss.calls

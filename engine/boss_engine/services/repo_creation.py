@@ -3,7 +3,7 @@
 Add project › Start a new app › New GitHub repo said "BOSS has no GitHub credential that can
 create repositories" on an install that held three: the GitHub App registered through Repo and
 models (installed on @paramg), and two project connections with personal access tokens
-(@paramg, @paramg-kaapppu). `local_publish.default_reach` read only the ENVIRONMENT-configured
+(@paramg, @example-org-b). `local_publish.default_reach` read only the ENVIRONMENT-configured
 App (`BOSS_GITHUB_APP_*`) and the install-wide `BOSS_GITHUB_TOKEN` — the two credentials a
 wizard-connected install never has. And Setup called the App "Connected" although it
 was never granted `administration`, the permission that creates repositories.

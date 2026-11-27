@@ -1,7 +1,7 @@
 """BOSSAPP-1160: ONE credential resolver for making GitHub repositories.
 
 Add project › New GitHub repo said "no GitHub credential" on an install holding a Setup-registered
-App (installed on @paramg) and two token connections (@paramg, @paramg-kaapppu): default_reach
+App (installed on @paramg) and two token connections (@paramg, @example-org-b): default_reach
 read only the environment App and BOSS_GITHUB_TOKEN. The resolver tries, in order, the
 Identity App's installation on the owner (an organisation that accepted administration: write),
 the environment App, the connections' tokens for their own account, the install token — and says
@@ -190,8 +190,8 @@ def test_a_connection_for_the_owner_is_found_with_its_recorded_scopes(monkeypatc
     with engine.begin() as c:
         c.execute(text("UPDATE github_connections SET account_login = 'paramg', granted_permissions = "
                        "'[\"pull\",\"push\",\"administration\",\"contents\",\"pull_requests\"]'::jsonb WHERE id = :c"), {"c": cid})
-        c.execute(text("UPDATE github_connections SET account_login = 'paramg-kaapppu', missing_permissions = "
-                       "'[\"administration\"]'::jsonb, created_by = 'usr_kaapppu' WHERE id = :c"), {"c": cid2})
+        c.execute(text("UPDATE github_connections SET account_login = 'example-org-b', missing_permissions = "
+                       "'[\"administration\"]'::jsonb, created_by = 'usr_example_b' WHERE id = :c"), {"c": cid2})
     from boss_engine.services.github_connections import GitHubConnectionService
 
     monkeypatch.setattr(GitHubConnectionService, "token_for_connection",
@@ -204,20 +204,20 @@ def test_a_connection_for_the_owner_is_found_with_its_recorded_scopes(monkeypatc
         # this project's own token says so (BOSSAPP-1338: which project a credential is from)
         assert "paramg (access token, this project)" in got.words
         # ANOTHER PROJECT'S TOKEN IS ITS OWNER'S (#179 review): not considered for anyone else …
-        stranger = repo_creation.repo_creation_credential(c, settings, "paramg-kaapppu", project_id=pid,
+        stranger = repo_creation.repo_creation_credential(c, settings, "example-org-b", project_id=pid,
                                                           actor="usr_someone")
-        assert not stranger.ok and not stranger.candidates and "paramg-kaapppu (access" not in stranger.words
+        assert not stranger.ok and not stranger.candidates and "example-org-b (access" not in stranger.words
         # … and used for the person who made it.
-        no = repo_creation.repo_creation_credential(c, settings, "paramg-kaapppu", project_id=pid,
-                                                    actor="usr_kaapppu")
+        no = repo_creation.repo_creation_credential(c, settings, "example-org-b", project_id=pid,
+                                                    actor="usr_example_b")
         assert not no.ok and "missing: administration" in no.words and no.fixes
-        assert "paramg-kaapppu" in no.fixes[0] and "repo scope" in no.fixes[0]
+        assert "example-org-b" in no.fixes[0] and "repo scope" in no.fixes[0]
         # Case does not matter for a GitHub login; a stranger gets the no-credential words.
         assert repo_creation.repo_creation_credential(c, settings, "PARAMG", project_id=pid).ok
-        owners = repo_creation.creating_owners(c, settings, pid, ["someone-else"], actor="usr_kaapppu")
+        owners = repo_creation.creating_owners(c, settings, pid, ["someone-else"], actor="usr_example_b")
     by = {o["login"]: o for o in owners}
     assert by["paramg"]["can_create"] and by["paramg"]["via"] == "paramg (access token, this project)" and by["paramg"]["verified"]
-    assert not by["paramg-kaapppu"]["can_create"] and by["paramg-kaapppu"]["fixes"]
+    assert not by["example-org-b"]["can_create"] and by["example-org-b"]["fixes"]
     assert not by["someone-else"]["can_create"] and "no GitHub credential" in by["someone-else"]["words"]
 
 
