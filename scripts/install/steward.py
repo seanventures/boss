@@ -515,6 +515,9 @@ def collect(env: Env, runner: Callable = run_cmd) -> dict[str, Any]:
         sample["docker_alloc_gb"] = gb(alloc)
         sample["docker_used_gb"] = gb(docker_used)
     sample["by_type"] = {"images": sample["images_gb"], "build_cache": sample["cache_gb"],
+                         # What a prune can free of it; the rest is layers installed images use
+                         # (storage_watch.cache_freeable_gb counts only this against the cap).
+                         "build_cache_reclaimable": gb(min(df["reclaimable_cache"], df["cache"])),
                          "volumes": sample["volumes_gb"], "logs": sample["logs_gb"],
                          "backups": sample["backups_gb"],
                          # What the orphan-volume job could really free (measured, ours, rebuildable,
@@ -522,20 +525,51 @@ def collect(env: Env, runner: Callable = run_cmd) -> dict[str, Any]:
                          # until they are relabelled. `volumes` above is every volume on the disk.
                          "volumes_reclaimable": gb(reclaimable),
                          "volumes_needs_relabel_n": float(len(relabel))}
-    # The budget prices the layers of this release and its rollback set. The whole
-    # daemon footprint above is still used by host pressure and cleanup decisions.
+    sample["by_type"].update(budget_reading(env, runner))
+    return sample
+
+
+#: The budget split walks every BOSS image's layers and every volume: measured at most this often,
+#: the last split re-sent in between (the disk reading itself stays every 30 s).
+BUDGET_EVERY_SECONDS = 600
+BUDGET_FILE = "steward-budget.json"
+
+
+def budget_reading(env: Env, runner: Callable, now: Optional[float] = None) -> dict[str, float]:
+    """The budget prices the layers of this release and its rollback set (disk_budget.py, the file
+    `boss doctor` runs, from this same checkout). The whole daemon footprint above is still used by
+    host pressure and cleanup decisions. Read-only; a failure leaves the split out, never the sample."""
+    now = time.time() if now is None else now
+    path = env.state_dir / BUDGET_FILE
+    try:
+        cached = json.loads(path.read_text())
+        if (isinstance(cached, dict) and isinstance(cached.get("values"), dict)
+                and cached.get("install_dir") == str(env.install_dir)
+                and 0 <= now - float(cached.get("at") or 0) < BUDGET_EVERY_SECONDS):
+            return {str(k): float(v) for k, v in cached["values"].items()}
+    except (OSError, ValueError, TypeError):
+        pass
     budget_module = Path(__file__).resolve().parents[2] / "engine/boss_engine/services/disk_budget.py"
-    if budget_module.is_file():
+    if not budget_module.is_file():
+        return {}
+    values: dict[str, float] = {}
+    try:
         budget = runpy.run_path(str(budget_module))
         for key, value in budget["measure_docker"](env.docker, project=env.compose_project,
                                                    tag=env.image_tag, run=runner).items():
             if value is not None:
-                sample["by_type"][f"budget_{key}"] = value
+                values[f"budget_{key}"] = float(value)
         age = budget["rollback_age_hours"](env.install_dir)
         if age is not None:
-            sample["by_type"]["rollback_age_hours"] = age
-            sample["by_type"]["rollback_keep_hours"] = budget["rollback_keep_hours"](env.dotenv)
-    return sample
+            values["rollback_age_hours"] = float(age)
+            values["rollback_keep_hours"] = float(budget["rollback_keep_hours"](env.dotenv))
+    except Exception as exc:  # noqa: BLE001 — the disk reading still goes out without the split
+        log_line(env, {"budget_reading": "failed", "error": type(exc).__name__})
+        return {}
+    with contextlib.suppress(OSError):
+        env.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        path.write_text(json.dumps({"at": now, "install_dir": str(env.install_dir), "values": values}))
+    return values
 
 
 def _volume_reading(env: Env, runner: Callable) -> tuple[float, list[str]]:
@@ -674,7 +708,9 @@ def verb_prune_build_cache(env: Env, args: dict, *, dry_run: bool, runner: Calla
         raise Refused("the build cache is Docker-wide; on a shared machine BOSS prunes only its own "
                       "buildx builder (set BOSS_BUILDX_BUILDER) or a dedicated host (BOSS_DEDICATED_HOST=1)")
     df = docker_df(env, runner)
-    over = max(0.0, df["cache"] - keep * 1e9)
+    # Only what Docker can free counts: cache that installed images share stays whatever the cap
+    # says, so a plan built on the total would promise bytes no prune returns (ENT-SETUP-01).
+    over = max(0.0, min(df["reclaimable_cache"], df["cache"]) - keep * 1e9)
     scope = f"builder:{env.buildx_builder}" if env.buildx_builder else "dedicated-host"
     items = [f"build-cache:{scope}:above-{keep}GB"] if over > 0 else []
     if dry_run or not items:
@@ -760,7 +796,10 @@ def verb_remove_images(env: Env, args: dict, *, dry_run: bool, runner: Callable)
         if inventory.returncode:
             raise Refused("could not read the rollback image inventory")
         for line in (inventory.stdout or "").splitlines():
-            row = json.loads(line)
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue        # an unreadable line is never a reason to remove anything
             ref = f"{row.get('Repository')}:{row.get('Tag')}"
             if ref in recorded and ref not in in_use:
                 rollback_items.add(ref)

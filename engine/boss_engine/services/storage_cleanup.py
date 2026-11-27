@@ -119,9 +119,17 @@ def _volumes_reclaimable(s: Mapping[str, Any]) -> float:
     return _f((s.get("by_type") or {}).get("volumes_reclaimable"))
 
 
+def _cache_over_cap(s: Mapping[str, Any], r: Mapping[str, Any]) -> float:
+    from .storage_watch import cache_freeable_gb
+
+    return _f(cache_freeable_gb(s)) - _f(r.get("build_cache", {}).get("cap_gb", 10))
+
+
 TOOLS: tuple[ToolDef, ...] = (
     ToolDef("storage.prune_build_cache", "Prune build cache", "host", "safe", "prune_build_cache",
-            "build_cache", applies=lambda s, r: _f(s.get("cache_gb")) > 0.5,
+            # Only what Docker can free, past the cap: a cache held by installed images is not a
+            # step that could free anything (ENT-SETUP-01).
+            "build_cache", applies=lambda s, r: _cache_over_cap(s, r) > 0.5,
             args_of=lambda s, r: {"keep_storage_gb": int(r.get("build_cache", {}).get("cap_gb", 10))}),
     ToolDef("storage.remove_images", "Remove old images", "host", "safe", "remove_images", "images",
             applies=lambda s, r: _f(s.get("images_gb")) > 1.0,

@@ -45,6 +45,19 @@ describe("the disk budget on the Storage card", () => {
     expect(rows[2].querySelector('[data-testid="sc-budget-action"]')).toBeNull();
   });
 
+  it("says cache that installed images share is theirs, with no command to run (ENT-SETUP-01)", async () => {
+    const cache = { key: "build_cache", label: "Build cache", gb: 0.01, budget_gb: 10, level: "ok", bounded_by: "the cap",
+                    what: "", action: "", note: "12.4 GB more is shared with installed images: it is theirs, and goes when they go. Nothing to do." };
+    const s = parseSummary({ ...wire, budget: { ...wire.budget, rows: [cache] } })!;
+    expect(s.budget!.rows[0].note).toContain("shared with installed images");
+    expect(parseBudget({ ...wire.budget, rows: [wire.budget.rows[0]] })!.rows[0].note).toBe("");
+    await mount(<StorageCardView s={s} projectId="p1" {...noop} />);
+    const row = $('[data-testid="sc-budget-row"]')!;
+    expect(row.querySelector('[data-testid="sc-budget-note"]')!.textContent).toContain("Nothing to do");
+    expect(row.querySelector('[data-testid="sc-budget-action"]')).toBeNull();
+    expect(row.textContent).not.toContain("boss prune");
+  });
+
   it("marks an overdue host sample and explains how to recover the helper", async () => {
     const s = parseSummary({ ...wire, stale: true, helper_overdue: true, sampled_at: "2026-11-25T18:00:00Z" })!;
     await mount(<StorageCardView s={s} projectId="p1" {...noop} />);

@@ -178,8 +178,35 @@ fi
 
 # 4. Build cache. The cap holds on every host: Docker keeps the newest BOSS_BUILD_CACHE_CAP_GB
 #    of cache and drops the rest, so the cache can no longer grow without bound between deploys.
+#    The cap counts what Docker can free (`docker system df` Reclaimable): the rest is layers that
+#    installed images (the release, its rollback set) still use, which no prune frees. A plain
+#    prune passes over some unused cache, so an rc10.34→rc10.35 upgrade said it pruned and left
+#    17.2 GB (ENT-DISK-02): when what Docker can free is still above the cap, --all drops the
+#    rest of the unused cache down to the cap — never below it, so another project keeps its
+#    newest cache. The before and after are Docker's own readings, printed below.
+# "<size GB>|<freeable GB>" of Docker's build cache; "" when Docker does not say.
+cache_reading() {
+  "${D[@]}" system df --format '{{.Type}}|{{.Size}}|{{.Reclaimable}}' 2>/dev/null | LC_ALL=C awk -F'|' '
+    function gb(s,  n, u) {
+      split(s, w, " "); n = w[1]; u = w[1]; gsub(/[^0-9.]/, "", n); gsub(/[0-9.]/, "", u); u = tolower(u)
+      if (n == "") return -1
+      if (u == "b") return n / 1e9; if (u == "kb") return n / 1e6; if (u == "mb") return n / 1e3
+      if (u == "tb") return n * 1e3; return n + 0 }
+    $1 ~ /Build Cache/ { s = gb($2); r = gb($3); if (s >= 0 && r >= 0) printf "%.1f|%.1f\n", s, (r < s ? r : s); exit }' || true
+}
+cache_before=""
 if [[ "$CACHE_CAP_GB" -gt 0 ]]; then
+  cache_before="$(cache_reading)"
   run "${D[@]}" builder prune -f --keep-storage "${CACHE_CAP_GB}gb"
+  if [[ "$DRY" -eq 1 ]]; then
+    printf '  would run, if Docker can still free more than %s GB: %s builder prune -af --keep-storage %sgb\n' \
+      "$CACHE_CAP_GB" "${D[*]}" "$CACHE_CAP_GB"
+  else
+    freeable="$(cache_reading)"; freeable="${freeable#*|}"
+    if [[ -n "$freeable" ]] && awk -v f="$freeable" -v c="$CACHE_CAP_GB" 'BEGIN { exit !(f + 0 > c + 0) }'; then
+      run "${D[@]}" builder prune -af --keep-storage "${CACHE_CAP_GB}gb"
+    fi
+  fi
 else
   printf 'build cache cap off (BOSS_BUILD_CACHE_CAP_GB=0)\n'
 fi
@@ -263,6 +290,25 @@ if [[ "$CACHE_CAP_GB" -gt 0 && ( "$DEDICATED" -eq 1 || "$ROOM" -eq 1 ) ]]; then
       run "${D[@]}" builder prune -af
     else
       run "${D[@]}" builder prune -af --keep-storage "${keep}gb"
+    fi
+  fi
+fi
+# What the build cache really is now, from Docker, not what the steps above meant to do.
+if [[ -n "$cache_before" ]]; then
+  cache_after="$cache_before"
+  [[ "$DRY" -eq 1 ]] || cache_after="$(cache_reading)"
+  if [[ -n "$cache_after" ]]; then
+    IFS='|' read -r size_b free_b <<<"$cache_before"
+    IFS='|' read -r size_a free_a <<<"$cache_after"
+    printf 'build cache: %s GB before (%s GB Docker can free), %s GB after (%s GB Docker can free); the cap is %s GB\n' \
+      "$size_b" "$free_b" "$size_a" "$free_a" "$CACHE_CAP_GB"
+    shared="$(awk -v s="$size_a" -v f="$free_a" 'BEGIN { printf "%.1f", s - f }')"
+    if awk -v x="$shared" 'BEGIN { exit !(x + 0 >= 0.1) }'; then
+      printf '  %s GB of it is layers installed images still use: it goes when they go, and no prune frees it\n' "$shared"
+    fi
+    if [[ "$DRY" -eq 0 ]] && awk -v f="$free_a" -v c="$CACHE_CAP_GB" 'BEGIN { exit !(f + 0 > c + 0) }'; then
+      failed=1
+      printf 'prune: the build cache Docker can free is still %s GB, over the %s GB cap\n' "$free_a" "$CACHE_CAP_GB" >&2
     fi
   fi
 fi

@@ -432,12 +432,30 @@ def by_type_rows(sample: Mapping[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+#: The helper's reading of the build cache Docker can free (`docker system df` Reclaimable).
+#: The rest is layers installed images share: no prune frees it (ENT-SETUP-01).
+CACHE_FREEABLE_KEY = "build_cache_reclaimable"
+
+
+def cache_freeable_gb(sample: Mapping[str, Any]) -> Optional[float]:
+    """THE build cache a prune can free: what the cap, the budget, the cleanup plan and the cause
+    sentence count. An older helper sent only the total, which is the best reading there is."""
+    freeable = _f((sample.get("by_type") or {}).get(CACHE_FREEABLE_KEY))
+    return freeable if freeable is not None else _f(sample.get("cache_gb"))
+
+
+def cache_shared_gb(sample: Mapping[str, Any]) -> Optional[float]:
+    """The build cache installed images still use (total minus freeable); None when unknown."""
+    total, freeable = _f(sample.get("cache_gb")), _f((sample.get("by_type") or {}).get(CACHE_FREEABLE_KEY))
+    return None if total is None or freeable is None else max(0.0, total - freeable)
+
+
 def rules_reclaim_gb(sample: Mapping[str, Any], rules: Sequence[Mapping[str, Any]]) -> float:
     """What the ENABLED rules would hand back now (for the "with rules" forecast line)."""
     enabled = {r["kind"]: r["rule"] for r in rules if r.get("enabled")}
     gain = 0.0
     if "build_cache" in enabled:
-        gain += max(0.0, (_f(sample.get("cache_gb")) or 0.0) - float(enabled["build_cache"].get("cap_gb", 10)))
+        gain += max(0.0, (cache_freeable_gb(sample) or 0.0) - float(enabled["build_cache"].get("cap_gb", 10)))
     if "backups" in enabled:
         cap = float(enabled["backups"].get("cap_gb", 20))
         gain += max(0.0, (_f(sample.get("backups_gb")) or 0.0) - cap)
@@ -503,7 +521,8 @@ def budget(connection: Any, sample: Mapping[str, Any]) -> dict[str, Any]:
         "rollback_images": _f(host.get("budget_rollback_images")),
         "volumes_other": _f(host.get("budget_volumes_other")),
         "dangling_volumes": _f(host.get("budget_dangling_volumes")),
-        "build_cache": _f(sample.get("cache_gb")),
+        "build_cache": cache_freeable_gb(sample),
+        disk_budget.CACHE_SHARED_KEY: cache_shared_gb(sample),
         "logs": _f(sample.get("logs_gb")),
         "db_records": db["db_records"], "db_knowledge": db["db_knowledge"],
         "db_telemetry": db["db_telemetry"], "test_data": db["test_databases"],

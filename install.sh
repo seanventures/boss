@@ -1968,15 +1968,18 @@ chmod 600 "$INSTALL_DIR/boss-community.env.sh"
 # left 5 GB free. The same retention every upgrade runs (prune.sh): old BOSS tags go, the cache is
 # capped, and on a small Docker disk it is trimmed to keep BOSS_DISK_FLOOR_GB free. Best effort.
 if [[ -f "$INSTALL_DIR/scripts/install/prune.sh" ]]; then
-  if _prune_out="$(bash "$INSTALL_DIR/scripts/install/prune.sh" --dir "$INSTALL_DIR" --room </dev/null 2>&1)"; then
-    while IFS= read -r _l; do
-      case "$_l" in *"build cache"*|*"could not be measured"*) ui_info "$_l" ;; esac
-    done <<< "$_prune_out"
-    ui_ok "Old images and build cache pruned"
+  _prune_ok=1
+  _prune_out="$(bash "$INSTALL_DIR/scripts/install/prune.sh" --dir "$INSTALL_DIR" --room </dev/null 2>&1)" || _prune_ok=0
+  # Docker's own before/after reading of the build cache, whichever way it went (ENT-DISK-02).
+  while IFS= read -r _l; do
+    case "$_l" in *"build cache"*|*"could not be measured"*|"prune: "*) ui_info "$_l" ;; esac
+  done <<< "$_prune_out"
+  if [[ "$_prune_ok" -eq 1 ]]; then
+    ui_ok "Old images pruned; build cache within its cap"
   else
-    ui_warn "The build cache was not trimmed; run: boss prune"
+    ui_warn "Pruning did not finish (see above); run: boss prune"
   fi
-  unset _prune_out _l
+  unset _prune_out _prune_ok _l
 fi
 
 # ---- models and subscriptions already on this machine ----------------------

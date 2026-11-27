@@ -559,19 +559,23 @@ cmd_rollback() {
 
 cmd_prune() {
   need_install
+  # prune.sh fails when a step did not finish or the cache is still over its cap; the test
+  # leftovers below are still checked, and `boss prune` then exits with its status.
+  local rc=0
   BOSS_DEDICATED_HOST="$(env_value BOSS_DEDICATED_HOST)" \
-    bash "$INSTALL_DIR/scripts/install/prune.sh" "$@"
+    bash "$INSTALL_DIR/scripts/install/prune.sh" "$@" || rc=$?
   # The test Postgres's volume, when no container uses it (BOSSAPP-1459): the steward, whose
   # label gate is the one place BOSS removes a volume.
   local dry=() arg
   for arg in "$@"; do
     case "$arg" in
-      --cache-only) return 0 ;;
+      --cache-only) return "$rc" ;;
       --dry-run) dry=(--dry-run) ;;
     esac
   done
   python3 "$INSTALL_DIR/scripts/install/steward.py" --install-dir "$INSTALL_DIR" --test-leftovers \
     ${dry[@]+"${dry[@]}"} </dev/null || printf 'boss: test leftovers not checked\n' >&2
+  return "$rc"
 }
 
 # ---- dev: the test Postgres (storage hygiene, BOSSAPP-1152/1162) -----------------------------

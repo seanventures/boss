@@ -143,10 +143,11 @@ function BudgetList({ b }: { b: DiskBudget }) {
       </div>
       <ul className="sc-legend-types" data-testid="sc-budget-rows">
         {rows.map((r) => (
-          <li key={r.key} data-level={r.level} data-testid="sc-budget-row" title={r.what ? `${r.what} ${r.action}` : r.boundedBy}>
+          <li key={r.key} data-level={r.level} data-testid="sc-budget-row" title={[r.what ? `${r.what} ${r.action}` : r.boundedBy, r.note].filter(Boolean).join(" ")}>
             <span className="sc-swatch" data-tone={r.level === "over" ? "red" : r.level === "near" ? "amber" : "green"} aria-hidden />
             {r.label} <code>{gb(r.gb ?? 0)} / {gb(r.budgetGb)}</code>
             {r.level === "over" || r.level === "near" ? <span className="sc-faint" data-testid="sc-budget-action"> {r.action}</span> : null}
+            {r.note ? <span className="sc-faint" data-testid="sc-budget-note"> {r.note}</span> : null}
           </li>
         ))}
       </ul>
