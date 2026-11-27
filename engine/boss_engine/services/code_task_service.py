@@ -2395,8 +2395,8 @@ def retry_code_task(
     # code and keep their own bounds.
     if automatic and not platform_retry and not recheck:
         with _transaction(engine) as c:
-            _made = _lineage_cap.attempts(c, run_id)
-        if _made >= _lineage_cap.CAP:
+            _made = _lineage_cap.attempts(c, run_id)   # at the cause this build stopped on
+        if _made >= _lineage_cap.cap_for(spec):
             raise RetryNeedsPerson(
                 f"{_lineage_cap.words(_made)}. {_lineage_cap.NEXT_STEP}.")
 
@@ -2595,9 +2595,9 @@ def retry_code_task(
             finalize_ctx={"parent_run_id": run_id, "root_run_id": root, "attempt": attempt,
                           # WHO STARTED THIS ATTEMPT (lineage_cap): BOSS's own attempts share
                           # one cap per lineage; a person's Retry starts a new window.
-                          _lineage_cap.STARTED_BY: (
-                              _lineage_cap.PLATFORM if automatic and platform_retry
-                              else _lineage_cap.BOSS if automatic else _lineage_cap.PERSON),
+                          _lineage_cap.STARTED_BY: _lineage_cap.started_by(
+                              automatic=automatic, by_person=by_person,
+                              platform_retry=platform_retry),
                           # WHICH AUTOMATIC PLATFORM RETRY THIS IS, written WITH the row — never
                           # after the job is queued (a fast-failing attempt read it as 0).
                           **({"auto_infra_retry": int(auto_retry_attempt)}

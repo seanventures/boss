@@ -406,29 +406,12 @@ def port_held(failure: Mapping[str, Any]) -> Optional[int]:
     return int(next(g for g in found.groups() if g))
 
 
-#: A gate that fails because of what a repair round did, never a cause of its own: a round that
-#: could not fix the test wrote nothing, and `code_written` failed beside the same test.
-_SYMPTOM_GATES = frozenset({"code_written"})
-#: Which failing gate names THE cause when several fail. The floors the later checks stand on
-#: come first: a reviewer or the must-haves read a red suite, never the other way round.
-_CAUSE_ORDER = ("no_committed_secrets", "template_tests", "app_serves", "written_tests_pass",
-                "existing_tests_intact", "nothing_broke", "coder_did_not_edit_tests",
-                "stayed_in_app", "web_package_honest", "security_clean", "brief_tests_written",
-                "tests_written_first", "tests_strong_enough", "acceptance_met",
-                "code_review_passed", "consistent", "input_fidelity", "code_written")
-
-
 def cause_gate(gates: Iterable[str]) -> str:
-    """THE ONE GATE that names why a build stopped on its checks (ENT-REC-52). The signature
-    used to join every failing gate, so the same broken test read as a NEW cause the moment a
-    repair added a gate beside it (`code_written` after a round that wrote nothing, a seat
-    that failed on the follow-up), and "the same cause twice asks a person" never fired. The
-    cause is the first failing gate in _CAUSE_ORDER, symptoms last; an unknown gate sorts after
-    the known ones."""
-    named = sorted({str(g) for g in gates if g})
-    causes = [g for g in named if g not in _SYMPTOM_GATES] or named
-    rank = {g: i for i, g in enumerate(_CAUSE_ORDER)}
-    return min(causes, key=lambda g: (rank.get(g, len(rank)), g)) if causes else "review"
+    """THE ONE GATE that names why a build stopped on its checks (lineage_cap.cause_gate: the
+    same rule the lineage's attempt cap counts by)."""
+    from .lineage_cap import cause_gate as _cause_gate
+
+    return _cause_gate(gates)
 
 
 def cause_signature(kind: str, failure: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:

@@ -833,7 +833,8 @@ def check_pull_request(g: Gate) -> str:
 
 RETRY_SUITES = ["test_a_failed_delivery_retries_only_the_delivery.py",
                 "test_an_automatic_retry_runs_under_the_persons_grant_or_not_at_all.py",
-                "test_a_retry_of_nothing_is_a_fresh_build_of_its_own_app.py"]
+                "test_a_retry_of_nothing_is_a_fresh_build_of_its_own_app.py",
+                "test_a_lineage_has_one_attempt_cap.py"]
 
 
 class Background:

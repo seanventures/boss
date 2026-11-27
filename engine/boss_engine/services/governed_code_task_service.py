@@ -2780,6 +2780,55 @@ class AppScopedAgent:
         setattr(self._agent, name, value)
 
 
+def _lineage_brief(engine, spec: dict, fctx: dict, run: Optional[dict]) -> str:
+    """The brief the lineage was started with: this run's own, else (a findings follow-up, or a
+    retry of one, whose instructions are findings) its root's. Iteration notes are cut."""
+    text = str((spec or {}).get("instructions") or "")
+    root_id = str((fctx or {}).get("root_run_id") or "")
+    if verification_target.is_continuation_of_findings(fctx) and root_id:
+        try:
+            with _transaction(engine) as c:
+                root_run = load_code_task_run(c, root_id) or {}
+            text = str((root_run.get("spec") or {}).get("instructions") or "")
+        except Exception:  # noqa: BLE001 — no root brief: none is named
+            _log_caught(logger)
+            text = ""
+    return text.split("\n\n=== ITERATION FEEDBACK", 1)[0]
+
+
+def _scope_for_writing(engine, run_id: str, project_id: str, root, spec: dict, fctx: dict,
+                       run: Optional[dict], app_id: Optional[str], scope: Optional[str],
+                       exempt: list) -> Optional[str]:
+    """The app every writing turn stays in, or None. A brief that names OTHER deployable apps
+    beside it ("move the login from `crm/` to `helpdesk/`") is cross-app work by design: no
+    scope then (a pinned benchmark app keeps its own). Every folder the brief names is recorded
+    in `exempt` — never another app's for the gate."""
+    from . import app_root
+
+    if not scope:
+        return None
+    try:
+        named = app_root.named_folders(root, _lineage_brief(engine, spec, fctx, run))
+    except Exception:  # noqa: BLE001 — nothing named: the scope stands
+        _log_caught(logger)
+        named = []
+    exempt[:] = named
+    apps = set(app_root.subfolder_apps(root))
+    others = sorted(d for d in named if d in apps and d != scope
+                    and not d.startswith(scope + "/") and not scope.startswith(d + "/")
+                    and not app_root.is_shared_package(root, d))
+    if others and not app_id:
+        try:
+            with _transaction(engine) as c:
+                emit_event(c, project_id, "code_task.app_scope_off", "boss", "code_task_run",
+                           run_id, {"app": scope, "also_named": others[:10],
+                                    "why": "the brief names several apps: cross-app work"})
+        except Exception:  # noqa: BLE001
+            _log_caught(logger)
+        return None
+    return scope
+
+
 #: The gate a diff that changes another app's files fails (ENT-REC-51).
 STAYED_IN_APP_GATE = "stayed_in_app"
 
@@ -4304,13 +4353,15 @@ def _spawn_deferred_findings_task(
     When the ledger cannot be read the task is built from ``findings`` as before.
     """
     from .code_task_service import start_code_task
-    # ONE CAP PER LINEAGE (lineage_cap): the follow-up would be one attempt too many.
+    # ONE CAP PER CAUSE (lineage_cap): the follow-up would be one attempt too many at the
+    # cause its parent stopped on.
     with _transaction(engine) as c:
         _made = _lineage_cap.attempts(c, parent_run_id)
-        if _made >= _lineage_cap.CAP:
+        _cap = _lineage_cap.cap_for(spec)
+        if _made >= _cap:
             emit_event(c, project_id, "code_task.followup_skipped", "boss", "code_task_run",
                        parent_run_id, {"reason": _lineage_cap.words(_made),
-                                       "attempts": _made, "cap": _lineage_cap.CAP})
+                                       "attempts": _made, "cap": _cap})
             return None
     limit = 40 if checks_failing else 20
     plan = _ledger_followup(engine, project_id=project_id, parent_run_id=parent_run_id,
@@ -6184,6 +6235,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     #: folder the lineage recorded — set once the checkout says which. Every writing turn of
     #: every engine is told it (_scoped_prompt), and `stayed_in_app` gates the diff on it.
     _write_scope: list[Optional[str]] = [None]
+    #: The folders the lineage's brief names: never "another app's" (stayed_in_app).
+    _write_exempt: list[str] = []
 
     def _scoped_prompt(prompt: str) -> str:
         return app_scope_rule(_write_scope[0], prompt)
@@ -7499,8 +7552,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             _log_caught(logger)
         # THE APP EVERY WRITING TURN STAYS IN (ENT-REC-51): named or the brief's folder, else
         # the folder this lineage recorded (a follow-up's brief is findings, never a folder).
-        _write_scope[0] = (_app_root_mod.clean_rel(_app_id or _app_scope)
-                           or _app_root_mod.clean_rel(_recorded_app))
+        _write_scope[0] = _scope_for_writing(
+            engine, run_id, project_id, root, spec, fctx, run, _app_id,
+            _app_root_mod.clean_rel(_app_id or _app_scope)
+            or _app_root_mod.clean_rel(_recorded_app), _write_exempt)
         # CONTINUE FROM THE FAILED ATTEMPT'S WORKSPACE (saved_workspace_files). Seeded after the
         # verify manifest is pinned, exactly as the parent's agents wrote after it. A seeded run
         # skips the design chain, write_tests and the first implement: its first pass is the
@@ -10997,27 +11052,39 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         _other_app_files: list[str] = []
 
         def _whole_change_paths() -> list[str]:
-            """THE PULL REQUEST'S WHOLE CHANGE, not this attempt's. A follow-up or repair works
-            on the lineage's branch, so its own diff never shows what an earlier attempt wrote
-            into another app (and a file it restored shows as a change). Measured against the
-            integration branch the sandbox fetched (sandbox.integration_ref), tracked changes
-            plus new files; this run's changed paths when there is none (a first build)."""
-            ref = None if use_microvm else getattr(sandbox, "integration_ref", None)
-            if ref:
-                try:
-                    from .git_safety import tree_git
+            """THE PULL REQUEST'S WHOLE CHANGE, not this attempt's (whole_change): the tree
+            against the merge base of the PR's base branch and the work, renames off — never a
+            two-dot diff against the base's tip, which counts what other apps merged since. A
+            shallow checkout is deepened to reach it. Without one (the micro-VM substrate, no
+            history to be had) the lineage's own recorded paths judge, with this run's."""
+            fallback = sorted(set(_changed_paths()) | set(_lineage_paths))
+            base = str((_release_target or {}).get("pr_base") or repo_base_branch or "").strip()
+            if use_microvm or not base or sandbox is None:
+                return fallback
+            ref = f"refs/remotes/origin/{base}"
+            from . import whole_change
+            from .git_safety import tree_git
 
-                    tracked = tree_git(root, "diff", "--name-only", ref, timeout=30)
-                    new = tree_git(root, "ls-files", "--others", "--exclude-standard",
-                                   timeout=30)
-                    if (tracked is not None and new is not None
-                            and tracked.returncode == 0 and new.returncode == 0):
-                        return sorted({ln.strip() for ln in
-                                       (tracked.stdout or "").splitlines()
-                                       + (new.stdout or "").splitlines() if ln.strip()})
-                except Exception:  # noqa: BLE001 — this attempt's own change still judges
-                    _log_caught(logger)
-            return _changed_paths()
+            def _fetch(*args: str) -> None:
+                sandbox._git(["fetch", *args], redact=token or None)  # noqa: SLF001
+
+            try:
+                have = tree_git(root, "rev-parse", "--verify", "--quiet", ref, timeout=20)
+                if have is None or have.returncode != 0:
+                    _fetch("--depth", "50", "origin", f"{base}:{ref}")
+
+                def _deepen() -> None:
+                    _fetch("--deepen", "200", "origin", f"{base}:{ref}")
+                    try:
+                        _fetch("--deepen", "200", "origin", work_branch)
+                    except Exception:  # noqa: BLE001 — a first build's branch is not pushed yet
+                        pass
+
+                paths = whole_change.paths_since_base(root, ref, deepen=_deepen)
+            except Exception:  # noqa: BLE001 — the lineage's own record still judges
+                _log_caught(logger)
+                paths = None
+            return paths if paths is not None else fallback
 
         def _judge_stayed_in_app() -> None:
             """THE DIFF STAYS IN ITS APP (ENT-REC-51): a change to another app's files — a
@@ -11026,7 +11093,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             if not _write_scope[0]:
                 return
             _other_app_files[:] = _app_root_mod.foreign_app_paths(
-                root, _whole_change_paths(), _write_scope[0])
+                root, _whole_change_paths(), _write_scope[0], exempt=_write_exempt)
             gates[STAYED_IN_APP_GATE] = not _other_app_files
             try:
                 evidence["app_scope"] = {"app": _write_scope[0],
@@ -12114,13 +12181,20 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # THE LIGHT LANE: at most one cold repair round below production, then hand over.
             max_repair_rounds = _quality_bar.fix_rounds(getattr(gates, "bar", _qbar),
                                                         max_repair_rounds)
-            # ONE CAP PER LINEAGE (lineage_cap, ENT-REC-52). `attempt` restarts at 1 on a
+            # ONE CAP PER CAUSE (lineage_cap, ENT-REC-52). `attempt` restarts at 1 on a
             # follow-up, so its rounds read as unspent and the same broken test took a fourth
-            # build. The lineage's own count decides: at the cap no repair child starts, and the
-            # PR opens with no follow-up for a person to decide (_env_stop below).
+            # build. This build records the cause it stopped on, and the lineage's count of
+            # builds that stopped on it decides: at the cap no repair child starts, and the PR
+            # opens with no follow-up for a person to decide (_env_stop below).
+            _stop_cause = _lineage_cap.cause_gate(failing)
             with _transaction(engine) as c:
-                _lineage_made = _lineage_cap.attempts(c, run_id)
-            _lineage_spent = _lineage_made >= _lineage_cap.CAP
+                c.execute(sql(
+                    "UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb) "
+                    "|| jsonb_build_object(CAST(:k AS text), CAST(:v AS text)) WHERE id = :id"),
+                    {"k": _lineage_cap.STOP_CAUSE, "v": _stop_cause, "id": run_id})
+                _lineage_made = _lineage_cap.attempts(c, run_id, _stop_cause)
+            _lineage_cap_n = _lineage_cap.cap_for(spec)
+            _lineage_spent = _lineage_made >= _lineage_cap_n
             if _lineage_spent:
                 rounds_used = max(rounds_used, max_repair_rounds)
             gate_faults = classify_gate_faults(failing=failing, evidence=evidence)
@@ -12431,8 +12505,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 with _transaction(engine) as c:
                     emit_event(c, project_id, "code_task.lineage_attempts_spent", "boss",
                                "code_task_run", run_id,
-                               {"attempts": _lineage_made, "cap": _lineage_cap.CAP,
-                                "failing_gates": failing,
+                               {"attempts": _lineage_made, "cap": _lineage_cap_n,
+                                "cause": _stop_cause, "failing_gates": failing,
                                 "why": _lineage_cap.words(_lineage_made),
                                 "next_step": _lineage_cap.NEXT_STEP})
             if action == "ship" and failing and advisory_gate:

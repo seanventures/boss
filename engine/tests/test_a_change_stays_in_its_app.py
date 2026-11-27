@@ -61,6 +61,129 @@ def test_stayed_in_app_is_a_floor_gate_with_words_on_every_surface():
     assert 'stayed_in_app: "Stayed in app"' in web and 'stayed_in_app: "Changed another app"' in web
 
 
+def test_shared_code_and_folders_the_brief_names_are_never_another_app(tmp_path):
+    root = _two_apps(tmp_path)
+    for lib in ("packages/ui", "libs/auth", "e2e"):
+        (root / lib).mkdir(parents=True, exist_ok=True)
+        (root / lib / "package.json").write_text("{}")
+    changed = ["packages/ui/button.js", "libs/auth/x.js", "e2e/flow.spec.js",
+               "neighborhood-board/src/board.js"]
+    assert app_root.foreign_app_paths(root, changed, "recipe-box") == [
+        "neighborhood-board/src/board.js"]
+    # A folder the brief names is the brief's to change.
+    assert app_root.foreign_app_paths(root, changed, "recipe-box",
+                                      exempt=["neighborhood-board"]) == []
+
+
+def test_a_workspace_member_nothing_runs_is_shared(tmp_path):
+    import json
+
+    (tmp_path / "package.json").write_text(json.dumps({"workspaces": ["apps/*", "ui-kit"]}))
+    for app, scripts in (("apps/web", {"dev": "vite"}), ("apps/api", {"start": "node ."}),
+                         ("ui-kit", {"build": "tsc"})):
+        (tmp_path / app).mkdir(parents=True)
+        (tmp_path / app / "package.json").write_text(json.dumps({"scripts": scripts}))
+    assert app_root.foreign_app_paths(tmp_path, ["ui-kit/a.ts", "apps/api/b.ts"],
+                                      "apps/web") == ["apps/api/b.ts"]
+
+
+def test_the_folders_a_brief_names(tmp_path):
+    root = _two_apps(tmp_path)
+    assert app_root.named_folders(root, "Build it in the `recipe-box/` folder.") == ["recipe-box"]
+    assert app_root.named_folders(
+        root, "Move the login from neighborhood-board into `recipe-box/`") == [
+        "neighborhood-board", "recipe-box"]
+    assert app_root.named_folders(root, "Add a counter to the slug service.") == []
+
+
+# ── ENT-REC-51: the pull request's whole change ───────────────────────────────────────────────
+
+def _git(cwd, *args):
+    import subprocess
+
+    return subprocess.run(["git", "-c", "user.email=t@example.com", "-c", "user.name=t", *args],
+                          cwd=cwd, capture_output=True, text=True, check=True).stdout
+
+
+def _origin(tmp_path):
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    _git(seed, "init", "-q", "-b", "main")
+    for app in ("recipe-box", "neighborhood-board", "crm", "helpdesk"):
+        (seed / app / "src").mkdir(parents=True)
+        (seed / app / "package.json").write_text('{"scripts": {"start": "node ."}}')
+        (seed / app / "src" / "index.js").write_text(f"// {app}\n")
+    (seed / "crm" / "src" / "login.js").write_text("export const login = 1;\n")
+    _git(seed, "add", "-A")
+    _git(seed, "commit", "-qm", "base")
+    bare = tmp_path / "origin.git"
+    _git(tmp_path, "clone", "-q", "--bare", str(seed), str(bare))
+    work = tmp_path / "work"
+    _git(tmp_path, "clone", "-q", str(bare), str(work))
+    _git(work, "checkout", "-qb", "boss/code/crun_1")
+    return bare, seed, work
+
+
+def _main_moves_in_a_sibling_app(tmp_path, bare):
+    other = tmp_path / "other"
+    _git(tmp_path, "clone", "-q", str(bare), str(other))
+    (other / "neighborhood-board" / "src" / "index.js").write_text("// moved on main\n")
+    _git(other, "commit", "-qam", "main moves")
+    _git(other, "push", "-q", "origin", "main")
+
+
+def test_what_main_merged_since_is_not_this_change(tmp_path):
+    from boss_engine.services import whole_change
+
+    bare, _seed, work = _origin(tmp_path)
+    (work / "recipe-box" / "src" / "index.js").write_text("// the counter\n")
+    _git(work, "commit", "-qam", "the counter")
+    _main_moves_in_a_sibling_app(tmp_path, bare)
+    _git(work, "fetch", "-q", "origin", "main:refs/remotes/origin/main")
+    two_dot = _git(work, "diff", "--name-only", "origin/main").split()
+    assert "neighborhood-board/src/index.js" in two_dot          # what the old diff counted
+    paths = whole_change.paths_since_base(work, "refs/remotes/origin/main")
+    assert paths == ["recipe-box/src/index.js"]
+    assert app_root.foreign_app_paths(work, paths, "recipe-box") == []
+
+
+def test_a_file_moved_out_of_another_app_is_that_apps_change(tmp_path):
+    from boss_engine.services import whole_change
+
+    _bare, _seed, work = _origin(tmp_path)
+    _git(work, "mv", "crm/src/login.js", "helpdesk/src/login.js")
+    _git(work, "commit", "-qm", "move the login")
+    paths = whole_change.paths_since_base(work, "refs/remotes/origin/main")
+    assert paths == ["crm/src/login.js", "helpdesk/src/login.js"]
+    assert app_root.foreign_app_paths(work, paths, "helpdesk") == ["crm/src/login.js"]
+
+
+def test_a_shallow_checkout_is_deepened_to_its_merge_base(tmp_path):
+    from boss_engine.services import whole_change
+
+    bare, _seed, work = _origin(tmp_path)
+    (work / "recipe-box" / "src" / "index.js").write_text("// one\n")
+    _git(work, "commit", "-qam", "one")
+    (work / "recipe-box" / "src" / "index.js").write_text("// two\n")
+    _git(work, "commit", "-qam", "two")
+    _git(work, "push", "-q", "origin", "boss/code/crun_1")
+    _main_moves_in_a_sibling_app(tmp_path, bare)
+    shallow = tmp_path / "shallow"
+    _git(tmp_path, "clone", "-q", "--depth", "1", "--branch", "boss/code/crun_1",
+         f"file://{bare}", str(shallow))
+    _git(shallow, "fetch", "-q", "--depth", "1", "origin", "main:refs/remotes/origin/main")
+    assert whole_change.paths_since_base(shallow, "refs/remotes/origin/main") is None
+    deepened = []
+
+    def deepen():
+        deepened.append(1)
+        _git(shallow, "fetch", "-q", "--deepen", "50", "origin",
+             "main:refs/remotes/origin/main", "boss/code/crun_1")
+
+    paths = whole_change.paths_since_base(shallow, "refs/remotes/origin/main", deepen=deepen)
+    assert deepened and paths == ["recipe-box/src/index.js"]
+
+
 # ── ENT-REC-51: every writing turn is told ───────────────────────────────────────────────────
 
 class _Agent:
@@ -103,10 +226,33 @@ def test_every_build_path_runs_its_agents_through_the_scope():
     src = Path(governed.__file__).read_text()
     assert src.count("make_code_agent(") == 1
     assert "a = AppScopedAgent(a, _scoped_prompt)" in src
-    assert ("_write_scope[0] = (_app_root_mod.clean_rel(_app_id or _app_scope)\n"
-            "                           or _app_root_mod.clean_rel(_recorded_app))") in src
+    assert ("_write_scope[0] = _scope_for_writing(\n"
+            "            engine, run_id, project_id, root, spec, fctx, run, _app_id,\n"
+            "            _app_root_mod.clean_rel(_app_id or _app_scope)\n"
+            "            or _app_root_mod.clean_rel(_recorded_app), _write_exempt)") in src
     # The micro-VM guest's brief too.
     assert "_scoped_prompt(prompt)}" in src
+    # The gate judges the pull request's whole change, with the brief's folders exempt.
+    assert "root, _whole_change_paths(), _write_scope[0], exempt=_write_exempt)" in src
+
+
+def test_a_cross_app_brief_has_no_single_app_scope(tmp_path):
+    """"Move the login from `crm/` to `helpdesk/`" changes two apps by design: no scope, so no
+    writing turn is told to stay in one and the gate never fails it."""
+    root = _two_apps(tmp_path)
+    exempt: list = []
+    one = governed._scope_for_writing(None, "crun_1", "p", root, {
+        "instructions": "Build it in the `recipe-box/` folder."}, {}, None, None,
+        "recipe-box", exempt)
+    assert one == "recipe-box" and exempt == ["recipe-box"]
+    both = governed._scope_for_writing(None, "crun_1", "p", root, {
+        "instructions": "Move the board from `neighborhood-board/` into `recipe-box/`."}, {},
+        None, None, "recipe-box", exempt)
+    assert both is None and exempt == ["neighborhood-board", "recipe-box"]
+    # A pinned benchmark app keeps its scope whatever the brief names.
+    assert governed._scope_for_writing(None, "crun_1", "p", root, {
+        "instructions": "Use `neighborhood-board/` as the reference."}, {}, None,
+        "recipe-box", "recipe-box", exempt) == "recipe-box"
 
 
 # ── ENT-REC-52: one cause, one signature ─────────────────────────────────────────────────────
