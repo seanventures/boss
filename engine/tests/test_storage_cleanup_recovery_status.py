@@ -85,3 +85,23 @@ def test_forecast_and_hysteresis_query_only_the_selected_disk_source(monkeypatch
     for call in connection.execute.call_args_list:
         assert "source = :source" in str(call.args[0])
         assert call.args[1]["source"] == "steward"
+
+
+def test_clean_now_retries_a_finished_safe_plan_without_erasing_other_steps(monkeypatch):
+    previous = [
+        {"tool": "trim", "tier": 1, "state": "failed"},
+        {"tool": "images", "tier": 1, "state": "refused"},
+        {"tool": "backups", "tier": 3, "state": "done", "receipt_id": "kept"},
+    ]
+    trim = {"tool": "trim", "tier": 1, "state": "planned"}
+    monkeypatch.setattr(storage_cleanup, "_plan", lambda c, i: ({"status": "critical"}, previous))
+    monkeypatch.setattr(storage_cleanup, "build_plan", lambda c, i, s, max_tier: [
+        trim, {"tool": "images", "tier": 1, "state": "planned"}])
+    saved = []
+    monkeypatch.setattr(storage_cleanup, "_save_plan", lambda c, i, p: saved.append(p))
+    storage_cleanup.request_safe_cleanup(None, "incident", {})
+    assert saved == [[trim, previous[1], previous[2]]]
+    for state in ("planned", "running", "queued", "ask"):
+        previous[0]["state"] = state
+        storage_cleanup.request_safe_cleanup(None, "incident", {})
+    assert len(saved) == 1

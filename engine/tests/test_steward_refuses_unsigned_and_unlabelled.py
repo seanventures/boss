@@ -164,6 +164,10 @@ class FakeDocker:
                 self.volumes = [v for v in self.volumes if v["name"] != a[-1]]
         elif a[:1] == ["rmi"]:
             self.removed.append(("image", a[-1]))
+        elif a[:2] == ["buildx", "inspect"]:
+            out = f"Name:          {a[-1]}\nDriver:        docker-container\n"
+        elif a[:2] == ["buildx", "du"]:
+            out = "ID  RECLAIMABLE  SIZE  LAST ACCESSED\nShared:\t\t0B\nPrivate:\t18GB\nReclaimable:\t18GB\nTotal:\t\t18GB\n"
         elif a[:2] == ["system", "df"]:
             out = "\n".join(json.dumps(r) for r in [
                 {"Type": "Images", "Size": "30GB", "Reclaimable": "10GB (33%)"},
@@ -692,3 +696,60 @@ def test_an_install_without_an_id_prunes_nothing_and_says_so(tmp_path, keypair, 
     report = steward.once(env, runner=docker, sample_only=True)
     assert "BOSS_INSTALL_ID" in report["warning"]
     assert "BOSS_INSTALL_ID" in capsys.readouterr().err
+
+
+def test_release_rollback_label_can_only_remove_a_recorded_unused_previous_tag(env, monkeypatch):
+    """Docker puts labels on image IDs. Other aliases of that ID belong to their owners."""
+    prev = "prev-" + env.image_tag
+    expected = "boss-community-api:" + prev
+    busy = "boss-community-worker:" + prev
+    entries = [expected, busy, "boss-community-web:" + prev, "private:archive",
+               "boss-community-api:" + env.image_tag]
+    (env.install_dir / ".boss-rollback").write_text(
+        f"BOSS_IMAGE_TAG={env.image_tag}\nBOSS_PREV_IMAGES=boss-community-api boss-community-worker\n"
+    )
+    monkeypatch.setattr(steward, "rollback_expired", lambda *_: True)
+    monkeypatch.setattr(steward, "docker_df", lambda *_: {})
+    label_on_apply = env.install_id
+    def run(argv, **_):
+        cmd = argv[len(env.docker):]
+        if cmd[0] == "ps":
+            output = busy
+        elif cmd[0] == "images" and "--filter" not in cmd:
+            output = "\n".join(entries)
+        elif cmd[0] == "images":
+            output = ""
+            if f"label={steward.ROLLBACK_LABEL}={env.install_id}" in cmd:
+                output = "\n".join(json.dumps({"Repository": ref.split(":")[0], "Tag": ref.split(":")[1],
+                                              "Size": "1MB"}) for ref in entries)
+        elif cmd[:2] == ["image", "inspect"]:
+            assert cmd[-1] == expected and steward.ROLLBACK_LABEL in cmd[-2]
+            output = label_on_apply
+        elif cmd[0] == "rmi":
+            assert cmd[1:] == [expected]
+            entries.remove(expected)
+            output = ""
+        else:
+            raise AssertionError(cmd)
+        return subprocess.CompletedProcess(argv, 0, output, "")
+    assert steward.verb_remove_images(env, {}, dry_run=True, runner=run)[0] == [expected]
+    label_on_apply = "different-install"
+    assert not steward.verb_remove_images(env, {}, dry_run=False, runner=run)[0]
+    label_on_apply = env.install_id
+    assert steward.verb_remove_images(env, {}, dry_run=False, runner=run)[0] == [expected]
+    assert busy in entries and "private:archive" in entries
+    assert "BOSS_PREV_EXPIRED_AT" not in (env.install_dir / ".boss-rollback").read_text()
+
+
+def test_compose_service_snapshot_excludes_oneoff_containers_and_distinguishes_unknown(env):
+    def listed(argv, **_):
+        assert f"label={steward.COMPOSE_PROJECT_LABEL}={env.compose_project}" in argv
+        assert "label=com.docker.compose.oneoff=False" in argv
+        return subprocess.CompletedProcess(argv, 0,
+            "private-web-1|web|running|Up an hour\nprivate-api-1|api|running|Up 2 minutes (unhealthy)\n"
+            "private-db-1|db|exited|Exited (1) 3 seconds ago\n", "")
+    rows = steward.compose_service_states(env, listed)
+    assert [(r["service"], r["state"]) for r in rows] == [
+        ("api", "unhealthy"), ("db", "exited"), ("web", "running")]
+    assert steward.compose_service_states(env, lambda *a, **kw: subprocess.CompletedProcess([], 1, "", "")) is None
+    assert steward.compose_service_states(env, lambda *a, **kw: subprocess.CompletedProcess([], 0, "", "")) == []
