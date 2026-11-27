@@ -1,27 +1,29 @@
-"""L2a: the run supervisor.
+"""L2a: the run supervisor (BOSSAPP-942; Kiro gap 9).
 
-Watches the code-task repair loop and workflow-step recovery windows for stalled progress.
-The progress signal is deterministic and cheap (no DB, no model call); when it trips, or a
-hard invariant forces it, exactly one governed judgement call picks one of the five fixed
-actions in run_supervisor_types.ACTIONS. Judgement can never override the invariants: the
-3-round cap, the zero-caused-failure rule, and the refusal allow-list.
+Watches the code-task repair loop and workflow-step recovery windows using schema-bounded
+``StageRecord`` work-ledger records — NEVER raw worker transcripts — and independently
+re-verifies workers' structured claims against real gate/check/diff evidence.
 
-L1 (classification: WORK/HARNESS/PERSON) is not merged yet, so `evaluate_signal` is coded
-against the narrow signal this module needs — a repeated/identical failure signature across
-rounds, no shrink in the failing set — rather than against L1's classifier directly. Once L1
-lands, callers can keep passing the same `faults` mapping; nothing here needs to change.
+L1 classification (WORK / HARNESS / PERSON) is live; ``evaluate_stage_records`` consumes
+structured ``StageRecord`` entries directly (while keeping ``evaluate_signal`` backwards-
+compatible for callers passing a classified ``faults`` mapping). When progress stalls or a
+worker makes a false claim contradicted by evidence, one governed judgement call picks one of
+the five fixed actions in ``run_supervisor_types.ACTIONS``. Judgement can never override the
+invariants: the 3-round cap, the zero-caused-failure rule, claim verification, and the refusal
+allow-list.
 """
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping, Optional, Sequence
 
 from .run_supervisor_types import (
     ACTION_SETTING,
     ACTIONS,
+    CHANGE_APPROACH,
+    ClaimCheck,
     DECIDED_EVENT,
     DEFAULT_STALL_MINUTES,
-    DEGRADED,
     JUDGEMENT_SETTING,
     MAX_ROUNDS_WITHOUT_JUDGEMENT,
     PLATFORM_FIX,
@@ -30,7 +32,7 @@ from .run_supervisor_types import (
     SIGNAL_SETTING,
     STEER,
     STOP_REPORT,
-    CHANGE_APPROACH,
+    StageRecord,
 )
 
 WORK = "WORK"
@@ -195,9 +197,223 @@ def evaluate_signal(
     )
 
 
-def build_evidence_digest(*, run_id: str, project_id: str, signal: ProgressSignal,
-                           history: list[dict[str, Any]]) -> dict[str, Any]:
-    """Structured fields only — gate names, signatures, counts. Never raw log/stdout text."""
+def verify_worker_claims(
+    record: StageRecord,
+    evidence: Optional[Mapping[str, Any]] = None,
+) -> list[ClaimCheck]:
+    """Independently re-check a worker's structured claims against real evidence (BOSSAPP-942).
+
+    Never trusts raw transcripts; compares structured ``record.claims`` against gate faults,
+    actual check exit codes, and observed diff/reproduction evidence.
+    """
+    ev = dict(evidence or {})
+    claims = dict(record.claims or {})
+    checks_map = dict(record.checks or {})
+    if isinstance(ev.get("checks"), Mapping):
+        checks_map = {**checks_map, **ev["checks"]}
+    faults = dict(record.faults or {})
+    results: list[ClaimCheck] = []
+
+    # 1. Worker claims tests/checks passed, but actual exit codes or WORK faults disagree.
+    if claims.get("tests_passed") is True:
+        failing_checks = sorted(k for k, rc in checks_map.items() if int(rc) != 0)
+        work_faults = sorted(g for g, k in faults.items() if k == WORK)
+        if failing_checks or work_faults:
+            detail = (
+                f"failing checks={failing_checks}" if failing_checks else f"work faults={work_faults}"
+            )
+            results.append(
+                ClaimCheck(
+                    claim_kind="tests_passed",
+                    subject=record.stage,
+                    claimed=True,
+                    verified=False,
+                    discrepancy=f"Worker claimed tests passed, contradicted by evidence ({detail}).",
+                    evidence_ref=f"stage:{record.stage}:round:{record.round_no}",
+                )
+            )
+        else:
+            results.append(
+                ClaimCheck(
+                    claim_kind="tests_passed",
+                    subject=record.stage,
+                    claimed=True,
+                    verified=True,
+                    evidence_ref=f"stage:{record.stage}:round:{record.round_no}",
+                )
+            )
+
+    # 2. Worker claims specific files were changed, compared against observed diff files / artifacts.
+    claimed_files = claims.get("files_changed")
+    if isinstance(claimed_files, (list, tuple)) and claimed_files:
+        observed_files = set(ev.get("diff_files") or record.artifacts or ())
+        missing = sorted(f for f in claimed_files if f not in observed_files)
+        if missing:
+            results.append(
+                ClaimCheck(
+                    claim_kind="files_changed",
+                    subject=",".join(missing),
+                    claimed=list(claimed_files),
+                    verified=False,
+                    discrepancy=f"Worker claimed edits to {missing}, absent from actual diff/artifacts.",
+                    evidence_ref=f"diff:{record.stage}:round:{record.round_no}",
+                )
+            )
+        else:
+            results.append(
+                ClaimCheck(
+                    claim_kind="files_changed",
+                    subject=",".join(str(f) for f in claimed_files),
+                    claimed=list(claimed_files),
+                    verified=True,
+                    evidence_ref=f"diff:{record.stage}:round:{record.round_no}",
+                )
+            )
+
+    # 3. Worker claims bug was reproduced before editing, compared against actual repro exit code.
+    if claims.get("reproduced") is True:
+        repro_rc = ev.get("repro_exit_code")
+        if repro_rc is not None and int(repro_rc) == 0:
+            results.append(
+                ClaimCheck(
+                    claim_kind="reproduced",
+                    subject=record.stage,
+                    claimed=True,
+                    verified=False,
+                    discrepancy="Worker claimed reproduction, but repro command exited 0 (never failed).",
+                    evidence_ref=f"repro:{record.stage}:round:{record.round_no}",
+                )
+            )
+        else:
+            results.append(
+                ClaimCheck(
+                    claim_kind="reproduced",
+                    subject=record.stage,
+                    claimed=True,
+                    verified=True,
+                    evidence_ref=f"repro:{record.stage}:round:{record.round_no}",
+                )
+            )
+
+    # 4. Worker claims specific gate passed while it appears in faults.
+    for gate_name in claims.get("gates_passed") or ():
+        if gate_name in faults:
+            results.append(
+                ClaimCheck(
+                    claim_kind="gate_passed",
+                    subject=str(gate_name),
+                    claimed=True,
+                    verified=False,
+                    discrepancy=(
+                        f"Worker claimed gate '{gate_name}' passed, but ledger recorded "
+                        f"fault '{faults[gate_name]}'."
+                    ),
+                    evidence_ref=f"gate:{gate_name}",
+                )
+            )
+        else:
+            results.append(
+                ClaimCheck(
+                    claim_kind="gate_passed",
+                    subject=str(gate_name),
+                    claimed=True,
+                    verified=True,
+                    evidence_ref=f"gate:{gate_name}",
+                )
+            )
+
+    return results
+
+
+def evaluate_stage_records(
+    records: Sequence[StageRecord],
+    *,
+    evidence: Optional[Mapping[str, Any]] = None,
+    max_repair_rounds: int = MAX_ROUNDS_WITHOUT_JUDGEMENT,
+    stall_minutes: int = DEFAULT_STALL_MINUTES,
+) -> tuple[ProgressSignal, list[ClaimCheck]]:
+    """Evaluate structured ``StageRecord`` work-ledger entries (never transcripts) and
+    re-verify the latest worker's claims against evidence (BOSSAPP-942)."""
+    if not records:
+        return (
+            ProgressSignal(
+                tripped=False,
+                reason="",
+                forced=False,
+                caused=(),
+                environment=(),
+                refusals=(),
+                repeated_signature=None,
+                rounds_used=0,
+                spend_usd_micros=0,
+                elapsed_seconds=0,
+            ),
+            [],
+        )
+    for rec in records:
+        if not isinstance(rec, StageRecord):
+            raise TypeError(
+                "Supervisor requires schema-bounded StageRecord inputs, never raw transcripts."
+            )
+    latest = records[-1]
+    prior_history = [
+        {"stage": r.stage, "round_no": r.round_no, "status": r.status, "faults": dict(r.faults)}
+        for r in records[:-1]
+    ]
+    claim_checks = verify_worker_claims(latest, evidence=evidence)
+    false_claims = [c for c in claim_checks if not c.verified]
+
+    faults = dict(latest.faults)
+    for fc in false_claims:
+        faults.setdefault(f"unverified_claim:{fc.claim_kind}", WORK)
+
+    total_spend = sum(int(r.spend_usd_micros or 0) for r in records)
+    total_elapsed = sum(int(r.elapsed_seconds or 0) for r in records)
+    signal = evaluate_signal(
+        faults=faults,
+        rounds_used=latest.round_no,
+        max_repair_rounds=max_repair_rounds,
+        history=prior_history,
+        spend_usd_micros=total_spend,
+        started_at=None,
+        stall_minutes=stall_minutes,
+        elapsed_seconds=total_elapsed,
+    )
+    if false_claims and not signal.tripped:
+        signal = ProgressSignal(
+            tripped=True,
+            reason="unverified_claim",
+            forced=True,
+            caused=signal.caused,
+            environment=signal.environment,
+            refusals=signal.refusals,
+            repeated_signature=f"unverified_claim:{false_claims[0].claim_kind}",
+            rounds_used=signal.rounds_used,
+            spend_usd_micros=signal.spend_usd_micros,
+            elapsed_seconds=signal.elapsed_seconds,
+        )
+    return signal, claim_checks
+
+
+def build_evidence_digest(
+    *,
+    run_id: str,
+    project_id: str,
+    signal: ProgressSignal,
+    history: list[dict[str, Any]],
+    claim_checks: Optional[Sequence[ClaimCheck]] = None,
+) -> dict[str, Any]:
+    """Structured fields only — gate names, signatures, counts, claim checks. Never raw log/stdout text."""
+    discrepancies = [
+        {
+            "claim_kind": c.claim_kind,
+            "subject": c.subject,
+            "discrepancy": c.discrepancy,
+            "evidence_ref": c.evidence_ref,
+        }
+        for c in (claim_checks or ())
+        if not c.verified
+    ]
     return {
         "run_id": run_id,
         "project_id": project_id,
@@ -210,6 +426,7 @@ def build_evidence_digest(*, run_id: str, project_id: str, signal: ProgressSigna
         "spend_usd_micros": signal.spend_usd_micros,
         "elapsed_seconds": signal.elapsed_seconds,
         "prior_rounds": len(history),
+        "claim_discrepancies": discrepancies,
     }
 
 
