@@ -1262,43 +1262,84 @@ class GitHubConnectionService:
         auth_method: str,
         label: str,
         actor: str,
+        connection_id: Optional[str] = None,
     ) -> str:
-        """Write a pasted token through to the secret backend; return its credential_ref.
+        """Write a pasted token into THIS CONNECTION'S OWN SLOT; return its credential_ref.
 
-        The value leaves BOSS inside `put_secret` and is never written to a column, logged, or
-        returned. What comes back is a reference the connection stores, resolved at use time by
-        `_resolve_secret` — which already handles every backend, so nothing downstream has to
-        know this token arrived by hand rather than from the environment.
+        The slot's key is ``ghconn-<random ref id>`` (connection_slot_key): a form secrets_service
+        .ref_key_for never emits (it only makes ``BOSS_[A-Z0-9_]``) and no named reference may
+        take (SecretRefService refuses it), so no other project, scope or label can ever write
+        to it (BOSSAPP-1286). A re-save for ``connection_id`` whose current credential is its own
+        bound slot overwrites that slot in place and stays bound; otherwise a fresh slot is made.
+        The value leaves BOSS in the backend's ``put`` and is never written to a column, logged,
+        or returned. ``label`` only names the event.
         """
-        from .secrets_service import put_secret
-
         method = (auth_method or "").strip().lower()
         secret_kind = "private_key" if method == "github_app" else "api_token"
-        # A NAME THAT SURVIVES A SECOND CONNECTION. `ref_key` is unique per project, so a fixed
-        # name would make a second GitHub account silently overwrite the first one's token.
-        slug = re.sub(r"[^a-z0-9]+", "_", (label or "github").strip().lower()).strip("_")
-        stored = put_secret(
-            connection,
-            self.settings,
-            project_id=project_id,
-            name=f"github_{slug or 'connection'}",
-            value=token.strip(),
-            secret_kind=secret_kind,
-            backend=self._preferred_backend(),
-            actor=actor,
-        )
-        # THE CONNECTION'S OWN SLOT (BOSSAPP-1286): marked pending here, bound to the connection
-        # by its create/repoint in this same flow. Only such a slot may carry a non-install host.
-        connection.execute(
-            text("UPDATE secret_refs SET provider='github', metadata = COALESCE(metadata, "
-                 "'{}'::jsonb) || jsonb_build_object(CAST(:k AS TEXT), "
-                 "jsonb_build_object('pending', true, 'project_id', CAST(:p AS TEXT))) "
-                 "WHERE id = :id"),
-            {"id": stored["secret_ref_id"], "k": CONNECTION_SLOT_KEY, "p": project_id},
-        )
-        ref = f"{stored['backend']}:{stored['ref_key']}"
+        current = self._own_bound_slot(connection, project_id, connection_id) \
+            if connection_id else None
+        ref = self._write_connection_slot(connection, project_id=project_id,
+                                          value=token.strip(), secret_kind=secret_kind,
+                                          actor=actor, label=label, existing=current)
         self.__dict__.setdefault("_fresh_slots", set()).add((str(project_id), ref))
         return ref
+
+    def _own_bound_slot(self, connection: Connection, project_id: str,
+                        connection_id: str) -> Optional[dict[str, Any]]:
+        """The connection's current secret_refs row when it is that connection's own bound slot."""
+        row = connection.execute(text(
+            "SELECT r.id, r.ref_kind, r.ref_key, r.storage_backend, r.project_id, r.scope_type, "
+            "r.metadata FROM github_connections g JOIN secret_refs r ON r.project_id = g.project_id "
+            "AND g.credential_ref = r.ref_kind || ':' || r.ref_key "
+            "WHERE g.project_id = :p AND g.id = :c"), {"p": project_id, "c": connection_id}
+        ).mappings().first()
+        if row is None:
+            return None
+        record = dict(row)
+        return record if credential_host_for(record, github_urls.PUBLIC_API, project_id,
+                                             connection_id) else None
+
+    def _write_connection_slot(self, connection: Connection, *, project_id: str, value: str,
+                               secret_kind: str, actor: str, label: str,
+                               existing: Optional[dict[str, Any]] = None) -> str:
+        """THE write-through for a connection slot: the material goes to the slot's own unique
+        key, and the reference row records it — never through a name-derived key."""
+        from .secret_access_log import record_version
+        from .secrets_service import _KIND_MAP, _metadata
+
+        meta = _metadata(value, secret_kind)
+        if existing is not None:
+            ref_id, backend, key = existing["id"], existing["storage_backend"], existing["ref_key"]
+            backend_for(backend, self.settings).put(key, value)
+            connection.execute(text(
+                "UPDATE secret_refs SET metadata = metadata || CAST(:m AS JSONB) || "
+                "jsonb_build_object(CAST(:k AS TEXT), jsonb_build_object('pending', true, "
+                "'project_id', CAST(:p AS TEXT), 'connection_id', "
+                "metadata -> CAST(:k AS TEXT) ->> 'connection_id')), status = 'active', "
+                "updated_at = now() WHERE id = :id"),
+                {"m": json.dumps(meta), "k": CONNECTION_SLOT_KEY, "p": project_id, "id": ref_id})
+        else:
+            import uuid
+
+            ref_id = f"sref_{uuid.uuid4().hex}"
+            backend, key = self._preferred_backend(), connection_slot_key(ref_id)
+            backend_for(backend, self.settings).put(key, value)
+            meta[CONNECTION_SLOT_KEY] = {"pending": True, "project_id": project_id}
+            connection.execute(text(
+                "INSERT INTO secret_refs (id, project_id, scope_type, scope_id, ref_kind, "
+                "ref_key, provider, secret_kind, storage_backend, status, metadata, created_by, "
+                "created_at, updated_at) VALUES (:id, :p, 'project', :p, :b, :key, 'github', "
+                ":sk, :b, 'active', CAST(:m AS JSONB), :by, now(), now())"),
+                {"id": ref_id, "p": project_id, "b": backend, "key": key,
+                 "sk": _KIND_MAP.get(secret_kind, "api_token"), "m": json.dumps(meta),
+                 "by": actor})
+        version = record_version(connection, secret_ref_id=ref_id,
+                                 fingerprint=meta["fingerprint"], last4=meta["last4"], actor=actor)
+        emit_event(connection, project_id, "secret.written", actor, "secret_ref", ref_id,
+                   {"name": f"github connection {label or ''}".strip(), "backend": backend,
+                    "kind": secret_kind, "fingerprint": meta["fingerprint"],
+                    **({"version": version} if version else {})})
+        return f"{backend}:{key}"
 
     def _is_fresh_slot(self, project_id: str, credential_ref: str) -> bool:
         """This service instance's own store_token_credential wrote it, in this flow."""
@@ -1311,6 +1352,14 @@ class GitHubConnectionService:
         if not self._is_fresh_slot(project_id, credential_ref):
             return
         kind, _, key = str(credential_ref or "").partition(":")
+        others = connection.execute(text(
+            "SELECT count(*) FROM secret_refs WHERE storage_backend = :rk AND ref_key = :key"),
+            {"rk": kind, "key": key}).scalar_one()
+        if int(others or 0) != 1:
+            # Another reference (any project, any scope) names this slot's material: it is not
+            # this connection's alone, so it is never bound.
+            raise ValueError("This connection's credential slot is named by another reference; "
+                             "paste the token again.")
         connection.execute(text(
             "UPDATE secret_refs SET metadata = metadata || jsonb_build_object(CAST(:k AS TEXT), "
             "jsonb_build_object('connection_id', CAST(:c AS TEXT), 'project_id', CAST(:p AS TEXT))) "
@@ -1356,6 +1405,7 @@ class GitHubConnectionService:
         open-source evaluations.
         """
         if token and token.strip():
+            prior = self._connection_by_label(connection, project_id, connection_label)
             credential_ref = self.store_token_credential(
                 connection,
                 project_id=project_id,
@@ -1363,6 +1413,7 @@ class GitHubConnectionService:
                 auth_method=auth_method,
                 label=connection_label,
                 actor=actor,
+                connection_id=(prior or {}).get("id"),
             )
         else:
             credential_ref = self.ensure_env_credential_ref(
@@ -2210,6 +2261,28 @@ def ghes_hosts(db: Any) -> dict[str, str]:
 #: stored for that connection. It is RESERVED: SecretRefService refuses it in any metadata a
 #: person or agent supplies, so only BOSS's connection flow can bind a slot (BOSSAPP-1286).
 CONNECTION_SLOT_KEY = "connection_slot"
+#: The ONLY key form a connection slot's material lives at: ``ghconn-<its own ref id>``. Lower
+#: case and a hyphen: secrets_service.ref_key_for only ever emits ``BOSS_[A-Z0-9_]``, and
+#: SecretRefService refuses this prefix for any named reference.
+CONNECTION_SLOT_PREFIX = "ghconn-"
+
+
+#: The stores BOSS itself writes a connection slot's material to (never a host variable, a
+#: host file or the Setup App).
+SLOT_STORES = frozenset({"database", "local_vault", "vault", "infisical",
+                         "platform_secret_store"})
+
+
+def connection_slot_key(ref_id: str) -> str:
+    return f"{CONNECTION_SLOT_PREFIX}{ref_id}"
+
+
+def _in_slot_form(record: Any) -> bool:
+    """The reference's material lives at its own unique slot key, in a store BOSS writes."""
+    backend = str(record.get("storage_backend") or "").lower()
+    return bool(record.get("id")) and backend in SLOT_STORES \
+        and str(record.get("ref_kind") or "").lower() == backend \
+        and str(record.get("ref_key") or "") == connection_slot_key(str(record["id"]))
 
 
 def _is_connection_slot_for(record: Any, project_id: str, connection_id: Optional[str], *,
@@ -2220,6 +2293,8 @@ def _is_connection_slot_for(record: Any, project_id: str, connection_id: Optiona
     meta = record.get("metadata") if isinstance(record, dict) and isinstance(
         record.get("metadata"), dict) else {}
     slot = meta.get(CONNECTION_SLOT_KEY)
+    if not isinstance(record, dict) or not _in_slot_form(record):
+        return False
     if not isinstance(slot, dict) or str(slot.get("project_id") or "") != str(project_id) or \
             str(record.get("project_id") or "") != str(project_id):
         return False
@@ -2237,6 +2312,8 @@ def credential_host_for(record: Any, conn_base: Any, project_id: Optional[str],
     local_vault, vault, infisical, platform, env, local_runner), any scope, and anything that
     existed before this rule — such a connection's token is re-saved through the connection."""
     if not isinstance(record, dict) or not connection_id or not project_id:
+        return ""
+    if not _in_slot_form(record):
         return ""
     meta = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
     slot = meta.get(CONNECTION_SLOT_KEY) if isinstance(meta, dict) else None

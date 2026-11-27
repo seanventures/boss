@@ -171,7 +171,7 @@ def repository_token(connection: Connection, settings: Any, project_id: str, tok
     service = _service(settings)
     credential_ref = service.store_token_credential(
         connection, project_id=project_id, token=token, auth_method="personal_access_token",
-        label=GITHUB_LABEL, actor=actor)
+        label=GITHUB_LABEL, actor=actor, connection_id=connection_id or None)
     existing = service.get_connection(connection, project_id, connection_id) if connection_id else None
     if existing is not None:
         current = service.repoint_connection(

@@ -124,13 +124,17 @@ def test_a_ghes_connection_with_its_own_app_can_mint(monkeypatch):
 
 # ---- THE RULE, as a table: every backend x scope x pre-existing ref (eighth review) ----------
 
+SLOT_KEY = "ghconn-sref_1"
+
+
 def _record(backend, scope_type="project", project="p_1", key=None, slot=None, **meta):
     md = dict(meta)
     if slot is not None:
         md["connection_slot"] = slot
     return {"id": "sref_1", "ref_kind": backend, "storage_backend": backend,
             "scope_type": scope_type, "scope_id": project if scope_type == "project" else "org_1",
-            "project_id": project, "ref_key": key or "BOSS_P_1_GITHUB_TOKEN", "metadata": md}
+            "project_id": project, "ref_key": key or (SLOT_KEY if slot else "BOSS_P_1_GITHUB_TOKEN"),
+            "metadata": md}
 
 
 BOUND = {"connection_id": "ghc_1", "project_id": "p_1"}
@@ -141,7 +145,7 @@ BACKENDS = sorted(__import__("boss_engine.services.secret_refs", fromlist=["x"])
 @pytest.mark.parametrize("backend", BACKENDS)
 @pytest.mark.parametrize("scope", ["project", "org", "workspace"])
 @pytest.mark.parametrize("origin", ["named", "pre_existing", "pending", "other_connection",
-                                    "other_project", "bound"])
+                                    "other_project", "bound_named_key", "bound"])
 def test_only_a_slot_bound_to_this_connection_takes_its_host(backend, scope, origin):
     """THE RULE: a connection's non-install host ONLY for a slot its own create/repoint/rotate
     flow wrote and bound to (connection_id, project). Every named ref (database, local_vault,
@@ -152,10 +156,14 @@ def test_only_a_slot_bound_to_this_connection_takes_its_host(backend, scope, ori
     slot = {"named": None, "pre_existing": None, "pending": {"pending": True, "project_id": "p_1"},
             "other_connection": {"connection_id": "ghc_2", "project_id": "p_1"},
             "other_project": {"connection_id": "ghc_1", "project_id": "p_2"},
-            "bound": BOUND}[origin]
-    key = "db/sref_1" if origin == "pre_existing" else None
+            "bound_named_key": BOUND, "bound": BOUND}[origin]
+    # A binding on a name-derived key (ref_key_for's BOSS_… form) is not in slot form: install.
+    key = {"pre_existing": "db/sref_1", "bound_named_key": "BOSS_ACME_GITHUB_GITHUB_CI"}.get(origin)
     got = credential_host_for(_record(backend, scope, key=key, slot=slot), GHES, "p_1", "ghc_1")
-    expected = GHES if (origin == "bound" and scope == "project") else ""
+    from boss_engine.services.github_connections import SLOT_STORES
+
+    expected = GHES if (origin == "bound" and scope == "project"
+                        and backend in SLOT_STORES) else ""
     assert got == expected, (backend, scope, origin, got)
     # Without the connection asking, nothing takes a non-install host.
     assert credential_host_for(_record(backend, scope, slot=slot), GHES, "p_1", None) == ""
@@ -202,11 +210,20 @@ def test_create_and_repoint_refuse_any_named_ref_on_another_host(backend):
     if backend == "env":
         return                       # the install's own credential: never another host at all
     check(named, "github_app", "9", "1", G.PUBLIC_API, "p_1")           # install host: fine
-    pending = {**named, "metadata": {"connection_slot": {"pending": True, "project_id": "p_1"}}}
+    # Even a binding on a name-derived key is refused: only the slot key form counts.
+    with pytest.raises(ValueError):
+        check({**named, "metadata": {"connection_slot": BOUND}}, "github_app", "9", "1", GHES,
+              "p_1", "ghc_1")
+    slot = {**named, "ref_key": SLOT_KEY}
+    pending = {**slot, "metadata": {"connection_slot": {"pending": True, "project_id": "p_1"}}}
+    if backend == "local_runner":       # a host file is never a connection slot
+        with pytest.raises(ValueError):
+            check(pending, "github_app", "9", "1", GHES, "p_1", fresh=True)
+        return
     check(pending, "github_app", "9", "1", GHES, "p_1", fresh=True)  # its own flow's fresh slot
     with pytest.raises(ValueError):    # a pending slot a failed flow left behind: no one's
         check(pending, "github_app", "9", "1", GHES, "p_1")
-    bound = {**named, "metadata": {"connection_slot": BOUND}}
+    bound = {**slot, "metadata": {"connection_slot": BOUND}}
     check(bound, "github_app", "9", "1", GHES, "p_1", "ghc_1")  # repoint: still its own
     with pytest.raises(ValueError):
         check(bound, "github_app", "9", "1", GHES, "p_1", "ghc_2")  # another connection's
@@ -304,3 +321,124 @@ def test_the_connection_flow_binds_the_slot_it_wrote(eng):
                             "ref_kind=:k AND ref_key=:key"),
                        {"p": project, "k": kind, "key": key}).scalar_one()
         assert md[CONNECTION_SLOT_KEY]["connection_id"] == "ghc_x"     # never re-bound
+
+
+# ---- a slot's key is unique: no name, project or label reaches it (ninth review) -------------
+
+def _named_project(eng, pid):
+    with eng.begin() as c:
+        c.execute(text("INSERT INTO orgs (id, name) VALUES ('org_ops2', 'ops2') "
+                       "ON CONFLICT DO NOTHING"))
+        c.execute(text("INSERT INTO workspaces (id, org_id, name) VALUES "
+                       "('ws_ops2', 'org_ops2', 'ops2') ON CONFLICT DO NOTHING"))
+        c.execute(text("INSERT INTO projects (id, workspace_id, name, slug) "
+                       "VALUES (:i, 'ws_ops2', :i, :i)"), {"i": pid})
+    return pid
+
+
+def _connect(eng, service, project, label, value, base):
+    """The connection's own flow: store the slot, write the connection row, bind."""
+    with eng.begin() as c:
+        ref = service.store_token_credential(c, project_id=project, token=value,
+                                             auth_method="personal_access_token", label=label,
+                                             actor="ceo")
+        cid = f"ghc_{label.replace(' ', '_')}_{project}"
+        c.execute(text(
+            "INSERT INTO github_connections (id, project_id, connection_label, auth_method, "
+            "credential_ref, status, api_base_url, created_by) VALUES (:i, :p, :l, "
+            "'personal_access_token', :r, 'active', :b, 'ceo')"),
+            {"i": cid, "p": project, "l": label, "r": ref, "b": base})
+        service._bind_connection_slot(c, project_id=project, credential_ref=ref,  # noqa: SLF001
+                                      connection_id=cid)
+    return cid, ref
+
+
+def _row(eng, project, ref):
+    kind, _, key = ref.partition(":")
+    with eng.begin() as c:
+        return dict(c.execute(text(
+            "SELECT id, ref_kind, ref_key, storage_backend, project_id, scope_type, metadata "
+            "FROM secret_refs WHERE project_id=:p AND ref_kind=:k AND ref_key=:key"),
+            {"p": project, "k": kind, "key": key}).mappings().one())
+
+
+def _material(ref):
+    from boss_engine.config import get_settings
+    from boss_engine.services.secret_backends import backend_for
+
+    kind, _, key = ref.partition(":")
+    return backend_for(kind, get_settings()).get(key)
+
+
+def test_a_victims_rotation_never_reaches_an_attackers_bound_slot(eng):
+    """The collision: ref_key_for("<u>_acme", "github_github_ci") ==
+    ref_key_for("<u>_acme-github", "github_ci"). With name-derived keys the victim's re-save
+    overwrote the attacker's bound slot, sending the victim's token to the attacker's GHES."""
+    import uuid
+
+    from boss_engine.config import get_settings
+    from boss_engine.services.github_connections import (GitHubConnectionService,
+                                                        credential_host_for)
+    from boss_engine.services.secrets_service import ref_key_for
+
+    u = uuid.uuid4().hex[:8]
+    attacker = _named_project(eng, f"x{u}_acme")
+    victim = _named_project(eng, f"x{u}_acme-github")
+    assert ref_key_for(attacker, "github_github_ci") == ref_key_for(victim, "github_ci")
+
+    service = GitHubConnectionService(get_settings())
+    a_cid, a_ref = _connect(eng, service, attacker, "github ci", "attacker-own-value", GHES)
+    v_cid, v_ref = _connect(eng, service, victim, "ci", "victim-first-value", G.PUBLIC_API)
+    assert a_ref != v_ref
+    for ref in (a_ref, v_ref):
+        key = ref.partition(":")[2]
+        assert key.startswith("ghconn-sref_") and not key.startswith("BOSS_")
+    # The victim rotates its token, twice, through its own connection.
+    for value in ("victim-second-value", "victim-third-value"):
+        with eng.begin() as c:
+            again = service.store_token_credential(
+                c, project_id=victim, token=value, auth_method="personal_access_token",
+                label="ci", actor="ceo", connection_id=v_cid)
+            assert again == v_ref                            # re-saved in place
+            service._bind_connection_slot(c, project_id=victim,  # noqa: SLF001
+                                          credential_ref=again, connection_id=v_cid)
+    assert _material(a_ref) == "attacker-own-value"          # never reached
+    assert _material(v_ref) == "victim-third-value"
+    # Both slots stay bound to their own connection (a re-save keeps the binding).
+    assert credential_host_for(_row(eng, attacker, a_ref), GHES, attacker, a_cid) == GHES
+    assert credential_host_for(_row(eng, victim, v_ref), GHES, victim, v_cid) == GHES
+    assert credential_host_for(_row(eng, victim, v_ref), GHES, victim, a_cid) == ""
+
+
+def test_a_second_ref_naming_a_slot_key_is_refused(eng):
+    from boss_engine.config import get_settings
+    from boss_engine.services import secret_backends
+    from boss_engine.services.github_connections import GitHubConnectionService
+    from boss_engine.services.secret_refs import SecretRefService
+
+    owner, thief = make_project(eng), make_project(eng)
+    service = GitHubConnectionService(get_settings())
+    _cid, ref = _connect(eng, service, owner, "northgate", "owner-slot-value", GHES)
+    kind, _, key = ref.partition(":")
+    # Through the checked path: refused outright.
+    with eng.begin() as c, pytest.raises(ValueError):
+        SecretRefService().create_secret_ref(c, project_id=thief, ref_kind=kind, ref_key=key,
+                                              provider="github", status="active", metadata={},
+                                              actor="ceo")
+    # A row that names it anyway (written before the rule): never reads it, never binds it.
+    with eng.begin() as c:
+        c.execute(text(
+            "INSERT INTO secret_refs (id, project_id, scope_type, scope_id, ref_kind, ref_key, "
+            "provider, storage_backend, created_by) VALUES (:i, :p, 'project', :p, :k, :key, "
+            "'github', :k, 'ceo')"), {"i": f"sref_t_{thief}", "p": thief, "k": kind, "key": key})
+    with eng.begin() as c, pytest.raises(secret_backends.SecretUnavailable):
+        secret_backends.resolve_secret_ref(c, f"sref_t_{thief}", get_settings(), project_id=thief)
+    with eng.begin() as c:
+        fresh = service.store_token_credential(c, project_id=owner, token="v2",
+                                               auth_method="personal_access_token",
+                                               label="northgate", actor="ceo")
+    service.__dict__["_fresh_slots"].add((str(owner), ref))      # even if the flow claimed it
+    with eng.begin() as c, pytest.raises(ValueError):
+        service._bind_connection_slot(c, project_id=owner, credential_ref=ref,  # noqa: SLF001
+                                      connection_id="ghc_other")
+    assert fresh != ref

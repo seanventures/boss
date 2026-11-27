@@ -4,7 +4,8 @@
   exists (env and host-file references need org authority; reserved metadata is refused);
 * BOSS's own WRITE-THROUGHS, which store the material themselves in the same function and record
   the reference to what they just wrote: secrets_service.put_secret, the database backend's own
-  slot (DatabaseBackend.store) and the channel OAuth stores (save_oauth_client, complete).
+  slot (DatabaseBackend.store), the channel OAuth stores (save_oauth_client, complete) and a
+  GitHub connection's own slot (GitHubConnectionService._write_connection_slot).
 
 A static scan fails on an INSERT INTO secret_refs anywhere else, so a new code path cannot mint a
 reference without the checks (resource_plane._ensure_secret_ref and connection_spend used to).
@@ -24,6 +25,7 @@ WRITE_THROUGHS = {
     "engine/boss_engine/services/secret_backends.py:store",
     "engine/boss_engine/services/channel_oauth.py:save_oauth_client",
     "engine/boss_engine/services/channel_oauth.py:complete",
+    "engine/boss_engine/services/github_connections.py:_write_connection_slot",
 }
 
 

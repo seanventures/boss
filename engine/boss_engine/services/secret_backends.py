@@ -1222,7 +1222,11 @@ _GLOBAL_KEY_STORES = frozenset({"database", "local_vault"})
 
 
 def _material_belongs_to(row: Any, secret_ref_id: str) -> bool:
-    """The master key never; a db/<id> slot only for the reference it was written for."""
+    """The master key never; a db/<id> or connection slot (ghconn-<id>) only for the reference it
+    was written for."""
+    key = str(row.get("ref_key") or "")
+    if key.startswith("ghconn-") and key != f"ghconn-{secret_ref_id}":
+        return False
     backend = str(row.get("storage_backend") or row.get("ref_kind") or "").lower()
     if backend not in _GLOBAL_KEY_STORES:
         return True

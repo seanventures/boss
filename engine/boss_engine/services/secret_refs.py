@@ -170,6 +170,10 @@ class SecretRefService:
             )
         if not ref_key:
             raise ValueError("ref_key must be non-empty.")
+        if ref_key.lower().startswith("ghconn-"):
+            # A GitHub connection's own slot (BOSSAPP-1286): written and named only by that
+            # connection's flow, never by a reference someone creates.
+            raise ValueError("ref_key names a GitHub connection's own slot; it cannot be referenced.")
         self.parse_credential_ref(f"{ref_kind}:{ref_key}")
         if status not in self.ALLOWED_STATUSES:
             raise ValueError(
