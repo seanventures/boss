@@ -177,7 +177,9 @@ def queue_review_of(c: Any, settings: Any, *, change: Mapping[str, Any], pusher:
                     f"#{change['number']} (“{change.get('title') or change['branch']}”). Its code is "
                     "already on this branch. Do not rewrite it or add features: install, build and "
                     "run its tests, fix only what fails, and let the review panel review it."),
-                acceptance_criteria=["The change builds and its tests pass in BOSS's sandbox.",
+                acceptance_criteria=["Check the submitted change. Build and run the existing suite when "
+                                     "applicable. In a documentation-only repository report the document "
+                                     "checks and the absence of an application suite.",
                                      "The review panel reviewed the change."],
                 test_commands=[], owner=owner, repo=repo, base_branch=change["branch"],
                 finalize_ctx={"local_change_branch": change["branch"],

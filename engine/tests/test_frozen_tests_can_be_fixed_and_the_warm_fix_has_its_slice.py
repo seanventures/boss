@@ -11,6 +11,7 @@ Pre-mortem findings, each verified by calling the code directly:
 """
 from __future__ import annotations
 
+import ast
 import inspect
 
 from boss_engine.services import governed_code_task_service as g
@@ -90,7 +91,10 @@ def test_the_warm_fix_has_a_reserved_slice_of_the_implement_budget():
     assert g.implement_work_deadline(10_000.0, 2 * reserve - 1) == 10_000.0   # too small to split
     assert g.implement_work_deadline(None, 0) is None
     src = inspect.getsource(g._run_governed_code_task)
-    assert "set_llm_context(stage_deadline=_impl_work_deadline)" in src
+    setters = [node for node in ast.walk(ast.parse(src)) if isinstance(node, ast.Call)
+               and isinstance(node.func, ast.Name) and node.func.id == "set_llm_context"]
+    assert any(kw.arg == "stage_deadline" and isinstance(kw.value, ast.Name)
+               and kw.value.id == "_impl_work_deadline" for call in setters for kw in call.keywords)
     loop = src[src.index("for attempt in range(max_repair + 2):"):]
     # The warm fix runs to the real deadline; a cold attempt past the work slice jumps to it.
     assert "set_llm_context(stage_deadline=_impl_deadline)" in loop

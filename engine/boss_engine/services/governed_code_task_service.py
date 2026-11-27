@@ -7342,11 +7342,49 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                            {"brief_said": _stack_ctx["verdict"].message[:300],
                             "repository_ok": True})
         root = sandbox.path
+        submitted_paths = []
+        document_check = None
+        if fctx.get("local_review_of_push") and _is_local_owner(owner):
+            from . import local_repo, local_review, pushed_review
+
+            with _transaction(engine) as c:
+                change = local_review.change_by_id(c, str(fctx.get("local_change_set_id") or ""))
+            if (not change or change["project_id"] != project_id
+                    or change["repository"] != f"{owner}/{repo}" or change["state"] != "open"
+                    or change["branch"] != work_branch
+                    or change["head_sha"] != getattr(sandbox, "base_sha", None)):
+                raise RuntimeError("The pushed change or its head has moved. Request a review of its current head.")
+            repo_base_branch = change["base_branch"]
+            submitted = pushed_review.inspect(local_repo.bare_path(owner, repo, settings),
+                                              change["base_sha"], change["head_sha"])
+            submitted_paths = submitted.paths
+            if submitted.documents_only and not use_microvm:
+                _recheck = True
+                # Check the full submitted range, including intermediate commits in a shallow
+                # worktree. The bare repository is BOSS's and both revisions are stored SHAs.
+                from .sandbox import CommandResult
+                check_args = ["diff", "--check", "--no-ext-diff",
+                              f"{change['base_sha']}...{change['head_sha']}", "--"]
+                started_check = time.monotonic()
+                try:
+                    local_repo.git(check_args, git_dir=local_repo.bare_path(owner, repo, settings))
+                    message = "Submitted documentation checked. No application test suite exists."
+                    check_ok = True
+                except local_repo.LocalRepoError as exc:
+                    message = str(exc)
+                    check_ok = False
+                document_check = CommandResult(command="git diff --check", argv=["git", *check_args],
+                    exit_code=0 if check_ok else 1, duration_ms=int((time.monotonic()-started_check)*1000),
+                    timed_out=False, stdout=message if check_ok else "", stderr="" if check_ok else message)
+                with _transaction(engine) as c:
+                    emit_event(c, project_id, "code_task.pushed_documents_review", "boss",
+                               "code_task_run", run_id, {"head": change["head_sha"],
+                               "files": len(submitted_paths)})
         # NEVER BUILD A SECOND APP FROM SCRATCH (AR-54, build_checkout): a checkout with no app
         # files in a repository BOSS already built an app in (a workflow's build step that
         # carried no base branch cloned the README-only mainline) fails here with the branches
         # that hold it, before any model call.
-        if not use_microvm and not _is_repair and not fctx.get("seed_workspace_from"):
+        if not use_microvm and not _is_repair and not submitted_paths and not fctx.get("seed_workspace_from"):
             from . import build_checkout as _build_checkout
 
             with _transaction(engine) as c:
@@ -7694,7 +7732,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
 
         def _changed_paths() -> list[str]:
             """Every path this run has changed: what is checkpointed plus the live tree."""
-            paths = set(accumulated)
+            paths = set(accumulated).union(submitted_paths)
             # A REPAIR SEEDED FROM A SAVED WORKSPACE: the seeded files are this lineage's work
             # against the base branch, even when the live diff reports nothing (crun_cc365333
             # planned its tests at the repository root: changed was empty, so the app folder
@@ -8169,6 +8207,12 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
 
         def _run_verify_once(*, record: bool = True):
             nonlocal last_verify_cwd, last_verify_output, last_verify_command
+            if document_check is not None:
+                if record:
+                    last_verify_command = document_check.command
+                    last_verify_output = document_check.stdout or document_check.stderr
+                    last_verify_cwd = "."
+                return document_check
             tampered_manifest = verification_target.verify_manifest_tampered(
                 _pinned_manifest, root)
             if tampered_manifest:
@@ -8826,6 +8870,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     iac=iac_task, web=_web_verify, app_root=_app_id, stack_note=_stack_note,
                 ) + _placed_tests_note(_placed_tpl_tests) + _brief_tests.brief_note(_named_tests) \
                     + _items_note
+                prompt += ("\nFor a new app, inspect the brief for independently testable behavior. "
+                           "Write tests for agreed cases even if another case needs clarification. "
+                           "Do not invent an authorization policy, route, or success criterion. "
+                           "Identify remaining decisions in the summary.")
                 # AUGMENT, DON'T RE-AUTHOR. On a repair the prior attempt's tests are ALREADY in
                 # the working tree (the retry clones the lineage branch), and the review names the
                 # exact gap — e.g. "the defects are all in app.js, which no test covers". Sending
@@ -9003,7 +9051,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 # SELF-HEAL once, on a stronger lane when one is configured. The same
                 # engine and model is not a frontier retry (BOSSAPP-1032).
                 # (A config-only change: writing no new test file is the expected outcome.)
-                r1, test_files, test_changes = _attempt_write_tests(escalate=True)
+                retry_result, test_files, test_changes = _attempt_write_tests(escalate=True)
+                if retry_result.get("escalation") != "skipped":
+                    r1 = retry_result
                 if _tests_escalation["stronger"]:
                     with _transaction(engine) as c:
                         emit_event(c, project_id, "code_task.step_escalating", "boss",
@@ -10642,7 +10692,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         gates = {
             "code_written": (bool(impl_files) or (_is_repair_iteration and tests_passed)
                              # A re-check writes nothing; the change is the lineage's.
-                             or (_recheck and bool(_lineage_paths))),
+                             or (_recheck and bool(_lineage_paths or submitted_paths))),
             "written_tests_pass": tests_passed,
             # An existing test that was edited or deleted is the one way a green suite can
             # still mean "we broke something" — so this gate holds at tier 0 too.
@@ -11248,7 +11298,13 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # WHAT THE APP IS, from its own tree (preview_service.app_tree_kind): a service or
             # library's failed workflow Preview is skipped, never an app's (BOSSAPP-1308).
             "app_kind": _app_kind_of(root, _app_scope),
-            "test_command": test_cmd, "test_exit_code": official_test_exit,
+            **({"documentation_review": {"submitted_paths": submitted_paths,
+                                         "check": document_check.command,
+                                         "exit_code": document_check.exit_code,
+                                         "application_tests": "not_applicable"}}
+               if document_check is not None else {}),
+            "test_command": document_check.command if document_check is not None else test_cmd,
+            "test_exit_code": official_test_exit,
             "verify_cwd": last_verify_cwd,
             "last_verify_output": official_verify_output or last_verify_output,
             "tests": (
