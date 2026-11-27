@@ -428,7 +428,12 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         "absent only when `total` says so — never from a page you did not finish.",
         _obj({"status": {"type": "string",
                          "enum": ["open", "fixing", "implemented", "done", "wont_fix"]},
-              "id": {"type": "string", "description": "brec_… — that one gap, in full"},
+              "id": {"type": "string", "description": "brec_… — that one gap, in full (searches "
+                                                      "this project and sibling projects in the "
+                                                      "same organization)"},
+              "all_projects": {"type": "boolean", "default": False,
+                               "description": "when true, list platform gaps across every project "
+                                              "in this organization (SF-11)"},
               "offset": {"type": "integer", "minimum": 0, "default": 0},
               "detail": {"type": "boolean", "default": False},
               "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20}}),
@@ -438,24 +443,35 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         """PAGED HONESTLY. The rows carried every prose field, so 14 of them overflowed the
         agent's tool-result budget and arrived as 8 and a cut-off tail; the agent concluded the
         gap it was looking for did not exist. A page is now compact rows that fit, with the
-        total and the next offset, and one gap in full is a direct lookup by id."""
+        total and the next offset, and one gap in full is a direct lookup by id — including
+        cross-project lookup inside the caller's organization (BOSSAPP-770 SF-11)."""
         from ..services import boss_recommendations as recs
 
-        full = ("id", "signature", "status", "title", "symptom", "root_cause",
+        full = ("id", "project_id", "signature", "status", "title", "symptom", "root_cause",
                 "proposed_change", "acceptance_tests", "files", "occurrences", "self_fix_id",
                 "created_by", "updated_at")
-        brief = ("id", "signature", "status", "title", "occurrences", "self_fix_id",
+        brief = ("id", "project_id", "signature", "status", "title", "occurrences", "self_fix_id",
                  "updated_at")
         wanted = str(args.get("id") or "").strip()
+        all_projects = bool(args.get("all_projects"))
         with ctx.begin() as c:
-            items = recs.list_recommendations(
-                c, project_id, status=None if wanted else (args.get("status") or None))
-        if wanted:
-            found = next((i for i in items if i.get("id") == wanted), None)
-            if found is None:
-                return {"ok": False, "found": False, "id": wanted,
-                        "error": f"no platform gap {wanted!r} in this project"}
-            return {"ok": True, "found": True, "gap": {k: _json_safe(found.get(k)) for k in full}}
+            if wanted:
+                found = recs.find_recommendation(c, wanted, project_id=project_id)
+                if found is None:
+                    return {"ok": False, "found": False, "id": wanted,
+                            "error": f"no platform gap {wanted!r} in this organization"}
+                return {"ok": True, "found": True,
+                        "cross_project": found.get("project_id") != project_id,
+                        "gap": {k: _json_safe(found.get(k)) for k in full}}
+            if all_projects:
+                org_id = recs._project_org_id(c, project_id)
+                items = (recs.list_org_recommendations(
+                    c, org_id, status=args.get("status") or None)
+                    if org_id else recs.list_recommendations(
+                        c, project_id, status=args.get("status") or None))
+            else:
+                items = recs.list_recommendations(
+                    c, project_id, status=args.get("status") or None)
         items = list(reversed(items))
         total = len(items)
         offset = max(0, int(args.get("offset") or 0))
@@ -466,7 +482,51 @@ def _register_read_tools(reg: ToolRegistry) -> None:
         return {"total": total, "offset": offset, "returned": len(page),
                 "next_offset": nxt if nxt < total else None,
                 "complete": offset == 0 and nxt >= total,
+                "all_projects": all_projects,
                 "gaps": [{k: _json_safe(i.get(k)) for k in keep} for i in page]}
+
+    @reg.tool(
+        "close_platform_gap",
+        "Close a recorded BOSS platform gap (`brec_…`) as `done` or `wont_fix` once it has been "
+        "fixed upstream or confirmed no longer applicable (BOSSAPP-770 SF-16). Searches this "
+        "project and sibling projects in the same organization, records an audited "
+        "`boss.recommendation_closed` event, and updates RECOMMENDATIONS.md.",
+        _obj({"id": {"type": "string", "description": "brec_… — the platform gap id to close"},
+              "status": {"type": "string", "enum": ["done", "wont_fix"], "default": "done"},
+              "reason": {"type": "string",
+                         "description": "why this gap is closed (fix summary, release/commit, or "
+                                        "why it will not be fixed)"},
+              "commit_ref": {"type": "string", "description": "optional: commit SHA or release tag"},
+              "pr_url": {"type": "string", "description": "optional: pull request URL"}},
+             ["id", "reason"]),
+        kind="write", reversibility="safe",
+        permission="improvement:manage",
+        exposure=Exposure(tags=("boss", "health")))
+    def close_platform_gap(ctx, *, project_id, actor, args):
+        from ..services import boss_recommendations as recs
+
+        rec_id = str(args.get("id") or "").strip()
+        status = str(args.get("status") or "done").strip().lower()
+        reason = str(args.get("reason") or "").strip()
+        if not rec_id:
+            return {"ok": False, "error": "id (brec_…) is required"}
+        if status not in ("done", "wont_fix"):
+            return {"ok": False, "error": "status must be 'done' or 'wont_fix'"}
+        if not reason:
+            return {"ok": False, "error": "reason is required to close a platform gap"}
+        with ctx.begin() as c:
+            found = recs.find_recommendation(c, rec_id, project_id=project_id)
+            if found is None:
+                return {"ok": False, "found": False, "id": rec_id,
+                        "error": f"no platform gap {rec_id!r} in this organization"}
+            target_project_id = str(found["project_id"])
+            out = recs.close_recommendation(
+                c, getattr(ctx, "settings", None), project_id=target_project_id, rec_id=rec_id,
+                status=status, reason=reason, actor=actor,
+                commit_ref=(str(args["commit_ref"]).strip() if args.get("commit_ref") else None),
+                pr_url=(str(args["pr_url"]).strip() if args.get("pr_url") else None))
+            out["cross_project"] = target_project_id != project_id
+            return out
 
     @reg.tool(
         "file_platform_gap",

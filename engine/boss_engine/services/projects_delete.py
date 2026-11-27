@@ -359,10 +359,46 @@ KEEPS = [
     "Your organization, its people, its GitHub connection and repository list.",
 ]
 
+LOCAL_KEEPS = [
+    "No external repository is affected; local BOSS repository copies on this machine are removed.",
+    "The organization's security audit log, with one more entry saying who deleted it.",
+    "Your organization, its people, and its other projects.",
+]
+
+
+def _is_local_first(connection: Any, cat: Any, project_id: str) -> bool:
+    """True when the project uses local BOSS repositories only (no GitHub repo binding)."""
+    has_local = False
+    if cat.has("local_change_sets", "project_id"):
+        has_local = bool(connection.execute(
+            text("SELECT 1 FROM local_change_sets WHERE project_id = :p LIMIT 1"),
+            {"p": project_id}).first())
+    if not has_local and cat.has("project_repositories", "project_id"):
+        cols = cat.columns.get("project_repositories", set())
+        if "provider" in cols:
+            providers = {
+                str(r[0] or "").strip().lower()
+                for r in connection.execute(
+                    text("SELECT DISTINCT provider FROM project_repositories WHERE project_id = :p"),
+                    {"p": project_id}).all()
+            }
+            if providers and providers == {"local"}:
+                return True
+            if "github" in providers:
+                return False
+    if cat.has("github_connections", "project_id"):
+        if connection.execute(
+            text("SELECT 1 FROM github_connections WHERE project_id = :p LIMIT 1"),
+            {"p": project_id}).first():
+            return False
+    return has_local
+
 
 def preview(connection: Any, settings: Any, project_id: str) -> Optional[dict[str, Any]]:
     """What deleting the project would remove, counted by kind, and what stays. None when there is
     no such project. `refused` says in words why it cannot be deleted (the home project)."""
+    from . import portability
+
     row = _project(connection, project_id)
     if row is None:
         return None
@@ -376,10 +412,12 @@ def preview(connection: Any, settings: Any, project_id: str) -> Optional[dict[st
     refused = None
     if project_id == _home(settings):
         refused = _home_sentence(row["name"])
+    local_only = _is_local_first(connection, cat, project_id)
     return {
         "id": row["id"], "name": row["name"], "slug": row["slug"], "org_id": row["org_id"],
         "archived": row["archived_at"] is not None,
         "home": project_id == _home(settings), "refused": refused,
+        "local_only": local_only,
         "counts": kinds, "total": sum(per_table.values()),
         "tables": len(per_table), "staging_apps": staging, "production_apps": production,
         "previews_running": int(connection.execute(text(
@@ -387,10 +425,15 @@ def preview(connection: Any, settings: Any, project_id: str) -> Optional[dict[st
             "('stopped', 'failed', 'expired')"), {"p": project_id}).scalar() or 0)
         if cat.has("app_previews", "status") else 0,
         "graph": kg,
-        "keeps": KEEPS,
-        # No project export exists yet (there is no GET /v1/projects/{id}/export): said, not linked.
-        "export": {"available": False,
-                   "note": "There is no project export yet, so there is nothing to download first."},
+        "keeps": list(LOCAL_KEEPS if local_only else KEEPS),
+        # Project export via services/portability.py (BOSSAPP-837 / BOSSAPP-1470).
+        "export": {
+            "available": True,
+            "href": f"/v1/projects/{project_id}/export",
+            "format": portability.FORMAT,
+            "note": "Download a portable JSON bundle of this project's configuration before "
+                    "deleting (secrets are exported as empty placeholders).",
+        },
     }
 
 
