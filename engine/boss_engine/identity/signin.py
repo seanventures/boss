@@ -307,6 +307,18 @@ def first_factor_grant(db: Any, user: users.UserRow, *, mfa: bool,
     return None
 
 
+def next_sign_in_may_enrol(db: Any, user: users.UserRow) -> bool:
+    """Would the person's next sign-in get a first-factor grant (`first_factor_grant`), without
+    taking it? A live window from a promotion or an admin's reset, or the org's only Owner."""
+    from sqlalchemy import text
+
+    if users.factors(db, user.principal_id).any_second_factor:
+        return False
+    pending = db.execute(text("SELECT first_factor_grant_until > now() FROM identity_users "
+                              "WHERE principal_id = :p"), {"p": user.principal_id}).scalar()
+    return bool(pending) or nobody_can_reset(db, user)
+
+
 def nobody_can_reset(db: Any, user: users.UserRow) -> bool:
     """Is this person the org's ONLY Owner? Then nobody can reset their second factor (an Owner's
     reset needs another Owner, and nobody resets their own)."""
@@ -371,7 +383,9 @@ def may_enrol(db: Any, row: sessions.SessionRow, user: users.UserRow) -> Optiona
       - a person who already has a factor: only with that fresh MFA (step up first);
       - the FIRST factor of a person whose roles require MFA: this session's first-factor grant
         (claim, invitation, first sign-in, or after an admin reset), never a later password-only
-        sign-in — 403 `enrolment_grant_required` (ask an admin to reset your second factor);
+        sign-in — 403 `enrolment_needs_sign_in` when the next sign-in would hold that grant
+        (a promotion or a reset after this session began), else 403 `enrolment_grant_required`
+        (ask an admin to reset your second factor);
       - the first factor of anyone else: a sign-in within the last 10 minutes."""
     now = utcnow()
     if row.mfa_at is not None and (now - row.mfa_at).total_seconds() <= STEP_UP_WINDOW_SECONDS:
@@ -380,6 +394,12 @@ def may_enrol(db: Any, row: sessions.SessionRow, user: users.UserRow) -> Optiona
         return 401, "step_up_required"
     if users.mfa_required(db, user):
         if row.enrol_grant_until is None or now >= row.enrol_grant_until:
+            # SIGN IN AGAIN, NOT AN ADMIN (enterprise validation: promoted to Owner in an open
+            # session). The grant is taken at sign-in, so a session older than a promotion or a
+            # reset never holds it; when the NEXT sign-in would, say so instead of sending the
+            # person to an admin for a reset nobody needs.
+            if next_sign_in_may_enrol(db, user):
+                return 403, "enrolment_needs_sign_in"
             return 403, "enrolment_grant_required"
         return None
     if not recently_authenticated(row):

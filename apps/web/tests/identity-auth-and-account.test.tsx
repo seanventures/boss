@@ -345,6 +345,51 @@ describe("Enrolment and recovery codes", () => {
   });
 });
 
+describe("A first factor after a promotion in an open session (enterprise validation)", () => {
+  it("the next sign-in holds the grant: Create a passkey offers a fresh sign-in that returns to enrol, never an admin", async () => {
+    const assign = vi.fn();
+    vi.spyOn(window.location, "assign").mockImplementation(assign);
+    routes({
+      "GET /v1/identity/me": { body: { csrf_token: "c" } },
+      "POST /v1/identity/me/passkeys/options": { status: 403, body: { error: "enrolment_needs_sign_in" } },
+      "POST /v1/auth/logout": { body: { ok: true } },
+    });
+    const el = await mount(<Enrol host="boss.acme.dev" next="/identity" who={null} />);
+    await click(el.querySelector("[data-testid='enrol-passkey']"));
+    expect(el.querySelector("[data-testid='enrol-passkey']")).toBeNull();
+    expect(el.querySelector("[data-testid='enrol-sign-in-again-why']")?.textContent).toContain("Sign in again");
+    expect(el.textContent).not.toMatch(/Ask an admin|reset your second factor/i);
+    await click(el.querySelector("[data-testid='enrol-sign-in-again']"));
+    await settle();
+    expect(calls.some((c) => c.url === "/v1/auth/logout")).toBe(true);
+    // The sign-in page sends a sign-in that must enrol on to /enrol, then back to /identity.
+    expect(assign).toHaveBeenCalledWith("/login?next=%2Fidentity");
+  });
+
+  it("the authenticator path says the same, not an error", async () => {
+    routes({
+      "GET /v1/identity/me": { body: { csrf_token: "c" } },
+      "POST /v1/identity/me/mfa/totp": { status: 403, body: { error: "enrolment_needs_sign_in" } },
+    });
+    const el = await mount(<Enrol host="100.64.0.20" next="/identity" who={null} passkeyReason="passkey_needs_domain" />);
+    await settle();
+    expect(el.querySelector("[data-testid='enrol-sign-in-again']")).not.toBeNull();
+    expect(el.querySelector("[role='alert']")).toBeNull();
+  });
+
+  it("no grant at the next sign-in either: the admin-reset advice stays, and no sign-in-again offer", async () => {
+    routes({
+      "GET /v1/identity/me": { body: { csrf_token: "c" } },
+      "POST /v1/identity/me/passkeys/options": { status: 403, body: { error: "enrolment_grant_required" } },
+    });
+    const el = await mount(<Enrol host="boss.acme.dev" next="/identity" who={null} />);
+    await click(el.querySelector("[data-testid='enrol-passkey']"));
+    expect(el.querySelector("[role='alert']")?.textContent).toMatch(/Ask an admin to reset your second factor/);
+    expect(el.querySelector("[data-testid='enrol-sign-in-again']")).toBeNull();
+    expect(el.querySelector("[data-testid='enrol-passkey']")).not.toBeNull();
+  });
+});
+
 describe("An authenticator key that expired is replaced, never “That code didn't work” forever (hotfix, boss-1)", () => {
   it("confirm answered 409 enrolment_expired: a NEW key is shown with the reason, and its code enrols", async () => {
     let begins = 0;
