@@ -1963,7 +1963,10 @@ try:
 except ValueError:
     data = {}
 if code != "200":
-    msg = data.get("message") or (data.get("detail") if isinstance(data.get("detail"), str) else "") or data.get("error") or ("HTTP " + code)
+    detail = data.get("detail")
+    if isinstance(detail, dict):
+        detail = detail.get("message") or detail.get("error")
+    msg = data.get("message") or (detail if isinstance(detail, str) else "") or data.get("error") or ("HTTP " + code)
     print("boss: " + str(msg), file=sys.stderr); sys.exit(1)
 def where(c):
     return (c.get("path") or "(the change)") + (":" + str(c["line"]) if c.get("line") else "")

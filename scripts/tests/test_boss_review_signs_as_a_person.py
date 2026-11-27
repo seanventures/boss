@@ -39,6 +39,12 @@ class _Api(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def do_POST(self):  # noqa: N802
+        if self.path.endswith("/comments/7/resolve"):
+            return self._send(403, {"detail": {"error": "people_only",
+                                               "message": "Resolve this thread in the console."}})
+        return self._send(404, {"error": "not_found"})
+
     def do_GET(self):  # noqa: N802
         auth = self.headers.get("Authorization", "")
         _Api.seen.append(("GET", self.path, auth))
@@ -138,3 +144,11 @@ def test_login_refuses_anything_but_a_persons_token_and_never_prints_it(install,
     assert said.returncode == 1 and words in said.stderr, said.stderr
     assert token not in said.stdout + said.stderr
     assert not (tmp_path / "creds").exists() or token not in (tmp_path / "creds").read_text()
+
+
+def test_review_shows_the_reason_a_person_must_use_the_console(install, tmp_path):
+    result = _boss(install, {**_env(tmp_path), "BOSS_TOKEN": PERSON},
+                   "review", "resolve", "1", "7", "--project", "p1")
+    assert result.returncode == 1
+    assert "Resolve this thread in the console." in result.stderr
+    assert PERSON not in result.stderr
