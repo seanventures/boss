@@ -843,9 +843,6 @@ if [[ "$WITH_WEB" -eq 1 ]]; then
   MON_METRICS_PORT="${MON_METRICS_PORT:-9464}"
   MON_METRICS_HOST="${MON_METRICS_HOST:-0.0.0.0}"
   ui_ok "Monitoring: bundled Prometheus and Grafana (Grafana on port $GRAFANA_PORT)"
-  if port_in_use "$GRAFANA_PORT" && ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q 'grafana'; then
-    ui_warn "Port $GRAFANA_PORT is already in use — set BOSS_GRAFANA_PORT to another port and re-run if Grafana does not start."
-  fi
 else
   ui_ok "Mission Control: skipped"
 fi
@@ -1918,6 +1915,10 @@ fi
 
 # Start the worker and optional console only after the project and actors are
 # available. The same order applies to a first install, rerun, and upgrade.
+if [[ "$WITH_WEB" -eq 1 ]] && port_in_use "$GRAFANA_PORT" && \
+   ! "${DOCKER[@]}" ps --format '{{.Names}}' 2>/dev/null | grep -q 'grafana'; then
+  ui_warn "Port $GRAFANA_PORT is already in use — set BOSS_GRAFANA_PORT to another port and re-run if Grafana does not start."
+fi
 # shellcheck disable=SC2086
 ${COMPOSE[@]} ${COMPOSE_FILES:--f scripts/install/community-compose.yml} --env-file "$ENV_FILE" \
   $COMPOSE_PROFILES up -d --no-build </dev/null

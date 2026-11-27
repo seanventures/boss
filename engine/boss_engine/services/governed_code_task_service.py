@@ -7889,7 +7889,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 _log_caught(logger)
                 prep = {
                     "install_command": verification_target.NPM_INSTALL_CMD,
-                    "browser_install_command": verification_target.PLAYWRIGHT_INSTALL_CMD,
+                    "browser_install_command": "",
                     "changed": [],
                     "error": f"{type(exc).__name__}: {exc}",
                 }
@@ -8222,22 +8222,23 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 from . import playwright_cache
                 from .sandbox import CommandResult as _PwResult
 
-                _pw = playwright_cache.ensure(playwright_cache.project_version(app_cwd))
-                if _pw.get("ok"):
-                    _emit_cmd("install browsers", _PwResult(
-                        command=f"boss: {_pw.get('detail')}", argv=[], exit_code=0,
-                        duration_ms=int(float(_pw.get("seconds") or 0) * 1000),
-                        timed_out=False, stdout="", stderr=""))
-                else:
-                    prep_note += f"[boss] shared browser cache: {_pw.get('detail')}\n"
-                    _emit_cmd("install browsers", sandbox.run(
-                        str(
-                            prep.get("browser_install_command")
-                            or verification_target.PLAYWRIGHT_INSTALL_CMD
-                        ),
-                        cwd=str(app_cwd),
-                        timeout=max(install_timeout, playwright_cache.install_timeout()),
-                    ))
+                if playwright_cache.uses_playwright(app_cwd):
+                    _pw = playwright_cache.ensure(playwright_cache.project_version(app_cwd))
+                    if _pw.get("ok"):
+                        _emit_cmd("install browsers", _PwResult(
+                            command=f"boss: {_pw.get('detail')}", argv=[], exit_code=0,
+                            duration_ms=int(float(_pw.get("seconds") or 0) * 1000),
+                            timed_out=False, stdout="", stderr=""))
+                    else:
+                        prep_note += f"[boss] shared browser cache: {_pw.get('detail')}\n"
+                        _emit_cmd("install browsers", sandbox.run(
+                            str(
+                                prep.get("browser_install_command")
+                                or verification_target.PLAYWRIGHT_INSTALL_CMD
+                            ),
+                            cwd=str(app_cwd),
+                            timeout=max(install_timeout, playwright_cache.install_timeout()),
+                        ))
             # npm install / the implementer can recreate leftover Playwright
             # configs. Force the official HookWatch tree again immediately
             # before the authoritative command so e2e cannot start itty-router
