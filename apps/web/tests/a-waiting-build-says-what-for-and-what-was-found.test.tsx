@@ -126,6 +126,20 @@ describe("Project › Work and Agents at work say it too", () => {
     expect($('[data-testid="px-work-why-wfr_1"]')?.textContent).toContain("Stuck: every attempt crashed (30×)");
   });
 
+  it("a running row waiting for GitHub draws the GitHub wait, and a finished row draws no reason", async () => {
+    const { WorkRow } = await import("../app/projects/tab-work");
+    const { parseWorkItem } = await import("../lib/project-experience");
+    const ctx = { projectId: "p1", refreshWork: () => {}, open: () => {} } as unknown as Parameters<typeof WorkRow>[0]["ctx"];
+    const row = (id: string, state: string) => parseWorkItem({
+      id, label: "Bump esbuild", kind: "fix", state, age: "2h", stages: [], agents: [], links: {}, attempts: [],
+      why: { code: "github", who: "boss", words: "Waiting for GitHub · your work is saved here and will push when GitHub is back" },
+    });
+    await mount(<><WorkRow w={row("wfr_gh", "running")} ctx={ctx} /><WorkRow w={row("wfr_done", "done")} ctx={ctx} /></>);
+    expect($('[data-testid="px-work-why-wfr_gh"] [data-testid="github-wait"]')).not.toBeNull();
+    expect($('[data-testid="px-work-status-wfr_gh"]')?.textContent).not.toMatch(/Failed/);
+    expect($('[data-testid="px-work-why-wfr_done"]')).toBeNull();
+  });
+
   it("an agent's item on Agents at work says what its build waits for", async () => {
     const { parseList } = await import("../lib/ambient");
     const view = parseList({ filter: "all", counts: { running: 1 }, items: [{

@@ -17,3 +17,25 @@ export function browserHref(href: string): string {
 export function previewWebHref(previewId: string): string {
   return `/v1/previews/${encodeURIComponent(previewId)}/web/`;
 }
+
+/** A sandbox's own address (127.0.0.1:<port>, localhost): reachable from the API, never a browser. */
+export function isLoopbackPreviewUrl(url: string | null | undefined): boolean {
+  if (!url) return false;
+  const lowered = url.trim().toLowerCase();
+  return (
+    lowered.includes("://127.") ||
+    lowered.includes("://localhost") ||
+    lowered.includes("://[::1]") ||
+    lowered.includes("://0.0.0.0") ||
+    lowered.startsWith("127.") ||
+    lowered.startsWith("localhost") ||
+    lowered.startsWith("[::1]") ||
+    lowered.startsWith("0.0.0.0")
+  );
+}
+
+/** Where a preview's Open goes: the address the engine gave it, unless that is a sandbox's
+ *  loopback, then the console's own gateway path (Infra › Previews, enterprise validation). */
+export function previewOpenHref(previewId: string, url: string | null | undefined): string {
+  return url && !isLoopbackPreviewUrl(url) ? browserHref(url) : previewWebHref(previewId);
+}

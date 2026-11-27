@@ -106,3 +106,63 @@ def test_the_audit_logs_actor_filter_is_not_the_actor_rule(engine):
         only_other = client.get(f"/v1/identity/audit?actor={other.id}").json()["events"]
     assert any(e["actor"]["id"] == other.id for e in everyone)
     assert only_other and all(e["actor"]["id"] == other.id for e in only_other)
+
+
+def _promote_in_open_session(engine, email: str):
+    """Enterprise validation: an Operator signed in, then was promoted to Owner before enrolling.
+    Returns the person's open session (taken before the promotion) and their id."""
+    from apps.api.tests.identity_s1_world import fresh_client, mark_claimed, sign_in
+
+    mark_claimed(engine)
+    ctx, _org = _owner_ctx(engine)
+    pid = make_user(engine, email, role="operator")
+    with engine.begin() as db:
+        db.execute(text("UPDATE identity_users SET last_login_at = now() - interval '1 day' WHERE principal_id = :p"),
+                   {"p": pid})
+    open_session = fresh_client()
+    assert sign_in(open_session, email).json()["next"] == "done"   # an Operator needs no factor
+    with engine.begin() as db:
+        owner = db.execute(text("SELECT id FROM identity_access_roles WHERE key = 'owner' AND org_id IS NULL")).scalar()
+        bindings.add_binding(db, ctx, subject_type="principal", subject_id=pid, role_id=owner, scope_type="org")
+    return open_session, pid
+
+
+def _enrol_csrf(client) -> dict[str, str]:
+    from apps.api.tests.identity_s1_world import HEADERS
+
+    me = client.get("/v1/identity/me")
+    assert me.status_code == 200, me.text
+    return {**HEADERS, "X-Boss-CSRF": me.json()["csrf_token"]}
+
+
+def test_a_session_older_than_the_promotion_is_told_to_sign_in_again_not_to_ask_an_admin(
+        world, engine, monkeypatch):
+    """The grant waits for the NEXT sign-in, so the open session cannot use it. It is told to sign
+    in again (enrolment_needs_sign_in), and the fresh sign-in enrols the first factor."""
+    from apps.api.tests.identity_s1_world import fresh_client, sign_in, totp_now
+
+    monkeypatch.setattr(authz, "check", REAL_CHECK)
+    open_session, _pid = _promote_in_open_session(engine, "promoted-owner@example.test")
+    for path in ("/v1/identity/me/mfa/totp", "/v1/identity/me/passkeys/options"):
+        refused = open_session.post(path, headers=_enrol_csrf(open_session))
+        assert refused.status_code == 403 and refused.json()["error"] == "enrolment_needs_sign_in", refused.text
+    again = fresh_client()
+    step = sign_in(again, "promoted-owner@example.test").json()
+    assert step["next"] == "enrol" and step["enrolment_grant"] is True
+    assert again.post("/v1/identity/me/passkeys/options", headers=_enrol_csrf(again)).status_code == 200
+    begin = again.post("/v1/identity/me/mfa/totp", headers=_enrol_csrf(again))
+    assert begin.status_code == 200, begin.text
+    confirm = again.post("/v1/identity/me/mfa/totp/confirm", headers=_enrol_csrf(again),
+                         json={"code": totp_now(begin.json()["secret"])})
+    assert confirm.status_code == 200, confirm.text
+
+
+def test_once_the_promotion_window_closed_the_open_session_keeps_the_admin_reset_advice(
+        world, engine, monkeypatch):
+    monkeypatch.setattr(authz, "check", REAL_CHECK)
+    open_session, pid = _promote_in_open_session(engine, "late-owner@example.test")
+    with engine.begin() as db:
+        db.execute(text("UPDATE identity_users SET first_factor_grant_until = now() - interval '1 second' "
+                        "WHERE principal_id = :p"), {"p": pid})
+    refused = open_session.post("/v1/identity/me/mfa/totp", headers=_enrol_csrf(open_session))
+    assert refused.status_code == 403 and refused.json()["error"] == "enrolment_grant_required", refused.text

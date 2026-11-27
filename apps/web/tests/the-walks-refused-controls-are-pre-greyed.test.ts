@@ -26,7 +26,7 @@ const CONTROLS: ReadonlyArray<readonly [string, string, string, string]> = [
   ["app/ConsoleShell.tsx", 'data-testid="topbar-new-project"', "workflow_run:start", "POST /v1/delivery-workflows/start"],
   ["app/improve/sharing-ask.tsx", 'data-testid="su-sharing-on"', "telemetry:manage", ""],
   ["app/improve/sharing-ask.tsx", 'data-testid="su-sharing-no"', "telemetry:manage", ""],
-  ["app/setup/setup-board.tsx", 'data-testid="su-test-all"', "setup:manage", "POST /v1/setup/checks"],
+  ["app/setup/setup-board.tsx", 'data-testid="su-test-all"', "setup:check", "POST /v1/setup/checks"],
   ["app/shepherd-ui.tsx", "onClick={sweep}", "autopilot:operate", ""],
   ["app/agents/attention-card.tsx", "data-testid={`ag-att-option-${a.key}`}", "system:operate", "POST /v1/system-doctor/findings/{finding_id}/act"],
   ["app/agents/attention-card.tsx", "data-testid={`ag-att-infra-${a.key}`}", "deployment:rollback", "POST /v1/infra/attention/act"],
@@ -50,9 +50,9 @@ describe("each control the walk caught is gated on the permission the API checks
     }
   });
 
-  it("Setup does not run the stale checks for a viewer who may not (the API refuses setup:manage)", () => {
+  it("Setup does not run the stale checks for a viewer who may not (the API refuses setup:check)", () => {
     const src = readFileSync(join(WEB, "app/setup/setup-board.tsx"), "utf8");
-    expect(src).toMatch(/const mayCheck = useGate\("setup:manage"\)\.allowed;/);
+    expect(src).toMatch(/const mayCheck = useGate\("setup:check"\)\.allowed;/);
     expect(src).toMatch(/if \(!view \|\| autoChecked\.current \|\| !mayCheck\) return;/);
   });
 });

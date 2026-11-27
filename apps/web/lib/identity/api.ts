@@ -96,6 +96,7 @@ export const REFUSAL_WORDS: Readonly<Record<string, (body: Body) => string>> = {
   mfa_enrolment_required: () => "Add a second factor first",
   enrolment_expired: () => "That key expired — start again",
   enrolment_grant_required: () => "Ask an admin to reset your second factor",
+  enrolment_needs_sign_in: () => "Sign in again to add your second factor",
   task_grants_end_with_their_run: () => "Ends with its run",
   captain_authority_has_no_expiry: () => "This authority has no end date. Revoke it to end it.",
   revoked_is_terminal: () => "Already ended",

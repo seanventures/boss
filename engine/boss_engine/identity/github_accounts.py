@@ -49,8 +49,8 @@ PATHS = ("pick", "make_public", "install", "no_app")
 # ---- the one input ----------------------------------------------------------------------------------
 
 def parse_account(raw: str) -> str:
-    """The account name from what a person typed: `kaappu`, `@kaappu`, `github.com/kaappu`,
-    `https://github.com/kaappu/helpdesk` (a repository link names its owner)."""
+    """The account name from what a person typed: `your-org`, `@your-org`, `github.com/your-org`,
+    `https://github.com/your-org/helpdesk` (a repository link names its owner)."""
     text = (raw or "").strip()
     if not text:
         raise GitHubSetupError("account_required", 422, message="Type a GitHub user or organisation name.")

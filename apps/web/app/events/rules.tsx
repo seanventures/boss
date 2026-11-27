@@ -53,7 +53,7 @@ function browserZone(): string { try { return Intl.DateTimeFormat().resolvedOpti
 
 /** Visible pause reason beside the list switch. Blank is nothing. */
 export function pausedReasonSentence(reason: string | null | undefined): string | null {
-  const text = reason?.trim() ?? "";
+  const text = (reason || "").trim();
   return text ? text : null;
 }
 

@@ -91,13 +91,16 @@ def test_the_installer_routes_answer_only_the_self_installer(client, engine):
         assert client.post("/v1/self-fixes/tickets/sft_nope/take", json={}).status_code == 409
 
 
-def test_people_switch_start_follow_and_stop_a_self_fix(client, engine, self_fixable):
+def test_people_switch_start_follow_and_stop_a_self_fix(client, engine, self_fixable,
+                                                       monkeypatch):
+    monkeypatch.setenv("BOSS_INSTALL_TIER", "prod")
     assert client.put("/v1/self-fix/settings", json={
         "project_id": HOME, "actor": "ceo", "on": True,
         "settings": {"self_fix_budget_cents": 300}}).status_code == 200
     state = client.get("/v1/self-fix/settings", params={"project_id": HOME}).json()
     assert state["switch"]["on"] is True and state["settings"]["self_fix_budget_cents"] == 300
     assert state["can_install"] is True and state["auto_install"] == "off"
+    assert "a person approves every install" in state["auto_install_why"]
     from boss_engine.services import boss_recommendations
 
     with engine.begin() as c:
@@ -222,7 +225,39 @@ def test_send_to_boss_team_is_previewed_ticked_and_exportable(client, engine, mo
             c.execute(text("DELETE FROM self_fixes WHERE id = :i"), {"i": sfx_id})
 
 
-def test_removal_and_autonomy_routes(client, engine):
+def test_readiness_is_one_place_with_one_action_per_missing_piece(client, engine, self_fixable,
+                                                                  monkeypatch):
+    """ENT-REC-54: Govern › Self-fix reads what a self-fix still needs from the settings route;
+    enrolling the host installer (its key) is what turns that piece from 'Not enrolled'."""
+    from boss_engine.identity import tokens
+
+    monkeypatch.setenv("BOSS_INSTALL_TIER", "dev")
+    with engine.begin() as c:
+        c.execute(text("UPDATE identity_api_credentials SET revoked_at = now() "
+                       "WHERE principal_id = 'sys_self_installer' AND revoked_at IS NULL"))
+    pieces = {p["key"]: p for p in client.get("/v1/self-fix/settings", params={
+        "project_id": HOME}).json()["readiness"]["pieces"]}
+    assert pieces["installer"]["state"] == "Not enrolled"
+    assert pieces["installer"]["action"]["command"] == "boss self-fix enable"
+    assert pieces["source"]["action"]["command"] == "boss self-fix seed", "no record yet"
+    assert pieces["mirror"]["ok"] is True
+    world = _world(engine)
+    with engine.begin() as c:
+        tokens.issue_self_installer_key(c, org_id=world.org)
+        si_seen = text("DELETE FROM system_state WHERE key = 'self_fix_installer'")
+        c.execute(si_seen)
+    got = client.get("/v1/self-fix/settings", params={"project_id": HOME}).json()
+    pieces = {p["key"]: p for p in got["readiness"]["pieces"]}
+    assert pieces["installer"]["state"] == "Not watching"
+    if pieces["mode"]["ok"]:
+        assert (got["auto_install"] == "on") == (pieces["mode"]["state"] == "Installs on its own")
+    with engine.begin() as c:
+        c.execute(text("UPDATE identity_api_credentials SET revoked_at = now() "
+                       "WHERE principal_id = 'sys_self_installer' AND revoked_at IS NULL"))
+
+
+def test_removal_and_autonomy_routes(client, engine, monkeypatch):
+    monkeypatch.setenv("BOSS_INSTALL_TIER", "prod")
     sfx_id = _verified_row(engine)
     try:
         nothing = client.post(f"/v1/self-fixes/{sfx_id}/remove",

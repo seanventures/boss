@@ -301,7 +301,7 @@ export function StorageCardView({ s, projectId, orgId, sample, pendingDecisionId
           <span className="ia-chip" data-tone="red"><Shield size={11} aria-hidden />Hard floor {s.thresholds.floorPct} %</span>
           <span className="ia-chip" data-tone="green"><Broom size={11} aria-hidden />Resume at {s.thresholds.targetPct} %</span>
           <span className="sc-spacer" />
-          <span className="sc-faint" data-testid="sc-thresholds-note" title="PUT /v1/infra/storage/rules carries thresholds; the editor is a follow-up (INFRA_CONSOLE_GAPS.md)">Set by the install</span>
+          <span className="sc-faint" data-testid="sc-thresholds-note" title="The install sets these thresholds; they cannot be changed from this screen yet">Set by the install</span>
         </div>
       </section>
 

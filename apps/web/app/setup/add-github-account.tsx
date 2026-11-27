@@ -300,7 +300,7 @@ export function AddGitHubAccount({ onClose, onAdvanced, onOther }: {
       {/* 1 · the one input */}
       <label className="ga-in" title="A GitHub user or organisation name, or a link to it.">
         <span className="ga-in-ico" aria-hidden="true"><GithubLogo weight="fill" size={20} /></span>
-        <input className="ga-in-text" value={text} placeholder="kaappu" aria-label="GitHub account"
+        <input className="ga-in-text" value={text} placeholder="your-org" aria-label="GitHub account"
                autoComplete="off" spellCheck={false} maxLength={300} data-testid="ga-input"
                onChange={(e) => setText(e.target.value)}
                onKeyDown={(e) => { if (e.key === "Enter") { asked.current = ""; void lookup(text); } }} />
