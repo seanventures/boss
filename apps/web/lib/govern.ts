@@ -125,6 +125,35 @@ export type CapPreview = {
   period: "day" | "month"; cap_usd_micros: number; days_considered: number; days_with_spend: number;
   days_stopped: number; stopped_days: string[]; not_enough_history: boolean; daily: DailySpend[];
 };
+export type RoutingSavingsReport = {
+  project_id: string;
+  days: number;
+  baseline_model: string;
+  baseline_all_frontier_usd: number;
+  actual_list_value_usd: number;
+  total_saved_usd: number;
+  total_savings_pct: number;
+  metered: { actual_usd: number; baseline_usd: number; dollars_saved_usd: number };
+  subscription: { actual_list_usd: number; baseline_list_usd: number; capacity_saved_usd: number };
+  total_calls: number;
+  routed_down_calls: number;
+  pct_calls_routed_down: number;
+  total_tokens: number;
+  routed_down_tokens: number;
+  pct_tokens_routed_down: number;
+  merged_changes: number;
+  cost_per_merged_change_usd: number | null;
+  baseline_cost_per_merged_change_usd: number | null;
+  escalations: {
+    total: number; rate: number; rescued: number; recovery_rate: number | null;
+    total_cost_usd: number; cost_per_rescued_build_usd: number | null;
+  };
+  review_verdicts_by_tier: {
+    tier: string; label: string; approved: number; changes_requested: number;
+    total: number; approval_rate: number | null;
+  }[];
+  recomputation_check?: { recorded_usd: number; recomputed_list_usd: number; drift_pct: number; within_5pct: boolean };
+};
 export type SpendView = {
   window: string; money_usd_micros: number; included_usd_micros: number; daily: DailySpend[];
   daily_cap_usd_micros: number;
@@ -134,6 +163,7 @@ export type SpendView = {
   };
   savings: { kind: string; severity?: string; finding?: string; action?: string; save_usd_micros?: number;
              est_save_usd_micros?: number; message?: string; detail?: string }[];
+  routing_savings?: RoutingSavingsReport | null;
   top_drivers: { id: string; amount_usd_micros: number }[];
   by_agent?: ModelSpendRow[];
   by_model?: ModelSpendRow[];

@@ -28,11 +28,14 @@ const READS: Record<string, (q: URLSearchParams) => string> = {
   envelopes: (q) => `/v1/govern/envelopes?project_id=${enc(q.get("project_id"))}`,
   daily: (q) => `/v1/budget/daily?project_id=${enc(q.get("project_id"))}&days=30`,
   project_limits: (q) => `/v1/govern/project-limits?project_id=${enc(q.get("project_id"))}`,
+  routing_savings: (q) => `/v1/govern/routing-savings?project_id=${enc(q.get("project_id"))}&days=${enc(q.get("days") || "30")}`,
+  routing_savings_export: (q) => `/v1/govern/routing-savings/export?project_id=${enc(q.get("project_id"))}&days=${enc(q.get("days") || "30")}&format=${enc(q.get("format") || "html")}`,
 };
 
 export async function GET(req: Request) {
   const q = rawRequestUrl(req).searchParams;
-  const view = READS[q.get("view") || "limits"];
+  const viewKey = q.get("view") || "limits";
+  const view = READS[viewKey];
   if (!q.get("project_id")?.trim() || !view) {
     return NextResponse.json({ error: "project_id and a view are required" }, { status: 400 });
   }
@@ -45,6 +48,14 @@ export async function GET(req: Request) {
     const tag = r.headers.get("etag");
     if (tag) out.set("ETag", tag);
     if (r.status === 304) return new Response(null, { status: 304, headers: out });
+    if (viewKey === "routing_savings_export" && r.ok) {
+      const text = await r.text();
+      const ct = r.headers.get("content-type");
+      const cd = r.headers.get("content-disposition");
+      if (ct) out.set("Content-Type", ct);
+      if (cd) out.set("Content-Disposition", cd);
+      return new Response(text, { status: r.status, headers: out });
+    }
     const body = await r.json().catch(() => ({}));
     if (!r.ok) return NextResponse.json({ error: apiErrorText(body, r.status) }, { status: r.status, headers: out });
     return NextResponse.json(body, { headers: out });

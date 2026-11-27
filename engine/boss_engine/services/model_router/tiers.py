@@ -71,6 +71,10 @@ CODING_STEPS = frozenset({"implement", "solo", "repair", "quality"})
 #: Mechanical steps: one tier below the task's own difficulty (never below Fast).
 MECHANICAL_STEPS = frozenset({"standards", "docs"})
 
+#: Mechanical / draft / test-check stages eligible for Fast-tier shadow evaluation
+#: before promoting to active Fast routing (BOSSAPP-781).
+FAST_SHADOW_STAGES = frozenset({"standards", "plan", "check_tests", "docs"})
+
 
 def step_label(step: str) -> str:
     return STEP_LABELS.get(step, step.replace("_", " ").capitalize() if step else "Model call")

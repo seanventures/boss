@@ -174,13 +174,15 @@ class CodexCliAdapter(CliChatBrain):
         Reasoning tokens are billed as output, so they belong in `completion_tokens` rather
         than in a field of their own that nothing prices.
         """
+        from .openai_adapter import list_price_cost_usd_micros
+
         usage = self._turn_usage(data.get("stdout") or "")
         cache_read = int(usage.get("cached_input_tokens") or 0)
         cache_write = int(usage.get("cache_write_input_tokens") or 0)
         prompt = max(int(usage.get("input_tokens") or 0) - cache_read, 0)
         completion = (int(usage.get("output_tokens") or 0)
                       + int(usage.get("reasoning_output_tokens") or 0))
-        return {
+        out = {
             "model": (self.model_override
                       or (getattr(self.settings, "codex_cli_model", "") or "") or "codex-cli"),
             "prompt_tokens": prompt,
@@ -192,6 +194,10 @@ class CodexCliAdapter(CliChatBrain):
             # of these tokens is its list-price value, not money (included_spend.py).
             "billing": BILLING_SUBSCRIPTION,
         }
+        # BOSSAPP-782: give Codex CLI calls a real list-price value from their tokens.
+        list_micros, _ = list_price_cost_usd_micros(out)
+        out["cost_usd_micros"] = list_micros
+        return out
 
 
 def make_codex_chat_adapter(settings: Settings, *, model: Optional[str] = None):

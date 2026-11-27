@@ -99,7 +99,7 @@ def routing_mode(connection: Any, settings: Any, project_id: Optional[str]) -> s
     except Exception:  # noqa: BLE001
         value = getattr(settings, "model_routing_mode", "fixed")
     value = str(value or "fixed").strip().lower()
-    return value if value in ("fixed", "smart") else "fixed"
+    return value if value in ("fixed", "shadow", "smart") else "fixed"
 
 
 _MODES: dict[str, tuple[float, str]] = {}
@@ -385,6 +385,8 @@ def snapshot(connection: Any, settings: Any, project_id: Optional[str], *,
             subs = [e for e, i in connected.items()
                     if str(i.get("kind")) == "subscription"
                     or i.get("env_attr") == "claude_code_oauth_token"]
+            from .outcomes import load_outcome_priors
+
             snap = Snapshot(
                 project_id=project_id, policy=policy,
                 sources=sources_from(
@@ -393,7 +395,9 @@ def snapshot(connection: Any, settings: Any, project_id: Optional[str], *,
                                                              subs)),
                 budget_state=_budget_state(connection, settings, project_id),
                 job_pins=_job_pins(connection, project_id), jev_state=jev_state(effective),
-                settings=effective)
+                settings=effective,
+                outcome_priors=load_outcome_priors(connection, project_id)
+                if policy.use_outcome_priors else {})
             _wire_deciders(snap, connection, effective, project_id)
             if "openrouter" in connected:
                 _openrouter_catalogue(connection, effective, project_id)
@@ -570,10 +574,18 @@ def route(connection: Any, settings: Any, request: RouteRequest, *,
         if found:
             request = replace(request, agent_policy=found)
     agent_mode = str((request.agent_policy or {}).get("selection_mode") or "router").lower()
-    # A Fixed route needs the connected sources only; Smart (or an agent's Local/Pinned policy,
-    # or an experiment's Smart arm on a Fixed project) needs the whole picture, headroom too.
-    lite = mode != "smart" and agent_mode not in ("local", "pinned")
+    # A Fixed route needs the connected sources only; Smart, Shadow (which runs Smart
+    # counterfactually), an agent's Local/Pinned policy, or an experiment's Smart arm on a Fixed
+    # project needs the whole picture, headroom and outcome priors too.
+    lite = mode == "fixed" and agent_mode not in ("local", "pinned")
     snap = snapshot(connection, settings, request.project_id, lite=lite)
+    # BOSSAPP-779: read live budget state per stage boundary, never stale from run start.
+    if not lite and connection is not None and request.project_id:
+        from dataclasses import replace
+
+        live_budget = _budget_state(connection, settings, request.project_id)
+        if live_budget != snap.budget_state:
+            snap = replace(snap, budget_state=live_budget)
     if request.sticky and request.unit_id and request.session_pin is None \
             and mode == "smart":
         prior = last_route(connection, request.unit_id, request.step, request.ref)
@@ -619,29 +631,64 @@ def record(connection: Any, decision: RouteDecision) -> None:
     if decision.id in _RECORDED:
         return
     c = decision.classification
+    sh = decision.shadow
+    base_params = {
+        "id": decision.id, "p": decision.project_id, "k": decision.kind,
+        "u": decision.unit_id, "s": decision.step, "ref": decision.ref,
+        "r": decision.role,
+        "m": decision.mode, "t": decision.tier, "ct": decision.classified_tier,
+        "cl": c.classifier if c else None,
+        "cf": round(c.confidence, 3) if c else None,
+        "e": decision.engine or None, "mo": decision.model,
+        "si": decision.source_id, "sk": decision.source_kind or None,
+        "rules": json.dumps(list(decision.rules)), "why": json.dumps(list(decision.why)),
+        "reason": decision.reason[:500], "esc": decision.escalation,
+        "sig": decision.escalation_signal,
+        "fb": decision.fallback,
+        "mv": decision.moved_by_headroom, "bl": decision.budget_lite,
+        "lat": round(decision.latency_ms, 3),
+    }
+    ext_params = {
+        "estrat": decision.escalation_strategy,
+        "effort": decision.effort,
+        "closs": decision.cache_loss_usd_micros,
+        "stier": sh.tier if sh else None,
+        "seng": (sh.engine or None) if sh else None,
+        "smod": sh.model if sh else None,
+        "sreason": sh.reason[:500] if sh and sh.reason else None,
+        "sct": sh.classified_tier if sh else None,
+        "scl": sh.classifier if sh else None,
+        "scf": round(sh.confidence, 3) if sh and sh.confidence is not None else None,
+        "srules": json.dumps(list(sh.rules)) if sh else "[]",
+    }
     try:
-        with connection.begin_nested():
-            connection.execute(text("""
-                INSERT INTO model_routes (id, project_id, unit_kind, unit_id, step, ref, role, mode,
-                    tier, classified_tier, classifier, confidence, engine, model, source_id,
-                    source_kind, rules, why, reason, escalation, escalation_signal, fallback,
-                    moved_by_headroom, budget_lite, latency_ms)
-                VALUES (:id, :p, :k, :u, :s, :ref, :r, :m, :t, :ct, :cl, :cf, :e, :mo, :si, :sk,
-                    :rules, :why, :reason, :esc, :sig, :fb, :mv, :bl, :lat)
-                ON CONFLICT (id) DO NOTHING"""),
-                {"id": decision.id, "p": decision.project_id, "k": decision.kind,
-                 "u": decision.unit_id, "s": decision.step, "ref": decision.ref,
-                 "r": decision.role,
-                 "m": decision.mode, "t": decision.tier, "ct": decision.classified_tier,
-                 "cl": c.classifier if c else None,
-                 "cf": round(c.confidence, 3) if c else None,
-                 "e": decision.engine or None, "mo": decision.model,
-                 "si": decision.source_id, "sk": decision.source_kind or None,
-                 "rules": json.dumps(list(decision.rules)), "why": json.dumps(list(decision.why)),
-                 "reason": decision.reason[:500], "esc": decision.escalation,
-                 "sig": decision.escalation_signal, "fb": decision.fallback,
-                 "mv": decision.moved_by_headroom, "bl": decision.budget_lite,
-                 "lat": round(decision.latency_ms, 3)})
+        try:
+            with connection.begin_nested():
+                connection.execute(text("""
+                    INSERT INTO model_routes (id, project_id, unit_kind, unit_id, step, ref, role, mode,
+                        tier, classified_tier, classifier, confidence, engine, model, source_id,
+                        source_kind, rules, why, reason, escalation, escalation_signal,
+                        escalation_strategy, effort, cache_loss_usd_micros,
+                        shadow_tier, shadow_engine, shadow_model, shadow_reason,
+                        shadow_classified_tier, shadow_classifier, shadow_confidence, shadow_rules,
+                        fallback, moved_by_headroom, budget_lite, latency_ms)
+                    VALUES (:id, :p, :k, :u, :s, :ref, :r, :m, :t, :ct, :cl, :cf, :e, :mo, :si, :sk,
+                        :rules, :why, :reason, :esc, :sig,
+                        :estrat, :effort, :closs,
+                        :stier, :seng, :smod, :sreason,
+                        :sct, :scl, :scf, :srules,
+                        :fb, :mv, :bl, :lat)
+                    ON CONFLICT (id) DO NOTHING"""), {**base_params, **ext_params})
+        except Exception:  # noqa: BLE001 — fallback for minimal/pre-M5 test tables
+            with connection.begin_nested():
+                connection.execute(text("""
+                    INSERT INTO model_routes (id, project_id, unit_kind, unit_id, step, ref, role, mode,
+                        tier, classified_tier, classifier, confidence, engine, model, source_id,
+                        source_kind, rules, why, reason, escalation, escalation_signal, fallback,
+                        moved_by_headroom, budget_lite, latency_ms)
+                    VALUES (:id, :p, :k, :u, :s, :ref, :r, :m, :t, :ct, :cl, :cf, :e, :mo, :si, :sk,
+                        :rules, :why, :reason, :esc, :sig, :fb, :mv, :bl, :lat)
+                    ON CONFLICT (id) DO NOTHING"""), base_params)
         _RECORDED[decision.id] = time.monotonic()
         if len(_RECORDED) > 50_000:
             _RECORDED.pop(next(iter(_RECORDED)))
@@ -690,11 +737,14 @@ def routes_for(connection: Any, unit_id: str) -> list[dict[str, Any]]:
     out = []
     for r in rows:
         item = dict(r)
-        for key in ("rules", "why"):
-            value = item.get(key)
-            item[key] = json.loads(value) if isinstance(value, str) else (value or [])
+        for key in ("rules", "why", "shadow_rules"):
+            if key in item:
+                value = item.get(key)
+                item[key] = json.loads(value) if isinstance(value, str) else (value or [])
         if item.get("confidence") is not None:
             item["confidence"] = float(item["confidence"])
+        if item.get("shadow_confidence") is not None:
+            item["shadow_confidence"] = float(item["shadow_confidence"])
         if item.get("latency_ms") is not None:
             item["latency_ms"] = float(item["latency_ms"])
         if hasattr(item.get("created_at"), "isoformat"):

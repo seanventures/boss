@@ -18,16 +18,19 @@ from typing import Any, Mapping, Optional
 
 from .tiers import BALANCED, FAST, FRONTIER, TIERS, rank, step_label
 
-MODES = ("fixed", "smart")
+MODES = ("fixed", "shadow", "smart")
 HEADROOM_STATES = ("plenty", "tight", "near_limit", "exhausted")
 CLASSIFIER_BACKENDS = ("auto", "jev", "rules", "model")
 SIGNALS = ("tests_failed", "no_output", "changes_requested", "gate_failed", "final_attempt")
 
 #: Each engine's model per tier, when the operator has not named one. Claude's CLI aliases are
 #: stable across releases ("opus" is always the current Opus), which is why they are used rather
-#: than dated ids. An engine absent here runs its own default model on every tier.
+#: than dated ids. Codex leaves Balanced on its own default while binding Frontier explicitly so
+#: strong/review floors hold in Fixed and Smart modes (BOSSAPP-779).
 ENGINE_TIER_MODELS: dict[str, dict[str, Optional[str]]] = {
     "claude_code": {FAST: "haiku", BALANCED: "sonnet", FRONTIER: "opus"},
+    "claude_agent_sdk": {FAST: "haiku", BALANCED: "sonnet", FRONTIER: "opus"},
+    "codex": {FAST: "gpt-5-mini", BALANCED: None, FRONTIER: "gpt-5.2-codex"},
 }
 
 #: OpenRouter's defaults when its catalogue has not been fetched (openrouter_catalog.suggest
@@ -65,11 +68,11 @@ _FAST_MARKERS = ("haiku", "-mini", "mini-", "nano", "flash", "-small", "ministra
 #: Fast. Matched as a whole size token, so "gemma-3-27b" is not "7b" and "mixtral-8x7b" (a
 #: mixture of experts) is not "7b" either.
 _SIZE = re.compile(r"(?:^|[-_/:])(\d+(?:\.\d+)?)b(?=$|[-_:.])")
-_FRONTIER_MARKERS = ("opus", "gpt-5", "gemini-2.5-pro", "gemini-3-pro", "grok-4",
-                     "claude-sonnet-4.5-thinking")
+_FRONTIER_MARKERS = ("opus", "fable", "gpt-6", "gpt-5", "codex-max", "gemini-2.5-pro",
+                     "gemini-3-pro", "grok-4", "claude-sonnet-4.5-thinking")
 _BALANCED_MARKERS = ("sonnet", "deepseek", "qwen", "coder", "kimi", "glm", "llama", "mistral",
                      "mixtral", "gemma", "gpt-oss", "gpt-4", "gemini", "codestral", "devstral",
-                     "grok-3", "grok-code")
+                     "grok-3", "grok-code", "codex")
 
 
 def model_tier(engine: str, model: Optional[str]) -> Optional[str]:
@@ -223,11 +226,19 @@ class RoutingPolicy:
     #: Frontier work may fall back to a local model. Off: Frontier goes subscription →
     #: metered frontier → a refusal in words (Decision 6).
     frontier_allows_local: bool = False
+    #: BOSSAPP-781: feed empirical stage-outcome rates as priors to the router/classifier.
+    use_outcome_priors: bool = True
+    #: BOSSAPP-781: shadow-evaluate Fast tier on mechanical stages (standards, plan, check_tests).
+    fast_stage_shadow: bool = True
     version: int = 0
 
     @property
     def smart(self) -> bool:
         return self.mode == "smart"
+
+    @property
+    def shadow(self) -> bool:
+        return self.mode == "shadow"
 
     def targets(self, tier: str) -> tuple[Target, ...]:
         return tuple(self.tiers.get(tier) or ())
@@ -256,6 +267,8 @@ class RoutingPolicy:
             "weekly_allowance_usd": dict(self.weekly_allowance_usd),
             "hard_pins": list(self.hard_pins),
             "frontier_allows_local": self.frontier_allows_local,
+            "use_outcome_priors": self.use_outcome_priors,
+            "fast_stage_shadow": self.fast_stage_shadow,
             "version": self.version,
         }
 
@@ -296,7 +309,7 @@ def from_dict(doc: Mapping[str, Any], *, base: Optional[RoutingPolicy] = None) -
         raise PolicyError("A routing policy is a JSON object.")
     mode = str(doc.get("mode", base.mode) or "fixed").strip().lower()
     if mode not in MODES:
-        raise PolicyError("mode must be fixed or smart.")
+        raise PolicyError("mode must be fixed, shadow, or smart.")
     tiers = dict(base.tiers)
     if "tiers" in doc:
         raw = doc["tiers"]
@@ -422,8 +435,11 @@ def from_dict(doc: Mapping[str, Any], *, base: Optional[RoutingPolicy] = None) -
         if unknown:
             raise PolicyError(f"hard_pins: {', '.join(unknown)} is not a job ({', '.join(jobs)}).")
     frontier_local = bool(doc.get("frontier_allows_local", base.frontier_allows_local))
+    use_priors = bool(doc.get("use_outcome_priors", base.use_outcome_priors))
+    fast_shadow = bool(doc.get("fast_stage_shadow", base.fast_stage_shadow))
     return RoutingPolicy(
         hard_pins=hard_pins, frontier_allows_local=frontier_local,
+        use_outcome_priors=use_priors, fast_stage_shadow=fast_shadow,
         mode=mode, tiers=tiers, floors=floors,
         floor_preset=str(doc.get("floor_preset", base.floor_preset) or "custom")[:40],
         headroom=headroom, thresholds=thresholds, budget=budget, escalation=escalation,
@@ -526,6 +542,23 @@ def tier_model(engine: str, tier: str) -> Optional[str]:
     if engine == "openrouter":
         return OPENROUTER_FALLBACK_MODELS[tier]
     return (ENGINE_TIER_MODELS.get(engine) or {}).get(tier)
+
+
+def default_strong_model(engine: str, policy: Optional[RoutingPolicy] = None) -> Optional[str]:
+    """The real frontier model bound to the `strong` lane for `engine` by default (BOSSAPP-779).
+
+    Checks the policy's Frontier targets for `engine` first, then the engine's built-in Frontier
+    model (e.g. `claude_code` → `opus`, `codex` → `gpt-5.2-codex`, `openrouter` →
+    `anthropic/claude-opus-4.1`), ensuring review/security floors hold in Fixed mode too.
+    """
+    eng = str(engine or "").strip().lower()
+    if not eng:
+        return None
+    if policy is not None:
+        for target in policy.targets(FRONTIER):
+            if target.engine == eng and target.model:
+                return target.model
+    return tier_model(eng, FRONTIER)
 
 
 def seed(*, settings: Any, connected: Mapping[str, Mapping[str, Any]], build_engine: str,
