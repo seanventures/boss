@@ -2847,17 +2847,33 @@ def precheck(engine: Any, settings: Any = None, *, project_id: str, actor: str =
     return out
 
 
-def materialize_build(connection: Connection, build_run_id: str, into: Path) -> Optional[Path]:
-    """The build's saved workspace written under `into`; returns the app's folder (the top-level
-    directory holding most of the files), or None when the build saved nothing."""
-    from . import code_task_service as cts
+def materialize_build(connection: Connection, build_run_id: str, into: Path, *,
+                      app_map: Any = None) -> Optional[Path]:
+    """The build's saved workspace written under `into`; returns the app's folder from the stored
+    App Map / app_root resolver (never defaulting to root when ambiguous), or None when the build
+    saved nothing or cannot be placed."""
+    from . import app_map as _app_map, app_root as _app_root, code_task_service as cts
     from .governed_code_task_service import layered_workspace_files, seed_workspace
+    from .verification_target import app_scope
 
     run = cts.load_code_task_run(connection, build_run_id)
     files = layered_workspace_files(lambda rid: cts.load_code_task_run(connection, rid), run)
     if not files:
         return None
     seed_workspace(into, files)
+
+    entry = _app_map.coerce_entry(app_map) or _app_map.entry_from_run_context(run)
+    if entry is None and run:
+        rec = _app_root.recorded_app_dir(connection, run)
+        named = app_scope((run or {}).get("spec"), (run or {}).get("finalize_ctx"))
+        paths = [str(f.get("path") or "") for f in files if f.get("path")]
+        res = _app_root.resolve(into, app_id=named, recorded=rec, changed=paths)
+        if res.path is not None:
+            return res.path
+        return None
+    if entry is not None:
+        return entry.resolved_dir(into)
+
     tops: dict[str, int] = {}
     for f in files:
         head = str(f.get("path") or "").split("/", 1)

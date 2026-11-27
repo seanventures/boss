@@ -33505,8 +33505,10 @@ app.include_router(build_security_router())
 app.include_router(build_links_router())
 app.include_router(build_oidc_router())
 from .routes_multirepo import build_multirepo_router  # noqa: E402  (multi-repo apps)
+from .routes_app_map import build_app_map_router  # noqa: E402  (BOSSAPP-555/556 App Map)
 
 app.include_router(build_multirepo_router())
+app.include_router(build_app_map_router())
 from .routes_infra_platform import build_infra_platform_router  # noqa: E402  (infra plugins)
 
 app.include_router(build_infra_platform_router())

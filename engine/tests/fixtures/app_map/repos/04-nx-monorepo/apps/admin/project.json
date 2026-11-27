@@ -1,0 +1,12 @@
+{
+  "name": "admin",
+  "projectType": "application",
+  "targets": {
+    "build": {
+      "executor": "@nx/vite:build"
+    },
+    "test": {
+      "executor": "@nx/vite:test"
+    }
+  }
+}

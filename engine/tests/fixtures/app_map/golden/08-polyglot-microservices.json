@@ -1,0 +1,85 @@
+{
+  "status": "ambiguous",
+  "source": "descriptor",
+  "workspace_root": ".",
+  "selected_root_path": null,
+  "shared_paths": [],
+  "apps": [
+    {
+      "app_key": "billing",
+      "root_path": "services/billing",
+      "workspace_root": ".",
+      "stack": {
+        "language": "python",
+        "framework": "fastapi",
+        "role": "backend",
+        "package_manager": "pip"
+      },
+      "commands": {
+        "install": "python3 -m pip install --user --disable-pip-version-check --no-input -q -r requirements.txt",
+        "test": "python3 -m pytest -q"
+      },
+      "run": {
+        "command": "python3 -m uvicorn main:app --host 0.0.0.0 --port \"$PORT\""
+      },
+      "manifests": [
+        "services/billing/requirements.txt"
+      ],
+      "shared_paths": [],
+      "provenance_source": "descriptor"
+    },
+    {
+      "app_key": "gateway",
+      "root_path": "services/gateway",
+      "workspace_root": ".",
+      "stack": {
+        "language": "node",
+        "framework": "express",
+        "role": "backend",
+        "package_manager": "npm"
+      },
+      "commands": {
+        "install": "npm install --include=dev --no-audit --no-fund --loglevel=error",
+        "test": "npm test"
+      },
+      "run": {
+        "command": "npm start"
+      },
+      "manifests": [
+        "services/gateway/package.json"
+      ],
+      "shared_paths": [],
+      "provenance_source": "descriptor"
+    },
+    {
+      "app_key": "orders",
+      "root_path": "services/orders",
+      "workspace_root": ".",
+      "stack": {
+        "language": "go",
+        "framework": "gin",
+        "role": "backend",
+        "package_manager": "go modules",
+        "entrypoints": [
+          "cmd/orders"
+        ]
+      },
+      "commands": {
+        "lint": "go vet ./...",
+        "test": "go test ./...",
+        "build": "go build ./..."
+      },
+      "run": {
+        "entrypoints": [
+          "cmd/orders"
+        ],
+        "command": "go run ./cmd/orders"
+      },
+      "manifests": [
+        "services/orders/go.mod"
+      ],
+      "shared_paths": [],
+      "provenance_source": "descriptor"
+    }
+  ]
+}

@@ -71,6 +71,19 @@ def order(components: list[dict[str, Any]]) -> list[str]:
 def _shape(row: dict[str, Any]) -> dict[str, Any]:
     return {"id": row["id"], "name": row["name"], "binding_id": row["binding_id"],
             "repository": row.get("full_name"), "path": row.get("path") or "/",
+            "root_path": row.get("root_path") or (
+                "." if str(row.get("path") or "/").strip("/") == "" else str(row.get("path") or "/").strip("/")
+            ),
+            "workspace_root": row.get("workspace_root") or ".",
+            "stack": jload(row.get("stack"), {}) or {},
+            "commands": jload(row.get("commands"), {}) or {},
+            "run": jload(row.get("run"), {}) or {},
+            "manifests": jload(row.get("manifests"), []) or [],
+            "shared_paths": jload(row.get("shared_paths"), []) or [],
+            "provenance": jload(row.get("provenance"), {}) or {},
+            "fingerprint": row.get("fingerprint"),
+            "baseline": jload(row.get("baseline"), {}) or {},
+            "map_status": row.get("map_status") or "proposed",
             "access": row.get("access") or "write", "kind": row.get("kind") or "code",
             "depends_on": list(row.get("depends_on") or []),
             "ship_target": jload(row.get("ship_target"), {}) or {},

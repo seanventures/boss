@@ -1,0 +1,74 @@
+{
+  "status": "ambiguous",
+  "source": "workspace_graph:turborepo",
+  "workspace_root": ".",
+  "selected_root_path": null,
+  "shared_paths": [
+    "packages/config",
+    "packages/ui"
+  ],
+  "apps": [
+    {
+      "app_key": "api",
+      "root_path": "apps/api",
+      "workspace_root": ".",
+      "stack": {
+        "language": "node",
+        "framework": "fastify",
+        "role": "backend",
+        "package_manager": "pnpm",
+        "workspace_tool": "turborepo"
+      },
+      "commands": {
+        "install": "pnpm install",
+        "build": "pnpm run build",
+        "test": "pnpm test"
+      },
+      "run": {
+        "command": "pnpm run start"
+      },
+      "manifests": [
+        "apps/api/package.json",
+        "package.json",
+        "pnpm-workspace.yaml",
+        "turbo.json"
+      ],
+      "shared_paths": [
+        "packages/config",
+        "packages/ui"
+      ],
+      "provenance_source": "workspace_graph"
+    },
+    {
+      "app_key": "web",
+      "root_path": "apps/web",
+      "workspace_root": ".",
+      "stack": {
+        "language": "node",
+        "framework": "next",
+        "role": "frontend",
+        "package_manager": "pnpm",
+        "workspace_tool": "turborepo"
+      },
+      "commands": {
+        "install": "pnpm install",
+        "build": "pnpm run build",
+        "test": "pnpm test"
+      },
+      "run": {
+        "command": "pnpm run start"
+      },
+      "manifests": [
+        "apps/web/package.json",
+        "package.json",
+        "pnpm-workspace.yaml",
+        "turbo.json"
+      ],
+      "shared_paths": [
+        "packages/config",
+        "packages/ui"
+      ],
+      "provenance_source": "workspace_graph"
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "name": "acme-turbo",
+  "private": true,
+  "devDependencies": {
+    "turbo": "^2.0.0"
+  }
+}
