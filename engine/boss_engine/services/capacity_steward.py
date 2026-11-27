@@ -119,9 +119,11 @@ def plan(*, cap: admission.Capacity, level: int, request_mb: float, base: int, d
     """Pure: what the doctor does about capacity on this look, and what it remembers."""
     m = dict(memo or {})
     room, short = headroom(cap, level, request_mb)
-    memory_short = (not cap.unknown) and (
-        level >= admission.L1 or (cap.total_mb > 0 and cap.spare_mb < request_mb / 2))
-    load_hot = (not cap.unknown) and cap.load_per_core >= DRAIN_LOAD
+    # AN UNKNOWN READING BLOCKS A RAISE, NEVER A DRAIN: drain on whatever is known.
+    memory_short = level >= admission.L1 or (
+        "memory" not in cap.unknown and cap.total_mb > 0 and cap.spare_mb < request_mb / 2) or (
+        "memory stall" not in cap.unknown and cap.psi_full_avg60 >= admission.MAX_PSI_FULL_AVG60)
+    load_hot = "CPU load" not in cap.unknown and cap.load_per_core >= DRAIN_LOAD
     m["room_since"] = (m.get("room_since") or now.isoformat()) if room else None
     m["hot_since"] = (m.get("hot_since") or now.isoformat()) if load_hot else None
     room_for = now - (_at(m["room_since"]) or now)

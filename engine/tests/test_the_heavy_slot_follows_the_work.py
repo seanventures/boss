@@ -437,3 +437,13 @@ def test_conc04_three_released_builds_race_back_into_one_slot(eng, project):  # 
     [t.join(20) for t in ts]
     assert not errors, errors
     assert inside["max"] == 1, inside
+
+
+def test_a_thinking_stage_gets_no_shell_and_a_review_seat_keeps_one():
+    from boss_engine.services.llm_telemetry import set_llm_context
+
+    set_llm_context(stage="plan")
+    assert heavy_slot.read_only_tools() == "Read,Grep,Glob"
+    set_llm_context(stage="review_code")
+    assert heavy_slot.read_only_tools() == "Read,Grep,Glob,Bash"
+    set_llm_context(stage=None)

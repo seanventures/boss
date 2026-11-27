@@ -102,6 +102,16 @@ def test_an_unreadable_reading_never_adds_capacity():
     assert p.action == "busy" and "could not read this machine's CPU load, disk" in p.why
 
 
+def test_an_unknown_reading_never_stops_a_drain():
+    """Re-review PR #367: drain on what is known; an unknown reading only blocks a raise."""
+    hot = admission.Capacity(total_mb=8192, available_mb=6000, cores=4, load_per_core=3.0,
+                             disk_free_gb=80.0, unknown=("memory stall",))
+    long_hot = {"hot_since": (NOW - timedelta(minutes=15)).isoformat(),
+                "changed_at": (NOW - timedelta(minutes=20)).isoformat()}
+    p = _plan(cap=hot, boost=1, memo=long_hot)
+    assert p.action == "lower" and p.boost == 0
+
+
 def _simulate(pattern, minutes=120, base=2):
     memo, boost, changes, now = {}, 0, 0, NOW
     for minute in range(minutes):

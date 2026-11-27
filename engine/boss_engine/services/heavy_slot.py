@@ -94,6 +94,13 @@ def stage_is_light(stage: Optional[str]) -> bool:
     return str(stage or "") in LIGHT_STAGES
 
 
+def read_only_tools() -> str:
+    """The tool list of a read-only CLI/SDK session: a thinking stage that gives the slot back
+    gets no shell, so it cannot run a suite without the slot (re-review PR #367); every other
+    read-only session (review seats, check_tests) keeps Bash and holds the slot."""
+    return "Read,Grep,Glob" if stage_is_light(stage_now()) else "Read,Grep,Glob,Bash"
+
+
 def stage_now() -> Optional[str]:
     try:
         from .llm_telemetry import get_llm_context
@@ -417,5 +424,6 @@ def waiting_row(connection: Any, run_id: str) -> Optional[dict[str, Any]]:
 
 
 __all__ = ["HeavySlotLost", "LIGHT_STAGES", "POLL_SECONDS", "RELEASED_SQL", "RELEASE_AFTER_SECONDS",
-           "TRACKED_KINDS", "WAITING_SQL", "heavy", "light", "stage_is_light", "stage_now",
+           "TRACKED_KINDS", "WAITING_SQL", "heavy", "light", "read_only_tools", "stage_is_light",
+           "stage_now",
            "tracking", "waiting_row"]

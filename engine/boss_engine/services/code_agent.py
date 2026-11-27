@@ -1254,7 +1254,12 @@ class ClaudeCodeAgent:
         if allowed_tools is not None:
             allowed = allowed_tools
         else:
-            allowed = "Read,Grep,Glob,Bash" if read_only else self.settings.code_agent_allowed_tools
+            # A read-only review seat keeps "Read,Grep,Glob,Bash" (a shell, auto-approved: hence
+            # read_only_shell and the isolated copy); a thinking stage that gives the heavy slot
+            # back loses Bash (heavy_slot.read_only_tools).
+            from .heavy_slot import read_only_tools
+
+            allowed = read_only_tools() if read_only else self.settings.code_agent_allowed_tools
         # PARALLEL SUB-AGENTS (build_speed). A sub-agent runs INSIDE this same CLI process: same
         # uid, same cwd, same environment, same network fence and the same --allowedTools and
         # permission mode, so it can do nothing the parent cannot. Granted only to writing stages
