@@ -375,6 +375,8 @@ def test_a_single_model_corrects_empty_test_output_once(pipeline, monkeypatch, r
     assert len(prompts) == 2, (result["run"]["status"], error, result["events"])
     assert observation in prompts[1]
     assert "code_task.step_retry" in result["events"]
+    completed = result["run"]["finalize_ctx"].get("completed_stages") or []
+    assert ("write_tests" in completed) == recover
     if recover:
         assert result["run"]["status"] == "completed", (result["run"].get("error"), error)
         assert result["run"]["pull_request_url"]

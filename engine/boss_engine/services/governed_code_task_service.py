@@ -9174,13 +9174,6 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                     "left": _left[:10]})
                 except Exception:  # noqa: BLE001 — the gate still judges what QA left
                     _log_caught(logger)
-            if use_microvm:
-                # Commit ONLY test files — anything else the QA role wrote is discarded.
-                _commit_stage(test_changes or [], f"governed: tests-first (qa) — {title[:60]}")
-                _replan_microvm()
-            else:
-                _checkpoint("write_tests")
-            _mark_stage_done("write_tests")
             if not test_files:
                 with _transaction(engine) as c:
                     emit_event(c, project_id, "code_task.step_exhausted", "boss",
@@ -9208,6 +9201,13 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             last_words=str((r1 or {}).get("summary") or ""),
                             changed=_author_changed),
                         failure_class="needs_human", reason_code="no_test_files")
+            if use_microvm:
+                # Commit ONLY test files — anything else the QA role wrote is discarded.
+                _commit_stage(test_changes or [], f"governed: tests-first (qa) — {title[:60]}")
+                _replan_microvm()
+            else:
+                _checkpoint("write_tests")
+            _mark_stage_done("write_tests")
             if not use_microvm:
                 # The placed template tests are frozen with QA's own.
                 test_files = list(test_files) + [p for p in _placed_tpl_tests
