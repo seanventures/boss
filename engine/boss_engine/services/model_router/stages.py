@@ -225,9 +225,27 @@ class StageRouter:
                f"{'strong' if cls == 'strong' else 'low-cost'} lane")
         return LegacyRoute(engine, model, why, cls, {"budget_lite": True} if lite else {})
 
+    def _refresh_budget_state(self, connection: Any) -> str:
+        """Read live budget state per stage boundary (BOSSAPP-779), not once at run start."""
+        if connection is None or not self.project_id:
+            return self.budget_state
+        try:
+            from ..budget import BudgetGovernor
+
+            with connection.begin_nested():
+                state = str(BudgetGovernor(self.settings).status_for_project(
+                    connection, self.project_id).get("budget_state") or "")
+            if state:
+                self.budget_state = state
+        except Exception:  # noqa: BLE001 — keep last known state if budget read fails
+            pass
+        return self.budget_state
+
     # ── the boundary ───────────────────────────────────────────────────────────────────────
     def route(self, step: str, *, signal: Optional[str] = None, budget: bool = True,
-              previous: Optional[dict] = None) -> RouteDecision:
+              previous: Optional[dict] = None, warm_context_tokens: int = 0,
+              warm_fix_attempted: bool = False,
+              current_effort: Optional[str] = None) -> RouteDecision:
         """The route for `step` at this boundary. `signal` is the evidence that brought the
         pipeline here (no_output, final_attempt…): recorded first, so Smart mode escalates on
         it; in Fixed mode the legacy escalation applies, as before."""
@@ -237,6 +255,8 @@ class StageRouter:
             self.ledger.record(step, signal)
         escalated_legacy = signal in ("no_output", "final_attempt")
         with self._tx() as connection:
+            if budget:
+                self._refresh_budget_state(connection)
             pins = self._setup_pins(connection)
             job_pin = None if task_pin(self.spec, step) else pin_for_step(pins, step)
             hard = None if task_pin(self.spec, step) else pins.get("hard")
@@ -258,7 +278,11 @@ class StageRouter:
             mode_override=self.mode_override,
             aliases=tuple(CODING_STEPS - {step}) if step in CODING_STEPS else (),
             extra_floors=self._profile_floors(),
-            preferred=self._profile_preferences().get(step))
+            preferred=self._profile_preferences().get(step),
+            warm_context_tokens=warm_context_tokens,
+            warm_fix_attempted=warm_fix_attempted,
+            current_effort=current_effort,
+            repo=self.spec.get("repo") or None)
         with self._tx() as connection:
             decision = store.route(connection, self.settings, request, ledger=self.ledger)
         self.decisions[step] = decision
@@ -307,7 +331,9 @@ class StageRouter:
             "mode": next((d.mode for d in self.decisions.values()), None),
             "stages": {step: {"route_id": d.id, "tier": d.tier, "engine": d.engine,
                               "model": d.model, "reason": d.reason,
-                              **({"escalation": d.escalation} if d.escalation else {})}
+                              **({"effort": d.effort} if d.effort else {}),
+                              **({"escalation": d.escalation} if d.escalation else {}),
+                              **({"shadow": d.shadow.to_dict()} if d.shadow else {})}
                        for step, d in self.decisions.items()},
             "signals": self.ledger.snapshot(),
         }

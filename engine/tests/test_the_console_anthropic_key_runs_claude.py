@@ -187,10 +187,11 @@ def test_a_call_on_the_key_is_booked_as_money(monkeypatch):
     from boss_engine.services.llm_telemetry import engine_call_is_included
     from boss_engine.services.model_routing import ModelChoice, turn_is_included
 
-    data = {"usage": {"input_tokens": 10, "output_tokens": 5}, "total_cost_usd": 0.25,
+    # BOSSAPP-782: token-based list pricing: 50k input @ $3/M + 6_667 output @ $15/M = 250_005 micros.
+    data = {"usage": {"input_tokens": 50_000, "output_tokens": 6_667}, "total_cost_usd": 0.25,
             "modelUsage": {"claude-sonnet-4-5": {}}, "_billing": "metered"}
     usage, cost = ClaudeCodeAgent._usage(data, _settings())
-    assert usage["billing"] == "metered" and cost == 250_000
+    assert usage["billing"] == "metered" and cost == 250_005
     assert not engine_call_is_included("claude_code", usage)
     assert not turn_is_included(ModelChoice("claude_code", "x"), usage)
 

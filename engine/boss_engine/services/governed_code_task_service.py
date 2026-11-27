@@ -6270,11 +6270,14 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             raise RouteRefused(f"{step}: {decision.refusal}")
         stage_routes[step] = {"engine": decision.engine, "model": decision.model,
                               "route_id": decision.id, "tier": decision.tier,
+                              **({"effort": decision.effort} if decision.effort else {}),
                               **({"budget_lite": True} if decision.budget_lite else {}),
                               **({"escalated": True} if decision.escalation else {})}
         # Every llm_calls row of this boundary carries the route that chose its model: by its
         # stage (`routes`), which also reaches the panel's worker threads, else the last one.
-        set_llm_context(route_id=decision.id, routes=_route_ids())
+        # BOSSAPP-780: propagate per-stage effort override when the router bumped effort.
+        set_llm_context(route_id=decision.id, routes=_route_ids(),
+                        effort_override=decision.effort)
         return decision.engine, decision.model
 
     def _route_ids() -> dict:
@@ -6335,17 +6338,17 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
 
         return FailoverAgent(agent, model, eng, reroute, on_hop), model
 
-    def _route(step: str):
+    def _route(step: str, **kw):
         """Resolve a step to (agent, model) through the router."""
-        return _routed_agent(step, _await_route(step))
+        return _routed_agent(step, _await_route(step, **kw))
 
-    def _route_escalated(step: str):
+    def _route_escalated(step: str, **kw):
         """The step again, one boundary later, on the evidence that its route produced no
         usable output (write_tests) or that this is the final attempt (implement). Fixed mode:
         the hard-problems lane, as before; Smart mode: the escalation rules."""
         signal = "no_output" if step == "write_tests" else "final_attempt"
         return _routed_agent(step, _await_route(step, signal=signal,
-                                                previous=stage_routes.get(step)))
+                                                previous=stage_routes.get(step), **kw))
 
     def _vm_escalation(step: str, escalate: bool, signal: str) -> str:
         """A micro-VM stage's escalation. Fixed: the hard-problems engine override, as before.
@@ -9362,6 +9365,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             return ruling
 
         _budget_exhausted = [False]
+        _warm_fix_attempted = [False]
+        _warm_context_tokens = [0]
         baseline_record = None
         for attempt in range(max_repair + 2):
             _impl_ran[0] = True
@@ -9371,6 +9376,13 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 _warm_fix_ran[0] = True
                 set_llm_context(stage_deadline=_impl_deadline)
             escalate_impl = attempt == max_repair + 1 and not _warm_fix[0]
+            if escalate_impl and not use_microvm and impl_session_id and not _warm_fix_attempted[0]:
+                # BOSSAPP-780: always run a same-model warm fix round with failing tests BEFORE
+                # paying for a cold model switch that throws away the prompt cache.
+                _warm_fix[0] = True
+                _warm_fix_ran[0] = True
+                escalate_impl = False
+                set_llm_context(stage_deadline=_impl_deadline)
             if escalate_impl:
                 with _transaction(engine) as c:
                     emit_event(c, project_id, "code_task.step_escalating", "boss",
@@ -9487,8 +9499,15 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             else:
                 set_llm_context(stage="implement" if do_separate_tests else "solo")
                 _prev_route = dict(stage_routes.get("implement") or {})
-                a, m = ((tuple(_esc_route) if _esc_route else _route_escalated("implement"))
-                        if escalate_impl else _route("implement"))
+                _route_kw = {
+                    "warm_context_tokens": _warm_context_tokens[0] if impl_session_id else 0,
+                    "warm_fix_attempted": _warm_fix_attempted[0],
+                    "current_effort": _prev_route.get("effort")
+                    or getattr(settings, "build_effort_writing", None),
+                }
+                a, m = ((tuple(_esc_route) if _esc_route
+                         else _route_escalated("implement", **_route_kw))
+                        if escalate_impl else _route("implement", **_route_kw))
                 # Resume-based repair: continue the implementer's own session so the
                 # repair rides the warm prompt cache (task context + its prior work are
                 # cache READS, not fresh ingestion). Escalated attempts stay cold —
@@ -9499,6 +9518,25 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     stage_routes["implement"].get("engine"), stage_routes["implement"].get("model"))
                 resume_sid = impl_session_id if (attempt and not escalate_impl
                                                  and _same_route) else None
+                if attempt and not _same_route:
+                    # BOSSAPP-780: escalate WITH EVIDENCE, not cold/blind — hand the stronger
+                    # model the failing tests, the current implementation diff, and any prior
+                    # review findings so it does not re-derive from scratch.
+                    from .model_router.escalation import build_escalation_handoff
+
+                    try:
+                        _diff_text = _render_change_for_review(
+                            {fc.path: fc.content for fc in sandbox.diff()})
+                    except Exception:  # noqa: BLE001
+                        _diff_text = ""
+                    _handoff = build_escalation_handoff(
+                        failing_tests=_repair_evidence if attempt else "",
+                        diff=_diff_text,
+                        prior_attempts=attempt,
+                        prior_model=str(_prev_route.get("model") or _prev_route.get("engine") or ""),
+                        signal="tests_failed",
+                    )
+                    impl_prompt = _repair_prompt(base_impl_prompt, _handoff, max(1, attempt))
                 # A CROSS-RUN REPAIR RESUMES THE PARENT ATTEMPT'S SESSION (BOSSAPP-1001). The
                 # child's first pass IS the repair, and the parent's implement session already
                 # holds the task, the repo and its own work warm — a cold start here re-paid the
@@ -9521,6 +9559,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                              if _carried_resume
                              else _repair_resume_prompt(evidence_text, attempt)), root,
                             model=m, resume_session_id=resume_sid)
+                        _warm_fix_attempted[0] = True
                         if _carried_resume:
                             _from = (fctx.get("resume_implement_session") or {}).get("from_run")
                             with _transaction(engine) as c:
@@ -9692,6 +9731,12 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                        tests_passed=tests_passed, output=fail_output,
                                        command=test_cmd, failing=failing_tests(fail_output),
                                        files=impl_files, summary=r2.get("summary"))
+            _r2_usage = r2.get("usage") if isinstance(r2.get("usage"), dict) else {}
+            _warm_context_tokens[0] = (
+                int(_r2_usage.get("prompt_tokens") or 0)
+                + int(_r2_usage.get("cache_read_tokens") or 0)
+                + int(_r2_usage.get("cache_write_tokens") or 0)
+            )
             if escalate_impl and ok:
                 escalated_recovered = True
                 with _transaction(engine) as c:
@@ -9699,6 +9744,31 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                "code_task_run", run_id,
                                {"step": "implement", "recovered_by": "frontier_retry",
                                 "attempt": attempt})
+            _cur_impl_route = stage_routes.get("implement") or {}
+            if _cur_impl_route.get("route_id") and (escalate_impl or _cur_impl_route.get("escalated")):
+                from .model_router.outcomes import record_route_outcome
+
+                with _transaction(engine) as c:
+                    record_route_outcome(
+                        c,
+                        route_id=str(_cur_impl_route["route_id"]),
+                        project_id=project_id,
+                        unit_id=run_id,
+                        repo=spec.get("repo") or None,
+                        task_type=str(spec.get("task_kind") or "unknown"),
+                        stage="implement",
+                        tier=str(_cur_impl_route.get("tier") or "frontier"),
+                        engine=_cur_impl_route.get("engine"),
+                        model=_cur_impl_route.get("model"),
+                        mode="smart" if stage_router.is_smart() else "fixed",
+                        tests_passed=bool(tests_passed),
+                        stage_passed=bool(ok),
+                        escalated=True,
+                        escalation_signal="tests_failed",
+                        escalation_strategy="tier_escalation",
+                        escalation_rescued=bool(ok),
+                        list_cost_usd_micros=int(r2.get("cost_usd_micros") or 0),
+                    )
             if ok or attempt == max_repair + 1 or _warm_fix_ran[0]:
                 break
             _can_warm_fix = (not use_microvm and bool(impl_session_id)
@@ -11454,9 +11524,28 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     # A TEST_WRONG round amends only the oracle — there is nothing for the
                     # implementer to do, and resuming it with an empty brief invites churn.
                     if finding_bits:
+                        # BOSSAPP-780: record changes_requested and gate_failed as escalation
+                        # signals INSIDE the run (not only on continuation runs).
+                        from .model_router.escalation import REVIEW_GATES, build_escalation_handoff
+
+                        if any(g in REVIEW_GATES for g in failing):
+                            stage_router.signal("implement", "changes_requested")
+                        if any(g not in REVIEW_GATES for g in failing):
+                            stage_router.signal("implement", "gate_failed")
+                        _prev_fix_route = dict(stage_routes.get("implement") or {})
                         set_llm_context(routes=_route_ids(), db_engine=engine, project_id=project_id, run_id=run_id,
                                         stage="implement")
-                        a_fix, m_fix = _route("implement")
+                        a_fix, m_fix = _route(
+                            "implement",
+                            warm_context_tokens=_warm_context_tokens[0] if impl_session_id else 0,
+                            warm_fix_attempted=round_i > 1 or _warm_fix_attempted[0],
+                            current_effort=_prev_fix_route.get("effort")
+                            or getattr(settings, "build_effort_writing", None),
+                        )
+                        _fix_switched = (_prev_fix_route.get("engine"), _prev_fix_route.get("model")) != (
+                            stage_routes["implement"].get("engine"),
+                            stage_routes["implement"].get("model"),
+                        )
                         # A ROUND THAT CHANGES NOTHING IS NOT A ROUND OF PROGRESS.
                         #
                         # Measured on a live loop (deepseek implementing, Claude reviewing): one
@@ -11469,10 +11558,25 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         # The comments, numbered as shown, so the implementer's RESPONSE lines
                         # can be matched back and posted beside each one on the pull request.
                         _answered = review_comments.implementer_order(_open) if _open else []
+                        _fix_findings = "\n\n".join(finding_bits)
+                        if _fix_switched:
+                            # Escalated to a stronger model mid-run: start cold on the new model
+                            # and pass failing tests + current diff + review findings.
+                            _fix_findings = build_escalation_handoff(
+                                review_findings=_fix_findings,
+                                diff=_render_change_for_review(_before),
+                                prior_attempts=round_i,
+                                prior_model=str(_prev_fix_route.get("model")
+                                                or _prev_fix_route.get("engine") or ""),
+                                signal=("changes_requested"
+                                        if any(g in REVIEW_GATES for g in failing)
+                                        else "gate_failed"),
+                            )
                         rfix = a_fix.run_role(
-                            _targeted_fix_prompt("\n\n".join(finding_bits), round_i)
+                            _targeted_fix_prompt(_fix_findings, round_i)
                             + ("\n" + review_comments.response_clause() if _answered else ""),
-                            root, model=m_fix, resume_session_id=impl_session_id)
+                            root, model=m_fix,
+                            resume_session_id=None if _fix_switched else impl_session_id)
                         impl_session_id = rfix.get("session_id") or impl_session_id
                         cost += int(rfix.get("cost_usd_micros") or 0)
                         impl_session_id = _install_until_it_passes(

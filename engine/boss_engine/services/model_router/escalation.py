@@ -14,6 +14,163 @@ from typing import Any, Iterable, Optional
 from .policy import EscalationRule
 from .tiers import TIERS, rank, up
 
+#: Ordered reasoning-effort lever on the SAME model (BOSSAPP-780): raising effort preserves the
+#: prompt cache and costs far less than a cold switch to a stronger model.
+EFFORT_LADDER: tuple[str, ...] = ("low", "medium", "high")
+
+
+def next_effort(current: Optional[str]) -> Optional[str]:
+    """The next higher reasoning effort level on the same model, or None if already at high+."""
+    cur = str(current or "").strip().lower()
+    if not cur:
+        return "medium"
+    if cur == "low":
+        return "medium"
+    if cur == "medium":
+        return "high"
+    return None
+
+
+@dataclass(frozen=True)
+class CacheSwitchAnalysis:
+    """Cost economics of keeping a warm session vs switching cold to a stronger model."""
+
+    warm_context_tokens: int
+    current_model: str
+    target_model: str
+    stay_warm_usd_micros: int
+    switch_cold_usd_micros: int
+    cache_loss_usd_micros: int
+    effort_bump_usd_micros: int
+    worth_switching: bool
+    reason: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "warm_context_tokens": self.warm_context_tokens,
+            "current_model": self.current_model,
+            "target_model": self.target_model,
+            "stay_warm_usd_micros": self.stay_warm_usd_micros,
+            "switch_cold_usd_micros": self.switch_cold_usd_micros,
+            "cache_loss_usd_micros": self.cache_loss_usd_micros,
+            "effort_bump_usd_micros": self.effort_bump_usd_micros,
+            "worth_switching": self.worth_switching,
+            "reason": self.reason,
+        }
+
+
+def estimate_cache_switch_cost(
+    *,
+    warm_context_tokens: int,
+    current_model: str,
+    target_model: str,
+    expected_output_tokens: int = 2000,
+    warm_fix_attempted: bool = False,
+) -> CacheSwitchAnalysis:
+    """Price the prompt-cache loss of switching from `current_model` to `target_model` (BOSSAPP-780).
+
+    Staying on the warm session reads `warm_context_tokens` at 0.1x input price; switching cold
+    re-ingests the context at 1.25x input price (cache write) on `target_model`. When a warm
+    session exists and no same-model warm fix has been tried yet, staying warm (with or without
+    an effort bump) avoids discarding the cache unnecessarily.
+    """
+    from ..openai_adapter import CACHE_READ_MULT, CACHE_WRITE_MULT, price_for_model
+
+    tokens = max(0, int(warm_context_tokens or 0))
+    out_tok = max(0, int(expected_output_tokens or 0))
+    cur_in, cur_out, _ = price_for_model(current_model or "claude-sonnet-5")
+    tgt_in, tgt_out, _ = price_for_model(target_model or "claude-opus-4-6")
+
+    stay_warm = int(round(tokens * cur_in * CACHE_READ_MULT + out_tok * cur_out))
+    # Raising effort on the same model preserves cache reads and adds ~40% reasoning output tokens.
+    effort_bump = int(round(tokens * cur_in * CACHE_READ_MULT + out_tok * 1.4 * cur_out))
+    switch_cold = int(round(tokens * tgt_in * CACHE_WRITE_MULT + out_tok * tgt_out))
+    cache_loss = max(0, switch_cold - stay_warm)
+
+    if tokens == 0 or warm_fix_attempted:
+        worth = True
+        reason = ("warm fix already failed; cold switch justified"
+                  if warm_fix_attempted else "no warm cache to lose")
+    else:
+        worth = False
+        reason = (f"warm cache ({tokens:,} tok) loses ~${cache_loss / 1e6:.3f} on cold switch; "
+                  "try same-model warm fix first")
+    return CacheSwitchAnalysis(
+        warm_context_tokens=tokens,
+        current_model=current_model or "",
+        target_model=target_model or "",
+        stay_warm_usd_micros=stay_warm,
+        switch_cold_usd_micros=switch_cold,
+        cache_loss_usd_micros=cache_loss,
+        effort_bump_usd_micros=effort_bump,
+        worth_switching=worth,
+        reason=reason,
+    )
+
+
+@dataclass(frozen=True)
+class EscalationPlan:
+    """What the router should do when failure signals exist on a step (BOSSAPP-780)."""
+
+    action: str                      # none | warm_fix | effort_bump | tier_escalation
+    tier: str
+    effort: Optional[str] = None
+    signal: Optional[str] = None
+    count: int = 0
+    cache_loss_usd_micros: int = 0
+    reason: str = ""
+    escalation: Optional["Escalation"] = None
+
+    def describe(self) -> str:
+        if self.escalation is not None and self.action == "tier_escalation":
+            return self.escalation.describe()
+        return self.reason
+
+
+def build_escalation_handoff(
+    *,
+    failing_tests: str = "",
+    diff: str = "",
+    review_findings: str = "",
+    prior_attempts: int = 0,
+    prior_model: str = "",
+    signal: str = "",
+    max_diff_chars: int = 8000,
+    max_test_chars: int = 4000,
+    max_findings_chars: int = 4000,
+) -> str:
+    """Structured evidence packet for an escalated stronger model (BOSSAPP-780).
+
+    Instead of starting cold and blind on the stronger model, hand over the failing tests,
+    the current implementation diff, and any review/gate findings from the prior attempt.
+    """
+    sections: list[str] = []
+    meta_bits = []
+    if prior_model:
+        meta_bits.append(f"previous model: {prior_model}")
+    if prior_attempts:
+        meta_bits.append(f"prior attempts: {prior_attempts}")
+    if signal:
+        meta_bits.append(f"signal: {signal}")
+    header = "=== ESCALATION EVIDENCE HANDOFF ==="
+    if meta_bits:
+        header += f"\nContext: {'; '.join(meta_bits)}"
+    header += ("\nA warm same-model fix did not converge. Diagnose from the concrete evidence "
+               "below and patch ONLY the implementation (never weaken frozen tests).")
+    sections.append(header)
+    if (failing_tests or "").strip():
+        sections.append("### FAILING TESTS / VERIFICATION OUTPUT\n"
+                        + failing_tests.strip()[-max_test_chars:])
+    if (review_findings or "").strip():
+        sections.append("### REVIEW & GATE FINDINGS\n"
+                        + review_findings.strip()[:max_findings_chars])
+    if (diff or "").strip():
+        body = diff.strip()
+        if len(body) > max_diff_chars:
+            body = body[:max_diff_chars] + "\n... (diff truncated)"
+        sections.append("### CURRENT IMPLEMENTATION DIFF\n" + body)
+    return "\n\n".join(sections)
+
 
 @dataclass(frozen=True)
 class Escalation:
@@ -70,6 +227,74 @@ class EscalationLedger:
             if best is None or rank(target) > rank(best.tier):
                 best = Escalation(target, rule.signal, seen, rule)
         return best
+
+    def plan_escalation(
+        self,
+        step: str,
+        tier: str,
+        rules: Iterable[EscalationRule],
+        *,
+        steps_alias: Optional[Iterable[str]] = None,
+        warm_context_tokens: int = 0,
+        warm_fix_attempted: bool = False,
+        current_effort: Optional[str] = None,
+        current_model: str = "",
+        target_model: str = "",
+    ) -> EscalationPlan:
+        """Cache-aware escalation decision (BOSSAPP-780):
+          1. If any failure signal exists below the tier-escalation threshold and effort can be
+             raised on the same model, bump effort first (keeps the prompt cache).
+          2. If a tier-escalation rule fires while a warm session exists and no same-model warm
+             fix has run yet, stay on the same model for a warm fix (and bump effort if possible).
+          3. Once a warm fix has already failed (or no warm session exists), escalate tier and
+             price the cache loss of the cold switch.
+        """
+        esc = self.escalate(step, tier, rules, steps_alias=steps_alias)
+        names = {step, *(steps_alias or ())}
+        if esc is None:
+            # Below tier-escalation count: check if a single failure signal warrants an effort bump.
+            for sig in ("tests_failed", "changes_requested", "gate_failed"):
+                seen = max((self.count(name, sig) for name in names), default=0)
+                if seen >= 1:
+                    bumped = next_effort(current_effort)
+                    if bumped is not None:
+                        return EscalationPlan(
+                            action="effort_bump", tier=tier, effort=bumped, signal=sig, count=seen,
+                            cache_loss_usd_micros=0,
+                            reason=f"{sig.replace('_', ' ')} ×{seen}: raise effort to {bumped} "
+                                   "before switching models (keeps prompt cache)",
+                        )
+            return EscalationPlan(action="none", tier=tier)
+
+        analysis = estimate_cache_switch_cost(
+            warm_context_tokens=warm_context_tokens,
+            current_model=current_model,
+            target_model=target_model,
+            warm_fix_attempted=warm_fix_attempted,
+        )
+        if not analysis.worth_switching and esc.signal != "no_output":
+            bumped = next_effort(current_effort)
+            action = "effort_bump" if bumped else "warm_fix"
+            return EscalationPlan(
+                action=action,
+                tier=tier,
+                effort=bumped,
+                signal=esc.signal,
+                count=esc.count,
+                cache_loss_usd_micros=0,
+                reason=f"Warm fix first on same model ({analysis.reason})"
+                       + (f"; effort → {bumped}" if bumped else ""),
+            )
+        return EscalationPlan(
+            action="tier_escalation",
+            tier=esc.tier,
+            effort=next_effort(current_effort) or "high",
+            signal=esc.signal,
+            count=esc.count,
+            cache_loss_usd_micros=analysis.cache_loss_usd_micros,
+            reason=esc.describe(),
+            escalation=esc,
+        )
 
 
 #: Gates whose failure means "the reviewers asked for changes"; any other failed gate (tests,
