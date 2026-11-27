@@ -540,7 +540,11 @@ def create_blocking_decision(
     )
 
 
-#: One cause's open card (_create_blocking_decision_postgres): everything but its head.
+#: One cause's open card (_create_blocking_decision_postgres): everything but its head. Its
+#: SUBJECT is part of the cause: "Merge community PR #9?" asks about o/a's PR and o/b's PR alike,
+#: and the repository and number say which.
+_SUBJECT_KEYS = ("pull_request_url", "github_repository", "github_pr_number", "repository",
+                 "number")
 _SAME_CAUSE_SQL = """
     project_id = :project_id
     AND question = :question
@@ -551,6 +555,11 @@ _SAME_CAUSE_SQL = """
          OR recommendation->>'step_id' IS NOT DISTINCT FROM :gate_step)
     AND recommendation->>'deployment_run_id' IS NOT DISTINCT FROM :subject_run
     AND recommendation->>'interrupt_id' IS NOT DISTINCT FROM :interrupt
+    AND recommendation->>'pull_request_url' IS NOT DISTINCT FROM :s_pull_request_url
+    AND recommendation->>'github_repository' IS NOT DISTINCT FROM :s_github_repository
+    AND recommendation->>'github_pr_number' IS NOT DISTINCT FROM :s_github_pr_number
+    AND recommendation->>'repository' IS NOT DISTINCT FROM :s_repository
+    AND recommendation->>'number' IS NOT DISTINCT FROM :s_number
     AND (CAST(:merge_review AS boolean) = false
          OR (recommendation->>'action' = 'review_pull_request'
              AND recommendation->>'pull_request_url' IS NOT DISTINCT FROM :pr_url
@@ -608,7 +617,12 @@ def _create_blocking_decision_postgres(
         "gate_run": gate_run, "gate_step": gate_step, "subject_run": subject_run,
         "interrupt": interrupt, "merge_review": rec_in.get("action") == "review_pull_request",
         "pr_url": rec_in.get("pull_request_url"), "head": head,
-        "review_run": rec_in.get("run_id")}
+        "review_run": rec_in.get("run_id"),
+        # ->> reads text: a subject's number is compared as the text JSON holds.
+        **{f"s_{k}": (None if rec_in.get(k) is None else
+                      str(rec_in[k]) if isinstance(rec_in[k], (str, int)) and
+                      not isinstance(rec_in[k], bool) else json.dumps(rec_in[k]))
+           for k in _SUBJECT_KEYS}}
     existing = connection.execute(
         sql(
             "SELECT id, recommendation FROM decisions WHERE " + _SAME_CAUSE_SQL

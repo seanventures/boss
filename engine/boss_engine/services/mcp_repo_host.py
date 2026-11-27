@@ -178,19 +178,20 @@ class McpRepoHost:
     def merge_pull_request(self, pull_request_number: int, commit_title: str, *,
                            head_sha: Optional[str] = None,
                            merge_tip: bool = False) -> PullRequestMergeResult:
-        if head_sha and not merge_tip:
+        if head_sha:
             # MERGE WHAT WAS APPROVED: the merge tool takes no expected commit, so read the
-            # head first (as BitbucketAdapter does). A server that cannot say never merges the
-            # tip on its own; a person's force (merge_tip) is the only way past.
+            # head first (as BitbucketAdapter does). A head that reads and moved is refused
+            # even with `merge_tip`; `merge_tip` (a forced approval of the "Merge the tip?"
+            # card) only lets an UNREADABLE head through.
             current = self.pull_request_head(pull_request_number)
-            if current is None:
+            if current is None and not merge_tip:
                 raise MergeHeadUnverifiable(
                     f"This repository's MCP server cannot report which commit PR "
                     f"#{pull_request_number} holds, so BOSS cannot bind the merge to the approved "
                     f"commit {str(head_sha)[:7]}. Nothing was merged. Approve with Force to merge "
                     "its tip, or merge it in the repository host.")
-            want, now = str(head_sha).strip().lower(), current.lower()
-            if not (want.startswith(now) or now.startswith(want)):
+            want, now = str(head_sha).strip().lower(), (current or "").lower()
+            if current is not None and not (want.startswith(now) or now.startswith(want)):
                 raise RuntimeError("409 Conflict: Head branch was modified after approval.")
         out = self._call("merge_pull_request", {
             "repository": self.repository_full_name, "id": pull_request_number,

@@ -170,3 +170,11 @@ def test_mcp_merge_is_bound_to_the_approved_head_or_refused():
         host.merge_pull_request(4, "t", head_sha="abc1234def")
     assert not [c for c in blind.calls if c[0] == "call"], "nothing merged"
     assert host.merge_pull_request(4, "t", head_sha="abc1234def", merge_tip=True).merged is True
+
+    # merge_tip lets only an UNREADABLE head through: one that reads and moved is still refused.
+    reads = _FakeMcp(tools=["bb_get_pull_request", "bb_merge_pull_request"],
+                     results={"bb_get_pull_request": {"source": {"commit": {"hash": "fff0000aaaa"}}},
+                              "bb_merge_pull_request": {"sha": "m3", "merged": True}})
+    host = McpRepoHost(_mcp_settings(), client=reads)
+    with pytest.raises(RuntimeError, match="409"):
+        host.merge_pull_request(4, "t", head_sha="abc1234def", merge_tip=True)

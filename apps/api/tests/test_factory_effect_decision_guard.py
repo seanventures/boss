@@ -181,12 +181,16 @@ def test_any_card_that_names_a_head_is_that_heads_card(engine):
         assert ask(head_sha="") == unbound, "empty and absent heads are one value"
 
 
-def test_a_host_that_cannot_confirm_the_head_merges_its_tip_only_on_a_persons_force(
+def test_a_host_that_cannot_confirm_the_head_merges_its_tip_only_from_a_forced_tip_card(
     client, engine, monkeypatch,
 ):
     """An MCP-served repository without a pull-request read: the approved merge merges nothing
-    and asks a person; only a person's Force (decision.merge_forced) merges the tip."""
+    and raises a "Merge the tip?" card. Only that card, approved with Force, merges the tip; a
+    force on the original card (a CI override) does not, and an unforced or policy approval of
+    the tip card is refused, so dev autonomy cannot loop on it."""
+    import pytest
     from boss_engine.services.core import emit_event
+    from boss_engine.services.decisions import InvalidDecisionTransitionError
     from boss_engine.services.github_adapter import MergeHeadUnverifiable, PullRequestMergeResult
 
     calls = []
@@ -200,18 +204,62 @@ def test_a_host_that_cannot_confirm_the_head_merges_its_tip_only_on_a_persons_fo
     monkeypatch.setattr(api_main.software_factory.github, "merge_pull_request", blind_merge)
     approved = {"action": "review_pull_request", "pull_request_url": PR_URL, "head_sha": "a" * 40}
 
-    asked = client.post("/v1/software-factory/merges",
-                        json=_merge(_decision(engine, status="approved", recommendation=approved)))
+    # A force on the original card (say, overriding CI) is not a decision to merge an unread tip.
+    original = _decision(engine, status="approved", recommendation=approved)
+    with engine.begin() as db:
+        emit_event(db, PROJECT, "decision.merge_forced", "a-person", "decision", original,
+                   {"reason": "CI is flaky"})
+    asked = client.post("/v1/software-factory/merges", json=_merge(original))
     assert asked.status_code == 200, asked.text
     assert asked.json()["status"] == "blocked" and asked.json()["decision_id"]
     assert calls == [{"head_sha": "a" * 40, "merge_tip": False}]
+    tip = asked.json()["decision_id"]
+    with engine.connect() as db:
+        row = db.execute(text("SELECT status, recommendation FROM decisions WHERE id = :d"),
+                         {"d": tip}).mappings().one()
+    assert row["status"] == "pending"
+    assert row["recommendation"]["merge_tip_card"] is True
+    assert row["recommendation"]["requires_person_approval"] is True
+    assert row["recommendation"]["superseded_decision_id"] == original
+
+    # No loop: neither an unforced approval nor a setting's answers the tip card.
+    from boss_engine.services.decisions import approve_by_policy
+
+    with engine.begin() as db, pytest.raises(InvalidDecisionTransitionError, match="Force"):
+        api_main.decisions.transition(db, tip, action="approve", actor="ceo", note="ok")
+    with engine.begin() as db:
+        assert approve_by_policy(db, tip, project_id=PROJECT, actor="dev-autonomy",
+                                 note="dev autonomy") is False
     with engine.connect() as db:
         assert db.execute(text("SELECT status FROM decisions WHERE id = :d"),
-                          {"d": asked.json()["decision_id"]}).scalar() == "pending"
+                          {"d": tip}).scalar() == "pending"
 
-    forced = _decision(engine, status="approved", recommendation=approved)
+    # The tip card, forced: the merge goes through with merge_tip, still naming the head.
     with engine.begin() as db:
-        emit_event(db, PROJECT, "decision.merge_forced", "a-person", "decision", forced,
-                   {"reason": "the tip is what I reviewed"})
-    client.post("/v1/software-factory/merges", json=_merge(forced))
+        api_main.decisions.transition(db, tip, action="approve", actor="ceo", force=True,
+                                      note="the tip is what I reviewed")
+    merged = client.post("/v1/software-factory/merges", json=_merge(tip))
+    assert merged.status_code == 200, merged.text
     assert calls[-1] == {"head_sha": "a" * 40, "merge_tip": True}
+
+
+def test_one_question_about_two_repositories_is_two_cards(engine):
+    """"Merge community PR #9?" for o/a and for o/b are different subjects: a card for one never
+    absorbs or withdraws the other's."""
+    from boss_engine.services.core import create_blocking_decision
+
+    with engine.begin() as db:
+        project = db.execute(text("SELECT id FROM projects ORDER BY id LIMIT 1")).scalar_one()
+        question = f"Merge community PR #9? {uuid4().hex[:8]}"
+
+        def ask(repo, head):
+            return create_blocking_decision(db, project, None, question, {
+                "action": "github.community.merge_authorization", "github_repository": repo,
+                "github_pr_number": 9, "head_sha": head}, {}, "t")
+
+        a, b = ask("o/a", "a" * 40), ask("o/b", "b" * 40)
+        assert a != b
+        assert ask("o/a", "a" * 40) == a, "the same subject and head still merge"
+        statuses = dict(db.execute(text("SELECT id, status FROM decisions WHERE id IN (:a, :b)"),
+                                   {"a": a, "b": b}).all())
+        assert statuses == {a: "pending", b: "pending"}

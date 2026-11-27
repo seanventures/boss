@@ -1545,17 +1545,22 @@ class SoftwareFactoryService:
         return value if re.fullmatch(r"[0-9a-f]{7,64}", value) else None
 
     @staticmethod
-    def _person_forced_merge(connection: Any, decision_id: Optional[str]) -> bool:
-        """Whether a person approved this merge with Force (decision.merge_forced: who, why).
-        A setting never forces (ci_gate refuses a policy's force)."""
+    def _forced_tip_card(connection: Any, project_id: str, decision_id: Optional[str]) -> bool:
+        """Whether `decision_id` is a "Merge the tip?" card (raised for an unverifiable head,
+        naming the card it replaces) that was approved with Force (decision.merge_forced). Force
+        is whatever actor the approval was bound to may give; a force on any other card — a CI
+        override on the original, say — never lets an unread head through."""
         if not decision_id:
             return False
         try:
             with connection.begin_nested():
                 return bool(connection.execute(sql(
-                    "SELECT 1 FROM events WHERE entity_id = :d "
-                    "AND event_type = 'decision.merge_forced' LIMIT 1"),
-                    {"d": decision_id}).first())
+                    "SELECT 1 FROM decisions d WHERE d.id = :d AND d.project_id = :p "
+                    "AND d.recommendation->>'merge_tip_card' = 'true' "
+                    "AND COALESCE(d.recommendation->>'superseded_decision_id', '') <> '' "
+                    "AND EXISTS (SELECT 1 FROM events e WHERE e.entity_id = d.id "
+                    "  AND e.event_type = 'decision.merge_forced')"),
+                    {"d": decision_id, "p": project_id}).first())
         except Exception:  # noqa: BLE001 — unread is not forced
             return False
 
@@ -3318,9 +3323,10 @@ class SoftwareFactoryService:
                if approved_head and _accepts_kwarg(self.github.merge_pull_request, "head_sha")
                else {})
         if pin and _accepts_kwarg(self.github.merge_pull_request, "merge_tip") \
-                and self._person_forced_merge(connection, decision_id):
+                and self._forced_tip_card(connection, project_id, decision_id):
             # A HOST THAT CANNOT CONFIRM THE HEAD (an MCP-served repository without a pull
-            # request read) merges its tip only on a person's force, on the record.
+            # request read) merges its tip only when its "Merge the tip?" card was approved
+            # with Force, on the record. A head it can read is still checked.
             pin = {**pin, "merge_tip": True}
             self.events.emit(
                 connection, project_id, "software_factory.merge_head_pin_dropped",
@@ -3346,7 +3352,10 @@ class SoftwareFactoryService:
                 {"action": "review_pull_request", "pull_request_url": pull_request_url,
                  "pull_request_number": pull_request_number, "title": title,
                  "branch_name": branch_name, "head_sha": approved_head,
-                 "summary": str(error), "superseded_decision_id": decision_id},
+                 "summary": str(error), "superseded_decision_id": decision_id,
+                 # Only a forced approval answers it (decisions.transition): an unforced one,
+                 # or a setting's, would merge nothing and raise this card again.
+                 "merge_tip_card": True, "requires_person_approval": True},
                 {}, "merge_head_unverifiable")
             return {"status": "blocked", "decision_id": ask, "message": str(error),
                     "receipt_id": merge_receipt["id"], "pull_request_url": pull_request_url}

@@ -817,6 +817,13 @@ class DecisionService:
             disabled = None if force else local_merge_disabled(self.settings, recommendation)
             if disabled:
                 raise InvalidDecisionTransitionError(disabled)
+            # A "Merge the tip?" card (software_factory, an unverifiable head) is answered only
+            # with Force: an unforced approval would merge nothing and raise it again, and dev
+            # autonomy would loop on it.
+            if not force and isinstance(recommendation, dict) and recommendation.get("merge_tip_card"):
+                raise InvalidDecisionTransitionError(
+                    "This repository's host cannot confirm which commit the pull request holds. "
+                    "Approve with Force to merge its tip, or merge it in the repository host.")
             preview = (recommendation or {}).get("action_preview") \
                 if isinstance(recommendation, dict) else None
             current_hash = (preview or {}).get("content_hash") if isinstance(preview, dict) \
