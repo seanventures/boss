@@ -329,9 +329,19 @@ class MetatronStepSpend(ArchitectureSpend):
                 str(authority.receipt_id or ""),
             )
         if authority.outcome != "ready":
-            if authority.outcome == "reconcile":
+            if authority.outcome == "reconcile" or authority.refusal_kind in (
+                "reconciliation_required",
+                "legacy_reconciliation_required",
+            ):
                 raise TypedDecisionReconciliationRequired(authority.message)
-            if authority.refusal_kind in ("cap_exceeded", "headroom", "budget_cap"):
+            if authority.refusal_kind in (
+                "cap_exceeded",
+                "headroom",
+                "budget_cap",
+                "allocation_exceeded",
+                "member_monthly_cap",
+                "tier2_frozen",
+            ):
                 raise MetatronBudgetError("budget_exhausted", authority.message)
             raise TypedDecisionSpendError(authority.message)
 
@@ -765,6 +775,7 @@ def start_turn(
 
     svc = AgentService(settings)
     with begin(engine) as connection:
+        org_id = org_id or tool_policy_engine.org_of(connection, project_id)
         try:
             thread = svc.start_or_load_thread(
                 connection,
@@ -1444,11 +1455,17 @@ def _run_turn_loop(
                         }
                     )
                 with begin(engine) as c:
+                    cur_status = c.execute(
+                        text("SELECT status FROM metatron_turns WHERE id = :t FOR UPDATE"),
+                        {"t": turn_id},
+                    ).scalar()
+                    if cur_status != "awaiting_tool_result":
+                        return
                     c.execute(
                         text(
                             "UPDATE metatron_turns SET status = 'running', pending_tool_calls = '[]'::jsonb, "
                             "messages = CAST(:msgs AS JSONB), tool_deadline_at = NULL, updated_at = now() "
-                            "WHERE id = :t"
+                            "WHERE id = :t AND status = 'awaiting_tool_result'"
                         ),
                         {"t": turn_id, "msgs": json.dumps(messages)},
                     )
@@ -1603,12 +1620,20 @@ def submit_tool_result(
 ) -> dict[str, Any]:
     if status not in ("ok", "error", "denied", "cancelled"):
         raise MetatronTurnError(422, "invalid_status", f"Invalid tool result status {status!r}.")
-    serialized = json.dumps(output if output is not None else {}, separators=(",", ":"), ensure_ascii=False)
+    serialized = json.dumps(
+        {
+            "output": output if output is not None else {},
+            "decision": decision if decision is not None else {},
+        },
+        separators=(",", ":"),
+        ensure_ascii=False,
+        default=str,
+    )
     if len(serialized.encode("utf-8")) > MAX_TOOL_RESULT_BYTES:
         raise MetatronTurnError(
             413,
             "tool_result_too_large",
-            f"Tool result output exceeds {MAX_TOOL_RESULT_BYTES} bytes.",
+            f"Tool result payload exceeds {MAX_TOOL_RESULT_BYTES} bytes.",
         )
 
     redacted_output = _redact_obj(output if isinstance(output, Mapping) else {"value": output})
@@ -1669,7 +1694,9 @@ def submit_tool_result(
 
 def _resume_after_restart(engine: Any, settings: Settings, turn_id: str, ctx: Any) -> None:
     with begin(engine) as c:
-        row = c.execute(text("SELECT * FROM metatron_turns WHERE id = :t"), {"t": turn_id}).mappings().first()
+        row = c.execute(
+            text("SELECT * FROM metatron_turns WHERE id = :t FOR UPDATE"), {"t": turn_id}
+        ).mappings().first()
         if not row or row["status"] != "awaiting_tool_result":
             return
         pending = _loads(row["pending_tool_calls"], []) or []
@@ -1713,11 +1740,14 @@ def _resume_after_restart(engine: Any, settings: Settings, turn_id: str, ctx: An
             ),
             {"t": turn_id, "msgs": json.dumps(messages)},
         )
+        resolved_org_id = (
+            ctx.principal.org_id if ctx is not None else None
+        ) or tool_policy_engine.org_of(c, row["project_id"])
         offered_schemas, server_bundle, client_tool_map, _ = _filter_tools_for_turn(
             c,
             settings,
             project_id=row["project_id"],
-            org_id=ctx.principal.org_id if ctx else None,
+            org_id=resolved_org_id,
             agent_role=row["agent_role"],
             mode=row["mode"],
             client_tools=_loads(row["client_tools"], []) or [],
@@ -1727,7 +1757,7 @@ def _resume_after_restart(engine: Any, settings: Settings, turn_id: str, ctx: An
             "turn_id": turn_id,
             "thread_id": row["thread_id"],
             "project_id": row["project_id"],
-            "org_id": ctx.principal.org_id if ctx else None,
+            "org_id": resolved_org_id,
             "principal_id": row["principal_id"],
             "actor": row["actor"],
             "agent_role": row["agent_role"],

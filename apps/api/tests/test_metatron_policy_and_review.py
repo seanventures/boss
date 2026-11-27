@@ -255,3 +255,229 @@ def test_grants_and_server_side_budgeted_reviewer(
         )
         assert after_del.json()["decision"] == "escalate"
         assert after_del.json()["reason"] == "no_active_grant"
+
+
+def test_policy_keys_public_under_require_api_auth(
+    client: TestClient, engine, monkeypatch
+):
+    from apps.api.app import main
+    from apps.api.app.config import get_settings as api_get_settings
+
+    monkeypatch.setenv("BOSS_AUTHZ_MODE", "enforce")
+    monkeypatch.setattr(main.settings, "require_api_auth", True)
+    monkeypatch.setattr(api_get_settings(), "require_api_auth", True)
+
+    # Both empty BOSS_API_KEYS and populated BOSS_API_KEYS must allow unauthenticated GET /v1/metatron/policy/keys
+    for configured_keys in ("", "legacy-static-key-12345"):
+        monkeypatch.setattr(main.settings, "api_keys", configured_keys)
+        monkeypatch.setattr(api_get_settings(), "api_keys", configured_keys)
+        resp = client.get("/v1/metatron/policy/keys")
+        assert resp.status_code == 200, (configured_keys, resp.text)
+        body = resp.json()
+        assert isinstance(body.get("keys"), list) and len(body["keys"]) >= 1
+
+
+def test_reviewer_enforces_grant_scope_secret_use_and_lower_priority_hard_rules(
+    client: TestClient, engine, monkeypatch
+):
+    monkeypatch.setenv("BOSS_AUTHZ_MODE", "enforce")
+    world = IdentityWorld.create(engine)
+    admin = world.person("rev-scope-admin")
+    operator = world.person("rev-scope-op")
+    world.bind(admin, "admin", project=world.project_a)
+    world.bind(operator, "operator", project=world.project_a)
+
+    connect_owned(engine, monkeypatch, world.project_a, paid=True)
+    reviewer_model = _ReviewerAdapter(action="approve")
+    monkeypatch.setattr(model_routing, "project_chat_adapter", lambda *_a, **_k: reviewer_model)
+
+    with world.acting_as(world.ctx(operator)):
+        # 1. Host-scoped grant covers staging-1 only, NOT prod-db-1 or missing host
+        g_host = client.post(
+            "/v1/metatron/grants",
+            json={
+                "project_id": world.project_a,
+                "scope": {"hosts": ["staging-1"]},
+                "allowed_tools": ["ssh_run", "secret_use"],
+                "max_risk_class": "app-control",
+                "ttl_s": 300,
+            },
+        )
+        assert g_host.status_code == 201, g_host.text
+        g_host_id = g_host.json()["grant_id"]
+
+        out_of_scope_host = client.post(
+            "/v1/metatron/approvals/review",
+            json={
+                "project_id": world.project_a,
+                "session_id": "ses_scope_1",
+                "call": {"tool": "ssh_run", "host": "prod-db-1", "risk_class": "remote-write"},
+            },
+        )
+        assert out_of_scope_host.status_code == 200
+        assert out_of_scope_host.json()["decision"] == "escalate"
+        assert out_of_scope_host.json()["reason"] == "no_active_grant"
+        assert reviewer_model.calls == 0
+
+        missing_host = client.post(
+            "/v1/metatron/approvals/review",
+            json={
+                "project_id": world.project_a,
+                "session_id": "ses_scope_1",
+                "call": {"tool": "ssh_run", "risk_class": "remote-write"},
+            },
+        )
+        assert missing_host.status_code == 200
+        assert missing_host.json()["decision"] == "escalate"
+        assert reviewer_model.calls == 0
+
+        # 2. Forged benign risk_class on built-in hard tool `secret_use` STILL escalates (never approves!)
+        forged_secret_use = client.post(
+            "/v1/metatron/approvals/review",
+            json={
+                "project_id": world.project_a,
+                "session_id": "ses_scope_1",
+                "call": {"tool": "secret_use", "host": "staging-1", "risk_class": "read"},
+            },
+        )
+        assert forged_secret_use.status_code == 200
+        assert forged_secret_use.json()["decision"] == "escalate"
+        assert forged_secret_use.json()["hard"] is True
+        assert reviewer_model.calls == 0
+
+        # Matching host in scope succeeds
+        in_scope_host = client.post(
+            "/v1/metatron/approvals/review",
+            json={
+                "project_id": world.project_a,
+                "session_id": "ses_scope_1",
+                "call": {"tool": "ssh_run", "host": "staging-1", "risk_class": "remote-write"},
+            },
+        )
+        assert in_scope_host.status_code == 200
+        assert in_scope_host.json()["decision"] == "approve"
+        assert reviewer_model.calls == 1
+
+        client.delete(f"/v1/metatron/grants/{g_host_id}")
+
+        # 3. Domain-scoped grant rejects mismatched domain and approves matching domain
+        g_dom = client.post(
+            "/v1/metatron/grants",
+            json={
+                "project_id": world.project_a,
+                "scope": {"domains": ["metrics.internal"]},
+                "allowed_tools": ["http_session"],
+                "max_risk_class": "remote-write",
+                "ttl_s": 300,
+            },
+        )
+        assert g_dom.status_code == 201
+        g_dom_id = g_dom.json()["grant_id"]
+
+        bad_dom = client.post(
+            "/v1/metatron/approvals/review",
+            json={
+                "project_id": world.project_a,
+                "session_id": "ses_scope_1",
+                "call": {"tool": "http_session", "domain": "evil.example", "risk_class": "remote-read"},
+            },
+        )
+        assert bad_dom.json()["decision"] == "escalate"
+        assert reviewer_model.calls == 1
+
+        ok_dom = client.post(
+            "/v1/metatron/approvals/review",
+            json={
+                "project_id": world.project_a,
+                "session_id": "ses_scope_1",
+                "call": {"tool": "http_session", "domain": "metrics.internal", "risk_class": "remote-read"},
+            },
+        )
+        assert ok_dom.json()["decision"] == "approve"
+        assert reviewer_model.calls == 2
+        client.delete(f"/v1/metatron/grants/{g_dom_id}")
+
+        # 4. Unrecognized non-empty scope constraint fails closed
+        g_unk = client.post(
+            "/v1/metatron/grants",
+            json={
+                "project_id": world.project_a,
+                "scope": {"paths": ["/etc"]},
+                "allowed_tools": ["ssh_run"],
+                "max_risk_class": "remote-write",
+                "ttl_s": 300,
+            },
+        )
+        assert g_unk.status_code == 201
+        unk_res = client.post(
+            "/v1/metatron/approvals/review",
+            json={
+                "project_id": world.project_a,
+                "session_id": "ses_scope_1",
+                "call": {"tool": "ssh_run", "risk_class": "remote-write"},
+            },
+        )
+        assert unk_res.json()["decision"] == "escalate"
+        assert unk_res.json()["reason"] == "no_active_grant"
+        assert reviewer_model.calls == 2
+        client.delete(f"/v1/metatron/grants/{g_unk.json()['grant_id']}")
+
+    # 5. Priority-10 `allow` rule CANNOT mask a priority-100 `hard: true` `ask` rule
+    with world.acting_as(world.ctx(admin)):
+        p_allow = client.post(
+            "/v1/tool-policies",
+            json={
+                "project_id": world.project_a,
+                "actor": admin.id,
+                "scope": "project",
+                "priority": 10,
+                "effect": "allow",
+                "selector": {"server": "metatron", "tool": "ssh_run"},
+                "conditions": [],
+            },
+        )
+        assert p_allow.status_code == 201, p_allow.text
+        p_hard = client.post(
+            "/v1/tool-policies",
+            json={
+                "project_id": world.project_a,
+                "actor": admin.id,
+                "scope": "project",
+                "priority": 100,
+                "effect": "ask",
+                "hard": True,
+                "selector": {"server": "metatron", "tool": "ssh_run"},
+                "conditions": [{"path": "$.argv[0]", "op": "equals", "value": "reboot"}],
+                "examples": {"match": ["reboot"], "not_match": ["uptime"]},
+            },
+        )
+        assert p_hard.status_code == 201, p_hard.text
+
+    with world.acting_as(world.ctx(operator)):
+        g_all = client.post(
+            "/v1/metatron/grants",
+            json={
+                "project_id": world.project_a,
+                "scope": {},
+                "allowed_tools": ["ssh_run"],
+                "max_risk_class": "remote-write",
+                "ttl_s": 300,
+            },
+        )
+        assert g_all.status_code == 201
+        masked_hard = client.post(
+            "/v1/metatron/approvals/review",
+            json={
+                "project_id": world.project_a,
+                "session_id": "ses_scope_1",
+                "call": {
+                    "tool": "ssh_run",
+                    "argv_redacted": ["reboot"],
+                    "risk_class": "remote-write",
+                },
+            },
+        )
+        assert masked_hard.status_code == 200
+        assert masked_hard.json()["decision"] == "escalate"
+        assert masked_hard.json()["hard"] is True
+        assert reviewer_model.calls == 2

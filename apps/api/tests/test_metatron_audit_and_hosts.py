@@ -191,3 +191,68 @@ def test_hosts_and_credential_lease_step_up_and_secret_access(
             {"sr": sref_id},
         ).scalar()
         assert ev_count >= 1
+
+
+def test_audit_rejects_boss_tokens_compact_jwts_and_malformed_types(
+    client: TestClient, engine, monkeypatch
+):
+    monkeypatch.setenv("BOSS_AUTHZ_MODE", "enforce")
+    world = IdentityWorld.create(engine)
+    operator = world.person("audit-op-types")
+    world.bind(operator, "operator", project=world.project_a)
+
+    ev_ok = f"ev_ok_{uuid4().hex[:8]}"
+    ev_pat = f"ev_pat_{uuid4().hex[:8]}"
+    ev_sak = f"ev_sak_{uuid4().hex[:8]}"
+    ev_scim = f"ev_scim_{uuid4().hex[:8]}"
+    ev_run = f"ev_run_{uuid4().hex[:8]}"
+    ev_jwt = f"ev_jwt_{uuid4().hex[:8]}"
+    ev_bad_ec = f"ev_ec_{uuid4().hex[:8]}"
+    ev_bad_st = f"ev_st_{uuid4().hex[:8]}"
+    ev_bad_bytes = f"ev_bytes_{uuid4().hex[:8]}"
+    ev_bad_ts = f"ev_ts_{uuid4().hex[:8]}"
+    ev_bad_cn = f"ev_cn_{uuid4().hex[:8]}"
+
+    payload = {
+        "project_id": world.project_a,
+        "session_id": "ses_audit_types",
+        "events": [
+            {"event_id": ev_ok, "kind": "tool_call", "tool": "ssh_run", "exit_code": 0, "bytes": 42},
+            {"event_id": ev_pat, "kind": "tool_call", "argv_redacted": ["boss_pat_abcdef1234567890abcdef1234567890"]},
+            {"event_id": ev_sak, "kind": "tool_call", "argv_redacted": ["boss_sak_abcdef1234567890abcdef1234567890"]},
+            {"event_id": ev_scim, "kind": "tool_call", "argv_redacted": ["boss_scim_abcdef1234567890abcdef1234567890"]},
+            {"event_id": ev_run, "kind": "tool_call", "argv_redacted": ["boss_run_abcdef1234567890abcdef1234567890"]},
+            {"event_id": ev_jwt, "kind": "http", "path": "/v1/x?t=eyJhbGciOiJIUzI1NiJ9.eyJhIjoxfQ.abc12345678"},
+            {"event_id": ev_bad_ec, "kind": "tool_call", "exit_code": "not_an_int"},
+            {"event_id": ev_bad_st, "kind": "http", "status": "ok"},
+            {"event_id": ev_bad_bytes, "kind": "http", "bytes": "many"},
+            {"event_id": ev_bad_ts, "kind": "tool_call", "ts": 12345},
+            {"event_id": ev_bad_cn, "kind": "http", "cookie_names": 123},
+        ],
+    }
+
+    with world.acting_as(world.ctx(operator)):
+        resp = client.post("/v1/metatron/audit", json=payload)
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["accepted"] == [ev_ok]
+        rej_by_id = {r["event_id"]: r["reason"] for r in body["rejected"]}
+        assert rej_by_id == {
+            ev_pat: "credential_shaped_payload",
+            ev_sak: "credential_shaped_payload",
+            ev_scim: "credential_shaped_payload",
+            ev_run: "credential_shaped_payload",
+            ev_jwt: "credential_shaped_payload",
+            ev_bad_ec: "invalid_exit_code",
+            ev_bad_st: "invalid_status",
+            ev_bad_bytes: "invalid_bytes",
+            ev_bad_ts: "invalid_timestamp",
+            ev_bad_cn: "invalid_cookie_names",
+        }
+
+    with engine.connect() as c:
+        stored = c.execute(
+            text("SELECT event_id FROM metatron_audit_events WHERE project_id = :p"),
+            {"p": world.project_a},
+        ).scalars().all()
+        assert stored == [ev_ok]

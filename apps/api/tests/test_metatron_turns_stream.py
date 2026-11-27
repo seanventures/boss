@@ -448,7 +448,7 @@ def test_client_tool_pause_heartbeat_tool_results_413_and_last_event_id_resume(
         == 403
     )
 
-    # Oversized tool_result (> 65536 bytes) -> 413
+    # Oversized tool_result (> 65536 bytes) -> 413 (both output-only and output + decision)
     too_big = httpx.post(
         f"{turn_env['base_url']}/v1/metatron/turns/{turn_id}/tool_results",
         headers={**owner_hdrs, "Idempotency-Key": f"{turn_id}:call_cli_1:big"},
@@ -457,6 +457,20 @@ def test_client_tool_pause_heartbeat_tool_results_413_and_last_event_id_resume(
     )
     assert too_big.status_code == 413
     assert too_big.json()["error"]["code"] == "tool_result_too_large"
+
+    too_big_decision = httpx.post(
+        f"{turn_env['base_url']}/v1/metatron/turns/{turn_id}/tool_results",
+        headers={**owner_hdrs, "Idempotency-Key": f"{turn_id}:call_cli_1:bigdec"},
+        json={
+            "call_id": "call_cli_1",
+            "status": "ok",
+            "output": {"text": "B" * 65525},
+            "decision": {"by": "reviewer", "notes": "D" * 10000},
+        },
+        timeout=5.0,
+    )
+    assert too_big_decision.status_code == 413
+    assert too_big_decision.json()["error"]["code"] == "tool_result_too_large"
 
     # Valid tool_result -> 202 and stream completes cleanly
     ok_res = httpx.post(
@@ -597,6 +611,156 @@ def test_cancel_and_tool_timeout_and_reconciliation_and_budget_exhausted(
             {"p": world.project_a},
         ).scalar()
         assert rec_dec >= 1
+
+    # 4. Budget exhausted -> turn.failed (code="budget_exhausted", retryable=False, zero model calls)
+    model.calls = 0
+    model.fail_step = 0
+    model.steps = []
+    with engine.begin() as c:
+        c.execute(
+            text("DELETE FROM budget_policies WHERE scope_type = 'project' AND scope_id = :p"),
+            {"p": world.project_a},
+        )
+        c.execute(
+            text(
+                "INSERT INTO budget_policies (id, scope_type, scope_id, daily_cap_usd_micros, "
+                "monthly_cap_usd_micros, burst_cap_usd_micros_per_min) "
+                "VALUES (:i, 'project', :p, 1, 1, 1000000)"
+            ),
+            {"i": f"bp_{uuid4().hex[:10]}", "p": world.project_a},
+        )
+    bud_resp = httpx.post(
+        f"{turn_env['base_url']}/v1/metatron/turns",
+        headers=owner_hdrs,
+        json={"project_id": world.project_a, "message": "over daily cap"},
+        timeout=10.0,
+    )
+    assert bud_resp.status_code == 200
+    bud_events = [f for f in _parse_sse_frames(bud_resp.text) if "event" in f]
+    assert bud_events[0]["event"] == "turn.started"
+    assert bud_events[-1]["event"] == "turn.failed"
+    assert bud_events[-1]["data"]["code"] == "budget_exhausted"
+    assert bud_events[-1]["data"]["retryable"] is False
+    assert model.calls == 0
+
+
+def test_budget_refusal_kinds_shadow_org_fallback_and_concurrent_restart_resume(
+    engine, monkeypatch
+):
+    from boss_engine.services import metatron_turns
+    from boss_engine.services.typed_decision_spend import TypedDecisionReconciliationRequired, _Authority
+
+    world = IdentityWorld.create(engine)
+    owner = world.person("shadow-owner")
+    world.bind(owner, "owner", project=world.project_a)
+    connect_owned(engine, monkeypatch, world.project_a, paid=True)
+
+    # 1. Verify all budget/reconciliation refusal_kinds map accurately in MetatronStepSpend.run_chat_step
+    spend = metatron_turns._make_step_spend(
+        engine,
+        engine_get_settings(),
+        project_id=world.project_a,
+        turn_id="mturn_refusal_check",
+        step_index=1,
+        actor=owner.id,
+        principal_id=owner.id,
+        org_id=world.org,
+        ctx=None,
+    )
+
+    class _DummyAdapter:
+        _boss_choice = ModelChoice("ollama", "owned-metatron-model", "approved_local_model_host")
+
+    for kind in ("allocation_exceeded", "member_monthly_cap", "tier2_frozen", "cap_exceeded", "headroom"):
+        monkeypatch.setattr(
+            spend,
+            "_prepare",
+            lambda *_a, _k=kind, **_kw: _Authority(
+                outcome="refused", message=f"refused:{_k}", refusal_kind=_k
+            ),
+        )
+        with pytest.raises(metatron_turns.MetatronBudgetError) as exc_info:
+            spend.run_chat_step(engine_get_settings(), _DummyAdapter(), messages=[{"role": "user", "content": "hi"}], tools=None)
+        assert exc_info.value.code == "budget_exhausted"
+
+    for rec_kind in ("reconciliation_required", "legacy_reconciliation_required"):
+        monkeypatch.setattr(
+            spend,
+            "_prepare",
+            lambda *_a, _k=rec_kind, **_kw: _Authority(
+                outcome="refused", message=f"refused:{_k}", refusal_kind=_k
+            ),
+        )
+        with pytest.raises(TypedDecisionReconciliationRequired):
+            spend.run_chat_step(engine_get_settings(), _DummyAdapter(), messages=[{"role": "user", "content": "hi"}], tools=None)
+
+    # 2. Shadow mode (`ctx=None`, `org_id=None`) resolves org_id via org_of() and enforces org-wide deny rules
+    with engine.begin() as c:
+        c.execute(
+            text(
+                "INSERT INTO tool_policies_v2 "
+                "(id, org_id, project_id, scope, priority, effect, selector, conditions, status, created_by) "
+                "VALUES (:id, :o, NULL, 'org', 1, 'deny', CAST(:sel AS JSONB), '[]'::jsonb, 'active', :cb)"
+            ),
+            {
+                "id": f"pol_org_{uuid4().hex[:8]}",
+                "o": world.org,
+                "sel": json.dumps({"server": "metatron", "tool": "org_blocked_tool"}),
+                "cb": owner.id,
+            },
+        )
+    turn_state = metatron_turns.start_turn(
+        engine,
+        engine_get_settings(),
+        project_id=world.project_a,
+        actor=owner.id,
+        principal_id=owner.id,
+        org_id=None,
+        payload={
+            "project_id": world.project_a,
+            "message": "shadow mode org policy check",
+            "client_tools": [{"name": "org_blocked_tool", "risk_class": "remote-read"}],
+        },
+        ctx=None,
+    )
+    assert turn_state["org_id"] == world.org
+    assert "org_blocked_tool" not in turn_state["client_tool_map"]
+
+    # 3. Concurrent _resume_after_restart launches _run_turn_loop at most once thanks to FOR UPDATE
+    launched: list[str] = []
+    monkeypatch.setattr(
+        metatron_turns,
+        "launch_turn_runner",
+        lambda _eng, _set, st: launched.append(st["turn_id"]),
+    )
+    turn_id = turn_state["turn_id"]
+    with engine.begin() as c:
+        c.execute(
+            text(
+                "UPDATE metatron_turns SET status = 'awaiting_tool_result', "
+                "pending_tool_calls = CAST(:ptc AS JSONB) WHERE id = :t"
+            ),
+            {"t": turn_id, "ptc": json.dumps([{"call_id": "call_race_1", "name": "ssh_run"}])},
+        )
+        c.execute(
+            text(
+                "INSERT INTO metatron_turn_tool_results (turn_id, call_id, status, output, decision) "
+                "VALUES (:t, 'call_race_1', 'ok', '{}'::jsonb, '{}'::jsonb)"
+            ),
+            {"t": turn_id},
+        )
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(
+            pool.map(
+                lambda _: metatron_turns._resume_after_restart(
+                    engine, engine_get_settings(), turn_id, None
+                ),
+                range(4),
+            )
+        )
+    assert launched == [turn_id]
 
 
 def test_shared_sse_transcript_fixtures_parse_cleanly():

@@ -118,7 +118,7 @@ Every event carries `id: <turn_id>:<seq>`, `event: <type>`, `data: <json>`. Keep
 
 - Headers: `Idempotency-Key: <turn_id>:<call_id>`.
 - Body: `{"call_id", "status": "ok|error|denied|cancelled", "output": {...}, "decision": {"by","rule_id","mode"}}`.
-- Returns `202 Accepted`. Output serialized above `65536` bytes returns `413 Payload Too Large` (`code: "tool_result_too_large"`).
+- Returns `202 Accepted`. Combined `output` and `decision` serialized above `65536` bytes returns `413 Payload Too Large` (`code: "tool_result_too_large"`).
 
 ### Resume & Cancel
 
@@ -129,12 +129,12 @@ Every event carries `id: <turn_id>:<seq>`, `event: <type>`, `data: <json>`. Keep
 
 - `GET /v1/metatron/policy?project_id=...` (`policy:read`, zero DB writes, honors `If-None-Match` -> `304`, sets `ETag`): returns `{"bundle", "jws", "kid", "alg": "EdDSA", "typ": "boss-policy+jws"}`. Rules include `hard: true` flags and `examples: {"match", "not_match"}` validated (`422` on invalid examples) when published via `/v1/tool-policies`.
 - `GET /v1/metatron/policy/keys` (public JWKS, zero DB writes): returns `{"keys": [...]}` Ed25519 public JWKs.
-- `POST /v1/metatron/grants` (`autopilot:operate`) & `DELETE /v1/metatron/grants/{grant_id}` (`self_only`): creates/revokes TTL-bounded (`60..86400` s) `act-on-my-behalf` grants.
-- `POST /v1/metatron/approvals/review` (`assistant:chat`): server-side budgeted reviewer (`AgentService.decide` + `BudgetReservation` + `receipts`). Requires an active grant and **never** approves `hard: true` rules, `forbidden` decisions, or `capture` / `secret-use` / `app-control` risk classes.
+- `POST /v1/metatron/grants` (`autopilot:operate`) & `DELETE /v1/metatron/grants/{grant_id}` (`self_only`): creates/revokes TTL-bounded (`60..86400` s) `act-on-my-behalf` grants scoped by `allowed_tools`, `max_risk_class`, and `scope` (`hosts`, `domains`).
+- `POST /v1/metatron/approvals/review` (`assistant:chat`): server-side budgeted reviewer (`AgentService.decide` + `BudgetReservation` + `receipts`). Requires an active covering grant (including `scope` match) and **never** approves `hard: true` rules (regardless of priority), `forbidden` decisions, or `capture` / `secret-use` / `app-control` risk classes or tools.
 
 ## Audit Ingest & Hosts
 
-- `POST /v1/metatron/audit` (`assistant:chat`): batch ingest into `metatron_audit_events`, idempotent by `event_id`. Rejects any event containing credential-shaped values or keys (`cookie_values`, `token`, `raw_secret`, `file_contents`, `private_key`, `authorization`, `password`, URL credentials, or secret token patterns) in `rejected[]` while accepting valid events.
+- `POST /v1/metatron/audit` (`assistant:chat`): batch ingest into `metatron_audit_events`, idempotent by `event_id`. Rejects any event containing credential-shaped values or keys (`cookie_values`, `token`, `raw_secret`, `file_contents`, `private_key`, `authorization`, `password`, URL credentials, or secret token patterns including `boss_pat_`/`boss_sak_`/`boss_scim_`/`boss_run_` and JWTs) or invalid field types in `rejected[]` while accepting valid events.
 - `GET /v1/metatron/hosts?project_id=...` (`host:read`, zero DB writes): returns registered hosts including `host_key_known_hosts` and `host_key_fingerprint`.
 - `POST /v1/metatron/hosts/{host_id}/credential-lease` (`host:exec`, `step_up=True` under `BOSS_AUTHZ_MODE=enforce`): returns a short-lived (`15..300` s), single-use TLS SSH-key lease (`Cache-Control: no-store`) backed by `resolve_secret_ref` (`secret_access_events` + `run_secret_redaction`), `receipts`, and `metatron_credential_leases`.
 

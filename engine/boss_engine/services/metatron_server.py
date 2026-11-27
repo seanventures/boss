@@ -205,6 +205,35 @@ def _builtin_hard_rules() -> list[dict[str, Any]]:
     ]
 
 
+def _builtin_hard_rule_rows() -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for br in _builtin_hard_rules():
+        match = br.get("match") or {}
+        rows.append(
+            {
+                "id": br["id"],
+                "scope": "org",
+                "priority": 0,
+                "effect": "ask" if br.get("decision") == "prompt" else str(br.get("decision") or "ask"),
+                "selector": {
+                    "server": match.get("server") or "metatron",
+                    "tool": match.get("tool") or "*",
+                },
+                "conditions": list(match.get("conditions") or []),
+                "hard": bool(br.get("hard", True)),
+                "status": "active",
+            }
+        )
+    return rows
+
+
+_BUILTIN_HARD_TOOLS = frozenset(
+    str((br.get("match") or {}).get("tool") or "").strip()
+    for br in _builtin_hard_rules()
+    if br.get("hard") and str((br.get("match") or {}).get("tool") or "").strip() not in ("", "*")
+)
+
+
 def build_and_sign_policy_bundle(
     connection: Any, project_id: str
 ) -> tuple[dict[str, Any], str]:
@@ -409,13 +438,62 @@ def revoke_grant(
     return True
 
 
-def _grant_covers(grant: Mapping[str, Any], tool: str, risk_class: str) -> bool:
+def _grant_covers(
+    grant: Mapping[str, Any],
+    tool: str,
+    risk_class: str,
+    call: Optional[Mapping[str, Any]] = None,
+) -> bool:
     allowed = list(grant.get("allowed_tools") or [])
     if allowed and tool not in allowed and "*" not in allowed:
         return False
     max_risk = grant.get("max_risk_class")
     if max_risk and RISK_RANK.get(risk_class, 99) > RISK_RANK.get(str(max_risk), -1):
         return False
+
+    scope = _loads(grant.get("scope"), {})
+    if scope is None:
+        scope = {}
+    if not isinstance(scope, Mapping):
+        return False
+    if not scope:
+        return True
+
+    call_map = call if isinstance(call, Mapping) else {}
+    call_args = call_map.get("arguments") if isinstance(call_map.get("arguments"), Mapping) else {}
+    raw_host = call_map.get("host") if call_map.get("host") is not None else call_args.get("host")
+    raw_domain = (
+        call_map.get("domain") if call_map.get("domain") is not None else call_args.get("domain")
+    )
+    call_host = str(raw_host).strip() if isinstance(raw_host, str) else ""
+    call_domain = str(raw_domain).strip() if isinstance(raw_domain, str) else ""
+
+    for key, raw_val in scope.items():
+        if raw_val is None or raw_val == "" or raw_val == [] or raw_val == {}:
+            continue
+        if key in ("hosts", "host"):
+            if isinstance(raw_val, str):
+                allowed_hosts = [raw_val.strip()] if raw_val.strip() else []
+            elif isinstance(raw_val, (list, tuple, set)):
+                allowed_hosts = [str(v).strip() for v in raw_val if isinstance(v, str) and v.strip()]
+            else:
+                return False
+            if not allowed_hosts or not call_host or call_host not in allowed_hosts:
+                return False
+        elif key in ("domains", "domain"):
+            if isinstance(raw_val, str):
+                allowed_domains = [raw_val.strip().lower()] if raw_val.strip() else []
+            elif isinstance(raw_val, (list, tuple, set)):
+                allowed_domains = [
+                    str(v).strip().lower() for v in raw_val if isinstance(v, str) and v.strip()
+                ]
+            else:
+                return False
+            if not allowed_domains or not call_domain or call_domain.lower() not in allowed_domains:
+                return False
+        else:
+            # Fail closed on any unrecognized non-empty scope constraint.
+            return False
     return True
 
 
@@ -441,11 +519,19 @@ def review_approval(
     if not tool:
         raise MetatronServerError(422, "invalid_call", "call.tool is required.")
     risk_class = str(call.get("risk_class") or "write-local").strip()
-    argv_redacted = call.get("argv_redacted") or []
+    call_args = call.get("arguments") if isinstance(call.get("arguments"), Mapping) else {}
+    argv_redacted = (
+        call.get("argv_redacted")
+        if call.get("argv_redacted") is not None
+        else (call_args.get("argv") or [])
+    )
+    host_val = call.get("host") if call.get("host") is not None else call_args.get("host")
+    domain_val = call.get("domain") if call.get("domain") is not None else call_args.get("domain")
     args_ctx = {
+        **{k: v for k, v in call_args.items() if k not in ("argv", "host", "domain", "risk_class")},
         "argv": argv_redacted,
-        "host": call.get("host"),
-        "domain": call.get("domain"),
+        "host": host_val,
+        "domain": domain_val,
         "risk_class": risk_class,
     }
 
@@ -461,13 +547,20 @@ def review_approval(
             base="allow",
         )
         verdict = tool_policy_engine.decide(pctx, rules=rules)
-        matched_hard = any(
-            bool(r.get("hard"))
-            for r in rules
-            if str(r.get("id")) in set(verdict.get("matched_policy_ids") or [])
-        )
-        is_hard = matched_hard or risk_class in HARD_RISK_CLASSES or tool in {"pcap", "app_control"}
-        if verdict["decision"] == "deny":
+        now = _now()
+        matching_hard_rules = [
+            r
+            for r in (list(rules) + _builtin_hard_rule_rows())
+            if bool(r.get("hard"))
+            and str(r.get("status") or "active") == "active"
+            and not tool_policy_engine._expired(r, now)
+            and not tool_policy_engine._pin_stale(r, pctx)
+            and tool_policy_engine.rule_matches(r, pctx)
+        ]
+        matched_hard = bool(matching_hard_rules)
+        hard_denied = any(str(r.get("effect") or "") == "deny" for r in matching_hard_rules)
+        is_hard = matched_hard or risk_class in HARD_RISK_CLASSES or tool in _BUILTIN_HARD_TOOLS
+        if verdict["decision"] == "deny" or hard_denied:
             return {
                 "decision": "deny",
                 "reason": verdict.get("explanation") or "forbidden_by_policy",
@@ -491,7 +584,10 @@ def review_approval(
             ),
             {"p": principal_id, "proj": project_id},
         ).mappings().all()
-        covering = next((dict(g) for g in grant_rows if _grant_covers(g, tool, risk_class)), None)
+        covering = next(
+            (dict(g) for g in grant_rows if _grant_covers(g, tool, risk_class, call=call)),
+            None,
+        )
         if covering is None:
             return {
                 "decision": "escalate",
@@ -630,6 +726,55 @@ def _contains_credential_payload(value: Any) -> bool:
     return False
 
 
+_INT32_MIN = -(2**31)
+_INT32_MAX = 2**31 - 1
+_INT64_MIN = -(2**63)
+_INT64_MAX = 2**63 - 1
+_AUDIT_TEXT_FIELDS = (
+    "session_id",
+    "turn_id",
+    "ticket_id",
+    "kind",
+    "tool",
+    "risk_class",
+    "host",
+    "domain",
+    "method",
+    "path",
+    "decision",
+    "decided_by",
+    "rule_id",
+)
+
+
+def _valid_pg_int(val: Any, *, min_val: int, max_val: int) -> bool:
+    return isinstance(val, int) and not isinstance(val, bool) and min_val <= val <= max_val
+
+
+def _validate_audit_event(raw: Mapping[str, Any]) -> Optional[str]:
+    ts_raw = raw.get("ts")
+    if ts_raw is not None and not isinstance(ts_raw, (str, datetime)):
+        return "invalid_timestamp"
+    for field in ("status", "exit_code", "duration_ms"):
+        val = raw.get(field)
+        if val is not None and not _valid_pg_int(val, min_val=_INT32_MIN, max_val=_INT32_MAX):
+            return f"invalid_{field}"
+    bytes_val = raw.get("bytes")
+    if bytes_val is not None and not _valid_pg_int(bytes_val, min_val=_INT64_MIN, max_val=_INT64_MAX):
+        return "invalid_bytes"
+    cookie_names = raw.get("cookie_names")
+    if cookie_names is not None:
+        if not isinstance(cookie_names, (list, tuple)) or any(
+            not isinstance(x, str) for x in cookie_names
+        ):
+            return "invalid_cookie_names"
+    for field in _AUDIT_TEXT_FIELDS:
+        val = raw.get(field)
+        if val is not None and not isinstance(val, str):
+            return f"invalid_{field}"
+    return None
+
+
 def ingest_audit_batch(
     connection: Any,
     *,
@@ -643,17 +788,32 @@ def ingest_audit_batch(
     accepted: list[str] = []
     rejected: list[dict[str, str]] = []
     for raw in events:
-        ev_id = str(raw.get("event_id") or "").strip()
+        if not isinstance(raw, Mapping):
+            rejected.append({"event_id": "", "reason": "invalid_event_object"})
+            continue
+        raw_ev_id = raw.get("event_id")
+        if raw_ev_id is not None and not isinstance(raw_ev_id, str):
+            rejected.append({"event_id": "", "reason": "invalid_event_id"})
+            continue
+        ev_id = str(raw_ev_id or "").strip()
         if not ev_id:
             rejected.append({"event_id": "", "reason": "missing_event_id"})
             continue
         if _contains_credential_payload(raw):
             rejected.append({"event_id": ev_id, "reason": "credential_shaped_payload"})
             continue
+        invalid_reason = _validate_audit_event(raw)
+        if invalid_reason is not None:
+            rejected.append({"event_id": ev_id, "reason": invalid_reason})
+            continue
         ts_raw = raw.get("ts")
-        if isinstance(ts_raw, str) and ts_raw.strip():
+        if isinstance(ts_raw, datetime):
+            ts = ts_raw if ts_raw.tzinfo is not None else ts_raw.replace(tzinfo=timezone.utc)
+        elif isinstance(ts_raw, str) and ts_raw.strip():
             try:
                 ts = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
             except ValueError:
                 rejected.append({"event_id": ev_id, "reason": "invalid_timestamp"})
                 continue

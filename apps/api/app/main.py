@@ -2575,6 +2575,9 @@ async def require_transport_auth_for_v1(request: Request, call_next):
     # @public on an identity router and always enforced. Requiring a legacy key here made sign-in
     # unreachable on a default install (BOSS_REQUIRE_API_AUTH=true).
     is_identity_public = identity_guard.is_identity_public_route(request.scope)
+    is_metatron_policy_keys = (
+        request.method == "GET" and route_path == "/v1/metatron/policy/keys"
+    )
     if not auth_required and any(
         request.headers.get(name) for name in (
             "X-BOSS-MCP-Operation", "X-BOSS-MCP-Confirmation", "X-BOSS-MCP-Project"
@@ -2596,6 +2599,7 @@ async def require_transport_auth_for_v1(request: Request, call_next):
         or is_investigation_callback
         or is_telemetry_collector
         or is_identity_public
+        or is_metatron_policy_keys
     ):
         principal_token = current_api_principal.set(None)
         authenticated_token = current_transport_authenticated.set(False)

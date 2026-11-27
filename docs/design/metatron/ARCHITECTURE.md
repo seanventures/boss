@@ -323,7 +323,7 @@ While the stream is open and waiting for a tool result the turn is in state `awa
   "decision": {"by":"rule|person|reviewer", "rule_id":"…", "mode":"risky-only"}
 }
 ```
-Returns `202`. The original stream continues with more `text.delta` or `tool_call`. Limits: inline output to the server is capped (default 64 KiB, head plus tail, with `truncated:true`); full output stays in the local session. Output is redacted for secrets before upload. A `denied` result tells the model the person or policy refused, so it can adapt.
+Returns `202`. The original stream continues with more `text.delta` or `tool_call`. Limits: combined inline `output` and `decision` payload to the server is capped (default 64 KiB; payloads above 65536 bytes return `413 tool_result_too_large`); full output stays in the local session. Output is redacted for secrets before upload. A `denied` result tells the model the person or policy refused, so it can adapt.
 
 #### Resume, cancel
 - `GET /v1/metatron/turns/{turn_id}/events` with `Last-Event-ID` replays missed events then continues (replaces the Python client's poll-the-thread recovery).
@@ -342,7 +342,7 @@ Returns `202`. The original stream continues with more `text.delta` or `tool_cal
 The client refuses an unsigned or expired bundle for mutating tools; offline it falls back to read-only local analysis. Rule `examples` are executed as tests when the bundle loads. `hard:true` rules cannot be satisfied by the reviewer.
 
 #### Reviewer (act-on-my-behalf)
-`POST /v1/metatron/approvals/review` `{session_id, turn_id, call:{tool, argv_redacted, host, domain, risk_class}, mode}` -> `{decision:"approve|deny|escalate", reason, reviewer_receipt_id}`. Runs through the agent path (budgeted, audited). `escalate` means ask the person. Grants are time-boxed: `POST /v1/metatron/grants` `{scope, ttl_s}` creates, `DELETE /v1/metatron/grants/{id}` revokes.
+`POST /v1/metatron/approvals/review` `{session_id, turn_id, call:{tool, argv_redacted, host, domain, risk_class}, mode}` -> `{decision:"approve|deny|escalate", reason, reviewer_receipt_id}`. Runs through the agent path (budgeted, audited). `escalate` means ask the person. Grants are time-boxed: `POST /v1/metatron/grants` (`autopilot:operate`) `{scope, allowed_tools, max_risk_class, ttl_s}` creates, `DELETE /v1/metatron/grants/{id}` (`self_only`) revokes; grant `scope` (`hosts`, `domains`) and all matching `hard:true` rules (regardless of priority) are enforced on review.
 
 #### Hosts and credential leases
 `GET /v1/metatron/hosts` lists hosts the person may use (including `host_key_known_hosts` and `host_key_fingerprint`). `POST /v1/metatron/hosts/{id}/credential-lease` (`{purpose, ttl_s, session_id}`, bounded `15..300` s) -> `{lease_id, host_id, kind:"ssh_key", expires_at, host_key_known_hosts, host_key_fingerprint, material}` with `Cache-Control: no-store`, backed by `resolve_secret_ref` (`secret_access_events` + `run_secret_redaction`), `receipts`, and `metatron_credential_leases`. Under `BOSS_AUTHZ_MODE=enforce`, `host:exec` is `step_up=True`: a `boss_pat_` token from device login requires a fresh MFA session, `HUMAN_CONFIRMED` replay, or a `boss_sak_` service-account key. Short-lived SSH user-CA certificates remain a future enterprise enhancement (see §12 #2).
