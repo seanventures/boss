@@ -4,9 +4,9 @@
   "canonical_key": "method + path",
   "request_body_type_enforcement_note": "pass_through_documented fields appear in OpenAPI but SkipValidation preserves the handler's existing input coercion and error statuses; runtime_validated_input_schema is a legacy schema-presence flag",
   "edition": "community",
-  "operation_count": 2455,
+  "operation_count": 2456,
   "counts": {
-    "api_policy_gated": 2117,
+    "api_policy_gated": 2118,
     "excluded": 131,
     "human_confirmation_gated": 78,
     "operator_only_unavailable": 129
@@ -34229,6 +34229,24 @@
       "domain_scoped_direct_tool": true,
       "requires_explicit_bound_api_credential": true,
       "read_only_available": false
+    },
+    {
+      "method": "GET",
+      "path": "/v1/qa/ledger",
+      "alias": "get_v1_qa_ledger_5e7dd19a",
+      "domain": "ops",
+      "summary": "Get Qa Ledger",
+      "mcp_status": "api_policy_gated",
+      "reason": null,
+      "input_schema_quality": "parameters_only",
+      "mounted_input_schema_quality": "parameters_only",
+      "request_body_type_enforcement": "no_json_body",
+      "curated_input_fields": false,
+      "typed_input_schema": true,
+      "runtime_validated_input_schema": true,
+      "domain_scoped_direct_tool": true,
+      "requires_explicit_bound_api_credential": true,
+      "read_only_available": true
     },
     {
       "method": "GET",
