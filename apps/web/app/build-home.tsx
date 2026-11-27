@@ -23,6 +23,7 @@ import {
   GoogleDriveLogo,
   Hammer,
   MagicWand,
+  FolderSimple,
   MapTrifold,
   Microphone,
   Paperclip,
@@ -332,7 +333,8 @@ const STATUS: Record<Phase, string> = {
   error: "Not started",
 };
 
-export function BuildHome({ modelReady }: { modelReady?: boolean } = {}) {
+export function BuildHome({ modelReady, projects = [] }: { modelReady?: boolean; projects?: { id: string; name: string }[] } = {}) {
+  const [target, setTarget] = useState("");
   const [knownModelReady, setKnownModelReady] = useState<boolean | undefined>(modelReady);
   useEffect(() => { setKnownModelReady(modelReady); }, [modelReady]);
   useEffect(() => {
@@ -476,6 +478,7 @@ export function BuildHome({ modelReady }: { modelReady?: boolean } = {}) {
       mode,
       ...(reviewPlan ? { review_plan: true } : {}),
       template_id: templateId,
+      ...(templateId && mode === "build" && target ? { target_project_id: target } : {}),
       attachment_ids: [...new Set(attachments.map((item) => item.id))],
     };
     setBusy(true);
@@ -710,6 +713,22 @@ export function BuildHome({ modelReady }: { modelReady?: boolean } = {}) {
                 <CaretDown {...ICON} className="bh-mode-caret" />
               </span>
             </label>
+            {templateId && mode === "build" && projects.length > 0 && (
+              // INTO: a template builds into a new project, or into one already here (its own
+              // repository and consent; the API refuses a project with no repository).
+              <label className="bh-mode" title="Build this template into a new project or one you already have">
+                <span>Into</span>
+                <span className="bh-mode-pill">
+                  <FolderSimple {...ICON} className="bh-mode-icon" />
+                  <select aria-label="Into" data-testid="build-into" value={target}
+                          onChange={(event) => { setTarget(event.target.value); touch(); }}>
+                    <option value="">New project</option>
+                    {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+                  </select>
+                  <CaretDown {...ICON} className="bh-mode-caret" />
+                </span>
+              </label>
+            )}
             <label className="bh-mode bh-review" title="The agent panel writes a spec before anything is built. Tick this to read and approve it yourself; otherwise your start approves it.">
               <input type="checkbox" data-testid="build-review-plan" checked={reviewPlan}
                      onChange={(event) => { setReviewPlan(event.target.checked); touch(); }} />

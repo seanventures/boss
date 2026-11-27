@@ -989,3 +989,31 @@ def test_attachment_upload_records_uploaded_by(client, engine):
     row = _one(engine, "SELECT uploaded_by FROM factory_launch_attachments WHERE id = :id",
                id=att_id)
     assert row is not None and row["uploaded_by"]
+
+
+def test_template_into_existing_project_keeps_its_repository_and_review_stop(client, engine, monkeypatch, tmp_path):
+    catalogue = tmp_path / "factory_templates"
+    _write_catalogue(catalogue)
+    monkeypatch.setattr("boss_engine.services.factory_launch.TEMPLATE_DIR", catalogue)
+    calls = []
+    _patch_builder(monkeypatch, calls)
+    new = client.post("/v1/factory/launch", json={"template_id": "alpha-notes"})
+    assert new.status_code == 201, new.text
+    project = new.json()["project_id"]
+    assert not calls[-1]["spec"].get("existing_project")
+    # The fake builder does not release the launch hold as the real workflow start does.
+    with engine.begin() as connection:
+        BudgetGovernor(get_settings()).release(connection, project, new.json()["reservation_id"],
+                                               "Test builder finished.")
+    count = _count(engine, "projects")
+    target = f"/v1/projects/{project}/factory/launch"
+    payload = {"template_id": "beta-board", "review_plan": True, "mode": "build"}
+    result = client.post(target, json=payload)
+    assert result.status_code == 201, result.text
+    assert result.json()["project_id"] == project
+    assert _count(engine, "projects") == count
+    assert calls[-1]["spec"]["local_repo"] == new.json()["spec"]["local_repo"]
+    assert calls[-1]["spec"]["spec_approval"] == "person"
+    assert calls[-1]["spec"]["existing_project"]
+    assert client.post(target, json={**payload, "github_repo": "other/repo"}).status_code == 422
+    assert client.post("/v1/projects/unknown-project/factory/launch", json=payload).status_code == 404
