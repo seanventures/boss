@@ -178,129 +178,311 @@ def test_a_tag_is_never_laundered_onto_another_host():
 
 # ---- the static guard: every GitHub credential put on the wire goes through the send check ---------
 
-import ast as _ast
-import re as _re
 from pathlib import Path as _Path
 
 _ROOT = _Path(__file__).resolve().parents[2]
-#: Header helpers that build but never send; every caller sends through a check (named here).
-_HELPERS = {
-    "engine/boss_engine/services/setup_checks.py:_gh_headers":
-        "inspect_token/probe_repository/pat_abilities/_org_member call _send_check first",
-    "engine/boss_engine/services/stack_deploy.py:_headers": "GitHubSource._get calls check_send",
-}
+import ast  # noqa: E402 — the static guard below
+import re  # noqa: E402
 
-_GH = _re.compile(r"vnd\.github|X-GitHub-Api-Version|x-access-token|api\.github|github_urls|GH_TOKEN|GITHUB_TOKEN", _re.I)
-_CREDTXT = _re.compile(r"Bearer |x-access-token:|AUTHORIZATION: basic|^token |basic ", _re.I)
-_CHECKS = {"check_send","_send_check","_send_base","_check_jwt_host","_github_tracker_token"}
-def _names(node):
-    return {_ast.unparse(n) for n in _ast.walk(node) if isinstance(n,(_ast.Name,_ast.Attribute)) and not isinstance(getattr(n,'ctx',None),_ast.Store)} - set()
-def _uses(fn):
-    out=set()
-    for n in _ast.walk(fn):
-        if isinstance(n,_ast.JoinedStr):
-            prev=""
-            for v in n.values:
-                if isinstance(v,_ast.Constant) and isinstance(v.value,str):
-                    prev=v.value
-                elif isinstance(v,_ast.FormattedValue):
-                    if _re.search(r"(Bearer |x-access-token:|basic |^token )$", prev, _re.I):
-                        out.add(_ast.unparse(v.value))
-                    prev=""
-        elif isinstance(n,_ast.BinOp) and isinstance(n.op,_ast.Add):
-            for side,other in ((n.left,n.right),(n.right,n.left)):
-                if isinstance(side,_ast.Constant) and isinstance(side.value,str) and _CREDTXT.search(side.value):
-                    out.add(_ast.unparse(other))
-        elif isinstance(n,_ast.Call) and isinstance(n.func,_ast.Attribute) and n.func.attr=="format" and isinstance(n.func.value,_ast.Constant) and _CREDTXT.search(str(n.func.value.value)):
-            out.update(_ast.unparse(a) for a in n.args)
-        elif isinstance(n,_ast.Call):
-            fname=n.func.attr if isinstance(n.func,_ast.Attribute) else getattr(n.func,'id','')
-            if fname=="BasicAuth": out.update(_ast.unparse(a) for a in n.args)
-            if fname in ("get","post","put","patch","delete","request","stream","Client","AsyncClient"):
-                for k in n.keywords:
-                    if k.arg=="auth": out.add(_ast.unparse(k.value))
-        elif isinstance(n,_ast.Dict):
-            for k,v in zip(n.keys,n.values):
-                if isinstance(k,_ast.Constant) and k.value in ("GH_TOKEN","GITHUB_TOKEN") and v is not None:
-                    out.add(_ast.unparse(v)+"#env")
-    return out
-def _checked(fn):
-    out=set()
-    for n in _ast.walk(fn):
-        if isinstance(n,_ast.Call):
-            fname=n.func.attr if isinstance(n.func,_ast.Attribute) else getattr(n.func,'id','')
-            if fname in _CHECKS:
-                out.add(_ast.unparse(n.args[0]) if n.args else "*")
-    # a value DERIVED from a checked credential (basic = b64(f"user:{token}")) is checked too
-    changed=True
+#: Places that build a credential header and cannot call check_send themselves (named, with why).
+_NOT_SEND_POINTS = {
+    "sandbox-host/guest/in_guest_agent.py:_prepare_repo":
+        "the dependency-free guest clones with spec.token from spec.github_web; the HOST checked "
+        "that pair (repo_host.guest_github_web) before building the spec",
+}
+_ROOTS = ("engine/boss_engine", "apps/api/app", "apps/egress", "apps/worker", "sandbox-host")
+
+GH_MARKER = re.compile(r"vnd\.github|X-GitHub-Api-Version|x-access-token|api\.github|github_urls|"
+                       r"GH_TOKEN|GITHUB_TOKEN|github\.com|GitHub", re.I)
+WEAK_TXT = re.compile(r"(Bearer|token|basic)\s*(%s)?$", re.I)
+CHECKS = {"check_send", "_send_check", "_send_base", "_check_jwt_host", "_github_tracker_token",
+          "guest_github_web"}
+ENV_KEYS = ("GH_TOKEN", "GITHUB_TOKEN")
+SPEC_KEYS = {"github_web", "repo_host", "work_branch", "base_branch"}
+
+
+def _src(n):
+    return ast.unparse(n)
+
+
+def _fn_name(call):
+    f = call.func
+    return f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", "")
+
+
+class _Uses(ast.NodeVisitor):
+    """(expr, line, strong) for every place a credential is put into a request, a git URL, a
+    subprocess env or a guest spec."""
+
+    def __init__(self):
+        self.out = []
+
+    def add(self, node, line, strong):
+        if isinstance(node, ast.Constant):
+            return
+        self.out.append((_src(node), line, strong))
+
+    def visit_JoinedStr(self, n):
+        vals = n.values
+        for i, v in enumerate(vals):
+            if not isinstance(v, ast.FormattedValue):
+                continue
+            prev = vals[i - 1].value if i and isinstance(vals[i - 1], ast.Constant) else ""
+            nxt = vals[i + 1].value if i + 1 < len(vals) and isinstance(vals[i + 1], ast.Constant) else ""
+            prev, nxt = str(prev), str(nxt)
+            if re.search(r"(x-access-token:|oauth2:)$", prev) or \
+                    (re.search(r"https?://$", prev) and nxt.startswith("@")):
+                self.add(v.value, n.lineno, True)          # a token in a git/HTTP URL
+            elif re.search(r"(Bearer |token |basic )$", prev, re.I):
+                self.add(v.value, n.lineno, False)
+        self.generic_visit(n)
+
+    def visit_BinOp(self, n):
+        if isinstance(n.op, ast.Add):
+            for side, other in ((n.left, n.right), (n.right, n.left)):
+                if isinstance(side, ast.Constant) and isinstance(side.value, str) and \
+                        re.search(r"(Bearer |token |x-access-token:)$", side.value, re.I):
+                    self.add(other, n.lineno, "x-access-token" in side.value)
+        if isinstance(n.op, ast.Mod) and isinstance(n.left, ast.Constant) and \
+                re.search(r"(Bearer|token|basic) %s", str(n.left.value), re.I):
+            parts = n.right.elts if isinstance(n.right, ast.Tuple) else [n.right]
+            for p in parts:
+                self.add(p, n.lineno, False)
+        self.generic_visit(n)
+
+    def visit_Call(self, n):
+        name = _fn_name(n)
+        f = n.func
+        if name == "format" and isinstance(f, ast.Attribute) and isinstance(f.value, ast.Constant) \
+                and re.search(r"(Bearer|token|basic) \{", str(f.value.value), re.I):
+            for a in n.args:
+                self.add(a, n.lineno, False)
+        if name == "join" and n.args and isinstance(n.args[0], (ast.List, ast.Tuple)):
+            elts = n.args[0].elts
+            if any(isinstance(e, ast.Constant) and str(e.value).strip().lower() in ("bearer", "token", "basic")
+                   for e in elts):
+                for e in elts:
+                    self.add(e, n.lineno, False)
+        if name == "BasicAuth":
+            for a in n.args:
+                self.add(a, n.lineno, False)
+        if name in ("get", "post", "put", "patch", "delete", "request", "stream", "Client",
+                    "AsyncClient", "head"):
+            for k in n.keywords:
+                if k.arg == "auth":
+                    self.add(k.value, n.lineno, False)
+        for k in n.keywords:                      # env.update(GH_TOKEN=t), dict(os.environ, GH_TOKEN=t)
+            if k.arg in ENV_KEYS:
+                self.add(k.value, n.lineno, True)
+            if k.arg is None and isinstance(k.value, ast.Dict):   # f(**{"token": t, ...})
+                self._spec(k.value, n.lineno, force=False)
+        self.generic_visit(n)
+
+    def visit_Assign(self, n):
+        for t in n.targets:                       # env["GH_TOKEN"] = t
+            if isinstance(t, ast.Subscript) and isinstance(t.slice, ast.Constant) and t.slice.value in ENV_KEYS:
+                self.add(n.value, n.lineno, True)
+        self.generic_visit(n)
+
+    def visit_Dict(self, n):
+        for k, v in zip(n.keys, n.values):
+            if isinstance(k, ast.Constant) and k.value in ENV_KEYS and v is not None:
+                self.add(v, n.lineno, True)
+        self._spec(n, n.lineno, force=False)
+        self.generic_visit(n)
+
+    def _spec(self, d, line, force):
+        keys = {k.value for k in d.keys if isinstance(k, ast.Constant)}
+        if "token" in keys and (force or keys & SPEC_KEYS):
+            for k, v in zip(d.keys, d.values):
+                if isinstance(k, ast.Constant) and k.value == "token" and v is not None:
+                    self.add(v, line, True)       # a token handed to a guest/spec is a send
+
+
+def _checks(fn):
+    """{expr: [lines]} where the send check ran on that credential (or one derived from it),
+    and {expr: [lines]} of every assignment to a name."""
+    checked, assigned = {}, {}
+    nodes = list(ast.walk(fn))
+    for n in nodes:
+        if isinstance(n, ast.Call) and _fn_name(n) in CHECKS:
+            key = _src(n.args[0]) if n.args else "*"
+            checked.setdefault(key, []).append(n.lineno)
+        if isinstance(n, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            targets = n.targets if isinstance(n, ast.Assign) else [n.target]
+            for t in targets:
+                for tn in ast.walk(t):
+                    if isinstance(tn, (ast.Name, ast.Attribute)) and isinstance(tn.ctx, ast.Store):
+                        assigned.setdefault(_src(tn), []).append(n.lineno)
+    # derived: `basic = b64(f"x:{token}")` after token was checked
+    changed = True
     while changed:
-        changed=False
-        for n in _ast.walk(fn):
-            if isinstance(n,_ast.Assign) and len(n.targets)==1 and isinstance(n.targets[0],_ast.Name):
-                t=n.targets[0].id
-                if t not in out and _names(n.value) & out:
-                    out.add(t); changed=True
-    return out
+        changed = False
+        for n in nodes:
+            if isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name):
+                tname = n.targets[0].id
+                inner = {_src(x) for x in ast.walk(n.value) if isinstance(x, (ast.Name, ast.Attribute))}
+                if any(k in checked and min(checked[k]) <= n.lineno for k in inner) and \
+                        n.lineno not in checked.get(tname, []):
+                    checked.setdefault(tname, []).append(n.lineno)
+                    changed = True
+    return checked, assigned
+
+
+def _covered(expr, line, checked, assigned):
+    if "*" in checked:
+        return True
+    for cline in checked.get(expr, []):
+        # the check must come before the use, with no reassignment in between
+        if cline <= line and not any(cline < a <= line for a in assigned.get(expr, [])
+                                     if a not in checked.get(expr, [])):
+            return True
+    return False
+
+
+def _code_text(fn):
+    """The function's CODE (no comments, no docstrings): what decides "is this GitHub"."""
+    body = [st for st in fn.body if not (isinstance(st, ast.Expr) and isinstance(st.value, ast.Constant)
+                                         and isinstance(st.value.value, str))]
+    return ast.unparse(ast.Module(body=body, type_ignores=[]))
+
+
+def _functions(tree):
+    return [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+
+
+def _own_nodes(fn):
+    """The function's statements without nested function bodies (they are judged on their own)."""
+    clone = ast.Module(body=[s for s in fn.body if not isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef))],
+                       type_ignores=[])
+    return clone
+
+
+def scan(files):
+    """files: [(rel, src)]. Returns offenders. A function that builds a credential header from
+    one of its PARAMETERS without checking it is a HELPER: every call site must check the
+    argument it passes instead (the check moves to where the token is known)."""
+    helpers = {}        # name -> param index
+    pending = []
+    parsed = []
+    for rel, src in files:
+        try:
+            tree = ast.parse(src)
+        except SyntaxError:
+            continue
+        parsed.append((rel, src, tree))
+        for fn in _functions(tree):
+            seg = _code_text(fn)
+            v = _Uses()
+            v.visit(_own_nodes(fn))
+            if not v.out:
+                continue
+            checked, assigned = _checks(fn)
+            params = [a.arg for a in fn.args.args + fn.args.kwonlyargs]
+            for expr, line, strong in v.out:
+                if not strong and not GH_MARKER.search(seg):
+                    continue
+                if _covered(expr, line, checked, assigned):
+                    continue
+                if expr in params and expr not in assigned:
+                    helpers.setdefault(fn.name, set()).add(params.index(expr) - (1 if params and params[0] in ("self", "cls") else 0))
+                    continue
+                pending.append(f"{rel}:{line} {fn.name} {expr}")
+    for rel, src, tree in parsed:
+        for fn in _functions(tree):
+            checked, assigned = _checks(fn)
+            for n in ast.walk(_own_nodes(fn)):
+                if isinstance(n, ast.Call) and _fn_name(n) in helpers:
+                    for idx in helpers[_fn_name(n)]:
+                        if 0 <= idx < len(n.args):
+                            expr = _src(n.args[idx])
+                            if not isinstance(n.args[idx], ast.Constant) and \
+                                    not _covered(expr, n.lineno, checked, assigned):
+                                pending.append(f"{rel}:{n.lineno} {fn.name} {expr} (via {_fn_name(n)})")
+    return sorted(set(pending))
 
 
 def _unchecked_in(src: str, rel: str) -> list[str]:
-    try:
-        tree = _ast.parse(src)
-    except SyntaxError:
-        return []
-    out = []
-    for fn in _ast.walk(tree):
-        if not isinstance(fn, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
-            continue
-        if f"{rel}:{fn.name}" in _HELPERS or not _GH.search(_ast.get_source_segment(src, fn) or ""):
-            continue
-        used, ok = _uses(fn), _checked(fn)
-        missing = sorted(u for u in used if u.replace("#env", "") not in ok and "*" not in ok)
-        if missing:
-            out.append(f"{rel}:{fn.lineno} {fn.name} {missing}")
-    return out
+    return [o for o in scan([(rel, src)])
+            if f"{rel}:{o.split(' ')[1]}" not in _NOT_SEND_POINTS]
 
 
 def _unchecked_github_credential_builders(root=None) -> list[str]:
     root = root or _ROOT
-    out = []
-    for top in ("engine/boss_engine", "apps/api/app", "apps/egress", "apps/worker"):
+    files = []
+    for top in _ROOTS:
         for path in sorted((root / top).rglob("*.py")):
             rel = path.relative_to(root).as_posix()
             if "/tests/" in rel or rel.endswith("identity/github_urls.py"):
                 continue
-            out += _unchecked_in(path.read_text(encoding="utf-8", errors="replace"), rel)
-    return out
+            files.append((rel, path.read_text(encoding="utf-8", errors="replace")))
+    return [o for o in scan(files) if f"{o.split(':')[0]}:{o.split(' ')[1]}" not in _NOT_SEND_POINTS]
 
 
 def test_every_github_credential_put_on_the_wire_goes_through_the_send_check():
-    """Every Authorization (f-string, .format, concatenation), basic git header, token-in-URL,
-    httpx auth=/BasicAuth and GH_TOKEN/GITHUB_TOKEN handed to a subprocess, in GitHub code, must
-    have check_send called ON THAT SAME credential (or a value derived from a checked one) in the
-    same function — merely mentioning check_send is not enough (BOSSAPP-1286)."""
+    """Every credential put into a request header (f-string, .format, %, concatenation, join),
+    an httpx auth=/BasicAuth, a token-in-URL (x-access-token:, oauth2:, https://{t}@), a
+    GH_TOKEN/GITHUB_TOKEN in a subprocess env (literal, env[...] =, .update, dict(os.environ, ...))
+    or a guest spec's "token" must have check_send run ON THAT credential, before the use and with
+    no reassignment in between. A header helper fed a parameter moves the duty to every call site.
+    Strong patterns need no GitHub marker in the function (BOSSAPP-1286)."""
     missing = _unchecked_github_credential_builders()
-    assert not missing, ("call github_urls.check_send(<that token>, url) before sending it:\n"
+    assert not missing, ("call github_urls.check_send(<that token>, url) before using it:\n"
                          + "\n".join(missing))
 
 
+_GH_ACCEPT = '"Accept": "application/vnd.github+json"'
+
+
 @pytest.mark.parametrize("code", [
-    'def f(t):\n    return {"Authorization": f"Bearer {t}", "Accept": "application/vnd.github+json"}\n',
-    'def f(t):\n    return {"Authorization": "Bearer {}".format(t), "X-GitHub-Api-Version": "x"}\n',
-    'def f(t):\n    return {"Authorization": "Bearer " + t, "Accept": "application/vnd.github+json"}\n',
-    'def f(t, httpx):\n    return httpx.get("https://api.github.com/user", auth=t)\n',
-    'def f(t, run):\n    return run(["gh", "pr"], env={"GH_TOKEN": t})\n',
-    'def f(t, other, check_send):\n    check_send(other, "u")\n'
-    '    return {"Authorization": f"Bearer {t}", "Accept": "application/vnd.github+json"}\n',
+    # header building, weak patterns (in GitHub code)
+    'def f(src):\n    t = src()\n    return {"Authorization": f"Bearer {t}", ' + _GH_ACCEPT + '}\n',
+    'def f(src):\n    t = src()\n    return {"Authorization": "Bearer {}".format(t), ' + _GH_ACCEPT + '}\n',
+    'def f(src):\n    t = src()\n    return {"Authorization": "Bearer " + t, ' + _GH_ACCEPT + '}\n',
+    'def f(src):\n    t = src()\n    return {"Authorization": "Bearer %s" % t, ' + _GH_ACCEPT + '}\n',
+    'def f(src):\n    t = src()\n    return {"Authorization": " ".join(["Bearer", t]), ' + _GH_ACCEPT + '}\n',
+    'def f(src, httpx):\n    t = src()\n    return httpx.get("https://api.github.com/user", auth=t)\n',
+    'def f(src, httpx):\n    t = src()\n    return httpx.get("https://api.github.com", auth=httpx.BasicAuth("x", t))\n',
+    # subprocess env, strong (no GitHub marker needed)
+    'def f(src, run):\n    t = src()\n    return run(["gh"], env={"GH_TOKEN": t})\n',
+    'def f(src, env):\n    t = src()\n    env["GITHUB_TOKEN"] = t\n',
+    'def f(src, env):\n    t = src()\n    env.update(GH_TOKEN=t)\n',
+    'def f(src, os):\n    t = src()\n    return dict(os.environ, GH_TOKEN=t)\n',
+    # token in a URL, strong
+    'def f(src):\n    t = src()\n    return f"https://x-access-token:{t}@example.test/o/r.git"\n',
+    'def f(src):\n    t = src()\n    return f"https://oauth2:{t}@example.test/o/r.git"\n',
+    'def f(src):\n    t = src()\n    return f"https://{t}@example.test/o/r.git"\n',
+    # a guest spec and a **kwargs hand-off carry the token too
+    'def f(src, w):\n    t = src()\n    return {"token": t, "github_web": w}\n',
+    'def f(src, go, b):\n    t = src()\n    return go(**{"token": t, "work_branch": b})\n',
+    # a header helper fed a parameter: its CALLER must check what it passes
+    'def h(t):\n    return {"Authorization": f"Bearer {t}", ' + _GH_ACCEPT + '}\n'
+    'def c(src):\n    return h(src())\n',
+    # a check on ANOTHER variable, and a reassignment after the check
+    'def f(src, other, check_send):\n    t = src()\n    check_send(other, "u")\n'
+    '    return {"Authorization": f"Bearer {t}", ' + _GH_ACCEPT + '}\n',
+    'def f(src, again, check_send):\n    t = src()\n    check_send(t, "u")\n    t = again()\n'
+    '    return {"Authorization": f"Bearer {t}", ' + _GH_ACCEPT + '}\n',
 ])
 def test_the_static_guard_sees_each_way_a_credential_is_built(code):
     assert _unchecked_in(code, "engine/boss_engine/x.py"), code
 
 
-def test_the_static_guard_accepts_a_checked_and_a_derived_credential():
-    code = ('def f(t, check_send, b64):\n    check_send(t, "https://api.github.com")\n'
-            '    basic = b64(f"x-access-token:{t}")\n'
-            '    return {"Authorization": f"basic {basic}", "Accept": "application/vnd.github+json"}\n')
-    assert _unchecked_in(code, "engine/boss_engine/x.py") == []
+@pytest.mark.parametrize("code", [
+    # checked before use, and a value derived from a checked credential
+    'def f(src, check_send, b64):\n    t = src()\n    check_send(t, "https://api.github.com")\n'
+    '    basic = b64(f"x-access-token:{t}")\n'
+    '    return {"Authorization": f"basic {basic}", ' + _GH_ACCEPT + '}\n',
+    # a helper whose caller checks what it passes
+    'def h(t):\n    return {"Authorization": f"Bearer {t}", ' + _GH_ACCEPT + '}\n'
+    'def c(src, check_send):\n    t = src()\n    check_send(t, "u")\n    return h(t)\n',
+    # a non-GitHub bearer (no GitHub marker) is not this guard's business
+    'def f(key):\n    k = key()\n    return {"Authorization": f"Bearer {k}"}\n',
+    # an ssh user is not a token
+    'def f(user, host):\n    return f"ssh://{user}@{host}"\n',
+])
+def test_the_static_guard_accepts_what_is_checked_or_not_a_credential(code):
+    assert _unchecked_in(code, "engine/boss_engine/x.py") == [], code
 
 
 def test_strict_mode_refuses_an_untagged_credential_and_production_counts_it(monkeypatch):
@@ -337,3 +519,17 @@ def test_the_untagged_token_ratchet_only_shrinks():
                 if r.strip() and not r.startswith("#")]
         assert all((_ROOT / name / r).exists() for r in rows), rows
         assert len(rows) <= CAP, f"{listed}: {len(rows)} > {CAP}: tag the tokens instead"
+
+
+def test_the_micro_vm_guest_clones_from_the_tokens_own_host(monkeypatch):
+    """The guest is a send point (sixth review, finding 4): spec.github_web comes from the
+    token's own host, never from an adapter's base, and the check runs before the spec exists."""
+    from boss_engine.services.repo_host import guest_github_web
+
+    assert guest_github_web(G.tag("ghes-tok", GHES), "https://github.com") == G.web_base_for(GHES)
+    assert guest_github_web(G.tag("gh-tok", PUBLIC), "https://ghe.northgate.example") == G.PUBLIC_WEB
+    assert guest_github_web("", "https://github.com") == "https://github.com"           # anonymous
+    assert guest_github_web("bb-tok", "", host="bitbucket") == ""                        # not GitHub
+    monkeypatch.setenv(G.STRICT_ENV, "1")
+    with pytest.raises(G.UntaggedGitHubCredential):                                     # untagged
+        guest_github_web("raw-token", "https://github.com")

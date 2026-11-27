@@ -18,7 +18,7 @@ Adding a host = one adapter module conforming to ``RepoHost`` + one line in ``_H
 """
 from __future__ import annotations
 
-from typing import Optional, Protocol, runtime_checkable
+from typing import Any, Optional, Protocol, runtime_checkable
 
 from .github_adapter import (
     GitHubAdapter,
@@ -158,6 +158,20 @@ def git_config_env(pairs) -> dict:
         env[f"GIT_CONFIG_KEY_{i}"] = key
         env[f"GIT_CONFIG_VALUE_{i}"] = value
     return env
+
+
+def guest_github_web(token: Any, fallback_web: str = "", *, host: str = "github") -> str:
+    """THE SEND POINT for a micro-VM guest (BOSSAPP-1286): the guest clones with ``token`` from
+    ``spec.github_web``, so that origin is derived from the TOKEN's own host (its tag), never from
+    an adapter's base, and the send check runs before the spec is built. A refusal raises
+    github_urls.CrossHostCredential: the step fails, nothing is handed to the guest."""
+    if not token or (host or "github").strip().lower() != "github":
+        return fallback_web
+    from ..identity import github_urls
+
+    web = github_urls.web_base_for(github_urls.credential_api_base(token))
+    github_urls.check_send(token, web, where="guest")
+    return web
 
 
 def git_access(host: str, owner: str, repo: str, token: str = "", *, web_base: str) -> GitAccess:

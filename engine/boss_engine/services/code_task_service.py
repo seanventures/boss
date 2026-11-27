@@ -3904,6 +3904,10 @@ def _run_code_task(engine, settings: Settings, jobs, run_id: str,
         if hasattr(provider, "run_code_task"):
             with _transaction(engine) as c:
                 _set_phase(c, run_id, "coding")
+            from .repo_host import guest_github_web
+
+            # The guest is a send point: the token's own host, checked (BOSSAPP-1286).
+            guest_web = guest_github_web(token, clone_web_base, host=repo_host_kind)
             guest_spec = {
                 "task_id": run_id, "work_branch": work_branch,
                 "owner": owner, "repo": repo, "base_branch": base_branch,
@@ -3914,7 +3918,7 @@ def _run_code_task(engine, settings: Settings, jobs, run_id: str,
                 "token": token, "timeout": settings.code_agent_timeout_seconds,
                 "repo_host": repo_host_kind,
                 # The web origin the token belongs to (BOSSAPP-1286): the guest clones there.
-                "github_web": clone_web_base,
+                "github_web": guest_web,
             }
             # ONLY THE SELECTED ENGINE'S CREDENTIAL (P8-pre S5, BOSSAPP-1061): the OpenAI and
             # Azure keys were sent to every guest, a claude_code one included.

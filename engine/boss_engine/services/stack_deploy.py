@@ -167,6 +167,10 @@ class GitHubSource:
         self.API = github_urls.api_base(api_base)
 
     def _headers(self, accept: str = "application/vnd.github+json") -> dict[str, str]:
+        from ..identity import github_urls
+
+        # THE SEND POINT (BOSSAPP-1286): every request of this reader goes to self.API.
+        github_urls.check_send(self._token, self.API, where="stack_deploy")
         headers = {"Accept": accept, "X-GitHub-Api-Version": "2022-11-28",
                    "User-Agent": "boss-stack-deploy"}
         if self._token:

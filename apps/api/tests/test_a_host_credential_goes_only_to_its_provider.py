@@ -295,6 +295,10 @@ RAW_SENDERS = {
     "engine/boss_engine/identity/runs.py": None,
     # The sandbox's CONNECT tunnel: relays opaque TLS the sandbox wrote; BOSS attaches nothing.
     "apps/egress/boss_egress/connect.py": None,
+    # The ticket connectors' PINNED transport (BOSSAPP-1385): socket.create_connection only opens
+    # the socket to the address the host check judged; the request itself goes through an
+    # http.client connection on that socket, which the process-wide guard covers.
+    "engine/boss_engine/connectors/tickets/http.py": None,
 }
 OTHER_HTTP_LIBS = ("requests", "urllib3", "aiohttp", "pycurl", "websocket", "websockets", "smtplib")
 

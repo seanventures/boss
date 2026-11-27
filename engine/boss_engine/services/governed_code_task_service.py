@@ -6466,6 +6466,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             eng_name, model = engine_override, None
         else:
             eng_name, model = _route_names(step)
+        from .repo_host import guest_github_web
+
+        # The guest is a send point: the token's own host, checked (BOSSAPP-1286).
+        guest_web = guest_github_web(token, clone_web_base)
         guest_spec = {
             "task_id": f"{run_id}-{step}", "owner": owner, "repo": repo,
             "base_branch": guest_base, "work_branch": work_branch,
@@ -6474,7 +6478,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                              "in your JSON reply."),
             "acceptance_criteria": [], "test_commands": test_cmds,
             "token": token, "timeout": settings.code_agent_timeout_seconds,
-            "github_web": clone_web_base,
+            "github_web": guest_web,
             "max_turns": int(getattr(settings, "code_agent_guest_max_turns", 120) or 120),
         }
         if guest_egress.get("spec"):

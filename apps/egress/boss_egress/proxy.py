@@ -725,6 +725,8 @@ class EgressProxy:
             base = (github_urls.web_base_for(api) if api else
                     (os.environ.get(GIT_UPSTREAM_ENV) or github_urls.web_base())).rstrip("/")
             if token:                       # "" = an anonymous read (anonymous_read_allowed)
+                # THE SEND POINT (BOSSAPP-1286), before the header exists.
+                github_urls.check_send(token, base, where="egress")
                 basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
                 headers["Authorization"] = f"Basic {basic}"
         elif provider == "bitbucket":
@@ -736,6 +738,7 @@ class EgressProxy:
                                         else f"Bearer {token}")
         else:
             base = api or github_app.api_base()
+            github_urls.check_send(token, base, where="egress")   # before the header exists
             headers["Authorization"] = f"Bearer {token}"
         url = upstream_url(base, encoded, req.query)
         if provider in ("github", "github-api"):
