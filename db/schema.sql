@@ -16888,7 +16888,6 @@ ALTER TABLE agent_wakeups ADD COLUMN IF NOT EXISTS purpose TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS agent_wakeups_one_golden_journeys
   ON agent_wakeups ((1)) WHERE purpose = 'golden_journeys' AND status = 'active';
 
-<<<<<<< HEAD
 -- SHORT-TTL SESSION MONEY-CAP HOLDS (BOSSAPP-1306): concurrent money-billed sessions (across
 -- builds or parallel review seats) register their clamped ceiling as a short-TTL active hold
 -- before running and release it in finally, and money_headroom subtracts active non-expired
@@ -16906,7 +16905,6 @@ CREATE TABLE IF NOT EXISTS session_budget_holds (
 CREATE INDEX IF NOT EXISTS idx_session_budget_holds_project_active
   ON session_budget_holds (project_id, expires_at)
   WHERE status = 'active';
-=======
 -- METATRON CLI SERVER PROTOCOL (BOSSAPP-1381 / MT-10): streaming agent turns, ordered SSE event
 -- replay, client tool results, act-on-my-behalf TTL grants, audit batch ingest, and single-use
 -- host credential leases. Also extends tool_policies_v2 with `hard` and `examples` for signed
@@ -17051,4 +17049,3 @@ CREATE TABLE IF NOT EXISTS metatron_credential_leases (
 );
 CREATE INDEX IF NOT EXISTS idx_metatron_credential_leases_host
   ON metatron_credential_leases (host_id, created_at DESC);
->>>>>>> cec16ca2f
