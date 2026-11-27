@@ -102,6 +102,40 @@ def surface_view(registry: Any, surface: str) -> Optional[dict]:
     return view
 
 
+def ordered_surface_offers(
+    available: list,
+    ranked: Iterable[Mapping[str, Any]],
+    *,
+    enforced: bool = True,
+) -> list:
+    """Order offered kernel tools using sanity-gated procedural priors (BOSSAPP-1031).
+
+    Never drops a tool and never changes a tool's standing (`core`/`deferred`/`hidden`).
+    When `enforced=True`, only priors whose `ordering_approved` is True affect the order;
+    rejected priors (`ordering_approved is False`) never affect ordering.
+    """
+    from ..services.engine_contract import canonical_tool_name
+
+    weights: dict[str, float] = {}
+    for item in ranked or ():
+        approved = item.get("ordering_approved")
+        if approved is False:
+            continue
+        if enforced and approved is not True:
+            continue
+        action = str(item.get("action") or "")
+        if action:
+            weights[action] = max(weights.get(action, 0.0), float(item.get("weight") or 0.0))
+    if not weights:
+        return list(available)
+
+    def _key(tool: Any) -> tuple[float, str]:
+        name = str(getattr(tool, "name", "") or "")
+        return (-weights.get(canonical_tool_name(name), 0.0), name)
+
+    return sorted(available, key=_key)
+
+
 @dataclass(frozen=True)
 class ScopedTools:
     """The ToolPolicy of design §5: core ∪ found, plus the search tool, when the flag is on;
@@ -113,10 +147,19 @@ class ScopedTools:
     version: str = "tools.scoped@1"
 
     def select(self, state: RunState, available: list) -> list:
-        if not enabled():
-            return list(available)
-        found = found_names(state)
-        return [t for t in available if not t.deferred or t.name in found]
+        selected = (
+            list(available)
+            if not enabled()
+            else [t for t in available if not t.deferred or t.name in found_names(state)]
+        )
+        ranked = state.extra.get("procedural_priors_ranked")
+        if ranked:
+            return ordered_surface_offers(
+                selected,
+                ranked,
+                enforced=bool(state.extra.get("procedural_priors_require_gate", True)),
+            )
+        return selected
 
     def answer_tools(self, state: RunState, reason: StopReason, available: list) -> list:
         if reason.why not in ("budget", "deadline") or not self.answer_offer:
@@ -130,4 +173,4 @@ class ScopedTools:
 
 
 __all__ = ["FIND_TOOLS", "FLAG", "ScopedTools", "cli_text_default", "enabled", "found_in_trace",
-           "found_names", "surface_view"]
+           "found_names", "ordered_surface_offers", "surface_view"]

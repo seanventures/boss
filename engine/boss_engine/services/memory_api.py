@@ -298,15 +298,30 @@ def _plain(row: Any) -> dict:
 
 # ── Priors, as a callable job ─────────────────────────────────────────────────────────────────
 
-def build_priors_job(engine: Any, *, org_id: str, since: Optional[datetime] = None) -> dict:
+def build_priors_job(
+    engine: Any,
+    *,
+    org_id: str,
+    since: Optional[datetime] = None,
+    settings: Any = None,
+    jev: Any = None,
+    sanity_gate: bool = False,
+) -> dict:
     """THE PRIORS BUILD AS A JOB (§4.6 "priors build as a scheduled bot"): fold the executed
     runs' agent_turns into kg_action_priors for `org_id`. Idempotent (a high-water mark per
     org), so a scheduler may call it as often as it likes; P3's bot is its clock. The manual
     script (scripts/build_action_priors.py) is now a thin caller of this."""
-    from .knowledge.procedural_priors import build_priors
+    from .knowledge.procedural_priors import build_priors, optional_jev_decider
 
     started = datetime.now(timezone.utc)
-    result = build_priors(engine, org_id=org_id, since=since)
+    resolved_jev = jev if jev is not None else (optional_jev_decider(settings) if settings is not None else None)
+    result = build_priors(
+        engine,
+        org_id=org_id,
+        since=since,
+        jev=resolved_jev,
+        sanity_gate=sanity_gate or (resolved_jev is not None),
+    )
     return {"job": PRIORS_JOB, "org_id": org_id, "started_at": started.isoformat(),
             "result": result}
 

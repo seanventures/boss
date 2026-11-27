@@ -573,8 +573,25 @@ class ToolRegistry:
             # A refusal that knows its own shape says it (BranchOwned: the run it waits on), so
             # a caller acts on the kind, never on the sentence.
             said = getattr(exc, "tool_result", None)
+            err_msg = f"{type(exc).__name__}: {exc}"
+            from ..mcp.server import (
+                format_database_error,
+                is_database_error,
+                resolve_database_config,
+            )
+
+            if is_database_error(exc):
+                settings_obj = getattr(ctx, "settings", None)
+                db_url = str(getattr(settings_obj, "database_url", "") or "")
+                db_source = str(getattr(ctx, "database_source", "") or "")
+                if not db_source:
+                    cfg = resolve_database_config()
+                    db_source = cfg.source
+                    if not db_url:
+                        db_url = cfg.url
+                err_msg = format_database_error(exc, database_url=db_url, source=db_source)
             return {**(said if isinstance(said, dict) else {}),
-                    "ok": False, "tool": name, "error": f"{type(exc).__name__}: {exc}"}
+                    "ok": False, "tool": name, "error": err_msg}
         finally:
             TRUSTED_STEP_ARGS.reset(trusted_token)
             if auth_token is not None:

@@ -5233,11 +5233,15 @@ CREATE TABLE IF NOT EXISTS kg_action_priors (
   org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
   fingerprint_key TEXT NOT NULL,             -- deterministic: v1|<stage>|<language>|<situation>
   action TEXT NOT NULL,                      -- engine_contract.canonical_tool_name vocabulary
-  success_count INTEGER NOT NULL DEFAULT 0,  -- progress credit (procedural_priors._credit)
+  success_count INTEGER NOT NULL DEFAULT 0,  -- progress credit (procedural_priors._credit / v1.1 judge)
   failure_count INTEGER NOT NULL DEFAULT 0,
   last_seen_at TIMESTAMPTZ,
   example_run_id TEXT,
   example_excerpt TEXT,
+  evidence_grade TEXT NOT NULL DEFAULT 'ground_truth', -- ground_truth | jev | correlation (BOSSAPP-1031 v1.1)
+  fingerprint_label TEXT,                    -- optional Jev-assisted label for ambiguous fingerprints
+  ordering_approved BOOLEAN,                 -- Jev sanity-gate before graduation to enforced tool ordering
+  sanity_verdict JSONB,                      -- {approved, verdict, reason, judge, confidence, checked_at}
   UNIQUE(org_id, fingerprint_key, action)
 );
 

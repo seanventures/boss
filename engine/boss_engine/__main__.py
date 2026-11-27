@@ -71,25 +71,23 @@ def _ctx():
     from .ports import EnginePorts, configure_engine_ports, get_engine_ports
 
     if get_engine_ports() is None:
-        if os.environ.get("DATABASE_URL"):
+        if ctx.durable_workspace_configured:
             configure_engine_ports(_postgres_ports(ctx))
         else:
             configure_engine_ports(EnginePorts.oss_defaults(ctx.settings))
-    if not os.environ.get("DATABASE_URL"):
+    if not ctx.durable_workspace_configured:
         print(
-            "boss-engine: DATABASE_URL is not set — running in catalog-only mode. "
-            "BOSS workflow commands require a self-hosted Postgres workspace so "
-            "tasks, Receipts, approvals, and leases are durable. Set DATABASE_URL "
-            "and run `python -m boss_engine bootstrap` before invoking workflow tools.",
+            f"boss-engine: no database configured (source={ctx.database_source}) — running in "
+            "catalog-only mode. BOSS workflow commands require a self-hosted Postgres workspace "
+            "so tasks, Receipts, approvals, and leases are durable. Set DATABASE_URL (or "
+            "BOSS_INSTALL_DIR pointing at your install .env) and run "
+            "`python -m boss_engine bootstrap` before invoking workflow tools.",
             file=sys.stderr,
         )
-    elif not ctx.database_reachable():
-        print(
-            "boss-engine: warning — database is unreachable; DB-backed tools will "
-            "fail. Check DATABASE_URL and run `python -m boss_engine bootstrap` "
-            "against a fresh database (see engine/README.md).",
-            file=sys.stderr,
-        )
+    else:
+        db_err = ctx.database_error()
+        if db_err:
+            print(f"boss-engine: warning — {db_err}", file=sys.stderr)
     return ctx
 
 
