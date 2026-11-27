@@ -340,6 +340,12 @@ def launch(
         receipt_id: Optional[str] = str(kept["receipt_id"])
     else:
         spec, origin = resolve_spec(prompt, template_id, template_dir)
+        if target is not None and origin != "template":
+            # INTO A PROJECT BUILDS A CATALOGUE TEMPLATE, nothing else: a pasted spec (its own
+            # repository, resources and workflows) or a template the catalogue does not have
+            # never lands in a project that already exists.
+            raise FactoryLaunchError(422, "template_required",
+                                     "Choose a template from the catalogue to build into this project.")
         attachments = _load_attachments(connection, org_id, ids)
         spec = _fold_attachments(spec, attachments)
         if repo:

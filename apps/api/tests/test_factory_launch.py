@@ -1017,3 +1017,89 @@ def test_template_into_existing_project_keeps_its_repository_and_review_stop(cli
     assert calls[-1]["spec"]["existing_project"]
     assert client.post(target, json={**payload, "github_repo": "other/repo"}).status_code == 422
     assert client.post("/v1/projects/unknown-project/factory/launch", json=payload).status_code == 404
+
+
+def _project_with_repo(client, engine, monkeypatch, tmp_path, calls: list) -> tuple[str, str]:
+    """A project made by an ordinary launch (it has its own local repository), its hold released."""
+    catalogue = tmp_path / "factory_templates"
+    _write_catalogue(catalogue)
+    monkeypatch.setattr("boss_engine.services.factory_launch.TEMPLATE_DIR", catalogue)
+    _patch_builder(monkeypatch, calls)
+    # Its own words, so each test's launch is its own (the dedupe key and slug follow them).
+    new = client.post("/v1/factory/launch", json={"template_id": "alpha-notes", "prompt": f"Notes for {tmp_path.name}"})
+    assert new.status_code == 201, new.text
+    with engine.begin() as connection:
+        BudgetGovernor(get_settings()).release(connection, new.json()["project_id"], new.json()["reservation_id"],
+                                               "Test builder finished.")
+    return new.json()["project_id"], new.json()["spec"]["local_repo"]
+
+
+def test_into_a_project_builds_only_a_catalogue_template(client, engine, monkeypatch, tmp_path):
+    """A pasted spec or a template the catalogue lacks never lands in an existing project."""
+    calls: list = []
+    project, _repo = _project_with_repo(client, engine, monkeypatch, tmp_path, calls)
+    target = f"/v1/projects/{project}/factory/launch"
+    made = len(calls)
+    unknown = client.post(target, json={"template_id": "no-such-template", "prompt": _ALPHA, "mode": "build"})
+    assert 400 <= unknown.status_code < 500, unknown.text
+    pasted = client.post(target, json={"template_id": "beta-board", "prompt": _ALPHA, "mode": "build"})
+    assert pasted.status_code == 422 and pasted.json()["error"] == "template_required", pasted.text
+    prose = client.post(target, json={"template_id": "no-such-template", "prompt": "Build a CRM", "mode": "build"})
+    assert 400 <= prose.status_code < 500, prose.text
+    assert len(calls) == made                    # nothing was built
+
+
+def test_an_into_launch_held_for_consent_resumes_in_the_same_project_and_repository(
+        client, engine, monkeypatch, tmp_path):
+    """Into → 409 consent → the same launch again → 201, the same project, its own repository."""
+    from boss_engine.identity.consent import ConsentRequired
+
+    calls: list = []
+    project, repo = _project_with_repo(client, engine, monkeypatch, tmp_path, calls)
+    state = {"allow": False}
+
+    def build(connection, *, project_id, spec, actor, settings, jobs, reservation_id):
+        if not state["allow"]:
+            raise ConsentRequired({"error": "consent_required", "message": "Consent is required.",
+                                   "agents": [{"id": "agt_forge", "name": "Forge"}], "permissions": ["code_task:run"],
+                                   "task": "Easy Mode build", "task_run_id": "pending_into", "projects": [project_id]})
+        calls.append({"project_id": project_id, "spec": dict(spec)})
+        return {"project_id": project_id, "run_id": "run_into_1"}
+
+    monkeypatch.setattr("boss_engine.services.factory_launch.build_run", build)
+    count = _count(engine, "projects")
+    target = f"/v1/projects/{project}/factory/launch"
+    payload = {"template_id": "beta-board", "mode": "build"}
+    asked = client.post(target, json=payload)
+    assert asked.status_code == 409, asked.text
+    assert asked.json()["project_id"] == project
+    state["allow"] = True
+    again = client.post(target, json=payload)
+    assert again.status_code == 201, again.text
+    assert again.json()["project_id"] == project
+    assert _count(engine, "projects") == count
+    spec = calls[-1]["spec"]
+    assert spec["existing_project"] is True
+    assert spec["local_repo"] == repo and not spec.get("github_repo")
+
+
+def test_an_into_launch_tells_the_workflow_it_is_not_a_new_app(engine, monkeypatch):
+    """With the new_app run input (#352), an Into launch's Easy Mode run says it builds into an
+    existing app, keyed on spec["existing_project"] — the one mark this path sets."""
+    import inspect
+
+    from boss_engine.services import factory_launch, workflow_catalogue, workflows
+
+    if "new_app" not in inspect.getsource(factory_launch):
+        pytest.skip("needs the new_app run input from #352; meaningful once both are on main")
+    seen: dict = {}
+    monkeypatch.setattr(workflow_catalogue, "seed", lambda *a, **k: None)
+    monkeypatch.setattr(workflows, "running_version", lambda *a, **k: {"version_id": "wfv_x"})
+    monkeypatch.setattr(workflows, "start_run", lambda connection, **k: seen.update(k) or {"id": "wfr_into"})
+    monkeypatch.setattr(factory_launch, "_release_hold", lambda *a, **k: None)
+    monkeypatch.setattr(factory_launch, "_start_approver", lambda *a, **k: None)
+    spec = {"title": "Beta board", "prompt": "Build beta.", "local_repo": "boss-local/beta", "existing_project": True}
+    with engine.begin() as connection:
+        factory_launch.spec_first_run(connection, project_id="default", spec=spec, actor="ceo",
+                                      settings=get_settings(), jobs=None, reservation_id="res_x")
+    assert seen["input_data"]["new_app"] is False
