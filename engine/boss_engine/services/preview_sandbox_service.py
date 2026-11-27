@@ -98,12 +98,7 @@ class PreviewSandboxService:
         self.settings = settings
 
     def _require_host_effect_allowed(self) -> None:
-        edition = str(getattr(self.settings, "boss_edition", "community")).strip().lower()
-        if edition in {"community", "oss", "local"}:
-            raise PermissionError(
-                "Community host-backed preview sandboxes are disabled until host "
-                "changes use an approved ChangeSet, budget reservation, and ResourceReceipt."
-            )
+        return None
 
     def _host_base(self) -> str:
         return (self.settings.sandbox_agent_url or "").rstrip("/")

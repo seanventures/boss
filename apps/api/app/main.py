@@ -8439,7 +8439,7 @@ def list_pipeline_profiles_endpoint(project_id: str):
 @app.post("/v1/pipeline-profiles", status_code=201)
 @permit(P.PIPELINE_MANAGE, scope=Scope.project(body="project_id"))
 def create_pipeline_profile_endpoint(payload: open_bodies.PipelineProfileCreateBody):
-    """Create/update a custom profile (enterprise edition only)."""
+    """Create/update a custom pipeline profile."""
     payload = payload.payload()
     from .services import pipeline_profile_service as pps
 
@@ -10374,14 +10374,7 @@ def list_deployment_hosts_endpoint(project_id: str, include_retired: bool = Fals
             "stack_deploy_allowed": outward_ssh,
             "host_writes_allowed": host_writes_allowed,
             "host_write_blocker": None if host_writes_allowed else {
-                "message": (
-                    "Direct host changes require BOSS_SSH_HOST_DEPLOY_ALLOWED=true."
-                    if str(getattr(settings, "boss_edition", "community")).strip().lower()
-                    in {"enterprise", "enterprise_cloud", "enterprise_self_hosted", "cloud"}
-                    else ("Direct key installation, Docker provisioning, and host retirement "
-                          "are disabled in this edition until an approved Resource Plane flow "
-                          "is available.")
-                ),
+                "message": "Direct host changes require BOSS_SSH_HOST_DEPLOY_ALLOWED=true.",
             },
             "blocker": None if outward_ssh else {
                 "setting": "BOSS_SSH_OUTWARD_ALLOWED",
@@ -11691,11 +11684,6 @@ def deploy_code_task_endpoint(run_id: str, request: Request, payload: Optional[d
         return {"plan": plan, "markdown": render_plan_markdown(plan)}
     if mode != "ssh":
         raise HTTPException(status_code=422, detail="mode must be 'dry_run' or 'ssh'")
-    if str(settings.boss_edition).strip().lower() in {"community", "oss", "local"}:
-        from boss_engine.services.governed_host_deploy import ungoverned_refusal
-
-        raise HTTPException(status_code=409,
-                            detail=ungoverned_refusal("Community SSH deployment"))
 
     # mode == 'ssh' — actuate on a real host (Phase 2/3). Requires an explicit host, the SSH key,
     # and the outward gate; otherwise return the plan + the reason it's held (never touch a host).
@@ -15510,6 +15498,7 @@ def get_task(task_id: str) -> TaskSummary:
     "/v1/self-improvement/proposals",
     response_model=SelfImprovementProposalListResponse,
 )
+@permit(P.IMPROVEMENT_READ, scope=Scope.project(query="project_id"))
 def list_self_improvement_proposals(
     project_id: str, limit: int = 25, offset: int = 0
 ) -> SelfImprovementProposalListResponse:
@@ -15532,6 +15521,7 @@ def list_self_improvement_proposals(
     response_model=SelfImprovementProposalDetail,
     status_code=201,
 )
+@permit(P.IMPROVEMENT_MANAGE, scope=Scope.project(body="project_id"))
 def create_self_improvement_proposal(
     payload: SelfImprovementProposalCreateRequest,
 ) -> SelfImprovementProposalDetail:
@@ -15567,6 +15557,7 @@ def create_self_improvement_proposal(
     "/v1/self-improvement/proposals/{proposal_id}",
     response_model=SelfImprovementProposalDetail,
 )
+@permit(P.IMPROVEMENT_READ, scope=Scope.of("self_improvement_proposal", path="proposal_id"))
 def get_self_improvement_proposal(
     proposal_id: str,
 ) -> SelfImprovementProposalDetail:
@@ -15589,6 +15580,7 @@ def get_self_improvement_proposal(
     "/v1/self-improvement/proposals/{proposal_id}/canary",
     response_model=SelfImprovementProposalDetail,
 )
+@permit(P.IMPROVEMENT_MANAGE, scope=Scope.of("self_improvement_proposal", path="proposal_id"))
 def record_self_improvement_canary(
     proposal_id: str, payload: SelfImprovementCanaryRequest
 ) -> SelfImprovementProposalDetail:
@@ -15625,6 +15617,7 @@ def record_self_improvement_canary(
     "/v1/self-improvement/proposals/{proposal_id}/rollout",
     response_model=SelfImprovementProposalDetail,
 )
+@permit(P.IMPROVEMENT_MANAGE, scope=Scope.of("self_improvement_proposal", path="proposal_id"))
 def record_self_improvement_rollout(
     proposal_id: str, payload: SelfImprovementRolloutRequest
 ) -> SelfImprovementProposalDetail:
@@ -15661,6 +15654,7 @@ def record_self_improvement_rollout(
     "/v1/self-improvement/proposals/{proposal_id}/rollback",
     response_model=SelfImprovementProposalDetail,
 )
+@permit(P.IMPROVEMENT_MANAGE, scope=Scope.of("self_improvement_proposal", path="proposal_id"))
 def rollback_self_improvement_proposal(
     proposal_id: str, payload: SelfImprovementRollbackRequest
 ) -> SelfImprovementProposalDetail:
@@ -15697,6 +15691,7 @@ def rollback_self_improvement_proposal(
     "/v1/self-improvement/proposals/{proposal_id}/run-canary",
     response_model=SelfImprovementProposalDetail,
 )
+@permit(P.IMPROVEMENT_MANAGE, scope=Scope.of("self_improvement_proposal", path="proposal_id"))
 def run_self_improvement_canary(
     proposal_id: str, payload: SelfImprovementRunCanaryRequest
 ) -> SelfImprovementProposalDetail:
@@ -15729,6 +15724,7 @@ def run_self_improvement_canary(
     "/v1/self-improvement/proposals/{proposal_id}/rollout/start",
     response_model=SelfImprovementProposalDetail,
 )
+@permit(P.IMPROVEMENT_MANAGE, scope=Scope.of("self_improvement_proposal", path="proposal_id"))
 def start_self_improvement_rollout(
     proposal_id: str, payload: SelfImprovementStartRolloutRequest
 ) -> SelfImprovementProposalDetail:
@@ -15764,6 +15760,7 @@ def start_self_improvement_rollout(
     "/v1/self-improvement/proposals/{proposal_id}/rollout/advance",
     response_model=SelfImprovementProposalDetail,
 )
+@permit(P.IMPROVEMENT_MANAGE, scope=Scope.of("self_improvement_proposal", path="proposal_id"))
 def advance_self_improvement_rollout(
     proposal_id: str, payload: SelfImprovementAdvanceRolloutRequest
 ) -> SelfImprovementProposalDetail:
@@ -22028,6 +22025,7 @@ def get_changeset_terraform_export(
     "/v1/projects/{project_id}/terraform-drift-reconcile",
     response_model=TerraformDriftReconcileResponse,
 )
+@permit(P.INFRA_PROVISION, scope=Scope.project(path="project_id"))
 def terraform_drift_reconcile(
     project_id: str,
     payload: TerraformDriftReconcileRequest,

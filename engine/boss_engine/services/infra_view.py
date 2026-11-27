@@ -449,7 +449,7 @@ class TargetDetail(TypedDict, total=False):
     recent: list["DeployRow"]         # 5 newest
     secrets: list[dict[str, Any]]     # [{name, kind, status}]
     can: dict[str, bool]              # deploy, auto_deploy, move, retire, check
-    disabled: dict[str, str]          # control → tooltip (e.g. "Paused in Community")
+    disabled: dict[str, str]          # control → tooltip when a precondition blocks it
     etag: str
 
 
@@ -626,8 +626,6 @@ ACTIVE_STATES = ("planned", "awaiting_approval", "approved", "running", "applyin
 TERMINAL_RUN_STATES = ("succeeded", "failed", "rolled_back", "deployed", "blocked")
 #: Target kinds that deploy through the per-app delivery connectors rather than a cloud account.
 LOCAL_KINDS = frozenset({"local", "local_process", "local_runner", "ssh", "container"})
-_PAID_EDITIONS = frozenset({"cloud", "enterprise", "enterprise_cloud", "enterprise_self_hosted"})
-PAUSED_IN_COMMUNITY = "Paused in Community"
 
 
 def _now() -> datetime:
@@ -682,8 +680,8 @@ def usd(micros: Any) -> str:
 
 
 def community(settings: Any) -> bool:
-    edition = str(getattr(settings, "boss_edition", "community") or "community").strip().lower()
-    return not (edition in _PAID_EDITIONS or edition.startswith("enterprise"))
+    _ = settings
+    return False
 
 
 def _guard(connection: Any, partial: list[str], name: str, fn, default):
@@ -2153,14 +2151,8 @@ def target_detail(connection: Any, settings: Any, project_id: str, target_id: st
                                or "missing")} for r in refs]
 
     route = target_kind_route(t)
-    is_community = community(settings)
     domains = _json(t.get("domains")) or []
     disabled: dict[str, str] = {}
-    # A host target deploys in Community too: through a plan a person approves.
-    if is_community and route != "stack" and not governed_host(dict(t)):
-        disabled["deploy"] = PAUSED_IN_COMMUNITY
-    if is_community:
-        disabled["auto_deploy"] = PAUSED_IN_COMMUNITY
     retired = t.get("status") == "retired"
     body: dict[str, Any] = {
         "id": t["id"], "app": t["app_name"], "env": t["environment"],

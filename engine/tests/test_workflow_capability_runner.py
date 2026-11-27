@@ -1875,8 +1875,12 @@ def test_community_still_adopts_research_that_already_exists(eng, project, monke
 
 
 def test_other_editions_still_research(eng, project, monkeypatch):
+    from boss_engine.services import discovery_service
+
     discovery = RecordingTool("create_discovery", {"run_id": "drun_ent"})
     monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([discovery]))
+    monkeypatch.setattr(discovery_service, "research_unavailable",
+                        lambda connection, settings, project_id, actor="boss": None)
 
     with eng.begin() as c:
         _, version = _publish(c, project, "enterpriseresearch", [
@@ -1886,7 +1890,7 @@ def test_other_editions_still_research(eng, project, monkeypatch):
         _start(c, project, version["id"], {})
         runner.tick(c, EditionCtx(eng, "enterprise"), project_id=project)
 
-    assert discovery.calls, "the Community research check leaked into another edition"
+    assert discovery.calls, "other editions stopped commissioning research"
 
 
 def test_an_approved_spec_is_not_approved_again(eng, project, monkeypatch):

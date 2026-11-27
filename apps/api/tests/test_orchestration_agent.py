@@ -228,7 +228,7 @@ def test_community_discovery_from_the_agent_is_a_governed_job_with_no_run_wide_r
 def test_discovery_tool_reserves_budget_and_creates_receipt_before_start(
     engine, monkeypatch, decides
 ):
-    """Outside Community the legacy in-process path keeps its run-wide reservation."""
+    """Every edition uses the governed discovery job path without a run-wide reservation."""
     settings = get_settings().model_copy(
         update={"openai_api_key": "test-model-key", "plan_budget_usd_micros": 10_000,
                 "boss_edition": "enterprise"}
@@ -240,6 +240,7 @@ def test_discovery_tool_reserves_budget_and_creates_receipt_before_start(
         lambda **kwargs: started.append(kwargs) or "drun_governed",
     )
     with engine.begin() as connection:
+        before = connection.execute(text("SELECT count(*) FROM budget_reservations")).scalar_one()
         manifest = build_manifest(connection, settings, settings.default_project_id)
         turn = IntentRouter(settings).route_turn(
             connection,
@@ -249,15 +250,10 @@ def test_discovery_tool_reserves_budget_and_creates_receipt_before_start(
             manifest=manifest,
         )
         assert turn.actions[0]["kind"] == "discovery_started"
-        governance = started[0]["governance"]
+        assert "governance" not in started[0]
+        assert started[0]["actor"] == "executive_console"
         assert connection.execute(
-            text("SELECT status FROM budget_reservations WHERE id = :id"),
-            {"id": governance["reservation_id"]},
-        ).scalar_one() == "active"
-        assert connection.execute(
-            text("SELECT status FROM receipts WHERE id = :id"),
-            {"id": governance["receipt_id"]},
-        ).scalar_one() == "in_progress"
+            text("SELECT count(*) FROM budget_reservations")).scalar_one() == before
 
 
 def test_broad_ask_proposes_then_explicit_confirmation_dispatches(client, engine, decides):

@@ -28,17 +28,10 @@ DEFAULT_PROJECT = os.environ.get("BOSS_PROJECT_ID", "boss-dogfood")
 
 
 def _postgres_ports(ctx):
-    """Postgres-backed ports for a CLI/MCP process, mirroring what the API builds at startup.
-
-    Falls back to the OSS defaults for a community edition, which is exactly what
-    apps/api/app/bootstrap_ports.build_ports does — the two must agree, or the same tool
-    behaves differently depending on which process invoked it.
-    """
+    """Postgres-backed ports for a CLI/MCP process, mirroring what the API builds at startup."""
     from .ports import EnginePorts
 
-    edition = str(getattr(ctx.settings, "boss_edition", "community")).strip().lower()
-    if edition not in ("enterprise", "enterprise_plus", "ent"):
-        return EnginePorts.oss_defaults(ctx.settings)
+    _ = ctx
     try:
         from apps.api.app.adapters_postgres import (
             PostgresBudgetPort, PostgresDecisionSink, PostgresEntitlementPort,

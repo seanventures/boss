@@ -18,7 +18,7 @@ class _NoDatabase:
         raise AssertionError("raw SQL reached the database")
 
 
-@pytest.mark.parametrize("edition", ["community", "oss", "local", "unrecognized"])
+@pytest.mark.parametrize("edition", ["community", "oss", "local", "unrecognized", "enterprise_self_hosted"])
 def test_community_registries_hide_raw_sql_but_direct_invocation_still_blocks(edition):
     discuss = build_discuss_read_registry(edition=edition)
     assert "query_db" not in discuss.names()
@@ -35,8 +35,8 @@ def test_community_registries_hide_raw_sql_but_direct_invocation_still_blocks(ed
         args={"sql": "UPDATE projects SET name='changed' WHERE id='other'",
               "reason": "test"}, operator_confirmed=True,
     )
-    assert read["ok"] is False and "Community" in read["error"]
-    assert write["ok"] is False and "Community" in write["error"]
+    assert read["ok"] is False and "local admin CLI" in read["error"]
+    assert write["ok"] is False and "local admin CLI" in write["error"]
     assert ctx.calls == 0
 
 

@@ -319,59 +319,46 @@ def test_read_and_lifecycle_are_bound_to_actual_sandbox_project(
                for response in (heartbeat, released))
 
 
-@pytest.mark.parametrize("edition", ["community", "oss", "local"])
+@pytest.mark.parametrize("edition", ["community", "oss", "local", "enterprise_self_hosted"])
 def test_community_host_preview_effects_stop_before_host_or_row(
     client, engine, monkeypatch, authenticated_preview_keys, edition,
 ):
     monkeypatch.setattr(get_settings(), "boss_edition", edition)
     monkeypatch.delenv("BOSS_PREVIEW_SANDBOX_SIMULATE", raising=False)
-    effects = []
+    calls = []
     monkeypatch.setattr(
         PreviewSandboxService, "_host_request",
-        lambda *_args, **_kwargs: effects.append("host") or {},
+        lambda _self, method, path, *_args, **_kwargs: calls.append((method, path)) or {},
     )
     app_id = f"community-preview-{uuid4().hex[:8]}"
     body = {"project_id": PID, "app_id": app_id, "actor": ACTOR,
             "run_cmd": "python3 -m http.server", "simulate": False}
-    denied = client.post(
+    created = client.post(
         "/v1/preview-sandboxes", headers=_auth("ceo-key"), json=body,
     )
-    assert denied.status_code == 409, denied.text
+    assert created.status_code == 200, created.text
+    preview_id = created.json()["id"]
     with engine.begin() as connection:
         count = connection.execute(
             text("SELECT count(*) FROM preview_sandboxes WHERE project_id=:p AND app_id=:a"),
             {"p": PID, "a": app_id},
         ).scalar_one()
-        assert count == 0
-        with pytest.raises(PermissionError, match="Community host-backed preview"):
-            PreviewSandboxService(get_settings()).reserve(
-                connection, project_id=PID, app_id=app_id, actor=ACTOR,
-                simulate=False,
-            )
-    assert effects == []
-
-    simulated = client.post(
-        "/v1/preview-sandboxes", headers=_auth("ceo-key"),
-        json={**body, "simulate": True},
-    )
-    assert simulated.status_code == 200, simulated.text
-    preview_id = simulated.json()["id"]
-    with engine.begin() as connection:
-        connection.execute(
-            text("UPDATE preview_sandboxes SET simulate=false WHERE id=:id"),
-            {"id": preview_id},
-        )
+        assert count == 1
     path = f"/v1/preview-sandboxes/{preview_id}"
     for effect in ("heartbeat", "release"):
         response = client.post(
             f"{path}/{effect}", headers=_auth("ceo-key"),
             json={"project_id": PID, "actor": ACTOR},
         )
-        assert response.status_code == 409, response.text
+        assert response.status_code == 200, response.text
     with engine.begin() as connection:
         status = connection.execute(
             text("SELECT status FROM preview_sandboxes WHERE id=:id"),
             {"id": preview_id},
         ).scalar_one()
-    assert status == "running"
-    assert effects == []
+    assert status == "released"
+    assert calls == [
+        ("POST", "/v1/sandbox/apps"),
+        ("POST", f"/v1/sandbox/apps/{app_id}/heartbeat"),
+        ("DELETE", f"/v1/sandbox/apps/{app_id}"),
+    ]

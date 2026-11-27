@@ -3,11 +3,9 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime, timezone
-from importlib import import_module
 from pathlib import Path
 from typing import Any, Optional
 
-import yaml
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
@@ -73,16 +71,8 @@ class EntitlementBrokerService:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.budget = BudgetGovernor(settings)
-        edition = str(settings.boss_edition or "community").strip().lower()
         self._paid_gateway = None
-        if edition in {
-            "cloud", "enterprise", "enterprise_cloud", "enterprise_self_hosted"
-        }:
-            extension = import_module("boss_engine.services.enterprise_gateway")
-            self._paid_gateway = extension.EnterpriseGatewayPolicy(settings)
         self._gateway_source_kinds = set(self.GATEWAY_SOURCE_KINDS)
-        if self._paid_gateway is not None:
-            self._gateway_source_kinds.add(self._paid_gateway.source_kind)
 
     def _load_yaml(self, path: Path) -> dict[str, Any]:
         # Parsed once per version of the file (yaml_files): list_skills reads every skill file.
@@ -122,27 +112,15 @@ class EntitlementBrokerService:
         connection: Connection,
         project_id: str,
     ) -> set[str]:
-        # The skill catalog is edition-scoped, but selecting its pack must not
-        # import the hosted billing/connection service. Edition status uses the
-        # same configured edition for its source pack; the database link only
-        # affects whether that edition is active, not which skills it installs.
-        configured = str(self.settings.boss_edition or "community").strip().lower()
-        configured = configured.replace("-", "_")
-        if configured in {"enterprise", "enterprise_cloud", "enterprise_self_hosted"}:
-            edition = "enterprise"
-        elif configured == "cloud":
-            edition = "cloud"
-        else:
-            edition = "community"
-        packs = [
-            path
-            for path in sorted((self.settings.specpack_root / "packs").glob("*_edition.yaml"))
-            if str(self._load_yaml(path).get("edition") or "").strip().lower()
-            == edition
-        ]
-        if len(packs) != 1:
-            raise ValueError(f"Expected one skill pack for edition {edition!r}; found {len(packs)}")
-        return self._pack_skill_bundles(packs[0].stem)
+        # All installs load the full skill pack regardless of configured edition label.
+        _ = (connection, project_id)
+        packs = sorted((self.settings.specpack_root / "packs").glob("*_edition.yaml"))
+        if not packs:
+            raise ValueError("Expected at least one *_edition.yaml skill pack; found 0")
+        bundles: set[str] = set()
+        for pack in packs:
+            bundles.update(self._pack_skill_bundles(pack.stem))
+        return bundles
 
     def _pack_skill_bundles(
         self,
@@ -1372,8 +1350,6 @@ class EntitlementBrokerService:
         passes an explicit status ("revoked") and is unaffected.
         """
         defaults = self._source_record_defaults().get(payload["source_id"], {})
-        if payload.get("provider") == "boss" and not defaults:
-            raise ValueError("BOSS-owned model source is unavailable in this edition")
         record = {**defaults, **payload}
         if (not defaults and CONNECTED_KEY_SOURCE.match(record["source_id"])
                 and not record.get("workload_classes_allowed")):
