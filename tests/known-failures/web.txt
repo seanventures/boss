@@ -14,12 +14,8 @@ apps/web/tests/connection-section.test.tsx | BOSSAPP-944 | web console | 2026-11
 apps/web/tests/datetime-hydration.test.ts | BOSSAPP-944 | web console | 2026-11-10 | a client island formats dates without the UTC helpers or a pinned locale
 apps/web/tests/every-button-class-is-styled.test.ts | BOSSAPP-944 | web console | 2026-11-10 | a <button className> names a class no stylesheet defines
 apps/web/tests/every-call-action-button-is-pre-greyed.test.ts | BOSSAPP-944 | web console | 2026-11-10 | a pressed call's permission is not gated in the same file
-apps/web/tests/every-control-mirrors-the-permission-the-api-checks.test.ts | BOSSAPP-944 | web console | 2026-11-10 | an action posting a literal /v1 path declares a permission that route does not check
 apps/web/tests/every-write-is-pre-greyed.test.ts | BOSSAPP-944 | web console | 2026-11-10 | a browser file that writes is not accounted for, or does not gate its permission
 apps/web/tests/identity-contract.test.ts | BOSSAPP-944 | web console | 2026-11-10 | the generated permission union is no longer the reviewed 200-entry catalogue
 apps/web/tests/identity-readers-subscribe.test.ts | BOSSAPP-944 | web console | 2026-11-10 | a component calls an identity reader at render without a subscribing hook
 apps/web/tests/settings-knobs.test.ts | BOSSAPP-944 | web console | 2026-11-10 | the starter strip and the per-job model picker no longer match their expectations
-apps/web/tests/start-doors-forward-the-checklist.test.ts | BOSSAPP-944 | web console | 2026-11-10 | app/knowledge/kg-aml-sample.tsx does not draw the readiness checklist with Start anyway
-apps/web/tests/the-step-up-is-the-top-layer.test.tsx | BOSSAPP-944 | web console | 2026-11-10 | a file picks its own overlay z-index instead of a --z token
-apps/web/tests/the-walks-refused-controls-are-pre-greyed.test.ts | BOSSAPP-944 | web console | 2026-11-10 | app/setup/setup-board.tsx su-test-all is not pre-greyed on setup:manage
 apps/web/tests/ui-simplification.test.tsx | BOSSAPP-944 | web console | 2026-11-10 | refresh failures and simplified lists do not render as the test expects
