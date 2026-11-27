@@ -24,7 +24,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 import time
-from typing import Optional
+from typing import Any, Optional
 
 import httpx
 
@@ -77,6 +77,14 @@ def _workflows_opted_in(full_name: str, connection=None) -> bool:
         return False
 
 
+def _tagged(token: Any, api_base: str) -> Any:
+    """A token tagged with the host it was issued by (github_urls.GitHubCredential): the send
+    points refuse it anywhere else (BOSSAPP-1286). "" means the install's host."""
+    from ..identity import github_urls
+
+    return github_urls.tag(token, api_base) if token else token
+
+
 def repo_token(settings, owner: str, repo: str, *, api_base_url: str = "", app=None,
                connection=None, project_id: str = "") -> str:
     """A usable GitHub token for THIS repo: installation token if the App covers it, else PAT.
@@ -105,11 +113,11 @@ def repo_token(settings, owner: str, repo: str, *, api_base_url: str = "", app=N
             token, missing = app.usable_token_for_repo(
                 owner, repo, extra=scope_for_repo(owner, repo, connection))
             if not missing:
-                return token
+                return _tagged(token, getattr(app, "api_base_url", ""))
             # The App is installed here but was not granted enough to do the work. Without
             # this branch the token is used anyway and dies at push time with a bare 403.
             if not getattr(settings, "github_token", ""):
-                return token
+                return _tagged(token, getattr(app, "api_base_url", ""))
             logging.getLogger(__name__).warning(
                 "github: App installation for %s/%s is missing %s; using the configured "
                 "token instead", owner, repo, ", ".join(missing))
@@ -123,7 +131,7 @@ def repo_token(settings, owner: str, repo: str, *, api_base_url: str = "", app=N
                 owner, repo)
     token = getattr(settings, "github_token", "")
     if token:
-        return token
+        return _tagged(token, "")          # the install's own token: the install's host
     # A THIRD SOURCE: THE TOKEN THIS PROJECT REGISTERED.
     #
     # The setup wizard writes a connection and a repository binding, and `create_code_task`
@@ -148,7 +156,7 @@ def repo_token(settings, owner: str, repo: str, *, api_base_url: str = "", app=N
                 "github: registered-credential lookup failed for %s/%s: %s", owner, repo, error)
             registered = None
         if registered:
-            return registered
+            return registered              # tagged by token_for_repository with its binding's host
     # A FOURTH: GitHub connected in Setup › GitHub access (identity/github_setup.py) — the App
     # created from a manifest, or the org's fine-grained token — both held in the vault.
     try:
@@ -167,7 +175,7 @@ def repo_token(settings, owner: str, repo: str, *, api_base_url: str = "", app=N
                                           owner, repo, type(error).__name__)
         held = None
     if held:
-        return held
+        return _tagged(held, "")           # the Setup App / org token: the install's host
     raise GitHubNotConnected(
         "No GitHub credentials for %s/%s: the App has no installation for it, "
         "BOSS_GITHUB_TOKEN is not set, and this project has no repository connected in Setup."
@@ -197,10 +205,12 @@ class GitHubAppAdapter:
         self,
         settings: Settings,
         *,
-        api_base_url: str = "https://api.github.com",
+        api_base_url: str = "",
     ):
         self.settings = settings
-        self.api_base_url = api_base_url.rstrip("/")
+        from ..identity import github_urls
+
+        self.api_base_url = github_urls.api_base(api_base_url)
         self._cache: dict[str, tuple[float, InstallationToken]] = {}
 
     # -- configuration ------------------------------------------------------
@@ -249,6 +259,19 @@ class GitHubAppAdapter:
         return jwt.encode(payload, pem, algorithm="RS256")
 
     # -- the installation's account -----------------------------------------
+    def _check_jwt_host(self) -> None:
+        """THE SEND POINT for the App's JWT (BOSSAPP-1286): the install's App belongs to the
+        install's GitHub host; its JWT is never sent to another (a GHES connection's base)."""
+        from ..identity import github_urls
+
+        # The JWT is signed with the App's private key: it belongs to the host that key was
+        # stored for (a GHES connection's own App), else the install's.
+        key = getattr(self.settings, "github_app_private_key", None)
+        host = github_urls.credential_api_base(key) if isinstance(key, github_urls.GitHubCredential) \
+            else github_urls.api_base()
+        github_urls.check_send(github_urls.tag("app-jwt", host), self.api_base_url,
+                               where="github_app_jwt")
+
     def installation_account(self, installation_id: Optional[str] = None) -> Optional[dict]:
         """Who the App is installed on ({login, type, permissions}), from GET
         /app/installations/{id} with the App JWT; None when GitHub did not answer. Repo creation
@@ -258,6 +281,7 @@ class GitHubAppAdapter:
         if not inst:
             return None
         try:
+            self._check_jwt_host()            # before the JWT is put in any header
             headers = {"Accept": "application/vnd.github+json", "Authorization": f"Bearer {self._app_jwt()}",
                        "X-GitHub-Api-Version": "2022-11-28"}
             with httpx.Client(timeout=15) as client:
@@ -303,6 +327,7 @@ class GitHubAppAdapter:
         if permissions:
             body["permissions"] = permissions
 
+        self._check_jwt_host()                # before the JWT is put in any header
         headers = {
             "Accept": "application/vnd.github+json",
             "Authorization": f"Bearer {self._app_jwt()}",
@@ -335,7 +360,8 @@ class GitHubAppAdapter:
             )
         data = resp.json()
         token = InstallationToken(
-            token=data["token"],
+            # Tagged with the host that minted it (BOSSAPP-1286).
+            token=_tagged(data["token"], self.api_base_url),
             expires_at=data.get("expires_at", ""),
             permissions=data.get("permissions", {}),
             repository_selection=data.get("repository_selection"),

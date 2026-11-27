@@ -60,7 +60,7 @@ def local_git(tmp_path, monkeypatch):
     monkeypatch.setattr(owned_process, "current_owner", lambda: owner)
     monkeypatch.setattr(sandbox_identity, "current", lambda: identity)
     monkeypatch.setattr(sandbox_identity, "for_owner", lambda got: identity if got is owner else None)
-    monkeypatch.setattr(repo_host, "clone_url_for", lambda *a: str(origin))
+    monkeypatch.setattr(repo_host, "clone_url_for", lambda *a, **_kw: str(origin))
     monkeypatch.setattr(resource_ledger, "claim_dir", lambda *a, **k: None)
     monkeypatch.setattr(resource_ledger, "release_dir", lambda *a, **k: None)
     settings = SimpleNamespace(sandbox_root_path=run.parent, sandbox_clone_depth=1,

@@ -136,18 +136,17 @@ def checkout(engine: Any, settings: Any, src: scope.AppSource, workdir: Path) ->
                                   ignore=shutil.ignore_patterns("node_modules", ".npm-cache"))
     else:
         from ..identity import runs as identity_runs
-        from ..services.github_connections import github_token_for
+        from ..services.github_connections import github_credential
 
         if not (src.owner and src.repo):
             raise ScanCouldNotRun("the app has no repository to scan")
 
-        def _token() -> str:
-            with engine.begin() as c:
-                return github_token_for(c, settings, src.project_id, src.owner, src.repo) or ""
 
         with identity_runs.repo_access(engine, host=getattr(settings, "target_repo_host", "github") or "github",
                                        owner=src.owner, repo=src.repo, project_id=src.project_id,
-                                       token=_token) as access:
+                                       credential=github_credential(
+                                           engine, settings, src.project_id, src.owner,
+                                           src.repo)) as access:
             # BOSS's own git (the control plane's uid): its credential rides in its own
             # environment; the shim socket answers only the scan's sandbox uid. umask 0: the
             # scan's uid must be able to write in what BOSS cloned (npm install, build output).

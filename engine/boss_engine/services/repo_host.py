@@ -18,7 +18,7 @@ Adding a host = one adapter module conforming to ``RepoHost`` + one line in ``_H
 """
 from __future__ import annotations
 
-from typing import Optional, Protocol, runtime_checkable
+from typing import Any, Optional, Protocol, runtime_checkable
 
 from .github_adapter import (
     GitHubAdapter,
@@ -49,14 +49,37 @@ class RepoHost(Protocol):
     def get_pull_request_diff(self, pull_number: int) -> str: ...
 
 
-def clone_url_for(host: str, owner: str, repo: str, token: str = "") -> str:
+class MissingGitHubHost(ValueError):
+    """A GitHub git call named no host. The host comes WITH the credential (BOSSAPP-1286):
+    github_connections.github_access_for -> (token, api base) -> github_urls.web_base_for(base).
+    There is no default: a default host is how a GHES token reached github.com."""
+
+
+def _github_web(web_base: str) -> str:
+    """The GitHub web origin a clone goes to: the one the caller's credential belongs to."""
+    web = str(web_base or "").strip().rstrip("/")
+    if not web:
+        raise MissingGitHubHost("a GitHub clone needs the web origin its credential belongs to "
+                                "(github_urls.web_base_for(api_base)); there is no default host")
+    return web
+
+
+def clone_url_for(host: str, owner: str, repo: str, token: str = "", *, web_base: str) -> str:
     """The authenticated HTTPS clone URL for a host — the ONE place that knows each host's
-    credential form (previously duplicated, GitHub-only, across 4+ call sites)."""
+    credential form (previously duplicated, GitHub-only, across 4+ call sites). ``web_base`` is
+    REQUIRED for GitHub: the web origin of the host ``token`` belongs to (github.com or a GHES
+    ``https://ghe.example``); it is ignored for other hosts (pass "")."""
     kind = (host or "github").strip().lower()
     if kind == "github":
+        web = _github_web(web_base)
         if token:
-            return f"https://x-access-token:{token}@github.com/{owner}/{repo}.git"
-        return f"https://github.com/{owner}/{repo}.git"
+            # THE SEND POINT for a token-in-URL (BOSSAPP-1286).
+            from ..identity import github_urls
+
+            github_urls.check_send(token, web, where="clone_url")
+            scheme, _, rest = web.partition("://")
+            return f"{scheme}://x-access-token:{token}@{rest}/{owner}/{repo}.git"
+        return f"{web}/{owner}/{repo}.git"
     if kind == "bitbucket":
         # Bitbucket Cloud: workspace/repo_slug; access tokens use the x-token-auth pseudo-user.
         if token:
@@ -82,7 +105,7 @@ def clone_url_for(host: str, owner: str, repo: str, token: str = "") -> str:
 # and no GitHub token exists on this side at all.
 
 _BASIC_USER = {"github": "x-access-token", "bitbucket": "x-token-auth"}
-_HOST_ORIGIN = {"github": "https://github.com/", "bitbucket": "https://bitbucket.org/"}
+_HOST_ORIGIN = {"bitbucket": "https://bitbucket.org/"}   # GitHub's comes from github_urls
 
 
 class GitAccess:
@@ -137,8 +160,23 @@ def git_config_env(pairs) -> dict:
     return env
 
 
-def git_access(host: str, owner: str, repo: str, token: str = "") -> GitAccess:
-    """The legacy (token) path, without leaking the token into the checkout or argv."""
+def guest_github_web(token: Any, fallback_web: str = "", *, host: str = "github") -> str:
+    """THE SEND POINT for a micro-VM guest (BOSSAPP-1286): the guest clones with ``token`` from
+    ``spec.github_web``, so that origin is derived from the TOKEN's own host (its tag), never from
+    an adapter's base, and the send check runs before the spec is built. A refusal raises
+    github_urls.CrossHostCredential: the step fails, nothing is handed to the guest."""
+    if not token or (host or "github").strip().lower() != "github":
+        return fallback_web
+    from ..identity import github_urls
+
+    web = github_urls.web_base_for(github_urls.credential_api_base(token))
+    github_urls.check_send(token, web, where="guest")
+    return web
+
+
+def git_access(host: str, owner: str, repo: str, token: str = "", *, web_base: str) -> GitAccess:
+    """The legacy (token) path, without leaking the token into the checkout or argv.
+    ``web_base`` is REQUIRED for GitHub — the origin ``token`` belongs to (see clone_url_for)."""
     import base64
 
     kind = (host or "github").strip().lower()
@@ -146,11 +184,17 @@ def git_access(host: str, owner: str, repo: str, token: str = "") -> GitAccess:
 
     if kind == "local" or local_repo.is_local_owner(owner):
         return GitAccess(local_repo.file_url(local_repo.bare_path(owner, repo)), via="local")
-    url = clone_url_for(kind, owner, repo, "")
+    url = clone_url_for(kind, owner, repo, "", web_base=web_base)
     if not token:
         return GitAccess(url, via="anonymous")
+    if kind == "github":
+        # THE GIT SEND POINT (BOSSAPP-1286): the credential header is only ever set for the host
+        # the token belongs to.
+        from ..identity import github_urls
+
+        github_urls.check_send(token, _github_web(web_base), where="git")
     basic = base64.b64encode(f"{_BASIC_USER.get(kind, 'x-access-token')}:{token}".encode()).decode()
-    origin = _HOST_ORIGIN.get(kind, "https://github.com/")
+    origin = _HOST_ORIGIN.get(kind) or _github_web(web_base) + "/"
     return GitAccess(url, git_config_env([(f"http.{origin}.extraheader", f"AUTHORIZATION: basic {basic}")]),
                      via="token")
 
@@ -177,7 +221,10 @@ def make_repo_host(settings, *, host: Optional[str] = None,
 
         return LocalGitAdapter(settings, owner=str(owner or ""), repo=str(repo or ""))
     if kind == "github":
-        return GitHubAdapter(settings)
+        from ..identity import github_urls
+
+        # The settings-bound target repository: the install's credentials on the install's host.
+        return GitHubAdapter(settings, api_base_url=github_urls.api_base())
     if kind == "bitbucket":
         from .bitbucket_adapter import BitbucketAdapter
         return BitbucketAdapter(settings, workspace=owner, repo_slug=repo)

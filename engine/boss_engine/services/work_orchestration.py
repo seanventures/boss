@@ -10,6 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ..config import Settings
+from boss_engine.identity import github_urls
 from .budget import BudgetGovernor
 from .core import emit_event, make_id
 from .role_governance import RoleGovernanceService
@@ -239,7 +240,7 @@ class WorkOrchestrationService:
                 False,
                 {
                     "credential_ref": "env:BOSS_GITHUB_TOKEN",
-                    "api_base_url": "https://api.github.com",
+                    "api_base_url": github_urls.api_base(),
                     "owner": "",
                     "repo": "",
                 },

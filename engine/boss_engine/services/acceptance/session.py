@@ -733,6 +733,7 @@ def _cut_remotes(root: Path) -> None:
 def open_sandbox(settings: Any, *, run_id: str, source: Any = None, head_sha: Optional[str] = None,
                  branch: Optional[str] = None, owner: Optional[str] = None,
                  repo: Optional[str] = None, token: Optional[str] = None,
+                 web_base: str = "",
                  egress_access: Any = None, egress: str = LOOPBACK,
                  target_url: Optional[str] = None,
                  project_id: Optional[str] = None) -> AcceptanceSandbox:
@@ -782,7 +783,8 @@ def open_sandbox(settings: Any, *, run_id: str, source: Any = None, head_sha: Op
             with owned_process.owner_scope(OWNER_KIND, owner_id, project_id=project_id):
                 eph = EphemeralSandbox(settings, task_id=f"acc-{run_id}")
                 root = Path(eph.provision(owner, repo, base_branch=branch or "main",
-                                          token=token, egress=egress_access))
+                                          token=token, egress=egress_access,
+                                          web_base=web_base))
         if head_sha:
             try:
                 _git(["checkout", "--quiet", "--detach", _commit_of(root, head_sha)], root)

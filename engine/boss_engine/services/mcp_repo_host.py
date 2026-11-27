@@ -82,7 +82,11 @@ class McpRepoHost:
         from .repo_host import clone_url_for
         owner, repo = self.repository_full_name.split("/", 1)
         tok = token or self._minted_token()
-        return clone_url_for(self.provider, owner, repo, tok)
+        from ..identity import github_urls
+
+        # The gateway's repo is the install's target: the install's GitHub web origin.
+        return clone_url_for(self.provider, owner, repo, tok,
+                             web_base=github_urls.web_base() if self.provider == "github" else "")
 
     def _minted_token(self) -> str:
         """An OAuth access token minted by the gateway (works as x-token-auth for Bitbucket

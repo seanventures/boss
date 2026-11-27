@@ -12,6 +12,7 @@ from urllib.parse import quote
 import httpx
 
 from ..config import Settings
+from boss_engine.identity import github_urls
 
 
 class IntegrationConfigurationError(RuntimeError):
@@ -120,13 +121,21 @@ class GitHubAdapter:
         owner: Optional[str] = None,
         repo: Optional[str] = None,
         token: Optional[str] = None,
-        api_base_url: str = "https://api.github.com",
+        api_base_url: str,
     ):
+        """``api_base_url`` is REQUIRED (BOSSAPP-1286): the REST base the token belongs to —
+        github_connections.github_access_for gives the pair; the install's own credentials (no
+        ``token``: its App or BOSS_GITHUB_TOKEN) go with ``github_urls.api_base()``. There is no
+        default base, so a token can never be paired with the wrong host by omission."""
+        if not str(api_base_url or "").strip():
+            raise IntegrationConfigurationError(
+                "GitHubAdapter needs the API base its credential belongs to "
+                "(github_access_for gives the token and the base together).")
         self.settings = settings
         self.owner = (owner or settings.target_github_owner).strip()
         self.repo = (repo or settings.target_github_repo).strip()
         self._token_override = token
-        self.api_base_url = api_base_url.rstrip("/")
+        self.api_base_url = github_urls.api_base(api_base_url)
         self._app = None
 
     @property
@@ -135,8 +144,9 @@ class GitHubAdapter:
 
     def clone_url(self, token: str) -> str:
         from .repo_host import clone_url_for
-        return clone_url_for("github", self.settings.target_github_owner,
-                             self.settings.target_github_repo, token)
+        # This adapter's repository, on this adapter's host (a GHES connection clones from GHES).
+        return clone_url_for("github", self.owner, self.repo, token,
+                             web_base=github_urls.web_base_for(self.api_base_url))
 
     def _auth_token(self) -> str:
         """Prefer a short-lived, repo-scoped GitHub-App installation token
@@ -145,10 +155,19 @@ class GitHubAdapter:
             GitHubAppAdapter, GitHubAppConfigurationError, repo_token,
         )
 
-        if self._app is None:
-            self._app = GitHubAppAdapter(self.settings, api_base_url=self.api_base_url)
         if self._token_override:
             return self._token_override
+        key = getattr(self.settings, "github_app_private_key", None)
+        own_app = isinstance(key, github_urls.GitHubCredential) and key.api_base == self.api_base_url
+        if self.api_base_url != github_urls.api_base() and not own_app:
+            # The install's App and token belong to the install's GitHub, never to another host
+            # (a GHES connection's base): no credential rather than the wrong one. A GHES
+            # connection's OWN App (its private key tagged with that host) mints there.
+            raise IntegrationConfigurationError(
+                f"No GitHub credential for {github_urls.web_host(self.api_base_url)} was given "
+                f"for {self.repository_full_name}; connect that host's repository in Setup.")
+        if self._app is None:
+            self._app = GitHubAppAdapter(self.settings, api_base_url=self.api_base_url)
         try:
             # One shared decision: App token where the installation covers this repo, PAT
             # where it does not. Choosing here independently is how BOSS came to be unable to
@@ -159,9 +178,13 @@ class GitHubAdapter:
             raise IntegrationConfigurationError(str(error)) from error
 
     def _headers(self) -> dict[str, str]:
+        token = self._auth_token()
+        # THE SEND POINT (BOSSAPP-1286): every request of this adapter goes to api_base_url (REST
+        # or its GraphQL sibling on the same host); a token of another host is refused here.
+        github_urls.check_send(token, self.api_base_url, where="github_adapter")
         return {
             "Accept": "application/vnd.github+json",
-            "Authorization": f"Bearer {self._auth_token()}",
+            "Authorization": f"Bearer {token}",
             "X-GitHub-Api-Version": "2022-11-28",
         }
 

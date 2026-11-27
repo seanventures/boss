@@ -264,6 +264,12 @@ class GitHubFake:
                 return 422, {"message": "Reference already exists"}
             _git(bare, "update-ref", ref, str(body.get("sha")))
             return 201, self._ref_payload(full, ref.replace("refs/heads/", ""), str(body.get("sha")))
+        if rest == "/branches" and method == "GET":
+            listed = _git(bare, "for-each-ref", "--format=%(refname:short) %(objectname)",
+                          "refs/heads/")
+            return 200, [{"name": name, "protected": False, "commit": {"sha": sha}}
+                         for name, _, sha in (line.partition(" ") for line in listed.splitlines())
+                         if name and sha]
         m = re.match(r"^/branches/(.+)$", rest)
         if m:
             branch = m.group(1).replace("%2F", "/")

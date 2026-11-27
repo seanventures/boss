@@ -31,6 +31,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from .core import emit_event, make_id
+from boss_engine.identity import github_urls
 
 Begin = Callable[[], AbstractContextManager]
 
@@ -257,12 +258,12 @@ def github_state(connection: Connection, settings: Any, project_id: str) -> dict
                                         getattr(settings, "github_repo", "") or "") if x)
         if conn_row is None and getattr(settings, "github_token", None) \
                 and env_repo.count("/") == 1:
-            return {"connected": True, "repo": env_repo, "api_base": "https://api.github.com",
+            return {"connected": True, "repo": env_repo, "api_base": github_urls.api_base(),
                     "failing": None}
-        base = str((conn_row or {}).get("api_base_url") or "https://api.github.com").rstrip("/")
+        base = github_urls.api_base((conn_row or {}).get("api_base_url"))
         return {"connected": False, "repo": None, "api_base": base, "failing": failing,
                 "has_connection": conn_row is not None}
-    base = str(row["api_base_url"] or "https://api.github.com").rstrip("/")
+    base = github_urls.api_base(row["api_base_url"])
     return {"connected": True, "repo": str(row["full_name"]), "api_base": base,
             "failing": failing, "has_connection": True}
 
@@ -533,6 +534,9 @@ def _http_get(url: str, token: str, timeout: float = TEST_TIMEOUT_SECONDS) -> An
     """A GitHub-style read. Raises httpx.HTTPStatusError on a refusal (the status is the fact)."""
     import httpx
 
+    from ..identity import github_urls
+
+    github_urls.check_send(token, url, where="kit_http_get")   # BOSSAPP-1286: its own host only
     resp = httpx.get(url, headers={"Authorization": f"Bearer {token}",
                                    "Accept": "application/vnd.github+json",
                                    "X-GitHub-Api-Version": "2022-11-28",

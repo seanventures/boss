@@ -115,8 +115,18 @@ def _service(settings: Any):
     return GitHubConnectionService(settings)
 
 
+def _tag(token: Any, api_base: str) -> Any:
+    """A setup token tagged with the host of the connection it is for (BOSSAPP-1286); a token
+    already tagged keeps its own host (a mismatch is refused, never re-pointed)."""
+    from ..identity import github_urls
+
+    return github_urls.tag(token, api_base) if token else token
+
+
 def _api_base(settings: Any) -> str:
-    return str(getattr(settings, "github_api_base_url", "") or "https://api.github.com")
+    from ..identity import github_urls
+
+    return github_urls.api_base(getattr(settings, "github_api_base_url", ""))
 
 
 def _dedupe_label(connection: Connection, project_id: str, login: str) -> str:
@@ -148,6 +158,8 @@ def repository_token(connection: Connection, settings: Any, project_id: str, tok
         raise SetupActionError(422, "token_rejected", "Paste token", "Paste a GitHub token.")
     # THE DECISION FIRST: nothing is sent anywhere until the operator has agreed where it lives.
     require_store(connection, settings, project_id, accept_database_fallback, actor)
+    # The pasted token is for the connection this creates, on _api_base(settings): its host.
+    token = _tag(token, _api_base(settings))
     found = setup_checks.inspect_token(token, api_base=_api_base(settings), http=http)
     if not found["ok"]:
         from .setup_pills import REPOSITORY, pill
@@ -159,7 +171,7 @@ def repository_token(connection: Connection, settings: Any, project_id: str, tok
     service = _service(settings)
     credential_ref = service.store_token_credential(
         connection, project_id=project_id, token=token, auth_method="personal_access_token",
-        label=GITHUB_LABEL, actor=actor)
+        label=GITHUB_LABEL, actor=actor, connection_id=connection_id or None)
     existing = service.get_connection(connection, project_id, connection_id) if connection_id else None
     if existing is not None:
         current = service.repoint_connection(
@@ -358,6 +370,7 @@ def connection_repos(connection: Connection, settings: Any, project_id: str,
     except Exception:  # noqa: BLE001 — an unreadable token is one to replace
         raise SetupActionError(422, "token_rejected", "Token rejected",
                                "Paste a new token.") from None
+    token = _tag(token, _api_base(settings))
     found = setup_checks.inspect_token(token, api_base=_api_base(settings), http=http)
     if not found["ok"]:
         raise SetupActionError(422, found["state"], "Token rejected", "Paste a new token.")
@@ -557,6 +570,20 @@ def _mirror_token_into_vault(connection: Connection, service: Any, project_id: s
         return                             # the App's own tokens: nothing to keep
     if _signin_person(connection, project_id, connection_id):
         return                             # a person's own sign-in: never lent to the org's builds
+    # THE ORG STORE HOLDS THE INSTALL'S GITHUB CREDENTIALS ONLY (BOSSAPP-1286): everything read
+    # back from it (control_plane_token, the org token) is used as the install's own. A token of a
+    # connection on another host (GHES) is never mirrored there — that would re-label it.
+    from ..identity import github_urls
+
+    conn_base = service._connection_api_base(connection, project_id, str(connection_id))  # noqa: SLF001
+    if conn_base != github_urls.api_base():
+        from .core import emit_event
+
+        emit_event(connection, project_id, "github.org_token_unchanged", actor, "github_connection",
+                   connection_id, {"reason": "other_host", "message": (
+                       "This token is for another GitHub host; it stays on its own connection "
+                       "and is not the organisation's install token.")})
+        return
     org_of_project = connection.execute(
         text("SELECT w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
              "WHERE p.id = :p"), {"p": project_id}).scalar()
@@ -585,7 +612,9 @@ def _mirror_token_into_vault(connection: Connection, service: Any, project_id: s
         ref = service.secret_refs.require_usable(
             connection, project_id=project_id,
             credential_ref=service._credential_ref(connection, project_id, connection_id))
-        token = service._resolve_secret(ref, connection)
+        token = service._tag_by_origin(service._resolve_secret(ref, connection), ref,  # noqa: SLF001
+                                       conn_base, connection=connection, project_id=project_id,
+                                       connection_id=str(connection_id))
         org_id = connection.execute(
             text("SELECT w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
                  "WHERE p.id = :p"), {"p": project_id}).scalar()
@@ -696,7 +725,11 @@ def check_repository(connection: Connection, settings: Any, project_id: str,
         ref = service.secret_refs.require_usable(
             connection, project_id=project_id,
             credential_ref=service._credential_ref(connection, project_id, row["connection_id"]))
-        token = service._resolve_secret(ref, connection)
+        # The binding's connection's own token: its connection's host (BOSSAPP-1286).
+        token = service._tag_by_origin(service._resolve_secret(ref, connection), ref,  # noqa: SLF001
+                                       row["api_base_url"] or _api_base(settings),
+                                       connection=connection, project_id=project_id,
+                                       connection_id=str(row["connection_id"]))
     except Exception:  # noqa: BLE001 — an unreadable token is a token GitHub cannot accept
         token = ""
     receipt_id = _receipt(connection, project_id, "github.repository.check",
@@ -796,6 +829,7 @@ def _check_install_repository(connection: Connection, settings: Any, project_id:
     full = f"{owner}/{name}"
     receipt_id = _receipt(connection, project_id, "github.repository.check",
                           {"repository": full, "source": "install"})
+    token = _tag(token, _api_base(settings))      # the install's own repository and token
     found = setup_checks.probe_repository(token, full, api_base=_api_base(settings), http=http)
     login = None
     if found["state"] == "working":

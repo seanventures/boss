@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import text
 
-from boss_engine.identity import github_setup
+from boss_engine.identity import github_setup, github_urls
 
 from ._identity_agents_support import ROOT
 from .test_identity_github_setup import PAT, _clone, _connect_app, _injected, _run, env  # noqa: F401 — the fixture
@@ -56,8 +56,11 @@ def _second_account_world(c) -> None:
         c.execute(text("INSERT INTO projects (id, workspace_id) VALUES ('prj_web', 'ws_boss') ON CONFLICT DO NOTHING"))
     c.execute(text(
         "INSERT INTO github_connections (id, project_id, connection_label, auth_method, credential_ref, "
-        "status, account_login, created_by) VALUES ('ghconn_b', 'prj_web', 'Kaappu org', "
-        "'personal_access_token', :ref, 'active', 'paramg-kaapppu', 'usr_alice')"), {"ref": f"env:{B_ENV}"})
+        "status, account_login, created_by, api_base_url) VALUES ('ghconn_b', 'prj_web', 'Kaappu org', "
+        "'personal_access_token', :ref, 'active', 'paramg-kaapppu', 'usr_alice', :api)"),
+        # On the install's own GitHub (the env fixture's api.github.test): a connection on ANOTHER
+        # host is refused on the install's route (BOSSAPP-1286).
+        {"ref": f"env:{B_ENV}", "api": github_urls.install_api_base()})
 
 
 def _bind_second_account(env, repo: str = REPO_B) -> None:  # noqa: F811

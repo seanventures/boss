@@ -138,7 +138,11 @@ _PR_REF = re.compile(r"^(?:#|pr[/:#-]?|pull/|refs/pull/)(\d+)(?:/head|/merge)?$"
 
 
 def split_repository(repository: str) -> tuple[str, str]:
-    value = str(repository or "").strip().removeprefix("https://github.com/")
+    from ..identity import github_urls
+
+    value = str(repository or "").strip()
+    for web in dict.fromkeys((github_urls.web_base(), github_urls.PUBLIC_WEB)):
+        value = value.removeprefix(web + "/")
     value = value.removesuffix(".git").strip("/")
     owner, _, repo = value.partition("/")
     if not owner or not repo or "/" in repo:
@@ -155,12 +159,18 @@ class GitHubSource:
     command line, an exception message or a log line.
     """
 
-    API = "https://api.github.com"
+    def __init__(self, token: str = "", api_base: str = ""):
+        from ..identity import github_urls
 
-    def __init__(self, token: str = ""):
         self._token = token or ""
+        #: The connection's REST base (GHES: https://<host>/api/v3), never a literal default.
+        self.API = github_urls.api_base(api_base)
 
     def _headers(self, accept: str = "application/vnd.github+json") -> dict[str, str]:
+        from ..identity import github_urls
+
+        # THE SEND POINT (BOSSAPP-1286): every request of this reader goes to self.API.
+        github_urls.check_send(self._token, self.API, where="stack_deploy")
         headers = {"Accept": accept, "X-GitHub-Api-Version": "2022-11-28",
                    "User-Agent": "boss-stack-deploy"}
         if self._token:
@@ -170,13 +180,16 @@ class GitHubSource:
     def _get(self, path: str, *, accept: str = "application/vnd.github+json"):
         import httpx
 
+        from ..identity import github_urls
+
+        github_urls.check_send(self._token, self.API, where="stack_deploy")
         try:
             return httpx.get(f"{self.API}{path}", headers=self._headers(accept), timeout=30,
                              follow_redirects=True)
         except httpx.HTTPError as exc:
             raise StackDeployError(
                 f"BOSS could not reach GitHub ({type(exc).__name__}).",
-                "Check the API container's network access to api.github.com, then try again.",
+                f"Check the API container's network access to {self.API}, then try again.",
                 outage=True)
 
     def _refused(self, response, what: str) -> StackDeployError:
@@ -442,8 +455,11 @@ class MirroredSource:
 def github_source(connection: Connection, settings: Settings, project_id: str,
                   owner: str, repo: str) -> GitHubSource:
     """GitHub's reader with the token this project registered for owner/repo, falling back to
-    its connection. Only `source_for` calls this: every deploy reads code through that."""
-    from .github_connections import GitHubConnectionService, github_token_for
+    its connection. Only `source_for` calls this: every deploy reads code through that. The
+    token and the API base are chosen TOGETHER (BOSSAPP-1286): the registered token goes to its
+    binding's base; the fallback is the one resolver's (token, base) pair."""
+    from .github_connections import (GitHubConnectionService, api_base_for_repository,
+                                     github_access_for)
 
     token = None
     try:
@@ -451,9 +467,10 @@ def github_source(connection: Connection, settings: Settings, project_id: str,
             connection, project_id=project_id, owner=owner, repo=repo)
     except Exception:  # noqa: BLE001 — no token is an answer; a public repo needs none
         log.debug("stack deploy: no registered token for %s/%s", owner, repo, exc_info=True)
-    if not token:
-        token = github_token_for(connection, settings, project_id, owner, repo)
-    return GitHubSource(token or "")
+    if token:
+        return GitHubSource(token, api_base_for_repository(connection, project_id, owner, repo))
+    token, base = github_access_for(connection, settings, project_id, owner, repo)
+    return GitHubSource(token or "", base)
 
 
 def source_for(connection: Connection, settings: Settings, project_id: str,
@@ -2589,13 +2606,19 @@ def rollback_approval(connection: Connection, project_id: str, authority: dict[s
                  "AND status IN ('pending', 'approved')"),
             {"d": decision_id, "p": project_id}).scalar()
         rec = rec if isinstance(rec, dict) else json.loads(rec or "null") if rec else None
-        if not rec or rec.get("action") != "incident_squad.mitigate":
+        runbook_ok = bool(rec) and rec.get("kind") == "sre_runbook" \
+            and rec.get("step_action") == "rollback_deployment" \
+            and str((rec.get("params") or {}).get("deployment_id") or "") == rollback_of \
+            and authority.get("source") == "sre_runbook" and connection.execute(
+                text("SELECT 1 FROM decisions WHERE id = :d AND status = 'approved'"),
+                {"d": decision_id}).first() is not None
+        if not rec or (rec.get("action") != "incident_squad.mitigate" and not runbook_ok):
             return None
         if connection.execute(text("SELECT 1 FROM stack_deployments WHERE decision_id = :d "
                                    "LIMIT 1"), {"d": decision_id}).first():
             return None
-    return {"source": "incident_squad", "decision_id": decision_id or None,
-            "approved_by": approved_by}
+    source = "sre_runbook" if authority.get("source") == "sre_runbook" else "incident_squad"
+    return {"source": source, "decision_id": decision_id or None, "approved_by": approved_by}
 
 
 def rollback_stack_deploy(engine, settings: Settings, *, deployment_id: str,

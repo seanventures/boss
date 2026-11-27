@@ -172,6 +172,8 @@ def link(*, person_id: str, org_id: str, token: str, refresh: Optional[str], exp
 
     from . import audit, vault
 
+    # A person's GitHub sign-in is on the install's GitHub: its token is that host's (BOSSAPP-1286).
+    token = github_urls.tag(token, github_app.api_base())
     me = github_app._call("GET", "/user", token=token)  # noqa: SLF001
     login = (me.json() or {}).get("login") if me.status == 200 else None
     old = [r[0] for r in db.execute(text(
@@ -243,7 +245,9 @@ def reach(person_id: str, *, db: Any) -> dict[str, Any]:
     installs it once (or GitHub sends the org's owners a request)."""
     from . import vault
 
-    token = vault.token_for_access_check(person_id, provider="github", db=db)
+    # A person's GitHub sign-in is the install's GitHub: tagged with that host (BOSSAPP-1286).
+    token = github_urls.tag(vault.token_for_access_check(person_id, provider="github", db=db),
+                            github_app.api_base())
     if not token:
         raise github_app.GitHubRefused("not_signed_in", 409)
     me = github_app._call("GET", "/user", token=token)  # noqa: SLF001

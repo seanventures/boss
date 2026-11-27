@@ -65,7 +65,7 @@ def test_repo_root_routes_a_short_sha_and_not_a_branch(monkeypatch, tmp_path):
     monkeypatch.setattr(builtin, "_abbreviated_sha_root",
                         lambda dest, url, env, ref, repo: (seen.append(ref) or dest, None))
     settings = type("S", (), {"target_repo_host": "github", "github_token": ""})()
-    builtin._repo_root(settings, "o/r", "63dd10e4150b")
+    builtin._repo_root(settings, "o/r", "63dd10e4150b", credential=("", "https://api.github.com"))
     assert seen == ["63dd10e4150b"]
     assert builtin._ABBREVIATED_SHA.fullmatch("main") is None
     assert builtin._ABBREVIATED_SHA.fullmatch("0" * 40) is None     # a full sha fetches as is

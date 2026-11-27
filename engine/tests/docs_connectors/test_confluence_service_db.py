@@ -192,6 +192,40 @@ def test_disconnect_removes_the_reference_and_agents_are_told_to_connect(eng, fa
     assert fake.requests == []
 
 
+def test_a_reconnect_keeps_a_sync_progress_save_made_after_its_read(eng, fake, project,
+                                                                  monkeypatch):
+    """BOSSAPP-1385: a reconnect read the row, then a sync saved its progress (committed on its
+    own connection), then the reconnect wrote. It must merge only the fields it owns, never write
+    back the configuration it read."""
+    from boss_engine.services import secrets_service
+
+    _connect(eng, project)
+    with eng.begin() as c:
+        config, tok = docs.prepare(c, _settings(), project_id=project, base_url=SITE,
+                                   email=EMAIL, token=TOKEN)
+    outcome = docs.run_test(config, tok)
+    real_put = secrets_service.put_secret
+
+    def put_then_a_sync_saves(*a, **k):
+        # store() has read the row by now; a sync commits its cursor before store() writes.
+        with eng.begin() as other:
+            other.execute(text(
+                "UPDATE docs_connections SET configuration = configuration || CAST(:p AS JSONB) "
+                "WHERE home_project_id = :h"),
+                {"p": json.dumps({"sync_states": {project: {"cursor": "2026-11-25T00:00Z"}},
+                                  "knowledge_spaces": ["OPS"]}), "h": project})
+        return real_put(*a, **k)
+
+    monkeypatch.setattr(secrets_service, "put_secret", put_then_a_sync_saves)
+    with eng.begin() as c:
+        row = docs.store(c, _settings(), project_id=project, config=config, token=tok,
+                         outcome=outcome, actor="ceo")
+    cfg = row["configuration"]
+    assert cfg.get("sync_states", {}).get(project, {}).get("cursor") == "2026-11-25T00:00Z"
+    assert cfg["knowledge_spaces"] == ["OPS"] and cfg["default_spaces"] == ["ENG"]
+    assert cfg["secret_ref_id"] and cfg["base_url"] == SITE and "api_token" not in cfg
+
+
 # ---- agent tools ----------------------------------------------------------------------------
 
 def test_search_and_read_tools_use_default_spaces_and_the_screen(eng, fake, project):

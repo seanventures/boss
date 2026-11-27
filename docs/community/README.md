@@ -51,7 +51,7 @@ Credentials stay on the install. A hosted model receives the authentication and 
 
 - [Do the work](FIRST_USEFUL_CHANGE.md), then [review a result](RESULT_REVIEW.md) and [return to it](RETURNING_TO_WORK.md)
 - [People](PEOPLE_AND_ACCESS.md), [spend and approvals](ARCHITECTURE_GOVERNANCE.md)
-- [GitHub](CONNECT_GITHUB.md), [models](MODEL_CONNECTIONS.md), [terminal](terminal.md), [MCP](MCP.md), [CLI](cli.md)
+- [GitHub](CONNECT_GITHUB.md), [CloudWatch](CONNECT_CLOUDWATCH.md), [models](MODEL_CONNECTIONS.md), [terminal](terminal.md), [MCP](MCP.md), [CLI](cli.md)
 - [Features](FEATURES.md) and the [release notes](RELEASE_NOTES_v1.0-rc10.32.md)
 - The [fifteen example workflows](https://github.com/seanventures/boss/blob/main/examples/README.md). Installing an example does not start work.
 - The [Workflow Library](WORKFLOW_LIBRARY.md): add a workflow to a project, change your copy, share your own

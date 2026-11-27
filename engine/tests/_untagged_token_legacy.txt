@@ -1,0 +1,17 @@
+# Test modules that still hand RAW (untagged) placeholder GitHub tokens to senders — by patching a
+# token source (repo_token, a connection secret, Settings(github_token=...) via model_copy) to
+# return a plain string. They run with BOSS_GITHUB_CREDENTIALS_STRICT off. A RATCHET: remove a
+# line when its test tags its tokens (github_urls.tag); never add one
+# (test_the_untagged_token_ratchet_only_shrinks caps the count). BOSSAPP-1286.
+test_a_gate_only_a_person_can_unblock_stops_the_build.py
+test_a_github_blip_is_retried_in_place.py
+test_boss_own_git_gets_its_egress_credential.py
+test_execution_environments_824.py
+test_identity_int_a_token_paths.py
+test_lineage_sandbox_repair_wiring.py
+test_publish_reaches_the_repository_with_a_credential_that_can.py
+test_repo_creation_credential.py
+test_repo_host.py
+test_repository_checks_prove_write_and_pr.py
+test_sandbox_resumes_checkpointed_work.py
+test_workflow_precheck_own_github.py

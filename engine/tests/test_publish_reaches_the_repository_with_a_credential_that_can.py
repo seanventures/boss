@@ -210,7 +210,8 @@ def test_an_owner_credential_says_which_project_it_comes_from(monkeypatch, own, 
         "own": own, "visible": True,
         "id": "ghconn_1", "project_id": "fxquote" if own else "boss-dogfood",
         "project_name": "FXQuote" if own else "BOSS dogfood", "connection_label": "x",
-        "account_login": "paramg", "api_base_url": "https://api.github.test",
+        # the install's host: a connection of another host is never a candidate (BOSSAPP-1286)
+        "account_login": "paramg", "api_base_url": "https://api.github.com",
         "granted_permissions": [], "missing_permissions": [], "last_test_status": None}])
     monkeypatch.setattr(github_connections, "GitHubConnectionService",
                         lambda s: types.SimpleNamespace(token_for_connection=lambda *a, **k: "pat"))
@@ -319,6 +320,9 @@ def test_the_publish_reach_asks_the_resolver_once(monkeypatch):
 
     monkeypatch.setattr(github_connections, "github_token_for", lambda *a, **k: "")
     monkeypatch.setattr(local_publish, "github_token_for", lambda *a, **k: "", raising=False)
+    # The bound fallback (the token WITH its host) finds nothing either (BOSSAPP-1286).
+    monkeypatch.setattr(github_connections, "github_access_for",
+                        lambda *a, **k: ("", "https://api.github.com"))
     reach = local_publish.default_reach(object(), SETTINGS, "fxquote", owner=OWNER, repo=REPO,
                                         connection_id="c", actor="usr_me")
     assert reach.reach_words_for(OWNER, REPO) == "None of the credentials …"

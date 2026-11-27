@@ -42,7 +42,11 @@ def hub(monkeypatch, engine):
         monkeypatch.delenv(name, raising=False)
     gh = demo_world(slug=SLUG)
     monkeypatch.setattr(github_app, "TRANSPORT", gh)
-    monkeypatch.setattr(github_app, "app_jwt", lambda db, now=None: "eyJfake.app.jwt")
+    from boss_engine.identity import github_urls
+
+    # The App's JWT is the install host's, as the real one is tagged (BOSSAPP-1286).
+    monkeypatch.setattr(github_app, "app_jwt",
+                        lambda db, now=None: github_urls.tag("eyJfake.app.jwt", github_app.api_base()))
     monkeypatch.setattr(setup_checks, "default_http", gh.http)
 
     def ready(db, org_id=None):

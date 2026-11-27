@@ -186,27 +186,28 @@ class ConnectionSpend(TypedDecisionSpend):
         self.staged = True
         env_name = self.candidate.get("credential_env_name")
         if env_name:
-            from .core import make_id
             from .env_refs import env_name_allowed
 
             if not env_name_allowed(env_name):
                 raise TypedDecisionSpendError(
                     "Connection proof cannot reference this host variable."
                 )
-            ref_id = make_id("sref")
-            c.execute(
-                text(
-                    "INSERT INTO secret_refs(id,project_id,scope_id,ref_kind,ref_key,storage_backend,"
-                    "provider,secret_kind,created_by) VALUES(:i,:p,:p,'env',:k,'environment',:v,'api_token',:a)"
-                ),
-                {
-                    "i": ref_id,
-                    "p": self.project_id,
-                    "k": env_name,
-                    "v": self.candidate["provider"],
-                    "a": self.actor,
-                },
-            )
+            # THE ONE CHECKED PATH (BOSSAPP-1286): an env reference names the HOST's credential
+            # and needs integration:manage at the org, like every other one.
+            from .env_refs import HostCredentialAuthorityRequired
+            from .secret_refs import SecretRefService
+
+            try:
+                ref_id = SecretRefService().create_secret_ref(
+                    c, project_id=self.project_id, ref_kind="env", ref_key=env_name,
+                    provider=self.candidate["provider"], status="active", metadata={},
+                    actor=self.actor, secret_kind="api_token")["id"]
+            except HostCredentialAuthorityRequired:
+                raise TypedDecisionSpendError(
+                    f"Using the host variable {env_name} needs the Connect integrations "
+                    "permission for the whole organisation (integration:manage at the org). Ask "
+                    "an Owner or org Admin to approve this connection, or paste a key for this "
+                    "project instead.") from None
             self.gateway.bind_credential_secret_ref(
                 c, self.project_id, source_id, ref_id, actor=self.actor
             )

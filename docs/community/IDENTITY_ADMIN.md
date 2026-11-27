@@ -328,6 +328,72 @@ Treat the key like the machine's root password. If it may have leaked, run `boss
 
 A personal or service-account key that is restricted to some projects keeps any org-wide permissions its owner holds. The project list narrows only the project-scoped permissions.
 
+## Unattended agents: a service account and long runs
+
+A scheduler, a CI pipeline or a script that starts BOSS work with no person at the keyboard uses a
+**service account**. The account's key only *asks* for work; the agents that do the work act under
+a delegation grant, never under the key itself.
+
+### Set it up, step by step
+
+1. **Create the account.** Identity › Service accounts › **New service account**. Give it a
+   **Name** (for example `ci-deployer`), **What it's for**, at least one **Owner** (the people who
+   rotate and revoke its keys) and an **Access role**. API: `POST /v1/identity/service-accounts`
+   with `name`, `description`, `owner_principal_ids`; bind more roles with
+   `POST /v1/identity/role-bindings` (`subject_type: "principal"`, `subject_id`, `role_id`).
+   Needs `service_account:manage`.
+2. **Create its key.** On the account, **Create key**: a **Key name**, a **Preset** (Read-only,
+   MCP client, CI deploy) or Custom scopes, optional **Projects** and **Allowed networks**
+   (CIDRs), and **Expires**. A key never holds more than the account holds, or than you hold.
+   API: `POST /v1/identity/service-accounts/{id}/keys` (`name`, `scopes`, `project_ids`, `cidrs`,
+   `expires_in_days`). The key (`boss_sak_…`) is shown **once** ("Copy your new key now"); BOSS
+   keeps only its hash. Put it in your scheduler's secret store and send it as
+   `Authorization: Bearer <key>`.
+3. **Give the agents their authority.** The work the key starts runs as agents, and an agent run
+   needs a delegation grant: a person's standing grant (My account › **Agents acting for me**, or
+   `POST /v1/identity/me/delegations` with no expiry or a long one), or, for always-on squad
+   builds, the project's Captain authority, which BOSS keeps for every project. A service account
+   is never the subject of an agent's token itself: runs are minted on behalf of the grant's
+   person (or autonomously for an agent Passport marked autonomous), and every permission is
+   that person's live access ∩ the agent's ceiling ∩ the grant.
+4. **Rotate before expiry.** **Rotate key** with an overlap (**Old key keeps working for**
+   0, 1 h, 24 h or 7 d), or `POST /v1/identity/service-accounts/{id}/keys/{key_id}/rotate`.
+   A key with no expiry is flagged in Posture. Revoke with `…/keys/{key_id}/revoke`, or disable
+   the whole account with `POST /v1/identity/service-accounts/{id}/disable`.
+
+### How a long run keeps its access
+
+Run tokens live 5 minutes and are bound to the run's DPoP key. The run supervisor renews every
+live run's tokens at 4 minutes (two thirds of the lifetime), so a build can run for hours:
+
+- each renewal re-checks everything live (the person, the grant, every agent in the chain) and is
+  never longer than the grant, or than a child run's parent;
+- the token it replaces is revoked at once (renewal is single-use and rate-limited per run);
+- each renewal is a `token.issued` lineage event naming the token it renewed, so the audit log
+  walks unbroken from a run's first token to its current one;
+- a refused renewal (grant revoked, person disabled, parent run ended) stops the run, and an
+  ended run's tokens cannot be renewed.
+
+`engine/tests/test_a_long_run_outlives_its_token_lifetime.py` proves this with a 60-second
+lifetime over six lifetimes. A microVM run's key is held by its host agent, which rotates the
+run's tokens itself on the same schedule.
+
+### Workload identity: what is supported now
+
+- **Supported:** BOSS's own short-lived, key-bound identities for its workloads. Every agent run
+  gets DPoP-bound run tokens (above); agent hosts and their VMs get X.509 certificates from the
+  install's fleet CA with SPIFFE IDs (`spiffe://<trust domain>/host/<id>`, 24 h, renewed at two
+  thirds); deployed apps get per-replica certificates the same way. Git access goes through the
+  egress proxy with GitHub App installation tokens minted per run, so no run holds a GitHub token.
+- **Supported, static:** cloud credentials for BOSS's own resource plane are an access key pair,
+  optionally exchanged for an assumed role (`BOSS_AWS_ROLE_ARN`, STS AssumeRole).
+- **Not supported yet:** signing in to BOSS's API with a cloud or CI workload token in place of a
+  service-account key (GitHub Actions OIDC, AWS IAM roles for service accounts / web identity,
+  Azure managed identity, GCP workload identity federation, Kubernetes service-account tokens).
+  The provider catalog lists the GitHub Actions OIDC issuer for people's sign-in only, and the
+  resource plane's cloud workload-identity slots are marked *planned*. Until then, use a
+  service-account key with an expiry, a network restriction and an overlap rotation.
+
 ## Next steps
 
 - [Upgrade to named accounts](IDENTITY_UPGRADE.md), for the claim and the 30-day window.

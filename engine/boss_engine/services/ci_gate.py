@@ -490,7 +490,7 @@ def grant_view(connection: Any, project_id: str, repository: str, enabled: bool)
 
 
 def setting_view(connection: Any, project_id: str, binding_id: str,
-                 app_cfg: Optional[Mapping[str, Any]] = None, web_base: str = "https://github.com"
+                 app_cfg: Optional[Mapping[str, Any]] = None, web_base: str = ""
                  ) -> dict[str, Any]:
     row = _binding(connection, project_id, binding_id)
     enabled = _meta(row["metadata"]).get(SETTING_KEY) is True
@@ -839,7 +839,9 @@ class HttpCiReader:
 
     def __init__(self, api_base: str, repository: str, token: str,
                  get: Optional[Callable[[str, str], Any]] = None):
-        self.api_base = (api_base or "https://api.github.com").rstrip("/")
+        from ..identity import github_urls
+
+        self.api_base = github_urls.api_base(api_base)
         self.repository = repository
         self.token = token
         if get is None:
@@ -949,7 +951,7 @@ class UnreadableCi:
 def reader_for_project(connection: Any, settings: Any, project_id: str,
                        repository: Optional[str] = None) -> HttpCiReader:
     """The project's GitHub, as Setup connected it. Tests replace this function."""
-    from .kit_connections import github_state, github_token
+    from .kit_connections import github_state
     from .local_repo import is_local
 
     if is_local(repository):
@@ -967,9 +969,17 @@ def reader_for_project(connection: Any, settings: Any, project_id: str,
         raise CiSettingError("github_not_connected", 409,
                              "This project has no GitHub repository connected. Connect it in Setup.")
     repo = repository or state["repo"]
-    return HttpCiReader(state.get("api_base") or "https://api.github.com", repo,
-                        ci_token(connection, settings, project_id, repo)
-                        or github_token(connection, settings, project_id, repo))
+    # The token and the base come TOGETHER (BOSSAPP-1286): the repository's own host, and a
+    # credential of that host. The install's App token is tried only when that host is the
+    # install's GitHub; it never goes to a GHES connection's base.
+    from ..identity import github_urls
+    from .github_connections import github_access_for
+
+    owner, _, name = str(repo).partition("/")
+    token, base = github_access_for(connection, settings, project_id, owner, name)
+    if github_urls.api_base(base) == github_urls.api_base():
+        token = ci_token(connection, settings, project_id, repo) or token
+    return HttpCiReader(base, repo, token)
 
 
 def ci_token(connection: Any, settings: Any, project_id: str, repository: str) -> str:

@@ -710,14 +710,17 @@ class DocsUpdateService:
                  target: dict[str, Any]) -> GitHubAdapter:
         """The project's GitHub repository, with the credential it is connected with."""
         owner, repo = str(target["owner"]), str(target["repo"])
-        token = None
-        try:
-            from .github_connections import github_token_for
+        from ..identity import github_urls
+        from .github_connections import github_access_for
 
-            token = github_token_for(connection, self.settings, project_id, owner, repo) or None
+        # The token and its host together (BOSSAPP-1286); no token on the install's host lets
+        # the adapter's own resolver run (the install's App or token), never on another host.
+        try:
+            token, api_base = github_access_for(connection, self.settings, project_id, owner, repo)
         except Exception:  # noqa: BLE001 - the adapter's own resolver still runs
-            token = None
-        return GitHubAdapter(self.settings, owner=owner, repo=repo, token=token)
+            token, api_base = "", github_urls.api_base()
+        return GitHubAdapter(self.settings, owner=owner, repo=repo, token=token or None,
+                             api_base_url=api_base)
 
     def _scope(self, connection: Connection, project_id: str) -> dict[str, Any]:
         row = connection.execute(

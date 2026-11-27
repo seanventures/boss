@@ -6067,12 +6067,16 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     app = GitHubAppAdapter(settings)
     # Shared decision — see repo_token. Prefer the bound MC adapter's token when the
     # factory plane is mission_control_binding so clone and PR use the same credentials.
-    from .github_app_adapter import repo_token
+    # The clone token comes WITH the host it belongs to (BOSSAPP-1286): clone_web_base is that
+    # host's web origin, handed to every clone (sandbox, review clone, guest stages).
+    from ..identity import github_urls as _github_urls
 
     token = None
+    clone_web_base = ""
     if getattr(sf, "github_plane", None) == "mission_control_binding":
         try:
             token = sf.github._auth_token()  # noqa: SLF001 — intentional dual-plane share
+            clone_web_base = _github_urls.web_base_for(sf.github.api_base_url)
         except Exception:  # noqa: BLE001
             _log_caught(logger)
             token = None
@@ -6080,10 +6084,12 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
 
     if not token and not _is_local_owner(owner):
         # Same third source as the ungoverned path: the credential this project registered in
-        # Setup, after the App and the environment.
+        # Setup, after the App and the environment — on the repository's own host.
+        from .github_connections import build_credential
+
         with _transaction(engine) as c:
-            token = repo_token(settings, owner, repo,
-                               connection=c, project_id=project_id)
+            token, _clone_api = build_credential(c, settings, project_id, owner, repo)
+        clone_web_base = _github_urls.web_base_for(_clone_api)
 
     # THE GRANULAR SANDBOX SEAM IS PLUGGABLE (BOSSAPP-824): the factory resolves
     # the step's explicit override, then the agent's, the project's and the
@@ -6460,6 +6466,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             eng_name, model = engine_override, None
         else:
             eng_name, model = _route_names(step)
+        from .repo_host import guest_github_web
+
+        # The guest is a send point: the token's own host, checked (BOSSAPP-1286).
+        guest_web = guest_github_web(token, clone_web_base)
         guest_spec = {
             "task_id": f"{run_id}-{step}", "owner": owner, "repo": repo,
             "base_branch": guest_base, "work_branch": work_branch,
@@ -6468,6 +6478,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                              "in your JSON reply."),
             "acceptance_criteria": [], "test_commands": test_cmds,
             "token": token, "timeout": settings.code_agent_timeout_seconds,
+            "github_web": guest_web,
             "max_turns": int(getattr(settings, "code_agent_guest_max_turns", 120) or 120),
         }
         if guest_egress.get("spec"):
@@ -7280,7 +7291,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         if _outage is not None and not use_microvm:
             # THE MIRROR IS FETCHED AT BUILD START (all branches and tags), so an outage later in
             # the build — or one that already began — has this repository to build on.
-            _murl, _menv = _gho.access_for(egress_access, owner, repo, token)
+            _murl, _menv = _gho.access_for(egress_access, owner, repo, token,
+                                           web_base=clone_web_base)
             _mirror = _gho.refresh_mirror(settings, owner, repo, url=_murl, env=_menv)
             with _transaction(engine) as c:
                 emit_event(c, project_id, "code_task.github_mirror", "boss", "code_task_run",
@@ -7288,7 +7300,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                     **({} if _mirror["ok"] else {"error": _mirror["error"][-200:]})})
         try:
             sandbox.provision(owner, repo, base_branch=base_branch,
-                              work_branch=work_branch, token=token, egress=egress_access)
+                              work_branch=work_branch, token=token, egress=egress_access,
+                              web_base=clone_web_base)
         except Exception as _clone_error:  # noqa: BLE001 — re-raised unless GitHub is down
             if (_outage is None or use_microvm or not _gho.is_outage(_clone_error)
                     or not _gho.mirror_ready(owner, repo, settings)):
@@ -7302,7 +7315,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
 
             sandbox = provider.acquire(task_id=run_id, tenant_id=project_id)
             sandbox.provision(owner, repo, base_branch=base_branch, work_branch=work_branch,
-                              token="", egress=SimpleNamespace(
+                              token="", web_base="",   # the local mirror: no GitHub host
+                              egress=SimpleNamespace(
                                   clone_url=_lr.file_url(_lr.mirror_path(owner, repo, settings)),
                                   git_config=[], own_git=None))
         # BOSSAPP-826: a REMOTE sandbox (only with BOSS_WORKSPACE_SNAPSHOTS=remote) gets this
@@ -10138,7 +10152,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 review_sandbox = provider.acquire(task_id=f"{run_id}-review",
                                                   tenant_id=project_id)
                 review_sandbox.provision(owner, repo, base_branch=guest_base,
-                                         work_branch=work_branch, token=token, egress=egress_access)
+                                         work_branch=work_branch, token=token, egress=egress_access,
+                                         web_base=clone_web_base)
                 review_root = review_sandbox.path
 
             # Pre-resolve routes on the MAIN thread (the agent cache is not locked); the

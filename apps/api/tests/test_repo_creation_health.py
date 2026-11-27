@@ -169,3 +169,40 @@ def test_the_connection_test_records_the_flow_permissions_too(engine, world, mon
     assert out["detail"]["can_create_repos"] is False
     assert "administration" in out["detail"]["missing_permissions"] and "push" in out["detail"]["granted_permissions"]
     assert out["connection"]["can_create_repos"] == {"ok": False, "missing": ["administration"]}
+
+
+def test_a_ghes_connection_never_creates_or_checks_a_github_com_repository(engine, world, monkeypatch,
+                                                                          quiet_app):
+    """BOSSAPP-1286 (fourth review, S2): a GHES connection whose account has the same login as
+    the owner is NOT a creating credential for github.com, and the check route never sends its
+    token anywhere — it says no credential for this host."""
+    import httpx
+
+    monkeypatch.setenv("BOSS_TEST_GH_GHES", "ghes_token_never_to_github_com")
+    cid, _bid = _connection(engine, world, "ghes-only-owner", env_name="BOSS_TEST_GH_GHES",
+                            label="ghes")
+    with engine.begin() as db:
+        db.execute(text("UPDATE github_connections SET api_base_url = :b WHERE id = :i"),
+                   {"b": "https://ghe.northgate.example/api/v3", "i": cid})
+    sent: list[tuple[str, str]] = []
+
+    def handle(request):
+        sent.append((str(request.url), request.headers.get("Authorization", "")))
+        return httpx.Response(404, json={})
+
+    from boss_engine.services import local_publish
+
+    real_check = local_publish.check_repository
+    monkeypatch.setattr(local_publish, "check_repository", lambda **k: real_check(
+        **k, client=httpx.Client(transport=httpx.MockTransport(handle))))
+    with world.acting_as(world.ctx(world.owner)):
+        r = client_get(world, f"/v1/projects/{world.project_a}/github-repository/check"
+                              "?owner=ghes-only-owner&repo=new-app")
+        owners = client_get(world, f"/v1/projects/{world.project_a}/github-repository/owners"
+                                   "?owners=ghes-only-owner")
+    assert r.status_code == 200, r.text
+    assert r.json()["reason"] == "no_github_credential", r.json()
+    assert not any("ghes_token_never_to_github_com" in auth for _u, auth in sent), sent
+    assert owners.status_code == 200, owners.text
+    row = {o["login"]: o for o in owners.json()["owners"]}["ghes-only-owner"]
+    assert not row["can_create"]

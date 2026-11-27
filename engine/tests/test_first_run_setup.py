@@ -37,16 +37,20 @@ def test_and_the_environment_path_is_untouched():
 
 
 def test_a_pasted_token_is_written_through_not_stored_in_a_column():
-    """The value leaves BOSS inside put_secret; what the connection keeps is a reference."""
+    """The value leaves BOSS inside the backend's put; what the connection keeps is a reference.
+    BOSSAPP-1286: the slot is the connection's own (ghconn-<random ref id>), never a name built
+    from the project and label, so a second account (or another project) never overwrites it."""
     import inspect
 
     from boss_engine.services import github_connections
 
-    source = inspect.getsource(github_connections.GitHubConnectionService.store_token_credential)
-    assert "put_secret(" in source
-    assert "stored['ref_key']" in source
-    # Not a fixed name: a second GitHub account must not silently overwrite the first's token.
-    assert "slug" in source
+    service = github_connections.GitHubConnectionService
+    store = inspect.getsource(service.store_token_credential)
+    write = inspect.getsource(service._write_connection_slot)  # noqa: SLF001
+    assert "_write_connection_slot(" in store
+    assert ".put(key, value)" in write and "INSERT INTO secret_refs" in write
+    assert "connection_slot_key(ref_id)" in write and "uuid4()" in write
+    assert "put_secret(" not in store and "ref_key_for" not in write
 
 
 def test_the_wizard_picks_a_secret_store_that_works_here(monkeypatch):
@@ -190,6 +194,12 @@ def test_and_its_last_check_is_what_the_row_says(conn):
 
 # ── What the install runs on is checked, not assumed ─────────────────────────────────────────
 
+
+#: The install's own token, tagged at its source as Settings tags it (BOSSAPP-1286).
+from boss_engine.identity import github_urls as _github_urls  # noqa: E402
+
+_T = _github_urls.tag("t", "")
+
 class FakeGitHub:
     """A fine-grained token's answers, per permission profile (fixtures from GitHub's REST docs:
     blobs need Contents: write, pulls need Pull requests: write)."""
@@ -225,7 +235,7 @@ def test_what_the_install_already_runs_on_is_checked_not_assumed():
     green "Can push" could still fail at push or PR time. So the check WRITES (a blob nobody
     sees) and ASKS TO OPEN A PR (with a head that does not exist)."""
     fake = FakeGitHub()
-    found = setup_checks.probe_repository("t", "o/r", http=fake)
+    found = setup_checks.probe_repository(_T, "o/r", http=fake)
     assert found["state"] == "working"
     assert [m for m, _ in fake.calls] == ["GET", "POST", "POST"]
     assert found["expires_at"].startswith("2099-01-02")
@@ -233,24 +243,24 @@ def test_what_the_install_already_runs_on_is_checked_not_assumed():
 
 def test_a_read_only_token_is_not_reported_as_connected():
     """It looks connected and produces a pull request that never opens."""
-    found = setup_checks.probe_repository("t", "o/r", http=FakeGitHub(contents_write=False))
+    found = setup_checks.probe_repository(_T, "o/r", http=FakeGitHub(contents_write=False))
     assert found["state"] == "cant_write"
     assert found["checks"]["read"]["ok"] is True and found["checks"]["write"]["ok"] is False
 
 
 def test_nor_one_that_cannot_open_pull_requests():
-    found = setup_checks.probe_repository("t", "o/r", http=FakeGitHub(pull_requests=False))
+    found = setup_checks.probe_repository(_T, "o/r", http=FakeGitHub(pull_requests=False))
     assert found["state"] == "cant_open_prs"
 
 
 def test_a_revoked_token_says_so():
-    found = setup_checks.probe_repository("t", "o/r", http=FakeGitHub(status=401))
+    found = setup_checks.probe_repository(_T, "o/r", http=FakeGitHub(status=401))
     assert found["state"] == "token_rejected"
 
 
 def test_the_credential_itself_never_leaves():
     """No part of a token or key in anything a check returns."""
-    token = "github_pat_" + "Z" * 40
+    token = _github_urls.tag("github_pat_" + "Z" * 40, "")
     fake = FakeGitHub()
     found = setup_checks.probe_repository(token, "o/r", http=fake)
     blob = json.dumps(found)

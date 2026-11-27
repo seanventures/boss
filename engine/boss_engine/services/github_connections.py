@@ -10,6 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ..config import Settings
+from ..identity import github_urls
 from .core import emit_event, make_id
 from .github_adapter import GitHubAdapter
 from .receipts import ReceiptService
@@ -242,6 +243,15 @@ class GitHubConnectionService:
             raise ValueError(
                 "auth_method must be one of: " + ", ".join(sorted(self.AUTH_METHODS)) + ".")
         self.secret_refs.parse_credential_ref(credential_ref)
+        # The SAME checks as create (BOSSAPP-1286): a normalised API base, a usable GitHub
+        # SecretRef of the right kind, and a credential that may belong to that host.
+        api_base_url = self._normalize_api_base_url(api_base_url)
+        secret_ref = self.secret_refs.require_usable(
+            connection, project_id=project_id, credential_ref=credential_ref)
+        self._check_connection_secret(secret_ref, method, app_id or current.get("app_id"),
+                                      installation_id or current.get("installation_id"),
+                                      api_base_url, project_id, connection_id,
+                                      fresh=self._is_fresh_slot(project_id, credential_ref))
         connection.execute(
             text("""
                 UPDATE github_connections
@@ -271,6 +281,8 @@ class GitHubConnectionService:
             {"previous_credential_ref": previous_ref,
              "credential_ref": credential_ref, "auth_method": method},
         )
+        self._bind_connection_slot(connection, project_id=project_id,
+                                   credential_ref=credential_ref, connection_id=connection_id)
         return self.get_connection(connection, project_id, connection_id)
 
     def create_connection(
@@ -302,21 +314,9 @@ class GitHubConnectionService:
             project_id=project_id,
             credential_ref=credential_ref,
         )
-        if secret_ref["provider"] not in {None, "github"}:
-            raise ValueError("GitHub connections require a GitHub SecretRef.")
-        if method == "github_app":
-            if not (app_id and app_id.strip()):
-                raise ValueError("github_app connections require app_id.")
-            if not (installation_id and installation_id.strip()):
-                raise ValueError("github_app connections require installation_id.")
-            if secret_ref["secret_kind"] not in {"private_key", "client_secret"}:
-                raise ValueError(
-                    "github_app connections require a private_key SecretRef."
-                )
-        elif secret_ref["secret_kind"] not in {"api_token", "access_key", "session"}:
-            raise ValueError(
-                "personal_access_token connections require an api_token SecretRef."
-            )
+        self._check_connection_secret(secret_ref, method, app_id, installation_id,
+                                      safe_api_base, project_id,
+                                      fresh=self._is_fresh_slot(project_id, credential_ref))
         permissions = self._normalize_permissions(required_permissions or ["pull"])
         safe_metadata = self.secret_refs._validate_metadata(metadata)
         duplicate = connection.execute(
@@ -382,6 +382,8 @@ class GitHubConnectionService:
                 "credential_configured": True,
             },
         )
+        self._bind_connection_slot(connection, project_id=project_id,
+                                   credential_ref=credential_ref, connection_id=connection_id)
         return self.get_connection(connection, project_id, connection_id)
 
     def transition_connection(
@@ -979,7 +981,7 @@ class GitHubConnectionService:
                                               connection_id=str(github_connection["id"]))
             if not token:
                 return empty
-            got = pat_abilities(token, api_base=str(github_connection.get("api_base_url") or "https://api.github.com"))
+            got = pat_abilities(token, api_base=github_urls.api_base(github_connection.get("api_base_url")))
             return {"granted": list(got.get("granted") or []), "missing": list(got.get("missing") or []),
                     "can_create": got.get("can_create"), "words": str(got.get("words") or "")}
         except Exception:  # noqa: BLE001 — the repository test stands on its own
@@ -1119,8 +1121,14 @@ class GitHubConnectionService:
                 from boss_engine.identity import github_setup
 
                 with connection.begin_nested():
-                    return github_setup.control_plane_token(connection, owner, repo)
-            return self._resolve_connection_secret(connection, project_id, ref)
+                    return github_urls.tag(
+                        github_setup.control_plane_token(connection, owner, repo), "")
+            # Tagged with ITS connection's host (BOSSAPP-1286): a GHES token never leaves GHES.
+            return self._tag_by_origin(
+                self._resolve_connection_secret(connection, project_id, ref), ref,
+                self._connection_api_base(connection, project_id, str(rows["connection_id"])),
+                connection=connection, project_id=project_id,
+                connection_id=str(rows["connection_id"]))
         except (GitHubConnectionStateError, GitHubConnectionNotFoundError) as error:
             # A bound connection whose secret cannot be read here is not a reason to fail the
             # build: the environment may still have a usable token.
@@ -1142,10 +1150,87 @@ class GitHubConnectionService:
             ref = self._credential_ref(connection, project_id, connection_id)
             if str(ref) == "identity_github:app":
                 return None
-            return self._resolve_connection_secret(connection, project_id, ref)
+            return self._tag_by_origin(
+                self._resolve_connection_secret(connection, project_id, ref), ref,
+                self._connection_api_base(connection, project_id, connection_id),
+                connection=connection, project_id=project_id,
+                connection_id=connection_id) or None
         except (GitHubConnectionStateError, GitHubConnectionNotFoundError) as error:
             logger.debug("github: could not resolve the connection's credential: %s", error)
             return None
+
+    def _tag_by_origin(self, value: Any, ref: Any, conn_base: Any, *,
+                       connection: Optional[Connection] = None,
+                       project_id: Optional[str] = None,
+                       connection_id: Optional[str] = None) -> Any:
+        """A resolved credential tagged with its host by THE RULE (credential_host_for): the
+        connection's non-install base only for a slot bound to that very connection; the
+        install's for everything else. A GitHub-bound env name is judged by
+        env_refs.assert_may_send first (rc6 N-1)."""
+        if not value:
+            return value
+        record = ref if isinstance(ref, dict) and "storage_backend" in ref else None
+        if record is None and connection is not None and project_id and isinstance(ref, str):
+            try:
+                with connection.begin_nested():
+                    record = self.secret_refs.get_by_credential_ref(
+                        connection, project_id=project_id, credential_ref=ref)
+            except Exception:  # noqa: BLE001 — unknown origin: the install's host (below)
+                record = None
+        kind, name = _ref_origin(record if record is not None else ref)
+        if kind == "env":
+            from .env_refs import assert_may_send, binding_for
+
+            binding = binding_for(name)
+            if binding is not None and binding.provider == "github":
+                assert_may_send(name, github_urls.api_base(conn_base))
+        host = credential_host_for(record, conn_base, project_id or (record or {}).get("project_id"),
+                                   connection_id)
+        return github_urls.tag(value, host)
+
+    @staticmethod
+    def _check_connection_secret(secret_ref: dict[str, Any], method: str, app_id: Any,
+                                 installation_id: Any, api_base: str, project_id: str,
+                                 connection_id: Optional[str] = None, *,
+                                 fresh: bool = False) -> None:
+        """THE checks a connection's credential passes, at create AND repoint: a GitHub
+        SecretRef of the right kind, and — on a host other than the install's — a slot this
+        connection's own flow just wrote (store_token_credential's pending slot) or one already
+        bound to this connection (BOSSAPP-1286). Never a named reference of any kind."""
+        if secret_ref.get("provider") not in {None, "github"}:
+            raise ValueError("GitHub connections require a GitHub SecretRef.")
+        _refuse_env_ref_on_another_host(secret_ref, api_base)
+        if github_urls.api_base(api_base) != github_urls.api_base() and \
+                not _is_connection_slot_for(secret_ref, project_id, connection_id, fresh=fresh):
+            raise ValueError(
+                f"A credential for {github_urls.web_host(api_base)} must be saved through this "
+                "connection: paste that host's token here (Setup › GitHub access) instead of "
+                "naming an existing secret.")
+        if method == "github_app":
+            if not (app_id and str(app_id).strip()):
+                raise ValueError("github_app connections require app_id.")
+            if not (installation_id and str(installation_id).strip()):
+                raise ValueError("github_app connections require installation_id.")
+            if secret_ref.get("secret_kind") not in {"private_key", "client_secret"}:
+                raise ValueError(
+                    "github_app connections require a private_key SecretRef."
+                )
+        elif secret_ref.get("secret_kind") not in {"api_token", "access_key", "session"}:
+            raise ValueError(
+                "personal_access_token connections require an api_token SecretRef."
+            )
+
+    @staticmethod
+    def _connection_api_base(connection: Connection, project_id: str, connection_id: str) -> str:
+        """The REST base of ONE connection (its credential's host)."""
+        try:
+            with connection.begin_nested():
+                value = connection.execute(text(
+                    "SELECT api_base_url FROM github_connections WHERE id = :i"),
+                    {"i": connection_id}).scalar()
+        except Exception:  # noqa: BLE001 — an older schema: the install's host
+            value = None
+        return github_urls.api_base(value)
 
     def _resolve_connection_secret(self, connection: Connection, project_id: str, ref: str) -> str:
         """A connection's SecretRef pointer → its value (never logged). The one lookup both the
@@ -1177,36 +1262,112 @@ class GitHubConnectionService:
         auth_method: str,
         label: str,
         actor: str,
+        connection_id: Optional[str] = None,
     ) -> str:
-        """Write a pasted token through to the secret backend; return its credential_ref.
+        """Write a pasted token into THIS CONNECTION'S OWN SLOT; return its credential_ref.
 
-        The value leaves BOSS inside `put_secret` and is never written to a column, logged, or
-        returned. What comes back is a reference the connection stores, resolved at use time by
-        `_resolve_secret` — which already handles every backend, so nothing downstream has to
-        know this token arrived by hand rather than from the environment.
+        The slot's key is ``ghconn-<random ref id>`` (connection_slot_key): a form secrets_service
+        .ref_key_for never emits (it only makes ``BOSS_[A-Z0-9_]``) and no named reference may
+        take (SecretRefService refuses it), so no other project, scope or label can ever write
+        to it (BOSSAPP-1286). A re-save for ``connection_id`` whose current credential is its own
+        bound slot overwrites that slot in place and stays bound; otherwise a fresh slot is made.
+        The value leaves BOSS in the backend's ``put`` and is never written to a column, logged,
+        or returned. ``label`` only names the event.
         """
-        from .secrets_service import put_secret
-
         method = (auth_method or "").strip().lower()
         secret_kind = "private_key" if method == "github_app" else "api_token"
-        # A NAME THAT SURVIVES A SECOND CONNECTION. `ref_key` is unique per project, so a fixed
-        # name would make a second GitHub account silently overwrite the first one's token.
-        slug = re.sub(r"[^a-z0-9]+", "_", (label or "github").strip().lower()).strip("_")
-        stored = put_secret(
-            connection,
-            self.settings,
-            project_id=project_id,
-            name=f"github_{slug or 'connection'}",
-            value=token.strip(),
-            secret_kind=secret_kind,
-            backend=self._preferred_backend(),
-            actor=actor,
-        )
-        connection.execute(
-            text("UPDATE secret_refs SET provider='github' WHERE id = :id"),
-            {"id": stored["secret_ref_id"]},
-        )
-        return f"{stored['backend']}:{stored['ref_key']}"
+        current = self._own_bound_slot(connection, project_id, connection_id) \
+            if connection_id else None
+        ref = self._write_connection_slot(connection, project_id=project_id,
+                                          value=token.strip(), secret_kind=secret_kind,
+                                          actor=actor, label=label, existing=current)
+        self.__dict__.setdefault("_fresh_slots", set()).add((str(project_id), ref))
+        return ref
+
+    def _own_bound_slot(self, connection: Connection, project_id: str,
+                        connection_id: str) -> Optional[dict[str, Any]]:
+        """The connection's current secret_refs row when it is that connection's own bound slot."""
+        row = connection.execute(text(
+            "SELECT r.id, r.ref_kind, r.ref_key, r.storage_backend, r.project_id, r.scope_type, "
+            "r.metadata FROM github_connections g JOIN secret_refs r ON r.project_id = g.project_id "
+            "AND g.credential_ref = r.ref_kind || ':' || r.ref_key "
+            "WHERE g.project_id = :p AND g.id = :c"), {"p": project_id, "c": connection_id}
+        ).mappings().first()
+        if row is None:
+            return None
+        record = dict(row)
+        return record if credential_host_for(record, github_urls.PUBLIC_API, project_id,
+                                             connection_id) else None
+
+    def _write_connection_slot(self, connection: Connection, *, project_id: str, value: str,
+                               secret_kind: str, actor: str, label: str,
+                               existing: Optional[dict[str, Any]] = None) -> str:
+        """THE write-through for a connection slot: the material goes to the slot's own unique
+        key, and the reference row records it — never through a name-derived key."""
+        from .secret_access_log import record_version
+        from .secrets_service import _KIND_MAP, _metadata
+
+        meta = _metadata(value, secret_kind)
+        if existing is not None:
+            ref_id, backend, key = existing["id"], existing["storage_backend"], existing["ref_key"]
+            backend_for(backend, self.settings).put(key, value)
+            connection.execute(text(
+                "UPDATE secret_refs SET metadata = metadata || CAST(:m AS JSONB) || "
+                "jsonb_build_object(CAST(:k AS TEXT), jsonb_build_object('pending', true, "
+                "'project_id', CAST(:p AS TEXT), 'connection_id', "
+                "metadata -> CAST(:k AS TEXT) ->> 'connection_id')), status = 'active', "
+                "updated_at = now() WHERE id = :id"),
+                {"m": json.dumps(meta), "k": CONNECTION_SLOT_KEY, "p": project_id, "id": ref_id})
+        else:
+            import uuid
+
+            ref_id = f"sref_{uuid.uuid4().hex}"
+            backend, key = self._preferred_backend(), connection_slot_key(ref_id)
+            backend_for(backend, self.settings).put(key, value)
+            meta[CONNECTION_SLOT_KEY] = {"pending": True, "project_id": project_id}
+            connection.execute(text(
+                "INSERT INTO secret_refs (id, project_id, scope_type, scope_id, ref_kind, "
+                "ref_key, provider, secret_kind, storage_backend, status, metadata, created_by, "
+                "created_at, updated_at) VALUES (:id, :p, 'project', :p, :b, :key, 'github', "
+                ":sk, :b, 'active', CAST(:m AS JSONB), :by, now(), now())"),
+                {"id": ref_id, "p": project_id, "b": backend, "key": key,
+                 "sk": _KIND_MAP.get(secret_kind, "api_token"), "m": json.dumps(meta),
+                 "by": actor})
+        version = record_version(connection, secret_ref_id=ref_id,
+                                 fingerprint=meta["fingerprint"], last4=meta["last4"], actor=actor)
+        emit_event(connection, project_id, "secret.written", actor, "secret_ref", ref_id,
+                   {"name": f"github connection {label or ''}".strip(), "backend": backend,
+                    "kind": secret_kind, "fingerprint": meta["fingerprint"],
+                    **({"version": version} if version else {})})
+        return f"{backend}:{key}"
+
+    def _is_fresh_slot(self, project_id: str, credential_ref: str) -> bool:
+        """This service instance's own store_token_credential wrote it, in this flow."""
+        return (str(project_id), str(credential_ref)) in self.__dict__.get("_fresh_slots", set())
+
+    def _bind_connection_slot(self, connection: Connection, *, project_id: str,
+                              credential_ref: str, connection_id: str) -> None:
+        """Bind the slot THIS flow just wrote (pending) to the connection, at write time. Only a
+        fresh slot is bound; a slot already bound to another connection is never re-bound."""
+        if not self._is_fresh_slot(project_id, credential_ref):
+            return
+        kind, _, key = str(credential_ref or "").partition(":")
+        others = connection.execute(text(
+            "SELECT count(*) FROM secret_refs WHERE storage_backend = :rk AND ref_key = :key"),
+            {"rk": kind, "key": key}).scalar_one()
+        if int(others or 0) != 1:
+            # Another reference (any project, any scope) names this slot's material: it is not
+            # this connection's alone, so it is never bound.
+            raise ValueError("This connection's credential slot is named by another reference; "
+                             "paste the token again.")
+        connection.execute(text(
+            "UPDATE secret_refs SET metadata = metadata || jsonb_build_object(CAST(:k AS TEXT), "
+            "jsonb_build_object('connection_id', CAST(:c AS TEXT), 'project_id', CAST(:p AS TEXT))) "
+            "WHERE project_id = :p AND ref_kind = :rk AND ref_key = :key "
+            "AND metadata -> CAST(:k AS TEXT) ->> 'pending' = 'true'"),
+            {"k": CONNECTION_SLOT_KEY, "c": connection_id, "p": project_id, "rk": kind,
+             "key": key})
+        self.__dict__.get("_fresh_slots", set()).discard((str(project_id), str(credential_ref)))
 
     def _preferred_backend(self) -> str:
         """Where a pasted secret goes: the best store that works on this installation."""
@@ -1244,6 +1405,7 @@ class GitHubConnectionService:
         open-source evaluations.
         """
         if token and token.strip():
+            prior = self._connection_by_label(connection, project_id, connection_label)
             credential_ref = self.store_token_credential(
                 connection,
                 project_id=project_id,
@@ -1251,6 +1413,7 @@ class GitHubConnectionService:
                 auth_method=auth_method,
                 label=connection_label,
                 actor=actor,
+                connection_id=(prior or {}).get("id"),
             )
         else:
             credential_ref = self.ensure_env_credential_ref(
@@ -1281,7 +1444,7 @@ class GitHubConnectionService:
                 auth_method=auth_method,
                 app_id=app_id,
                 installation_id=installation_id,
-                api_base_url=api_base_url or "https://api.github.com",
+                api_base_url=github_urls.api_base(api_base_url),
                 actor=actor,
             )
         else:
@@ -1293,7 +1456,7 @@ class GitHubConnectionService:
                 credential_ref=credential_ref,
                 app_id=app_id,
                 installation_id=installation_id,
-                api_base_url=api_base_url or "https://api.github.com",
+                api_base_url=github_urls.api_base(api_base_url),
                 required_permissions=required_permissions
                 or ["pull", "push", "triage"],
                 metadata={
@@ -1485,17 +1648,18 @@ class GitHubConnectionService:
                 f"repository that is what a token without access returns — it is a scope "
                 f"answer, not a missing repository.")
         try:
-            credential = self._resolve_secret(
-                self.secret_refs.require_usable(
-                    connection, project_id=project_id,
-                    credential_ref=self._credential_ref(
-                        connection, project_id, github_connection["id"])),
-                connection)
-            who = self._github_get("/user", credential) or {}
+            record = self.secret_refs.require_usable(
+                connection, project_id=project_id,
+                credential_ref=self._credential_ref(connection, project_id, github_connection["id"]))
+            api = github_urls.api_base(github_connection.get("api_base_url"))
+            credential = self._tag_by_origin(self._resolve_secret(record, connection), record, api,
+                                             connection=connection, project_id=project_id,
+                                             connection_id=str(github_connection["id"]))
+            who = self._github_get("/user", credential, api_base=api) or {}
             login = str(who.get("login") or "").strip()
             repos = self._github_get(
                 "/user/repos?per_page=100&affiliation=owner,collaborator,"
-                "organization_member", credential)
+                "organization_member", credential, api_base=api)
             if login:
                 hint += f" The token belongs to {login}."
             if isinstance(repos, list):
@@ -1513,13 +1677,15 @@ class GitHubConnectionService:
         return f"{base} — {hint}"
 
     @staticmethod
-    def _github_get(path: str, credential: str, timeout: int = 15) -> Any:
+    def _github_get(path: str, credential: str, timeout: int = 15, api_base: str = "") -> Any:
         """A read against GitHub with the connection's own credential. Returns None on error."""
         import urllib.error
         import urllib.request
 
+        url = f"{github_urls.api_base(api_base)}{path}"
+        github_urls.check_send(credential, url, where="github_connections")
         request = urllib.request.Request(
-            f"https://api.github.com{path}",
+            url,
             headers={"Authorization": f"Bearer {credential}",
                      "Accept": "application/vnd.github+json",
                      "User-Agent": "boss-setup-check"})
@@ -1568,7 +1734,11 @@ class GitHubConnectionService:
             # repository from a fixed set, which is wider than the work. None here (no Setup
             # App, or it does not cover the repository): the connection's credential, as before.
             owner, _, name = str(binding.get("full_name") or "").partition("/")
-            if owner and name:
+            # The Setup App lives on the INSTALL's GitHub; its token never goes to another host
+            # (a GHES connection's API base) and vice versa (BOSSAPP-1286).
+            same_host = github_urls.api_base(github_connection.get("api_base_url")) == \
+                github_urls.api_base()
+            if owner and name and same_host:
                 try:
                     from boss_engine.identity import github_setup
 
@@ -1576,14 +1746,31 @@ class GitHubConnectionService:
                         credential = github_setup.control_plane_token(connection, owner, name)
                 except Exception:  # noqa: BLE001 — the connection's credential still works
                     credential = None
+        if credential:
+            credential = github_urls.tag(credential, "")   # the Setup App: the install's host
         if not credential and self._custom_secret_resolver is None:
-            credential = self._resolve_secret(secret_ref, connection)
+            credential = self._tag_by_origin(self._resolve_secret(secret_ref, connection),
+                                             secret_ref, github_connection.get("api_base_url"),
+                                             connection=connection, project_id=project_id,
+                                             connection_id=str(github_connection["id"]))
         elif not credential:
-            credential = self.secret_resolver(secret_ref)
+            credential = self._tag_by_origin(self.secret_resolver(secret_ref), secret_ref,
+                                             github_connection.get("api_base_url"),
+                                             connection=connection, project_id=project_id,
+                                             connection_id=str(github_connection["id"]))
         if not credential:
             raise GitHubConnectionStateError(
                 "GitHub SecretRef could not be resolved by this execution node."
             )
+        conn_base = github_urls.api_base(github_connection.get("api_base_url"))
+        if conn_base != github_urls.api_base() and \
+                github_urls.credential_api_base(credential) != conn_base:
+            # BOSSAPP-1286: a token for another GitHub host is accepted only from this
+            # connection's own slot. A connection made before that rule must re-save its token.
+            raise GitHubConnectionStateError(
+                f"Re-save this connection's token: a token for {github_urls.web_host(conn_base)} "
+                "must be saved through the connection itself (Setup › GitHub access › Replace "
+                "token). BOSS will not send another stored secret to that host.")
         if github_connection["auth_method"] == "github_app":
             scoped_settings = self.settings.model_copy(
                 update={
@@ -2012,6 +2199,240 @@ def can_create_repos(granted: Any, missing: Any) -> dict[str, Any]:
     if "administration" in missing_set:
         return {"ok": False, "missing": ["administration"]}
     return {"ok": None, "missing": []}
+
+
+#: How long the install's GHES host list is reused (egress asks per request).
+GHES_HOSTS_TTL_S = 60.0
+_GHES_HOSTS_CACHE: dict[str, Any] = {}
+#: Seam for tests: replaces the database read, ``(db) -> iterable of api_base_url values``.
+GHES_BASES_LOOKUP: Optional[Callable[[Any], Any]] = None
+
+
+def reset_ghes_hosts_cache() -> None:
+    _GHES_HOSTS_CACHE.clear()
+
+
+def _connection_api_bases(db: Any) -> list[str]:
+    if GHES_BASES_LOOKUP is not None:
+        return [str(b) for b in (GHES_BASES_LOOKUP(db) or ()) if b]
+    sql = text("SELECT DISTINCT api_base_url FROM github_connections "
+               "WHERE status IN ('configured', 'active') AND api_base_url IS NOT NULL")
+    if hasattr(db, "execute") and not hasattr(db, "connect"):      # a Connection
+        with db.begin_nested():
+            return [str(r[0]) for r in db.execute(sql)]
+    with db.connect() as c:                                          # an Engine
+        return [str(r[0]) for r in c.execute(sql)]
+
+
+def ghes_hosts(db: Any) -> dict[str, str]:
+    """THE GitHub Enterprise Server hosts this install reaches (BOSSAPP-1286), as
+    ``{host: REST base}``: the install's own (BOSS_GITHUB_API_URL / _WEB_URL) and every active or
+    configured connection's ``api_base_url`` that is not github.com. Both the web host and the API
+    host of each map to its REST base. Egress fences, routes and rewrites exactly these; cached
+    for GHES_HOSTS_TTL_S. A database that cannot be read keeps the last answer."""
+    import time
+    from urllib.parse import urlsplit
+
+    now = time.monotonic()
+    hit = _GHES_HOSTS_CACHE.get("hosts")
+    if hit is not None and now < hit[0]:
+        return dict(hit[1])
+    bases = [github_urls.install_api_base()]
+    try:
+        bases += _connection_api_bases(db)
+    except Exception as error:  # noqa: BLE001 — keep the last known list (or the install's)
+        logger.warning("github: could not read the connections' API bases: %s", type(error).__name__)
+        if hit is not None:
+            return dict(hit[1])
+    out: dict[str, str] = {}
+    for raw in bases:
+        api = github_urls.api_base(raw)
+        if api == github_urls.PUBLIC_API:
+            continue
+        for url in (api, github_urls.web_base_for(api)):
+            host = (urlsplit(url).hostname or "").lower()
+            if host and host not in github_urls.PUBLIC_HOSTS:
+                out.setdefault(host, api)
+    _GHES_HOSTS_CACHE["hosts"] = (now + GHES_HOSTS_TTL_S, out)
+    return dict(out)
+
+
+#: The metadata key a connection's own flow (create / repoint / rotate) writes on the secret it
+#: stored for that connection. It is RESERVED: SecretRefService refuses it in any metadata a
+#: person or agent supplies, so only BOSS's connection flow can bind a slot (BOSSAPP-1286).
+CONNECTION_SLOT_KEY = "connection_slot"
+#: The ONLY key form a connection slot's material lives at: ``ghconn-<its own ref id>``. Lower
+#: case and a hyphen: secrets_service.ref_key_for only ever emits ``BOSS_[A-Z0-9_]``, and
+#: SecretRefService refuses this prefix for any named reference.
+CONNECTION_SLOT_PREFIX = "ghconn-"
+
+
+#: The stores BOSS itself writes a connection slot's material to (never a host variable, a
+#: host file or the Setup App).
+SLOT_STORES = frozenset({"database", "local_vault", "vault", "infisical",
+                         "platform_secret_store"})
+
+
+def connection_slot_key(ref_id: str) -> str:
+    return f"{CONNECTION_SLOT_PREFIX}{ref_id}"
+
+
+def _in_slot_form(record: Any) -> bool:
+    """The reference's material lives at its own unique slot key, in a store BOSS writes."""
+    backend = str(record.get("storage_backend") or "").lower()
+    return bool(record.get("id")) and backend in SLOT_STORES \
+        and str(record.get("ref_kind") or "").lower() == backend \
+        and str(record.get("ref_key") or "") == connection_slot_key(str(record["id"]))
+
+
+def _is_connection_slot_for(record: Any, project_id: str, connection_id: Optional[str], *,
+                            fresh: bool = False) -> bool:
+    """A slot this connection's flow wrote: pending AND written by this very flow (``fresh``:
+    the same service call chain that just stored it), or already bound to this connection. A
+    pending slot left behind by a failed flow is no one's to name."""
+    meta = record.get("metadata") if isinstance(record, dict) and isinstance(
+        record.get("metadata"), dict) else {}
+    slot = meta.get(CONNECTION_SLOT_KEY)
+    if not isinstance(record, dict) or not _in_slot_form(record):
+        return False
+    if not isinstance(slot, dict) or str(slot.get("project_id") or "") != str(project_id) or \
+            str(record.get("project_id") or "") != str(project_id):
+        return False
+    return (fresh and bool(slot.get("pending"))) or (bool(connection_id) and
+                                         str(slot.get("connection_id") or "") == str(connection_id))
+
+
+def credential_host_for(record: Any, conn_base: Any, project_id: Optional[str],
+                        connection_id: Optional[str] = None) -> str:
+    """THE RULE (BOSSAPP-1286): the REST base a resolved credential belongs to. A connection's
+    non-install base ONLY for a credential in a slot BOUND TO THAT CONNECTION — written by BOSS
+    through the connection's own create/repoint/rotate flow, which records
+    ``metadata.connection_slot = {connection_id, project_id}`` at write time. Every other
+    credential is the install's (``""``), with no exceptions: any named reference (database,
+    local_vault, vault, infisical, platform, env, local_runner), any scope, and anything that
+    existed before this rule — such a connection's token is re-saved through the connection."""
+    if not isinstance(record, dict) or not connection_id or not project_id:
+        return ""
+    if not _in_slot_form(record):
+        return ""
+    meta = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
+    slot = meta.get(CONNECTION_SLOT_KEY) if isinstance(meta, dict) else None
+    if not isinstance(slot, dict):
+        return ""
+    if str(slot.get("connection_id") or "") != str(connection_id) or \
+            str(slot.get("project_id") or "") != str(project_id) or \
+            str(record.get("project_id") or "") != str(project_id) or \
+            str(record.get("scope_type") or "project").lower() != "project":
+        return ""
+    return github_urls.api_base(conn_base)
+
+
+def _ref_origin(ref: Any) -> tuple[str, str]:
+    """(kind, key) of where a credential reference's secret lives: a SecretRef record
+    (``ref_kind``/``ref_key``) or a ``kind:key`` string such as ``env:BOSS_GITHUB_TOKEN``."""
+    if isinstance(ref, dict):
+        return str(ref.get("ref_kind") or "").lower(), str(ref.get("ref_key") or "")
+    kind, _, key = str(ref or "").partition(":")
+    return kind.lower(), key
+
+
+def _refuse_env_ref_on_another_host(ref: Any, api_base_url: Any) -> None:
+    """A host environment credential (env:NAME) belongs to the INSTALL's GitHub: a connection
+    may not pair it with another API base (BOSSAPP-1286, rc6 N-1) — the token would otherwise be
+    sent to whatever host the connection names."""
+    kind, name = _ref_origin(ref)
+    if kind == "env" and github_urls.api_base(api_base_url) != github_urls.api_base():
+        raise ValueError(
+            f"{name or 'This environment credential'} is the install's own GitHub credential; it "
+            f"goes only to {github_urls.web_host()}. Paste a token for the other host instead.")
+
+
+def api_base_for_repository(connection: Connection, project_id: Optional[str], owner: str = "",
+                            repo: str = "") -> str:
+    """THE REST base for a repository (BOSSAPP-1286): the ``api_base_url`` of the connection
+    owner/repo is BOUND through (a GitHub Enterprise Server connection answers
+    ``https://<host>/api/v3``), else the install's (github_urls.api_base()). Never another
+    connection's base: the base and the token must come from the same place (repo_access.resolve
+    pairs them), so there is no "primary/newest connection" fallback here."""
+    wanted = f"{owner}/{repo}".strip("/").lower()
+    if project_id and "/" in wanted:
+        try:
+            with connection.begin_nested():
+                row = connection.execute(text(
+                    """
+                    SELECT c.api_base_url
+                    FROM github_repository_bindings b
+                    JOIN github_connections c ON c.id = b.connection_id
+                    WHERE b.project_id = :p AND b.status = 'active'
+                      AND c.status IN ('configured', 'active')
+                      AND LOWER(b.full_name) = :want
+                    ORDER BY (b.role = 'primary') DESC, b.updated_at DESC
+                    LIMIT 1
+                    """), {"p": project_id, "want": wanted}).first()
+            if row is not None and row[0]:
+                return github_urls.api_base(row[0])
+        except Exception as error:  # noqa: BLE001 — an older schema: the install's base
+            logger.debug("github: api base lookup failed: %s", type(error).__name__)
+    return github_urls.api_base()
+
+
+def github_access_for(connection: Connection, settings: Settings, project_id: str, owner: str,
+                      repo: str) -> tuple[str, str]:
+    """(token, REST base) for owner/repo, chosen TOGETHER by the one resolver under the build's
+    rule (github_token_for): the token is only ever sent to the base it belongs to. ("", base)
+    when no credential of that host is held."""
+    try:
+        from .repo_access import resolve
+
+        got = resolve(connection, settings, project_id, owner, repo, bound_only=True,
+                      verify=False)
+        return got.token or "", got.api_base or api_base_for_repository(connection, project_id,
+                                                                        owner, repo)
+    except Exception:  # noqa: BLE001 — no token is an answer; the caller reports it
+        logger.debug("no usable GitHub credential for %s", project_id, exc_info=True)
+        return "", api_base_for_repository(connection, project_id, owner, repo)
+
+
+def build_credential(connection: Connection, settings: Settings, project_id: Optional[str],
+                     owner: str, repo: str) -> tuple[str, str]:
+    """(token, REST base) a BUILD clones and pushes with. On the install's own GitHub host the
+    shared decision stays (github_app_adapter.repo_token: the App's installation token where it
+    covers the repository, else the PAT, else the project's registered credential); on any
+    other host (a GHES connection) only that host's credential, from the one resolver. The two
+    are never mixed (BOSSAPP-1286)."""
+    base = api_base_for_repository(connection, project_id, owner, repo)
+    if base == github_urls.api_base():
+        from .github_app_adapter import repo_token
+
+        try:
+            token = repo_token(settings, owner, repo, connection=connection,
+                               project_id=project_id or "") or ""
+            # The base the token itself belongs to (its tag), never a separately chosen one.
+            return token, github_urls.credential_api_base(token) if token else base
+        except Exception:  # noqa: BLE001 — the resolver below is the fallback
+            logger.debug("github: repo_token failed for %s/%s", owner, repo, exc_info=True)
+    return github_access_for(connection, settings, project_id or "", owner, repo)
+
+
+def github_credential(engine: Any, settings: Settings, project_id: Optional[str], owner: str,
+                      repo: str, *, prefer_app: bool = False) -> Callable[[], tuple[str, str]]:
+    """A deferred (token, REST base) pair for identity.runs.repo_access and the like: resolved
+    when called, in its own transaction, by github_access_for. ``prefer_app`` uses the install's
+    App installation token instead — only when the repository's host IS the install's."""
+
+    def pair() -> tuple[str, str]:
+        with engine.begin() as connection:
+            token, base = github_access_for(connection, settings, project_id or "", owner, repo)
+        if prefer_app and github_urls.api_base(base) == github_urls.api_base():
+            try:
+                from .github_app_adapter import repo_token
+
+                token = repo_token(settings, owner, repo) or token
+            except Exception:  # noqa: BLE001 — the paired token still answers
+                logger.debug("github: no App token for %s/%s", owner, repo, exc_info=True)
+        return token or "", base
+
+    return pair
 
 
 def github_token_for(connection: Connection, settings: Settings, project_id: str, owner: str,

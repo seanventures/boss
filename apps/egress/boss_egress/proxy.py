@@ -48,7 +48,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Optional
 from urllib.parse import parse_qsl
 
-from boss_engine.identity import egress_rules, github_app, grants, lineage, repo_scope, runs, tokens
+from boss_engine.identity import egress_rules, github_app, github_urls, grants, lineage, repo_scope, runs, tokens
 from boss_engine.identity.principal import RunTokenClaims
 
 log = logging.getLogger("boss.egress")
@@ -58,9 +58,37 @@ BITBUCKET_GIT_ENV = "BOSS_BITBUCKET_GIT_URL"       # default https://bitbucket.o
 BITBUCKET_API_ENV = "BOSS_BITBUCKET_API_URL"       # default https://api.bitbucket.org
 STRICT_ENV = "BOSS_EGRESS_STRICT_SECRETS"
 #: The host route's guest-facing host names → the provider that serves them (D19).
-GIT_HOSTS = {"github.com": "github", "bitbucket.org": "bitbucket"}
-API_HOSTS = {"github.com": "github-api", "api.github.com": "github-api",
+#: The install's GitHub Enterprise Server host (when it is pointed at one) routes as GitHub, so a
+#: GHES install's guests get the credential injected the same way (BOSSAPP-1286).
+_GHES_HOSTS = tuple(h for h in github_urls.github_hosts() if h not in github_urls.PUBLIC_HOSTS)
+GIT_HOSTS = {"github.com": "github", "bitbucket.org": "bitbucket",
+             **{h: "github" for h in _GHES_HOSTS}}
+API_HOSTS = {**{h: "github-api" for h in _GHES_HOSTS},
+             github_urls.PUBLIC_WEB_HOST: "github-api", github_urls.PUBLIC_API_HOST: "github-api",
              "bitbucket.org": "bitbucket-api", "api.bitbucket.org": "bitbucket-api"}
+def ghes_api_for(db: Any, host: str) -> str:
+    """The REST base of a GitHub Enterprise Server host of this install — the install's own or
+    one set on any GitHub connection (github_connections.ghes_hosts, the ONE list) — else ""."""
+    from boss_engine.services.github_connections import ghes_hosts
+
+    return ghes_hosts(db).get(str(host or "").lower().rstrip("."), "")
+
+
+def _on_install_host(api: str) -> bool:
+    """True when `api` is the install's own GitHub (where the App and its tokens live)."""
+    return not api or github_urls.api_base(api) == github_urls.install_api_base()
+
+
+def _repo_of(provider: str, rest: str) -> str:
+    """owner/name a GitHub request names: /owner/repo.git/... (git), /repos/owner/repo/... (API)."""
+    parts = [p for p in rest.split("/") if p]
+    if provider == "github" and len(parts) >= 2:
+        return f"{parts[0]}/{parts[1].removesuffix('.git')}"
+    if provider == "github-api" and len(parts) >= 3 and parts[0] == "repos":
+        return f"{parts[1]}/{parts[2]}"
+    return ""
+
+
 #: The ONLY inbound headers that cross the proxy (an allowlist: a header nobody thought of —
 #: X-HTTP-Method-Override, a hop-by-hop header, a credential under a new name — never does).
 _FORWARD = frozenset({"accept", "content-type", "user-agent", "git-protocol", "x-github-api-version",
@@ -263,6 +291,9 @@ class EgressProxy:
             return self._host_route(req, first)
         provider, _, rest_raw = req.path.lstrip("/").partition("/")
         rest_raw = "/" + rest_raw
+        # A repository on a GitHub Enterprise Server host comes as /github@<host>/... (git) or
+        # /github-api@<host>/... (REST): runs.egress_access rewrites that host's origin so.
+        provider, _, ghes_host = provider.partition("@")
         template = "{unparsed}"
         presented = _credential(req)
         # THE CHALLENGE (round 2 walk): git (libcurl, CURLAUTH_ANY) sends its credential only after a
@@ -295,7 +326,14 @@ class EgressProxy:
                                  f"run_token_{exc.reason}")
                 return EgressResponse(401, {"content-type": "application/json"},
                                       b'{"error":"run_token_refused"}')
-            judged = self._judge(db, claims, provider, rest_raw, req, allow_delete=True)
+            ghes_api = ""
+            if ghes_host:
+                ghes_api = ghes_api_for(db, ghes_host) if provider in ("github", "github-api") else ""
+                if not ghes_api:
+                    return self._refuse(db, claims, provider, req.method, template,
+                                        "git_host_not_routed")
+            judged = self._judge(db, claims, provider, rest_raw, req, allow_delete=True,
+                                 ghes_api=ghes_api)
             if isinstance(judged, EgressResponse):
                 return judged
         return self._send(claims, provider, req, judged)
@@ -312,6 +350,7 @@ class EgressProxy:
         rest_raw = "/" + (parts[2] if len(parts) > 2 else "")
         provider = (GIT_HOSTS if kind == "git" else API_HOSTS).get(guest_host, "")
         template = f"/{kind}/{{host}}"
+        ghes_api = ""
 
         def answer(status: int, reason: str) -> EgressResponse:
             from boss_engine.services.lapsed import say
@@ -410,20 +449,30 @@ class EgressProxy:
                 # Nothing registers a VM handle into the in-process egress table, so a host
                 # that predates S13 and attaches no boss:egress token fails closed.
                 return answer(401, "egress_not_registered")
-            # 3. THE ROUTE: a host egress injects for, or a refusal that names it (D19).
+            # 3. THE ROUTE: a host egress injects for, or a refusal that names it (D19). A GHES
+            # host (the install's, or one on any GitHub connection) routes as GitHub, upstream
+            # to THAT host.
+            ghes_api = ghes_api_for(db, guest_host)
+            if ghes_api:
+                provider = "github" if kind == "git" else "github-api"
             if not provider:
                 reason = ("strict_secrets_git_host_refused" if _strict()
                           else "git_host_not_routed")
                 return self._refuse(db, claims, guest_host or "unknown", req.method, template, reason)
-            judged = self._judge(db, claims, provider, rest_raw, req, allow_delete=False)
+            judged = self._judge(db, claims, provider, rest_raw, req, allow_delete=False,
+                                 ghes_api=ghes_api)
             if isinstance(judged, EgressResponse):
                 return judged
         return self._send(claims, provider, req, judged)
 
     # ---- the rule table, the push inspection and the credential -------------------------------------
     def _judge(self, db: Any, claims: RunTokenClaims, provider: str, rest_raw: str,
-               req: EgressRequest, *, allow_delete: bool) -> Any:
-        """An EgressResponse (a refusal), or (url, headers, template, token, rest) to send."""
+               req: EgressRequest, *, allow_delete: bool, ghes_api: str = "") -> Any:
+        """An EgressResponse (a refusal), or (url, headers, template, token, rest) to send.
+        `ghes_api`: the REST base of the GHES host the request is for ("" = the install's)."""
+        # A host other than the install's GitHub gets ITS connection's credential, never the
+        # install App's token (BOSSAPP-1286); "" keeps the install's route unchanged.
+        foreign = "" if _on_install_host(ghes_api) else github_urls.api_base(ghes_api)
         template = "{unparsed}"
         # THE PATH FIRST: decoded and canonical BEFORE any rule sees it; `..`, `.`, `//` and
         # encoded separators are refused outright, and the upstream gets exactly this path.
@@ -448,7 +497,8 @@ class EgressProxy:
 
         def installation_token() -> str:
             if "t" not in minted:
-                minted["t"] = self._installation_token(claims, db)
+                minted["t"] = (self._connection_token(claims, db, foreign, _repo_of(provider, rest))
+                               if foreign else self._installation_token(claims, db))
             return minted["t"]
 
         def body_json() -> Optional[dict]:
@@ -466,7 +516,7 @@ class EgressProxy:
             try:
                 decision = egress_rules.check_api(
                     req.method, rest, perms=perms, repos=repos, body=body_json(), push_pattern=pattern,
-                    pr_head=lambda repo, n: self._pr_head(repo, n, installation_token()))
+                    pr_head=lambda repo, n: self._pr_head(repo, n, installation_token(), api=foreign))
             except github_app.GitHubRefused as exc:
                 return self._refuse(db, claims, provider, req.method, "/repos/{o}/{r}/pulls/{n}", exc.code)
         elif provider == "bitbucket":
@@ -479,6 +529,14 @@ class EgressProxy:
         template = decision.template
         if not decision.allowed:
             return self._refuse(db, claims, provider, req.method, template, decision.reason)
+        if provider in ("github", "github-api") and not foreign:
+            # THE INSTALL'S ROUTE never serves a repository bound to ANOTHER GitHub host (a GHES
+            # connection): `git clone https://github.com/<that owner>/<repo>` from a sandbox must
+            # not pull the GHES connection's token onto github.com (BOSSAPP-1286).
+            other = self._bound_elsewhere(claims, db, _repo_of(provider, rest))
+            if other:
+                return self._refuse(db, claims, provider, req.method, template,
+                                    "repo_bound_to_other_host")
         if provider.startswith("bitbucket"):
             token = bitbucket_credential()
             if not token:
@@ -499,15 +557,20 @@ class EgressProxy:
                 return self._refuse(db, claims, provider, req.method, template, "encoded_push")
             if provider == "github":
                 verdict = self._check_push(req.body, rest, perms, pattern, token,
-                                           allow_delete=allow_delete)
+                                           allow_delete=allow_delete, api=foreign)
             else:
                 verdict = _check_push_offline(req.body, pattern, perms, allow_delete=allow_delete)
             if not verdict.allowed:
                 return self._refuse(db, claims, provider, req.method, template, verdict.reason)
         try:
-            url, headers = self._upstream_request(provider, encoded, req, token)
+            url, headers = self._upstream_request(provider, encoded, req, token, api=foreign)
         except egress_rules.PathRefused as exc:
             return self._refuse(db, claims, provider, req.method, template, str(exc))
+        except github_urls.CrossHostCredential:
+            # The credential belongs to another GitHub host (check_send logged it): refused,
+            # never sent (BOSSAPP-1286).
+            return self._refuse(db, claims, provider, req.method, template,
+                                "credential_host_mismatch")
         return (url, headers, template, token, rest)
 
     def _send(self, claims: RunTokenClaims, provider: str, req: EgressRequest, judged: Any) -> EgressResponse:
@@ -552,14 +615,52 @@ class EgressProxy:
                 break
         return resp
 
+    def _bound_elsewhere(self, claims: RunTokenClaims, db: Any, repo: str) -> bool:
+        """True when owner/repo is bound (in the run's project) to a connection on a GitHub host
+        other than the install's."""
+        from boss_engine.services.github_connections import api_base_for_repository
+
+        owner, _, name = str(repo or "").partition("/")
+        project = getattr(claims.task, "project_id", None)
+        if not owner or not name or not project:
+            return False
+        with db.begin_nested():
+            bound = api_base_for_repository(db, project, owner, name)
+        return not _on_install_host(bound)
+
+    def _connection_token(self, claims: RunTokenClaims, db: Any, api: str, repo: str) -> str:
+        """The credential of the run's project connection that owner/repo is BOUND through on the
+        GHES host `api` — never the install App's token on another host (BOSSAPP-1286). Raises
+        GitHubRefused when the repository is not bound on that host or holds no credential."""
+        from boss_engine.config import get_settings
+        from boss_engine.services.github_connections import (GitHubConnectionService,
+                                                             api_base_for_repository)
+
+        owner, _, name = repo.partition("/")
+        project = getattr(claims.task, "project_id", None)
+        if not owner or not name or not project:
+            raise github_app.GitHubRefused("ghes_repo_required", 403)
+        with db.begin_nested():
+            bound = api_base_for_repository(db, project, owner, name)
+        if github_urls.api_base(bound) != github_urls.api_base(api):
+            raise github_app.GitHubRefused("ghes_repo_not_bound", 403)
+        with db.begin_nested():
+            token = GitHubConnectionService(get_settings()).token_for_repository(
+                db, project_id=project, owner=owner, repo=name)
+        if not token:
+            raise github_app.GitHubRefused("ghes_not_connected", 403)
+        # Tagged at its source by where the secret lives (token_for_repository): an install env
+        # token a GHES connection names stays the install's; the upstream check refuses it.
+        return token
+
     def _installation_token(self, claims: RunTokenClaims, db: Any) -> str:
         cached = github_app.cached_for_run(claims.task.run_id)
         if cached is not None:
             return cached.token
         return github_app.mint_for_run(claims, task=claims.task, db=db).token
 
-    def _pr_head(self, repo: str, number: int, token: str) -> Optional[str]:
-        resp = github_app._call("GET", f"/repos/{repo}/pulls/{number}", token=token)
+    def _pr_head(self, repo: str, number: int, token: str, api: str = "") -> Optional[str]:
+        resp = github_app._call("GET", f"{api}/repos/{repo}/pulls/{number}", token=token)
         if resp.status != 200:
             return None
         data = resp.json() or {}
@@ -569,12 +670,13 @@ class EgressProxy:
         return str(head.get("ref") or "") or None
 
     def _check_push(self, body: bytes, rest: str, perms: Mapping[str, str], pattern: str,
-                    token: str, *, allow_delete: bool = True) -> egress_rules.RuleDecision:
+                    token: str, *, allow_delete: bool = True,
+                    api: str = "") -> egress_rules.RuleDecision:
         tpl = "/{o}/{r}.git/git-receive-pack"
         repo = "/".join(rest.strip("/").split("/")[:2]).removesuffix(".git")
 
         def remote_json(path: str) -> Optional[dict]:
-            resp = github_app._call("GET", f"/repos/{repo}{path}", token=token)
+            resp = github_app._call("GET", f"{api}/repos/{repo}{path}", token=token)
             return (resp.json() or {}) if resp.status == 200 else None
 
         def remote_tree(sha: str):
@@ -607,7 +709,7 @@ class EgressProxy:
             return egress_rules.RuleDecision(False, tpl, "unparseable_push")
 
         def is_ancestor(old: str, descendant: str) -> bool:
-            resp = github_app._call("GET", f"/repos/{repo}/compare/{old}...{descendant}", token=token)
+            resp = github_app._call("GET", f"{api}/repos/{repo}/compare/{old}...{descendant}", token=token)
             return resp.status == 200 and (resp.json() or {}).get("status") in ("ahead", "identical")
 
         return egress_rules.check_push(updates, objects, push_pattern=pattern, perms=perms, is_ancestor=is_ancestor,
@@ -615,11 +717,16 @@ class EgressProxy:
                                        allow_delete=allow_delete)
 
     def _upstream_request(self, provider: str, encoded: str, req: EgressRequest,
-                          token: str) -> tuple[str, dict[str, str]]:
+                          token: str, api: str = "") -> tuple[str, dict[str, str]]:
         headers = {k: v for k, v in req.headers.items() if k.lower() in _FORWARD}
         if provider == "github":
-            base = (os.environ.get(GIT_UPSTREAM_ENV) or "https://github.com").rstrip("/")
+            # The upstream git origin: a connection's GHES host (`api`), else explicit, else the
+            # install's GitHub web origin (GHES too).
+            base = (github_urls.web_base_for(api) if api else
+                    (os.environ.get(GIT_UPSTREAM_ENV) or github_urls.web_base())).rstrip("/")
             if token:                       # "" = an anonymous read (anonymous_read_allowed)
+                # THE SEND POINT (BOSSAPP-1286), before the header exists.
+                github_urls.check_send(token, base, where="egress")
                 basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
                 headers["Authorization"] = f"Basic {basic}"
         elif provider == "bitbucket":
@@ -630,9 +737,14 @@ class EgressProxy:
             headers["Authorization"] = (_bitbucket_basic(token) if ":" in token
                                         else f"Bearer {token}")
         else:
-            base = github_app.api_base()
+            base = api or github_app.api_base()
+            github_urls.check_send(token, base, where="egress")   # before the header exists
             headers["Authorization"] = f"Bearer {token}"
-        return upstream_url(base, encoded, req.query), headers
+        url = upstream_url(base, encoded, req.query)
+        if provider in ("github", "github-api"):
+            # THE SEND POINT (BOSSAPP-1286): a GitHub credential reaches only its own host.
+            github_urls.check_send(token, url, where="egress")
+        return url, headers
 
     def _refuse(self, db: Any, claims: Optional[RunTokenClaims], provider: str, method: str, template: str,
                 reason: str) -> EgressResponse:

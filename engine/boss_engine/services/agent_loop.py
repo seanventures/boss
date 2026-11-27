@@ -709,7 +709,7 @@ def _open_workspace(
     # NOT settings.github_token — see github_connections.github_token_for. It is empty wherever
     # the repository was connected through the wizard, which makes this an anonymous clone of a
     # private repo and fails with git asking for a username on a terminal nobody is at.
-    from .github_connections import github_token_for
+    from .github_connections import github_access_for
 
     project_id = connection.execute(
         text("SELECT project_id FROM code_task_runs WHERE id = :i"), {"i": run_id},
@@ -722,8 +722,8 @@ def _open_workspace(
     with _identity_runs.repo_access(
             connection.engine, host=getattr(settings, "target_repo_host", "github") or "github",
             owner=target["owner"], repo=target["repo"], project_id=project_id,
-            token=lambda: github_token_for(
-                connection, settings, project_id, target["owner"], target["repo"]) or "") as access:
+            credential=lambda: github_access_for(
+                connection, settings, project_id, target["owner"], target["repo"])) as access:
         return ensure_workspace(
             run_id,
             owner=target["owner"], repo=target["repo"], branch=target["branch"],
@@ -944,7 +944,7 @@ def _tool_inspect_app(connection, project_id, settings, args) -> dict:
     import subprocess
     import tempfile
 
-    from .github_app_adapter import repo_token
+    from .github_connections import github_credential
 
     workdir = Path(tempfile.mkdtemp(prefix="boss-inspect-"))
     try:
@@ -952,7 +952,9 @@ def _tool_inspect_app(connection, project_id, settings, args) -> dict:
 
         with _identity_runs.repo_access(connection.engine, host="github", owner=owner, repo=repo,
                                         project_id=project_id,
-                                        token=lambda: repo_token(settings, owner, repo)) as access:
+                                        credential=github_credential(
+                                            connection.engine, settings, project_id, owner, repo,
+                                            prefer_app=True)) as access:
             clone = owned_process.run(
                 ["git", "clone", "--depth", "1", "--branch", branch, access.url, str(workdir / "r")],
                 capture_output=True, text=True, timeout=300, env=access.environ())
@@ -1536,7 +1538,10 @@ def _wt_publish_document(connection, project_id, settings, args) -> dict:
         return {"error": f"PDF render failed: {type(exc).__name__}: {exc}"}
 
     try:
-        gh = GitHubAdapter(settings)
+        from boss_engine.identity import github_urls
+
+        # The install's target repository with the install's credentials: the install's host.
+        gh = GitHubAdapter(settings, api_base_url=github_urls.api_base())
         gh.ensure_branch(branch)
         gh.upsert_file(branch, md_path, markdown, f"BOSS: add {md_path}")
         gh.upsert_binary_file(branch, pdf_path, pdf_bytes, f"BOSS: add {pdf_path}")

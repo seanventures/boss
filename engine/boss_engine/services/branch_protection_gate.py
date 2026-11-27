@@ -378,8 +378,12 @@ class BranchProtectionGateService:
         try:
             from .github_adapter import GitHubAdapter
 
+            from ..identity import github_urls
+
+            # The install's own token goes to the install's own host only.
             adapter = GitHubAdapter(
-                self.settings, owner=owner, repo=repo, token=token
+                self.settings, owner=owner, repo=repo, token=token,
+                api_base_url=github_urls.api_base()
             )
             body = adapter._request("GET", path)
             return {

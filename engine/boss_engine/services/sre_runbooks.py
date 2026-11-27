@@ -9,6 +9,19 @@ Built-in templates spend nothing:
   * ``page_oncall`` — may dry-run the existing on-call page (receipted,
     simulated without credentials)
 
+Actions a project's own runbook may use (BOSSAPP-1293):
+  * ``query_telemetry`` — READ-ONLY diagnostic: one query against a telemetry
+    connector (CloudWatch, Prometheus, Loki, ...); safe, runs without approval,
+    the rows it saw go on the receipt.
+  * ``rollback_deployment`` — REMEDIATION: roll a BOSS-managed stack deployment
+    back to its last known-good commit (``params.deployment_id``).
+  * ``redeploy_deployment`` — REMEDIATION: redeploy a build's latest deployment
+    (``params.run_id``).
+  Remediation steps always hold for a person's approval (a hold-default
+  Decision); once approved, the run carries them out and receipts the result.
+
+Steps run in order; the run stops at the first step that holds or fails.
+
 Receipts use ``dedupe_key = sre_runbook:{run_id}:{step}``. Not public GA.
 """
 from __future__ import annotations
@@ -24,9 +37,12 @@ from .oncall_sre import OncallSreService
 from .receipts import ReceiptService
 
 
-KNOWN_ACTIONS = frozenset({"restart_preview", "page_oncall"})
-SAFE_ACTIONS = frozenset({"restart_preview"})
+SAFE_ACTIONS = frozenset({"restart_preview", "query_telemetry"})
 EXTERNAL_ACTIONS = frozenset({"page_oncall"})
+#: Change something real: always behind an approved Decision, never auto-applied.
+REMEDIATION_ACTIONS = frozenset({"rollback_deployment", "redeploy_deployment"})
+KNOWN_ACTIONS = SAFE_ACTIONS | EXTERNAL_ACTIONS | REMEDIATION_ACTIONS
+MAX_DIAGNOSTIC_ROWS = 20
 
 BUILTIN_RUNBOOKS: tuple[dict[str, Any], ...] = (
     {
@@ -79,7 +95,37 @@ CREATE INDEX IF NOT EXISTS idx_sre_runbook_runs_project
   ON sre_runbook_runs(project_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sre_runbook_runs_runbook
   ON sre_runbook_runs(project_id, runbook_id, created_at DESC);
+
+-- One approval authorises ONE remediation step of ONE run (BOSSAPP-1293): consumed here.
+CREATE TABLE IF NOT EXISTS sre_runbook_approvals_used (
+  decision_id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  run_id TEXT NOT NULL,
+  step_digest TEXT NOT NULL,
+  used_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 """
+
+
+def step_digest(runbook_id: str, incident_id: str, step_id: str, step: dict[str, Any]) -> str:
+    """What one approval authorises: this runbook, incident, step id, action and params. Any
+    change to them (an edited runbook, other params) is a different digest, so a new card."""
+    import hashlib
+
+    body = json.dumps({"runbook_id": runbook_id, "incident_id": incident_id, "step": step_id,
+                       "action": str(step.get("action") or ""),
+                       "params": step.get("params") or {}}, sort_keys=True, default=str)
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
+def _rec(row: Any) -> dict[str, Any]:
+    rec = row.get("recommendation") or {}
+    if isinstance(rec, str):
+        try:
+            rec = json.loads(rec)
+        except json.JSONDecodeError:
+            rec = {}
+    return rec if isinstance(rec, dict) else {}
 
 
 class SreRunbookError(Exception):
@@ -90,7 +136,7 @@ class SreRunbookError(Exception):
 
 
 def classify_step(step: Any) -> str:
-    """Return safe | external | unknown. Unknown is fail-closed."""
+    """Return safe | external | remediation | unknown. Unknown is fail-closed."""
     if not isinstance(step, dict):
         return "unknown"
     action = str(step.get("action") or "").strip()
@@ -98,7 +144,26 @@ def classify_step(step: Any) -> str:
         return "safe"
     if action in EXTERNAL_ACTIONS:
         return "external"
+    if action in REMEDIATION_ACTIONS:
+        return "remediation"
     return "unknown"
+
+
+def _step_params(raw: Any) -> dict[str, Any]:
+    """A step's parameters: a small flat object of strings/numbers/bools (and, for
+    query_telemetry, the source spec object). Credentials never belong here — a telemetry
+    source names the env vars that hold them."""
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for key, value in list(raw.items())[:20]:
+        key = str(key)[:60]
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            out[key] = value if not isinstance(value, str) else value[:2000]
+        elif isinstance(value, dict) and key == "source":
+            out[key] = {str(k)[:60]: v for k, v in list(value.items())[:20]
+                        if isinstance(v, (str, int, float, bool))}
+    return out
 
 
 def receipt_dedupe_key(run_id: str, step: str) -> str:
@@ -131,11 +196,19 @@ def _row(row: Any) -> dict[str, Any]:
 
 
 class SreRunbookService:
-    def __init__(self, settings=None):
+    def __init__(self, settings=None, *, effects: Optional[dict[str, Any]] = None):
         self.settings = settings
         self.receipts = ReceiptService()
         self.oncall = OncallSreService(settings)
         self._tables_ready = False
+        #: action -> callable(connection, project_id, params, *, actor, approval) -> dict.
+        #: The real remediations by default; tests replace them.
+        self.effects: dict[str, Any] = {
+            "rollback_deployment": self._rollback_deployment,
+            "redeploy_deployment": self._redeploy_deployment,
+            "query_telemetry": self._query_telemetry,
+            **(effects or {}),
+        }
 
     def ensure_tables(self, connection: Connection) -> None:
         if self._tables_ready:
@@ -200,8 +273,11 @@ class SreRunbookService:
             normalized.append({
                 "id": step_id,
                 "action": action,
-                "kind": str(raw.get("kind") or kind),
+                # The kind is BOSS's classification, never the author's word: a step cannot
+                # declare a remediation "safe" to skip its approval.
+                "kind": kind,
                 "description": str(raw.get("description") or "")[:400],
+                "params": _step_params(raw.get("params")),
             })
         runbook_id = make_id("srb")
         connection.execute(
@@ -333,99 +409,243 @@ class SreRunbookService:
         run_id = run["id"]
         del force  # reserved; never a Decision bypass
 
-        first = steps[0]
-        step_id = str(first.get("id") or first.get("action") or "step")
-        kind = classify_step(first)
-        if kind == "unknown":
-            emit_event(
-                connection, project_id, "sre_runbook.run.failed", actor,
-                "sre_runbook_run", run_id,
-                {"reason": "unknown_step", "action": first.get("action"), "public_ga": False},
-            )
-            return self._finish(
-                connection, run,
-                status="failed",
-                extra={"reason": "unknown_step", "action": first.get("action")},
-            )
+        results: list[dict[str, Any]] = []
+        receipt_id: Optional[str] = None
+        extra: dict[str, Any] = {}
+        approval: Optional[dict[str, Any]] = None
+        last_decision: Optional[str] = None
+        for step in steps:
+            step_id = str(step.get("id") or step.get("action") or "step")
+            action = str(step.get("action") or "")
+            kind = classify_step(step)
+            if kind == "unknown":
+                emit_event(
+                    connection, project_id, "sre_runbook.run.failed", actor,
+                    "sre_runbook_run", run_id,
+                    {"reason": "unknown_step", "action": action, "public_ga": False},
+                )
+                return self._finish(
+                    connection, run, status="failed", receipt_id=receipt_id,
+                    extra={"reason": "unknown_step", "action": action, "steps": results},
+                )
 
-        if kind == "external" and not self._approved_decision(
-            connection, project_id, runbook["id"], incident_id,
-        ):
-            decision_id = self._hold_decision(
-                connection, project_id, runbook, incident_id, step_id, actor=actor,
-            )
-            receipt_id = None
-            extra: dict[str, Any] = {
-                "held": True,
-                "reason": "decision_required",
-                "action": first.get("action"),
-                "public_ga": False,
-            }
-            if first.get("action") == "page_oncall":
+            # ONE approval per gated step: the decision names this step, action and params
+            # (exactly what the card showed), and it is consumed by this run — it never carries
+            # over to the next step or replays on a later run.
+            approval = None
+            if kind in ("external", "remediation"):
+                approval = self._approved_decision(
+                    connection, project_id, runbook["id"], incident_id, step=step,
+                    step_id=step_id, run_id=run_id,
+                )
+            if kind in ("external", "remediation") and not approval:
+                decision_id = self._hold_decision(
+                    connection, project_id, runbook, incident_id, step_id, actor=actor,
+                    step=step,
+                )
+                held_receipt: Optional[str] = None
+                extra = {
+                    "held": True,
+                    "reason": "decision_required",
+                    "action": action,
+                    "step": step_id,
+                    "public_ga": False,
+                    "steps": results,
+                }
+                if action == "page_oncall":
+                    held_receipt, notify = self._page_oncall_dry_run(
+                        connection, project_id, run_id, step_id, incident_id,
+                        adapter=adapter, actor=actor,
+                    )
+                    extra["notify"] = notify
+                    extra["simulated"] = True
+                emit_event(
+                    connection, project_id, "sre_runbook.run.held", actor,
+                    "sre_runbook_run", run_id,
+                    {"decision_id": decision_id, "step": step_id, "action": action,
+                     "public_ga": False},
+                )
+                return self._finish(
+                    connection, run, status="held", decision_id=decision_id,
+                    receipt_id=held_receipt or receipt_id, extra=extra,
+                )
+
+            if action == "restart_preview":
+                receipt_id = self._record_receipt(
+                    connection, project_id, run_id, step_id,
+                    payload={
+                        "action": "restart_preview",
+                        "applied": False,
+                        "simulated": True,
+                        "reason": "safe_validate_only",
+                        "incident_id": incident_id,
+                    },
+                )
+                extra = {"applied": False, "simulated": True, "action": "restart_preview"}
+            elif action == "page_oncall":
                 receipt_id, notify = self._page_oncall_dry_run(
                     connection, project_id, run_id, step_id, incident_id,
                     adapter=adapter, actor=actor,
                 )
-                extra["notify"] = notify
-                extra["simulated"] = True
+                extra = {"notify": notify, "simulated": True, "action": "page_oncall"}
+            else:
+                # query_telemetry (read-only) or an APPROVED remediation.
+                params = dict(step.get("params") or {})
+                try:
+                    outcome = dict(self.effects[action](
+                        connection, project_id, params, actor=actor, approval=approval,
+                    ) or {})
+                except Exception as error:  # noqa: BLE001 — the receipt says what went wrong
+                    outcome = {"ok": False, "error": f"{type(error).__name__}: {error}"[:500]}
+                ok = bool(outcome.get("ok", True))
+                last_decision = (approval or {}).get("decision_id") or last_decision
+                payload = {"action": action, "applied": ok and kind == "remediation",
+                           "incident_id": incident_id, "params": params,
+                           "approved_by": (approval or {}).get("approved_by"),
+                           "decision_id": (approval or {}).get("decision_id"),
+                           "result": outcome}
+                receipt_id = self._record_receipt(
+                    connection, project_id, run_id, step_id, payload=payload, ok=ok,
+                )
+                extra = {"action": action, "applied": payload["applied"], "result": outcome}
+                if not ok:
+                    emit_event(
+                        connection, project_id, "sre_runbook.run.failed", actor,
+                        "sre_runbook_run", run_id,
+                        {"reason": "step_failed", "step": step_id, "action": action,
+                         "public_ga": False},
+                    )
+                    results.append({"step": step_id, "action": action, "ok": False,
+                                    "receipt_id": receipt_id})
+                    return self._finish(
+                        connection, run, status="failed",
+                        decision_id=(approval or {}).get("decision_id"),
+                        receipt_id=receipt_id,
+                        extra={**extra, "reason": "step_failed", "steps": results},
+                    )
+            results.append({"step": step_id, "action": action, "ok": True,
+                            "receipt_id": receipt_id})
             emit_event(
-                connection, project_id, "sre_runbook.run.held", actor,
+                connection, project_id, "sre_runbook.step.completed", actor,
                 "sre_runbook_run", run_id,
-                {"decision_id": decision_id, "step": step_id, "public_ga": False},
-            )
-            return self._finish(
-                connection, run,
-                status="held",
-                decision_id=decision_id,
-                receipt_id=receipt_id,
-                extra=extra,
+                {"step": step_id, "action": action, "receipt_id": receipt_id,
+                 "public_ga": False},
             )
 
-        if first.get("action") == "restart_preview":
-            receipt_id = self._record_receipt(
-                connection, project_id, run_id, step_id,
-                payload={
-                    "action": "restart_preview",
-                    "applied": False,
-                    "simulated": True,
-                    "reason": "safe_validate_only",
-                    "incident_id": incident_id,
-                },
-            )
-            emit_event(
-                connection, project_id, "sre_runbook.run.completed", actor,
-                "sre_runbook_run", run_id,
-                {"step": step_id, "applied": False, "public_ga": False},
-            )
-            return self._finish(
-                connection, run,
-                status="completed",
-                receipt_id=receipt_id,
-                extra={"applied": False, "simulated": True, "action": "restart_preview"},
-            )
-
-        if first.get("action") == "page_oncall":
-            receipt_id, notify = self._page_oncall_dry_run(
-                connection, project_id, run_id, step_id, incident_id,
-                adapter=adapter, actor=actor,
-            )
-            emit_event(
-                connection, project_id, "sre_runbook.run.completed", actor,
-                "sre_runbook_run", run_id,
-                {"step": step_id, "simulated": True, "public_ga": False},
-            )
-            return self._finish(
-                connection, run,
-                status="completed",
-                receipt_id=receipt_id,
-                extra={"notify": notify, "simulated": True, "action": "page_oncall"},
-            )
-
-        return self._finish(
-            connection, run,
-            status="failed",
-            extra={"reason": "unhandled_step", "action": first.get("action")},
+        emit_event(
+            connection, project_id, "sre_runbook.run.completed", actor,
+            "sre_runbook_run", run_id,
+            {"steps": len(results), "applied": bool(extra.get("applied")), "public_ga": False},
         )
+        return self._finish(
+            connection, run, status="completed",
+            decision_id=last_decision, receipt_id=receipt_id,
+            extra={**extra, "steps": results},
+        )
+
+    # ── remediations and diagnostics ──────────────────────────────────────
+    def _engine(self, connection: Connection):
+        return connection.engine
+
+    def _query_telemetry(self, connection: Connection, project_id: str,
+                         params: dict[str, Any], *, actor: str,
+                         approval: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+        """One READ-ONLY query against a telemetry connector; the first rows go on the receipt."""
+        import time
+
+        from .reliability import build_source
+        from .telemetry_connectors import ensure_connector_ready, run_source_query
+        from .telemetry_source import TimeWindow
+
+        spec = dict(params.get("source") or {})
+        ensure_connector_ready(spec)
+        minutes = max(1, min(int(params.get("window_minutes") or 15), 24 * 60))
+        end = time.time()
+        rows = run_source_query(build_source(spec), str(params.get("capability") or "logs"),
+                                str(params.get("query") or ""),
+                                TimeWindow(end - minutes * 60, end), limit=MAX_DIAGNOSTIC_ROWS)
+        return {"ok": True, "source": spec.get("kind"), "rows": len(rows),
+                "sample": rows[:MAX_DIAGNOSTIC_ROWS]}
+
+    def _rollback_deployment(self, connection: Connection, project_id: str,
+                             params: dict[str, Any], *, actor: str,
+                             approval: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+        from .stack_deploy import StackDeployError, rollback_stack_deploy
+
+        deployment_id = str(params.get("deployment_id") or "").strip()
+        if not deployment_id:
+            return {"ok": False, "error": "rollback_deployment needs params.deployment_id"}
+        owner = connection.execute(
+            text("SELECT project_id FROM stack_deployments WHERE id = :d"),
+            {"d": deployment_id}).scalar()
+        if owner != project_id:
+            return {"ok": False, "error": "That deployment is not this project's"}
+        refused = self._authority_refused(connection, project_id, approval,
+                                          action="rollback_deployment", key="deployment_id",
+                                          value=deployment_id)
+        if refused:
+            return {"ok": False, "error": refused}
+        try:
+            planned = rollback_stack_deploy(
+                self._engine(connection), self.settings, deployment_id=deployment_id,
+                actor=actor, authority=approval)
+        except StackDeployError as error:
+            return {"ok": False, "error": str(error)}
+        return {"ok": True, "deployment_id": str((planned or {}).get("id") or ""),
+                "commit_sha": str((planned or {}).get("commit_sha") or ""),
+                "status": str((planned or {}).get("status") or "")}
+
+    def _redeploy_deployment(self, connection: Connection, project_id: str,
+                             params: dict[str, Any], *, actor: str,
+                             approval: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+        from .shepherd_service import redeploy_latest_deployment
+
+        run_ref = str(params.get("run_id") or "").strip()
+        if not run_ref:
+            return {"ok": False, "error": "redeploy_deployment needs params.run_id"}
+        owner = connection.execute(
+            text("SELECT project_id FROM code_task_runs WHERE id = :r"), {"r": run_ref}).scalar()
+        if owner != project_id:
+            return {"ok": False, "error": "That build is not this project's"}
+        refused = self._authority_refused(connection, project_id, approval,
+                                          action="redeploy_deployment", key="run_id",
+                                          value=run_ref)
+        if refused:
+            return {"ok": False, "error": refused}
+        result = redeploy_latest_deployment(self._engine(connection), self.settings, run_ref,
+                                            actor)
+        if result is None:
+            return {"ok": False, "error": "That build was never deployed"}
+        status = str(result.get("status") or "")
+        return {"ok": status not in ("failed", "error", "blocked", "not_found"),
+                "deployment_run_id": result.get("deployment_run_id"), "status": status}
+
+    def _authority_refused(self, connection: Connection, project_id: str,
+                           approval: Optional[dict[str, Any]], *, action: str, key: str,
+                           value: str) -> Optional[str]:
+        """Why ``approval`` does NOT authorise ``action`` on ``value`` here, or None. It must be
+        a person's approved runbook decision in this project, for this action and this target,
+        claimed by the run that carries it (sre_runbook_approvals_used)."""
+        a = approval or {}
+        if a.get("source") != "sre_runbook" or not a.get("decision_id"):
+            return f"{action} needs a person's approval of this step"
+        if a.get("action") != action or str((a.get("params") or {}).get(key) or "") != value \
+                or a.get("project_id") != project_id:
+            return f"The approval does not name this {action} ({key}={value})"
+        row = connection.execute(
+            text("SELECT status, recommendation FROM decisions WHERE id = :d AND project_id = :p"),
+            {"d": a["decision_id"], "p": project_id}).mappings().first()
+        rec = _rec(row) if row else {}
+        if not row or row.get("status") != "approved" or rec.get("step_digest") != a.get("step_digest") \
+                or rec.get("step_action") != action \
+                or str((rec.get("params") or {}).get(key) or "") != value:
+            return f"No approved decision for this {action}"
+        used = connection.execute(
+            text("SELECT run_id FROM sre_runbook_approvals_used WHERE decision_id = :d"),
+            {"d": a["decision_id"]}).scalar()
+        if used != a.get("run_id"):
+            return "That approval belongs to another run"
+        return None
 
     # ── internals ──────────────────────────────────────────────────────────
     def _insert_run(
@@ -525,6 +745,7 @@ class SreRunbookService:
         step: str,
         *,
         payload: dict[str, Any],
+        ok: bool = True,
     ) -> str:
         tenant = self._tenant(connection, project_id)
         key = receipt_dedupe_key(run_id, step)
@@ -538,11 +759,15 @@ class SreRunbookService:
             {"run_id": run_id, "step": step},
             payload,
         )
-        self.receipts.mark_succeeded(
-            connection, receipt["id"],
-            provider_ref=f"sre_runbook:{step}",
-            result=payload,
-        )
+        if ok:
+            self.receipts.mark_succeeded(
+                connection, receipt["id"],
+                provider_ref=f"sre_runbook:{step}",
+                result=payload,
+            )
+        else:
+            self.receipts.mark_failed(connection, receipt["id"], {
+                "message": str((payload.get("result") or {}).get("error") or "failed")[:500]})
         return receipt["id"]
 
     def _page_oncall_dry_run(
@@ -588,11 +813,19 @@ class SreRunbookService:
         project_id: str,
         runbook_id: str,
         incident_id: str,
-    ) -> bool:
+        *,
+        step: dict[str, Any],
+        step_id: str,
+        run_id: str,
+    ) -> Optional[dict[str, Any]]:
+        """The person's approval of THIS step — same runbook, incident, step id, action and
+        params as the card they approved (its step_digest) — consumed by ``run_id`` so it
+        authorises exactly one execution. Returns the authority a remediation carries, or None."""
+        digest = step_digest(runbook_id, incident_id, step_id, step)
         rows = connection.execute(
             text(
                 """
-                SELECT id, status, recommendation
+                SELECT id, status, recommendation, approved_by
                 FROM decisions
                 WHERE project_id = :project_id AND status = :status
                 """
@@ -600,19 +833,45 @@ class SreRunbookService:
             {"project_id": project_id, "status": "approved"},
         ).mappings().all()
         for row in rows:
-            rec = row.get("recommendation") or {}
-            if isinstance(rec, str):
-                try:
-                    rec = json.loads(rec)
-                except json.JSONDecodeError:
-                    rec = {}
-            if (
-                rec.get("runbook_id") == runbook_id
-                and rec.get("incident_id") == incident_id
-                and rec.get("kind") == "sre_runbook"
-            ):
-                return True
-        return False
+            rec = _rec(row)
+            if rec.get("kind") != "sre_runbook" or rec.get("step_digest") != digest:
+                continue
+            if rec.get("runbook_id") != runbook_id or rec.get("incident_id") != incident_id:
+                continue
+            if not self._claim(connection, decision_id=row["id"], project_id=project_id,
+                               run_id=run_id, digest=digest):
+                continue                     # already used by another run: never replays
+            return {"source": "sre_runbook", "decision_id": row["id"],
+                    "approved_by": str(row.get("approved_by") or "a person"),
+                    "step": step_id, "action": str(step.get("action") or ""),
+                    "params": dict(step.get("params") or {}), "step_digest": digest,
+                    "run_id": run_id, "project_id": project_id}
+        return None
+
+    def _claim(self, connection: Connection, *, decision_id: str, project_id: str,
+               run_id: str, digest: str) -> bool:
+        """CLAIM, THEN EFFECT. The claim is COMMITTED in its own transaction before any
+        remediation runs: a remediation commits through its own engine transaction, so a claim
+        left in the caller's (still open, maybe rolled back) transaction could vanish after the
+        effect landed and let a later run replay it. A lost effect is safer than a replay. Two
+        concurrent claims: the primary key decides, exactly one inserts. True when THIS run won."""
+        params = {"d": decision_id, "p": project_id, "r": run_id, "g": digest}
+        sql = text(
+            """
+            INSERT INTO sre_runbook_approvals_used (decision_id, project_id, run_id, step_digest)
+            VALUES (:d, :p, :r, :g)
+            ON CONFLICT (decision_id) DO NOTHING
+            """
+        )
+        from sqlalchemy.engine import Engine
+
+        engine = getattr(connection, "engine", None)
+        if isinstance(engine, Engine):
+            with engine.begin() as own:
+                claimed = own.execute(sql, params)
+                return getattr(claimed, "rowcount", 0) == 1
+        claimed = connection.execute(sql, params)          # an in-memory test connection
+        return getattr(claimed, "rowcount", 0) == 1
 
     def _hold_decision(
         self,
@@ -623,7 +882,9 @@ class SreRunbookService:
         step_id: str,
         *,
         actor: str,
+        step: Optional[dict[str, Any]] = None,
     ) -> str:
+        digest = step_digest(runbook["id"], incident_id, step_id, step or {})
         existing = connection.execute(
             text(
                 """
@@ -643,8 +904,7 @@ class SreRunbookService:
                     rec = {}
             if (
                 rec.get("kind") == "sre_runbook"
-                and rec.get("runbook_id") == runbook["id"]
-                and rec.get("incident_id") == incident_id
+                and rec.get("step_digest") == digest
                 and row.get("status") == "pending"
             ):
                 return row["id"]
@@ -652,13 +912,17 @@ class SreRunbookService:
             connection,
             project_id,
             None,
-            f"Approve SRE runbook {runbook['name']!r} for the open incident?",
+            f"Approve step {step_id!r} ({str((step or {}).get('action') or '')}) of SRE runbook "
+            f"{runbook['name']!r} for the open incident?",
             {
                 "kind": "sre_runbook",
                 "runbook_id": runbook["id"],
                 "runbook_name": runbook["name"],
                 "incident_id": incident_id,
                 "step": step_id,
+                "step_action": str((step or {}).get("action") or ""),
+                "params": dict((step or {}).get("params") or {}),
+                "step_digest": digest,
                 "actor": actor,
             },
             {"estimated_cost": 0, "spend": False},
@@ -670,6 +934,8 @@ class SreRunbookService:
 
 __all__ = [
     "BUILTIN_RUNBOOKS",
+    "KNOWN_ACTIONS",
+    "REMEDIATION_ACTIONS",
     "SreRunbookError",
     "SreRunbookService",
     "classify_step",

@@ -660,14 +660,27 @@ def _github_token(ctx: Context, binding: Mapping[str, Any]) -> str:
             ctx.connection, project_id=ctx.project_id,
             credential_ref=service._credential_ref(ctx.connection, ctx.project_id,  # noqa: SLF001
                                                    binding["connection_id"]))
-        return str(service._resolve_secret(ref, ctx.connection) or "")  # noqa: SLF001
+        # Tagged by where the secret lives (BOSSAPP-1286), with the binding connection's base.
+        return service._tag_by_origin(  # noqa: SLF001
+            service._resolve_secret(ref, ctx.connection), ref,  # noqa: SLF001
+            service._connection_api_base(ctx.connection, ctx.project_id,  # noqa: SLF001
+                                         str(binding["connection_id"])),
+            connection=ctx.connection, project_id=ctx.project_id,
+            connection_id=str(binding["connection_id"])) or ""
     token = ctx.once("gh_token", lambda: ctx.savepoint(read, default="")) or ""
     if not token:
         try:
+            from ..identity import github_urls
+            from .github_connections import GitHubConnectionService
             from .setup_view import install_repository
 
+            # The install's own token is a fallback ONLY for a binding on the install's host
+            # (BOSSAPP-1286); it is used as tagged (the install's), never re-labelled.
+            conn_base = ctx.savepoint(lambda: GitHubConnectionService._connection_api_base(  # noqa: SLF001
+                ctx.connection, ctx.project_id, str(binding["connection_id"])), default=None)
             owner, name, tok = install_repository(ctx.settings)
-            if f"{owner}/{name}".lower() == str(binding.get("full_name") or "").lower():
+            if conn_base == github_urls.api_base() and \
+                    f"{owner}/{name}".lower() == str(binding.get("full_name") or "").lower():
                 token = tok or ""
         except Exception:  # noqa: BLE001
             token = ""
@@ -685,8 +698,25 @@ def _gh_get(ctx: Context, path: str) -> tuple[Optional[int], Any]:
     token = _github_token(ctx, binding)
     if not token:
         return None, "no usable token"
-    base = str(getattr(ctx.settings, "github_api_base_url", "") or "https://api.github.com")
-    req = urllib.request.Request(base.rstrip("/") + path, headers={
+    from ..identity import github_urls
+    from .github_connections import GitHubConnectionService
+
+    # The binding's connection holds the token: tag it with THAT connection's host and send it
+    # only there (BOSSAPP-1286) — no fallback base that could disagree with the token.
+    conn_base = ctx.savepoint(lambda: GitHubConnectionService._connection_api_base(  # noqa: SLF001
+        ctx.connection, ctx.project_id, str(binding["connection_id"])), default=None)
+    if conn_base is None:
+        return None, "the connection's GitHub host could not be read"
+    # The token arrives tagged by its source; it is never re-tagged here. It must belong to the
+    # binding's connection host, and goes only there.
+    if github_urls.credential_api_base(token) != github_urls.api_base(conn_base):
+        return None, "the credential BOSS holds is for another GitHub host than this repository's"
+    url = github_urls.api_base(conn_base).rstrip("/") + path
+    try:
+        github_urls.check_send(token, url, where="precheck")
+    except github_urls.CrossHostCredential as refused:
+        return None, str(refused)
+    req = urllib.request.Request(url, headers={
         "Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
         "User-Agent": "boss-precheck"})
     try:

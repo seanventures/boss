@@ -161,7 +161,7 @@ class TwoRealProvisioningRoundsShareOneWarmSandbox(unittest.TestCase):
         sandbox_one.provision(
             "owner", "repo", base_branch="main", work_branch=f"boss/code/{root_run_id}",
             token="tok", warm_dir=warm_dir, reuse_warm=round_one.reused,
-        )
+            web_base="https://github.com")
         ran_one = [" ".join(c) for c in sandbox_one.commands]
         self.assertTrue(any(c.startswith("clone") for c in ran_one), "the first round must clone")
         self.assertEqual(Path(sandbox_one.path), warm_dir)
@@ -181,7 +181,7 @@ class TwoRealProvisioningRoundsShareOneWarmSandbox(unittest.TestCase):
         sandbox_two.provision(
             "owner", "repo", base_branch="main", work_branch=f"boss/code/{root_run_id}",
             token="tok", warm_dir=warm_dir, reuse_warm=round_two.reused,
-        )
+            web_base="https://github.com")
         ran_two = [" ".join(c) for c in sandbox_two.commands]
         self.assertFalse(any(c.startswith("clone") for c in ran_two),
                           "the second round reused the warm checkout; it must never clone again")

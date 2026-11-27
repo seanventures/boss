@@ -3534,7 +3534,7 @@ def _transient_retry_recorder(engine, run_id: str):
 
 
 def _clone_token(engine, settings: Settings, *, owner: str, repo: str, project_id: str,
-                 repo_host_kind: str) -> str:
+                 repo_host_kind: str) -> tuple[str, str]:
     """The credential the build clones and pushes with. A repository BOSS keeps on this machine
     (`local_<project>/<name>`, or the spec's repo_host "local") needs none: asking GitHub for one
     failed every local build with a 500 on an install without a GitHub token (Easy Mode,
@@ -3542,18 +3542,19 @@ def _clone_token(engine, settings: Settings, *, owner: str, repo: str, project_i
     from .local_repo import is_local_owner as _is_local_owner
 
     if repo_host_kind == "bitbucket":
-        return settings.bitbucket_token or ""
+        return settings.bitbucket_token or "", ""
     if repo_host_kind == "local" or _is_local_owner(owner):
-        return ""
+        return "", ""
     # Shared decision — see repo_token. Was: prefer the App and fail hard when this repo
     # is outside its installation, even with a working PAT configured.
-    from .github_app_adapter import repo_token
+    from .github_connections import build_credential
 
     # THE PROJECT'S OWN REGISTERED CREDENTIAL, as a third source after the App and the
     # environment. This is the build that used to die on "BOSS_GITHUB_TOKEN is not set"
-    # against a repository the operator had just connected in Setup.
+    # against a repository the operator had just connected in Setup. The token comes WITH the
+    # host it belongs to (BOSSAPP-1286): a GHES repository clones from GHES with its own token.
     with _transaction(engine) as c:
-        return repo_token(settings, owner, repo, connection=c, project_id=project_id)
+        return build_credential(c, settings, project_id, owner, repo)
 
 
 def run_code_task(engine, settings: Settings, jobs, run_id: str,
@@ -3847,8 +3848,11 @@ def _run_code_task(engine, settings: Settings, jobs, run_id: str,
                                                  "from": _bases.moved_from, "to": _bases.clone})
     base_branch = _bases.clone     # may advance to work_branch below (a repair)
     repo_base_branch = _bases.pr   # the PR's base
-    token = _clone_token(engine, settings, owner=owner, repo=repo, project_id=project_id,
-                         repo_host_kind=repo_host_kind)
+    token, clone_api_base = _clone_token(engine, settings, owner=owner, repo=repo,
+                                         project_id=project_id, repo_host_kind=repo_host_kind)
+    from ..identity import github_urls as _github_urls
+
+    clone_web_base = _github_urls.web_base_for(clone_api_base) if clone_api_base else ""
 
     # Feedback-iteration: reuse the ROOT run's branch and clone its accumulated code so the
     # model builds ON prior work (not from base), and update the SAME PR. Mirrors the governed
@@ -3910,6 +3914,10 @@ def _run_code_task(engine, settings: Settings, jobs, run_id: str,
         if hasattr(provider, "run_code_task"):
             with _transaction(engine) as c:
                 _set_phase(c, run_id, "coding")
+            from .repo_host import guest_github_web
+
+            # The guest is a send point: the token's own host, checked (BOSSAPP-1286).
+            guest_web = guest_github_web(token, clone_web_base, host=repo_host_kind)
             guest_spec = {
                 "task_id": run_id, "work_branch": work_branch,
                 "owner": owner, "repo": repo, "base_branch": base_branch,
@@ -3919,6 +3927,8 @@ def _run_code_task(engine, settings: Settings, jobs, run_id: str,
                 "engine": settings.sandbox_guest_engine,
                 "token": token, "timeout": settings.code_agent_timeout_seconds,
                 "repo_host": repo_host_kind,
+                # The web origin the token belongs to (BOSSAPP-1286): the guest clones there.
+                "github_web": guest_web,
             }
             # ONLY THE SELECTED ENGINE'S CREDENTIAL (P8-pre S5, BOSSAPP-1061): the OpenAI and
             # Azure keys were sent to every guest, a claude_code one included.
@@ -3959,7 +3969,8 @@ def _run_code_task(engine, settings: Settings, jobs, run_id: str,
                               work_branch=work_branch, token=token,
                               repo_host=repo_host_kind,
                               egress=identity_run[1] if identity_run is not None else None,
-                              warm_dir=sandbox_claim.run_dir, reuse_warm=sandbox_claim.reused)
+                              warm_dir=sandbox_claim.run_dir, reuse_warm=sandbox_claim.reused,
+                              web_base=clone_web_base)
             # The claim was a reservation; this is whether provisioning actually fetched+reset
             # the warm checkout instead of cloning. They can differ (a claimed-but-missing
             # checkout falls back to a fresh clone inside `provision`) — the recorded flag must

@@ -201,6 +201,7 @@ def clean_tables(engine):
             "oncall_pages",
             "oncall_policies",
             "oncall_schedules",
+            "sre_runbook_approvals_used",
             "sre_runbook_runs",
             "sre_runbooks",
             "release_board_items",
@@ -590,3 +591,29 @@ def _fresh_model_router():
     store.invalidate()
     accounts.reset_caches()
     breaker.reset()
+
+
+#: Test modules that still hand raw (untagged) placeholder tokens to GitHub senders. A RATCHET:
+#: the list only shrinks (test_the_untagged_token_ratchet_only_shrinks). Every other test runs in
+#: strict mode, where an untagged GitHub credential reaching a send point is a hard error
+#: (identity/github_urls.UntaggedGitHubCredential, BOSSAPP-1286): a source that forgot to tag
+#: fails a test, never a customer.
+UNTAGGED_TOKEN_LEGACY_FILE = "_untagged_token_legacy.txt"
+
+
+def _untagged_legacy(here) -> set[str]:
+    from pathlib import Path
+
+    path = Path(here).with_name(UNTAGGED_TOKEN_LEGACY_FILE)
+    if not path.exists():
+        return set()
+    return {line.strip() for line in path.read_text().splitlines()
+            if line.strip() and not line.startswith("#")}
+
+
+@pytest.fixture(autouse=True)
+def _github_credentials_strict(request, monkeypatch):
+    from pathlib import Path
+
+    if Path(str(request.node.fspath)).name not in _untagged_legacy(__file__):
+        monkeypatch.setenv("BOSS_GITHUB_CREDENTIALS_STRICT", "1")

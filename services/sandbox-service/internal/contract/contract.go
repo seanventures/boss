@@ -26,6 +26,11 @@ const Version = "1.1"
 // LegacyVersion is the frozen v1.0 lane, which carried credentials into the guest.
 const LegacyVersion = "1.0"
 
+// LegacyRevision is what this host's v1.0 lane understands, reported on /health. Revision
+// "1.0.1" forwards repo.github_web to the guest (BOSSAPP-1286); an older host reports none, and
+// BOSS then hands its legacy lane no git token at all.
+const LegacyRevision = "1.0.1"
+
 const (
 	StatusQueued    = "queued"
 	StatusRunning   = "running"
@@ -106,6 +111,11 @@ type RepoSpec struct {
 	Name       string `json:"name"`
 	BaseBranch string `json:"base_branch"`
 	WorkBranch string `json:"work_branch"`
+	// Host is the git host kind ("github", "bitbucket"); GithubWeb the web origin of the
+	// GitHub the git token belongs to (github.com or a GHES origin). Additive (BOSSAPP-1286):
+	// both are forwarded to the guest so a token is cloned only from its own host.
+	Host      string `json:"host,omitempty"`
+	GithubWeb string `json:"github_web,omitempty"`
 }
 
 type SubmitResponse struct {
@@ -272,6 +282,12 @@ func ValidateSubmitWith(req SubmitRequest, opts Options) []string {
 				ReasonContractDeprecated, LegacyVersion, req.TaskID)
 			if req.EngineEnv == nil {
 				problems = append(problems, "engine_env must be an object")
+			}
+			// A git token without the web origin it belongs to would be cloned from a
+			// default host (BOSSAPP-1286): refused, never defaulted.
+			if req.GitToken != "" && (req.Repo.Host == "" || req.Repo.Host == "github") &&
+				strings.TrimSpace(req.Repo.GithubWeb) == "" {
+				problems = append(problems, "repo.github_web is required with git_token")
 			}
 			problems = append(problems, EngineEnvProblems(req.Engine, req.EngineEnv)...)
 		}
@@ -540,6 +556,12 @@ func GuestSpec(req SubmitRequest) map[string]any {
 	}
 	if req.Repo.WorkBranch != "" {
 		spec["work_branch"] = req.Repo.WorkBranch
+	}
+	if req.Repo.Host != "" {
+		spec["repo_host"] = req.Repo.Host
+	}
+	if req.Repo.GithubWeb != "" {
+		spec["github_web"] = req.Repo.GithubWeb
 	}
 	if IsLegacy(req) {
 		if req.GitToken != "" {

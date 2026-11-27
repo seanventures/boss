@@ -61,7 +61,7 @@ def test_boss_own_git_is_answered_from_its_own_environment(monkeypatch):
 def test_legacy_token_access_is_the_same_for_both():
     from boss_engine.services import repo_host
 
-    access = repo_host.git_access("github", "acme", "web", "ghs_SOMETOKEN000000000000000000000000")
+    access = repo_host.git_access("github", "acme", "web", "ghs_SOMETOKEN000000000000000000000000", web_base="https://github.com")
     assert access.boss_environ({}) == access.environ({})
 
 

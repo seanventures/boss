@@ -644,13 +644,15 @@ def fix_brief(incident: dict, ctx: dict, hyp: dict, signatures: list[dict], diff
 
 def _github_for(connection, settings: Any, project_id: str, repository: str):
     from .github_adapter import GitHubAdapter
-    from .github_app_adapter import repo_token
+    from .github_connections import build_credential
 
     owner, _, repo = (repository or "").partition("/")
     if not owner or not repo:
         return None
-    token = repo_token(settings, owner, repo, connection=connection, project_id=project_id)
-    return GitHubAdapter(settings, owner=owner, repo=repo, token=token)
+    # The build's credential AND its host (BOSSAPP-1286).
+    token, api_base = build_credential(connection, settings, project_id, owner, repo)
+    return GitHubAdapter(settings, owner=owner, repo=repo, token=token or None,
+                         api_base_url=api_base)
 
 
 def _host_for_target(connection, target_id: str) -> Optional[dict]:

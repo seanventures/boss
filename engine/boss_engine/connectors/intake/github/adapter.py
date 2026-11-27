@@ -29,12 +29,12 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-import os
 import re
 from typing import Any, Callable, Mapping, Optional
 from urllib.parse import quote
 
 from ..base import IntakeAdapterBase
+from boss_engine.identity import github_urls
 from ..contract import (
     AuthFailed,
     Cursor,
@@ -55,7 +55,7 @@ from ..contract import (
 SIGNATURE_HEADER = "x-hub-signature-256"
 DELIVERY_HEADER = "x-github-delivery"
 EVENT_HEADER = "x-github-event"
-API_BASE = "https://api.github.com"
+API_BASE = github_urls.PUBLIC_API
 #: GitHub puts at most this many commits in a push payload; beyond it the list is truncated.
 PUSH_COMMIT_LIMIT = 20
 MAX_CHANGED_FILES = 300
@@ -91,10 +91,8 @@ def _api_base(conn: IntakeConnection) -> str:
     raw = (
         str(conn.get("api_base_url") or "").strip()
         or str(getattr(conn.app_settings, "github_api_base_url", "") or "").strip()
-        or str(os.environ.get("BOSS_GITHUB_API_URL") or "").strip()
-        or API_BASE
     )
-    return raw.rstrip("/") or API_BASE
+    return github_urls.api_base(raw)
 
 
 def _default_transport(method: str, url: str, headers: Mapping[str, str],
@@ -517,7 +515,14 @@ def _headers(conn: IntakeConnection, repo: str) -> dict[str, str]:
     connection can name any repository, and an unbound one is read anonymously or not at all.
     Never handed to an agent, never logged."""
     headers = {"Accept": "application/vnd.github+json", "User-Agent": "boss-intake"}
-    token = conn.secret("api_token")
+    base = _api_base(conn)
+    # The connection's own token belongs to the connection's host — unless it lives in the host
+    # environment (an install credential, tagged at resolution): then it is refused here, never
+    # re-labelled onto this connection's host (BOSSAPP-1286).
+    try:
+        token = github_urls.tag(conn.secret("api_token"), base)
+    except github_urls.CrossHostCredential:
+        token = ""
     if not token and conn.db is not None and conn.project_id:
         try:
             from ....services.github_connections import GitHubConnectionService
@@ -534,6 +539,12 @@ def _headers(conn: IntakeConnection, repo: str) -> dict[str, str]:
         except Exception:  # noqa: BLE001 — no binding: a public repository still answers
             token = ""
     if token:
+        # THE SEND POINT (BOSSAPP-1286): every intake request goes to this connection's base; a
+        # binding token of another host is refused (logged) and the read goes anonymous.
+        try:
+            github_urls.check_send(token, base, where="intake")
+        except github_urls.CrossHostCredential:
+            return headers
         headers["Authorization"] = f"Bearer {token}"
     return headers
 

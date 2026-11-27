@@ -29,7 +29,7 @@ def _http_error(status_code: int, url: str) -> httpx.HTTPStatusError:
 
 
 def test_wait_for_verdict_returns_no_ci_immediately_without_sleeping(monkeypatch):
-    github = GitHubAdapter(_settings())
+    github = GitHubAdapter(_settings(), api_base_url="https://api.github.com")
     sleeps: list[float] = []
     monkeypatch.setattr("boss_engine.services.pipeline_adapter.time.sleep", lambda s: sleeps.append(s))
 
@@ -51,7 +51,7 @@ def test_wait_for_verdict_returns_no_ci_immediately_without_sleeping(monkeypatch
 
 
 def test_wait_for_verdict_polls_when_pr_adds_workflow_file(monkeypatch):
-    github = GitHubAdapter(_settings())
+    github = GitHubAdapter(_settings(), api_base_url="https://api.github.com")
     sleeps: list[float] = []
     monkeypatch.setattr("boss_engine.services.pipeline_adapter.time.sleep", lambda s: sleeps.append(s))
     poll_count = 0
@@ -82,7 +82,7 @@ def test_wait_for_verdict_polls_when_pr_adds_workflow_file(monkeypatch):
 
 
 def test_wait_for_verdict_fails_open_to_polling_on_workflows_api_error(monkeypatch):
-    github = GitHubAdapter(_settings())
+    github = GitHubAdapter(_settings(), api_base_url="https://api.github.com")
     sleeps: list[float] = []
     monkeypatch.setattr("boss_engine.services.pipeline_adapter.time.sleep", lambda s: sleeps.append(s))
     ticks = iter([0.0, 0.5, 2.0])

@@ -28,6 +28,14 @@ if str(_GATE) not in sys.path:
 from remote import LocalGitHub  # noqa: E402  (tests/e2e/gate/remote.py)
 
 
+def _gh(token, api_base):
+    """A placeholder token, tagged with the (fake) GitHub it belongs to, as every real source
+    hands one out (BOSSAPP-1286)."""
+    from boss_engine.identity import github_urls
+
+    return github_urls.tag(token, api_base)
+
+
 @pytest.fixture(scope="module")
 def world(engine) -> IdentityWorld:
     return IdentityWorld.create(engine)
@@ -78,6 +86,13 @@ def _github_connection(engine, pid: str) -> str:
     return cid
 
 
+
+def _tok(hub):
+    """The connection's token, tagged with the local GitHub it belongs to (BOSSAPP-1286)."""
+    from boss_engine.identity import github_urls
+
+    return github_urls.tag("gate-token", hub.api_url)
+
 def _reach(hub: LocalGitHub, connection_id, *, token_kind="app"):
     from boss_engine.services.github_adapter import GitHubAdapter
     from boss_engine.services.local_publish import GitHubReach
@@ -85,10 +100,10 @@ def _reach(hub: LocalGitHub, connection_id, *, token_kind="app"):
 
     settings = get_settings()
     return GitHubReach(
-        adapter_for=lambda o, r: GitHubAdapter(settings, owner=o, repo=r, token="gate-token",
+        adapter_for=lambda o, r: GitHubAdapter(settings, owner=o, repo=r, token=_tok(hub),
                                                api_base_url=hub.api_url),
         access_for=lambda o, r: GitAccess(hub.git_url(o, r), via="token"),
-        create_token="gate-token", create_token_kind=token_kind, api_base_url=hub.api_url,
+        create_token=_gh("gate-token", hub.api_url), create_token_kind=token_kind, api_base_url=hub.api_url,
         connection_id=connection_id)
 
 
@@ -234,7 +249,7 @@ def test_creating_a_repository_answers_in_words_for_each_case():
             return httpx.Response(201, json={"full_name": "acme/new", "html_url": "https://x/acme/new"})
         return httpx.Response(500)
 
-    out = create_repository(owner="acme", name="new", private=True, token="t",
+    out = create_repository(owner="acme", name="new", private=True, token=_gh("t", "http://gh"),
                             api_base_url="http://gh", client=_api(org))
     assert out.ok and out.created and made == [{"name": "new", "private": True, "auto_init": False,
                                                 "description": ""}]
@@ -244,7 +259,7 @@ def test_creating_a_repository_answers_in_words_for_each_case():
             return httpx.Response(200, json={"type": "User"})
         return httpx.Response(404, json={"message": "Not Found"})
 
-    out = create_repository(owner="me", name="new", token="t", api_base_url="http://gh",
+    out = create_repository(owner="me", name="new", token=_gh("t", "http://gh"), api_base_url="http://gh",
                             client=_api(personal))
     assert not out.ok and out.reason == "personal_account" and "personal" in out.words
 
@@ -255,14 +270,14 @@ def test_creating_a_repository_answers_in_words_for_each_case():
             return httpx.Response(403, json={"message": "Resource not accessible by integration"})
         return httpx.Response(404, json={"message": "Not Found"})
 
-    out = create_repository(owner="acme", name="new", token="t", api_base_url="http://gh",
+    out = create_repository(owner="acme", name="new", token=_gh("t", "http://gh"), api_base_url="http://gh",
                             client=_api(no_admin))
     assert not out.ok and out.reason == "no_admin_permission" and "Administration" in out.words
 
     def exists(request):
         return httpx.Response(200, json={"html_url": "https://x/acme/new", "private": True})
 
-    out = create_repository(owner="acme", name="new", token="t", api_base_url="http://gh",
+    out = create_repository(owner="acme", name="new", token=_gh("t", "http://gh"), api_base_url="http://gh",
                             client=_api(exists))
     assert out.ok and out.exists and not out.created
 
@@ -290,6 +305,7 @@ def _preview_clones_the_mirror(engine, settings, run_id: str, mirror: Path) -> N
         patch.setattr(preview_service, "_preview_sandbox", lambda _pid: None)
         patch.setattr(preview_service, "_record_repo_manifests", stop_after_clone)
         patch.setattr(preview_service, "github_token_for", no_github)
+        patch.setattr(preview_service, "github_credential", no_github)
         from boss_engine.identity import runs as identity_runs
 
         patch.setattr(identity_runs, "repo_access", no_github)
@@ -348,7 +364,7 @@ def test_a_github_outage_finishes_the_build_locally_then_pushes_and_opens_the_pr
     # The build's adapter: GitHub's, falling back to the mirror once GitHub stops answering.
     switched = []
     gh = github_outage.ResilientGitHub(
-        GitHubAdapter(settings, owner=owner, repo=repo, token="gate-token", api_base_url=hub.api_url),
+        GitHubAdapter(settings, owner=owner, repo=repo, token=_tok(hub), api_base_url=hub.api_url),
         settings=settings, project_id=pid, run_id=run_id, engine=engine,
         on_switch=switched.append)
     gh.ensure_branch(branch, "main")
@@ -388,7 +404,7 @@ def test_a_github_outage_finishes_the_build_locally_then_pushes_and_opens_the_pr
     assert waiting and waiting[0]["branch"] == branch and "waits for GitHub" in waiting[0]["words"]
 
     def github(c, s, project_id, o, r):
-        return (GitHubAdapter(s, owner=o, repo=r, token="gate-token", api_base_url=hub.api_url),
+        return (GitHubAdapter(s, owner=o, repo=r, token=_tok(hub), api_base_url=hub.api_url),
                 GitAccess(hub.git_url(o, r), via="token"))
 
     pending_id = waiting[0]["id"]

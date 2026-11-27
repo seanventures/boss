@@ -710,7 +710,7 @@ def _build_dist(tmp_path, monkeypatch, repo, changed):
     monkeypatch.setattr(repo_host, "clone_url_for",
                         lambda *_a, **_k: "file://" + str(repo))
     return ds._build_dist(SimpleNamespace(target_repo_host="github"), "o", "r", branch,
-                          changed=changed)
+                          changed=changed, web_base="https://github.com")
 
 
 def _serves(directory, shell_command):

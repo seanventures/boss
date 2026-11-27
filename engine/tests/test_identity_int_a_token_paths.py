@@ -42,12 +42,12 @@ def test_no_code_builds_a_credential_url_outside_the_repo_host_seam():
 
 
 def test_git_access_keeps_the_token_out_of_the_url_and_the_repr():
-    access = repo_host.git_access("github", "acme", "web", TOKEN)
+    access = repo_host.git_access("github", "acme", "web", TOKEN, web_base="https://github.com")
     assert access.url == "https://github.com/acme/web.git" and access.via == "token"
     assert TOKEN not in repr(access) and TOKEN not in access.url
     assert access.env["GIT_CONFIG_KEY_0"] == "http.https://github.com/.extraheader"
     assert access.env["GIT_CONFIG_VALUE_0"].startswith("AUTHORIZATION: basic ")
-    assert repo_host.git_access("github", "acme", "web", "").env == {}
+    assert repo_host.git_access("github", "acme", "web", "", web_base="https://github.com").env == {}
 
 
 @pytest.fixture()
@@ -94,10 +94,10 @@ def test_a_code_task_sandbox_clone_holds_no_token(fake_github, monkeypatch):
            ("protocol.file.allow", "always")]
     monkeypatch.setattr(repo_host, "git_config_env",
                         lambda pairs: real_config_env([*pairs, *hub]))
-    assert repo_host.git_access("github", "acme", "web", TOKEN).env["GIT_CONFIG_KEY_0"] == \
+    assert repo_host.git_access("github", "acme", "web", TOKEN, web_base="https://github.com").env["GIT_CONFIG_KEY_0"] == \
         "http.https://github.com/.extraheader"
     with EphemeralSandbox(settings, task_id="tsk_tok") as sbx:
-        path = sbx.provision("acme", "web", base_branch="main", work_branch="boss/code/x", token=TOKEN)
+        path = sbx.provision("acme", "web", base_branch="main", work_branch="boss/code/x", token=TOKEN, web_base="https://github.com")
         assert (path / "app.js").exists()
         remote = subprocess.run(["git", "-C", str(path), "config", "--get", "remote.origin.url"],
                                 capture_output=True, text=True).stdout.strip()
@@ -110,13 +110,13 @@ def test_the_read_tools_repo_cache_holds_no_token(fake_github, monkeypatch):
     from boss_engine.tools import builtin
 
     monkeypatch.setattr(builtin, "_REPO_CACHE", str(fake_github / "cache"))
-    root, error = builtin._repo_root(get_settings(), "acme/web", token=TOKEN)
+    root, error = builtin._repo_root(get_settings(), "acme/web", credential=(TOKEN, "https://api.github.com"))
     assert error is None and (Path(root) / "app.js").exists()
     _nothing_names_the_token(Path(root))
     # A cache written before the fix (token in its remote URL) is rewritten on the next read.
     subprocess.run(["git", "-C", root, "remote", "set-url", "origin",
                     f"https://x-access-token:{TOKEN}@github.com/acme/web.git"], check=True)
-    root, error = builtin._repo_root(get_settings(), "acme/web", token=TOKEN)
+    root, error = builtin._repo_root(get_settings(), "acme/web", credential=(TOKEN, "https://api.github.com"))
     _nothing_names_the_token(Path(root))
 
 
@@ -124,7 +124,7 @@ def test_the_agent_shell_workspace_holds_no_token(fake_github, monkeypatch):
     from boss_engine.services import agent_shell
 
     monkeypatch.setattr(agent_shell, "workspace_for", lambda run_id: fake_github / "ws" / run_id)
-    access = repo_host.git_access("github", "acme", "web", TOKEN)
+    access = repo_host.git_access("github", "acme", "web", TOKEN, web_base="https://github.com")
     path, problem = agent_shell.ensure_workspace("crun_t", owner="acme", repo="web", branch="main",
                                                  clone_url=access.url, git_env=access.environ())
     assert problem is None and (path / "app.js").exists()
@@ -155,7 +155,7 @@ def test_repo_access_goes_through_egress_under_a_delegated_principal(monkeypatch
     alice = lineage.Acting(principal_id=env.alice, org_id="org_boss", grant_id=g.id, run_id="run_wf:wr9")
     with lineage.acting(alice):
         with runs.repo_access(env.engine, host="github", owner="acme", repo="web", project_id=env.project,
-                              token=never) as access:
+                              credential=never) as access:
             assert access.via == "egress" and access.url == "https://egress.boss.internal/github/acme/web.git"
             assert any(v.startswith("!f()") for v in access.env.values())          # git asks the shim
             with env.db() as c:
@@ -165,7 +165,7 @@ def test_repo_access_goes_through_egress_under_a_delegated_principal(monkeypatch
         assert c.execute(text("SELECT count(*) FROM identity_run_credentials WHERE revoked_at IS NULL")).scalar() == 0
     # No delegated principal: the legacy token, in git's environment only.
     with runs.repo_access(env.engine, host="github", owner="acme", repo="web", project_id=env.project,
-                          token=lambda: TOKEN) as access:
+                          credential=lambda: (TOKEN, "https://api.github.com")) as access:
         assert access.via == "token" and TOKEN not in access.url
 
 
@@ -207,7 +207,7 @@ def test_round2_e_no_grant_clones_as_the_audited_system_reader_never_the_shared_
         raise AssertionError("the shared token was consulted")
 
     with runs.repo_access(env.engine, host="github", owner="acme", repo="web", project_id=env.project,
-                          token=never) as access:
+                          credential=never) as access:
         assert access.via == "egress"
         with env.db() as c:
             row = c.execute(text("SELECT subject_principal_id, run_id FROM identity_run_credentials "
@@ -227,5 +227,5 @@ def test_round2_e_no_grant_clones_as_the_audited_system_reader_never_the_shared_
     monkeypatch.setattr(get_settings(), "authz_mode", "enforce")
     with pytest.raises(runs.NoAuthority):
         with runs.repo_access(env.engine, host="github", owner="acme", repo="web", project_id=env.project,
-                              token=never):
+                              credential=never):
             pass

@@ -1051,8 +1051,14 @@ def run_investigation(engine, settings: Settings, *, investigation_id: str,
             try:
                 owner, repo = _repo_for(engine, project_id, str(record["run_id"] or ""), settings)
                 if owner and repo:
-                    sandbox.provision(owner, repo, base_branch="main",
-                                      token=(getattr(settings, "github_token", "") or None))
+                    # The repository's own host and a credential of that host (BOSSAPP-1286).
+                    from ..identity import github_urls
+                    from .github_connections import github_access_for
+
+                    with engine.begin() as _c:
+                        _tok, _base = github_access_for(_c, settings, project_id, owner, repo)
+                    sandbox.provision(owner, repo, base_branch="main", token=_tok or None,
+                                      web_base=github_urls.web_base_for(_base))
                     repo_note = (f" The app's repository ({owner}/{repo}) is checked out there, "
                                  "so you can read the code that actually shipped.")
             except Exception as exc:  # noqa: BLE001 — a missing checkout is not a failed run

@@ -76,7 +76,7 @@ REPOSITORY: dict[str, dict[str, Any]] = {
     "rate_limited": {"label": "GitHub busy · {time}", "tone": "amber",
                      "tip": "GitHub rate limit. Checks resume at {time}."},
     "unreachable": {"label": "Can't reach GitHub", "tone": "amber",
-                    "tip": "The server can't reach api.github.com.",
+                    "tip": "The server can't reach GitHub's API.",
                     "action": "test"},
 }
 

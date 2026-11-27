@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from boss_engine.identity import github_urls  # noqa: E402
 import httpx
 import pytest
 
@@ -87,7 +88,7 @@ def test_comment_review_and_diff_use_existing_app_auth_path(monkeypatch):
         return _response(method, url, 200, text="diff --git a/a.py b/a.py\n")
 
     monkeypatch.setattr(httpx, "request", fake_request)
-    adapter = GitHubAdapter(_settings())
+    adapter = GitHubAdapter(_settings(), api_base_url="https://api.github.com")
     app = _InstalledApp()
     adapter._app = app
 
@@ -194,7 +195,7 @@ def test_branch_snapshot_compare_and_checks_use_immutable_github_reads(monkeypat
         _settings(),
         owner="octo",
         repo="project",
-        token="scoped-token",
+        token=github_urls.tag("scoped-token", "https://github.example/api/v3"),
         api_base_url="https://github.example/api/v3",
     )
 
@@ -256,7 +257,7 @@ def test_rate_limit_status_reads_core_quota_without_repository_mutation(
         )
 
     monkeypatch.setattr(httpx, "request", fake_request)
-    adapter = GitHubAdapter(_settings())
+    adapter = GitHubAdapter(_settings(), api_base_url="https://api.github.com")
 
     assert adapter.rate_limit_status() == {
         "resource": "core",
@@ -355,7 +356,7 @@ def test_safe_branch_write_primitives_are_non_force_and_conflicts_are_typed(
         raise AssertionError(f"unexpected GitHub request: {method} {url}")
 
     monkeypatch.setattr(httpx, "request", fake_request)
-    adapter = GitHubAdapter(_settings(), token="scoped-token")
+    adapter = GitHubAdapter(_settings(), token="scoped-token", api_base_url="https://api.github.com")
     files = adapter.compare_changed_files("base", "head")
     created = adapter.create_branch_ref("ai/codex/work", old_sha)
     updated = adapter.fast_forward_ref(
@@ -464,7 +465,7 @@ def test_guarded_pull_request_merge_binds_exact_snapshot(monkeypatch):
         raise AssertionError(f"unexpected GitHub request: {method} {url}")
 
     monkeypatch.setattr(httpx, "request", fake_request)
-    adapter = GitHubAdapter(_settings(), token="scoped-token")
+    adapter = GitHubAdapter(_settings(), token="scoped-token", api_base_url="https://api.github.com")
 
     assert adapter.commit_identity(head_sha) == {
         "commit_sha": head_sha,
@@ -533,7 +534,7 @@ def test_guarded_pull_request_merge_rejects_stale_head_without_write(monkeypatch
         )
 
     monkeypatch.setattr(httpx, "request", fake_request)
-    adapter = GitHubAdapter(_settings(), token="scoped-token")
+    adapter = GitHubAdapter(_settings(), token="scoped-token", api_base_url="https://api.github.com")
 
     with pytest.raises(
         GitHubMergeRejectedError,
@@ -567,7 +568,7 @@ def test_community_methods_surface_github_errors(
         return _response(method, url, 403, json_body={"message": "forbidden"})
 
     monkeypatch.setattr(httpx, "request", denied)
-    adapter = GitHubAdapter(_settings())
+    adapter = GitHubAdapter(_settings(), api_base_url="https://api.github.com")
     adapter._app = _PatOnly()
 
     with pytest.raises(httpx.HTTPStatusError):
@@ -579,7 +580,7 @@ def test_review_rejects_unknown_event_without_network(monkeypatch):
         pytest.fail("invalid review event must not call GitHub")
 
     monkeypatch.setattr(httpx, "request", unexpected)
-    adapter = GitHubAdapter(_settings())
+    adapter = GitHubAdapter(_settings(), api_base_url="https://api.github.com")
 
     with pytest.raises(ValueError, match="event must be"):
         adapter.create_review(42, "body", event="MERGE")

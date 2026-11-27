@@ -170,6 +170,10 @@ class SecretRefService:
             )
         if not ref_key:
             raise ValueError("ref_key must be non-empty.")
+        if ref_key.lower().startswith("ghconn-"):
+            # A GitHub connection's own slot (BOSSAPP-1286): written and named only by that
+            # connection's flow, never by a reference someone creates.
+            raise ValueError("ref_key names a GitHub connection's own slot; it cannot be referenced.")
         self.parse_credential_ref(f"{ref_kind}:{ref_key}")
         if status not in self.ALLOWED_STATUSES:
             raise ValueError(
@@ -191,14 +195,17 @@ class SecretRefService:
             scope_type=normalized_scope_type,
             scope_id=normalized_scope_id,
         )
-        # rc6 N-1: an `env` reference names the HOST's credential, and an org or workspace scope
-        # hands the reference to every project there: both need integration:manage at the org.
-        if ref_kind == "env" or normalized_scope_type in ("org", "workspace"):
+        # rc6 N-1: an `env` reference names the HOST's credential, a `local_runner` reference a
+        # file ON THE HOST (an App key, a token file: BOSSAPP-1286), and an org or workspace
+        # scope hands the reference to every project there: all need integration:manage at the
+        # org.
+        if ref_kind in ("env", "local_runner") or normalized_scope_type in ("org", "workspace"):
             from .env_refs import require_host_credential_authority
 
             require_host_credential_authority(
                 connection, project_id,
                 f"An env reference ({ref_key})" if ref_kind == "env"
+                else f"A host file reference ({ref_key})" if ref_kind == "local_runner"
                 else f"A reference scoped to the {normalized_scope_type}")
         normalized_secret_kind = secret_kind.strip().lower()
         if normalized_secret_kind not in self.ALLOWED_SECRET_KINDS:
@@ -290,8 +297,10 @@ class SecretRefService:
         existing = self.get_secret_ref(connection, project_id, secret_ref_id)
         # rc6 N-1: a host or org-wide reference's provider and metadata (its allowed hosts) say
         # where its value may be sent; changing them is the org's act, not a project's.
-        if (provider is not None or metadata is not None) and (
-                existing.get("ref_kind") == "env"
+        changes_where = (provider is not None and provider != existing.get("provider")) or \
+            metadata is not None
+        if changes_where and (
+                existing.get("ref_kind") in ("env", "local_runner")
                 or str(existing.get("scope_type") or "project") in ("org", "workspace")):
             from .env_refs import require_host_credential_authority
 
@@ -310,6 +319,11 @@ class SecretRefService:
             if metadata is not None
             else existing["metadata"]
         )
+        if metadata is not None and isinstance(existing.get("metadata"), dict) \
+                and "connection_slot" in existing["metadata"]:
+            # BOSS's own binding survives an edit of the rest (it is not editable).
+            next_metadata = {**next_metadata,
+                             "connection_slot": existing["metadata"]["connection_slot"]}
         next_rotation_due_at = (
             rotation_due_at
             if rotation_due_at is not None
@@ -503,6 +517,10 @@ class SecretRefService:
     def _validate_metadata(cls, metadata: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(metadata, dict):
             raise ValueError("metadata must be an object.")
+        # RESERVED (BOSSAPP-1286): the binding a GitHub connection's own flow records on the
+        # slot it wrote. No person or agent may set or forge it on any reference.
+        if any(str(k).strip().lower() == "connection_slot" for k in metadata):
+            raise ValueError("metadata.connection_slot is reserved for BOSS.")
 
         def visit(value: Any, path: str) -> None:
             if isinstance(value, dict):

@@ -313,3 +313,47 @@ def test_adf_round_trip_and_acceptance_criteria():
         ["Given a cart", "When I pay", "Then it works"]
     assert acceptance_criteria("nothing here\n- a bullet") == []
     assert acceptance_criteria("", ["from", "field"]) == ["from", "field"]
+
+
+@pytest.mark.parametrize("url", [
+    "http://[2001:4860::8888]/rest/api/2/myself",      # public IPv6 literal (was "single-label")
+    "http://134744072/rest/api/2/myself",              # 8.8.8.8 as one decimal number
+    "http://0x08080808/rest/api/2/myself",             # ... as hex
+    "http://8.8.2056/rest/api/2/myself",               # ... as a three-part shorthand
+    "http://[::ffff:8.8.8.8]/rest/api/2/myself",       # ... IPv4-mapped IPv6
+    "http://2852039166/latest/meta-data/",             # 169.254.169.254 (metadata) as decimal
+])
+def test_a_public_or_metadata_ip_literal_in_any_spelling_is_refused_over_http(url):
+    """BOSSAPP-1385: IP literals are judged by ADDRESS first; the single-label rule (for compose
+    names like ``plane-api``) applies to names only."""
+    from boss_engine.connectors.tickets.http import check_host
+
+    with pytest.raises(HostNotAllowed):
+        check_host(url, (), (ticket_http._host_of(url) or "x",), provider="jira")
+
+
+@pytest.mark.parametrize("url", [
+    "http://100.101.102.103/rest/api/2/myself",        # tailnet (CGNAT) address
+    "http://jira.tail1234.ts.net/rest/api/2/myself",   # tailnet MagicDNS name
+    "http://[fd12:3456::1]/rest/api/2/myself",         # IPv6 unique-local
+    "http://10.0.0.7/rest/api/2/myself",
+    "http://172.20.0.4/rest/api/2/myself",
+    "http://192.168.1.9/rest/api/2/myself",
+    "http://127.0.0.1:8080/rest/api/2/myself",
+    "http://plane-api:8000/api/v1/",                   # compose service name
+])
+def test_tailnet_and_private_hosts_may_use_plain_http(url):
+    from boss_engine.connectors.tickets.http import check_host
+
+    check_host(url, (), (ticket_http._host_of(url),), provider="jira")
+
+
+@pytest.mark.parametrize("host,expected", [
+    ("100.64.0.1", True), ("100.127.255.254", True), ("100.128.0.1", False),
+    ("192.0.0.8", False), ("198.18.0.1", False), ("203.0.113.5", False), ("8.8.8.8", False),
+    ("10.1", True), ("0177.0.0.1", True),
+])
+def test_the_private_range_answer_is_an_explicit_list(host, expected):
+    """The same answer on Python 3.11 (images) and 3.13 (a laptop): an explicit range list, not
+    ipaddress.is_private (whose ranges changed between versions)."""
+    assert ticket_http._loopback(host) is expected

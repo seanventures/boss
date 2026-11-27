@@ -172,7 +172,9 @@ def _upstream(tmp_path, monkeypatch) -> None:
 def test_inside_the_guest_after_the_clone_the_remote_holds_no_credential(tmp_path, monkeypatch):
     _upstream(tmp_path, monkeypatch)
     guest = _guest(monkeypatch, tmp_path)
-    guest._prepare_repo({"owner": "o", "repo": "r", "base_branch": "main", "token": TOKEN})
+    # the host always sends the token WITH the web origin it belongs to (BOSSAPP-1286)
+    guest._prepare_repo({"owner": "o", "repo": "r", "base_branch": "main", "token": TOKEN,
+                         "github_web": "https://github.com"})
     remotes = subprocess.run(["git", "-C", str(guest.WORK), "remote", "-v"], check=True,
                              capture_output=True, text=True).stdout
     assert "https://github.com/o/r.git" in remotes
@@ -387,3 +389,86 @@ def test_a_system_read_with_no_project_takes_no_reference_route():
             raise AssertionError("no query may run without a project")
 
     assert _system_ref_for(_NoDb(), ["K"], None) is None
+
+
+def test_the_guest_refuses_a_token_without_the_host_it_belongs_to(tmp_path, monkeypatch):
+    """BOSSAPP-1286: a token without github_web is never cloned from a default github.com."""
+    _upstream(tmp_path, monkeypatch)
+    guest = _guest(monkeypatch, tmp_path)
+    with pytest.raises(RuntimeError, match="without github_web"):
+        guest._prepare_repo({"owner": "o", "repo": "r", "base_branch": "main", "token": TOKEN})
+
+
+def test_the_legacy_body_carries_the_tokens_host_and_is_refused_without_it():
+    from boss_engine.services.sandbox_contract import build_submit_request, validate_submit_request
+
+    spec = {"owner": "o", "repo": "r", "engine": "openai", "token": "ghes-token",
+            "repo_host": "github", "github_web": "https://ghe.example"}
+    body = build_submit_request(spec, "default", task_id="crun_l", legacy=True)
+    assert body["repo"]["github_web"] == "https://ghe.example" and body["repo"]["host"] == "github"
+    assert "repo.github_web is required with git_token" not in \
+        validate_submit_request(body, allow_legacy=True, strict_secrets=False)
+    bare = build_submit_request({**spec, "github_web": ""}, "default", task_id="crun_l", legacy=True)
+    assert "repo.github_web is required with git_token" in \
+        validate_submit_request(bare, allow_legacy=True, strict_secrets=False)
+
+
+def test_the_legacy_lane_gets_a_token_only_from_a_host_that_forwards_github_web(monkeypatch):
+    """BOSSAPP-1286: an older sandbox host's legacy lane would drop repo.github_web, and its guest
+    could not tell where the token may go. BOSS reads the host's reported legacy revision first
+    and refuses, plainly, when it is missing or older than 1.0.1."""
+    from boss_engine.services.sandbox_provider import MicroVMProvider
+
+    assert sc.host_forwards_github_web({"legacy_revision": "1.0.1"})
+    assert sc.host_forwards_github_web({"legacy_revision": "1.2"})
+    for old in (None, {}, {"contract_version": "1.1"}, {"legacy_revision": "1.0"},
+                {"legacy_revision": "junk"}):
+        assert not sc.host_forwards_github_web(old)
+
+    provider = MicroVMProvider.__new__(MicroVMProvider)
+    provider.settings = Settings()
+    monkeypatch.setenv(sc.LEGACY_ENV, "1")
+    spec = {"task_id": "crun_t6", "owner": "o", "repo": "r", "engine": "claude_code",
+            "token": TOKEN}
+    sent = []
+    monkeypatch.setattr(MicroVMProvider, "_require_base", lambda self: "http://sandbox.invalid")
+    monkeypatch.setattr(MicroVMProvider, "_headers", lambda self: {})
+
+    class _Resp:
+        def __init__(self, body):
+            self.status_code, self._body = 200, body
+
+        def json(self):
+            return self._body
+
+    def client_with(body):
+        class _Client:
+            def __init__(self, *a, **k):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def get(self, url, headers=None):
+                sent.append(url)
+                return _Resp(body)
+        return _Client
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "Client", client_with({"contract_version": "1.1"}))
+    with pytest.raises(RuntimeError) as refused:
+        provider._submit_body(dict(spec), "p")
+    assert "older legacy lane" in str(refused.value) and TOKEN not in str(refused.value)
+    assert sent and sent[-1].endswith("/v1/sandbox/health")
+
+    monkeypatch.setattr(httpx, "Client", client_with({"legacy_revision": "1.0.1"}))
+    try:
+        body = provider._submit_body(dict(spec), "p")
+    except Exception as exc:  # noqa: BLE001 — any later refusal is not the version gate
+        assert "older legacy lane" not in str(exc)
+    else:
+        assert body["contract_version"] == sc.LEGACY_CONTRACT_VERSION

@@ -378,7 +378,11 @@ def _disk_free_gb(path: Path) -> Optional[float]:
 def _online(timeout: float = 3.0) -> bool:
     import socket
 
-    for host in ("api.github.com", "github.com"):
+    from ..identity import github_urls
+    from urllib.parse import urlsplit
+
+    api_host = urlsplit(github_urls.api_base()).hostname or github_urls.PUBLIC_API_HOST
+    for host in dict.fromkeys((api_host, github_urls.web_host())):
         try:
             with socket.create_connection((host, 443), timeout=timeout):
                 return True

@@ -187,7 +187,11 @@ def test_a_build_commits_the_prd_and_minutes_to_its_github_branch(world, client,
     with engine.begin() as db:
         _bind_github(db, pid, "acme/greeting")
     run_id, decision_id = _panel(engine, pid, monkeypatch)
-    adapter = GitHubAdapter(get_settings(), owner="acme", repo="greeting", token="gate-token",
+    from boss_engine.identity import github_urls
+
+    # The connection's token, tagged with the host it belongs to (BOSSAPP-1286).
+    adapter = GitHubAdapter(get_settings(), owner="acme", repo="greeting",
+                            token=github_urls.tag("gate-token", hub.api_url),
                             api_base_url=hub.api_url)
     branch = "boss/code/crun_prdtest"
     adapter.ensure_branch(branch)

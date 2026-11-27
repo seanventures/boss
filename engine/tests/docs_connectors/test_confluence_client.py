@@ -262,3 +262,24 @@ def test_written_page_reads_back_what_landed(client, fake):
     assert page and page.version == 5
     assert client.written_page(op="update", space="ENG", title="x", markdown="different",
                                page_id="101", base_version=4) is None
+
+
+def test_a_landed_page_over_the_read_cap_reads_back_as_landed(client, fake):
+    """BOSSAPP-1385: a proposal may be 200k chars; a read returns at most MAX_BODY_CHARS. The
+    read-back after a timed-out write compares the version and a hash of the FULL body, so a big
+    page that landed is not recorded as failed (and one that differs past the cap is not
+    mistaken for a match)."""
+    from boss_engine.connectors.docs.confluence import MAX_BODY_CHARS
+
+    big = "# Deploy Runbook\n\n" + ("step line of the runbook. " * 6000)
+    assert len(big) > MAX_BODY_CHARS * 2
+    client.update_page("101", markdown=big, expected_version=4)
+    page = client.written_page(op="update", space="ENG", title="Deploy Runbook", markdown=big,
+                               page_id="101", base_version=4)
+    assert page is not None and page.version == 5 and page.truncated
+    differs_past_the_cap = big + "\n\none more paragraph at the end"
+    assert client.written_page(op="update", space="ENG", title="Deploy Runbook",
+                               markdown=differs_past_the_cap, page_id="101",
+                               base_version=4) is None
+    assert client.written_page(op="update", space="ENG", title="Deploy Runbook", markdown=big,
+                               page_id="101", base_version=5) is None

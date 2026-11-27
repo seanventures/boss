@@ -97,7 +97,11 @@ def build_source(spec: dict[str, Any]) -> TelemetrySource:
                              app_key_env=spec.get("app_key_env", "DD_APP_KEY"))
     if kind == "cloudwatch":
         from .telemetry_connectors import CloudWatchSource
-        return CloudWatchSource(spec["log_group"], region=spec.get("region", "us-east-1"))
+        return CloudWatchSource(spec.get("log_group", ""), region=spec.get("region", "us-east-1"),
+                                access_key_env=spec.get("access_key_env", ""),
+                                secret_key_env=spec.get("secret_key_env", ""),
+                                session_token_env=spec.get("session_token_env", ""),
+                                period_seconds=int(spec.get("period_seconds", 60)))
     if kind == "pagerduty":
         from .telemetry_connectors import PagerDutySource
         return PagerDutySource(spec.get("base_url", "https://api.pagerduty.com"),

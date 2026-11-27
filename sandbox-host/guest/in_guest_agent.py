@@ -94,13 +94,23 @@ def _prepare_repo(spec):
         # BOSS-267: host-aware clone (the guest is dependency-free, so the tiny URL map lives
         # inline; the host passes spec.repo_host — absent -> github, unchanged behavior).
         host = (spec.get("repo_host") or "github").lower()
+        # The GitHub web origin the token belongs to (spec.github_web: github.com, or a GitHub
+        # Enterprise Server origin); the host always sends it with the token (BOSSAPP-1286).
+        # A token WITHOUT it is refused — never sent to a default host. An anonymous clone
+        # (no token) may still read github.com.
+        web = str(spec.get("github_web") or "").rstrip("/")
+        if host != "bitbucket" and token and not web:
+            raise RuntimeError("clone refused: a git token came without github_web, the host it "
+                               "belongs to; the guest never sends a token to a default host")
+        web = web or "https://github.com"
+        scheme, _, web_host = web.partition("://")
         clean = (f"https://bitbucket.org/{owner}/{repo}.git" if host == "bitbucket"
-                 else f"https://github.com/{owner}/{repo}.git")
+                 else f"{web}/{owner}/{repo}.git")
         if host == "bitbucket":
             url = (f"https://x-token-auth:{token}@bitbucket.org/{owner}/{repo}.git"
                    if token else clean)
         else:
-            url = (f"https://x-access-token:{token}@github.com/{owner}/{repo}.git"
+            url = (f"{scheme}://x-access-token:{token}@{web_host}/{owner}/{repo}.git"
                    if token else clean)
         rc, _o, e = _run(["git", "clone", "--depth", "1", "--branch", branch, url, str(WORK)])
         if rc != 0:

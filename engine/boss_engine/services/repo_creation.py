@@ -38,6 +38,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
+from boss_engine.identity import github_urls
+
 from sqlalchemy import text
 
 log = logging.getLogger(__name__)
@@ -82,16 +84,18 @@ def scopes_to_permissions(scopes_header: Optional[str]) -> dict[str, str]:
     return out
 
 
-def pat_abilities(token: str, *, api_base: str = "https://api.github.com", http: Any = None) -> dict[str, Any]:
+def pat_abilities(token: str, *, api_base: str = "", http: Any = None) -> dict[str, Any]:
     """What a personal access token can do, read from GitHub (GET /user), never from its name.
 
     {ok, login, shape: classic|fine_grained|unknown, granted: [...], missing: [...],
      can_create: True|False|None, words}. A classic token says its scopes in `X-OAuth-Scopes`;
     a fine-grained token has no such header and GitHub only tells at the attempt, so `can_create`
     is None (unverified) with the words saying what it would need. Never includes the token."""
-    from .setup_checks import _gh_headers, default_http
+    from .setup_checks import _base, _gh_headers, _send_check, default_http
 
     http = http or default_http
+    api_base = _base(api_base)
+    _send_check(token, api_base)
     who = http("GET", f"{api_base.rstrip('/')}/user", headers=_gh_headers(token))
     shape = "fine_grained" if _FINE_GRAINED.match(token or "") else "classic" if _CLASSIC.match(token or "") else "unknown"
     out: dict[str, Any] = {"ok": who.status == 200, "login": None, "shape": shape, "granted": [], "missing": [],
@@ -341,15 +345,17 @@ def _abilities_cached(token: str, api_base: str) -> dict[str, Any]:
 
 
 def _org_member(token: str, owner: str, api_base: str) -> bool:
-    from .setup_checks import _gh_headers, default_http
+    from .setup_checks import _base, _gh_headers, _send_check, default_http
 
+    api_base = _base(api_base)
+    _send_check(token, api_base)
     got = default_http("GET", f"{api_base.rstrip('/')}/user/memberships/orgs/{owner}", headers=_gh_headers(token))
     return got.status == 200 and isinstance(got.body, dict) and str(got.body.get("state") or "") == "active"
 
 
 def _connection_candidates(db: Any, settings: Any, owner: str, project_id: Optional[str], *,
                            owner_type: str = "", probe: bool = True,
-                           actor: Optional[str] = None) -> list[Candidate]:
+                           actor: Optional[str] = None, api_base: str = "") -> list[Candidate]:
     """Project connections whose token creates in `owner`: its own user, or an organisation it
     is an active member of (checked at GitHub, only for an organisation owner, and only when
     `probe`: the owner picker reads no secrets and asks GitHub nothing)."""
@@ -357,7 +363,13 @@ def _connection_candidates(db: Any, settings: Any, owner: str, project_id: Optio
 
     service = GitHubConnectionService(settings)
     out: list[Candidate] = []
+    # THE TARGET HOST (BOSSAPP-1286): a repository is created on one GitHub — the install's,
+    # unless the caller names another. A connection of another host is never a candidate, even
+    # when its account has the owner's login (logins are only unique per host).
+    target = github_urls.api_base(api_base)
     for row in _connection_rows(db, project_id, actor):
+        if github_urls.api_base(row.get("api_base_url")) != target:
+            continue
         login = str(row.get("account_login") or "")
         same = login.lower() == owner.lower()
         if not same and owner_type != "Organization":
@@ -368,7 +380,7 @@ def _connection_candidates(db: Any, settings: Any, owner: str, project_id: Optio
         label = token_label(row)
         granted = [str(p) for p in (row.get("granted_permissions") or [])]
         missing = [str(p) for p in (row.get("missing_permissions") or [])]
-        api_base = str(row.get("api_base_url") or getattr(settings, "github_api_base_url", "") or "https://api.github.com")
+        api_base = github_urls.api_base(row.get("api_base_url") or getattr(settings, "github_api_base_url", ""))
 
         def mint(row=row) -> Optional[str]:
             try:

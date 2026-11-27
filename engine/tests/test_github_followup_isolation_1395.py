@@ -24,7 +24,7 @@ def _settings() -> Settings:
 
 
 def test_github_adapter_ensure_branch_uses_base_sha_and_merge_pins_sha(monkeypatch):
-    github = GitHubAdapter(_settings())
+    github = GitHubAdapter(_settings(), api_base_url="https://api.github.com")
     calls: list[tuple[str, str, dict | None]] = []
 
     def fake_request(method: str, path: str, json_body=None, **_kwargs):
@@ -53,7 +53,7 @@ def test_github_adapter_ensure_branch_uses_base_sha_and_merge_pins_sha(monkeypat
 
 
 def test_github_adapter_pinned_409_head_modified_raises_clear_message(monkeypatch):
-    github = GitHubAdapter(_settings())
+    github = GitHubAdapter(_settings(), api_base_url="https://api.github.com")
 
     def fake_request(method: str, path: str, json_body=None, **_kwargs):
         req = httpx.Request(method, f"https://api.github.com{path}")

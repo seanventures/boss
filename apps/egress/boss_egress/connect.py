@@ -43,7 +43,9 @@ import socket
 import ssl
 import struct
 import threading
-from typing import Iterable, NamedTuple, Optional, Union
+from typing import Any, Iterable, NamedTuple, Optional, Union
+
+from boss_engine.identity import github_urls
 
 log = logging.getLogger("boss.egress.connect")
 
@@ -97,7 +99,11 @@ def toolchain_hosts() -> tuple[str, ...]:
 
 
 #: Never through the tunnel, whatever the allowlist says.
-NEVER = ("github.com", "*.github.com", "*.githubusercontent.com", "api.github.com")
+#: A GitHub Enterprise Server host the install is pointed at (BOSS_GITHUB_API_URL / _WEB_URL) is
+#: fenced the same way: its credential is only ever added by the host route, never tunnelled.
+NEVER = (github_urls.PUBLIC_WEB_HOST, "*.github.com", "*.githubusercontent.com",
+         github_urls.PUBLIC_API_HOST) + tuple(
+             h for h in github_urls.github_hosts() if h not in github_urls.PUBLIC_HOSTS)
 MAX_HEADER = 8192
 
 
@@ -166,8 +172,74 @@ def _matches(host: str, patterns: Iterable[str]) -> bool:
     return False
 
 
+_ENGINE: list = []
+
+
+def _db() -> Any:
+    """The egress database (one engine per process), for the GHES host list."""
+    if not _ENGINE:
+        from .app import _engine
+
+        _ENGINE.append(_engine())
+    return _ENGINE[0]
+
+
+#: The last GHES host list read from the database, and when (monotonic seconds).
+_LAST_GOOD: dict[str, Any] = {}
+#: How long a list read before a database failure is still trusted.
+GHES_LIST_GRACE_S = 600.0
+
+
+def _read_ghes_hosts() -> set[str]:
+    """The GHES hosts, READ NOW: the database is asked (a trivial query first, so a failure is
+    seen here rather than swallowed into a cached partial list), then the one list."""
+    from sqlalchemy import text
+
+    from boss_engine.services.github_connections import ghes_hosts
+
+    engine = _db()
+    with engine.connect() as conn:
+        # A schema with no connections table holds no connections: only the install's own GHES
+        # host (static fence). A table that exists but cannot be read is a failure (closed).
+        if conn.execute(text("SELECT to_regclass('github_connections')")).scalar() is None:
+            return set()
+        conn.execute(text("SELECT api_base_url FROM github_connections LIMIT 1"))
+    return set(ghes_hosts(engine))
+
+
+def ghes_fenced(host: str) -> bool:
+    """A GitHub Enterprise Server host of this install — set on the host OR on any GitHub
+    connection's API base (github_connections.ghes_hosts) — is never tunnelled: its credential is
+    added only by the GitHub route (BOSSAPP-1286).
+
+    FAILS CLOSED: when the list cannot be read, a list read within GHES_LIST_GRACE_S still
+    decides; with none, EVERY host is fenced (the CONNECT tunnel refuses until the database
+    answers). A database outage must never open the tunnel to a GHES host whose credential the
+    route alone may add — egress cannot mint a credential without its database either."""
+    import time
+
+    name = host.lower().rstrip(".")
+    try:
+        _db()
+    except RuntimeError:
+        # NO DATABASE CONFIGURED (boss-egress needs DATABASE_URL to mint any credential): no
+        # connection can exist, so no connection-set GHES host either; the install's own GHES host
+        # is in the static fence (NEVER). This is not a read failure, which fails closed below.
+        return False
+    try:
+        hosts = _read_ghes_hosts()
+        _LAST_GOOD.update(at=time.monotonic(), hosts=hosts)
+        return name in hosts
+    except Exception as exc:  # noqa: BLE001 — fail closed below
+        log.warning("could not read the GHES hosts: %s", type(exc).__name__)
+    at = _LAST_GOOD.get("at")
+    if at is not None and time.monotonic() - at < GHES_LIST_GRACE_S:
+        return name in _LAST_GOOD.get("hosts", set())
+    return True
+
+
 def _rules_for(host: str) -> list[Rule]:
-    if _matches(host, NEVER):
+    if _matches(host, NEVER) or ghes_fenced(host):
         return []
     return [r for r in allow_rules() if _matches(host, (r.pattern,))]
 
@@ -363,7 +435,7 @@ def refusal_reason(host: str, port: int, reason: str) -> str:
     host = _SAFE_HOST.sub("", host.lower())[:200] or "this host"
     where = host if port == 443 else f"{host}:{port}"
     fence = "Blocked by BOSS network fence"
-    if reason == "host_not_allowed" and _matches(host, NEVER):
+    if reason == "host_not_allowed" and (_matches(host, NEVER) or ghes_fenced(host)):
         return f"{fence}: {host} is reached through BOSS's GitHub proxy, not this tunnel"
     if reason == "host_not_allowed":
         return (f"{fence}: {host} is not on the egress allowlist. An operator can add {where} "

@@ -35,7 +35,7 @@ def test_a_local_repository_clones_without_a_github_credential(monkeypatch, owne
     monkeypatch.setattr("boss_engine.services.github_app_adapter.repo_token", _no_github)
     settings = SimpleNamespace(bitbucket_token="", github_token="")
     assert cts._clone_token(object(), settings, owner=owner, repo="csv-quality-desk",  # noqa: SLF001
-                            project_id="prj_csv", repo_host_kind=host) == ""
+                            project_id="prj_csv", repo_host_kind=host) == ("", "")
 
 
 def test_a_github_repository_still_asks_github(monkeypatch):
@@ -49,7 +49,8 @@ def test_a_github_repository_still_asks_github(monkeypatch):
     monkeypatch.setattr(cts, "_transaction", lambda engine: contextlib.nullcontext(object()))
     settings = SimpleNamespace(bitbucket_token="", github_token="")
     assert cts._clone_token(object(), settings, owner="acme", repo="web",  # noqa: SLF001
-                            project_id="prj_1", repo_host_kind="github") == "ghs_x"
+                            project_id="prj_1", repo_host_kind="github") == \
+        ("ghs_x", "https://api.github.com")   # the token WITH its host (BOSSAPP-1286)
     assert seen == [("acme", "web", "prj_1")]
 
 

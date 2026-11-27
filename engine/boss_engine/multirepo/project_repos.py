@@ -210,6 +210,7 @@ def _connection_for(db: Any, settings: Any, project_id: str, actor: str, *,
                              "Connect GitHub for this project first (Setup › GitHub access).")
     if full_name:
         from ..services import setup_checks
+        from ..identity import github_urls
         from ..services.github_connections import GitHubConnectionService
 
         service = GitHubConnectionService(settings)
@@ -223,13 +224,15 @@ def _connection_for(db: Any, settings: Any, project_id: str, actor: str, *,
                     if item.get("ref_kind") == kind and item.get("ref_key") == key:
                         record = item
                         break
-                token = service._resolve_secret(record, db)  # noqa: SLF001
+                own = service.get_connection(db, project_id, cid)
+                # Each connection's token is tagged with, and probed against, ITS OWN host.
+                token = service._tag_by_origin(  # noqa: SLF001 — where the secret lives decides
+                    service._resolve_secret(record, db), record, own.get("api_base_url"),  # noqa: SLF001
+                    connection=db, project_id=project_id, connection_id=cid)
                 if not token:
                     continue
                 probed = setup_checks.probe_repository(
-                    token, full_name,
-                    api_base=str(getattr(settings, "github_api_base_url", "") or
-                                 "https://api.github.com"))
+                    token, full_name, api_base=github_urls.api_base(own.get("api_base_url")))
                 if (probed.get("checks") or {}).get("read", {}).get("ok"):
                     return cid
             except Exception:  # noqa: BLE001 — a connection that cannot be probed cannot reach it either

@@ -30,6 +30,14 @@ if str(_GATE) not in sys.path:
 from remote import LocalGitHub  # noqa: E402  (tests/e2e/gate/remote.py)
 
 
+def _gh(token, api_base):
+    """A placeholder token, tagged with the (fake) GitHub it belongs to, as every real source
+    hands one out (BOSSAPP-1286)."""
+    from boss_engine.identity import github_urls
+
+    return github_urls.tag(token, api_base)
+
+
 @pytest.fixture(scope="module")
 def world(engine) -> IdentityWorld:
     w = IdentityWorld.create(engine)
@@ -124,7 +132,7 @@ def test_can_boss_make_the_repo_is_said_in_the_engine_words():
             return httpx.Response(200, json={"type": "Organization"})
         return httpx.Response(404, json={"message": "Not Found"})
 
-    out = check_repository(owner="acme", name="new", token="t", api_base_url="http://gh", client=_api(org))
+    out = check_repository(owner="acme", name="new", token=_gh("t", "http://gh"), api_base_url="http://gh", client=_api(org))
     assert out["ok"] and out["owner_type"] == "Organization" and "free" in out["words"]
 
     def personal(request):
@@ -132,21 +140,21 @@ def test_can_boss_make_the_repo_is_said_in_the_engine_words():
             return httpx.Response(200, json={"type": "User"})
         return httpx.Response(404, json={"message": "Not Found"})
 
-    out = check_repository(owner="me", name="new", token="t", api_base_url="http://gh", client=_api(personal))
+    out = check_repository(owner="me", name="new", token=_gh("t", "http://gh"), api_base_url="http://gh", client=_api(personal))
     assert not out["ok"] and out["reason"] == "personal_account" and "personal" in out["words"]
-    out = check_repository(owner="me", name="new", token="t", token_kind="user", api_base_url="http://gh",
+    out = check_repository(owner="me", name="new", token=_gh("t", "http://gh"), token_kind="user", api_base_url="http://gh",
                            client=_api(personal))
     assert out["ok"], "a person's own token can create in their account"
 
     def exists(request):
         return httpx.Response(200, json={"private": True})
 
-    out = check_repository(owner="acme", name="new", token="t", api_base_url="http://gh", client=_api(exists))
+    out = check_repository(owner="acme", name="new", token=_gh("t", "http://gh"), api_base_url="http://gh", client=_api(exists))
     assert not out["ok"] and out["reason"] == "exists" and out["exists"]
-    out = check_repository(owner="acme", name="new", token="t", purpose="existing", api_base_url="http://gh",
+    out = check_repository(owner="acme", name="new", token=_gh("t", "http://gh"), purpose="existing", api_base_url="http://gh",
                            client=_api(exists))
     assert out["ok"] and "empty" in out["words"]
-    out = check_repository(owner="acme", name="new", token="t", purpose="existing", api_base_url="http://gh",
+    out = check_repository(owner="acme", name="new", token=_gh("t", "http://gh"), purpose="existing", api_base_url="http://gh",
                            client=_api(org))
     assert not out["ok"] and out["reason"] == "not_found"
 
@@ -158,7 +166,7 @@ def test_can_boss_make_the_repo_is_said_in_the_engine_words():
     def down(request):
         return httpx.Response(502, json={"message": "bad gateway"})
 
-    out = check_repository(owner="acme", name="new", token="t", api_base_url="http://gh", client=_api(down))
+    out = check_repository(owner="acme", name="new", token=_gh("t", "http://gh"), api_base_url="http://gh", client=_api(down))
     assert not out["ok"] and out["reason"] == "failed" and "try again" in out["words"]
 
 
@@ -183,9 +191,9 @@ def _fake_reach(hub, connection_id, token_kind="app"):
 
     settings = get_settings()
     return GitHubReach(
-        adapter_for=lambda o, r: GitHubAdapter(settings, owner=o, repo=r, token="gate-token", api_base_url=hub.api_url),
+        adapter_for=lambda o, r: GitHubAdapter(settings, owner=o, repo=r, token=_gh("gate-token", hub.api_url), api_base_url=hub.api_url),
         access_for=lambda o, r: GitAccess(hub.git_url(o, r), via="token"),
-        create_token="gate-token", create_token_kind=token_kind, api_base_url=hub.api_url,
+        create_token=_gh("gate-token", hub.api_url), create_token_kind=token_kind, api_base_url=hub.api_url,
         connection_id=connection_id)
 
 

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import urllib.parse
 import urllib.request
 from typing import Any, Optional
@@ -284,40 +285,256 @@ class DatadogSource:
 
 
 # --- CloudWatch (boto3) -------------------------------------------------------
+#: The ONLY AWS operations a CloudWatch connection may call — all reads. The client handed to the
+#: source refuses anything else, so a connector bug can never write to the account. These are
+#: also the IAM actions the read-only policy grants (docs/community/CONNECT_CLOUDWATCH.md).
+CLOUDWATCH_READ_OPERATIONS: dict[str, frozenset[str]] = {
+    "cloudwatch": frozenset({"get_metric_data", "describe_alarms"}),
+    "logs": frozenset({"filter_log_events", "start_query", "get_query_results"}),
+}
+CLOUDWATCH_IAM_ACTIONS = ("cloudwatch:GetMetricData", "cloudwatch:DescribeAlarms",
+                          "logs:StartQuery", "logs:GetQueryResults", "logs:FilterLogEvents")
+#: A Logs Insights query starts with one of these commands; anything else is a filter pattern.
+_INSIGHTS_COMMANDS = ("fields", "filter", "stats", "sort", "limit", "parse", "display", "dedup",
+                      "pattern", "unmask", "diff")
+_CW_MAX_PAGES = 10
+_CW_INSIGHTS_WAIT_S = 30.0
+#: Seam for tests: the pause between Logs Insights polls.
+CW_SLEEP = None
+
+
+class CloudWatchReadOnly(PermissionError):
+    """A CloudWatch connection was asked to do something that is not a read."""
+
+
+class _ReadOnlyClient:
+    """A boto3 client that exposes only the read operations above."""
+
+    def __init__(self, service: str, client: Any):
+        self._service, self._client = service, client
+
+    def __getattr__(self, name: str) -> Any:
+        if name not in CLOUDWATCH_READ_OPERATIONS.get(self._service, frozenset()):
+            raise CloudWatchReadOnly(
+                f"CloudWatch connections are read-only: {self._service}.{name} is not allowed")
+        return getattr(self._client, name)
+
+
+def _cw_epoch(value: Any) -> float:
+    if hasattr(value, "timestamp"):
+        return float(value.timestamp())
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def parse_metric_query(q: str, period: int) -> list[dict[str, Any]]:
+    """The metric query in any of three forms, as GetMetricData ``MetricDataQueries``:
+
+    * JSON — a MetricDataQueries list (or one query object), passed through;
+    * ``SELECT ...`` — a CloudWatch Metrics Insights expression;
+    * ``Namespace MetricName [Statistic] [Dim=Value ...]`` — e.g.
+      ``AWS/ApiGateway 5XXError Sum ApiName=orders``.
+    """
+    text = (q or "").strip()
+    if not text:
+        return []
+    if text[:1] in "[{":
+        loaded = json.loads(text)
+        queries = loaded if isinstance(loaded, list) else [loaded]
+        return [dict(item) for item in queries if isinstance(item, dict)]
+    if text[:6].upper() == "SELECT":
+        return [{"Id": "q0", "Expression": text, "Period": period, "ReturnData": True}]
+    parts = text.split()
+    if len(parts) < 2:
+        raise ValueError("A CloudWatch metric query is 'Namespace MetricName [Statistic] "
+                         "[Dim=Value ...]', a Metrics Insights SELECT, or MetricDataQueries JSON")
+    namespace, metric, rest = parts[0], parts[1], parts[2:]
+    stat = "Average"
+    if rest and "=" not in rest[0]:
+        stat, rest = rest[0], rest[1:]
+    dims = [{"Name": k, "Value": v} for k, _, v in (r.partition("=") for r in rest) if k and v]
+    return [{"Id": "q0", "ReturnData": True, "MetricStat": {
+        "Metric": {"Namespace": namespace, "MetricName": metric, "Dimensions": dims},
+        "Period": period, "Stat": stat}}]
+
+
+#: The ONLY env-var names a CloudWatch connection may name for its keys (PR #330 review): AWS's
+#: own (AWS_*) or a CloudWatch secret-store key (CW_* / CLOUDWATCH_*). A connection must never be
+#: able to point the AWS client at another credential the process holds (BOSS_GITHUB_TOKEN,
+#: DATABASE_URL, a model key) and have it sent to AWS or echoed in an error.
+_AWS_KEY_ENV = re.compile(r"^(AWS|CW|CLOUDWATCH)_[A-Z0-9_]{1,64}$")
+
+
+def aws_key_env_refused(name: str) -> str:
+    """Why ``name`` may not hold a CloudWatch credential, or "" when it may."""
+    name = (name or "").strip()
+    if not name or _AWS_KEY_ENV.fullmatch(name):
+        return ""
+    return (f"connector 'cloudwatch' key env {name!r} is not allowed: name an AWS_* variable or "
+            "a CloudWatch secret-store key (CW_* or CLOUDWATCH_*)")
+
+
 class CloudWatchSource:
-    """AWS CloudWatch Logs (filter_log_events) + Metrics (get_metric_data) via boto3 — auth by the
-    standard AWS credential chain (env/instance role), never inline. Config: log_group, region,
-    optional metric namespace queries."""
+    """AWS CloudWatch, READ-ONLY, on the same TelemetrySource contract as Prometheus/Loki:
+
+    * metrics — GetMetricData (``parse_metric_query`` forms), paged;
+    * logs — Logs Insights (StartQuery/GetQueryResults) for an Insights query, else
+      FilterLogEvents with the query as a filter pattern;
+    * alerts — DescribeAlarms, the alarms currently in ALARM.
+
+    Credentials: never in the config. ``access_key_env``/``secret_key_env``/``session_token_env``
+    name env vars the ops secret store populates on deploy (like ``bearer_env`` elsewhere);
+    with none named, the standard AWS chain (instance/task role). Every client is wrapped so only
+    the read operations in ``CLOUDWATCH_READ_OPERATIONS`` can be called."""
     kind = "cloudwatch"
 
-    def __init__(self, log_group: str, *, region: str = "us-east-1", client_factory=None):
+    def __init__(self, log_group: str = "", *, region: str = "us-east-1", client_factory=None,
+                 access_key_env: str = "", secret_key_env: str = "", session_token_env: str = "",
+                 period_seconds: int = 60, endpoint_url: str = ""):
         self.log_group = log_group
+        self.log_groups = [g.strip() for g in (log_group or "").split(",") if g.strip()]
         self.region = region
+        self.period = max(1, int(period_seconds or 60))
+        self.endpoint_url = endpoint_url
+        for name in (access_key_env, secret_key_env, session_token_env):
+            why = aws_key_env_refused(name)
+            if why:
+                raise ConnectorNotReady(why, status_code=422)
+        self._env = (access_key_env, secret_key_env, session_token_env)
         # injectable for tests; defaults to boto3 at call time so importing this module never
         # requires AWS creds
         self._factory = client_factory
 
     def _client(self, service: str):
         if self._factory:
-            return self._factory(service)
+            return _ReadOnlyClient(service, self._factory(service))
         import boto3
-        return boto3.client(service, region_name=self.region)
+        kwargs: dict[str, Any] = {"region_name": self.region}
+        if self.endpoint_url:
+            kwargs["endpoint_url"] = self.endpoint_url
+        key_env, secret_env, token_env = self._env
+        if key_env and secret_env:
+            kwargs["aws_access_key_id"] = os.environ.get(key_env, "") or None
+            kwargs["aws_secret_access_key"] = os.environ.get(secret_env, "") or None
+            if token_env:
+                kwargs["aws_session_token"] = os.environ.get(token_env, "") or None
+        return _ReadOnlyClient(service, boto3.client(service, **kwargs))
 
+    # -- logs --------------------------------------------------------------------------------
     def query_logs(self, q: str, window: TimeWindow, *, limit: int = 5000) -> list[LogEvent]:
-        kwargs = {"logGroupName": self.log_group, "startTime": int(window.start * 1000),
-                  "endTime": int(window.end * 1000), "limit": min(limit, 10000)}
+        q = (q or "").strip()
+        if q and q.split(None, 1)[0].lower().lstrip("|") in _INSIGHTS_COMMANDS:
+            return self._insights(q, window, limit=limit)
+        kwargs = {"logGroupName": self.log_groups[0] if self.log_groups else self.log_group,
+                  "startTime": int(window.start * 1000), "endTime": int(window.end * 1000),
+                  "limit": min(limit, 10000)}
         if q:
             kwargs["filterPattern"] = q
-        resp = self._client("logs").filter_log_events(**kwargs)
-        return [LogEvent(ts=e["timestamp"] / 1000.0, message=e.get("message", ""),
-                         service=e.get("logStreamName", ""))
-                for e in resp.get("events", [])][:limit]
+        client = self._client("logs")
+        out: list[LogEvent] = []
+        for _ in range(_CW_MAX_PAGES):
+            resp = client.filter_log_events(**kwargs)
+            out.extend(LogEvent(ts=e["timestamp"] / 1000.0, message=e.get("message", ""),
+                                service=e.get("logStreamName", ""))
+                       for e in resp.get("events", []))
+            token = resp.get("nextToken")
+            if not token or len(out) >= limit:
+                break
+            kwargs["nextToken"] = token
+        return out[:limit]
 
-    def query_metrics(self, q, window):
-        return []
+    def _insights(self, q: str, window: TimeWindow, *, limit: int) -> list[LogEvent]:
+        import time
+
+        if not self.log_groups:
+            raise ValueError("A Logs Insights query needs the connection's log_group")
+        client = self._client("logs")
+        started = client.start_query(logGroupNames=self.log_groups, queryString=q,
+                                     startTime=int(window.start), endTime=int(window.end),
+                                     limit=min(limit, 10000))
+        sleep = CW_SLEEP or time.sleep
+        deadline = time.monotonic() + _CW_INSIGHTS_WAIT_S
+        while True:
+            resp = client.get_query_results(queryId=started["queryId"])
+            status = resp.get("status")
+            if status in ("Complete", "Failed", "Cancelled", "Timeout"):
+                break
+            if time.monotonic() > deadline:
+                raise TimeoutError("The CloudWatch Logs Insights query did not finish in time")
+            sleep(0.5)
+        if status != "Complete":
+            raise RuntimeError(f"The CloudWatch Logs Insights query ended {status}")
+        out: list[LogEvent] = []
+        for row in resp.get("results", [])[:limit]:
+            fields = {f.get("field"): f.get("value") for f in row if isinstance(f, dict)}
+            ts = fields.get("@timestamp") or ""
+            try:
+                from datetime import datetime, timezone
+                when = datetime.strptime(ts[:23], "%Y-%m-%d %H:%M:%S.%f").replace(
+                    tzinfo=timezone.utc).timestamp() if ts else window.start
+            except ValueError:
+                when = window.start
+            out.append(LogEvent(ts=when, message=str(fields.get("@message") or json.dumps(
+                {k: v for k, v in fields.items() if k != "@ptr"})),
+                service=str(fields.get("@logStream") or fields.get("@log") or ""),
+                fields={k: str(v) for k, v in fields.items() if k and k != "@ptr"}))
+        return out
+
+    # -- metrics -----------------------------------------------------------------------------
+    def query_metrics(self, q: str, window: TimeWindow) -> list[MetricSeries]:
+        queries = parse_metric_query(q, self.period)
+        if not queries:
+            return []
+        from datetime import datetime, timezone
+        kwargs: dict[str, Any] = {
+            "MetricDataQueries": queries,
+            "StartTime": datetime.fromtimestamp(window.start, tz=timezone.utc),
+            "EndTime": datetime.fromtimestamp(window.end, tz=timezone.utc),
+            "ScanBy": "TimestampAscending"}
+        client = self._client("cloudwatch")
+        series: dict[str, MetricSeries] = {}
+        for _ in range(_CW_MAX_PAGES):
+            resp = client.get_metric_data(**kwargs)
+            for result in resp.get("MetricDataResults", []):
+                key = str(result.get("Id"))
+                found = series.setdefault(key, MetricSeries(
+                    name=str(result.get("Label") or key), points=[],
+                    labels={"id": key, "status": str(result.get("StatusCode") or "")}))
+                found.points.extend(MetricPoint(ts=_cw_epoch(t), value=float(v)) for t, v in
+                                    zip(result.get("Timestamps", []), result.get("Values", [])))
+            token = resp.get("NextToken")
+            if not token:
+                break
+            kwargs["NextToken"] = token
+        for found in series.values():
+            found.points.sort(key=lambda p: p.ts)
+        return list(series.values())
+
+    # -- alarms ------------------------------------------------------------------------------
+    def list_alerts(self, window: TimeWindow) -> list[Alert]:
+        client = self._client("cloudwatch")
+        kwargs: dict[str, Any] = {"StateValue": "ALARM", "MaxRecords": 100}
+        out: list[Alert] = []
+        for _ in range(_CW_MAX_PAGES):
+            resp = client.describe_alarms(**kwargs)
+            for alarm in resp.get("MetricAlarms", []) + resp.get("CompositeAlarms", []):
+                dims = {d.get("Name"): d.get("Value") for d in alarm.get("Dimensions") or []}
+                out.append(Alert(
+                    id=str(alarm.get("AlarmArn") or alarm.get("AlarmName")),
+                    title=str(alarm.get("AlarmName") or "CloudWatch alarm"),
+                    service=str(dims.get("ServiceName") or dims.get("ApiName")
+                                or dims.get("FunctionName") or alarm.get("Namespace") or ""),
+                    ts=_cw_epoch(alarm.get("StateUpdatedTimestamp")) or window.end,
+                    severity="critical"))
+            token = resp.get("NextToken")
+            if not token:
+                break
+            kwargs["NextToken"] = token
+        return out
+
     def query_traces(self, q, window, *, limit=2000):
-        return []
-    def list_alerts(self, window):
         return []
     def comment_back(self, ref, body):
         return False
@@ -409,10 +626,13 @@ CONNECTOR_CATALOG: list[dict[str, Any]] = [
     {
         "kind": "cloudwatch",
         "title": "AWS CloudWatch",
-        "capabilities": ["logs"],
+        "capabilities": ["metrics", "logs", "alerts"],
         "auth": "aws_credential_chain",
-        "required_config": ["log_group"],
-        "optional_config": ["region"],
+        "read_only": True,
+        "iam_actions": list(CLOUDWATCH_IAM_ACTIONS),
+        "required_config": [],
+        "optional_config": ["log_group", "region", "access_key_env", "secret_key_env",
+                            "session_token_env", "period_seconds"],
     },
     {
         "kind": "pagerduty",
@@ -514,6 +734,24 @@ def ensure_connector_ready(spec: dict[str, Any]) -> None:
                 f"connector 'pagerduty' requires credentials in env: {token_env}",
                 status_code=422,
             )
+
+    if kind == "cloudwatch":
+        named = [(k, (spec.get(k) or "").strip()) for k in
+                 ("access_key_env", "secret_key_env", "session_token_env")]
+        declared = {k: v for k, v in named if v}
+        refused = [aws_key_env_refused(v) for v in declared.values() if aws_key_env_refused(v)]
+        if refused:
+            raise ConnectorNotReady(refused[0], status_code=422)
+        if bool(declared.get("access_key_env")) != bool(declared.get("secret_key_env")):
+            raise ConnectorNotReady(
+                "connector 'cloudwatch' needs both access_key_env and secret_key_env, or "
+                "neither (then the AWS credential chain: an instance or task role)",
+                status_code=422)
+        missing = [v for v in declared.values() if not os.environ.get(v, "").strip()]
+        if missing:
+            raise ConnectorNotReady(
+                f"connector 'cloudwatch' requires credentials in env: {', '.join(missing)}",
+                status_code=422)
 
     if kind == "grafana":
         if not (spec.get("prometheus_uid") or spec.get("loki_uid")):

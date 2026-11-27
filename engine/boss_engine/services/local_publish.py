@@ -74,8 +74,23 @@ class CreateRepoResult:
                 "exists": self.exists, "url": self.url, "words": self.words, "reason": self.reason}
 
 
+def _send_base(token: Any, api_base_url: str) -> tuple[str, str]:
+    """(REST base, refusal words). The CREDENTIAL'S OWN host when it carries one, else the base
+    asked for — and the send-point check (BOSSAPP-1286): a token never goes to another host."""
+    from ..identity import github_urls
+
+    base = (github_urls.credential_api_base(token) if isinstance(token, github_urls.GitHubCredential)
+            else github_urls.api_base(api_base_url)).rstrip("/")
+    try:
+        github_urls.check_send(token, base, where="local_publish")
+    except github_urls.CrossHostCredential:
+        return base, ("The credential BOSS holds for this is for another GitHub host; connect a "
+                      "credential for this host in Setup › GitHub access.")
+    return base, ""
+
+
 def create_repository(*, owner: str, name: str, private: bool = True, token: str,
-                      api_base_url: str = "https://api.github.com", token_kind: str = "app",
+                      api_base_url: str = "", token_kind: str = "app",
                       description: str = "", client: Optional[httpx.Client] = None) -> CreateRepoResult:
     """Make `owner/name` on GitHub, empty (no README: the history comes from BOSS).
 
@@ -88,7 +103,9 @@ def create_repository(*, owner: str, name: str, private: bool = True, token: str
         return CreateRepoResult(False, full, reason="not_allowed",
                                 words="A GitHub owner is letters, digits and hyphens; a repository "
                                       "name is letters, digits, '.', '_' and '-'.")
-    base = api_base_url.rstrip("/")
+    base, refused = _send_base(token, api_base_url)
+    if refused:
+        return CreateRepoResult(False, full, reason="credential_host_mismatch", words=refused)
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
                "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "boss-publish"}
     own = client or httpx.Client(timeout=20)
@@ -157,7 +174,7 @@ NO_CREDENTIAL_WORDS = ("BOSS has no GitHub credential that can create repositori
 
 
 def check_repository(*, owner: str, name: str, token: Optional[str], purpose: str = "create",
-                     api_base_url: str = "https://api.github.com", token_kind: str = "app",
+                     api_base_url: str = "", token_kind: str = "app",
                      client: Optional[httpx.Client] = None, credential_words: str = "",
                      via: str = "") -> dict[str, Any]:
     """BEFORE A PERSON PRESSES CREATE (BOSSAPP-917/921's sheets): can BOSS make `owner/name` (or,
@@ -178,7 +195,9 @@ def check_repository(*, owner: str, name: str, token: Optional[str], purpose: st
     if not token:
         return {**out, "reason": "no_github_credential",
                 "words": credential_words or NO_CREDENTIAL_WORDS}
-    base = api_base_url.rstrip("/")
+    base, refused = _send_base(token, api_base_url)
+    if refused:
+        return {**out, "reason": "credential_host_mismatch", "words": refused}
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
                "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "boss-publish"}
     own = client or httpx.Client(timeout=15)
@@ -305,9 +324,10 @@ def default_reach(c: Any, settings: Any, project_id: str, *, connection_id: Opti
     installation on `owner` when it holds administration, the environment App, a project
     connection's token for its own account, the install token — in that order, with the reason."""
     from .github_adapter import GitHubAdapter
-    from .github_connections import github_token_for
+    from .github_connections import api_base_for_repository, github_access_for
     from .repo_creation import repo_creation_credential
     from .repo_host import git_access
+    from ..identity import github_urls
 
     reached: dict[tuple[str, str], Any] = {}
 
@@ -325,15 +345,22 @@ def default_reach(c: Any, settings: Any, project_id: str, *, connection_id: Opti
                 reached[key] = None
         return reached[key]
 
-    def token(o: str, r: str) -> str:
-        """The credential that REACHES o/r to push and open pull requests (repo_access.resolve),
-        else the project's bound one: never the creating credential borrowed for a read or a
-        push (BOSSAPP-1338)."""
+    def access(o: str, r: str) -> tuple[str, str]:
+        """(token, REST base) that REACH o/r to push and open pull requests
+        (repo_access.resolve), else the project's bound pair: never the creating credential
+        borrowed for a read or a push (BOSSAPP-1338), and never a token on another host's base
+        (BOSSAPP-1286: the resolver chooses both together)."""
         got = resolved(o, r)
-        return (getattr(got, "token", None) or "") or github_token_for(c, settings, project_id, o, r) or ""
+        if getattr(got, "token", None):
+            return got.token, got.api_base or api_base_for_repository(c, project_id, o, r)
+        return github_access_for(c, settings, project_id, o, r)
+
+    def token(o: str, r: str) -> str:
+        return access(o, r)[0] or ""
 
     def adapter(o: str, r: str) -> Any:
-        return GitHubAdapter(settings, owner=o, repo=r, token=token(o, r) or None)
+        tok, base = access(o, r)
+        return GitHubAdapter(settings, owner=o, repo=r, token=tok or None, api_base_url=base)
 
     create_token, kind, label, words, reason = None, "app", "", "", ""
     if owner:
@@ -358,10 +385,11 @@ def default_reach(c: Any, settings: Any, project_id: str, *, connection_id: Opti
         return (getattr(got, "words", "") or f"BOSS holds no GitHub credential that reaches {o}/{r}.")
 
     return GitHubReach(adapter_for=adapter, reach_words_for=reach_words,
-                       access_for=lambda o, r: git_access("github", o, r, token(o, r)),
+                       access_for=lambda o, r: git_access(
+                           "github", o, r, access(o, r)[0],
+                           web_base=github_urls.web_base_for(access(o, r)[1])),
                        create_token=create_token, create_token_kind=kind,
-                       api_base_url=str(getattr(settings, "github_api_base_url", "")
-                                        or "https://api.github.com"),
+                       api_base_url=api_base_for_repository(c, project_id, owner, repo),
                        connection_id=conn_id, create_label=label, create_words=words, create_reason=reason)
 
 

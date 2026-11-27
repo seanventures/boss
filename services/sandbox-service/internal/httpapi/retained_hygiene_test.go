@@ -73,7 +73,10 @@ func TestFailedTaskIsRetainedScrubbedAndOwnerOnly(t *testing.T) {
 	body, _ := json.Marshal(map[string]any{
 		"contract_version": "1.0", "task_id": "crun_leaky", "tenant_id": "default",
 		"engine": "claude_code", "engine_env": map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": leakedToken},
-		"repo": map[string]string{"owner": "o", "name": "r"}, "git_token": leakedToken,
+		// The token comes WITH the host it belongs to (BOSSAPP-1286); without it the
+		// legacy lane refuses the submit.
+		"repo":      map[string]string{"owner": "o", "name": "r", "github_web": "https://github.com"},
+		"git_token": leakedToken,
 	})
 	res := doJSON(t, srv, http.MethodPost, "/v1/sandbox/tasks", body, "tok")
 	if res.StatusCode != http.StatusAccepted {

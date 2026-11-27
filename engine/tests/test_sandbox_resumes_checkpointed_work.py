@@ -42,7 +42,7 @@ class _Recorder(EphemeralSandbox):
 
 
 def _provision(sandbox, *, base="main", work="boss/code/crun_1"):
-    sandbox.provision("owner", "repo", base_branch=base, work_branch=work, token="tok")
+    sandbox.provision("owner", "repo", base_branch=base, work_branch=work, token="tok", web_base="https://github.com")
     return [" ".join(c) for c in sandbox.commands]
 
 

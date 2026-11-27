@@ -358,7 +358,7 @@ class TestSSHSandbox:
         transport = FakeTransport()
         sandbox = ssh_sandbox(transport)
         path = sandbox.provision("acme", "app", base_branch="main",
-                                 token="ghs_SECRETTOKEN")
+                                 token="ghs_SECRETTOKEN", web_base="https://github.com")
         assert str(path) == f"{DEFAULT_WORKROOT}/crun_t824"
         assert sandbox.base_sha == "abc123def456"
         assert sandbox.diff_base_sha == "abc123def456"
@@ -379,7 +379,7 @@ class TestSSHSandbox:
         sandbox = ssh_sandbox(transport)
         path = sandbox.provision(
             "acme", "app", base_branch="main", token="t",
-            warm_dir="/var/lib/boss/lineage-sandboxes/lin_1", reuse_warm=True)
+            warm_dir="/var/lib/boss/lineage-sandboxes/lin_1", reuse_warm=True, web_base="https://github.com")
         # fresh remote clone in the driver's own workroot — the local warm dir
         # is not touched, referenced, or claimed
         assert str(path) == f"{DEFAULT_WORKROOT}/crun_t824"
@@ -401,12 +401,12 @@ class TestSSHSandbox:
 
         sandbox = ssh_sandbox(FakeTransport(), sandbox_command_runtime="docker")
         with pytest.raises(SetupError, match="BOSS_SANDBOX_COMMAND_RUNTIME=docker"):
-            sandbox.provision("acme", "app", token="t")
+            sandbox.provision("acme", "app", token="t", web_base="https://github.com")
 
     def test_run_executes_in_the_workdir_and_refuses_shell_syntax(self):
         transport = FakeTransport()
         sandbox = ssh_sandbox(transport)
-        sandbox.provision("acme", "app", token="t")
+        sandbox.provision("acme", "app", token="t", web_base="https://github.com")
         result = sandbox.run("pytest -q")
         assert isinstance(result, SandboxCommandResult)
         assert result.ok and "1 passed" in result.stdout
@@ -418,7 +418,7 @@ class TestSSHSandbox:
     def test_run_drops_credential_shaped_env(self):
         transport = FakeTransport()
         sandbox = ssh_sandbox(transport)
-        sandbox.provision("acme", "app", token="t")
+        sandbox.provision("acme", "app", token="t", web_base="https://github.com")
         sandbox.run("pytest -q", env={"API_TOKEN": "nope", "PORT": "8080"})
         script = transport.calls[-1]["stdin_text"]
         assert "PORT=8080" in script
@@ -427,7 +427,7 @@ class TestSSHSandbox:
     def test_diff_summary_and_diff_come_back_over_the_tar_idiom(self):
         transport = FakeTransport()
         sandbox = ssh_sandbox(transport)
-        sandbox.provision("acme", "app", token="t")
+        sandbox.provision("acme", "app", token="t", web_base="https://github.com")
         summary = sandbox.diff_summary()
         assert summary.files_changed == 1
         assert summary.additions == 3 and summary.deletions == 1
@@ -440,7 +440,7 @@ class TestSSHSandbox:
         transport = FakeTransport()
         transport.diff_files = {"src/app.py": b"ok\n", "logo.png": b"\x89PNG\x00\xff"}
         sandbox = ssh_sandbox(transport)
-        sandbox.provision("acme", "app", token="t")
+        sandbox.provision("acme", "app", token="t", web_base="https://github.com")
         transport_numstat = "2\t0\tsrc/app.py\n-\t-\tlogo.png\n"
         original = transport.stack_exec
 
@@ -458,7 +458,7 @@ class TestSSHSandbox:
     def test_sync_in_pipes_a_tarball_into_tar_xzf(self, tmp_path):
         transport = FakeTransport()
         sandbox = ssh_sandbox(transport)
-        sandbox.provision("acme", "app", token="t")
+        sandbox.provision("acme", "app", token="t", web_base="https://github.com")
         (tmp_path / "data.txt").write_text("payload")
         sandbox.sync_in(tmp_path, "fixtures")
         call = transport.calls[-1]
@@ -468,7 +468,7 @@ class TestSSHSandbox:
     def test_teardown_removes_the_workdir_and_only_the_workdir(self):
         transport = FakeTransport()
         sandbox = ssh_sandbox(transport)
-        sandbox.provision("acme", "app", token="t")
+        sandbox.provision("acme", "app", token="t", web_base="https://github.com")
         sandbox.teardown()
         assert sandbox.path is None
         last = transport.calls[-1]["stdin_text"]
