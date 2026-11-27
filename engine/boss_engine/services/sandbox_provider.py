@@ -320,6 +320,8 @@ class MicroVMProvider:
                                        ensure_no_raw_credential, legacy_lane_enabled)
         task_id = spec.get("task_id") or make_id("crun")
         if legacy_lane_enabled():
+            if spec.get("token"):
+                self._require_legacy_github_web()
             body = build_submit_request(spec, tenant_id, task_id=task_id, legacy=True)
             # Refused here, by name, rather than by the sandbox-service after a round trip — and
             # never sent on with a credential the guest would drop (P8-pre S5).
@@ -332,6 +334,28 @@ class MicroVMProvider:
                                     mcp=spec.get("mcp"))
         ensure_no_raw_credential(body, strict=True)
         return body
+
+    def _require_legacy_github_web(self) -> None:
+        """The legacy lane carries a git token into the guest, which needs repo.github_web to know
+        where that token may go. Hand it one only when the host says its legacy lane forwards
+        github_web (BOSSAPP-1286); otherwise refuse, plainly, before anything is sent."""
+        from .sandbox_contract import host_forwards_github_web
+
+        health: object = None
+        try:
+            import httpx
+
+            with httpx.Client(timeout=10.0) as client:
+                response = client.get(f"{self._require_base()}/v1/sandbox/health",
+                                      headers=self._headers())
+                health = response.json() if response.status_code == 200 else None
+        except Exception:  # noqa: BLE001 — unknown host: refused below
+            health = None
+        if not host_forwards_github_web(health):
+            raise RuntimeError(
+                "This sandbox host runs an older legacy lane that does not pass the GitHub host "
+                "to the guest, so BOSS will not send it a git token. Upgrade the sandbox host, or "
+                "turn off the legacy lane (unset BOSS_SANDBOX_CONTRACT_LEGACY).")
 
     def _model_handle(self, spec: dict, tenant_id: Optional[str], task_id: str) -> dict:
         """A `boss_mdl_` handle for the task's run, when a database is reachable: bound to the

@@ -194,12 +194,20 @@ class ConnectionSpend(TypedDecisionSpend):
                 )
             # THE ONE CHECKED PATH (BOSSAPP-1286): an env reference names the HOST's credential
             # and needs integration:manage at the org, like every other one.
+            from .env_refs import HostCredentialAuthorityRequired
             from .secret_refs import SecretRefService
 
-            ref_id = SecretRefService().create_secret_ref(
-                c, project_id=self.project_id, ref_kind="env", ref_key=env_name,
-                provider=self.candidate["provider"], status="active", metadata={},
-                actor=self.actor, secret_kind="api_token")["id"]
+            try:
+                ref_id = SecretRefService().create_secret_ref(
+                    c, project_id=self.project_id, ref_kind="env", ref_key=env_name,
+                    provider=self.candidate["provider"], status="active", metadata={},
+                    actor=self.actor, secret_kind="api_token")["id"]
+            except HostCredentialAuthorityRequired:
+                raise TypedDecisionSpendError(
+                    f"Using the host variable {env_name} needs the Connect integrations "
+                    "permission for the whole organisation (integration:manage at the org). Ask "
+                    "an Owner or org Admin to approve this connection, or paste a key for this "
+                    "project instead.") from None
             self.gateway.bind_credential_secret_ref(
                 c, self.project_id, source_id, ref_id, actor=self.actor
             )

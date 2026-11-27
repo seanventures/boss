@@ -39,6 +39,21 @@ log = logging.getLogger(__name__)
 
 CONTRACT_VERSION = "1.1"
 LEGACY_CONTRACT_VERSION = "1.0"
+#: The legacy-lane revision a sandbox host must report on /health (``legacy_revision``) before
+#: BOSS hands that lane a git token: 1.0.1 forwards ``repo.github_web`` to the guest, which
+#: refuses a token without it. An older host gets no token (BOSSAPP-1286).
+LEGACY_GITHUB_WEB_REVISION = (1, 0, 1)
+
+
+def host_forwards_github_web(health: Any) -> bool:
+    """True only when a sandbox host's /health reports a legacy revision that forwards
+    github_web. Missing, malformed or older: False."""
+    raw = health.get("legacy_revision") if isinstance(health, dict) else None
+    try:
+        got = tuple(int(p) for p in str(raw or "").split("."))
+    except ValueError:
+        return False
+    return bool(raw) and got >= LEGACY_GITHUB_WEB_REVISION
 LEGACY_ENV = "BOSS_SANDBOX_CONTRACT_LEGACY"
 
 # --- job status (the guest's poll response `status`) -------------------------

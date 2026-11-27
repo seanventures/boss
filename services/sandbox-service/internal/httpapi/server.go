@@ -124,6 +124,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"claims_frozen":     frozen,
 		"reason":            reason,
 		"contract_version":  contract.Version,
+		"legacy_revision":   contract.LegacyRevision,
 		"capacity":          capacity,
 		"available":         available,
 		"running":           s.Store.RunningCount(),

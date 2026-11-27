@@ -26,6 +26,11 @@ const Version = "1.1"
 // LegacyVersion is the frozen v1.0 lane, which carried credentials into the guest.
 const LegacyVersion = "1.0"
 
+// LegacyRevision is what this host's v1.0 lane understands, reported on /health. Revision
+// "1.0.1" forwards repo.github_web to the guest (BOSSAPP-1286); an older host reports none, and
+// BOSS then hands its legacy lane no git token at all.
+const LegacyRevision = "1.0.1"
+
 const (
 	StatusQueued    = "queued"
 	StatusRunning   = "running"
