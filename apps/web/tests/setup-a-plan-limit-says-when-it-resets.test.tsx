@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { click, fakeApi, flush, mountBoard, q, type Mounted } from "./_helpers/setup-board";
 import { board } from "./_helpers/setup-fixtures";
 
-import { needsSentence } from "../app/setup/model-status";
+import { limitPill, needsSentence } from "../app/setup/model-status";
 import type { Pill } from "../lib/setup-types";
 
 const limited = (over: Partial<Pill> = {}): Pill => ({
@@ -25,6 +25,16 @@ describe("needsSentence", () => {
     expect(said).toMatch(/^Limit resets /);
     expect(said).toMatch(/7:00/);
     expect(said).not.toMatch(/Not usable|Test again|failed/i);
+  });
+
+  it("draws the pill's time with the sentence's formatter, so the two always agree", () => {
+    const pill = limitPill(limited());
+    const clock = pill.label.split(" · ")[1];
+    expect(clock).toMatch(/\d{1,2}:00/);
+    expect(needsSentence(pill).endsWith(`${clock}.`)).toBe(true);
+    expect(pill.tip).not.toMatch(/19:00/);
+    // Before hydration both are the server's paint (UTC), after it both are the viewer's.
+    expect(limitPill({ ...limited(), state: "working" }).label).toBe("Limited · 19:00");
   });
 
   it("says the limit plainly when the provider named no reset", () => {
@@ -56,6 +66,11 @@ describe("the Models row on a plan limit", () => {
     const row = document.querySelector('[data-testid="setup-cap-source"][data-source="anthropic_claude_code"]') as HTMLElement;
     const said = q(row, "su-model-said")!;
     expect(said.textContent).toMatch(/^Limit resets /);
+    // ONE CLOCK: the pill's time is the sentence's time (never UTC beside local).
+    const pillTime = q(row, "su-model-pill")!.textContent!.split(" · ")[1];
+    expect(pillTime).toBeTruthy();
+    expect(said.textContent!.endsWith(`${pillTime}.`)).toBe(true);
+    expect(q(row, "su-model-test")!.querySelector("svg")).not.toBeNull();
     expect(said.getAttribute("data-tip")).toContain("You've hit your weekly limit");
     expect(q(row, "su-model-sign-in")).toBeNull();
     expect(q(row, "su-model-test")).not.toBeNull();
