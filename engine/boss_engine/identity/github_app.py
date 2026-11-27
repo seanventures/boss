@@ -95,6 +95,9 @@ def api_base() -> str:
 
 
 def _call(method: str, path: str, *, token: str, scheme: str = "Bearer", body: Any = None) -> Response:
+    from ..db import assert_not_in_written_tx
+
+    assert_not_in_written_tx(f"github_app.{method}")
     headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28",
                "User-Agent": "boss-identity"}
     if token:

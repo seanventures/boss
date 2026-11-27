@@ -3690,8 +3690,8 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         from ..services import setup_actions
 
         pid = args.get("project_id") or project_id
+        wanted = str(args.get("repository") or "").strip()
         with ctx.begin() as c:
-            wanted = str(args.get("repository") or "").strip()
             binding = c.execute(
                 _text("SELECT id, full_name FROM github_repository_bindings "
                       " WHERE project_id = :p AND status = 'active' "
@@ -3699,28 +3699,30 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                       " ORDER BY (role = 'primary') DESC LIMIT 1"),
                 {"p": pid, "w": wanted}).mappings().first()
             target = binding["id"] if binding else None
+            binding_full = str(binding["full_name"]) if binding else ""
             if target is None:
                 from ..services.setup_view import install_repository
 
                 if all(install_repository(ctx.settings)):
                     target = "install"
-            if target is None:
-                return {"ok": False,
-                        "error": (f"no repository connected on {pid}"
-                                  + (f" for {wanted}" if wanted else "")
-                                  + " — connect one in Setup first."),
-                        "href": "/?area=setup&focus=repository"}
-            try:
-                found = setup_actions.check_repository(c, ctx.settings, pid, target, actor=actor)
-            except Exception as exc:  # noqa: BLE001 — the reason is the answer
-                return {"ok": False, "error": f"{type(exc).__name__}: {exc}"[:400]}
+        if target is None:
+            return {"ok": False,
+                    "error": (f"no repository connected on {pid}"
+                              + (f" for {wanted}" if wanted else "")
+                              + " — connect one in Setup first."),
+                    "href": "/?area=setup&focus=repository"}
+        try:
+            found = setup_actions.check_repository(None, ctx.settings, pid, target, actor=actor,
+                                                   db_engine=ctx.engine)
+        except Exception as exc:  # noqa: BLE001 — the reason is the answer
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"[:400]}
         from ..services.setup_pills import pill
 
-        shown = pill("repository", found["state"], repo=(binding or {}).get("full_name") or "")
+        shown = pill("repository", found["state"], repo=binding_full)
         return {"ok": found["state"] == "working", "state": shown["label"],
                 "fix": shown["tip"], "checks": {k: v.get("ok") for k, v in
                                                 (found.get("checks") or {}).items()},
-                "repository": (binding or {}).get("full_name"),
+                "repository": binding_full or None,
                 "href": "/?area=setup&focus=repository"}
 
     @reg.tool(
@@ -5661,10 +5663,11 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         from ..multirepo.common import MultiRepoError
 
         try:
+            refreshed = None
+            if args.get("refresh") in (True, "true", "True"):
+                refreshed = registry.refresh(None, ctx.settings, project_id, actor=actor,
+                                             db_engine=ctx.engine)
             with ctx.begin() as c:
-                refreshed = None
-                if args.get("refresh") in (True, "true", "True"):
-                    refreshed = registry.refresh(c, ctx.settings, project_id, actor=actor)
                 out = registry.list_registry(c, project_id)
         except MultiRepoError as exc:
             return {"ok": False, **exc.body()}

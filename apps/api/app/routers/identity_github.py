@@ -188,22 +188,46 @@ def _access_updated(db: Any, installation_id: str) -> RedirectResponse:
     signed-in session is the proof of who; the App's API says whether the installation is ITS
     own; then the stored verification is refreshed and the repositories the App reaches now are
     named, so Setup says "Access updated" with them instead of a failure."""
-    org_id = default_org_id(db)
-    github_setup.confirm_installation(installation_id=installation_id[:40], org_id=org_id, db=db)
-    try:
-        with db.begin_nested():
-            github_setup.verify(db, org_id)
-    except Exception:  # noqa: BLE001 — the access row asks again on its own; the update stands
-        pass
-    reachable = _reachable(db)
-    confirmed = {"github": "app_updated"}
-    lost = _lost_in_use(db, reachable)
-    if lost:
-        confirmed["lost"] = ",".join(lost)
-    if reachable:
-        confirmed["repos"] = ",".join(reachable[:_NAMED_REPOS])
-        confirmed["repo_count"] = str(len(reachable))
-    return _back(db, **confirmed)
+    if db is not None:
+        org_id = default_org_id(db)
+        eng = getattr(db, "engine", None)
+        github_setup.confirm_installation(installation_id=installation_id[:40], org_id=org_id, db=db)
+    else:
+        with begin() as db_tx:
+            org_id = default_org_id(db_tx)
+            eng = getattr(db_tx, "engine", None)
+            github_setup.confirm_installation(installation_id=installation_id[:40], org_id=org_id, db=db_tx)
+    if eng is not None and db is None:
+        try:
+            github_setup.verify(None, org_id, db_engine=eng)
+        except Exception:  # noqa: BLE001 — the access row asks again on its own; the update stands
+            pass
+    elif db is not None:
+        try:
+            with db.begin_nested():
+                github_setup.verify(db, org_id)
+        except Exception:  # noqa: BLE001 — the access row asks again on its own; the update stands
+            pass
+    if db is not None:
+        reachable = _reachable(db)
+        confirmed = {"github": "app_updated"}
+        lost = _lost_in_use(db, reachable)
+        if lost:
+            confirmed["lost"] = ",".join(lost)
+        if reachable:
+            confirmed["repos"] = ",".join(reachable[:_NAMED_REPOS])
+            confirmed["repo_count"] = str(len(reachable))
+        return _back(db, **confirmed)
+    with begin() as db_tx:
+        reachable = _reachable(db_tx)
+        confirmed = {"github": "app_updated"}
+        lost = _lost_in_use(db_tx, reachable)
+        if lost:
+            confirmed["lost"] = ",".join(lost)
+        if reachable:
+            confirmed["repos"] = ",".join(reachable[:_NAMED_REPOS])
+            confirmed["repo_count"] = str(len(reachable))
+        return _back(db_tx, **confirmed)
 
 
 def build_identity_github_router() -> APIRouter:
@@ -277,7 +301,7 @@ def build_identity_github_router() -> APIRouter:
             with begin() as db:
                 if _console_session(request, db) is None:
                     return _unauthenticated()
-                return _access_updated(db, installation_id)
+            return _access_updated(None, installation_id)
         except AuthnError as exc:
             return refusal(exc)
         except (github_setup.GitHubSetupError, github_app.GitHubRefused) as exc:
@@ -302,7 +326,9 @@ def build_identity_github_router() -> APIRouter:
         try:
             with begin() as db:
                 ctx = current_context(request, db)
-                return github_setup.verify(db, ctx.principal.org_id)
+                org_id = ctx.principal.org_id
+                eng = getattr(db, "engine", None)
+            return github_setup.verify(None, org_id, db_engine=eng)
         except Exception as exc:  # noqa: BLE001
             return _err(exc)
 

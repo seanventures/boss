@@ -346,3 +346,141 @@ def test_revision_and_discussion_replies_never_dispatch(client, engine, decides)
             text("SELECT count(*) FROM tasks WHERE parent_task_id = :parent"),
             {"parent": parent_id},
         ).scalar_one() == 0
+
+
+def test_thread_messages_preserves_staged_offers_across_trailing_status_notes(client, engine):
+    """BOSSAPP-1237: trailing non-superseding status/consent/error assistant messages must not
+    drop staged proposed_actions on GET /v1/agent/threads/{id}/messages until acted upon or
+    superseded."""
+    from boss_engine.services.agent_service import AgentService
+
+    project_id = get_settings().default_project_id
+    svc = AgentService(get_settings())
+    offer = {
+        "id": "pa_revise_1",
+        "tool": "decide",
+        "label": "Revise decision",
+        "args": {"decision_id": "dec_1", "action": "revise", "note": "Handle weekends."},
+    }
+    with engine.begin() as connection:
+        thread = svc.start_or_load_thread(
+            connection, project_id=project_id, actor="executive_console",
+        )
+        thread_id = thread["id"]
+        svc.append_message(
+            connection, thread_id=thread_id, role="user",
+            content="Send it back to handle weekends.",
+        )
+        svc.append_message(
+            connection, thread_id=thread_id, role="assistant",
+            content="I can send it back with your note.",
+            proposed_actions=[offer],
+        )
+        # Simulate a trailing consent reminder / failed-turn error note with empty proposed_actions.
+        svc.append_message(
+            connection, thread_id=thread_id, role="assistant",
+            content="Not run: “Revise decision” needs your consent first.",
+        )
+
+    restored = client.get(
+        f"/v1/agent/threads/{thread_id}/messages",
+        params={"project_id": project_id, "actor": "executive_console"},
+    )
+    assert restored.status_code == 200, restored.text
+    assert restored.json()["proposed_actions"] == [offer]
+
+    # Once acted upon via record_action_outcome, the offer is spent and cleared.
+    with engine.begin() as connection:
+        svc.record_action_outcome(
+            connection, thread_id=thread_id, action_id="pa_revise_1",
+            tool="decide", args=offer["args"], label="Revise decision",
+            ok=True, result={"ok": True}, error="",
+        )
+    after_press = client.get(
+        f"/v1/agent/threads/{thread_id}/messages",
+        params={"project_id": project_id, "actor": "executive_console"},
+    )
+    assert after_press.status_code == 200, after_press.text
+    assert after_press.json()["proposed_actions"] == []
+
+    # And if a new offer is superseded by a New work proposal card, it clears too.
+    with engine.begin() as connection:
+        svc.append_message(
+            connection, thread_id=thread_id, role="assistant",
+            content="Offered again.",
+            proposed_actions=[{**offer, "id": "pa_revise_2"}],
+        )
+        new_msg = svc.append_message(
+            connection, thread_id=thread_id, role="assistant",
+            content="Started new work instead.",
+        )
+        connection.execute(
+            text("UPDATE agent_messages SET proposal = CAST(:p AS JSONB) WHERE id = :id"),
+            {"p": '{"kind":"new_work","title":"New work"}', "id": new_msg["id"]},
+        )
+    after_supersede = client.get(
+        f"/v1/agent/threads/{thread_id}/messages",
+        params={"project_id": project_id, "actor": "executive_console"},
+    )
+    assert after_supersede.status_code == 200, after_supersede.text
+    assert after_supersede.json()["proposed_actions"] == []
+
+
+def test_thread_messages_stops_offer_scan_at_new_user_turn(client, engine):
+    """BOSSAPP-1237: an unclicked offer from Turn 1 must not resurrect after Turn 2's
+    user prompt receives a plain-text assistant reply."""
+    from boss_engine.services.agent_service import AgentService
+
+    project_id = get_settings().default_project_id
+    svc = AgentService(get_settings())
+    offer = {
+        "id": "pa_turn1_1",
+        "tool": "decide",
+        "label": "Approve plan",
+        "args": {"decision_id": "dec_turn1", "action": "approve"},
+    }
+    with engine.begin() as connection:
+        thread = svc.start_or_load_thread(
+            connection, project_id=project_id, actor="executive_console",
+        )
+        thread_id = thread["id"]
+        svc.append_message(
+            connection, thread_id=thread_id, role="user",
+            content="Please revise decision dec_turn1.",
+        )
+        svc.append_message(
+            connection, thread_id=thread_id, role="assistant",
+            content="I staged an offer for dec_turn1.",
+            proposed_actions=[offer],
+        )
+        # Trailing assistant consent/status note in Turn 1 still keeps the offer alive.
+        svc.append_message(
+            connection, thread_id=thread_id, role="assistant",
+            content="Needs your consent first.",
+        )
+
+    same_turn = client.get(
+        f"/v1/agent/threads/{thread_id}/messages",
+        params={"project_id": project_id, "actor": "executive_console"},
+    )
+    assert same_turn.status_code == 200, same_turn.text
+    assert same_turn.json()["proposed_actions"] == [offer]
+
+    # Turn 2: operator moves on with a new user message and receives a plain-text reply.
+    with engine.begin() as connection:
+        svc.append_message(
+            connection, thread_id=thread_id, role="user",
+            content="Actually never mind, what is the build status?",
+        )
+        svc.append_message(
+            connection, thread_id=thread_id, role="assistant",
+            content="The build is green.",
+            proposed_actions=[],
+        )
+
+    next_turn = client.get(
+        f"/v1/agent/threads/{thread_id}/messages",
+        params={"project_id": project_id, "actor": "executive_console"},
+    )
+    assert next_turn.status_code == 200, next_turn.text
+    assert next_turn.json()["proposed_actions"] == []

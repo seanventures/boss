@@ -85,30 +85,33 @@ def _sweep_one(engine, settings: Any, project_id: str, source_id: str, provider:
     with engine.begin() as conn:
         if _connection_status(conn, project_id, source_id) != "connected":
             return
-        if provider == "codex":
-            try:
-                codex_login.refresh_if_due()
-            except Exception:  # noqa: BLE001 — a refresh failure must not stop the ping
-                _log.warning("codex_login refresh_if_due failed", exc_info=True)
-        binary = None
-        spec = None
+    if provider == "codex":
         try:
-            from .cli_harness import load_specs
+            codex_login.refresh_if_due()
+        except Exception:  # noqa: BLE001 — a refresh failure must not stop the ping
+            _log.warning("codex_login refresh_if_due failed", exc_info=True)
+    binary = None
+    spec = None
+    try:
+        from .cli_harness import load_specs
 
-            spec = load_specs(settings).get(provider)
-            if spec is not None:
-                binary = shutil.which(spec.binary)
-        except Exception:  # noqa: BLE001
-            spec, binary = None, None
-        ok, output = ping(binary, spec)
-        if ok:
-            # NOT PROOF OF A WORKING LOGIN. `codex debug models` answered from its cache while
-            # the login was revoked (boss-1, 2026-10-30: every real request 401 "invalidated
-            # oauth token", the badge said Working). Only a real question (`_reprove`) clears a
-            # login a real call refused.
+        spec = load_specs(settings).get(provider)
+        if spec is not None:
+            binary = shutil.which(spec.binary)
+    except Exception:  # noqa: BLE001
+        spec, binary = None, None
+    ok, output = ping(binary, spec)
+    if ok:
+        # NOT PROOF OF A WORKING LOGIN. `codex debug models` answered from its cache while
+        # the login was revoked (boss-1, 2026-10-30: every real request 401 "invalidated
+        # oauth token", the badge said Working). Only a real question (`_reprove`) clears a
+        # login a real call refused.
+        return
+    if not model_failures.is_login_rejected(output):
+        return  # a transient failure (CLI missing, network blip) — leave state untouched
+    with engine.begin() as conn:
+        if _connection_status(conn, project_id, source_id) != "connected":
             return
-        if not model_failures.is_login_rejected(output):
-            return  # a transient failure (CLI missing, network blip) — leave state untouched
         was_rejected = _credential_state(conn, project_id, source_id) == "rejected"
         model_failures.mark_login(conn, project_id, source_id, rejected=True)
         if not was_rejected:
@@ -144,9 +147,8 @@ def _reprove(engine, settings: Any, project_id: str, *, now: Optional[datetime] 
         if not proof_schedule.entry_due(model, now, settings):
             continue
         try:
-            with engine.begin() as conn:
-                setup_actions.check_model(conn, settings, project_id, str(model["source_id"]),
-                                          actor="system")
+            setup_actions.check_model(None, settings, project_id, str(model["source_id"]),
+                                      actor="system", db_engine=engine)
             asked += 1
         except Exception:  # noqa: BLE001 — one source must not stop the others
             _log.warning("keep-alive re-proof of %s failed", model.get("source_id"), exc_info=True)

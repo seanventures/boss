@@ -439,8 +439,7 @@ def _openrouter_catalogue(connection: Any, settings: Any, project_id: Optional[s
 
     def run() -> None:
         try:
-            with db_engine.begin() as c:
-                cat.refresh(c, settings, project_id)
+            cat.refresh(None, settings, project_id, db_engine=db_engine)
         except Exception:  # noqa: BLE001
             log.warning("OpenRouter catalogue refresh failed", exc_info=True)
         finally:
@@ -546,7 +545,7 @@ class GovernedModelDecider:
                             model=chosen.target.model),
                 connection, self._settings, self._project_id,
                 skill_id="model.route_classify", ref="router")
-            _, answer, usage = adapter.create_text_response(_prompt(context, questions))
+        _, answer, usage = adapter.create_text_response(_prompt(context, questions))
         return DecisionBatch(decisions=_parse(answer, questions), backend="model",
                              model=str(usage.get("model") or chosen.target.model or ""),
                              latency_ms=int((time.monotonic() - started) * 1000),

@@ -195,6 +195,11 @@ def _check_state(state: str, purpose: str, *, db: Any, consume: bool = True) -> 
                            {"k": f"gh-{purpose}", "n": str(data.get("n")), "e": int(data["e"])}).scalar()
         if not fresh:
             raise GitHubSetupError("state_replayed")
+    elif db is not None:
+        seen = db.execute(_sql("SELECT 1 FROM identity_dpop_replay WHERE jkt = :k AND jti = :n"),
+                          {"k": f"gh-{purpose}", "n": str(data.get("n"))}).first()
+        if seen:
+            raise GitHubSetupError("state_replayed")
     return str(data.get("p") or "")
 
 
@@ -271,7 +276,7 @@ def manifest(*, origin: str, person_id: str, owner: Optional[str] = None,
 def complete_manifest(*, code: str, state: str, org_id: str, db: Any) -> dict[str, Any]:
     """GitHub sent the person back with a one-time `code`: convert it into the App's id and keys,
     keep the keys in the vault, and send the person on to install it."""
-    person = _check_state(state, "app-manifest", db=db)
+    person = _check_state(state, "app-manifest", db=db, consume=False)
     if not code or len(code) > 100 or not all(c.isalnum() or c in "-_" for c in code):
         raise GitHubSetupError("bad_code")
     resp = github_app._call("POST", f"/app-manifests/{code}/conversions", token="", scheme="")  # noqa: SLF001
@@ -281,6 +286,7 @@ def complete_manifest(*, code: str, state: str, org_id: str, db: Any) -> dict[st
     pem, app_id = str(data.get("pem") or ""), str(data.get("id") or "")
     if not pem or not app_id:
         raise GitHubSetupError("manifest_conversion_failed", 502)
+    _check_state(state, "app-manifest", db=db, consume=True)
     db.execute(_sql("UPDATE identity_vault_items SET status = 'revoked' WHERE kind = 'app_private_key' "
                     "AND provider = 'github' AND status = 'active'"))
     key_item = vault.store(org_id=org_id, owner_principal_id=None, kind=vault.VaultItemKind.APP_PRIVATE_KEY,
@@ -313,8 +319,10 @@ def complete_manifest(*, code: str, state: str, org_id: str, db: Any) -> dict[st
 def complete_install(*, installation_id: str, state: Optional[str], org_id: str, db: Any) -> dict[str, Any]:
     """GitHub sent the person back after installing the App: keep the installation once the App's
     own JWT confirms it is one of ITS installations."""
-    person = _check_state(state or "", "app-install", db=db)      # no state, no change: the picker is the other way
-    return select_installation(installation_id=installation_id, org_id=org_id, db=db, by=person)
+    person = _check_state(state or "", "app-install", db=db, consume=False)      # no state, no change: the picker is the other way
+    out = select_installation(installation_id=installation_id, org_id=org_id, db=db, by=person)
+    _check_state(state or "", "app-install", db=db, consume=True)
+    return out
 
 
 #: A state GitHub carried back that no longer opens the install path: signed for another
@@ -873,38 +881,133 @@ def _registered_repos(db: Any) -> list[str]:
     return [str(r) for r in rows]
 
 
-def verify(db: Any, org_id: Optional[str] = None) -> dict[str, Any]:
+def _mint_installation_token_all_with_jwt(
+    jwt: str,
+    installation_id: str,
+    *,
+    permissions: Optional[Mapping[str, str]] = None,
+) -> str:
+    perms = dict(permissions if permissions is not None else CONTROL_PLANE_PERMISSIONS)
+    resp = github_app._call("POST", f"/app/installations/{installation_id}/access_tokens",  # noqa: SLF001
+                            token=jwt, body={"permissions": perms})
+    if resp.status not in (200, 201):
+        raise GitHubSetupError("mint_failed", 502, status=resp.status)
+    token = str((resp.json() or {})["token"])
+    from datetime import datetime, timedelta, timezone
+
+    _account_for(github_app.InstallationToken(token=token, expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+                                              repositories=(), permissions=perms,
+                                              kind=github_app.CONTROL_PLANE_KIND))
+    return github_urls.tag(token, github_app.api_base())   # the install App's host
+
+
+def _fetch_one_installation_repositories(jwt: str, installation_id: str) -> list[dict[str, Any]]:
+    token = _mint_installation_token_all_with_jwt(jwt, installation_id)
+    out: list[dict[str, Any]] = []
+    for page in range(1, 4):
+        resp = github_app._call("GET", f"/installation/repositories?per_page=100&page={page}", token=token)  # noqa: SLF001
+        if resp.status != 200:
+            raise GitHubSetupError("repositories_unavailable", 502, status=resp.status)
+        items = (resp.json() or {}).get("repositories") or []
+        for item in items:
+            if isinstance(item, dict) and "/" in str(item.get("full_name") or ""):
+                owner = item.get("owner") if isinstance(item.get("owner"), dict) else {}
+                out.append({"full_name": str(item["full_name"]), "private": bool(item.get("private")),
+                            "default_branch": item.get("default_branch"),
+                            "owner_type": str(owner.get("type") or "Organization")})
+        if len(items) < 100:
+            break
+    return out
+
+
+def _fetch_installation_repositories(jwt: str, inst_ids: list[str], default_inst: str) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for inst in inst_ids or [default_inst]:
+        if not inst:
+            raise GitHubSetupError("app_not_connected", 409)
+        try:
+            listed = _fetch_one_installation_repositories(jwt, inst)
+        except GitHubSetupError:
+            if not inst or inst == default_inst:
+                raise
+            continue
+        for item in listed:
+            if item["full_name"].lower() not in seen:
+                seen.add(item["full_name"].lower())
+                out.append(item)
+    return out
+
+
+def verify(db: Any, org_id: Optional[str] = None, *, db_engine: Any = None) -> dict[str, Any]:
     """Ask GitHub what the App's installation was ACTUALLY granted, instead of trusting what BOSS
     asked for: the installation's accepted permissions (GET /app/installations/{id}) against what
     the App needs now, and the repositories it was installed on against the ones registered here.
     Each gap names the GitHub page that closes it (github_urls). Kept on the row (`verified`) so
     the console shows it without asking GitHub on every page load; refreshed on return from
     GitHub, by Refresh and by Test all."""
+    from ..db import begin
     from ..services import ci_gate
 
-    org_id = org_id or (db.execute(_sql("SELECT org_id FROM identity_github_app ORDER BY created_at LIMIT 1"))
-                        .scalar() if db is not None else None)
-    cfg = app_config(db, org_id)
-    if cfg["source"] != "setup" or not cfg["app_id"]:
+    def _read_inputs(c: Any) -> dict[str, Any]:
+        oid = org_id or (c.execute(_sql("SELECT org_id FROM identity_github_app ORDER BY created_at LIMIT 1"))
+                         .scalar() if c is not None else None)
+        cfg = dict(app_config(c, oid))
+        if cfg["source"] != "setup" or not cfg["app_id"]:
+            return {"no_app": True}
+        jwt = github_app.app_jwt(c)
+        allow_workflows = ci_gate.any_repo_allows_workflows(c)
+        registered = _registered_repos(c)
+        inst_ids = installation_ids(c, oid)
+        return {
+            "no_app": False,
+            "org_id": oid,
+            "cfg": cfg,
+            "jwt": jwt,
+            "allow_workflows": allow_workflows,
+            "registered": registered,
+            "inst_ids": inst_ids,
+        }
+
+    # Short Tx 1: read App configuration, JWT, workflow setting, and registered repos.
+    if db is None:
+        if db_engine is None:
+            raise ValueError("verify requires either db or db_engine")
+        with begin(db_engine) as c:
+            inputs = _read_inputs(c)
+    else:
+        inputs = _read_inputs(db)
+
+    if inputs.get("no_app"):
         return {"state": "no_app"}
+
+    org_id = inputs["org_id"]
+    cfg = inputs["cfg"]
+    jwt = inputs["jwt"]
+    allow_workflows = inputs["allow_workflows"]
+    registered = inputs["registered"]
+    inst_ids = inputs["inst_ids"]
+
+    # No Tx: call GitHub App & installation endpoints with zero open writes.
     out: dict[str, Any] = {"state": "ok", "checked_at": int(time.time())}
-    jwt = github_app.app_jwt(db)
     me = github_app._call("GET", "/app", token=jwt)  # noqa: SLF001
     app_perms: dict[str, str] = {}
+    pending_owner: Optional[tuple[Any, str]] = None
     if me.status == 200:
         owner = (me.json() or {}).get("owner") or {}
         app_perms = dict((me.json() or {}).get("permissions") or {})
         kind = github_urls.account_type(owner.get("type"))
         if kind and (kind != cfg.get("owner_type") or owner.get("login") != cfg.get("owner_login")):
-            db.execute(_sql("UPDATE identity_github_app SET owner_login = :l, owner_type = :t WHERE org_id = :o"),
-                       {"l": owner.get("login"), "t": kind, "o": org_id})
+            pending_owner = (owner.get("login"), kind)
             cfg.update(owner_login=owner.get("login"), owner_type=kind)
     elif me.status in (401, 404):
         out["state"] = "app_gone"
     else:
         out["state"] = "unreachable"
+
     inst = cfg.get("installation_id")
     granted: dict[str, str] = {}
+    pending_account: Optional[tuple[Any, str]] = None
     if out["state"] == "ok" and not inst:
         out["state"] = "not_installed"
     elif out["state"] == "ok":
@@ -918,13 +1021,13 @@ def verify(db: Any, org_id: Optional[str] = None) -> dict[str, Any]:
             account = data.get("account") or {}
             kind = github_urls.account_type(account.get("type"))
             if kind and (kind != cfg.get("account_type") or account.get("login") != cfg.get("account_login")):
-                db.execute(_sql("UPDATE identity_github_app SET account_login = :l, account_type = :t "
-                                "WHERE org_id = :o"), {"l": account.get("login"), "t": kind, "o": org_id})
+                pending_account = (account.get("login"), kind)
                 cfg.update(account_login=account.get("login"), account_type=kind)
             granted = dict(data.get("permissions") or {})
             out["repository_selection"] = data.get("repository_selection")
+
     page = links(cfg)
-    needed = app_permissions(ci_gate.any_repo_allows_workflows(db))
+    needed = app_permissions(allow_workflows)
     perms = []
     for name, want in sorted(needed.items()):
         has = granted.get(name)
@@ -944,10 +1047,11 @@ def verify(db: Any, org_id: Optional[str] = None) -> dict[str, Any]:
     repos: list[dict[str, Any]] = []
     if out["state"] == "ok":
         try:
-            reachable = {r["full_name"].lower() for r in installation_repositories(db)}
+            listed = _fetch_installation_repositories(jwt, inst_ids, str(inst or ""))
+            reachable = {r["full_name"].lower() for r in listed}
         except (GitHubSetupError, github_app.GitHubRefused):
             reachable = None
-        for full in _registered_repos(db):
+        for full in registered:
             ok = None if reachable is None else full in reachable
             repos.append({"full_name": full, "installed": ok, "fix_url": None if ok else page["installation"]})
         out["installed_on"] = sorted(reachable) if reachable is not None else None
@@ -957,8 +1061,24 @@ def verify(db: Any, org_id: Optional[str] = None) -> dict[str, Any]:
     out["links"] = page
     out["ok"] = (out["state"] == "ok" and all(p["state"] == "accepted" for p in perms)
                  and all(r["installed"] is not False for r in repos))
-    db.execute(_sql("UPDATE identity_github_app SET verified = CAST(:v AS jsonb), verified_at = now() "
-                    "WHERE org_id = :o"), {"v": json.dumps(out), "o": org_id})
+
+    # Short Tx 2: persist deferred owner/account updates and verified payload.
+    def _write_results(c: Any) -> None:
+        if pending_owner is not None:
+            c.execute(_sql("UPDATE identity_github_app SET owner_login = :l, owner_type = :t WHERE org_id = :o"),
+                      {"l": pending_owner[0], "t": pending_owner[1], "o": org_id})
+        if pending_account is not None:
+            c.execute(_sql("UPDATE identity_github_app SET account_login = :l, account_type = :t "
+                           "WHERE org_id = :o"),
+                      {"l": pending_account[0], "t": pending_account[1], "o": org_id})
+        c.execute(_sql("UPDATE identity_github_app SET verified = CAST(:v AS jsonb), verified_at = now() "
+                       "WHERE org_id = :o"), {"v": json.dumps(out), "o": org_id})
+
+    if db is None:
+        with begin(db_engine) as c:
+            _write_results(c)
+    else:
+        _write_results(db)
     return out
 
 

@@ -2258,14 +2258,15 @@ def redeliver_code_task(engine, settings: Settings, run_id: str, *, automatic: b
         emit_event(c, project_id, "code_task.delivery_retried", "boss", "code_task_run", run_id,
                    {"files": len(files), "automatic": automatic,
                     "why": "the build passed its gates; only the push and the pull request run"})
-        proposal = sf.propose_pull_request(
-            c, project_id, run.get("task_id"), reservation_id=reservation.get("reservation_id"),
-            dedupe_key=f"code:task:{run_id}", title=run["title"],
-            branch_name=held.get("branch") or f"boss/code/{fctx.get('root_run_id') or run_id}",
-            summary=str(held.get("summary") or ""), files=files,
-            created_by_job_id=fctx.get("created_by_job_id"),
-            quality_gate_id=held.get("quality_gate_id"), run_id=run_id,
-            pr_base=_build_base.pr_base_for_run(c, run, getattr(sf, "github", None)))
+        pr_base = _build_base.pr_base_for_run(c, run, getattr(sf, "github", None))
+    proposal = sf.propose_pull_request(
+        None, project_id, run.get("task_id"), reservation_id=reservation.get("reservation_id"),
+        dedupe_key=f"code:task:{run_id}", title=run["title"],
+        branch_name=held.get("branch") or f"boss/code/{fctx.get('root_run_id') or run_id}",
+        summary=str(held.get("summary") or ""), files=files,
+        created_by_job_id=fctx.get("created_by_job_id"),
+        quality_gate_id=held.get("quality_gate_id"), run_id=run_id,
+        pr_base=pr_base, db_engine=engine)
     status = proposal.get("status")
     if status not in ("created", "succeeded") and not (
             status == "reused" and proposal.get("pull_request_url")):
@@ -2804,14 +2805,15 @@ def override_code_task(engine, settings: Settings, jobs, run_id: str, *,
         # Use the root-run branch so a waived iteration lands on the SAME branch/PR the
         # iteration chain has been accumulating (create_pull_request reuses the open PR).
         root_run = fctx.get("root_run_id") or run_id
-        proposal = sf.propose_pull_request(
-            c, project_id, task_id, reservation_id=reservation.get("reservation_id"),
-            dedupe_key=f"code:task:{run_id}", title=run["title"],
-            branch_name=f"boss/code/{root_run}", settle_run_id=run_id,
-            summary=(f"⚠️ GATE OVERRIDE by {actor}: waived {waive_gates} (QualityGate {qg}).\n"
-                     f"Reason: {reason or '(none given)'}\n\n{fctx.get('pr_summary', '')}"),
-            files=files, created_by_job_id=fctx.get("created_by_job_id"),
-            pr_base=_build_base.pr_base_for_run(c, run, getattr(sf, "github", None)))
+        pr_base = _build_base.pr_base_for_run(c, run, getattr(sf, "github", None))
+    proposal = sf.propose_pull_request(
+        None, project_id, task_id, reservation_id=reservation.get("reservation_id"),
+        dedupe_key=f"code:task:{run_id}", title=run["title"],
+        branch_name=f"boss/code/{root_run}", settle_run_id=run_id,
+        summary=(f"⚠️ GATE OVERRIDE by {actor}: waived {waive_gates} (QualityGate {qg}).\n"
+                 f"Reason: {reason or '(none given)'}\n\n{fctx.get('pr_summary', '')}"),
+        files=files, created_by_job_id=fctx.get("created_by_job_id"),
+        pr_base=pr_base, db_engine=engine)
     status = proposal.get("status")
     # `reused`: this build's PR effect already happened (a prior receipt) — the PR is open.
     if status not in ("created", "succeeded", "reused"):
@@ -2946,14 +2948,14 @@ def open_parked_with_checks_failing(engine, settings: Settings, jobs, run_id: st
                 reason=f"checks-failing PR {run_id[:12]}", expires_in_minutes=15)
             _build_budget.bind(c, run_id, None)
             _set_phase(c, run_id, "opening_pr")
-            proposal = sf.propose_pull_request(
-                c, project_id, task_id, reservation_id=reservation.get("reservation_id"),
-                dedupe_key=f"code:task:{run_id}", title=run["title"], branch_name=branch,
-                summary=cf.pr_section(record) + str(fctx.get("pr_summary") or ""),
-                files=files, created_by_job_id=fctx.get("created_by_job_id"),
-                evidence=evidence, quality_gate_id=fctx.get("quality_gate_id"), run_id=run_id,
-                checks_failing=record,
-                pr_base=_build_base.pr_base_for_run(c, run, getattr(sf, "github", None)))
+            pr_base = _build_base.pr_base_for_run(c, run, getattr(sf, "github", None))
+        proposal = sf.propose_pull_request(
+            None, project_id, task_id, reservation_id=reservation.get("reservation_id"),
+            dedupe_key=f"code:task:{run_id}", title=run["title"], branch_name=branch,
+            summary=cf.pr_section(record) + str(fctx.get("pr_summary") or ""),
+            files=files, created_by_job_id=fctx.get("created_by_job_id"),
+            evidence=evidence, quality_gate_id=fctx.get("quality_gate_id"), run_id=run_id,
+            checks_failing=record, pr_base=pr_base, db_engine=engine)
     status = proposal.get("status")
     if status not in ("created", "succeeded", "reused") or not proposal.get("pull_request_url"):
         with _transaction(engine) as c:
@@ -4059,19 +4061,21 @@ def _run_code_task(engine, settings: Settings, jobs, run_id: str,
                 return {"status": "cancelled", "done": True,
                         "reason": "stopped before the PR was opened"}
             _set_phase(c, run_id, "opening_pr")
-            proposal = sf.propose_pull_request(
-                c, project_id, task_id,
-                reservation_id=reservation_id,
-                dedupe_key=f"code:task:{run_id}",
-                title=f"{run['title']}",
-                branch_name=work_branch,
-                # Who made it, as git trailers in the PR body (agent_acts; "" when unsigned).
-                summary=result.summary + _pr_trailers(c, run_id),
-                files=result.diff,
-                created_by_job_id=fctx.get("created_by_job_id"),
-                settle_run_id=run_id,
-                pr_base=repo_base_branch,
-            )
+            trailers = _pr_trailers(c, run_id)
+        proposal = sf.propose_pull_request(
+            None, project_id, task_id,
+            reservation_id=reservation_id,
+            dedupe_key=f"code:task:{run_id}",
+            title=f"{run['title']}",
+            branch_name=work_branch,
+            # Who made it, as git trailers in the PR body (agent_acts; "" when unsigned).
+            summary=result.summary + trailers,
+            files=result.diff,
+            created_by_job_id=fctx.get("created_by_job_id"),
+            settle_run_id=run_id,
+            pr_base=repo_base_branch,
+            db_engine=engine,
+        )
 
         status = proposal.get("status")
         if status not in ("created", "succeeded"):

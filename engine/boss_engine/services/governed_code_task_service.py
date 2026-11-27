@@ -7032,32 +7032,38 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             n = _checkpoint("exit")
             if not n:
                 return None
+            rescue_files = (
+                [FileChange(path=p, content=content) for p, content in accumulated.items()]
+                if use_microvm
+                else sandbox.diff()
+            )
+            rescue_deleted = _deleted_now()
+            rescue_pr_base = _release_target["pr_base"] if _release_target else repo_base_branch
+            # A RESCUE NEEDS NO FRESH RESERVATION (rescue_of_run): the money was spent, and
+            # this exit settles it on the build's own hold. Passing None here used to
+            # raise a blocking "Missing active reservation" card on every failure and never
+            # open the partial PR (since rc.1). run_id is named so a refused rescue can
+            # still see that the fix run is dead and leave no reservation decision
+            # (BOSSAPP-984).
+            pr = sf.propose_pull_request(
+                None, project_id, task_id, reservation_id=reservation_id,
+                rescue_of_run=run_id, run_id=run_id,
+                dedupe_key=f"code:task:{run_id}", title=_partial_title(title),
+                branch_name=work_branch,
+                summary=("INCOMPLETE — this run did not finish.\n\n"
+                         f"It stopped because: {reason}\n\n"
+                         f"The {n} file(s) it had written are on this branch, so the work is "
+                         "not lost and can be reviewed or continued with a retry. The quality "
+                         "gates did NOT run to completion — treat this as work-in-progress, "
+                         "not a reviewed change."),
+                files=rescue_files,
+                deleted_paths=rescue_deleted,
+                created_by_job_id=job_id, actual_usd_micros=cost,
+                pr_base=rescue_pr_base,
+                **({"parent_branch": parent_branch} if parent_branch else {}),
+                monitoring_removals=_monitoring_removals(spec),
+                db_engine=engine)
             with _transaction(engine) as c:
-                # A RESCUE NEEDS NO FRESH RESERVATION (rescue_of_run): the money was spent, and
-                # this exit settles it on the build's own hold. Passing None here used to
-                # raise a blocking "Missing active reservation" card on every failure and never
-                # open the partial PR (since rc.1). run_id is named so a refused rescue can
-                # still see that the fix run is dead and leave no reservation decision
-                # (BOSSAPP-984).
-                pr = sf.propose_pull_request(
-                    c, project_id, task_id, reservation_id=reservation_id,
-                    rescue_of_run=run_id, run_id=run_id,
-                    dedupe_key=f"code:task:{run_id}", title=_partial_title(title),
-                    branch_name=work_branch,
-                    summary=("INCOMPLETE — this run did not finish.\n\n"
-                             f"It stopped because: {reason}\n\n"
-                             f"The {n} file(s) it had written are on this branch, so the work is "
-                             "not lost and can be reviewed or continued with a retry. The quality "
-                             "gates did NOT run to completion — treat this as work-in-progress, "
-                             "not a reviewed change."),
-                    files=([FileChange(path=p, content=content)
-                            for p, content in accumulated.items()]
-                           if use_microvm else sandbox.diff()),
-                    deleted_paths=_deleted_now(),
-                    created_by_job_id=job_id, actual_usd_micros=cost,
-                    pr_base=(_release_target["pr_base"] if _release_target else repo_base_branch),
-                    **({"parent_branch": parent_branch} if parent_branch else {}),
-                    monitoring_removals=_monitoring_removals(spec))
                 if pr.get("status") in ("created", "succeeded"):
                     url = pr.get("pull_request_url") or pr.get("url")
                     c.execute(sql("UPDATE code_task_runs SET pull_request_url=:u, updated_at=now() "
@@ -12708,15 +12714,6 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
 
         with _transaction(engine) as c:
             _phase(c, "opening_pr")
-            # The budget reservation is taken for 45 minutes at run start. propose_pull_request
-            # BLOCKS when it has expired ("Missing active reservation for PR proposal"), so any
-            # run longer than 45 minutes could not open a PR at all — regardless of how good the
-            # code was. Observed on crun_9f8febe8: every quality gate resolved, the work was
-            # finished and PAID FOR, and the PR was refused purely because a stalled stage had
-            # pushed the run past the reservation window.
-            #
-            # Blocking here saves nothing: the spend has ALREADY happened. Refusing the PR only
-            # destroys the work the user paid for. So re-acquire a reservation and proceed.
             try:
                 if not budget.assert_active_reservation(c, project_id, reservation_id):
                     renewed = budget.reserve(
@@ -12736,84 +12733,64 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 _log_caught(logger)
                 emit_event(c, project_id, "code_task.reservation_renew_failed", "boss",
                            "code_task_run", run_id, {"error": f"{type(exc).__name__}: {exc}"[:200]})
-            # THE STOP WINS WHEN IT CAN (factory walk D1). The PR step is one long transaction
-            # with no phase change inside, so a Stop pressed during it was only seen after the
-            # PR existed. Checked right before the first GitHub write (the push and the PR).
-            # CHECKS FAILING (checks_failing.py): the description OPENS with them, and the PR
-            # is a draft with the label, so nobody reads it as a passing change.
             from .checks_failing import KEY as _CF_KEY, pr_section as _cf_section
+            from . import pr_follow_up as _pr_fu, review_packet as _rp_title
 
             _checks = evidence.get(_CF_KEY) if isinstance(evidence.get(_CF_KEY), dict) else None
-            # PAST THE LAST STAGE BOUNDARY. The final `take_pending_guidance` read is behind us;
-            # from here to the terminal write no stage reads the queue again, so a steer queued
-            # now would be the silent no-op this task exists to end (crun_e470d6dc). Mark it, so
-            # `steer_code_task` answers in words / lands it on a follow-up instead of dropping it.
             c.execute(sql(
                 "UPDATE code_task_runs SET finalize_ctx = "
                 "COALESCE(finalize_ctx,'{}'::jsonb) "
                 "|| jsonb_build_object('past_last_stage_boundary', true), updated_at=now() "
                 "WHERE id=:id"), {"id": run_id})
-            _abort_if_cancelled("before opening the PR", spends=False)
-            if use_microvm:
-                _replan_microvm()
-            _halt_if_needs_person()  # never a PR of code no gate could run
-            _pr_files = ([FileChange(path=p, content=content)
-                          for p, content in accumulated.items()]
-                         if use_microvm else sandbox.diff())
-            # A DELETION REACHES THE BRANCH (dry run 2, gap 1): what the tree removed is
-            # deleted on the change branch, and propose_pull_request reads the branch back.
-            _pr_deleted = _deleted_now()
-            if _recheck:
-                # A RE-CHECK COMMITS NOTHING: whatever BOSS's own gate preparation touched in
-                # the checkout stays there; the PR gets the new verdict and card, not a commit.
-                if _pr_files:
+            _change_title = (_rp_title.work_root_title(c, run_id, fctx)
+                             or _pr_fu.work_name(title) or title)
+            _pr_trailers = agent_acts.pr_trailers(c, run_id)
+
+        _abort_if_cancelled("before opening the PR", spends=False)
+        if use_microvm:
+            _replan_microvm()
+        _halt_if_needs_person()  # never a PR of code no gate could run
+        _pr_files = ([FileChange(path=p, content=content)
+                      for p, content in accumulated.items()]
+                     if use_microvm else sandbox.diff())
+        _pr_deleted = _deleted_now()
+        if _recheck:
+            if _pr_files:
+                with _transaction(engine) as c:
                     emit_event(c, project_id, "code_task.recheck_discarded_changes", "boss",
                                "code_task_run", run_id,
                                {"paths": [f.path for f in _pr_files][:40]})
-                _pr_files = []
-                _pr_deleted = []
-            _pr_summary = _cf_section(_checks) + _generated_pr_summary(
-                engine, settings, run_id, project_id, title=title, evidence=evidence,
-                gates=gates, paths=[f.path for f in _pr_files], qg_id=qg_id)
-            # THE MUST-HAVE TABLE (acceptance_gate.pr_section) right after the failing checks.
-            _acc_section = _acceptance_gate.pr_section(evidence.get(_acceptance_gate.KEY))
-            if _acc_section:
-                _cf_lead = _cf_section(_checks)
-                _pr_summary = _cf_lead + _acc_section + _pr_summary[len(_cf_lead):]
-            # THE CHANGE IS TITLED FOR THE WORK ("Lumen Pay tenant onboarding"): its workflow
-            # run's own title, never this step build's, and never with "· retry N".
-            from . import pr_follow_up as _pr_fu, review_packet as _rp_title
-
-            _change_title = (_rp_title.work_root_title(c, run_id, fctx)
-                             or _pr_fu.work_name(title) or title)
-            proposal = sf.propose_pull_request(
-                c, project_id, task_id, reservation_id=reservation_id,
-                dedupe_key=f"code:task:{run_id}", title=_change_title,
-                branch_name=work_branch,
-                summary=_pr_summary + agent_acts.pr_trailers(c, run_id),
-                files=_pr_files, deleted_paths=_pr_deleted,
-                created_by_job_id=job_id, actual_usd_micros=cost,
-                evidence=evidence, quality_gate_id=qg_id, run_id=run_id,
-                pr_base=(_release_target["pr_base"] if _release_target else repo_base_branch),
-                **({"parent_branch": parent_branch} if parent_branch else {}),
-                **({"checks_failing": _checks} if _checks else {}),
-                monitoring_removals=_monitoring_removals(spec))
+            _pr_files = []
+            _pr_deleted = []
+        _pr_summary = _cf_section(_checks) + _generated_pr_summary(
+            engine, settings, run_id, project_id, title=title, evidence=evidence,
+            gates=gates, paths=[f.path for f in _pr_files], qg_id=qg_id)
+        _acc_section = _acceptance_gate.pr_section(evidence.get(_acceptance_gate.KEY))
+        if _acc_section:
+            _cf_lead = _cf_section(_checks)
+            _pr_summary = _cf_lead + _acc_section + _pr_summary[len(_cf_lead):]
+        _abort_if_cancelled("before opening the PR", spends=False)
+        proposal = sf.propose_pull_request(
+            None, project_id, task_id, reservation_id=reservation_id,
+            dedupe_key=f"code:task:{run_id}", title=_change_title,
+            branch_name=work_branch,
+            summary=_pr_summary + _pr_trailers,
+            files=_pr_files, deleted_paths=_pr_deleted,
+            created_by_job_id=job_id, actual_usd_micros=cost,
+            evidence=evidence, quality_gate_id=qg_id, run_id=run_id,
+            pr_base=(_release_target["pr_base"] if _release_target else repo_base_branch),
+            **({"parent_branch": parent_branch} if parent_branch else {}),
+            **({"checks_failing": _checks} if _checks else {}),
+            monitoring_removals=_monitoring_removals(spec),
+            db_engine=engine)
 
         status = proposal.get("status")
-        # RETRY THE PR ITSELF. A transient GitHub error, an expired reservation, a network
-        # blip — none of these are reasons to hand the operator nothing after a run that
-        # PASSED its gates. Two runs blocked tonight on "PR not created: failed" having done
-        # all the work. The PR is the deliverable; opening it gets the same persistence as
-        # any other critical step.
         for _pr_attempt in (2, 3):
             if status in ("created", "succeeded", "reused"):
                 break
             with _transaction(engine) as c:
                 emit_event(c, project_id, "code_task.pr_retry", "boss", "code_task_run", run_id,
                            {"attempt": _pr_attempt, "prior_status": status})
-                # First attempt may have released the reservation (model overflow,
-                # missing entitlement). Retries with the dead id only mint
-                # "Missing active reservation" decisions. Re-reserve each try.
                 try:
                     if not budget.assert_active_reservation(c, project_id, reservation_id):
                         renewed = budget.reserve(
@@ -12837,23 +12814,26 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         "code_task_run", run_id,
                         {"attempt": _pr_attempt, "error": f"{type(exc).__name__}: {exc}"[:200]},
                     )
-                _abort_if_cancelled("before retrying the PR", spends=False)
-                try:
-                    proposal = sf.propose_pull_request(
-                        c, project_id, task_id, reservation_id=reservation_id,
-                        dedupe_key=f"code:task:{run_id}", title=_change_title,
-                        branch_name=work_branch,
-                        summary=_pr_summary + agent_acts.pr_trailers(c, run_id),
-                        files=_pr_files, deleted_paths=_pr_deleted,
-                        created_by_job_id=job_id, actual_usd_micros=cost,
-                        evidence=evidence, quality_gate_id=qg_id, run_id=run_id,
-                        pr_base=(_release_target["pr_base"] if _release_target else repo_base_branch),
-                        **({"parent_branch": parent_branch} if parent_branch else {}),
-                        **({"checks_failing": _checks} if _checks else {}),
-                        monitoring_removals=_monitoring_removals(spec))
-                    status = proposal.get("status")
-                except Exception as exc:  # noqa: BLE001
-                    _log_caught(logger)
+                _pr_trailers = agent_acts.pr_trailers(c, run_id)
+            _abort_if_cancelled("before retrying the PR", spends=False)
+            try:
+                proposal = sf.propose_pull_request(
+                    None, project_id, task_id, reservation_id=reservation_id,
+                    dedupe_key=f"code:task:{run_id}", title=_change_title,
+                    branch_name=work_branch,
+                    summary=_pr_summary + _pr_trailers,
+                    files=_pr_files, deleted_paths=_pr_deleted,
+                    created_by_job_id=job_id, actual_usd_micros=cost,
+                    evidence=evidence, quality_gate_id=qg_id, run_id=run_id,
+                    pr_base=(_release_target["pr_base"] if _release_target else repo_base_branch),
+                    **({"parent_branch": parent_branch} if parent_branch else {}),
+                    **({"checks_failing": _checks} if _checks else {}),
+                    monitoring_removals=_monitoring_removals(spec),
+                    db_engine=engine)
+                status = proposal.get("status")
+            except Exception as exc:  # noqa: BLE001
+                _log_caught(logger)
+                with _transaction(engine) as c:
                     emit_event(c, project_id, "code_task.pr_retry_failed", "boss",
                                "code_task_run", run_id,
                                {"attempt": _pr_attempt, "error": f"{type(exc).__name__}: {exc}"[:200]})

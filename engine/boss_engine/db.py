@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import contextvars
+import os
 import re
 import threading
 import weakref
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Optional
 
 from sqlalchemy import create_engine, text
@@ -757,6 +759,67 @@ def ensure_schema(engine: Engine, settings: Optional[Settings] = None) -> None:
 _OPEN_TRANSACTIONS: ContextVar[tuple] = ContextVar("boss_open_transactions", default=())
 
 
+@dataclass
+class _TxFrame:
+    connection: Any
+    written: bool = False
+
+
+_OPEN_TX_STACK: ContextVar[tuple[_TxFrame, ...]] = ContextVar("boss_open_tx_stack", default=())
+
+STRICT_TX_GUARD_ENV = "BOSS_STRICT_TX_GUARD"
+
+_SQL_COMMENT_OR_LITERAL = re.compile(
+    r"--[^\n]*"
+    r"|/\*.*?\*/"
+    r"|'(?:''|[^'])*'",
+    re.S,
+)
+_LEADING_MUTATING_SQL = re.compile(
+    r"^\s*(?:INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|REPLACE|MERGE|TRUNCATE)\b",
+    re.I,
+)
+_CTE_MUTATING_SQL = re.compile(
+    r"^\s*WITH\b[\s\S]*?\b(?:INSERT|UPDATE|DELETE|MERGE)\b",
+    re.I,
+)
+_LOCKING_SELECT_SQL = re.compile(
+    r"\bFOR\s+(?:NO\s+KEY\s+)?UPDATE\b",
+    re.I,
+)
+
+
+def _is_mutating_sql(statement: str) -> bool:
+    """True for DML/DDL, CTE writes (`WITH ... INSERT/UPDATE/DELETE/MERGE`), or row-locking reads."""
+    cleaned = _SQL_COMMENT_OR_LITERAL.sub(" ", statement or "")
+    return bool(
+        _LEADING_MUTATING_SQL.match(cleaned)
+        or _CTE_MUTATING_SQL.match(cleaned)
+        or _LOCKING_SELECT_SQL.search(cleaned)
+    )
+
+
+class WaitInWrittenTransactionError(RuntimeError):
+    """A slow external/model/sandbox/CI operation was invoked inside a written DB transaction."""
+
+
+def in_written_transaction() -> bool:
+    """True when any active `begin(engine)` transaction in this context has run mutating SQL."""
+    return any(frame.written for frame in _OPEN_TX_STACK.get())
+
+
+def assert_not_in_written_tx(op_name: str) -> None:
+    """Guard external/slow operations against running inside an open written transaction."""
+    if not in_written_transaction():
+        return
+    message = f"{op_name} cannot run inside a written database transaction"
+    if os.environ.get(STRICT_TX_GUARD_ENV, "") not in ("", "0"):
+        raise WaitInWrittenTransactionError(message)
+    import logging
+
+    logging.getLogger("boss.db").warning(message)
+
+
 def open_transaction() -> Optional[object]:
     """The connection of the innermost transaction this context opened through `begin`, or None."""
     stack = _OPEN_TRANSACTIONS.get()
@@ -774,6 +837,9 @@ def begin(engine: Optional[Engine] = None):
     active_engine = engine or get_engine()
     with active_engine.begin() as connection:
         _OPEN_TRANSACTIONS.set(_OPEN_TRANSACTIONS.get() + (connection,))
+        stack = _OPEN_TX_STACK.get()
+        if not any(f.connection is connection for f in stack):
+            _OPEN_TX_STACK.set(stack + (_TxFrame(connection=connection),))
         try:
             yield connection
         finally:
@@ -786,6 +852,7 @@ def begin(engine: Optional[Engine] = None):
             # Limit: across such steps the stack holds only within one step; a later step's copy
             # never saw the push, so open_transactions() does not list the streamed transaction.
             _OPEN_TRANSACTIONS.set(tuple(c for c in _OPEN_TRANSACTIONS.get() if c is not connection))
+            _OPEN_TX_STACK.set(tuple(f for f in _OPEN_TX_STACK.get() if f.connection is not connection))
 
 
 # ── BACKGROUND WORK NEVER STRANDS A TRANSACTION OR HOLDS UP A SIGN-IN (BOSSAPP-1456) ───────────
@@ -1042,6 +1109,9 @@ def _drop_registered_in(conn, name: str) -> None:  # noqa: ANN001
 
 
 def _on_begin(conn) -> None:  # noqa: ANN001
+    stack = _OPEN_TX_STACK.get()
+    if not any(f.connection is conn for f in stack):
+        _OPEN_TX_STACK.set(stack + (_TxFrame(connection=conn),))
     if not _BACKGROUND.get() or conn.dialect.name != "postgresql":
         return
     statements = background_limits_sql()
@@ -1094,11 +1164,24 @@ def _on_commit(conn) -> None:  # noqa: ANN001
             except Exception:  # noqa: BLE001
                 pass
         raise
+    finally:
+        _OPEN_TX_STACK.set(tuple(f for f in _OPEN_TX_STACK.get() if f.connection is not conn))
     _AT_COMMIT.pop(conn, None)
 
 
 def _on_rollback(conn) -> None:  # noqa: ANN001
     _AT_COMMIT.pop(conn, None)
+    _OPEN_TX_STACK.set(tuple(f for f in _OPEN_TX_STACK.get() if f.connection is not conn))
+
+
+def _on_before_cursor_execute(conn, _cursor, statement, _parameters, _context, _executemany) -> None:  # noqa: ANN001
+    stack = _OPEN_TX_STACK.get()
+    if not stack:
+        return
+    if _is_mutating_sql(str(statement or "")):
+        for frame in stack:
+            if frame.connection is conn:
+                frame.written = True
 
 
 def _install_transaction_hooks() -> None:
@@ -1106,7 +1189,8 @@ def _install_transaction_hooks() -> None:
     from sqlalchemy import event
 
     for name, fn in (("begin", _on_begin), ("rollback_savepoint", _on_rollback_savepoint),
-                     ("commit", _on_commit), ("rollback", _on_rollback)):
+                     ("commit", _on_commit), ("rollback", _on_rollback),
+                     ("before_cursor_execute", _on_before_cursor_execute)):
         if not event.contains(Engine, name, fn):
             event.listen(Engine, name, fn)
 

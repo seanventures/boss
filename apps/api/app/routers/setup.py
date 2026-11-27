@@ -121,12 +121,13 @@ def build_setup_router(
         with background():
             with begin(engine) as connection:
                 require_actor(connection, body.project_id, actor, "entitlement_manage")
-                if setup_actions.first_press(body.project_id, body.idempotency_key):
-                    try:
-                        setup_actions.run_checks(connection, get_settings(), body.project_id,
-                                                 body.target, actor=actor)
-                    except setup_actions.SetupActionError as error:
-                        fail(error)
+                should_run = setup_actions.first_press(body.project_id, body.idempotency_key)
+            if should_run:
+                try:
+                    setup_actions.run_checks_phased(engine, get_settings(), body.project_id,
+                                                    body.target, actor=actor)
+                except setup_actions.SetupActionError as error:
+                    fail(error)
             return fresh_view(body.project_id)
 
     @router.post("/v1/setup/subscriptions/keep-alive")
@@ -575,7 +576,7 @@ def build_setup_router(
         actor = actor_for(body.actor)
         with begin(engine) as connection:
             require_actor(connection, body.project_id, actor, "entitlement_manage")
-            openrouter_catalog.refresh(connection, get_settings(), body.project_id)
+        openrouter_catalog.refresh(None, get_settings(), body.project_id, db_engine=engine)
         from boss_engine.services.model_router import store as router_store
 
         router_store.invalidate(body.project_id)
