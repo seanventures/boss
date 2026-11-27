@@ -442,7 +442,32 @@ disk_check() {
     fi
   fi
 }
+prune_stale_build_cache_before_check() {
+  local _prune_script="$INSTALL_DIR/scripts/install/prune.sh"
+  [[ "$DRY_RUN" -eq 0 && -x "$_prune_script" ]] || return 0
+  local tag floor full incr images cache target_free min_cache=0
+  tag="$(image_tag)"
+  floor="$(env_or_dotenv BOSS_DISK_FLOOR_GB 20)"
+  full="$(env_or_dotenv BOSS_UPGRADE_FULL_BUILD_GB 35)"
+  incr="$(env_or_dotenv BOSS_UPGRADE_INCREMENTAL_BUILD_GB 5)"
+  for n in "$floor" "$full" "$incr"; do
+    [[ "$n" =~ ^[0-9]+([.][0-9]+)?$ ]] || return 0
+  done
+  cache="$(build_cache_gb)"
+  [[ -n "$cache" ]] || return 0
+  awk -v c="$cache" 'BEGIN { exit !(c + 0 > 0) }' || return 0
+  images="$(has_current_images "$tag")"
+  if [[ "$images" == "1" ]] && awk -v c="$cache" 'BEGIN { exit !(c + 0 >= 1) }'; then
+    target_free="$(LC_ALL=C awk -v f="$floor" -v i="$incr" 'BEGIN { v = f + i; printf "%d", (v == int(v) ? v : int(v) + 1) }')"
+    min_cache=1
+  else
+    target_free="$(LC_ALL=C awk -v f="$floor" -v u="$full" 'BEGIN { v = f + u; printf "%d", (v == int(v) ? v : int(v) + 1) }')"
+  fi
+  bash "$_prune_script" --dir "$INSTALL_DIR" --cache-only --room \
+    --target-free "$target_free" --min-cache "$min_cache" </dev/null || true
+}
 if [[ "$DISK_CHECK" -eq 1 && "$(env_or_dotenv BOSS_DISK_CHECK on)" != off ]]; then
+  prune_stale_build_cache_before_check
   disk_check
 else
   echo 'Disk check skipped (--skip-disk-check / BOSS_DISK_CHECK=off).'

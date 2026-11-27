@@ -214,14 +214,32 @@ def confirm_login_rejection(call, *, sleep=None):
 #: "circuit breaker: 2 attempts … have failed (last: '(psycopg.errors.IdleInTransaction…')" — a
 #: refusal that quoted an old build's error — and the step read it as BOSS's database failing,
 #: retried itself three times in a second and was dead-lettered (2026-11-16).
+_DB_PREFIX = (
+    r"(?:"
+    r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*:\s+"
+    r"|(?:database|db|storage)\s+(?:error|failure):\s+"
+    r"|BOSS could not complete that turn:\s+"
+    r")"
+)
 _STORAGE_TEXT = re.compile(
-    r"^\s*(?:[A-Za-z_]\w*: )?"
-    r"(?:\((?:psycopg2?|sqlalchemy)\.(?:errors|exc)\.\w+\)"
+    rf"^\s*(?:{_DB_PREFIX}){{0,3}}?"
+    r"(?:\((?:psycopg2?|sqlalchemy)\.(?:(?:errors|exc)\.)?\w+\)"
+    r"|(?:psycopg2?|sqlalchemy)\.(?:(?:errors|exc)\.)?"
+    r"(?:OperationalError|InterfaceError|DatabaseError|IntegrityError|"
+    r"DisconnectionError|TimeoutError)\b"
     r"|\([\w.]+\) [^\n]*\n\[SQL: "        # str(sqlalchemy DBAPIError) with any driver's error
     r"|duplicate key value violates unique constraint"
     r"|(?:insert or update on table \S+ |update or delete on table \S+ |null value in column \S+ )?"
     r"(?:violates (?:foreign key|not-null|check|exclusion) constraint)"
-    r"|current transaction is aborted|could not serialize access|deadlock detected)",
+    r"|current transaction is aborted|could not serialize access|deadlock detected"
+    r"|connection to server (?:at|on) [^\n]+ failed"
+    r"|could not connect to server"
+    r"|server closed the connection unexpectedly"
+    r"|SSL connection has been closed unexpectedly"
+    r"|terminating connection due to "
+    r"|remaining connection slots are reserved"
+    r"|too many clients already"
+    r"|the database system is (?:starting up|shutting down|in recovery mode))",
     re.I,
 )
 
@@ -229,17 +247,29 @@ _STORAGE_TEXT = re.compile(
 def is_storage_failure(error: object) -> bool:
     """A failure of BOSS's own database — not the model, not the operator's setup.
 
-    An exception is one when it, or what it was raised from, is SQLAlchemy's or psycopg's; text
-    (and an exception's own message) only when it BEGINS with the database's wording — a sentence
-    that merely quotes a database error (a refusal naming a build's last error) is not one."""
-    seen = 0
-    current = error
-    while isinstance(current, BaseException) and seen < 5:
-        module = type(current).__module__ or ""
-        if module.startswith(("sqlalchemy", "psycopg")):
-            return True
-        current = current.__cause__
-        seen += 1
+    An exception is one when it, or what it was raised from (__cause__, __context__, or orig),
+    is SQLAlchemy's or psycopg's; text (and an exception's own message) only when it BEGINS with
+    the database's wording — a sentence that merely quotes a database error (a refusal naming a
+    build's last error) is not one."""
+    if isinstance(error, BaseException):
+        seen: set[int] = set()
+        pending: list[Optional[BaseException]] = [error]
+        while pending and len(seen) < 16:
+            current = pending.pop()
+            if current is None or id(current) in seen:
+                continue
+            seen.add(id(current))
+            module = type(current).__module__ or ""
+            if module.startswith(("sqlalchemy", "psycopg")):
+                return True
+            if _STORAGE_TEXT.search(str(current)):
+                return True
+            pending.append(current.__cause__)
+            pending.append(current.__context__)
+            orig = getattr(current, "orig", None)
+            if isinstance(orig, BaseException):
+                pending.append(orig)
+        return False
     return bool(_STORAGE_TEXT.search(str(error or "")))
 
 
@@ -377,13 +407,27 @@ def _chain_text(error: object) -> str:
         text = str(value or "")
         return text[:text.find("[SQL:")] if "[SQL:" in text else text
 
-    parts, current, seen = [words(error)], error, 0
-    while isinstance(current, BaseException) and seen < 5:
-        parts.append(type(current).__name__)
-        parts.append(words(getattr(current, "orig", "") or ""))
-        current = current.__cause__ or getattr(current, "orig", None)
-        seen += 1
-    return " ".join(parts)
+    parts: list[str] = []
+    if isinstance(error, BaseException):
+        seen: set[int] = set()
+        pending: list[Optional[BaseException]] = [error]
+        while pending and len(seen) < 16:
+            current = pending.pop()
+            if current is None or id(current) in seen:
+                continue
+            seen.add(id(current))
+            parts.append(words(current))
+            parts.append(type(current).__name__)
+            orig = getattr(current, "orig", None)
+            if isinstance(orig, BaseException):
+                pending.append(orig)
+            elif orig:
+                parts.append(words(orig))
+            pending.append(current.__cause__)
+            pending.append(current.__context__)
+    else:
+        parts.append(words(error))
+    return " ".join(p for p in parts if p)
 
 
 def storage_said(error: object) -> dict:

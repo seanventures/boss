@@ -1341,30 +1341,14 @@ function ConsoleShellInner({
     return undefined;
   }, [paletteOpen]);
 
-  const areasForEdition = useMemo(() => {
-    return AREAS.map((area) => {
-      if (!community) return area;
-      const copy = communityNavCopy(area.id);
-      return {
-        ...area,
-        label: copy.label ?? area.label,
-        sub: copy.sub ?? area.sub,
-      };
-    });
-  }, [community]);
+  const areasForEdition = AREAS;
 
-  // Sidebar only: Community v1 home is a small cut (V1_COMMUNITY_PRIMARY_NAV).
-  // Areas are not deleted. Palette and `?area=` keep every area reachable
-  // (SSO stays in the sidebar).
-  // THE RAIL SHOWS ONLY WHAT THE VIEWER CAN OPEN (IDENTITY.md §6.5). A direct URL to one they
-  // cannot still lands, on <AccessDenied> naming the permission, never a blank page.
-  // INSIDER ITEMS (Self-fixes, Landed slices) only on an install that has fixed BOSS itself.
   const insider = useInsider(scope.projectId ?? scope.project);
   const navAreas = useMemo(
     () => areasForEdition.filter(
-      (a) => isCommunityPrimaryNavVisible(a.id, resolvedEdition) && !OWN_RAIL_BUTTON.has(a.id) && !UNDER_PROJECTS.has(a.id) && !OFF_THE_NAV.has(a.id) && areaCan(a.id).allowed
+      (a) => isCommunityPrimaryNavVisible(a.id) && !OWN_RAIL_BUTTON.has(a.id) && !UNDER_PROJECTS.has(a.id) && !OFF_THE_NAV.has(a.id) && areaCan(a.id).allowed
         && (!INSIDER_AREAS.has(a.id) || insiderShown(insider))),
-    [areasForEdition, resolvedEdition, areaCan, insider],
+    [areasForEdition, areaCan, insider],
   );
 
   const activeDef = areasForEdition.find((a) => a.id === active) ?? areasForEdition[0];

@@ -458,7 +458,7 @@ def _priors_runner(connection: Any, settings: Any, run: dict, *, kind: str) -> d
     org = str(ref).split(":", 1)[-1]
     connection.commit()
     try:
-        out = build_priors_job(connection.engine, org_id=org)
+        out = build_priors_job(connection.engine, org_id=org, settings=settings)
     except Exception as exc:  # noqa: BLE001 — recorded on the run; health shows it
         return {"status": "failed", "error": f"{type(exc).__name__}: {exc}"[:500],
                 "clean_failure": True}

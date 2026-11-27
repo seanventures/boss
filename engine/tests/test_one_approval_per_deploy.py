@@ -52,18 +52,22 @@ def test_a_staging_policy_set_by_a_person_runs_deploys_without_asking(eng, proje
                   {"p": project})
 
 
-def _gated_deploy_step(c, project, *, released=True, capability="deploy"):  # noqa: F811
+def _gated_deploy_step(c, project, *, released=True, capability="deploy", approved_by="usr_person"):  # noqa: F811
+    inputs_by_cap = {
+        "deploy": {"run_id": "crun_x"},
+        "config_deploy": {"target_id": "deptgt_x", "files": {"a.yaml": "x: 1\n"}},
+        "promote_config": {"deployment_id": "deprun_x", "target_id": "deptgt_x"},
+    }
     _, version = _publish(c, project, f"gated_{capability}_{released}", [
         {"id": "deploy", "kind": "capability",
          "binding": {"capability": capability,
-                     "inputs": {"run_id": "crun_x"} if capability == "deploy"
-                     else {"message": "hi"}}, "next": []},
+                     "inputs": inputs_by_cap.get(capability, {"message": "hi"})}, "next": []},
     ], "deploy")
     run = _start(c, project, version["id"], {})
     decision = f"dec_gate_{run['id'][-8:]}"
     c.execute(text("INSERT INTO decisions (id, project_id, question, status, approved_by) "
-                   "VALUES (:d, :p, 'Deploy?', 'approved', 'usr_person')"),
-              {"d": decision, "p": project})
+                   "VALUES (:d, :p, 'Deploy?', 'approved', :a)"),
+              {"d": decision, "p": project, "a": approved_by})
     snapshot = {"capability": capability, **({"released_for": decision} if released else {})}
     c.execute(text("UPDATE workflow_step_runs SET decision_id = :d, binding_snapshot = "
                    "COALESCE(binding_snapshot, '{}'::jsonb) || CAST(:s AS JSONB) "
@@ -115,3 +119,48 @@ def test_both_paths_and_the_runner_use_the_one_answer():
     assert 'approval_decision_id=str(context.get("approval_decision_id") or "") or None' in dispatch
     assert '"approval_decision_id": str(context["approval_decision_id"])' in dispatch
     assert "requires_approval" in inspect.getsource(deploy_policy.deploy_policy)
+
+
+def test_config_deploy_and_promote_config_gates_approve_once_and_reject_non_human(eng, project):  # noqa: F811
+    """BOSSAPP-1410 / BOSSAPP-1172: config_deploy and promote_config gates approve ONCE via
+    deployment_gate_uses, only when released by a real person for production, and never from a
+    non-human actor or a second plan."""
+    with eng.begin() as c:
+        for cap in ("config_deploy", "promote_config"):
+            decision = _gated_deploy_step(
+                c, project, capability=cap, approved_by="executive_console",
+            )
+            run_id = c.execute(
+                text("SELECT workflow_run_id FROM workflow_step_runs WHERE decision_id = :d"),
+                {"d": decision},
+            ).scalar_one()
+            gate = deploy_policy.released_gate(
+                c, project, decision, capability=cap, run_id=run_id,
+            )
+            assert gate is not None and gate["decision_id"] == decision
+
+            # Non-human approved_by values must NEVER satisfy production gate_by_person.
+            for fake_actor in ("", "auto_approval", "agent:deploy-lead", "policy:pol_1", "usr_unregistered"):
+                bad_gate = {**gate, "approved_by": fake_actor}
+                assert pre_approval(
+                    c, project, "production",
+                    person_required=True, gate_by_person=True,
+                    released=bad_gate, gate_capability=cap, gate_run_id=run_id,
+                ) is None
+
+            # Human-released trusted gate approves production once, and is claimed in
+            # deployment_gate_uses so a second deployment cannot reuse it.
+            found = pre_approval(
+                c, project, "production",
+                person_required=True, gate_by_person=True,
+                released=gate, gate_capability=cap, gate_run_id=run_id,
+            )
+            assert found == {
+                "source": "gate", "decision_id": decision, "approved_by": "executive_console",
+            }
+            assert pre_approval(
+                c, project, "production",
+                person_required=True, gate_by_person=True,
+                released=gate, gate_capability=cap, gate_run_id=run_id,
+            ) is None
+        c.execute(text("DELETE FROM deployment_gate_uses WHERE project_id = :p"), {"p": project})

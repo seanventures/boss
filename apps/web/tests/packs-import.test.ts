@@ -224,8 +224,8 @@ describe("Company Pack YAML island", async () => {
 
     expect(html).toContain('data-testid="pack-import"');
     expect(html).toContain('data-testid="pack-export"');
-    expect(html).toMatch(/Local Community import/i);
-    expect(html).toMatch(/pack_manage/i);
+    expect(html).toMatch(/Import a pack YAML/i);
+    expect(html).toMatch(/pack:install/i);
     expect(html).toContain("Export");
     expect(html).not.toMatch(/sync hosted catalog/i);
     expect(html).not.toMatch(/hosted marketplace catalog/i);

@@ -174,4 +174,44 @@ describe("Model routing", () => {
     expect(q(document.body, "su-row-jobs")?.getAttribute("data-focused")).toBe("true");
     expect(q(document.body, "su-job-hard")).not.toBeNull();
   });
+
+  it("Shadow mode switches cleanly and renders counterfactual mix & stage outcomes", async () => {
+    const view = {
+      ...board(),
+      routing: {
+        ...ROUTING,
+        mode: "shadow" as const,
+        shadow: {
+          days: 14, routes: 24, agreed: 16, agreement_rate: 0.67,
+          actual_tiers: { fast: 0, balanced: 18, frontier: 6 },
+          shadow_tiers: { fast: 8, balanced: 10, frontier: 6 },
+          actual_list_usd: 12.5, shadow_projected_usd: 7.25,
+          projected_saving_usd: 5.25, projected_saving_pct: 0.42,
+        },
+        outcomes: {
+          days: 30, projected_saving_usd: 3.4,
+          rows: [{
+            task_type: "fix", stage: "standards", stage_label: "Standards",
+            dominant_tier: "balanced" as const,
+            tiers: {
+              fast: { samples: 10, passed: 9, pass_rate: 0.9, avg_list_cost_usd: 0.03 },
+              balanced: { samples: 10, passed: 9, pass_rate: 0.9, avg_list_cost_usd: 0.12 },
+            },
+            recommendation: { direction: "down" as const, from_tier: "balanced" as const,
+                              to_tier: "fast" as const, reason: "fast holds 90%" },
+            projected_saving_usd: 0.9,
+          }],
+        },
+      },
+    };
+    const api = fakeApi(view);
+    mounted = await mountBoard(view);
+    expect(q(document.body, "mr-mode-shadow")?.getAttribute("aria-pressed")).toBe("true");
+    expect(q(document.body, "mr-shadow")?.textContent).toContain("24");
+    expect(q(document.body, "mr-shadow")?.textContent).toContain("$5.25");
+    expect(q(document.body, "mr-outcomes")?.textContent).toContain("Stage outcomes (1)");
+    await click(q(document.body, "mr-mode-smart"));
+    expect(writes(api)).toEqual([{ op: "routing", project_id: "p",
+                                   policy: { mode: "smart" }, version: 3 }]);
+  });
 });

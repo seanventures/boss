@@ -29,7 +29,7 @@ ARM_KNOBS: dict[str, dict[str, Any]] = {
     # SMART ROUTING VS FIXED (docs/product/MODEL_ROUTER.md, "(e) Learning"): the router's own
     # value, measured on the same score as every other harness change rather than asserted.
     "routing": {"label": "Model routing", "setting": "model_routing_mode", "kind": "choice",
-                "choices": ("fixed", "smart")},
+                "choices": ("fixed", "shadow", "smart")},
 }
 #: Spec keys an arm writes. Asserted disjoint from APPROVAL_KEYS by a test.
 ARM_SPEC_KEYS = frozenset({"model_config", "review_rounds", "routing_mode", "experiment"})
@@ -82,7 +82,12 @@ def _coerce(knob: str, value: Any) -> Any:
 def _arm_word(knob: str, value: Any) -> str:
     from .scorecards import HARNESS_NAMES
 
-    return HARNESS_NAMES.get(str(value), str(value)) if knob == "harness" else f"{value} rounds"
+    if knob == "harness":
+        return HARNESS_NAMES.get(str(value), str(value))
+    if knob == "routing":
+        return {"fixed": "Fixed", "shadow": "Shadow", "smart": "Smart"}.get(
+            str(value or "").lower(), str(value))
+    return f"{value} rounds"
 
 
 def _default_name(connection, project_id: str, kind: str, key: str, knob: str, a: Any, b: Any) -> str:
@@ -205,20 +210,36 @@ def _arms(connection, eid: str) -> dict[str, dict[str, Any]]:
                COALESCE(SUM(s.cost_usd), 0) AS cost,
                AVG(CASE WHEN COALESCE(s.gates_failed, 0) > 0 OR s.terminal_state <> 'completed'
                         THEN 1 ELSE 0 END) FILTER (WHERE s.unit_id IS NOT NULL) AS gate_fail,
-               COUNT(a.unit_id) AS assigned
+               COUNT(a.unit_id) AS assigned,
+               COUNT(*) FILTER (WHERE s.pr_merged IS TRUE) AS merged_count,
+               COUNT(*) FILTER (WHERE s.review_approved IS TRUE) AS review_ok,
+               COUNT(*) FILTER (WHERE s.review_approved IS NOT NULL) AS review_total
         FROM experiment_assignments a
         LEFT JOIN run_scorecards s ON s.unit_kind IN ('build', 'quick_change')
              AND s.unit_id = a.unit_id
         WHERE a.experiment_id = :e GROUP BY a.arm"""), {"e": eid}).mappings().all()
     out = {arm: {"n": 0, "mean": None, "sd": None, "cost_usd": 0.0, "gate_fail": None,
-                 "assigned": 0} for arm in ("a", "b")}
+                 "assigned": 0, "merged_count": 0, "cost_per_merged_usd": None,
+                 "review_approved_count": 0, "review_total_count": 0,
+                 "review_approval_rate": None} for arm in ("a", "b")}
     for r in rows:
-        out[r["arm"]] = {"n": int(r["n"] or 0),
-                         "mean": None if r["mean"] is None else round(float(r["mean"]), 3),
-                         "sd": None if r["sd"] is None else round(float(r["sd"]), 3),
-                         "cost_usd": round(float(r["cost"] or 0), 2),
-                         "gate_fail": None if r["gate_fail"] is None else round(float(r["gate_fail"]), 3),
-                         "assigned": int(r["assigned"] or 0)}
+        cost = float(r["cost"] or 0)
+        merged = int(r["merged_count"] or 0)
+        rev_ok = int(r["review_ok"] or 0)
+        rev_tot = int(r["review_total"] or 0)
+        out[r["arm"]] = {
+            "n": int(r["n"] or 0),
+            "mean": None if r["mean"] is None else round(float(r["mean"]), 3),
+            "sd": None if r["sd"] is None else round(float(r["sd"]), 3),
+            "cost_usd": round(cost, 2),
+            "gate_fail": None if r["gate_fail"] is None else round(float(r["gate_fail"]), 3),
+            "assigned": int(r["assigned"] or 0),
+            "merged_count": merged,
+            "cost_per_merged_usd": round(cost / merged, 2) if merged > 0 else None,
+            "review_approved_count": rev_ok,
+            "review_total_count": rev_tot,
+            "review_approval_rate": round(rev_ok / rev_tot, 3) if rev_tot > 0 else None,
+        }
     return out
 
 

@@ -58,14 +58,29 @@ _bbn_url() {
 _bbn_url BOSS_NPM_REGISTRY "${BOSS_NPM_REGISTRY:-}" https
 _bbn_url BOSS_PIP_INDEX_URL "${BOSS_PIP_INDEX_URL:-}" https
 _bbn_url BOSS_PLAYWRIGHT_DOWNLOAD_HOST "${BOSS_PLAYWRIGHT_DOWNLOAD_HOST:-}" https
+_bbn_url BOSS_TOOLCHAIN_MIRROR_URL "${BOSS_TOOLCHAIN_MIRROR_URL:-}" https
+_bbn_url BOSS_JDK_DOWNLOAD_BASE_URL "${BOSS_JDK_DOWNLOAD_BASE_URL:-}" https
+_bbn_url BOSS_MAVEN_DOWNLOAD_BASE_URL "${BOSS_MAVEN_DOWNLOAD_BASE_URL:-}" https
+_bbn_url BOSS_GRADLE_DOWNLOAD_BASE_URL "${BOSS_GRADLE_DOWNLOAD_BASE_URL:-}" https
+_bbn_url BOSS_GO_DOWNLOAD_BASE_URL "${BOSS_GO_DOWNLOAD_BASE_URL:-}" https
 _bbn_url BOSS_UPSTREAM_PROXY "${BOSS_UPSTREAM_PROXY:-}" "http https"
 _bbn_url BOSS_UPSTREAM_HTTP_PROXY "${BOSS_UPSTREAM_HTTP_PROXY:-}" "http https"
 
 if [ -n "${BOSS_NPM_REGISTRY:-}" ]; then
-  export npm_config_registry="$BOSS_NPM_REGISTRY" npm_config_strict_ssl=true
+  export npm_config_registry="$BOSS_NPM_REGISTRY" npm_config_strict_ssl=true \
+    YARN_NPM_REGISTRY_SERVER="$BOSS_NPM_REGISTRY"
 fi
 if [ -n "${BOSS_PIP_INDEX_URL:-}" ]; then
   export PIP_INDEX_URL="$BOSS_PIP_INDEX_URL"
+fi
+
+_bbn_npmrc="${BOSS_BUILD_NPMRC_SECRET:-/run/secrets/boss_build_npmrc}"
+if [ -f "$_bbn_npmrc" ] && [ -s "$_bbn_npmrc" ]; then
+  export npm_config_userconfig="$_bbn_npmrc"
+fi
+_bbn_pipconf="${BOSS_BUILD_PIP_CONF_SECRET:-/run/secrets/boss_build_pip_conf}"
+if [ -f "$_bbn_pipconf" ] && [ -s "$_bbn_pipconf" ]; then
+  export PIP_CONFIG_FILE="$_bbn_pipconf"
 fi
 # pip's 15 s read timeout and 5 retries lose large wheels (the Agent SDK bundles its CLI) behind a
 # slow inspecting proxy while other stages download in parallel; a caller's own value wins.
@@ -111,7 +126,7 @@ if [ -f "$_bbn_ca" ] && [ -s "$_bbn_ca" ]; then
       GIT_SSL_CAINFO="$_bbn_dir/ca-bundle.pem" APT_CONFIG="$_bbn_dir/apt.conf"
   fi
 fi
-unset _bbn_ok _bbn_s _bbn_rest _bbn_auth _bbn_ca _bbn_system _bbn_f _bbn_dir
+unset _bbn_ok _bbn_s _bbn_rest _bbn_auth _bbn_ca _bbn_npmrc _bbn_pipconf _bbn_system _bbn_f _bbn_dir
 
 if [ "$#" -gt 0 ]; then
   exec "$@"

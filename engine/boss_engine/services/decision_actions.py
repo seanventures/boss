@@ -232,6 +232,7 @@ RECORDED_ON_APPROVAL = frozenset({
     "configure_target_github_and_retry_phase",
     "coordinate_with_surface_owner",
     "create_budget_reservation",
+    "design_assumptions",
     # Community's discovery spend (discovery_spend.py) asks a person to reconcile a stage whose
     # paid call may already have been charged — the same shape as typed_decision_reconciliation.
     # Unknown to the console-a stream, which was written on the private tree (integration).

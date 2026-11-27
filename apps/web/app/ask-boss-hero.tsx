@@ -1938,8 +1938,8 @@ export function AskBossHero({
                 ))}
                 <span className="askboss-research-hint">→ then press Research</span>
               </div> : <div className="askboss-research-row" role="status"
-                  title="Discovery research is paused in Community while budget and recovery safeguards are completed. Saved dossiers are available under Discovery.">
-                Research is paused in Community
+                  title="Discovery research is disabled on this view. Saved dossiers are available under Discovery.">
+                Research is disabled
               </div>}
               {/* A SCROLL STRIP, NOT A SLIDESHOW.
                   These flipped pages on a nine-second timer, which means the one you were
@@ -2219,12 +2219,12 @@ export function AskBossHero({
                   <h4>What BOSS will do</h4>
                   <ol>
                     {researchAvailable ? <li>Research the idea and cite what it finds</li>
-                      : <li>Start from your brief, new Discovery research is paused in Community</li>}
+                      : <li>Start from your brief; Discovery research is disabled</li>}
                     <li>Convene a panel of roles to argue the shape of it</li>
                     <li>Write a PRD, <strong>you approve it</strong> before any code</li>
                     <li>Build, review and test it, then open a pull request</li>
                     {deploymentAvailable ? <li>Deploy it, asking you first unless the plan says your deploy policy decides</li>
-                      : <li>Review the release; SSH host deployment is paused in Community</li>}
+                      : <li>Review the release; deployment is disabled</li>}
                   </ol>
                 </section>
 

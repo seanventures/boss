@@ -26,12 +26,21 @@ x-boss-logging: &boss-logging
 # value is capped at 128 KiB, and a bigger one stops the process from starting.
 x-boss-enterprise-env: &boss-enterprise-env
   BOSS_NPM_REGISTRY: ${BOSS_NPM_REGISTRY:-}
+  BOSS_NPM_CREDENTIAL_REF: ${BOSS_NPM_CREDENTIAL_REF:-}
   BOSS_PIP_INDEX_URL: ${BOSS_PIP_INDEX_URL:-}
+  BOSS_PIP_CREDENTIAL_REF: ${BOSS_PIP_CREDENTIAL_REF:-}
   BOSS_GOPROXY: ${BOSS_GOPROXY:-}
   BOSS_GOSUMDB: ${BOSS_GOSUMDB:-}
   BOSS_GONOSUMDB: ${BOSS_GONOSUMDB:-}
   BOSS_MAVEN_MIRROR: ${BOSS_MAVEN_MIRROR:-}
+  BOSS_MAVEN_CREDENTIAL_REF: ${BOSS_MAVEN_CREDENTIAL_REF:-}
   BOSS_PLAYWRIGHT_DOWNLOAD_HOST: ${BOSS_PLAYWRIGHT_DOWNLOAD_HOST:-}
+  BOSS_TOOLCHAIN_MIRROR_URL: ${BOSS_TOOLCHAIN_MIRROR_URL:-}
+  BOSS_GITHUB_WEB_URL: ${BOSS_GITHUB_WEB_URL:-}
+  BOSS_GITHUB_API_URL: ${BOSS_GITHUB_API_URL:-}
+  BOSS_GITHUB_GIT_URL: ${BOSS_GITHUB_GIT_URL:-}
+  BOSS_GITLAB_BASE_URL: ${BOSS_GITLAB_BASE_URL:-}
+  BOSS_GITLAB_REPOS: ${BOSS_GITLAB_REPOS:-}
   BOSS_UPSTREAM_PROXY: ${BOSS_UPSTREAM_PROXY:-}
   BOSS_UPSTREAM_HTTP_PROXY: ${BOSS_UPSTREAM_HTTP_PROXY:-}
   BOSS_UPSTREAM_NO_PROXY: ${BOSS_UPSTREAM_NO_PROXY:-}
@@ -42,11 +51,16 @@ x-boss-enterprise-env: &boss-enterprise-env
   BOSS_EGRESS_PRIVATE_ALLOW: ${BOSS_EGRESS_PRIVATE_ALLOW:-}
 
 # What an image build gets (Dockerfile.community, scripts/install/build-network.sh). The extra
-# CA goes as the BuildKit secret boss_build_ca (bottom of this file), never as an argument.
+# CA and registry configs go as BuildKit secrets (bottom of this file), never as arguments.
 x-boss-enterprise-build-args: &boss-enterprise-build-args
   BOSS_NPM_REGISTRY: ${BOSS_NPM_REGISTRY:-}
   BOSS_PIP_INDEX_URL: ${BOSS_PIP_INDEX_URL:-}
   BOSS_PLAYWRIGHT_DOWNLOAD_HOST: ${BOSS_PLAYWRIGHT_DOWNLOAD_HOST:-}
+  BOSS_TOOLCHAIN_MIRROR_URL: ${BOSS_TOOLCHAIN_MIRROR_URL:-}
+  BOSS_JDK_DOWNLOAD_BASE_URL: ${BOSS_JDK_DOWNLOAD_BASE_URL:-}
+  BOSS_MAVEN_DOWNLOAD_BASE_URL: ${BOSS_MAVEN_DOWNLOAD_BASE_URL:-}
+  BOSS_GRADLE_DOWNLOAD_BASE_URL: ${BOSS_GRADLE_DOWNLOAD_BASE_URL:-}
+  BOSS_GO_DOWNLOAD_BASE_URL: ${BOSS_GO_DOWNLOAD_BASE_URL:-}
   BOSS_UPSTREAM_PROXY: ${BOSS_UPSTREAM_PROXY:-}
   BOSS_UPSTREAM_HTTP_PROXY: ${BOSS_UPSTREAM_HTTP_PROXY:-}
   BOSS_UPSTREAM_NO_PROXY: ${BOSS_UPSTREAM_NO_PROXY:-}
@@ -395,6 +409,8 @@ services:
       labels: *boss-rollback-labels
       secrets:
         - boss_build_ca
+        - boss_build_npmrc
+        - boss_build_pip_conf
       args:
         <<: *boss-enterprise-build-args
         BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
@@ -819,6 +835,8 @@ services:
       labels: *boss-rollback-labels
       secrets:
         - boss_build_ca
+        - boss_build_npmrc
+        - boss_build_pip_conf
       args:
         <<: *boss-enterprise-build-args
         BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
@@ -1130,6 +1148,8 @@ services:
       labels: *boss-rollback-labels
       secrets:
         - boss_build_ca
+        - boss_build_npmrc
+        - boss_build_pip_conf
       args:
         <<: *boss-enterprise-build-args
         BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
@@ -1194,6 +1214,8 @@ services:
       labels: *boss-rollback-labels
       secrets:
         - boss_build_ca
+        - boss_build_npmrc
+        - boss_build_pip_conf
       args:
         <<: *boss-enterprise-build-args
         BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
@@ -1247,6 +1269,8 @@ services:
       labels: *boss-rollback-labels
       secrets:
         - boss_build_ca
+        - boss_build_npmrc
+        - boss_build_pip_conf
       args:
         <<: *boss-enterprise-build-args
         BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
@@ -1299,6 +1323,27 @@ services:
       BOSS_TARGET_BITBUCKET_WORKSPACE: ${BOSS_TARGET_BITBUCKET_WORKSPACE:-}
       BOSS_TARGET_BITBUCKET_REPO: ${BOSS_TARGET_BITBUCKET_REPO:-}
       BOSS_BITBUCKET_REPOS: ${BOSS_BITBUCKET_REPOS:-}
+      # Secret store & egress-only registry/GitLab credentials (never forwarded to sandboxes).
+      BOSS_INFISICAL_URL: ${BOSS_INFISICAL_URL:-}
+      BOSS_INFISICAL_TOKEN: ${BOSS_INFISICAL_TOKEN:-}
+      BOSS_INFISICAL_PROJECT_ID: ${BOSS_INFISICAL_PROJECT_ID:-}
+      BOSS_INFISICAL_CLIENT_ID: ${BOSS_INFISICAL_CLIENT_ID:-}
+      BOSS_INFISICAL_CLIENT_SECRET: ${BOSS_INFISICAL_CLIENT_SECRET:-}
+      BOSS_INFISICAL_ENVIRONMENT: ${BOSS_INFISICAL_ENVIRONMENT:-prod}
+      BOSS_COMMUNITY_SECRET_STORE: ${BOSS_COMMUNITY_SECRET_STORE:-}
+      BOSS_KMS_MASTER_KEY: ${BOSS_KMS_MASTER_KEY:-}
+      BOSS_NPM_TOKEN: ${BOSS_NPM_TOKEN:-}
+      BOSS_NPM_USERNAME: ${BOSS_NPM_USERNAME:-}
+      BOSS_NPM_PASSWORD: ${BOSS_NPM_PASSWORD:-}
+      BOSS_PIP_TOKEN: ${BOSS_PIP_TOKEN:-}
+      BOSS_PIP_USERNAME: ${BOSS_PIP_USERNAME:-}
+      BOSS_PIP_PASSWORD: ${BOSS_PIP_PASSWORD:-}
+      BOSS_MAVEN_TOKEN: ${BOSS_MAVEN_TOKEN:-}
+      BOSS_MAVEN_USERNAME: ${BOSS_MAVEN_USERNAME:-}
+      BOSS_MAVEN_PASSWORD: ${BOSS_MAVEN_PASSWORD:-}
+      BOSS_GITLAB_TOKEN: ${BOSS_GITLAB_TOKEN:-}
+      BOSS_GITLAB_USERNAME: ${BOSS_GITLAB_USERNAME:-}
+      BOSS_GITLAB_PROJECT_ID: ${BOSS_GITLAB_PROJECT_ID:-}
     volumes:
       # The company CA (installer's copy of BOSS_EXTRA_CA_FILE; empty when none). Never created
       # by Docker: a missing file fails `up` loudly instead of becoming a directory that breaks
@@ -1401,6 +1446,8 @@ services:
       target: runner
       secrets:
         - boss_build_ca
+        - boss_build_npmrc
+        - boss_build_pip_conf
       args:
         <<: *boss-enterprise-build-args
         BOSS_SOURCE_SHA: ${BOSS_SOURCE_SHA:-unknown}
@@ -1472,6 +1519,8 @@ services:
       labels: *boss-rollback-labels
       secrets:
         - boss_build_ca
+        - boss_build_npmrc
+        - boss_build_pip_conf
       args:
         <<: *boss-enterprise-build-args
         # THE PORT IS DECLARED ONCE, ABOVE, AND EVERYTHING DERIVES FROM IT.
@@ -1537,6 +1586,10 @@ secrets:
   # Compose reads the file on this machine; /dev/null is an empty secret, which the build ignores.
   boss_build_ca:
     file: ${BOSS_EXTRA_CA_FILE:-${BOSS_BUILD_CA_FILE:-/dev/null}}
+  boss_build_npmrc:
+    file: ${BOSS_BUILD_NPMRC_FILE:-/dev/null}
+  boss_build_pip_conf:
+    file: ${BOSS_BUILD_PIP_CONF_FILE:-/dev/null}
 
 volumes:
   boss_community_cli_home:

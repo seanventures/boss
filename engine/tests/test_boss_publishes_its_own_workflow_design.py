@@ -349,3 +349,118 @@ def test_describe_surfaces_the_error_after_the_one_retry(eng, project, monkeypat
     bad = {"name": "Lint", "steps": [{"id": "lint", "instructions": "lint it"}]}
     with pytest.raises(DraftError):
         _describe_with(eng, project, monkeypatch, [bad, bad])
+
+
+def test_conditional_step_inputs_checked_on_publish_and_draft(eng, project):
+    """BOSSAPP-1413: config_deploy with code_task_run_id requires source_paths (or source_file),
+    fix_pr pairs path <-> content, and build pairs start_from_content -> start_from / target_path."""
+    from boss_engine.services import workflows
+
+    # 1) config_deploy v8 (code_task_run_id without source_paths) refused on BOTH paths naming source_paths.
+    bad_v8_steps = [
+        {"id": "build", "capability": "build",
+         "input": {"title": "Make config", "instructions": "make config"}},
+        {"id": "deploy", "capability": "config_deploy",
+         "deployment_target": STAGING,
+         "input": {"code_task_run_id": {"from_step": "build", "field": "run_id"}}},
+    ]
+    draft_v8 = _draft(eng, project, workflow_key="cfg_cond", name="Cfg Cond", steps=bad_v8_steps)
+    assert draft_v8["ok"] is False and "source_paths" in draft_v8["error"], draft_v8
+
+    with eng.begin() as c:
+        wf = workflows.create_definition(
+            c, project_id=project, workflow_key="cfg_cond_pub",
+            name="Cfg Cond Pub", description=None, actor="test", namespace="product",
+        )
+        with pytest.raises(workflows.WorkflowValidationError, match="source_paths"):
+            workflows.publish_version(
+                c, project_id=project, definition_id=wf["id"], actor="test",
+                spec={
+                    "entry_step": "deploy",
+                    "steps": [{
+                        "id": "deploy",
+                        "kind": "capability",
+                        "binding": {
+                            "capability": "config_deploy",
+                            "inputs": {
+                                "target_id": STAGING,
+                                "code_task_run_id": "crun_123",
+                            },
+                        },
+                        "next": [],
+                    }],
+                },
+            )
+
+    # 2) config_deploy v9 (with source_paths) succeeds on BOTH draft_workflow and publish_version.
+    good_v9_steps = [
+        {"id": "build", "capability": "build",
+         "input": {"title": "Make config", "instructions": "make config"}},
+        {"id": "deploy", "capability": "config_deploy",
+         "deployment_target": STAGING,
+         "input": {"code_task_run_id": {"from_step": "build", "field": "run_id"},
+                   "source_paths": ["tenants/lumen.yaml"]}},
+    ]
+    draft_v9 = _draft(eng, project, workflow_key="cfg_cond", name="Cfg Cond", steps=good_v9_steps)
+    assert draft_v9.get("status") == "published", draft_v9
+
+    with eng.begin() as c:
+        wf2 = workflows.create_definition(
+            c, project_id=project, workflow_key="cfg_cond_pub_ok",
+            name="Cfg Cond Pub Ok", description=None, actor="test", namespace="product",
+        )
+        v9 = workflows.publish_version(
+            c, project_id=project, definition_id=wf2["id"], actor="test",
+            spec={
+                "entry_step": "deploy",
+                "steps": [{
+                    "id": "deploy",
+                    "kind": "capability",
+                    "binding": {
+                        "capability": "config_deploy",
+                        "inputs": {
+                            "target_id": STAGING,
+                            "code_task_run_id": "crun_123",
+                            "source_paths": ["tenants/lumen.yaml"],
+                        },
+                    },
+                    "next": [],
+                }],
+            },
+        )
+        assert v9["version"] == 1
+
+    # 3) fix_pr conditional pairing (path <-> content) & build (start_from_content -> start_from/target_path).
+    bad_fix = _draft(eng, project, workflow_key="fix_cond", name="Fix Cond", steps=[
+        {"id": "fix", "capability": "fix_pr",
+         "input": {"pull_request": "crun_1", "title": "Fix", "path": "a.py"}},
+    ])
+    assert bad_fix["ok"] is False and "content" in bad_fix["error"]
+
+    bad_build = _draft(eng, project, workflow_key="build_cond", name="Build Cond", steps=[
+        {"id": "b", "capability": "build",
+         "input": {"title": "Make app", "instructions": "Make app", "start_from_content": "print(1)"}},
+    ])
+    assert bad_build["ok"] is False and "start_from" in bad_build["error"]
+
+    with eng.begin() as c:
+        wf3 = workflows.create_definition(
+            c, project_id=project, workflow_key="fix_cond_pub",
+            name="Fix Cond Pub", description=None, actor="test", namespace="product",
+        )
+        with pytest.raises(workflows.WorkflowValidationError, match="path"):
+            workflows.publish_version(
+                c, project_id=project, definition_id=wf3["id"], actor="test",
+                spec={
+                    "entry_step": "fix",
+                    "steps": [{
+                        "id": "fix",
+                        "kind": "capability",
+                        "binding": {
+                            "capability": "fix_pr",
+                            "inputs": {"pull_request": "crun_1", "title": "Fix", "content": "x = 1"},
+                        },
+                        "next": [],
+                    }],
+                },
+            )

@@ -35,7 +35,8 @@ from sqlalchemy import text
 
 from .core import make_id
 
-SCOPES = ("mcp", "mcp:read")
+SCOPES = ("mcp", "mcp:read", "metatron", "metatron:read")
+METATRON_CLIENT_ID = "metatron"
 DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
 CODE_TTL = timedelta(minutes=5)
 DEVICE_TTL = timedelta(minutes=10)
@@ -142,6 +143,46 @@ def register_client(connection: Any, metadata: dict[str, Any]) -> dict[str, Any]
             "client_id_issued_at": int(_now().timestamp())}
 
 
+def ensure_metatron_client(connection: Any) -> dict[str, Any]:
+    """Idempotently register the built-in `metatron` CLI public client for RFC 8628."""
+    connection.execute(text(
+        "INSERT INTO mcp_oauth_clients (client_id, client_name, redirect_uris, grant_types, status) "
+        "VALUES (:c, 'BOSS Metatron CLI', '[]'::jsonb, CAST(:g AS jsonb), 'active') "
+        "ON CONFLICT (client_id) DO NOTHING"),
+        {"c": METATRON_CLIENT_ID, "g": json.dumps([DEVICE_GRANT, "refresh_token"])})
+    return _client(connection, METATRON_CLIENT_ID)
+
+
+def principal_summary(connection: Any, principal_id: str) -> dict[str, Any]:
+    """Return {id, actor, display_name, roles} for an active principal."""
+    row = connection.execute(text(
+        "SELECT p.id, p.display_name, p.legacy_member_ids, u.email "
+        "FROM identity_principals p "
+        "LEFT JOIN identity_users u ON u.principal_id = p.id "
+        "WHERE p.id = :p"),
+        {"p": principal_id}).mappings().first()
+    if not row:
+        return {"id": principal_id, "actor": principal_id, "display_name": principal_id, "roles": []}
+    roles = list(connection.execute(text(
+        "SELECT DISTINCT r.key "
+        "FROM identity_role_bindings b "
+        "JOIN identity_access_roles r ON r.id = b.role_id "
+        "WHERE (b.expires_at IS NULL OR b.expires_at > now()) "
+        "  AND ((b.subject_type = 'principal' AND b.subject_id = :p) "
+        "       OR (b.subject_type = 'group' AND b.subject_id IN "
+        "           (SELECT group_id FROM identity_group_members WHERE principal_id = :p))) "
+        "ORDER BY r.key"),
+        {"p": principal_id}).scalars().all())
+    legacy = list(row["legacy_member_ids"] or [])
+    actor = row["email"] or (legacy[0] if legacy else None) or row["display_name"] or row["id"]
+    return {
+        "id": row["id"],
+        "actor": str(actor),
+        "display_name": row["display_name"],
+        "roles": roles,
+    }
+
+
 def _client(connection: Any, client_id: str) -> dict[str, Any]:
     row = connection.execute(text(
         "SELECT client_id, client_name, redirect_uris, grant_types, status FROM mcp_oauth_clients "
@@ -203,7 +244,7 @@ def _permissions_for(connection: Any, principal: Any, scopes: list[str]) -> list
     from ..identity import api_keys
 
     held = sorted(api_keys.held_permissions(connection, principal))
-    if "mcp" in scopes:
+    if "mcp" in scopes or "metatron" in scopes:
         return held
     return [p for p in held if p.endswith(":read")]
 

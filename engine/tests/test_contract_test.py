@@ -251,13 +251,13 @@ def test_no_case_is_sent_after_the_turns_deadline(gateway):
 
 # ── the tool and the capability ───────────────────────────────────────────────────────────
 
-def test_the_tool_reaches_only_the_projects_own_deployments(gateway, eng, project):
+def test_the_tool_reaches_only_the_projects_own_deployments(gateway, eng, project):  # noqa: F811
     from boss_engine.config import get_settings
     from boss_engine.kernel.idempotency import declared
     from boss_engine.tools.builtin import build_default_registry
 
     tool = {s.name: s for s in build_default_registry().specs()}["contract_test"]
-    assert tool.permission == "observability:manage"
+    assert tool.permission == "observability:read"
     # It can POST or DELETE: a resumed run never re-sends it on its own.
     assert tool.idempotency == "irreversible" and declared("contract_test") == "irreversible"
 
@@ -293,46 +293,31 @@ def _target(c, project_id, health_url, created_by):
          "h": json.dumps([{"url": health_url}]), "by": created_by})
 
 
-def test_community_reaches_only_the_exact_urls_of_targets_a_person_made(gateway, eng, project,
-                                                                          dead_port):
-    """BOSSAPP-1166: Community runs contract tests, bound to the project's targets.
-
-    Community has no egress network policy, so the guard is the policy: the exact scheme, host
-    and port of a deployment target a PERSON created. Another port on the same host (the BOSS
-    API on localhost), a public host, and a target an agent created are refused before
-    anything is sent."""
+def test_contract_test_reaches_project_targets_identically_across_editions(gateway, eng, project):  # noqa: F811
+    """BOSSAPP-1460: contract_test enforces the exact same host rules across all editions."""
     from boss_engine.config import get_settings
     from boss_engine.tools.builtin import build_default_registry
 
     tool = {s.name: s for s in build_default_registry().specs()}["contract_test"]
 
     class C:
-        settings = get_settings().model_copy(update={"boss_edition": "community"})
+        def __init__(self, edition):
+            self.settings = get_settings().model_copy(update={"boss_edition": edition})
 
         def begin(self):
             return eng.begin()
 
-    args = {"cases": [{"path": "/healthz", "expect_status": 200}], "base_url": gateway}
-    none_yet = tool.handler(C(), project_id=project, actor="a", args=args)
-    assert none_yet["ok"] is False and "has none" in none_yet["error"]
     with eng.begin() as c:
-        # An AGENT's target adds nothing; a host registered for SSH has no port, adds nothing.
-        _target(c, project, gateway + "/healthz", "agent:deploy-lead")
         add_deployment_host(c, project, "127.0.0.1")
-    still = tool.handler(C(), project_id=project, actor="a", args=args)
-    assert still["ok"] is False and "has none" in still["error"]
-    with eng.begin() as c:
-        _target(c, project, gateway + "/healthz", "executive_console")      # a person
-    out = tool.handler(C(), project_id=project, actor="a", args=args)
-    assert out["ok"] and out["passed"] == 1, out
-    for url in (f"http://127.0.0.1:{dead_port}/", "http://8.8.8.8/",
-                gateway.replace("http://", "https://") + "/healthz"):
-        refused = tool.handler(C(), project_id=project, actor="a",
-                               args={"cases": [{"url": url}]})
+    args = {"cases": [{"path": "/healthz", "expect_status": 200}], "base_url": gateway}
+    for edition in ("community", "enterprise_self_hosted"):
+        out = tool.handler(C(edition), project_id=project, actor="a", args=args)
+        assert out["ok"] and out["passed"] == 1, (edition, out)
+        refused = tool.handler(C(edition), project_id=project, actor="a",
+                               args={"cases": [{"url": "http://169.254.169.254/latest/meta-data/"}]})
         assert refused["ok"] and refused["failed"] == 1
-        case = refused["cases"][0]
-        assert "not one of this project's deployment targets" in case["failures"][0], case
-        assert case["ms"] == 0, "nothing was sent"
+        assert "metadata" in refused["cases"][0]["failures"][0]
+        assert refused["cases"][0]["ms"] == 0, "nothing was sent"
 
 
 def test_project_only_matches_scheme_host_and_port_on_every_hop(gateway):
@@ -340,7 +325,7 @@ def test_project_only_matches_scheme_host_and_port_on_every_hop(gateway):
     origins = frozenset({("http", "127.0.0.1", port)})
     assert ct.check_host(gateway + "/x", project_only=True, origins=origins) == ["127.0.0.1"]
     for url in ("http://127.0.0.1:1/", "http://8.8.8.8/", f"https://127.0.0.1:{port}/"):
-        with pytest.raises(ct.HostRefused, match="Community"):
+        with pytest.raises(ct.HostRefused, match="project-only"):
             ct.check_host(url, project_only=True, origins=origins)
     with pytest.raises(ct.HostRefused, match="metadata"):
         ct.check_host("http://169.254.169.254/", project_only=True,
@@ -415,3 +400,227 @@ def test_credentials_do_not_follow_a_redirect_to_another_origin(gateway):
     out = ct.run_cases([{"url": gateway + "/to-same-origin", "headers": secret}],
                        allowed_private=allowed)
     assert json.loads(out["cases"][0]["body_excerpt"])["authorization"] == "Bearer good"
+
+
+def test_integration_validator_runs_read_only_probes_and_refuses_mutating_or_foreign_secret(
+    eng, project, gateway, monkeypatch,  # noqa: F811
+):
+    """BOSSAPP-1411: integration_validator holds observability:read (runs http_probe and
+    GET/HEAD/OPTIONS contract_test directly), while mutating methods require observability:manage,
+    mutating production calls require deployment:production, and secret_ref is project-scoped."""
+    from types import SimpleNamespace
+
+    from sqlalchemy import text
+
+    from boss_engine.config import get_settings
+    from boss_engine.identity import authz
+    from boss_engine.identity.authz import Decision, DenyReason
+    from boss_engine.identity.principal import (
+        AuthContext,
+        AuthMethod,
+        Principal,
+        PrincipalKind,
+        PrincipalStatus,
+    )
+    from boss_engine.tools.builtin import build_default_registry
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "authz_mode", "enforce")
+    monkeypatch.setattr(settings, "authz_router_modes", "")
+
+    validator = AuthContext(
+        Principal("agt_integration_validator", PrincipalKind.AGENT, "org_1",
+                  PrincipalStatus.ACTIVE, "integration_validator"),
+        AuthMethod.RUN_TOKEN,
+    )
+
+    def _allow_read_only(_ctx, permission, scope, **_kwargs):
+        if permission == "observability:read":
+            return Decision.allow(permission, scope)
+        return Decision.deny(permission, scope, DenyReason.MISSING_PERMISSION)
+
+    monkeypatch.setattr(authz, "check", _allow_read_only)
+
+    with eng.begin() as c:
+        add_deployment_host(c, project, "127.0.0.1")
+
+    reg = build_default_registry()
+    assert reg.get("http_probe").permission == "observability:read"
+    assert reg.get("contract_test").permission == "observability:read"
+
+    ctx = SimpleNamespace(settings=settings, begin=lambda: eng.begin())
+
+    probe_out = reg.invoke(
+        "http_probe", ctx, project_id=project, actor="integration_validator",
+        args={"url": gateway + "/healthz"}, auth=validator,
+    )
+    assert probe_out["ok"] is True and probe_out["status"] == 200
+
+    ro_out = reg.invoke(
+        "contract_test", ctx, project_id=project, actor="integration_validator",
+        args={"cases": [{"path": "/healthz", "method": "GET", "expect_status": 200}],
+              "base_url": gateway},
+        auth=validator,
+    )
+    assert ro_out["ok"] is True and ro_out["passed"] == 1
+
+    # Mutating method must be refused BEFORE any HTTP request fires.
+    def _no_http(*_args, **_kwargs):
+        raise AssertionError("mutating contract_test should have been refused before network")
+
+    monkeypatch.setattr(ct, "run_cases", _no_http)
+    mut_out = reg.invoke(
+        "contract_test", ctx, project_id=project, actor="integration_validator",
+        args={"cases": [{"path": "/v1/orders", "method": "POST", "json": {"x": 1}}],
+              "base_url": gateway},
+        auth=validator,
+    )
+    assert mut_out["ok"] is False
+    assert mut_out.get("permission") == "observability:manage"
+
+    # Even with observability:manage, mutating against a production target requires deployment:production.
+    def _allow_manage_not_prod(_ctx, permission, scope, **_kwargs):
+        if permission in {"observability:read", "observability:manage"}:
+            return Decision.allow(permission, scope)
+        return Decision.deny(permission, scope, DenyReason.MISSING_PERMISSION)
+
+    monkeypatch.setattr(authz, "check", _allow_manage_not_prod)
+    with eng.begin() as c:
+        c.execute(
+            text("INSERT INTO deployment_targets "
+                 "(id, project_id, app_name, repo, environment, target_kind, target_ref, "
+                 "public_url, status, created_by) VALUES "
+                 "(:id, :p, 'prod-api', 'ex/api', 'production', 'ssh', '127.0.0.1', "
+                 ":u, 'active', 'test')"),
+            {"id": f"deptgt_prod_{project}", "p": project, "u": gateway},
+        )
+    prod_out = reg.invoke(
+        "contract_test", ctx, project_id=project, actor="integration_validator",
+        args={"cases": [{"path": "/v1/orders", "method": "POST", "json": {"x": 1}}],
+              "base_url": gateway},
+        auth=validator,
+    )
+    assert prod_out["ok"] is False
+    assert prod_out.get("permission") == "deployment:production"
+
+    # Foreign/wrong-purpose secret_ref is rejected by project scope before network.
+    with eng.begin() as c:
+        ws = c.execute(text("SELECT workspace_id FROM projects WHERE id = :p"), {"p": project}).scalar_one()
+        other_project = f"p_other_{project}"
+        c.execute(
+            text("INSERT INTO projects (id, workspace_id, name, slug) VALUES (:i, :w, 'Other', :i)"),
+            {"i": other_project, "w": ws},
+        )
+        c.execute(
+            text("INSERT INTO secret_refs "
+                 "(id, project_id, scope_type, scope_id, ref_kind, ref_key, "
+                 "secret_kind, storage_backend, metadata, created_by) "
+                 "VALUES (:id, :p, 'project', :p, 'env', 'NOPE', 'api_token', "
+                 "'environment', '{\"http_auth\": true}'::jsonb, 'test')"),
+            {"id": f"sec_foreign_{project}", "p": other_project},
+        )
+        problem = ct.http_auth_problem(c, f"sec_foreign_{project}", project)
+        assert problem is not None and "does not exist" in problem
+
+
+def _contract_tool_with(engine, monkeypatch, allowed_permissions):
+    """The registry's contract_test, invoked as integration_validator holding exactly
+    `allowed_permissions` (authz enforced)."""
+    from types import SimpleNamespace
+
+    from boss_engine.config import get_settings
+    from boss_engine.identity import authz
+    from boss_engine.identity.authz import Decision, DenyReason
+    from boss_engine.identity.principal import (
+        AuthContext,
+        AuthMethod,
+        Principal,
+        PrincipalKind,
+        PrincipalStatus,
+    )
+    from boss_engine.tools.builtin import build_default_registry
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "authz_mode", "enforce")
+    monkeypatch.setattr(settings, "authz_router_modes", "")
+    validator = AuthContext(
+        Principal("agt_integration_validator", PrincipalKind.AGENT, "org_1",
+                  PrincipalStatus.ACTIVE, "integration_validator"),
+        AuthMethod.RUN_TOKEN,
+    )
+
+    def _check(_ctx, permission, scope, **_kwargs):
+        if permission in allowed_permissions:
+            return Decision.allow(permission, scope)
+        return Decision.deny(permission, scope, DenyReason.MISSING_PERMISSION)
+
+    monkeypatch.setattr(authz, "check", _check)
+    reg = build_default_registry()
+    ctx = SimpleNamespace(settings=settings, begin=lambda: engine.begin())
+
+    def call(project_id, args):
+        return reg.invoke("contract_test", ctx, project_id=project_id,
+                          actor="integration_validator", args=args, auth=validator)
+
+    return call
+
+
+def test_cases_given_as_a_json_string_get_the_same_checks(eng, project, gateway, monkeypatch):  # noqa: F811
+    """BOSSAPP-1411 (gate review): `cases` as a JSON string (run_cases accepts it) runs, and a
+    mutating case in it is still refused without observability:manage — no NameError, no way
+    around the method check by stringifying. Header secret references inside string cases are
+    resolved too (an empty one is refused, never sent as text)."""
+    with eng.begin() as c:
+        add_deployment_host(c, project, "127.0.0.1")
+    call = _contract_tool_with(eng, monkeypatch, {"observability:read"})
+
+    ro = call(project, {"cases": json.dumps([{"path": "/healthz", "expect_status": 200}]),
+                        "base_url": gateway})
+    assert ro["ok"] is True and ro["passed"] == 1
+
+    empty_ref = call(project, {"cases": json.dumps([{"path": "/echo", "headers": {
+        "Authorization": {"secret_ref": ""}}}]), "base_url": gateway})
+    assert empty_ref["ok"] is False and "secret_ref is empty" in empty_ref["error"]
+
+    def _no_http(*_args, **_kwargs):
+        raise AssertionError("a refused case must not reach the network")
+
+    monkeypatch.setattr(ct, "run_cases", _no_http)
+    mut = call(project, {"cases": json.dumps([{"path": "/v1/x", "method": "post"}]),
+                         "base_url": gateway})
+    assert mut["ok"] is False and mut.get("permission") == "observability:manage"
+    assert "NameError" not in str(mut)
+
+
+def test_a_write_to_a_production_host_on_another_port_or_scheme_is_production(
+    eng, project, gateway, dead_port, monkeypatch,  # noqa: F811
+):
+    """BOSSAPP-1411 (gate review): a production target named by its public_url is matched by
+    HOST — a mutating case sent to that host on another port, or over the other scheme, still
+    needs deployment:production."""
+    from sqlalchemy import text
+
+    host = "prod-only.example.invalid"
+    with eng.begin() as c:
+        c.execute(
+            text("INSERT INTO deployment_targets "
+                 "(id, project_id, app_name, repo, environment, target_kind, target_ref, "
+                 "public_url, status, created_by) VALUES "
+                 "(:id, :p, 'prod-api', 'ex/api', 'production', 'ssh', '', "
+                 ":u, 'active', 'test')"),
+            {"id": f"deptgt_prodalt_{project}", "p": project, "u": f"https://{host}"},
+        )
+    call = _contract_tool_with(eng, monkeypatch, {"observability:read", "observability:manage"})
+
+    def _no_http(*_args, **_kwargs):
+        raise AssertionError("a production write without deployment:production was sent")
+
+    monkeypatch.setattr(ct, "run_cases", _no_http)
+    for url in (f"https://{host}:8443/v1/x", f"http://{host}/v1/x",
+                f"http://{host}:{dead_port}/v1/x", f"https://{host}/v1/x"):
+        out = call(project, {"cases": [{"url": url, "method": "POST"}]})
+        assert out["ok"] is False, url
+        assert out.get("permission") == "deployment:production", (url, out)
+    with eng.begin() as c:
+        c.execute(text("DELETE FROM deployment_targets WHERE id = :i"),
+                  {"i": f"deptgt_prodalt_{project}"})

@@ -210,6 +210,9 @@ def _ensure_browsers(plan: Any, record: dict) -> set:
         for command, cwd in plan.e2e_steps:
             if command != PLAYWRIGHT_INSTALL_CMD:
                 continue
+            if (Path(cwd) / "package.json").is_file() and not playwright_cache.uses_playwright(cwd):
+                covered.add((command, str(cwd)))
+                continue
             got = playwright_cache.ensure(playwright_cache.project_version(cwd))
             record["browsers"] = {k: got.get(k) for k in ("ok", "cached", "seconds", "detail")}
             if got.get("ok"):

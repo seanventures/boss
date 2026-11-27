@@ -1,0 +1,12 @@
+id: mturn_fixture_05:1
+event: turn.started
+data: {"turn_id":"mturn_fixture_05","thread_id":"athr_fixture_05","model":"gpt-4o","mode":"ask","tools":["ssh_run"],"dropped":[]}
+
+id: mturn_fixture_05:2
+event: text.delta
+data: {"text":"Starting analysis..."}
+
+id: mturn_fixture_05:3
+event: turn.completed
+data: {"turn_id":"mturn_fixture_05","stop_reason":"cancelled"}
+

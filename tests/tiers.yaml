@@ -152,6 +152,10 @@ P1:
     - engine/tests/test_no_model_call_outside_the_kernel.py
     # The scripted harness benchmark end to end on one task, and a regression it must catch
     - engine/tests/test_harness_bench_e2e.py
+    # Open-model (Ollama/native) lane conformance against a recorded OpenAI-compat server (BOSSAPP-1024)
+    - engine/tests/test_open_model_lane_conformance.py
+    # MCP server install DB config & error source reporting (BOSSAPP-991)
+    - engine/tests/test_mcp_db_config.py
     # Operator-reported: tsx Permission denied in the serve proof (crun_247435e1)
     - engine/tests/test_an_installed_executable_stays_executable.py
     # Operator-reported: SESSION_SECRET missing in the serve proof; vitest.config secret false positive (crun_db538dff)

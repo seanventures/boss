@@ -120,8 +120,8 @@ def check_host(url: str, allowed_private: frozenset[str] = frozenset(), *,
     if project_only:
         if origin not in origins:
             raise HostRefused(
-                f"{scheme}://{host}:{port} is not one of this project's deployment targets. In "
-                "Community a contract test reaches only the exact scheme, host and port of a "
+                f"{scheme}://{host}:{port} is not one of this project's deployment targets. A "
+                "project-only contract test reaches only the exact scheme, host and port of a "
                 "deployment target a person created (its health or public URL).")
         return addresses
     if host in allowed_private:
@@ -371,13 +371,20 @@ class HeaderSecretRefused(RuntimeError):
 
 def http_auth_problem(db: Any, ref_id: str, project_id: str) -> Optional[str]:
     """Only a secret reference a person marked for HTTP auth (kind api_token, metadata
-    `http_auth: true`) may become a request header: a provider's own key (an LLM or GitHub token)
-    or a private key is never something a test spec can read out into a request."""
+    `http_auth: true`) in this project (or shared with it) may become a request header: a
+    provider's own key (an LLM or GitHub token) or a private key or another project's secret
+    is never something a test spec can read out into a request."""
     from sqlalchemy import text
 
-    row = db.execute(text("SELECT secret_kind, metadata FROM secret_refs WHERE id = :i"),
-                     {"i": ref_id}).mappings().first()
+    from .secret_backends import _shared_with
+
+    row = db.execute(
+        text("SELECT secret_kind, metadata, project_id, scope_type, scope_id "
+             "FROM secret_refs WHERE id = :i"),
+        {"i": ref_id}).mappings().first()
     if row is None:
+        return f"secret reference {ref_id} does not exist"
+    if project_id and row.get("project_id") != project_id and not _shared_with(db, row, project_id):
         return f"secret reference {ref_id} does not exist"
     meta = row["metadata"] if isinstance(row["metadata"], dict) else {}
     if str(row["secret_kind"] or "") != "api_token" or meta.get("http_auth") is not True:

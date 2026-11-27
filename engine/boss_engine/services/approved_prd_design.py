@@ -51,7 +51,7 @@ _SOLUTION_HEAD = re.compile(
 _ANY_HEAD = re.compile(r"^(#{1,6})[ \t]+\S", re.MULTILINE)
 
 _HEADS = (("standards", "STANDARDS"), ("plan", "PLAN"), ("contradictions", "CONTRADICTIONS"),
-          ("packages", _parallel_build.PACKAGES_HEAD))
+          ("assumptions", "ASSUMPTIONS"), ("packages", _parallel_build.PACKAGES_HEAD))
 
 
 def solution_section(markdown: str) -> str:
@@ -131,7 +131,10 @@ def prompt(ctx_block: str, solution: str) -> str:
         "`database: none`.\n\n"
         "=== CONTRADICTIONS ===\nThe single word NONE when the repository fits the solution. "
         "Otherwise, one line per thing the solution assumes that the code contradicts (a "
-        "model, route, framework or file it names that is absent or different)."
+        "model, route, framework or file it names that is absent or different).\n\n"
+        "=== ASSUMPTIONS ===\nNever ask the user clarification questions mid-build. If any "
+        "minor implementation detail is underspecified, pick the most reasonable engineering "
+        "reading and list each assumption concisely (one `- ` bullet per item), or write NONE."
         + _parallel_build.design_prompt_section()
         + f"\n\nTHE APPROVED SOLUTION:\n{solution}"
     )
@@ -182,6 +185,7 @@ def design_from_answer(prd: dict, solution: str, answer: str) -> tuple[Optional[
         return None, f"the repository contradicts the PRD: {verdict[:300]}"
     if not parts["plan"].strip():
         return None, "the short pass gave no file plan"
+    assumptions = _parse_assumptions(parts.get("assumptions", ""))
     decision_id = prd["decision_id"]
     design = {
         "standards": parts["standards"],
@@ -195,10 +199,28 @@ def design_from_answer(prd: dict, solution: str, answer: str) -> tuple[Optional[
                         "the repository was checked against it and contradicts nothing."),
         "plan_ok": True,
         "packages": parts["packages"],
+        "assumptions": assumptions,
         "source": "approved_prd",
         "prd_decision_id": decision_id,
     }
     return design, ""
+
+
+def _parse_assumptions(raw: str) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for line in str(raw or "").splitlines():
+        cleaned = re.sub(r"^\s*(?:[-*•]|\d+[.)])\s*", "", line).strip()
+        cleaned = " ".join(cleaned.split())
+        if not cleaned or cleaned.lower().rstrip(".") in ("none", "n/a", "no assumptions"):
+            continue
+        item = cleaned[:300]
+        if item not in seen:
+            seen.add(item)
+            out.append(item)
+        if len(out) >= 20:
+            break
+    return out
 
 
 def brief_addendum(instructions: str, design: dict) -> str:

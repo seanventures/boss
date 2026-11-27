@@ -69,7 +69,10 @@ export default async function ChatLinkPage({ searchParams }: Props) {
     );
   }
   const who = peek.data.external_name ? `@${peek.data.external_name}` : peek.data.external_user_id;
-  const channel = peek.data.kind === "telegram" ? "Telegram" : peek.data.kind === "slack" ? "Slack" : peek.data.kind;
+  const channel = peek.data.kind === "telegram" ? "Telegram"
+    : peek.data.kind === "slack" ? "Slack"
+    : peek.data.kind === "teams" ? "Microsoft Teams"
+    : peek.data.kind;
   return (
     <main style={box}>
       <h1 style={{ fontSize: "var(--fs-page)" }}>Link {channel} to you</h1>

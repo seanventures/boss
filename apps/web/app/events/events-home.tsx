@@ -15,6 +15,7 @@ import React, { useEffect, useMemo } from "react";
 import { readAgents, readConnections } from "../../lib/intake";
 import { SetupBoard } from "../setup/setup-board";
 import { ConnectSlack } from "./connect-slack";
+import { ConnectTeams } from "./connect-teams";
 import { ConnectionsTab } from "./connections";
 import { DeadLettersTab } from "./dead-letters";
 import { EvCtx, type EvShared } from "./frame";
@@ -31,15 +32,17 @@ export function EventsHome({ projectId, actor = "", place }: { projectId: string
   const shared: EvShared = useMemo(() => ({
     projectId, actor, conns: conns.read, reloadConns: conns.reload, agents: agents.read, dead, conn: place.conn, ev: place.ev, kind: place.kind,
   }), [projectId, actor, conns.read, conns.reload, agents.read, dead, place.conn, place.ev, place.kind]);
-  // A Connect page for a kind that has its own page only (Slack); anything else opens the sheet.
+  // A Connect page for a kind that has its own page only (Slack or Teams); anything else opens the sheet.
   // (Read from the address itself: the first render's place has no `kind` yet.)
+  const connectKind = place.kind || (typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("kind") || "" : "");
   useEffect(() => {
     if (place.tab !== "connect") return;
-    if (new URLSearchParams(window.location.search).get("kind") !== "slack") goEvents({ events: "connections", kind: null }, "replace");
+    const k = new URLSearchParams(window.location.search).get("kind");
+    if (k !== "slack" && k !== "teams") goEvents({ events: "connections", kind: null }, "replace");
   }, [place.tab, place.kind]);
   return (
     <EvCtx.Provider value={shared}>
-      {place.tab === "connect" ? <ConnectSlack />
+      {place.tab === "connect" ? (connectKind === "teams" ? <ConnectTeams /> : <ConnectSlack />)
         : place.tab === "rules" ? <RulesTab />
         : place.tab === "stream" ? <StreamTab />
         : place.tab === "dead" ? <DeadLettersTab />

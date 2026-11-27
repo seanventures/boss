@@ -112,6 +112,8 @@ CREATE TABLE IF NOT EXISTS tool_policies_v2 (
   hit_count BIGINT NOT NULL DEFAULT 0,
   last_hit_at TIMESTAMPTZ,
   status TEXT NOT NULL DEFAULT 'active',
+  hard BOOLEAN NOT NULL DEFAULT FALSE,
+  examples JSONB,
   created_by TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -568,8 +570,8 @@ def _record(connection: Any, ctx: PolicyContext, chosen: Optional[Mapping[str, A
 
 _COLUMNS = ("id, org_id, project_id, scope, priority, effect, selector, conditions, rate_limit, "
             "source, source_decision_id, schema_sha256, note, expires_at, hit_count, "
-            "last_hit_at, status, created_by, created_at, updated_at, revoked_at, revoked_by, "
-            "revoked_reason")
+            "last_hit_at, status, hard, examples, created_by, created_at, updated_at, revoked_at, "
+            "revoked_by, revoked_reason")
 
 
 def _loads(value: Any, fallback: Any) -> Any:
@@ -586,6 +588,8 @@ def _row(row: Mapping[str, Any]) -> dict:
     out["selector"] = _loads(out.get("selector"), {}) or {}
     out["conditions"] = _loads(out.get("conditions"), []) or []
     out["rate_limit"] = _loads(out.get("rate_limit"), None)
+    out["hard"] = bool(out.get("hard", False))
+    out["examples"] = _loads(out.get("examples"), None)
     return out
 
 
@@ -749,11 +753,87 @@ def validate(fields: Mapping[str, Any], *, partial: bool = False,
         if fields.get("status") not in ("active", "disabled"):
             raise ToolPolicyError("status must be active or disabled (revoke to remove).")
         out["status"] = fields.get("status")
+    if "hard" in fields:
+        out["hard"] = bool(fields.get("hard"))
+    if "examples" in fields:
+        ex = fields.get("examples")
+        if ex is None:
+            out["examples"] = None
+        else:
+            if not isinstance(ex, Mapping):
+                raise ToolPolicyError("examples must be {match: [...], not_match: [...]}.")
+            extra_keys = set(ex.keys()) - {"match", "not_match"}
+            if extra_keys:
+                raise ToolPolicyError(f"examples has unexpected keys: {sorted(extra_keys)}.")
+            norm_ex: dict[str, list[Any]] = {}
+            for k in ("match", "not_match"):
+                vals = ex.get(k, [])
+                if vals is None:
+                    vals = []
+                if not isinstance(vals, list):
+                    raise ToolPolicyError(f"examples.{k} must be a list.")
+                if len(vals) > 32:
+                    raise ToolPolicyError(f"examples.{k} may have at most 32 entries.")
+                norm_ex[k] = list(vals)
+            out["examples"] = norm_ex
     return out
 
 
+def _sample_for_glob(pattern: Any, default: str) -> str:
+    p = str(pattern or "").strip()
+    if not p or p == "*":
+        return default
+    return p.replace("*", "example").replace("?", "x")
+
+
+def validate_rule_examples(rule: Mapping[str, Any], examples: Optional[Mapping[str, Any]]) -> None:
+    """Validate that `examples.match` entries match `rule` and `examples.not_match` do not."""
+    if not examples:
+        return
+    import shlex
+
+    selector = rule.get("selector") or {}
+    scope = str(rule.get("scope") or "project")
+    kind, _, scope_val = scope.partition(":")
+    default_role = scope_val if kind == "agent" else None
+    default_wf = scope_val if kind == "workflow" else None
+    default_srv = _sample_for_glob(selector.get("server"), "metatron")
+    default_tool = _sample_for_glob(selector.get("tool"), "example_tool")
+
+    def _ctx_from(sample: Any) -> PolicyContext:
+        if isinstance(sample, Mapping):
+            args = sample.get("arguments") if isinstance(sample.get("arguments"), Mapping) else dict(sample)
+            return PolicyContext(
+                server=str(sample.get("server") or default_srv),
+                tool=str(sample.get("tool") or default_tool),
+                arguments=dict(args),
+                role=sample.get("role") or default_role,
+                workflow=sample.get("workflow") or default_wf,
+            )
+        if isinstance(sample, str):
+            try:
+                argv = shlex.split(sample)
+            except ValueError:
+                argv = sample.split()
+            return PolicyContext(
+                server=default_srv,
+                tool=default_tool,
+                arguments={"command": sample, "argv": argv, "verb": argv[0] if argv else ""},
+                role=default_role,
+                workflow=default_wf,
+            )
+        raise ToolPolicyError("each rule example must be a string or JSON object.")
+
+    for entry in examples.get("match") or []:
+        if not rule_matches(rule, _ctx_from(entry)):
+            raise ToolPolicyError(f"rule example in 'match' did not match the rule: {entry!r}")
+    for entry in examples.get("not_match") or []:
+        if rule_matches(rule, _ctx_from(entry)):
+            raise ToolPolicyError(f"rule example in 'not_match' unexpectedly matched the rule: {entry!r}")
+
+
 def _db(values: Mapping[str, Any]) -> dict:
-    return {k: (json.dumps(v) if k in ("selector", "conditions", "rate_limit") and v is not None
+    return {k: (json.dumps(v) if k in ("selector", "conditions", "rate_limit", "examples") and v is not None
                 else v) for k, v in values.items()}
 
 
@@ -769,14 +849,16 @@ def create_rule(connection: Any, project_id: str, fields: Mapping[str, Any], *, 
     if values["scope"] == "org" and values["effect"] == "allow":
         raise ToolPolicyError("an org-wide rule may ask, deny or rate-limit, never allow: "
                               "loosen a tool per project or per agent.")
+    if values.get("examples") is not None:
+        validate_rule_examples(values, values["examples"])
     rid = make_id("tpol")
     org = org_of(connection, project_id)
     row = {"id": rid, "org_id": org, "project_id": None if values["scope"] == "org" else project_id,
            "source": source, "source_decision_id": source_decision_id, "created_by": actor,
            "rate_limit": None, "schema_sha256": None, "note": None, "expires_at": None,
-           "status": values.get("status", "active"), **values}
+           "status": values.get("status", "active"), "hard": False, "examples": None, **values}
     cols = ", ".join(row)
-    vals = ", ".join(f"CAST(:{k} AS JSONB)" if k in ("selector", "conditions", "rate_limit")
+    vals = ", ".join(f"CAST(:{k} AS JSONB)" if k in ("selector", "conditions", "rate_limit", "examples")
                      else f":{k}" for k in row)
     connection.execute(text(f"INSERT INTO tool_policies_v2 ({cols}) VALUES ({vals})"), _db(row))
     event = "mcp.always_allow_created" if source == "decision" else "mcp.tool_policy_created"
@@ -801,9 +883,11 @@ def update_rule(connection: Any, project_id: str, rule_id: str, fields: Mapping[
         raise ToolPolicyError("an org-wide rule may ask, deny or rate-limit, never allow.")
     if "scope" in values and (values["scope"] == "org") != (current["scope"] == "org"):
         raise ToolPolicyError("a rule cannot move between org-wide and project; write a new one.")
+    if merged.get("examples") is not None:
+        validate_rule_examples(merged, merged["examples"])
     if not values:
         return current
-    sets = ", ".join(f"{k} = CAST(:{k} AS JSONB)" if k in ("selector", "conditions", "rate_limit")
+    sets = ", ".join(f"{k} = CAST(:{k} AS JSONB)" if k in ("selector", "conditions", "rate_limit", "examples")
                      else f"{k} = :{k}" for k in values)
     connection.execute(text(f"UPDATE tool_policies_v2 SET {sets}, updated_at = now() "
                             "WHERE id = :rid"), {**_db(values), "rid": rule_id})

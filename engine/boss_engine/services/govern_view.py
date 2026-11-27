@@ -658,6 +658,16 @@ def spend(connection: Connection, settings: Any, project_id: str, *, window: str
     for rec in (te.build_recommendations(connection, project_id).get("recommendations") or []):
         savings.setdefault(str(rec.get("kind")), {**rec, "from": "tokens"})
     status = BudgetGovernor(settings).status_for_project(connection, project_id, now=now)
+    # BOSSAPP-782: per-project routing savings vs all-frontier baseline over the same window.
+    routing_savings = None
+    try:
+        from .model_router.savings import savings_report
+
+        window_days = max(1, (hours + 23) // 24)
+        with connection.begin_nested():
+            routing_savings = savings_report(connection, project_id, days=window_days, now=now)
+    except Exception:  # noqa: BLE001 — never fail the Spend tab on a minimal schema
+        routing_savings = None
     return {
         "project_id": project_id, "window": window,
         # Model spend by agent and by model, over the same window: money (subscription calls
@@ -685,6 +695,7 @@ def spend(connection: Connection, settings: Any, project_id: str, *, window: str
                                     .get("cap_usd_micros") or 0),
         "scorecard": scorecard,
         "savings": list(savings.values()),
+        "routing_savings": routing_savings,
         "top_drivers": drivers,
         "spent_vs_cap": meter(status, ledger_for(connection, project_id, status),
                               period_spent(connection, project_id, status)),

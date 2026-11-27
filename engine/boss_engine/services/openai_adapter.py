@@ -193,7 +193,20 @@ PRICE_PER_MTOK: dict[str, tuple[float, float]] = {
     "gpt-4o-mini": (0.15, 0.60),
     "gpt-4.1": (2.00, 8.00),
     "gpt-4.1-mini": (0.40, 1.60),
+    "gpt-5": (2.50, 10.00),
+    "gpt-5-mini": (0.25, 2.00),
+    "gpt-5-codex": (2.50, 10.00),
     "gpt-5.2-codex": (2.50, 10.00),
+    "gpt-5.3-codex": (2.50, 10.00),
+    "gpt-5.4": (2.50, 10.00),
+    "gpt-6": (3.00, 15.00),
+    "gpt-6-sol": (3.00, 15.00),
+    "gpt-6-codex": (3.00, 15.00),
+    "gpt-6-mini": (0.30, 1.20),
+    "codex-cli": (2.50, 10.00),
+    "codex-mini": (0.40, 1.60),
+    "o3": (2.00, 8.00),
+    "o4-mini": (1.10, 4.40),
     "deepseek-chat": (0.27, 1.10),
     "deepseek-reasoner": (0.55, 2.19),
     "qwen2.5-coder-32b-instruct": (0.90, 0.90),
@@ -204,6 +217,7 @@ PRICE_PER_MTOK: dict[str, tuple[float, float]] = {
     # ("claude-sonnet-4-5-20250929") and the "anthropic:"/"anthropic/" spellings resolve here.
     "claude-fable-5-1": (10.00, 50.00),
     "claude-fable-5": (10.00, 50.00),
+    "fable": (10.00, 50.00),
     "claude-opus-5-5": (4.00, 20.00),
     "claude-opus-5": (5.00, 25.00),
     "claude-opus-4-8": (5.00, 25.00),
@@ -213,15 +227,18 @@ PRICE_PER_MTOK: dict[str, tuple[float, float]] = {
     "claude-opus-4-1": (15.00, 75.00),
     "claude-opus-4-0": (15.00, 75.00),
     "claude-opus-4": (15.00, 75.00),
+    "opus": (5.00, 25.00),
     "claude-sonnet-5": (2.00, 10.00),
     "claude-sonnet-4-6": (3.00, 15.00),
     "claude-sonnet-4-5": (3.00, 15.00),
     "claude-sonnet-4-0": (3.00, 15.00),
     "claude-sonnet-4": (3.00, 15.00),
     "claude-3-7-sonnet": (3.00, 15.00),
+    "sonnet": (3.00, 15.00),
     "claude-haiku-4-5": (1.00, 5.00),
     "claude-3-5-haiku": (0.80, 4.00),
     "claude-3-haiku": (0.25, 1.25),
+    "haiku": (1.00, 5.00),
 }
 DEFAULT_PRICE = (2.50, 10.00)
 #: What a reply BOSS has no price for is charged at, labelled "unpriced": the dearest per-token
@@ -315,23 +332,32 @@ CACHE_READ_MULT = 0.1
 CACHE_WRITE_MULT = 1.25
 
 
-def estimate_cost_usd_micros(usage: dict) -> int:
-    """micros = prompt*input + completion*output + cache_read*input*0.1 + cache_write*input*1.25.
-
-    If the backend already reported an exact cost (e.g. the Claude CLI returns
-    total_cost_usd per call), honor that instead of the token price table."""
-    if usage.get("cost_usd_micros") is not None:
-        return int(usage["cost_usd_micros"])
-    inp, out, _ = price_for_model(str(usage.get("model") or ""),
-                                  provider=str(usage.get("provider") or ""),
-                                  endpoint=str(usage.get("base_url") or ""))
+def list_price_cost_usd_micros(usage: dict) -> tuple[int, bool]:
+    """Price a call strictly at list price from its token counts, ignoring any CLI-reported
+    `cost_usd_micros` (BOSSAPP-782: Claude CLI reports Sonnet 5 at ~1.8x list price, and
+    Codex CLI reports no cost at all). Returns `(micros, price_known)`."""
+    inp, out, known = price_for_model(str(usage.get("model") or ""),
+                                      provider=str(usage.get("provider") or ""),
+                                      endpoint=str(usage.get("base_url") or ""))
     prompt = int(usage.get("prompt_tokens") or 0)
     completion = int(usage.get("completion_tokens") or 0)
     cache_read = int(usage.get("cache_read_tokens") or 0)
     cache_write = int(usage.get("cache_write_tokens") or 0)
-    return int(round(prompt * inp + completion * out
-                     + cache_read * inp * CACHE_READ_MULT
-                     + cache_write * inp * CACHE_WRITE_MULT))
+    micros = int(round(prompt * inp + completion * out
+                       + cache_read * inp * CACHE_READ_MULT
+                       + cache_write * inp * CACHE_WRITE_MULT))
+    return micros, known
+
+
+def estimate_cost_usd_micros(usage: dict) -> int:
+    """micros = prompt*input + completion*output + cache_read*input*0.1 + cache_write*input*1.25.
+
+    If the backend already reported an exact cost (e.g. a metered gateway settlement), honor that
+    instead of the token price table."""
+    if usage.get("cost_usd_micros") is not None:
+        return int(usage["cost_usd_micros"])
+    micros, _ = list_price_cost_usd_micros(usage)
+    return micros
 
 
 def _usage_from_response(response, model: str) -> dict:

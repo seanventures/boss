@@ -1,0 +1,7 @@
+{
+  "name": "nx-root",
+  "private": true,
+  "devDependencies": {
+    "nx": "^20.0.0"
+  }
+}

@@ -1,0 +1,16 @@
+version: 1
+apps:
+  - key: billing-api
+    name: Billing API
+    root_path: services/billing
+    workspace_root: .
+    stack:
+      language: python
+      framework: stdlib
+    commands:
+      test: python3 -m unittest discover -v
+    run:
+      command: python3 server.py
+      health: /healthz
+    shared_paths:
+      - libs/contracts

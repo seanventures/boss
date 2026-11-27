@@ -1,0 +1,9 @@
+{
+  "name": "shared",
+  "projectType": "library",
+  "targets": {
+    "test": {
+      "executor": "@nx/jest:jest"
+    }
+  }
+}

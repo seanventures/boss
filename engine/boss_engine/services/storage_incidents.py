@@ -667,12 +667,23 @@ def _lesson(connection: Any, project_id: Any, kind: str, rule: Mapping[str, Any]
 
 # ── the report ──────────────────────────────────────────────────────────────────────────────
 
-def paused_work(connection: Any, inc: Mapping[str, Any]) -> list[dict[str, Any]]:
+def paused_work(connection: Any, inc: Mapping[str, Any], *, org_id: Optional[str] = None) -> list[dict[str, Any]]:
     """Jobs this incident paused (stamped with its id), with how long each waited."""
-    rows = connection.execute(text("""
-        SELECT id, kind, payload, last_error, created_at, updated_at FROM jobs
-         WHERE last_error->>'incident_id' = :i ORDER BY created_at LIMIT 500"""),
-        {"i": inc["id"]}).mappings().all()
+    if org_id is not None:
+        if not org_id:
+            return []
+        rows = connection.execute(text("""
+            SELECT j.id, j.kind, j.payload, j.last_error, j.created_at, j.updated_at FROM jobs j
+            JOIN projects p ON p.id = j.project_id
+            JOIN workspaces w ON w.id = p.workspace_id
+             WHERE j.last_error->>'incident_id' = :i AND w.org_id = :org
+             ORDER BY j.created_at LIMIT 500"""),
+            {"i": inc["id"], "org": str(org_id)}).mappings().all()
+    else:
+        rows = connection.execute(text("""
+            SELECT id, kind, payload, last_error, created_at, updated_at FROM jobs
+             WHERE last_error->>'incident_id' = :i ORDER BY created_at LIMIT 500"""),
+            {"i": inc["id"]}).mappings().all()
     out = []
     for r in rows:
         err = _json(r.get("last_error"), {}) or {}
@@ -691,10 +702,10 @@ def paused_work(connection: Any, inc: Mapping[str, Any]) -> list[dict[str, Any]]
     return out
 
 
-def build_report(connection: Any, inc: Mapping[str, Any], *, learned: Optional[Mapping[str, Any]] = None
-                 ) -> dict[str, Any]:
+def build_report(connection: Any, inc: Mapping[str, Any], *, learned: Optional[Mapping[str, Any]] = None,
+                 org_id: Optional[str] = None) -> dict[str, Any]:
     plan = _json(inc.get("plan"), []) or []
-    paused = paused_work(connection, inc)
+    paused = paused_work(connection, inc, org_id=org_id)
     waited = max([p["waited_seconds"] or 0 for p in paused] or [0])
     opened, resolved_at = inc.get("opened_at"), inc.get("resolved_at") or _now()
     duration = int((resolved_at - opened).total_seconds()) if opened else 0
@@ -723,8 +734,13 @@ def build_report(connection: Any, inc: Mapping[str, Any], *, learned: Optional[M
             "timeline": flow_of(inc, paused_runs=len(paused))}
 
 
-def report_markdown(connection: Any, inc: Mapping[str, Any]) -> str:
-    rep = _json(inc.get("report"), None) or build_report(connection, inc)
+def report_markdown(connection: Any, inc: Mapping[str, Any], *, org_id: Optional[str] = None) -> str:
+    if org_id is not None:
+        stored = _json(inc.get("report"), None)
+        learned_data = stored.get("learned") if isinstance(stored, Mapping) else None
+        rep = build_report(connection, inc, learned=learned_data, org_id=org_id)
+    else:
+        rep = _json(inc.get("report"), None) or build_report(connection, inc)
     lines = [f"# Storage incident {inc['id']} on {inc.get('host_label') or inc['host_id']}", "",
              rep["summary"], "",
              f"- Freed: {rep['freed_gb']} GB", f"- Work paused: {rep['paused_runs']} "
@@ -799,9 +815,318 @@ def _emit(connection: Any, project_id: Any, event_type: str, entity_id: str, dat
         _log.debug("event %s not emitted", event_type, exc_info=True)
 
 
+# ── multi-org Option A scoping (BOSSAPP-1415) ────────────────────────────────────────────────
+
+def is_separated(connection: Any) -> bool:
+    """True when at least one active instance admin exists (separated install)."""
+    try:
+        from ..identity import instance_admin
+
+        with connection.begin_nested() if hasattr(connection, "begin_nested") else _NullCtx():
+            return bool(instance_admin.layer(connection, "").separated)
+    except Exception:  # noqa: BLE001 — unit tests without identity tables default to unseparated
+        return False
+
+
+def is_install_operator(connection: Any, principal_id: Optional[str]) -> bool:
+    """True when `principal_id` may mutate or view full install-wide storage details.
+
+    Instance admins always qualify. Before any instance admin exists, a single-org install
+    keeps owner/admin operator access; on a multi-org install an org-scoped user is NOT an
+    install operator even before `identity_instance_admins` is populated.
+    """
+    try:
+        from ..identity import instance_admin
+
+        with connection.begin_nested() if hasattr(connection, "begin_nested") else _NullCtx():
+            found = instance_admin.layer(connection, str(principal_id or ""))
+            if found.is_admin:
+                return True
+            if found.separated:
+                return False
+            org_count = int(connection.execute(text("SELECT count(*) FROM orgs")).scalar() or 0)
+            return org_count <= 1
+    except Exception:  # noqa: BLE001 — unit tests without identity tables default to single-org
+        return True
+
+
+class _NullCtx:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_a):
+        return False
+
+
+def project_org_id(connection: Any, project_id: Optional[str]) -> Optional[str]:
+    if not project_id:
+        return None
+    try:
+        with connection.begin_nested() if hasattr(connection, "begin_nested") else _NullCtx():
+            val = connection.execute(
+                text("SELECT w.org_id FROM projects p "
+                     "JOIN workspaces w ON w.id = p.workspace_id WHERE p.id = :p"),
+                {"p": str(project_id)},
+            ).scalar()
+            return str(val) if val else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def incident_org_id(connection: Any, inc: Optional[Mapping[str, Any]]) -> Optional[str]:
+    if not inc:
+        return None
+    return project_org_id(connection, inc.get("project_id"))
+
+
+def incident_visible_to_org(connection: Any, inc: Optional[Mapping[str, Any]],
+                            org_id: Optional[str]) -> bool:
+    """An org caller sees its own org's incidents and a redacted install-wide summary (never
+    another org's incidents)."""
+    if not inc or not org_id:
+        return False
+    inc_org = incident_org_id(connection, inc)
+    return inc_org is None or inc_org == org_id
+
+
+def org_paused_count(connection: Any, org_id: Optional[str],
+                     *, incident_id: Optional[str] = None) -> int:
+    if not org_id:
+        return 0
+    try:
+        with connection.begin_nested() if hasattr(connection, "begin_nested") else _NullCtx():
+            sql = (
+                "SELECT count(*) FROM jobs j "
+                "JOIN projects p ON p.id = j.project_id "
+                "JOIN workspaces w ON w.id = p.workspace_id "
+                "WHERE j.status IN ('queued', 'failed_retryable') "
+                "  AND j.last_error->>'code' = :code "
+                "  AND w.org_id = :org"
+            )
+            params: dict[str, Any] = {"code": work_hold.REASON, "org": str(org_id)}
+            if incident_id:
+                sql += " AND j.last_error->>'incident_id' = :inc"
+                params["inc"] = str(incident_id)
+            return int(connection.execute(text(sql), params).scalar() or 0)
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def org_scoped_summary_incident(connection: Any, inc: Mapping[str, Any],
+                                org_id: str) -> dict[str, Any]:
+    """Read-only org-scoped view of an incident (redacted if install-wide, org-paused count)."""
+    inc_org = incident_org_id(connection, inc)
+    hold = work_hold.state(connection)
+    is_held = bool(hold.get("active") and hold.get("incident_id") == inc["id"])
+    paused = org_paused_count(connection, org_id, incident_id=inc["id"])
+    if inc_org == org_id:
+        out = public(connection, inc)
+        out["hold"] = {**out["hold"], "paused_runs": paused}
+        out["flow"] = flow_of(inc, paused_runs=paused)
+        if isinstance(out.get("report"), dict):
+            out["report"] = build_report(
+                connection, inc, learned=out["report"].get("learned"), org_id=org_id
+            )
+        out["org_scoped"] = True
+        out["read_only"] = True
+        return out
+    return {
+        "id": inc["id"],
+        "host_id": inc["host_id"],
+        "host_label": inc.get("host_label") or inc["host_id"],
+        "status": inc["status"],
+        "severity": inc.get("severity") or "warn",
+        "opened_at": _iso(inc.get("opened_at")),
+        "resolved_at": _iso(inc.get("resolved_at")),
+        "cause_key": inc.get("cause_key"),
+        "cause_text": inc.get("cause_text") or "",
+        "free_pct_start": _f(inc.get("free_pct_start")),
+        "free_pct_now": _f(inc.get("free_pct_now")),
+        "target_pct": _f(inc.get("target_pct")) or 25.0,
+        "freed_gb": round(float(inc.get("freed_gb") or 0), 2),
+        "eta_seconds": inc.get("eta_seconds"),
+        "hold": {
+            "active": is_held,
+            "since": _iso(inc.get("hold_since")),
+            "released_at": _iso(inc.get("hold_released_at")),
+            "paused_runs": paused,
+        },
+        "plan": [],
+        "flow": [],
+        "acknowledged_by": None,
+        "acknowledged_at": None,
+        "spend_usd": 0.0,
+        "agent_run_id": None,
+        "helper": {"last_seen_at": None, "reachable": False},
+        "report": None,
+        "org_scoped": True,
+        "read_only": True,
+    }
+
+
+def scoped_hold_status(connection: Any, org_id: Optional[str], *, is_operator: bool) -> dict[str, Any]:
+    st = work_hold.status(connection)
+    if is_operator:
+        return st
+    if not org_id:
+        return {
+            **st,
+            "incident_id": None,
+            "paused_runs": 0,
+            "actor": "",
+            "org_scoped": True,
+            "read_only": True,
+        }
+    inc_id = st.get("incident_id")
+    if inc_id:
+        inc = get(connection, str(inc_id))
+        if not incident_visible_to_org(connection, inc, org_id):
+            st = {**st, "incident_id": None}
+    return {
+        **st,
+        "paused_runs": org_paused_count(connection, org_id),
+        "actor": "",
+        "org_scoped": True,
+        "read_only": True,
+    }
+
+
+def scoped_current(connection: Any, org_id: Optional[str], *, is_operator: bool) -> dict[str, Any]:
+    if is_operator:
+        return current(connection)
+    if not org_id:
+        return {
+            "incidents": [],
+            "hold": scoped_hold_status(connection, None, is_operator=False),
+            "generated_at": _now().isoformat(),
+            "org_scoped": True,
+            "read_only": True,
+        }
+    visible = [
+        org_scoped_summary_incident(connection, r, org_id)
+        for r in open_rows(connection)
+        if incident_visible_to_org(connection, r, org_id)
+    ]
+    return {
+        "incidents": visible,
+        "hold": scoped_hold_status(connection, org_id, is_operator=False),
+        "generated_at": _now().isoformat(),
+        "org_scoped": True,
+        "read_only": True,
+    }
+
+
+def scoped_listing(connection: Any, org_id: Optional[str], *, is_operator: bool,
+                   limit: int = 20, host_id: Optional[str] = None) -> list[dict[str, Any]]:
+    if is_operator:
+        return listing(connection, limit=limit, host_id=host_id)
+    if not org_id:
+        return []
+    rows = connection.execute(text(
+        "SELECT * FROM storage_incidents WHERE (CAST(:h AS TEXT) IS NULL OR host_id = :h) "
+        "ORDER BY opened_at DESC LIMIT :n"), {"h": host_id, "n": max(1, min(int(limit), 200))}
+    ).mappings().all()
+    return [
+        org_scoped_summary_incident(connection, dict(r), org_id)
+        for r in rows
+        if incident_visible_to_org(connection, r, org_id)
+    ]
+
+
+def scoped_detail(connection: Any, incident_id: str, org_id: Optional[str],
+                  *, is_operator: bool) -> Optional[dict[str, Any]]:
+    if is_operator:
+        return detail(connection, incident_id)
+    if not org_id:
+        return None
+    inc = _row(connection, incident_id)
+    if inc is None or not incident_visible_to_org(connection, inc, org_id):
+        return None
+    inc_org = incident_org_id(connection, inc)
+    if inc_org is None:
+        return {
+            "incident": org_scoped_summary_incident(connection, inc, org_id),
+            "actions": [],
+            "receipts": [],
+            "paused_work": paused_work(connection, inc, org_id=org_id),
+            "decisions": [],
+            "org_scoped": True,
+            "read_only": True,
+        }
+    base = detail(connection, incident_id)
+    if base is None:
+        return None
+    base["incident"] = org_scoped_summary_incident(connection, inc, org_id)
+    base["paused_work"] = paused_work(connection, inc, org_id=org_id)
+    base["decisions"] = _org_decisions_for_incident(connection, incident_id, org_id)
+    base["org_scoped"] = True
+    base["read_only"] = True
+    return base
+
+
+def _job_in_org(connection: Any, job_id: str, org_id: str) -> bool:
+    try:
+        return bool(connection.execute(text(
+            "SELECT 1 FROM jobs j JOIN projects p ON p.id = j.project_id "
+            "JOIN workspaces w ON w.id = p.workspace_id "
+            "WHERE j.id = :j AND w.org_id = :org LIMIT 1"),
+            {"j": job_id, "org": org_id}).first())
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _org_decisions_for_incident(connection: Any, incident_id: str, org_id: str) -> list[dict[str, Any]]:
+    from .decision_actions import kind_of
+
+    rows = connection.execute(text(
+        "SELECT d.id, d.status, d.question, d.created_at, d.recommendation->>'action' AS action "
+        "FROM decisions d JOIN projects p ON p.id = d.project_id "
+        "JOIN workspaces w ON w.id = p.workspace_id "
+        "WHERE d.recommendation->>'incident_id' = :i AND w.org_id = :org ORDER BY d.created_at"),
+        {"i": incident_id, "org": org_id}).mappings().all()
+    return [
+        {"id": d["id"], "kind": kind_of({"recommendation": {"action": d["action"]}}),
+         "status": d["status"], "question": d["question"], "created_at": _iso(d["created_at"])}
+        for d in rows
+    ]
+
+
+def scoped_summary(connection: Any, org_id: Optional[str], *, is_operator: bool,
+                   host_id: Optional[str] = None) -> dict[str, Any]:
+    from . import storage_watch
+
+    out = storage_watch.summary(connection, host_id)
+    if is_operator:
+        return out
+    if not org_id:
+        out["open_incident_id"] = None
+        out["last_cleanup"] = None
+    else:
+        open_id = out.get("open_incident_id")
+        if open_id:
+            inc = get(connection, str(open_id))
+            if not incident_visible_to_org(connection, inc, org_id):
+                out["open_incident_id"] = None
+        last = out.get("last_cleanup")
+        if isinstance(last, dict) and last.get("incident_id"):
+            inc = get(connection, str(last["incident_id"]))
+            if not incident_visible_to_org(connection, inc, org_id):
+                out["last_cleanup"] = None
+    out["rules"] = [
+        {**r, "created_by": None, "decision_id": None}
+        for r in (out.get("rules") or [])
+    ]
+    out["org_scoped"] = True
+    out["read_only"] = True
+    return out
+
+
 __all__ = ["AGENT_KEY", "FLOW_KEYS", "LEARN_AFTER", "MAX_LABEL_WORDS", "RULE_FOR_CAUSE", "STATUSES",
            "acknowledge", "add_freed", "add_spend", "build_report", "current", "current_for_host",
-           "default_project", "detail", "explain_cause", "flow_of", "get", "last_resolved", "learn",
-           "level_of", "listing", "on_level", "on_rule_decision", "open_rows", "paused_work",
-           "propose_rule", "public", "refresh_flow", "report_markdown", "resolve", "set_status",
-           "short", "times_seen"]
+           "default_project", "detail", "explain_cause", "flow_of", "get", "incident_org_id",
+           "incident_visible_to_org", "is_install_operator", "is_separated", "last_resolved",
+           "learn", "level_of", "listing", "on_level", "on_rule_decision", "open_rows",
+           "org_paused_count", "org_scoped_summary_incident", "paused_work", "project_org_id",
+           "propose_rule", "public", "refresh_flow", "report_markdown", "resolve",
+           "scoped_current", "scoped_detail", "scoped_hold_status", "scoped_listing",
+           "scoped_summary", "set_status", "short", "times_seen"]

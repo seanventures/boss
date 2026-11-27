@@ -19,9 +19,7 @@ the guard permits them. The shell itself is not confined to the clone by the ope
 
 It refuses some known publishing and destructive commands by name, and sanitizes inherited
 environment variables. Those are convenience guards, not isolation: `sh -lc` can still read
-host/container files and reach the network outside the disposable checkout. The legacy
-`run_shell` tool is therefore unavailable in Community until it runs in an OS sandbox with
-filesystem and network boundaries. Enabled paid editions retain their existing behavior.
+host/container files and reach the network outside the disposable checkout.
 """
 
 from __future__ import annotations

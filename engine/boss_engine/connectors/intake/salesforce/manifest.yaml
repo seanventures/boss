@@ -1,0 +1,40 @@
+key: salesforce
+label: Salesforce Pub/Sub API
+icon: cloud
+description: Salesforce Change Data Capture (CDC) and Platform Events streamed over the Salesforce Pub/Sub API with replay-id checkpointing, automatic reconnect/catch-up, and 72-hour SOQL fallback.
+docs_url: https://developer.salesforce.com/docs/platform/pub-sub-api/overview
+adapter: SalesforceIntakeAdapter
+order: 60
+modes: [subscribe, stream, poll]
+capabilities:
+  verify: false
+  handshake: false
+  parse: true
+  poll: true
+  subscribe: true
+  stream: true
+  reply: false
+  stream_reply: false
+  identity: true
+  conversation: true
+  health: true
+dedupe: [id]
+auth_fields:
+  - {name: instance_url, label: Salesforce instance URL, placeholder: "https://acme.my.salesforce.com", help: "Your Salesforce My Domain URL."}
+  - {name: topic, label: Pub/Sub topic name, placeholder: "/data/AccountChangeEvent", help: "CDC channel (/data/<Object>ChangeEvent) or Platform Event (/event/<Name>__e)."}
+  - {name: org_id, label: Salesforce Org ID, required: false, help: "15- or 18-character Salesforce organization ID (tenantid header)."}
+  - {name: access_token, label: Salesforce OAuth access token, secret: true, required: false, help: "OAuth bearer token (or configure client_id + client_secret for client credentials). Never handed to agents."}
+  - {name: client_id, label: Connected App client ID, required: false, help: "OAuth 2.0 client ID for client-credentials flow."}
+  - {name: client_secret, label: Connected App client secret, secret: true, required: false, help: "OAuth 2.0 client secret stored in the vault."}
+  - {name: pubsub_endpoint, label: Pub/Sub API gRPC endpoint, required: false, placeholder: "api.pubsub.salesforce.com:7443", help: "Override for regional endpoints or local fake servers in tests."}
+  - {name: sobject, label: Catch-up SObject name, required: false, placeholder: "Account", help: "SObject queried via SOQL if a replay ID expires beyond Salesforce's 72-hour retention window."}
+  - {name: integration_user_id, label: Integration user ID, required: false, help: "Salesforce User ID BOSS writes as; events committed by this user are ignored (loop prevention)."}
+default_hosts: [api.pubsub.salesforce.com, login.salesforce.com, test.salesforce.com, "*.my.salesforce.com"]
+guard_provider: salesforce
+self_identity: [integration_user_id]
+event_types:
+  - com.salesforce.cdc.create
+  - com.salesforce.cdc.update
+  - com.salesforce.cdc.delete
+  - com.salesforce.cdc.undelete
+  - com.salesforce.platform_event

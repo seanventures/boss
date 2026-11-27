@@ -62,6 +62,90 @@ REFUSAL = ("BOSS cannot tell which folder this app lives in: the repository root
            "this app. Name the app's folder in the brief (\"in the `my-app/` folder\"), then "
            "retry the build. This is BOSS's to resolve, not the code's.")
 
+#: Root-level metadata files BOSS itself writes (allowed outside a subfolder app's root_path).
+BOSS_ROOT_ALLOWLIST = frozenset({
+    "boss.preview.app",
+    ".boss/apps.yaml",
+})
+#: Root-level directory prefixes BOSS itself writes (PRDs, BOSS metadata).
+BOSS_ROOT_PREFIX_ALLOWLIST = ("docs/prd/", ".boss/")
+
+
+class WriteBoundaryViolation(ValueError):
+    """Raised when a build tries to create, modify, or delete files outside its App Map root_path."""
+
+    def __init__(self, app_rel: str, offending: list[str], shared: Iterable[str] = ()) -> None:
+        self.app_rel = app_rel
+        self.offending = list(offending)
+        self.shared = list(shared)
+        shown = ", ".join(self.offending[:8])
+        more = f" (+{len(self.offending) - 8} more)" if len(self.offending) > 8 else ""
+        super().__init__(
+            f"Write boundary violation for app {app_rel!r}: refusing to modify files outside "
+            f"its App Map root ({shown}{more})."
+        )
+
+
+def files_outside_app(
+    paths: Optional[Iterable[str]],
+    app_rel: Optional[str],
+    shared: Optional[Iterable[str]] = None,
+    *,
+    allow_boss_root_files: bool = True,
+) -> list[str]:
+    """Return sorted repo-relative paths from `paths` that fall outside `app_rel` (and `shared`).
+
+    A root app (`app_rel` is None or ".") allows every path inside the repository (still flagging
+    path traversal like `../` or absolute paths). For a subfolder app (e.g. `helpdesk-ai`), any
+    file outside `helpdesk-ai/`, declared `shared` prefixes, and known BOSS-owned metadata files
+    is returned as an offending path (BOSSAPP-555: prevents a repair agent from deleting or
+    editing a sibling app's files or stray root manifests like `pom.xml`).
+    """
+    norm_app = clean_rel(app_rel)
+    shared_rels = [s for s in (clean_rel(x) for x in (shared or ())) if s]
+    offending: list[str] = []
+    for raw in paths or ():
+        s = str(raw or "").strip().replace("\\", "/")
+        if not s:
+            continue
+        while s.startswith("./"):
+            s = s[2:]
+        p = PurePosixPath(s)
+        if p.is_absolute() or ".." in p.parts:
+            if s not in offending:
+                offending.append(s)
+            continue
+        if norm_app is None:
+            continue
+        pos = p.as_posix()
+        if pos == norm_app or pos.startswith(norm_app + "/"):
+            continue
+        if any(pos == sh or pos.startswith(sh + "/") for sh in shared_rels):
+            continue
+        if allow_boss_root_files and (
+            pos in BOSS_ROOT_ALLOWLIST or any(pos.startswith(pref) for pref in BOSS_ROOT_PREFIX_ALLOWLIST)
+        ):
+            continue
+        if pos not in offending:
+            offending.append(pos)
+    return sorted(offending)
+
+
+def check_write_boundary(
+    paths: Optional[Iterable[str]],
+    app_rel: Optional[str],
+    shared: Optional[Iterable[str]] = None,
+    *,
+    mode: str = "refuse",
+    allow_boss_root_files: bool = True,
+) -> list[str]:
+    """Check `paths` against the app's write boundary. Raises `WriteBoundaryViolation` when
+    `mode == "refuse"` and any path falls outside; otherwise returns the offending paths list."""
+    outside = files_outside_app(paths, app_rel, shared=shared, allow_boss_root_files=allow_boss_root_files)
+    if outside and str(mode or "refuse").strip().lower() in ("refuse", "enforce"):
+        raise WriteBoundaryViolation(str(app_rel or "."), outside, shared=shared or ())
+    return outside
+
 
 def _rels(paths: Optional[Iterable[str]]) -> list[PurePosixPath]:
     out = []
@@ -285,18 +369,40 @@ def _root_manifest_for(base: Path, lang: str) -> bool:
 
 def resolve(root: Path | str, *, app_id: Optional[str] = None, recorded: Optional[str] = None,
             changed: Optional[Iterable[str]] = None,
-            lineage: Optional[Iterable[str]] = None) -> AppDir:
+            lineage: Optional[Iterable[str]] = None,
+            app_map: Any = None,
+            require_map: bool = False) -> AppDir:
     """THE directory of the app this build builds, inside the checkout `root`, and its source.
 
-    In order: `app_id`, the named app (verification_target.app_scope: the pinned benchmark app,
-    else the folder the brief names); `recorded`, the folder BOSS recorded for this app
-    (recorded_app_dir); the files this run changed (a seeded workspace's included); the files
+    In order: stored `app_map` (the canonical AppMapEntry — always wins, never falls back to root
+    for a subfolder app); `app_id`, the named app (verification_target.app_scope: the pinned
+    benchmark app, else the folder the brief names); `recorded`, the folder BOSS recorded for this
+    app (recorded_app_dir); the files this run changed (a seeded workspace's included); the files
     the app's whole lineage and record wrote (identity_paths). A change list that touched only
     the root's manifest defers to a lineage that names the app's folder.
 
+    With `require_map=True` and no stored map (nor `.boss/apps.yaml`), REFUSED (path None).
     With no evidence at all: the root when the repository is one app, and REFUSED (path None,
     REFUSAL) when the root holds several apps — never the shared root by default."""
+    from . import app_map as _app_map
+
     base = Path(root)
+    entry = _app_map.coerce_entry(app_map)
+    if entry is not None:
+        return AppDir(entry.resolved_dir(base), "app_map")
+    if require_map:
+        from .app_map_scanner import load_boss_apps_yaml
+
+        declared = load_boss_apps_yaml(base)
+        aid_clean = clean_rel(app_id)
+        if declared:
+            picked = next(
+                (a for a in declared if (app_id and a.app_key.lower() == str(app_id).lower()) or (aid_clean and a.root_path == aid_clean)),
+                declared[0] if len(declared) == 1 else None,
+            )
+            if picked is not None:
+                return AppDir(picked.resolved_dir(base), "app_map")
+        return AppDir(None, "refused", _app_map.NO_MAP_REFUSAL)
     aid = clean_rel(app_id)
     if aid:
         return AppDir(base / aid, "named")
@@ -322,11 +428,14 @@ def resolve(root: Path | str, *, app_id: Optional[str] = None, recorded: Optiona
 
 def app_dir(root: Path | str, *, app_id: Optional[str] = None, recorded: Optional[str] = None,
             changed: Optional[Iterable[str]] = None,
-            lineage: Optional[Iterable[str]] = None) -> Optional[Path]:
+            lineage: Optional[Iterable[str]] = None,
+            app_map: Any = None,
+            require_map: bool = False) -> Optional[Path]:
     """THE directory of the app this build builds (resolve), or None when BOSS cannot tell
     which folder of a shared repository it is. A named app's directory is the app's even before
     the build has created it (a first build's plan is made on the base branch)."""
-    return resolve(root, app_id=app_id, recorded=recorded, changed=changed, lineage=lineage).path
+    return resolve(root, app_id=app_id, recorded=recorded, changed=changed, lineage=lineage,
+                   app_map=app_map, require_map=require_map).path
 
 
 def root_is_the_app(root: Path | str, **identity) -> bool:
@@ -368,12 +477,15 @@ def npm_dir_in(root: Path | str, where: Path, *, changed: Optional[Iterable[str]
 
 def gate_dir(root: Path | str, *, app_id: Optional[str] = None, recorded: Optional[str] = None,
              changed: Optional[Iterable[str]] = None,
-             lineage: Optional[Iterable[str]] = None) -> Optional[Path]:
+             lineage: Optional[Iterable[str]] = None,
+             app_map: Any = None,
+             require_map: bool = False) -> Optional[Path]:
     """Where a gate runs when no verify recorded a directory (an applied template's tests, the
     web package check): the app's npm package when it has one (npm_dir_in), else the app's
     directory. None when BOSS cannot tell which folder the app is (resolve)."""
     base = Path(root)
-    where = app_dir(base, app_id=app_id, recorded=recorded, changed=changed, lineage=lineage)
+    where = app_dir(base, app_id=app_id, recorded=recorded, changed=changed, lineage=lineage,
+                    app_map=app_map, require_map=require_map)
     if where is None:
         return None
     return npm_dir_in(base, where, changed=changed, lineage=lineage)
@@ -395,6 +507,8 @@ def recorded_app_dir(connection: Any, run: dict) -> Optional[str]:
     from sqlalchemy import text
 
     fctx = run.get("finalize_ctx") or {}
+    if isinstance(fctx.get("app_map"), dict) and fctx["app_map"].get("root_path"):
+        return clean_rel(fctx["app_map"].get("root_path"))
     project_id = run.get("project_id")
     owner, repo = _run_repo(run)
     if not project_id or not repo:
@@ -406,10 +520,11 @@ def recorded_app_dir(connection: Any, run: dict) -> Optional[str]:
         key = app_key(project_name(str(run.get("title") or ""))[0])
         if key:
             row = connection.execute(text(
-                "SELECT c.path FROM app_components c JOIN github_repository_bindings b "
+                "SELECT COALESCE(NULLIF(c.root_path, ''), c.path) AS path "
+                "FROM app_components c JOIN github_repository_bindings b "
                 "ON b.id = c.binding_id WHERE c.project_id = :p AND c.app_key = :k "
                 "AND c.kind = 'code' AND lower(b.full_name) = lower(:r) "
-                "ORDER BY c.position, c.name LIMIT 1"),
+                "ORDER BY (c.map_status = 'confirmed') DESC, c.position, c.name LIMIT 1"),
                 {"p": project_id, "k": key, "r": f"{owner}/{repo}"}).mappings().first()
             if row and clean_rel(row["path"]):
                 return clean_rel(row["path"])
@@ -418,9 +533,10 @@ def recorded_app_dir(connection: Any, run: dict) -> Optional[str]:
     root_run = str(fctx.get("root_run_id") or run.get("id") or "")
     app_id = str(fctx.get("app_id") or "")
     row = connection.execute(text(
-        "SELECT finalize_ctx->>'app_dir' AS d FROM code_task_runs "
+        "SELECT COALESCE(NULLIF(finalize_ctx->'app_map'->>'root_path', ''), finalize_ctx->>'app_dir') AS d "
+        "FROM code_task_runs "
         "WHERE project_id = :p AND spec->>'repo' = :r AND COALESCE(spec->>'owner','') = :o "
-        "AND COALESCE(finalize_ctx->>'app_dir','') <> '' "
+        "AND COALESCE(NULLIF(finalize_ctx->'app_map'->>'root_path', ''), finalize_ctx->>'app_dir', '') <> '' "
         "AND ((:a <> '' AND finalize_ctx->>'app_id' = :a) "
         "     OR COALESCE(finalize_ctx->>'root_run_id', id) = :root) "
         "ORDER BY created_at DESC LIMIT 1"),

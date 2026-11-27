@@ -31,6 +31,9 @@ export const SECTIONS = [
   { key: "profile", label: "Profile" },
   { key: "used", label: "Used in" },
   { key: "lineage", label: "Lineage" },
+  { key: "deployments", label: "Deployments" },
+  { key: "triggers", label: "Triggers" },
+  { key: "endpoints", label: "Endpoints" },
   { key: "settings", label: "Settings" },
 ] as const;
 export type SectionKey = (typeof SECTIONS)[number]["key"];

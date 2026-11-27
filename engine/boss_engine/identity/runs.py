@@ -99,6 +99,8 @@ class RunStart:
     #: Bitbucket Cloud repositories (`workspace/repo_slug`) the run may reach through egress
     #: (P8b S11, D19). Kept apart from `repos`: a GitHub installation token is never minted for one.
     bitbucket_repos: tuple[str, ...] = ()
+    #: Self-hosted GitLab repositories (`group[/sub]/repo`) the run may reach through egress.
+    gitlab_repos: tuple[str, ...] = ()
 
 
 def _task(start: RunStart) -> TaskBinding:
@@ -107,6 +109,8 @@ def _task(start: RunStart) -> TaskBinding:
         resources["github"] = list(start.repos)
     if start.bitbucket_repos:
         resources["bitbucket"] = list(start.bitbucket_repos)
+    if start.gitlab_repos:
+        resources["gitlab"] = list(start.gitlab_repos)
     if start.github_needs:
         resources["github_permissions"] = dict(start.github_needs)
     return TaskBinding(run_id=start.run_id, project_id=start.project_id, step=start.step, resources=resources)
@@ -131,8 +135,8 @@ def start_run(ctx: AuthContext, start: RunStart, *, grant_id: Optional[str], db:
         shim = Shim(run_id=start.run_id, key=None, host_jkt=jkt)
     else:
         shim = Shim(run_id=start.run_id)
-    if start.bitbucket_repos:
-        # A payload or a deployment's metadata NAMES Bitbucket repositories; only the ones the
+    if start.bitbucket_repos or start.gitlab_repos:
+        # A payload or a deployment's metadata NAMES Bitbucket/GitLab repositories; only the ones the
         # registry and the run's grants allow enter the token (identity/repo_scope.py), exactly as
         # GitHub's are judged at its mint. The rest are `repo_outside_run` at egress.
         from dataclasses import replace
@@ -140,13 +144,21 @@ def start_run(ctx: AuthContext, start: RunStart, *, grant_id: Optional[str], db:
         from . import grants, repo_scope
         from .principal import PrincipalKind
 
-        start = replace(start, bitbucket_repos=repo_scope.granted(
-            db, provider=repo_scope.BITBUCKET, org_id=ctx.principal.org_id, run_id=start.run_id,
-            grant=grants.load(grant_id, db=db), obo=ctx.principal.kind == PrincipalKind.USER,
-            repos=start.bitbucket_repos))
+        grant = grants.load(grant_id, db=db)
+        obo = ctx.principal.kind == PrincipalKind.USER
+        if start.bitbucket_repos:
+            start = replace(start, bitbucket_repos=repo_scope.granted(
+                db, provider=repo_scope.BITBUCKET, org_id=ctx.principal.org_id, run_id=start.run_id,
+                grant=grant, obo=obo, repos=start.bitbucket_repos))
+        if start.gitlab_repos:
+            start = replace(start, gitlab_repos=repo_scope.granted(
+                db, provider=repo_scope.GITLAB, org_id=ctx.principal.org_id, run_id=start.run_id,
+                grant=grant, obo=obo, repos=start.gitlab_repos))
     task = _task(start)
     agent = AgentInstance(start.agent_id, start.run_id)
-    auds = list(audiences) + ([AUD_EGRESS] if start.repos and AUD_EGRESS not in audiences else [])
+    auds = list(audiences) + (
+        [AUD_EGRESS] if (start.repos or start.gitlab_repos) and AUD_EGRESS not in audiences else []
+    )
     for aud in auds:
         shim.tokens[aud] = tokens.mint_run_token(subject=ctx, agent=agent, grant_id=grant_id, task=task,
                                                  audience=aud, scope=start.scope, cnf_jkt=shim.jkt, db=db)
@@ -212,6 +224,9 @@ def end_run(run_id: str, *, db: Any, org_id: str, reason: str = "run ended") -> 
 
     from . import github_app, grants
 
+    # Revoke remote GitHub installation tokens before mutating DB rows so no write locks are held
+    # across network calls (BOSSAPP-1232).
+    github_app.revoke_runs([run_id], reason)
     db.execute(text("UPDATE identity_run_credentials SET revoked_at = now() WHERE (run_id = :r OR run_id LIKE :c) "
                     "AND revoked_at IS NULL"), {"r": run_id, "c": run_id + "/%"})
     db.execute(text("UPDATE identity_egress_credentials SET revoked_at = now() WHERE (run_id = :r OR run_id LIKE :c) "
@@ -221,7 +236,6 @@ def end_run(run_id: str, *, db: Any, org_id: str, reason: str = "run ended") -> 
 
     _revoke_model_handles(db, run_id, reason)
     grants.end_task_grants(run_id, db=db, org_id=org_id)
-    github_app.revoke_runs([run_id], reason)
     # A SEPARATE boss-egress process holds the run's installation tokens in ITS memory: tell it
     # (identity_revocation_notices + NOTIFY), so they are revoked at GitHub there too.
     from . import cascade
@@ -781,14 +795,16 @@ def _repo_api_base(engine: Any, project_id: Optional[str], owner: str, repo: str
 
 
 def egress_access(shim: Shim, *, owner: str, repo: str, api_base: str = "",
-                  db: Any = None) -> CloneAccess:
+                  db: Any = None, host: str = "github") -> CloneAccess:
     """`api_base`: the repository's REST base (its binding's connection). A repository on a GHES
     host clones through /github@<host>/, and every known GHES web origin is rewritten to egress
-    as github.com is, so no git call from the run reaches a GitHub host directly (BOSSAPP-1286)."""
+    as github.com is, so no git call from the run reaches a GitHub host directly (BOSSAPP-1286).
+    `host="gitlab"` routes self-hosted GitLab repositories through /gitlab/ (BOSSAPP-1419)."""
     import os
     from urllib.parse import urlsplit
 
     base = (os.environ.get(EGRESS_URL_ENV) or "").rstrip("/")
+    kind = (host or "github").strip().lower()
     socket_path = serve_shim_socket(shim)
     # git runs the helper with the action ("get", "store", "erase"); only "get" answers.
     helper = ("!f() { python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); "
@@ -796,13 +812,31 @@ def egress_access(shim: Shim, *, owner: str, repo: str, api_base: str = "",
               f"{socket_path} \"$1\"; }}; f")
     own = OwnGit(config=(("credential.helper", ""), ("credential.helper", _OWN_HELPER)),
                  env={"BOSS_EGR_CREDENTIAL": shim.egress_credential or ""})
+    if kind == "gitlab":
+        gl_raw = (os.environ.get("BOSS_GITLAB_BASE_URL") or "https://gitlab.com").strip()
+        gl_parts = urlsplit(gl_raw)
+        gl_origin = (f"{gl_parts.scheme}://{gl_parts.netloc}/"
+                     if (gl_parts.scheme and gl_parts.netloc) else "https://gitlab.com/")
+        return CloneAccess(
+            run_id=shim.run_id, clone_url=f"{base}/gitlab/{owner}/{repo}.git",
+            git_config=((f"url.{base}/gitlab/.insteadOf", gl_origin),
+                        ("credential.helper", ""), ("credential.helper", helper),
+                        ("credential.useHttpPath", "true")),
+            helper_env={"BOSS_SHIM_SOCKET": socket_path}, own_git=own)
     install_web = github_urls.web_base()
     rewrites: list[tuple[str, str]] = [(f"url.{base}/github/.insteadOf", github_urls.PUBLIC_WEB + "/")]
     if install_web != github_urls.PUBLIC_WEB:
         rewrites.append((f"url.{base}/github/.insteadOf", install_web + "/"))
-    for web, host in sorted(_ghes_origins(db).items()):
+    git_raw = (os.environ.get(github_urls.GIT_BASE_ENV) or "").strip()
+    if git_raw:
+        gp = urlsplit(git_raw)
+        if gp.scheme and gp.netloc:
+            git_origin = f"{gp.scheme}://{gp.netloc}/"
+            if all(existing != git_origin for _, existing in rewrites):
+                rewrites.append((f"url.{base}/github/.insteadOf", git_origin))
+    for web, ghes_host in sorted(_ghes_origins(db).items()):
         if web != install_web:
-            rewrites.append((f"url.{base}/github@{host}/.insteadOf", web + "/"))
+            rewrites.append((f"url.{base}/github@{ghes_host}/.insteadOf", web + "/"))
     route = "github"
     if api_base and github_urls.api_base(api_base) not in (github_urls.PUBLIC_API,
                                                             github_urls.install_api_base()):
@@ -1199,8 +1233,13 @@ def repo_access(engine: Any, *, host: str, owner: str, repo: str, project_id: Op
         # BOSSAPP-918: a repository BOSS keeps on this machine — file://, no credential, no egress.
         yield git_access("local", owner, repo, "", web_base="")
         return
-    if kind == "github" and engine is not None and egress_enabled() and acting is not None and acting.grant_id:
+    if kind in ("github", "gitlab") and engine is not None and egress_enabled() and acting is not None and acting.grant_id:
         shim = None
+        repo_kw = (
+            {"repos": (f"{owner}/{repo}",)}
+            if kind == "github"
+            else {"gitlab_repos": (f"{owner}/{repo}",)}
+        )
         with engine.begin() as db:
             agent_id = (acting.chain[-1].split("#", 1)[0] if acting.chain
                         else agent_for_role(db, project_id, resolved_builder({"role_key": role_key})))
@@ -1208,12 +1247,15 @@ def repo_access(engine: Any, *, host: str, owner: str, repo: str, project_id: Op
                 rid = _nested_run_id(acting, "git", secrets.token_hex(6))
                 shim = start_run(subject_for(acting, db=db),
                                  RunStart(run_id=rid, agent_id=agent_id, project_id=project_id,
-                                          repos=(f"{owner}/{repo}",),
-                                          scope=frozenset({"repository:read", "github:read"})),
+                                          scope=frozenset({"repository:read", "github:read"}),
+                                          **repo_kw),
                                  grant_id=acting.grant_id, db=db, audiences=(AUD_API,))
         if shim is not None:
-            access = egress_access(shim, owner=owner, repo=repo,
-                                   api_base=_repo_api_base(engine, project_id, owner, repo))
+            access = egress_access(
+                shim, owner=owner, repo=repo,
+                api_base=_repo_api_base(engine, project_id, owner, repo) if kind == "github" else "",
+                host=kind,
+            )
             try:
                 yield _egress_git_access(access)
             finally:
@@ -1221,24 +1263,32 @@ def repo_access(engine: Any, *, host: str, owner: str, repo: str, project_id: Op
                 with engine.begin() as db:
                     end_run(shim.run_id, db=db, org_id=acting.org_id)
             return
-    if kind == "github" and engine is not None:
+    if kind in ("github", "gitlab") and engine is not None:
         # NO GRANT (a system loop, a preview of a build, a read tool outside any run): never the
         # shared token silently (round 2 e). With egress on, the clone runs as BOSS's own read-only
         # system agent under its explicit, audited authority; under enforce without egress it is
         # refused; in shadow the legacy token is used and that use is recorded.
         if egress_enabled():
+            repo_kw = (
+                {"repos": (f"{owner}/{repo}",)}
+                if kind == "github"
+                else {"gitlab_repos": (f"{owner}/{repo}",)}
+            )
             with engine.begin() as db:
                 agent_ctx = system_repo_reader(db, project_id=project_id)
                 shim = None
                 if agent_ctx is not None:
                     rid = f"run_sys:git:{secrets.token_hex(6)}"
                     shim = start_run(agent_ctx, RunStart(run_id=rid, agent_id=agent_ctx.principal.id,
-                                                         project_id=project_id, repos=(f"{owner}/{repo}",),
-                                                         scope=SYSTEM_GIT_SCOPE),
+                                                         project_id=project_id,
+                                                         scope=SYSTEM_GIT_SCOPE, **repo_kw),
                                      grant_id=None, db=db, audiences=(AUD_API,))
             if shim is not None:
-                access = egress_access(shim, owner=owner, repo=repo,
-                                   api_base=_repo_api_base(engine, project_id, owner, repo))
+                access = egress_access(
+                    shim, owner=owner, repo=repo,
+                    api_base=_repo_api_base(engine, project_id, owner, repo) if kind == "github" else "",
+                    host=kind,
+                )
                 try:
                     yield _egress_git_access(access)
                 finally:
@@ -1246,10 +1296,11 @@ def repo_access(engine: Any, *, host: str, owner: str, repo: str, project_id: Op
                     with engine.begin() as db:
                         end_run(shim.run_id, db=db, org_id=agent_ctx.principal.org_id)
                 return
-        if lineage._enforced():  # noqa: SLF001
-            _no_authority("no grant and no system repo reader (is boss-egress configured?)",
-                          task_run_id=f"git:{owner}/{repo}")
-        _note_shared_token_use(engine, owner=owner, repo=repo, project_id=project_id)
+        if kind == "github":
+            if lineage._enforced():  # noqa: SLF001
+                _no_authority("no grant and no system repo reader (is boss-egress configured?)",
+                              task_run_id=f"git:{owner}/{repo}")
+            _note_shared_token_use(engine, owner=owner, repo=repo, project_id=project_id)
     raw, api_base = credential() if callable(credential) else credential
     yield git_access(kind, owner, repo, raw or "",
                      web_base=github_urls.web_base_for(api_base) if kind == "github" else "")

@@ -44,9 +44,10 @@ class _Connection:
             assert "project_id = :p" in sql
             assert params["p"] == "project-a"
             return _Result(self.run)
+        if "FROM deployment_targets" in sql or "FROM deployment_hosts" in sql:
+            return _Result(rows=[])
         if "FROM app_logs" in sql:
-            assert "AND project_id = :pid" in sql
-            assert "project_id IS NULL" not in sql
+            assert "project_id = :pid" in sql
             assert params["pid"] == "project-a"
             return _Result(rows=self.logs)
         raise AssertionError(f"unexpected query: {sql}")
@@ -71,16 +72,16 @@ def _no_external(*_args, **_kwargs):
     raise AssertionError("external access must be stopped before this call")
 
 
-@pytest.mark.parametrize("edition", ["community", "oss", "local", "unknown"])
-def test_direct_http_probe_stops_before_network(edition, monkeypatch):
+@pytest.mark.parametrize("edition", ["community", "oss", "local", "unknown", "enterprise_self_hosted"])
+def test_direct_http_probe_is_exposed_and_enforces_ssrf_guard(edition, monkeypatch):
     monkeypatch.setattr(urllib.request, "urlopen", _no_external)
     result = build_default_registry().invoke(
         "http_probe", _Ctx(edition, _Connection()), project_id="project-a",
         actor="member", args={"url": "http://169.254.169.254/latest/meta-data/"},
     )
     assert result["ok"] is False
-    assert "Community URL probes" in result["error"]
-    assert "http_probe" not in build_discuss_read_registry(edition=edition).names()
+    assert "metadata or link-local" in result["error"]
+    assert "http_probe" in build_discuss_read_registry(edition=edition).names()
 
 
 @pytest.mark.parametrize("tool,args", [
@@ -159,19 +160,19 @@ def test_project_run_pull_request_ignores_foreign_repo_override(monkeypatch):
     ]
 
 
-@pytest.mark.parametrize("edition", ["community", "oss", "local", "unknown"])
-def test_community_logs_use_only_project_rows_and_never_open_shared_files(edition, monkeypatch):
+@pytest.mark.parametrize("edition", ["community", "oss", "local", "unknown", "enterprise_self_hosted"])
+def test_logs_are_project_scoped_and_identical_across_editions(edition, monkeypatch):
     # Build first: the registry's lazy imports (pydantic, zoneinfo) stat files themselves, and
     # whether an earlier test already imported them must not decide this one.
     registry = build_default_registry()
-    monkeypatch.setattr(builtin._os.path, "isfile", _no_external)
+    monkeypatch.setattr(builtin._os.path, "isfile", lambda _p: False)
     stamp = datetime.now(timezone.utc)
     conn = _Connection(logs=[{
         "created_at": stamp, "level": "INFO", "logger": "api",
         "message": "own project event", "project_id": "project-a", "run_id": None,
     }])
     # The call acts in ONE project — the one the identity gate decided (H1): an explicit
-    # project_id argument names it, and the handler reads that project's rows only.
+    # project_id argument names it, and the handler reads that project's rows.
     result = registry.invoke(
         "read_logs", _Ctx(edition, conn), project_id="project-z", actor="member",
         args={"service": "api", "project_id": "project-a"},
@@ -180,3 +181,60 @@ def test_community_logs_use_only_project_rows_and_never_open_shared_files(editio
     assert result["source"] == "app_logs (BOSS's own capture)"
     assert "own project event" in result["log"][0]
     assert len(conn.queries) == 1
+
+
+@pytest.mark.parametrize("edition", ["community", "enterprise_self_hosted"])
+def test_http_probe_executes_from_chat_registry_on_project_host_and_blocks_ssrf(edition):
+    import http.server
+    import threading
+
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            body = b'{"status":"healthy"}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args):
+            return
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        port = server.server_address[1]
+
+        class _HostConn:
+            def begin_nested(self):
+                return contextmanager(lambda: (yield self))()
+
+            def execute(self, statement, _params=None):
+                sql = str(statement)
+                if "FROM deployment_hosts" in sql:
+                    return _Result(rows=[("127.0.0.1",)])
+                if "FROM deployment_targets" in sql:
+                    return _Result(rows=[])
+                raise AssertionError(f"unexpected query: {sql}")
+
+        chat_reg = build_discuss_read_registry(edition=edition)
+        assert "http_probe" in chat_reg.names()
+        assert "chat" in chat_reg.get("http_probe").exposure.surfaces
+
+        ok = chat_reg.invoke(
+            "http_probe", _Ctx(edition, _HostConn()), project_id="project-a",
+            actor="member", args={"url": f"http://127.0.0.1:{port}/healthz"},
+        )
+        assert ok["ok"] is True, ok
+        assert ok["status"] == 200
+        assert "healthy" in ok["body_excerpt"]
+
+        blocked = chat_reg.invoke(
+            "http_probe", _Ctx(edition, _HostConn()), project_id="project-a",
+            actor="member", args={"url": "http://169.254.169.254/latest/meta-data/"},
+        )
+        assert blocked["ok"] is False
+        assert "metadata or link-local" in blocked["error"]
+    finally:
+        server.shutdown()

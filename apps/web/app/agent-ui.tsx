@@ -560,7 +560,13 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
       // Twenty minutes: longer than any turn measured, and it stops rather than polling for
       // ever if the turn really did die.
       if (Date.now() - started > 20 * 60_000) { setLanding(false); return; }
-      void read<{ messages?: Msg[]; working?: boolean }>(
+      void read<{
+        messages?: Msg[];
+        working?: boolean;
+        proposed_actions?: ProposedAction[];
+        next_steps?: unknown;
+        pending_confirmation?: Record<string, unknown> | null;
+      }>(
         { view: "messages", project_id: projectId, actor, thread_id: threadId }).then((d) => {
         if (!alive || !d?.messages) return;
         // THIS TURN, NOT THE PREVIOUS ONE.
@@ -578,6 +584,9 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
               server.some((m) => m.role === "user" && (m.content ?? "").includes(lastLocal.content ?? ""));
             return serverHasIt ? server : [...server, lastLocal];
           });
+          setPendingPlan((d.pending_confirmation as Record<string, unknown>) ?? null);
+          setProposed(Array.isArray(d.proposed_actions) ? (d.proposed_actions as ProposedAction[]) : []);
+          setNextSteps(nextStepsOf(d as Record<string, unknown>));
           setLanding(false);
           return;
         }
@@ -613,15 +622,22 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
   // conversation about it came first. An API older than `agent_role` on the list matches by
   // subject, as before.
   const roleKey = (roleName ?? "").trim().toLowerCase();
+  const roleSlug = roleKey.replace(/\s+/g, "_");
+  const propRole = (roleKeyProp ?? "").trim().toLowerCase();
+  const propRoleSlug = propRole.replace(/\s+/g, "_");
   // THE AGENT'S OWN KEY AS WELL AS ITS NAME. The server stores a turn under the role it
-  // resolved ("Helm" → engineering_captain), so a door that addressed the captain by name never
-  // found its own conversation again (the captain drawer reopened empty, 09-02).
+  // resolved ("Helm" → engineering_captain, "Product Manager" → product_manager), so a door
+  // that addressed the agent by display name never found its own conversation again.
   const threadFor = useCallback(
     (id: string, list: Thread[]): Thread | undefined =>
-      list.find((t) => (t.external_ref ?? null) === (id === GENERAL ? null : id)
-        && ((t.agent_role ?? roleKey) === roleKey
-            || (Boolean(roleKeyProp?.trim()) && (t.agent_role ?? "") === roleKeyProp!.trim().toLowerCase()))),
-    [roleKey, roleKeyProp],
+      list.find((t) => {
+        if ((t.external_ref ?? null) !== (id === GENERAL ? null : id)) return false;
+        const threadRole = (t.agent_role ?? roleKey).trim().toLowerCase();
+        const threadSlug = threadRole.replace(/\s+/g, "_");
+        return threadRole === roleKey || threadSlug === roleSlug
+          || (Boolean(propRole) && (threadRole === propRole || threadSlug === propRoleSlug));
+      }),
+    [roleKey, roleSlug, propRole, propRoleSlug],
   );
 
   /**

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { mapActivityLog } from "../lib/activity-log";
 import { LOG_FORWARD } from "../lib/activity-proxy";
+import { isCommunityPrimaryNavVisible } from "../lib/edition";
 import { apiParams, readLogParams } from "../lib/log-url";
 import { LEVELS, firstLine } from "../app/activity/log-model";
 import { codeOnly } from "./_helpers/source";
@@ -84,8 +85,8 @@ describe("where it lives", () => {
     expect(SHELL).toContain("open || holdsActive ?");
   });
 
-  it("is visible to self-hosted operators", () => {
-    const set = EDITION.slice(EDITION.indexOf("V1_COMMUNITY_PRIMARY_NAV = new Set("));
-    expect(set.slice(0, set.indexOf("]);"))).toContain('"activity"');
+  it("is visible regardless of edition", () => {
+    expect(isCommunityPrimaryNavVisible("activity", "community")).toBe(true);
+    expect(isCommunityPrimaryNavVisible("activity", "enterprise_self_hosted")).toBe(true);
   });
 });

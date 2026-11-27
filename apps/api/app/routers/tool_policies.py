@@ -41,6 +41,8 @@ class RuleBody(Body):
     note: Optional[str] = Field(default=None, max_length=2000)
     expires_at: Optional[str] = None
     status: str = "active"
+    hard: bool = False
+    examples: Optional[dict[str, Any]] = None
 
 
 class PatchBody(Body):
@@ -54,6 +56,8 @@ class PatchBody(Body):
     note: Optional[str] = Field(default=None, max_length=2000)
     expires_at: Optional[str] = None
     status: Optional[str] = None
+    hard: Optional[bool] = None
+    examples: Optional[dict[str, Any]] = None
 
 
 class SimulateBody(Body):

@@ -70,16 +70,20 @@ class TestItWillNotRunOnTheModelsSayS0:
 
 
 class TestTheFlagIsTheOuterGate:
-    def test_community_refuses_even_with_flag_and_confirmation(self):
-        for edition in ("community", "oss", "local", "unrecognized"):
-            out = build_default_registry().invoke(
+    def test_flag_applies_uniformly_across_editions(self):
+        for edition in ("community", "oss", "local", "unrecognized", "enterprise_self_hosted"):
+            off = build_default_registry().invoke(
+                "run_on_host", _Ctx(False, edition), project_id="p", actor="ceo",
+                args={"host": "h", "command": "docker ps"}, operator_confirmed=True,
+            )
+            assert off["ok"] is False
+            assert "BOSS_AGENT_HOST_SHELL" in off["error"]
+            on = build_default_registry().invoke(
                 "run_on_host", _Ctx(True, edition), project_id="p", actor="ceo",
                 args={"host": "h", "command": "docker ps"}, operator_confirmed=True,
             )
-            assert out["ok"] is False
-            # Said in the words a person reads (action_unavailable); the governance detail
-            # goes to the log.
-            assert "This edition doesn't let agents run commands on your hosts" in out["error"]
+            assert on.get("requires_confirmation") is not True
+            assert "reached the database" in on.get("error", "")
 
     def test_disabled_refuses_even_with_confirmation(self):
         out = build_default_registry().invoke(

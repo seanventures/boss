@@ -37,9 +37,9 @@ COMMUNITY_DISCOVERY_BLOCK_REASON = (
 
 
 def _research_runs_as_a_job(settings: Settings) -> bool:
-    """Community runs Discovery as a governed worker job. Other editions keep the legacy
-    in-process path until they are qualified separately (DISCOVERY_COMMUNITY_GA_BLOCKER.md)."""
-    return str(settings.boss_edition).strip().lower() in {"community", "oss", "local"}
+    """Every install runs Discovery as a durable governed `discovery.run` job."""
+    _ = settings
+    return True
 
 
 #: The one reason a workflow's research step stands aside instead of commissioning research.
@@ -608,8 +608,14 @@ def _row_to_summary(r) -> dict:
     return {
         "id": r["id"], "project_id": r["project_id"], "status": r["status"], "phase": r["phase"],
         "title": _clip(r["title"]), "seed": _clip(r["seed"]), "error": _clip(r["error"]),
-        "usage": ({"cost_usd_micros": usage.get("cost_usd_micros"), "model": usage.get("model")}
-                  if isinstance(usage, dict) else None),
+        "usage": (
+            {
+                "cost_usd_micros": usage.get("cost_usd_micros"),
+                "model": usage.get("model"),
+                **({"billing": usage.get("billing")} if usage.get("billing") else {}),
+            }
+            if isinstance(usage, dict) else None
+        ),
         "created_at": r["created_at"].isoformat() if r["created_at"] else None,
         "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None,
         "summary": {
@@ -825,6 +831,30 @@ def _run_discovery(run_id: str, project_id: str, seed: str, context: str,
             dossier["governance"] = governance
         cost = 0
         model = None
+        billing: Optional[str] = None
+
+        def _stage_billing(stage_result: Optional[dict] = None) -> str:
+            nonlocal billing
+            if isinstance(stage_result, dict):
+                usage_obj = stage_result.get("usage")
+                stamped = (
+                    (usage_obj.get("billing") if isinstance(usage_obj, dict) else None)
+                    or stage_result.get("billing")
+                )
+                if stamped:
+                    billing = str(stamped)
+                    return billing
+            if billing:
+                return billing
+            try:
+                from .claude_cli_adapter import claude_cli_billing
+
+                billing = claude_cli_billing(settings)
+            except Exception:  # noqa: BLE001
+                from .included_spend import BILLING_METERED
+
+                billing = BILLING_METERED
+            return billing
 
         # P1 — Signal sweep (web research). Deep mode fans out to parallel focused scouts.
         _phase(engine, run_id, "signal_sweep", guard=guard)
@@ -834,15 +864,17 @@ def _run_discovery(run_id: str, project_id: str, seed: str, context: str,
             dossier["research_brief"] = brief
             dossier["signal_findings"] = findings
             cost += sweep_cost
+            _stage_billing()
         else:
             r = research("signal_sweep", _sweep_prompt(seed, context))
             cost += r["cost_usd_micros"]
             model = r.get("model")
+            _stage_billing(r)
             sweep = _extract_json(r["summary"])
             dossier["research_brief"] = sweep.get("brief", {})
             dossier["signal_findings"] = sweep.get("findings", [])
             _record_stage(dossier, "signal_sweep", r, parsed=sweep)
-        _save(engine, run_id, dossier, cost, model, guard=guard)
+        _save(engine, run_id, dossier, cost, model, billing=billing, guard=guard)
 
         # A SWEEP THAT FOUND NOTHING IS A FAILED RUN, NOT A CAUTIOUS ONE.
         #
@@ -877,28 +909,31 @@ def _run_discovery(run_id: str, project_id: str, seed: str, context: str,
         _phase(engine, run_id, "synthesize", guard=guard)
         r = research("synthesize", _synth_prompt(seed, context, dossier["signal_findings"]))
         cost += r["cost_usd_micros"]
+        _stage_billing(r)
         parsed = _extract_json(r["summary"])
         dossier["market_analysis"] = parsed.get("analysis", {})
         _record_stage(dossier, "synthesize", r, parsed=parsed)
-        _save(engine, run_id, dossier, cost, model, guard=guard)
+        _save(engine, run_id, dossier, cost, model, billing=billing, guard=guard)
 
         # P3 — Adversarial vetting (web research for disconfirming evidence)
         _phase(engine, run_id, "vet", guard=guard)
         r = research("vet", _vet_prompt(seed, dossier))
         cost += r["cost_usd_micros"]
+        _stage_billing(r)
         parsed = _extract_json(r["summary"])
         dossier["critique"] = parsed.get("critique", {})
         _record_stage(dossier, "vet", r, parsed=parsed)
-        _save(engine, run_id, dossier, cost, model, guard=guard)
+        _save(engine, run_id, dossier, cost, model, billing=billing, guard=guard)
 
         # P4 — Shape outcomes
         _phase(engine, run_id, "shape", guard=guard)
         r = research("shape", _shape_prompt(seed, context, dossier))
         cost += r["cost_usd_micros"]
+        _stage_billing(r)
         parsed = _extract_json(r["summary"])
         dossier["candidate_outcomes"] = parsed.get("outcomes", [])
         _record_stage(dossier, "shape", r, parsed=parsed)
-        _save(engine, run_id, dossier, cost, model, guard=guard)
+        _save(engine, run_id, dossier, cost, model, billing=billing, guard=guard)
 
         # P5 — Evidence gate (deterministic, fail-closed)
         _phase(engine, run_id, "gate", guard=guard)
@@ -906,13 +941,17 @@ def _run_discovery(run_id: str, project_id: str, seed: str, context: str,
 
         with begin(engine) as c:
             _require_running(c, run_id, project_id, guard)
+            final_billing = _stage_billing()
             c.execute(
                 text("""UPDATE discovery_runs SET status='completed', phase='done',
                         state=CAST(:s AS JSONB) || jsonb_strip_nulls(jsonb_build_object('job_id', state->'job_id')),
-                        usage=jsonb_build_object('cost_usd_micros', CAST(:cost AS bigint),
-                                                 'model', CAST(:m AS text)),
+                        usage=jsonb_strip_nulls(jsonb_build_object(
+                            'cost_usd_micros', CAST(:cost AS bigint),
+                            'model', CAST(:m AS text),
+                            'billing', CAST(:billing AS text))),
                         updated_at=now() WHERE id=:id"""),
-                {"s": json.dumps(dossier), "cost": cost, "m": model, "id": run_id},
+                {"s": json.dumps(dossier), "cost": cost, "m": model,
+                 "billing": final_billing, "id": run_id},
             )
             emit_event(c, project_id, "discovery.completed", "boss", "discovery_run", run_id,
                        {"verdict": dossier["gate"]["verdict"],
@@ -1000,17 +1039,20 @@ def _phase(engine, run_id: str, phase: str, *, guard: Optional[Callable] = None)
 
 
 def _save(engine, run_id: str, dossier: dict, cost: int, model: Optional[str],
-          *, guard: Optional[Callable] = None) -> None:
+          *, billing: Optional[str] = None, guard: Optional[Callable] = None) -> None:
     # The dossier REPLACES the state but the job that owns the run is kept: dropping it made a
     # governed run look like an orphan of the old in-process path to startup recovery.
     with begin(engine) as c:
         _require_running(c, run_id, guard=guard)
         c.execute(
             text("""UPDATE discovery_runs SET state=CAST(:s AS JSONB) || jsonb_strip_nulls(jsonb_build_object('job_id', state->'job_id')),
-                    usage=jsonb_build_object('cost_usd_micros', CAST(:cost AS bigint),
-                                             'model', CAST(:m AS text)),
+                    usage=jsonb_strip_nulls(jsonb_build_object(
+                        'cost_usd_micros', CAST(:cost AS bigint),
+                        'model', CAST(:m AS text),
+                        'billing', CAST(:billing AS text))),
                     updated_at=now() WHERE id=:id"""),
-            {"s": json.dumps(dossier), "cost": cost, "m": model, "id": run_id},
+            {"s": json.dumps(dossier), "cost": cost, "m": model,
+             "billing": billing, "id": run_id},
         )
 
 

@@ -55,21 +55,12 @@ def build_ports(settings: Any, engine: Any = None) -> EnginePorts:
         PostgresEventSink,
         PostgresPersistence,
     )
-    from boss_engine.defaults import AllowAllEntitlementPort
-
-    edition = str(getattr(settings, "boss_edition", "community")).strip().lower()
-    paid = edition in ENTERPRISE_EDITIONS
 
     return EnginePorts(
-        # Every edition: the project's caps count and stop build spend like any other spend.
+        # Every install: the project's caps count and stop build spend like any other spend.
         budget=PostgresBudgetPort(settings),
-        # Paid: entitlement checks.
-        entitlement=(
-            PostgresEntitlementPort(settings) if paid
-            else AllowAllEntitlementPort(
-                model_id=getattr(settings, "openai_model", "user-supplied-model"))
-        ),
-        # Shared runtime: durable in every edition that has a database.
+        entitlement=PostgresEntitlementPort(settings),
+        # Shared runtime: durable wherever a database exists.
         persistence=PostgresPersistence(engine),
         events=PostgresEventSink(),
         decisions=PostgresDecisionSink(),

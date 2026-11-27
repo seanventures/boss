@@ -278,14 +278,14 @@ def _required_in(field: Mapping[str, Any], mode: str) -> bool:
 
 
 #: Chat sources whose connection rides on a chat endpoint (§15 D1), by intake kind.
-CHAT_ENDPOINT_KINDS = {"slack": "slack"}
+CHAT_ENDPOINT_KINDS = {"slack": "slack", "teams": "teams"}
 
 
 def _bind_chat_endpoint(connection: Connection, project_id: str, kind: str,
                         cfg: dict) -> Optional[dict]:
     """The chat endpoint a chat connection rides on (`config.chat_endpoint_id`): same project,
-    same channel kind, active. Its team id is copied into the connection's config when the
-    connection names none (the guest / other-workspace checks read it)."""
+    same channel kind, active. Its team/tenant/app ids are copied into the connection's config when
+    the connection names none (the guest / other-workspace / JWT checks read them)."""
     wanted = CHAT_ENDPOINT_KINDS.get(kind)
     endpoint_id = str(cfg.get("chat_endpoint_id") or "").strip()
     if not wanted:
@@ -306,10 +306,11 @@ def _bind_chat_endpoint(connection: Connection, project_id: str, kind: str,
         {"e": endpoint_id}).scalar()
     if taken:
         raise IntakeServiceError(f"chat endpoint {endpoint_id} already has an intake connection "
-                                 f"({taken}): one Slack app, one connection.", status=409,
+                                 f"({taken}): one chat app, one connection.", status=409,
                                  code="endpoint_taken")
     ecfg = _json(row.get("config"), {}) or {}
-    for key in ("team_id", "bot_user_id", "bot_id"):
+    for key in ("team_id", "bot_user_id", "bot_id", "app_id", "tenant_id",
+                "service_url", "oidc_config_url", "token_url"):
         if ecfg.get(key) and not cfg.get(key):
             cfg[key] = ecfg[key]
     cfg["chat_endpoint_id"] = endpoint_id
@@ -764,7 +765,8 @@ def _is_person_address(ev: Mapping[str, Any], channel: str, bot_user: str) -> bo
     kind = str(ev.get("type") or env.get("type") or raw_ev.get("type") or "")
     text_ = str(data.get("text") or raw_ev.get("text") or "")
     mentioned = bool(bot_user) and f"<@{bot_user}>" in text_
-    addressed = "app_mention" in kind or im or mentioned or data.get("mentions_bot") is True
+    addressed = ("app_mention" in kind or "message.mention" in kind or im
+                 or mentioned or data.get("mentions_bot") is True)
     if not addressed:
         return False
     if channel and ch and ch != channel and not im:
@@ -1104,7 +1106,8 @@ def accept_in_tx(connection: Connection, adapter: Any, row: Mapping[str, Any],
         shake = adapter.handshake(conn, request)
         if shake is not None:
             return {"outcome": ACK_HANDSHAKE, "http_status": shake.status,
-                    "body": shake.body, "headers": dict(shake.headers)}
+                    "body": shake.body, "headers": dict(shake.headers),
+                    "media_type": shake.media_type}
     if row["status"] != "active":
         key = "dropped_while_" + str(row["status"])
         connection.execute(text("""
@@ -1125,13 +1128,24 @@ def accept_in_tx(connection: Connection, adapter: Any, row: Mapping[str, Any],
     retry = verified.retry or _retry_signal(adapter, request)
     event_id = make_id("iev")
     received = _now()
-    inserted = connection.execute(text("""
+    claimed_dedupe = connection.execute(text("""
+        INSERT INTO intake_event_dedupe (connection_id, dedupe_key, event_id, received_at)
+        VALUES (:c, :dk, :id, :at)
+        ON CONFLICT (connection_id, dedupe_key) DO NOTHING RETURNING event_id"""),
+        {"c": row["id"], "dk": dedupe_key, "id": event_id, "at": received}).scalar()
+    if claimed_dedupe is None:
+        connection.execute(text("""
+            UPDATE intake_events SET duplicates = duplicates + 1,
+                   retry_count_seen = GREATEST(retry_count_seen, :retry)
+             WHERE connection_id = :c AND dedupe_key = :dk"""),
+            {"retry": int((retry or {}).get("num") or 0), "c": row["id"], "dk": dedupe_key})
+        return _ack(adapter, conn, request, ACK_DUPLICATE, dedupe_key=dedupe_key)
+    connection.execute(text("""
         INSERT INTO intake_events (id, connection_id, project_id, dedupe_key,
                source_event_id, status, raw, raw_sha256, headers, retry_count_seen,
                trace_id, verify_scheme, received_at, raw_expires_at, expires_at)
         VALUES (:id, :c, :p, :dk, :sid, :st, :raw, :sha, CAST(:h AS JSONB), :retry, :tr,
-                :vs, :at, :rexp, :exp)
-        ON CONFLICT (connection_id, dedupe_key) DO NOTHING RETURNING id"""),
+                :vs, :at, :rexp, :exp)"""),
         {"id": event_id, "c": row["id"], "p": row.get("project_id"), "dk": dedupe_key,
          "sid": dedupe_key.split(":", 1)[-1][:200],
          "st": ACK_SHED if shed else ACK_RECEIVED,
@@ -1142,14 +1156,7 @@ def accept_in_tx(connection: Connection, adapter: Any, row: Mapping[str, Any],
          "tr": (lower_headers(request.headers).get("traceparent") or make_id("itr"))[:120],
          "vs": verified.scheme, "at": received,
          "rexp": received + timedelta(days=RAW_RETENTION_DAYS),
-         "exp": received + timedelta(days=ENVELOPE_RETENTION_DAYS)}).scalar()
-    if inserted is None:
-        connection.execute(text("""
-            UPDATE intake_events SET duplicates = duplicates + 1,
-                   retry_count_seen = GREATEST(retry_count_seen, :retry)
-             WHERE connection_id = :c AND dedupe_key = :dk"""),
-            {"retry": int((retry or {}).get("num") or 0), "c": row["id"], "dk": dedupe_key})
-        return _ack(adapter, conn, request, ACK_DUPLICATE, dedupe_key=dedupe_key)
+         "exp": received + timedelta(days=ENVELOPE_RETENTION_DAYS)})
     if _BEFORE_COMMIT is not None:
         _BEFORE_COMMIT(event_id)
     outcome = ACK_SHED if shed else ACK_RECEIVED
@@ -1373,9 +1380,23 @@ def process_one(engine: Any, settings: Any, row: Mapping[str, Any], *,
             primary: Optional[IntakeEvent] = None
             primary_conversation: Optional[str] = None
             filtered_reason = ""
+            lifecycle_actions: list[tuple[str, str, str]] = []
             for ev in events:
                 ev.bossconnection = conn.id
                 ev.bossdedupe = ev.bossdedupe or str(row["dedupe_key"])
+                if ev.type.startswith("com.microsoft.outlook.subscription.") and ev.data.get("lifecycle_event"):
+                    lifecycle_actions.append((
+                        conn.id,
+                        str(ev.data.get("subscription_id") or ""),
+                        str(ev.data.get("lifecycle_event") or ""),
+                    ))
+                    all_outcomes.append({"lifecycle": ev.data.get("lifecycle_event"),
+                                         "subscription_id": ev.data.get("subscription_id")})
+                    if primary is None:
+                        primary = ev
+                        parsed_fields = _fields_of(primary, None)
+                        parsed_envelope = primary.to_dict()
+                    continue
                 try:
                     ev = adapter.enrich(conn, ev)
                 except Exception as error:  # noqa: BLE001 — enrichment is optional context
@@ -1389,6 +1410,30 @@ def process_one(engine: Any, settings: Any, row: Mapping[str, Any], *,
                         conversation = None
                 if conversation and ev.bossconversation is None:
                     ev.bossconversation = {"key": conversation}
+                if crow.get("chat_endpoint_id") and isinstance(ev.bossconversation, dict) and \
+                        isinstance(ev.bossconversation.get("conversation_ref"), dict) and \
+                        ev.bossconversation["conversation_ref"]:
+                    # Refresh conversation_ref (serviceUrl can change) & last_inbound_at (§9.3).
+                    conv_ref = ev.bossconversation["conversation_ref"]
+                    ch_ext = str(ev.bossconversation.get("channel") or ev.data.get("channel") or "")
+                    th_ext = str(ev.bossconversation.get("thread_ts") or conversation or ch_ext)
+                    if ch_ext and th_ext:
+                        c.execute(text("""
+                            INSERT INTO chat_threads (id, endpoint_id, project_id, external_channel_id,
+                                   external_thread_id, conversation_key, conversation_ref,
+                                   last_inbound_at)
+                            VALUES (:i, :e, :p, :ch, :th, :ck, CAST(:cref AS JSONB), :now)
+                            ON CONFLICT (endpoint_id, external_channel_id, external_thread_id)
+                            DO UPDATE SET
+                                conversation_ref = EXCLUDED.conversation_ref,
+                                conversation_key = COALESCE(EXCLUDED.conversation_key,
+                                                            chat_threads.conversation_key),
+                                last_inbound_at = EXCLUDED.last_inbound_at,
+                                updated_at = now()"""),
+                            {"i": make_id("cht"), "e": crow["chat_endpoint_id"],
+                             "p": conn.project_id, "ch": ch_ext[:200], "th": th_ext[:200],
+                             "ck": conversation, "cref": json.dumps(conv_ref, default=str),
+                             "now": now})
                 if primary is None:
                     primary, primary_conversation = ev, conversation
                     parsed_fields = _fields_of(primary, conversation)
@@ -1533,7 +1578,19 @@ def process_one(engine: Any, settings: Any, row: Mapping[str, Any], *,
                                                if o.get("run_id")]})
             _finish(c, event_id, status, envelope=envelope, outcome=history + all_outcomes,
                     now=now, fields=fields)
-            return {"id": event_id, "status": status, "outcome": all_outcomes}
+            result_out = {"id": event_id, "status": status, "outcome": all_outcomes}
+        if lifecycle_actions:
+            from . import intake_subscriptions
+
+            for cid, sub_id, lc_ev in lifecycle_actions:
+                try:
+                    intake_subscriptions.handle_lifecycle(
+                        engine, settings, connection_id=cid,
+                        provider_subscription_id=sub_id, lifecycle_event=lc_ev, now=now,
+                    )
+                except Exception:  # noqa: BLE001 — renewer retries on next tick
+                    logger.warning("lifecycle handler failed for %s (%s)", cid, lc_ev, exc_info=True)
+        return result_out
     except ParseRefused as refused:
         with begin(engine) as c:
             _dead(c, row, f"parse refused: {refused}", now=now)
@@ -1610,31 +1667,40 @@ POLL_DORMANT_SECONDS = 3600
 
 
 def poll_seconds(config: Mapping[str, Any]) -> int:
+    raw_val = (config or {}).get("poll_seconds") or (config or {}).get("poll_interval_seconds") or POLL_SECONDS_DEFAULT
     try:
-        wanted = int(str((config or {}).get("poll_seconds") or POLL_SECONDS_DEFAULT).strip())
+        wanted = int(str(raw_val).strip())
     except ValueError:
         wanted = POLL_SECONDS_DEFAULT
     return max(POLL_SECONDS_MIN, wanted)
 
 
 def _insert_polled(connection: Connection, row: Mapping[str, Any], raw: StoredRaw,
-                   received: datetime) -> Optional[str]:
-    """One polled delivery into the inbox, exactly as the front door inserts a pushed one:
-    deduplicated on (connection, dedupe_key), announced to the processor at commit."""
+                   received: datetime, *, verify_scheme: str = "poll") -> Optional[str]:
+    """One polled or streamed delivery into the inbox, exactly as the front door inserts a pushed
+    one: deduplicated on (connection, dedupe_key), announced to the processor at commit."""
     event_id = make_id("iev")
-    return connection.execute(text("""
+    dk = raw.dedupe_key[:500]
+    claimed = connection.execute(text("""
+        INSERT INTO intake_event_dedupe (connection_id, dedupe_key, event_id, received_at)
+        VALUES (:c, :dk, :id, :at)
+        ON CONFLICT (connection_id, dedupe_key) DO NOTHING RETURNING event_id"""),
+        {"c": row["id"], "dk": dk, "id": event_id, "at": received}).scalar()
+    if claimed is None:
+        return None
+    connection.execute(text("""
         INSERT INTO intake_events (id, connection_id, project_id, dedupe_key, source_event_id,
                status, raw, raw_sha256, headers, trace_id, verify_scheme, received_at,
                raw_expires_at, expires_at)
-        VALUES (:id, :c, :p, :dk, :sid, 'received', :raw, :sha, CAST(:h AS JSONB), :tr, 'poll',
-                :at, :rexp, :exp)
-        ON CONFLICT (connection_id, dedupe_key) DO NOTHING RETURNING id"""),
+        VALUES (:id, :c, :p, :dk, :sid, 'received', :raw, :sha, CAST(:h AS JSONB), :tr, :vs,
+                :at, :rexp, :exp)"""),
         {"id": event_id, "c": row["id"], "p": row.get("project_id"),
-         "dk": raw.dedupe_key[:500], "sid": raw.dedupe_key.split(":", 1)[-1][:200],
+         "dk": dk, "sid": dk.split(":", 1)[-1][:200],
          "raw": raw.body, "sha": hashlib.sha256(raw.body).hexdigest(),
-         "h": json.dumps(kept_headers(raw.headers)), "tr": make_id("itr"), "at": received,
-         "rexp": received + timedelta(days=RAW_RETENTION_DAYS),
-         "exp": received + timedelta(days=ENVELOPE_RETENTION_DAYS)}).scalar()
+         "h": json.dumps(kept_headers(raw.headers)), "tr": make_id("itr"), "vs": verify_scheme,
+         "at": received, "rexp": received + timedelta(days=RAW_RETENTION_DAYS),
+         "exp": received + timedelta(days=ENVELOPE_RETENTION_DAYS)})
+    return event_id
 
 
 def poll_due(engine: Any, settings: Any = None, *, now: Optional[datetime] = None,
@@ -1654,18 +1720,29 @@ def poll_due(engine: Any, settings: Any = None, *, now: Optional[datetime] = Non
     out = {"polled": 0, "inserted": 0, "skipped": 0, "failed": 0}
     with begin(engine) as c:
         rows = [dict(r) for r in c.execute(text(
-            "SELECT * FROM intake_connections WHERE mode = 'poll' AND status = 'active' "
+            "SELECT * FROM intake_connections WHERE mode IN ('poll', 'push') AND status = 'active' "
             "AND (CAST(:only AS TEXT) IS NULL OR id = :only)"), {"only": connection_id}
         ).mappings()]
     for crow in rows:
+        adapter = REGISTRY.get(str(crow["kind"]))
+        if adapter is None or not adapter.can("poll"):
+            continue
+        if crow["mode"] == "push":
+            probe_conn = IntakeConnection(
+                str(crow["id"]), str(crow.get("project_id") or ""), str(crow["kind"]),
+                mode="push", config=_json(crow.get("config"), {}) or {},
+            )
+            checker = getattr(adapter, "wants_safety_net_poll", None)
+            if callable(checker):
+                if not checker(probe_conn):
+                    continue
+            elif not probe_conn.get("poll_safety_net"):
+                continue
         health = _json(crow.get("health"), {}) or {}
         state = dict(health.get("poll") or {})
         due = _event_time(state.get("next_poll_at"))
         if due is not None and due > now:
             out["skipped"] += 1
-            continue
-        adapter = REGISTRY.get(str(crow["kind"]))
-        if adapter is None or not adapter.can("poll"):
             continue
         interval = poll_seconds(_json(crow.get("config"), {}) or {})
         with begin(engine) as c:
@@ -2152,7 +2229,7 @@ def connection_people(connection: Connection, *, project_id: str, connection_id:
     out: dict[str, Any] = {"connection_id": connection_id, "kind": row["kind"],
                            "endpoint_id": endpoint_id, "attestation": cfg.get(ATTESTATION_KEY),
                            "people": [], "counts": counts, "people_redacted": not reveal,
-                           "limit": limit, "offset": offset, "next_offset": None}
+                           "limit": limit, "offset": offset, "next_offset": None, "total": 0}
     if not endpoint_id:
         return out
     links = connection.execute(text("""
@@ -2167,6 +2244,8 @@ def connection_people(connection: Connection, *, project_id: str, connection_id:
          ORDER BY l.revoked_at NULLS FIRST, l.verified_at DESC"""),
         {"e": endpoint_id, "d": REVOKED_SHOWN_DAYS}).mappings().all()
     # The chat users heard from, newest first (idx_intake_events_connection_actor).
+    # Uncapped (BOSSAPP-1197): previously capped at 5000 (PEOPLE_PAGE_MAX * 5), which silently
+    # dropped older users when paging through large workspaces.
     last_seen = {str(r["actor_external_id"]): r for r in connection.execute(text("""
         SELECT * FROM (
           SELECT DISTINCT ON (actor_external_id) actor_external_id, envelope, received_at
@@ -2174,8 +2253,8 @@ def connection_people(connection: Connection, *, project_id: str, connection_id:
            WHERE connection_id = :c AND actor_kind = 'user' AND actor_external_id IS NOT NULL
              AND actor_external_id <> ''
            ORDER BY actor_external_id, received_at DESC) seen
-         ORDER BY received_at DESC LIMIT :n"""),
-        {"c": connection_id, "n": PEOPLE_PAGE_MAX * 5}).mappings().all()}
+         ORDER BY received_at DESC"""),
+        {"c": connection_id}).mappings().all()}
     # A link prompt is the outbox's `link_dm:intake:<endpoint>:<user>:<hour>` row, nothing else
     # (a refused event may have been refused for a budget, a grant, a stop).
     prompted = {str(r["user_id"]): r["at"] for r in connection.execute(text("""
@@ -2214,6 +2293,7 @@ def connection_people(connection: Connection, *, project_id: str, connection_id:
             "prompted_at": None if guest else _iso(prompted.get(uid))})
         counts["guests" if guest else "not_linked"] += 1
     out["people"] = people[offset:offset + limit]
+    out["total"] = len(people)
     out["next_offset"] = offset + limit if len(people) > offset + limit else None
     return out
 
@@ -2291,16 +2371,13 @@ def prompt_people(connection: Connection, settings: Any, *, project_id: str, con
 
 
 def sweep_retention(connection: Connection, *, now: Optional[datetime] = None) -> dict:
-    """§4.5: raw bodies are nulled after 14 days (the hash stays); rows go after 30 days
-    (routed/ignored/...) or 90 days (dead/refused); a row still being worked is never touched."""
-    now = now or _now()
-    nulled = connection.execute(text(
-        "UPDATE intake_events SET raw = NULL WHERE raw IS NOT NULL AND raw_expires_at < :now "
-        "AND status NOT IN ('received', 'processing', 'failed')"), {"now": now}).rowcount
-    deleted = connection.execute(text(
-        "DELETE FROM intake_events WHERE expires_at < :now "
-        "AND status NOT IN ('received', 'processing', 'failed')"), {"now": now}).rowcount
-    return {"raw_nulled": int(nulled or 0), "deleted": int(deleted or 0)}
+    """§4.5 + P9c-3 (BOSSAPP-1107): raw bodies are nulled after 14 days (the hash stays); rows go
+    after 30 days (routed/ignored/...) or 90 days (dead/refused); monthly partitions are pre-created
+    and expired monthly partitions dropped; a row still being worked is never touched."""
+    from . import intake_retention
+
+    res = intake_retention.sweep_retention(connection, now=now)
+    return {"raw_nulled": int(res["raw_nulled"]), "deleted": int(res["deleted"])}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
@@ -2353,6 +2430,18 @@ def start(engine: Any, settings: Any) -> bool:
                         poll_due(engine, settings)
                     except Exception:  # noqa: BLE001 — a failed poll never stops processing
                         logger.warning("intake poll failed", exc_info=True)
+                    try:
+                        from . import intake_subscriptions
+
+                        intake_subscriptions.renew_due(engine, settings)
+                    except Exception:  # noqa: BLE001 — a failed renewal never stops processing
+                        logger.warning("intake subscription renew failed", exc_info=True)
+                    try:
+                        from . import intake_streams
+
+                        intake_streams.consume_due(engine, settings)
+                    except Exception:  # noqa: BLE001 — a failed stream never stops processing
+                        logger.warning("intake stream consume failed", exc_info=True)
                     got = process_due(engine, settings)
                     while got["claimed"] >= PROCESSOR_BATCH and not _STOP.is_set():
                         got = process_due(engine, settings)

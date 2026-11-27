@@ -29,6 +29,10 @@ are one rule, not one per call site:
 from __future__ import annotations
 
 import logging
+import math
+import time
+import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from .budget import BUILD_CATEGORY
@@ -254,7 +258,7 @@ def _run_bounds(settings: Any, *, list_spent_micros: int, money: bool,
         if budget > 0:
             bounds.append(max(budget - max(int(build_money_spent_micros or 0), 0), 0) / 1e6)
         if period_headroom_micros is not None:
-            bounds.append(max(int(period_headroom_micros), 0) / 1e6)
+            bounds.append(math.floor(max(int(period_headroom_micros), 0) / 10_000) / 100.0)
     return bounds
 
 
@@ -484,13 +488,166 @@ def cap_reached(budget: Any, connection: Any, project_id: str,
 def money_headroom(budget: Any, connection: Any, project_id: str,
                    run_id: Optional[str] = None) -> Optional[int]:
     """What the tightest money cap still allows, in micros: min over capped periods of
-    cap + override - settled - in flight (cap_reached's arithmetic). None when nothing caps it."""
+    cap + override - settled - in flight - active session holds. None when nothing caps it."""
     found = _money_periods(budget, connection, project_id, run_id)
     if found is None:
         return None
     capped, building, headroom = found
+    held = active_session_holds_micros(connection, project_id)
     return max(0, min(int(p["cap_usd_micros"]) + headroom
-                      - int(p.get("actual_usd_micros") or 0) - building for p in capped))
+                      - int(p.get("actual_usd_micros") or 0) - building - held
+                      for p in capped))
+
+
+SESSION_HOLD_TTL_SECONDS = 900
+_HOLD_LOCK_PAUSES = (0.05, 0.1, 0.2, 0.4, 0.8)
+
+
+class SessionBudgetHoldBusy(RuntimeError):
+    """Raised when the project's short-TTL session-hold advisory lock is busy."""
+
+
+def active_session_holds_micros(connection: Any, project_id: str, *,
+                                now: Optional[datetime] = None,
+                                exclude_hold_id: Optional[str] = None) -> int:
+    """Sum of active, non-expired session money-cap holds for `project_id`, in micros."""
+    if not hasattr(connection, "execute") or hasattr(connection, "save_run"):
+        return 0
+    from sqlalchemy import text
+
+    cutoff = now or datetime.now(timezone.utc)
+    excl_sql = " AND id <> :excl" if exclude_hold_id else ""
+    stmt = text(
+        "SELECT COALESCE(SUM(amount_usd_micros), 0) "
+        "FROM session_budget_holds "
+        "WHERE project_id = :p "
+        "  AND status = 'active' "
+        "  AND expires_at > :now"
+        + excl_sql
+    )
+    params: dict[str, Any] = {"p": project_id, "now": cutoff}
+    if exclude_hold_id:
+        params["excl"] = exclude_hold_id
+    try:
+        if hasattr(connection, "begin_nested"):
+            with connection.begin_nested():
+                return int(connection.execute(stmt, params).scalar() or 0)
+        return int(connection.execute(stmt, params).scalar() or 0)
+    except Exception as exc:  # noqa: BLE001 — fail-soft when unit-test stub DB omits the table
+        # Visible, not silent: a missing/unreadable holds table counts zero holds (the period
+        # cap's own settled + in-flight arithmetic still binds), and the operator sees why.
+        logger.warning("session_budget_holds unreadable for project %s; counting 0 held: %s",
+                       project_id, exc)
+        return 0
+
+
+def _acquire_hold_lock(connection: Any, project_id: str) -> None:
+    dialect = getattr(getattr(connection, "dialect", None), "name", "")
+    if dialect != "postgresql":
+        return
+    from sqlalchemy import text
+
+    for pause in (*_HOLD_LOCK_PAUSES, None):
+        if connection.execute(
+            text("SELECT pg_try_advisory_xact_lock(hashtextextended('boss-session-hold:' || :p, 0))"),
+            {"p": project_id},
+        ).scalar_one():
+            return
+        if pause is not None:
+            time.sleep(pause)
+    raise SessionBudgetHoldBusy("session budget hold lock is busy; retry shortly")
+
+
+def acquire_session_hold(
+    budget: Any,
+    connection: Any,
+    project_id: str,
+    settings: Any,
+    *,
+    run_id: Optional[str] = None,
+    list_spent_micros: int = 0,
+    money: bool = True,
+    build_money_spent_micros: int = 0,
+    risk_tier: Optional[int] = None,
+    repo_files: Optional[int] = None,
+    requested_usd: Optional[float] = None,
+    ttl_seconds: int = SESSION_HOLD_TTL_SECONDS,
+) -> tuple[Optional[str], Optional[float]]:
+    """Atomically compute a session's clamped ceiling and register a short-TTL hold if capped."""
+    if not money:
+        if requested_usd is not None:
+            ceiling = lifted_ceiling_usd(
+                settings, float(requested_usd),
+                list_spent_micros=list_spent_micros, money=False,
+                risk_tier=risk_tier, repo_files=repo_files,
+            )
+        else:
+            ceiling = session_ceiling_usd(
+                settings, list_spent_micros=list_spent_micros, money=False,
+                risk_tier=risk_tier, repo_files=repo_files,
+            )
+        return None, (round(max(float(ceiling), 0.01), 2) if ceiling is not None else None)
+
+    _acquire_hold_lock(connection, project_id)
+    room = money_headroom(budget, connection, project_id, run_id=run_id)
+    if requested_usd is not None:
+        ceiling_usd: Optional[float] = lifted_ceiling_usd(
+            settings, float(requested_usd),
+            list_spent_micros=list_spent_micros, money=True,
+            build_money_spent_micros=build_money_spent_micros,
+            period_headroom_micros=room,
+            risk_tier=risk_tier, repo_files=repo_files,
+        )
+    else:
+        ceiling_usd = session_ceiling_usd(
+            settings, list_spent_micros=list_spent_micros, money=True,
+            build_money_spent_micros=build_money_spent_micros,
+            period_headroom_micros=room,
+            risk_tier=risk_tier, repo_files=repo_files,
+        )
+    if room is None:
+        return None, (round(max(float(ceiling_usd), 0.01), 2) if ceiling_usd is not None else None)
+    if room <= 0 or ceiling_usd is None or ceiling_usd <= 0:
+        return None, 0.0
+
+    from sqlalchemy import text
+
+    hold_id = f"sbh_{uuid.uuid4().hex[:16]}"
+    amount_micros = int(round(float(ceiling_usd) * 1_000_000))
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(seconds=max(1, int(ttl_seconds)))
+    connection.execute(
+        text(
+            "INSERT INTO session_budget_holds "
+            "(id, project_id, run_id, amount_usd_micros, status, expires_at, created_at) "
+            "VALUES (:id, :p, :r, :amt, 'active', :exp, :now)"
+        ),
+        {
+            "id": hold_id,
+            "p": project_id,
+            "r": run_id,
+            "amt": amount_micros,
+            "exp": expires_at,
+            "now": now,
+        },
+    )
+    return hold_id, round(float(ceiling_usd), 2)
+
+
+def release_session_hold(connection: Any, hold_id: Optional[str]) -> None:
+    """Release an active session money-cap hold."""
+    if not hold_id or not hasattr(connection, "execute") or hasattr(connection, "save_run"):
+        return
+    from sqlalchemy import text
+
+    connection.execute(
+        text(
+            "UPDATE session_budget_holds "
+            "SET status = 'released', released_at = :now "
+            "WHERE id = :id AND status = 'active'"
+        ),
+        {"id": hold_id, "now": datetime.now(timezone.utc)},
+    )
 
 
 def renew(budget: Any, connection: Any, project_id: str, reservation_id: Optional[str],

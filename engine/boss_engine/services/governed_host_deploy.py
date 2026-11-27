@@ -34,6 +34,7 @@ of use inside the connector and every step log is redacted by value.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import secrets as _secrets
@@ -52,7 +53,7 @@ OPERATION_SKILL = "ssh_host.app.deploy"
 JOB_KIND = "deployment.host_apply"
 DECISION_ACTION = "deploy_host"
 REASON_CODE = "host_deploy_requires_approval"
-HOST_KINDS = frozenset({"ssh", "container"})
+HOST_KINDS = frozenset({"ssh", "container", "local"})
 #: A run in one of these is still going somewhere: planning the same commit again returns it.
 ACTIVE_STATES = ("awaiting_approval", "approved", "running")
 #: How long a queued apply waits before asking again whether its target is free.
@@ -469,13 +470,20 @@ def plan_host_deployment(rp, connection: Connection, *, project_id: str, target:
         "release_artifact_id": release_artifact_id,
         "surface_ownership": ownership_guard,
     }
+    is_local = str(target.get("target_kind") or "").lower() == "local"
+    summary = (
+        f"Build {target.get('repo')}@{short}, deploy it locally as {app} on port {app_port}, "
+        "and health-check it; roll back on a failed check."
+        if is_local else
+        f"Build {target.get('repo')}@{short}, ship it to {user}@{address} as {app} on "
+        f"port {app_port}, and health-check it; roll back on a failed check."
+    )
     changeset = rp.create_changeset(
         connection, project_id=project_id, provider_account_id=None,
         title=f"Deploy {app} to {host_name} · {environment}",
-        summary=(f"Build {target.get('repo')}@{short}, ship it to {user}@{address} as {app} on "
-                 f"port {app_port}, and health-check it; roll back on a failed check."),
+        summary=summary,
         operations=[{"skill_id": OPERATION_SKILL, "action": "deploy",
-                     "resource_type": "ssh_host.app",
+                     "resource_type": "local_host.app" if is_local else "ssh_host.app",
                      "resource_ref": f"{target['id']}:{app}",
                      "desired_state": desired, "risk_tier": 1,
                      "production_affecting": _production.production_affecting(target={**target, "environment": environment})}],
@@ -824,9 +832,17 @@ def apply_on_host(engine, settings: Settings, *, row: dict, governance: dict,
     from .config_deploy import apply_config, is_config_run
 
     with begin(engine) as c:
-        host_id = c.execute(text("SELECT host_id FROM deployment_targets WHERE id = :t"),
-                            {"t": row["deployment_target_id"]}).scalar()
-    with pinned(engine, host_id) as pin:
+        trow = c.execute(
+            text("SELECT host_id, target_kind FROM deployment_targets WHERE id = :t"),
+            {"t": row["deployment_target_id"]}).mappings().first()
+        host_id = trow["host_id"] if trow else None
+        is_local = str((trow or {}).get("target_kind") or "").lower() == "local"
+        if not is_local and host_id:
+            from .deployment_fleet import get_host, is_builtin_local_host
+
+            is_local = is_builtin_local_host(get_host(c, host_id))
+    pin_ctx = contextlib.nullcontext(None) if is_local else pinned(engine, host_id)
+    with pin_ctx as pin:
         # A REMOVAL (app_removal) is a deployment run of kind `remove`: same lease, ChangeSet,
         # pinned host key and receipt, a different phase two. A CONFIG deployment
         # (config_deploy, BOSSAPP-1140) is one of kind `config`: files into a directory, kept

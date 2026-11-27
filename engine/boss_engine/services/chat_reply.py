@@ -355,18 +355,25 @@ def bind_conversation(connection: Connection, run_id: str, target: Mapping[str, 
         return None
     row = connection.execute(text("""
         INSERT INTO chat_threads (id, endpoint_id, project_id, external_channel_id,
-               external_thread_id, run_id, conversation_key, agent_thread_id, trigger_id)
-        VALUES (:i, :e, :p, :c, :t, :r, :k, :at, :tr)
+               external_thread_id, run_id, conversation_key, agent_thread_id, trigger_id,
+               conversation_ref, deployment_id, last_inbound_at)
+        VALUES (:i, :e, :p, :c, :t, :r, :k, :at, :tr, CAST(:cref AS JSONB), :dep, now())
         ON CONFLICT (endpoint_id, external_channel_id, external_thread_id) DO UPDATE
            SET run_id = EXCLUDED.run_id,
                conversation_key = COALESCE(EXCLUDED.conversation_key, chat_threads.conversation_key),
                agent_thread_id = COALESCE(EXCLUDED.agent_thread_id, chat_threads.agent_thread_id),
                trigger_id = COALESCE(EXCLUDED.trigger_id, chat_threads.trigger_id),
+               conversation_ref = CASE WHEN EXCLUDED.conversation_ref <> '{}'::jsonb
+                 THEN EXCLUDED.conversation_ref ELSE chat_threads.conversation_ref END,
+               deployment_id = COALESCE(EXCLUDED.deployment_id, chat_threads.deployment_id),
+               last_inbound_at = now(),
                updated_at = now()
         RETURNING id"""),
         {"i": make_id("cht"), "e": target["chat_endpoint_id"], "p": project_id,
          "c": target["channel"], "t": thread[:200], "r": run_id,
-         "k": target.get("conversation_key"), "at": agent_thread_id, "tr": trigger_id}).scalar()
+         "k": target.get("conversation_key"), "at": agent_thread_id, "tr": trigger_id,
+         "cref": json.dumps(dict(target.get("conversation_ref") or {}), default=str),
+         "dep": target.get("deployment_id")}).scalar()
     return str(row) if row else None
 
 
@@ -527,12 +534,24 @@ def with_chat_tools(tools: Any, connection: Connection, settings: Any,
 # The sender's side (notify.deliver_chat_due → chat_channels.deliver)
 # ---------------------------------------------------------------------------------------------
 
+#: Teams Bot Framework sliding rate windows per conversation and per app/tenant envelope (LLD §7.2).
+TEAMS_CONVERSATION_WINDOWS: tuple[tuple[int, float], ...] = (
+    (7, 1.0),
+    (8, 2.0),
+    (60, 30.0),
+    (1800, 3600.0),
+)
+TEAMS_ENVELOPE_WINDOWS: tuple[tuple[int, float], ...] = ((50, 1.0),)
+
+
 class _Buckets:
-    """Per (endpoint, channel) token buckets, in memory per API process (§7.2)."""
+    """Per (endpoint, channel) token buckets + Teams multi-window rate shapers, in memory (§7.2)."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._state: dict[str, list[float]] = {}
+        self._windows: dict[str, list[float]] = {}
+        self._blocked_until: dict[str, float] = {}
 
     def wait_for(self, key: str, now: Optional[float] = None) -> float:
         """0 when a send may go now (a token is taken), else the seconds to wait."""
@@ -548,20 +567,57 @@ class _Buckets:
             self._state[key] = [tokens, now, 0.0]
             return (1.0 - tokens) / CHANNEL_RATE_PER_SECOND
 
+    def wait_for_teams(self, conv_key: str, app_key: str, now: Optional[float] = None) -> float:
+        """Enforce Teams per-conversation (7/1s, 8/2s, 60/30s, 1800/h) and app (50/1s) limits."""
+        now = time.monotonic() if now is None else now
+        with self._lock:
+            for k in (conv_key, app_key):
+                if k and self._blocked_until.get(k, 0.0) > now:
+                    return self._blocked_until[k] - now
+            wait = 0.0
+            for k, rules in ((conv_key, TEAMS_CONVERSATION_WINDOWS), (app_key, TEAMS_ENVELOPE_WINDOWS)):
+                if not k:
+                    continue
+                max_win = max(w for _, w in rules)
+                stamps = [t for t in self._windows.get(k, []) if now - t < max_win]
+                self._windows[k] = stamps
+                for limit, window in rules:
+                    recent = [t for t in stamps if now - t < window]
+                    if len(recent) >= limit:
+                        oldest = recent[-limit]
+                        wait = max(wait, max(0.05, (oldest + window) - now))
+            if wait > 0:
+                return wait
+            for k in (conv_key, app_key):
+                if k:
+                    self._windows.setdefault(k, []).append(now)
+            return 0.0
+
     def block(self, key: str, seconds: float, now: Optional[float] = None) -> None:
         now = time.monotonic() if now is None else now
         with self._lock:
             tokens, at, blocked = self._state.get(key, [0.0, now, 0.0])
             self._state[key] = [0.0, now, max(blocked, now + max(0.0, seconds))]
+            self._blocked_until[key] = max(self._blocked_until.get(key, 0.0), now + max(0.0, seconds))
 
     def reset(self) -> None:
         with self._lock:
             self._state.clear()
+            self._windows.clear()
+            self._blocked_until.clear()
 
 
 BUCKETS = _Buckets()
 #: Ops that do not spend the channel's message rate (reactions, the status line).
 UNMETERED_OPS = ("react", "set_status")
+
+
+def teams_app_key(row: Mapping[str, Any], payload: Mapping[str, Any]) -> Optional[str]:
+    cfg = payload.get("teams_config") if isinstance(payload.get("teams_config"), dict) else {}
+    app_id = cfg.get("app_id")
+    if app_id:
+        return f"teams_app:{app_id}"
+    return f"teams_ep:{row['endpoint_id']}" if row.get("endpoint_id") else None
 
 
 def bucket_key(row: Mapping[str, Any], payload: Mapping[str, Any]) -> Optional[str]:

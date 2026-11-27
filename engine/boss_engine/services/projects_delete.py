@@ -86,6 +86,26 @@ LOGICAL_KEYS: dict[str, tuple[tuple[str, ...], str]] = {
     "sandbox_violation_counts": (("lineage_id",),
                                  "lineage_id IN (SELECT lineage_id FROM lineage_sandboxes "
                                  "WHERE project_id = :p)"),
+    "autonomy_policies": (("scope_kind", "scope_id"),
+                          "scope_kind = 'project' AND scope_id = :p"),
+    "portability_imports": (("scope", "target_id"),
+                            "scope = 'project' AND target_id = :p"),
+    "agent_checkpoint_writes": (
+        ("checkpoint_id",),
+        "checkpoint_id IN (SELECT checkpoint_id FROM agent_checkpoints WHERE run_id IN "
+        "(SELECT id FROM agent_runs WHERE project_id = :p "
+        "UNION SELECT id FROM code_task_runs WHERE project_id = :p))",
+    ),
+    "agent_checkpoints": (
+        ("run_id",),
+        "run_id IN (SELECT id FROM agent_runs WHERE project_id = :p "
+        "UNION SELECT id FROM code_task_runs WHERE project_id = :p)",
+    ),
+    "runner_sessions": (
+        ("run_id",),
+        "run_id IN (SELECT id FROM code_task_runs WHERE project_id = :p "
+        "UNION SELECT id FROM agent_runs WHERE project_id = :p)",
+    ),
 }
 
 #: Tables kept as they are, by name, with why. Org-level, install-level or the security log.
@@ -103,6 +123,28 @@ KEPT_TABLES: dict[str, str] = {
     "subscription_accounts": "install model subscriptions", "secret_material": "the install vault",
     "signal_adapter_cursors": "install signal adapters", "workload_profiles": "install profiles",
     "schema_apply_runs": "schema history", "schema_once": "schema history",
+    "schema_backfills": "schema history",
+    "agent_ca": "install agent CA", "agent_certs": "org/host agent certificates",
+    "agent_host_join_tokens": "org host join tokens", "agent_hosts": "org host fleet",
+    "backup_scheduler_lease": "install backup lease", "backups": "install backups",
+    "director_leases": "org director leases", "director_nodes": "org director nodes",
+    "extension_installs": "install extensions", "extension_job_leases": "install extension leases",
+    "factory_launch_attachments": "org launch attachments", "fleet_ca": "install fleet CA",
+    "guest_calls": "org/host guest call audit", "host_events": "org host lifecycle events",
+    "ip_allow_audit": "install IP allowlist audit", "ip_allowlist": "install IP allowlist",
+    "kg_action_priors": "org procedural priors",
+    "mcp_oauth_clients": "install MCP OAuth clients", "mcp_oauth_codes": "org MCP OAuth codes",
+    "mcp_oauth_device_codes": "install MCP OAuth device codes", "mcp_oauth_grants": "org MCP OAuth grants",
+    "member_monthly_build_caps": "org member build caps", "policy_versions": "immutable policy versions",
+    "publish_guards": "org publish guards", "remote_agent_profiles": "org remote agent profiles",
+    "retention_rules": "host storage retention rules", "storage_samples": "host storage telemetry",
+    "system_services": "install daemon health registry",
+    "trace_export_destinations": "org trace export config",
+    "vip_pool": "org VIP pool", "vm_images": "org/install VM images",
+    "vm_snapshots": "host VM snapshots",
+    "workspace_design_apps": "workspace design system apps",
+    "workspace_design_systems": "workspace design systems",
+    "golden_journey_results": "install daily golden-journey check results",
 }
 #: Kept by prefix: identity (people, roles, keys, the security audit log), BOSS as an OIDC
 #: provider, and the install's telemetry.
@@ -249,6 +291,11 @@ def _cols(cols: Iterable[str], alias: str = "") -> str:
     return cs[0] if len(cs) == 1 else "(" + ", ".join(cs) + ")"
 
 
+def _select_cols(cols: Iterable[str], alias: str = "") -> str:
+    pre = f"{alias}." if alias else ""
+    return ", ".join(pre + _q(c) for c in cols)
+
+
 class _Preds:
     """The WHERE clause that picks each table's rows for the project (`:p`)."""
 
@@ -277,7 +324,7 @@ class _Preds:
                 parent_pred = self.of(fk.parent, depth + 1)
                 if parent_pred == "FALSE":
                     continue
-                parts.append(f"{_cols(fk.cols)} IN (SELECT {_cols(fk.pcols)} FROM {_q(fk.parent)} "
+                parts.append(f"{_cols(fk.cols)} IN (SELECT {_select_cols(fk.pcols)} FROM {_q(fk.parent)} "
                              f"WHERE {parent_pred})")
             pred = " OR ".join(f"({x})" for x in parts) if parts else "FALSE"
         else:
@@ -530,7 +577,7 @@ def _keep_others(connection: Any, cat: Catalog, preds: _Preds, project_id: str,
                 continue
             child_pred = preds.of(fk.child) if fk.child in deleted else "FALSE"
             outside = (f"({child_pred}) IS NOT TRUE AND {_cols(fk.cols, 'x')} IN "
-                       f"(SELECT {_cols(fk.pcols)} FROM {_q(fk.parent)} WHERE {parent_pred})")
+                       f"(SELECT {_select_cols(fk.pcols)} FROM {_q(fk.parent)} WHERE {parent_pred})")
             count = f"SELECT count(*) FROM {_q(fk.child)} x WHERE {outside}"
             n = connection.execute(text(count), {"p": project_id}).scalar()
             if not n:
@@ -559,7 +606,7 @@ def _keep_others(connection: Any, cat: Catalog, preds: _Preds, project_id: str,
                 kept.append({"table": fk.child, "cleared": list(fk.cols), "rows": int(n)})
             elif movable and fallback:
                 _move(connection, fk.parent,
-                      f"{_cols(fk.pcols)} IN (SELECT {_cols(fk.cols, 'x')} FROM {_q(fk.child)} x "
+                      f"{_cols(fk.pcols)} IN (SELECT {_select_cols(fk.cols, 'x')} FROM {_q(fk.child)} x "
                       f"WHERE {outside})", {"to": fallback, "p": project_id})
                 kept.append({"table": fk.parent, "to": fallback, "used_by": fk.child})
             else:

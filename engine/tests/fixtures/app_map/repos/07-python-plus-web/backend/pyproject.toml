@@ -1,0 +1,5 @@
+[project]
+name = "desk-api"
+dependencies = ["fastapi", "uvicorn"]
+[tool.pytest.ini_options]
+testpaths = ["tests"]

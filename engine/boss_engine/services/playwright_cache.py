@@ -93,6 +93,25 @@ def project_version(app_dir: Any) -> Optional[str]:
     return None
 
 
+PLAYWRIGHT_PACKAGES = ("@playwright/test", "playwright")
+_DEP_SECTIONS = ("dependencies", "devDependencies", "optionalDependencies")
+
+
+def uses_playwright(app_dir: Any) -> bool:
+    """True when `app_dir/package.json` declares `@playwright/test` or `playwright`."""
+    try:
+        raw = json.loads((Path(app_dir) / "package.json").read_text("utf-8"))
+    except (OSError, ValueError, TypeError):
+        return False
+    if not isinstance(raw, dict):
+        return False
+    for section in _DEP_SECTIONS:
+        deps = raw.get(section)
+        if isinstance(deps, dict) and any(pkg in deps for pkg in PLAYWRIGHT_PACKAGES):
+            return True
+    return False
+
+
 def _marker(base: Path, version: str) -> Path:
     return base / f".boss-chromium-{version}.ok"
 

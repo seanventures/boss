@@ -305,6 +305,12 @@ def admit_run(connection: Connection, deployment: dict, *, thread_id: str, messa
         {"d": deployment["id"], "t": (extra or {}).get("trigger_id"),
          "a": deployment["agent_key"], "v": deployment.get("version"),
          "e": deployment["environment"], "r": admitted["run_id"]})
+    if (deployment.get("runtime") or "local") == "microvm":
+        from . import fleet_scheduler
+
+        wake = fleet_scheduler.wake_from_zero(connection, str(deployment["id"]))
+        if wake.get("woken"):
+            admitted["scale_wake"] = wake
     return admitted
 
 
@@ -508,6 +514,8 @@ def set_runtime(connection: Connection, project_id: str, agent_key: str, environ
                 actor: str, runtime: str, vm_mode: Optional[str] = None,
                 replicas: Optional[int] = None, resources: Optional[dict] = None,
                 image_digest: Optional[str] = None, placement: Optional[dict] = None,
+                min_replicas: Optional[int] = None, max_replicas: Optional[int] = None,
+                scale_to_zero: Optional[bool] = None,
                 settings: Any = None, action: str = "host") -> dict:
     """Where this deployment's runs execute. `local` (the default) is the worker path, unchanged;
     `microvm` places replicas on enrolled hosts (the scheduler, services/fleet_scheduler.py).
@@ -522,8 +530,9 @@ def set_runtime(connection: Connection, project_id: str, agent_key: str, environ
     if runtime == "microvm" and (current.get("runner") or "deployed_agent") != "deployed_agent":
         raise DeploymentError("only a deployed agent runs on microVMs; BOSS's own bots "
                               f"({current.get('runner')}) stay on the local workers.")
+    s2z = bool(scale_to_zero if scale_to_zero is not None else current.get("scale_to_zero", False))
     if runtime == "local":
-        mode, count = None, 1
+        mode, count, min_r, max_r, s2z = None, 1, 1, MAX_REPLICAS, False
     else:
         mode = vm_mode or current.get("vm_mode") or "replica"
         if mode not in VM_MODES:
@@ -536,23 +545,31 @@ def set_runtime(connection: Connection, project_id: str, agent_key: str, environ
                     "per_run VMs are built but off on this install: BOSS_MICROVM_CLAIMS_FROZEN "
                     "is set. Use vm_mode replica, or ask the operator to unfreeze microVM "
                     "claims.", status=409)
-        floor = PROD_MIN_REPLICAS if (env == "prod" and mode == "replica") else 1
-        count = int(replicas if replicas is not None else max(
-            floor, int(current.get("replicas") or 1)))
+        if min_replicas == 0 and scale_to_zero is None:
+            s2z = True
+        floor = 0 if s2z else (PROD_MIN_REPLICAS if (env == "prod" and mode == "replica") else 1)
+        count = int(replicas if replicas is not None else (
+            0 if s2z and current.get("replicas") == 0 else max(
+                floor, int(current.get("replicas") or (0 if s2z else 1)))))
         if not floor <= count <= MAX_REPLICAS:
             raise DeploymentError(
                 f"replicas must be between {floor} and {MAX_REPLICAS}"
                 + (" (production on microVMs runs at least two replicas on two hosts)"
                    if floor > 1 else "") + ".")
+        min_r = int(min_replicas if min_replicas is not None else (0 if s2z else floor))
+        max_r = int(max_replicas if max_replicas is not None else max(count, MAX_REPLICAS))
+        if not 0 <= min_r <= max_r <= MAX_REPLICAS:
+            raise DeploymentError(f"min_replicas/max_replicas must satisfy 0 <= min <= max <= {MAX_REPLICAS}.")
     connection.execute(text("""
         UPDATE agent_deployments SET runtime = :rt, vm_mode = :m, replicas = :n,
+               min_replicas = :min_r, max_replicas = :max_r, scale_to_zero = :s2z,
                resources = COALESCE(CAST(:res AS JSONB), resources),
                image_digest = COALESCE(:img, image_digest),
                placement = COALESCE(CAST(:pl AS JSONB), placement),
                placement_state = CASE WHEN :rt = 'local' THEN NULL ELSE 'pending' END,
                updated_at = now()
          WHERE id = :id"""),
-        {"rt": runtime, "m": mode, "n": count,
+        {"rt": runtime, "m": mode, "n": count, "min_r": min_r, "max_r": max_r, "s2z": s2z,
          "res": json.dumps(resources) if resources is not None else None, "img": image_digest,
          "pl": json.dumps(placement) if placement is not None else None, "id": current["id"]})
     _retarget(connection, current["id"], runtime)
@@ -560,10 +577,11 @@ def set_runtime(connection: Connection, project_id: str, agent_key: str, environ
              action=action, actor=actor, from_version=current.get("version"),
              to_version=current.get("version"),
              checks={"runtime": runtime, "vm_mode": mode, "replicas": count,
+                     "min_replicas": min_r, "max_replicas": max_r, "scale_to_zero": s2z,
                      "from_runtime": current.get("runtime") or "local"})
     emit_event(connection, project_id, "agent.deployment.runtime", actor, "agent_deployment",
                current["id"], {"agent_key": agent_key, "environment": env, "runtime": runtime,
-                               "vm_mode": mode, "replicas": count})
+                               "vm_mode": mode, "replicas": count, "scale_to_zero": s2z})
     return by_id(connection, current["id"]) or {}
 
 

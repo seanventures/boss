@@ -1,0 +1,46 @@
+key: servicenow
+label: ServiceNow
+icon: servicenow
+description: ServiceNow incidents and change requests wake an agent — Business Rule or Flow Designer Standard Webhooks push paired with a Table API keyset polling safety net deduplicated against push.
+docs_url: https://developer.servicenow.com/dev.do#!/reference/api/utah/rest/c_TableAPI
+adapter: ServiceNowIntakeAdapter
+order: 40
+modes: [push, poll]
+capabilities:
+  verify: true
+  handshake: false
+  parse: true
+  poll: true
+  subscribe: false
+  stream: false
+  reply: false
+  stream_reply: false
+  identity: true
+  conversation: true
+  health: false
+ack:
+  deadline_ms: 10000
+  success_status: 202
+  retry_signal_headers: []
+dedupe: [delivery_id, id, body_sha256]
+auth_fields:
+  - {name: signing_secret, label: Signing secret, secret: true, required: false, modes: [push], help: "Standard Webhooks secret (whsec_...). Leave empty to mint one."}
+  - {name: instance_url, label: Instance URL, required: false, placeholder: "https://dev12345.service-now.com", help: "ServiceNow instance URL for Table API safety-net polling."}
+  - {name: username, label: Table API username, required: false, help: "ServiceNow integration user for basic auth polling."}
+  - {name: password, label: Table API password, secret: true, required: false, help: "Password for the Table API integration user."}
+  - {name: api_token, label: OAuth bearer token, secret: true, required: false, help: "Optional OAuth bearer token instead of username and password."}
+  - {name: tables, label: Tables to poll, required: false, placeholder: "incident,change_request", help: "Comma-separated ServiceNow tables (default: incident, change_request)."}
+  - {name: poll_interval_seconds, label: Safety-net poll interval (s), required: false, placeholder: "300", help: "How often Table API keyset polling checks for missed events (default 300s)."}
+  - {name: service_account, label: BOSS service account, required: false, help: "ServiceNow user whose updates BOSS ignores to prevent self-update loops."}
+default_hosts:
+  - "*.service-now.com"
+guard_provider: servicenow
+operator_base_url_env: [SERVICENOW_BASE_URL]
+self_identity: [service_account]
+event_types:
+  - com.servicenow.incident.created
+  - com.servicenow.incident.updated
+  - com.servicenow.incident.commented
+  - com.servicenow.change_request.created
+  - com.servicenow.change_request.updated
+  - com.servicenow.record.updated

@@ -53,7 +53,7 @@ from .core import emit_event, make_id
 
 log = logging.getLogger(__name__)
 
-KINDS = ("slack", "telegram", "discord")
+KINDS = ("slack", "telegram", "discord", "teams")
 ACTOR = "boss.chat"
 ACTION_TTL = timedelta(hours=72)
 LINK_CODE_TTL = timedelta(minutes=30)
@@ -113,6 +113,8 @@ def endpoint_urls(base: str, endpoint: Mapping[str, Any]) -> dict[str, str]:
     root = f"{base}/v1/webhooks/inbound/chat/{endpoint['id']}"
     if endpoint["kind"] == "slack":
         return {"interactivity_request_url": root, "event_subscriptions_request_url": root}
+    if endpoint["kind"] == "teams":
+        return {"messaging_endpoint_url": root, "webhook_url": root}
     return {"webhook_url": root}
 
 
@@ -133,6 +135,15 @@ def create_endpoint(connection, settings: Any, *, project_id: str, kind: str, na
         raise ChatRefused("channel_required",
                           "config.channel is required: the Slack channel id or Telegram chat id "
                           "decision cards are posted to", 422)
+    if kind == "teams":
+        if not str(cfg.get("app_id") or "").strip() or not str(cfg.get("tenant_id") or "").strip():
+            raise ChatRefused(
+                "teams_config_required",
+                "config.app_id and config.tenant_id are required for a single-tenant Teams bot",
+                422,
+            )
+        if not str(cfg.get("bot_id") or "").strip():
+            cfg["bot_id"] = f"28:{str(cfg['app_id']).strip()}"
     tier = cfg.get("max_tier", DEFAULT_MAX_TIER)
     try:
         tier = int(tier)
@@ -407,18 +418,29 @@ def revoke_link(connection, principal_id: str, link_id: str) -> bool:
 # --------------------------------------------------------------------------------------------- #
 def bind_thread(connection, endpoint: Mapping[str, Any], *, channel: str, thread: str,
                 decision_id: Optional[str] = None, run_id: Optional[str] = None,
-                work_item_id: Optional[str] = None) -> None:
+                work_item_id: Optional[str] = None,
+                conversation_ref: Optional[Mapping[str, Any]] = None,
+                deployment_id: Optional[str] = None,
+                last_inbound_at: Optional[datetime] = None) -> None:
     if not channel or not thread:
         return
     connection.execute(sql(
         "INSERT INTO chat_threads (id, endpoint_id, project_id, external_channel_id, "
-        " external_thread_id, decision_id, run_id, work_item_id) VALUES (:i, :e, :p, :c, :t, :d, "
-        " :r, :w) ON CONFLICT (endpoint_id, external_channel_id, external_thread_id) DO UPDATE "
+        " external_thread_id, decision_id, run_id, work_item_id, conversation_ref, deployment_id, "
+        " last_inbound_at) VALUES (:i, :e, :p, :c, :t, :d, :r, :w, CAST(:cref AS JSONB), :dep, "
+        " :lin) ON CONFLICT (endpoint_id, external_channel_id, external_thread_id) DO UPDATE "
         "SET decision_id = COALESCE(EXCLUDED.decision_id, chat_threads.decision_id), "
         " run_id = COALESCE(EXCLUDED.run_id, chat_threads.run_id), "
-        " work_item_id = COALESCE(EXCLUDED.work_item_id, chat_threads.work_item_id)"),
+        " work_item_id = COALESCE(EXCLUDED.work_item_id, chat_threads.work_item_id), "
+        " conversation_ref = CASE WHEN EXCLUDED.conversation_ref <> '{}'::jsonb "
+        "   THEN EXCLUDED.conversation_ref ELSE chat_threads.conversation_ref END, "
+        " deployment_id = COALESCE(EXCLUDED.deployment_id, chat_threads.deployment_id), "
+        " last_inbound_at = COALESCE(EXCLUDED.last_inbound_at, chat_threads.last_inbound_at), "
+        " updated_at = now()"),
         {"i": make_id("cht"), "e": endpoint["id"], "p": endpoint["project_id"], "c": channel,
-         "t": thread, "d": decision_id, "r": run_id, "w": work_item_id})
+         "t": thread, "d": decision_id, "r": run_id, "w": work_item_id,
+         "cref": json.dumps(dict(conversation_ref or {}), default=str),
+         "dep": deployment_id, "lin": last_inbound_at})
 
 
 def threads_of_decision(connection, decision_id: str) -> list[dict]:
@@ -582,9 +604,55 @@ def deliver(connection, settings: Any, row: Mapping[str, Any]) -> dict[str, Any]
             return {"skipped": "the decision was answered before its card was sent"}
         card = build_card(connection, settings, endpoint, decision)
         payload["message"] = adapter.render_decision(card)
+    if endpoint["kind"] == "teams":
+        ecfg = _json(endpoint.get("config"), {}) or {}
+        # The endpoint's own config is authoritative (never a value carried in the row).
+        payload["teams_config"] = {
+            "app_id": ecfg.get("app_id"),
+            "tenant_id": ecfg.get("tenant_id"),
+            "bot_id": ecfg.get("bot_id"),
+            "service_url": ecfg.get("service_url"),
+            "token_url": ecfg.get("token_url"),
+        }
+        # Teams answered 403 MessageWritesBlocked for this conversation or person before: that
+        # is permanent, so nothing more is sent there (the row dies with the reason, visibly).
+        from .chat_adapters import ChatWritesBlocked
+
+        blocked = None
+        if row.get("chat_thread_id"):
+            blocked = connection.execute(
+                sql("SELECT blocked_reason FROM chat_threads WHERE id = :t AND blocked_at IS NOT NULL"),
+                {"t": row["chat_thread_id"]}).first()
+        if blocked is None and payload.get("user"):
+            blocked = connection.execute(
+                sql("SELECT blocked_reason FROM chat_identity_links WHERE endpoint_id = :e "
+                    "AND external_user_id = :u AND revoked_at IS NULL AND blocked_at IS NOT NULL "
+                    "LIMIT 1"),
+                {"e": endpoint["id"], "u": str(payload["user"])}).first()
+        if blocked is not None:
+            raise ChatWritesBlocked("Teams blocked writes to this conversation earlier",
+                                    reason=str(blocked[0] or "MessageWritesBlocked"))
+        if row.get("chat_thread_id") and not payload.get("conversation_ref"):
+            cref = connection.execute(
+                sql("SELECT conversation_ref FROM chat_threads WHERE id = :t"),
+                {"t": row["chat_thread_id"]},
+            ).scalar()
+            if cref:
+                payload["conversation_ref"] = _json(cref, {}) or {}
+        elif payload.get("channel") and not payload.get("conversation_ref"):
+            cref = connection.execute(
+                sql("SELECT conversation_ref FROM chat_threads WHERE endpoint_id = :e "
+                    "AND external_channel_id = :c ORDER BY updated_at DESC LIMIT 1"),
+                {"e": endpoint["id"], "c": str(payload["channel"])},
+            ).scalar()
+            if cref:
+                payload["conversation_ref"] = _json(cref, {}) or {}
     # The bot token is read from the secret store HERE, for this one call, and never leaves it.
-    token = endpoint_secret(connection, settings, endpoint, "bot_token") \
-        if "bot_token" in adapter.secret_names else ""
+    token = ""
+    if "app_password" in adapter.secret_names:
+        token = endpoint_secret(connection, settings, endpoint, "app_password")
+    elif "bot_token" in adapter.secret_names:
+        token = endpoint_secret(connection, settings, endpoint, "bot_token")
     receipt = adapter.send(token, payload)
     if row["kind"] == "decision_card":
         bind_thread(connection, endpoint, channel=str(receipt.get("channel") or ""),

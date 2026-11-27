@@ -1,0 +1,10 @@
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.acme</groupId>
+  <artifactId>platform-parent</artifactId>
+  <packaging>pom</packaging>
+  <modules>
+    <module>core</module>
+    <module>service-api</module>
+  </modules>
+</project>

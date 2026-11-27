@@ -153,6 +153,43 @@ export function SpendTab({ projectId, paused }: { projectId: string; paused: boo
               </ul>
             </section>
           ) : null}
+          {s.routing_savings && s.routing_savings.total_calls > 0 ? (
+            <section className="gv-card" aria-labelledby="gv-routing-save-h" data-testid="gv-routing-savings">
+              <div className="gv-spend-bar">
+                <h3 id="gv-routing-save-h" className="gv-sec-head">ROUTING SAVINGS</h3>
+                <a className="ag-link"
+                   data-testid="gv-routing-savings-export"
+                   href={`/api/govern?view=routing_savings_export&project_id=${encodeURIComponent(projectId)}&days=${s.routing_savings.days}&format=html`}
+                   title="Download one-page routing savings report">Export report</a>
+              </div>
+              <ul className="gv-list">
+                <li>
+                  <span>Saved vs all-Frontier</span>
+                  <strong>${s.routing_savings.total_saved_usd.toFixed(2)} ({pctText(s.routing_savings.total_savings_pct)})</strong>
+                </li>
+                <li>
+                  <span>Metered cash saved</span>
+                  <span>${s.routing_savings.metered.dollars_saved_usd.toFixed(2)}</span>
+                </li>
+                <li>
+                  <span>Subscription capacity saved</span>
+                  <span className="gv-muted">${s.routing_savings.subscription.capacity_saved_usd.toFixed(2)}</span>
+                </li>
+                <li>
+                  <span>Routed below Frontier</span>
+                  <span>{pctText(s.routing_savings.pct_calls_routed_down)} calls, {pctText(s.routing_savings.pct_tokens_routed_down)} tokens</span>
+                </li>
+                <li>
+                  <span>Cost per merged change</span>
+                  <span>{s.routing_savings.cost_per_merged_change_usd != null ? `$${s.routing_savings.cost_per_merged_change_usd.toFixed(2)}` : "—"}</span>
+                </li>
+                <li>
+                  <span>Escalation recovery</span>
+                  <span>{s.routing_savings.escalations.total} ({s.routing_savings.escalations.recovery_rate != null ? pctText(s.routing_savings.escalations.recovery_rate) : "—"})</span>
+                </li>
+              </ul>
+            </section>
+          ) : null}
           <section className="gv-card" aria-labelledby="gv-save-h" data-testid="gv-savings">
             <h3 id="gv-save-h" className="gv-sec-head">SAVINGS</h3>
             {s.savings.length ? (

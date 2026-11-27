@@ -824,8 +824,9 @@ _PERSON_ONLY_CACHE: dict[str, Optional[tuple[str, str]]] = {}
 
 def person_only_permission(step: dict[str, Any]) -> Optional[tuple[str, str]]:
     """(title, key) of the permission a BUILT-IN capability step's tool needs when no agent can
-    ever hold it (PermissionMeta.delegable False — e.g. contract_test and smoke_test need
-    observability:manage), else None. Agent, custom and gate steps are never person-only here."""
+    ever hold it (PermissionMeta.delegable False), else None. Agent, custom and gate steps are
+    never person-only here. Read-only probes (`contract_test`, `smoke_test`) declare
+    `observability:read` (delegable) so `integration_validator` runs them by default."""
     binding = step.get("binding") if isinstance(step.get("binding"), dict) else {}
     if str(step.get("kind") or "capability") != "capability":
         return None

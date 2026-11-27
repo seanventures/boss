@@ -836,6 +836,14 @@ def stamp_routing(connection, kind: str, unit_id: str) -> dict[str, Any]:
                     "routing = CAST(:r AS JSONB) WHERE unit_kind = :k AND unit_id = :u"),
                     {"m": summary["mode"], "t": summary["tier"], "r": json.dumps(summary),
                      "k": kind, "u": unit_id})
+            # BOSSAPP-781: join this unit's routes with its scorecard outcomes for learning priors.
+            proj = connection.execute(text(
+                "SELECT project_id FROM run_scorecards WHERE unit_kind = :k AND unit_id = :u "
+                "LIMIT 1"), {"k": kind, "u": unit_id}).scalar()
+            if proj and rows:
+                from .model_router.outcomes import sync_unit_outcomes
+
+                sync_unit_outcomes(connection, project_id=str(proj), unit_id=unit_id)
             return summary
     except Exception:  # noqa: BLE001
         return {}

@@ -19,6 +19,7 @@ import re
 import shutil
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.parse
@@ -712,9 +713,23 @@ def _app_dir_of_plan(workdir: Path, plan: Optional["AppRun"]) -> Path:
     return workdir if rel in ("", ".") else workdir / rel
 
 
-def app_dir_of(workdir: Path, changed: Optional[list[str]] = None) -> Path:
+def app_dir_of(workdir: Path, changed: Optional[list[str]] = None, *,
+               app_map: Any = None, require_map: bool = False) -> Path:
     """The directory of the app a runner starts (where its .env.example and boss.deploy.yaml
-    live): the declared command's directory, a resolved Node/static app's, else the root."""
+    live): the stored App Map's `root_path` when supplied (never falling back to root for a
+    subfolder app), else the declared command's directory, a resolved Node/static app's, else
+    the root (refusing when `require_map=True`)."""
+    from . import app_map as _app_map
+
+    entry = _app_map.coerce_entry(app_map)
+    if entry is not None:
+        return entry.resolved_dir(workdir)
+    if require_map:
+        res = _app_map.resolve_for_stage(workdir, require_map=True)
+        if res.path is None:
+            raise _app_map.AppMapRequiredError(res.refusal or _app_map.NO_MAP_REFUSAL,
+                                               candidates=list(res.candidates))
+        return res.path
     try:
         plan = how_app_runs(workdir, changed)
     except Exception:  # noqa: BLE001 — an ambiguous repo is the launcher's to report
@@ -1689,7 +1704,8 @@ class AppRun:
         return shlex.join(argv)
 
 
-def how_app_runs(workdir: Path, changed: Optional[list[str]] = None) -> Optional[AppRun]:
+def how_app_runs(workdir: Path, changed: Optional[list[str]] = None, *,
+                 app_map: Any = None, require_map: bool = False) -> Optional[AppRun]:
     """THE answer to "what command runs this lineage's app". Every runner asks this function.
 
     WHY ONE FUNCTION. The serve proof (prove_app_serves) asked find_run_declaration about this
@@ -1705,8 +1721,53 @@ def how_app_runs(workdir: Path, changed: Optional[list[str]] = None) -> Optional
     package module) — running a declared preview command in a production container broke
     apps that needed devDependencies (fourth review).
 
-    Raises AmbiguousAppError rather than guessing (see _detect_command's history).
+    When `app_map` is supplied (BOSSAPP-555), detection is scoped strictly to `app_map.root_path`
+    — never reading the repository root for a subfolder app. Raises AmbiguousAppError or
+    AppMapRequiredError rather than guessing.
     """
+    from . import app_map as _app_map
+
+    entry_map = _app_map.coerce_entry(app_map)
+    if entry_map is None and require_map:
+        res = _app_map.resolve_for_stage(workdir, require_map=True)
+        if res.entry is None:
+            raise _app_map.AppMapRequiredError(res.refusal or _app_map.NO_MAP_REFUSAL,
+                                               candidates=list(res.candidates))
+        entry_map = res.entry
+
+    if entry_map is not None:
+        rel = entry_map.root_path
+        target = entry_map.resolved_dir(workdir)
+        declared_cmd = str((entry_map.run or {}).get("command") or "").strip()
+        if declared_cmd:
+            cmd = (
+                ["sh", "-lc", declared_cmd]
+                if rel == "."
+                else ["sh", "-lc", f"cd {shlex.quote(rel)} && {declared_cmd}"]
+            )
+            return AppRun(cmd, "app_map", declared_in=rel, declared_command=declared_cmd)
+        if not target.is_dir():
+            return None
+        scoped_changed = _changed_inside(changed, rel) if rel != "." else changed
+        inner = how_app_runs(target, scoped_changed or None)
+        if inner is None:
+            return None
+        if rel == ".":
+            return inner
+        inner_cmd = inner.command
+        if inner_cmd:
+            shell_str = inner_cmd[2] if inner_cmd[:2] == ["sh", "-lc"] and len(inner_cmd) == 3 else shlex.join(inner_cmd)
+            prefix = f"cd {shlex.quote(rel)} && "
+            if not shell_str.startswith(prefix):
+                shell_str = prefix + shell_str
+            inner_cmd = ["sh", "-lc", shell_str]
+        declared_in = rel if not inner.declared_in or inner.declared_in == "." else f"{rel}/{inner.declared_in}"
+        scoped_entry = inner.entry
+        if scoped_entry and scoped_entry[1]:
+            val = rel if scoped_entry[1] in ("", ".") else f"{rel}/{scoped_entry[1]}"
+            scoped_entry = (scoped_entry[0], val)
+        return AppRun(inner_cmd, inner.source, scoped_entry, declared_in=declared_in,
+                      declared_command=inner.declared_command)
     # HOW THE BUILD SAID TO RUN IT beats everything, including which app BOSS derived: the
     # build wrote the command and proved it served before it passed (find_run_declaration).
     run_declaration = find_run_declaration(workdir, changed)
@@ -1796,11 +1857,15 @@ def named_app_directory(run: Optional[dict], connection=None) -> Optional[str]:
     """
     if not run:
         return None
+    from . import app_map as _app_map
     from .app_root import clean_rel, recorded_app_dir
     from .verification_target import app_scope
 
     spec = run.get("spec") if isinstance(run.get("spec"), dict) else {}
     fctx = run.get("finalize_ctx") if isinstance(run.get("finalize_ctx"), dict) else {}
+    stored = _app_map.entry_from_run_context(run, spec=spec, finalize_ctx=fctx)
+    if stored is not None:
+        return stored.rel_or_none()
     named = clean_rel(app_scope(spec, fctx)) or clean_rel(fctx.get("app_dir"))
     if named or connection is None:
         return named
@@ -2363,6 +2428,8 @@ START_FAILURE_ADVICE: dict[str, str] = {
                      "mode."),
     "boot_crash": ("The app crashed while starting — read the error in its log (an import or "
                    "syntax error is a code fix, not a port), fix it, then preview again."),
+    "migration_needed": ("The app needs database migrations applied before it can start — "
+                         "check its migration files and DATABASE_URL, then preview again."),
 }
 
 #: The checker's own wrapper sentences around a failure, as they appear in a step's error.
@@ -2372,6 +2439,37 @@ CHECKER_LABELS: tuple[str, ...] = (
     "the preview it started finished as",
     "Traceback (most recent call last)",
 )
+
+
+#: What a cold-DB / pending-migration error looks like in an app's own output.
+MIGRATION_MARKERS: tuple[str, ...] = (
+    "migration_needed",
+    "needs db migration",
+    "undefinedtable",
+    "no such table",
+    "pendingmigrationerror",
+    "unapplied migration",
+    "you have unapplied migrations",
+    "target database is not up to date",
+    "can't locate revision identified by",
+    "p2021",
+    "p3005",
+    "alembic upgrade",
+    "prisma migrate",
+    "database is not migrated",
+    "schema has not been initialized",
+)
+
+_MIGRATION_REGEXES: tuple[re.Pattern[str], ...] = (
+    re.compile(r'(?:relation|table)\s+["\']?[\w.]+["\']?\s+does not exist', re.I),
+    re.compile(r'column\s+["\']?[\w.]+["\']?\s+(?:of relation\s+\S+\s+)?does not exist', re.I),
+)
+
+
+def _is_migration_error(lowered: str) -> bool:
+    if any(marker in lowered for marker in MIGRATION_MARKERS):
+        return True
+    return any(pattern.search(lowered) for pattern in _MIGRATION_REGEXES)
 
 
 #: What a CRASH looks like in an app's own output, as opposed to an app that is slow to bind.
@@ -2403,6 +2501,8 @@ def _classify_start_failure(message: str, *, exited: Optional[bool] = None) -> t
         kind = "no_health_route"
     elif "clone" in lowered:
         kind = "clone_failed"
+    elif _is_migration_error(lowered):
+        kind = "migration_needed"
     # A CRASH IS A CRASH, whatever wrapper sentence it arrives in. boss-1, 2026-10-02: a
     # Preview step died on an ImportError at import time; the message said "app did not serve
     # HTTP within timeout … ImportError …", the "did not serve" rule below won, and the row was
@@ -2418,6 +2518,67 @@ def _classify_start_failure(message: str, *, exited: Optional[bool] = None) -> t
     else:
         kind = "boot_crash"
     return kind, START_FAILURE_ADVICE[kind]
+
+
+def _detect_migration_command(workdir: Path) -> Optional[str]:
+    """Detect a database migration command from the previewed repository, or None."""
+    if (workdir / "alembic.ini").is_file() or (workdir / "alembic").is_dir():
+        if (workdir / ".venv" / "bin" / "alembic").is_file():
+            return ".venv/bin/alembic upgrade head"
+        return f"{shlex.quote(sys.executable)} -m alembic upgrade head"
+    if (workdir / "prisma" / "schema.prisma").is_file():
+        if (workdir / "prisma" / "migrations").is_dir():
+            return "npx prisma migrate deploy"
+        return "npx prisma db push --skip-generate"
+    if (workdir / "manage.py").is_file() and any(workdir.glob("**/migrations")):
+        return f"{shlex.quote(sys.executable)} manage.py migrate --noinput"
+    pkg = workdir / "package.json"
+    if pkg.is_file():
+        try:
+            scripts = (json.loads(pkg.read_text(encoding="utf-8")) or {}).get("scripts") or {}
+        except (OSError, ValueError, TypeError):
+            scripts = {}
+        if isinstance(scripts, dict):
+            for key in ("db:migrate", "migrate"):
+                val = str(scripts.get(key) or "").strip()
+                if val:
+                    return f"npm run {key}"
+    for rel in ("migrations", "db/migrations"):
+        mdir = workdir / rel
+        if mdir.is_dir() and sorted(mdir.glob("*.sql")):
+            return (
+                f"{shlex.quote(sys.executable)} -c "
+                "\"import os, pathlib, psycopg; "
+                "url = os.environ.get('DATABASE_URL', ''); "
+                "assert url, 'DATABASE_URL is not set for SQL migration'; "
+                "conn = psycopg.connect(url); "
+                f"files = sorted(pathlib.Path({rel!r}).glob('*.sql')); "
+                "with conn.transaction(): "
+                "[conn.execute(f.read_text(encoding='utf-8')) for f in files]; "
+                "conn.close()\""
+            )
+    return None
+
+
+def _run_preview_migration(workdir: Path, *, preview_id: str, project_id: Optional[str],
+                           env: dict[str, str], cmd: str) -> tuple[bool, str]:
+    """Run one bounded database migration inside the preview's own sandbox/DB owner."""
+    try:
+        proc = owned_process.run(
+            ["sh", "-lc", cmd],
+            cwd=str(workdir),
+            env=env,
+            owner=owned_process.Owner("preview", preview_id, project_id),
+            timeout=120,
+            capture_output=True,
+            text=True,
+        )
+        output = (proc.stdout or "") + (proc.stderr or "")
+        return proc.returncode == 0, output[-2000:]
+    except subprocess.TimeoutExpired:
+        return False, "database migration timed out after 120s"
+    except Exception as exc:  # noqa: BLE001
+        return False, f"{type(exc).__name__}: {exc}"
 
 
 def _candidate_ports(log_path: str, port_hint: int) -> list[int]:
@@ -2450,7 +2611,8 @@ def _candidate_ports(log_path: str, port_hint: int) -> list[int]:
 _ERROR_LINE_MARKERS = (
     "error", "err!", "failed", "cannot find", "could not resolve", "not found",
     "unexpected", "syntaxerror", "typeerror", "referenceerror", "eaddrinuse",
-    "permission denied", "enoent", "missing",
+    "permission denied", "enoent", "missing", "does not exist", "undefinedtable",
+    "no such table", "pendingmigration", "unapplied migration",
 )
 
 
@@ -3412,13 +3574,14 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
                      command=" ".join(command))
     keep_preview_data(engine, preview_id, workdir, project_id=project_id, repo=f"{owner}/{repo}",
                       ident=ident)
+    extra_env = preview_link_environment(engine, project_id=project_id, run_id=run_id,
+                                         preview_id=preview_id, expires_at=_expires, rotate=True,
+                                         app_env=app_env)
     proc, port_hint = launch_app(
         workdir, command, log_path,
         owner=owned_process.Owner("preview", preview_id, project_id),
         expires_at=_expires, port=_sandboxed_preview_port(ident),
-        extra_env=preview_link_environment(engine, project_id=project_id, run_id=run_id,
-                                           preview_id=preview_id, expires_at=_expires, rotate=True,
-                                           app_env=app_env))
+        extra_env=extra_env)
 
     # Web builds do `npm install` + `vite build` before the static server binds — well past the
     # default 20s window — so give discovery generous headroom (it returns as soon as the port
@@ -3442,6 +3605,43 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
             f"the app exited (code {exit_code}) before serving HTTP: " + why_it_failed_text(_own)
             if exit_code is not None else _serve_failure(log_path, port_hint, health)
         )
+        if _classify_start_failure(why + "\n" + _own, exited=exit_code is not None)[0] == "migration_needed":
+            _kill(proc.pid)
+            migrate_cmd = _detect_migration_command(workdir)
+            if migrate_cmd:
+                mig_env = app_environment(workdir, 0, extra_env)
+                mig_ok, mig_out = _run_preview_migration(
+                    workdir, preview_id=preview_id, project_id=project_id,
+                    env=mig_env, cmd=migrate_cmd)
+                if mig_ok:
+                    with contextlib.suppress(Exception), begin(engine) as c:
+                        emit_event(c, project_id, "app_preview.migration_repaired", "boss",
+                                   "app_preview", preview_id,
+                                   {"run_id": run_id, "command": migrate_cmd})
+                    proc, port_hint = launch_app(
+                        workdir, command, log_path,
+                        owner=owned_process.Owner("preview", preview_id, project_id),
+                        expires_at=_expires, port=_sandboxed_preview_port(ident),
+                        extra_env=extra_env)
+                    port = _discover_working_port(
+                        log_path, port_hint, timeout=window, proc=proc,
+                        health_path=health, service=_tree_kind == "service",
+                        listener_uid=ident.uid if ident is not None else None)
+                    if port is None:
+                        exit_code = proc.poll()
+                        _own = _app_start.split_output(_read_log(log_path))[1]
+                        why = (
+                            f"the app exited (code {exit_code}) before serving HTTP: "
+                            + why_it_failed_text(_own)
+                            if exit_code is not None else _serve_failure(log_path, port_hint, health)
+                        )
+                else:
+                    why = (f"migration_needed: database migration `{migrate_cmd}` failed: "
+                           f"{mig_out.strip()[-300:] or 'migration exited non-zero without output — check the preview log in Activity'}")
+                    exit_code = 1
+            else:
+                why = f"migration_needed: {why}"
+    if port is None:
         needed = app_env.explain_crash(_own)
         if needed:
             why = f"the app {needed}. {why}"
@@ -3931,23 +4131,47 @@ def _respawn_process_preview(engine, settings: Settings, preview_id: str) -> Non
         record_demo_logins(engine, preview_id, app_env)
         keep_preview_data(engine, preview_id, workdir, project_id=project_id, repo=repo_full,
                           ident=ident)
+        extra_env = preview_link_environment(engine, project_id=project_id, run_id=row.get("run_id"),
+                                             preview_id=preview_id, expires_at=row.get("expires_at"),
+                                             rotate=False, app_env=app_env)
         proc, port_hint = launch_app(
             workdir, command, log_path,
             owner=owned_process.Owner("preview", preview_id, row.get("project_id")),
             port=_sandboxed_preview_port(ident),
-            extra_env=preview_link_environment(engine, project_id=project_id, run_id=row.get("run_id"),
-                                               preview_id=preview_id, expires_at=row.get("expires_at"),
-                                               rotate=False, app_env=app_env))
+            extra_env=extra_env)
+        respawn_timeout = preview_start_timeout(workdir, changed=_changed, command=command)
+        respawn_health = preview_health_path(workdir)
+        respawn_service = app_tree_kind(workdir)[0] == "service"
         port = _discover_working_port(log_path, port_hint,
-                                      timeout=preview_start_timeout(workdir, changed=_changed,
-                                                                    command=command),
-                                      health_path=preview_health_path(workdir),
-                                      service=app_tree_kind(workdir)[0] == "service",
+                                      timeout=respawn_timeout,
+                                      health_path=respawn_health,
+                                      service=respawn_service,
                                       listener_uid=ident.uid if ident is not None else None)
         if port is None:
+            from . import app_start as _app_start
+
+            _own = _app_start.split_output(_read_log(log_path))[1]
             _kill(proc.pid)
-            _release_preview_sandbox(preview_id)
-            return
+            if _classify_start_failure(_own, exited=proc.poll() is not None)[0] == "migration_needed":
+                migrate_cmd = _detect_migration_command(workdir)
+                if migrate_cmd:
+                    mig_ok, _ = _run_preview_migration(
+                        workdir, preview_id=preview_id, project_id=project_id,
+                        env=app_environment(workdir, 0, extra_env), cmd=migrate_cmd)
+                    if mig_ok:
+                        proc, port_hint = launch_app(
+                            workdir, command, log_path,
+                            owner=owned_process.Owner("preview", preview_id, row.get("project_id")),
+                            port=_sandboxed_preview_port(ident),
+                            extra_env=extra_env)
+                        port = _discover_working_port(
+                            log_path, port_hint, timeout=respawn_timeout,
+                            health_path=respawn_health, service=respawn_service,
+                            listener_uid=ident.uid if ident is not None else None)
+            if port is None:
+                _kill(proc.pid)
+                _release_preview_sandbox(preview_id)
+                return
         url = f"http://127.0.0.1:{port}"
         with begin(engine) as c:
             c.execute(text(

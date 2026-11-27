@@ -1,0 +1,31 @@
+{
+  "status": "proposed",
+  "source": "marker",
+  "workspace_root": ".",
+  "selected_root_path": "app",
+  "shared_paths": [],
+  "apps": [
+    {
+      "app_key": "app",
+      "root_path": "app",
+      "workspace_root": ".",
+      "stack": {
+        "language": "python",
+        "framework": null,
+        "role": "backend",
+        "package_manager": "pip"
+      },
+      "commands": {
+        "install": "python3 -m pip install --user --disable-pip-version-check --no-input -q .",
+        "test": "python3 -m unittest discover -v"
+      },
+      "run": {},
+      "manifests": [
+        "app/pyproject.toml",
+        "package.json"
+      ],
+      "shared_paths": [],
+      "provenance_source": "marker"
+    }
+  ]
+}

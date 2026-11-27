@@ -25,14 +25,12 @@ export function normalizeEditionId(editionId?: string | null): string {
   return raw || "community";
 }
 
-export function isCommunityEdition(editionId?: string | null): boolean {
-  const id = normalizeEditionId(editionId);
-  if (PAID_EDITION_IDS.has(id) || id.startsWith("enterprise")) return false;
-  return id === "community" || id === "oss" || id === "local";
+export function isCommunityEdition(_editionId?: string | null): boolean {
+  return false;
 }
 
-export function isPaidEdition(editionId?: string | null): boolean {
-  return !isCommunityEdition(editionId);
+export function isPaidEdition(_editionId?: string | null): boolean {
+  return true;
 }
 
 /** Self-hosted SSO/identity always remains visible regardless of edition. */
@@ -55,102 +53,32 @@ export function editionDisplayName(editionId?: string | null): string {
     .join(" ");
 }
 
-/**
- * Leftover product chrome that must not appear as a required Community
- * primary-nav area. Routes, ⌘K, and `?area=` deep links stay intact.
- *
- * `enterprise` is NOT hidden: Community self-hosted SSO / IdP packs live there.
- * Only the Enterprise *label* is stripped via `communityNavCopy`.
- *
- * V1 Community home is a small cut (`V1_COMMUNITY_PRIMARY_NAV`). Areas are
- * not deleted — palette and `?area=` keep every area reachable.
- */
-const COMMUNITY_HIDDEN_PRIMARY_NAV = new Set(["foundations", "components"]);
-
-// The Community cut. The full console is defined in ConsoleShell's AREAS; this list is the
-// only thing that decides what a Community operator sees in the sidebar, so an area dropped
-// here is still present for Enterprise and Cloud — and still reachable by ?area= for everyone.
-//
-// Not listed, deliberately:
-//   reliability — incidents: 0 rows.
-//   reports/Evidence — drift_reports: 0 rows.
-//   work ("Jobs") — NOT empty: 5 open tasks, 196 jobs, 4,287 receipts. Hidden because the
-//     screen is plumbing rather than a place decisions get made; Factory and Approvals are
-//     where the same work is actually acted on. Worth revisiting if open tasks ever need to be
-//     seen on their own.
-// Each returns the moment it earns a click.
-const V1_COMMUNITY_PRIMARY_NAV = new Set([
+/** Wireframe primary sidebar rail — identical across all installs; all other areas remain reachable via ⌘K and ?area=. */
+const PRIMARY_RAIL_NAV = new Set([
   "overview",
-  // Projects (BOSSAPP-914): every project's home, and the first run. Never paid.
   "projects",
   "project",
-  // THE FIRST TEN MINUTES, and the one entry a self-hosted operator needs before any other.
-  // Every piece of setup already had an endpoint; what nobody had was the order. A console that
-  // hides its own setup behind documentation is a console that gets abandoned during
-  // evaluation, which is precisely the audience this edition is for.
   "setup",
-  // Skills are how a self-hosted operator adds a capability BOSS does not ship. Hiding that
-  // from the edition aimed at self-hosting would hide the point.
   "skills",
   "decisions",
-  // BOSS fixes itself: the open-source wedge, so never a paid feature.
   "self_fixes",
-  // Agents at work: the marquee of autonomous agents (BOSSAPP-902) — what agents did on their own.
   "agent_ops",
   "code_tasks",
   "budget",
   "enterprise",
-
-  // Agents (roster, team and panels in one area). BOSS's pitch is governed AI labour, and until
-  // this was here the console could show what the agents produced but never the agents
-  // themselves -- who did the work, how well it went, and which of them are running without a
-  // registered role at all. Team structure and Agent Studio are views of it now.
   "workforce",
-
-  // The path from an idea to shipped software. Without these the console lists the places
-  // work ENDS UP -- approvals, jobs, reports -- and none of the places it starts, so an
-  // operator can watch BOSS work but cannot see how to set it going. Discovery and Meetings
-  // are the two ways in besides a direct code task; Apps is where the result lives; Infra and
-  // Observability are how it reaches production and whether it is alive.
-  //
-  // Task Shepherd is deliberately NOT here. Its automatic retries and repairs are worth having
-  // on by default and not worth a nav entry: a self-hosted operator wants to know a run
-  // recovered, not to watch the reasoning. It stays available to the paid editions and by
-  // deep link.
   "discovery",
   "meetings",
-  // Where it runs and whether it is alive (infra-observability spec §4.1). The old ids
-  // `delivery` and `monitoring` redirect to these two (app/legacy-areas.ts).
   "infra",
   "observability",
-
-  // The Graph (KNOWLEDGE_GRAPH_PRODUCT_SPEC.md §5.1, §3.7): the code view is never gated, and
-  // Rules and Learning go through the entitlement port, which is allow-all in Community.
   "knowledge",
-
-  // How work moves through the factory. A self-hosted operator who cannot choose or see the
-  // path their work takes is running the product blind, so this is not a paid feature either.
   "delivery_workflows",
-
-  // The log itself, directly under Observability. A dashboard tells you something is wrong;
-  // this is where you go next, and until it was here the only way to reach it was a URL you
-  // had to already know. It is also the one place the 40-90 minutes of a build are legible —
-  // which agent said what, which tool it ran, what came back — so a self-hosted operator with
-  // no access to our infrastructure can debug their own builds. That is not a paid feature.
   "activity",
 ]);
 
-/**
- * Nav chrome adjustments for Community honesty.
- * Enterprise area stays as **SSO** (identity lives there); it is not an
- * Enterprise-product required area. Paid ops/org copy is softened.
- */
+// Non-gating display copy overrides kept consistent across all installs.
 export function communityNavCopy(areaId: string): { label?: string; sub?: string; badge?: string } {
   if (areaId === "enterprise") {
-    // "Identity", not "SSO": SSO names one protocol. The subtitle is the area's own (People,
-    // access roles, agents and sign-in): everyone signs in as themselves now, so the old line
-    // about "the installer password" was wrong. The badge stays "SSO" because that is the thing
-    // Community is being told it INCLUDES, and the word somebody scanning for it would look for.
     return {
       label: "Identity",
       sub: "People, access roles, agents and sign-in",
@@ -193,18 +121,14 @@ export function communityNavCopy(areaId: string): { label?: string; sub?: string
   return {};
 }
 
-/** False for design-system-as-product lab areas on Community primary nav. */
+/** Identical primary rail visibility across all installs (no edition gating). */
 export function isCommunityPrimaryNavVisible(
   areaId: string,
-  editionId?: string | null,
+  _editionId?: string | null,
 ): boolean {
-  if (!isCommunityEdition(editionId)) return true;
-  if (COMMUNITY_HIDDEN_PRIMARY_NAV.has(areaId)) return false;
-  return V1_COMMUNITY_PRIMARY_NAV.has(areaId);
+  return PRIMARY_RAIL_NAV.has(areaId);
 }
 
-export function shouldShowPaidNavBadge(areaId: string, editionId?: string | null): boolean {
-  if (!isCommunityEdition(editionId)) return false;
-  // Ops hosts self-improvement (paid); org hosts marketplace (paid).
-  return areaId === "ops" || areaId === "org";
+export function shouldShowPaidNavBadge(_areaId: string, _editionId?: string | null): boolean {
+  return false;
 }
