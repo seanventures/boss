@@ -227,6 +227,56 @@ def _merge_offer(c: Any, project_id: str, url: str, head: str, is_open: bool
     return decision, merge
 
 
+def _test_evidence_for_change(
+    c: Any, project_id: str, run_id: Optional[str], pr_url: str, host_kind: str
+) -> Optional[dict[str, Any]]:
+    """Latest downloadable test evidence artifact for a change (BOSSAPP-1011)."""
+    row = None
+    if pr_url:
+        row = c.execute(text(
+            "SELECT a.id, a.title, a.content "
+            "FROM decisions d "
+            "JOIN artifacts a ON a.id = d.recommendation->>'test_report_artifact_id' "
+            "  AND a.project_id = d.project_id "
+            "WHERE d.project_id = :p AND d.recommendation->>'pull_request_url' = :u "
+            "  AND d.recommendation->>'action' = 'review_pull_request' "
+            "ORDER BY d.created_at DESC LIMIT 1"
+        ), {"p": project_id, "u": pr_url}).mappings().first()
+    if row is None and run_id:
+        row = c.execute(text(
+            "SELECT a.id, a.title, a.content "
+            "FROM code_task_runs r "
+            "LEFT JOIN decisions d ON d.id = r.decision_id AND d.project_id = r.project_id "
+            "JOIN artifacts a ON a.id = d.recommendation->>'test_report_artifact_id' "
+            "  AND a.project_id = r.project_id "
+            "WHERE r.project_id = :p AND r.id = :r LIMIT 1"
+        ), {"p": project_id, "r": run_id}).mappings().first()
+    if row is None:
+        return None
+    content = row["content"] if isinstance(row["content"], dict) else {}
+    te = content.get("test_evidence") if isinstance(content.get("test_evidence"), dict) else {}
+    host = "local" if host_kind == "local" else "github"
+    artifact_id = str(row["id"])
+    check_run_url = (
+        str(content.get("check_run_url") or te.get("check_run_url") or "").strip() or None
+        if host != "local" else None
+    )
+    return {
+        "artifact_id": artifact_id,
+        "title": str(row["title"] or "Test evidence"),
+        "download_url": f"/v1/artifacts/{artifact_id}/download",
+        "status": str(te.get("status") or content.get("status") or "unknown"),
+        "summary": str(content.get("summary") or ""),
+        "suites": list(te.get("suites") or []),
+        "counts": dict(te.get("counts") or {}),
+        "environment": dict(te.get("environment") or {}),
+        "not_run": list(te.get("not_run") or []),
+        "head_sha": (str(content.get("verified_commit_sha") or content.get("head_sha") or te.get("head_sha") or "") or None),
+        "check_run_url": check_run_url,
+        "host_kind": host,
+    }
+
+
 # ── the local source ──────────────────────────────────────────────────────────────────────────
 
 class LocalSource:
@@ -308,6 +358,9 @@ class LocalSource:
                            "in_reply_to": n["in_reply_to"], "author": n["author"],
                            "created_at": _iso(n["created_at"])} for n in notes]
         view["checks"] = self.checks()
+        view["test_evidence"] = _test_evidence_for_change(
+            self.c, self.project_id, self.run_id(), self.url, "local"
+        )
         view["decision"], view["merge"] = _merge_offer(
             self.c, self.project_id, self.url, row.get("head_sha") or "", row["state"] == "open")
         return view
@@ -690,6 +743,9 @@ class GitHubSource:
             view["checks"] = self.checks()
         except ChangeReviewError:
             view["checks"] = None
+        view["test_evidence"] = _test_evidence_for_change(
+            self.c, self.project_id, self.run_id(), self.url, "github"
+        )
         view["decision"], view["merge"] = _merge_offer(
             self.c, self.project_id, self.url, str(meta.get("head_sha") or ""), state == "open")
         view["stale"] = self.stale

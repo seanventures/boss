@@ -16756,6 +16756,41 @@ def get_artifact(artifact_id: str) -> ArtifactDetail:
         return artifact_detail_from_row(row)
 
 
+@app.get("/v1/artifacts/{artifact_id}/download")
+@permit(P.ARTIFACT_READ, scope=Scope.of("artifact", path="artifact_id"))
+def download_artifact(artifact_id: str, format: str = "text") -> Response:
+    """Download full test evidence or artifact report as a file attachment (BOSSAPP-1011)."""
+    from boss_engine.services import test_evidence as _test_evidence
+
+    with begin(engine) as connection:
+        row = connection.execute(
+            text(
+                """
+                SELECT id, project_id, artifact_type, title, content
+                FROM artifacts
+                WHERE id = :artifact_id
+                """
+            ),
+            {"artifact_id": artifact_id},
+        ).mappings().first()
+        if not row:
+            raise HTTPException(status_code=404, detail="Artifact not found")
+        require_project_reader(connection, row["project_id"])
+    content = row["content"] if isinstance(row["content"], dict) else {}
+    payload, media_type, ext = _test_evidence.format_artifact_download(
+        {**content, "title": content.get("title") or row["title"]},
+        fmt=format,
+    )
+    slug = re.sub(r"[^A-Za-z0-9_-]+", "-", str(row["artifact_type"] or "artifact")).strip("-").lower()
+    safe_id = re.sub(r"[^A-Za-z0-9_-]+", "", str(row["id"]))[:48]
+    filename = f"{slug}-{safe_id}.{ext}"
+    return Response(
+        content=payload,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @app.post("/v1/artifacts/{artifact_id}/rebuild")
 @permit(P.ARTIFACT_REBUILD, scope=Scope.project(body="project_id"))
 def rebuild_change_record(artifact_id: str, payload: open_bodies.ArtifactRebuildBody = Body(default_factory=open_bodies.ArtifactRebuildBody)) -> dict:

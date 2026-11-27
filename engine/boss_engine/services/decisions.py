@@ -2409,7 +2409,10 @@ class DecisionService:
             text(
                 """
                 SELECT q.gates_passed, q.gates_failed, q.code_task_run_id,
-                       q.evidence->'quality_bar'->'followups' AS followups
+                       q.evidence->'quality_bar'->'followups' AS followups,
+                       q.evidence->>'verified_commit_sha' AS verified_commit_sha,
+                       q.evidence->>'verified_tree_sha' AS verified_tree_sha,
+                       q.evidence->>'gate_integrity_invalidated' AS gate_integrity_invalidated
                 FROM quality_gates q
                 JOIN code_task_runs r ON r.id = q.code_task_run_id
                 WHERE q.project_id = :p
@@ -2440,10 +2443,14 @@ class DecisionService:
                 followups = json.loads(followups)
             except Exception:  # noqa: BLE001
                 followups = {}
+        invalidated_raw = str(gate.get("gate_integrity_invalidated") or "").strip().lower()
         # `followups`: gates the quality bar let through; they are not in passed or failed.
         return {"passed": list(passed), "failed": list(failed),
                 "followups": sorted(followups) if isinstance(followups, dict) else [],
-                "run_id": gate["code_task_run_id"]}
+                "run_id": gate["code_task_run_id"],
+                "verified_commit_sha": (str(gate.get("verified_commit_sha") or "").strip() or None),
+                "verified_tree_sha": (str(gate.get("verified_tree_sha") or "").strip() or None),
+                "gate_integrity_invalidated": invalidated_raw in ("true", "1", "yes")}
 
     def _pull_request_ci_gate(
         self, connection: Connection, row: dict[str, Any]
@@ -2454,6 +2461,22 @@ class DecisionService:
         # CI signal and was previously never consulted here.
         own = self._boss_own_verdict(connection, row, recommendation)
         if own:
+            # (1b) GATE INTEGRITY (BOSSAPP-1029): the last gate run must have verified the
+            # exact commit SHA that is about to merge; an edit after the last gate run
+            # invalidates the prior pass until re-verified on the exact landing SHA.
+            from . import gate_integrity as _gate_integrity
+
+            sha_block = _gate_integrity.check_commit_sha_matches(
+                own.get("verified_commit_sha"),
+                recommendation.get("head_sha"),
+                invalidated=bool(own.get("gate_integrity_invalidated")),
+            )
+            if sha_block:
+                return {
+                    **sha_block,
+                    "validation_status": "failed",
+                    "validation_summary": sha_block["reason"],
+                }
             # (3) HARD STOP: a change that edited or deleted PRE-EXISTING tests must never be
             # auto-merged. A green suite proves nothing if the guard tests were weakened, and
             # a merge into main is irreversible. never-block means "ship the PR and record the
@@ -2504,6 +2527,29 @@ class DecisionService:
             }
 
         content = artifact["content"] or {}
+        # (1c) TEST REPORT HEAD SHA MUST MATCH LANDING HEAD SHA (BOSSAPP-1029).
+        report_sha = str(content.get("verified_commit_sha") or content.get("head_sha") or "").strip().lower()
+        rec_sha = str(recommendation.get("head_sha") or "").strip().lower()
+        if (
+            report_sha
+            and rec_sha
+            and len(report_sha) >= 7
+            and len(rec_sha) >= 7
+            and report_sha != rec_sha
+        ):
+            return {
+                "status": "blocked_gate_sha_mismatch",
+                "reason": (
+                    f"Test report artifact was recorded for commit {report_sha[:12]}, "
+                    f"which does not match the pull request head {rec_sha[:12]}."
+                ),
+                "next_action": "Re-run verification on the current pull request commit before merging.",
+                "event_reason": "test_report_sha_mismatch",
+                "validation_status": "failed",
+                "validation_summary": (
+                    f"Stale test report ({report_sha[:12]} != {rec_sha[:12]})."
+                ),
+            }
         validation_status = str(content.get("status") or "missing")
         validation_summary = str(
             content.get("summary")

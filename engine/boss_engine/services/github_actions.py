@@ -446,7 +446,11 @@ def _files_to_write(files: Any, path: Any, content: Any, diff: Any,
 
 
 def pull_request_body(*, title: str, run_id: Optional[str], files: list[str], report: str,
-                      summary: str, branch: str, base: str) -> str:
+                      summary: str, branch: str, base: str,
+                      test_evidence: Optional[Mapping[str, Any]] = None,
+                      host_kind: str = "github", head_sha: str = "") -> str:
+    from . import test_evidence as _test_evidence
+
     lines = [summary.strip() or f"BOSS corrected {len(files)} file(s) so the change passes "
                                  "validation.", ""]
     lines.append(f"**Opened by BOSS** from workflow run `{run_id}`." if run_id
@@ -458,7 +462,25 @@ def pull_request_body(*, title: str, run_id: Optional[str], files: list[str], re
     if report.strip():
         lines += ["", "### Validation report", "", "```text",
                   report.strip()[:REPORT_LIMIT], "```"]
-    return "\n".join(lines)
+    if isinstance(test_evidence, Mapping) and test_evidence:
+        te_record = dict(test_evidence)
+    else:
+        te_record = _test_evidence.build_evidence_record(
+            evidence={
+                "tests": ([{"command": "validation", "ok": True}] if report.strip() else []),
+                "last_verify_output": report.strip(),
+                "substrate": "fix_pr",
+            },
+            host_kind=host_kind,
+            head_sha=head_sha,
+            extra_not_run=(
+                ["Full repository test suite (targeted validation fix PR)"]
+                if report.strip()
+                else ["No automated test suite was executed for this targeted fix PR"]
+            ),
+        )
+    lines += ["", _test_evidence.render_pr_section(te_record).rstrip()]
+    return "\n".join(lines).strip() + "\n"
 
 
 def open_fix_pr(db: Connection, settings: Any, *, project_id: str, actor: str,
@@ -466,8 +488,11 @@ def open_fix_pr(db: Connection, settings: Any, *, project_id: str, actor: str,
                 files: Any = None, path: Any = None, content: Any = None, diff: Any = None,
                 report: Any = None, summary: Any = None, slug: Any = None, draft: Any = None,
                 run_id: Optional[str] = None,
-                bound: Optional[BoundRepository] = None) -> dict[str, Any]:
+                bound: Optional[BoundRepository] = None,
+                test_evidence: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
     """Create `boss/<run>-fix-<slug>` from the base branch, write the file(s), open the PR."""
+    from . import test_evidence as _test_evidence
+
     bound = bound or adapter_for_repository(db, settings, project_id, repository)
     adapter = bound.adapter
     base = str(base_branch or "").strip() or bound.default_branch
@@ -484,10 +509,15 @@ def open_fix_pr(db: Connection, settings: Any, *, project_id: str, actor: str,
     pr_title = str(title or "").strip() or f"fix: {paths[0]}" + (
         f" (+{len(paths) - 1})" if len(paths) > 1 else "")
     branch = fix_branch_name(run_id, str(slug or "").strip() or pr_title)
+    host_kind = "local" if getattr(adapter, "kind", "") == "local" else "github"
     body = pull_request_body(title=pr_title, run_id=run_id, files=paths,
                              report=_scrubbed(str(report or ""), run_id),
                              summary=_scrubbed(str(summary or ""), run_id), branch=branch,
-                             base=base)
+                             base=base, test_evidence=test_evidence, host_kind=host_kind)
+    try:
+        _test_evidence.require_test_evidence_section(body)
+    except _test_evidence.MissingTestEvidenceError as exc:
+        raise GitHubActionError(str(exc), code="missing_test_evidence") from exc
     commits: list[dict[str, str]] = []
     try:
         adapter.ensure_branch(branch, base)
