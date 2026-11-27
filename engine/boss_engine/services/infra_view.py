@@ -1069,11 +1069,14 @@ def _target_resident(t: dict[str, Any], health: dict[str, dict[str, Any]],
 
 
 def _preview_resident(p: dict[str, Any]) -> Resident:
+    from .preview_service import publicize_preview
+
     raw = str(p.get("status") or "")
     w = word("preview", raw)
+    # The browser gateway, never the sandbox's 127.0.0.1:<port> (as the Previews tab's rows).
     return {"kind": "preview", "id": p["id"], "name": f"Preview {preview_app(p)}",
             "env": p.get("branch"), "health": w, "strip": [], "last_deploy": None,
-            "expires_at": _iso(p.get("expires_at")), "url": p.get("url"),
+            "expires_at": _iso(p.get("expires_at")), "url": publicize_preview(p)["url"],
             "port": p.get("port")}
 
 
