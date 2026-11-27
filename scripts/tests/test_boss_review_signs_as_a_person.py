@@ -56,6 +56,11 @@ class _Api(BaseHTTPRequestHandler):
                 return self._send(200, {"principal_id": "sva_1", "kind": "service_account",
                                         "display_name": "CI"})
             return self._send(401, {"error": "unauthenticated"})
+        if self.path == "/v1/projects" and auth == f"Bearer {PERSON}":
+            return self._send(200, {"items": [
+                {"id": "prj_helpdesk", "name": "HelpDesk AI", "slug": "helpdesk"},
+                {"id": "prj_ops_a", "name": "Ops", "slug": "ops-a"},
+                {"id": "prj_ops_b", "name": "Ops", "slug": "ops-b"}]})
         if self.path.endswith("/local-changes/1/comments") and auth == f"Bearer {PERSON}":
             return self._send(200, {"number": 1, "items": [
                 {"id": 7, "state": "open", "path": "src/app.js", "line": 5, "body": "Skip weekends.",
@@ -152,3 +157,20 @@ def test_review_shows_the_reason_a_person_must_use_the_console(install, tmp_path
     assert result.returncode == 1
     assert "Resolve this thread in the console." in result.stderr
     assert PERSON not in result.stderr
+
+
+@pytest.mark.parametrize("typed", ["HelpDesk AI", "helpdesk ai", "helpdesk", "prj_helpdesk"])
+def test_clone_resolves_what_the_console_shows_to_the_project_id(install, tmp_path, typed):
+    """`boss clone "HelpDesk AI"` cloned /git/HelpDesk AI.git (or refused it as not an id); the
+    clone URL needs the project's exact id, so the CLI resolves a name or slug first."""
+    result = _boss(install, {**_env(tmp_path), "BOSS_TOKEN": PERSON}, "clone", typed)
+    # The stand-in has no Git remote: the clone fails, but only after it aimed at the real id.
+    assert "is prj_helpdesk a local project" in result.stderr, result.stderr
+    assert PERSON not in result.stdout + result.stderr
+
+
+def test_clone_refuses_a_name_two_projects_share(install, tmp_path):
+    result = _boss(install, {**_env(tmp_path), "BOSS_TOKEN": PERSON}, "clone", "ops")
+    assert result.returncode == 1
+    assert "More than one project is named ops" in result.stderr, result.stderr
+    assert not (tmp_path / "home" / "code").exists()

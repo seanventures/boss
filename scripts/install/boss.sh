@@ -1791,33 +1791,32 @@ cmd_clone() {
   [[ -n "$project" ]] || die "clone needs the project: boss clone PROJECT [DIR] [--branch B]"
   local base url helper token
   token="$(person_token)" || exit 1
-  # Display names can differ from the clone URL's case-sensitive project id. Resolve
-  # against projects visible to this person, retaining exact ids when names collide.
-  if [[ ! "$project" =~ ^[a-z0-9][a-z0-9._-]{0,120}$ ]]; then
-    local listing resolved
-    listing="$(api_call "$token" GET /v1/projects)" || listing=""
-    if [[ "${listing##*$'\n'}" == 200 ]]; then
-      resolved="$(python3 -c '
+  # A person types what the console shows: the project's name, slug or id, in any case. The
+  # clone URL needs the exact id, so resolve it among the projects this person can read; an
+  # exact id always wins, and a name two projects share is refused rather than guessed.
+  local listing resolved
+  listing="$(api_call "$token" GET /v1/projects 2>/dev/null)" || listing=""
+  if [[ "${listing##*$'\n'}" == 200 ]]; then
+    resolved="$(python3 -c '
 import json, sys
 value = sys.argv[1]
-data = json.load(sys.stdin)
-rows = data if isinstance(data, list) else data.get("projects", data.get("items", []))
-ids = set()
-for row in rows:
-    ident = row.get("id") or row.get("project_id") or ""
-    if ident == value:
-        print(ident)
-        break
-    if value.casefold() in (ident.casefold(), (row.get("name") or "").casefold()):
-        ids.add(ident)
-else:
-    if len(ids) == 1:
-        print(ids.pop())
-    elif len(ids) > 1:
-        sys.exit(2)
-' "$project" <<<"${listing%$'\n'*}")" || die "Could not resolve one project named $project. Use the project id from its BOSS page."
-      [[ -z "$resolved" ]] || project="$resolved"
-    fi
+try:
+    data = json.load(sys.stdin)
+except ValueError:
+    sys.exit()
+rows = data if isinstance(data, list) else data.get("items", data.get("projects", []))
+ids = {str(r.get("id")) for r in rows if r.get("id")}
+if value in ids:
+    print(value)
+    sys.exit()
+want = value.casefold()
+hits = {str(r["id"]) for r in rows if r.get("id") and want in
+        {str(r.get(k) or "").casefold() for k in ("id", "name", "slug")}}
+if len(hits) > 1:
+    sys.exit(2)
+print(next(iter(hits), ""))
+' "$project" <<<"${listing%$'\n'*}")" || die "More than one project is named $project. Use the project id from its BOSS page."
+    [[ -z "$resolved" ]] || project="$resolved"
   fi
   [[ "$project" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$ ]] || die "No accessible project id for that name. Use the project id from its BOSS page."
   dir="${dir:-$HOME/code/$project}"
