@@ -71,7 +71,7 @@ export function AddServerSheet({ projectId, actor, initialText = "", onClose, on
   const [privateKey, setPrivateKey] = useState("");
   const [storedId, setStoredId] = useState("");
   const [setup, setSetup] = useState({ docker: true, exporter: true, caddy: true });
-  const [watch, setWatch] = useState({ host_health: true, disk_pct: 80, prune_cache: true });
+  const [watch, setWatch] = useState({ host_health: true, disk_pct: 80, prune_cache: true, dedicated: false });
   const [open, setOpen] = useState<Box | null>(null);
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -433,6 +433,9 @@ export function AddServerSheet({ projectId, actor, initialText = "", onClose, on
                            onChange={(e) => setWatch({ ...watch, disk_pct: Math.max(0, Math.min(99, Number(e.target.value.replace(/\D/g, "")) || 0)) })} /></label>
                   <label className="inf-check"><input type="checkbox" checked={watch.prune_cache} data-testid="as-f-prune"
                     onChange={(e) => setWatch({ ...watch, prune_cache: e.target.checked })} /> Prune Docker build cache alone (cache, not data)</label>
+                  <label className="inf-check" title="Otherwise the agent keeps the newest 10 GB of build cache: other projects on the server may use it"><input type="checkbox" checked={watch.dedicated} data-testid="as-f-dedicated"
+                    disabled={!watch.prune_cache}
+                    onChange={(e) => setWatch({ ...watch, dedicated: e.target.checked })} /> Runs only what BOSS deploys: clear all unused build cache</label>
                 </div>
               ) : (
                 <div className="as-pop-b">

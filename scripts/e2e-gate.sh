@@ -115,7 +115,7 @@ PG="boss-e2egate-pg-$ID"
 GATE="boss-e2egate-$ID"
 WORK="$(mktemp -d -t boss-e2egate-XXXX)"
 chmod 700 "$WORK"
-mkdir -p "$WORK/out" && chmod 777 "$WORK/out"
+mkdir -p "$WORK/out"
 
 cleanup() {
   # -v: the Postgres image declares a data VOLUME, and `rm -f` without it left a ~435 MB
@@ -125,6 +125,7 @@ cleanup() {
   docker volume ls -q --filter label=boss-e2egate=1 --filter dangling=true 2>/dev/null |
     xargs docker volume rm >/dev/null 2>&1 || true
   docker network rm "$NET" >/dev/null 2>&1 || true
+  rm -f "$WORK/pg.env" "$WORK/gate.env"
   if [ "$KEEP" = 1 ]; then echo "e2e-gate: kept $WORK/out"; else rm -rf "$WORK"; fi
 }
 trap cleanup EXIT INT TERM
@@ -175,10 +176,18 @@ docker run --name "$GATE" --network "$NET" --label boss-e2egate=1 ${SECURITY[@]+
   -e BOSS_SANDBOX_ISOLATION=required -e BOSS_SANDBOX_NETWORK=off \
   -e BOSS_BUILD_SERVICES_PREFIX=boss_e2egate_ -e BOSS_ARTIFACTS_DIR=/tmp/boss-e2egate-artifacts \
   -e PYTHONPATH=/boss:/boss/engine -e PYTHONDONTWRITEBYTECODE=1 \
-  -v "$BOSS_ROOT":/boss:ro -v "$ROOT":/gate-src:ro -v "$WORK/out":/out \
-  "$IMAGE" ${ENTRY[@]+"${ENTRY[@]}"} python3 "/gate-src/tests/e2e/gate/$TIER.py" --out /out/results.json > "$WORK/out/gate.log" 2>&1
+  -v "$BOSS_ROOT":/boss:ro -v "$ROOT":/gate-src:ro \
+  "$IMAGE" sh -c 'mkdir -p /tmp/boss-gate-output && exec "$@"' sh \
+  ${ENTRY[@]+"${ENTRY[@]}"} python3 "/gate-src/tests/e2e/gate/$TIER.py" \
+  --out /tmp/boss-gate-output/results.json > "$WORK/out/gate.log" 2>&1
 status=$?
-grep '^\[gate\]' "$WORK/out/gate.log" >/dev/null 2>&1 || tail -30 "$WORK/out/gate.log"
+# A Colima guest may not share the Mac's temporary directory. Collect from the stopped
+# container before cleanup just as on a remote daemon.
+docker cp "$GATE:/tmp/boss-gate-output/." "$WORK/out" ||
+  { echo "e2e-gate: could not copy results out of $GATE"; status=1; }
+if [ "$status" -ne 0 ] || [ ! -s "$WORK/out/results.json" ]; then
+  tail -30 "$WORK/out/gate.log"
+fi
 
 python3 - "$WORK/out/results.json" "$started" <<'PY'
 import json, sys, time
@@ -186,8 +195,9 @@ path, started = sys.argv[1], int(sys.argv[2])
 try:
     data = json.load(open(path))
 except (OSError, ValueError):
-    print("e2e-gate: the gate wrote no results (see its log)")
-    sys.exit(0)
+    print("e2e-gate: the gate wrote no results (the end of its log is above; "
+          "rerun with --keep to keep the whole log)")
+    sys.exit(1)
 rows = data["results"]
 w = max(len(r["check"]) for r in rows) if rows else 10
 print(f"\n{'check':<{w}}  bug   result   secs  detail")
@@ -197,10 +207,12 @@ for r in rows:
     print(f"{r['check']:<{w}}  {r.get('bug') or '':<4}  {r['status']:<6}  {r['seconds']:>5}  {detail}")
 failed = sum(r["status"] == "FAIL" for r in rows)
 skipped = sum(r["status"] == "SKIP" for r in rows)
-verdict = "PASS" if rows and not failed and not skipped else "FAIL"
+verdict = "PASS" if rows and all(r["status"] == "PASS" for r in rows) else "FAIL"
 print(f"\n{verdict}: {len(rows)} checks, {failed} failed, {skipped} not run; "
       f"{int(time.time()) - started}s in all")
+sys.exit(0 if verdict == "PASS" else 1)
 PY
+report_status=$?
 
 if [ "$KEEP" = 1 ]; then cp "$WORK/out/gate.log" "$WORK/out/gate.log.kept" 2>/dev/null || true; fi
-exit $(( status == 0 ? 0 : 1 ))
+exit $(( status == 0 && report_status == 0 ? 0 : 1 ))

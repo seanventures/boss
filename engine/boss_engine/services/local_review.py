@@ -278,7 +278,9 @@ def where(c: Any, settings: Any, row: Mapping[str, Any]) -> dict[str, Any]:
             ahead = int(out) if out.isdigit() else None
     path = remote_path(row["project_id"], row["repository"],
                        is_primary(c, row["project_id"], row["repository"]))
-    origin = str(getattr(settings, "public_url", "") or "").rstrip("/") or "http://localhost:3000"
+    from ..identity.authn_support import console_origin
+
+    origin = console_origin(c).rstrip("/")
     copies = c.execute(text(
         "SELECT path, branch, machine, recorded_by, updated_at FROM local_working_copies "
         "WHERE project_id = :p AND repository = :r ORDER BY updated_at DESC LIMIT 10"),

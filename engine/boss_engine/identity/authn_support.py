@@ -310,6 +310,13 @@ def local_console_origin() -> str:
     return f"http://localhost:{port if port.isdigit() else '3000'}"
 
 
+def console_origin(db: Any, org_id: Optional[str] = None) -> str:
+    """Where a person on this install opens the console: the public origin when one is bound,
+    else this machine's console on its real port. Every console link BOSS prints for a person
+    here (a push's change link, a clone URL) uses this, so none falls back to an assumed port."""
+    return public_origin(db, org_id) or local_console_origin()
+
+
 def default_org_id(db: Any) -> Optional[str]:
     """One org per install in v1 (D24): the first one created."""
     row = db.execute(text("SELECT id FROM orgs ORDER BY created_at, id LIMIT 1")).first()

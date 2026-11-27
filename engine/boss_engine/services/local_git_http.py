@@ -114,7 +114,7 @@ def busy_branches(c: Any, project_id: str, repository: str) -> list[str]:
 
 
 def hook_env(*, project_id: str, repository: str, default_branch: str, pusher: str,
-             pusher_kind: str, busy: list[str], settings: Any) -> dict[str, str]:
+             pusher_kind: str, busy: list[str], console: str) -> dict[str, str]:
     """What the hooks read: who pushes, where, and what they may not touch. The hooks are git's
     own children, so they also inherit DATABASE_URL and the rest of the API's environment."""
     engine_dir = str(Path(__file__).resolve().parents[2])
@@ -127,7 +127,7 @@ def hook_env(*, project_id: str, repository: str, default_branch: str, pusher: s
         "BOSS_GIT_PUSHER": pusher,
         "BOSS_GIT_PUSHER_KIND": pusher_kind,
         "BOSS_GIT_BUSY_BRANCHES": json.dumps(busy),
-        "BOSS_GIT_CONSOLE": str(getattr(settings, "public_url", "") or "").rstrip("/"),
+        "BOSS_GIT_CONSOLE": console.rstrip("/"),
     }
 
 

@@ -345,8 +345,14 @@ def test_the_watch_says_disk_and_prunes_cache_only_when_it_may(world, client, en
         out = add_server.watch_one(c, get_settings(), host_id)
     assert out["disk_pct"] == 83 and out.get("pruned")
     assert any("builder prune" in c for c in machines.calls)
+    # The server may run the person's own workloads: only the plain capped prune runs, and the
+    # full one is named for them (review of the enterprise disk port).
+    prunes = [c for c in machines.calls if "builder prune" in c]
+    assert all("--keep-storage 10gb" in c and " -af" not in c for c in prunes), prunes
+    assert out["left_to_you"] == "docker builder prune -af"
     log = " | ".join(x["line"] for x in _view(engine, host_id)["log"])
     assert "Pruned Docker build cache alone" in log and "83% → 40%" in log
+    assert "`docker builder prune -af` on the server" in log
     with engine.connect() as c:
         assert c.execute(text("SELECT 1 FROM events WHERE entity_id = :h AND event_type = 'server.disk_high'"),
                          {"h": host_id}).first()
