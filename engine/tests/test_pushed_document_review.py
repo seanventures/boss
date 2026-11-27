@@ -36,3 +36,12 @@ def test_executable_links_and_manifests_keep_the_code_path():
                        ("CMakeLists.txt", b"100644"), ("requirements/dev.txt", b"100644"),
                        ("requirements.txt", b"100644"), (".github/guide.md", b"100644")]:
         assert not pushed_review.prose_file(path, mode)
+
+
+def test_review_checkpoints_never_modify_the_submitted_branch():
+    from boss_engine.services.change_recheck import push_hold_reason
+
+    for stage in ("checkpoint:write_tests", "checkpoint:cancelled"):
+        assert push_hold_reason(False, None, submitted_review=True, where=stage)
+        assert push_hold_reason(False, None, where=stage) is None
+    assert push_hold_reason(False, "template", submitted_review=True, where="pull_request") == "template"

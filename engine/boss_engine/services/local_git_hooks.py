@@ -156,6 +156,23 @@ def open_or_update(c: Any, settings: Any, *, project_id: str, repository: str, b
             "url": change_set_url(repository, row["number"]), "review_run_id": review_run}
 
 
+def _refresh_open_head(c, settings, row, head):
+    """Re-anchor an open change and invalidate prior decisions when its branch advanced."""
+    from sqlalchemy import text
+
+    from . import local_review
+    from .finding_overrides import on_head_moved
+
+    updated = c.execute(text("UPDATE local_change_sets SET head_sha = :h, updated_at = now() "
+                             "WHERE id = :i AND state = 'open' AND head_sha IS NOT DISTINCT FROM :old "
+                             "RETURNING id"), {"h": head, "i": row["id"], "old": row.get("head_sha")})
+    if updated.scalar_one_or_none() is None:
+        return False
+    local_review.remap(c, settings, row, head)
+    on_head_moved(c, settings, row["project_id"], int(row["number"]), head)
+    return True
+
+
 def queue_review_of(c: Any, settings: Any, *, change: Mapping[str, Any], pusher: str,
                     jobs: Any, raise_refusals: bool = False) -> Optional[str]:
     """The review panel for a pushed change: a build pinned to the pushed branch whose job is to
@@ -168,6 +185,11 @@ def queue_review_of(c: Any, settings: Any, *, change: Mapping[str, Any], pusher:
     owner, _, repo = str(change["repository"]).partition("/")
     try:
         with c.begin_nested():
+            from . import local_repo
+
+            current = local_repo.branch_sha(local_repo.bare_path(owner, repo, settings), change["branch"])
+            if current and current != change.get("head_sha"):
+                _refresh_open_head(c, settings, change, current)
             run_id = code_task_service.start_code_task(
                 c, project_id=change["project_id"], task_id=None,
                 title=f"Review change #{change['number']}: {change.get('title') or change['branch']}"[:160],
@@ -325,13 +347,7 @@ def reconcile(c: Any, settings: Any, project_id: str, *, jobs: Any = None) -> li
         head = local_repo.branch_sha(git_dir, branch) or ""
         row = open_sets.get(branch)
         if row is not None:
-            if head and row.get("head_sha") != head:
-                c.execute(text("UPDATE local_change_sets SET head_sha = :h, updated_at = now() "
-                               "WHERE id = :i"), {"h": head, "i": row["id"]})
-                local_review.remap(c, settings, row, head)
-                from .finding_overrides import on_head_moved
-
-                on_head_moved(c, settings, project_id, int(row["number"]), head)
+            if head and row.get("head_sha") != head and _refresh_open_head(c, settings, row, head):
                 out.append({"branch": branch, "number": row["number"], "moved": True})
             continue
         if branch.startswith("boss/") or not head or not tip:

@@ -6439,7 +6439,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # nothing — no checkpoint, rescue, partial PR, preview declaration or PRD record —
         # whatever gate preparation left in the checkout (change_recheck.push_hold_reason).
         reason = _change_recheck.push_hold_reason(
-            _recheck, template_push_hold(_tpl_applies, _tpl_gates))
+            _recheck, template_push_hold(_tpl_applies, _tpl_gates),
+            submitted_review=bool(fctx.get("local_review_of_push")), where=where)
         if reason is None:
             return False
         try:
