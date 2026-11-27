@@ -4399,6 +4399,11 @@ def _perform_capability(
         preview_anchor = str((context.get("input") or {}).get("preview_id") or "").strip()
         if preview_anchor:
             inputs = {**inputs, "preview_id": preview_anchor}
+        if not extends and not preview_anchor \
+                and (context.get("input") or {}).get("new_app") is True:
+            # A NEW APP, as the start door recorded it: the build says so (app_scope), so it
+            # starts from the default branch beside the project's other apps.
+            inputs = {**inputs, "new_app": True}
         if extends:
             inputs = {**inputs, "extends_run_id": extends}
             # The preview the operator was looking at (validated by the start endpoint).

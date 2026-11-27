@@ -434,3 +434,114 @@ def test_the_chat_fallback_for_a_merged_app_starts_a_new_change(engine, apps):
     assert run["finalize_ctx"].get("after_merged_run_id") == B_ROOT
     assert _clones(engine, run["id"]) != f"boss/code/{B_ROOT}"
     assert "new change" in turn.reply
+
+
+# ── Two apps in ONE repository (ENT-FEAT-01, ENT-REC-50) ────────────────────────────────────
+#
+# Recipe Box and Neighborhood Board share local_northgate/northgate; each change is open on its
+# own lineage branch. A new app is said so all the way to its build (app_scope.NEW_APP_KEY, read
+# by the empty-checkout guard), and every door that names one app lands on that app's branch.
+
+R_ROOT, N_ROOT, N_FAILED = "crun_reciperoot01", "crun_boardroot001", "crun_boardretry01"
+R_PREVIEW, N_PREVIEW = "prev_recipebox01", "prev_neighboard1"
+SHARED = "northgate"
+
+
+@pytest.fixture()
+def one_repo(engine):
+    _insert(engine, R_ROOT, title="Recipe Box", repo=SHARED, pr=1,
+            fctx={"attempt": 1, "app_id": "app_recipebox"})
+    _insert(engine, N_ROOT, title="Neighborhood Board", repo=SHARED, pr=2,
+            fctx={"attempt": 1, "app_id": "app_neighborhood", "new_app": True})
+    _insert(engine, N_FAILED, title="Neighborhood Board", repo=SHARED, status="failed",
+            fctx={"attempt": 2, "root_run_id": N_ROOT, "parent_run_id": N_ROOT,
+                  "app_id": "app_neighborhood", "new_app": True},
+            spec={"base_branch": "main"})
+    with engine.begin() as connection:
+        for preview, run in ((R_PREVIEW, R_ROOT), (N_PREVIEW, N_ROOT)):
+            connection.execute(text(
+                "INSERT INTO app_previews (id, project_id, run_id, repo, branch, status, url) "
+                "VALUES (:i, :p, :r, :repo, :b, 'running', 'http://127.0.0.1:4100/')"),
+                {"i": preview, "p": _project(), "r": run, "repo": f"{OWNER}/{SHARED}",
+                 "b": f"boss/code/{run}"})
+    yield
+
+
+def _clones_shared(engine, run_id) -> str:
+    from boss_engine.services.build_base_branch import lineage_clone, resolve_build_base
+
+    run = _run(engine, run_id)
+    spec = run["spec"] or {}
+    with engine.begin() as connection:
+        base = resolve_build_base(connection, project_id=run["project_id"], owner=spec["owner"],
+                                  repo=spec["repo"], explicit=spec.get("base_branch"),
+                                  host_default=lambda: "main", run_id=run_id)
+    branches = {"main", f"boss/code/{R_ROOT}", f"boss/code/{N_ROOT}"}
+    return lineage_clone(run_id, run["finalize_ctx"], base.clone, branches.__contains__)[1]
+
+
+@pytest.mark.parametrize("preview, branch, app_id", [
+    (N_PREVIEW, f"boss/code/{N_ROOT}", "app_neighborhood"),
+    (R_PREVIEW, f"boss/code/{R_ROOT}", "app_recipebox"),
+])
+def test_a_repair_from_a_preview_targets_that_previews_app_in_a_shared_repository(
+        engine, one_repo, preview, branch, app_id):
+    out = _tool(engine, instructions="The list is empty.", preview_id=preview)
+    assert out.get("status") == "queued", out
+    assert _clones_shared(engine, out["run_id"]) == branch
+    assert _run(engine, out["run_id"])["finalize_ctx"].get("app_id") == app_id
+
+
+def test_a_repair_from_a_preview_at_the_start_door_targets_that_app(client, engine, one_repo,
+                                                                    panel):
+    started = _start_from(client, {"title": "Repair the board preview",
+                                   "directive": "The list is empty.",
+                                   "preview_id": N_PREVIEW})
+    assert started.status_code == 200, started.text
+    assert started.json()["extends"]["run_id"] == N_ROOT
+    built = _tick_until_built(client, engine, started.json()["run"]["id"])
+    assert _clones_shared(engine, built[0]["id"]) == f"boss/code/{N_ROOT}"
+
+
+def test_a_retry_in_a_shared_repository_stays_on_its_app(client, engine, one_repo):
+    retried = client.post(f"/v1/code-tasks/{N_FAILED}/retry", json={"actor": "ceo"})
+    assert retried.status_code == 200, retried.text
+    new_id = retried.json().get("run_id") or retried.json().get("new_run_id")
+    assert _clones_shared(engine, new_id) == f"boss/code/{N_ROOT}"
+    fctx = _run(engine, new_id)["finalize_ctx"]
+    assert fctx.get("app_id") == "app_neighborhood" and fctx.get("new_app") is True
+
+
+def test_create_a_new_app_is_said_all_the_way_to_the_build(client, engine, one_repo, panel,
+                                                           monkeypatch):
+    """New work › Create a new app: the run's input and its build both say new_app, and the
+    build clones the default branch (not either app's branch)."""
+    monkeypatch.setattr(get_settings(), "target_github_owner", OWNER)
+    monkeypatch.setattr(get_settings(), "target_github_repo", SHARED)
+    started = _post_work(client, {"kind": "feature", "new_app": True,
+                                  "text": "A parking rota for the street."})
+    assert started.status_code == 200, started.text
+    with engine.begin() as connection:
+        run_input = connection.execute(text("SELECT input FROM workflow_runs WHERE id = :r"),
+                                       {"r": started.json()["run_id"]}).scalar()
+    assert run_input.get("new_app") is True and "extends_run_id" not in run_input
+    built = _built_approving_gates(client, engine, started.json()["run_id"])
+    assert built[0]["finalize_ctx"].get("new_app") is True
+    assert _clones_shared(engine, built[0]["id"]) == "main"
+
+
+def test_the_agents_new_app_is_recorded_on_the_build(engine, one_repo, monkeypatch):
+    monkeypatch.setattr(get_settings(), "target_github_owner", OWNER)
+    monkeypatch.setattr(get_settings(), "target_github_repo", SHARED)
+    out = _tool(engine, instructions="A parking rota for the street.", new_app=True)
+    assert out.get("status") == "queued", out
+    assert _run(engine, out["run_id"])["finalize_ctx"].get("new_app") is True
+    named = _tool(engine, instructions="Fix the list.", extends_run_id=N_ROOT)
+    assert "new_app" not in _run(engine, named["run_id"])["finalize_ctx"]
+
+
+def test_the_start_door_refuses_a_new_app_that_also_names_an_app(client, engine, one_repo):
+    refused = _start_from(client, {"title": "Both", "directive": "x", "new_app": True,
+                                   "extends_run_id": N_ROOT})
+    assert refused.status_code == 422, refused.text
+    assert "not both" in refused.text

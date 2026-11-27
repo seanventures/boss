@@ -28473,6 +28473,13 @@ def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = Non
                 "A preview repair that sets base_branch or release_base_sha must also name "
                 "extends_run_id, the build to repair. Start it from that build's page instead."))
     run_input.pop("extends_run_id", None)
+    # A NEW APP (app_scope.NEW_APP_KEY) is the person's word, and only ever `true`; naming the
+    # app to build onto as well is a contradiction, refused before anything is spent.
+    if run_input.pop("new_app", None) is True:
+        if extends_run_id:
+            raise HTTPException(status_code=422, detail=(
+                "Name the app to change or ask for a new app, not both."))
+        run_input["new_app"] = True
     if extends_run_id:
         from boss_engine.services.code_task_service import (
             is_simulated_run, load_code_task_run, work_branch_for,

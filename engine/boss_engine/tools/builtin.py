@@ -1461,6 +1461,10 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         if new_app and (extends or preview_id):
             return {"ok": False, "error": ("Name the app to change (extends_run_id or preview_id) "
                                            "or ask for a new app (new_app), not both.")}
+        if new_app:
+            # Recorded on the build (app_scope.NEW_APP_KEY): it starts from the default branch,
+            # and another app's unmerged branch in the repository is no reason to stop it.
+            finalize_ctx["new_app"] = True
         if preview_id and not extends:
             with ctx.begin() as connection:
                 preview = _preview_in_project(connection, preview_id, pid)

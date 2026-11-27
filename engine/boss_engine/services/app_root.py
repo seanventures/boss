@@ -417,14 +417,14 @@ def recorded_app_dir(connection: Any, run: dict) -> Optional[str]:
         pass
     root_run = str(fctx.get("root_run_id") or run.get("id") or "")
     app_id = str(fctx.get("app_id") or "")
+    from .app_scope import same_app_params, same_app_sql
+
     row = connection.execute(text(
         "SELECT finalize_ctx->>'app_dir' AS d FROM code_task_runs "
-        "WHERE project_id = :p AND spec->>'repo' = :r AND COALESCE(spec->>'owner','') = :o "
-        "AND COALESCE(finalize_ctx->>'app_dir','') <> '' "
-        "AND ((:a <> '' AND finalize_ctx->>'app_id' = :a) "
-        "     OR COALESCE(finalize_ctx->>'root_run_id', id) = :root) "
-        "ORDER BY created_at DESC LIMIT 1"),
-        {"p": project_id, "r": repo, "o": owner, "a": app_id, "root": root_run}).mappings().first()
+        "WHERE project_id = :p AND COALESCE(finalize_ctx->>'app_dir','') <> '' "
+        "AND " + same_app_sql() + " ORDER BY created_at DESC LIMIT 1"),
+        {"p": project_id, **same_app_params(owner=owner, repo=repo, app_id=app_id,
+                                             root=root_run)}).mappings().first()
     return clean_rel(row["d"]) if row else None
 
 
@@ -472,6 +472,7 @@ def identity_paths(engine: Any, run: dict) -> list[str]:
     from sqlalchemy import text
 
     from ..db import begin
+    from .app_scope import same_app_params, same_app_sql
     from .preview_service import lineage_impl_files
 
     out: list[str] = []
@@ -490,13 +491,10 @@ def identity_paths(engine: Any, run: dict) -> list[str]:
         return out
     with begin(engine) as c:
         rows = c.execute(text(
-            "SELECT state, finalize_ctx FROM code_task_runs "
-            "WHERE project_id = :p AND spec->>'repo' = :r AND COALESCE(spec->>'owner','') = :o "
-            "AND ((:a <> '' AND finalize_ctx->>'app_id' = :a) "
-            "     OR COALESCE(finalize_ctx->>'root_run_id', id) = :root) "
-            "ORDER BY created_at DESC LIMIT 200"),
-            {"p": run["project_id"], "r": repo, "o": owner, "a": app_id,
-             "root": root_run}).mappings().all()
+            "SELECT state, finalize_ctx FROM code_task_runs WHERE project_id = :p "
+            "AND " + same_app_sql() + " ORDER BY created_at DESC LIMIT 200"),
+            {"p": run["project_id"], **same_app_params(owner=owner, repo=repo, app_id=app_id,
+                                                        root=root_run)}).mappings().all()
     for row in rows:
         add(_paths_of(dict(row)))
     return out

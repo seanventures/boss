@@ -7347,12 +7347,17 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # carried no base branch cloned the README-only mainline) fails here with the branches
         # that hold it, before any model call.
         if not use_microvm and not _is_repair and not fctx.get("seed_workspace_from"):
+            from . import app_scope as _which_app
             from . import build_checkout as _build_checkout
 
             with _transaction(engine) as c:
+                # THIS APP'S builds (app_scope): a declared new app is never stopped by
+                # another app's unmerged branch (ENT-FEAT-01).
                 _no_app = _build_checkout.problem(
                     c, root, owner=owner, repo=repo, run_id=run_id, root_run=root_run,
                     base_branch=str(base_branch or ""),
+                    app_id=str(fctx.get("app_id") or ""),
+                    new_app=_which_app.declared_new_app(fctx),
                     branch_exists=getattr(sf.github, "branch_exists", None))
             if _no_app:
                 with _transaction(engine) as c:
