@@ -9,6 +9,8 @@ use metatron_protocol::ApprovalMode;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::hooks::HookConfig;
+
 pub const DEFAULT_BOSS_URL: &str = "http://127.0.0.1:8000";
 pub const DEFAULT_PROFILE_NAME: &str = "default";
 
@@ -58,6 +60,8 @@ pub struct MetatronConfig {
     pub actor: Option<String>,
     #[serde(default)]
     pub profiles: BTreeMap<String, ProfileConfig>,
+    #[serde(default)]
+    pub hooks: Vec<HookConfig>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

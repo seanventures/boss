@@ -3,12 +3,23 @@
 //! All OS keychain access in Metatron lives exclusively in this crate, wrapping the
 //! vendored `codex-keyring-store` trait so tests can inject an in-memory fake.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex, PoisonError};
+
+pub mod cookies;
+
+pub use cookies::{
+    CHROME_LINUX_PBKDF2_ITERATIONS, CHROME_MACOS_PBKDF2_ITERATIONS, ChromeCookieRow,
+    ChromeDomainReadResult, ChromeKeychainProvider, CookieError, CookieRecord,
+    CookieSessionManager, CookieSourceKind, CookieValue, OsChromeKeychain,
+    cookie_domain_matches_host, decrypt_chrome_cookie_v10, encrypt_chrome_cookie_v10,
+    load_chrome_sqlite_for_domain, load_cookie_file_for_host, parse_json_cookies,
+    parse_netscape_cookies, read_chrome_rows_for_domain, validate_exact_host,
+};
 
 use chrono::{DateTime, Utc};
 use codex_keyring_store::{DefaultKeyringStore, KeyringStore};
@@ -385,14 +396,47 @@ fn build_rules() -> Vec<RedactionRule> {
 }
 
 static REDACTION_RULES: LazyLock<Vec<RedactionRule>> = LazyLock::new(build_rules);
+static RUNTIME_SECRETS: LazyLock<Mutex<HashSet<String>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
 
-/// Redact tokens, API keys, passwords, PEM blocks, and URL credentials from text.
+/// Register an ephemeral in-memory secret (such as a session cookie value) so `redact_secrets()`
+/// guarantees it can never appear in logs, session JSONL, audit records, or model prompts (`MT-6`).
+pub fn register_runtime_secret(secret: &str) {
+    if secret.len() < 4 {
+        return;
+    }
+    let mut guard = RUNTIME_SECRETS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    guard.insert(secret.to_string());
+}
+
+/// Clear all registered runtime secrets (e.g., on session end).
+pub fn clear_runtime_secrets() {
+    let mut guard = RUNTIME_SECRETS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    guard.clear();
+}
+
+/// Redact tokens, API keys, passwords, PEM blocks, URL credentials, and active session cookies.
 pub fn redact_secrets(input: &str) -> String {
     let mut current = input.to_string();
     for rule in REDACTION_RULES.iter() {
         let replaced = rule.regex.replace_all(&current, rule.replacement);
         if let std::borrow::Cow::Owned(next) = replaced {
             current = next;
+        }
+    }
+    let runtime_vals: Vec<String> = {
+        let guard = RUNTIME_SECRETS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        guard.iter().cloned().collect()
+    };
+    for secret in runtime_vals {
+        if current.contains(&secret) {
+            current = current.replace(&secret, "[REDACTED:COOKIE]");
         }
     }
     current

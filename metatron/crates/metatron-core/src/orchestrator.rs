@@ -9,16 +9,18 @@
 //! 6. Escalate on sandbox denial with a **fresh** human decision.
 //! 7. Record redacted `AuditEvent` in `AuditBuffer` and full output in `SessionStore`.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::Utc;
+use futures_util::future::join_all;
 use metatron_audit::AuditBuffer;
 use metatron_boss_client::{BossClient, BossClientError};
 use metatron_exec::{ExecRequest, run_command};
+use metatron_mcp::{ApprovedMcpTool, McpClient};
 use metatron_policy::{
     EvaluationDecision, PolicyEvaluator, ToolCallContext, classify_command_argv, parse_command_argv,
 };
@@ -34,6 +36,9 @@ use metatron_session::{SessionItem, SessionStore};
 use serde_json::{Value, json};
 use thiserror::Error;
 use tokio::sync::watch;
+
+use crate::hooks::{HookEventKind, HookRunner};
+use crate::registry::ToolRegistry;
 
 #[derive(Debug, Error)]
 pub enum OrchestratorError {
@@ -101,16 +106,32 @@ impl ReviewerBackend for BossReviewerClient {
     }
 }
 
+/// HTTP audit metadata recorded for `http_session` calls (`MT-6`).
+/// Holds cookie NAMES only — NEVER cookie values.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HttpAuditMeta {
+    pub domain: String,
+    pub cookie_names: Vec<String>,
+    pub method: String,
+    pub path: String,
+    pub http_status: Option<u16>,
+}
+
 #[derive(Debug, Clone)]
 pub struct ToolCtx {
     pub project_id: String,
     pub session_id: String,
     pub cwd: PathBuf,
     pub scratch_dir: PathBuf,
+    /// Per-session read-only evidence directory (target for `transfer`/`pcap`, readable by `pyrun`).
+    pub evidence_dir: PathBuf,
     pub allowed_read_roots: Vec<PathBuf>,
     pub allow_unsandboxed_retry: bool,
     pub boss_client: Option<BossClient>,
     pub remote_runner: RemoteRunner,
+    pub ticket_id: Option<String>,
+    pub mcp_client: Option<Arc<McpClient>>,
+    pub hooks: Option<Arc<HookRunner>>,
     pub cancel_rx: Option<watch::Receiver<bool>>,
 }
 
@@ -126,6 +147,10 @@ pub struct ToolOutcome {
     pub host: Option<String>,
     pub host_origin: Option<String>,
     pub sandbox_denied: bool,
+    /// Optional image attachments (`(media_type, base64_data)`) for `view_image` (`MT-9`).
+    pub images: Vec<(String, String)>,
+    /// Optional HTTP metadata for `http_session` audit records (`MT-6`).
+    pub http_audit: Option<HttpAuditMeta>,
 }
 
 #[async_trait]
@@ -213,6 +238,8 @@ impl Tool for ShellLocalTool {
                     host: None,
                     host_origin: None,
                     sandbox_denied: false,
+                    images: Vec::new(),
+                    http_audit: None,
                 };
             }
         };
@@ -225,8 +252,10 @@ impl Tool for ShellLocalTool {
             .get("network")
             .and_then(Value::as_bool)
             .unwrap_or(false);
+        let is_app_control =
+            classify_command_argv(&argv, false).risk_class == RiskClass::AppControl;
 
-        let (program, cmd_args, ran_sandboxed) = if ctx.allow_unsandboxed_retry {
+        let (program, cmd_args, ran_sandboxed) = if ctx.allow_unsandboxed_retry || is_app_control {
             (argv[0].clone(), argv[1..].to_vec(), false)
         } else {
             let policy = SandboxPolicy {
@@ -248,6 +277,8 @@ impl Tool for ShellLocalTool {
                         host: None,
                         host_origin: None,
                         sandbox_denied: true,
+                        images: Vec::new(),
+                        http_audit: None,
                     };
                 }
                 Err(e) => {
@@ -263,6 +294,8 @@ impl Tool for ShellLocalTool {
                         host: None,
                         host_origin: None,
                         sandbox_denied: false,
+                        images: Vec::new(),
+                        http_audit: None,
                     };
                 }
             }
@@ -292,6 +325,8 @@ impl Tool for ShellLocalTool {
                     host: None,
                     host_origin: None,
                     sandbox_denied,
+                    images: Vec::new(),
+                    http_audit: None,
                 }
             }
             Err(e) => {
@@ -307,6 +342,8 @@ impl Tool for ShellLocalTool {
                     host: None,
                     host_origin: None,
                     sandbox_denied: false,
+                    images: Vec::new(),
+                    http_audit: None,
                 }
             }
         }
@@ -376,6 +413,8 @@ impl Tool for SshRunTool {
                     host: None,
                     host_origin: None,
                     sandbox_denied: false,
+                    images: Vec::new(),
+                    http_audit: None,
                 };
             }
         };
@@ -403,6 +442,8 @@ impl Tool for SshRunTool {
                     host: Some(host_name),
                     host_origin: None,
                     sandbox_denied: false,
+                    images: Vec::new(),
+                    http_audit: None,
                 };
             }
         };
@@ -445,6 +486,8 @@ impl Tool for SshRunTool {
                     host: Some(out.host),
                     host_origin: Some(out.origin.as_str().to_string()),
                     sandbox_denied: false,
+                    images: Vec::new(),
+                    http_audit: None,
                 }
             }
             Err(e) => {
@@ -460,15 +503,17 @@ impl Tool for SshRunTool {
                     host: Some(host_name),
                     host_origin: Some(resolved.origin().as_str().to_string()),
                     sandbox_denied: false,
+                    images: Vec::new(),
+                    http_audit: None,
                 }
             }
         }
     }
 }
 
-/// Central tool router and governance orchestrator (`ARCHITECTURE.md` §5).
+/// Central tool router and governance orchestrator (`ARCHITECTURE.md` §5, §8).
 pub struct ToolOrchestrator {
-    tools: HashMap<String, Arc<dyn Tool>>,
+    registry: ToolRegistry,
     evaluator: PolicyEvaluator,
     prompter: Arc<dyn ApprovalPrompter>,
     reviewer: Option<Arc<dyn ReviewerBackend>>,
@@ -485,13 +530,11 @@ impl ToolOrchestrator {
         audit: AuditBuffer,
         session_store: Option<SessionStore>,
     ) -> Self {
-        let mut tools: HashMap<String, Arc<dyn Tool>> = HashMap::new();
-        let local: Arc<dyn Tool> = Arc::new(ShellLocalTool);
-        let remote: Arc<dyn Tool> = Arc::new(SshRunTool);
-        tools.insert(local.name().to_string(), local);
-        tools.insert(remote.name().to_string(), remote);
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(ShellLocalTool));
+        registry.register(Arc::new(SshRunTool));
         Self {
-            tools,
+            registry,
             evaluator,
             prompter,
             reviewer,
@@ -502,7 +545,20 @@ impl ToolOrchestrator {
     }
 
     pub fn register_tool(&mut self, tool: Arc<dyn Tool>) {
-        self.tools.insert(tool.name().to_string(), tool);
+        self.registry.register(tool);
+    }
+
+    /// Register approved BOSS MCP tools with `mcp__server__tool` namespacing (`MT-9`).
+    pub fn register_mcp_tools(
+        &mut self,
+        client: Arc<McpClient>,
+        approved_tools: Vec<ApprovedMcpTool>,
+    ) {
+        self.registry.register_mcp_tools(client, approved_tools);
+    }
+
+    pub fn registry(&self) -> &ToolRegistry {
+        &self.registry
     }
 
     pub fn evaluator(&self) -> &PolicyEvaluator {
@@ -517,10 +573,82 @@ impl ToolOrchestrator {
         &self.audit
     }
 
-    /// Step 1: list tools allowed to be advertised to the model.
+    /// Step 1: list tools allowed to be advertised to the model (`Direct` + activated `Deferred`,
+    /// filtered by BOSS policy + effective approval mode).
     pub fn visible_tools(&self) -> Vec<ClientToolSpec> {
-        let all: Vec<ClientToolSpec> = self.tools.values().map(|t| t.spec()).collect();
-        self.evaluator.filter_tools(&all)
+        let mut specs = self.registry.visible_specs(&self.evaluator);
+        // Advertise built-in `tool_search` whenever deferred tools exist and `tool_search` is allowed.
+        let has_deferred = self
+            .registry
+            .all_specs()
+            .iter()
+            .any(|s| s.exposure == ToolExposure::Deferred);
+        if has_deferred
+            && !specs.iter().any(|s| s.name == "tool_search")
+            && self.evaluator.is_tool_allowed("tool_search")
+        {
+            specs.push(ClientToolSpec {
+                name: "tool_search".to_string(),
+                description:
+                    "Search and activate deferred tools (e.g. large MCP servers) by keyword."
+                        .to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "required": ["query"],
+                    "properties": {
+                        "query": { "type": "string" },
+                        "limit": { "type": "integer", "minimum": 1, "maximum": 25 }
+                    }
+                }),
+                risk_class: "read-local".to_string(),
+                exposure: ToolExposure::Direct,
+            });
+        }
+        specs
+    }
+
+    /// Execute a batch of tool calls respecting `Tool::parallel_ok()` (`MT-9`):
+    /// consecutive `parallel_ok() == true` calls execute concurrently; non-parallel calls run
+    /// strictly sequentially in order.
+    pub async fn execute_tool_calls_batch(
+        &self,
+        ctx: &ToolCtx,
+        turn_id: Option<&str>,
+        calls: Vec<(String, String, Value)>,
+    ) -> Vec<Result<ToolResultSubmission, OrchestratorError>> {
+        let mut results = Vec::with_capacity(calls.len());
+        let mut idx = 0usize;
+        while idx < calls.len() {
+            let can_parallel = self
+                .registry
+                .get(&calls[idx].1)
+                .is_some_and(|t| t.parallel_ok())
+                || calls[idx].1 == "tool_search";
+            if !can_parallel {
+                let (call_id, name, args) = calls[idx].clone();
+                results.push(
+                    self.execute_tool_call(ctx, turn_id, &call_id, &name, args)
+                        .await,
+                );
+                idx += 1;
+                continue;
+            }
+            let start = idx;
+            while idx < calls.len()
+                && (self
+                    .registry
+                    .get(&calls[idx].1)
+                    .is_some_and(|t| t.parallel_ok())
+                    || calls[idx].1 == "tool_search")
+            {
+                idx += 1;
+            }
+            let futs = calls[start..idx].iter().map(|(call_id, name, args)| {
+                self.execute_tool_call(ctx, turn_id, call_id, name, args.clone())
+            });
+            results.extend(join_all(futs).await);
+        }
+        results
     }
 
     /// Steps 2-7: classify, evaluate policy + mode, prompt/review, execute, escalate on
@@ -534,13 +662,52 @@ impl ToolOrchestrator {
         tool_name: &str,
         args: Value,
     ) -> Result<ToolResultSubmission, OrchestratorError> {
+        // Built-in `tool_search` activates matching deferred tools inside this orchestrator's registry.
+        if tool_name == "tool_search" {
+            let query = args.get("query").and_then(Value::as_str).unwrap_or("");
+            let limit = args
+                .get("limit")
+                .and_then(Value::as_u64)
+                .unwrap_or(10)
+                .clamp(1, 25) as usize;
+            let found = self
+                .registry
+                .search_and_activate(query, &self.evaluator, limit);
+            let text = serde_json::to_string_pretty(&json!({
+                "query": query,
+                "activated": found.iter().map(|s| json!({
+                    "name": s.name,
+                    "description": s.description,
+                    "risk_class": s.risk_class,
+                    "exposure": s.exposure
+                })).collect::<Vec<_>>()
+            }))
+            .unwrap_or_else(|_| "{}".to_string());
+            let bytes = text.len();
+            return Ok(ToolResultSubmission {
+                call_id: call_id.to_string(),
+                status: ToolResultStatus::Ok,
+                output: ToolResultOutput {
+                    content: vec![ToolContentItem::Text { text }],
+                    truncated: false,
+                    exit_code: Some(0),
+                    bytes,
+                    duration_ms: 0,
+                },
+                decision: ToolResultDecision {
+                    by: DecisionSource::Rule,
+                    rule_id: Some("builtin-tool-search".to_string()),
+                    mode: self.evaluator.effective_mode(),
+                },
+            });
+        }
+
         let tool = self
-            .tools
+            .registry
             .get(tool_name)
-            .cloned()
             .ok_or_else(|| OrchestratorError::UnknownTool(tool_name.to_string()))?;
 
-        let is_remote = tool_name == "ssh_run";
+        let is_remote = matches!(tool_name, "ssh_run" | "transfer" | "pcap");
         let host = args
             .get("host")
             .and_then(Value::as_str)
@@ -548,7 +715,13 @@ impl ToolOrchestrator {
         let domain = args
             .get("domain")
             .and_then(Value::as_str)
-            .map(ToString::to_string);
+            .map(ToString::to_string)
+            .or_else(|| {
+                args.get("url")
+                    .and_then(Value::as_str)
+                    .and_then(|u| url::Url::parse(u).ok())
+                    .and_then(|u| u.host_str().map(ToString::to_string))
+            });
 
         // Step 2: parse argv fail-closed for shell_local / ssh_run.
         let argv = if matches!(tool_name, "shell_local" | "ssh_run") {
@@ -941,33 +1114,80 @@ impl ToolOrchestrator {
             );
         }
 
-        let audit_ev = AuditBuffer::build_event(
-            tool_name,
-            tool_name,
-            risk_class,
-            &argv_redacted,
-            outcome.host.clone().or(host),
-            outcome.host_origin.clone(),
-            domain,
-            Some(format!("{:?}", outcome.status).to_ascii_lowercase()),
-            "allow",
-            final_decided_by,
-            rule_id.clone(),
-            outcome.exit_code,
-            outcome.bytes,
-            outcome.duration_ms,
-        );
+        let mut audit_ev = if let Some(ref http_meta) = outcome.http_audit {
+            AuditBuffer::build_http_event(
+                tool_name,
+                risk_class,
+                &http_meta.domain,
+                http_meta.cookie_names.clone(),
+                &http_meta.method,
+                &http_meta.path,
+                http_meta.http_status,
+                "allow",
+                final_decided_by,
+                rule_id.clone(),
+                outcome.bytes,
+                outcome.duration_ms,
+                ctx.ticket_id.clone(),
+            )
+        } else {
+            let mut ev = AuditBuffer::build_event(
+                tool_name,
+                tool_name,
+                risk_class,
+                &argv_redacted,
+                outcome.host.clone().or(host),
+                outcome.host_origin.clone(),
+                domain,
+                Some(format!("{:?}", outcome.status).to_ascii_lowercase()),
+                "allow",
+                final_decided_by,
+                rule_id.clone(),
+                outcome.exit_code,
+                outcome.bytes,
+                outcome.duration_ms,
+            );
+            ev.ticket_id = ctx.ticket_id.clone();
+            ev
+        };
+        audit_ev.ticket_id = audit_ev.ticket_id.or_else(|| ctx.ticket_id.clone());
         let _ = self
             .audit
             .record(&ctx.project_id, &ctx.session_id, audit_ev);
+
+        // MT-5: Fire configured `on_decision` hooks (and `on_handoff` for code task handoffs).
+        if let Some(ref hooks) = ctx.hooks {
+            let hook_payload = json!({
+                "event": "on_decision",
+                "session_id": ctx.session_id,
+                "call_id": call_id,
+                "tool": tool_name,
+                "risk_class": risk_class.as_str(),
+                "decision": "allow",
+                "decided_by": final_decided_by.as_str(),
+                "status": format!("{:?}", outcome.status).to_ascii_lowercase(),
+            });
+            let _ = hooks.fire(HookEventKind::OnDecision, &hook_payload).await;
+            if tool_name == "handoff_code_task" && outcome.status == ToolResultStatus::Ok {
+                let _ = hooks.fire(HookEventKind::OnHandoff, &hook_payload).await;
+            }
+        }
+
+        let mut content = vec![ToolContentItem::Text {
+            text: outcome.inline_text,
+        }];
+        for (media_type, data_b64) in outcome.images {
+            content.push(ToolContentItem::Image {
+                media_type,
+                data_b64,
+            });
+        }
 
         Ok(ToolResultSubmission {
             call_id: call_id.to_string(),
             status: outcome.status,
             output: ToolResultOutput {
-                content: vec![ToolContentItem::Text {
-                    text: outcome.inline_text,
-                }],
+                content,
                 truncated: outcome.truncated,
                 exit_code: outcome.exit_code,
                 bytes: outcome.bytes,
@@ -1219,10 +1439,14 @@ mod tests {
             session_id: "msess_1".to_string(),
             cwd: scratch.clone(),
             scratch_dir: scratch.clone(),
+            evidence_dir: scratch.clone(),
             allowed_read_roots: vec![scratch.clone()],
             allow_unsandboxed_retry: false,
             boss_client: None,
             remote_runner: RemoteRunner::default(),
+            ticket_id: None,
+            mcp_client: None,
+            hooks: None,
             cancel_rx: None,
         };
 
@@ -1287,10 +1511,14 @@ mod tests {
             session_id: "msess_esc".to_string(),
             cwd: allowed.clone(),
             scratch_dir: allowed.clone(),
+            evidence_dir: allowed.clone(),
             allowed_read_roots: vec![allowed.clone()],
             allow_unsandboxed_retry: false,
             boss_client: None,
             remote_runner: RemoteRunner::default(),
+            ticket_id: None,
+            mcp_client: None,
+            hooks: None,
             cancel_rx: None,
         };
 

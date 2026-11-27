@@ -16,6 +16,7 @@ use crate::context::{
     DEFAULT_AGENTS_MD_MAX_BYTES, DEFAULT_AT_FILE_MAX_BYTES, collect_agents_md,
     resolve_at_file_mentions,
 };
+use crate::hooks::HookEventKind;
 use crate::orchestrator::{OrchestratorError, ToolCtx, ToolOrchestrator};
 
 #[derive(Debug, Error)]
@@ -148,6 +149,18 @@ where
                 } => {
                     turn_id = tid.clone();
                     thread_id = thid.clone();
+                    // MT-9: record the exact per-step tool list confirmed by the server in the session JSONL.
+                    if let Some(store) = session_store {
+                        let _ = store.append(
+                            &opts.session_id,
+                            &SessionItem::TurnTools {
+                                ts: Utc::now(),
+                                turn_id: tid.clone(),
+                                tools: tools.clone(),
+                                dropped: dropped.clone(),
+                            },
+                        );
+                    }
                     if !emitted_thread_started {
                         emitted_thread_started = true;
                         emit(ExecEvent::ThreadStarted {
@@ -341,6 +354,21 @@ where
 
     // Best-effort flush of buffered audit events after every turn.
     let _ = orchestrator.audit().flush(client).await;
+
+    // MT-5: Fire configured `on_run_complete` hooks with redacted payload.
+    if let Some(ref hooks) = tool_ctx.hooks {
+        let hook_payload = serde_json::json!({
+            "event": "on_run_complete",
+            "session_id": opts.session_id,
+            "turn_id": turn_id,
+            "thread_id": thread_id,
+            "stop_reason": stop_reason,
+            "ok": failure.is_none(),
+        });
+        let _ = hooks
+            .fire(HookEventKind::OnRunComplete, &hook_payload)
+            .await;
+    }
 
     if let Some((code, message, retryable)) = failure {
         return Err(TurnDriverError::TurnFailed {

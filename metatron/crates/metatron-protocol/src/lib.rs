@@ -15,6 +15,8 @@ pub const CLIENT_NAME: &str = "metatron";
 pub const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Current BOSS Metatron protocol contract version (`X-Boss-Contract`).
 pub const BOSS_CONTRACT_VERSION: u32 = 1;
+/// Versioned JSONL event schema identifier for `metatron exec --json` and SDK consumers (`MT-5`).
+pub const JSONL_SCHEMA_VERSION: &str = "1.0";
 /// Required JWS `typ` header for signed policy bundles.
 pub const POLICY_JWS_TYP: &str = "boss-policy+jws";
 /// Required JWS `alg` header for BOSS tokens and bundles.
@@ -667,6 +669,157 @@ pub enum ExecEvent {
     },
 }
 
+/// Versioned JSONL envelope emitted by `metatron exec --json` for TS/Python SDK consumers (`MT-5`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VersionedExecEvent {
+    pub schema_version: String,
+    #[serde(flatten)]
+    pub event: ExecEvent,
+}
+
+impl ExecEvent {
+    /// Wrap this event in the versioned JSONL envelope (`schema_version = "1.0"`).
+    pub fn into_versioned(self) -> VersionedExecEvent {
+        VersionedExecEvent {
+            schema_version: JSONL_SCHEMA_VERSION.to_string(),
+            event: self,
+        }
+    }
+
+    /// Borrow-preserving versioned JSONL envelope for streaming emission.
+    pub fn to_versioned(&self) -> VersionedExecEvent {
+        VersionedExecEvent {
+            schema_version: JSONL_SCHEMA_VERSION.to_string(),
+            event: self.clone(),
+        }
+    }
+
+    /// Canonical JSON Schema (draft 2020-12) for Metatron JSONL exec events (`MT-5`).
+    pub fn jsonl_schema_v1() -> Value {
+        serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$id": "https://boss.local/schemas/metatron-exec-event-v1.0.json",
+            "title": "MetatronExecEventV1",
+            "description": "Versioned JSONL event emitted by `metatron exec --json` (schema_version 1.0).",
+            "type": "object",
+            "required": ["schema_version", "type"],
+            "properties": {
+                "schema_version": { "const": JSONL_SCHEMA_VERSION },
+                "type": {
+                    "type": "string",
+                    "enum": [
+                        "thread.started",
+                        "turn.started",
+                        "item.started",
+                        "item.updated",
+                        "item.completed",
+                        "usage",
+                        "turn.completed",
+                        "turn.failed"
+                    ]
+                }
+            },
+            "oneOf": [
+                {
+                    "properties": {
+                        "type": { "const": "thread.started" },
+                        "thread_id": { "type": "string" }
+                    },
+                    "required": ["schema_version", "type", "thread_id"]
+                },
+                {
+                    "properties": {
+                        "type": { "const": "turn.started" },
+                        "turn_id": { "type": "string" },
+                        "thread_id": { "type": "string" },
+                        "model": { "type": "string" },
+                        "mode": { "type": "string" },
+                        "tools": { "type": "array", "items": { "type": "string" } },
+                        "dropped": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "required": ["name", "reason"],
+                                "properties": {
+                                    "name": { "type": "string" },
+                                    "reason": { "type": "string" }
+                                }
+                            }
+                        }
+                    },
+                    "required": ["schema_version", "type", "turn_id", "thread_id", "model", "mode", "tools"]
+                },
+                {
+                    "properties": {
+                        "type": { "const": "item.started" },
+                        "id": { "type": "string" },
+                        "kind": { "type": "string" },
+                        "name": { "type": "string" },
+                        "summary": { "type": "string" }
+                    },
+                    "required": ["schema_version", "type", "id", "kind", "name", "summary"]
+                },
+                {
+                    "properties": {
+                        "type": { "const": "item.updated" },
+                        "id": { "type": "string" },
+                        "delta": { "type": "string" }
+                    },
+                    "required": ["schema_version", "type", "id", "delta"]
+                },
+                {
+                    "properties": {
+                        "type": { "const": "item.completed" },
+                        "id": { "type": "string" },
+                        "kind": { "type": "string" },
+                        "status": { "type": "string" },
+                        "text": { "type": ["string", "null"] },
+                        "exit_code": { "type": ["integer", "null"] },
+                        "truncated": { "type": "boolean" }
+                    },
+                    "required": ["schema_version", "type", "id", "kind", "status"]
+                },
+                {
+                    "properties": {
+                        "type": { "const": "usage" },
+                        "input_tokens": { "type": "integer" },
+                        "output_tokens": { "type": "integer" },
+                        "cost": {
+                            "type": "object",
+                            "required": ["amount", "currency", "source"],
+                            "properties": {
+                                "amount": { "type": "number" },
+                                "currency": { "type": "string" },
+                                "source": { "type": "string" }
+                            }
+                        }
+                    },
+                    "required": ["schema_version", "type", "input_tokens", "output_tokens", "cost"]
+                },
+                {
+                    "properties": {
+                        "type": { "const": "turn.completed" },
+                        "turn_id": { "type": "string" },
+                        "stop_reason": { "type": "string" },
+                        "final_message": { "type": ["string", "null"] }
+                    },
+                    "required": ["schema_version", "type", "turn_id", "stop_reason"]
+                },
+                {
+                    "properties": {
+                        "type": { "const": "turn.failed" },
+                        "turn_id": { "type": "string" },
+                        "code": { "type": "string" },
+                        "message": { "type": "string" },
+                        "retryable": { "type": "boolean" }
+                    },
+                    "required": ["schema_version", "type", "turn_id", "code", "message", "retryable"]
+                }
+            ]
+        })
+    }
+}
+
 // --- Auth & Capabilities DTOs ---
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -967,6 +1120,18 @@ pub struct AuditEvent {
     pub host_origin: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub domain: Option<String>,
+    /// Cookie names attached to an HTTP request (NEVER cookie values! `MT-6`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cookie_names: Vec<String>,
+    /// HTTP method for `http_session` audit records (`MT-6`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub method: Option<String>,
+    /// URL path (no query secrets) for `http_session` audit records (`MT-6`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// HTTP response status code for `http_session` audit records (`MT-6`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http_status: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
     pub decision: String,
@@ -1063,6 +1228,179 @@ impl fmt::Debug for CredentialLeaseResponse {
             .field("material", &"[REDACTED]")
             .finish()
     }
+}
+
+// --- Wave D DTOs: MCP Registry, Skills, Evidence, Handoff, Web Search (`MT-9`, `MT-4`, `MT-5`) ---
+
+/// Tool schema published by an MCP server (`tools/list`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct McpToolSpec {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default = "default_json_object", alias = "inputSchema")]
+    pub input_schema: Value,
+}
+
+fn default_json_object() -> Value {
+    serde_json::json!({"type": "object", "properties": {}})
+}
+
+/// Admin-approved MCP server entry from BOSS `/v1/mcp/servers` or `PolicyBundle.mcp`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct McpServerRecord {
+    #[serde(default)]
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default = "default_mcp_transport")]
+    pub transport: String,
+    #[serde(default)]
+    pub risk_tier: u8,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Optional local stdio command (for admin-approved local stdio MCP servers).
+    #[serde(default)]
+    pub command: Option<String>,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub tool_risk_overrides: BTreeMap<String, u8>,
+    #[serde(default)]
+    pub tool_policy: BTreeMap<String, String>,
+    #[serde(default)]
+    pub tools: Vec<McpToolSpec>,
+    #[serde(default)]
+    pub auth: Option<Value>,
+}
+
+fn default_mcp_transport() -> String {
+    "http".to_string()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// BOSS-granted skill record returned by `GET /v1/skills`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BossSkillRecord {
+    #[serde(default)]
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub body: Option<String>,
+    #[serde(default)]
+    pub tools: Vec<String>,
+    #[serde(default)]
+    pub dependencies: Vec<String>,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+/// Reference to a collected evidence artifact (redacted metadata, never secrets).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvidenceRef {
+    pub name: String,
+    pub path: String,
+    pub sha256: String,
+    pub bytes: u64,
+    #[serde(default)]
+    pub media_type: Option<String>,
+}
+
+/// Request body to post investigation findings & evidence to a BOSS ticket (`MT-4`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TicketFindingRequest {
+    pub project_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ticket_id: Option<String>,
+    pub title: String,
+    pub summary: String,
+    #[serde(default)]
+    pub evidence: Vec<EvidenceRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dashboard_excerpt: Option<String>,
+    pub session_id: String,
+    pub dedupe_key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TicketFindingResponse {
+    pub ticket_id: String,
+    #[serde(default)]
+    pub comment_id: Option<String>,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub attached_count: usize,
+}
+
+/// Request body for `handoff_code_task` (`MT-5`, `POST /v1/code-tasks`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodeTaskHandoffRequest {
+    pub project_id: String,
+    pub title: String,
+    pub instructions: String,
+    pub findings: String,
+    #[serde(default)]
+    pub evidence: Vec<EvidenceRef>,
+    #[serde(default)]
+    pub log_excerpt: Option<String>,
+    pub session_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ticket_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_branch: Option<String>,
+    pub dedupe_key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodeTaskHandoffResponse {
+    pub run_id: String,
+    #[serde(default)]
+    pub task_id: Option<String>,
+    pub status: String,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+/// Web search request routed through BOSS model gateway (`MT-9`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WebSearchRequest {
+    pub project_id: String,
+    pub query: String,
+    #[serde(default = "default_search_limit")]
+    pub limit: usize,
+    #[serde(default)]
+    pub allowed_domains: Vec<String>,
+}
+
+fn default_search_limit() -> usize {
+    5
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WebSearchResultItem {
+    pub title: String,
+    pub url: String,
+    pub snippet: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WebSearchResponse {
+    pub provider: String,
+    #[serde(default)]
+    pub results: Vec<WebSearchResultItem>,
 }
 
 #[cfg(test)]

@@ -128,7 +128,7 @@ pub fn build_seatbelt_profile(policy: &SandboxPolicy) -> Result<String, SandboxE
     sbpl.push_str("(allow file-read-metadata)\n");
     sbpl.push_str("(allow file-read* (literal \"/\"))\n");
     sbpl.push_str(
-        "(allow file-map-executable (subpath \"/System\") (subpath \"/usr/lib\") (subpath \"/bin\") (subpath \"/usr/bin\") (subpath \"/usr/libexec\"))\n",
+        "(allow file-map-executable (subpath \"/System\") (subpath \"/usr/lib\") (subpath \"/bin\") (subpath \"/usr/bin\") (subpath \"/usr/libexec\") (subpath \"/opt/homebrew\") (subpath \"/usr/local/Cellar\") (subpath \"/Library/Frameworks/Python.framework\") (subpath \"/Library/Developer/CommandLineTools\"))\n",
     );
 
     // Minimal system runtime paths needed to execute `/bin/*`, `/usr/bin/*`, dynamic libs.

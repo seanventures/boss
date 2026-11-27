@@ -13,6 +13,7 @@ futures-util.workspace = true
 metatron-audit.workspace = true
 metatron-boss-client.workspace = true
 metatron-exec.workspace = true
+metatron-mcp.workspace = true
 metatron-policy.workspace = true
 metatron-protocol.workspace = true
 metatron-remote.workspace = true
@@ -23,8 +24,9 @@ regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["sync", "time"] }
+tokio = { workspace = true, features = ["process", "sync", "time"] }
 toml.workspace = true
+url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]

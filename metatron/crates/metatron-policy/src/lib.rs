@@ -7,6 +7,7 @@ pub mod verbs;
 
 pub use evaluator::{
     EvaluationDecision, GrantStore, LocalPolicyConfig, PolicyEvaluator, ToolCallContext,
+    mcp_policy_key,
 };
 pub use jws::{
     JwsError, VerifiedPolicyBundle, sign_policy_bundle_ed25519, verify_signed_policy_bundle,
