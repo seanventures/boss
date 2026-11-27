@@ -385,8 +385,8 @@ ASK_WHAT_TO_DO: dict[str, str] = {
     ASK_PROD_RELEASE: "Approve or reject it on this card.",
     EXPLICIT_STOP: "Answer it on this card; the stop stays until the person who set it lifts "
                    "it.",
-    ASK_PRODUCT_CHOICE: "Answer the question in the note and approve; the build starts from the "
-                        "spec with your answer.",
+    ASK_PRODUCT_CHOICE: "Answer the panel's question in the note on this card, then approve it; "
+                        "the build starts from the spec with your answer.",
     "unclassified": "Answer it on this card.",
 }
 
