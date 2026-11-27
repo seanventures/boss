@@ -26,6 +26,7 @@ import { hostPort, ownerChip, ownerFixLines, repoCheckFix, type Candidate, type 
 import type { RegistryRepo } from "../../lib/multirepo";
 
 export type BoxKey = "captain" | "stack" | "connectors" | "workflow" | "code" | "staging" | "tell" | "more";
+const MINI_STEP_LIMIT = 19;
 
 export type PlanState = {
   captain: string;            // role key
@@ -415,7 +416,7 @@ export function PlanBoxes({ kind, preview, plan, set, cards, adapters, helmPicks
                           onClick={() => set({ workflow: w.key })} title={w.detail}>
                     <b>{w.short}{w.key === workflow?.key ? <span className="npx-tag" data-tone="blue">picked</span> : null}
                       {helmPicks.workflow?.key === w.key ? <span className="npx-tag" title={helmPicks.workflow.because}>Helm</span> : null}</b>
-                    <span className="npx-mini" aria-hidden>{w.step_list.slice(0, 19).map((s, i) => <i key={i} data-y={s.you || undefined} />)}</span>
+                    <span className="npx-mini" aria-hidden>{w.step_list.slice(0, MINI_STEP_LIMIT).map((s, i) => <i key={i} data-y={s.you || undefined} />)}</span>
                     <small>{w.steps} steps · {w.approvals ? `${w.approvals} you approve` : "no approvals"}{w.approve_words.length ? `: ${w.approve_words.slice(0, 3).join(", ")}` : ""}</small>
                   </button>
                 ))}

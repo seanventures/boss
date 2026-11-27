@@ -13,6 +13,7 @@ import { LockedPanel } from "../../components/locked-panel";
 import { GatedButton } from "../../components/gated";
 import { KG_LAYERS } from "../../lib/kg-view-types";
 import { INDEX_NOW, type KgRepository } from "../../lib/kg-view";
+import { LOCAL, useLocalTime } from "../../lib/local-time";
 import { scanReader } from "../../lib/kg-scan";
 
 const LAYER_LINE: Record<(typeof KG_LAYERS)[number], { name: string; what: string }> = {
@@ -181,7 +182,7 @@ export function KgError({ text, onRetry, testId = "kg-error" }: { text: string; 
   );
 }
 
-export function ago(at: string | null | undefined, now = Date.now()): string {
+export function ago(at: string | null | undefined, now = LOCAL.now()): string {
   if (!at) return "";
   const t = Date.parse(at);
   if (Number.isNaN(t)) return "";
@@ -198,12 +199,14 @@ export function ago(at: string | null | undefined, now = Date.now()): string {
 export function KgBuilt({ builtAt, stale, onRebuild, busy, indexing }: {
   builtAt: string | null; stale: boolean; onRebuild: () => void; busy?: boolean; indexing?: boolean;
 }) {
+  const lt = useLocalTime();
+  const builtAgo = builtAt && lt.now() > 0 ? ago(builtAt, lt.now()) : "";
   return (
     <span className="kg-built" data-testid={stale ? "kg-stale" : "kg-built"} data-stale={stale || undefined}>
       {indexing ? <span className="kg-live" data-testid="kg-indexing-chip"><span className="kg-live-dot" aria-hidden />Indexing…</span> : null}
       {stale ? (
-        <span className="kg-stale-badge" title="The code changed since the graph view was built">Graph is from the last index{builtAt ? ` (${ago(builtAt)})` : ""}</span>
-      ) : builtAt ? <span className="inf-muted">Built {ago(builtAt)}</span> : null}
+        <span className="kg-stale-badge" title="The code changed since the graph view was built">Graph is from the last index{builtAgo ? ` (${builtAgo})` : ""}</span>
+      ) : builtAgo ? <span className="inf-muted">Built {builtAgo}</span> : null}
       <GatedButton permission={INDEX_NOW} className="ag-btn" data-testid="kg-rebuild" disabled={busy || indexing}
                    title="Index the repository again now and rebuild the graph view. No model is called." onClick={onRebuild}>
         {busy ? "Starting…" : "Rebuild"}

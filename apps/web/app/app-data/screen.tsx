@@ -6,6 +6,7 @@
  */
 import React, { useCallback, useEffect, useState } from "react";
 import { apiWrite } from "../../lib/api-write";
+import { GatedButton } from "../../components/gated";
 
 const CSS = `
 .ad1266 {
@@ -426,7 +427,7 @@ export function AppDataScreen({ projectId, appKey, appName }: {
                 CSV
                 <textarea name="csv" data-testid="import-text" />
               </label>
-              <button type="submit" className="ad1266-go" data-testid="import-submit">Bring in</button>
+              <GatedButton permission="project:update" type="submit" className="ad1266-go" data-testid="import-submit">Bring in</GatedButton>
             </form>
             {(page?.tables ?? []).length === 0 ? (
               <p>Bring in a CSV. The first row names the columns.</p>

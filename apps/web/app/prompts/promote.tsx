@@ -9,6 +9,7 @@
  */
 import React, { useEffect, useState } from "react";
 import { apiWrite } from "../../lib/api-write";
+import { GatedButton } from "../../components/gated";
 
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500&family=Literata:opsz,wght@7..72,500;7..72,650&family=Outfit:wght@400;500;700&display=swap');
@@ -302,10 +303,10 @@ export function PromptPromote({ projectId, actor }: { projectId: string; actor: 
                         Ask for a decision
                       </button>
                     )}
-                    <button type="button" className="pp-promote" data-testid="promote-prompt"
+                    <GatedButton permission="agent:create" type="button" className="pp-promote" data-testid="promote-prompt"
                       title="Needs an approved decision" disabled={Boolean(busy)} onClick={() => onPromote(prompt)}>
                       Promote
-                    </button>
+                    </GatedButton>
                   </div>
                 )}
                 {cardError[prompt.id] ? <p className="pp-error" data-testid="promote-error">{cardError[prompt.id]}</p> : null}

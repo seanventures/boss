@@ -12,13 +12,13 @@ import React from "react";
 import { ArrowRight, Crown, Gauge, UsersThree } from "@phosphor-icons/react";
 
 import { consoleHref } from "../url-intent";
-import { localWith } from "../../lib/local-time";
+import { localWith, useLocalTime } from "../../lib/local-time";
 import type { SubscriptionSource, SubscriptionsView } from "../../lib/govern";
 
 const ORDER = ["exhausted", "near_limit", "tight", "plenty"];
 /** "3 h ago" from when BOSS last heard the number: computed here so the read stays cacheable. */
-function ago(iso: string | null): string {
-  const ms = iso ? Date.now() - Date.parse(iso) : NaN;
+function ago(iso: string | null, nowMs: number): string {
+  const ms = iso && nowMs > 0 ? nowMs - Date.parse(iso) : NaN;
   if (!Number.isFinite(ms)) return "";
   const m = Math.max(0, Math.round(ms / 60000));
   return m < 2 ? "just now" : m < 60 ? `${m} min ago` : m < 36 * 60 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`;
@@ -47,6 +47,7 @@ export function SubscriptionBanner({ view, onOpen }: { view: SubscriptionsView |
 const tidOf = (s: SubscriptionSource) => (s.pool ? `${s.engine}-${s.pool.position}` : s.engine);
 
 function Card({ s }: { s: SubscriptionSource }) {
+  const lt = useLocalTime();
   const fresh = s.freshness;
   const tid = tidOf(s);
   return (
@@ -64,9 +65,9 @@ function Card({ s }: { s: SubscriptionSource }) {
             <ArrowRight size={12} weight="bold" aria-hidden />Takes new work</span>
         ) : null}
         {s.login.state === "expired" ? <span className="gv-sub-faint">{s.login.words}</span> : null}
-        {fresh.stale && fresh.as_of ? (
+        {fresh.stale && fresh.as_of && lt.now() > 0 ? (
           <span className="gv-sub-faint" data-testid={`gv-sub-age-${tid}`}
-                title="BOSS has not heard this account's numbers since; they may have moved.">last reported {ago(fresh.as_of)}</span>
+                title="BOSS has not heard this account's numbers since; they may have moved.">last reported {ago(fresh.as_of, lt.now())}</span>
         ) : null}
       </header>
       {s.windows.length ? s.windows.map((w) => (

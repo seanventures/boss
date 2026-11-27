@@ -9,6 +9,7 @@
  */
 import React, { useEffect, useState } from "react";
 import { apiWrite } from "../../lib/api-write";
+import { GatedButton } from "../../components/gated";
 
 export type PreviewShareLink = {
   id: string;
@@ -229,14 +230,14 @@ export function PreviewShare(props: PreviewShareProps) {
             onChange={(event) => setExpiry(event.target.value)}
           />
         </label>
-        <button type="button" data-testid="issue-pass" disabled={stoppedNew} onClick={() => void issue()}>
+        <GatedButton permission="preview:manage" type="button" data-testid="issue-pass" disabled={stoppedNew} onClick={() => void issue()}>
           Issue pass
-        </button>
+        </GatedButton>
       </form>
       {props.admin ? (
-        <button type="button" className="ps1251-stop-new" data-testid="stop-new" onClick={() => void stopNew()}>
+        <GatedButton permission="preview:manage" type="button" className="ps1251-stop-new" data-testid="stop-new" onClick={() => void stopNew()}>
           Stop new passes
-        </button>
+        </GatedButton>
       ) : null}
     </section>
   );

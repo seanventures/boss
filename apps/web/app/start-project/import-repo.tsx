@@ -24,6 +24,7 @@ import {
 } from "@phosphor-icons/react";
 
 import { GatedButton, useGate } from "../../components/gated";
+import { localFull } from "../../lib/local-time";
 import { useGuardedCall } from "../../components/identity/identity-provider";
 import { IdentityError, idGet, idPost } from "../../lib/identity/api";
 import { multirepo, refusalCode, refusalMessage, type Registry, type RegistryRepo } from "../../lib/multirepo";
@@ -154,7 +155,7 @@ export function RepoPicker({ registry, loadError, account, onAccount, query, onQ
                 <span style={{ flex: 1 }} />
                 {inHere ? <span className="spj-inuse" data-testid={`${testid}-here-${r.id}`}>in this project</span>
                   : usedBy ? <span className="spj-inuse" data-testid={`${testid}-inuse-${r.id}`}>in use</span>
-                    : <small className="spj-mono spj-faint" data-testid={`${testid}-age-${r.id}`} title={r.pushed_at ? `Last push ${new Date(r.pushed_at).toLocaleString()}` : "Last push not known yet"}>{ageShort(r.pushed_at)}</small>}
+                    : <small className="spj-mono spj-faint" data-testid={`${testid}-age-${r.id}`} title={r.pushed_at ? `Last push ${localFull(r.pushed_at)}` : "Last push not known yet"}>{ageShort(r.pushed_at)}</small>}
               </button>
             </li>
           );

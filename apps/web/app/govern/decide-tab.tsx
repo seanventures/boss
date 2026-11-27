@@ -36,6 +36,7 @@ import { AgentAvatar } from "../agent-avatar";
 import { AutonomyControl } from "../autonomy/control";
 import { KillSwitch } from "../agent-ops/autonomy-panel";
 import { showToast } from "../client-forms";
+import { GatedButton } from "../../components/gated";
 import "./decide.css";
 
 const ICONS: Record<string, Icon> = {
@@ -250,10 +251,10 @@ function Popover({ card, board, projectId, onClose, onSaved }: {
         <span className="wd-spacer" />
         <button type="button" className="wd-btn" data-kind="ghost" onClick={onClose}>Cancel</button>
         {card.fixed ? null : (
-          <button type="button" className="wd-btn" data-kind="primary" disabled={busy} onClick={() => void save()} data-testid="wd-save"
-                  title="Changing this list is itself on the list: it asks for your passkey">
+          <GatedButton permission="approval_rule:manage" type="button" className="wd-btn" data-kind="primary" disabled={busy} onClick={() => void save()} data-testid="wd-save"
+                       title="Changing this list is itself on the list: it asks for your passkey">
             <ShieldCheck size={14} />{busy ? "Saving…" : "Save · passkey"}
-          </button>
+          </GatedButton>
         )}
       </div>
     </div>
@@ -323,9 +324,9 @@ function RuleChange({ projectId, onApplied }: { projectId: string; onApplied: ()
         <div className="wd-in-foot">
           <span className="wd-faint">⇧↵ new line · ⌘↵ read it</span>
           <span className="wd-spacer" />
-          <button type="button" className="wd-btn" data-kind="primary" disabled={!words.trim() || reading} onClick={() => void read()} data-testid="wd-words-read">
+          <GatedButton permission="work_item:manage" type="button" className="wd-btn" data-kind="primary" disabled={!words.trim() || reading} onClick={() => void read()} data-testid="wd-words-read">
             <AgentAvatar agent="engineering_captain" size={18} aiBadge={false} tip="Helm" />{reading ? "Helm is reading…" : "Read it"}
-          </button>
+          </GatedButton>
         </div>
       </div>
       {reading ? <div className="wd-ub" data-state="reading" aria-busy="true" data-testid="wd-rule-change-reading"><span className="wd-skel" /><span className="wd-skel" data-w="60" /></div> : null}
@@ -375,9 +376,9 @@ function RuleChange({ projectId, onApplied }: { projectId: string; onApplied: ()
             <button type="button" className="wd-btn" onClick={() => setEditing(!editing)} data-testid="wd-edit-toggle"><PencilSimple size={14} />{editing ? "Done" : "Edit"}</button>
             <span className="wd-faint wd-row"><ShieldCheck size={13} /> Changing this list is itself on the list: it asks for your passkey.</span>
             <span className="wd-spacer" />
-            <button type="button" className="wd-btn" data-kind="primary" disabled={!edits.length || applying} onClick={() => void apply()} data-testid="wd-apply">
+            <GatedButton permission="approval_rule:manage" type="button" className="wd-btn" data-kind="primary" disabled={!edits.length || applying} onClick={() => void apply()} data-testid="wd-apply">
               <CheckCircle size={14} />{applying ? "Applying…" : `Apply ${edits.length} change${edits.length === 1 ? "" : "s"}`}
-            </button>
+            </GatedButton>
           </div>
         </div>
       ) : null}

@@ -9,6 +9,7 @@
  */
 import React, { useState } from "react";
 import { apiWrite } from "../../lib/api-write";
+import { GatedButton } from "../../components/gated";
 
 export type PlaygroundResult = {
   prompt: string;
@@ -275,14 +276,15 @@ export function PlaygroundScreen({
             maxLength={8000}
           />
         </label>
-        <button
+        <GatedButton
+          permission="assistant:chat"
           type="submit"
           data-testid="playground-run"
           disabled={!ready}
           title="Runs this prompt once."
         >
           {busy ? "Running" : "Run prompt"}
-        </button>
+        </GatedButton>
       </form>
       {error ? (
         <p className="error" data-testid="playground-error" role="alert">

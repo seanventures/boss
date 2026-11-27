@@ -5,6 +5,7 @@
  * on the agents you tick. A row that does not take the change is listed.
  */
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { GatedButton } from "../../components/gated";
 
 export type RosterAgent = {
   roleKey: string;
@@ -164,7 +165,7 @@ const BENCH_CSS = `
 function freshKey(): string {
   const uuid = globalThis.crypto?.randomUUID?.();
   if (uuid) return `roster-${uuid}`;
-  return `roster-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+  return `roster-${Math.random().toString(36).slice(2, 10)}-${Math.random().toString(36).slice(2, 12)}`;
 }
 
 export async function applyRosterChange(
@@ -381,7 +382,8 @@ export function RosterBulk({
       <div className="rb-bus">
         <span className="rb-rail" aria-hidden="true" />
         <span className="rb-count">{selected.length} on the bus</span>
-        <button
+        <GatedButton
+          permission="agent:update"
           type="button"
           className="rb-go"
           data-testid="rb-apply"
@@ -390,7 +392,7 @@ export function RosterBulk({
           onClick={() => void send(selected.map((agent) => agent.roleKey))}
         >
           {busy ? "Setting" : `Set ${countLabel}`}
-        </button>
+        </GatedButton>
       </div>
       <div className="rb-rows">
         {agents.map((agent) => {

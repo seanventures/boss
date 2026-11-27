@@ -176,9 +176,9 @@ export function timelineLabels(ats: (string | null)[], now: Date | null = isHydr
   const yesterday = new Date(now); yesterday.setDate(now.getDate() - 1);
   const known = dates.filter((d): d is Date => d !== null);
   if (known.length > 1 && known.every((d) => same(d, now))) {
-    return dates.map((d) => d ? d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : "");
+    return dates.map((d) => d ? localWith(d.getTime(), { hour: "2-digit", minute: "2-digit" }) : "");
   }
-  return dates.map((d) => !d ? "" : same(d, now) ? "Today" : same(d, yesterday) ? "Yesterday" : d.toLocaleDateString(undefined, { weekday: "short" }));
+  return dates.map((d) => !d ? "" : same(d, now) ? "Today" : same(d, yesterday) ? "Yesterday" : localWith(d.getTime(), { weekday: "short" }));
 }
 
 /** A TIMELINE: up to six points, oldest first, a day label over each ("Mon", "Today"; times when

@@ -31,7 +31,7 @@ const DELETE_TIP = "Delete this project and everything BOSS holds for it. The Gi
 
 /** "12 workflow runs" — the label's own word, lower-cased after a number. */
 export function countLine(count: number, label: string): string {
-  return `${count.toLocaleString("en-GB")} ${label.charAt(0).toLowerCase()}${label.slice(1)}`;
+  return `${count.toLocaleString("en-US")} ${label.charAt(0).toLowerCase()}${label.slice(1)}`;
 }
 
 /** Where the console lands after a delete: Projects, in the same organization, no project. */
@@ -148,7 +148,7 @@ export function DeleteProjectDialog({ projectId, name, onClose }: {
                   <ul className={styles.counts}>
                     {preview.counts.map((c) => (
                       <li key={c.key} data-testid={`delete-count-${c.key}`}>
-                        <b>{c.count.toLocaleString("en-GB")}</b> <span>{c.label.toLowerCase()}</span>
+                        <b>{c.count.toLocaleString("en-US")}</b> <span>{c.label.toLowerCase()}</span>
                       </li>
                     ))}
                   </ul>

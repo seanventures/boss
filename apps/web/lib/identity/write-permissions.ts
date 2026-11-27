@@ -282,6 +282,14 @@ export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permiss
 
   // app/factory/legacy-build-parts.tsx — Factory › retire a deploy target
   "app/factory/legacy-build-parts.tsx#retireTarget": "deployment_target:manage", // DELETE /v1/deployment-targets/{id}
+
+  // lib/decide.ts — Govern › Where people decide (PUT /v1/decide/rules/{kind}, POST /v1/decide/apply, /understand)
+  "lib/decide.ts#saveRule": "approval_rule:manage",
+  "lib/decide.ts#applyEdits": "approval_rule:manage",
+  "lib/decide.ts#understandWords": "work_item:manage",
+
+  // lib/new-work.ts — New work › Helm's understanding turn (POST /v1/projects/{id}/work/understand)
+  "lib/new-work.ts#understand": "assistant:chat",
 };
 
 /** Dispatchers: the first string literal a call passes names the operation. */
@@ -306,7 +314,7 @@ export const WRITE_OPS: Readonly<Record<string, Readonly<Record<string, WriteGat
   },
   // lib/setup-client.ts `setupWrite(projectId, op, …)` → /api/setup → /v1/setup/*
   "lib/setup-client.ts#setupWrite": {
-    checks: "setup:manage", repo_token: "github:connect", repo_select: "repository:register",
+    checks: "setup:check", repo_token: "github:connect", repo_select: "repository:register",
     repo_app: "github:connect", repo_signin: "github:connect", repo_default: "repository:manage", repo_remove: "repository:manage",
     models: "model_provider:manage", model_catalogue: "model_provider:manage", source_model: "model_provider:manage",
     model_remove: "model_provider:manage", job: "setup:manage", budget: "budget:manage", try: "workflow_run:start",
@@ -314,6 +322,7 @@ export const WRITE_OPS: Readonly<Record<string, Readonly<Record<string, WriteGat
     ci_workflows: "github:connect", build_database: "settings:update", build_speed: "settings:update",
     release_hold: "entitlement:manage", embedding_model: "model_provider:manage",
     embedding_model_check: "model_provider:manage", embedding_model_remove: "model_provider:manage",
+    agent_capacity: "project:update", claude_credential: "setup:manage",
     // Subscription Sign in (BOSSAPP-769): the same permission as POST /v1/setup/models.
     sign_in_start: "model_provider:manage", sign_in_code: "model_provider:manage",
     sign_in_cancel: "model_provider:manage",
@@ -401,6 +410,11 @@ export const WRITE_OPS: Readonly<Record<string, Readonly<Record<string, WriteGat
     "/v1/reflection/": "agent:update",
     // Activity › Feedback (lib/agent-feedback.ts, BOSSAPP-889): a person closes a record.
     "/v1/agent-feedback/": "agent:update",
+    // Govern › Where people decide (lib/decide.ts).
+    "/v1/decide/rules/": "approval_rule:manage",
+    "/v1/decide/apply": "approval_rule:manage",
+    "/v1/decide/understand": "work_item:manage",
+    "/v1/decide/replay": "self",
   },
 };
 
@@ -409,14 +423,32 @@ export const INLINE_WRITES: Readonly<Record<string, readonly WriteGate[]>> = {
   "app/agent-quick-create.tsx": ["agent:publish"],                 // POST /v1/agent-studio/templates/{id}/install
   "app/agent-ui.tsx": ["assistant:chat"],                          // /api/agent-thread, /api/agent clear
   "app/agents/create-wizard.tsx": ["agent:deploy"],               // POST /v1/agents/{role}/deployments and …/triggers
+  "app/agents/roster-bulk.tsx": ["agent:update"],                 // POST /v1/agents/roster-bulk
   "app/agents-on-this.tsx": ["work_item:manage"],                  // POST /v1/projects/{id}/agents
+  "app/app-data/screen.tsx": ["project:update"],                   // POST /v1/apps/{app}/data/{import,rows/...}
+  "app/build-home.tsx": ["project:create", "workflow_run:start"],  // POST /api/factory/{attachments,launch}
+  "app/builder/chat-plan.tsx": ["assistant:chat"],                 // POST /v1/builder/threads/*
+  "app/builder/element-select.tsx": ["preview:manage"],            // POST /v1/element-select/apply
+  "app/builder/field-acl.tsx": ["project:update"],                 // POST/PUT /v1/field-acl/apps*
+  "app/builder/freeze-paths.tsx": ["settings:update"],             // POST /v1/freeze-paths*
+  "app/builder/live-rules.tsx": ["policy:manage"],                 // POST /v1/live-action-rules*
+  "app/builder/preview-share.tsx": ["preview:manage"],             // POST /v1/preview-shares*
+  "app/builder/project-suite.tsx": ["project:update"],             // PUT/POST /v1/projects/{id}/suite/*
+  "app/builder/tenant-handoff.tsx": ["self"],                      // POST /v1/tenant-handoff (@authenticated)
   "app/default-agent-picker.tsx": ["work_item:manage"],            // POST /v1/projects/{id}/agents
   "app/ask-boss-hero.tsx": ["workflow:publish", "workflow_run:start", "discovery:create"], // apply, /api/builds, /api/discoveries
   "app/delivery-workflows-ui.tsx": ["workflow_schedule:manage", "workflow:create", "deployment:create", "deployment_target:manage"],
+  "app/design-system/screen.tsx": ["org:update", "project:create"], // PUT /v1/workspaces/{id}/design-system, POST …/apps
   "app/factory/legacy-build-parts.tsx": ["deployment:create", "deployment_target:manage"], // /api/app-deploy, retire
   "app/memory-ui.tsx": ["memory:manage"],                          // POST /v1/memory/{id}/{forget|review}
+  "app/models/compare.tsx": ["model_provider:manage"],             // POST /v1/model-compares
+  "app/playground/screen.tsx": ["assistant:chat"],                 // POST /v1/playground/runs
+  "app/projects/tab-settings.tsx": ["work_item:manage"],           // POST /api/project-agents
+  "app/prompts/promote.tsx": ["agent:create"],                     // POST /v1/prompts*
+  "app/provider-terms/screen.tsx": ["model_provider:manage"],      // POST /v1/provider-terms/*
   "app/run-report-ui.tsx": ["workflow_run:control", "workflow:publish"], // POST …/report, apply
   "app/sandboxes-ui.tsx": ["sandbox:exec"],                        // POST /v1/sandboxes/{id}/exec
+  "app/settings/residency-pin.tsx": ["project:update"],            // PUT/DELETE /v1/projects/{id}/residency-pins/{app}
   "app/setup/capacity-row.tsx": ["entitlement:manage"],            // /v1/entitlements/…
   "app/skills/skill-drawer.tsx": ["skill:manage", "agent_ability:assign"], // /api/skills enable/disable/delete, assign
   "app/skills/skill-history.tsx": ["skill:manage", "skill:invoke"], // /api/skill-supply restore/publish/cases/grade, run_tests

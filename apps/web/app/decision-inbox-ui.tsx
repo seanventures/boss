@@ -30,6 +30,7 @@ import { AlwaysAllowOption, alwaysAllowOffer } from "./always-allow-ui";
 import { parseForm } from "../lib/typed-form";
 import { SubmitButton } from "./submit-button";
 import { formatDateTime as formatDateTimeShared } from "../lib/datetime";
+import { LOCAL, useLocalTime } from "../lib/local-time";
 import { sentenceCut } from "../lib/decision-excerpt";
 import {
   DEFAULT_DECISION_INBOX_FILTER,
@@ -100,7 +101,7 @@ function formatDeadline(deadlineAt?: string): string {
 
 /** The card's deadline, labelled (a bare future date in the evidence row read as an unexplained
  *  timestamp): "Decide by …" before it, "Deadline passed …" after, nothing when there is none. */
-export function deadlineLabel(deadlineAt?: string | null, now: number = Date.now()): string {
+export function deadlineLabel(deadlineAt?: string | null, now: number = LOCAL.now()): string {
   if (!deadlineAt) return "";
   const at = Date.parse(deadlineAt);
   const when = formatDateTimeShared(deadlineAt, "");
@@ -1512,7 +1513,8 @@ export function DecisionCard({
     ? <a href={lines.more.href} data-testid="decision-status-more">{lines.more.label} ›</a>
     : detailsButton(`${lines.more.label} ›`, "decision-status-more");
   const detailsInLinks = lines.more.href ? detailsButton(open ? "Hide details" : "Details", "decision-details-toggle") : null;
-  const when = deadlineLabel(decision.deadlineAt);
+  const lt = useLocalTime();
+  const when = deadlineLabel(decision.deadlineAt, lt.now());
   const occurrences = typeof rec.occurrences === "number" ? rec.occurrences : 0;
   const autoApproved = isApproved && decision.approvedBy === "auto_approval";
 
