@@ -615,19 +615,44 @@ def test_an_agents_start_workflow_never_declares_a_new_app(engine, one_repo):
     assert 'if k != "new_app"' in inspect.getsource(main.start_code_task_endpoint)
 
 
-# ── A run started with new_app (#356's Command Center launch Into a project) ─────────────
+# ── A Command Center launch Into the project (ENT-FEAT-01's own door, end to end) ─────────
 
-def test_a_run_started_as_a_new_app_builds_from_main_past_another_apps_open_change(
-        client, engine, one_repo, panel, tmp_path):
-    """The composition the launch Into a project relies on: a workflow run started with
-    start_run(declared_new_app=True) (as factory_launch starts its Easy Mode run) hands
-    its build a declared new app, and the empty-checkout guard lets that build start on a
-    README-only main beside Recipe Box's and Neighborhood Board's unmerged branches — the same
-    checkout an undeclared build is refused on."""
+def _readme_only_main(tmp_path):
     import subprocess
 
+    tree = tmp_path / "main"
+    tree.mkdir()
+    for cmd in (["init", "-q"], ["config", "user.email", "t@example.invalid"],
+                ["config", "user.name", "t"]):
+        subprocess.run(["git", *cmd], cwd=tree, check=True)
+    (tree / "README.md").write_text("# northgate\n")
+    subprocess.run(["git", "add", "README.md"], cwd=tree, check=True)
+    return tree
+
+
+def _launched_build(client, engine, *, title, into):
+    """factory_launch.build_run as the launch calls it (spec-first: the Easy Mode workflow), then
+    the real runner until its build step has started the build."""
+    from boss_engine.services import factory_launch
+    from boss_engine.services.jobs import JobLeaseService
+
+    spec = {"title": title, "prompt": f"{title} for the street.", "spec_first": True,
+            "github_repo": f"{OWNER}/{SHARED}", "mode": "new_app", "id": "tpl_into",
+            **({"existing_project": True} if into else {})}
+    with engine.begin() as connection:
+        started = factory_launch.build_run(
+            connection, project_id=_project(), spec=spec, actor="ceo", settings=get_settings(),
+            jobs=JobLeaseService(get_settings()), reservation_id=f"rsv_{title[:6].lower()}")
+    return _built_approving_gates(client, engine, started["workflow_run_id"])[0]
+
+
+def test_a_template_launched_into_the_project_builds_from_main_past_its_other_apps(
+        client, engine, one_repo, panel, tmp_path):
+    """THE REPORTED FLOW: a template launched Into a project whose repository holds two apps'
+    unmerged changes (factory_launch, `existing_project`) -> its Easy Mode run -> the runner's
+    build step -> a build that says new_app -> the empty-checkout guard lets it start on the
+    README-only main. The same launch not Into the project (no mark) is refused there."""
     from boss_engine.services import app_scope, build_checkout
-    from boss_engine.services import workflows as wf
 
     with engine.begin() as connection:
         connection.execute(text(
@@ -643,50 +668,48 @@ def test_a_run_started_as_a_new_app_builds_from_main_past_another_apps_open_chan
         connection.execute(text(
             "UPDATE code_task_runs SET state = jsonb_build_object('impl_files', "
             "jsonb_build_array('app/index.js')) WHERE id IN (:a, :b)"), {"a": R_ROOT, "b": N_ROOT})
+    tree = _readme_only_main(tmp_path)
+
+    def guard(build):
+        fctx = build["finalize_ctx"]
+        with engine.begin() as connection:
+            return build_checkout.problem(
+                connection, tree, owner=OWNER, repo=SHARED, run_id=build["id"],
+                base_branch="main", app_id=str(fctx.get("app_id") or ""),
+                new_app=app_scope.declared_new_app(fctx))
+
+    into = _launched_build(client, engine, title="Parking Rota", into=True)
+    assert into["finalize_ctx"].get("new_app") is True
+    assert _clones_shared(engine, into["id"]) == "main"
+    assert guard(into) is None
+
+    control = _launched_build(client, engine, title="Garden Swap", into=False)
+    assert "new_app" not in control["finalize_ctx"]
+    refused = guard(control)
+    assert refused and f"boss/code/{R_ROOT}" in refused
+
+
+def test_start_run_drops_a_callers_new_app_and_honours_only_the_declaration(client, engine,
+                                                                            one_repo):
+    from boss_engine.services import workflows as wf
+
     installed = client.post("/v1/delivery-workflows/catalogue/install",
                             json={"project_id": _project(), "actor": "ceo"})
     assert installed.status_code == 200, installed.text
     with engine.begin() as connection:
-        running = wf.running_version(connection, _project(), "minor_feature")
-        # A caller's `new_app` in the input is dropped for every caller...
-        forged = wf.start_run(
-            connection, project_id=_project(), actor="ceo",
-            input_data={"title": "Forged", "directive": "x", "repository": f"{OWNER}/{SHARED}",
-                        "new_app": True},
-            dedupe_key="twoapps:forged", workflow_version_id=str(running["version_id"]))
-        forged_input = connection.execute(text("SELECT input FROM workflow_runs WHERE id = :r"),
-                                          {"r": forged["id"]}).scalar()
-        assert "new_app" not in forged_input
-        # ...and only the door's own declaration writes it.
-        run = wf.start_run(
-            connection, project_id=_project(), actor="ceo",
-            input_data={"title": "Parking Rota", "directive": "A parking rota for the street.",
-                        "repository": f"{OWNER}/{SHARED}"},
-            dedupe_key="twoapps:launch-into", workflow_version_id=str(running["version_id"]),
-            declared_new_app=True)
-    built = _built_approving_gates(client, engine, run["id"])
-    fctx = built[0]["finalize_ctx"]
-    assert fctx.get("new_app") is True
-    assert _clones_shared(engine, built[0]["id"]) == "main"
-
-    # The checkout it clones: main holds a README only.
-    tree = tmp_path / "main"
-    tree.mkdir()
-    for cmd in (["init", "-q"], ["config", "user.email", "t@example.invalid"],
-                ["config", "user.name", "t"]):
-        subprocess.run(["git", *cmd], cwd=tree, check=True)
-    (tree / "README.md").write_text("# northgate\n")
-    subprocess.run(["git", "add", "README.md"], cwd=tree, check=True)
-    with engine.begin() as connection:
-        declared = build_checkout.problem(
-            connection, tree, owner=OWNER, repo=SHARED, run_id=built[0]["id"],
-            base_branch="main", app_id=str(fctx.get("app_id") or ""),
-            new_app=app_scope.declared_new_app(fctx))
-        undeclared = build_checkout.problem(
-            connection, tree, owner=OWNER, repo=SHARED, run_id=built[0]["id"],
-            base_branch="main", app_id=str(fctx.get("app_id") or ""), new_app=False)
-    assert declared is None
-    assert undeclared and f"boss/code/{R_ROOT}" in undeclared
+        version = str(wf.running_version(connection, _project(), "minor_feature")["version_id"])
+        forged = wf.start_run(connection, project_id=_project(), actor="ceo",
+                              input_data={"title": "Forged", "directive": "x", "new_app": True},
+                              dedupe_key="twoapps:forged", workflow_version_id=version)
+        declared = wf.start_run(connection, project_id=_project(), actor="ceo",
+                                input_data={"title": "Declared", "directive": "x"},
+                                dedupe_key="twoapps:declared", workflow_version_id=version,
+                                declared_new_app=True)
+        inputs = dict(connection.execute(text(
+            "SELECT id, input FROM workflow_runs WHERE id IN (:a, :b)"),
+            {"a": forged["id"], "b": declared["id"]}).all())
+    assert "new_app" not in inputs[forged["id"]]
+    assert inputs[declared["id"]].get("new_app") is True
 
 
 def test_only_a_persons_request_declares_a_new_app_at_an_http_door():

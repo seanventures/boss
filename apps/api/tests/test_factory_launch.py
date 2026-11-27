@@ -1086,7 +1086,8 @@ def test_an_into_launch_held_for_consent_resumes_in_the_same_project_and_reposit
 def test_an_into_launch_tells_the_build_it_is_a_new_app(engine, monkeypatch):
     """A template built into an existing project (spec["existing_project"], the one mark this path
     sets) is a NEW app in that project, on both start paths: the Easy Mode run's input and the
-    direct code-task build's finalize context say new_app."""
+    direct code-task build's finalize context say new_app. The run's is DECLARED through
+    start_run (workflows.NEW_APP_INPUT is server-only: a caller's input never carries it)."""
     from boss_engine.services import code_task_service, factory_launch, workflow_catalogue, workflows
 
     seen: dict = {}
@@ -1103,7 +1104,8 @@ def test_an_into_launch_tells_the_build_it_is_a_new_app(engine, monkeypatch):
                                  settings=get_settings(), jobs=None, reservation_id="res_x")
         factory_launch.build_run(connection, project_id="default", spec={**into, "spec_first": False}, actor="ceo",
                                  settings=get_settings(), jobs=None, reservation_id="res_y")
-    assert seen["run"]["input_data"]["new_app"] is True
+    assert seen["run"]["declared_new_app"] is True
+    assert "new_app" not in seen["run"]["input_data"]
     assert seen["task"]["finalize_ctx"]["new_app"] is True
     # An ordinary launch makes its own project: no mark, no key.
     seen.clear()

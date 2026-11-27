@@ -885,9 +885,6 @@ def spec_first_run(
         "repository": github or local,
         # "Review the plan first": stricter, so a plain input (the panel's PRD waits).
         **({"spec_approval": SPEC_BY_PERSON} if review_first else {}),
-        # A template built into an existing project (spec["existing_project"]) is a NEW app in
-        # that project, never a change to the app already there.
-        **({"new_app": True} if spec.get("existing_project") else {}),
     }
     if not spec.get("existing_project"):
         _staging_ships_without_asking(connection, project_id, actor)
@@ -895,6 +892,10 @@ def spec_first_run(
         connection, project_id=project_id, actor=actor, input_data=run_input,
         dedupe_key=f"easy-mode:{project_id}:{reservation_id}",
         workflow_version_id=str(running["version_id"]),
+        # A template built into an existing project (spec["existing_project"], server-set) is a
+        # NEW app in that project, never a change to the app already there: declared through
+        # start_run (workflows.NEW_APP_INPUT is server-only), whoever was allowed to launch it.
+        declared_new_app=bool(spec.get("existing_project")),
         # THE START APPROVES THE PRD — server-only, with who started it, and only when that
         # person may approve a PRD here (an enforced request asks the PDP).
         spec_approved_by_start=None if review_first else _start_approver(connection, project_id, actor))
