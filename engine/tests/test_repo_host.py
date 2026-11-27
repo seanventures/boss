@@ -38,8 +38,10 @@ def test_factory_defaults_to_github_zero_behavior_change():
 def test_factory_dispatches_and_rejects_unknown():
     assert make_repo_host(_settings(), host="bitbucket").kind == "bitbucket"
     assert make_repo_host(_settings(BOSS_TARGET_REPO_HOST="bitbucket")).kind == "bitbucket"
+    assert make_repo_host(_settings(), host="gitlab").kind == "gitlab"
+    assert make_repo_host(_settings(), host="azure_devops").kind == "azure_devops"
     with pytest.raises(ValueError, match="unsupported repo host"):
-        make_repo_host(_settings(), host="gitlab")
+        make_repo_host(_settings(), host="perforce")
 
 
 def test_resolve_kind_spec_wins_over_settings():
@@ -57,8 +59,11 @@ def test_clone_url_forms():
     assert clone_url_for("bitbucket", "ws", "slug", "T", web_base="https://github.com") == \
         "https://x-token-auth:T@bitbucket.org/ws/slug.git"
     assert clone_url_for("bitbucket", "ws", "slug", web_base="https://github.com") == "https://bitbucket.org/ws/slug.git"
+    assert clone_url_for("gitlab", "grp", "app", "T", web_base="https://gitlab.com") == "https://oauth2:T@gitlab.com/grp/app.git"
+    assert clone_url_for("azure_devops", "org/proj", "repo", "T", web_base="https://dev.azure.com") == \
+        "https://pat:T@dev.azure.com/org/proj/_git/repo"
     with pytest.raises(ValueError):
-        clone_url_for("gitlab", "o", "r", web_base="https://github.com")
+        clone_url_for("perforce", "o", "r", web_base="https://github.com")
 
 
 # --- bitbucket adapter (stubbed wire) -----------------------------------------

@@ -35,6 +35,24 @@ _BITBUCKET_EVENT_TYPES = {
     "pullrequest:fulfilled": "bitbucket.pr_merged",
     "pullrequest:rejected": "bitbucket.pr_declined",
 }
+# GitLab + Azure DevOps (BOSSAPP-937 / Kiro gap 4)
+_GITLAB_EVENT_TYPES = {
+    "merge_request:open": "gitlab.mr_opened",
+    "merge_request:reopen": "gitlab.mr_opened",
+    "merge_request:update": "gitlab.mr_updated",
+    "merge_request:merge": "gitlab.mr_merged",
+    "merge_request:close": "gitlab.mr_closed",
+    "note:created": "gitlab.comment",
+    "pipeline:finished": "gitlab.pipeline",
+    "push:push": "gitlab.push",
+}
+_AZURE_DEVOPS_EVENT_TYPES = {
+    "git.pullrequest.created": "azure_devops.pr_opened",
+    "git.pullrequest.updated": "azure_devops.pr_updated",
+    "git.pullrequest.merged": "azure_devops.pr_merged",
+    "ms.vss-code.git-pullrequest-comment-event": "azure_devops.pr_comment",
+    "git.push": "azure_devops.push",
+}
 _GITHUB_RECONCILIATION_EVENTS = {
     "push",
     "create",
@@ -837,6 +855,10 @@ class InboundWebhookService:
             fallback = self.settings.github_webhook_secret
         if source == "bitbucket" and getattr(self.settings, "bitbucket_webhook_secret", None):
             fallback = self.settings.bitbucket_webhook_secret
+        if source == "gitlab" and getattr(self.settings, "gitlab_webhook_secret", None):
+            fallback = self.settings.gitlab_webhook_secret
+        if source == "azure_devops" and getattr(self.settings, "azure_devops_webhook_secret", None):
+            fallback = self.settings.azure_devops_webhook_secret
         return self._resolve_config_secret(
             configured.get(source, fallback)
         )
@@ -894,9 +916,15 @@ class InboundWebhookService:
                 "duplicate": False,
             }
         audit_project_id = self.settings.default_project_id
-        delivery_key = (headers.get("x-github-delivery", "").strip()
-                        or headers.get("x-request-uuid", "").strip()      # Bitbucket delivery id
-                        or headers.get("x-hook-uuid", "").strip())
+        delivery_key = (
+            headers.get("x-github-delivery", "").strip()
+            or headers.get("x-request-uuid", "").strip()      # Bitbucket delivery id
+            or headers.get("x-hook-uuid", "").strip()
+            or headers.get("x-gitlab-event-uuid", "").strip()  # GitLab delivery id
+            or headers.get("x-gitlab-webhook-uuid", "").strip()
+            or headers.get("x-vss-activityid", "").strip()     # Azure DevOps delivery id
+            or headers.get("x-boss-delivery", "").strip()
+        )
         gh_adapter = None
         gh_conn = None
         gh_req = None
@@ -931,6 +959,64 @@ class InboundWebhookService:
                     audit_project_id,
                     "webhook.inbound.rejected",
                     normalized_source or "unknown",
+                    "webhook_delivery",
+                    delivery_key or "missing",
+                    {
+                        "source": normalized_source,
+                        "delivery_id": delivery_key or None,
+                        "reason": "invalid_signature",
+                    },
+                )
+                return {
+                    "status": "rejected",
+                    "source": normalized_source,
+                    "delivery_id": delivery_key or None,
+                    "duplicate": False,
+                }
+        elif normalized_source == "gitlab":
+            # GitLab authenticates webhooks via X-Gitlab-Token (constant-time comparison) or HMAC.
+            gl_token = headers.get("x-gitlab-token", "").strip()
+            signature = (headers.get("x-hub-signature-256", "") or headers.get("x-hub-signature", ""))
+            expected = "sha256=" + hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+            token_ok = bool(gl_token and compare_digest(gl_token, secret))
+            hmac_ok = bool(signature and compare_digest(signature, expected))
+            if not (token_ok or hmac_ok):
+                emit_event(
+                    connection,
+                    audit_project_id,
+                    "webhook.inbound.rejected",
+                    normalized_source,
+                    "webhook_delivery",
+                    delivery_key or "missing",
+                    {
+                        "source": normalized_source,
+                        "delivery_id": delivery_key or None,
+                        "reason": "invalid_signature",
+                    },
+                )
+                return {
+                    "status": "rejected",
+                    "source": normalized_source,
+                    "delivery_id": delivery_key or None,
+                    "duplicate": False,
+                }
+        elif normalized_source == "azure_devops":
+            # Azure DevOps supports HMAC (X-Hub-Signature-256 / X-BOSS-Signature) or shared token header.
+            az_token = headers.get("x-azure-devops-token", "").strip()
+            signature = (
+                headers.get("x-hub-signature-256", "")
+                or headers.get("x-boss-signature", "")
+                or headers.get("x-hub-signature", "")
+            )
+            expected = "sha256=" + hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+            token_ok = bool(az_token and compare_digest(az_token, secret))
+            hmac_ok = bool(signature and compare_digest(signature, expected))
+            if not (token_ok or hmac_ok):
+                emit_event(
+                    connection,
+                    audit_project_id,
+                    "webhook.inbound.rejected",
+                    normalized_source,
                     "webhook_delivery",
                     delivery_key or "missing",
                     {
@@ -1060,6 +1146,34 @@ class InboundWebhookService:
             provider_event, _, action = event_key.partition(":")
             repo = str((payload.get("repository") or {}).get("full_name") or "")
             own_sender = False
+        elif normalized_source == "gitlab":
+            provider_event = str(
+                payload.get("object_kind")
+                or payload.get("event_type")
+                or headers.get("x-gitlab-event", "")
+            ).strip().lower()
+            attrs = payload.get("object_attributes") or {}
+            action = str(
+                attrs.get("action")
+                or ("created" if provider_event == "note" else "push" if provider_event == "push" else attrs.get("status") or "")
+            ).strip().lower()
+            if provider_event == "pipeline" and attrs.get("status") in {"success", "failed", "canceled"}:
+                action = "finished"
+            proj = payload.get("project") or {}
+            repo = str(proj.get("path_with_namespace") or "")
+            own_sender = False
+        elif normalized_source == "azure_devops":
+            provider_event = str(payload.get("eventType") or "").strip().lower()
+            resource = payload.get("resource") or {}
+            action = str(resource.get("status") or provider_event.rsplit(".", 1)[-1]).strip().lower()
+            az_repo = resource.get("repository") or {}
+            az_proj = (az_repo.get("project") or {}).get("name") or ""
+            az_name = az_repo.get("name") or ""
+            repo = str(
+                az_repo.get("full_name")
+                or (f"{az_proj}/{az_name}" if az_proj and az_name else az_name)
+            )
+            own_sender = False
         elif normalized_source == "github":
             from ..connectors.intake.contract import ParseRefused, StoredRaw
 
@@ -1117,6 +1231,10 @@ class InboundWebhookService:
         community_event_type = None
         if normalized_source == "bitbucket":
             community_event_type = _BITBUCKET_EVENT_TYPES.get(f"{provider_event}:{action}")
+        elif normalized_source == "gitlab":
+            community_event_type = _GITLAB_EVENT_TYPES.get(f"{provider_event}:{action}")
+        elif normalized_source == "azure_devops":
+            community_event_type = _AZURE_DEVOPS_EVENT_TYPES.get(provider_event)
         elif not gh_handshake and action in _GITHUB_COMMUNITY_ACTIONS.get(provider_event, set()):
             community_event_type = _GITHUB_COMMUNITY_EVENT_TYPES[provider_event]
         legacy_routed = (
@@ -1222,6 +1340,10 @@ class InboundWebhookService:
         )
         if normalized_source == "bitbucket":
             normalized = self._normalize_bitbucket_payload(provider_event, action, payload)
+        elif normalized_source == "gitlab":
+            normalized = self._normalize_gitlab_payload(provider_event, action, payload)
+        elif normalized_source == "azure_devops":
+            normalized = self._normalize_azure_devops_payload(provider_event, payload)
         else:
             normalized = self._normalize_github_payload(provider_event, payload)
         event_id = emit_event(
@@ -1328,6 +1450,72 @@ class InboundWebhookService:
             "author": ((pr.get("author") or {}).get("nickname")) or "",
             "merge_commit": (((pr.get("merge_commit") or {}).get("hash")) or ""),
         }
+
+    @staticmethod
+    def _normalize_gitlab_payload(
+        provider_event: str, action: str, payload: dict
+    ) -> dict:
+        """Canonical PR/event shape from a GitLab webhook payload (BOSSAPP-937)."""
+        attrs = payload.get("object_attributes") or {}
+        user = payload.get("user") or {}
+        if provider_event == "merge_request":
+            return {
+                "kind": "pull_request",
+                "action": action,
+                "merged": action == "merge" or str(attrs.get("state") or "").lower() == "merged",
+                "number": attrs.get("iid"),
+                "title": attrs.get("title") or "",
+                "state": str(attrs.get("state") or "").lower(),
+                "source_branch": attrs.get("source_branch") or "",
+                "destination_branch": attrs.get("target_branch") or "",
+                "url": attrs.get("url") or "",
+                "author": user.get("username") or "",
+                "merge_commit": attrs.get("merge_commit_sha") or "",
+            }
+        if provider_event == "note":
+            mr = payload.get("merge_request") or {}
+            return {
+                "kind": "comment",
+                "action": "created",
+                "number": mr.get("iid"),
+                "body": attrs.get("note") or "",
+                "url": attrs.get("url") or "",
+                "author": user.get("username") or "",
+            }
+        return {"kind": provider_event, "action": action}
+
+    @staticmethod
+    def _normalize_azure_devops_payload(
+        provider_event: str, payload: dict
+    ) -> dict:
+        """Canonical PR/event shape from an Azure DevOps service hook payload (BOSSAPP-937)."""
+        resource = payload.get("resource") or {}
+        if provider_event.startswith("git.pullrequest."):
+            status = str(resource.get("status") or "").lower()
+            return {
+                "kind": "pull_request",
+                "action": provider_event.rsplit(".", 1)[-1],
+                "merged": provider_event == "git.pullrequest.merged" or status == "completed",
+                "number": resource.get("pullRequestId"),
+                "title": resource.get("title") or "",
+                "state": status,
+                "source_branch": str(resource.get("sourceRefName") or "").removeprefix("refs/heads/"),
+                "destination_branch": str(resource.get("targetRefName") or "").removeprefix("refs/heads/"),
+                "url": resource.get("url") or "",
+                "author": ((resource.get("createdBy") or {}).get("uniqueName")) or "",
+                "merge_commit": ((resource.get("lastMergeCommit") or {}).get("commitId")) or "",
+            }
+        if provider_event == "ms.vss-code.git-pullrequest-comment-event":
+            pr = resource.get("pullRequest") or {}
+            comment = resource.get("comment") or {}
+            return {
+                "kind": "comment",
+                "action": "created",
+                "number": pr.get("pullRequestId"),
+                "body": comment.get("content") or "",
+                "author": ((comment.get("author") or {}).get("uniqueName")) or "",
+            }
+        return {"kind": provider_event, "action": provider_event.rsplit(".", 1)[-1]}
 
     @staticmethod
     def _normalize_github_payload(

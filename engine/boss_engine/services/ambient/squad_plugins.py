@@ -237,13 +237,178 @@ def convene_panel(connection: Connection, item: Mapping[str, Any], *,
     return {"kind": "meeting", "ref": meeting_id}
 
 
-#: action -> what carries it out (anything else is decided here and executed by its owner
-#: stream: SRE mitigation (910), labels and nudges (904)).
-EXECUTORS = {"start_workflow": launch_workflow, "open_draft_pr": launch_workflow,
-             "convene_meeting": convene_panel}
+#: Reversible actions a squad may execute directly inside the compliance boundary (BOSSAPP-935).
+#: Every action on ``decide_list.AMBIENT_ACTIONS`` (``task_classes.ALWAYS_A_PERSON``: merge,
+#: deploy_prod, send_external, pay) is strictly excluded and remains human-only.
+REVERSIBLE_SQUAD_ACTIONS: frozenset[str] = frozenset(
+    k
+    for k, act in tc.ACTIONS.items()
+    if not act.always_a_person and act.reversibility in ("reversible", "compensable")
+)
+
+
+def execute_reversible_action(
+    connection: Connection,
+    item: Mapping[str, Any],
+    *,
+    squad: Mapping[str, Any],
+    proposal: Mapping[str, Any],
+    decision: Optional[Mapping[str, Any]],
+    launchers: Optional[Launchers] = None,
+) -> dict[str, Any]:
+    """Execute any reversible ambient action inside the compliance boundary (BOSSAPP-935):
+    records a deduped governed Receipt + board handoff + audit event + undo plan, and
+    delegates to ``launchers.execute_action`` when the launcher supplies an adapter hook.
+    Never executes an action on the Where people decide list (``ALWAYS_A_PERSON``)."""
+    from ._common import emit, iso, now
+    from ..receipts import ReceiptService
+
+    body = proposal.get("body") or {}
+    action_key = str(body.get("action") or "")
+    act = tc.action(action_key)
+    if act.always_a_person:
+        raise PermissionError(
+            f"{act.title} ({act.key}) is on the Where people decide compliance boundary "
+            "and may never be executed autonomously by a squad."
+        )
+    p = packet(connection, item, squad=squad, proposal=proposal, decision=decision)
+    lead = squad["lead"]
+    summary = clean_text(body.get("summary") or f"Executed {act.title}", 240)
+    undo = body.get("undo") or {"action": f"reverse {act.key}"}
+    provider_result: dict[str, Any] = {}
+    if launchers is not None and hasattr(launchers, "execute_action"):
+        provider_result = launchers.execute_action(
+            connection,
+            project_id=item["project_id"],
+            actor=party_id(lead),
+            action=act.key,
+            summary=summary,
+            packet=p,
+            authority=_authority(item, decision),
+        )
+        if provider_result.get("error"):
+            why = str(provider_result["error"])[:300]
+            squad_memory.note(
+                connection,
+                item["id"],
+                actor=lead,
+                tried_and_failed=f"{act.key}: {why}",
+            )
+            collab.post(
+                connection,
+                item["id"],
+                kind="finding",
+                sender="boss",
+                body={"summary": f"Could not execute {act.title}: {why}"},
+            )
+            return {"error": why}
+
+    # Apply canonical local effects for reversible board/item actions
+    extra: dict[str, Any] = {}
+    if act.key == "label":
+        label_name = clean_text(body.get("label") or body.get("summary") or item["task_class"], 60)
+        extra["label"] = label_name
+    elif act.key == "silence_rule":
+        from datetime import timedelta
+
+        extra["expires_at"] = iso(now() + timedelta(hours=1))
+    elif act.key == "quarantine_test":
+        extra["quarantined"] = True
+    elif act.key == "nudge":
+        extra["nudged"] = body.get("to") or squad["lead"]
+
+    # Record a governed Receipt with a unique dedupe_key for every reversible side effect.
+    receipt_id: Optional[str] = None
+    act_id = (decision or {}).get("act_id") or proposal.get("id") or item["id"]
+    dedupe_key = f"ambient_squad:{item['id']}:{act_id}:{act.key}"
+    tenancy = connection.execute(
+        text(
+            "SELECT w.org_id, p.workspace_id FROM projects p "
+            "JOIN workspaces w ON w.id = p.workspace_id WHERE p.id = :p"
+        ),
+        {"p": item["project_id"]},
+    ).mappings().first()
+    if tenancy is not None:
+        receipt, _ = ReceiptService().record_completed(
+            connection,
+            str(tenancy["org_id"]),
+            str(tenancy["workspace_id"]),
+            item["project_id"],
+            dedupe_key,
+            f"ambient.squad.{act.key}",
+            f"work_item:{item['id']}",
+            {
+                "action": act.key,
+                "summary": summary,
+                "undo": undo,
+                "reversibility": act.reversibility,
+                **extra,
+                **provider_result,
+            },
+            provider_ref=str(provider_result.get("ref") or f"squad:{act.key}:{act_id}"),
+        )
+        receipt_id = str(receipt["id"])
+
+    collab.post(
+        connection,
+        item["id"],
+        kind="finding",
+        sender=lead,
+        body={
+            "summary": f"{act.title}: {summary}",
+            "action": act.key,
+            "undo": undo,
+            **({"receipt_id": receipt_id} if receipt_id else {}),
+            **extra,
+        },
+    )
+    squad_memory.note(
+        connection,
+        item["id"],
+        actor=lead,
+        phase=f"Executed {act.title}",
+        artifact=receipt_id or act_id,
+    )
+    emit(
+        connection,
+        item["project_id"],
+        "ambient.squad_action_executed",
+        lead,
+        "work_item",
+        item["id"],
+        {
+            "action": act.key,
+            "act_id": act_id,
+            "receipt_id": receipt_id,
+            "reversibility": act.reversibility,
+            "undo": undo,
+            **extra,
+        },
+    )
+    return {
+        "kind": "reversible_action",
+        "action": act.key,
+        "ref": receipt_id or f"squad:{act.key}:{act_id}",
+        "receipt_id": receipt_id,
+        "undo": undo,
+        **extra,
+        **provider_result,
+    }
+
+
+#: action -> what carries it out (BOSSAPP-935: squads may execute EVERY reversible action inside
+#: the compliance boundary; the Where people decide list — ALWAYS_A_PERSON — stays human-only).
+EXECUTORS: dict[str, Any] = {
+    **{k: execute_reversible_action for k in sorted(REVERSIBLE_SQUAD_ACTIONS)},
+    "start_workflow": launch_workflow,
+    "open_draft_pr": launch_workflow,
+    "convene_meeting": convene_panel,
+}
 
 
 def executes(action: str) -> bool:
+    if action in tc.ALWAYS_A_PERSON:
+        return False
     return action in EXECUTORS
 
 

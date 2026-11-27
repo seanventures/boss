@@ -99,6 +99,33 @@ class SweepBody(Body):
     only: list[str] = Field(default_factory=list, max_length=20)
 
 
+class AreaGoalCreateBody(Body):
+    title: str = Field(min_length=1, max_length=240)
+    description: str = Field(default="", max_length=1200)
+    cadence_hours: int = Field(default=24, ge=1, le=720)
+    milestones: list[dict[str, Any]] = Field(default_factory=list, max_length=20)
+
+
+class AreaReadingBody(Body):
+    value: float
+    note: str = Field(default="", max_length=500)
+    evidence: list[dict[str, Any]] = Field(default_factory=list, max_length=20)
+
+
+class AreaHeartbeatBody(Body):
+    readings: list[dict[str, Any]] = Field(default_factory=list, max_length=20)
+    status: Optional[str] = Field(default=None, pattern="^(ok|attention|degraded|blocked)$")
+    summary: Optional[str] = Field(default=None, max_length=600)
+    proposed_actions: list[dict[str, Any]] = Field(default_factory=list, max_length=20)
+
+
+class AreaWeeklyReportBody(Body):
+    area_key: Optional[str] = Field(default=None, max_length=40)
+    period: str = Field(default="weekly", pattern="^(weekly|daily_digest)$")
+    days: int = Field(default=7, ge=1, le=90)
+    post_to_chat: bool = False
+
+
 def build_ambient_router(*, engine, settings: Callable[[], Any],
                          require_reader: Callable[..., None],
                          require_write_actor: Callable[..., str],
@@ -382,5 +409,124 @@ def build_ambient_router(*, engine, settings: Callable[[], Any],
         with begin(engine) as c:
             require_reader(c, project_id)
             return read_model.scorecard(c, project_id, days=days, task_class=task_class)
+
+    # ── goal-owning area agents: goals, milestones, readings, heartbeats, weekly reports ─────
+    @router.get("/v1/ambient/area-agents")
+    @permit(P.WORK_ITEM_READ, scope=Scope.project(query="project_id"))
+    def list_area_agents(project_id: str) -> dict:
+        from boss_engine.services.ambient import area_agents
+
+        with begin(engine) as c:
+            require_reader(c, project_id)
+            return area_agents.project_overview(c, project_id)
+
+    @router.post("/v1/ambient/area-agents/seed")
+    @permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"))
+    def seed_area_agents(payload: Body) -> dict:
+        from boss_engine.services.ambient import area_agents
+
+        with begin(engine) as c:
+            actor = require_write_actor(c, payload.project_id, payload.actor, "decision_resolve")
+            created = area_agents.seed_default_area_goals(c, payload.project_id, actor=actor)
+            return {"created": created, "overview": area_agents.project_overview(c, payload.project_id)}
+
+    @router.post("/v1/ambient/area-agents/{area_key}/goals")
+    @permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"))
+    def create_area_agent_goal(area_key: str, payload: AreaGoalCreateBody) -> dict:
+        from boss_engine.services.ambient import area_agents
+
+        with begin(engine) as c:
+            actor = require_write_actor(c, payload.project_id, payload.actor, "decision_resolve")
+            return {
+                "goal": _errors(
+                    lambda: area_agents.create_area_goal(
+                        c,
+                        payload.project_id,
+                        area_key,
+                        title=payload.title,
+                        description=payload.description,
+                        cadence_hours=payload.cadence_hours,
+                        milestones=payload.milestones,
+                        actor=actor,
+                    )
+                )
+            }
+
+    @router.post("/v1/ambient/area-agents/milestones/{milestone_id}/readings")
+    @permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"))
+    def post_area_milestone_reading(milestone_id: str, payload: AreaReadingBody) -> dict:
+        from boss_engine.services.ambient import area_agents
+
+        with begin(engine) as c:
+            actor = require_write_actor(c, payload.project_id, payload.actor, "decision_resolve")
+            return _errors(
+                lambda: area_agents.record_reading(
+                    c,
+                    payload.project_id,
+                    milestone_id,
+                    value=payload.value,
+                    recorded_by=actor,
+                    note=payload.note,
+                    evidence=payload.evidence,
+                )
+            )
+
+    @router.post("/v1/ambient/area-agents/{area_key}/heartbeat")
+    @permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"))
+    def post_area_heartbeat(area_key: str, payload: AreaHeartbeatBody) -> dict:
+        from boss_engine.services.ambient import area_agents
+
+        with begin(engine) as c:
+            actor = require_write_actor(c, payload.project_id, payload.actor, "decision_resolve")
+            return _errors(
+                lambda: area_agents.run_heartbeat(
+                    c,
+                    payload.project_id,
+                    area_key,
+                    actor=actor,
+                    readings=payload.readings,
+                    status=payload.status,
+                    summary=payload.summary,
+                    proposed_actions=payload.proposed_actions,
+                )
+            )
+
+    @router.post("/v1/ambient/area-agents/reports/weekly")
+    @permit(P.WORK_ITEM_MANAGE, scope=Scope.project(body="project_id"))
+    def post_area_weekly_report(payload: AreaWeeklyReportBody) -> dict:
+        from boss_engine.services.ambient import area_agents
+
+        with begin(engine) as c:
+            actor = require_write_actor(c, payload.project_id, payload.actor, "decision_resolve")
+            return {
+                "report": _errors(
+                    lambda: area_agents.generate_weekly_report(
+                        c,
+                        payload.project_id,
+                        area_key=payload.area_key,
+                        period=payload.period,
+                        days=payload.days,
+                        actor=actor,
+                        post_to_chat=payload.post_to_chat,
+                    )
+                )
+            }
+
+    @router.get("/v1/ambient/area-agents/reports")
+    @permit(P.WORK_ITEM_READ, scope=Scope.project(query="project_id"))
+    def get_area_reports(
+        project_id: str,
+        area_key: Optional[str] = None,
+        limit: int = Query(20, ge=1, le=100),
+    ) -> dict:
+        from boss_engine.services.ambient import area_agents
+
+        with begin(engine) as c:
+            require_reader(c, project_id)
+            return {
+                "reports": area_agents.list_reports(
+                    c, project_id, area_key=area_key, limit=limit
+                )
+            }
 
     return router
