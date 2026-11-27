@@ -37,16 +37,20 @@ def test_and_the_environment_path_is_untouched():
 
 
 def test_a_pasted_token_is_written_through_not_stored_in_a_column():
-    """The value leaves BOSS inside put_secret; what the connection keeps is a reference."""
+    """The value leaves BOSS inside the backend's put; what the connection keeps is a reference.
+    BOSSAPP-1286: the slot is the connection's own (ghconn-<random ref id>), never a name built
+    from the project and label, so a second account (or another project) never overwrites it."""
     import inspect
 
     from boss_engine.services import github_connections
 
-    source = inspect.getsource(github_connections.GitHubConnectionService.store_token_credential)
-    assert "put_secret(" in source
-    assert "stored['ref_key']" in source
-    # Not a fixed name: a second GitHub account must not silently overwrite the first's token.
-    assert "slug" in source
+    service = github_connections.GitHubConnectionService
+    store = inspect.getsource(service.store_token_credential)
+    write = inspect.getsource(service._write_connection_slot)  # noqa: SLF001
+    assert "_write_connection_slot(" in store
+    assert ".put(key, value)" in write and "INSERT INTO secret_refs" in write
+    assert "connection_slot_key(ref_id)" in write and "uuid4()" in write
+    assert "put_secret(" not in store and "ref_key_for" not in write
 
 
 def test_the_wizard_picks_a_secret_store_that_works_here(monkeypatch):
