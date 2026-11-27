@@ -37,6 +37,24 @@ from typing import Any, Optional
 
 from sqlalchemy.engine import Connection
 
+#: Read-only Knowledge Graph tools exposed to build harnesses and Quick Lane sessions
+#: (BOSSAPP-796 / PRINCIPAL_ENGINEER_INTELLIGENCE.md §3.A). Read-only so no write credential
+#: boundary is crossed.
+READONLY_KG_TOOLS: tuple[str, ...] = (
+    "kg_callers",
+    "kg_blast_radius",
+    "kg_precedent",
+    "kg_why",
+    "kg_symbol",
+    "kg_search",
+)
+
+
+def readonly_kg_tool_names(server_name: str = "boss_kg") -> list[str]:
+    """Return MCP tool identifiers for read-only KG tools exposed inside build harnesses."""
+    prefix = _cli_name(server_name)
+    return [f"mcp__{prefix}__{tool}" for tool in READONLY_KG_TOOLS]
+
 
 @dataclass
 class HarnessMcp:
