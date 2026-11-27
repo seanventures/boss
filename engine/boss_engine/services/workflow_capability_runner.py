@@ -6328,7 +6328,8 @@ def _terminal_evidence(
             # THE PANEL'S PRD, now approved: the same evidence the meeting gives, plus who
             # approved it, so the build is briefed from the spec a person signed.
             row = connection.execute(
-                text("SELECT m.id AS meeting_run_id, d.approved_by FROM decisions d "
+                text("SELECT m.id AS meeting_run_id, d.approved_by, d.resolution_note, "
+                     "m.state->>'build_readiness_question' AS readiness_question FROM decisions d "
                      "LEFT JOIN meeting_runs m ON m.decision_id = d.id WHERE d.id = :d "
                      "ORDER BY m.created_at DESC LIMIT 1"),
                 {"d": awaited_id},
@@ -6337,6 +6338,13 @@ def _terminal_evidence(
                 return {}
             evidence = (_terminal_evidence(connection, "meeting", row["meeting_run_id"])
                         if row["meeting_run_id"] else {})
+            # THE REQUESTER'S ANSWER TO THE PANEL'S BLOCKING QUESTION travels with the spec.
+            if evidence.get("prd_markdown"):
+                from .meeting_service import with_requester_answer
+
+                evidence["prd_markdown"] = with_requester_answer(
+                    evidence["prd_markdown"], row["readiness_question"],
+                    row["resolution_note"])[:_PRD_CHARS]
             return {**evidence, "spec_decision_id": awaited_id,
                     "spec_approved_by": row["approved_by"]}
         if kind == "meeting":

@@ -560,3 +560,36 @@ def test_panel_question_holds_build_even_when_the_start_covered_spec_approval(
     assert (row["status"], row["question"]) == ("pending", question)
     assert row["recommendation"]["explicit_stop"] == question
     assert not _builds(engine, workflow)
+    # THE PERSON'S ANSWER IS THE BUILD'S: approving the card with the answer starts the build,
+    # and the brief carries the question and the answer, not the unanswered spec.
+    approved = client.post(f"/v1/decisions/{decision}/approve",
+                           json={"actor": "ceo", "note": "Administrators only, behind sign-in."})
+    assert approved.status_code == 200, approved.text
+    built = _tick_until_built(client, engine, project, workflow)
+    instructions = built[0]["spec"]["instructions"]
+    assert question in instructions and "Administrators only, behind sign-in." in instructions
+
+
+@pytest.mark.parametrize("draft, expected", [
+    (PRD + "\n**Build readiness: ready.**", None),
+    (PRD + "\nbuild readiness - READY\n", None),
+    (PRD + "\nBUILD READINESS: ASK Public or administrators only?\n```", "Public or administrators only?"),
+    (PRD + "\nBuild Readiness — ASK: Public or administrators only?", "Public or administrators only?"),
+])
+def test_a_readiness_line_is_read_through_formatting(draft, expected):
+    """A model's bold, case or punctuation is not a held build; the line leaves the document."""
+    from boss_engine.services.meeting_service import panel_build_readiness
+
+    document, question = panel_build_readiness(draft)
+    assert question == expected
+    assert "readiness" not in document.lower()
+
+
+@pytest.mark.parametrize("draft", [PRD, PRD + "\nBUILD READINESS: ASK", PRD + "\nBUILD READINESS: ALREADY"])
+def test_an_unreadable_readiness_asks_once_in_words(draft):
+    """No disposition, an empty ASK or a garbled one holds the build with a visible question
+    (never silently, never a guess that it is ready)."""
+    from boss_engine.services.meeting_service import (UNREADABLE_READINESS_QUESTION,
+                                                      panel_build_readiness)
+
+    assert panel_build_readiness(draft)[1] == UNREADABLE_READINESS_QUESTION

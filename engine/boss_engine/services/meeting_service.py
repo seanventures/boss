@@ -1541,17 +1541,48 @@ def _advance_phase(engine, settings: Settings, jobs, run: dict, run_id: str, pha
     return {"status": "running", "done": False, "phase": next_phase}
 
 
+# THE PANEL'S BUILD DISPOSITION, the PRD's last line: READY, or ASK and the one question that
+# blocks the build. Read tolerantly (models bold it, lower-case it, add a full stop or a trailing
+# fence) because a misread is a held build; an answer that cannot be read at all still holds
+# it, ONCE and visibly, as the approval card's question, never silently and never mid-build.
+_READINESS_LINE = re.compile(
+    r"^[\s>*_`#-]*build[\s_-]*readiness[\s*_`]*[:\-\u2013\u2014]\s*[*_`]*\s*"
+    r"(?P<verdict>ready|ask)\b[\s*_`]*[:.\-\u2013\u2014]?\s*(?P<question>.*?)[\s*_`]*$",
+    re.IGNORECASE)
+UNREADABLE_READINESS_QUESTION = (
+    "The panel did not say whether this spec is ready to build. Approve it to build as written, "
+    "or answer what is missing.")
+
+
 def panel_build_readiness(draft: str) -> tuple[str, Optional[str]]:
     """Separate the facilitator's final build disposition from the published document."""
-    document, _, last_line = draft.rstrip().rpartition("\n")
-    prefix = "BUILD READINESS:"
-    if last_line.startswith(prefix):
-        disposition = last_line[len(prefix):].strip()
-        if disposition == "READY":
-            return document.rstrip(), None
-        if disposition.startswith("ASK ") and len(disposition[4:].strip()) > 0:
-            return document.rstrip(), disposition[4:].strip()[:500]
-    return draft.rstrip(), "Does the specification resolve the requirements well enough to start building?"
+    lines = draft.rstrip().split("\n")
+    # The disposition is the last line that says something; a closing fence or a stray blank
+    # after it is formatting, not a different answer.
+    tail = [i for i in range(len(lines) - 1, -1, -1) if lines[i].strip().strip("`").strip()][:2]
+    for index in tail:
+        match = _READINESS_LINE.match(lines[index])
+        if not match:
+            continue
+        document = "\n".join(lines[:index] + lines[index + 1:]).rstrip()
+        if match["verdict"].lower() == "ready":
+            return document, None
+        question = match["question"].strip()
+        if question:
+            return document, question[:500]
+        break
+    return draft.rstrip(), UNREADABLE_READINESS_QUESTION
+
+
+def with_requester_answer(prd: str, question: Optional[str], answer: Optional[str]) -> str:
+    """The spec a build is briefed from, with the requester's answer to the panel's blocking
+    question. The card held the build to ask it; an answer left on the decision row would build
+    the question's unanswered version anyway."""
+    answer = str(answer or "").strip()
+    if not (question and answer and prd):
+        return prd
+    return (prd.rstrip() + "\n\n## Requester's answer before the build\n\n"
+            + f"**{str(question).strip()}**\n\n{answer}\n")
 
 
 def prd_blocks_auto_approve(directive: str, prd_markdown: str) -> bool:
@@ -1630,7 +1661,8 @@ def _finalize_meeting(connection, settings, run_id) -> dict:
          # that app (decisions._build_prd_onto_app). Carried as data, never as text in the PRD.
          **({"extends_run_id": str((run.get("constraints") or {})["extends_run_id"])}
             if (run.get("constraints") or {}).get("extends_run_id") else {}),
-         **({"explicit_stop": explicit_stop} if explicit_stop else {})},
+         **({"explicit_stop": explicit_stop} if explicit_stop else {}),
+         **({"build_readiness_question": readiness_question} if readiness_question else {})},
         {}, "meeting_prd_ready_to_publish", risk_tier=2)
 
     # Resolve the gate the panel has already satisfied.
