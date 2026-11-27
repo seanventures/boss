@@ -49,7 +49,7 @@ def main():
     (origin / "base.txt").write_text("base\n")
     git(origin, "add", "-A")
     git(origin, "commit", "-m", "base")
-    repo_host.clone_url_for = lambda *a: str(origin)
+    repo_host.clone_url_for = lambda *a, **_k: str(origin)
     settings = SimpleNamespace(sandbox_root_path=None, sandbox_clone_depth=1,
                                sandbox_integration_branch="main",
                                sandbox_validation_timeout_seconds=20)
