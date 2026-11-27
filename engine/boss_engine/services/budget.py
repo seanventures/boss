@@ -1228,6 +1228,22 @@ class BudgetGovernor:
             post_available = max(post_cap - post_total, 0)
         else:
             post_cap, post_total, post_available = 0, 0, 0
+        from .scoped_budgets import refusal_for_limit, reservation_limit
+
+        cap = snapshot["cap_usd_micros"]
+        available = snapshot["available_usd_micros"]
+        limit = reservation_limit(connection, project_id)
+        if limit is not None:
+            policy, remaining = limit
+            if not after or remaining <= min(c - (total - amount_usd_micros) for _, c, total in after):
+                cap = post_cap = int(policy["cap_usd_micros"])
+                available = max(0, remaining)
+                post_total = post_cap - remaining + amount_usd_micros
+                post_available = max(0, remaining - amount_usd_micros)
+            refusal = refusal_for_limit(limit, amount_usd_micros)
+            if refusal:
+                allowed = False
+                reason = refusal["message"]
         post_state = self._state_for_totals(
             post_cap,
             post_total,
@@ -1242,8 +1258,8 @@ class BudgetGovernor:
             "requested_usd_micros": amount_usd_micros,
             "budget_state": snapshot["budget_state"],
             "post_reservation_budget_state": post_state,
-            "cap_usd_micros": snapshot["cap_usd_micros"],
-            "available_usd_micros": snapshot["available_usd_micros"],
+            "cap_usd_micros": cap,
+            "available_usd_micros": available,
             "post_reservation_available_usd_micros": post_available,
         }
 

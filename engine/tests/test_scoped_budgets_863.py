@@ -115,6 +115,39 @@ def test_reserve_refuses_past_any_matching_hard_cap(eng, world):
     assert "agent backend_engineer" in out["message"]
 
 
+def test_project_cap_quote_agrees_with_reservation_and_release(eng, world):
+    from boss_engine.config import get_settings
+    from boss_engine.services.budget import BudgetGovernor
+
+    governor = BudgetGovernor(get_settings())
+    project = world["p"]
+    policy = _policy(eng, world, "project", project, 0.01, period="day")
+    with eng.begin() as c:
+        def quote(amount):
+            return governor.quote(c, project, "model", amount, "QA estimate")
+
+        def reserve(amount):
+            return governor.reserve(c, project, "model", amount, "QA estimate", 5)
+
+        at_cap = quote(10_000)
+        assert at_cap["allowed"]
+        assert at_cap["available_usd_micros"] == 10_000
+        assert at_cap["post_reservation_available_usd_micros"] == 0
+        attempt = quote(20_000)
+        assert not attempt["allowed"]
+        assert attempt["cap_usd_micros"] == 10_000
+        assert attempt["post_reservation_available_usd_micros"] == 0
+        refusal = reserve(20_000)
+        assert refusal["status"] == "denied"
+        assert refusal["message"] == attempt["reason"]
+
+        assert sb.remove_policy(c, org_id=world["org"], policy_id=policy["id"])
+        assert quote(20_000)["allowed"]
+        approved = reserve(20_000)
+        assert approved["status"] == "reserved"
+        governor.release(c, project, approved["reservation_id"], "QA complete")
+
+
 def test_a_soft_policy_never_refuses(eng, world):
     _spend(eng, world["p"], 9)
     _policy(eng, world, "project", world["p"], 5, hard_stop=False)
