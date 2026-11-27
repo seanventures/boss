@@ -38,6 +38,13 @@ BACKOFF_FIRST = timedelta(hours=1)
 #: that is waiting out the cap.
 BACKOFF_CAP = timedelta(hours=24)
 
+#: A check after a named plan reset waits this much past it: the provider's "resets 7pm" is
+#: rounded to its minute and its clock is not ours, so asking at 19:00:00 can still be refused.
+RESET_GRACE = timedelta(minutes=2)
+
+#: The furthest a named reset may push the next check: past the longest plan window (a week).
+RESET_CAP = timedelta(days=8)
+
 #: Results that are not the provider's answer — BOSS's own queue or budget said "not now" —
 #: neither prove nor disprove the connection, so they leave the schedule untouched.
 NOT_AN_ANSWER = ("paused_budget", "job_deferred", "legacy_hold")
@@ -84,10 +91,17 @@ def after_check(*, ok: bool, state: str, failures_before: int, now: datetime,
            f"backing off. Re-check tries now.")
     said = parse_time(retry_at)
     if said is not None and said > now:
-        # The provider named the moment itself (a plan reset): that is when to ask.
-        next_at = said
-        why = (f"Check failed ({state or 'failed'}); the provider said to try again at "
-               f"{said.strftime('%H:%M')} UTC. Re-check tries now.")
+        # The provider named the moment itself (a plan reset): ask just after it, never on the
+        # generic backoff — a weekly limit that resets in 30 h would otherwise be asked about
+        # at 1 h, 2 h, 4 h … and the row would read "Limited" hours after the plan came back.
+        # Capped: a past date the parser rolled into next year ("Nov 24" read on Nov 26) must
+        # not park the row for a year; no plan window is longer than a week.
+        next_at = min(said + RESET_GRACE, now + RESET_CAP)
+        when = said.strftime("%b %d %H:%M").replace(" 0", " ")
+        why = (f"Plan limit; it resets {when} UTC. Checked again just after. "
+               "Re-check tries now." if state == "rate_limited" else
+               f"Check failed ({state or 'failed'}); the provider said to try again at "
+               f"{when} UTC. Re-check tries now.")
     return {"failures": failures, "next_at": next_at.isoformat(), "why": why}
 
 

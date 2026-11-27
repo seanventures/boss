@@ -741,7 +741,8 @@ def source_entry(row: Any, *, by_entitlement: dict[str, str], now: datetime,
         host=last.get("host") or "", latency_ms=last.get("latency_ms"),
         base_url=str(metadata.get("base_url") or ""), budget_period=budget_period,
         minutes_left=minutes_left, credential=claude,
-        next_check_at=schedule.get("next_at"), next_check_why=schedule.get("why"))
+        next_check_at=schedule.get("next_at"), next_check_why=schedule.get("why"),
+        reason=last.get("reason") if state == last.get("state") else None)
     # SETUP'S WRITE CHECK (engine_policy): "Checking…" while the queued job runs where builds
     # run, then whether this login can write there.
     entry["write_check"] = _write_check(metadata.get("engine_policy"), provider)
@@ -833,7 +834,8 @@ def _models(connection: Connection, settings: Any, project_id: str, now: datetim
             source_id=source_id, provider=provider, kind=kind, model=model, state=state,
             checked_at=checked_at, retry_at=retry_at, source="install", now=now,
             host=(last or {}).get("host") or "", latency_ms=(last or {}).get("latency_ms"),
-            budget_period=budget_period))
+            budget_period=budget_period,
+            reason=(last or {}).get("reason") if state == (last or {}).get("state") else None))
     return out
 
 
@@ -843,7 +845,8 @@ def _model_entry(*, source_id: str, provider: str, kind: str, model: Optional[st
                  budget_period: str = "month", minutes_left: Optional[int] = None,
                  credential: Optional[dict[str, Any]] = None,
                  next_check_at: Optional[str] = None,
-                 next_check_why: Optional[str] = None) -> dict[str, Any]:
+                 next_check_why: Optional[str] = None,
+                 reason: Optional[str] = None) -> dict[str, Any]:
     entry = CATALOGUE_BY_PROVIDER.get(provider) or {}
     pill = setup_pills.pill(
         "model", state, n="" if minutes_left is None else minutes_left,
@@ -855,6 +858,13 @@ def _model_entry(*, source_id: str, provider: str, kind: str, model: Optional[st
         # THE PILL NAMES THE CAP THAT IS ACTUALLY BINDING, never a hardcoded "Monthly cap":
         # `_budget` already worked out which period (day, month, or a burst refusal) is tightest.
         cap_name=_cap_name(budget_period))
+    # THE PROVIDER'S OWN WORDS IN THE TOOLTIP, ahead of ours: "Claude Code refused: You've hit
+    # your weekly limit · resets Nov 27, 7pm (UTC)." says more than any pill BOSS can write.
+    reason = str(reason or "").strip() if state not in ("working", "not_checked") else ""
+    if reason:
+        who = provider_label(provider)
+        said = reason if reason.lower().startswith(who.lower()) else f"{who} said: {reason}"
+        pill["tip"] = f"{said} {pill['tip']}"
     checked = parse_time(checked_at)
     return {
         "source_id": source_id, "provider": provider,
@@ -868,6 +878,8 @@ def _model_entry(*, source_id: str, provider: str, kind: str, model: Optional[st
         # has run under that policy. Re-check always proves now.
         "next_check_at": next_check_at or None,
         "next_check_why": next_check_why or None,
+        # What the provider said at the last check (short, redacted), for Details.
+        "reason": reason or None,
         # Replace asks for the KEY only: the form keeps where it points (never a password that
         # was written into the URL).
         "base_url": _without_userinfo(base_url) or None,

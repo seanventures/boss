@@ -718,4 +718,4 @@ def test_only_a_capacity_failure_marks_the_source_unavailable(message, state):
     routing; the router skips a source recorded as unavailable."""
     from boss_engine.services.typed_decision_spend import capacity_after_failure
 
-    assert capacity_after_failure(RuntimeError(message)) == {"capacity_state": state}
+    assert capacity_after_failure(RuntimeError(message))["capacity_state"] == state

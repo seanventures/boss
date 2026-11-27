@@ -13,6 +13,7 @@ import re
 import threading
 import time
 import uuid
+from datetime import timedelta
 from typing import Any, Optional
 
 from sqlalchemy import text
@@ -826,6 +827,52 @@ def _subscription_spec(settings: Any, provider: str):
     return load_specs(settings).get(provider)
 
 
+def _provider_words(proof: dict[str, Any]) -> str:
+    """Every sentence a failed proof carries about WHY, joined: the provider's own error, the
+    outcome the governed proof recorded, its summary, and BOSS's error. Fed to the one limit
+    and failure classifier, so the reason is read wherever it landed."""
+    outcome = proof.get("outcome") if isinstance(proof.get("outcome"), dict) else {}
+    parts = (proof.get("provider_error"), outcome.get("provider_error"), proof.get("summary"),
+             outcome.get("summary"), proof.get("error"))
+    seen: list[str] = []
+    for part in parts:
+        text_ = str(part or "").strip()
+        if text_ and text_ not in seen:
+            seen.append(text_)
+    return "\n".join(seen)
+
+
+#: The longest provider reason a check keeps: one sentence for Details and the pill's tooltip.
+REASON_CHARS = 200
+
+
+def check_reason(result: dict[str, Any]) -> Optional[str]:
+    """What the provider said, short and redacted, for a check that did not work — never a
+    credential, never a whole body. The provider's own words first; BOSS's summary of them
+    next; BOSS's own error last. None for a working check."""
+    if result.get("ok") or result.get("state") == "working":
+        return None
+    if result.get("reason"):
+        said = str(result["reason"])
+    else:
+        outcome = result.get("outcome") if isinstance(result.get("outcome"), dict) else {}
+        said = next((str(v) for v in (result.get("provider_error"),
+                                       outcome.get("provider_error"), result.get("summary"),
+                                       outcome.get("summary"), result.get("error")) if v), "")
+    from .model_router.headroom import windows_from_limit_message
+    from .redaction import redact_secrets
+
+    # Redact the WHOLE text first: a credential split across lines must not survive in one.
+    lines = [line.strip() for line in redact_secrets(said).splitlines() if line.strip()]
+    # The line that names the limit, when one does: a CLI prints banners around it.
+    said = next((line for line in lines if windows_from_limit_message(line)),
+                lines[0] if lines else "")
+    said = " ".join(said.split())
+    if len(said) > REASON_CHARS:
+        said = said[:REASON_CHARS - 1].rstrip() + "\u2026"
+    return said or None
+
+
 def _record_model_check(connection: Connection, project_id: str, source_id: str,
                         result: dict[str, Any], actor: str, settings: Any = None) -> None:
     """Write a model check onto its source (or, for an install key, as an event)."""
@@ -839,6 +886,20 @@ def _record_model_check(connection: Connection, project_id: str, source_id: str,
             "at": result.get("checked_at") or iso(now_utc()), "latency_ms": result.get("latency_ms"),
             "retry_at": result.get("retry_at"), "host": result.get("host"),
             "receipt_id": result.get("receipt_id")}
+    if last["retry_at"]:
+        # A reset already past (an old epoch, "try again at 2020-…") is no reset: the limit
+        # was just seen, so it holds for the half-open probe window instead.
+        from .model_router.headroom import LIMIT_PROBE_S
+
+        checked = setup_view.parse_time(last["at"]) or now_utc()
+        said = setup_view.parse_time(last["retry_at"])
+        if said is None or said <= checked:
+            last["retry_at"] = iso(checked + timedelta(seconds=LIMIT_PROBE_S))
+    # WHAT THE PROVIDER SAID, KEPT: Details and the pill's tooltip show it, so a check BOSS has
+    # the words for never reads as a bare "failed".
+    reason = check_reason(result)
+    if reason:
+        last["reason"] = reason
     if source_id.startswith("env-"):
         emit_event(connection, project_id, "setup.model_checked", actor, "model_source",
                    source_id, last)
@@ -865,19 +926,33 @@ def _record_model_check(connection: Connection, project_id: str, source_id: str,
          "p": project_id, "s": source_id})
     if last["state"] == "rate_limited":
         capacity = {"exhausted": True, "retry_at": last["retry_at"],
-                    "detail": "Plan limit reached during a setup check."}
+                    "detail": reason or "Plan limit reached during a setup check."}
     elif last["ok"]:
         capacity = {"exhausted": False, "credential_state": "ok"}
+        # A GREEN CHECK REOPENS A LIMIT a failed call recorded (typed_decision_spend's
+        # capacity_state): the source just answered, so routing may use it again. A person's
+        # own blocked / disabled / suspended state is left alone.
+        current = connection.execute(
+            text("SELECT observed_capacity->>'capacity_state' FROM entitlement_sources "
+                 "WHERE project_id = :p AND source_id = :s"),
+            {"p": project_id, "s": source_id}).scalar()
+        if current in ("rate_limited", "unavailable", "exhausted"):
+            capacity["capacity_state"] = "available"
     elif last["state"] in ("login_expired", "key_rejected"):
         capacity = {"credential_state": "rejected"}
     else:
         capacity = None
     if capacity is not None:
         connection.execute(
+            # entitlements.merge_capacity's rule in SQL: a write that sets capacity_state
+            # clears the reset an earlier state left.
             text("UPDATE entitlement_sources SET observed_capacity = "
-                 "COALESCE(observed_capacity, '{}'::jsonb) || CAST(:c AS JSONB) "
+                 "(COALESCE(observed_capacity, '{}'::jsonb) - "
+                 "CASE WHEN CAST(:sets_state AS BOOLEAN) THEN 'capacity_reset_at' ELSE '' END) "
+                 "|| CAST(:c AS JSONB) "
                  "WHERE project_id = :p AND source_id = :s"),
-            {"c": json.dumps(capacity), "p": project_id, "s": source_id})
+            {"c": json.dumps(capacity), "p": project_id, "s": source_id,
+             "sets_state": "capacity_state" in capacity})
     emit_event(connection, project_id, "setup.model_checked", actor, "model_source", source_id,
                last)
 
@@ -985,16 +1060,21 @@ def _subscription_proof(connection: Connection, settings: Any, project_id: str, 
         # (setup_service.prove_coding_agent): a known rejection, so Login expired.
         status = proof.get("status")
         status = status if isinstance(status, int) and not isinstance(status, bool) else None
+        # THE CLI'S OWN WORDS, wherever the proof carries them: a reply the governed proof
+        # could not settle comes back as "needs reconciliation" in `error`, with what the CLI
+        # said only in its outcome and summary ("Claude Code refused: You've hit your weekly
+        # limit · resets Nov 27, 7pm (UTC)."). Reading `error` alone said "Check failed".
+        said = _provider_words(proof)
         proof["state"] = setup_checks.classify_model_failure(
             status if status is not None else
             0 if "could not reach" in str(proof.get("error") or "").lower() else -1,
-            str(proof.get("error") or ""), subscription=True)
+            said, subscription=True)
         if proof["state"] == "unreachable":
             proof["state"] = "failed"
         if proof["state"] == "rate_limited":
-            # The CLI names when the plan resets ("Try again at …"): the pill shows it, and
-            # Auto knows when to come back.
-            proof["retry_at"] = setup_checks._retry_after({}, str(proof.get("error") or ""))
+            # The CLI names when the plan resets ("resets Nov 27, 7pm (UTC)"): the pill shows
+            # it, the next check is scheduled just after it, and Auto knows when to come back.
+            proof["retry_at"] = setup_checks._retry_after({}, said)
     if proof.get("state") == "working":
         # Answered, but the login's real expiry still decides: Expiring / Renewal failed.
         proof["state"], _ = setup_view.claude_login_state(
