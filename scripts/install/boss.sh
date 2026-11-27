@@ -28,9 +28,11 @@ Commands:
                       optional dev profiles stay stopped: boss dev up / boss toolchains enable
   metatron [options]  Open Metatron, the BOSS terminal, on this machine (colours, keys and
                       the terminal's size work natively). Talks to the local API with the
-                      host tools' key, never printed. --print 'COMMAND' [--json] runs one
-                      command for scripts; --plain is plain text. First run sets up Rich
-                      and prompt_toolkit in ~/.local/share/boss/metatron-venv
+                      host tools' key, never printed. Pass --rust for the native Rust
+                      binary (default when installed; no Python needed), --legacy for the
+                      Python TUI during retirement, or --install-binary to fetch and verify
+                      the signed/checksummed release binary. --print 'COMMAND' [--json]
+                      runs one command for scripts; --plain is plain text.
   password [reset]    Show the console password (terminal only), or rotate it
   doctor [--probe]    Check the install can do its job (runs checkup.sh). --repair lists the
                       known remedy for each failed check; --repair --apply runs the safe ones
@@ -489,6 +491,8 @@ cmd_upgrade() {
   # The host tools' own key, ready before the shared key stops (best effort: the next boss
   # command issues it otherwise).
   [[ -n "$(env_value BOSS_HOST_API_KEY)" ]] || issue_host_key >/dev/null 2>&1 || true
+  # MT-11: refresh the installed Rust Metatron binary on upgrade when a release source is configured.
+  metatron_upgrade_binary || true
   post_deploy_prune
 }
 
@@ -1675,16 +1679,98 @@ metatron_python() {
   printf '%s\n' "$venv/bin/python"
 }
 
+metatron_rust_bin() {
+  local cand
+  if [[ -n "${BOSS_METATRON_BIN:-}" && -x "${BOSS_METATRON_BIN}" ]]; then
+    printf '%s\n' "$BOSS_METATRON_BIN"; return 0
+  fi
+  for cand in \
+    "$INSTALL_DIR/bin/metatron" \
+    "${XDG_DATA_HOME:-$HOME/.local/share}/boss/bin/metatron" \
+    "$INSTALL_DIR/metatron/target/release/metatron"
+  do
+    if [[ -x "$cand" ]]; then
+      printf '%s\n' "$cand"; return 0
+    fi
+  done
+  cand="$(command -v metatron 2>/dev/null || true)"
+  if [[ -n "$cand" && -x "$cand" ]]; then
+    printf '%s\n' "$cand"; return 0
+  fi
+  return 1
+}
+
+metatron_install_binary() {
+  local installer="$INSTALL_DIR/metatron/scripts/install-metatron.sh"
+  [[ -x "$installer" || -f "$installer" ]] ||
+    die "Metatron binary installer not found at $installer"
+  local bin_dir="${BOSS_METATRON_BIN_DIR:-$INSTALL_DIR/bin}"
+  bash "$installer" --bin-dir "$bin_dir" "$@"
+}
+
+metatron_upgrade_binary() {
+  local installer="$INSTALL_DIR/metatron/scripts/install-metatron.sh"
+  [[ -f "$installer" ]] || return 0
+  local bin_dir="${BOSS_METATRON_BIN_DIR:-$INSTALL_DIR/bin}"
+  if [[ -n "${BOSS_METATRON_RELEASE_DIR:-}" && -d "${BOSS_METATRON_RELEASE_DIR}" ]]; then
+    bash "$installer" --bin-dir "$bin_dir" --from-dir "$BOSS_METATRON_RELEASE_DIR" >/dev/null 2>&1 ||
+      printf 'boss: metatron binary upgrade skipped (checksum or install error)\n' >&2
+  elif [[ -n "${BOSS_METATRON_RELEASE_URL:-}" ]]; then
+    bash "$installer" --bin-dir "$bin_dir" --base-url "$BOSS_METATRON_RELEASE_URL" >/dev/null 2>&1 ||
+      printf 'boss: metatron binary upgrade skipped (download or verification error)\n' >&2
+  fi
+  return 0
+}
+
 cmd_metatron() {
   need_install
-  [[ -f "$INSTALL_DIR/scripts/metatron_tui.py" ]] || die "this release has no Metatron terminal."
-  local py key project
-  py="$(metatron_python)"
+  local client_mode="${BOSS_METATRON_CLIENT:-auto}"
+  local install_mode=0
+  local pass_args=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --rust) client_mode=rust; shift ;;
+      --legacy) client_mode=legacy; shift ;;
+      --install-binary) install_mode=1; shift ;;
+      *) pass_args+=("$1"); shift ;;
+    esac
+  done
+
+  if [[ "$install_mode" -eq 1 ]]; then
+    metatron_install_binary ${pass_args[@]+"${pass_args[@]}"}
+    return 0
+  fi
+
+  local key project rust_bin=""
   key="$(host_key)"
   [[ -n "$key" ]] || die "no key for the host tools. Is the api service running ($(hint_command) status)? Then: $(hint_command) identity host-key"
   project="${BOSS_PROJECT_ID:-$(env_value BOSS_DEFAULT_PROJECT_ID)}"
-  BOSS_API_URL="$(api_url)" BOSS_API_KEY="$key" BOSS_PROJECT_ID="${project:-boss-dogfood}" \
-    exec "$py" "$INSTALL_DIR/scripts/metatron_tui.py" "$@"
+  project="${project:-boss-dogfood}"
+
+  if [[ "$client_mode" != "legacy" ]]; then
+    rust_bin="$(metatron_rust_bin || true)"
+  fi
+
+  if [[ "$client_mode" == "rust" ]]; then
+    [[ -n "$rust_bin" ]] || die "Rust Metatron binary not found. Install it with: $(hint_command) metatron --install-binary (or build: make metatron-build)"
+    BOSS_API_URL="$(api_url)" BOSS_API_KEY="$key" BOSS_PROJECT_ID="$project" \
+      exec "$rust_bin" ${pass_args[@]+"${pass_args[@]}"}
+  fi
+
+  if [[ "$client_mode" == "auto" && -n "$rust_bin" ]]; then
+    BOSS_API_URL="$(api_url)" BOSS_API_KEY="$key" BOSS_PROJECT_ID="$project" \
+      exec "$rust_bin" ${pass_args[@]+"${pass_args[@]}"}
+  fi
+
+  # Legacy Python TUI path (MT-11: retained behind --legacy during transition, then removed).
+  [[ -f "$INSTALL_DIR/scripts/metatron_tui.py" ]] || die "this release has no legacy Python Metatron terminal; install the Rust binary with: $(hint_command) metatron --install-binary"
+  if [[ "$client_mode" == "legacy" ]]; then
+    printf 'boss: using legacy Python Metatron TUI (--legacy); scheduled for removal after one release.\n' >&2
+  fi
+  local py
+  py="$(metatron_python)"
+  BOSS_API_URL="$(api_url)" BOSS_API_KEY="$key" BOSS_PROJECT_ID="$project" \
+    exec "$py" "$INSTALL_DIR/scripts/metatron_tui.py" ${pass_args[@]+"${pass_args[@]}"}
 }
 
 # ---- identity ---------------------------------------------------------------------------------

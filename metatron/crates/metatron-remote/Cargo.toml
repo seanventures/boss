@@ -5,5 +5,20 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[dependencies]
+metatron-boss-client.workspace = true
+metatron-exec.workspace = true
+metatron-protocol.workspace = true
+metatron-secrets.workspace = true
+shell-words.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "time"] }
+
+[dev-dependencies]
+chrono.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "io-util"] }
+
 [lints]
 workspace = true

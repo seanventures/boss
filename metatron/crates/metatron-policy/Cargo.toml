@@ -5,5 +5,20 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[dependencies]
+base64.workspace = true
+chrono.workspace = true
+ed25519-dalek.workspace = true
+metatron-protocol.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+shell-words.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+rand.workspace = true
+
 [lints]
 workspace = true

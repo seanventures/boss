@@ -11,10 +11,28 @@ New to BOSS? The [quickstart](QUICKSTART.md) gets you to a console on `127.0.0.1
 ### On the install machine
 
 ```sh
-boss metatron
+boss metatron                 # uses the native Rust binary when installed, else legacy Python TUI
+boss metatron --rust          # explicitly launch the native Rust binary (no Python needed)
+boss metatron --legacy        # explicitly launch the legacy Python TUI (scheduled for removal)
 ```
 
-This runs Metatron natively on the host, so colours, keys and the terminal size behave as they do for any other program. It talks to the local API with the host tools' key (`BOSS_HOST_API_KEY`, issued for you if missing), which it passes through the environment and never prints. The first run installs Rich and prompt_toolkit into `~/.local/share/boss/metatron-venv` (set `BOSS_METATRON_VENV` to put it elsewhere). If they cannot be installed, Metatron still runs, as plain text. It needs Python 3.9 or newer.
+#### Native Rust binary (recommended; zero Python required)
+
+Metatron's Rust binary (`metatron`) runs natively without Python or a virtualenv and adds governed local/remote tools (`shell_local`, `ssh_run`, `transfer`, `pcap`, `pyrun`, `dashboard`, `http_session`, `handoff_code_task`), BOSS admin-approved MCP servers, shared `SKILL.md` skills, and four approval modes (`read-only`, `ask`, `risky-only`, `act-on-my-behalf`).
+
+Install or upgrade a verified release binary (SHA-256 checksum verified, optional minisign signature verification):
+
+```sh
+boss metatron --install-binary --base-url https://releases.example.com/metatron/v0.1.0
+# Or build locally from a checkout:
+make metatron-build && make metatron-rust
+```
+
+`boss upgrade` refreshes the installed Rust binary automatically when `BOSS_METATRON_RELEASE_URL` (or `BOSS_METATRON_RELEASE_DIR`) is configured. See `docs/design/metatron/RELEASE_AND_RETIREMENT.md` for the Homebrew formula generator, checksum verification, and two-release Python TUI retirement schedule.
+
+#### Legacy Python TUI
+
+When the Rust binary is not installed (or when `--legacy` is passed), `boss metatron` falls back to the legacy Python TUI. It talks to the local API with the host tools' key (`BOSS_HOST_API_KEY`, issued for you if missing), which it passes through the environment and never prints. The first run installs Rich and prompt_toolkit into `~/.local/share/boss/metatron-venv` (set `BOSS_METATRON_VENV` to put it elsewhere). If they cannot be installed, Metatron still runs, as plain text. It needs Python 3.9 or newer.
 
 `make metatron`, from the install directory, still opens the same terminal inside the API container, with no host Python needed.
 
