@@ -289,6 +289,7 @@ def launch(
     auth: Any = None,
     allowed: bool = False,
     review_plan: bool = False,
+    target_project_id: Optional[str] = None,
 ) -> dict[str, Any]:
     """Create the project and start the build. The builder runs only after the budget is reserved
     and only a result that names a project and a run is returned. Personal data in the blurb or
@@ -299,7 +300,22 @@ def launch(
     # WHOSE launch it is: two people pressing the same template never share a kept or a reused
     # project (nor a consent the other one owes).
     who = str(getattr(getattr(auth, "principal", None), "id", "") or actor or "")
+    target = None
+    if target_project_id is not None:
+        if repo:
+            raise FactoryLaunchError(422, "repository_override", "Choose the project's repository in Setup.")
+        target = connection.execute(text(
+            "SELECT p.workspace_id, b.full_name FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+            "LEFT JOIN LATERAL (SELECT full_name FROM github_repository_bindings WHERE project_id = p.id "
+            "AND status = 'active' ORDER BY (role = 'primary') DESC, created_at LIMIT 1) b ON true "
+            "WHERE p.id = :p AND w.org_id = :o AND p.archived_at IS NULL"),
+            {"p": target_project_id, "o": org_id}).mappings().first()
+        if target is None:
+            raise FactoryLaunchError(404, "missing_project", "Choose an active project in this organization.")
+        if not target["full_name"]:
+            raise FactoryLaunchError(409, "no_repository", "Connect a repository in this project's Setup before starting the build.")
     dedupe_key = _dedupe_key(org_id, prompt, asked, template_id, ids, repo, who,
+                             target_project_id=target_project_id,
                              review_plan=bool(review_plan))
     connection.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": dedupe_key})
     previous = _reuse(connection, org_id, dedupe_key)
@@ -324,6 +340,12 @@ def launch(
         receipt_id: Optional[str] = str(kept["receipt_id"])
     else:
         spec, origin = resolve_spec(prompt, template_id, template_dir)
+        if target is not None and origin != "template":
+            # INTO A PROJECT BUILDS A CATALOGUE TEMPLATE, nothing else: a pasted spec (its own
+            # repository, resources and workflows) or a template the catalogue does not have
+            # never lands in a project that already exists.
+            raise FactoryLaunchError(422, "template_required",
+                                     "Choose a template from the catalogue to build into this project.")
         attachments = _load_attachments(connection, org_id, ids)
         spec = _fold_attachments(spec, attachments)
         if repo:
@@ -334,6 +356,16 @@ def launch(
         # (Easy Mode MVP workflow); a bug or a small fix keeps the small path, as New work does.
         spec["spec_first"] = spec_first(spec["mode"])
         spec["spec_approval"] = (SPEC_BY_PERSON if review_plan else SPEC_BY_START)
+        # INTO AN EXISTING PROJECT: only this server sets the marker, never a template or a prompt.
+        spec.pop("existing_project", None)
+        if target is not None:
+            from .local_repo import is_local_owner
+
+            full_name = str(target["full_name"])
+            spec.pop("github_repo", None)
+            spec.pop("local_repo", None)
+            spec["local_repo" if is_local_owner(full_name.split("/", 1)[0]) else "github_repo"] = full_name
+            spec["existing_project"] = True
 
     if again is not None and again.get("project_id"):
         project_id = str(again["project_id"])
@@ -341,6 +373,11 @@ def launch(
         resources = list(again.get("resources") or [])
         workflows = list(again.get("workflows") or [])
         receipt_id = str(again["receipt_id"])
+    elif kept is None and target is not None:
+        project_id = target_project_id
+        workspace_id = str(target["workspace_id"])
+        resources, workflows = [], []
+        receipt_id = str(again["receipt_id"]) if again is not None else None
     elif kept is None:
         title = str(spec.get("title") or "Easy Mode").strip()[:120]
         description = str(spec.get("blurb") or spec.get("prompt") or "").strip()[:2000] or None
@@ -397,8 +434,12 @@ def _launch_with_dedupe_key(
         raise FactoryLaunchError(409, "needs_model", model_readiness.NO_MODEL_LAUNCH,
                                  fix_href=model_readiness.SETUP_MODELS_HREF)
     # THE BUILD'S REPOSITORY IS REAL: the connected GitHub repo, else the project's own local
-    # repository (made here when it has none). Never a placeholder name nothing can clone.
-    made_repo = _ensure_repository(connection, settings, project_id, spec, actor=actor)
+    # repository (made here when it has none). Never a placeholder name nothing can clone. A
+    # template launched into an existing project builds in that project's own repository.
+    if spec.get("existing_project"):
+        made_repo = False
+    else:
+        made_repo = _ensure_repository(connection, settings, project_id, spec, actor=actor)
 
     # The blurb and the prompt, before any reservation. A block or an unanswered ask stops here.
     if builder is None:
@@ -782,7 +823,9 @@ def build_run(
         owner=owner, repo=repo, base_branch=None,
         finalize_ctx={"factory_launch": True, "template_id": spec.get("id"),
                       "mode": spec.get("mode"), "reservation_id": reservation_id,
-                      "actor": actor},
+                      "actor": actor,
+                      # A template built into an existing project is still a NEW app there.
+                      **({"new_app": True} if spec.get("existing_project") else {})},
         # Its pull request and merge card open like every product build's: `open_pr=False` is
         # for evaluation runs, and it left Easy Mode builds completed with no PR (crun_5b11643d).
         jobs=jobs, repo_host=None if github else "local")
@@ -842,8 +885,12 @@ def spec_first_run(
         "repository": github or local,
         # "Review the plan first": stricter, so a plain input (the panel's PRD waits).
         **({"spec_approval": SPEC_BY_PERSON} if review_first else {}),
+        # A template built into an existing project (spec["existing_project"]) is a NEW app in
+        # that project, never a change to the app already there.
+        **({"new_app": True} if spec.get("existing_project") else {}),
     }
-    _staging_ships_without_asking(connection, project_id, actor)
+    if not spec.get("existing_project"):
+        _staging_ships_without_asking(connection, project_id, actor)
     run = wf.start_run(
         connection, project_id=project_id, actor=actor, input_data=run_input,
         dedupe_key=f"easy-mode:{project_id}:{reservation_id}",
@@ -1345,10 +1392,12 @@ def _relaunch(connection: Any, org_id: str, dedupe_key: str) -> Optional[dict[st
 def _dedupe_key(
     org_id: str, prompt: str, mode: str, template_id: Optional[str],
     attachment_ids: list[str], github_repo: str, who: str = "", review_plan: bool = False,
+    target_project_id: Optional[str] = None,
 ) -> str:
     raw = json.dumps({
         # Only when asked, so every launch made before the option keeps its key.
         **({"review_plan": True} if review_plan else {}),
+        **({"target_project": target_project_id} if target_project_id is not None else {}),
         "org": org_id,
         "who": who,
         "prompt": str(prompt or ""),

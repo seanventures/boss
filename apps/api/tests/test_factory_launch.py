@@ -989,3 +989,125 @@ def test_attachment_upload_records_uploaded_by(client, engine):
     row = _one(engine, "SELECT uploaded_by FROM factory_launch_attachments WHERE id = :id",
                id=att_id)
     assert row is not None and row["uploaded_by"]
+
+
+def test_template_into_existing_project_keeps_its_repository_and_review_stop(client, engine, monkeypatch, tmp_path):
+    catalogue = tmp_path / "factory_templates"
+    _write_catalogue(catalogue)
+    monkeypatch.setattr("boss_engine.services.factory_launch.TEMPLATE_DIR", catalogue)
+    calls = []
+    _patch_builder(monkeypatch, calls)
+    new = client.post("/v1/factory/launch", json={"template_id": "alpha-notes"})
+    assert new.status_code == 201, new.text
+    project = new.json()["project_id"]
+    assert not calls[-1]["spec"].get("existing_project")
+    # The fake builder does not release the launch hold as the real workflow start does.
+    with engine.begin() as connection:
+        BudgetGovernor(get_settings()).release(connection, project, new.json()["reservation_id"],
+                                               "Test builder finished.")
+    count = _count(engine, "projects")
+    target = f"/v1/projects/{project}/factory/launch"
+    payload = {"template_id": "beta-board", "review_plan": True, "mode": "build"}
+    result = client.post(target, json=payload)
+    assert result.status_code == 201, result.text
+    assert result.json()["project_id"] == project
+    assert _count(engine, "projects") == count
+    assert calls[-1]["spec"]["local_repo"] == new.json()["spec"]["local_repo"]
+    assert calls[-1]["spec"]["spec_approval"] == "person"
+    assert calls[-1]["spec"]["existing_project"]
+    assert client.post(target, json={**payload, "github_repo": "other/repo"}).status_code == 422
+    assert client.post("/v1/projects/unknown-project/factory/launch", json=payload).status_code == 404
+
+
+def _project_with_repo(client, engine, monkeypatch, tmp_path, calls: list) -> tuple[str, str]:
+    """A project made by an ordinary launch (it has its own local repository), its hold released."""
+    catalogue = tmp_path / "factory_templates"
+    _write_catalogue(catalogue)
+    monkeypatch.setattr("boss_engine.services.factory_launch.TEMPLATE_DIR", catalogue)
+    _patch_builder(monkeypatch, calls)
+    # Its own words, so each test's launch is its own (the dedupe key and slug follow them).
+    new = client.post("/v1/factory/launch", json={"template_id": "alpha-notes", "prompt": f"Notes for {tmp_path.name}"})
+    assert new.status_code == 201, new.text
+    with engine.begin() as connection:
+        BudgetGovernor(get_settings()).release(connection, new.json()["project_id"], new.json()["reservation_id"],
+                                               "Test builder finished.")
+    return new.json()["project_id"], new.json()["spec"]["local_repo"]
+
+
+def test_into_a_project_builds_only_a_catalogue_template(client, engine, monkeypatch, tmp_path):
+    """A pasted spec or a template the catalogue lacks never lands in an existing project."""
+    calls: list = []
+    project, _repo = _project_with_repo(client, engine, monkeypatch, tmp_path, calls)
+    target = f"/v1/projects/{project}/factory/launch"
+    made = len(calls)
+    unknown = client.post(target, json={"template_id": "no-such-template", "prompt": _ALPHA, "mode": "build"})
+    assert 400 <= unknown.status_code < 500, unknown.text
+    pasted = client.post(target, json={"template_id": "beta-board", "prompt": _ALPHA, "mode": "build"})
+    assert pasted.status_code == 422 and pasted.json()["error"] == "template_required", pasted.text
+    prose = client.post(target, json={"template_id": "no-such-template", "prompt": "Build a CRM", "mode": "build"})
+    assert 400 <= prose.status_code < 500, prose.text
+    assert len(calls) == made                    # nothing was built
+
+
+def test_an_into_launch_held_for_consent_resumes_in_the_same_project_and_repository(
+        client, engine, monkeypatch, tmp_path):
+    """Into → 409 consent → the same launch again → 201, the same project, its own repository."""
+    from boss_engine.identity.consent import ConsentRequired
+
+    calls: list = []
+    project, repo = _project_with_repo(client, engine, monkeypatch, tmp_path, calls)
+    state = {"allow": False}
+
+    def build(connection, *, project_id, spec, actor, settings, jobs, reservation_id):
+        if not state["allow"]:
+            raise ConsentRequired({"error": "consent_required", "message": "Consent is required.",
+                                   "agents": [{"id": "agt_forge", "name": "Forge"}], "permissions": ["code_task:run"],
+                                   "task": "Easy Mode build", "task_run_id": "pending_into", "projects": [project_id]})
+        calls.append({"project_id": project_id, "spec": dict(spec)})
+        return {"project_id": project_id, "run_id": "run_into_1"}
+
+    monkeypatch.setattr("boss_engine.services.factory_launch.build_run", build)
+    count = _count(engine, "projects")
+    target = f"/v1/projects/{project}/factory/launch"
+    payload = {"template_id": "beta-board", "mode": "build"}
+    asked = client.post(target, json=payload)
+    assert asked.status_code == 409, asked.text
+    assert asked.json()["project_id"] == project
+    state["allow"] = True
+    again = client.post(target, json=payload)
+    assert again.status_code == 201, again.text
+    assert again.json()["project_id"] == project
+    assert _count(engine, "projects") == count
+    spec = calls[-1]["spec"]
+    assert spec["existing_project"] is True
+    assert spec["local_repo"] == repo and not spec.get("github_repo")
+
+
+def test_an_into_launch_tells_the_build_it_is_a_new_app(engine, monkeypatch):
+    """A template built into an existing project (spec["existing_project"], the one mark this path
+    sets) is a NEW app in that project, on both start paths: the Easy Mode run's input and the
+    direct code-task build's finalize context say new_app."""
+    from boss_engine.services import code_task_service, factory_launch, workflow_catalogue, workflows
+
+    seen: dict = {}
+    monkeypatch.setattr(workflow_catalogue, "seed", lambda *a, **k: None)
+    monkeypatch.setattr(workflows, "running_version", lambda *a, **k: {"version_id": "wfv_x"})
+    monkeypatch.setattr(workflows, "start_run", lambda connection, **k: seen.setdefault("run", k) and {"id": "wfr_into"})
+    monkeypatch.setattr(code_task_service, "start_code_task",
+                        lambda connection, **k: seen.setdefault("task", k) and None)
+    monkeypatch.setattr(factory_launch, "_release_hold", lambda *a, **k: None)
+    monkeypatch.setattr(factory_launch, "_start_approver", lambda *a, **k: None)
+    into = {"title": "Beta board", "prompt": "Build beta.", "local_repo": "boss-local/beta", "existing_project": True}
+    with engine.begin() as connection:
+        factory_launch.build_run(connection, project_id="default", spec={**into, "spec_first": True}, actor="ceo",
+                                 settings=get_settings(), jobs=None, reservation_id="res_x")
+        factory_launch.build_run(connection, project_id="default", spec={**into, "spec_first": False}, actor="ceo",
+                                 settings=get_settings(), jobs=None, reservation_id="res_y")
+    assert seen["run"]["input_data"]["new_app"] is True
+    assert seen["task"]["finalize_ctx"]["new_app"] is True
+    # An ordinary launch makes its own project: no mark, no key.
+    seen.clear()
+    with engine.begin() as connection:
+        factory_launch.build_run(connection, project_id="default", spec={**into, "existing_project": False, "spec_first": False},
+                                 actor="ceo", settings=get_settings(), jobs=None, reservation_id="res_z")
+    assert "new_app" not in seen["task"]["finalize_ctx"]

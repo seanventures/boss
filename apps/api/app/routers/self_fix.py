@@ -253,12 +253,15 @@ def build_self_fix_router(
             stack = si.stack(c)
             spent = sf.month_spent(c)
             installer = si.installer_seen(c)
+            ready = sf.readiness(c, settings(), project_id=pid)
         ok, why = sf.install_capable(settings())
-        return {"switch": state, "settings": values, "auto_install": sf.AUTO_INSTALL_POLICY,
-                "auto_install_why": sf.AUTO_INSTALL_WHY,
+        mode = next(p for p in ready["pieces"] if p["key"] == "mode")
+        return {"switch": state, "settings": values,
+                "auto_install": "on" if ready["auto_install"] else "off",
+                "auto_install_why": mode["why"],
                 "can_install": ok, "why_not": why, "stack": stack,
                 "env_off": sf.env_off(), "month_spent_usd": round(spent / 1e6, 2),
-                "installer": installer}
+                "installer": installer, "readiness": ready}
 
     @router.put("/v1/self-fix/settings")
     @permit(P.IMPROVEMENT_MANAGE, scope=Scope.project(body="project_id"))

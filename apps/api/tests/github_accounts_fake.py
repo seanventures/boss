@@ -174,8 +174,8 @@ def demo_world(**kw: Any) -> FakeGitHub:
     (installed there), and an organisation it is not installed on yet."""
     hub = FakeGitHub(**kw)
     hub.user("paramg", "User", uid=5101, repos=("helpdesk-ai-demo", "boss"), name="Param G")
-    hub.user("kaappu", "Organization", uid=7202, repos=("helpdesk", "website", "infra-scripts"), public_repos=14,
-             name="Kaappu")
+    hub.user("example-org", "Organization", uid=7202, repos=("helpdesk", "website", "infra-scripts"), public_repos=14,
+             name="Example Org")
     hub.user("octo-person", "User", uid=8303, repos=("dotfiles",))
     hub.install("paramg")
     return hub

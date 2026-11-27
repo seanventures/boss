@@ -25,6 +25,8 @@ def test_restart_is_offered_only_for_a_build_that_exists(client, world):
     body = client.get("/v1/infra/previews", params={"project_id": HOME}).json()
     rows = {r["id"]: r for group in ("live", "failed_24h", "ended_24h") for r in body[group]}
     assert rows["pv_live"]["can"]["restart"] is True
+    assert rows["pv_live"]["can"]["open"] is True
+    assert rows["pv_live"]["url"].endswith("/v1/previews/pv_live/web/")
     assert rows["pv_live"].get("restart_why") is None
     assert rows["pv_fail"]["can"]["restart"] is True
     gone = rows["pv_ended"]

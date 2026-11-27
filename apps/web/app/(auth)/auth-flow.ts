@@ -2,7 +2,7 @@
  * Steps the auth screens share once a session exists: learn its CSRF token (auth pages have no
  * IdentityProvider to do it), register a passkey on this device, and words for a refusal.
  */
-import { ENROLMENT_GRANT_REQUIRED, ENROLMENT_GRANT_WORDS } from "../../lib/identity/enrolment";
+import { ENROLMENT_GRANT_REQUIRED, ENROLMENT_GRANT_WORDS, ENROLMENT_NEEDS_SIGN_IN, ENROLMENT_NEEDS_SIGN_IN_WORDS } from "../../lib/identity/enrolment";
 import { IdentityError, idGet, idPost, setCsrfToken } from "../../lib/identity/api";
 import { ME_PATH, type MeResponse } from "../../lib/identity/contract";
 import { codesOf, type RecoveryCodes } from "../../lib/identity/types-auth";
@@ -73,6 +73,7 @@ const WORDS: Record<string, string> = {
   passkey_counter_regressed: "That passkey looks copied, so it's blocked. Ask an admin",
   // Enrolment itself refused: this session may not add a factor (lib/identity/enrolment.ts).
   [ENROLMENT_GRANT_REQUIRED]: ENROLMENT_GRANT_WORDS,
+  [ENROLMENT_NEEDS_SIGN_IN]: ENROLMENT_NEEDS_SIGN_IN_WORDS,
 };
 
 /**

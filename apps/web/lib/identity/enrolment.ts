@@ -8,7 +8,9 @@
  * The console sends such a person to /enrol instead of rendering pages whose every read is
  * refused. If enrolment itself is refused (`403 enrolment_grant_required`: they already had a
  * factor, or the window closed), only an admin resetting their second factor helps, and the
- * enrol screen says exactly that.
+ * enrol screen says exactly that. When the NEXT sign-in would hold the grant (a promotion or a
+ * reset after this session began: `403 enrolment_needs_sign_in`), the screen offers a fresh
+ * sign-in that comes back to enrol instead — no admin needed.
  */
 import type { MeResponse } from "./contract";
 
@@ -21,6 +23,16 @@ export const ENROLMENT_EXPIRED_WORDS = "That key expired. Scan the new code (or 
 
 export const ENROLMENT_GRANT_WORDS =
   "You can't add a second factor from this session. Ask an admin to reset your second factor, then sign in again.";
+export const ENROLMENT_NEEDS_SIGN_IN = "enrolment_needs_sign_in";
+export const ENROLMENT_NEEDS_SIGN_IN_WORDS =
+  "Your new role lets your next sign-in add a second factor. Sign in again to add it.";
+
+/** Sign in, coming back to `next` (a same-origin path, never a sign-in page). A sign-in that must
+ *  enrol goes on to /enrol by itself (afterEnrolStep), so this is also the way back to enrolment. */
+export function freshSignInHref(next: string | null | undefined): string {
+  const back = next && next.startsWith("/") && !next.startsWith("//") && !/^\/(login|signin)\b/.test(next) ? next : "/";
+  return `/login?next=${encodeURIComponent(back)}`;
+}
 
 /** Must this signed-in person enrol before anything else? (The me banner, or an API refusal code.) */
 export function needsEnrolment(me: Pick<MeResponse, "banners"> | null | undefined, problem?: string | null): boolean {
@@ -66,6 +78,5 @@ export function afterEnrolStep(step: { enrolment_grant?: boolean }, next: string
  */
 export function signInAgainHref(problem: string | null | undefined, next: string): string | null {
   if (problem !== "unauthenticated") return null;
-  const back = next.startsWith("/") && !next.startsWith("//") && !/^\/(login|signin)\b/.test(next) ? next : "/";
-  return `/login?next=${encodeURIComponent(back)}`;
+  return freshSignInHref(next);
 }

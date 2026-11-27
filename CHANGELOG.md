@@ -2,6 +2,10 @@
 
 All notable changes to BOSS Community. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Release notes with more detail live in `docs/community/RELEASE_NOTES_*.md`.
 
+## [Unreleased]
+
+- **BOSS knows where it was installed from (ENT-REC-54).** Every install and upgrade records the checkout (`.boss/selfsrc/install.json`) and mirrors its source for self-fixes; Govern › Self-fix shows what a self-fix still needs, with one action each. **On upgrade, an existing development install used by more than one person turns self-fix on** (it was off by default there); a production install with more than one person keeps it off. A development install also enrols the host self-installer once, unless `BOSS_SELF_FIX_INSTALLER=off`; it never installs a fix that changes what the host runs (installer, compose, Dockerfiles, `.boss/`).
+
 ## [v1.0-rc10.32]
 
 Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.32.md](docs/community/RELEASE_NOTES_v1.0-rc10.32.md).
