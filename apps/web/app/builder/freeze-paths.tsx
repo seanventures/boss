@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 
 import { apiWrite } from "../../lib/api-write";
+import { GatedButton } from "../../components/gated";
 
 type Kind = "file" | "table";
 
@@ -145,14 +146,15 @@ export function FreezePaths({ projectId }: { projectId: string }) {
             placeholder="notes.txt"
           />
         </label>
-        <button
+        <GatedButton
+          permission="settings:update"
           type="button"
           data-testid="freeze-submit"
           title="Freeze this path"
           onClick={() => { void freeze(); }}
         >
           Freeze
-        </button>
+        </GatedButton>
         <label className="fp-field fp-bytes">
           <span>New bytes</span>
           <input

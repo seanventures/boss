@@ -8,10 +8,21 @@ import { $, click, mount, rerender, settle, unmount } from "./_helpers/live-rend
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 afterEach(() => { unmount(); vi.unstubAllGlobals(); });
 
+/** Route `/v1/projects/.../archive` reads separately from `/api/projects-strip` calls. */
+function stubStripFetch(stripFetch: ReturnType<typeof vi.fn>) {
+  const routed = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (url.includes("/archive")) return Promise.resolve(Response.json({ archived: false }));
+    return stripFetch(url, init);
+  });
+  vi.stubGlobal("fetch", routed);
+  return stripFetch;
+}
+
 describe("the secondary build row", () => {
   it("disappears only after the server confirms an empty complete list, and returns for new work", async () => {
     let body: unknown = { projects: [], total: 0 };
-    vi.stubGlobal("fetch", vi.fn(async () => Response.json(body)));
+    stubStripFetch(vi.fn(async () => Response.json(body)));
     await mount(<ProjectStrip projectId="p1" />);
     expect($("[data-testid=bx-strip]")).toBeNull();
     body = { projects: [{ id: "1", title: "Review", status: "GATED", stage: "Review", pct: 50, latest_run_id: "run1" }], total: 1 };
@@ -24,14 +35,14 @@ describe("the secondary build row", () => {
 
 
   it("shows a failed refresh even when the last successful list was empty", async () => {
-    const fetch = vi.fn().mockResolvedValueOnce(Response.json({ projects: [], total: 0 }))
-      .mockResolvedValue(Response.json({ error: "Offline" }, { status: 503 }));
-    vi.stubGlobal("fetch", fetch);
+    const stripFetch = stubStripFetch(vi.fn().mockResolvedValueOnce(Response.json({ projects: [], total: 0 }))
+      .mockResolvedValue(Response.json({ error: "Offline" }, { status: 503 })));
     await mount(<ProjectStrip projectId="p1" />);
     expect($("[data-testid=bx-strip]")).toBeNull();
     await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
     await settle();
-    expect($("[role=status]")?.textContent).toContain("Could not refresh — Offline");
+    expect(stripFetch.mock.calls.length).toBe(2);
+    expect($("[role=status]")?.textContent).toContain("Could not refresh, Offline");
   });
 
   it.each(["empty", "error", "reject"] as const)(
@@ -41,9 +52,8 @@ describe("the secondary build row", () => {
       let finishNew!: (response: Response) => void;
       const oldRefresh = new Promise<Response>((resolve, reject) => { finishOld = resolve; rejectOld = reject; });
       const newLoad = new Promise<Response>((resolve) => { finishNew = resolve; });
-      const fetch = vi.fn().mockResolvedValueOnce(Response.json({ projects: [], total: 0 }))
-        .mockReturnValueOnce(oldRefresh).mockReturnValueOnce(newLoad);
-      vi.stubGlobal("fetch", fetch);
+      const fetch = stubStripFetch(vi.fn().mockResolvedValueOnce(Response.json({ projects: [], total: 0 }))
+        .mockReturnValueOnce(oldRefresh).mockReturnValueOnce(newLoad));
       await mount(<ProjectStrip projectId="A" />);
       expect($("[data-testid=bx-strip]")).toBeNull();
       await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
@@ -67,7 +77,7 @@ describe("the secondary build row", () => {
   it("does not replace the new project's work with a late empty response", async () => {
     let finishOld!: (response: Response) => void;
     const oldLoad = new Promise<Response>((resolve) => { finishOld = resolve; });
-    vi.stubGlobal("fetch", vi.fn().mockReturnValueOnce(oldLoad).mockResolvedValueOnce(Response.json({
+    stubStripFetch(vi.fn().mockReturnValueOnce(oldLoad).mockResolvedValueOnce(Response.json({
       projects: [{ id: "b", title: "B review", status: "GATED", stage: "Review", pct: 50, latest_run_id: "runB" }], total: 1,
     })));
     await mount(<ProjectStrip projectId="A" />);
@@ -81,7 +91,7 @@ describe("the secondary build row", () => {
 
   it("keeps newer attention when an older same-project request returns empty", async () => {
     let finishOld!: (response: Response) => void;
-    vi.stubGlobal("fetch", vi.fn().mockReturnValueOnce(new Promise<Response>((resolve) => { finishOld = resolve; }))
+    stubStripFetch(vi.fn().mockReturnValueOnce(new Promise<Response>((resolve) => { finishOld = resolve; }))
       .mockResolvedValueOnce(Response.json({ projects: [{ id: "new", title: "New review", status: "GATED", stage: "Review", pct: 50,
         latest_run_id: "runNew" }], total: 1 })));
     await mount(<ProjectStrip projectId="A" />);
@@ -95,7 +105,7 @@ describe("the secondary build row", () => {
 
   it("shows the newest request's failure during initial loading and ignores late emptiness", async () => {
     let finishOld!: (response: Response) => void;
-    vi.stubGlobal("fetch", vi.fn().mockReturnValueOnce(new Promise<Response>((resolve) => { finishOld = resolve; }))
+    stubStripFetch(vi.fn().mockReturnValueOnce(new Promise<Response>((resolve) => { finishOld = resolve; }))
       .mockResolvedValueOnce(Response.json({ error: "Latest request offline" }, { status: 503 })));
     await mount(<ProjectStrip projectId="A" />);
     await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
@@ -107,15 +117,15 @@ describe("the secondary build row", () => {
   });
 
   it("retains loading, failure, and an unconfirmed empty list", async () => {
-    vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
+    stubStripFetch(vi.fn(() => new Promise(() => {})));
     await mount(<ProjectStrip projectId="p1" />);
     expect($("[data-state=loading]")?.textContent).toContain("Loading");
     unmount();
-    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ error: "Unavailable" }, { status: 503 })));
+    stubStripFetch(vi.fn(async () => Response.json({ error: "Unavailable" }, { status: 503 })));
     await mount(<ProjectStrip projectId="p1" />);
     expect($("[data-state=failed]")?.textContent).toContain("Unavailable");
     unmount();
-    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ projects: [] })));
+    stubStripFetch(vi.fn(async () => Response.json({ projects: [] })));
     await mount(<ProjectStrip projectId="p1" />);
     expect($("[data-testid=bx-strip]")).not.toBeNull();
   });

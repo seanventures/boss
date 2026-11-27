@@ -36,6 +36,7 @@ import {
 import React, { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 
 import { apiWrite, stepUpNotConfirmedSentence } from "../lib/api-write";
+import { useGate } from "../components/gated";
 import { askConsent, consentFromBody } from "../lib/identity/consent";
 import { SETUP_MODEL_READY_EVENT } from "../lib/setup-stepper";
 import { consoleHref } from "./console-href";
@@ -335,6 +336,9 @@ const STATUS: Record<Phase, string> = {
 
 export function BuildHome({ modelReady, projects = [] }: { modelReady?: boolean; projects?: { id: string; name: string }[] } = {}) {
   const [target, setTarget] = useState("");
+  const createGate = useGate("project:create");
+  const startGate = useGate("workflow_run:start", target || undefined);
+  const launchGate = target ? startGate : createGate;
   const [knownModelReady, setKnownModelReady] = useState<boolean | undefined>(modelReady);
   useEffect(() => { setKnownModelReady(modelReady); }, [modelReady]);
   useEffect(() => {
@@ -469,6 +473,11 @@ export function BuildHome({ modelReady, projects = [] }: { modelReady?: boolean;
       setLaunch(null);
       setLaunchError(CODE_WORDS.needs_model);
       setLaunchFix("?area=setup&focus=models");
+      setPhase("error");
+      return;
+    }
+    if (!launchGate.allowed) {
+      setLaunchError(launchGate.reason);
       setPhase("error");
       return;
     }

@@ -126,7 +126,7 @@ export function TurnMeter({ projectId, turnId }: { projectId: string; turnId: st
     if (!keyRef.current) {
       const nonce = typeof crypto !== "undefined" && crypto.randomUUID
         ? crypto.randomUUID().slice(0, 8)
-        : String(Date.now());
+        : Math.random().toString(36).slice(2, 10);
       keyRef.current = `ask-${amount}-${nonce}`;
     }
     void post(`/v1/builder/turns/${encodeURIComponent(turnId)}/credit`, {

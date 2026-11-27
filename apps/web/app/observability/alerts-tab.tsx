@@ -38,6 +38,7 @@ import { RuleFacts } from "./rule-facts";
 import { SevFlag, StatusChip } from "./severity";
 import { SilenceSheet } from "./silence-sheet";
 import { RunFace, nameOf } from "../agents/run-face";
+import { useIdentityVersion } from "../../lib/use-agent-identities";
 import { agentPageHref } from "./responders";
 import { AnswerAgent } from "./answer-agent";
 
@@ -153,6 +154,7 @@ function SourceRow({ s, targetId, projectId, actor, onDone }: { s: SignalSource;
 }
 
 function AlertDetail({ a, targetId, projectId, actor, onDone }: { a: Alert; targetId: string; projectId: string; actor: string; onDone: () => void }) {
+  useIdentityVersion();
   const [book, setBook] = useState(false);
   const [busy, setBusy] = useState(false);
   const again = async () => {
@@ -305,6 +307,7 @@ export function AlertRow({ a, targetId, projectId, actor, onDone, showApp, onApp
   /** Observability › Alerts: select-many for Ack selected, and a per-row Ack. */
   selected?: boolean; onSelect?: (on: boolean) => void; onAck?: () => void;
 }) {
+  useIdentityVersion();
   const lt = useLocalTime();
   const [open, setOpen] = useState(false);
   const [ruleOpen, setRuleOpen] = useState<false | "switches" | "tune">(false);

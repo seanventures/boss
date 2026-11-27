@@ -9,6 +9,7 @@ import React, { useEffect, useRef, useState } from "react";
 
 import type { Spec, SpecStep } from "../../../lib/workflow-editor-types";
 import { publishSpec } from "../../../lib/workflow-api";
+import { GatedButton } from "../../../components/gated";
 import { couldNot, reasonOf } from "../../../lib/action-result";
 import "./wizard.css";
 
@@ -331,10 +332,10 @@ export function WorkflowWizard({ projectId, onClose, onOpen }: {
                 <button type="button" className="wf-btn" data-testid="wf-wizard-back" onClick={back}>Back</button>
               )}
               {phase === "review" ? (
-                <button type="button" className="wf-btn wf-btn-primary" data-testid="wf-wizard-save"
-                        disabled={busy} onClick={() => save()}>
+                <GatedButton permission="workflow:publish" type="button" className="wf-btn wf-btn-primary" data-testid="wf-wizard-save"
+                             disabled={busy} onClick={() => save()}>
                   {busy ? "Saving…" : "Save"}
-                </button>
+                </GatedButton>
               ) : (
                 <button type="button" className="wf-btn wf-btn-primary" data-testid="wf-wizard-continue"
                         onClick={forward}>

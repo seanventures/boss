@@ -49,6 +49,7 @@ const NOT_WRITES = new Set([
   "lib/stack-deploy.ts#deployFormProblem",       // pure form validation
   "lib/security-scan.ts#runSecurityScan",        // no browser caller (server actions only)
   "lib/add-server.ts#readServer",                // POST …/servers/read reads the words and probes; creates nothing (assistant:chat), as you type
+  "lib/decide.ts#replayEdits",                   // POST /v1/decide/replay is a read-only preview of proposed rules
 ]);
 
 /** `file helper` uses that run only inside a press gated on a STRICTER permission (every role
@@ -79,6 +80,7 @@ const PASSTHROUGH: Record<string, string> = {
   "lib/tool-policies.ts": "its helpers (registered) send through obsWrite; app/skills/tool-rules.tsx gates each press on mcp_server:review / mcp_server:read",
   "lib/infra-storage.ts": "its helpers (registered) send through obsWrite; the strip (app/infra/infra-strip-banner.tsx) gates Acknowledge on system:operate, Storage (app/infra/storage-card.tsx) gates Clean now and the rule toggles on autonomy:manage, the deletion card (app/infra/storage-delete-decision.tsx) gates Delete and the alternatives on decision:approve",
   "app/always-allow-ui.tsx": "sends through obsWrite (/v1/decisions/ registered); its one press is a GatedButton on decision:approve",
+  "lib/decide.ts": "its helpers (registered) send through obsWrite; app/govern/decide-tab.tsx gates each press on approval_rule:manage / work_item:manage",
 };
 
 /** `file helper-or-op` pairs that are background writes (an effect, a poll), never a press. */

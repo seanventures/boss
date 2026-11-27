@@ -9,6 +9,7 @@
  */
 import React, { useState } from "react";
 import { apiWrite } from "../../lib/api-write";
+import { GatedButton } from "../../components/gated";
 
 export type CompareColumn = {
   model: string;
@@ -145,7 +146,8 @@ export function ModelCompare({
               Add a lane
             </button>
           ) : null}
-          <button
+          <GatedButton
+            permission="model_provider:manage"
             type="submit"
             className="mc-go"
             data-testid="compare-submit"
@@ -153,7 +155,7 @@ export function ModelCompare({
             disabled={busy}
           >
             {busy ? "Comparing" : "Compare"}
-          </button>
+          </GatedButton>
         </div>
         {formError ? <p className="mc-error" data-testid="compare-form-error">{formError}</p> : null}
         {runError ? <p className="mc-error" data-testid="compare-run-error">{runError}</p> : null}

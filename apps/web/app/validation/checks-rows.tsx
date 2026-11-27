@@ -17,6 +17,7 @@ import {
   checkSource, isReviewFinding, OVERRIDE_VERBS, packetTally, parsePacket, refTarget, shortSha, SEVS, type ContractCase, type Finding, type Override, type ReviewPacket, type Validation,
 } from "../../lib/validation-review";
 import { ActorName, RefChip } from "./kit";
+import { localWith } from "../../lib/hydration-state";
 import { ChangedVsPartner, FindingsTable, SevBar } from "./review-packet";
 
 type Tone = "ok" | "you" | "bad" | "wait";
@@ -39,7 +40,7 @@ export type JumpTo = (path: string, line?: number | null, side?: "new" | "old") 
 /** "O-1 · Priya Raman · accepted V-07 · “why” · 14:19 · re-run E-3": one row per override. */
 function OverrideRows({ rows }: { rows: Override[] }) {
   if (!rows.length) return null;
-  const time = (iso: string) => { const d = iso ? new Date(iso) : null; return d && !Number.isNaN(d.getTime()) ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : ""; };
+  const time = (iso: string) => (iso ? localWith(iso, { hour: "2-digit", minute: "2-digit" }) : "");
   return (
     <div data-testid="ck-overrides">
       <div className="vr-k">Overrides · {rows.length}</div>

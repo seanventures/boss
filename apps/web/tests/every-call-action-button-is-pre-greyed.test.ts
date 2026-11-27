@@ -36,6 +36,7 @@ const LOADS = new Set([
   "app/process-manager-ui.tsx loadProcessManagerAction",     // the panel's load and refresh
   "app/factory/legacy-build-parts.tsx getQaBenchmarkReportAction", // loads a benchmark report
   "app/factory/legacy-build-parts.tsx getCodeTaskActivityAction",  // polls a build's activity
+  "app/agents/conversation-sheet.tsx loadConversationMessagesAction", // reads the opened conversation on mount
 ]);
 
 /** callAction without a permission literal: generic plumbing whose caller carries the permission. */
