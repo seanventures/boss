@@ -16864,3 +16864,95 @@ ALTER TABLE agent_wakeups ADD COLUMN IF NOT EXISTS purpose TEXT;
 -- One daily journeys wake per install (service.arm_daily also takes an advisory lock).
 CREATE UNIQUE INDEX IF NOT EXISTS agent_wakeups_one_golden_journeys
   ON agent_wakeups ((1)) WHERE purpose = 'golden_journeys' AND status = 'active';
+
+-- GOAL-OWNING AREA AGENTS (BOSSAPP-936; parent BOSSAPP-934; absorbs BOSSAPP-907; relates to BOSSAPP-830):
+-- Each project's six area agents (Shepherd, SRE, Security, FinOps, Release, Infra) own a goal,
+-- measured milestones, self-recorded readings, heartbeats, and weekly reports + ambient digest.
+CREATE TABLE IF NOT EXISTS area_agent_goals (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  area_key TEXT NOT NULL,
+  role_key TEXT NOT NULL,
+  goal_id TEXT REFERENCES goals(id) ON DELETE SET NULL,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'achieved', 'paused', 'dropped')),
+  cadence_hours INTEGER NOT NULL DEFAULT 24 CHECK (cadence_hours >= 1),
+  last_heartbeat_at TIMESTAMPTZ,
+  next_heartbeat_at TIMESTAMPTZ,
+  created_by TEXT NOT NULL DEFAULT 'boss',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_area_agent_goals_project
+  ON area_agent_goals (project_id, area_key, status);
+
+CREATE TABLE IF NOT EXISTS area_agent_milestones (
+  id TEXT PRIMARY KEY,
+  area_goal_id TEXT NOT NULL REFERENCES area_agent_goals(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  metric_key TEXT NOT NULL,
+  unit TEXT NOT NULL DEFAULT '',
+  target_value DOUBLE PRECISION NOT NULL,
+  baseline_value DOUBLE PRECISION,
+  current_value DOUBLE PRECISION,
+  comparator TEXT NOT NULL DEFAULT 'lte' CHECK (comparator IN ('lte', 'gte', 'eq')),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'on_track', 'at_risk', 'achieved')),
+  due_at TIMESTAMPTZ,
+  achieved_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_area_agent_milestones_goal
+  ON area_agent_milestones (area_goal_id, status);
+
+CREATE TABLE IF NOT EXISTS area_agent_readings (
+  id TEXT PRIMARY KEY,
+  milestone_id TEXT NOT NULL REFERENCES area_agent_milestones(id) ON DELETE CASCADE,
+  area_goal_id TEXT NOT NULL REFERENCES area_agent_goals(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  area_key TEXT NOT NULL,
+  value DOUBLE PRECISION NOT NULL,
+  note TEXT NOT NULL DEFAULT '',
+  evidence JSONB NOT NULL DEFAULT '[]'::jsonb,
+  recorded_by TEXT NOT NULL,
+  recorded_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_area_agent_readings_milestone
+  ON area_agent_readings (milestone_id, recorded_at DESC);
+
+CREATE TABLE IF NOT EXISTS area_agent_heartbeats (
+  id TEXT PRIMARY KEY,
+  area_goal_id TEXT NOT NULL REFERENCES area_agent_goals(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  area_key TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'ok' CHECK (status IN ('ok', 'attention', 'degraded', 'blocked')),
+  summary TEXT NOT NULL DEFAULT '',
+  readings_count INTEGER NOT NULL DEFAULT 0,
+  open_items_count INTEGER NOT NULL DEFAULT 0,
+  proposed_actions JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_area_agent_heartbeats_goal
+  ON area_agent_heartbeats (area_goal_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS area_agent_reports (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  area_key TEXT NOT NULL DEFAULT 'all',
+  period TEXT NOT NULL DEFAULT 'weekly' CHECK (period IN ('weekly', 'daily_digest')),
+  window_start TIMESTAMPTZ NOT NULL,
+  window_end TIMESTAMPTZ NOT NULL,
+  summary TEXT NOT NULL DEFAULT '',
+  markdown TEXT NOT NULL DEFAULT '',
+  metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
+  proposed_goals JSONB NOT NULL DEFAULT '[]'::jsonb,
+  digest_items JSONB NOT NULL DEFAULT '{}'::jsonb,
+  posted_to_chat BOOLEAN NOT NULL DEFAULT false,
+  chat_message_ref TEXT,
+  created_by TEXT NOT NULL DEFAULT 'boss',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_area_agent_reports_project
+  ON area_agent_reports (project_id, area_key, created_at DESC);

@@ -131,6 +131,40 @@ def effective_mode(connection: Connection, settings: Any) -> str:
     return mode_state(connection, settings)["mode"]
 
 
+def onboarding_mode_for(
+    connection: Connection, project_id: str, settings: Any
+) -> dict[str, Any]:
+    """Effective operating mode for one project (BOSSAPP-935): new installs start in
+    ``propose`` during the onboarding grace window (until a person reviews the onboarding
+    backlog or the grace window elapses), then transition automatically to ``route`` so
+    agents act by default inside the compliance boundary."""
+    state = mode_state(connection, settings)
+    base_mode = state["mode"]
+    if base_mode == "off":
+        return {**state, "project_mode": "off", "in_onboarding_grace": False, "grace": None}
+    held = grace(connection, project_id, settings)
+    if held is not None:
+        return {
+            **state,
+            "project_mode": "propose",
+            "in_onboarding_grace": True,
+            "grace": held,
+        }
+    return {
+        **state,
+        "project_mode": base_mode,
+        "in_onboarding_grace": False,
+        "grace": None,
+    }
+
+
+def is_compliance_boundary_action(action_key: str) -> bool:
+    """True only for actions on the Where people decide list (merge, deploy_prod,
+    send_external, pay). Every other reversible action may be executed by squads inside
+    the compliance boundary."""
+    return tc.action(action_key).always_a_person
+
+
 def set_mode(connection: Connection, settings: Any, *, mode: str, actor: str,
              reason: str = "") -> dict[str, Any]:
     """A person turns the always-on agents on (propose | route) or off for the install. Refused
