@@ -35,12 +35,12 @@ export const WRITE_HELPERS: Readonly<Record<string, WriteGate | readonly Permiss
   "lib/agents.ts#grantMcp": "agent_ability:assign",               // POST /v1/role-mcp-servers
   "lib/agents.ts#revokeMcp": "agent_ability:assign",              // DELETE /v1/role-mcp-servers
 
-  // lib/infra-storage.ts — the Infra Agent's storage incident (BOSSAPP-1156; docs/infra/INFRA_AGENT_API.md §1)
-  "lib/infra-storage.ts#acknowledgeIncident": "system:operate",     // POST /v1/infra/storage/incidents/{id}/acknowledge
-  "lib/infra-storage.ts#cleanNow": "autonomy:manage",               // POST /v1/infra/storage/clean
-  "lib/infra-storage.ts#setRuleEnabled": "autonomy:manage",         // PUT /v1/infra/storage/rules
+  // lib/infra-storage.ts — the Infra Agent's storage incident (BOSSAPP-1156, BOSSAPP-1415)
+  "lib/infra-storage.ts#acknowledgeIncident": "instance:manage",     // POST /v1/infra/storage/incidents/{id}/acknowledge
+  "lib/infra-storage.ts#cleanNow": "instance:manage",               // POST /v1/infra/storage/clean
+  "lib/infra-storage.ts#setRuleEnabled": "instance:manage",         // PUT /v1/infra/storage/rules
   "lib/infra-storage.ts#answerStorageDelete": "decision:approve",   // POST /v1/decisions/{id}/approve|reject (kind storage_delete)
-  "lib/infra-storage.ts#replanStorageStep": "autonomy:manage",      // POST /v1/infra/storage/incidents/{id}/replan
+  "lib/infra-storage.ts#replanStorageStep": "instance:manage",      // POST /v1/infra/storage/incidents/{id}/replan
 
   // lib/agent-world.ts — an agent's persona, lifecycle, memories, persona test
   "lib/agent-world.ts#savePersona": "agent:update",               // PATCH /v1/agents/{role}
@@ -361,10 +361,10 @@ export const WRITE_OPS: Readonly<Record<string, Readonly<Record<string, WriteGat
     "/v1/autonomy/org-policy": "org:update",
     "/v1/autonomy/policy": "autonomy:manage",
     "/v1/autonomy/decided/": "decision:approve",
-    // The Infra Agent's storage incident (lib/infra-storage.ts, BOSSAPP-1156).
-    "/v1/infra/storage/incidents/": "system:operate",
-    "/v1/infra/storage/clean": "autonomy:manage",
-    "/v1/infra/storage/rules": "autonomy:manage",
+    // The Infra Agent's storage incident (lib/infra-storage.ts, BOSSAPP-1156, BOSSAPP-1415).
+    "/v1/infra/storage/incidents/": "instance:manage",
+    "/v1/infra/storage/clean": "instance:manage",
+    "/v1/infra/storage/rules": "instance:manage",
     // An agent's proposed secret: the person types the value and stores it
     // (app/secret-proposal-card.tsx, BOSSAPP-871; secret:manage @ the decision).
     "/v1/secret-proposals/": "secret:manage",

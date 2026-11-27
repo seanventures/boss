@@ -116,3 +116,43 @@ def test_a_statements_bound_values_are_not_recorded():
         Exception("server closed the connection"))))
     assert "someone@example.com" not in record["message"] + record.get("stack", "")
     assert "server closed the connection" in record["message"]
+
+
+# ── BOSSAPP-1300(c): dotted prefixes, prefixed messages, connection errors, __context__ ──────
+
+def test_storage_failure_detects_dotted_prefixes_prefixed_messages_and_connection_errors():
+    for msg in (
+        "sqlalchemy.exc.IntegrityError: duplicate key value violates unique constraint x",
+        "psycopg.OperationalError: connection refused",
+        "RuntimeError: sqlalchemy.exc.OperationalError: (psycopg.OperationalError) connection failed",
+        "database error: server closed the connection unexpectedly",
+        "BOSS could not complete that turn: IntegrityError: (psycopg.errors.UniqueViolation) dup",
+        '(psycopg.OperationalError) connection to server at "127.0.0.1", port 5432 failed: Connection refused',
+        "server closed the connection unexpectedly",
+        "SSL connection has been closed unexpectedly",
+        "remaining connection slots are reserved for non-replication superuser connections",
+        "terminating connection due to idle-in-transaction timeout",
+    ):
+        assert is_storage_failure(msg), msg
+
+
+def test_storage_failure_and_explain_walk_context_chain_without_matching_quoted_breaker():
+    try:
+        raise OperationalError("SELECT 1", {}, Exception("connection refused"))
+    except Exception:
+        try:
+            raise RuntimeError("step failed")  # sets __context__ with __cause__=None
+        except RuntimeError as outer:
+            assert outer.__cause__ is None
+            assert is_storage_failure(outer) is True
+            assert explain(outer)["kind"] == "storage"
+
+    # Quoted breaker in __context__ must still return False.
+    try:
+        raise ValueError(BREAKER)
+    except ValueError:
+        try:
+            raise RuntimeError(BREAKER)
+        except RuntimeError as outer_breaker:
+            assert outer_breaker.__cause__ is None
+            assert is_storage_failure(outer_breaker) is False

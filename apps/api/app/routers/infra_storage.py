@@ -23,10 +23,55 @@ from ..identity_guard import require_host_tools_principal, writing_get
 router = APIRouter(tags=["infra-storage"])
 
 
-def _actor(request: Request, claimed: Optional[str] = None) -> str:
-    principal = getattr(request.state, "principal", None)
+def _caller(request: Request) -> tuple[Optional[str], Optional[str]]:
+    from ..identity_guard import REQUEST_IDENTITY
+
+    ctx = getattr(request.state, "identity", None) or REQUEST_IDENTITY.get()
+    principal = getattr(ctx, "principal", None) or getattr(request.state, "principal", None)
     pid = getattr(principal, "id", None) or getattr(principal, "principal_id", None)
+    org_id = getattr(principal, "org_id", None)
+    return (str(pid) if pid else None), (str(org_id) if org_id else None)
+
+
+def _caller_scope(connection: Any, request: Request) -> tuple[Optional[str], Optional[str], bool]:
+    from boss_engine.services import storage_incidents
+
+    from ..identity_guard import IDENTITY_MODE, REQUEST_IDENTITY, identity_enforced
+
+    ctx = getattr(request.state, "identity", None) or REQUEST_IDENTITY.get()
+    principal = getattr(ctx, "principal", None) or getattr(request.state, "principal", None)
+    pid = getattr(principal, "id", None) or getattr(principal, "principal_id", None)
+    org_id = getattr(principal, "org_id", None)
+    mode = getattr(request.state, "identity_mode", None) or IDENTITY_MODE.get() or ""
+    enforced = identity_enforced() or mode == "enforce"
+    has_identity = ctx is not None or principal is not None or enforced
+    if not has_identity and not storage_incidents.is_separated(connection):
+        is_op = True
+    else:
+        is_op = storage_incidents.is_install_operator(
+            connection, str(pid) if pid else None
+        )
+    return (str(pid) if pid else None), (str(org_id) if org_id else None), is_op
+
+
+def _actor(request: Request, claimed: Optional[str] = None) -> str:
+    pid, _org = _caller(request)
     return str(pid or claimed or "operator")
+
+
+def _require_install_operator(connection: Any, request: Request) -> None:
+    from boss_engine.services import storage_incidents
+
+    pid, _org = _caller(request)
+    if not storage_incidents.is_install_operator(connection, pid):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "forbidden",
+                "permission": "instance:manage",
+                "message": "Install-wide storage mutations require instance:manage (instance admin).",
+            },
+        )
 
 
 class AcknowledgeBody(BaseModel):
@@ -93,43 +138,50 @@ class HostJobResultBody(BaseModel):
 
 @router.get("/v1/infra/storage/summary")
 @permit(P.SYSTEM_READ, scope=Scope.org())
-def get_summary(host_id: Optional[str] = Query(default=None, max_length=120)) -> dict[str, Any]:
+def get_summary(request: Request,
+                host_id: Optional[str] = Query(default=None, max_length=120)) -> dict[str, Any]:
     """Usage by type, 30-day trend, forecast, thresholds, rules, last cleanup, every host (S3)."""
-    from boss_engine.services import storage_watch
+    from boss_engine.services import storage_incidents
 
     with begin(get_engine()) as connection:
-        return storage_watch.summary(connection, host_id)
+        _pid, org_id, is_op = _caller_scope(connection, request)
+        return storage_incidents.scoped_summary(connection, org_id, is_operator=is_op, host_id=host_id)
 
 
 @router.get("/v1/infra/storage/incidents/current")
 @permit(P.SYSTEM_READ, scope=Scope.org())
-def get_current_incidents() -> dict[str, Any]:
+def get_current_incidents(request: Request) -> dict[str, Any]:
     """The open incidents with their StripNode[] flow, plan, freed, eta, paused runs, and the
     hold — what the strip (S1) and the Command Center card (S2) poll."""
     from boss_engine.services import storage_incidents
 
     with begin(get_engine()) as connection:
-        return storage_incidents.current(connection)
+        _pid, org_id, is_op = _caller_scope(connection, request)
+        return storage_incidents.scoped_current(connection, org_id, is_operator=is_op)
 
 
 @router.get("/v1/infra/storage/incidents")
 @permit(P.SYSTEM_READ, scope=Scope.org())
-def list_incidents(limit: int = Query(default=20, ge=1, le=200),
+def list_incidents(request: Request,
+                   limit: int = Query(default=20, ge=1, le=200),
                    host_id: Optional[str] = Query(default=None, max_length=120)) -> dict[str, Any]:
     from boss_engine.services import storage_incidents
 
     with begin(get_engine()) as connection:
-        return {"incidents": storage_incidents.listing(connection, limit=limit, host_id=host_id)}
+        _pid, org_id, is_op = _caller_scope(connection, request)
+        return {"incidents": storage_incidents.scoped_listing(
+            connection, org_id, is_operator=is_op, limit=limit, host_id=host_id)}
 
 
 @router.get("/v1/infra/storage/incidents/{incident_id}")
 @permit(P.SYSTEM_READ, scope=Scope.org())
-def get_incident(incident_id: str) -> dict[str, Any]:
+def get_incident(incident_id: str, request: Request) -> dict[str, Any]:
     """The full incident: actions (dry runs too), receipts, paused work, decisions, report (S5)."""
     from boss_engine.services import storage_incidents
 
     with begin(get_engine()) as connection:
-        found = storage_incidents.detail(connection, incident_id)
+        _pid, org_id, is_op = _caller_scope(connection, request)
+        found = storage_incidents.scoped_detail(connection, incident_id, org_id, is_operator=is_op)
     if found is None:
         raise HTTPException(status_code=404, detail="no such storage incident")
     return found
@@ -137,47 +189,62 @@ def get_incident(incident_id: str) -> dict[str, Any]:
 
 @router.get("/v1/infra/storage/incidents/{incident_id}/report.md", response_class=PlainTextResponse)
 @permit(P.SYSTEM_READ, scope=Scope.org())
-def get_incident_report_md(incident_id: str) -> Any:
+def get_incident_report_md(incident_id: str, request: Request) -> Any:
     from boss_engine.services import storage_incidents
 
     with begin(get_engine()) as connection:
+        _pid, org_id, is_op = _caller_scope(connection, request)
         inc = storage_incidents.get(connection, incident_id)
         if inc is None:
             raise HTTPException(status_code=404, detail="no such storage incident")
-        body = storage_incidents.report_markdown(connection, inc)
+        if not is_op:
+            if not org_id or not storage_incidents.incident_visible_to_org(connection, inc, org_id):
+                raise HTTPException(status_code=404, detail="no such storage incident")
+            if storage_incidents.incident_org_id(connection, inc) is None:
+                raise HTTPException(status_code=404, detail="no such storage incident")
+        body = storage_incidents.report_markdown(
+            connection, inc, org_id=None if is_op else org_id
+        )
     return PlainTextResponse(body, media_type="text/markdown")
 
 
 @router.get("/v1/infra/storage/hold")
 @permit(P.SYSTEM_READ, scope=Scope.org())
-def get_hold() -> dict[str, Any]:
-    from boss_engine.services import work_hold
+def get_hold(request: Request) -> dict[str, Any]:
+    from boss_engine.services import storage_incidents
 
     with begin(get_engine()) as connection:
-        return {"hold": work_hold.status(connection)}
+        _pid, org_id, is_op = _caller_scope(connection, request)
+        return {"hold": storage_incidents.scoped_hold_status(connection, org_id, is_operator=is_op)}
 
 
 @router.get("/v1/infra/storage/rules")
 @permit(P.SYSTEM_READ, scope=Scope.org())
-def get_rules(host_id: Optional[str] = Query(default=None, max_length=120)) -> dict[str, Any]:
+def get_rules(request: Request,
+              host_id: Optional[str] = Query(default=None, max_length=120)) -> dict[str, Any]:
     from boss_engine.services import storage_rules
 
     with begin(get_engine()) as connection:
         storage_rules.ensure_defaults(connection)
-        return {"rules": storage_rules.list_rules(connection, host_id),
+        _pid, _org_id, is_op = _caller_scope(connection, request)
+        rules = storage_rules.list_rules(connection, host_id)
+        if not is_op:
+            rules = [{**r, "created_by": None, "decision_id": None} for r in rules]
+        return {"rules": rules,
                 "thresholds": storage_rules.thresholds(connection, host_id)}
 
 
 # ── console actions ─────────────────────────────────────────────────────────────────────────
 
 @router.post("/v1/infra/storage/incidents/{incident_id}/acknowledge")
-@permit(P.SYSTEM_OPERATE, scope=Scope.org())
+@permit(P.INSTANCE_MANAGE, scope=Scope.org())
 def acknowledge_incident(incident_id: str, request: Request,
                          payload: Optional[AcknowledgeBody] = None) -> dict[str, Any]:
     """The strip stops flashing and keeps a status line until resolved. Idempotent."""
     from boss_engine.services import storage_incidents
 
     with begin(get_engine()) as connection:
+        _require_install_operator(connection, request)
         found = storage_incidents.acknowledge(connection, incident_id,
                                               _actor(request, (payload or AcknowledgeBody()).actor))
     if found is None:
@@ -186,7 +253,7 @@ def acknowledge_incident(incident_id: str, request: Request,
 
 
 @router.post("/v1/infra/storage/clean")
-@permit(P.AUTONOMY_MANAGE, scope=Scope.org())
+@permit(P.INSTANCE_MANAGE, scope=Scope.org())
 def clean_now(request: Request, payload: Optional[CleanBody] = None) -> dict[str, Any]:
     """Tier 1 now, dry-run first, with no hold: opens (or reuses) a warn incident and runs it."""
     from boss_engine.services import storage_cleanup, storage_incidents, storage_rules, storage_watch
@@ -194,6 +261,7 @@ def clean_now(request: Request, payload: Optional[CleanBody] = None) -> dict[str
     body = payload or CleanBody()
     engine = get_engine()
     with begin(engine) as connection:
+        _require_install_operator(connection, request)
         host_id = body.host_id or (storage_watch.hosts(connection) or [storage_watch.local_host_id()])[0]
         inc = storage_incidents.current_for_host(connection, host_id)
         sample = storage_watch.latest(connection, host_id) or {"host_id": host_id}
@@ -234,12 +302,13 @@ def clean_now(request: Request, payload: Optional[CleanBody] = None) -> dict[str
 
 
 @router.post("/v1/infra/storage/incidents/{incident_id}/replan")
-@permit(P.AUTONOMY_MANAGE, scope=Scope.org())
-def replan_incident_step(incident_id: str, payload: ReplanBody) -> dict[str, Any]:
+@permit(P.INSTANCE_MANAGE, scope=Scope.org())
+def replan_incident_step(incident_id: str, request: Request, payload: ReplanBody) -> dict[str, Any]:
     """"Keep 20 instead": the tier-3 step is dry-run again with these arguments and re-asked."""
     from boss_engine.services import storage_cleanup, storage_incidents
 
     with begin(get_engine()) as connection:
+        _require_install_operator(connection, request)
         step = storage_cleanup.replan_step(connection, incident_id, tool=payload.tool, args=payload.args)
         if step is None:
             raise HTTPException(status_code=404, detail="no such step waiting on this incident")
@@ -248,20 +317,21 @@ def replan_incident_step(incident_id: str, payload: ReplanBody) -> dict[str, Any
 
 
 @router.post("/v1/infra/storage/hold/release")
-@permit(P.AUTONOMY_MANAGE, scope=Scope.org())
+@permit(P.INSTANCE_MANAGE, scope=Scope.org())
 def release_hold(request: Request, payload: Optional[ReleaseBody] = None) -> dict[str, Any]:
     """The safety valve: clear the hold by hand; paused work resumes oldest first."""
     from boss_engine.services import work_hold
 
     body = payload or ReleaseBody()
     with begin(get_engine()) as connection:
+        _require_install_operator(connection, request)
         out = work_hold.release(connection, actor=f"person:{_actor(request, body.actor)}",
                                 reason=body.reason or "released from the console")
     return out
 
 
 @router.put("/v1/infra/storage/rules")
-@permit(P.AUTONOMY_MANAGE, scope=Scope.org())
+@permit(P.INSTANCE_MANAGE, scope=Scope.org())
 def put_rules(request: Request, payload: RulesBody) -> dict[str, Any]:
     """Retention rules and thresholds. An absent id creates; a known kind/host updates; nothing is
     deleted (disable instead)."""
@@ -269,6 +339,7 @@ def put_rules(request: Request, payload: RulesBody) -> dict[str, Any]:
 
     actor = _actor(request, payload.actor)
     with begin(get_engine()) as connection:
+        _require_install_operator(connection, request)
         storage_rules.ensure_defaults(connection)
         for r in payload.rules:
             if r.kind not in storage_rules.KINDS:

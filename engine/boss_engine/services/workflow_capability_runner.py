@@ -4895,7 +4895,9 @@ def _retried_build(
             try:
                 result = cts.retry_code_task(
                     ctx.engine, getattr(ctx, "settings", None) or get_settings(), ctx.jobs,
-                    previous, fix_note=note, by_person=by_person)
+                    previous, fix_note=note,
+                    attempt_ceiling=(10 if by_person else cts.LINEAGE_ATTEMPT_CEILING),
+                    by_person=by_person)
             except ValueError as error:
                 # SAID ONCE, IN ITS OWN WORDS. A refused resume (the circuit breaker, a finished
                 # build, a second owner of the branch) gives the same answer on every attempt:
@@ -5023,7 +5025,8 @@ def _start_recovery_build(
                 return "", str(refused.get("error") or refused.get("message")
                                or "the build step's agent may not start a build")
             started = cts.retry_code_task(ctx.engine, settings, ctx.jobs, build_run_id,
-                                          fix_note=note)
+                                          fix_note=note,
+                                          attempt_ceiling=cts.LINEAGE_ATTEMPT_CEILING)
     except Exception as error:  # noqa: BLE001 — said on the step, never a crash
         log.warning("recovery build for %s/%s not started: %s", run_id, step_id, error)
         return "", f"the repair build could not be started ({error})"

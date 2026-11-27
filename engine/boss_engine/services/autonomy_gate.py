@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import threading
 import time
@@ -143,16 +144,17 @@ ACTIONS: dict[str, Rule] = {
     "gateway_tool_call": _r(ACT_CAPPED, NONE_RECORD, "software_engineer"),
     "gateway_ask_person": _r(ACT, NONE_RECORD, "software_engineer"),
     "gateway_request_approval": _r(ACT_CAPPED, NONE_RECORD, "software_engineer"),
-    "review_tool_change": _r(ASK_PROD_RELEASE, NONE_VERSION, _SEC),
+    "review_tool_change": _r(ACT, "quarantine_tool", _SEC),
     "grant_tool_access": _r(ACT_CAPPED, "revoke_grant", _SEC),
-    # These three change the agents production work runs with: a person approves them
-    # (PERSON_ONLY_ACTIONS, the list a setting may never approve either).
-    "activate_authored_skill": _r(ASK_PROD_RELEASE, "disable_skill", _EM),
-    "apply_agent_prompt_diff": _r(ASK_PROD_RELEASE, NONE_VERSION, _EM),
+    # BOSS-side agent/skill/prompt/role changes act autonomously in dev with real Undo;
+    # tier>=3 / untrusted / two-person cards still ask via route().
+    "activate_authored_skill": _r(ACT, "disable_skill", _EM),
+    "apply_agent_prompt_diff": _r(ACT, "remove_instruction", _EM),
     "apply_wiki_patch": _r(ACT, NONE_VERSION, _PM),
     "apply_confluence_publish": _r(ACT, NONE_PUBLISH, _PM),
-    "role.hire": _r(ASK_PROD_RELEASE, NONE_RECORD, "vp_agents"),
-    "role.autonomy_change": _r(ASK_PROD_RELEASE, NONE_RECORD, "vp_agents"),
+    "role.hire": _r(ACT, "retire_hire", "vp_agents"),
+    "role.autonomy_change": _r(ACT, "revert_autonomy", "vp_agents"),
+    "design_assumptions": _r(ACT, NONE_RECORD, "architect"),
     "ambient_card": _r(ACT, NONE_RECORD, "metatron"),
     "ambient_route": _r(ACT, NONE_RECORD, "metatron"),
     # D. budget and spend
@@ -162,7 +164,7 @@ ACTIONS: dict[str, Rule] = {
     "budget_tier2_frozen": _r(ASK_SPEND, NONE_SPEND, _FIN),
     "budget_denied": _r(ASK_SPEND, NONE_SPEND, _FIN),
     "budget_deferred": _r(NOTICE, NONE_NOTICE, _FIN),
-    "budget.override": _r(ACT_CAPPED, NONE_SPEND, _FIN),
+    "budget.override": _r(ACT_CAPPED, "revoke_override", _FIN),
     "typed_decision_reconciliation": _r(ASK_SPEND, NONE_RECORD, _FIN),
     "architecture_reconciliation": _r(ASK_SPEND, NONE_RECORD, _FIN),
     "discovery_reconciliation": _r(ASK_SPEND, NONE_RECORD, _FIN),
@@ -212,8 +214,8 @@ ACTIONS: dict[str, Rule] = {
     # F. BOSS's own install, storage
     "self_fix.install": _r(ASK_PROD_ONLY, "remove_self_fix", _EM, "install"),
     "self_fix.remove": _r(ACT, NONE_RECORD, _EM),
-    "self_improvement.begin_canary": _r(ASK_PROD_ONLY, NONE_VERSION, _EM, "install"),
-    "self_improvement.rollout": _r(ASK_PROD_ONLY, NONE_VERSION, _EM, "install"),
+    "self_improvement.begin_canary": _r(ACT, "rollback_self_improvement", _EM),
+    "self_improvement.rollout": _r(ACT, "rollback_self_improvement", _EM),
     "storage_delete": _r(ASK_PROD_ONLY, NONE_RECORD, _INF, "install"),
     "storage_rule": _r(ACT, NONE_RECORD, _INF),
     # G. credentials, external channels, data boundary
@@ -250,16 +252,13 @@ PREFIXES: dict[str, Rule] = {
     "configure_or_enable_": _r(ASK_CREDENTIAL, NONE_RECORD, _PM),
 }
 
-#: THE ACTIONS ONLY A PERSON APPROVES — never dev autonomy (route() asks) and never a setting
-#: (decisions.approve_by_policy refuses SETTING_NEVER_APPROVES, which contains these). They change
-#: the agents production work runs with: an agent-drafted skill, an agent's prompt, a new hire.
-PERSON_ONLY_ACTIONS = frozenset({"activate_authored_skill", "apply_agent_prompt_diff",
-                                 "role.hire"})
-#: What a SETTING (the autonomy policy's approve_by_policy) never approves: the person-only
-#: actions, plus an architecture and BOSS's own self-fix (their follow-ons need a person's
-#: transition; dev autonomy routes them by ACTIONS).
-SETTING_NEVER_APPROVES = PERSON_ONLY_ACTIONS | frozenset({
-    "review_architecture", "self_fix.install", "self_fix.remove"})
+#: THE ACTIONS ONLY A PERSON APPROVES — kept as an empty set for contract compatibility;
+#: BOSS-side agent/skill/prompt/role/self-fix actions now act under dev autonomy (with Undo)
+#: while customer data/resource access (`grant_builder_authority`), boundary adapters,
+#: production releases, credentials, two-person tiers, and explicit stops still ask.
+PERSON_ONLY_ACTIONS: frozenset[str] = frozenset()
+#: What a SETTING (the autonomy policy's approve_by_policy) never approves.
+SETTING_NEVER_APPROVES = PERSON_ONLY_ACTIONS | frozenset({"review_architecture"})
 
 #: Workflow gates, by capability (a gate card carries `capability`, not an action).
 _DEPLOY_GATES = ("deploy", "redeploy", "config_deploy")
@@ -442,6 +441,30 @@ def production_default_base() -> str:
     return DEFAULT_BRANCH
 
 
+_BAD_TIER = object()
+
+
+def _tier_of(raw: Any, default: Any = None) -> Any:
+    """A risk tier as an int; ``default`` when absent; ``_BAD_TIER`` when it is not a finite
+    integer-like value (malformed card JSON asks; it never crashes route())."""
+    if raw is None or raw == "":
+        return default
+    if isinstance(raw, bool):
+        return _BAD_TIER
+    try:
+        return int(raw)
+    except (TypeError, ValueError, OverflowError):
+        return _BAD_TIER
+
+
+def _tool_list(rec: Mapping[str, Any]) -> Any:
+    """The card's ``tools`` list; ``[]`` when absent; ``None`` when it is not a list."""
+    tools = rec.get("tools")
+    if tools is None:
+        return []
+    return list(tools) if isinstance(tools, (list, tuple)) else None
+
+
 def route(connection: Any, decision: Mapping[str, Any], *, policy: Any = None) -> Route:
     """What dev autonomy does with this card: act, or ask — and why, in words."""
     from . import autonomy_policy, production
@@ -485,13 +508,30 @@ def route(connection: Any, decision: Mapping[str, Any], *, policy: Any = None) -
         # An agent-proposed BOSS tool (boss.propose_fix): only a reversible, tier-1/2 tool that
         # does not ship, delete, grant or reach a host acts; the rest are production-shaped.
         tool = str(rec.get("tool") or "")
-        tier = int(decision.get("risk_tier") or 2)
+        tier = _tier_of(decision.get("risk_tier") or None, 2)
+        if tier is _BAD_TIER:
+            return Route("ask", ASK_PROD_RELEASE, "this tool action has an invalid risk tier",
+                         rule.agent, rule.undo, policy=pol)
         if tier >= 3 or tool in _PROPOSED_TOOLS_THAT_ASK:
             return Route("ask", ASK_PROD_RELEASE, f"the proposed tool {tool or '?'} ships, "
                          "deletes, grants or reaches a host", rule.agent, rule.undo, policy=pol)
     if action == "grant_tool_access":
-        tiers = [int((t or {}).get("tier") or 0) for t in rec.get("tools") or []
-                 if isinstance(t, Mapping)]
+        tools = _tool_list(rec)
+        if tools is None:
+            return Route("ask", ASK_PROD_RELEASE, "the grant has an invalid tool list",
+                         rule.agent, rule.undo, policy=pol)
+        tiers = []
+        for t in tools:
+            if not isinstance(t, Mapping):
+                continue
+            tt = _tier_of(t.get("tier") or None, 0)
+            if tt is _BAD_TIER:
+                return Route("ask", ASK_PROD_RELEASE, "the grant includes an invalid tool tier",
+                             rule.agent, rule.undo, policy=pol)
+            tiers.append(tt)
+        if not tiers and decision.get("risk_tier") is not None:
+            dt = _tier_of(decision["risk_tier"])
+            tiers = [dt] if isinstance(dt, int) else []
         if not tiers or max(tiers) >= 3:
             return Route("ask", ASK_PROD_RELEASE, "the grant includes a tier-3 tool",
                          rule.agent, rule.undo, policy=pol)
@@ -512,17 +552,52 @@ def route(connection: Any, decision: Mapping[str, Any], *, policy: Any = None) -
                          rule.undo, policy=pol)
     if action in ("resume_agent_run", "resume_interrupt", "gateway_tool_call",
                   "gateway_request_approval", "grant_tool_access", "review_tool_change"):
-        tier = int(decision.get("risk_tier") or rec.get("risk_tier") or 2)
+        raw_tier = decision.get("risk_tier")
+        if raw_tier in (None, ""):
+            raw_tier = rec.get("risk_tier")
+        tier = _tier_of(raw_tier, 2)
+        if tier is _BAD_TIER:
+            return Route("ask", ASK_PROD_RELEASE,
+                         "this tool action has an invalid risk tier", rule.agent,
+                         rule.undo, policy=pol)
         if tier >= 3:
             return Route("ask", ASK_PROD_RELEASE, f"a tier-{tier} tool call is treated as "
                          "production", rule.agent, rule.undo, policy=pol)
+        if action == "review_tool_change":
+            tool_tiers: list[int] = []
+            if rec.get("max_tier") not in (None, ""):
+                mt = _tier_of(rec["max_tier"])
+                if mt is _BAD_TIER:
+                    return Route("ask", ASK_PROD_RELEASE,
+                                 "the tool change includes an invalid risk tier", rule.agent,
+                                 rule.undo, policy=pol)
+                tool_tiers.append(mt)
+            change_tools = _tool_list(rec)
+            if change_tools is None:
+                return Route("ask", ASK_PROD_RELEASE,
+                             "the tool change has an invalid tool list", rule.agent,
+                             rule.undo, policy=pol)
+            for t in change_tools:
+                if isinstance(t, Mapping) and t.get("tier") not in (None, ""):
+                    tt = _tier_of(t["tier"])
+                    if tt is _BAD_TIER:
+                        return Route("ask", ASK_PROD_RELEASE,
+                                     "the tool change includes an invalid tool tier", rule.agent,
+                                     rule.undo, policy=pol)
+                    tool_tiers.append(tt)
+            if any(tt >= 3 for tt in tool_tiers):
+                return Route("ask", ASK_PROD_RELEASE, "the tool change includes a tier-3 tool",
+                             rule.agent, rule.undo, policy=pol)
         if rec.get("unreviewed_server") or rec.get("tool_screen") == "untrusted":
             return Route("ask", ASK_PROD_RELEASE,
                          "it acts on an unreviewed server or on untrusted content, which is "
                          "treated like an unlabelled remote: production", rule.agent, rule.undo,
                          policy=pol)
     if rule is GATE_DEFAULT:
-        tier = int(decision.get("risk_tier") or 2)
+        tier = _tier_of(decision.get("risk_tier") or None, 2)
+        if tier is _BAD_TIER:
+            return Route("ask", ASK_PROD_RELEASE, "this step has an invalid risk tier",
+                         rule.agent, rule.undo, policy=pol)
         if rec.get("requires_person"):
             return Route("ask", ASK_PROD_RELEASE, str(rec["requires_person"])[:200],
                          rule.agent, rule.undo, policy=pol)
@@ -563,11 +638,34 @@ def route(connection: Any, decision: Mapping[str, Any], *, policy: Any = None) -
                          verdict.as_dict(), pol)
         return Route("act", cls, verdict.words, rule.agent, rule.undo, verdict.as_dict(), pol)
     if cls == ACT_CAPPED and action == "budget.override":
-        amount = _usd(rec.get("amount_usd") or rec.get("usd") or rec.get("amount"))
-        cap = float(policy.dev_topup_usd.get("per_item", 0))
-        if amount is None or amount > cap:
+        override = rec.get("override") if isinstance(rec.get("override"), Mapping) else {}
+        raw_amount = next(
+            (rec.get(k) for k in ("amount_usd", "usd", "amount") if rec.get(k) is not None),
+            None,
+        )
+        if raw_amount is None and override.get("extra_usd_micros") is not None:
+            raw_micros = override["extra_usd_micros"]
+            if isinstance(raw_micros, bool):
+                raw_amount = None
+            else:
+                try:
+                    raw_amount = float(raw_micros) / 1_000_000.0
+                except (TypeError, ValueError):
+                    raw_amount = None
+        amount = _usd(raw_amount)
+        cap = float(policy.dev_topup_usd.get("per_item", 0) or 0)
+        day_cap = float(policy.dev_topup_usd.get("per_day", 0) or 0)
+        spent_today = (
+            _dev_topup_spent_today(connection, project_id)
+            if connection is not None and project_id
+            else 0.0
+        )
+        if amount is None or not math.isfinite(amount) or amount <= 0 or amount > cap:
             return Route("ask", ASK_SPEND, f"over the dev top-up of ${cap:,.2f}", rule.agent,
                          rule.undo, policy=pol)
+        if day_cap > 0 and (spent_today + amount) > day_cap:
+            return Route("ask", ASK_SPEND, f"over the daily dev top-up of ${day_cap:,.2f}",
+                         rule.agent, rule.undo, policy=pol)
     words = {ACT: "development work; the agent acts and logs it",
              ACT_CAPPED: "development work within the autonomy cap",
              NOTICE: "a notice; nothing waits on an answer"}.get(cls, cls)
@@ -584,7 +682,7 @@ def _two_person_tier(decision: Mapping[str, Any], rec: Mapping[str, Any]) -> Opt
     for raw in (decision.get("risk_tier"), rec.get("risk_tier")):
         try:
             tiers.append(int(raw))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             continue
     hit = [t for t in tiers if t in TWO_PERSON_TIERS]
     return max(hit) if hit else None
@@ -623,10 +721,33 @@ def _retried_recently(connection: Any, project_id: str, rec: Mapping[str, Any]) 
 
 
 def _usd(value: Any) -> Optional[float]:
+    if isinstance(value, bool):
+        return None
     try:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _dev_topup_spent_today(connection: Any, project_id: str) -> float:
+    """USD already topped up today under dev autonomy for this project."""
+    from datetime import datetime, timezone
+
+    if not hasattr(connection, "execute") or not hasattr(connection, "begin_nested"):
+        return 0.0
+    midnight = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    point = connection.begin_nested()
+    try:
+        micros = connection.execute(text(
+            "SELECT COALESCE(SUM(extra_usd_micros), 0) FROM budget_overrides "
+            "WHERE project_id = :p AND status = 'active' AND approved_by LIKE :pre "
+            "AND created_at >= :since"),
+            {"p": project_id, "pre": ACTOR_PREFIX + "%", "since": midnight}).scalar()
+    except Exception as error:  # noqa: BLE001 — missing table in unit tests -> 0
+        release_failed_savepoint(point, error, connection=connection)
+        return 0.0
+    point.commit()
+    return max(0.0, float(micros or 0) / 1_000_000.0)
 
 
 # ---- the sink hook ----------------------------------------------------------------------------
@@ -1020,13 +1141,24 @@ def _undo_revoke(connection, settings, decision_id, project_id, rec, actor) -> s
 
 
 def _undo_disable_skill(connection, settings, decision_id, project_id, rec, actor) -> str:
+    from . import skill_definitions
     from .skill_registry import disable_skill
 
-    skill = rec.get("skill_id") or rec.get("skill_key")
-    if not skill:
+    skill_key = str(rec.get("skill_key") or "").strip()
+    skill_id = str(rec.get("skill_id") or "").strip()
+    if not skill_key and not skill_id:
         raise UndoRefused("This decision names no skill.")
-    disable_skill(connection, project_id, str(skill), actor=actor)
-    return f"disabled {skill}"
+    if skill_key:
+        try:
+            skill_definitions.set_skill_enabled(
+                connection, project_id=project_id, actor=actor, skill_key=skill_key, enabled=False
+            )
+        except Exception as err:  # noqa: BLE001
+            if not skill_id:
+                raise UndoRefused(f"Could not disable authored skill {skill_key}: {err}") from err
+    target = skill_id or skill_key
+    disable_skill(connection, project_id, target, actor=actor)
+    return f"disabled {skill_key or skill_id}"
 
 
 def _undo_remove_self_fix(connection, settings, decision_id, project_id, rec, actor) -> str:
@@ -1037,6 +1169,128 @@ def _undo_remove_self_fix(connection, settings, decision_id, project_id, rec, ac
     return f"removal asked ({removal.get('decision_id') or 'queued'})"
 
 
+def _undo_remove_instruction(connection, settings, decision_id, project_id, rec, actor) -> str:
+    from . import agent_instructions
+
+    role_key = str(rec.get("role_key") or "").strip().lower()
+    proposed = rec.get("proposed") if isinstance(rec.get("proposed"), Mapping) else {}
+    name = str(proposed.get("name") or rec.get("name") or "").strip()
+    ins_id = str(rec.get("instruction_id") or "").strip()
+    if not ins_id and role_key and name:
+        ins_id = str(connection.execute(text(
+            "SELECT id FROM agent_instructions WHERE project_id = :p AND role_key = :r "
+            "AND name = :n ORDER BY created_at DESC LIMIT 1"),
+            {"p": project_id, "r": role_key, "n": name}).scalar() or "")
+    if not role_key or not ins_id:
+        raise UndoRefused("No active instruction from this decision could be found to remove.")
+    try:
+        agent_instructions.remove(connection, project_id, role_key, ins_id, actor=actor)
+    except Exception as err:  # noqa: BLE001
+        raise UndoRefused(f"Could not remove instruction: {err}") from err
+    return f"removed instruction {name or ins_id} from {role_key}"
+
+
+def _undo_retire_hire(connection, settings, decision_id, project_id, rec, actor) -> str:
+    from . import agents
+
+    draft = rec.get("draft") if isinstance(rec.get("draft"), Mapping) else {}
+    role_key = str(draft.get("role_key") or rec.get("role_key") or "").strip().lower()
+    if not role_key:
+        raise UndoRefused("This decision names no hired role to retire.")
+    try:
+        agents.delete_agent(connection, project_id, role_key, actor=actor)
+    except Exception as err:  # noqa: BLE001
+        raise UndoRefused(f"Could not retire hired role {role_key}: {err}") from err
+    return f"retired hired agent {role_key}"
+
+
+def _undo_revert_autonomy(connection, settings, decision_id, project_id, rec, actor) -> str:
+    from .core import emit_event
+
+    change_id = str(rec.get("autonomy_change_id") or "").strip()
+    if not change_id:
+        raise UndoRefused("This decision names no autonomy change record.")
+    row = connection.execute(text(
+        "SELECT id, role_id, role_key, from_level, to_level, status FROM autonomy_changes "
+        "WHERE id = :id AND project_id = :p FOR UPDATE"),
+        {"id": change_id, "p": project_id}).mappings().first()
+    if row is None or row["status"] != "applied":
+        raise UndoRefused("This autonomy change is no longer applied.")
+    connection.execute(text(
+        "UPDATE roles SET autonomy_level = :lvl WHERE id = :r AND project_id = :p"),
+        {"lvl": int(row["from_level"]), "r": row["role_id"], "p": project_id})
+    connection.execute(text(
+        "UPDATE autonomy_changes SET status = 'reverted', updated_at = now() WHERE id = :id"),
+        {"id": change_id})
+    emit_event(connection, project_id, "role.autonomy_reverted", actor, "role", str(row["role_id"]),
+               {"role_key": row["role_key"], "autonomy_change_id": change_id,
+                "from_level": int(row["to_level"]), "to_level": int(row["from_level"]),
+                "decision_id": decision_id})
+    return f"reverted {row['role_key']} autonomy from {row['to_level']} to {row['from_level']}"
+
+
+def _undo_quarantine_tool(connection, settings, decision_id, project_id, rec, actor) -> str:
+    from . import mcp_registry
+
+    server_id = mcp_registry.tool_change_server_id(connection, project_id, dict(rec))
+    tool = str(rec.get("tool") or "").strip()
+    if not server_id or not tool:
+        raise UndoRefused("This decision names no MCP tool or server to re-quarantine.")
+    try:
+        mcp_registry.refuse_tool_change(connection, project_id, server_id, tool, actor=actor,
+                                        decision_id=decision_id)
+    except Exception as err:  # noqa: BLE001
+        raise UndoRefused(f"Could not quarantine tool {tool}: {err}") from err
+    return f"re-quarantined and disabled {tool}"
+
+
+def _undo_revoke_override(connection, settings, decision_id, project_id, rec, actor) -> str:
+    from .core import emit_event
+
+    row = connection.execute(text(
+        "UPDATE budget_overrides SET status = 'revoked' "
+        "WHERE decision_id = :d AND project_id = :p AND status = 'active' RETURNING id, run_id"),
+        {"d": decision_id, "p": project_id}).mappings().first()
+    if row is None:
+        raise UndoRefused("No active budget override from this decision remains to revoke.")
+    emit_event(connection, project_id, "budget.override_revoked", actor, "budget_override",
+               str(row["id"]), {"decision_id": decision_id, "run_id": row["run_id"]})
+    return f"revoked budget override {row['id']}"
+
+
+def _undo_rollback_self_improvement(connection, settings, decision_id, project_id, rec, actor) -> str:
+    from .core import emit_event
+    from .self_improvement import SelfImprovementService
+
+    proposal_id = str(rec.get("proposal_id") or "").strip()
+    if not proposal_id:
+        raise UndoRefused("This decision names no self-improvement proposal.")
+    svc = SelfImprovementService(settings)
+    proposal = svc.get_proposal(connection, proposal_id, for_update=True)
+    if proposal["project_id"] != project_id:
+        raise UndoRefused("Self-improvement proposal belongs to another project.")
+    status = str(proposal["status"] or "")
+    if status == "rolled_out":
+        rolled = svc.rollback(
+            connection, proposal_id, actor,
+            f"Undo decision {decision_id}",
+            None, {"undone": True}, [f"decision:{decision_id}"],
+        )
+        rolled_id = rolled.get("rollback_artifact_id") if isinstance(rolled, Mapping) else rolled
+        return f"rolled back {proposal_id} ({rolled_id or proposal_id})"
+    if status in ("canary_approved", "rollout_approved", "rolling_out", "canary_running"):
+        connection.execute(text(
+            "UPDATE self_improvement_proposals SET status = 'rejected', "
+            "status_note = :note, current_decision_id = NULL, updated_at = now() "
+            "WHERE id = :id"),
+            {"note": f"undone by {actor}"[:300], "id": proposal_id})
+        emit_event(connection, project_id, "self_improvement.rejected", actor,
+                   "self_improvement_proposal", proposal_id,
+                   {"decision_id": decision_id, "undone": True})
+        return f"cancelled {status} proposal {proposal_id}"
+    raise UndoRefused(f"Proposal {proposal_id} is {status} and cannot be rolled back.")
+
+
 UNDO_HANDLERS = {
     "send_back": _undo_send_back,
     "revert_merge": _undo_revert_merge,
@@ -1044,6 +1298,12 @@ UNDO_HANDLERS = {
     "revoke_grant": _undo_revoke,
     "disable_skill": _undo_disable_skill,
     "remove_self_fix": _undo_remove_self_fix,
+    "remove_instruction": _undo_remove_instruction,
+    "retire_hire": _undo_retire_hire,
+    "revert_autonomy": _undo_revert_autonomy,
+    "quarantine_tool": _undo_quarantine_tool,
+    "revoke_override": _undo_revoke_override,
+    "rollback_self_improvement": _undo_rollback_self_improvement,
     "cancel_run": _undo_cancel,
 }
 

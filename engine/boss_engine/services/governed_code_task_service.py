@@ -2775,6 +2775,8 @@ def _impl_prompt(title, instructions, test_files, test_cmd, *, criteria=(), iac=
         "iterate until the tests pass. "
         "Create parent directories for SQLite/data files before opening them.\n"
         + _run_declaration_rule() + _KEEP_MONITORING
+        + "- Never ask the user clarification questions mid-build; if anything is ambiguous, pick "
+        "the most reasonable engineering reading and proceed.\n"
         + "- Do NOT commit. End with a one-line summary of what you changed.\n"
         + _deferred_e2e_note()
         + FIRST_PASS_CHECKLIST
@@ -3123,7 +3125,8 @@ def _generated_pr_summary(engine, settings, run_id: str, project_id: str, *, tit
         additions=evidence.get("additions"), deletions=evidence.get("deletions"),
         rounds=rounds, comments=comments, deferred=evidence.get("deferred_findings") or [],
         build_url=pr_description.build_url(settings, run_id, project_id), run_id=run_id,
-        quality_gate_id=qg_id or "", baseline=evidence.get("baseline"))
+        quality_gate_id=qg_id or "", baseline=evidence.get("baseline"),
+        assumptions=evidence.get("assumptions") or [])
     # The follow-ups the quality bar let through ride the PR, in one list.
     section = _quality_bar.pr_section(evidence)
     return f"{body.rstrip()}\n\n{section}" if section else body
@@ -3638,6 +3641,8 @@ def _solo_prompt(title, instructions, criteria, test_cmd, *, iac=False, web=Fals
             "until it passes. "
             "Create parent directories for SQLite/data files before opening them.\n"
             + _run_declaration_rule() + _KEEP_MONITORING
+            + "- Never ask the user clarification questions mid-build; if anything is ambiguous, "
+            "pick the most reasonable engineering reading and proceed.\n"
             + "- Do NOT commit. End with a one-line summary of what you built.\n"
             + FIRST_PASS_CHECKLIST
             + (_IAC_GUIDANCE + _IAC_QA_GUIDANCE if iac else "")
@@ -3652,6 +3657,8 @@ def _solo_prompt(title, instructions, criteria, test_cmd, *, iac=False, web=Fals
         "Do NOT commit.\n"
         + "- " + SECRETS_FROM_ENV_RULE + "\n"
         + _run_declaration_rule() + _KEEP_MONITORING
+        + "- Never ask the user clarification questions mid-build; if anything is ambiguous, pick "
+        "the most reasonable engineering reading and proceed.\n"
         + "- End with a one-line summary of what you built.\n"
         + (_IAC_GUIDANCE + _IAC_QA_GUIDANCE if iac else "")
     )
@@ -4888,7 +4895,9 @@ def _spec_prompt(title, instructions, criteria):
         _ctx_block(title, instructions, criteria)
         + "You are a product engineer. Turn the task above into a clear, testable specification: a "
         "one-paragraph summary, a change list (added / changed / removed), and a clarified, testable "
-        "list of acceptance criteria — resolve any ambiguity explicitly. Do NOT edit any files."
+        "list of acceptance criteria. Never ask the user questions or pause for clarification "
+        "mid-build; if the brief is ambiguous, pick the most reasonable engineering reading and "
+        "list your assumptions concisely under `=== ASSUMPTIONS ===`. Do NOT edit any files."
     )
 
 
@@ -4942,12 +4951,15 @@ _DESIGN_HEADS = (("standards", "STANDARDS"), ("spec", "SPEC"), ("plan", "PLAN"),
 
 
 def _design_prompt(title, instructions, criteria):
-    """Standards, spec and plan from ONE read of the repository, in three marked sections."""
+    """Standards, spec, plan, assumptions and self-check from ONE read of the repository."""
     return (
         _ctx_block(title, instructions, criteria)
-        + "You are the design lead for this change. Read this repository ONCE, then write five "
+        + "You are the design lead for this change. Read this repository ONCE, then write six "
         "sections, each starting with its own heading line exactly as shown. Do NOT edit any "
-        "files.\n\n"
+        "files. Never ask the user questions or pause for clarification mid-build: if the brief "
+        "or specification is ambiguous or underspecified, pick the most reasonable engineering "
+        "reading, proceed cleanly with the implementation, and record every assumption concisely "
+        "under `=== ASSUMPTIONS ===`.\n\n"
         "=== STANDARDS ===\nA short bulleted list of the coding standards a new change here "
         "should follow: style, naming, error handling, test conventions, and file structure.\n\n"
         "=== SPEC ===\nA clear, testable specification: a one-paragraph summary, a change list "
@@ -4958,23 +4970,66 @@ def _design_prompt(title, instructions, criteria):
         "end the plan with the line `database: postgres` (BOSS then gives every build its own "
         "PostgreSQL database, DATABASE_URL in the environment); otherwise end with "
         "`database: none`.\n\n"
+        "=== ASSUMPTIONS ===\nEvery assumption made because the brief was ambiguous or "
+        "underspecified (one `- ` bullet per assumption; write `NONE` if unambiguous).\n\n"
         + _plan_self_check_section()
         + _parallel_build.design_prompt_section()
     )
 
 
 def _split_design(text: str) -> dict:
-    """The three sections of a joint design answer; a missing one is empty (and re-run)."""
+    """The sections of a joint design answer; a missing one is empty (and re-run)."""
     out = {key: "" for key, _ in _DESIGN_HEADS}
     marks = []
-    for key, head in _DESIGN_HEADS:
-        m = re.search(rf"^\s*=+\s*{head}\s*=+\s*$", text or "", re.MULTILINE)
+    for key, head in (*_DESIGN_HEADS, ("assumptions", "ASSUMPTIONS")):
+        flags = re.MULTILINE | (re.IGNORECASE if key == "assumptions" else 0)
+        m = re.search(rf"^\s*=+\s*{head}\s*=+\s*$", text or "", flags)
         if m:
             marks.append((m.start(), m.end(), key))
     marks.sort()
     for i, (_start, end, key) in enumerate(marks):
         stop = marks[i + 1][0] if i + 1 < len(marks) else len(text)
-        out[key] = text[end:stop].strip()
+        if key in out:
+            out[key] = text[end:stop].strip()
+    return out
+
+
+def _extract_assumptions(text: str) -> list[str]:
+    """Extract normalized assumption bullets from `=== ASSUMPTIONS ===` (or `### Assumptions`)."""
+    raw_block = ""
+    marks = []
+    for key, head in (*_DESIGN_HEADS, ("assumptions", "ASSUMPTIONS")):
+        flags = re.MULTILINE | (re.IGNORECASE if key == "assumptions" else 0)
+        m = re.search(rf"^\s*=+\s*{head}\s*=+\s*$", text or "", flags)
+        if m:
+            marks.append((m.start(), m.end(), key))
+    marks.sort()
+    for i, (_start, end, key) in enumerate(marks):
+        if key == "assumptions":
+            stop = marks[i + 1][0] if i + 1 < len(marks) else len(text)
+            raw_block = (text or "")[end:stop].strip()
+            break
+    if not raw_block and text:
+        sub = re.search(
+            r"^#{1,4}\s*Assumptions\b[^\n]*\n(.*?)(?=^#{1,4}\s+\S|^\s*=+\s*[A-Z]|\Z)",
+            text,
+            re.IGNORECASE | re.MULTILINE | re.DOTALL,
+        )
+        if sub:
+            raw_block = sub.group(1).strip()
+    out: list[str] = []
+    seen: set[str] = set()
+    for line in raw_block.splitlines():
+        cleaned = re.sub(r"^\s*(?:[-*•]|\d+[.)])\s*", "", line).strip()
+        cleaned = " ".join(cleaned.split())
+        if not cleaned or cleaned.lower().rstrip(".") in ("none", "n/a", "no assumptions"):
+            continue
+        item = cleaned[:300]
+        if item not in seen:
+            seen.add(item)
+            out.append(item)
+        if len(out) >= 20:
+            break
     return out
 
 
@@ -6203,6 +6258,41 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         return _build_budget.lifted_ceiling_usd(settings, float(requested),
                                                 **_ceiling_inputs(agent))
 
+    def _acquire_session_hold(agent=None, *, requested_usd=None):
+        money = _money_billed(agent)
+        if not money:
+            val = (_lift_ceiling(requested_usd, agent) if requested_usd is not None
+                   else _session_budget_ceiling(agent))
+            return None, (round(max(float(val), 0.01), 2) if val is not None else None)
+        repo_files = _repo_file_count()
+        try:
+            with _transaction(engine) as c:
+                list_spent = _build_budget.list_price_spend(c, run_id)
+                money_spent = _build_budget.unsettled_money(c, project_id, run_id)
+                return _build_budget.acquire_session_hold(
+                    budget, c, project_id, settings,
+                    run_id=run_id,
+                    list_spent_micros=list_spent,
+                    money=True,
+                    build_money_spent_micros=money_spent,
+                    risk_tier=risk_tier,
+                    repo_files=repo_files,
+                    requested_usd=requested_usd,
+                )
+        except _build_budget.SessionBudgetHoldBusy:
+            raise
+        except Exception:  # noqa: BLE001 — an unreadable ledger falls back to unclamped ceiling
+            _log_caught(logger)
+            val = (_lift_ceiling(requested_usd, agent) if requested_usd is not None
+                   else _session_budget_ceiling(agent))
+            return None, (round(max(float(val), 0.01), 2) if val is not None else None)
+
+    def _release_session_hold(hold_id: Optional[str]) -> None:
+        if not hold_id:
+            return
+        with _transaction(engine) as c:
+            _build_budget.release_session_hold(c, hold_id)
+
     def _agent_for_locked(engine_name: str):
         a = agents.get(engine_name)
         if a is None:
@@ -6220,6 +6310,12 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # (engine_contract._default_ceiling): set once here, enforced by the engine itself
             # where it can be (budget_limit), at the stage boundary where it cannot.
             a.budget_ceiling = (lambda _a=a: _session_budget_ceiling(_a))
+            a.session_budget_holder = (
+                lambda requested_usd=None, _a=a: _acquire_session_hold(
+                    _a, requested_usd=requested_usd
+                )
+            )
+            a.session_budget_releaser = _release_session_hold
             agents[engine_name] = a
         # A LOCAL REPOSITORY'S reviewers read the tree, never a GitHub connector (BOSSAPP-1350).
         a.local_repo = _is_local_owner_early(owner)
@@ -8553,9 +8649,13 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 # `PLAN: REVISE`; read that (last marker wins), and a review with no marker at
                 # all counts as ok, which is what the old parse did for marker-free text.
                 plan_ok = _plan_verdict(d4.get("summary", "")) != "revise"
+                assumptions = _extract_assumptions(joint.get("summary", ""))
+                if not assumptions and d2.get("summary"):
+                    assumptions = _extract_assumptions(d2.get("summary", ""))
                 design = {"standards": d1.get("summary", ""), "spec": d2.get("summary", ""),
                           "plan": d3.get("summary", ""), "plan_review": d4.get("summary", ""),
                           "plan_ok": plan_ok,
+                          "assumptions": assumptions,
                           # The partition BOSS runs the writing stages in parallel from
                           # (parallel_build); empty when the change is too small to split.
                           "packages": parts.get("packages", "")}
@@ -8588,6 +8688,26 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     "WHERE id=:id"), {"d": json.dumps(design), "id": run_id})
                 emit_event(c, project_id, "code_task.design_persisted", "boss",
                            "code_task_run", run_id, {"plan_chars": len(design.get("plan") or "")})
+                assumptions = [
+                    str(a).strip() for a in (design.get("assumptions") or []) if str(a).strip()
+                ]
+                if assumptions:
+                    emit_event(c, project_id, "code_task.assumptions_recorded",
+                               "autonomy:dev:architect", "code_task_run", run_id,
+                               {"assumptions": assumptions})
+                    from . import autonomy_gate as _autonomy_gate
+
+                    _autonomy_gate.record_decided(
+                        c, project_id, task_id=task_id,
+                        question=f"Design assumptions for {title[:120]} ({len(assumptions)})",
+                        recommendation={"action": "design_assumptions", "run_id": run_id,
+                                        "assumptions": assumptions},
+                        found=_autonomy_gate.Route(
+                            "act", _autonomy_gate.ACT,
+                            "ambiguous brief resolved by choosing the most reasonable reading",
+                            "architect", _autonomy_gate.NONE_RECORD,
+                        ),
+                    )
             _mark_stage_done("design")
             # FAIL FAST: if the design reviewer says this isn't a coding task for this repo (a
             # research/PRD/spec deliverable, or an unrelated repo) it was mis-routed into codegen.
@@ -11213,6 +11333,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             "test_arbitrations": test_arbitrations,
             "panel_parallel": panel_parallel,
             "design": design,
+            "assumptions": list((design or {}).get("assumptions") or []),
             "plan_ok": design.get("plan_ok") if do_design else None,
             # Resolved per-step routing (VAG B2): model=None means the engine's default ran —
             # fall back to what the step actually reported.
