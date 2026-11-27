@@ -610,7 +610,7 @@ def _filter_tools_for_turn(
     client_tool_map: dict[str, dict[str, Any]] = {}
     dropped: list[dict[str, str]] = []
 
-    reg = build_discuss_read_registry(edition=getattr(settings, "boss_edition", None))
+    reg = build_discuss_read_registry()
     for spec in reg.specs():
         if mode == "read-only" and spec.kind == "write":
             dropped.append({"name": spec.name, "reason": "read_only_mode"})

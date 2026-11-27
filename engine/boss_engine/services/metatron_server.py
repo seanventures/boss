@@ -410,7 +410,7 @@ def create_grant(
     }
 
 
-def revoke_grant(
+def mark_grant_revoked(
     connection: Any,
     *,
     grant_id: str,
@@ -436,6 +436,9 @@ def revoke_grant(
         {"principal_id": principal_id},
     )
     return True
+
+
+revoke_grant = mark_grant_revoked
 
 
 def _grant_covers(

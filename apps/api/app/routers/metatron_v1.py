@@ -184,7 +184,7 @@ def delete_metatron_grant(grant_id: str, request: Request) -> JSONResponse:
     ctx = _ctx(request)
     principal_id = str(ctx.principal.id) if ctx is not None else _actor(request)
     with begin(get_engine()) as c:
-        revoked = metatron_server.revoke_grant(c, grant_id=grant_id, principal_id=principal_id)
+        revoked = metatron_server.mark_grant_revoked(c, grant_id=grant_id, principal_id=principal_id)
     if not revoked:
         return JSONResponse(
             status_code=404,
