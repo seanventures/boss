@@ -182,9 +182,12 @@ def skill_project():
     project_id = f"budget-test-{uuid4().hex}"
     try:
         with engine.connect() as connection:
-            workspace = connection.execute(text("SELECT id FROM workspaces ORDER BY id LIMIT 1")).scalar_one()
+            # Its own org and workspace: a fresh database has none, and nothing here commits.
+            connection.execute(text("INSERT INTO orgs (id, name) VALUES (:p, :p)"), {"p": project_id})
+            connection.execute(text("INSERT INTO workspaces (id, org_id, name) VALUES (:p, :p, :p)"),
+                               {"p": project_id})
             connection.execute(text("INSERT INTO projects (id, workspace_id, name, slug) "
-                                    "VALUES (:p, :w, 'Budget QA', :p)"), {"p": project_id, "w": workspace})
+                                    "VALUES (:p, :p, 'Budget QA', :p)"), {"p": project_id})
             connection.execute(text("INSERT INTO roles (id, project_id, role_key, display_name) "
                                     "VALUES (:id, :p, 'qa', 'QA')"), {"id": f"qa-{uuid4().hex}", "p": project_id})
             _one_skill_agent(connection, project_id)
