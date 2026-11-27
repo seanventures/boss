@@ -460,3 +460,242 @@ def test_runtime_ranked_never_raises(connection):
     assert pp.runtime_ranked(_settings(), project_id="no_such_project",
                              fingerprint_key="v1|solo|unknown|exploration",
                              db_engine=None) == []
+
+
+# ── v1.1: deterministic-first Jev cascade, evidence grades, sanity-gate & replay ──────────
+
+class _FakeJev:
+    """Deterministic test double implementing typed_decisions.Decider."""
+
+    def __init__(self, answers: dict[str, tuple[str, float, str]], *, delay_s: float = 0.0,
+                 fail: Exception | None = None) -> None:
+        self.answers = answers
+        self.delay_s = delay_s
+        self.fail = fail
+        self.calls: list[tuple[str, list[str]]] = []
+
+    def decide(self, context: str, questions):
+        import time
+        from boss_engine.services.typed_decisions import Decision, DecisionBatch
+
+        self.calls.append((context, [q.key for q in questions]))
+        if self.delay_s > 0:
+            time.sleep(self.delay_s)
+        if self.fail is not None:
+            raise self.fail
+        decisions = {}
+        for q in questions:
+            ans, conf, reason = self.answers.get(q.key, ("unclear", 0.2, "default"))
+            decisions[q.key] = Decision(ans, conf, reason=reason)
+        return DecisionBatch(decisions=decisions, backend="typesafe", model="jev-test", latency_ms=5)
+
+
+def test_success_judge_is_deterministic_first_and_never_calls_jev_on_ground_truth():
+    pp.reset_jev_cooldown()
+    jev = _FakeJev({"step_progress": ("no", 0.99, "should never run")})
+    rows = [
+        {"stage": "implement", "direction": "tool_call", "tool_name": "grep",
+         "content": "{}", "ok": True, "run_status": "completed"},
+        {"stage": "implement", "direction": "tool_result", "tool_name": "edit_file",
+         "content": "edited", "ok": True, "run_status": "completed"},
+    ]
+    verdict = pp.judge_step_progress(rows, 0, jev=jev)
+    assert verdict.credited is True
+    assert verdict.evidence_grade == pp.EVIDENCE_GROUND_TRUTH
+    assert verdict.judge == "deterministic"
+    assert jev.calls == [], "Jev must never be called when deterministic ground truth exists"
+
+    # Failed gate is also ground truth — Jev cannot override a failed build gate.
+    failed_rows = [
+        {"stage": "implement", "direction": "tool_call", "tool_name": "grep",
+         "content": "{}", "ok": True, "run_status": "failed"},
+        {"stage": "implement", "direction": "tool_result", "tool_name": "grep",
+         "content": "(no matches)", "ok": True, "run_status": "failed"},
+    ]
+    failed_verdict = pp.judge_step_progress(failed_rows, 0, jev=jev)
+    assert failed_verdict.credited is False
+    assert failed_verdict.evidence_grade == pp.EVIDENCE_GROUND_TRUTH
+    assert jev.calls == []
+
+
+def test_success_judge_uses_jev_for_non_gated_episodes_and_falls_back_on_timeout():
+    pp.reset_jev_cooldown()
+    rows = [
+        {"stage": "investigation", "direction": "tool_call", "tool_name": "grep",
+         "content": '{"pattern":"timeout"}', "ok": True, "run_status": "in_progress"},
+        {"stage": "investigation", "direction": "tool_result", "tool_name": "grep",
+         "content": "logs/app.log:42: connection timeout", "ok": True, "run_status": "in_progress"},
+    ]
+    jev_yes = _FakeJev({"step_progress": ("yes", 0.88, "located root-cause log line")})
+    v_yes = pp.judge_step_progress(rows, 0, jev=jev_yes)
+    assert v_yes.credited is True
+    assert v_yes.verdict == "yes"
+    assert v_yes.evidence_grade == pp.EVIDENCE_JEV
+    assert v_yes.judge == "jev"
+    assert len(jev_yes.calls) == 1
+
+    jev_no = _FakeJev({"step_progress": ("no", 0.82, "irrelevant hit")})
+    v_no = pp.judge_step_progress(rows, 0, jev=jev_no)
+    assert v_no.credited is False
+    assert v_no.evidence_grade == pp.EVIDENCE_JEV
+
+    # Hard timeout falls back safely to correlation without raising.
+    jev_slow = _FakeJev({"step_progress": ("yes", 0.9, "too slow")}, delay_s=0.25)
+    v_timeout = pp.judge_step_progress(rows, 0, jev=jev_slow, timeout_ms=30)
+    assert v_timeout.credited is False
+    assert v_timeout.verdict == "unclear"
+    assert v_timeout.evidence_grade == pp.EVIDENCE_CORRELATION
+    assert v_timeout.judge == "fallback"
+    assert "timed out" in v_timeout.reason
+    pp.reset_jev_cooldown()
+
+
+def test_jev_labels_ambiguous_fingerprints_and_skips_clear_ones():
+    pp.reset_jev_cooldown()
+    jev = _FakeJev({"fingerprint_label": ("investigation", 0.91, "log search without test signal")})
+
+    clear = pp.label_fingerprint("v1|implement|python|post_test_failure:assertionerror", jev=jev)
+    assert clear.ambiguous is False
+    assert clear.judge == "deterministic"
+    assert jev.calls == []
+
+    ambiguous = pp.label_fingerprint("v1|solo|unknown|exploration", context="grepping nginx logs", jev=jev)
+    assert ambiguous.ambiguous is True
+    assert ambiguous.label == "investigation"
+    assert ambiguous.evidence_grade == pp.EVIDENCE_JEV
+    assert ambiguous.judge == "jev"
+    assert len(jev.calls) == 1
+
+    # Timeout falls back to deterministic human words.
+    slow = _FakeJev({"fingerprint_label": ("investigation", 0.9, "slow")}, delay_s=0.25)
+    timed_out = pp.label_fingerprint("v1|solo|unknown|exploration", jev=slow, timeout_ms=30)
+    assert timed_out.judge == "fallback"
+    assert timed_out.evidence_grade == pp.EVIDENCE_CORRELATION
+    assert "unknown-language repo" in timed_out.label
+    pp.reset_jev_cooldown()
+
+
+def test_evidence_grade_discipline_ground_truth_outranks_jev_outranks_correlation(connection):
+    """At identical observation counts and freshness, ground_truth > jev > correlation."""
+    fp = "v1|implement|python|exploration"
+    for action, grade in (
+        ("Read", pp.EVIDENCE_CORRELATION),
+        ("Grep", pp.EVIDENCE_JEV),
+        ("Glob", pp.EVIDENCE_GROUND_TRUTH),
+    ):
+        connection.execute(text(
+            """
+            INSERT INTO kg_action_priors (id, org_id, fingerprint_key, action,
+                                          success_count, failure_count, last_seen_at, evidence_grade)
+            VALUES (:id, :o, :fp, :a, 10, 2, :seen, :g)
+            """), {"id": uuid.uuid4().hex, "o": ORG, "fp": fp, "a": action, "seen": NOW, "g": grade})
+
+    ranked = pp.ranked_actions(connection, org_id=ORG, fingerprint_key=fp, now=NOW)
+    assert [r["action"] for r in ranked] == ["Glob", "Grep", "Read"]
+    assert [r["evidence_grade"] for r in ranked] == [
+        pp.EVIDENCE_GROUND_TRUTH, pp.EVIDENCE_JEV, pp.EVIDENCE_CORRELATION
+    ]
+
+
+def test_jev_sanity_gate_controls_graduation_to_enforced_ordering(connection):
+    pp.reset_jev_cooldown()
+    fp = "v1|implement|python|exploration"
+    for action in ("Grep", "Bash"):
+        connection.execute(text(
+            """
+            INSERT INTO kg_action_priors (id, org_id, fingerprint_key, action,
+                                          success_count, failure_count, last_seen_at, evidence_grade)
+            VALUES (:id, :o, :fp, :a, 12, 2, :seen, 'ground_truth')
+            """), {"id": uuid.uuid4().hex, "o": ORG, "fp": fp, "a": action, "seen": NOW})
+
+    jev_ok = _FakeJev({"approve_ordering": ("yes", 0.92, "grep is safe as a first move")})
+    v_ok = pp.sanity_gate_prior(
+        fp, "Grep", observations=14, successes=12, usefulness_score=0.81,
+        jev=jev_ok, connection=connection, org_id=ORG,
+    )
+    assert v_ok.approved is True and v_ok.verdict == "yes"
+
+    jev_no = _FakeJev({"approve_ordering": ("no", 0.89, "running bash blind is noisy")})
+    v_no = pp.sanity_gate_prior(
+        fp, "Bash", observations=14, successes=12, usefulness_score=0.81,
+        jev=jev_no, connection=connection, org_id=ORG,
+    )
+    assert v_no.approved is False and v_no.verdict == "no"
+
+    # Stored verdicts persisted in kg_action_priors.
+    ranked = pp.ranked_actions(connection, org_id=ORG, fingerprint_key=fp, now=NOW)
+    by_action = {r["action"]: r for r in ranked}
+    assert by_action["Grep"]["ordering_approved"] is True
+    assert by_action["Bash"]["ordering_approved"] is False
+
+    # Enforced schema ordering promotes Grep and refuses Bash; drops nothing.
+    schemas = tool_schemas(read_only=False)
+    enforced = pp.order_tool_schemas(schemas, ranked, enforced=True)
+    names = [s["function"]["name"] for s in enforced]
+    assert names[0] == "grep"
+    assert names[1] != "bash" or sorted(names[1:])[0] == "bash"
+    assert sorted(names) == sorted(s["function"]["name"] for s in schemas)
+
+    # Playbook lines remain framed as observations, never instructions.
+    lines = pp.playbook_lines(ranked, fp)
+    assert lines and "not instructions" in lines[0]
+    assert any("grep" in line for line in lines)
+
+    # Kernel scoped_tools.ordered_surface_offers enforces the same gate at the kernel boundary.
+    from boss_engine.kernel.scoped_tools import ordered_surface_offers
+
+    class _Tool:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+    tools = [_Tool("bash"), _Tool("read_file"), _Tool("grep")]
+    offered = ordered_surface_offers(tools, ranked, enforced=True)
+    assert [t.name for t in offered] == ["grep", "bash", "read_file"]
+
+
+def test_replay_experiment_publishes_turns_to_progress_delta_either_way():
+    pp.reset_jev_cooldown()
+    # Build 6 frontier training episodes where Grep -> Edit succeeds in python exploration.
+    training = []
+    for _ in range(6):
+        training.append([
+            {"stage": "implement", "direction": "tool_call", "tool_name": "grep",
+             "content": json.dumps({"path": "src/a.py", "pattern": "def f"}),
+             "ok": True, "run_status": "completed"},
+            {"stage": "implement", "direction": "tool_result", "tool_name": "grep",
+             "content": "src/a.py:1: def f", "ok": True, "run_status": "completed"},
+            {"stage": "implement", "direction": "tool_call", "tool_name": "edit_file",
+             "content": json.dumps({"path": "src/a.py"}), "ok": True, "run_status": "completed"},
+            {"stage": "implement", "direction": "tool_result", "tool_name": "edit_file",
+             "content": "edited", "ok": True, "run_status": "completed"},
+        ])
+
+    # Case 1: improvement (fewer turns to progress with priors on).
+    improved = pp.replay_experiment(
+        training_episodes=training,
+        eval_episodes=[
+            {"stage": "implement", "repo_language": "python", "baseline_turns_to_progress": 5,
+             "baseline_passed": False, "baseline_first_move": "bash", "progress_action": "grep",
+             "guided_turns_to_progress": 2, "guided_passed": True, "guided_first_move": "grep"},
+            {"stage": "implement", "repo_language": "python", "baseline_turns_to_progress": 4,
+             "baseline_passed": True, "baseline_first_move": "list_dir", "progress_action": "grep",
+             "guided_turns_to_progress": 2, "guided_passed": True, "guided_first_move": "grep"},
+        ],
+    )
+    assert improved["episodes_evaluated"] == 2
+    assert improved["turns_to_progress_delta"] == -2.5
+    assert improved["pass_rate_delta"] == 0.5
+    assert improved["verdict"] == "improved"
+
+    # Case 2: regression (more turns to progress with priors on — published honestly!).
+    regressed = pp.replay_experiment(
+        training_episodes=training,
+        eval_episodes=[
+            {"stage": "implement", "repo_language": "python", "baseline_turns_to_progress": 2,
+             "baseline_passed": True, "baseline_first_move": "read_file", "progress_action": "read_file",
+             "guided_turns_to_progress": 4, "guided_passed": True, "guided_first_move": "grep"},
+        ],
+    )
+    assert regressed["turns_to_progress_delta"] == 2.0
+    assert regressed["verdict"] == "regressed"
+
