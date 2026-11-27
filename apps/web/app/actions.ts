@@ -9,7 +9,7 @@ import { API_URL, client, PROJECT_ID, resolveProjectId, authHeaders} from "../li
 import { withdrawnNote, withdrawnSentence } from "../lib/decision-withdrawn";
 import { buildCommandRequest } from "../lib/commands";
 import { apiWrite, pressToken } from "../lib/api-write";
-import { act, apiFetch, consentOfThrown } from "../lib/server-action";
+import { act, ApiRefusal, apiFetch, consentOfThrown } from "../lib/server-action";
 import { describeActionError, missingInput, okResult, type ActionResult } from "../lib/action-result";
 import { previewWebHref } from "../lib/browser-links";
 import { apiErrorTechnical, detailText } from "../lib/api-error";
@@ -103,7 +103,7 @@ export type { ActionResult } from "../lib/action-result";
  *  callAction opens the consent sheet from and sends again once granted (lib/call-action.ts).
  *  Swallowed into `error`, the person read a refusal they could not answer (Change it, Start).
  *  tests/every-action-catch-answers-consent.test.ts holds every write action to it. */
-type ConsentRefusal = { ok: false; error: string; data: { consent: Record<string, unknown> } };
+export type ConsentRefusal = { ok: false; error: string; data: { consent: Record<string, unknown> } };
 function consentRefusal(e: unknown): ConsentRefusal | null {
   const consent = consentOfThrown(e);
   return consent ? { ok: false, error: "Needs your consent", data: { consent } } : null;
@@ -1046,6 +1046,8 @@ async function readSkillYaml(formData: FormData): Promise<string> {
 }
 
 function packYamlApiError(error: unknown, fallback: string): Error {
+  // A consent request stays one: act() answers it with the consent sheet, never as text.
+  if (consentOfThrown(error)) return error as Error;
   if (error instanceof BossApiError) {
     const detail = extractBossDetail(error.body);
     return new Error(detail || error.message || fallback);
@@ -1849,7 +1851,7 @@ export type EasyConnectProviderResult = {
 
 export async function easyConnectProviderAction(
   formData: FormData,
-): Promise<EasyConnectProviderResult> {
+): Promise<EasyConnectProviderResult | ConsentRefusal> {
   const provider = formData.get("provider");
   const accountLabel = formData.get("account_label");
   const secretValue = formData.get("secret_value");
@@ -1890,6 +1892,8 @@ export async function easyConnectProviderAction(
     unknown
   >;
   if (!response.ok) {
+    const asked = refusalOf(response.status, out);
+    if (asked) return asked;
     const message = failureText(out?.detail, response.status).replaceAll(
       secretValue,
       "[redacted]",
@@ -2344,15 +2348,10 @@ export async function createImprovementProgramAction(
     }),
   });
   if (!response.ok) {
-    let detail = "";
-    try {
-      detail = String((await response.json()).detail ?? "");
-    } catch {
-      detail = "";
-    }
-    throw new Error(
-      detail || `Improvement program create failed (${response.status})`,
-    );
+    const body = (await response.json().catch(() => ({}))) as { detail?: unknown };
+    // An ApiRefusal keeps the status and body, so act() answers a consent request as one.
+    throw new ApiRefusal(String(body.detail ?? "") || `Improvement program create failed (${response.status})`,
+                         response.status, null, body);
   }
   revalidatePath("/");
 }); }

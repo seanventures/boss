@@ -823,7 +823,9 @@ def build_run(
         owner=owner, repo=repo, base_branch=None,
         finalize_ctx={"factory_launch": True, "template_id": spec.get("id"),
                       "mode": spec.get("mode"), "reservation_id": reservation_id,
-                      "actor": actor},
+                      "actor": actor,
+                      # A template built into an existing project is still a NEW app there.
+                      **({"new_app": True} if spec.get("existing_project") else {})},
         # Its pull request and merge card open like every product build's: `open_pr=False` is
         # for evaluation runs, and it left Easy Mode builds completed with no PR (crun_5b11643d).
         jobs=jobs, repo_host=None if github else "local")
@@ -883,6 +885,9 @@ def spec_first_run(
         "repository": github or local,
         # "Review the plan first": stricter, so a plain input (the panel's PRD waits).
         **({"spec_approval": SPEC_BY_PERSON} if review_first else {}),
+        # A template built into an existing project (spec["existing_project"]) is a NEW app in
+        # that project, never a change to the app already there.
+        **({"new_app": True} if spec.get("existing_project") else {}),
     }
     if not spec.get("existing_project"):
         _staging_ships_without_asking(connection, project_id, actor)

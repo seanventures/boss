@@ -1083,23 +1083,31 @@ def test_an_into_launch_held_for_consent_resumes_in_the_same_project_and_reposit
     assert spec["local_repo"] == repo and not spec.get("github_repo")
 
 
-def test_an_into_launch_tells_the_workflow_it_is_not_a_new_app(engine, monkeypatch):
-    """With the new_app run input (#352), an Into launch's Easy Mode run says it builds into an
-    existing app, keyed on spec["existing_project"] — the one mark this path sets."""
-    import inspect
+def test_an_into_launch_tells_the_build_it_is_a_new_app(engine, monkeypatch):
+    """A template built into an existing project (spec["existing_project"], the one mark this path
+    sets) is a NEW app in that project, on both start paths: the Easy Mode run's input and the
+    direct code-task build's finalize context say new_app."""
+    from boss_engine.services import code_task_service, factory_launch, workflow_catalogue, workflows
 
-    from boss_engine.services import factory_launch, workflow_catalogue, workflows
-
-    if "new_app" not in inspect.getsource(factory_launch):
-        pytest.skip("needs the new_app run input from #352; meaningful once both are on main")
     seen: dict = {}
     monkeypatch.setattr(workflow_catalogue, "seed", lambda *a, **k: None)
     monkeypatch.setattr(workflows, "running_version", lambda *a, **k: {"version_id": "wfv_x"})
-    monkeypatch.setattr(workflows, "start_run", lambda connection, **k: seen.update(k) or {"id": "wfr_into"})
+    monkeypatch.setattr(workflows, "start_run", lambda connection, **k: seen.setdefault("run", k) and {"id": "wfr_into"})
+    monkeypatch.setattr(code_task_service, "start_code_task",
+                        lambda connection, **k: seen.setdefault("task", k) and None)
     monkeypatch.setattr(factory_launch, "_release_hold", lambda *a, **k: None)
     monkeypatch.setattr(factory_launch, "_start_approver", lambda *a, **k: None)
-    spec = {"title": "Beta board", "prompt": "Build beta.", "local_repo": "boss-local/beta", "existing_project": True}
+    into = {"title": "Beta board", "prompt": "Build beta.", "local_repo": "boss-local/beta", "existing_project": True}
     with engine.begin() as connection:
-        factory_launch.spec_first_run(connection, project_id="default", spec=spec, actor="ceo",
-                                      settings=get_settings(), jobs=None, reservation_id="res_x")
-    assert seen["input_data"]["new_app"] is False
+        factory_launch.build_run(connection, project_id="default", spec={**into, "spec_first": True}, actor="ceo",
+                                 settings=get_settings(), jobs=None, reservation_id="res_x")
+        factory_launch.build_run(connection, project_id="default", spec={**into, "spec_first": False}, actor="ceo",
+                                 settings=get_settings(), jobs=None, reservation_id="res_y")
+    assert seen["run"]["input_data"]["new_app"] is True
+    assert seen["task"]["finalize_ctx"]["new_app"] is True
+    # An ordinary launch makes its own project: no mark, no key.
+    seen.clear()
+    with engine.begin() as connection:
+        factory_launch.build_run(connection, project_id="default", spec={**into, "existing_project": False, "spec_first": False},
+                                 actor="ceo", settings=get_settings(), jobs=None, reservation_id="res_z")
+    assert "new_app" not in seen["task"]["finalize_ctx"]
