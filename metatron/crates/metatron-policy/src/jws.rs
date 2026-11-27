@@ -321,11 +321,13 @@ mod tests {
             Err(JwsError::Expired(_))
         ));
 
-        // Tampered signature
+        // Tampered signature (flip a non-trailing character so it can never be a no-op)
         let fresh = sample_bundle(now + Duration::hours(1));
         let (mut resp, jwks) = sign_policy_bundle_ed25519(&fresh, "kid-1", &sk).expect("sign");
-        resp.jws.pop();
-        resp.jws.push('A');
+        let mut chars: Vec<char> = resp.jws.chars().collect();
+        let flip_idx = chars.len() - 5;
+        chars[flip_idx] = if chars[flip_idx] == 'A' { 'B' } else { 'A' };
+        resp.jws = chars.into_iter().collect();
         assert!(matches!(
             verify_signed_policy_bundle(&resp, &jwks, now),
             Err(JwsError::BadSignature | JwsError::Malformed(_))

@@ -686,7 +686,7 @@ describe("BOSSAPP-1197 Eventing console polish & uncaptured states", () => {
   it("E1 Coming cards keep dashed outline and E6 calm cards show source type + Force panel opens and cancels", async () => {
     api();
     await mount(<EventsHome projectId={PID} place={place("connections")} />);
-    expect($('[data-testid="ev-coming-teams"]')?.getAttribute("data-dashed")).toBe("true");
+    expect($('[data-testid="ev-coming-mail"]')?.getAttribute("data-dashed")).toBe("true");
     unmount();
     await mount(<EventsHome projectId={PID} place={place("dead")} />);
     expect($('[data-testid="ev-calm-kind-icn_s"]')?.textContent).toBe("Slack");
