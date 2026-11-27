@@ -1,0 +1,44 @@
+key: gmail
+label: Gmail (Google Workspace)
+icon: mail
+description: Inbound emails from a Gmail mailbox via users.watch + Google Cloud Pub/Sub OIDC-verified push, daily watch renewal, and history.list catch-up with bounded full sync on expired historyId.
+docs_url: https://developers.google.com/workspace/gmail/api/guides/push
+adapter: GmailIntakeAdapter
+order: 50
+modes: [push, poll, subscribe]
+capabilities:
+  verify: true
+  handshake: false
+  parse: true
+  poll: true
+  subscribe: true
+  stream: false
+  reply: false
+  stream_reply: false
+  identity: true
+  conversation: true
+  health: true
+ack:
+  deadline_ms: 10000
+  success_status: 204
+  retry_signal_headers: []
+dedupe: [id]
+auth_fields:
+  - {name: mailbox, label: Mailbox email or 'me', help: "Gmail mailbox email address (e.g. support@company.com). Own messages are ignored (loop prevention)."}
+  - {name: pubsub_topic, label: Google Cloud Pub/Sub topic, required: false, modes: [subscribe], help: "Full topic resource name: projects/{project}/topics/{topic}."}
+  - {name: oidc_audience, label: Pub/Sub push OIDC audience, required: false, modes: [push], help: "Expected JWT 'aud' claim on Google Pub/Sub push requests."}
+  - {name: service_account_email, label: Pub/Sub push service account email, required: false, help: "Expected verified 'email' claim in the Pub/Sub OIDC token."}
+  - {name: access_token, label: Gmail OAuth access token, secret: true, required: false, help: "OAuth bearer token for Gmail API (or configure refresh_token + client credentials). Never handed to agents."}
+  - {name: client_id, label: Google OAuth client ID, required: false, help: "OAuth 2.0 client ID for refresh token exchange."}
+  - {name: client_secret, label: Google OAuth client secret, secret: true, required: false, help: "OAuth 2.0 client secret stored in the vault."}
+  - {name: refresh_token, label: Google OAuth refresh token, secret: true, required: false, help: "OAuth 2.0 refresh token stored in the vault."}
+  - {name: label_ids, label: Watched label IDs, required: false, help: "Comma-separated Gmail label IDs (default INBOX)."}
+  - {name: api_base_url, label: Gmail API base URL, required: false, placeholder: "https://gmail.googleapis.com", help: "Override for local fake servers in tests."}
+  - {name: oidc_jwks_url, label: OIDC JWKS URL, required: false, placeholder: "https://www.googleapis.com/oauth2/v3/certs", help: "Override for local fake OIDC servers in tests."}
+  - {name: poll_seconds, label: History catch-up interval (seconds), required: false, help: "Safety-net history.list poll interval in seconds (default 60, minimum 15)."}
+default_hosts: [gmail.googleapis.com, oauth2.googleapis.com, www.googleapis.com]
+guard_provider: gmail
+self_identity: [mailbox]
+event_types:
+  - com.google.gmail.message.received
+  - com.google.gmail.history.notified

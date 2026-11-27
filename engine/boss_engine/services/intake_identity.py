@@ -51,8 +51,9 @@ MODES = ("person", "person_or_owner", "owner")
 #: Sources whose events are conversations with a person (default identity mode `person`).
 CHAT_KINDS = ("slack", "teams")
 #: Sources whose events people cause but that are not conversations.
-RECORD_PERSON_KINDS = ("github", "jira", "plane", "servicenow", "salesforce")
-LINK_METHODS = ("code", "sso_email", "admin", "aad_oid")
+RECORD_PERSON_KINDS = ("github", "jira", "plane", "servicenow", "salesforce", "gmail", "outlook")
+MAIL_KINDS = ("gmail", "outlook")
+LINK_METHODS = ("code", "sso_email", "admin", "aad_oid", "dmarc_email")
 #: An event held for a person who has no grant yet, then fired when it lands (§6.1).
 GRANT_WAIT = timedelta(minutes=30)
 #: The link prompt (and the grant prompt) go out at most once per user per hour.
@@ -282,12 +283,65 @@ def _github_person(connection: Connection, event: IntakeEvent, org_id: Optional[
     return str(row) if row else None
 
 
+def _mail_person(connection: Connection, connection_row: Mapping[str, Any],
+                 conn: IntakeConnection, event: IntakeEvent) -> tuple[Optional[str], str]:
+    """Mail sender identity (EVENTING_LLD.md §6.2, P9c-T2): a `From` address resolves to a BOSS
+    person ONLY when `Authentication-Results` proves `dmarc=pass` aligned with the `From` domain
+    AND that domain is an active verified domain of the connection's org (or SSO-attested domain),
+    AND an active verified user holds that email. A DMARC-failing or missing-DMARC `From` NEVER
+    resolves to a person."""
+    from ..connectors.intake._mail import email_domain, parse_dmarc
+    from ..identity.users import by_email
+
+    email = str(event.bossactor.email or (event.data or {}).get("from_email") or "").strip().lower()
+    if not email or "@" not in email:
+        return None, "no_email"
+    data = event.data or {}
+    dmarc = data.get("dmarc") if isinstance(data.get("dmarc"), Mapping) else None
+    if dmarc is None:
+        raw_ar = data.get("authentication_results")
+        vals = raw_ar if isinstance(raw_ar, list) else ([raw_ar] if raw_ar else [])
+        dmarc = parse_dmarc(vals, email)
+    if dmarc.get("passed") is not True:
+        return None, "dmarc_failed"
+    domain = email_domain(email)
+    if not domain:
+        return None, "no_email"
+    org = connection.execute(text(
+        "SELECT w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+        "WHERE p.id = :p"), {"p": conn.project_id}).scalar()
+    verified_domains: set[str] = set()
+    if org:
+        rows = connection.execute(text(
+            "SELECT domains FROM identity_providers WHERE org_id = :o AND status = 'active'"),
+            {"o": org}).all()
+        for row in rows:
+            for d in (row[0] or []):
+                cleaned = str(d).strip().lower().lstrip("@")
+                if cleaned:
+                    verified_domains.add(cleaned)
+    attested = _attested(connection_row)
+    if attested:
+        verified_domains.update(attested["domains"])
+    if domain not in verified_domains:
+        return None, "domain_not_verified"
+    user = by_email(connection, email)
+    if user is None or user.status != "active" or not user.email_verified_at:
+        return None, "no_active_verified_user"
+    return user.principal_id, "dmarc_email"
+
+
 def find_person(connection: Connection, connection_row: Mapping[str, Any], conn: IntakeConnection,
                 event: IntakeEvent) -> tuple[Optional[str], Optional[str], str, str]:
     """(principal_id, link_id, method, reason) for the event's actor, per source."""
     actor = event.bossactor
     if actor.kind != "user" or not (actor.external_id or actor.email):
         return None, None, "", f"actor is {actor.kind or 'unknown'}, not a person"
+    if conn.kind in MAIL_KINDS:
+        principal, reason = _mail_person(connection, connection_row, conn, event)
+        if principal:
+            return principal, None, "dmarc_email", "dmarc pass + verified org domain"
+        return None, None, "", reason
     endpoint = _endpoint(connection, connection_row)
     if endpoint is not None and actor.external_id:
         link, reason = _linked(connection, endpoint, actor.external_id)

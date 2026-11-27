@@ -15224,10 +15224,21 @@ CREATE INDEX IF NOT EXISTS idx_intake_connections_project ON intake_connections 
 
 -- THE INBOX. Inserted by the front door (verify -> insert -> commit -> 2xx), claimed by the
 -- processor (SKIP LOCKED, a lease), finished with a status. `raw` is the verified body;
--- `headers` is allow-listed (never a signature). A redelivery hits UNIQUE (connection_id,
--- dedupe_key) and only bumps `duplicates`.
+-- `headers` is allow-listed (never a signature). Partitioned by month on `received_at` (P9c-3,
+-- BOSSAPP-1107); cross-month deduplication lives in `intake_event_dedupe` so redeliveries across
+-- month boundaries still hit UNIQUE (connection_id, dedupe_key) and only bump `duplicates`.
+CREATE TABLE IF NOT EXISTS intake_event_dedupe (
+  connection_id TEXT NOT NULL REFERENCES intake_connections(id) ON DELETE CASCADE,
+  dedupe_key TEXT NOT NULL,
+  event_id TEXT NOT NULL,
+  received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (connection_id, dedupe_key)
+);
+CREATE INDEX IF NOT EXISTS idx_intake_event_dedupe_received
+  ON intake_event_dedupe (received_at);
+
 CREATE TABLE IF NOT EXISTS intake_events (
-  id TEXT PRIMARY KEY,
+  id TEXT NOT NULL,
   connection_id TEXT NOT NULL REFERENCES intake_connections(id) ON DELETE CASCADE,
   project_id TEXT,
   dedupe_key TEXT NOT NULL,
@@ -15264,8 +15275,18 @@ CREATE TABLE IF NOT EXISTS intake_events (
   processed_at TIMESTAMPTZ,
   raw_expires_at TIMESTAMPTZ,                       -- retention: raw nulled after 14 days
   expires_at TIMESTAMPTZ,                           -- retention: row deleted after 30/90 days
-  UNIQUE (connection_id, dedupe_key)
-);
+  PRIMARY KEY (id, received_at)
+) PARTITION BY RANGE (received_at);
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+              WHERE n.nspname = current_schema() AND c.relname = 'intake_events'
+                AND c.relkind = 'p') THEN
+    CREATE TABLE IF NOT EXISTS intake_events_default PARTITION OF intake_events DEFAULT;
+  END IF;
+END $$;
+CREATE INDEX IF NOT EXISTS idx_intake_events_connection_dedupe
+  ON intake_events (connection_id, dedupe_key);
+CREATE INDEX IF NOT EXISTS idx_intake_events_id ON intake_events (id);
 CREATE INDEX IF NOT EXISTS idx_intake_events_due ON intake_events (next_attempt_at, received_at)
   WHERE status IN ('received', 'failed');
 CREATE INDEX IF NOT EXISTS idx_intake_events_conversation
@@ -16864,3 +16885,133 @@ ALTER TABLE agent_wakeups ADD COLUMN IF NOT EXISTS purpose TEXT;
 -- One daily journeys wake per install (service.arm_daily also takes an advisory lock).
 CREATE UNIQUE INDEX IF NOT EXISTS agent_wakeups_one_golden_journeys
   ON agent_wakeups ((1)) WHERE purpose = 'golden_journeys' AND status = 'active';
+
+-- ── P9b-2 / P9c (BOSSAPP-1101, 1105, 1106, 1107): scale-from-zero, subscriptions, partitioning ──
+ALTER TABLE agent_deployments ADD COLUMN IF NOT EXISTS min_replicas INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE agent_deployments ADD COLUMN IF NOT EXISTS max_replicas INTEGER NOT NULL DEFAULT 64;
+ALTER TABLE agent_deployments ADD COLUMN IF NOT EXISTS scale_to_zero BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE agent_deployments ADD COLUMN IF NOT EXISTS max_queued_runs INTEGER NOT NULL DEFAULT 200;
+ALTER TABLE agent_deployments ADD COLUMN IF NOT EXISTS queue_slo_ms INTEGER NOT NULL DEFAULT 1000;
+
+ALTER TABLE intake_subscriptions ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE intake_subscriptions ADD COLUMN IF NOT EXISTS last_renewed_at TIMESTAMPTZ;
+ALTER TABLE intake_subscriptions ADD COLUMN IF NOT EXISTS last_error TEXT;
+
+-- Idempotent upgrade of pre-P9c unpartitioned `intake_events` tables to monthly range partitioning
+-- on `received_at` (BOSSAPP-1107). A fresh schema is already partitioned (`relkind = 'p'`).
+DO $$
+DECLARE
+  rk "char";
+BEGIN
+  SELECT c.relkind INTO rk
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = current_schema() AND c.relname = 'intake_events';
+
+  IF rk = 'r' THEN
+    DROP TRIGGER IF EXISTS intake_events_notify_boss_intake ON intake_events;
+    ALTER TABLE intake_events RENAME TO intake_events_unpartitioned_legacy;
+    -- Rename old indexes out of the way so canonical names belong to the partitioned table.
+    PERFORM (
+      SELECT count(*) FROM (
+        SELECT idx.relname
+          FROM pg_index i
+          JOIN pg_class idx ON idx.oid = i.indexrelid
+          JOIN pg_class tbl ON tbl.oid = i.indrelid
+          JOIN pg_namespace ns ON ns.oid = tbl.relnamespace
+         WHERE ns.nspname = current_schema()
+           AND tbl.relname = 'intake_events_unpartitioned_legacy'
+           AND NOT i.indisprimary
+      ) s
+    );
+    EXECUTE 'DROP INDEX IF EXISTS idx_intake_events_due';
+    EXECUTE 'DROP INDEX IF EXISTS idx_intake_events_conversation';
+    EXECUTE 'DROP INDEX IF EXISTS idx_intake_events_project';
+    EXECUTE 'DROP INDEX IF EXISTS idx_intake_events_connection_status';
+    EXECUTE 'DROP INDEX IF EXISTS idx_intake_events_retention';
+    EXECUTE 'DROP INDEX IF EXISTS idx_intake_events_connection_actor';
+    EXECUTE 'DROP INDEX IF EXISTS idx_intake_events_connection_dedupe';
+    EXECUTE 'DROP INDEX IF EXISTS idx_intake_events_id';
+
+    CREATE TABLE intake_events (
+      id TEXT NOT NULL,
+      connection_id TEXT NOT NULL REFERENCES intake_connections(id) ON DELETE CASCADE,
+      project_id TEXT,
+      dedupe_key TEXT NOT NULL,
+      source_event_id TEXT,
+      type TEXT,
+      subject TEXT,
+      conversation_key TEXT,
+      status TEXT NOT NULL DEFAULT 'received'
+        CHECK (status IN ('received', 'processing', 'routed', 'ignored', 'filtered', 'refused',
+                          'failed', 'dead', 'shed', 'digest')),
+      raw BYTEA,
+      raw_sha256 TEXT,
+      raw_ref TEXT,
+      headers JSONB NOT NULL DEFAULT '{}'::jsonb,
+      envelope JSONB,
+      actor_kind TEXT,
+      actor_external_id TEXT,
+      principal_id TEXT,
+      screen JSONB,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      lease_until TIMESTAMPTZ,
+      claimed_by TEXT,
+      last_error TEXT,
+      retry_count_seen INTEGER NOT NULL DEFAULT 0,
+      duplicates INTEGER NOT NULL DEFAULT 0,
+      outcome JSONB NOT NULL DEFAULT '[]'::jsonb,
+      replays INTEGER NOT NULL DEFAULT 0,
+      replay_of TEXT,
+      trace_id TEXT,
+      verify_scheme TEXT,
+      received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      event_time TIMESTAMPTZ,
+      processed_at TIMESTAMPTZ,
+      raw_expires_at TIMESTAMPTZ,
+      expires_at TIMESTAMPTZ,
+      PRIMARY KEY (id, received_at)
+    ) PARTITION BY RANGE (received_at);
+
+    CREATE TABLE intake_events_default PARTITION OF intake_events DEFAULT;
+    CREATE INDEX idx_intake_events_connection_dedupe ON intake_events (connection_id, dedupe_key);
+    CREATE INDEX idx_intake_events_id ON intake_events (id);
+    CREATE INDEX idx_intake_events_due ON intake_events (next_attempt_at, received_at)
+      WHERE status IN ('received', 'failed');
+    CREATE INDEX idx_intake_events_conversation
+      ON intake_events (conversation_key, received_at) WHERE conversation_key IS NOT NULL;
+    CREATE INDEX idx_intake_events_project ON intake_events (project_id, received_at DESC);
+    CREATE INDEX idx_intake_events_connection_status
+      ON intake_events (connection_id, status, received_at DESC);
+    CREATE INDEX idx_intake_events_retention ON intake_events (expires_at)
+      WHERE expires_at IS NOT NULL;
+    CREATE INDEX idx_intake_events_connection_actor
+      ON intake_events (connection_id, actor_external_id, received_at DESC)
+      WHERE actor_external_id IS NOT NULL;
+
+    INSERT INTO intake_events (
+      id, connection_id, project_id, dedupe_key, source_event_id, type, subject, conversation_key,
+      status, raw, raw_sha256, raw_ref, headers, envelope, actor_kind, actor_external_id,
+      principal_id, screen, attempts, next_attempt_at, lease_until, claimed_by, last_error,
+      retry_count_seen, duplicates, outcome, replays, replay_of, trace_id, verify_scheme,
+      received_at, event_time, processed_at, raw_expires_at, expires_at)
+    SELECT
+      id, connection_id, project_id, dedupe_key, source_event_id, type, subject, conversation_key,
+      status, raw, raw_sha256, raw_ref, headers, envelope, actor_kind, actor_external_id,
+      principal_id, screen, attempts, next_attempt_at, lease_until, claimed_by, last_error,
+      retry_count_seen, duplicates, outcome, replays, replay_of, trace_id, verify_scheme,
+      received_at, event_time, processed_at, raw_expires_at, expires_at
+      FROM intake_events_unpartitioned_legacy;
+
+    INSERT INTO intake_event_dedupe (connection_id, dedupe_key, event_id, received_at)
+    SELECT connection_id, dedupe_key, id, received_at
+      FROM intake_events_unpartitioned_legacy
+    ON CONFLICT (connection_id, dedupe_key) DO NOTHING;
+
+    DROP TABLE intake_events_unpartitioned_legacy;
+
+    CREATE TRIGGER intake_events_notify_boss_intake AFTER INSERT ON intake_events
+      FOR EACH ROW EXECUTE FUNCTION boss_intake_notify();
+  END IF;
+END $$;
