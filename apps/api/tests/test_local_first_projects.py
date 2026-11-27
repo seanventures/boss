@@ -210,6 +210,14 @@ def test_a_local_project_builds_reviews_merges_previews_and_deploys_without_gith
         pending = client.get(f"/v1/projects/{pid}/local-changes/1").json()
     assert disabled.status_code == 409 and "BOSS_ENABLE_SANDBOX_MERGE" in disabled.text
     assert pending["state"] == "open" and pending["decision"]["status"] == "pending"
+    # A setting's approval (dev autonomy, approve_by_policy) takes the same path and is refused
+    # the same way: no approval is recorded for a merge that cannot follow.
+    from boss_engine.services.decisions import InvalidDecisionTransitionError
+
+    with engine.begin() as db, pytest.raises(InvalidDecisionTransitionError,
+                                             match="BOSS_ENABLE_SANDBOX_MERGE"):
+        main.decisions.transition(db, decision["id"], action="approve", actor="autonomy:test",
+                                  note="dev autonomy", system_policy=True)
     monkeypatch.setattr(main.decisions.settings, "enable_sandbox_merge", True, raising=False)
     with _owner(world):
         merged = client.post(f"/v1/projects/{pid}/local-changes/1/merge", json={"note": "ship it"})
