@@ -69,6 +69,10 @@ class Capacity:
     scope: str = "machine"            # machine | docker_vm | container
     limit_mb: Optional[float] = None  # the container's own cap, when it has one
     notes: list[str] = field(default_factory=list)
+    #: Readings `sample()` could not take ("CPU load", "disk", "memory stall"): their fields hold
+    #: the old permissive defaults so admission behaves as before, and anything that would ADD
+    #: capacity on them (capacity_steward) refuses instead.
+    unknown: tuple[str, ...] = ()
 
     @property
     def reserve_mb(self) -> float:
@@ -132,6 +136,9 @@ def sample() -> Capacity:
             available = min(available or cap_spare, cap_spare)
             scope = "container"
     cores = int(cpu.get("cpu_limit_cores") or cpu.get("cores") or 1)
+    unknown = tuple(name for name, missing in (
+        ("memory", not total), ("CPU load", cpu.get("load_per_core") is None),
+        ("disk", not disk), ("memory stall", mem.get("psi_full_avg60") is None)) if missing)
     return Capacity(
         total_mb=total or 0.0, available_mb=available or 0.0, cores=max(1, cores),
         psi_full_avg10=float(mem.get("psi_full_avg10") or 0.0),
@@ -140,7 +147,7 @@ def sample() -> Capacity:
         disk_used_pct=float(disk.get("used_pct") or 0.0) if disk else 0.0,
         load_per_core=float(cpu.get("load_per_core") or 0.0),
         swap_used_mb=float(mem.get("host_swap_used_mb") or 0.0),
-        scope=scope, limit_mb=float(limit) if limit else None,
+        scope=scope, limit_mb=float(limit) if limit else None, unknown=unknown,
     )
 
 
@@ -367,13 +374,14 @@ def builds_at_once(connection: Any, cap: Capacity, request_mb: float, *,
     from . import capacity_steward
 
     boost = capacity_steward.boost_of(connection)
-    if boost <= 0:
+    if boost <= 0 or not base["auto"]:
+        # A PERSON'S PIN IS A CEILING (ENT-CONC-04): the doctor never runs above it.
         return {**base, "boost": 0}
-    top = capacity_steward.ceiling(cap, request_mb)
+    top = capacity_steward.ceiling(cap, request_mb, derived=int(base["derived"]))
     value = max(int(base["value"]), min(int(base["value"]) + boost, top))
     if value == base["value"]:
         return {**base, "boost": 0}
-    why = (f"{base['value']} set, +{value - base['value']} added by the system doctor: work "
+    why = (f"{base['value']} measured, +{value - base['value']} added by the system doctor: work "
            f"waited while this machine had room (at most {top} here). {base['why']}")
     return {**base, "value": value, "boost": value - int(base["value"]), "why": why}
 

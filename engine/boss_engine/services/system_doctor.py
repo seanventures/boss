@@ -545,6 +545,17 @@ def diagnose(sig: Signals) -> list[dict[str, Any]]:
         })
 
     capacity = sig.capacity or {}
+    if capacity.get("action") == "pinned":
+        # A PERSON'S LIMIT HOLDS THE QUEUE on a machine with room: said once, never changed.
+        out.append({
+            "kind": "queue_held_by_limit", "severity": "info",
+            "title": "Your limit is holding builds",
+            "detail": f"{capacity.get('why')}. BOSS does not change a limit you set.",
+            "evidence": {"why": capacity.get("why"), "load_per_core": cap.load_per_core,
+                         "available_mb": round(cap.available_mb)},
+            "options": [_opt("dismiss_today", "OK", "Hide this notice for today.")],
+            "needs_choice": True, "auto": [],
+        })
     if capacity.get("action") == "busy":
         # SAID ONCE, NOT SILENTLY: work waits and the doctor cannot add a slot. One notice per
         # episode ("OK" hides it for the day; it clears two minutes after the wait ends).

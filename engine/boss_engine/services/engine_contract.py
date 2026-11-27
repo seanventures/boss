@@ -578,12 +578,14 @@ class ContractedAgent:
         sink = harness_failures.TurnSink(kwargs.get("on_turn"), engine=self.engine,
                                          writer=not read_only)
         kwargs["on_turn"] = sink
-        # THE HEAVY-BUILD SLOT FOLLOWS THE WORK (heavy_slot): a read-only session only thinks
-        # and may give the build's slot back; a writing session works the machine and holds it.
+        # THE HEAVY-BUILD SLOT FOLLOWS THE WORK (heavy_slot): a read-only session of a thinking
+        # stage (design, spec, plan) may give the build's slot back; every other session —
+        # a writer, a review seat with its shell, check_tests — works the machine and holds it.
         from . import heavy_slot
 
+        thinking = read_only and heavy_slot.stage_is_light(heavy_slot.stage_now())
         try:
-            with (heavy_slot.light() if read_only else heavy_slot.heavy()):
+            with (heavy_slot.light() if thinking else heavy_slot.heavy()):
                 raw = _call(self._inner.run_role, run_prompt, work, kwargs)
         except harness_failures.HarnessFailure:
             raise

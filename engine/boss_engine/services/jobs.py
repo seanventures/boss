@@ -2660,6 +2660,12 @@ class JobLeaseService:
                 "run_after": run_after,
                 "last_error": json.dumps({
                     "code": "host_capacity", "deferred_reason": "host_capacity",
+                    # When THIS wait began (the first deferral since it was last queued): a
+                    # job retried after hours is not "waiting for hours" (capacity_steward).
+                    "deferred_since": (previous.get("deferred_since")
+                                       if previous.get("code") == "host_capacity"
+                                       and previous.get("deferred_since")
+                                       else now_utc().isoformat()),
                     "message": message, "shortfall": verdict.shortfall,
                     "slots": verdict.slots, "in_flight": verdict.in_flight,
                     "disk_low": disk_low,

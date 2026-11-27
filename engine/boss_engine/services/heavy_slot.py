@@ -4,14 +4,21 @@ WHY. "Builds at once" (admission) counted a build's job from lease to end. A bui
 model thinking: on a 4 CPU / 8 GiB host with one heavy slot, one build held the slot ~1.5 h —
 its design, its review panel, its acceptance reads included — while two builds sat 12,361 s and
 12,876 s in the queue before their first lease. On the laptop's own runs (30 days, 277 builds,
-80 h of lease) 22% of the lease was read-only model sessions that never touched the CPU.
+80 h of lease) 10% of the lease was the thinking stages before a build writes (design, spec,
+plan, plan review) and 12% the review panel; only the first is given back (review seats keep a
+shell that can run the suite), and new leases no longer wait behind a build that is thinking.
 
 THE RULE. A running build gives its slot back while it only reads and thinks, and takes it back
 before it works the machine again:
 
-  * a READ-ONLY model session (engine_contract run_role(read_only=True), a plain verdict, web
-    research) is `light`: once one has run RELEASE_AFTER_SECONDS with nothing heavy alongside,
-    the slot is released (a ten-second verdict never gives the slot away mid-build);
+  * a READ-ONLY model session of a THINKING stage (design, standards, spec, plan, review_plan,
+    plan_coverage — LIGHT_STAGES), a plain verdict (no tools) and web research are `light`: once
+    one has run RELEASE_AFTER_SECONDS with nothing heavy alongside, the slot is released (a
+    ten-second verdict never gives the slot away mid-build). Review seats are read-only but
+    hold a shell that can run the suite (review PR #367), so they stay heavy;
+  * only the scope that gave the slot back may keep it given back: when it ends the build takes
+    the slot again, whatever other light sessions (an abandoned seat) are still open, and a
+    heavy step ending never gives it away again;
   * a WRITING session (the coder, the QA writer, a repair round) and every BOSS sandbox command
     (install, tests, build, app start) is `heavy`: it waits for the slot first if it was given
     back;
@@ -62,8 +69,38 @@ TOUCH_SECONDS = 60.0
 TRACKED_KINDS = ("code.task",)
 
 
-class HeavySlotLost(RuntimeError):
-    """The build stopped owning its job while it waited for the slot (a reclaim)."""
+#: Read-only stages that only think: their sessions may give the slot back. Everything else —
+#: review seats, check_tests, acceptance, any stage not named — holds it.
+LIGHT_STAGES = frozenset({"design", "standards", "spec", "plan", "review_plan",
+                          "plan_coverage", "research"})
+
+
+def _run_fenced_base():
+    from .run_fencing import RunFenced
+
+    return RunFenced
+
+
+class HeavySlotLost(_run_fenced_base()):
+    """The build stopped owning its job (a reclaim) or the run already ended elsewhere while it
+    waited for the slot. A RunFenced: the pipeline stands down quietly — no failed status, no
+    partial PR — exactly as a fenced duplicate execution does."""
+
+    def __init__(self, run_id: str, why: str) -> None:
+        super().__init__(run_id, f"the heavy-build slot wait ({why})")
+
+
+def stage_is_light(stage: Optional[str]) -> bool:
+    return str(stage or "") in LIGHT_STAGES
+
+
+def stage_now() -> Optional[str]:
+    try:
+        from .llm_telemetry import get_llm_context
+
+        return get_llm_context().get("stage")
+    except Exception:  # noqa: BLE001
+        return None
 
 
 @dataclass
@@ -78,6 +115,8 @@ class _Track:
     heavy: int = 0
     released: bool = False
     acquiring: bool = False
+    #: The generation of the light scope that may give the slot back (None: none open).
+    opener: Optional[int] = None
     generation: int = 0
     waited_total: float = 0.0
 
@@ -160,21 +199,28 @@ def light(run_id: Optional[str] = None) -> Iterator[None]:
     if track is None:
         yield
         return
+    mine: Optional[int] = None
     with track.cond:
         track.light += 1
-        if track.light == 1:
+        if track.heavy == 0 and not track.released and track.opener is None:
             track.generation += 1
-            if track.heavy == 0 and not track.released:
-                _schedule_release(track, track.generation)
+            mine = track.opener = track.generation
+            _schedule_release(track, mine)
     try:
         yield
     finally:
         with track.cond:
             track.light -= 1
-            last = track.light == 0
-            if last:
+            need = False
+            if mine is not None and track.opener == mine:
+                # The scope that gave the slot back ended: the build takes it again, whatever
+                # else is still open (an abandoned seat never keeps it given away).
+                track.opener = None
                 track.generation += 1      # a pending release is void
-        if last:
+                need = track.released
+            elif track.light == 0:
+                need = track.released
+        if need:
             # Between stages the build holds, as it always did.
             _ensure_held(track)
 
@@ -195,12 +241,10 @@ def heavy(run_id: Optional[str] = None) -> Iterator[None]:
         yield
     finally:
         with track.cond:
+            # Never a release here: a heavy step ending means the build goes on to its next
+            # step, which holds (review PR #367: an abandoned seat's open light scope gave the
+            # slot away between stages).
             track.heavy -= 1
-            if track.heavy == 0 and track.light > 0 and not track.released:
-                # Read-only sessions are still running beside it (the review panel, whose
-                # regression run just ended): they may give the slot back now.
-                track.generation += 1
-                _schedule_release(track, track.generation)
 
 
 def _schedule_release(track: _Track, generation: int) -> None:
@@ -210,8 +254,8 @@ def _schedule_release(track: _Track, generation: int) -> None:
         # Under the run's lock, so a heavy step starting now waits for the row to be written
         # and then takes the slot back through the queue, never past it.
         with track.cond:
-            if (track.generation != generation or track.released or track.acquiring
-                    or track.heavy > 0 or track.light == 0):
+            if (track.generation != generation or track.opener != generation
+                    or track.released or track.acquiring or track.heavy > 0 or track.light == 0):
                 return
             try:
                 _write_release(track)
@@ -278,16 +322,19 @@ def _check_stopped(c: Any, track: _Track) -> None:
     if owned_process.was_cancelled(track.run_id) or owned_process.draining():
         raise owned_process.OwnerCancelled(
             "stopped while waiting for the heavy-build slot")
+    status = c.execute(text("SELECT status FROM code_task_runs WHERE id = :r"),
+                       {"r": track.run_id}).scalar()
+    if status in ("failed", "completed", "superseded"):
+        # It ended elsewhere: stand down quietly, never touching the status it has.
+        raise HeavySlotLost(track.run_id, f"the run is already {status}")
+    if status == "cancelled":
+        raise owned_process.OwnerCancelled("the run was cancelled")
     live = c.execute(text(
         "SELECT 1 FROM jobs WHERE id = :j AND fence_epoch = :e AND status IN ('leased', "
         "'running') AND (lease_expires_at IS NULL OR lease_expires_at > now())"),
         {"j": track.job_id, "e": track.epoch}).first()
     if live is None:
-        raise HeavySlotLost("this build no longer owns its job; another execution has it")
-    status = c.execute(text("SELECT status FROM code_task_runs WHERE id = :r"),
-                       {"r": track.run_id}).scalar()
-    if status in ("cancelled", "failed", "completed", "superseded"):
-        raise owned_process.OwnerCancelled(f"run is already {status}")
+        raise HeavySlotLost(track.run_id, "this build no longer owns its job")
     try:
         from .code_task_service import pending_stop
 
@@ -369,5 +416,6 @@ def waiting_row(connection: Any, run_id: str) -> Optional[dict[str, Any]]:
     return dict(row) if row else None
 
 
-__all__ = ["HeavySlotLost", "POLL_SECONDS", "RELEASED_SQL", "RELEASE_AFTER_SECONDS",
-           "TRACKED_KINDS", "WAITING_SQL", "heavy", "light", "tracking", "waiting_row"]
+__all__ = ["HeavySlotLost", "LIGHT_STAGES", "POLL_SECONDS", "RELEASED_SQL", "RELEASE_AFTER_SECONDS",
+           "TRACKED_KINDS", "WAITING_SQL", "heavy", "light", "stage_is_light", "stage_now",
+           "tracking", "waiting_row"]

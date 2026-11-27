@@ -142,7 +142,7 @@ def test_a_short_verdict_never_gives_the_slot_away(eng, project, monkeypatch):  
         assert not _admit_new(eng).admitted
 
 
-def test_heavy_work_beside_a_review_keeps_the_slot_until_it_ends(eng, project):  # noqa: F811
+def test_a_light_session_opened_beside_heavy_work_never_gives_the_slot_away(eng, project):  # noqa: F811
     run, job = _build(eng, project)
     with heavy_slot.tracking(eng, run, lease_token=f"tok_{job}"):
         verify_done = threading.Event()
@@ -152,8 +152,7 @@ def test_heavy_work_beside_a_review_keeps_the_slot_until_it_ends(eng, project): 
             with heavy_slot.light(run):
                 light_in.set()
                 verify_done.wait(5)
-                # The regression run beside it ended: now the slot may go back.
-                assert _until(lambda: _row(eng, job) is not None)
+                time.sleep(0.3)
 
         with heavy_slot.heavy(run):
             t = threading.Thread(target=seat)
@@ -163,7 +162,51 @@ def test_heavy_work_beside_a_review_keeps_the_slot_until_it_ends(eng, project): 
             assert _row(eng, job) is None, "never released while the verify runs"
         verify_done.set()
         t.join(5)
-        assert _row(eng, job) is None     # the seat ended; the build holds again
+        assert _row(eng, job) is None, "a heavy step ending never gives the slot away"
+
+
+def test_an_abandoned_seat_never_gives_the_slot_away_between_stages(eng, project):  # noqa: F811
+    """Review PR #367: a seat past its deadline, still inside light(), made the build release
+    its slot after the NEXT heavy step, while it went on with un-instrumented work."""
+    run, job = _build(eng, project)
+    with heavy_slot.tracking(eng, run, lease_token=f"tok_{job}"):
+        stuck = threading.Event()
+
+        def zombie_seat():
+            with heavy_slot.light(run):
+                stuck.wait(5)
+
+        t = threading.Thread(target=zombie_seat)
+        t.start()
+        time.sleep(0.02)
+        with heavy_slot.heavy(run):       # implement / verify
+            time.sleep(0.1)
+        released = _until(lambda: _row(eng, job) is not None, timeout=1.0)
+        stuck.set()
+        t.join(5)
+    assert not released, "the build holds between stages, whatever seat is still open"
+
+
+def test_the_opening_scope_ending_takes_the_slot_back_whatever_else_is_open(eng, project):  # noqa: F811
+    run, job = _build(eng, project)
+    with heavy_slot.tracking(eng, run, lease_token=f"tok_{job}"):
+        hold = threading.Event()
+        opened = threading.Event()
+
+        def stray():
+            opened.wait(5)
+            with heavy_slot.light(run):
+                hold.wait(5)
+
+        t = threading.Thread(target=stray)
+        t.start()
+        with heavy_slot.light(run):                     # the design session
+            assert _until(lambda: _row(eng, job) is not None)
+            opened.set()
+            time.sleep(0.1)
+        assert _row(eng, job) is None, "design ended: the build holds again"
+        hold.set()
+        t.join(5)
 
 
 def test_lowering_capacity_drains_and_a_stale_row_never_counts(eng, project):  # noqa: F811
@@ -256,14 +299,29 @@ def test_read_only_sessions_think_and_writing_sessions_work(monkeypatch, tmp_pat
         def run(self, spec, repo, sandbox):
             return "built"
 
+    from boss_engine.services.llm_telemetry import set_llm_context
+
     agent = engine_contract.ContractedAgent(Inner())
     monkeypatch.setattr(engine_contract, "session_tree_problem", lambda _w: None)
-    monkeypatch.setattr(engine_contract, "_isolated_copy", lambda w: w)
+    def _copy(_w):
+        # The contract removes the copy's parent after the turn: never tmp_path's own parent.
+        tree = tmp_path / "copies" / f"c{len(seen)}" / "tree"
+        tree.mkdir(parents=True, exist_ok=True)
+        return tree
+
+    monkeypatch.setattr(engine_contract, "_isolated_copy", _copy)
     monkeypatch.setattr(engine_contract.readonly_guard, "is_repo", lambda _w: False)
-    agent.run_role("review it", tmp_path, read_only=True)
+    set_llm_context(stage="design")
+    agent.run_role("plan it", tmp_path, read_only=True)          # thinks: may give it back
+    # A review seat is read-only but holds a shell that can run the suite (review PR #367).
+    for stage in ("review_code", "check_tests", "security_check", "acceptance_check"):
+        set_llm_context(stage=stage)
+        agent.run_role("review it", tmp_path, read_only=True)
+    set_llm_context(stage="implement")
     agent.run_role("write it", tmp_path, read_only=False)
     agent.run(None, None, None)
-    assert seen == ["light", "heavy", "heavy"]
+    set_llm_context(stage=None)
+    assert seen == ["light", "heavy", "heavy", "heavy", "heavy", "heavy", "heavy"]
 
 
 def test_every_sandbox_command_holds_the_slot(monkeypatch):
@@ -295,3 +353,87 @@ def test_the_wait_still_going_counts_as_queue_time(eng, project):  # noqa: F811
                   {"j": job, "r": run, "s": since})
         waited = step_recovery.runs_queued_seconds(c, [run], since=since.isoformat())
     assert waited >= 29 * 60
+
+
+def test_a_build_whose_run_ended_elsewhere_stands_down_quietly(eng, project):  # noqa: F811
+    """HeavySlotLost is a RunFenced: the pipeline exits like a fenced duplicate (no failed
+    status, no partial PR), and the wait never touches the status the run already has."""
+    from boss_engine.services.run_fencing import RunFenced
+
+    assert issubclass(heavy_slot.HeavySlotLost, RunFenced)
+    _other_run, _other_job = _build(eng, project)
+    run, job = _build(eng, project)
+    with heavy_slot.tracking(eng, run, lease_token=f"tok_{job}"):
+        errors: list = []
+
+        def design():
+            try:
+                with heavy_slot.light(run):
+                    assert _until(lambda: _row(eng, job) is not None)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        t = threading.Thread(target=design)
+        t.start()
+        assert _until(lambda: (_row(eng, job) or {}).get("state") == "waiting")
+        with eng.begin() as c:
+            c.execute(text("UPDATE code_task_runs SET status = 'completed' WHERE id = :r"),
+                      {"r": run})
+        t.join(5)
+    assert errors and isinstance(errors[0], heavy_slot.HeavySlotLost)
+    with eng.begin() as c:
+        assert c.execute(text("SELECT status FROM code_task_runs WHERE id = :r"),
+                         {"r": run}).scalar() == "completed"
+    # A reclaimed job (its epoch moved on) stands down the same way.
+    run2, job2 = _build(eng, project)
+    with heavy_slot.tracking(eng, run2, lease_token=f"tok_{job2}"):
+        lost: list = []
+
+        def design2():
+            try:
+                with heavy_slot.light(run2):
+                    assert _until(lambda: _row(eng, job2) is not None)
+            except Exception as exc:  # noqa: BLE001
+                lost.append(exc)
+
+        t = threading.Thread(target=design2)
+        t.start()
+        assert _until(lambda: (_row(eng, job2) or {}).get("state") == "waiting")
+        with eng.begin() as c:
+            c.execute(text("UPDATE jobs SET fence_epoch = fence_epoch + 1 WHERE id = :j"),
+                      {"j": job2})
+        t.join(5)
+    assert lost and isinstance(lost[0], heavy_slot.HeavySlotLost)
+
+
+def test_conc04_three_released_builds_race_back_into_one_slot(eng, project):  # noqa: F811
+    """Reviewer's adversarial check (PR #367): three builds that gave the slot back race to take
+    it again; never more than one holds it."""
+    builds = [_build(eng, project, title=f"B{i}") for i in range(3)]
+    inside = {"now": 0, "max": 0}
+    lock = threading.Lock()
+    go = threading.Barrier(3)
+    errors = []
+
+    def one(run, job):
+        try:
+            with heavy_slot.tracking(eng, run, lease_token=f"tok_{job}"):
+                with heavy_slot.light(run):
+                    assert _until(lambda: _row(eng, job) is not None)
+                    go.wait(5)
+                with heavy_slot.heavy(run):
+                    with lock:
+                        inside["now"] += 1
+                        inside["max"] = max(inside["max"], inside["now"])
+                    time.sleep(0.15)
+                    with lock:
+                        inside["now"] -= 1
+            _finish(eng, job)
+        except Exception as e:  # noqa: BLE001
+            errors.append(e)
+
+    ts = [threading.Thread(target=one, args=b) for b in builds]
+    [t.start() for t in ts]
+    [t.join(20) for t in ts]
+    assert not errors, errors
+    assert inside["max"] == 1, inside

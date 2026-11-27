@@ -2,6 +2,14 @@
 
 All notable changes to BOSS Community. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Release notes with more detail live in `docs/community/RELEASE_NOTES_*.md`.
 
+## [Unreleased]
+
+### Changed
+
+- A build holds its heavy-build slot only while it works the machine (writing sessions, installs, tests, the app). While it designs and plans, the slot goes to the next build, and it takes it back in order. Waits for the slot count as queue time on every repair clock, and the build says what it waits for.
+- On installs that never saved Setup › Agent capacity, job slots are now measured on the machine: heavy builds at their memory request, thinking builds at about 400 MB, up to 4. Before, they matched "Builds at once". Setup says why each number was chosen.
+- The always-on system doctor adds a heavy slot when work has waited 10 minutes and the machine has had room for 10 minutes. It goes at most one above the measured value, drains when room goes (nothing is stopped), and backs off after a drain. Each episode is one row in "Decided for you"; Undo there removes the extra slot and keeps the doctor quiet for 24 h. A pinned "Builds at once" is never raised: the doctor says when your limit is what holds the queue. To turn the boost off, pin "Builds at once".
+
 ## [v1.0-rc10.32]
 
 Notes: [docs/community/RELEASE_NOTES_v1.0-rc10.32.md](docs/community/RELEASE_NOTES_v1.0-rc10.32.md).
