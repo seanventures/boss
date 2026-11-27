@@ -7,10 +7,11 @@ anyone clicked, which agent acted. BOSS already records all of it. `ledger` read
 per LINEAGE (a build and its repairs, retries and follow-ups are one attempt at the case), so
 `boss qa report` prints the ledger instead of the tester assembling it.
 
-WHICH CASE. A run belongs to a case when its own record names the fault branch the fault kit
-pushed (`test/fault-rec-01`, scripts/install/qa_fault.py), or — for the New work started after the
-fault was merged, which builds on the default branch — when the caller tags the window with
-`case`.
+WHICH CASE. A lineage belongs to a case when BOSS's records tie it to one: a run of it names the
+fault branch the fault kit pushed (`test/fault-rec-01`, scripts/install/qa_fault.py), a change of
+that branch was reviewed by one of its runs (local_change_sets.run_id), or the work names the case
+itself (the tester's New work titled "REC-01: add a recipe counter" — the kit says to). `case`
+only FILTERS to that case's lineages; it never tags a lineage that does not name it.
 
 WHAT EACH FIELD MEANS (read the same way the plan's "How to judge a failure case" does):
   failure_at     the first time a check failed: a repair round began, the app-start proof failed,
@@ -37,6 +38,8 @@ from sqlalchemy import text
 
 #: The fault kit's branch, with its case (scripts/install/qa_fault.py BRANCH_PREFIX).
 FAULT_BRANCH = re.compile(r"test/fault-(rec-\d{2})(?!\d)", re.IGNORECASE)
+#: The case named in the work itself ("REC-01: …", "ENT-REC-01 …").
+CASE_TAG = re.compile(r"(?<![\w-])(?:ENT-)?(REC-\d{2})(?!\d)", re.IGNORECASE)
 CASE = re.compile(r"^(?:ENT-)?REC-\d{2}$", re.IGNORECASE)
 
 #: Event → the agent or step of BOSS that acted.
@@ -85,7 +88,11 @@ def _case_of(run: dict) -> Optional[str]:
     blob = " ".join(json.dumps(_json(run.get(k)), default=str)
                     for k in ("spec", "finalize_ctx")) + " " + str(run.get("title") or "")
     m = FAULT_BRANCH.search(blob)
-    return m.group(1).upper() if m else None
+    if m:
+        return m.group(1).upper()
+    tagged = CASE_TAG.search(str(run.get("title") or "") + " "
+                             + str(_json(run.get("spec")).get("instructions") or "")[:2000])
+    return tagged.group(1).upper() if tagged else None
 
 
 def _root(run: dict, by_id: dict[str, dict]) -> str:
@@ -103,23 +110,24 @@ def _root(run: dict, by_id: dict[str, dict]) -> str:
         current = by_id[parent]
 
 
-def _is_person(connection: Any, project_id: str, actor: Any) -> bool:
-    """A PERSON, positively: a signed-in principal (usr_…) or a human member of the project
-    (a legacy install's `ceo`). BOSS's own actors — the pipeline, the shepherd, a seat, a role
-    agent — are none of these, and an unknown name is not counted as a click."""
-    who = str(actor or "").strip()
-    if not who:
-        return False
-    if who.startswith(("usr_", "person:")):
-        return True
-    try:
-        with connection.begin_nested():
-            kind = connection.execute(text(
-                "SELECT member_type FROM project_members WHERE project_id = :p AND member_id = :m"),
-                {"p": project_id, "m": who}).scalar()
-    except Exception:  # noqa: BLE001 — no membership table, no person by name
-        return False
-    return kind == "human"
+def _people(connection: Any, project_id: str, actors: Iterable[Any]) -> set[str]:
+    """Which of these actors are PEOPLE, positively, in one query: a signed-in principal (usr_…)
+    or a human member of the project (a legacy install's `ceo`). BOSS's own actors — the
+    pipeline, the shepherd, a seat, a role agent — are none of these, and an unknown name is not
+    counted as a click."""
+    names = {str(a).strip() for a in actors if str(a or "").strip()}
+    out = {n for n in names if n.startswith(("usr_", "person:"))}
+    rest = sorted(names - out)
+    if rest:
+        try:
+            with connection.begin_nested():
+                out |= {r[0] for r in connection.execute(text(
+                    "SELECT member_id FROM project_members WHERE project_id = :p AND "
+                    "member_id = ANY(:m) AND member_type = 'human'"),
+                    {"p": project_id, "m": rest})}
+        except Exception:  # noqa: BLE001 — no membership table, no person by name
+            pass
+    return out
 
 
 def ledger(connection: Any, project_id: str, *, since: Optional[datetime] = None,
@@ -130,15 +138,36 @@ def ledger(connection: Any, project_id: str, *, since: Optional[datetime] = None
         "SELECT id, status, phase, title, spec, finalize_ctx, error, pull_request_url, "
         "decision_id, created_at, updated_at FROM code_task_runs WHERE project_id = :p "
         "AND (CAST(:since AS timestamptz) IS NULL OR created_at >= CAST(:since AS timestamptz)) "
-        "ORDER BY created_at LIMIT :n"),
+        "ORDER BY created_at DESC LIMIT :n"),
         {"p": project_id, "since": since, "n": int(limit) * 4}).mappings()]
+    runs.reverse()                                    # oldest first inside a lineage
     by_id = {r["id"]: r for r in runs}
     lineages: dict[str, list[dict]] = {}
     for r in runs:
         lineages.setdefault(_root(r, by_id), []).append(r)
+    # A pushed fault branch's change, reviewed by a run: that run's lineage is the case's.
+    reviewed = {}
+    try:
+        with connection.begin_nested():
+            for branch, run_id in connection.execute(text(
+                    "SELECT branch, run_id FROM local_change_sets WHERE project_id = :p "
+                    "AND branch LIKE 'test/fault-%' AND run_id = ANY(:ids)"),
+                    {"p": project_id, "ids": list(by_id)}):
+                m = FAULT_BRANCH.search(str(branch or ""))
+                if m:
+                    reviewed[str(run_id)] = m.group(1).upper()
+    except Exception:  # noqa: BLE001 — no local changes table, no such link
+        pass
+    chosen: list[tuple[str, list[dict]]] = []
+    for root, members in lineages.items():
+        found = next((c for c in (reviewed.get(m["id"]) or _case_of(m) for m in members) if c),
+                     None)
+        if found and (case is None or found == case):
+            chosen.append((found, members))
+    chosen = sorted(chosen, key=lambda x: x[1][0]["created_at"], reverse=True)[:limit]
     from .share_scrub import install_names, scrub
 
-    names = install_names(connection, project_id)
+    names = install_names(connection, project_id) if chosen else []
     masked: dict[str, int] = {}
 
     def clean(value: Any, limit_chars: int = 300) -> str:
@@ -147,61 +176,73 @@ def ledger(connection: Any, project_id: str, *, since: Optional[datetime] = None
             masked[k] = masked.get(k, 0) + v
         return said[:limit_chars]
 
-    rows = []
-    for root, members in lineages.items():
-        found = next((c for c in (_case_of(m) for m in members) if c), None)
-        if case and found and found != case:
-            continue
-        the_case = found or case
-        if not the_case:
-            continue
-        rows.append(_row(connection, project_id, the_case, members, clean))
-    rows.sort(key=lambda r: r["started_at"] or "", reverse=True)
-    return {"project_id": project_id, "rows": rows[:limit], "masked": masked}
+    facts = _facts(connection, project_id, [m for _, ms in chosen for m in ms])
+    rows = [_row(case_id, members, facts, clean) for case_id, members in chosen]
+    return {"project_id": project_id, "rows": rows, "masked": masked}
 
 
-def _row(connection: Any, project_id: str, case: str, members: list[dict], clean) -> dict:
-    ids = [m["id"] for m in members]
-    events = [dict(e) for e in connection.execute(text(
-        "SELECT event_type, actor, entity_id, data, created_at FROM events WHERE project_id = :p "
-        "AND (entity_id = ANY(:ids) OR data->>'run_id' = ANY(:ids) "
-        "     OR data->>'build_run_id' = ANY(:ids)) ORDER BY created_at, id"),
-        {"p": project_id, "ids": ids}).mappings()]
-    gates = connection.execute(text(
-        "SELECT min(created_at) FROM quality_gates WHERE code_task_run_id = ANY(:ids) "
-        "AND jsonb_typeof(gates_failed) = 'array' AND jsonb_array_length(gates_failed) > 0"), {"ids": ids}).scalar()
-    decision_ids = [m["decision_id"] for m in members if m.get("decision_id")]
-    decisions = [dict(d) for d in connection.execute(text(
-        "SELECT id, status, approved_by, executed_by, answered_by, revision_requested_by "
-        "FROM decisions WHERE project_id = :p AND (id = ANY(:d) "
-        "OR recommendation->>'run_id' = ANY(:ids))"),
-        {"p": project_id, "d": decision_ids, "ids": ids}).mappings()]
-    workflows = sorted({str(_json(m["finalize_ctx"]).get("workflow_run_id")
-                            or (_json(m["finalize_ctx"]).get("origin") or {}).get("workflow_run_id")
-                            or "") for m in members} - {""})
-    if workflows:
-        events += [dict(e) for e in connection.execute(text(
+def _workflows(run: dict) -> set[str]:
+    fctx = _json(run.get("finalize_ctx"))
+    return {str(fctx.get("workflow_run_id") or (fctx.get("origin") or {}).get("workflow_run_id")
+                or "")} - {""}
+
+
+def _facts(connection: Any, project_id: str, runs: list[dict]) -> dict[str, Any]:
+    """Everything the rows need, in one query per table for every lineage at once."""
+    ids = [r["id"] for r in runs]
+    workflows = sorted(set().union(*(_workflows(r) for r in runs))) if runs else []
+    if not ids:
+        return {"events": {}, "gates": {}, "decisions": [], "people": set()}
+    events: dict[str, list[dict]] = {}
+    for e in connection.execute(text(
             "SELECT event_type, actor, entity_id, data, created_at FROM events "
-            "WHERE project_id = :p AND entity_id = ANY(:w) AND event_type LIKE 'recovery.%' "
-            "ORDER BY created_at"), {"p": project_id, "w": workflows}).mappings()]
-        events.sort(key=lambda e: e["created_at"])
+            "WHERE project_id = :p AND entity_id = ANY(:ids) ORDER BY created_at, id"),
+            {"p": project_id, "ids": ids + workflows}).mappings():
+        events.setdefault(str(e["entity_id"]), []).append(dict(e))
+    gates = {str(r[0]): r[1] for r in connection.execute(text(
+        "SELECT code_task_run_id, min(created_at) FROM quality_gates "
+        "WHERE code_task_run_id = ANY(:ids) AND jsonb_typeof(gates_failed) = 'array' "
+        "AND jsonb_array_length(gates_failed) > 0 GROUP BY code_task_run_id"), {"ids": ids})}
+    decisions = [dict(d) for d in connection.execute(text(
+        "SELECT id, status, approved_by, executed_by, answered_by, revision_requested_by, "
+        "recommendation->>'run_id' AS run_id FROM decisions WHERE project_id = :p AND "
+        "(id = ANY(:d) OR recommendation->>'run_id' = ANY(:ids))"),
+        {"p": project_id, "d": [r["decision_id"] for r in runs if r.get("decision_id")],
+         "ids": ids}).mappings()]
+    actors = [e["actor"] for es in events.values() for e in es]
+    actors += [d.get(k) for d in decisions
+               for k in ("approved_by", "executed_by", "answered_by", "revision_requested_by")]
+    return {"events": events, "gates": gates, "decisions": decisions,
+            "people": _people(connection, project_id, actors)}
+
+
+def _row(case: str, members: list[dict], facts: dict, clean) -> dict:
+    ids = [m["id"] for m in members]
+    workflows = sorted(set().union(*(_workflows(m) for m in members)))
+    events = sorted([e for i in ids + workflows for e in facts["events"].get(i, [])
+                     if i in ids or e["event_type"].startswith("recovery.")],
+                    key=lambda e: e["created_at"])
+    gate_times = [facts["gates"][i] for i in ids if i in facts["gates"]]
+    decision_ids = {m["decision_id"] for m in members if m.get("decision_id")}
+    decisions = [d for d in facts["decisions"]
+                 if d["id"] in decision_ids or d.get("run_id") in ids]
+    people = facts["people"]
 
     failed_at = [e["created_at"] for e in events if e["event_type"] in FAILED or (
         e["event_type"] == "code_task.app_serve_checked" and _json(e["data"]).get("ok") is False)]
-    if gates:
-        failed_at.append(gates)
+    failed_at += gate_times
     failed_at += [m["updated_at"] for m in members if m["status"] in ("failed", "blocked")]
     failure = min(failed_at) if failed_at else None
     draft = next((e["created_at"] for e in events if e["event_type"] == DRAFT), None)
     green = next((e["created_at"] for e in events if e["event_type"] == "code_task.pr_opened"
                   and (failure is None or e["created_at"] >= failure)), None)
     if green is None:
+        drafted = {e["entity_id"] for e in events if e["event_type"] == DRAFT}
         done = [m["updated_at"] for m in members if m["status"] == "completed"
-                and not (draft and m["id"] == next((e["entity_id"] for e in events
-                                                     if e["event_type"] == DRAFT), None))]
+                and m["id"] not in drafted]
         green = max(done) if done else None
     if green is not None and failure is not None and green < failure:
-        green = None if draft is None else green
+        green = None
     acted = []
     for e in events:
         who = ACTED_BY.get(e["event_type"])
@@ -213,10 +254,10 @@ def _row(connection: Any, project_id: str, case: str, members: list[dict], clean
             and "automatic retry" not in acted:
         acted.append("automatic retry")
     root = members[0]
-    person_acts = [e for e in events if _is_person(connection, project_id, e["actor"])
+    person_acts = [e for e in events if str(e["actor"] or "") in people
                    and not (e["entity_id"] == root["id"] and _START.search(e["event_type"]))]
     person_decisions = [d for d in decisions if d["status"] not in ("pending", "open")
-                        and any(_is_person(connection, project_id, d.get(k))
+                        and any(str(d.get(k) or "") in people
                                 for k in ("approved_by", "executed_by", "answered_by",
                                           "revision_requested_by"))]
     humans = len(person_acts) + len(person_decisions)

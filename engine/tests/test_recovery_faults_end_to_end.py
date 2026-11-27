@@ -139,7 +139,9 @@ def start(pipe, *, tag: str, seed: dict[str, str], fixture: Path, app_dir: Optio
     pipe.repos[repo] = pipe.hub.seed(harness.OWNER, repo, {"README.md": f"# {repo}\n", **seed})
     with pipe.engine.begin() as c:
         run_id = code_task_service.start_code_task(
-            c, project_id=pipe.project, task_id=None, title=f"Add a recipe counter ({tag})",
+            # The case leads the title, as the fault kit tells the tester (qa_ledger reads it).
+            c, project_id=pipe.project, task_id=None,
+            title=f"REC-{tag[3:5]}: Add a recipe counter ({tag})",
             instructions=("Add a recipe counter to the slug service: slug(text) in src/slug.js "
                           "and the HTTP server in src/server.js answering GET /?q=<text> with "
                           "{\"slug\": ...} on $PORT. Tests under node --test." + brief_extra),
@@ -349,8 +351,8 @@ def _attempts(pipe, lin: dict) -> list[dict]:
 @pytest.mark.xfail(strict=True, reason=(
     "ENT-REC-52: the recovery agent's cause signature for open findings is every failing gate "
     "joined (step_recovery.cause_signature: build:open_findings:<gates>), so the SAME broken "
-    "test reads as a new cause when a repair adds a gate (code_written after a no-op round, "
-    "security_clean on the follow-up) — and the same-cause rule never fires"))
+    "test reads as a new cause as soon as another gate joins it on a later attempt (code_written "
+    "after a repair round that changed nothing) — and the same-cause rule never fires"))
 def test_rec52_every_attempt_at_the_same_failing_test_has_one_cause_signature(pipe, rec01):
     from boss_engine.services import step_recovery as sr
 

@@ -9,8 +9,8 @@ act on:
     REC-09 crash on start        "the app exited (code N) before serving HTTP", the app's own error
     REC-10 wrong port            "did not answer HTTP" on the $PORT BOSS gave; when the app logs
                                  the port it chose: "listening on 5999, expected $PORT (N)"
-    REC-11 404 at /              "GET / returned 404": up, but no page and no health route of its
-                                 own — never "live"
+    REC-11 404 at / (and at its  "GET / returned 404": it runs but serves nothing and has no health
+           health routes)        route of its own — never "live"
     REC-12 a missing variable    the crash names PAGE_SIZE; the coder's to fix, never a person's
     REC-13 a secret only a       "needs a secret: PAYMENTS_API_KEY", the app not started, a person
            person has            asked — never a repair round; declared by a template OR by the
@@ -105,10 +105,10 @@ def test_rec10_a_wrong_port_did_not_answer_http(tmp_path, stack):
 
 
 @pytest.mark.parametrize("stack", STACKS)
-def test_rec11_a_404_at_home_is_failed_not_live(tmp_path, stack):
-    """THE RULE (preview_service._serving): a 404 at / is up only for a service that HAS a
-    health route — declared, or a /healthz|/readyz that is a route of its own. The node sample
-    answers every path but /, so its /healthz is a catch-all, not a health route: failed."""
+def test_rec11_an_app_that_serves_nothing_is_failed_not_live(tmp_path, stack):
+    """The kit's REC-11 takes / AND the health routes away. THE RULE (preview_service._serving):
+    a 404 at / is up only for a service that HAS a health route — declared, or a /healthz|/readyz
+    that is a route of its own, not a catch-all (test_preview_says_the_app_is_listening)."""
     record = _prove(tmp_path, stack, "REC-11")
     assert kind(record) == "404 at /", record
     assert record["harness"] is False

@@ -178,14 +178,27 @@ def test_a_merged_fault_is_put_back_by_a_revert_change(server, engine, world, re
     token = _token(engine, world)
     install = _install(tmp_path, server)
     assert _boss(install, server, token, tmp_path, "fault", "9", "--project", pid).returncode == 0
-    # The tester merges it on purpose (here: straight in the bare repository).
-    head = _git(bare, "rev-parse", "test/fault-rec-09").strip()
-    _git(bare, "update-ref", "refs/heads/main", head)
+    # The tester merges it on purpose, as the change page does: BOSS's own merge, with the
+    # install's default method (a squash, which drops the commit's BOSS-Fault trailer).
+    from boss_engine.services.local_repo_host import LocalGitAdapter
+
+    settings = get_settings()
+    assert settings.sandbox_merge_method == "squash"
+    with engine.begin() as db:
+        number = db.execute(text("SELECT number FROM local_change_sets WHERE project_id = :p "
+                                 "AND branch = 'test/fault-rec-09'"), {"p": pid}).scalar()
+    merged = LocalGitAdapter(settings, owner=f"local_{pid}", repo="recipes", project_id=pid
+                             ).merge_pull_request(int(number), "Merge test fault REC-09")
+    assert merged.merged
+    assert "BOSS-Fault" not in _git(bare, "log", "-1", "--format=%B", "main")
+    assert "BOSS fault REC-09" in _git(bare, "show", "main:src/server.js")
     back = _boss(install, server, token, tmp_path, "fault", "--revert", "REC-09", "--project", pid)
     assert back.returncode == 0, back.stdout + back.stderr
     assert "test/fault-rec-09-revert" in back.stdout
     reverted = _git(bare, "show", "test/fault-rec-09-revert:src/server.js")
     assert "BOSS fault REC-09" not in reverted and reverted == (FIXTURE / "src/server.js").read_text()
+    again = _boss(install, server, token, tmp_path, "fault", "--revert", "REC-09", "--project", pid)
+    assert again.returncode != 0 and "already pushed" in again.stderr
 
 
 def test_a_project_that_ships_to_production_is_refused_before_any_clone(server, engine, world,
@@ -263,6 +276,9 @@ def _seed_ledger(engine, pid: str) -> dict:
         event("code_task.inrun_convergence_round", b2, at(50), data={"round": 1, "of": 3})
         event("code_task.pr_opened_with_checks_failing", b2, at(68))
         event("code_task.deferred_findings_task", b2, at(69), data={"followup_run_id": "x"})
+        # Work that names no case: it is never in the ledger, whatever --case says.
+        run(f"crun_{uuid.uuid4().hex[:12]}", "Rename the page title", "completed", at(80),
+            at(90), {"base_branch": "main"})
     return {"rec01": a, "rec09": [b, b2], "t0": t0}
 
 
@@ -296,12 +312,19 @@ def test_the_ledger_reads_each_fault_attempt_from_bosss_records(engine, world):
     assert nine["acted"] == ["build repair", "follow-up build"]
     assert nine["final_state"] == "draft change · checks failing"
 
-    # Tagging the window names New work that never touched a fault branch.
+    # --case filters to the case's lineages; it never tags work that does not name the case.
     with engine.begin() as db:
         tagged = qa_ledger.ledger(db, pid, case="ent-rec-01")
-        assert [r["case"] for r in tagged["rows"]] == ["ENT-REC-01"]
+        assert [r["runs"] for r in tagged["rows"]] == [[seeded["rec01"]]]
+        assert qa_ledger.ledger(db, pid, case="REC-04")["rows"] == []
         since = qa_ledger.ledger(db, pid, since=seeded["t0"] + timedelta(minutes=25))
         assert [r["case"] for r in since["rows"]] == ["ENT-REC-09"]
+    with engine.begin() as db:
+        db.execute(text("INSERT INTO code_task_runs (id, project_id, status, phase, title) "
+                        "VALUES (:i, :p, 'completed', 'done', 'REC-04: Add a recipe counter')"),
+                   {"i": f"crun_{uuid.uuid4().hex[:12]}", "p": pid})
+        assert [r["case"] for r in qa_ledger.ledger(db, pid, case="REC-04")["rows"]] == \
+            ["ENT-REC-04"], "the tester's New work names its case in its title"
     md = qa_ledger.as_markdown(out["rows"])
     assert md.count("\n") == 3 and "| ENT-REC-01 |" in md and "| Y |" in md and "| N |" in md
 
@@ -344,3 +367,55 @@ def test_boss_qa_report_prints_the_ledger_over_the_api(server, engine, world, tm
     assert js.returncode == 0, js.stderr
     rows = json.loads(js.stdout)["rows"]
     assert [r["runs"] for r in rows] == [[seeded["rec01"]]] and rows[0]["unattended"] is True
+
+
+def test_thresholds_out_of_order_are_a_422_naming_the_keys_not_a_500(server, engine, world):
+    import httpx
+
+    from boss_engine.identity import host_tools
+
+    with engine.begin() as db:
+        key = host_tools.issue_host_key(db, org_id=world.org, revoke_others=False).key
+    got = httpx.put(f"{server}/v1/infra/storage/rules", headers={"Authorization": f"Bearer {key}"},
+                    json={"rules": [], "thresholds": {"critical_free_pct": 22.0},
+                          "host_id": f"qa-host-{uuid.uuid4().hex[:6]}"}, timeout=60)
+    assert got.status_code == 422, got.text
+    assert "warn > critical > floor" in got.text and "fix warn_free_pct, critical_free_pct" in \
+        got.text
+
+
+def test_disk_pressure_is_the_host_shells_and_cleans_up(server, engine, world, monkeypatch):
+    """PUT/POST /v1/qa/disk-pressure with the Host tools key (what `boss qa disk-pressure`
+    sends); a person's token is refused."""
+    import httpx
+
+    from boss_engine.identity import host_tools
+    from boss_engine.services import production, storage_rules, storage_watch
+
+    monkeypatch.setattr(production, "resolve_install",
+                        lambda: production._dev("dev", "install_tier", "BOSS_INSTALL_TIER=dev"))
+    hid = f"qa-host-{uuid.uuid4().hex[:8]}"
+    with engine.begin() as db:
+        key = host_tools.issue_host_key(db, org_id=world.org, revoke_others=False).key
+        storage_rules.upsert(db, kind="threshold", rule=dict(storage_rules.DEFAULT_THRESHOLDS),
+                             host_id=hid, source="default", actor="boss")
+        storage_watch.record_sample(db, storage_watch.clean_sample(
+            {"host_id": hid, "total_gb": 100.0, "free_gb": 41.0}, source="steward"))
+    try:
+        person = httpx.put(f"{server}/v1/qa/disk-pressure",
+                           headers={"Authorization": f"Bearer {_token(engine, world)}"},
+                           json={"level": "warn", "host_id": hid}, timeout=60)
+        assert person.status_code in (401, 403), person.text
+        host = {"Authorization": f"Bearer {key}"}
+        moved = httpx.put(f"{server}/v1/qa/disk-pressure", headers=host,
+                          json={"level": "critical", "host_id": hid, "hours": 2}, timeout=60)
+        assert moved.status_code == 200, moved.text
+        assert moved.json()["moved"]["critical_free_pct"] == [15.0, 45.0]
+        off = httpx.post(f"{server}/v1/qa/disk-pressure/off", headers=host, timeout=60)
+        assert off.status_code == 200, off.text
+        with engine.begin() as db:
+            assert storage_rules.thresholds(db, hid) == storage_rules.DEFAULT_THRESHOLDS
+    finally:
+        with engine.begin() as db:
+            db.execute(text("DELETE FROM retention_rules WHERE host_id = :h"), {"h": hid})
+            db.execute(text("DELETE FROM storage_samples WHERE host_id = :h"), {"h": hid})

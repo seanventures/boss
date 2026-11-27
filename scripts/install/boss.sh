@@ -155,9 +155,11 @@ Commands:
                       test/fault-<case> (BOSS opens a change) and say what to do next. Refuses
                       a project BOSS says ships to production. --list lists the cases;
                       --revert CASE puts it back (a revert change, or deletes the unmerged branch)
-  qa disk-pressure warn|critical|floor|off
-                      The low-disk cases (ENT-REC-29..31) without filling the disk: moves the
-                      storage thresholds just above today's free space; off restores them
+  qa disk-pressure warn|critical|floor|off [--hours H]
+                      The low-disk cases (ENT-REC-29..31) without filling the disk: BOSS moves
+                      the storage thresholds just above today's free space (only ever up),
+                      marked on the Storage card, back by itself after H hours (24); off puts
+                      back what the test moved. Refused on a production install
   qa report [--since T] [--project P] [--case ID] [--json]
                       The test ledger from BOSS's own records (read-only): one row per run of a
                       fault case — failure seen, green or draft change, time to fix, human
@@ -2027,10 +2029,15 @@ cmd_qa() {
     python3 "$SELF_DIR/qa_fault.py" fault --list; return
   fi
   local token
-  token="$(person_token)" || exit 1
+  if [[ "$what" == disk-pressure ]]; then
+    # The host's own disk, from the host shell: the Host tools key, as the storage readings are.
+    token="$(host_key)" || die "BOSS did not give the host tools a key. Is the api service running ($(hint_command) status)?"
+  else
+    token="$(person_token)" || exit 1
+  fi
   [[ "$what" == fault ]] && remember_token "$token"
   printf '%s\n' "$token" | BOSS_QA_API="$(api_url)" BOSS_QA_REMOTE="$(git_remote_base)" \
-    BOSS_QA_HELPER="$(credential_helper)" BOSS_QA_STATE="$INSTALL_DIR/.boss/qa-disk-pressure.json" \
+    BOSS_QA_HELPER="$(credential_helper)" \
     python3 "$SELF_DIR/qa_fault.py" "$what" "$@"
 }
 
