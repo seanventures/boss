@@ -665,7 +665,7 @@ def _github_token(ctx: Context, binding: Mapping[str, Any]) -> str:
             service._resolve_secret(ref, ctx.connection), ref,  # noqa: SLF001
             service._connection_api_base(ctx.connection, ctx.project_id,  # noqa: SLF001
                                          str(binding["connection_id"])),
-            project_id=ctx.project_id) or ""
+            connection=ctx.connection, project_id=ctx.project_id) or ""
     token = ctx.once("gh_token", lambda: ctx.savepoint(read, default="")) or ""
     if not token:
         try:

@@ -7005,6 +7005,30 @@ CREATE TABLE IF NOT EXISTS secret_material (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- WHO OWNS A SECRET BOSS WROTE (BOSSAPP-1286). Recorded by every write-through
+-- (secrets_service.record_material_owner) beside the material, for any backend; the ONLY evidence
+-- of ownership BOSS trusts — never a key's name. A reference may read, and a connection may take
+-- its host from, only material whose recorded owner is that reference's own scope. Material with
+-- no recorded owner is not anyone's own. Backfilled once from the OLDEST reference that names each
+-- key in BOSS's own stores (the scope that first stored it).
+CREATE TABLE IF NOT EXISTS secret_material_owners (
+  storage_backend TEXT NOT NULL,
+  ref_key TEXT NOT NULL,
+  owner_scope_type TEXT NOT NULL,
+  owner_scope_id TEXT NOT NULL,
+  recorded_by TEXT NOT NULL DEFAULT 'boss',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (storage_backend, ref_key)
+);
+INSERT INTO secret_material_owners (storage_backend, ref_key, owner_scope_type, owner_scope_id,
+                                    recorded_by)
+SELECT DISTINCT ON (storage_backend, ref_key) storage_backend, ref_key, scope_type, scope_id,
+       'backfill'
+  FROM secret_refs
+ WHERE storage_backend IN ('database', 'local_vault', 'vault', 'platform_secret_store', 'infisical')
+ ORDER BY storage_backend, ref_key, created_at, id
+ON CONFLICT DO NOTHING;
+
 -- The activity log unions five sources newest-first per project. `events` had the index for
 -- that; the others did not, so bounding their queries would still have meant a sequential scan
 -- and a sort. Same shape as idx_events_project_created, for the same reader.

@@ -207,13 +207,14 @@ class SecretRefService:
         # scope (secrets_service.ref_key_for: BOSS_<SCOPE>_…): naming another project's or
         # org's key is how a project would read their secret (BOSSAPP-1286).
         if ref_kind in ("database", "local_vault"):
-            from .secrets_service import ref_key_for
+            # OWNERSHIP IS RECORDED (secret_material_owners), never read off the key's name.
+            from .secrets_service import owner_is
 
-            own = ref_key_for(normalized_scope_id, "x")[:-1]
-            if not str(ref_key or "").startswith(own) or ref_key == "__boss_master_key__":
+            if ref_key == "__boss_master_key__" or not owner_is(
+                    connection, ref_kind, ref_key, normalized_scope_type, normalized_scope_id):
                 raise ValueError(
-                    f"A {ref_kind} reference names only this scope's own secrets ({own}…); store "
-                    "the value through BOSS instead of naming another key.")
+                    f"A {ref_kind} reference may name only a secret BOSS stored for this "
+                    f"{normalized_scope_type}; store the value through BOSS instead.")
         normalized_secret_kind = secret_kind.strip().lower()
         if normalized_secret_kind not in self.ALLOWED_SECRET_KINDS:
             raise ValueError(
@@ -304,9 +305,12 @@ class SecretRefService:
         existing = self.get_secret_ref(connection, project_id, secret_ref_id)
         # rc6 N-1: a host or org-wide reference's provider and metadata (its allowed hosts) say
         # where its value may be sent; changing them is the org's act, not a project's.
-        if (provider is not None or metadata is not None) and (
-                existing.get("ref_kind") == "env"
-                or str(existing.get("scope_type") or "project") in ("org", "workspace")):
+        changes_where = (provider is not None and provider != existing.get("provider")) or \
+            metadata is not None
+        if changes_where and (
+                existing.get("ref_kind") in ("env", "local_runner")
+                or str(existing.get("scope_type") or "project") in ("org", "workspace")
+                or not self._own_stored(connection, existing)):
             from .env_refs import require_host_credential_authority
 
             require_host_credential_authority(connection, project_id,
@@ -544,6 +548,17 @@ class SecretRefService:
 
         visit(metadata, "")
         return metadata
+
+    @staticmethod
+    def _own_stored(connection: Connection, ref: dict[str, Any]) -> bool:
+        """Is this reference's material one BOSS stored for THIS reference's scope (its recorded
+        owner, BOSSAPP-1286)? Only then may a project re-label its provider or hosts; any other
+        reference (an external store's key, a host file, unknown) is the org's to re-label."""
+        from .secrets_service import owner_is
+
+        return owner_is(connection, str(ref.get("storage_backend") or ""),
+                        str(ref.get("ref_key") or ""), str(ref.get("scope_type") or "project"),
+                        str(ref.get("scope_id") or ref.get("project_id") or ""))
 
     @staticmethod
     def _storage_backend_for_ref_kind(ref_kind: str) -> str:

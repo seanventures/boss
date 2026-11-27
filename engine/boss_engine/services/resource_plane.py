@@ -5656,54 +5656,19 @@ class ResourcePlaneService:
             return self.secret_refs.get_secret_ref(
                 connection, project_id, existing["id"]
             )
-        secret_ref_id = f"secret_{project_id}_{provider}_{ref_kind}_{ref_key}".replace(
-            "-",
-            "_",
-        )
-        connection.execute(
-            text(
-                """
-                INSERT INTO secret_refs (
-                    id, project_id, scope_type, scope_id, ref_kind, ref_key,
-                    provider, secret_kind, storage_backend, status, metadata, created_by
-                )
-                VALUES (
-                    :id, :project_id, 'project', :project_id, :ref_kind, :ref_key,
-                    :provider, :secret_kind, :storage_backend, 'active',
-                    CAST(:metadata AS JSONB), :actor
-                )
-                """
-            ),
-            {
-                "id": secret_ref_id[:96],
-                "project_id": project_id,
-                "ref_kind": ref_kind,
-                "ref_key": ref_key,
-                "provider": provider,
-                "secret_kind": secret_kind,
-                "storage_backend": self.secret_refs._storage_backend_for_ref_kind(
-                    ref_kind
-                ),
-                "metadata": json.dumps({"raw_secret_stored": False}),
-                "actor": actor,
-            },
-        )
-        emit_event(
+        # THE ONE CHECKED PATH (BOSSAPP-1286): every reference is created by
+        # SecretRefService.create_secret_ref — env and host-file references need org authority,
+        # global-key store references only name material recorded as this scope's.
+        return self.secret_refs.create_secret_ref(
             connection,
-            project_id,
-            "secret_ref.created",
-            actor,
-            "secret_ref",
-            secret_ref_id[:96],
-            {
-                "provider": provider,
-                "ref_kind": ref_kind,
-                "ref_key": ref_key,
-                "secret_kind": secret_kind,
-            },
-        )
-        return self.secret_refs.get_secret_ref(
-            connection, project_id, secret_ref_id[:96]
+            project_id=project_id,
+            ref_kind=ref_kind,
+            ref_key=ref_key,
+            provider=provider,
+            status="active",
+            metadata={"raw_secret_stored": False},
+            actor=actor,
+            secret_kind=secret_kind,
         )
 
     def _upsert_capabilities(

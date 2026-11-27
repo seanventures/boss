@@ -53,7 +53,8 @@ def test_an_env_reference_is_tagged_as_the_install_whatever_the_connection_says(
                                      "scope_type": "project", "scope_id": "p_1",
                                      "project_id": "p_1", "ref_key": "BOSS_P_1_GITHUB_TOKEN",
                                      "metadata": {}}, GHES, project_id="p_1")
-    assert stored.api_base == GHES                      # a secret stored FOR the connection
+    # no recorded owner can be read without a database: never the connection's host
+    assert stored.api_base == G.PUBLIC_API
 
 
 def test_a_connection_may_not_pair_an_env_reference_with_another_host():
@@ -123,6 +124,9 @@ def test_a_ghes_connection_with_its_own_app_can_mint(monkeypatch):
 
 # ---- the allow-list, as a table: every backend x every scope (sixth review) -------------------
 
+OWNED_BY_P1 = {"owner_scope_type": "project", "owner_scope_id": "p_1"}
+
+
 def _record(backend, scope_type="project", project="p_1", key=None, **meta):
     return {"id": "sref_1", "ref_kind": backend, "storage_backend": backend,
             "scope_type": scope_type, "scope_id": project if scope_type == "project" else "org_1",
@@ -140,7 +144,7 @@ def test_only_a_boss_stored_project_secret_takes_a_connections_host(backend, sco
     anything added later) and every org/workspace scope is the install's."""
     from boss_engine.services.github_connections import OWN_SECRET_STORES, credential_host_for
 
-    got = credential_host_for(_record(backend, scope), GHES, "p_1")
+    got = credential_host_for(_record(backend, scope), GHES, "p_1", OWNED_BY_P1)
     expected = GHES if (backend in OWN_SECRET_STORES and scope == "project") else ""
     assert got == expected, (backend, scope, got)
 
@@ -148,12 +152,14 @@ def test_only_a_boss_stored_project_secret_takes_a_connections_host(backend, sco
 def test_the_allow_list_also_needs_the_projects_own_key_and_named_host():
     from boss_engine.services.github_connections import credential_host_for
 
-    assert credential_host_for(_record("vault"), GHES, "p_2") == ""                 # other project
-    assert credential_host_for(_record("vault", key="BOSS_P_9_GITHUB_TOKEN"), GHES, "p_1") == ""
+    assert credential_host_for(_record("vault"), GHES, "p_2", OWNED_BY_P1) == ""    # other project
+    assert credential_host_for(_record("vault"), GHES, "p_1", None) == ""   # no recorded owner
+    assert credential_host_for(_record("vault"), GHES, "p_1",
+                               {"owner_scope_type": "project", "owner_scope_id": "p_9"}) == ""
     assert credential_host_for(_record("vault", allowed_hosts=["ghe.other.example"]), GHES,
-                               "p_1") == ""
+                               "p_1", OWNED_BY_P1) == ""
     assert credential_host_for(_record("vault", allowed_hosts=["ghe.northgate.example"]), GHES,
-                               "p_1") == GHES
+                               "p_1", OWNED_BY_P1) == GHES
     assert credential_host_for(None, GHES, "p_1") == ""
 
 
@@ -176,7 +182,7 @@ def test_the_install_repository_token_keeps_its_tag():
     assert isinstance(token, G.GitHubCredential) and token.api_base == G.PUBLIC_API
 
 
-def test_a_host_file_ref_on_another_host_is_refused_at_create_and_repoint():
+def test_a_host_file_ref_on_another_host_is_refused_at_create_and_repoint(monkeypatch):
     from boss_engine.services.github_connections import GitHubConnectionService
 
     check = GitHubConnectionService._check_connection_secret  # noqa: SLF001
@@ -187,7 +193,12 @@ def test_a_host_file_ref_on_another_host_is_refused_at_create_and_repoint():
         check(host_file, "github_app", "9", "1", EVIL, "p_1")
     check(host_file, "github_app", "9", "1", G.PUBLIC_API, "p_1")          # install host: fine
     own = {**_record("vault"), "provider": "github", "secret_kind": "private_key"}
-    check(own, "github_app", "9", "1", GHES, "p_1")
+    with pytest.raises(ValueError):                     # no recorded owner: not this project's
+        check(own, "github_app", "9", "1", GHES, "p_1")
+    from boss_engine.services import secrets_service
+
+    monkeypatch.setattr(secrets_service, "material_owner", lambda c, b, k: OWNED_BY_P1)
+    check(own, "github_app", "9", "1", GHES, "p_1", object())     # recorded as p_1's: allowed
 
 
 def test_the_real_adapter_path_mints_with_its_own_app_and_refuses_the_install_key(monkeypatch):
@@ -208,8 +219,16 @@ def test_the_real_adapter_path_mints_with_its_own_app_and_refuses_the_install_ke
         monkeypatch.setattr(service, "_credential_ref", lambda *a, **k: "x:y")
         monkeypatch.setattr(service.secret_refs, "require_usable", lambda *a, **k: record)
         monkeypatch.setattr(service, "_resolve_secret", lambda *a, **k: "-----PEM-----")
+        import contextlib
+
+        from boss_engine.services import secrets_service
+
+        # The material's RECORDED owner: the project for its own vault secret; none for a file.
+        monkeypatch.setattr(secrets_service, "material_owner",
+                            lambda c, b, k: OWNED_BY_P1 if b == "vault" else None)
+        db = SimpleNamespace(begin_nested=contextlib.nullcontext)
         settings, kw = service._make_adapter(  # noqa: SLF001
-            None, project_id="p_1",
+            db, project_id="p_1",
             github_connection={"id": "c", "auth_method": "github_app", "app_id": "9",
                                "installation_id": "1", "api_base_url": base},
             binding={"full_name": "platform/gw", "owner": "platform", "name": "gw"})
@@ -244,3 +263,60 @@ def test_a_project_cannot_read_another_scopes_material_by_naming_its_key(eng, mo
             "'__boss_master_key__', 'github', 'database', 'ceo')"), {"i": f"sref_m_{thief}", "p": thief})
     with eng.begin() as c, pytest.raises(secret_backends.SecretUnavailable):
         secret_backends.resolve_secret_ref(c, f"sref_m_{thief}", get_settings(), project_id=thief)
+
+
+# ---- ownership is RECORDED, never read off a key's name (seventh review) ----------------------
+
+def test_names_that_fold_together_never_share_an_owner(eng):
+    """acme vs acme-prod (a prefix), acme-prod vs acme_prod (the same folded key): the owner is
+    the scope BOSS recorded when it wrote the material, so neither can read, re-point or overwrite
+    the other's — and credential_host_for never gives the other's host."""
+    from boss_engine.config import get_settings
+    from boss_engine.services import secret_backends, secrets_service
+    from boss_engine.services.github_connections import credential_host_for
+
+    acme, acme_prod = make_project(eng), make_project(eng)
+    with eng.begin() as c:
+        secrets_service.record_material_owner(c, "database", "BOSS_ACME_PROD_GITHUB_TOKEN",
+                                              "project", acme_prod)
+        owner = secrets_service.material_owner(c, "database", "BOSS_ACME_PROD_GITHUB_TOKEN")
+    rec = {"id": "s", "storage_backend": "database", "scope_type": "project", "scope_id": acme,
+           "project_id": acme, "ref_key": "BOSS_ACME_PROD_GITHUB_TOKEN", "metadata": {}}
+    assert credential_host_for(rec, GHES, acme, owner) == ""          # prefix: not acme's
+    with eng.begin() as c, pytest.raises(secrets_service.MaterialOwnedElsewhere):
+        secrets_service.record_material_owner(c, "database", "BOSS_ACME_PROD_GITHUB_TOKEN",
+                                              "project", f"{acme}_other")   # a folded twin
+    with eng.begin() as c:
+        c.execute(text(
+            "INSERT INTO secret_refs (id, project_id, scope_type, scope_id, ref_kind, ref_key, "
+            "provider, storage_backend, created_by) VALUES (:i, :p, 'project', :p, 'database', "
+            "'BOSS_ACME_PROD_GITHUB_TOKEN', 'github', 'database', 'ceo')"), {"i": f"s_{acme}", "p": acme})
+    with eng.begin() as c, pytest.raises(secret_backends.SecretUnavailable):   # read time too
+        secret_backends.resolve_secret_ref(c, f"s_{acme}", get_settings(), project_id=acme)
+
+
+def test_material_with_no_recorded_owner_is_nobodys_own(eng):
+    from boss_engine.config import get_settings
+    from boss_engine.services import secret_backends
+    from boss_engine.services.secret_refs import SecretRefService
+
+    project = make_project(eng)
+    with eng.begin() as c, pytest.raises(ValueError):
+        SecretRefService().create_secret_ref(
+            c, project_id=project, ref_kind="database", ref_key=f"BOSS_{project.upper()}_LEGACY",
+            provider="github", status="active", metadata={}, actor="ceo")
+    with eng.begin() as c:
+        c.execute(text(
+            "INSERT INTO secret_refs (id, project_id, scope_type, scope_id, ref_kind, ref_key, "
+            "provider, storage_backend, created_by) VALUES (:i, :p, 'project', :p, 'database', "
+            "'BOSS_NOBODY_LEGACY', 'github', 'database', 'ceo')"), {"i": f"l_{project}", "p": project})
+    with eng.begin() as c, pytest.raises(secret_backends.SecretUnavailable):
+        secret_backends.resolve_secret_ref(c, f"l_{project}", get_settings(), project_id=project)
+
+
+@pytest.mark.parametrize("slug", ["subscription", "llm-gateway", "llm_gateway", "Subscription"])
+def test_a_project_may_not_be_named_onto_an_install_secret_scope(slug):
+    from boss_engine.bootstrap import project_slug_for
+
+    with pytest.raises(ValueError):
+        project_slug_for(slug, slug.lower() if "_" not in slug else None)

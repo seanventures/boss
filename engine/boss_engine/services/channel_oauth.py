@@ -282,6 +282,10 @@ def save_oauth_client(
     # days later, through a redeploy. See durable_secret_backend for what that cost.
     kind = durable_secret_backend(settings)
     ref_key = _client_ref_key(project_id)
+    from .secrets_service import record_material_owner
+
+    # The material's owner is RECORDED with it (BOSSAPP-1286); never inferred from its key.
+    record_material_owner(connection, kind, ref_key, "project", project_id, actor=actor)
     try:
         backend_for(kind, settings).put(
             ref_key, json.dumps({"client_id": cid, "client_secret": csec}))
@@ -689,6 +693,9 @@ def complete(
     # DURABLE, NOT MERELY PROTECTED. The console writes this and a WORKER reads it back
     # days later, through a redeploy. See durable_secret_backend for what that cost.
     kind = durable_secret_backend(settings)
+    from .secrets_service import record_material_owner
+
+    record_material_owner(connection, kind, ref_key, "project", project_id)
     try:
         backend_for(kind, settings).put(ref_key, refresh_token)
     except SecretUnavailable as error:

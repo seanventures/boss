@@ -79,6 +79,58 @@ def _metadata(material: str, kind: str, extra: Optional[dict] = None) -> dict[st
     }
 
 
+#: The install's own secret scopes (cli_harness.SUBSCRIPTION_SECRET_SCOPE, llm_gateway.SECRET_SCOPE).
+#: A project may not be named so that its keys fold onto them (BOSSAPP-1286).
+SYSTEM_SECRET_SCOPES = frozenset({"subscription", "llm_gateway"})
+
+
+def folds_to_system_scope(name: str) -> bool:
+    """Does `name`, folded the way ref_key_for folds a scope, equal an install scope?"""
+    fold = _SAFE_NAME.sub("_", str(name or "").upper()).strip("_")
+    return any(fold == _SAFE_NAME.sub("_", s.upper()).strip("_") for s in SYSTEM_SECRET_SCOPES)
+
+
+class MaterialOwnedElsewhere(ValueError):
+    """BOSS refused to write material another scope owns (its recorded owner differs)."""
+
+
+def material_owner(connection, backend: str, key: str) -> Optional[dict[str, Any]]:
+    """The recorded owner {owner_scope_type, owner_scope_id} of material BOSS wrote, or None."""
+    try:
+        row = connection.execute(sql(
+            "SELECT owner_scope_type, owner_scope_id FROM secret_material_owners "
+            "WHERE storage_backend = :b AND ref_key = :k"),
+            {"b": str(backend or "").lower(), "k": key}).mappings().first()
+    except Exception:  # noqa: BLE001 — an older schema: nobody's own
+        return None
+    return dict(row) if row else None
+
+
+def record_material_owner(connection, backend: str, key: str, scope_type: str, scope_id: str, *,
+                          actor: str = "boss") -> None:
+    """Record (once) that the material at (backend, key) belongs to (scope_type, scope_id).
+    A write to material another scope owns is refused, before anything is written."""
+    current = material_owner(connection, backend, key)
+    if current is not None:
+        if (current["owner_scope_type"], current["owner_scope_id"]) != (scope_type, scope_id):
+            raise MaterialOwnedElsewhere(
+                "That secret's storage slot belongs to another project or scope; BOSS will not "
+                "overwrite it. Rename the project or the secret.")
+        return
+    connection.execute(sql(
+        "INSERT INTO secret_material_owners (storage_backend, ref_key, owner_scope_type, "
+        "owner_scope_id, recorded_by) VALUES (:b, :k, :t, :i, :by) ON CONFLICT DO NOTHING"),
+        {"b": str(backend or "").lower(), "k": key, "t": scope_type, "i": scope_id,
+         "by": actor or "boss"})
+
+
+def owner_is(connection, backend: str, key: str, scope_type: str, scope_id: str) -> bool:
+    """True only when the RECORDED owner of the material is exactly this scope."""
+    current = material_owner(connection, backend, key)
+    return current is not None and \
+        (current["owner_scope_type"], current["owner_scope_id"]) == (scope_type, scope_id)
+
+
 def put_secret(connection, settings: Settings, *, project_id: str, name: str,
                value: str, secret_kind: str = "api_token",
                backend: str = "platform_secret_store",
@@ -92,6 +144,9 @@ def put_secret(connection, settings: Settings, *, project_id: str, name: str,
     scope_id = scope_id or project_id
     stored_kind = _KIND_MAP.get(secret_kind, "api_token")
     key = ref_key_for(scope_id, name)
+    # THE OWNER IS RECORDED, never inferred from the key's name (BOSSAPP-1286): two scopes whose
+    # names fold to the same key (acme-prod / acme_prod) can never overwrite each other.
+    record_material_owner(connection, backend, key, scope_type, scope_id, actor=actor)
 
     impl = backend_for(backend, settings)
     impl.put(key, value)          # the value leaves BOSS here and is not retained

@@ -613,7 +613,7 @@ def _mirror_token_into_vault(connection: Connection, service: Any, project_id: s
             connection, project_id=project_id,
             credential_ref=service._credential_ref(connection, project_id, connection_id))
         token = service._tag_by_origin(service._resolve_secret(ref, connection), ref,  # noqa: SLF001
-                                       conn_base, project_id=project_id)
+                                       conn_base, connection=connection, project_id=project_id)
         org_id = connection.execute(
             text("SELECT w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
                  "WHERE p.id = :p"), {"p": project_id}).scalar()
@@ -727,7 +727,7 @@ def check_repository(connection: Connection, settings: Any, project_id: str,
         # The binding's connection's own token: its connection's host (BOSSAPP-1286).
         token = service._tag_by_origin(service._resolve_secret(ref, connection), ref,  # noqa: SLF001
                                        row["api_base_url"] or _api_base(settings),
-                                       project_id=project_id)
+                                       connection=connection, project_id=project_id)
     except Exception:  # noqa: BLE001 — an unreadable token is a token GitHub cannot accept
         token = ""
     receipt_id = _receipt(connection, project_id, "github.repository.check",

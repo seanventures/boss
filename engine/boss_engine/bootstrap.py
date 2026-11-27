@@ -453,6 +453,17 @@ class ProjectExists(Exception):
 
 def project_slug_for(name: str, slug: str | None) -> str:
     """The slug asked for, or one made from the name. Raises ValueError with what to do."""
+    found = _project_slug_for(name, slug)
+    from .services.secrets_service import folds_to_system_scope
+
+    if folds_to_system_scope(found):
+        # The slug is the project's id and its secret scope: it may not fold onto one of the
+        # install's own secret scopes (BOSSAPP-1286).
+        raise ValueError(f"The slug {found!r} is reserved by BOSS; choose another.")
+    return found
+
+
+def _project_slug_for(name: str, slug: str | None) -> str:
     if slug is not None and str(slug).strip():
         candidate = str(slug).strip()
         if candidate != candidate.lower() or not PROJECT_SLUG.match(candidate) \
