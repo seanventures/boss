@@ -15,16 +15,13 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import create_engine, text
 
+from boss_engine.db import ensure_schema
+from boss_engine.dev.test_databases import scratch_database
+
 from boss_engine.services import backup_scheduler as bs
 from boss_engine.services import system_doctor
 
 T0 = datetime(2026, 11, 12, 10, 0, tzinfo=timezone.utc)
-SCHEMA = (Path(__file__).resolve().parents[2] / "db" / "schema.sql").read_text()
-
-
-def _ddl() -> list[str]:
-    tail = SCHEMA[SCHEMA.index("-- BOSSAPP-838"):]
-    return [s.strip() for s in tail.split(";") if s.strip() and "CREATE" in s]
 
 
 @pytest.fixture(scope="module")
@@ -33,15 +30,13 @@ def engine():
     name = url.rsplit("/", 1)[-1].split("?", 1)[0]
     if not url or "test" not in name:
         pytest.skip("needs BOSS_TEST_DATABASE_URL naming a disposable boss_test* database")
-    eng = create_engine(url, future=True)
-    try:
-        with eng.begin() as c:
-            for stmt in _ddl():
-                c.execute(text(stmt))
-    except Exception as exc:  # noqa: BLE001
-        pytest.skip(f"test postgres unreachable: {type(exc).__name__}")
-    yield eng
-    eng.dispose()
+    with scratch_database(url, "backup") as scratch_url:
+        eng = create_engine(scratch_url, future=True)
+        try:
+            ensure_schema(eng)
+            yield eng
+        finally:
+            eng.dispose()
 
 
 @pytest.fixture()

@@ -73,9 +73,11 @@ def _one(world, sql, **params):
         return db.execute(text(sql), params).first()
 
 
-def _decision(world, tier=3, preview_hash=None):
+def _decision(world, tier=3, preview_hash=None, action=None):
     did = f"dec_{uuid.uuid4().hex[:10]}"
     rec = {"action_preview": {"content_hash": preview_hash, "text": "send A"}} if preview_hash else None
+    if action:
+        rec = {**(rec or {}), "action": action}
     with world.engine.begin() as db:
         db.execute(text("INSERT INTO decisions (id, project_id, question, risk_tier, status, default_action, "
                         "recommendation) VALUES (:d, :p, 'Ship it?', :t, 'pending', 'hold', CAST(:r AS JSONB))"),
@@ -177,8 +179,10 @@ def test_no_code_approves_a_decision_except_through_transition():
 def test_a_policy_never_approves_a_tier_that_needs_a_seat(world, cast):
     from boss_engine.services.decisions import approve_by_policy
 
-    for tier, expect in ((1, True), (2, False), (3, False)):
-        did = _decision(world, tier=tier)
+    # A low-tier decision still needs a recognized action eligible for development autonomy.
+    for tier, action, expect in ((1, None, False), (1, "decide", True),
+                                 (2, "decide", False), (3, "decide", False)):
+        did = _decision(world, tier=tier, action=action)
         with world.engine.begin() as db:
             assert approve_by_policy(db, did, project_id=world.project_a, actor="autonomy:x", note="n") is expect
 

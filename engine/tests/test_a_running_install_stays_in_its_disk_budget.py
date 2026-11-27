@@ -104,6 +104,14 @@ def test_a_category_warns_at_eighty_percent_and_unmeasured_is_unknown():
     assert problems(what=rows["images"]["what"], action=rows["images"]["action"]) == []
 
 
+def test_doctor_lists_each_healthy_budget_and_does_not_price_an_unavailable_measurement():
+    rows = dbu.evaluate({"images": 6.5, "rollback_images": 6.8, "backups": 0})
+    lines = dbu._lines({"rows": rows, "total": dbu.total(rows)})
+    assert any("Rollback images: 6.8 GB" in line for line in lines)
+    assert any("Backups: 0 GB" in line for line in lines)
+    assert any("Test databases: measurement unavailable" in line for line in lines)
+
+
 def test_rollback_images_past_their_window_are_over_whatever_their_size():
     rows = {r["key"]: r for r in dbu.evaluate({"rollback_images": 2.0}, rollback_age_hours=100)}
     assert rows["rollback_images"]["level"] == "over"
@@ -142,6 +150,8 @@ def test_image_bytes_count_each_layer_once_and_shared_layers_belong_to_the_runni
     def run(argv):
         if argv[1] == "images":
             return subprocess.CompletedProcess(argv, 0, "\n".join(json.dumps(i) for i in images), "")
+        if argv[1] == "ps":
+            return subprocess.CompletedProcess(argv, 0, "boss-community-api:t\nboss-community-api:v0\n", "")
         ref = argv[-1]
         if argv[1:3] == ["image", "inspect"]:
             return subprocess.CompletedProcess(argv, 0, json.dumps(layers[ref]), "")
@@ -152,6 +162,39 @@ def test_image_bytes_count_each_layer_once_and_shared_layers_belong_to_the_runni
     got = dbu.measure_images(("docker",), tag="t", run=run)
     assert got["images"] == pytest.approx(6.0)        # base + cur, once
     assert got["rollback_images"] == pytest.approx(2.0)  # only what dropping them frees
+    assert got["stale_images"] == 0 and got[dbu.PREV_KEPT_KEY] == 0
+
+
+def test_old_boss_tags_are_counted_once_with_the_command_that_removes_them():
+    """Review of the enterprise port: with the images row priced as the running release, old BOSS
+    tags (earlier releases, :local) were counted nowhere. They are now their own row, at what
+    `boss prune` would give back; older prev-* tags, which it keeps, are named with `docker rmi`."""
+    images = [{"Repository": "boss-community-api", "Tag": "t", "Size": "6GB"},
+              {"Repository": "boss-community-api", "Tag": "local", "Size": "6GB"},
+              {"Repository": "boss-community-api", "Tag": "v0", "Size": "6GB"},          # a container runs it
+              {"Repository": "boss-community-api", "Tag": "prev-old", "Size": "6GB"},
+              {"Repository": "boss-community-mine", "Tag": "x", "Size": "6GB"}]          # not release-tagged
+    layers = {"boss-community-api:t": ["base", "cur"], "boss-community-api:local": ["base", "loc"],
+              "boss-community-api:v0": ["base", "v0"], "boss-community-api:prev-old": ["base", "older"]}
+    sizes = {"base": "4GB", "cur": "2GB", "loc": "1.5GB", "v0": "1GB", "older": "3GB"}
+
+    def run(argv):
+        if argv[1] == "images":
+            return subprocess.CompletedProcess(argv, 0, "\n".join(json.dumps(i) for i in images), "")
+        if argv[1] == "ps":
+            return subprocess.CompletedProcess(argv, 0, "boss-community-api:t\nboss-community-api:v0\n", "")
+        ref = argv[-1]
+        if argv[1:3] == ["image", "inspect"]:
+            return subprocess.CompletedProcess(argv, 0, json.dumps(layers[ref]), "")
+        return subprocess.CompletedProcess(argv, 0, "\n".join(sizes[x] for x in reversed(layers[ref])), "")
+
+    got = dbu.measure_images(("docker",), tag="t", run=run)
+    assert got["stale_images"] == pytest.approx(1.5)      # :local only; v0 is in use, base is held
+    assert got[dbu.PREV_KEPT_KEY] == pytest.approx(3.0)
+    rows = {r["key"]: r for r in dbu.evaluate(got)}
+    assert rows["stale_images"]["level"] == "over" and "boss prune" in rows["stale_images"]["action"]
+    assert "docker rmi boss-community-api:prev-old" in rows["stale_images"]["note"]
+    assert problems(what=rows["stale_images"]["what"], action=rows["stale_images"]["action"]) == []
 
 
 def test_the_rollback_age_is_read_from_the_record_and_a_dropped_point_has_none(tmp_path):
@@ -606,3 +649,45 @@ def test_compaction_rewrites_a_table_that_kept_its_size_after_its_rows_went(db, 
     assert done["disk_churn"]["after"] < done["disk_churn"]["bytes"] / 5
     with engine.begin() as c:
         assert c.execute(text("SELECT count(*) FROM disk_churn")).scalar() == 20
+
+
+def test_development_cap_uses_autonomy_for_scheduled_dumps_only(db, tmp_path, monkeypatch):
+    from boss_engine.config import get_settings
+    from boss_engine.services import autonomy_gate
+
+    engine, _ = db
+    monkeypatch.setenv("BOSS_INSTALL_TIER", "dev")
+    monkeypatch.setenv("BOSS_AUTONOMY_IMMEDIATE", "0")
+    with engine.begin() as c:
+        c.execute(text("DELETE FROM backups"))
+        c.execute(text("DELETE FROM retention_rules WHERE kind = 'scheduled_backups'"))
+        c.execute(text("DELETE FROM decisions WHERE recommendation->>'tool' = :t"), {"t": bs.CAP_TOOL})
+    paths = _backups(engine, tmp_path, 6, 2.0)
+    # The operator's separate copy must survive both the age policy and the byte cap.
+    with engine.begin() as c:
+        c.execute(text("UPDATE backups SET kind='manual' WHERE path=:p"), {"p": str(paths[-1])})
+    bs.prune(engine, _settings())
+    with engine.begin() as c:
+        row = c.execute(text("SELECT * FROM decisions WHERE recommendation->>'tool'=:t"),
+                        {"t": bs.CAP_TOOL}).mappings().one()
+        assert row["risk_tier"] == 2 and row["recommendation"]["autonomy"]["route"] == "act"
+        assert "deleted storage" in row["recommendation"]["autonomy"]["undo"]
+        assert autonomy_gate.decide(c, get_settings(), row["id"])["decided"]
+    with engine.begin() as c:
+        approved = c.execute(text("SELECT approved_by FROM decisions WHERE id=:d"), {"d": row["id"]}).scalar_one()
+        assert approved.startswith(autonomy_gate.ACTOR_PREFIX)
+        assert not c.execute(text("SELECT 1 FROM retention_rules WHERE kind='scheduled_backups'")).first()
+    assert [p.exists() for p in paths] == [True, True, True, False, False, True]
+
+def test_cli_cache_only_never_reaches_volume_cleanup():
+    source = (INSTALL / "boss.sh").read_text().split("cmd_prune() {", 1)[1].split("\n}", 1)[0]
+    script = """
+need_install() { :; }
+env_value() { :; }
+bash() { printf 'cache-tool\n'; }
+python3() { printf 'volume-tool\n'; }
+cmd_prune() {""" + source + "\n}\ncmd_prune \"$@\""
+    def run(*args):
+        return subprocess.check_output(["bash", "-c", script, "probe", *args], text=True).splitlines()
+    assert run("--dry-run", "--cache-only", "--room") == ["cache-tool"]
+    assert run("--dry-run") == ["cache-tool", "volume-tool"]

@@ -143,10 +143,11 @@ function BudgetList({ b }: { b: DiskBudget }) {
       </div>
       <ul className="sc-legend-types" data-testid="sc-budget-rows">
         {rows.map((r) => (
-          <li key={r.key} data-level={r.level} data-testid="sc-budget-row" title={r.what ? `${r.what} ${r.action}` : r.boundedBy}>
+          <li key={r.key} data-level={r.level} data-testid="sc-budget-row" title={[r.what ? `${r.what} ${r.action}` : r.boundedBy, r.note].filter(Boolean).join(" ")}>
             <span className="sc-swatch" data-tone={r.level === "over" ? "red" : r.level === "near" ? "amber" : "green"} aria-hidden />
             {r.label} <code>{gb(r.gb ?? 0)} / {gb(r.budgetGb)}</code>
             {r.level === "over" || r.level === "near" ? <span className="sc-faint" data-testid="sc-budget-action"> {r.action}</span> : null}
+            {r.note ? <span className="sc-faint" data-testid="sc-budget-note"> {r.note}</span> : null}
           </li>
         ))}
       </ul>
@@ -213,7 +214,14 @@ export function StorageCardView({ s, projectId, orgId, sample, pendingDecisionId
         </span>
       </header>
 
-      {tone !== "green" ? (
+      {s.helperOverdue ? (
+        <div className="sc-alert" role="status" data-tone="amber" data-testid="sc-helper-offline">
+          <Warning size={14} aria-hidden />
+          <span>The host helper is not answering. Check <code>boss steward status</code> on this host
+            and run <code>boss steward install</code> to restore it.</span>
+          {pendingLink}
+        </div>
+      ) : tone !== "green" ? (
         <div className="sc-alert" role="status" data-tone={tone} data-testid="sc-alert">
           {tone === "red" ? <Warning size={14} weight="bold" aria-hidden /> : <Bell size={14} weight="bold" aria-hidden />}
           {atFloor ? <><b>{Math.round(s.freePct)} % free, at the {s.thresholds.floorPct} % hard floor.</b> Builds and upgrades wait until the Infra Agent frees space.</>
@@ -227,9 +235,9 @@ export function StorageCardView({ s, projectId, orgId, sample, pendingDecisionId
 
       <div className="sc-tiles" data-testid="sc-tiles">
         <div className="sc-tile" data-tone={tone} data-testid="sc-tile-free">
-          <span className="sc-tile-label"><HardDrives size={13} aria-hidden /> Free now</span>
+          <span className="sc-tile-label"><HardDrives size={13} aria-hidden /> {s.stale ? "Last reported free space" : "Free now"}</span>
           <b className="sc-tile-n">{Math.round(s.freePct)} %</b>
-          <span className="sc-tile-sub">{gb(s.freeGb)} of {gb(s.totalGb)}{s.stale ? <> · <span className="sc-stale">reading is over 2 min old</span></> : s.sampledAt ? ` · ${whenWord(s.sampledAt)}` : ""}</span>
+          <span className="sc-tile-sub">{gb(s.freeGb)} of {gb(s.totalGb)}{s.stale ? <> · <span className="sc-stale">{s.sampledAt ? `last measured ${whenWord(s.sampledAt)}` : "reading is over 2 min old"}</span></> : s.sampledAt ? ` · ${whenWord(s.sampledAt)}` : ""}</span>
         </div>
         <div className="sc-tile" data-tone={s.growthGbPerDay > 0 ? "amber" : "green"} data-testid="sc-tile-growth">
           <span className="sc-tile-label"><TrendUp size={13} aria-hidden /> Growth</span>

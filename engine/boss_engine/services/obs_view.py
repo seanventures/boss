@@ -173,6 +173,7 @@ class System(TypedDict, total=False):
     machine: dict[str, Any]  # GET /v1/system/health body: scope, scope_label, level, level_label,
                              # gauges{...}, plus bands{memory,swap,cpu,disk:{value,unit,band,word}}
     build: dict[str, Any]    # {sha7, built_at}
+    compose: dict[str, Any]
     oom_kills_new: Optional[int]
     work: dict[str, Any]     # queue, leased, running, in_flight, builds_at_once{label}
     stalls: dict[str, Any]   # {strip:[n×96], rows:[≤8 {at, word, subject, did, shadow, run_id}], total}
@@ -1366,6 +1367,24 @@ def _advice(connection: Any, project_id: str) -> Optional[dict[str, Any]]:
     return line
 
 
+def _compose_snapshot(connection: Any) -> dict[str, Any]:
+    """The host helper's last Compose service states, marked stale once the helper has been
+    silent past HELPER_UNREACHABLE_AFTER: an old "running" is not a fact about now."""
+    from datetime import datetime, timezone
+
+    from . import admission
+    from .storage_watch import HELPER_UNREACHABLE_AFTER
+
+    snap = dict(admission._state(connection, "compose_service_snapshot") or {})
+    try:
+        at = datetime.fromisoformat(str(snap.get("at") or "").replace("Z", "+00:00"))
+        at = at if at.tzinfo else at.replace(tzinfo=timezone.utc)
+        snap["stale"] = datetime.now(timezone.utc) - at >= HELPER_UNREACHABLE_AFTER
+    except ValueError:
+        pass
+    return snap
+
+
 def system(connection: Any, settings: Any, project_id: str) -> System:
     """BOSS's own machine, its queue, its stalls and the doctor's findings. Polled every 10 s:
     /proc reads, statvfs and small indexed queries only. A reader that fails is `partial`."""
@@ -1411,6 +1430,7 @@ def system(connection: Any, settings: Any, project_id: str) -> System:
         "reason": reason, "machine": machine,
         "build": {"sha7": sha[:7] if sha else None, "built_at": stamp.get("built_at")},
         "oom_kills_new": oom_new,
+        "compose": guarded("services", lambda: _compose_snapshot(connection), {}),
         "work": {**q, "in_flight": flying,
                  "builds_at_once": {"label": adm.get("label"),
                                     "value": (adm.get("builds_at_once") or {}).get("value")}},

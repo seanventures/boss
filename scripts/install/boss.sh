@@ -576,14 +576,23 @@ cmd_rollback() {
 
 cmd_prune() {
   need_install
+  # prune.sh fails when a step did not finish or the cache is still over its cap; the test
+  # leftovers below are still checked, and `boss prune` then exits with its status.
+  local rc=0
   BOSS_DEDICATED_HOST="$(env_value BOSS_DEDICATED_HOST)" \
-    bash "$INSTALL_DIR/scripts/install/prune.sh" "$@"
+    bash "$INSTALL_DIR/scripts/install/prune.sh" "$@" || rc=$?
   # The test Postgres's volume, when no container uses it (BOSSAPP-1459): the steward, whose
   # label gate is the one place BOSS removes a volume.
-  local dry=()
-  [[ " $* " == *" --dry-run "* ]] && dry=(--dry-run)
+  local dry=() arg
+  for arg in "$@"; do
+    case "$arg" in
+      --cache-only) return "$rc" ;;
+      --dry-run) dry=(--dry-run) ;;
+    esac
+  done
   python3 "$INSTALL_DIR/scripts/install/steward.py" --install-dir "$INSTALL_DIR" --test-leftovers \
     ${dry[@]+"${dry[@]}"} </dev/null || printf 'boss: test leftovers not checked\n' >&2
+  return "$rc"
 }
 
 # ---- dev: the test Postgres (storage hygiene, BOSSAPP-1152/1162) -----------------------------
@@ -1806,13 +1815,47 @@ cmd_clone() {
     esac
   done
   [[ -n "$project" ]] || die "clone needs the project: boss clone PROJECT [DIR] [--branch B]"
-  [[ "$project" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$ ]] || die "that is not a project id: $project"
+  local base url helper token
+  token="$(person_token)" || exit 1
+  # A person types what the console shows: the project's name, slug or id, in any case. The
+  # clone URL needs the exact id, so resolve it among the projects this person can read; an
+  # exact id always wins, and a name two projects share is refused rather than guessed.
+  local listing resolved
+  listing="$(api_call "$token" GET /v1/projects 2>/dev/null)" || listing=""
+  if [[ "${listing##*$'\n'}" == 200 ]]; then
+    resolved="$(python3 -c '
+import json, sys
+value = sys.argv[1]
+try:
+    data = json.load(sys.stdin)
+except ValueError:
+    sys.exit()
+rows = data if isinstance(data, list) else (
+    data.get("items", data.get("projects")) if isinstance(data, dict) else None)
+if not isinstance(rows, list):
+    sys.exit()
+rows = [r for r in rows if isinstance(r, dict)]
+ids = {str(r.get("id")) for r in rows if r.get("id")}
+if value in ids:
+    print(value)
+    sys.exit()
+want = value.casefold()
+hits = {str(r["id"]) for r in rows if r.get("id") and want in
+        {str(r.get(k) or "").casefold() for k in ("id", "name", "slug")}}
+if len(hits) > 1:
+    sys.exit(2)
+print(next(iter(hits), ""))
+' "$project" <<<"${listing%$'\n'*}")" || {
+      [[ $? -eq 2 ]] && die "More than one project is named $project. Use the project id from its BOSS page."
+      resolved=""
+    }
+    [[ -z "$resolved" ]] || project="$resolved"
+  fi
+  [[ "$project" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$ ]] || die "No accessible project id for that name. Use the project id from its BOSS page."
   dir="${dir:-$HOME/code/$project}"
   dir="${dir/#\~/$HOME}"
   [[ ! -e "$dir" || -z "$(ls -A "$dir" 2>/dev/null)" ]] || die "$dir already exists and is not empty. Pick another folder."
-  local base url helper token
   base="$(git_remote_base)"; url="$base/git/$project.git"; helper="$(credential_helper)"
-  token="$(person_token)" || exit 1
   # The token goes to the credential helper (the keychain), keyed by this BOSS's address.
   remember_token "$token"
   mkdir -p "$(dirname "$dir")"
@@ -1952,7 +1995,10 @@ try:
 except ValueError:
     data = {}
 if code != "200":
-    msg = data.get("message") or (data.get("detail") if isinstance(data.get("detail"), str) else "") or data.get("error") or ("HTTP " + code)
+    detail = data.get("detail")
+    if isinstance(detail, dict):
+        detail = detail.get("message") or detail.get("error")
+    msg = data.get("message") or (detail if isinstance(detail, str) else "") or data.get("error") or ("HTTP " + code)
     print("boss: " + str(msg), file=sys.stderr); sys.exit(1)
 def where(c):
     return (c.get("path") or "(the change)") + (":" + str(c["line"]) if c.get("line") else "")

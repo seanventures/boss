@@ -115,7 +115,7 @@ export type HostStorageRow = { hostId: string; label: string; freePct: number; f
 export type Thresholds = { warnPct: number; criticalPct: number; targetPct: number; floorPct: number; floorGb: number | null; warnDays: number | null; criticalDays: number | null };
 
 export type StorageSummary = {
-  hostId: string; hostLabel: string; sampledAt: string | null; source: string | null; stale: boolean;
+  hostId: string; hostLabel: string; sampledAt: string | null; source: string | null; stale: boolean; helperOverdue?: boolean;
   totalGb: number; freeGb: number; freePct: number; usedPct: number;
   byType: StorageType[];
   /** 7-day growth, GB per day; "full in N days" (null = not growing) and with the rules. */
@@ -138,7 +138,9 @@ export type StorageSummary = {
 };
 
 export type BudgetLevel = "ok" | "near" | "over" | "unknown";
-export type BudgetRow = { key: string; label: string; gb: number | null; budgetGb: number; level: BudgetLevel; boundedBy: string; what: string; action: string };
+/** note: what a person might read as a problem with nothing to run for it (cache that installed
+ *  images share, ENT-SETUP-01); "" when there is none. */
+export type BudgetRow = { key: string; label: string; gb: number | null; budgetGb: number; level: BudgetLevel; boundedBy: string; what: string; action: string; note: string };
 export type DiskBudget = { rows: BudgetRow[]; totalGb: number; budgetGb: number; warnAtPct: number };
 
 export type TelemetrySweep = { at: string; rows: number; bytes: number; partitions: string[]; archived: number; errors: string[]; receiptId: string | null };
@@ -168,7 +170,7 @@ export function parseBudget(w: unknown): DiskBudget | null {
     const x = obj(r);
     const level = str(x.level) as BudgetLevel;
     return { key: str(x.key), label: str(x.label) || str(x.key), gb: optNum(x.gb), budgetGb: num(x.budget_gb),
-             level: levels.includes(level) ? level : "unknown", boundedBy: str(x.bounded_by), what: str(x.what), action: str(x.action) };
+             level: levels.includes(level) ? level : "unknown", boundedBy: str(x.bounded_by), what: str(x.what), action: str(x.action), note: str(x.note) };
   }).filter((r) => r.key);
   if (!rows.length) return null;
   const t = obj(o.total);
@@ -406,7 +408,7 @@ export function parseSummary(w: unknown): StorageSummary | null {
   const hostId = str(o.host_id, "this host");
   const unreclaimed = byType.find((t) => t.key === "docker_vm_unreclaimed");
   return {
-    hostId, hostLabel: str(o.host_label) || hostId, sampledAt: optStr(o.sampled_at), source: optStr(o.source), stale: o.stale === true,
+    hostId, hostLabel: str(o.host_label) || hostId, sampledAt: optStr(o.sampled_at), source: optStr(o.source), stale: o.stale === true, helperOverdue: o.helper_overdue === true,
     totalGb, freeGb, freePct: num(disk.free_pct, totalGb > 0 ? Math.round((freeGb / totalGb) * 100) : 0), usedPct: num(disk.used_pct, totalGb > 0 ? Math.round(((totalGb - freeGb) / totalGb) * 100) : 0),
     byType,
     growthGbPerDay: num(fc.growth_gb_per_day), fullInDays: optNum(fc.days_until_full), fullAt: optStr(fc.full_at),
