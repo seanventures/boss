@@ -809,6 +809,14 @@ class DecisionService:
                     recommendation = json.loads(recommendation)
                 except ValueError:
                     recommendation = None
+            if ((recommendation or {}).get("action") == "review_pull_request"
+                    and not self.settings.enable_sandbox_merge and not force):
+                from .local_repo_host import is_local_pr_url
+
+                if is_local_pr_url(recommendation.get("pull_request_url")):
+                    raise InvalidDecisionTransitionError(
+                        "Local merging is disabled on this installation. Enable "
+                        "BOSS_ENABLE_SANDBOX_MERGE and restart BOSS, then approve this change.")
             preview = (recommendation or {}).get("action_preview") \
                 if isinstance(recommendation, dict) else None
             current_hash = (preview or {}).get("content_hash") if isinstance(preview, dict) \

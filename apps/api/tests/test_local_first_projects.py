@@ -204,6 +204,12 @@ def test_a_local_project_builds_reviews_merges_previews_and_deploys_without_gith
     with world.acting_as(world.ctx(world.viewer)):
         refused = client.post(f"/v1/projects/{pid}/local-changes/1/merge", json={})
     assert refused.status_code == 403
+    monkeypatch.setattr(main.decisions.settings, "enable_sandbox_merge", False)
+    with _owner(world):
+        disabled = client.post(f"/v1/projects/{pid}/local-changes/1/merge", json={})
+        pending = client.get(f"/v1/projects/{pid}/local-changes/1").json()
+    assert disabled.status_code == 409 and "BOSS_ENABLE_SANDBOX_MERGE" in disabled.text
+    assert pending["state"] == "open" and pending["decision"]["status"] == "pending"
     monkeypatch.setattr(main.decisions.settings, "enable_sandbox_merge", True, raising=False)
     with _owner(world):
         merged = client.post(f"/v1/projects/{pid}/local-changes/1/merge", json={"note": "ship it"})
