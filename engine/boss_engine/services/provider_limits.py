@@ -65,22 +65,10 @@ def credit_exhausted(error: Optional[str]) -> bool:
     lowered = str(error).lower()
     return any(phrase in lowered for phrase in _CREDIT_EXHAUSTED)
 
-#: "try again at Sep 22nd, 2026 10:06 PM" — codex's phrasing, and the most useful field in the
-#: whole message: it is the answer to "when can I run this again".
-_RETRY_AT = re.compile(
-    r"try again (?:at|after)\s+"
-    r"(?P<month>[A-Z][a-z]{2})[a-z]*\s+(?P<day>\d{1,2})(?:st|nd|rd|th)?,?\s+"
-    r"(?P<year>\d{4})\s+(?P<hour>\d{1,2}):(?P<minute>\d{2})\s*(?P<ampm>[AP]M)",
-    re.IGNORECASE,
-)
-#: An ISO timestamp or a seconds count, which most HTTP APIs use instead of prose.
-_RETRY_ISO = re.compile(r"try again (?:at|after)\s+(?P<iso>\d{4}-\d{2}-\d{2}[T ][\d:]{5,8})",
-                        re.IGNORECASE)
+#: "Retry-After: 30" — a seconds count, which most HTTP APIs use instead of prose. The reset a
+#: sentence NAMES ("try again at Sep 22nd, 2026 10:06 PM", "resets 7pm (UTC)") is read by the
+#: one limit parser, model_router.headroom.
 _RETRY_SECONDS = re.compile(r"retry[- ]after[:\s]+(?P<seconds>\d+)", re.IGNORECASE)
-
-_MONTHS = {m: i + 1 for i, m in enumerate(
-    ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"))}
-
 
 @dataclass(frozen=True)
 class LimitSignal:
@@ -104,30 +92,6 @@ class LimitSignal:
         if self.retry_after_seconds is not None:
             out["retry_after_seconds"] = self.retry_after_seconds
         return out
-
-
-def _parse_retry_at(message: str) -> Optional[datetime]:
-    match = _RETRY_ISO.search(message)
-    if match:
-        try:
-            return datetime.fromisoformat(match.group("iso").replace(" ", "T")).replace(
-                tzinfo=timezone.utc)
-        except ValueError:
-            pass
-    match = _RETRY_AT.search(message)
-    if not match:
-        return None
-    month = _MONTHS.get(match.group("month").lower())
-    if not month:
-        return None
-    hour = int(match.group("hour")) % 12
-    if match.group("ampm").upper() == "PM":
-        hour += 12
-    try:
-        return datetime(int(match.group("year")), month, int(match.group("day")),
-                        hour, int(match.group("minute")), tzinfo=timezone.utc)
-    except ValueError:
-        return None
 
 
 def classify_limit(error: Optional[str]) -> Optional[LimitSignal]:
@@ -157,7 +121,9 @@ def classify_limit(error: Optional[str]) -> Optional[LimitSignal]:
     if not windows and not any(phrase in lowered for phrase in _EXHAUSTED):
         return None
 
-    retry_at = _parse_retry_at(text)
+    from .model_router.headroom import named_reset
+
+    retry_at = named_reset(text)
     if retry_at is None and windows:
         resets = [w["resets_at"] for w in windows.values() if w.get("resets_at")]
         if resets:

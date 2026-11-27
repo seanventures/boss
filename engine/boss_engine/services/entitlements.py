@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime, timezone
 from importlib import import_module
 from pathlib import Path
 from typing import Any, Optional
@@ -13,6 +14,10 @@ from sqlalchemy.engine import Connection
 from ..config import Settings
 from .budget import BudgetGovernor
 from .core import DATA_BOUNDARIES, emit_event, make_id, normalize_data_boundary
+
+
+#: When the current capacity_state lapses by itself (entitlements.merge_capacity owns it).
+CAPACITY_RESET_KEY = "capacity_reset_at"
 
 
 class SkillNotFoundError(Exception):
@@ -60,6 +65,9 @@ class EntitlementBrokerService:
         "suspended",
         "unavailable",
     }
+    #: Capacity states a clock lifts (a limit window): they lapse at their recorded reset. A
+    #: blocked, disabled or suspended source stays out until a person changes it.
+    LAPSING_CAPACITY_STATES = {"rate_limited", "unavailable", "exhausted"}
     GATEWAY_SOURCE_KINDS = {"managed_cloud_model_gateway"}
 
     def __init__(self, settings: Settings):
@@ -519,9 +527,47 @@ class EntitlementBrokerService:
             return "official_oauth_connection_not_connected"
         return None
 
+    @staticmethod
+    def merge_capacity(old: Optional[dict[str, Any]], new: Optional[dict[str, Any]]
+                       ) -> dict[str, Any]:
+        """THE ONE MERGE for observed_capacity writes. `capacity_reset_at` belongs to the write
+        that set `capacity_state`: a write that sets the state carries its own reset or clears
+        the old one, so a stale reset can never lift a newer denial (an "exhausted" probe with
+        no reset, under a Nov 27 reset left by an earlier limit)."""
+        new = new or {}
+        merged = {**(old or {}), **new}
+        if "capacity_state" in new:
+            if new.get(CAPACITY_RESET_KEY):
+                merged[CAPACITY_RESET_KEY] = new[CAPACITY_RESET_KEY]
+            else:
+                merged.pop(CAPACITY_RESET_KEY, None)
+        return merged
+
+    @staticmethod
+    def _capacity_reset_passed(observed_capacity: dict[str, Any],
+                               now: Optional[datetime] = None) -> bool:
+        """Has the reset recorded WITH the current capacity_state (`capacity_reset_at`, and only
+        that key) passed? False when none was recorded: a denial without a reset — out of
+        credit, a person's block — lasts until a success or a green Setup check clears it."""
+        value = observed_capacity.get(CAPACITY_RESET_KEY)
+        if not value:
+            return False
+        try:
+            when = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError:
+            return False
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        return when <= (now or datetime.now(timezone.utc))
+
     def _capacity_policy_denial(self, source: dict[str, Any]) -> Optional[str]:
         observed_capacity = source.get("observed_capacity") or {}
         capacity_state = str(observed_capacity.get("capacity_state") or "").strip()
+        if capacity_state in self.LAPSING_CAPACITY_STATES and self._capacity_reset_passed(
+                observed_capacity):
+            # A LIMIT LAPSES AT ITS RESET. Only a routed success used to clear it, and routing
+            # is exactly what this refuses: a weekly limit took the source out for good.
+            capacity_state = ""
         if capacity_state in self.CAPACITY_DENIAL_STATES:
             if capacity_state == "rate_limited":
                 return "capacity_rate_limited"
@@ -1192,10 +1238,7 @@ class EntitlementBrokerService:
             }
 
         source = self.get_source(connection, project_id, pool["source_id"])
-        merged_capacity = {
-            **(source.get("observed_capacity") or {}),
-            **observed_capacity,
-        }
+        merged_capacity = self.merge_capacity(source.get("observed_capacity"), observed_capacity)
         capacity_state_after = str(
             merged_capacity.get("capacity_state")
             or observed_capacity.get("capacity_state")
@@ -1765,8 +1808,7 @@ class EntitlementBrokerService:
                 "Subscription-backed public model sources must use an official OAuth connection method."
             )
         merged_capacity = {
-            **(source.get("observed_capacity") or {}),
-            **(observed_capacity or {}),
+            **self.merge_capacity(source.get("observed_capacity"), observed_capacity),
             "credential_present": True,
             "runtime_supported": True,
             "official_oauth_connected": bool(self._requires_official_oauth(source)),
@@ -1821,12 +1863,11 @@ class EntitlementBrokerService:
         reason: Optional[str] = None,
     ) -> dict[str, Any]:
         source = self.get_source(connection, project_id, source_id)
-        observed_capacity = {
-            **(source.get("observed_capacity") or {}),
+        observed_capacity = self.merge_capacity(source.get("observed_capacity"), {
             "credential_present": False,
             "official_oauth_connected": False,
             "capacity_state": "unknown",
-        }
+        })
         if source_id == "anthropic_claude_code":
             # The stored login goes too, so every `claude` run falls through to the Anthropic
             # API key (claude_credential) — including those that never read this row.

@@ -332,7 +332,19 @@ def classify_model_failure(status: int, detail: str, *, subscription: bool = Fal
     # the key may be right, so it is kept as "Can't reach", never "Check failed".
     if status == 0 or status in (502, 503, 504):
         return "unreachable"
-    if status == 429 or "rate limit" in lowered or "usage limit" in lowered:
+    # ONE LIMIT DETECTOR (model_router.headroom): "You've hit your weekly limit · resets …",
+    # "5-hour limit reached", "usage limit reached|<epoch>", a monthly spend limit, a 429. Its own
+    # narrower copy here ("rate limit" / "usage limit" only) read Claude's weekly limit as a bare
+    # "Check failed" (laptop, 2026-11-26).
+    from .model_router.headroom import limit_verdict
+
+    verdict = limit_verdict(detail)
+    # A refusal that names its own cause (401 key, 403 permission, 404 model) is that cause,
+    # unless the provider's words are a plan or credit sentence: a bare "429" inside the body
+    # ("model gpt-4-429 not found") is not a rate limit.
+    if verdict is not None and (verdict.plan or status not in (401, 403, 404)):
+        return verdict.state
+    if status == 429:
         return "rate_limited"
     if status == 402 or any(word in lowered for word in _NO_CREDIT):
         return "no_credit"
@@ -353,10 +365,10 @@ def _retry_after(headers: dict[str, str], detail: str) -> Optional[str]:
     if retry and str(retry).isdigit():
         return iso(now_utc() + timedelta(seconds=int(retry)))
     try:
-        from .provider_limits import _parse_retry_at
+        from .model_router.headroom import limit_verdict
 
-        when = _parse_retry_at(detail or "")
-        return iso(when) if when else None
+        verdict = limit_verdict(detail or "")
+        return iso(verdict.retry_at) if verdict and verdict.retry_at else None
     except Exception:  # noqa: BLE001
         return None
 

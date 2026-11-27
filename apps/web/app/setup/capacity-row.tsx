@@ -19,14 +19,14 @@ import { LockedPanel, lockedReason } from "../../components/locked-panel";
 import { isLocked } from "../../lib/identity/read-gates";
 import React, { forwardRef, useCallback, useEffect, useState } from "react";
 
-import { CaretDown } from "@phosphor-icons/react";
+import { ArrowClockwise, CaretDown } from "@phosphor-icons/react";
 
 import { apiWrite } from "../../lib/api-write";
 import { fetchSetup, SetupFailure, setupWrite } from "../../lib/setup-client";
 import { ageLabel } from "../../lib/setup-stepper";
 import type { ModelEntry, Pill as PillT, SetupView, Tone } from "../../lib/setup-types";
 import { useLocalTime } from "../../lib/local-time";
-import { needsSentence, subscriptionNext } from "./model-status";
+import { limitPill, needsSentence, subscriptionNext } from "./model-status";
 import { DefaultModel, KIND, signsIn, usedForLabel, usedForTip, useModelsSection } from "./models-row";
 import { AskBoss, RowMenu, toast, useBoard, type MenuItem } from "./parts";
 import { Dot, Out, Tip } from "./pill";
@@ -400,7 +400,7 @@ function SourceRow({ item, sessions, onBoard, formOpen, onForm, actions }: {
 
   // THE PILL: the Models row's (the server's last real proof) when it has one, else the
   // source's proven pill, else its connection record. Checking/editing replace it while they run.
-  const serverPill: PillT | null = entry ? entry.pill : null;
+  const serverPill: PillT | null = entry ? limitPill(entry.pill) : null;
   const badge = src ? badgeOf(src) : null;
   const pill: PillT = busy ? { state: "checking", tone: "busy", label: "Checking…", tip: "Asking one tiny question. Budgeted." }
     : editing && signInProvider ? { state: "editing", tone: "grey", label: "Signing in…", tip: "Signing in again. The old check no longer applies." }
@@ -463,12 +463,17 @@ function SourceRow({ item, sessions, onBoard, formOpen, onForm, actions }: {
 
   // ONE PRIMARY ACTION, only when the row needs something.
   let primary: React.ReactNode = null;
-  if (!busy && !editing && entry && staleGreen && !red && pill.tone !== "amber") {
+  // A PLAN LIMIT IS NOT A LOGIN PROBLEM: Sign in would replace a working login and change
+  // nothing (2026-11-26, Claude's weekly limit offered Sign in). It offers Test, like a stale green.
+  const limited = !!entry && entry.pill.state === "rate_limited";
+  if (!busy && !editing && entry && ((staleGreen && !red && pill.tone !== "amber") || limited)) {
     // WORKING, JUST NOT RECENTLY PROVEN: Test, never a blue "Sign in" beside a green "Working"
     // (boss-1, 2026-11-05: a long-lived token that renews in 2027 offered Sign in).
     primary = <GatedButton permission="setup:check" type="button" className="su-btn su-btn-sm"
                            data-testid="su-model-test" onClick={test}
-                           title="Asks the model one tiny question." data-tip="Asks the model one tiny question.">Test</GatedButton>;
+                           title="Asks the model one tiny question." data-tip="Asks the model one tiny question.">
+                 <ArrowClockwise size={14} aria-hidden="true" />Test
+               </GatedButton>;
   } else if (!busy && !editing && signInProvider && (entry ? needs : offersSignIn(src!))) {
     const next = subscriptionNext(view, signInProvider);
     primary = next === "connect" ? (
@@ -600,6 +605,7 @@ function SourceRow({ item, sessions, onBoard, formOpen, onForm, actions }: {
           {entry?.used_for.length ? <><dt>Used for</dt><dd>{entry.used_for.join(", ")}</dd></> : null}
           {said?.billing ? <><dt>Billing</dt><dd>{said.billing}</dd></> : null}
           {entry?.checked_at ? <><dt>Checked</dt><dd>{ageLabel(entry.checked_at)} ago</dd></> : null}
+          {entry?.reason ? <><dt>Said</dt><dd data-user-text data-testid="su-model-reason">{entry.reason}</dd></> : null}
           {entry?.next_check_at ? <><dt>Next check</dt><dd>
             <Tip tip={entry.next_check_why ?? "BOSS proves this connection again then; Re-check tries now."}>
               {lt.full(entry.next_check_at)}
