@@ -527,3 +527,36 @@ def test_easy_mode_deploys_only_a_merge_on_record(client, engine, monkeypatch, t
 
     assert out["status"] == "awaiting"
     assert out["await"]["kind"] == runner.MERGE_AWAIT_KIND and out["await"]["id"] == "crun_easy_pr"
+
+
+def test_panel_question_holds_build_even_when_the_start_covered_spec_approval(
+        client, engine, monkeypatch, tmp_path):
+    from boss_engine.services.meeting_service import _finalize_meeting, panel_build_readiness
+
+    _setup(monkeypatch, tmp_path)
+    convened = _panel(monkeypatch, engine, finish=False)
+    body = _launch(client, prompt="Build a local page for public or restricted use.")
+    project, workflow = body["project_id"], body["workflow_run_id"]
+    _tick(client, project)
+    meeting = convened[0]["run_id"]
+    question = "Should the report be public or restricted to administrators?"
+    draft, blocker = panel_build_readiness(PRD + "\nBUILD READINESS: ASK " + question)
+    assert (draft, blocker) == (PRD.rstrip(), question)
+    assert panel_build_readiness(PRD + "\nBUILD READINESS: READY") == (draft, None)
+    assert panel_build_readiness(PRD)[1]
+    settings = get_settings().model_copy(update={"meeting_prd_auto_approve": True})
+    with engine.begin() as c:
+        c.execute(text(
+            "UPDATE meeting_runs SET state = jsonb_build_object('prd_markdown', CAST(:prd AS text), "
+            "'build_readiness_question', CAST(:q AS text)) WHERE id = :m"),
+            {"prd": draft, "q": blocker, "m": meeting})
+        decision = _finalize_meeting(c, settings, meeting)["decision_id"]
+    for _ in range(3):
+        _tick(client, project)
+    with engine.begin() as c:
+        row = c.execute(text(
+            "SELECT status, question, recommendation FROM decisions WHERE id = :d"),
+            {"d": decision}).mappings().one()
+    assert (row["status"], row["question"]) == ("pending", question)
+    assert row["recommendation"]["explicit_stop"] == question
+    assert not _builds(engine, workflow)

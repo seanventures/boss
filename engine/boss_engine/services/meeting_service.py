@@ -695,7 +695,8 @@ def prd_state_of(connection: Connection, *, run_status: Optional[str], decision_
         ).mappings().first()
     elif task_id:
         row = connection.execute(
-            text("SELECT status FROM decisions WHERE task_id = :t AND question = :q "
+            text("SELECT status FROM decisions WHERE task_id = :t AND (question = :q "
+                 "OR recommendation->>'reason_code' = 'meeting_prd_ready_to_publish') "
                  "ORDER BY created_at DESC LIMIT 1"),
             {"t": task_id, "q": _PRD_DECISION_QUESTION},
         ).mappings().first()
@@ -1513,9 +1514,16 @@ def _advance_phase(engine, settings: Settings, jobs, run: dict, run_id: str, pha
                    "e.g. `flowchart LR` of the user journey or the system components; (2) for a UI/"
                    "website product, a simple page-layout sketch (a Mermaid block or an ASCII "
                    "wireframe of the key screen) so a reader sees the intended structure. Keep "
-                   "diagrams accurate to the proposed solution.")
+                   "diagrams accurate to the proposed solution.\n\n"
+                   "End with one plain-text line: BUILD READINESS: READY, or BUILD READINESS: ASK "
+                   "followed by the question the requester must answer. Use ASK when the brief "
+                   "contains incompatible requirements or a consequential product or access decision "
+                   "cannot be resolved from supplied facts. State the alternatives. Routine "
+                   "implementation choices and optional follow-ups do not block a build.")
         from .stacks import ensure_stack_line
 
+        prd, question = panel_build_readiness(prd)
+        state["build_readiness_question"] = question
         state["prd_markdown"] = ensure_stack_line(prd, str(run.get("directive") or ""))
         next_phase = "finalize"
     else:
@@ -1531,6 +1539,19 @@ def _advance_phase(engine, settings: Settings, jobs, run: dict, run_id: str, pha
         jobs.create_job(c, project_id=run["project_id"], task_id=run["task_id"],
                         kind="meeting.step", priority=JOB_PRIORITY_INTERACTIVE, payload={"run_id": run_id})
     return {"status": "running", "done": False, "phase": next_phase}
+
+
+def panel_build_readiness(draft: str) -> tuple[str, Optional[str]]:
+    """Separate the facilitator's final build disposition from the published document."""
+    document, _, last_line = draft.rstrip().rpartition("\n")
+    prefix = "BUILD READINESS:"
+    if last_line.startswith(prefix):
+        disposition = last_line[len(prefix):].strip()
+        if disposition == "READY":
+            return document.rstrip(), None
+        if disposition.startswith("ASK ") and len(disposition[4:].strip()) > 0:
+            return document.rstrip(), disposition[4:].strip()[:500]
+    return draft.rstrip(), "Does the specification resolve the requirements well enough to start building?"
 
 
 def prd_blocks_auto_approve(directive: str, prd_markdown: str) -> bool:
@@ -1591,14 +1612,15 @@ def _finalize_meeting(connection, settings, run_id) -> dict:
     # "Review the plan first", the install's own "a person approves every PRD", or a PRD that
     # departs from the stack the person's brief named.
     deviates = prd_blocks_auto_approve(run.get("directive"), state.get("prd_markdown"))
-    explicit_stop = (
+    readiness_question = state.get("build_readiness_question")
+    explicit_stop = readiness_question or (
         "Review the plan first" if approval == SPEC_APPROVED_BY_PERSON else
         "BOSS_MEETING_PRD_AUTO_APPROVE=false: a person approves every PRD"
         if getattr(settings, "meeting_prd_auto_approve", True) is False
         and approval != SPEC_APPROVED_BY_START else
         "the PRD declares a different stack from the brief" if deviates else None)
     decision_id = None if security_review else create_blocking_decision(connection, project_id, task_id,
-        _PRD_DECISION_QUESTION,
+        readiness_question or _PRD_DECISION_QUESTION,
         {"action": "execute_agent_tool", "tool": "publish_document", "start_code_task": True,
          "meeting_run_id": run_id,
          "args": {"title": "PRD: " + meeting_title(run.get("title"), run["directive"]), "markdown": state.get("prd_markdown") or "",
@@ -1629,6 +1651,8 @@ def _finalize_meeting(connection, settings, run_id) -> dict:
         auto_approve = False
     # A swapped stack is the blocking question, not a silent start. The spec gate asks
     # enable / accept / stop; approving the PRD here would build the substitute.
+    if readiness_question:
+        auto_approve = False
     if auto_approve and deviates:
         emit_event(connection, project_id, "meeting.prd_stack_deviation", "boss",
                    "decision", decision_id,
