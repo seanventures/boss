@@ -1336,6 +1336,15 @@ def serve_proof_known_service(spec: Optional[dict], fctx: Optional[dict]) -> boo
     return bool(verification_target.official_app_id(spec or {}, fctx or {}))
 
 
+def _app_serves_headline_of(record: Optional[dict]) -> Optional[str]:
+    """The failed start check's one line for a person's card (app_serves_headline), or None."""
+    if not record or record.get("ok") or record.get("skipped"):
+        return None
+    from .preview_service import app_serves_headline
+
+    return app_serves_headline(record)
+
+
 def _app_serves_sentence(record: Optional[dict]) -> str:
     """The serve proof's failure in ONE wording for every place it is shown (blocked error,
     convergence finding, repair prompt) — see preview_service.app_serves_failure_sentence."""
@@ -12351,7 +12360,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         needs=((app_serves_record or {}).get("needs_secret")
                                if "app_serves" in failing
                                and gate_faults.get("app_serves") == "PERSON" else None),
-                        why=str((_sup_decision or {}).get("reason") or ""))}
+                        why=str((_sup_decision or {}).get("reason") or ""),
+                        headline=(_app_serves_headline_of(app_serves_record)
+                                  if "app_serves" in failing else None))}
                        if _env_stop else {}),
                 }
                 evidence[_checks_failing.KEY] = checks_record

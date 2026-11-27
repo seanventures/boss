@@ -135,12 +135,16 @@ def environment_stop(failing: Iterable[str], *, faults: Optional[Mapping[str, st
 
 def stopped_record(reason: str, failing: Iterable[str], *,
                    needs: Optional[Iterable[str]] = None,
-                   why: Optional[str] = None) -> dict[str, Any]:
+                   why: Optional[str] = None,
+                   headline: Optional[str] = None) -> dict[str, Any]:
     """What the PR and its card say about such a stop, in the words a person acts on:
 
       a secret only a person can set (`needs`, the app_serves check's `needs_secret`) —
         "stopped: needs a person, App starts. Set STRIPE_KEY for environments … in the app's
         Secrets, then press Retry …" (reason `person`: the build waits for that person);
+        `headline` is the failed check's own line (preview_service.app_serves_headline): the
+        name WITH whose files or start error asked for it ("…(named by pay's start error)"),
+        so the card says why BOSS believes a person has it;
       an agent refusing — "stopped: an agent refused: <its reason>";
       the environment — "stopped: environment problem, <gates>"."""
     labels = ", ".join(_gate_label(g) for g in _ordered(failing))
@@ -149,8 +153,11 @@ def stopped_record(reason: str, failing: Iterable[str], *,
         from ..templates.run_env import needs_secret_action
 
         action = needs_secret_action(needs)
+        said = " ".join(str(headline or "").split())[:300]
         return {"reason": "person", "no_followup": True, "needs_secret": needs,
-                "action": action, "words": f"stopped: needs a person, {labels}. {action}"}
+                "action": action, **({"headline": said} if said else {}),
+                "words": f"stopped: needs a person, {labels}" + (f": {said}" if said else "")
+                         + f". {action}"}
     if reason == "refusal":
         said = " ".join(str(why or "").split())[:300] or labels
         return {"reason": reason, "no_followup": True,
@@ -181,7 +188,10 @@ def wait_for_person(connection: Any, *, run_id: str, project_id: str, task_id: O
                                                if pull_request_url else ""),
         {"action": SECRET_RETRY_ACTION, "run_id": run_id, "needs_secret": needs,
          "next_step": action, "pull_request_url": pull_request_url,
-         "summary": f"{action} The build's checks run again on the same branch and pull "
+         **({"why": stopped["headline"]} if stopped.get("headline") else {}),
+         "summary": (f"{stopped['headline'][:1].upper()}{stopped['headline'][1:]}. "
+                     if stopped.get("headline") else "")
+                    + f"{action} The build's checks run again on the same branch and pull "
                     "request when you press Retry once set."},
         {"phase": "app_serves"}, f"{stopped.get('words') or ''}", risk_tier=1)
     connection.execute(text(

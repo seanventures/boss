@@ -23,6 +23,7 @@ from apps.api.app import main
 from apps.api.tests.identity_fixtures import IdentityWorld
 from boss_engine.app_links.service import app_index
 from boss_engine.identity import vault
+from boss_engine.services import checks_failing as cf
 from boss_engine.services import governed_code_task_service as gov
 from boss_engine.services import preview_service as ps
 from boss_engine.services.core import emit_event
@@ -90,6 +91,18 @@ def test_the_card_the_route_and_retry(engine, tmp_path):
     with engine.begin() as c:
         emit_event(c, project, "code_task.app_serve_checked", "boss", "code_task_run", run_id,
                    {k: (v[:600] if isinstance(v, str) else v) for k, v in record.items()})
+        # THE CARD ITSELF names the app, whose start error asked, and that it takes a test key.
+        stopped = cf.stopped_record("person", ["app_serves"], needs=record["needs_secret"],
+                                    headline=gov._app_serves_headline_of(record))
+        decision = cf.wait_for_person(c, run_id=run_id, project_id=project, task_id=None,
+                                      record={"stopped": stopped}, pull_request_url=None)
+        card = dict(c.execute(text("SELECT * FROM decisions WHERE id = :d"),
+                              {"d": decision}).mappings().one())
+    summary = card["recommendation"]["summary"]
+    assert summary.startswith(
+        "The app needs a secret: PAYMENTS_API_KEY (named by pay's start error)"), summary
+    assert "use a test key" in summary and "Set PAYMENTS_API_KEY for environments" in summary
+    assert card["recommendation"]["why"].startswith("the app needs a secret: PAYMENTS_API_KEY")
 
     # 2. The person sets it through the real route, for every env the card names.
     client = TestClient(main.app, raise_server_exceptions=False)
@@ -112,4 +125,5 @@ def test_the_card_the_route_and_retry(engine, tmp_path):
         c.execute(text("DELETE FROM app_secret_bindings WHERE project_id = :p AND app_key = :a"),
                   {"p": project, "a": key})
         c.execute(text("DELETE FROM events WHERE entity_id = :r"), {"r": run_id})
+        c.execute(text("DELETE FROM decisions WHERE id = :d"), {"d": decision})
         c.execute(text("DELETE FROM code_task_runs WHERE id = :r"), {"r": run_id})

@@ -348,10 +348,31 @@ def test_a_credential_marked_required_in_env_example_asks_a_person_and_is_never_
     "# Required.\nFLASK_SECRET_KEY=\n",                 # the app's own signing key: BOSS mints it
     "# Required.\nGITHUB_TOKEN=\n",                     # never handed to code a build wrote
     "# Required.\nAWS_SECRET_ACCESS_KEY=\n",
+    "# Required.\nVERCEL_TOKEN=\n",
+    "# Required.\nHELPDESK_SECRET_KEY=\n",              # the app's own key, by its folder name
 ])
 def test_only_a_credential_the_file_marks_required_is_a_persons(example):
-    needs = run_env.needs_from_env_example(example)
+    needs = run_env.needs_from_env_example(example, label="helpdesk")
     assert not any(n.person_must_supply() for n in needs.values()), needs
+
+
+@pytest.mark.parametrize("example,name", [
+    ("# Required: sign-in with GitHub\nGITHUB_CLIENT_SECRET=\n", "GITHUB_CLIENT_SECRET"),
+    ("# Required: the app's own OpenAI key\nOPENAI_API_KEY=\n", "OPENAI_API_KEY"),
+])
+def test_an_apps_own_provider_secret_marked_required_reaches_a_person(example, name):
+    assert run_env.needs_from_env_example(example)[name].person_must_supply()
+
+
+def test_the_apps_own_secret_key_is_minted_by_its_folder_name():
+    needs = run_env.needs_from_env_example("HELPDESK_SECRET_KEY=\n", label="helpdesk")
+    assert needs["HELPDESK_SECRET_KEY"].kind == "generated"
+    env = run_env.resolve({}, purpose="proof")
+    env.app_label = "apps/helpdesk"
+    assert env.missing_secret_named_in("Error: HELPDESK_SECRET_KEY must be set") is None
+    env.app_label = "billing"
+    assert env.missing_secret_named_in("Error: HELPDESK_SECRET_KEY must be set") == \
+        "HELPDESK_SECRET_KEY"
 
 
 def test_an_inline_required_mark_is_read():
@@ -377,9 +398,16 @@ def test_a_required_mark_outranks_the_deploys_secret(tmp_path):
     ("FLASK_SECRET_KEY", False), ("DJANGO_SECRET_KEY", False), ("APP_SECRET", False),
     ("WEBHOOK_SECRET", False), ("JWT_PRIVATE_KEY", False), ("REQUEST_SIGNING_KEY", False),
     ("ADMIN_TOKEN", False), ("INTERNAL_API_KEY", False),
-    ("GITHUB_TOKEN", False), ("GITHUB_CLIENT_SECRET", False), ("GH_TOKEN", False),
-    ("AWS_SECRET_ACCESS_KEY", False), ("AZURE_CLIENT_SECRET", False), ("GCP_API_KEY", False),
+    ("GITHUB_TOKEN", False), ("GH_TOKEN", False), ("AWS_SECRET_ACCESS_KEY", False),
+    ("AWS_ACCESS_KEY_ID", False), ("AWS_SESSION_TOKEN", False),
     ("BOSS_API_KEY", False), ("BOSS_ANYTHING_TOKEN", False), ("OPS_TOKEN", False),
+    ("CLAUDE_CODE_OAUTH_TOKEN", False),
+    # A deploy platform's or registry's own account token: never handed to code a build wrote.
+    ("DIGITALOCEAN_ACCESS_TOKEN", False), ("CLOUDFLARE_API_TOKEN", False),
+    ("HEROKU_API_KEY", False), ("VERCEL_TOKEN", False), ("NPM_TOKEN", False),
+    ("DOCKER_PASSWORD", False), ("SENTRY_AUTH_TOKEN", False), ("DATABRICKS_TOKEN", False),
+    # The app's own sign-in client and model key: a person may set them.
+    ("GITHUB_CLIENT_SECRET", True), ("OPENAI_API_KEY", True), ("AZURE_CLIENT_SECRET", True),
     ("POSTGRES_PASSWORD", False), ("DATABASE_URL", False), ("PAGE_SIZE", False), ("PORT", False),
 ])
 def test_who_can_supply_a_name(name, person):
@@ -407,6 +435,23 @@ def test_only_a_providers_credential_is_asked_for_from_a_start_error(name, provi
     # A minted or never-a-person's name, even said missing.
     ("Error: FLASK_SECRET_KEY must be set", None), ("Error: GITHUB_TOKEN is required", None),
     ("Error: ADMIN_TOKEN must be set", None),
+    # uvicorn: the app's error, then the server's own shutdown line.
+    ("INFO:     Waiting for application startup.\nERROR:    Traceback (most recent call last):\n"
+     '  File "/app/main.py", line 9, in lifespan\n'
+     "RuntimeError: PAYMENTS_API_KEY must be set\n"
+     "ERROR:    Application startup failed. Exiting.", "PAYMENTS_API_KEY"),
+    # gunicorn: the worker's traceback, then the master's shutdown lines.
+    ("[2026-11-27 10:00:00 +0000] [9] [ERROR] Exception in worker process\n"
+     "Traceback (most recent call last):\n"
+     '  File "/app/app.py", line 4, in <module>\n'
+     "KeyError: 'STRIPE_SECRET_KEY is not set'\n"
+     "[2026-11-27 10:00:00 +0000] [9] [INFO] Worker exiting (pid: 9)\n"
+     "[2026-11-27 10:00:01 +0000] [1] [ERROR] Worker (pid:9) exited with code 3\n"
+     "[2026-11-27 10:00:01 +0000] [1] [ERROR] Shutting down: Master\n"
+     "[2026-11-27 10:00:01 +0000] [1] [ERROR] Reason: Worker failed to boot.", "STRIPE_SECRET_KEY"),
+    # npm's lifecycle wrapper after Node's own error.
+    ("Error: SLACK_BOT_TOKEN is required\n    at Object.<anonymous> (/app/server.js:2:9)\n"
+     "Node.js v20.11.0\nnpm ERR! code ELIFECYCLE\nnpm ERR! errno 1", "SLACK_BOT_TOKEN"),
 ])
 def test_the_start_error_names_a_persons_secret_only_on_the_line_it_died_on(log, named):
     env = run_env.resolve({}, purpose="proof")

@@ -76,11 +76,22 @@ _APP_OWN_CREDENTIAL = re.compile(
     r"|(?:^|_)(?:ADMIN|INTERNAL|SERVICE|MASTER|ROOT|LOCAL|DEV|TEST|SYSTEM)_(?:[A-Z0-9]+_)?"
     r"(?:TOKEN|SECRET|KEY|API_KEY)$")
 
-#: Credentials a person must NEVER be asked to hand to code a build wrote: BOSS's own, a code
-#: host's and a cloud account's (agent_env.NEVER names the rest). They stay out of every app.
-_NEVER_A_PERSONS_PREFIXES = (
-    "BOSS_", "GITHUB_", "GH_", "GITLAB_", "BITBUCKET_", "AWS_", "GCP_", "GCLOUD_",
-    "GOOGLE_APPLICATION_", "GOOGLE_CLOUD_", "AZURE_", "ARM_", "S3_", "MINIO_")
+#: Credentials a person must NEVER be asked to hand to code a build wrote, by EXACT name: BOSS's
+#: own (and every BOSS_* name), a code host's or cloud account's own token, a deploy platform's
+#: or registry's account token. A provider's sign-in client secret (GITHUB_CLIENT_SECRET) or an
+#: app's own model key (OPENAI_API_KEY) is the app's, and a person may set it.
+_NEVER_A_PERSONS_EXACT = frozenset({
+    "GITHUB_TOKEN", "GH_TOKEN", "GITLAB_TOKEN", "BITBUCKET_TOKEN",
+    "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
+    "GOOGLE_APPLICATION_CREDENTIALS", "ARM_CLIENT_SECRET",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "DIGITALOCEAN_ACCESS_TOKEN", "CLOUDFLARE_API_TOKEN", "CLOUDFLARE_API_KEY", "HEROKU_API_KEY",
+    "VERCEL_TOKEN", "NETLIFY_AUTH_TOKEN", "FLY_API_TOKEN", "RENDER_API_KEY", "NPM_TOKEN",
+    "DOCKER_PASSWORD", "DOCKERHUB_TOKEN", "SENTRY_AUTH_TOKEN", "DATABRICKS_TOKEN",
+    "PYPI_TOKEN", "TWINE_PASSWORD",
+})
+#: agent_env.NEVER, less what an app may legitimately hold of its own (a model key).
+_APP_MAY_HOLD = frozenset({"OPENAI_API_KEY"})
 
 #: A credential a PROVIDER issues (an external service's API key, an OAuth client secret, a
 #: bot/auth/access token): the only shape the start-error path asks a person for.
@@ -149,13 +160,24 @@ def is_person_only_name(name: str) -> bool:
     from ..services.agent_env import NEVER, SECRET_SHAPED
 
     upper = str(name or "").upper()
-    if not upper or upper in PLATFORM_NAMES or upper in NEVER or _BOSS_OWNED_NAME.match(upper):
+    if not upper or upper in PLATFORM_NAMES or _BOSS_OWNED_NAME.match(upper):
         return False
-    if upper.startswith(_NEVER_A_PERSONS_PREFIXES) or _APP_OWN_CREDENTIAL.search(upper):
+    if (upper in NEVER and upper not in _APP_MAY_HOLD) or upper in _NEVER_A_PERSONS_EXACT:
+        return False
+    if upper.startswith("BOSS_") or _APP_OWN_CREDENTIAL.search(upper):
         return False
     if is_demo_login_name(upper) or _BOSS_SERVICE_NAME.search(upper):
         return False
     return any(marker in upper for marker in SECRET_SHAPED)
+
+
+def is_app_own_key(name: str, label: Optional[str]) -> bool:
+    """<APP>_SECRET_KEY (or _SECRET, _SIGNING_KEY) where <APP> is the app's own folder name:
+    the key the app signs its own sessions with, minted by BOSS — never a provider's."""
+    stem = re.sub(r"[^A-Z0-9]+", "_", str(label or "").upper().rsplit("/", 1)[-1]).strip("_")
+    if not stem:
+        return False
+    return str(name or "").upper() in {f"{stem}_SECRET_KEY", f"{stem}_SECRET", f"{stem}_SIGNING_KEY"}
 
 
 def is_provider_credential(name: str) -> bool:
@@ -173,12 +195,25 @@ def said_missing(line: str, name: str) -> bool:
                 or re.search(_SAID_MISSING_BEFORE.format() + rf"\b{n}\b", line, re.IGNORECASE))
 
 
+#: What a server or runner prints AFTER the app's own error, about the shutdown — never the
+#: reason: uvicorn's "Application startup failed. Exiting.", gunicorn's "Worker failed to boot",
+#: npm's lifecycle wrapper, Node's version banner, go run's exit status.
+_SHUTDOWN_LINE = re.compile(
+    r"application startup failed|waiting for application (?:startup|shutdown)"
+    r"|finished server process|worker failed to boot|shutting down(?:: master)?"
+    r"|worker (?:\(pid:?\s*\d+\)\s*)?exit(?:ed|ing)|reason: worker|exception in worker process"
+    r"|^npm (?:err!|error)|^node\.js v\d|^exit status \d|^error: script \S+ exited"
+    r"|^\[nodemon\]|^error command failed with exit code", re.IGNORECASE)
+
+
 def death_line(log_text: str) -> Optional[str]:
     """The line the app died on: the LAST line of its output that reads as an error
-    (_ERROR_LINE), stack frames skipped. A warning it logged and survived is not it."""
+    (_ERROR_LINE), stack frames and a server's own shutdown lines (_SHUTDOWN_LINE) skipped. A
+    warning it logged and survived is not it."""
     for line in reversed((log_text or "").splitlines()):
-        bare = line.strip()
-        if not bare or bare.startswith(("at ", 'File "')) or re.match(r"^\S+\.(?:go|py|js|ts):\d+", bare):
+        bare = re.sub(r"^(?:\[[^\]]*\]\s*)+|^(?:ERROR|INFO|WARNING|CRITICAL):\s+", "", line.strip())
+        if (not bare or bare.startswith(("at ", 'File "', "Traceback"))
+                or re.match(r"^\S+\.(?:go|py|js|ts):\d+", bare) or _SHUTDOWN_LINE.search(bare)):
             continue
         if _ERROR_LINE.search(line):
             return line
@@ -343,7 +378,7 @@ class RunEnvironment:
         for m in _ENV_NAME.finditer(line):
             name = m.group(0)
             if (name in self.declared or name in self.values or name in self.supplied
-                    or name in given):
+                    or name in given or is_app_own_key(name, self.app_label)):
                 continue
             if is_provider_credential(name) and said_missing(line, name):
                 return name
@@ -547,7 +582,7 @@ def needs_from_env_example(text: str, *, source: str = ".env.example",
         name = m.group(1)
         said = " ".join(comments + ([line.split("#", 1)[1]] if "#" in line else []))
         comments = []
-        kind = ("generated" if _BOSS_OWNED_NAME.match(name)
+        kind = ("generated" if _BOSS_OWNED_NAME.match(name) or is_app_own_key(name, label)
                 else "demo" if is_demo_login_name(name) else "listed")
         if (kind == "listed" and is_person_only_name(name) and _REQUIRED_MARK.search(said)
                 and not _NOT_REQUIRED_MARK.search(said)):

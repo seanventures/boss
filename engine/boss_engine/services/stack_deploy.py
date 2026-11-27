@@ -3706,8 +3706,17 @@ def with_compose_owned_secrets(manifest_text: str, manifest: Any,
         return manifest_text, manifest
     env = data.get("env") if isinstance(data.get("env"), dict) else {}
     data["env"] = {**env, **{n: {"generate": "hex32"} for n in missing}}
+    # A WEBHOOK SECRET BOSS MINTS is the app's own: a provider that signs its webhooks with a
+    # secret IT issued will not match, so the plan says so instead of failing silently later.
+    webhook = [n for n in missing if "WEBHOOK" in n]
+    note = ("# BOSS: " + ", ".join(webhook) + " is minted for this deploy; if a provider signs "
+            "its webhooks with a secret it issued, set that value in the app's Secrets for "
+            "deploy, or every webhook will fail its signature check.\n") if webhook else ""
+    if webhook:
+        log.warning("deploy: minted %s for the app; a provider-issued webhook secret must be "
+                    "set in the app's Secrets for deploy", ", ".join(webhook))
     placed = ("# BOSS: generates the session keys the compose file reads: "
-              + ", ".join(missing) + "\n" + yaml.safe_dump(data, sort_keys=False))
+              + ", ".join(missing) + "\n" + note + yaml.safe_dump(data, sort_keys=False))
     try:
         return placed, parse_manifest(data, source_text=placed)
     except Exception:  # noqa: BLE001
