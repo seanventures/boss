@@ -17,6 +17,7 @@ from __future__ import annotations
 import inspect
 import json
 import os
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import create_engine, text
@@ -26,7 +27,6 @@ from boss_engine.services import agent_loop, agent_steps
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 needs_db = pytest.mark.skipif(not DATABASE_URL, reason="no database configured")
-PROJECT = "boss-dogfood"
 
 BURST = {"refusal": "burst", "transient": True, "retry_after_seconds": 20,
          "message": "Burst cap exceeded ($/min). Retry shortly.", "decision_id": None}
@@ -162,7 +162,8 @@ class _CallsTheSkillThenStops:
         self.turns += 1
         self.tool_results = [m.get("content") or "" for m in messages if m.get("role") == "tool"]
         if self.turns == 1:
-            name = (tools[0].get("function") or {}).get("name")
+            name = next(tool["function"]["name"] for tool in tools
+                        if tool["function"]["name"].startswith("skill_"))
             raw = {"role": "assistant", "content": "",
                    "tool_calls": [{"id": "call_1", "type": "function",
                                    "function": {"name": name, "arguments": "{}"}}]}
@@ -176,19 +177,27 @@ class _CallsTheSkillThenStops:
 
 
 @pytest.fixture()
-def db():
+def skill_project():
     engine = create_engine(DATABASE_URL)
-    with engine.begin() as connection:
-        yield connection
+    project_id = f"budget-test-{uuid4().hex}"
+    try:
+        with engine.connect() as connection:
+            workspace = connection.execute(text("SELECT id FROM workspaces ORDER BY id LIMIT 1")).scalar_one()
+            connection.execute(text("INSERT INTO projects (id, workspace_id, name, slug) "
+                                    "VALUES (:p, :w, 'Budget QA', :p)"), {"p": project_id, "w": workspace})
+            connection.execute(text("INSERT INTO roles (id, project_id, role_key, display_name) "
+                                    "VALUES (:id, :p, 'qa', 'QA')"), {"id": f"qa-{uuid4().hex}", "p": project_id})
+            _one_skill_agent(connection, project_id)
+            yield connection, project_id
+    finally:
+        engine.dispose()
 
 
-def _one_skill_agent(db):
+def _one_skill_agent(db, project_id):
     from boss_engine.services.skill_definitions import assign_skill_to_role, assignable_catalogue
 
-    db.execute(text("DELETE FROM role_skills WHERE project_id=:p AND role_key='qa'"),
-               {"p": PROJECT})
-    one = assignable_catalogue(db, PROJECT)[0]["skill_id"]
-    assign_skill_to_role(db, project_id=PROJECT, actor="test", role_key="qa", skill_id=one)
+    one = assignable_catalogue(db, project_id)[0]["skill_id"]
+    assign_skill_to_role(db, project_id=project_id, actor="test", role_key="qa", skill_id=one)
 
 
 def _scripted(monkeypatch, *results):
@@ -203,11 +212,11 @@ def _scripted(monkeypatch, *results):
 
 
 @needs_db
-def test_the_agent_never_sees_a_refusal_that_cleared(db, monkeypatch):
-    _one_skill_agent(db)
+def test_the_agent_never_sees_a_refusal_that_cleared(skill_project, monkeypatch):
+    db, project_id = skill_project
     model, made, t = _scripted(monkeypatch, _refused(BURST), SERVED)
 
-    out = agent_steps.run(db, Settings(), PROJECT, instructions="Fetch it.", role_key="qa",
+    out = agent_steps.run(db, Settings(), project_id, instructions="Fetch it.", role_key="qa",
                           actor="test")
 
     assert out["status"] == "completed"
@@ -219,11 +228,11 @@ def test_the_agent_never_sees_a_refusal_that_cleared(db, monkeypatch):
 
 
 @needs_db
-def test_past_the_bound_the_step_stops_to_wait_and_the_agent_does_not_judge_it(db, monkeypatch):
-    _one_skill_agent(db)
+def test_past_the_bound_the_step_stops_to_wait_and_the_agent_does_not_judge_it(skill_project, monkeypatch):
+    db, project_id = skill_project
     model, made, _ = _scripted(monkeypatch, _refused(BURST))
 
-    out = agent_steps.run(db, Settings(), PROJECT, instructions="Fetch it.", role_key="qa",
+    out = agent_steps.run(db, Settings(), project_id, instructions="Fetch it.", role_key="qa",
                           actor="test")
 
     assert out["status"] == agent_steps.BUDGET_WAIT
@@ -235,11 +244,11 @@ def test_past_the_bound_the_step_stops_to_wait_and_the_agent_does_not_judge_it(d
 
 
 @needs_db
-def test_a_refusal_a_person_must_lift_reaches_the_agent_as_before(db, monkeypatch):
-    _one_skill_agent(db)
+def test_a_refusal_a_person_must_lift_reaches_the_agent_as_before(skill_project, monkeypatch):
+    db, project_id = skill_project
     model, made, t = _scripted(monkeypatch, _refused(CAP))
 
-    out = agent_steps.run(db, Settings(), PROJECT, instructions="Fetch it.", role_key="qa",
+    out = agent_steps.run(db, Settings(), project_id, instructions="Fetch it.", role_key="qa",
                           actor="test")
 
     assert out["status"] == "completed", "the loop ran on; the agent decides"
