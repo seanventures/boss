@@ -22,15 +22,15 @@ SLUG = "boss-localhost-ab12"
 def test_an_organisation_from_name_to_allowed_repositories(person):
     person.open_sheet()
     person.shot("0-empty")
-    person.look_up("kaappu")
+    person.look_up("example-org")
     found = person.tid("ga-found").inner_text()
-    assert "kaappu" in found and "organisation" in found and "14 public repositories" in found, found
+    assert "example-org" in found and "organisation" in found and "14 public repositories" in found, found
     assert person.path() == "make_public"
     assert "Agent actions" in person.tid("ga-agent-actions").inner_text()
     # The app route is walled (private app, foreign account): the direct connection leads, the
     # owner's one-time switch sits behind a note, and there is NO Install button to a 404.
     assert person.tid("ga-install").count() == 0
-    assert person.tid("ga-connect-direct").inner_text() == "Paste a token for kaappu"
+    assert person.tid("ga-connect-direct").inner_text() == "Paste a token for example-org"
     assert "bare 404" in person.tid("ga-gate-private").inner_text()
     person.tid("ga-owner-note").locator("summary").click()
     settings = person.tid("ga-open-settings")
@@ -53,25 +53,25 @@ def test_an_organisation_from_name_to_allowed_repositories(person):
     person.check("install")
     person.shot("2-install")
 
-    state = github(install="kaappu")                      # …then pressed Install on kaappu
-    iid = next(i for i, who in state["installations"].items() if who == "kaappu")
+    state = github(install="example-org")                      # …then pressed Install on example-org
+    iid = next(i for i, who in state["installations"].items() if who == "example-org")
     took = person.wait_path("pick")
     assert took < 30, f"BOSS took {took:.0f} s to notice the installation"
-    person.p.wait_for_selector("[data-testid='ga-repo-kaappu/helpdesk']")
-    assert person.tid("ga-used-kaappu/website").count() == 0
+    person.p.wait_for_selector("[data-testid='ga-repo-example-org/helpdesk']")
+    assert person.tid("ga-used-example-org/website").count() == 0
     assert person.tid("ga-installation-settings").get_attribute("href") == (
-        f"https://github.com/organizations/kaappu/settings/installations/{iid}")
+        f"https://github.com/organizations/example-org/settings/installations/{iid}")
     person.check("pick repos")
     person.shot("3-pick-repos")
 
-    github(read_only=["kaappu/website"])
-    person.tid("ga-pick-kaappu/helpdesk").check()
-    person.tid("ga-pick-kaappu/website").check()
+    github(read_only=["example-org/website"])
+    person.tid("ga-pick-example-org/helpdesk").check()
+    person.tid("ga-pick-example-org/website").check()
     assert person.tid("ga-allow").inner_text() == "Allow 2 repositories"
     person.tid("ga-allow").click()
     person.p.wait_for_selector("[data-testid='ga-done']", timeout=60_000)
-    assert person.tid("ga-result-kaappu/helpdesk").inner_text().startswith("Working:")
-    assert person.tid("ga-result-kaappu/website").inner_text().startswith("Read only:")
+    assert person.tid("ga-result-example-org/helpdesk").inner_text().startswith("Working:")
+    assert person.tid("ga-result-example-org/website").inner_text().startswith("Read only:")
     assert person.tid("ga-step-check").get_attribute("data-s") == "done"
     assert person.tid("ga-foot-note").inner_text() == "1 of 2 working."
     person.check("allowed")
@@ -91,12 +91,12 @@ def test_a_name_github_does_not_know_is_said_in_words(person):
 
 
 def test_an_account_already_installed_goes_straight_to_pick_repos(person):
-    github(install="kaappu")
+    github(install="example-org")
     person.open_sheet()
-    person.look_up("https://github.com/kaappu/helpdesk")
+    person.look_up("https://github.com/example-org/helpdesk")
     assert person.path() == "pick"
     assert person.tid("ga-step-gate").count() == 0
-    person.p.wait_for_selector("[data-testid='ga-repo-kaappu/infra-scripts']")
+    person.p.wait_for_selector("[data-testid='ga-repo-example-org/infra-scripts']")
     person.check("already installed")
     person.shot("6-already-installed")
 
@@ -151,7 +151,7 @@ def test_the_apps_owner_keeps_the_app_route(person):
 
 def test_other_ways_keep_the_token_and_the_orgs_own_app(person):
     person.open_sheet()
-    person.look_up("kaappu")
+    person.look_up("example-org")
     person.tid("ga-other").locator("summary").click()
     assert person.tid("ga-other-own-app").is_visible()
     person.shot("8-other-ways")
@@ -161,7 +161,7 @@ def test_other_ways_keep_the_token_and_the_orgs_own_app(person):
     assert "Contents: Read and write" in perms and "Pull requests: Read and write" in perms
     href = person.tid("su-account-create-token").get_attribute("href")
     assert href.startswith("https://github.com/settings/personal-access-tokens/new?") and "contents=write" in href
-    assert "target_name=kaappu" in href and "pull_requests=write" in href
+    assert "target_name=example-org" in href and "pull_requests=write" in href
     person.check("token")
     person.shot("9-token")
     person.tid("su-account-back").click()
