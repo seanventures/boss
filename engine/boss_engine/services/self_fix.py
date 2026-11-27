@@ -162,8 +162,8 @@ SWITCH_KEY = "self_fix"
 ENV_SWITCH = "BOSS_SELF_FIX"
 
 DEFAULTS: dict[str, Any] = {
-    "self_fix_min_confidence": "medium", "self_fix_budget_cents": 1000,
-    "self_fix_month_cents": 5000, "self_fix_max_minutes": 60,
+    "self_fix_min_confidence": "medium", "self_fix_budget_cents": 5000,
+    "self_fix_month_cents": 50000, "self_fix_max_minutes": 60,
     "self_fix_attempts_per_signature": 2, "self_fix_max_diff_lines": 300,
     "self_fix_health_minutes": 10,
 }

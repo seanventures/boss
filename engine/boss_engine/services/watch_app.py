@@ -336,7 +336,9 @@ def _fired_word(fired: Optional[int]) -> str:
 
 def watch_view(connection, target: dict, rule: Mapping[str, Any], *, tone: str,
                words: Optional[str], now: Optional[datetime] = None,
-               with_backtest: bool = True) -> dict[str, Any]:
+               with_backtest: bool = True,
+               source_label: Optional[str] = None,
+               discovered_in: Optional[str] = None) -> dict[str, Any]:
     kind = str(rule["kind"])
     bt = backtest(connection, target, rule, now=now) if with_backtest else \
         {"fired": None, "word": "", "spark": [], "baseline": None}
@@ -344,7 +346,8 @@ def watch_view(connection, target: dict, rule: Mapping[str, Any], *, tone: str,
     return {
         "kind": kind, "rule_id": rule.get("id"), "icon": WATCH.get(kind, {}).get("icon", "bell"),
         "title": _title(kind, params), "what": WATCH.get(kind, {}).get("what", kind),
-        "words": words, "from": "your words" if words else "BOSS default",
+        "words": words, "from": source_label or ("your words" if words else "BOSS default"),
+        **({"discovered_in": discovered_in} if discovered_in else {}),
         "tone": tone, "params": params, "for_s": int(rule.get("for_seconds") or 0),
         "condition": aa.condition_words(kind, params, int(rule.get("for_seconds") or 0)),
         "expr": rule["expr"], "fired": bt["fired"], "backtest": bt["word"],
@@ -353,6 +356,131 @@ def watch_view(connection, target: dict, rule: Mapping[str, Any], *, tone: str,
         "runbook": (rule.get("annotations") or {}).get("runbook_url")
         or aa.BUILTIN.get(kind, {}).get("runbook"),
         "state": rule.get("last_state"), "enabled": bool(rule.get("enabled", True)),
+    }
+
+
+_CODE_SKIP_DIRS = frozenset({
+    ".git", "node_modules", ".venv", "venv", "dist", ".next", "build", "__pycache__", "target",
+})
+_CODE_EXTS = frozenset({
+    ".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java", ".rb", ".yml", ".yaml",
+})
+_CODE_HEALTH_RX = re.compile(r"""['"](/healthz|/readyz|/livez|/health|/api/health)['"]""")
+_CODE_METRICS_RX = re.compile(r"""(/metrics\b|prometheus_client|prom-client|opentelemetry)""", re.I)
+_CODE_ASYNC_RX = re.compile(
+    r"""\b(celery|bullmq|sidekiq|cron|webhook|worker_loop|background_task|sqs|kafka|intake)\b""",
+    re.I,
+)
+
+
+def discover_code_watches(repo_root: Any, *, max_files: int = 120) -> list[dict[str, Any]]:
+    """Scan a project's source tree for concrete watch signals (BOSSAPP-1470):
+    health routes, /metrics instrumentation, and async/webhook/queue workers."""
+    from pathlib import Path
+
+    if not repo_root:
+        return []
+    root = Path(repo_root)
+    if not root.is_dir():
+        return []
+    found: dict[str, dict[str, Any]] = {}
+    scanned = 0
+    for path in sorted(root.rglob("*")):
+        if scanned >= max_files:
+            break
+        if any(part in _CODE_SKIP_DIRS for part in path.parts):
+            continue
+        if not path.is_file() or path.suffix.lower() not in _CODE_EXTS:
+            continue
+        scanned += 1
+        try:
+            text_body = path.read_text(encoding="utf-8", errors="ignore")[:32_768]
+        except OSError:
+            continue
+        rel = str(path.relative_to(root))
+        if "health_check" not in found:
+            m = _CODE_HEALTH_RX.search(text_body)
+            if m:
+                found["health_check"] = {
+                    "kind": "health_check",
+                    "words": f"health endpoint {m.group(1)} stops answering",
+                    "discovered_in": rel,
+                    "endpoint": m.group(1),
+                }
+        if "latency_p95" not in found and _CODE_METRICS_RX.search(text_body):
+            found["latency_p95"] = {
+                "kind": "latency_p95",
+                "words": "instrumented /metrics latency spikes",
+                "discovered_in": rel,
+            }
+        if "no_traffic" not in found and _CODE_ASYNC_RX.search(text_body):
+            found["no_traffic"] = {
+                "kind": "no_traffic",
+                "words": "background job or webhook traffic stops",
+                "discovered_in": rel,
+            }
+        if len(found) >= 3:
+            break
+    return list(found.values())
+
+
+def _project_repo_path(connection, settings: Any, project_id: str,
+                       target: Mapping[str, Any]) -> Optional[str]:
+    from pathlib import Path
+
+    for candidate in (target.get("repo_path"), target.get("workspace_path")):
+        if candidate and Path(str(candidate)).is_dir():
+            return str(candidate)
+    meta = target.get("metadata")
+    if isinstance(meta, str):
+        try:
+            meta = json.loads(meta)
+        except ValueError:
+            meta = {}
+    if isinstance(meta, dict):
+        for k in ("repo_path", "workspace_path", "local_path"):
+            if meta.get(k) and Path(str(meta[k])).is_dir():
+                return str(meta[k])
+    try:
+        with connection.begin_nested():
+            row = connection.execute(sql(
+                "SELECT workspace_path FROM code_task_runs WHERE project_id = :p "
+                "AND workspace_path IS NOT NULL ORDER BY created_at DESC LIMIT 1"),
+                {"p": project_id}).scalar()
+            if row and Path(str(row)).is_dir():
+                return str(row)
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def estimate_watch_cost(watches: list[Mapping[str, Any]], collector_info: Mapping[str, Any],
+                        sig_info: Mapping[str, Any]) -> dict[str, Any]:
+    """Compute Watch this app's daily cost and first-data latency from active watches,
+    collector type, and live signal availability (BOSSAPP-1470)."""
+    enabled = [w for w in watches if w.get("enabled", True)]
+    watch_count = len(enabled)
+    wake_count = sum(1 for w in enabled if w.get("tone") == "wake")
+    col_kind = str(collector_info.get("kind") or "boss")
+    per_watch_usd = 0.03 if col_kind == "prometheus" else 0.04
+    wake_triage_usd = 0.02
+    daily_usd = round(watch_count * per_watch_usd + wake_count * wake_triage_usd, 2)
+    if col_kind == "prometheus" or sig_info.get("metrics"):
+        first_s = 30
+        first_label = "30 s"
+    elif int(sig_info.get("probes") or 0) > 0:
+        first_s = 45
+        first_label = "45 s"
+    else:
+        first_s = 60
+        first_label = "1 min"
+    return {
+        "daily_usd": daily_usd,
+        "watch_count": watch_count,
+        "wake_count": wake_count,
+        "first_data_seconds": first_s,
+        "collector": col_kind,
+        "formatted": f"≈ ${daily_usd:.2f} a day · first data ≈ {first_label}",
     }
 
 
@@ -420,7 +548,15 @@ def understand(connection, settings: Any, project_id: str, raw: str, *,
         "SELECT 1 FROM app_alert_rules WHERE subject_id = :t LIMIT 1"), {"t": t["id"]}).first() \
         else {}
     from_words = {m["kind"]: m["words"] for m in w["matters"]}
-    kinds = list(DEFAULT_WATCHES) + [k2 for k2 in from_words if k2 not in DEFAULT_WATCHES]
+    code_discovered = discover_code_watches(_project_repo_path(connection, settings, project_id, t))
+    from_code = {c["kind"]: c for c in code_discovered}
+    kinds = list(DEFAULT_WATCHES)
+    for k2 in from_words:
+        if k2 not in kinds:
+            kinds.append(k2)
+    for k2 in from_code:
+        if k2 not in kinds:
+            kinds.append(k2)
     watches = []
     for kd in kinds:
         have = existing.get(kd)
@@ -433,10 +569,18 @@ def understand(connection, settings: Any, project_id: str, raw: str, *,
         tone = WATCH[kd]["tone"]
         if kd in from_words and kd == "latency_p95":
             tone = "tell"
-        watches.append(watch_view(connection, t, rule, tone=tone, words=from_words.get(kd),
-                                  now=now))
+        code_hit = from_code.get(kd)
+        watch_words = from_words.get(kd) or (code_hit["words"] if code_hit else None)
+        src_label = ("your words" if kd in from_words else
+                     "code" if code_hit else "BOSS default")
+        watches.append(watch_view(
+            connection, t, rule, tone=tone, words=watch_words, now=now,
+            source_label=src_label,
+            discovered_in=(code_hit["discovered_in"] if code_hit else None),
+        ))
     sig = signals(connection, t)
     col = collector(connection, project_id)
+    cost_est = estimate_watch_cost(watches, col, sig)
     on_call = aa.on_call_agent(connection, project_id) or {"role_key": "sre", "role": "SRE"}
     tell = _tell_box(connection, project_id, w["channel"])
     bnd = boundary(t)
@@ -445,6 +589,7 @@ def understand(connection, settings: Any, project_id: str, raw: str, *,
                    "label": f"{t['app_name']} · {t['environment']}", "address": _address(t),
                    "prod": bnd["prod"]},
         "signals": sig, "collector": col, "watches": watches,
+        "code_watches": code_discovered,
         "question": {"key": "night", "ask": "At night, wake you or wait until 08:00?",
                      "options": [{"key": k2, "label": NIGHT_WORDS[k2]} for k2 in NIGHT],
                      "answer": w["night"]},
@@ -453,7 +598,8 @@ def understand(connection, settings: Any, project_id: str, raw: str, *,
                     "word": "triage + fix alone" if not bnd["prod"] else "triage · waits for you"},
         "tell": tell, "boundary": bnd,
         "runbooks": sorted({wv["runbook"] for wv in watches if wv.get("runbook")}),
-        "cost": "≈ $0.20 a day · first data ≈ 1 min",
+        "cost": cost_est["formatted"],
+        "cost_estimate": cost_est,
         "watching": bool(connection.execute(sql("SELECT 1 FROM app_watches WHERE target_id = :t"),
                                             {"t": t["id"]}).first()),
     })

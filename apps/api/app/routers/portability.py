@@ -79,7 +79,7 @@ def _import(scope: str, target_id: str, payload: ImportRequest) -> dict[str, Any
 
 @router.get("/v1/projects/{project_id}/export")
 @permit(P.PROJECT_UPDATE, scope=Scope.project(path="project_id"))
-def export_project(project_id: str, actor: str = Query(...)) -> dict[str, Any]:
+def export_project(project_id: str, actor: str = Query(default="console")) -> dict[str, Any]:
     """The project's bundle. Never a secret value: each is a typed empty placeholder."""
     return _export("project", project_id, actor)
 
@@ -103,7 +103,7 @@ def get_project_import(project_id: str, import_id: str) -> dict[str, Any]:
 
 @router.get("/v1/orgs/{org_id}/export")
 @permit(P.ORG_UPDATE, scope=Scope.org())
-def export_org(org_id: str, actor: str = Query(...)) -> dict[str, Any]:
+def export_org(org_id: str, actor: str = Query(default="console")) -> dict[str, Any]:
     """Every project of the org, and the org's model settings."""
     return _export("org", org_id, actor)
 

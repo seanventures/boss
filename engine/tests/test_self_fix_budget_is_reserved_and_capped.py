@@ -24,7 +24,7 @@ def test_the_budget_is_reserved_under_its_own_category(harness):
             "SELECT category, amount_usd_micros, status FROM budget_reservations WHERE id = :i"),
             {"i": sfx["budget_reservation_id"]}).mappings().first()
     assert reservation["category"] == "self_fix" and reservation["status"] == "active"
-    assert reservation["amount_usd_micros"] == 1000 * 10_000 == sfx["budget_usd_micros"]
+    assert reservation["amount_usd_micros"] == 5000 * 10_000 == sfx["budget_usd_micros"]
 
 
 def test_a_refused_budget_means_no_self_fix(harness):

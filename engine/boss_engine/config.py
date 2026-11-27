@@ -1382,8 +1382,8 @@ class Settings(BaseSettings):
     # the org switch (Govern › Self-fix, system_state 'self_fix') is next. These are the
     # install-wide defaults the switch's settings override.
     self_fix_min_confidence: str = Field(default="medium", alias="BOSS_SELF_FIX_MIN_CONFIDENCE")
-    self_fix_budget_cents: int = Field(default=1000, alias="BOSS_SELF_FIX_BUDGET_CENTS", ge=0)
-    self_fix_month_cents: int = Field(default=5000, alias="BOSS_SELF_FIX_MONTH_CENTS", ge=0)
+    self_fix_budget_cents: int = Field(default=5000, alias="BOSS_SELF_FIX_BUDGET_CENTS", ge=0)
+    self_fix_month_cents: int = Field(default=50000, alias="BOSS_SELF_FIX_MONTH_CENTS", ge=0)
     self_fix_max_minutes: int = Field(default=60, alias="BOSS_SELF_FIX_MAX_MINUTES", ge=1)
     self_fix_attempts_per_signature: int = Field(
         default=2, alias="BOSS_SELF_FIX_ATTEMPTS_PER_SIGNATURE", ge=0)

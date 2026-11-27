@@ -27,7 +27,7 @@ import { ArchiveDialog } from "./project-archive";
 import { deleteProject, readDelete, type DeletePreview } from "./project-delete-actions";
 import styles from "./project-delete.module.css";
 
-const DELETE_TIP = "Delete this project and everything BOSS holds for it. The GitHub repository stays";
+const DELETE_TIP = "Delete this project and everything BOSS holds for it. Connected remote repositories stay untouched";
 
 /** "12 workflow runs" — the label's own word, lower-cased after a number. */
 export function countLine(count: number, label: string): string {
@@ -310,7 +310,7 @@ export function DangerZone({ projectId, name, home }: {
       <div className={styles.zoneRow}>
         <div>
           <b>Delete project</b>
-          <p className={styles.muted}>Remove it and everything BOSS holds for it: runs, builds, decisions, apps on servers, its knowledge graph. The GitHub repository stays.</p>
+          <p className={styles.muted}>Remove it and everything BOSS holds for it: runs, builds, decisions, apps on servers, its knowledge graph. Connected remote repositories stay untouched; local BOSS repositories are removed.</p>
         </div>
         {home ? (
           <button type="button" className={styles.dangerQuiet} aria-disabled="true" title={homeTip}

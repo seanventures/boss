@@ -48,7 +48,7 @@ const NEW_PROJECT_TIP =
   "A new project in this organization: its own agents, skills, budget, settings and work, set up like the first one";
 const ARCHIVE_TIP = "Hide this project and pause its schedules, monitors and indexing. Nothing is deleted";
 const HOME_TIP = "The home project can't be archived: BOSS's own agent and the worker's schedules live there";
-const DELETE_TIP = "Delete this project and everything BOSS holds for it. The GitHub repository stays";
+const DELETE_TIP = "Delete this project and everything BOSS holds for it. Connected remote repositories stay untouched";
 const HOME_DELETE_TIP = "The home project can't be deleted: BOSS's own agent and the worker's schedules live there";
 
 /**
