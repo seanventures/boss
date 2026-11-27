@@ -109,6 +109,8 @@ def may_open(failing: Iterable[str], *, faults: Optional[Mapping[str, str]] = No
     return not (set(failing) & HELD_GATES)
 
 
+#: The stop when BOSS has made all its own attempts on the lineage (lineage_cap.REASON).
+_ATTEMPTS_SPENT = "attempts_spent"
 #: Supervisor stop reasons whose failures a follow-up build would only hit again.
 NO_FOLLOWUP_REASONS = ("environment_only", "refusal")
 _STOP_WORDS = {"environment_only": "environment problem", "refusal": "an agent refused",
@@ -151,6 +153,12 @@ def stopped_record(reason: str, failing: Iterable[str], *,
         action = needs_secret_action(needs)
         return {"reason": "person", "no_followup": True, "needs_secret": needs,
                 "action": action, "words": f"stopped: needs a person, {labels}. {action}"}
+    if reason == _ATTEMPTS_SPENT:
+        # ONE CAP PER LINEAGE (lineage_cap): BOSS made its attempts; a person decides next.
+        from .lineage_cap import NEXT_STEP, words
+
+        return {"reason": reason, "no_followup": True, "action": NEXT_STEP,
+                "words": f"stopped: {words()}, {labels}. {NEXT_STEP}"}
     if reason == "refusal":
         said = " ".join(str(why or "").split())[:300] or labels
         return {"reason": reason, "no_followup": True,

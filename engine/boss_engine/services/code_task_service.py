@@ -44,6 +44,7 @@ from .agent_acts import pr_trailers as _pr_trailers
 from .sandbox import SandboxError
 from .sandbox_provider import make_sandbox_provider
 from . import lineage_sandbox
+from . import lineage_cap as _lineage_cap
 from . import build_base_branch as _build_base
 from .software_factory import SoftwareFactoryService
 
@@ -2388,6 +2389,17 @@ def retry_code_task(
         refuse_second_owner(lineage_branch_owner(c, prev["project_id"], root,
                                                  exclude=(run_id,)))
 
+    # ONE CAP PER LINEAGE (lineage_cap, ENT-REC-52): BOSS's own attempts at a lineage — its
+    # repairs, follow-ups, CI repairs, a recovery agent's repair build — stop at CAP, and the
+    # next one is a person's. A platform retry (BOSS's own error) and a re-check attempt no
+    # code and keep their own bounds.
+    if automatic and not platform_retry and not recheck:
+        with _transaction(engine) as c:
+            _made = _lineage_cap.attempts(c, run_id)
+        if _made >= _lineage_cap.CAP:
+            raise RetryNeedsPerson(
+                f"{_lineage_cap.words(_made)}. {_lineage_cap.NEXT_STEP}.")
+
     # ---- Failure-loop guardrails (release blocker fix) -----------------------------------
     # An `infra` failure is NOT the task's fault, so re-running the same task on the same
     # broken substrate is a blind loop. Two mechanisms:
@@ -2581,6 +2593,11 @@ def retry_code_task(
             base_branch=spec.get("base_branch") or None,
             role_key=spec.get("role_key"),
             finalize_ctx={"parent_run_id": run_id, "root_run_id": root, "attempt": attempt,
+                          # WHO STARTED THIS ATTEMPT (lineage_cap): BOSS's own attempts share
+                          # one cap per lineage; a person's Retry starts a new window.
+                          _lineage_cap.STARTED_BY: (
+                              _lineage_cap.PLATFORM if automatic and platform_retry
+                              else _lineage_cap.BOSS if automatic else _lineage_cap.PERSON),
                           # WHICH AUTOMATIC PLATFORM RETRY THIS IS, written WITH the row — never
                           # after the job is queued (a fast-failing attempt read it as 0).
                           **({"auto_infra_retry": int(auto_retry_attempt)}
@@ -2701,7 +2718,11 @@ def retry_code_task(
                                   steer_notes=fctx_prev.get("steer_notes") or [])}
                              if (fctx_prev.get("completed_stages") and not fresh
                                  and _is_system_failure(prev.get("error"))) else {})},
-            jobs=jobs, profile=profile or spec.get("profile"), risk_tier=spec.get("risk_tier"),
+            jobs=jobs, profile=profile or spec.get("profile"),
+            # BOSS'S OWN ATTEMPT KEEPS THE LINEAGE'S TIER: its brief now carries the findings,
+            # and re-deciding the tier from their wording ("auth", "secret") raised a tier-1
+            # change to a plan approval (ENT-REC-52). A person's Retry is decided afresh.
+            risk_tier=(_lineage_cap.risk_tier(prev) if automatic else spec.get("risk_tier")),
             model_config=spec.get("model_config"), open_pr=spec.get("open_pr"),
             repair_retries=(repair_retries if isinstance(repair_retries, int)
                             else spec.get("repair_retries")),
