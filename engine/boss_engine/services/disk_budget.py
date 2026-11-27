@@ -445,6 +445,23 @@ def measure_docker(docker: Sequence[str], *, project: str, tag: str,
     return out
 
 
+def own_builder(docker: Sequence[str], builder: str, run: Runner = _run) -> str:
+    """BOSS_BUILDX_BUILDER when it is a builder of BOSS's own, else "": one with the `docker`
+    driver is the daemon's shared builder, and one Docker cannot describe proves nothing
+    (prune.sh and the steward apply the same check)."""
+    if not builder:
+        return ""
+    try:
+        res = run([*docker, "buildx", "inspect", builder])
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    for line in (res.stdout or "").splitlines() if res.returncode == 0 else []:
+        key, _, value = line.strip().partition(":")
+        if key == "Driver":
+            return builder if value.strip() and value.strip() != "docker" else ""
+    return ""
+
+
 def buildx_cache(docker: Sequence[str], builder: str, run: Runner = _run) -> Optional[tuple[float, float]]:
     """(total, freeable) bytes of a buildx builder's cache. `buildx du` counts layers that images
     share as Reclaimable too; what a prune can free is Private (equal to `system df` Reclaimable
@@ -533,7 +550,7 @@ def host_report(install_dir: Path, *, docker: Sequence[str] = ("docker",),
                                  "label=com.docker.compose.service=db-test"]).stdout or "").strip())
     except (OSError, subprocess.TimeoutExpired):
         test_server = False
-    builder = (env.get("BOSS_BUILDX_BUILDER") or "").strip()
+    builder = own_builder(docker, (env.get("BOSS_BUILDX_BUILDER") or "").strip(), run)
     measured = measure_docker(docker, project=project, tag=tag, run=run, builder=builder)
     measured[CACHE_OWNED_KEY] = bool(builder) or (
         (env.get("BOSS_DEDICATED_HOST") or "").strip().lower() in ("1", "true", "yes"))

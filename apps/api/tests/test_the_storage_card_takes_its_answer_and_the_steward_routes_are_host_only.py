@@ -159,7 +159,9 @@ def test_an_incident_on_a_host_whose_helper_is_gone_for_good_is_closed_with_that
             storage_watch.record_sample(c, row)
             c.execute(text("INSERT INTO storage_incidents (id, host_id, status, severity) "
                            "VALUES (:id, :host, 'critical', 'critical')"), {"id": f"si_{host}", "host": host})
-        closed = storage_watch.close_when_helper_gone(c)
+        # BOSS itself just started (a laptop waking after a day): the helper gets its window first.
+        assert f"si_{gone}" not in storage_watch.close_when_helper_gone(c, started_at=now - timedelta(minutes=5))
+        closed = storage_watch.close_when_helper_gone(c, started_at=now - timedelta(days=1))
         assert f"si_{gone}" in closed and f"si_{recent}" not in closed
         status = dict(c.execute(text("SELECT host_id, status FROM storage_incidents WHERE host_id IN (:a, :b)"),
                                 {"a": gone, "b": recent}).all())

@@ -1675,16 +1675,23 @@ fi
 # proxy settings are not enough: on a box whose only way out is BOSS_UPSTREAM_PROXY, the build
 # failed at "failed to fetch anonymous token" (enterprise lane, BOSSAPP-1430). Give the build
 # command the proxy explicitly; sudo resets the environment, so it goes after sudo.
+# BOSS'S OWN BUILDER: with BOSS_BUILDX_BUILDER set, the images build in it (BUILDX_BUILDER), so
+# its cache is BOSS's and prune.sh / the steward may clear it (review of the enterprise port).
 _BUILD_CMD=("${COMPOSE[@]}")
-_up_proxy="" _up_extra=""
+_up_proxy="" _up_extra="" _up_builder=""
 if declare -F env_value >/dev/null; then
   _up_proxy="$(env_value BOSS_UPSTREAM_PROXY || true)"
   _up_extra="$(env_value BOSS_UPSTREAM_NO_PROXY || true)"
+  _up_builder="$(env_value BOSS_BUILDX_BUILDER || true)"
 fi
-if [[ -n "$_up_proxy" ]]; then
-  _up_no_proxy="localhost,127.0.0.1"
-  [[ -z "$_up_extra" ]] || _up_no_proxy="$_up_no_proxy,$_up_extra"
-  _proxy_env=(env "HTTPS_PROXY=$_up_proxy" "https_proxy=$_up_proxy" "NO_PROXY=$_up_no_proxy" "no_proxy=$_up_no_proxy")
+if [[ -n "$_up_proxy" || -n "$_up_builder" ]]; then
+  _proxy_env=(env)
+  if [[ -n "$_up_proxy" ]]; then
+    _up_no_proxy="localhost,127.0.0.1"
+    [[ -z "$_up_extra" ]] || _up_no_proxy="$_up_no_proxy,$_up_extra"
+    _proxy_env+=("HTTPS_PROXY=$_up_proxy" "https_proxy=$_up_proxy" "NO_PROXY=$_up_no_proxy" "no_proxy=$_up_no_proxy")
+  fi
+  [[ -z "$_up_builder" ]] || _proxy_env+=("BUILDX_BUILDER=$_up_builder")
   if [[ "${COMPOSE[0]}" == sudo ]]; then
     # sudo and its own options (the scoped fallback passes -n), then env, then docker.
     _i=1
@@ -1696,7 +1703,7 @@ if [[ -n "$_up_proxy" ]]; then
   fi
   unset _proxy_env _up_no_proxy
 fi
-unset _up_proxy _up_extra
+unset _up_proxy _up_extra _up_builder
 # IMAGES OF ONE FAMILY BUILD TOGETHER (BOSSAPP-1458). The list above is grouped by the stage the
 # images grow from (the Python services share python-base; the console is its own), so each family
 # builds while its cache is warm. Between families, on a disk under BOSS_DISK_FLOOR_GB free, the

@@ -31,6 +31,7 @@ case "$1" in
     printf 'overlay 31457280 1 %s 90%% /\n' "$FAKE_FREE_KB"
     exit 0 ;;
   system) printf 'Images|12.1GB\nBuild Cache|%s\n' "${FAKE_CACHE:-4.2GB}"; exit 0 ;;
+  buildx) [[ "$2" == inspect ]] && printf 'Name: %s\nDriver: %s\n' "$3" "${FAKE_DRIVER:-docker-container}"; exit 0 ;;
   *) exit 0 ;;
 esac
 """
@@ -155,3 +156,39 @@ def test_boss_own_buildx_builder_is_cleared_through_it_and_never_the_daemon(tmp_
     prunes = [c for c in w["calls"] if "builder prune" in c or "buildx prune" in c]
     assert prunes and all(c.startswith("docker buildx prune --builder boss-builder") for c in prunes), prunes
     assert "docker buildx prune --builder boss-builder -af" in prunes
+
+
+def test_a_builder_with_the_docker_driver_is_the_daemons_shared_one_and_not_boss_own(tmp_path):
+    w = _world(tmp_path, free_gb=5, cache="4.2GB", BOSS_BUILDX_BUILDER="desktop-linux", FAKE_DRIVER="docker")
+    prunes = [c for c in w["calls"] if "builder prune" in c or "buildx prune" in c]
+    assert prunes == ["docker builder prune -f --keep-storage 10gb"], prunes
+    assert "uses the docker driver (the daemon's shared builder)" in w["out"]
+    assert "build cache left to you" in w["out"]
+
+
+def test_boss_builds_its_images_in_its_own_builder():
+    """A builder is BOSS's only because BOSS's images build in it: install.sh and
+    build_images.sh pass BUILDX_BUILDER (after sudo, which resets the environment)."""
+    install = (REPO / "install.sh").read_text()
+    assert '_up_builder="$(env_value BOSS_BUILDX_BUILDER || true)"' in install
+    assert '_proxy_env+=("BUILDX_BUILDER=$_up_builder")' in install
+
+
+def test_build_images_runs_compose_in_boss_builder_even_under_sudo(tmp_path):
+    log = tmp_path / "log"
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    for name in ("sudo", "docker"):
+        exe = fake / name
+        exe.write_text(f'#!/usr/bin/env bash\nprintf "%s BUILDX_BUILDER=%s :: %s\\n" "{name}" "${{BUILDX_BUILDER:-}}" "$*" >> {log}\n'
+                       + ('while [[ "$1" == -* ]]; do shift; done\nexec "$@"\n' if name == "sudo" else 'exit 1\n'))
+        exe.chmod(0o755)
+    install = tmp_path / "install"
+    install.mkdir()
+    (install / ".env").write_text("BOSS_BUILDX_BUILDER=boss-builder\n")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("BOSS_")}
+    env["PATH"] = f"{fake}{os.pathsep}{env['PATH']}"
+    subprocess.run(["bash", str(REPO / "scripts" / "install" / "build_images.sh"), "--dir", str(install),
+                    "--", "sudo", "-n", "docker", "compose"], env=env, capture_output=True, text=True, timeout=60)
+    calls = log.read_text().splitlines()
+    assert any(c.startswith("docker BUILDX_BUILDER=boss-builder :: compose") for c in calls), calls

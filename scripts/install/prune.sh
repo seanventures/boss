@@ -190,7 +190,19 @@ fi
 #    floor trims, a keep-less prune. On any other Docker the rest of the cache may be the
 #    person's own projects': BOSS prints the reading and the command, and leaves it to them.
 #    A Colima or Desktop VM is not proof of either: BOSS does not create the profile.
+#    A builder with the `docker` driver (`default`, `desktop-linux`) IS the daemon's shared
+#    builder, not one of BOSS's own: it counts as shared. So does one Docker cannot describe.
+#    The installer builds BOSS's images in BOSS_BUILDX_BUILDER (BUILDX_BUILDER, install.sh and
+#    build_images.sh), which is what makes that builder's cache BOSS's.
 BUILDER="$(env_or_dotenv BOSS_BUILDX_BUILDER "")"
+if [[ -n "$BUILDER" ]]; then
+  driver="$("${D[@]}" buildx inspect "$BUILDER" 2>/dev/null | awk '$1 == "Driver:" {print $2; exit}' || true)"
+  if [[ -z "$driver" || "$driver" == docker ]]; then
+    printf 'BOSS_BUILDX_BUILDER=%s %s, so it is not a builder of BOSS'"'"'s own: its cache is treated as shared.\n' \
+      "$BUILDER" "$([[ -z "$driver" ]] && echo 'could not be inspected' || echo "uses the docker driver (the daemon's shared builder)")"
+    BUILDER=""
+  fi
+fi
 if [[ -n "$BUILDER" ]]; then
   CACHE_PRUNE=("${D[@]}" buildx prune --builder "$BUILDER")
   OWNS_CACHE=1

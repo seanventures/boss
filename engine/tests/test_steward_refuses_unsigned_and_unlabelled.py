@@ -164,6 +164,8 @@ class FakeDocker:
                 self.volumes = [v for v in self.volumes if v["name"] != a[-1]]
         elif a[:1] == ["rmi"]:
             self.removed.append(("image", a[-1]))
+        elif a[:2] == ["buildx", "inspect"]:
+            out = f"Name:          {a[-1]}\nDriver:        docker-container\n"
         elif a[:2] == ["buildx", "du"]:
             out = "ID  RECLAIMABLE  SIZE  LAST ACCESSED\nShared:\t\t0B\nPrivate:\t18GB\nReclaimable:\t18GB\nTotal:\t\t18GB\n"
         elif a[:2] == ["system", "df"]:

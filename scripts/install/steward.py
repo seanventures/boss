@@ -395,10 +395,35 @@ def docker_df(env: Env, runner: Callable = run_cmd) -> dict[str, float]:
     return out
 
 
-def owns_build_cache(env: Env) -> bool:
+def own_builder(env: Env, runner: Callable = run_cmd) -> str:
+    """BOSS_BUILDX_BUILDER when it is a builder of BOSS's own, else "". One with the `docker`
+    driver (`default`, `desktop-linux`) is the daemon's shared builder, and one Docker cannot
+    describe proves nothing: neither is BOSS's (prune.sh applies the same check)."""
+    if not env.buildx_builder:
+        return ""
+    cached = getattr(env, "_own_builder", None)
+    if cached is not None and cached[0] == env.buildx_builder:
+        return cached[1]
+    driver = ""
+    try:
+        res = runner([*env.docker, "buildx", "inspect", env.buildx_builder])
+        if res.returncode == 0:
+            for line in (res.stdout or "").splitlines():
+                key, _, value = line.strip().partition(":")
+                if key == "Driver":
+                    driver = value.strip()
+                    break
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    owned = env.buildx_builder if driver and driver != "docker" else ""
+    env._own_builder = (env.buildx_builder, owned)
+    return owned
+
+
+def owns_build_cache(env: Env, runner: Callable = run_cmd) -> bool:
     """THE CACHE BOSS MAY CLEAR (prune.sh uses the same rule): its own buildx builder, or a
     Docker that runs only BOSS. Anywhere else the cache may be the person's own projects'."""
-    return bool(env.buildx_builder) or env.dedicated
+    return bool(own_builder(env, runner)) or env.dedicated
 
 
 def cache_reading(env: Env, runner: Callable = run_cmd,
@@ -407,9 +432,10 @@ def cache_reading(env: Env, runner: Callable = run_cmd,
     builder when it has one (`docker buildx du`), else the daemon's (`docker system df`).
     Freeable is what is not shared with images: `system df` Reclaimable, `buildx du` Private
     (its Reclaimable counts shared layers too)."""
-    if env.buildx_builder:
+    builder = own_builder(env, runner)
+    if builder:
         try:
-            res = runner([*env.docker, "buildx", "du", "--builder", env.buildx_builder])
+            res = runner([*env.docker, "buildx", "du", "--builder", builder])
         except (OSError, subprocess.TimeoutExpired):
             return 0.0, 0.0
         if res.returncode != 0:
@@ -552,7 +578,7 @@ def collect(env: Env, runner: Callable = run_cmd) -> dict[str, Any]:
                          # (storage_watch.cache_freeable_gb / cache_owned).
                          "build_cache_scope": gb(scope_size),
                          "build_cache_reclaimable": gb(freeable),
-                         "build_cache_owned": 1.0 if owns_build_cache(env) else 0.0,
+                         "build_cache_owned": 1.0 if owns_build_cache(env, runner) else 0.0,
                          "volumes": sample["volumes_gb"], "logs": sample["logs_gb"],
                          "backups": sample["backups_gb"],
                          # What the orphan-volume job could really free (measured, ours, rebuildable,
@@ -592,7 +618,7 @@ def budget_reading(env: Env, runner: Callable, now: Optional[float] = None) -> d
         budget = runpy.run_path(str(budget_module))
         for key, value in budget["measure_docker"](env.docker, project=env.compose_project,
                                                    tag=env.image_tag, run=runner,
-                                                   builder=env.buildx_builder).items():
+                                                   builder=own_builder(env, runner)).items():
             # A reading carries numbers only (storage_watch.clean_sample); names stay on the host.
             if isinstance(value, (int, float)) and not isinstance(value, bool):
                 values[f"budget_{key}"] = float(value)
@@ -741,19 +767,21 @@ def verb_du(env: Env, args: dict, *, dry_run: bool, runner: Callable) -> tuple[l
 
 def verb_prune_build_cache(env: Env, args: dict, *, dry_run: bool, runner: Callable) -> tuple[list[str], float]:
     keep = int(args.get("keep_storage_gb") or 10)
-    if not owns_build_cache(env):
+    if not owns_build_cache(env, runner):
         raise Refused("the build cache is Docker-wide; on a shared machine BOSS prunes only its own "
-                      "buildx builder (set BOSS_BUILDX_BUILDER) or a dedicated host (BOSS_DEDICATED_HOST=1)")
+                      "buildx builder (BOSS_BUILDX_BUILDER, not one with the docker driver) or a "
+                      "dedicated host (BOSS_DEDICATED_HOST=1)")
     # Only what can be freed, in the scope this prune works on (BOSS's builder, else the daemon):
     # a plan built on the total would promise bytes no prune returns (ENT-SETUP-01).
     size_before, freeable = cache_reading(env, runner)
     over = max(0.0, freeable - keep * 1e9)
-    scope = f"builder:{env.buildx_builder}" if env.buildx_builder else "dedicated-host"
+    builder = own_builder(env, runner)
+    scope = f"builder:{builder}" if builder else "dedicated-host"
     items = [f"build-cache:{scope}:above-{keep}GB"] if over > 0 else []
     if dry_run or not items:
         return items, over
-    if env.buildx_builder:
-        argv = [*env.docker, "buildx", "prune", "--builder", env.buildx_builder, "-f", "--keep-storage", f"{keep}gb"]
+    if builder:
+        argv = [*env.docker, "buildx", "prune", "--builder", builder, "-f", "--keep-storage", f"{keep}gb"]
     else:
         argv = [*env.docker, "builder", "prune", "-f", "--keep-storage", f"{keep}gb"]
     res = runner(argv, timeout=900)

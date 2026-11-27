@@ -52,6 +52,10 @@ STUCK_HOLD_AFTER = timedelta(minutes=15)
 #: a machine retired): its open incident is closed with that reason instead of staying open for
 #: ever on a reading nobody can refresh (review of the enterprise port, patch 20).
 HELPER_GONE_AFTER = timedelta(hours=6)
+#: When this process's watch first ran: silence is counted from here at the earliest, so a BOSS
+#: that starts after a laptop slept for a day does not close incidents before the helper's
+#: first reading has had the chance to arrive.
+WATCH_STARTED_AT: Optional[datetime] = None
 LEVELS = ("ok", "warn", "critical")
 SOURCES = ("steward", "hostd", "api")
 #: The by_type keys the Storage card draws, in order; `free` is appended by the summary.
@@ -559,13 +563,14 @@ def budget(connection: Any, sample: Mapping[str, Any]) -> dict[str, Any]:
             "warn_at_pct": round(100 * disk_budget.WARN_AT)}
 
 
-def close_when_helper_gone(connection: Any) -> list[str]:
+def close_when_helper_gone(connection: Any, *, started_at: Optional[datetime] = None) -> list[str]:
     """Open incidents on a host whose helper reported once and then not for HELPER_GONE_AFTER:
     resolved with that reason (the hold goes with it). Nothing can show the disk recovered, and
     nothing will clean it, so an open incident would only hold work for ever. A host that never
     had a helper is judged on the API's own readings, as before, and is left to evaluate_host."""
     from . import storage_incidents
 
+    started = started_at or WATCH_STARTED_AT or _now()
     closed: list[str] = []
     rows = connection.execute(text(
         "SELECT i.id, max(s.at) AS last_at FROM storage_incidents i "
@@ -573,7 +578,7 @@ def close_when_helper_gone(connection: Any) -> list[str]:
         "WHERE i.status <> 'resolved' GROUP BY i.id")).mappings().all()
     for row in rows:
         at = row["last_at"]
-        at = at if at.tzinfo else at.replace(tzinfo=timezone.utc)
+        at = max(at if at.tzinfo else at.replace(tzinfo=timezone.utc), started)
         if _now() - at < HELPER_GONE_AFTER:
             continue
         hours = int((_now() - at).total_seconds() // 3600)
@@ -704,6 +709,8 @@ def tick(engine: Any, settings: Any = None, *, sample_api: bool = True) -> dict[
     from ..db import background
     from . import storage_cleanup, storage_incidents, system_services, work_hold
 
+    global WATCH_STARTED_AT
+    WATCH_STARTED_AT = WATCH_STARTED_AT or _now()
     report: dict[str, Any] = {"at": _now().isoformat(), "hosts": []}
     try:
         with background():

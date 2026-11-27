@@ -286,8 +286,16 @@ def test_the_doctor_knows_whose_cache_it_is_from_the_install_settings(tmp_path):
         seen.setdefault("calls", []).append(argv)
         if argv[1:3] == ["buildx", "du"]:
             return subprocess.CompletedProcess(argv, 0, "Shared:\t6GB\nPrivate:\t2GB\nReclaimable:\t8GB\nTotal:\t8GB\n", "")
+        if argv[1:3] == ["buildx", "inspect"]:
+            driver = "docker" if argv[-1] == "default" else "docker-container"
+            return subprocess.CompletedProcess(argv, 0, f"Name: {argv[-1]}\nDriver: {driver}\n", "")
         return subprocess.CompletedProcess(argv, 0, "", "")
 
+    (tmp_path / ".env").write_text("BOSS_BUILDX_BUILDER=default\n")
+    report = dbu.host_report(tmp_path, run=run)
+    row = next(r for r in report["rows"] if r["key"] == "build_cache")
+    assert row["note"] == "" or "buildx" not in row["note"]
+    assert not any(c[1:3] == ["buildx", "du"] for c in seen["calls"]), "the daemon's builder is not BOSS's"
     (tmp_path / ".env").write_text("BOSS_BUILDX_BUILDER=boss-builder\n")
     report = dbu.host_report(tmp_path, run=run)
     row = next(r for r in report["rows"] if r["key"] == "build_cache")
@@ -304,11 +312,14 @@ def test_the_helper_reads_and_plans_its_own_builder_and_says_whether_the_cache_i
     steward, env = host
     env.dedicated, env.buildx_builder = False, "boss-builder"
     calls: list = []
+    driver = ["docker-container"]
 
     def run(argv, timeout=120.0):
         calls.append(argv)
         if argv[1:3] == ["buildx", "du"]:
             return subprocess.CompletedProcess(argv, 0, "Shared:\t6GB\nPrivate:\t13GB\nReclaimable:\t19GB\nTotal:\t19GB\n", "")
+        if argv[1:3] == ["buildx", "inspect"]:
+            return subprocess.CompletedProcess(argv, 0, f"Driver: {driver[0]}\n", "")
         if argv[1:3] == ["system", "df"] and "-v" not in argv:   # the daemon: not what this prune touches
             return subprocess.CompletedProcess(argv, 0, json.dumps(
                 {"Type": "Build Cache", "Size": "40GB", "Reclaimable": "40GB"}), "")
@@ -322,6 +333,12 @@ def test_the_helper_reads_and_plans_its_own_builder_and_says_whether_the_cache_i
     assert items == ["build-cache:builder:boss-builder:above-10GB"] and over == pytest.approx(3e9)
     env.buildx_builder = ""
     assert steward.collect(env, run)["by_type"]["build_cache_owned"] == 0.0
+    # The daemon's own builder (docker driver) is not BOSS's: refused, and read as the daemon.
+    driver[0] = "docker"
+    env.buildx_builder = "desktop-linux"
+    assert steward.collect(env, run)["by_type"]["build_cache_owned"] == 0.0
+    with pytest.raises(steward.Refused, match="not one with the docker driver"):
+        steward.verb_prune_build_cache(env, {"keep_storage_gb": 10}, dry_run=True, runner=run)
 
 
 def test_a_shared_cache_is_no_cleanup_step_and_govern_names_the_shared_part_of_the_builder():
