@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/seanventures/boss/releases/tag/v1.0-rc10.36"><img alt="Release v1.0-rc10.36" src="https://img.shields.io/badge/release-v1.0--rc10.36-1aa89a?style=flat-square"></a>
+  <a href="https://github.com/seanventures/boss/releases/tag/v1.0-rc10.37"><img alt="Release v1.0-rc10.37" src="https://img.shields.io/badge/release-v1.0--rc10.37-1aa89a?style=flat-square"></a>
   <a href="LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/license-Apache%202.0-101820?style=flat-square"></a>
   <img alt="Self-hosted" src="https://img.shields.io/badge/deploy-self--hosted-101820?style=flat-square">
   <img alt="Interfaces: web, terminal, CLI, MCP" src="https://img.shields.io/badge/interfaces-web%20%C2%B7%20terminal%20%C2%B7%20CLI%20%C2%B7%20MCP-101820?style=flat-square">
@@ -19,7 +19,7 @@ Credentials stay on the machine. A call to a hosted model sends that provider th
 
 ## The shortest path
 
-1. Install v1.0-rc10.36.
+1. Install v1.0-rc10.37.
 2. Claim the install.
 3. Connect a repository.
 4. Connect a model.
@@ -32,22 +32,22 @@ You need Git on the install machine. If GitHub asks you to sign in, use an accou
 ```bash
 (
   set -e
-  git clone --branch v1.0-rc10.36 https://github.com/seanventures/boss.git boss-rc10.36
-  cd boss-rc10.36
+  git clone --branch v1.0-rc10.37 https://github.com/seanventures/boss.git boss-rc10.37
+  cd boss-rc10.37
   BOSS_RELEASE_COMMIT="$(git rev-parse HEAD)"
   ./install.sh --dir "$PWD" --ref "$BOSS_RELEASE_COMMIT"
 )
 ```
 
-Use a new directory named `boss-rc10.36`. The command stops if the clone fails, and it pins the install to that commit. Continue from `cd boss-rc10.36`. Services listen on the machine itself. Add `--console-origin https://boss.example.com`, with your hostname, when the console will be opened from somewhere else. Omit it to open `http://localhost:3000` on the install machine.
+Use a new directory named `boss-rc10.37`. The command stops if the clone fails, and it pins the install to that commit. Continue from `cd boss-rc10.37`. Services listen on the machine itself. Add `--console-origin https://boss.example.com`, with your hostname, when the console will be opened from somewhere else. Omit it to open `http://localhost:3000` on the install machine.
 
 `boss upgrade` writes a backup (database, keys, artifacts, and the local repositories volume that holds unpublished local projects' code), then moves to a later release. `boss upgrade --to REF` picks the release. `boss uninstall` stops BOSS and keeps the data. Ports, flags, and recovery are in the [installer guide](scripts/install/README.md).
 
 Upgrade note: BOSS acts on its own approval cards in development and asks you in production. The installer writes `BOSS_INSTALL_TIER` (`dev` on a Mac with no public `--console-origin`, `prod` on a server or a `remote.sh` host); a Linux laptop or a dev VM passes `--install-tier dev`.
 
-The copy at [boss.sean.network/install.sh](https://boss.sean.network/install.sh) is published separately. This page does not treat it as v1.0-rc10.36. The manual in this repository is the source. The [hosted docs](https://boss.sean.network/docs/) are published separately too.
+The copy at [boss.sean.network/install.sh](https://boss.sean.network/install.sh) is published separately. This page does not treat it as v1.0-rc10.37. The manual in this repository is the source. The [hosted docs](https://boss.sean.network/docs/) are published separately too.
 
-The installer targets Ubuntu 22.04/24.04 and Debian 12/13, and it can set up Docker. Before this tag was published, this commit was installed fresh by the enterprise lane on a locked-down Ubuntu 24.04 (arm64) box: 4 vCPU, 8 GB, 30 GB disk, AppArmor, and an inspecting proxy with private mirrors. That install passed its sandbox, plumbing, engine and scripted-build checks. A laptop install was also upgraded to it and passed the same checks and a screen-by-screen browser walk. Read the [release notes](docs/community/RELEASE_NOTES_v1.0-rc10.36.md) and the [RC9 validation record](docs/community/RC9_VALIDATION.md) before you rely on a path.
+The installer targets Ubuntu 22.04/24.04 and Debian 12/13, and it can set up Docker. Before this tag was published, this commit was installed fresh by the enterprise lane on a locked-down Ubuntu 24.04 (arm64) box: 4 vCPU, 8 GB, 30 GB disk, AppArmor, and an inspecting proxy with private mirrors. That install passed its sandbox, plumbing, engine and scripted-build checks. A laptop install was also upgraded to it and passed the same checks and a screen-by-screen browser walk. Read the [release notes](docs/community/RELEASE_NOTES_v1.0-rc10.37.md) and the [RC9 validation record](docs/community/RC9_VALIDATION.md) before you rely on a path.
 
 Disk: a first install needs about 21 GB free, and the installer checks this before it starts. A running install uses about 20–30 GB and cleans up after itself; `boss doctor` shows where the space goes. See [the disk budget](docs/operations/DISK_BUDGET.md).
 
