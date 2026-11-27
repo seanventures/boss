@@ -5,5 +5,17 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[dependencies]
+codex-utils-head-tail-buffer.workspace = true
+codex-utils-pty.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
+uuid.workspace = true
+
+[dev-dependencies]
+libc.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+
 [lints]
 workspace = true

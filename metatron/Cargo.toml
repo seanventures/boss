@@ -50,17 +50,40 @@ codex-utils-pty = { path = "third_party/codex/utils/pty" }
 
 # Registry-only external dependencies (crates.io; zero git dependencies)
 anyhow = "1"
+async-trait = "0.1"
+base64 = "0.22"
+bytes = "1"
+chrono = { version = "0.4", features = ["serde", "clock"] }
 clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
+crossterm = "0.28"
 ctor = "0.6.3"
+dirs = "6"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+futures-util = "0.3"
+hex = "0.4"
 keyring = { version = "3.6", default-features = false }
 lazy_static = "1"
 libc = "0.2.182"
 log = "0.4"
 portable-pty = "0.9.0"
 pretty_assertions = "1.4.1"
+rand = "0.8"
+ratatui = "0.29"
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+shell-words = "1"
 tempfile = "3.23.0"
+thiserror = "2"
 tokio = "1"
+toml = "0.8"
 tracing = "0.1.44"
+url = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+zeroize = { version = "1", features = ["derive"] }
 
 [workspace.lints.rust]
 unexpected_cfgs = "warn"
