@@ -55,10 +55,12 @@ def declared_new_app(fctx: Optional[Mapping[str, Any]]) -> bool:
 def a_person_asked(auth: Any) -> bool:
     """May this request's `new_app` declare a new app? A person's own request does; an agent's
     does not — a non-person principal, or any request carrying a run token (an agent reaching an
-    HTTP door through its run's bridge). A request with no identity at all (an install without
-    the identity layer, where only the console's people reach these doors) counts as a person."""
+    HTTP door through its run's bridge). No identity at all is nobody: the door reads the
+    PRESENTED credential under every mode (identity_guard.presented_identity), so a console
+    person's session or key counts even with BOSS_AUTHZ_MODE=off, and an anonymous request or an
+    agent's token never does."""
     if auth is None:
-        return True
+        return False
     principal = getattr(auth, "principal", None)
     return bool(principal is not None and getattr(principal, "is_person", False)
                 and getattr(auth, "run_token", None) is None)

@@ -28492,7 +28492,7 @@ def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = Non
     # caller's `new_app`; `declared_new_app` is the only way in).
     from boss_engine.services.app_scope import a_person_asked as _a_person_asked
 
-    declared_new_app = new_app_asked and _a_person_asked(identity_guard.REQUEST_IDENTITY.get())
+    declared_new_app = new_app_asked and _a_person_asked(identity_guard.presented_identity())
     if extends_run_id:
         from boss_engine.services.code_task_service import (
             is_simulated_run, load_code_task_run, work_branch_for,

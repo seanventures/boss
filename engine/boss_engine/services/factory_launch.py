@@ -895,6 +895,9 @@ def spec_first_run(
         # A template built into an existing project (spec["existing_project"], server-set) is a
         # NEW app in that project, never a change to the app already there: declared through
         # start_run (workflows.NEW_APP_INPUT is server-only), whoever was allowed to launch it.
+        # Inherently so — a launch names a template, never an existing app — and the declaration
+        # only stops OTHER apps' branches blocking it: a launch of an app already built here (the
+        # same recorded app id) is still refused by the empty-checkout guard (build_checkout).
         declared_new_app=bool(spec.get("existing_project")),
         # THE START APPROVES THE PRD — server-only, with who started it, and only when that
         # person may approve a PRD here (an enforced request asks the PDP).

@@ -30,6 +30,7 @@ import pytest
 from sqlalchemy import text
 
 from apps.api.app.config import get_settings
+from apps.api.tests.identity_s1_world import world  # noqa: F401 — fixture
 from apps.api.tests.test_a_feature_builds_onto_its_app import (  # noqa: F401 — fixture
     _start as _start_workflow, _tick_until_built, panel,
 )
@@ -512,12 +513,18 @@ def test_a_retry_in_a_shared_repository_stays_on_its_app(client, engine, one_rep
     assert fctx.get("app_id") == "app_neighborhood" and fctx.get("new_app") is True
 
 
-def test_create_a_new_app_is_said_all_the_way_to_the_build(client, engine, one_repo, panel,
+def test_create_a_new_app_is_said_all_the_way_to_the_build(engine, one_repo, panel, world,
                                                            monkeypatch):
-    """New work › Create a new app: the run's input and its build both say new_app, and the
-    build clones the default branch (not either app's branch)."""
+    """New work › Create a new app, pressed by a signed-in person: the run's input and its build
+    both say new_app, and the build clones the default branch (not either app's branch)."""
+    from apps.api.tests.identity_s1_world import csrf, fresh_client, make_user, sign_in
+
     monkeypatch.setattr(get_settings(), "target_github_owner", OWNER)
     monkeypatch.setattr(get_settings(), "target_github_repo", SHARED)
+    make_user(engine, "newapp@example.test", role="operator")
+    client = fresh_client()
+    assert sign_in(client, "newapp@example.test").status_code == 200
+    client.headers.update(csrf(client))
     started = _post_work(client, {"kind": "feature", "new_app": True,
                                   "text": "A parking rota for the street."})
     assert started.status_code == 200, started.text
@@ -713,9 +720,9 @@ def test_start_run_drops_a_callers_new_app_and_honours_only_the_declaration(clie
 
 
 def test_only_a_persons_request_declares_a_new_app_at_an_http_door():
-    """The start door (and every door through it: New work, templates, the composer) honours
-    `new_app` only from a person: an agent's run token reaching it through its bridge, or a
-    service, does not declare one."""
+    """The rule the start door asks (and every door through it: New work, templates, the
+    composer): only a person. Driven over HTTP under each mode in
+    test_only_a_person_declares_a_new_app.py."""
     import dataclasses
     import inspect
 
@@ -731,7 +738,7 @@ def test_only_a_persons_request_declares_a_new_app_at_an_http_door():
     fields = {f.name for f in dataclasses.fields(RunTokenClaims)}
     claims = RunTokenClaims(**{name: None for name in fields})
     assert a_person_asked(dataclasses.replace(person, run_token=claims)) is False
-    assert a_person_asked(None) is True        # no identity layer: only the console's people
+    assert a_person_asked(None) is False       # no credential presented: nobody
     source = inspect.getsource(main.start_delivery_workflow)
-    assert "_a_person_asked(identity_guard.REQUEST_IDENTITY.get())" in source
+    assert "_a_person_asked(identity_guard.presented_identity())" in source
     assert "declared_new_app=declared_new_app" in source
