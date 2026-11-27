@@ -5,8 +5,8 @@ action constants / dataclass without pulling in the supervisor's judgement-call 
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Any, Mapping, Optional
 
 STEER = "steer"
 CHANGE_APPROACH = "change_approach"
@@ -54,3 +54,33 @@ class ProgressSignal:
         if self.refusals and not (self.caused or self.environment):
             return REFUSAL_ALLOWED
         return ACTIONS
+
+
+@dataclass(frozen=True)
+class StageRecord:
+    """Schema-bounded work-ledger record for one pipeline stage/round (BOSSAPP-942; Kiro gap 9).
+
+    The supervisor reads ONLY structured stage records — never raw worker transcripts.
+    """
+
+    stage: str
+    round_no: int
+    status: str                                    # passed | failed | blocked
+    faults: Mapping[str, str] = field(default_factory=dict)       # gate -> WORK | HARNESS | PERSON
+    claims: Mapping[str, Any] = field(default_factory=dict)       # worker's structured claims
+    checks: Mapping[str, int] = field(default_factory=dict)       # check_name -> exit_code
+    artifacts: tuple[str, ...] = ()                # changed file paths / artifact refs
+    spend_usd_micros: int = 0
+    elapsed_seconds: int = 0
+
+
+@dataclass(frozen=True)
+class ClaimCheck:
+    """Result of independently re-checking one worker claim against evidence (BOSSAPP-942)."""
+
+    claim_kind: str
+    subject: str
+    claimed: Any
+    verified: bool
+    discrepancy: str = ""
+    evidence_ref: str = ""

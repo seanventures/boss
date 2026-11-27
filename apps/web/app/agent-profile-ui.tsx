@@ -172,8 +172,17 @@ export function ProfileRow({ agent, feed, actor }: { agent: StudioAgent; feed: A
       {version ? (
         <dl className="wf-ag-facts">
           <div><dt>Model</dt><dd title={words(policy.selection_mode)}>
-            {words(policy.pinned_model ?? policy.execution_mode ?? "deterministic_brief")}
+            {words(
+              policy.pinned_harness && policy.pinned_model
+                ? `${policy.pinned_harness} · ${policy.pinned_model}`
+                : policy.pinned_harness ?? policy.pinned_model ?? policy.execution_mode ?? "deterministic_brief"
+            )}
           </dd></div>
+          {policy.pinned_harness || policy.pinned_model ? (
+            <div><dt>Route</dt><dd title={words(policy.route_reason ?? policy.selection_mode)}>
+              {words(policy.route_reason ?? `pinned (${policy.selection_mode ?? "pinned"})`)}
+            </dd></div>
+          ) : null}
           <div><dt>Skills</dt><dd title={(version.requested_skills ?? []).join(", ") || undefined}>
             {(version.requested_skills ?? []).length}
           </dd></div>

@@ -50,5 +50,6 @@ case "$claim" in
       printf '    From the server'"'"'s own network, opening %s claims it too.\n' "${origin%/}"
     printf '  %sThen finish setup%s  %s\n' "$B" "$N" "$setup_url"
     printf '                     (repository, model, first pull request)\n'
+    printf '  %sGuided first minute%s python3 scripts/install/guided_first_minute.py\n' "$B" "$N"
     ;;
 esac
