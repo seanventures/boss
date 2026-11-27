@@ -24,8 +24,16 @@ def test_the_host_prune_never_touches_volumes_or_prunes_the_system():
     for forbidden in ("system prune", "--volumes", "volume rm", "volume prune", "rmi -f $(",
                       "container prune"):
         assert forbidden not in code, forbidden
-    # Build cache is shared across projects: pruned only on a host that runs nothing but BOSS.
-    assert 'if [[ "$DEDICATED" -eq 1 ]]; then' in code
+    # Build cache is shared across projects: beyond the plain capped prune, only BOSS's own scope
+    # (a Docker that runs only BOSS, or BOSS's buildx builder) is cleared — every --all prune runs
+    # through that scope and under its check; nothing else names `builder prune -a`.
+    assert 'OWNS_CACHE="$DEDICATED"' in code and 'buildx prune --builder "$BUILDER"' in code
+    lines = code.splitlines()
+    for i, line in enumerate(lines):
+        if " -af" in line and line.lstrip().startswith("run "):
+            assert '"${CACHE_PRUNE[@]}"' in line, line
+            guard = next(lines[j] for j in range(i - 1, -1, -1) if lines[j].lstrip().startswith(("if ", "elif ")))
+            assert '"$OWNS_CACHE" -eq 1' in guard, (line, guard)
 
 
 def test_every_deploy_path_prunes_after_it_succeeds():

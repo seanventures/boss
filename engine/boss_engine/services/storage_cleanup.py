@@ -120,8 +120,12 @@ def _volumes_reclaimable(s: Mapping[str, Any]) -> float:
 
 
 def _cache_over_cap(s: Mapping[str, Any], r: Mapping[str, Any]) -> float:
-    from .storage_watch import cache_freeable_gb
+    from .storage_watch import cache_freeable_gb, cache_owned
 
+    # A shared Docker's cache is not BOSS's to clear: the helper refuses it, so it is no step;
+    # the Storage card's budget row tells the person, with the command.
+    if cache_owned(s) is False:
+        return 0.0
     return _f(cache_freeable_gb(s)) - _f(r.get("build_cache", {}).get("cap_gb", 10))
 
 

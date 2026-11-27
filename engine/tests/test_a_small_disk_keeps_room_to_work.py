@@ -58,19 +58,24 @@ def _world(tmp_path: Path, free_gb: int, cache: str = "4.2GB", room: bool = True
     return {"out": out.stdout, "calls": calls}
 
 
+# BOSS clears build cache below the cap only in its own scope: a Docker that runs only BOSS
+# (BOSS_DEDICATED_HOST=1) or its own buildx builder. Elsewhere the cache may be the person's.
+OWN = {"BOSS_DEDICATED_HOST": "1"}
+
+
 def test_a_30gb_box_after_its_first_build_drops_the_whole_build_cache(tmp_path):
-    w = _world(tmp_path, free_gb=5, cache="4.2GB")
+    w = _world(tmp_path, free_gb=5, cache="4.2GB", **OWN)
     assert "docker builder prune -af" in w["calls"], w["out"]
     assert "under the 20 GB floor (BOSS_DISK_FLOOR_GB): keeping 0 GB of build cache" in w["out"]
 
 
 def test_a_tight_disk_keeps_only_the_cache_that_fits_above_the_floor(tmp_path):
-    w = _world(tmp_path, free_gb=15, cache="10.4GB")
+    w = _world(tmp_path, free_gb=15, cache="10.4GB", **OWN)
     assert "docker builder prune -af --keep-storage 5gb" in w["calls"], w["out"]
 
 
 def test_the_floor_is_a_setting(tmp_path):
-    w = _world(tmp_path, free_gb=5, cache="4GB", BOSS_DISK_FLOOR_GB="8")
+    w = _world(tmp_path, free_gb=5, cache="4GB", BOSS_DISK_FLOOR_GB="8", **OWN)
     assert "docker builder prune -af --keep-storage 1gb" in w["calls"], w["out"]
 
 
@@ -117,8 +122,36 @@ def test_colima_releases_cache_when_mac_backing_disk_is_tight(tmp_path):
         exe = bin_dir / name
         exe.write_text("#!/bin/sh\n" + body + "\n")
         exe.chmod(0o755)
-    local = _world(tmp_path, free_gb=30, DOCKER_CONTEXT="colima-qa", DOCKER_HOST="")
+    local = _world(tmp_path, free_gb=30, DOCKER_CONTEXT="colima-qa", DOCKER_HOST="", **OWN)
     assert "docker builder prune -af" in local["calls"]
     assert "The Mac backing this install" in local["out"]
-    remote = _world(tmp_path, free_gb=30, DOCKER_CONTEXT="qa-remote", DOCKER_HOST="")
+    remote = _world(tmp_path, free_gb=30, DOCKER_CONTEXT="qa-remote", DOCKER_HOST="", **OWN)
     assert "docker builder prune -af" not in remote["calls"]
+
+
+def test_a_shared_desktop_docker_on_a_tight_mac_keeps_the_persons_cache_and_says_how(tmp_path):
+    """The review repro: Docker Desktop, not dedicated, the Mac at 14 GiB free, a small Docker
+    disk, after an upgrade (--room). No --all and no keep-less prune runs; the person gets the
+    reading, why, and the exact command."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for name, body in {"uname": "echo Darwin",
+                       "df": "printf 'Filesystem 1024-blocks Used Available Capacity Mounted\\n/dev/data 500000000 485000000 14680064 97%% /data\\n'"}.items():
+        exe = bin_dir / name
+        exe.write_text("#!/bin/sh\n" + body + "\n")
+        exe.chmod(0o755)
+    w = _world(tmp_path, free_gb=30, cache="12GB", DOCKER_CONTEXT="desktop-linux", DOCKER_HOST="")
+    assert not any(" -a" in c and "prune" in c for c in w["calls"]), w["calls"]
+    assert not any(c.rstrip().endswith("prune -af") for c in w["calls"]), w["calls"]
+    assert "docker builder prune -f --keep-storage 10gb" in w["calls"]       # the plain cap still holds
+    assert "build cache left to you" in w["out"]
+    assert "the Mac backing this install has 14 GiB free" in w["out"]
+    assert "To free it yourself: docker builder prune -af" in w["out"]
+    assert "BOSS_DEDICATED_HOST=1" in w["out"]
+
+
+def test_boss_own_buildx_builder_is_cleared_through_it_and_never_the_daemon(tmp_path):
+    w = _world(tmp_path, free_gb=5, cache="4.2GB", BOSS_BUILDX_BUILDER="boss-builder")
+    prunes = [c for c in w["calls"] if "builder prune" in c or "buildx prune" in c]
+    assert prunes and all(c.startswith("docker buildx prune --builder boss-builder") for c in prunes), prunes
+    assert "docker buildx prune --builder boss-builder -af" in prunes

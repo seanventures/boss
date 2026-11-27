@@ -201,14 +201,18 @@ export function SystemTab({ projectId, actor, orgId, system }: ObsTabProps) {
         ) : null}
       </section>
 
-      <section className="obs-zone" aria-labelledby="obs-services-head" data-testid="obs-compose-services">
+      <section className="obs-zone" aria-labelledby="obs-services-head" data-testid="obs-compose-services"
+               data-stale={s.compose?.stale ? "true" : undefined}>
         <ZoneHead id="obs-services-head" label="SERVICES" count={s.compose?.services.length}>
           {s.compose && <time dateTime={s.compose.at} className="inf-faint" title={lt.full(s.compose.at)}>
-            Last reported {lt.full(s.compose.at)}
+            {s.compose.stale ? "Stale · last reported " : "Last reported "}{lt.full(s.compose.at)}
           </time>}
         </ZoneHead>
+        {s.compose?.stale ? (
+          <span className="inf-muted" data-testid="obs-compose-stale">The host helper has stopped reporting, so these states may no longer be true. Check <code>boss steward status</code> on the host.</span>
+        ) : null}
         {s.compose?.services.length ? (
-          <ul className="obs-work-chips">{s.compose.services.map((row) => (
+          <ul className={s.compose.stale ? "obs-work-chips inf-muted" : "obs-work-chips"}>{s.compose.services.map((row) => (
             <li key={row.name} title={row.name}><b>{row.service}</b> {row.state}</li>
           ))}</ul>
         ) : <span className="inf-muted">{s.compose ? "No service containers reported" : "Awaiting a host reading"}</span>}

@@ -395,6 +395,36 @@ def docker_df(env: Env, runner: Callable = run_cmd) -> dict[str, float]:
     return out
 
 
+def owns_build_cache(env: Env) -> bool:
+    """THE CACHE BOSS MAY CLEAR (prune.sh uses the same rule): its own buildx builder, or a
+    Docker that runs only BOSS. Anywhere else the cache may be the person's own projects'."""
+    return bool(env.buildx_builder) or env.dedicated
+
+
+def cache_reading(env: Env, runner: Callable = run_cmd,
+                  df: Optional[dict[str, float]] = None) -> tuple[float, float]:
+    """(size, freeable) bytes of the build cache in the scope a prune works on: BOSS's buildx
+    builder when it has one (`docker buildx du`), else the daemon's (`docker system df`).
+    Freeable is what is not shared with images: `system df` Reclaimable, `buildx du` Private
+    (its Reclaimable counts shared layers too)."""
+    if env.buildx_builder:
+        try:
+            res = runner([*env.docker, "buildx", "du", "--builder", env.buildx_builder])
+        except (OSError, subprocess.TimeoutExpired):
+            return 0.0, 0.0
+        if res.returncode != 0:
+            return 0.0, 0.0
+        found = {}
+        for line in (res.stdout or "").splitlines():
+            key, _, value = line.strip().partition(":")
+            if key in ("Total", "Private") and value.strip():
+                found[key] = _parse_size(value.strip())
+        size = found.get("Total", 0.0)
+        return size, min(found.get("Private", size), size)
+    df = df if df is not None else docker_df(env, runner)
+    return df["cache"], min(df["reclaimable_cache"], df["cache"])
+
+
 def colima_profile(env: Env) -> Optional[str]:
     import re
 
@@ -514,10 +544,15 @@ def collect(env: Env, runner: Callable = run_cmd) -> dict[str, Any]:
     if alloc is not None:
         sample["docker_alloc_gb"] = gb(alloc)
         sample["docker_used_gb"] = gb(docker_used)
+    scope_size, freeable = cache_reading(env, runner, df)
     sample["by_type"] = {"images": sample["images_gb"], "build_cache": sample["cache_gb"],
-                         # What a prune can free of it; the rest is layers installed images use
-                         # (storage_watch.cache_freeable_gb counts only this against the cap).
-                         "build_cache_reclaimable": gb(min(df["reclaimable_cache"], df["cache"])),
+                         # The cache in the scope a prune works on (BOSS's builder, else the
+                         # daemon), what a prune can free of it (the rest is layers installed
+                         # images use), and whether BOSS may clear it beyond the plain cap
+                         # (storage_watch.cache_freeable_gb / cache_owned).
+                         "build_cache_scope": gb(scope_size),
+                         "build_cache_reclaimable": gb(freeable),
+                         "build_cache_owned": 1.0 if owns_build_cache(env) else 0.0,
                          "volumes": sample["volumes_gb"], "logs": sample["logs_gb"],
                          "backups": sample["backups_gb"],
                          # What the orphan-volume job could really free (measured, ours, rebuildable,
@@ -556,8 +591,10 @@ def budget_reading(env: Env, runner: Callable, now: Optional[float] = None) -> d
     try:
         budget = runpy.run_path(str(budget_module))
         for key, value in budget["measure_docker"](env.docker, project=env.compose_project,
-                                                   tag=env.image_tag, run=runner).items():
-            if value is not None:
+                                                   tag=env.image_tag, run=runner,
+                                                   builder=env.buildx_builder).items():
+            # A reading carries numbers only (storage_watch.clean_sample); names stay on the host.
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
                 values[f"budget_{key}"] = float(value)
         age = budget["rollback_age_hours"](env.install_dir)
         if age is not None:
@@ -704,13 +741,13 @@ def verb_du(env: Env, args: dict, *, dry_run: bool, runner: Callable) -> tuple[l
 
 def verb_prune_build_cache(env: Env, args: dict, *, dry_run: bool, runner: Callable) -> tuple[list[str], float]:
     keep = int(args.get("keep_storage_gb") or 10)
-    if not env.buildx_builder and not env.dedicated:
+    if not owns_build_cache(env):
         raise Refused("the build cache is Docker-wide; on a shared machine BOSS prunes only its own "
                       "buildx builder (set BOSS_BUILDX_BUILDER) or a dedicated host (BOSS_DEDICATED_HOST=1)")
-    df = docker_df(env, runner)
-    # Only what Docker can free counts: cache that installed images share stays whatever the cap
-    # says, so a plan built on the total would promise bytes no prune returns (ENT-SETUP-01).
-    over = max(0.0, min(df["reclaimable_cache"], df["cache"]) - keep * 1e9)
+    # Only what can be freed, in the scope this prune works on (BOSS's builder, else the daemon):
+    # a plan built on the total would promise bytes no prune returns (ENT-SETUP-01).
+    size_before, freeable = cache_reading(env, runner)
+    over = max(0.0, freeable - keep * 1e9)
     scope = f"builder:{env.buildx_builder}" if env.buildx_builder else "dedicated-host"
     items = [f"build-cache:{scope}:above-{keep}GB"] if over > 0 else []
     if dry_run or not items:
@@ -722,8 +759,8 @@ def verb_prune_build_cache(env: Env, args: dict, *, dry_run: bool, runner: Calla
     res = runner(argv, timeout=900)
     if res.returncode != 0:
         raise Refused(f"docker builder prune failed: {(res.stderr or '').strip()[:160]}")
-    after = docker_df(env, runner)
-    return items, max(0.0, df["cache"] - after["cache"])
+    size_after, _ = cache_reading(env, runner)
+    return items, max(0.0, size_before - size_after)
 
 
 #: How long `boss rollback`'s images stay after a healthy upgrade (prune.sh, disk_budget; BOSSAPP-1459).

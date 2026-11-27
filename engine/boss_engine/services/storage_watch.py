@@ -48,6 +48,10 @@ STALE_AFTER = timedelta(minutes=2)
 HELPER_UNREACHABLE_AFTER = timedelta(minutes=10)
 #: A hold whose host stopped reporting for this long auto-releases if the last reading was fine.
 STUCK_HOLD_AFTER = timedelta(minutes=15)
+#: A host whose helper has said nothing for this long is not coming back by itself (uninstalled,
+#: a machine retired): its open incident is closed with that reason instead of staying open for
+#: ever on a reading nobody can refresh (review of the enterprise port, patch 20).
+HELPER_GONE_AFTER = timedelta(hours=6)
 LEVELS = ("ok", "warn", "critical")
 SOURCES = ("steward", "hostd", "api")
 #: The by_type keys the Storage card draws, in order; `free` is appended by the summary.
@@ -445,9 +449,20 @@ def cache_freeable_gb(sample: Mapping[str, Any]) -> Optional[float]:
 
 
 def cache_shared_gb(sample: Mapping[str, Any]) -> Optional[float]:
-    """The build cache installed images still use (total minus freeable); None when unknown."""
-    total, freeable = _f(sample.get("cache_gb")), _f((sample.get("by_type") or {}).get(CACHE_FREEABLE_KEY))
+    """The build cache installed images still use (total minus freeable); None when unknown.
+    The total is the helper's prune scope (BOSS's buildx builder when it has one)."""
+    bt = sample.get("by_type") or {}
+    total = _f(bt.get("build_cache_scope"))
+    total = total if total is not None else _f(sample.get("cache_gb"))
+    freeable = _f(bt.get(CACHE_FREEABLE_KEY))
     return None if total is None or freeable is None else max(0.0, total - freeable)
+
+
+def cache_owned(sample: Mapping[str, Any]) -> Optional[bool]:
+    """Whether BOSS may clear the build cache beyond the plain cap (a Docker that runs only BOSS,
+    or its own buildx builder); None from a helper that does not say."""
+    v = _f((sample.get("by_type") or {}).get("build_cache_owned"))
+    return None if v is None else v >= 0.5
 
 
 def rules_reclaim_gb(sample: Mapping[str, Any], rules: Sequence[Mapping[str, Any]]) -> float:
@@ -515,14 +530,17 @@ def budget(connection: Any, sample: Mapping[str, Any]) -> dict[str, Any]:
         app_backups = None
     host_backups = _f(sample.get("backups_gb")) if sample.get("source") == "steward" else None
     host = sample.get("by_type") or {}
-    measured: dict[str, Optional[float]] = {
+    measured: dict[str, Any] = {
         # Older helpers only know total Docker image size. It cannot price this release.
         "images": _f(host.get("budget_images")),
         "rollback_images": _f(host.get("budget_rollback_images")),
         "volumes_other": _f(host.get("budget_volumes_other")),
         "dangling_volumes": _f(host.get("budget_dangling_volumes")),
+        "stale_images": _f(host.get("budget_stale_images")),
+        disk_budget.PREV_KEPT_KEY: _f(host.get(f"budget_{disk_budget.PREV_KEPT_KEY}")),
         "build_cache": cache_freeable_gb(sample),
         disk_budget.CACHE_SHARED_KEY: cache_shared_gb(sample),
+        disk_budget.CACHE_OWNED_KEY: cache_owned(sample),
         "logs": _f(sample.get("logs_gb")),
         "db_records": db["db_records"], "db_knowledge": db["db_knowledge"],
         "db_telemetry": db["db_telemetry"], "test_data": db["test_databases"],
@@ -539,6 +557,32 @@ def budget(connection: Any, sample: Mapping[str, Any]) -> dict[str, Any]:
                                 keep_hours=_f(host.get("rollback_keep_hours")) or disk_budget.ROLLBACK_KEEP_HOURS_DEFAULT)
     return {"rows": rows, "total": disk_budget.total(rows), "test_server": test_server,
             "warn_at_pct": round(100 * disk_budget.WARN_AT)}
+
+
+def close_when_helper_gone(connection: Any) -> list[str]:
+    """Open incidents on a host whose helper reported once and then not for HELPER_GONE_AFTER:
+    resolved with that reason (the hold goes with it). Nothing can show the disk recovered, and
+    nothing will clean it, so an open incident would only hold work for ever. A host that never
+    had a helper is judged on the API's own readings, as before, and is left to evaluate_host."""
+    from . import storage_incidents
+
+    closed: list[str] = []
+    rows = connection.execute(text(
+        "SELECT i.id, max(s.at) AS last_at FROM storage_incidents i "
+        "JOIN storage_samples s ON s.host_id = i.host_id AND s.source IN ('steward','hostd') "
+        "WHERE i.status <> 'resolved' GROUP BY i.id")).mappings().all()
+    for row in rows:
+        at = row["last_at"]
+        at = at if at.tzinfo else at.replace(tzinfo=timezone.utc)
+        if _now() - at < HELPER_GONE_AFTER:
+            continue
+        hours = int((_now() - at).total_seconds() // 3600)
+        with connection.begin_nested():
+            storage_incidents.resolve(connection, str(row["id"]), reason=(
+                f"host helper gone: no reading from this host for {hours} h, so nothing can show the "
+                "disk recovered; closed unverified. Check `boss steward status` on that host."))
+        closed.append(str(row["id"]))
+    return closed
 
 
 def host_disk_sample(connection: Any, host_id: str, *, fresh_only: bool = False) -> dict[str, Any]:
@@ -695,6 +739,7 @@ def tick(engine: Any, settings: Any = None, *, sample_api: bool = True) -> dict[
                                 and fp >= th["target_free_pct"]:
                             storage_incidents.resolve(c, inc["id"], reason="no reading for 15 min; "
                                                       "the last one was above target")
+                report["helper_gone"] = close_when_helper_gone(c)
                 if int(time.time()) % 600 < INTERVAL_SECONDS:
                     report["pruned"] = prune(c)
             # Plans advance outside the sampling transaction: host jobs, receipts, cards.

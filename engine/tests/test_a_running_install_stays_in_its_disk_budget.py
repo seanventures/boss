@@ -150,6 +150,8 @@ def test_image_bytes_count_each_layer_once_and_shared_layers_belong_to_the_runni
     def run(argv):
         if argv[1] == "images":
             return subprocess.CompletedProcess(argv, 0, "\n".join(json.dumps(i) for i in images), "")
+        if argv[1] == "ps":
+            return subprocess.CompletedProcess(argv, 0, "boss-community-api:t\nboss-community-api:v0\n", "")
         ref = argv[-1]
         if argv[1:3] == ["image", "inspect"]:
             return subprocess.CompletedProcess(argv, 0, json.dumps(layers[ref]), "")
@@ -160,6 +162,39 @@ def test_image_bytes_count_each_layer_once_and_shared_layers_belong_to_the_runni
     got = dbu.measure_images(("docker",), tag="t", run=run)
     assert got["images"] == pytest.approx(6.0)        # base + cur, once
     assert got["rollback_images"] == pytest.approx(2.0)  # only what dropping them frees
+    assert got["stale_images"] == 0 and got[dbu.PREV_KEPT_KEY] == 0
+
+
+def test_old_boss_tags_are_counted_once_with_the_command_that_removes_them():
+    """Review of the enterprise port: with the images row priced as the running release, old BOSS
+    tags (earlier releases, :local) were counted nowhere. They are now their own row, at what
+    `boss prune` would give back; older prev-* tags, which it keeps, are named with `docker rmi`."""
+    images = [{"Repository": "boss-community-api", "Tag": "t", "Size": "6GB"},
+              {"Repository": "boss-community-api", "Tag": "local", "Size": "6GB"},
+              {"Repository": "boss-community-api", "Tag": "v0", "Size": "6GB"},          # a container runs it
+              {"Repository": "boss-community-api", "Tag": "prev-old", "Size": "6GB"},
+              {"Repository": "boss-community-mine", "Tag": "x", "Size": "6GB"}]          # not release-tagged
+    layers = {"boss-community-api:t": ["base", "cur"], "boss-community-api:local": ["base", "loc"],
+              "boss-community-api:v0": ["base", "v0"], "boss-community-api:prev-old": ["base", "older"]}
+    sizes = {"base": "4GB", "cur": "2GB", "loc": "1.5GB", "v0": "1GB", "older": "3GB"}
+
+    def run(argv):
+        if argv[1] == "images":
+            return subprocess.CompletedProcess(argv, 0, "\n".join(json.dumps(i) for i in images), "")
+        if argv[1] == "ps":
+            return subprocess.CompletedProcess(argv, 0, "boss-community-api:t\nboss-community-api:v0\n", "")
+        ref = argv[-1]
+        if argv[1:3] == ["image", "inspect"]:
+            return subprocess.CompletedProcess(argv, 0, json.dumps(layers[ref]), "")
+        return subprocess.CompletedProcess(argv, 0, "\n".join(sizes[x] for x in reversed(layers[ref])), "")
+
+    got = dbu.measure_images(("docker",), tag="t", run=run)
+    assert got["stale_images"] == pytest.approx(1.5)      # :local only; v0 is in use, base is held
+    assert got[dbu.PREV_KEPT_KEY] == pytest.approx(3.0)
+    rows = {r["key"]: r for r in dbu.evaluate(got)}
+    assert rows["stale_images"]["level"] == "over" and "boss prune" in rows["stale_images"]["action"]
+    assert "docker rmi boss-community-api:prev-old" in rows["stale_images"]["note"]
+    assert problems(what=rows["stale_images"]["what"], action=rows["stale_images"]["action"]) == []
 
 
 def test_the_rollback_age_is_read_from_the_record_and_a_dropped_point_has_none(tmp_path):

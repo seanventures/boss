@@ -164,6 +164,8 @@ class FakeDocker:
                 self.volumes = [v for v in self.volumes if v["name"] != a[-1]]
         elif a[:1] == ["rmi"]:
             self.removed.append(("image", a[-1]))
+        elif a[:2] == ["buildx", "du"]:
+            out = "ID  RECLAIMABLE  SIZE  LAST ACCESSED\nShared:\t\t0B\nPrivate:\t18GB\nReclaimable:\t18GB\nTotal:\t\t18GB\n"
         elif a[:2] == ["system", "df"]:
             out = "\n".join(json.dumps(r) for r in [
                 {"Type": "Images", "Size": "30GB", "Reclaimable": "10GB (33%)"},

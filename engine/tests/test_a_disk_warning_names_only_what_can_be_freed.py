@@ -60,12 +60,14 @@ def test_cache_that_installed_images_share_is_not_warned_about_and_names_no_comm
     assert measured[dbu.CACHE_SHARED_KEY] == pytest.approx(12.39384)
     rows = {r["key"]: r for r in dbu.evaluate(measured)}
     assert rows["build_cache"]["level"] == "ok" and rows["build_cache"]["action"] == ""
-    assert "shared with installed images" in rows["build_cache"]["note"]
+    assert "layers installed images use" in rows["build_cache"]["note"]
+    # It does not rule out what does free space: old BOSS images go with `boss prune`.
+    assert "old BOSS ones go with `boss prune`" in rows["build_cache"]["note"]
     lines = [ln for ln in dbu._lines({"rows": list(rows.values()), "total": dbu.total(list(rows.values()))})
              if "Build cache" in ln]
     assert lines and not any(ln.startswith("warn") for ln in lines), lines
-    assert not any("boss prune" in ln for ln in lines), lines
-    assert "Nothing to do" in lines[0]
+    assert not any("Run `boss prune`" in ln for ln in lines), lines
+    assert "no cache prune frees it" in lines[0]
 
 
 def test_cache_docker_can_free_past_the_cap_still_warns_with_the_command_that_frees_it():
@@ -184,7 +186,8 @@ esac
 """
 
 
-def _prune(tmp_path: Path, before: str, after_all: str, *args: str, **extra: str) -> subprocess.CompletedProcess:
+def _prune(tmp_path: Path, before: str, after_all: str, *args: str, own: bool = True,
+           **extra: str) -> subprocess.CompletedProcess:
     bindir = tmp_path / "bin"
     bindir.mkdir(exist_ok=True)
     exe = bindir / "docker"
@@ -195,7 +198,8 @@ def _prune(tmp_path: Path, before: str, after_all: str, *args: str, **extra: str
     (tmp_path / "cache").write_text(before + "\n")
     env = {k: v for k, v in os.environ.items() if not k.startswith("BOSS_") and not k.startswith("DOCKER_")}
     env.update({"PATH": f"{bindir}{os.pathsep}{env['PATH']}", "FAKE_DOCKER_LOG": str(tmp_path / "log"),
-                "FAKE_CACHE_STATE": str(tmp_path / "cache"), "FAKE_AFTER_ALL": after_all, **extra})
+                "FAKE_CACHE_STATE": str(tmp_path / "cache"), "FAKE_AFTER_ALL": after_all,
+                **({"BOSS_DEDICATED_HOST": "1"} if own else {}), **extra})
     (tmp_path / "log").unlink(missing_ok=True)
     return subprocess.run(["bash", str(PRUNE), "--cache-only", "--dir", str(install), *args], env=env,
                           capture_output=True, text=True, timeout=60)
@@ -225,6 +229,15 @@ def test_an_upgrade_that_left_the_cache_over_its_cap_brings_it_under_and_prints_
     assert all("--keep-storage 10gb" in c for c in calls if " -af" in c)
 
 
+def test_on_a_shared_docker_the_rest_is_left_to_the_person_with_the_command(tmp_path):
+    out = _prune(tmp_path, "20.7GB|13.5GB", "8.6GB|1.4GB", own=False)
+    assert out.returncode == 0, out.stderr
+    assert not any(" -af" in c for c in _calls(tmp_path))
+    assert "build cache left to you" in out.stdout
+    assert "13.5 GB of build cache Docker can free is over the 10 GB cap. To free it yourself: " \
+           "docker builder prune -af --keep-storage 10gb" in out.stdout
+
+
 def test_a_cache_still_over_its_cap_is_a_failure_not_a_claim(tmp_path):
     out = _prune(tmp_path, "20.7GB|13.5GB", "20.7GB|13.5GB")
     assert out.returncode == 1
@@ -235,7 +248,7 @@ def test_a_dry_run_changes_nothing_and_says_what_it_would_run(tmp_path):
     out = _prune(tmp_path, "20.7GB|13.5GB", "1GB|0B", "--dry-run")
     assert out.returncode == 0
     assert not any("prune" in c for c in _calls(tmp_path))
-    assert "would run, if Docker can still free more than 10 GB" in out.stdout
+    assert "would run: docker builder prune -af --keep-storage 10gb" in out.stdout
 
 
 def test_the_upgrade_runs_the_prune_the_installer_runs_after_its_build():
@@ -245,3 +258,96 @@ def test_the_upgrade_runs_the_prune_the_installer_runs_after_its_build():
     block = install[install.index("# ---- room to work after the build"):install.index("# ---- models and subscriptions")]
     # The installer shows Docker's reading whichever way the prune went, never only a claim.
     assert '"prune: "*' in block and block.index("ui_info") < block.index('ui_ok "Old images pruned')
+
+
+# ── review of the port: BOSS clears only its own cache; its builder is read as such ────────
+
+def test_on_a_shared_docker_doctor_and_govern_say_the_rest_is_the_persons_with_the_command():
+    measured = {"build_cache": 13.5, dbu.CACHE_OWNED_KEY: False}
+    row = next(r for r in dbu.evaluate(measured) if r["key"] == "build_cache")
+    assert row["level"] == "over"
+    assert "This Docker is shared" in row["action"] and "Run `boss prune`" not in row["action"]
+    assert "docker builder prune -af --keep-storage 10gb" in row["action"]
+    assert problems_free(row)
+    own = next(r for r in dbu.evaluate({**measured, dbu.CACHE_OWNED_KEY: True}) if r["key"] == "build_cache")
+    assert own["action"] == "Run `boss prune` to cap it."
+
+
+def problems_free(row) -> bool:
+    from boss_engine.services.failure_words import problems
+
+    return problems(what=row["what"], action=row["action"]) == []
+
+
+def test_the_doctor_knows_whose_cache_it_is_from_the_install_settings(tmp_path):
+    seen = {}
+
+    def run(argv):
+        seen.setdefault("calls", []).append(argv)
+        if argv[1:3] == ["buildx", "du"]:
+            return subprocess.CompletedProcess(argv, 0, "Shared:\t6GB\nPrivate:\t2GB\nReclaimable:\t8GB\nTotal:\t8GB\n", "")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    (tmp_path / ".env").write_text("BOSS_BUILDX_BUILDER=boss-builder\n")
+    report = dbu.host_report(tmp_path, run=run)
+    row = next(r for r in report["rows"] if r["key"] == "build_cache")
+    # buildx du counts shared layers as Reclaimable; what a prune frees is Private.
+    assert row["gb"] == 2.0 and "6.0 GB more is layers installed images use" in row["note"]
+    assert any(c[1:5] == ["buildx", "du", "--builder", "boss-builder"] for c in seen["calls"])
+    (tmp_path / ".env").write_text("")
+    shared = dbu.host_report(tmp_path, run=_df_runner("30GB", "25GB"))
+    row = next(r for r in shared["rows"] if r["key"] == "build_cache")
+    assert row["level"] == "over" and "This Docker is shared" in row["action"]
+
+
+def test_the_helper_reads_and_plans_its_own_builder_and_says_whether_the_cache_is_its_own(host):
+    steward, env = host
+    env.dedicated, env.buildx_builder = False, "boss-builder"
+    calls: list = []
+
+    def run(argv, timeout=120.0):
+        calls.append(argv)
+        if argv[1:3] == ["buildx", "du"]:
+            return subprocess.CompletedProcess(argv, 0, "Shared:\t6GB\nPrivate:\t13GB\nReclaimable:\t19GB\nTotal:\t19GB\n", "")
+        if argv[1:3] == ["system", "df"] and "-v" not in argv:   # the daemon: not what this prune touches
+            return subprocess.CompletedProcess(argv, 0, json.dumps(
+                {"Type": "Build Cache", "Size": "40GB", "Reclaimable": "40GB"}), "")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    sample = steward.collect(env, run)
+    assert sample["by_type"]["build_cache_scope"] == pytest.approx(19.0)
+    assert sample["by_type"]["build_cache_reclaimable"] == pytest.approx(13.0)
+    assert sample["by_type"]["build_cache_owned"] == 1.0
+    items, over = steward.verb_prune_build_cache(env, {"keep_storage_gb": 10}, dry_run=True, runner=run)
+    assert items == ["build-cache:builder:boss-builder:above-10GB"] and over == pytest.approx(3e9)
+    env.buildx_builder = ""
+    assert steward.collect(env, run)["by_type"]["build_cache_owned"] == 0.0
+
+
+def test_a_shared_cache_is_no_cleanup_step_and_govern_names_the_shared_part_of_the_builder():
+    from boss_engine.services import storage_cleanup, storage_watch
+
+    sample = {"cache_gb": 40.0, "by_type": {"build_cache_scope": 19.0, storage_watch.CACHE_FREEABLE_KEY: 13.0,
+                                            "build_cache_owned": 0.0}}
+    prune = next(t for t in storage_cleanup.TOOLS if t.name == "storage.prune_build_cache")
+    assert not prune.applies(sample, {"build_cache": {"cap_gb": 10}})
+    assert storage_watch.cache_shared_gb(sample) == pytest.approx(6.0)   # of the builder, not the daemon
+    assert storage_watch.cache_owned(sample) is False
+    sample["by_type"]["build_cache_owned"] = 1.0
+    assert prune.applies(sample, {"build_cache": {"cap_gb": 10}})
+    assert storage_watch.cache_owned({"by_type": {}}) is None
+
+
+def test_a_service_snapshot_older_than_the_helper_window_is_marked_stale(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    from boss_engine.services import admission, obs_view
+
+    now = datetime.now(timezone.utc)
+    snap = {"services": [{"name": "boss-api-1", "service": "api", "state": "running"}]}
+    monkeypatch.setattr(admission, "_state", lambda c, k: {**snap, "at": (now - timedelta(minutes=11)).isoformat()})
+    assert obs_view._compose_snapshot(None)["stale"] is True
+    monkeypatch.setattr(admission, "_state", lambda c, k: {**snap, "at": (now - timedelta(minutes=1)).isoformat()})
+    assert obs_view._compose_snapshot(None)["stale"] is False
+    monkeypatch.setattr(admission, "_state", lambda c, k: {})
+    assert obs_view._compose_snapshot(None) == {}

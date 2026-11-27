@@ -142,3 +142,26 @@ def test_offline_host_keeps_its_disk_reading_after_many_container_samples(engine
         assert not view["stale"] and not view["helper_overdue"]
         assert view["disk"]["free_pct"] == 11
         assert not storage_cleanup.target_reached(c, incident)
+
+
+def test_an_incident_on_a_host_whose_helper_is_gone_for_good_is_closed_with_that_reason(engine):
+    """Review of the enterprise port: without host readings an incident keeps its level (patch 20),
+    so a helper that never comes back would leave it, and any hold, open for ever."""
+    from datetime import datetime, timedelta, timezone
+    from boss_engine.services import storage_watch
+
+    now = datetime.now(timezone.utc)
+    gone, recent = f"qa-gone-{uuid4().hex[:8]}", f"qa-quiet-{uuid4().hex[:8]}"
+    with engine.connect() as c:
+        for host, hours in ((gone, 7), (recent, 1)):
+            row = storage_watch.clean_sample({"host_id": host, "free_gb": 5, "total_gb": 100}, source="steward")
+            row["at"] = now - timedelta(hours=hours)
+            storage_watch.record_sample(c, row)
+            c.execute(text("INSERT INTO storage_incidents (id, host_id, status, severity) "
+                           "VALUES (:id, :host, 'critical', 'critical')"), {"id": f"si_{host}", "host": host})
+        closed = storage_watch.close_when_helper_gone(c)
+        assert f"si_{gone}" in closed and f"si_{recent}" not in closed
+        status = dict(c.execute(text("SELECT host_id, status FROM storage_incidents WHERE host_id IN (:a, :b)"),
+                                {"a": gone, "b": recent}).all())
+        assert status == {gone: "resolved", recent: "critical"}
+        c.rollback()
