@@ -212,9 +212,6 @@ def tick(engine: Any, *, cap: Optional[admission.Capacity] = None,
     return p
 
 
-_ACTIONS = {"raise": "capacity_raise", "lower": "capacity_lower", "reset": "capacity_reset"}
-
-
 def _record(c: Any, p: Plan, *, base: int, before: int, waits: list[dict[str, Any]]) -> None:
     """The change, in "Decided for you" of the project whose work waited longest (capacity is
     install-wide; that is where a person looks), and as an install event."""
@@ -229,13 +226,18 @@ def _record(c: Any, p: Plan, *, base: int, before: int, waits: list[dict[str, An
     words = {"raise": f"Run {base + p.boost} heavy builds at once (was {base + before})",
              "lower": f"Run {base + p.boost} heavy builds at once (was {base + before}), draining",
              "reset": f"Back to {base} heavy builds at once (was {base + before})"}[p.action]
+    detail = {"boost_before": before, "boost_after": p.boost, "base": base,
+              "run_id": next((w.get("run_id") for w in waits if w.get("run_id")), None)}
+    if p.action == "raise":
+        recommendation = {**detail, "action": "capacity_raise"}
+    elif p.action == "lower":
+        recommendation = {**detail, "action": "capacity_lower"}
+    else:
+        recommendation = {**detail, "action": "capacity_reset"}
     if project_id:
         record_decided(
             c, str(project_id), task_id=None, question=words,
-            recommendation={"action": _ACTIONS[p.action], "boost_before": before,
-                            "boost_after": p.boost, "base": base,
-                            "run_id": next((w.get("run_id") for w in waits if w.get("run_id")),
-                                           None)},
+            recommendation=recommendation,
             found=Route(answer="act", cls="capacity", why=p.why, agent=AGENT,
                         undo="restore_capacity" if p.action == "raise" else NONE_RECORD))
         emit_event(c, str(project_id), "capacity.steward_acted", AGENT, "system", STATE_KEY,
