@@ -45,7 +45,10 @@ def render(*, title: str, evidence: dict, gates: dict, paths: Iterable[str] = ()
            additions: Optional[int] = None, deletions: Optional[int] = None,
            rounds: Iterable[dict] = (), comments: Iterable[dict] = (),
            deferred: Iterable[dict] = (), build_url: str = "", run_id: str = "",
-           quality_gate_id: str = "", baseline: Optional[dict] = None) -> str:
+           quality_gate_id: str = "", baseline: Optional[dict] = None,
+           host_kind: str = "local", head_sha: str = "",
+           test_report_artifact_id: str = "", download_url: str = "",
+           check_run_url: str = "", test_evidence_record: Optional[dict] = None) -> str:
     """The description. Every line comes from a record; nothing is written by a model."""
     paths = sorted({str(p) for p in paths if p})
     rounds = [r for r in rounds if isinstance(r, dict)]
@@ -168,6 +171,19 @@ def render(*, title: str, evidence: dict, gates: dict, paths: Iterable[str] = ()
         out.append(f"- Run: `{run_id}`")
     if quality_gate_id:
         out.append(f"- Quality gate: `{quality_gate_id}`")
+    # Every BOSS-opened PR body ends with a brief Test evidence section (BOSSAPP-1011).
+    from . import test_evidence as _test_evidence
+
+    te_record = test_evidence_record or _test_evidence.build_evidence_record(
+        evidence=evidence,
+        gates=gates,
+        host_kind=host_kind,
+        head_sha=head_sha or str(evidence.get("verified_commit_sha") or evidence.get("head_sha") or ""),
+        artifact_id=test_report_artifact_id or None,
+        download_url=download_url or None,
+        check_run_url=check_run_url or None,
+    )
+    out += ["", _test_evidence.render_pr_section(te_record).rstrip()]
     return "\n".join(out).strip() + "\n"
 
 

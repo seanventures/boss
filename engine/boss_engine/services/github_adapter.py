@@ -87,6 +87,15 @@ class PullRequestValidationResult:
     checks: list[PullRequestValidationCheck]
 
 
+@dataclass
+class CheckRunResult:
+    id: int
+    html_url: str
+    status: str
+    conclusion: Optional[str]
+    name: str
+
+
 
 #: The prefix a rescue PR is opened with (governed_code_task_service._rescue_pr).
 PARTIAL_PREFIX = "[partial]"
@@ -620,9 +629,65 @@ class GitHubAdapter:
                 "status": check.get("status"),
                 "conclusion": check.get("conclusion"),
                 "app": (check.get("app") or {}).get("slug"),
+                "html_url": check.get("html_url"),
             }
             for check in (payload.get("check_runs") or [])
         ]
+
+    def create_check_run(
+        self,
+        *,
+        name: str,
+        head_sha: str,
+        title: str,
+        summary: str,
+        text: str = "",
+        conclusion: str = "success",
+        status: str = "completed",
+        external_id: Optional[str] = None,
+        details_url: Optional[str] = None,
+    ) -> CheckRunResult:
+        """Publish a native GitHub Check Run on ``head_sha`` (BOSSAPP-1011).
+
+        Holds full per-case test output on the PR's head commit without polluting the repository
+        with extra commits or files. Secret values are scrubbed before leaving BOSS.
+        """
+        from .run_secret_redaction import scrub as _scrub_known
+
+        clean_sha = str(head_sha or "").strip()
+        if not clean_sha:
+            raise ValueError("head_sha is required to publish a GitHub check run.")
+        output_payload: dict[str, Any] = {
+            "title": _scrub_known(str(title or name))[:250],
+            "summary": _scrub_known(str(summary or ""))[:60_000],
+        }
+        if text:
+            output_payload["text"] = _scrub_known(str(text))[:65_000]
+        body: dict[str, Any] = {
+            "name": str(name or "BOSS Test Evidence")[:250],
+            "head_sha": clean_sha,
+            "status": str(status or "completed"),
+            "output": output_payload,
+        }
+        if body["status"] == "completed":
+            body["conclusion"] = str(conclusion or "neutral")
+        if external_id:
+            body["external_id"] = str(external_id)[:250]
+        if details_url:
+            body["details_url"] = str(details_url)
+        response = self._request(
+            "POST",
+            f"/repos/{self.repository_full_name}/check-runs",
+            body,
+            accept="application/vnd.github+json",
+        )
+        return CheckRunResult(
+            id=int(response["id"]),
+            html_url=str(response.get("html_url") or response.get("url") or ""),
+            status=str(response.get("status") or body["status"]),
+            conclusion=response.get("conclusion"),
+            name=str(response.get("name") or body["name"]),
+        )
 
     def default_branch_sha(self) -> tuple[str, str]:
         repo = self.repo_metadata()

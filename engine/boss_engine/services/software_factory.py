@@ -2088,6 +2088,124 @@ class SoftwareFactoryService:
                 return True
         return False
 
+    def _open_pull_request(
+        self,
+        branch_name: str,
+        title: str,
+        pr_body: str,
+        *,
+        checks_failing: bool = False,
+        base_kwargs: Optional[dict[str, Any]] = None,
+    ) -> Any:
+        """Single door for factory PR creation; refuses any body lacking trailing Test evidence."""
+        from . import test_evidence as _test_evidence
+
+        _test_evidence.require_test_evidence_section(pr_body)
+        _base = dict(base_kwargs or {})
+        if checks_failing and getattr(self.github, "supports_draft_pull_requests", False):
+            # A DRAFT where the host has drafts: GitHub itself then refuses a merge until
+            # it is marked ready, which BOSS does only for a person's approved merge.
+            return self.github.create_pull_request(
+                branch_name, title, pr_body, draft=True, **_base
+            )
+        return self.github.create_pull_request(branch_name, title, pr_body, **_base)
+
+    def _publish_test_evidence_check_run(
+        self,
+        connection: Any,
+        *,
+        scope: dict[str, str],
+        project_id: str,
+        dedupe_key: str,
+        title: str,
+        head_sha: str,
+        test_report_content: dict[str, Any],
+        test_report_artifact_id: str,
+        created_by_job_id: Optional[str],
+    ) -> tuple[Optional[int], Optional[str]]:
+        """Publish full per-case test evidence as a GitHub Check Run on ``head_sha`` (BOSSAPP-1011).
+
+        Local hosts are console-download-only and skip this completely. On GitHub, publishes
+        the full output as a native Check Run (no repo pollution, no extra commits) under a
+        durable receipt; failures are recorded visibly on the event log without dropping the PR.
+        """
+        if getattr(self.github, "kind", "") == "local":
+            return None, None
+        create_fn = getattr(self.github, "create_check_run", None)
+        if not callable(create_fn) or not str(head_sha or "").strip():
+            return None, None
+        from . import test_evidence as _test_evidence
+
+        te = test_report_content.get("test_evidence") if isinstance(
+            test_report_content.get("test_evidence"), dict
+        ) else {}
+        out = _test_evidence.render_check_run_output(test_report_content, title=title)
+        conclusion = _test_evidence.check_run_conclusion(
+            str(te.get("status") or test_report_content.get("status") or "neutral")
+        )
+        cr_dedupe = f"{dedupe_key}:test-evidence-check-run:{head_sha}"
+        receipt, created = self.receipts.create_or_reuse(
+            connection,
+            scope["org_id"],
+            scope["workspace_id"],
+            project_id,
+            cr_dedupe,
+            "github.check_run.create",
+            {"repository": self.github.repository_full_name, "head_sha": head_sha},
+            {"name": "BOSS Test Evidence", "head_sha": head_sha, "conclusion": conclusion,
+             "artifact_id": test_report_artifact_id},
+            created_by_job_id=created_by_job_id,
+        )
+        if not created and receipt["status"] == "succeeded":
+            prior = receipt.get("result") or {}
+            return prior.get("check_run_id"), prior.get("check_run_url")
+        try:
+            cr = create_fn(
+                name="BOSS Test Evidence",
+                head_sha=head_sha,
+                title=out["title"],
+                summary=out["summary"],
+                text=out["text"],
+                conclusion=conclusion,
+                status="completed",
+                external_id=test_report_artifact_id,
+            )
+            cr_id = int(getattr(cr, "id", 0) or 0) or None
+            cr_url = str(getattr(cr, "html_url", "") or "").strip() or None
+            self.receipts.mark_succeeded(
+                connection,
+                receipt["id"],
+                cr_url or f"check-run:{cr_id}",
+                {"check_run_id": cr_id, "check_run_url": cr_url, "head_sha": head_sha,
+                 "conclusion": conclusion, "artifact_id": test_report_artifact_id},
+            )
+            self.events.emit(
+                connection,
+                project_id,
+                "software_factory.test_evidence_check_run_published",
+                "coding_worker",
+                "receipt",
+                receipt["id"],
+                {"check_run_id": cr_id, "check_run_url": cr_url, "head_sha": head_sha,
+                 "artifact_id": test_report_artifact_id, "conclusion": conclusion},
+            )
+            return cr_id, cr_url
+        except Exception as error:  # noqa: BLE001 — visible failure, never drops the PR
+            self.receipts.mark_failed(
+                connection, receipt["id"], {"message": str(error)[:400], "head_sha": head_sha}
+            )
+            self.events.emit(
+                connection,
+                project_id,
+                "software_factory.test_evidence_check_run_failed",
+                "coding_worker",
+                "receipt",
+                receipt["id"],
+                {"head_sha": head_sha, "artifact_id": test_report_artifact_id,
+                 "error": f"{type(error).__name__}: {error}"[:300]},
+            )
+            return None, None
+
     @_host_writes_on_caller
     def propose_pull_request(
         self,
@@ -2113,6 +2231,11 @@ class SoftwareFactoryService:
         rescue_of_run: Optional[str] = None,
         deleted_paths: Optional[list[str]] = None,
         parent_branch: Optional[str] = None,
+        require_test_evidence: Optional[bool] = None,
+        verified_changes_digest: Optional[str] = None,
+        verified_tree_sha: Optional[str] = None,
+        gate_integrity_invalidated: bool = False,
+        gate_integrity_reason: Optional[str] = None,
     ) -> dict:
         """Open the change's pull request and its merge decision.
 
@@ -2364,6 +2487,49 @@ class SoftwareFactoryService:
             # Guarded here too, so "the branch holds what was judged" compares the guarded text.
             _changes = [(p, _guarded(branch_name, p, c))
                         for p, c in with_deletions(files, deleted_paths)]
+            # GATE INTEGRITY (BOSSAPP-1029): the shippable artifact is the exact committed tree
+            # that the last gate run verified. Any edit after the last test run invalidates the
+            # prior pass and refuses landing until re-verified.
+            from . import gate_integrity as _gate_integrity
+            from . import test_evidence as _test_evidence
+
+            _landing_integrity = _gate_integrity.verify_landing_integrity(
+                expected_changes_digest=verified_changes_digest,
+                landing_changes=_changes,
+                gate_passed=not bool(checks_failing),
+                invalidated=bool(gate_integrity_invalidated),
+                invalidation_reason=gate_integrity_reason,
+                verified_tree_sha=verified_tree_sha,
+            )
+            _host_kind = "local" if getattr(self.github, "kind", "") == "local" else "github"
+            _fallback_te_section: Optional[str] = None
+            if not _test_evidence.has_test_evidence_section(summary):
+                if isinstance(evidence, dict) and evidence:
+                    _fallback_te_section = _test_evidence.render_pr_section(
+                        _test_evidence.build_evidence_record(
+                            evidence=evidence,
+                            host_kind=_host_kind,
+                        )
+                    )
+                elif require_test_evidence is not True:
+                    _fallback_te_section = _test_evidence.render_pr_section(
+                        _test_evidence.build_evidence_record(
+                            evidence={},
+                            host_kind=_host_kind,
+                            extra_not_run=(
+                                ["No automated test suite was recorded for this proposal"],
+                            ),
+                        )
+                    )
+            pr_body = _test_evidence.assemble_pr_body(
+                summary,
+                review_text=review_text,
+                fallback_section=_fallback_te_section,
+            )
+            # ENFORCING CHECK (BOSSAPP-1011): a factory PR missing the trailing Test evidence
+            # section is refused BEFORE any branch commit or PR creation.
+            _test_evidence.require_test_evidence_section(pr_body)
+
             commit_shas = commit_change(
                 self.github, branch_name, _changes,
                 f"BOSS: {title}"[:200],
@@ -2377,25 +2543,46 @@ class SoftwareFactoryService:
                     "The change branch does not hold what BOSS checked: "
                     + "; ".join(f"{d['path']} ({d['why']})" for d in _differs[:5])
                     + ". BOSS did not open the pull request.")
-            pr_body = "\n\n".join(
-                [
-                    summary,
-                    "## Review packet",
-                    review_text,
-                ]
-            )
             # The build's resolved base (build_base_branch) reaches every host that takes one;
             # a host whose create_pull_request has no `base` (Bitbucket, MCP) keeps its own.
             _base = ({"base": pr_base}
                      if pr_base and _accepts_kwarg(self.github.create_pull_request, "base")
                      else {})
-            if checks_failing and getattr(self.github, "supports_draft_pull_requests", False):
-                # A DRAFT where the host has drafts: GitHub itself then refuses a merge until
-                # it is marked ready, which BOSS does only for a person's approved merge.
-                pr = self.github.create_pull_request(branch_name, title, pr_body, draft=True,
-                                                     **_base)
-            else:
-                pr = self.github.create_pull_request(branch_name, title, pr_body, **_base)
+            pr = self._open_pull_request(
+                branch_name, title, pr_body,
+                checks_failing=bool(checks_failing), base_kwargs=_base,
+            )
+        except (_test_evidence.MissingTestEvidenceError, _gate_integrity.GateIntegrityError) as error:
+            self.receipts.mark_failed(
+                connection, pr_receipt["id"], {"message": str(error), "code": error.code}
+            )
+            self._release_hold(
+                connection,
+                project_id,
+                reservation_id,
+                f"Released reservation because PR proposal was refused: {error.code}.",
+            )
+            event_name = (
+                "software_factory.pull_request_refused_missing_test_evidence"
+                if isinstance(error, _test_evidence.MissingTestEvidenceError)
+                else "software_factory.gate_integrity_refused"
+            )
+            self.events.emit(
+                connection,
+                project_id,
+                event_name,
+                "coding_worker",
+                "receipt",
+                pr_receipt["id"],
+                {"message": str(error), "code": error.code, "branch": branch_name},
+            )
+            return {
+                "status": "refused",
+                "error": error.code,
+                "receipt_id": pr_receipt["id"],
+                "message": str(error),
+                **plane_fields,
+            }
         except IntegrationConfigurationError as error:
             self.receipts.mark_failed(
                 connection, pr_receipt["id"], {"message": str(error)}
@@ -2576,6 +2763,41 @@ class SoftwareFactoryService:
             },
             created_by_job_id=created_by_job_id,
         )
+        te_record = _test_evidence.build_evidence_record(
+            evidence=evidence if isinstance(evidence, dict) else {},
+            local_validation=local_validation,
+            checks=validation_checks,
+            host_kind=_host_kind,
+            head_sha=branch_head_sha,
+        )
+        full_report_text = _test_evidence.render_full_report_text(
+            {"title": f"Test report for {title}", "status": validation_status,
+             "head_sha": branch_head_sha, "test_evidence": te_record}
+        )
+        test_report_payload = {
+            "title": title,
+            "status": validation_status,
+            "summary": validation_summary,
+            "head_sha": branch_head_sha or validation.head_sha,
+            "verified_commit_sha": branch_head_sha,
+            "verified_tree_sha": verified_tree_sha,
+            "verified_changes_digest": _landing_integrity.get("landing_changes_digest"),
+            "validation_source": "+".join(validation_sources),
+            "validation_sources": validation_sources,
+            "tests_added_or_run": tests_added_or_run,
+            "checks": validation_checks,
+            "local_validation": local_validation,
+            "local_validation_receipt_id": local_validation_receipt_id,
+            "local_validation_receipt_status": local_validation_receipt_status,
+            "required_follow_up": validation_follow_up,
+            "notes": review_text,
+            "test_evidence": te_record,
+            "full_report": full_report_text,
+            "agent_module": self._module_descriptor(module_spec),
+            "security_dependency_review_artifact_id": security_review_artifact_id,
+            "security_dependency_review": security_dependency_review,
+            "browser_validation": browser_validation,
+        }
         test_report_artifact_id = create_artifact(
             connection,
             self.settings,
@@ -2583,27 +2805,88 @@ class SoftwareFactoryService:
             task_id,
             "test_report",
             f"Test report for {title}",
-            {
-                "title": title,
-                "status": validation_status,
-                "summary": validation_summary,
-                "head_sha": validation.head_sha,
-                "validation_source": "+".join(validation_sources),
-                "validation_sources": validation_sources,
-                "tests_added_or_run": tests_added_or_run,
-                "checks": validation_checks,
-                "local_validation": local_validation,
-                "local_validation_receipt_id": local_validation_receipt_id,
-                "local_validation_receipt_status": local_validation_receipt_status,
-                "required_follow_up": validation_follow_up,
-                "notes": review_text,
-                "agent_module": self._module_descriptor(module_spec),
-                "security_dependency_review_artifact_id": security_review_artifact_id,
-                "security_dependency_review": security_dependency_review,
-                "browser_validation": browser_validation,
-            },
+            test_report_payload,
             created_by_job_id=created_by_job_id,
         )
+        te_record["artifact_id"] = test_report_artifact_id
+        te_record["download_url"] = f"/v1/artifacts/{test_report_artifact_id}/download"
+        check_run_id, check_run_url = self._publish_test_evidence_check_run(
+            connection,
+            scope=scope,
+            project_id=project_id,
+            dedupe_key=dedupe_key,
+            title=title,
+            head_sha=branch_head_sha,
+            test_report_content={**test_report_payload, "test_evidence": te_record},
+            test_report_artifact_id=test_report_artifact_id,
+            created_by_job_id=created_by_job_id,
+        )
+        if check_run_url:
+            te_record["check_run_url"] = check_run_url
+        # Persist download_url + check_run metadata back onto the test_report artifact.
+        try:
+            if hasattr(connection, "execute"):
+                import json as _json
+
+                _patch = {
+                    "download_url": te_record["download_url"],
+                    "test_evidence": te_record,
+                    **({"check_run_id": check_run_id, "check_run_url": check_run_url}
+                       if check_run_id or check_run_url else {}),
+                }
+                connection.execute(
+                    sql(
+                        "UPDATE artifacts SET content = COALESCE(content, '{}'::jsonb) || CAST(:p AS JSONB) "
+                        "WHERE id = :a AND project_id = :proj"
+                    ),
+                    {"p": _json.dumps(_patch, default=str), "a": test_report_artifact_id,
+                     "proj": project_id},
+                )
+        except Exception:  # noqa: BLE001 — non-DB test double
+            pass
+        # Refresh the PR body's trailing Test evidence section so it links the downloadable
+        # artifact (and the GitHub check run when published on GitHub).
+        try:
+            update_body_fn = getattr(self.github, "update_pull_request_body", None)
+            if callable(update_body_fn) and (te_record.get("download_url") or check_run_url):
+                updated_body = _test_evidence.assemble_pr_body(
+                    pr_body,
+                    replacement_section=_test_evidence.render_pr_section(te_record),
+                )
+                update_body_fn(pr.number, updated_body)
+        except Exception:  # noqa: BLE001 — best-effort link enrichment; initial section already present
+            pass
+
+        # GATE INTEGRITY RECEIPT (BOSSAPP-1029): bind the quality gate pass to the exact commit
+        # SHA that just landed on the branch, and stamp it on quality_gates + code_task_runs.
+        gate_receipt_id: Optional[str] = None
+        try:
+            gate_receipt_id = _gate_integrity.record_gate_receipt(
+                connection,
+                self.receipts,
+                org_id=scope["org_id"],
+                workspace_id=scope["workspace_id"],
+                project_id=project_id,
+                run_id=run_id,
+                quality_gate_id=quality_gate_id,
+                commit_sha=branch_head_sha,
+                verified_tree_sha=verified_tree_sha,
+                verified_changes_digest=_landing_integrity.get("landing_changes_digest"),
+                tests_passed=(evidence.get("tests_passed") if isinstance(evidence, dict) else None),
+                created_by_job_id=created_by_job_id,
+            )
+            _gate_integrity.stamp_verified_commit(
+                connection,
+                project_id=project_id,
+                run_id=run_id,
+                quality_gate_id=quality_gate_id,
+                commit_sha=branch_head_sha,
+                verified_tree_sha=verified_tree_sha,
+                verified_changes_digest=_landing_integrity.get("landing_changes_digest"),
+                gate_receipt_id=gate_receipt_id,
+            )
+        except Exception:  # noqa: BLE001 — fake connection / test double
+            pass
         release_go_no_go = self._build_release_go_no_go(
             validation_status=validation_status,
             validation_summary=validation_summary,
@@ -2845,6 +3128,9 @@ class SoftwareFactoryService:
                             + (f" {ci_changed['ci_changed_note']}" if ci_changed else "")
                         ),
                         "head_sha": branch_head_sha,
+                        "verified_commit_sha": branch_head_sha,
+                        "gate_receipt_id": gate_receipt_id,
+                        "test_evidence_check_run_url": check_run_url,
                         # What ci_gate.refuse_approval reads: a CI change needs a PERSON's approval.
                         "ci_changed": bool(ci_changed),
                         "ci_changed_files": ci_changed.get("ci_changed_files") or [],
@@ -2972,6 +3258,11 @@ class SoftwareFactoryService:
                 "validation_sources": validation_sources,
                 "local_validation_receipt_id": local_validation_receipt_id,
                 "receipt_id": pr_receipt["id"],
+                "head_sha": branch_head_sha,
+                "verified_commit_sha": branch_head_sha,
+                "gate_receipt_id": gate_receipt_id,
+                "check_run_id": check_run_id,
+                "check_run_url": check_run_url,
             },
             evidence=sealed_evidence,
             decision_id=decision_id,
@@ -3039,6 +3330,11 @@ class SoftwareFactoryService:
             "validation_summary": validation_summary,
             "validation_sources": validation_sources,
             "local_validation_receipt_id": local_validation_receipt_id,
+            "head_sha": branch_head_sha,
+            "verified_commit_sha": branch_head_sha,
+            "gate_receipt_id": gate_receipt_id,
+            "check_run_id": check_run_id,
+            "check_run_url": check_run_url,
             **plane_fields,
         }
 

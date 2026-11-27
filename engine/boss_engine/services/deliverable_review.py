@@ -109,6 +109,11 @@ def snapshot(connection, project_id: str, run_id: str) -> dict:
         "criteria": _strings(row["criteria"]),
         "checks": {"state": check_state, "recorded_status": str(report.get("status") or "unknown"),
                    "checked_head": checked, "artifact_id": row["test_report_id"],
+                   "download_url": (f"/v1/artifacts/{row['test_report_id']}/download"
+                                    if row["test_report_id"] else None),
+                   "check_run_url": (str(report.get("check_run_url") or "") or None),
+                   "counts": ((report.get("test_evidence") or {}).get("counts")
+                              if isinstance(report.get("test_evidence"), dict) else None),
                    "evidence_hash": _hash(report), "quality_evidence_hash": _hash(row["quality_evidence"]),
                    "commands": _strings(report.get("tests_added_or_run")),
                    "quality_gate_id": row["quality_gate_id"], "quality_status": row["quality_status"],

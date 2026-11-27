@@ -92,6 +92,43 @@ describe("the Overview tab", () => {
     expect(tid("gr-ov-active")!.textContent).toContain("every comment is resolved");
     expect(tid("gr-ov-resolved")).toBeNull();
     expect(tid("gr-ov-description")!.textContent).toContain("No description yet");
+    expect(tid("gr-ov-test-evidence")).toBeNull();
+    unmount();
+  });
+
+  it("shows downloadable full test results on local changes and adds the GitHub check run link on GitHub", async () => {
+    const localWithTe = parseChangeSet({
+      number: 5, repository: "local_p1/helpdesk", state: "open",
+      url: "http://boss-local/local_p1/helpdesk/pull/5", source: "local",
+      test_evidence: {
+        artifact_id: "art_local_1", title: "Test report", download_url: "/v1/artifacts/art_local_1/download",
+        status: "passed", counts: { suites_run: 1, cases_total: 4, cases_passed: 4, cases_failed: 0, cases_skipped: 0 },
+        not_run: ["External hosted CI (local repository host)"], head_sha: "a".repeat(40),
+        check_run_url: "https://github.com/acme/app/runs/1", host_kind: "local",
+      },
+    });
+    await mountAs(<OverviewTab cs={localWithTe} at={{ projectId: "p1", number: 5 }} files={[]} onChanged={() => undefined}
+                               onJump={() => undefined} onJumpLoc={() => undefined} onFiles={() => undefined} />);
+    const teLocal = tid("gr-ov-test-evidence")!;
+    expect(teLocal.textContent).toContain("4 passed, 0 failed, 0 skipped");
+    expect(tid("gr-ov-test-download")!.getAttribute("href")).toBe("/v1/artifacts/art_local_1/download");
+    expect(tid("gr-ov-test-check-run")).toBeNull();
+    unmount();
+
+    const ghWithTe = parseChangeSet({
+      number: 6, repository: "acme/app", state: "open",
+      url: "https://github.com/acme/app/pull/6", source: "github",
+      test_evidence: {
+        artifact_id: "art_gh_1", title: "Test report", download_url: "/v1/artifacts/art_gh_1/download",
+        status: "passed", counts: { suites_run: 1, cases_total: 4, cases_passed: 4, cases_failed: 0, cases_skipped: 0 },
+        not_run: [], head_sha: "b".repeat(40),
+        check_run_url: "https://github.com/acme/app/runs/77", host_kind: "github",
+      },
+    });
+    await mountAs(<OverviewTab cs={ghWithTe} at={{ projectId: "p1", number: 6 }} files={[]} onChanged={() => undefined}
+                               onJump={() => undefined} onJumpLoc={() => undefined} onFiles={() => undefined} />);
+    expect(tid("gr-ov-test-download")!.getAttribute("href")).toBe("/v1/artifacts/art_gh_1/download");
+    expect(tid("gr-ov-test-check-run")!.getAttribute("href")).toBe("https://github.com/acme/app/runs/77");
     unmount();
   });
 });

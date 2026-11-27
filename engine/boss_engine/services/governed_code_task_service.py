@@ -3108,10 +3108,13 @@ def _review_record(engine, run_id: str, project_id: str) -> tuple[list[dict], li
 
 
 def _generated_pr_summary(engine, settings, run_id: str, project_id: str, *, title: str,
-                          evidence: dict, gates: dict, paths: list, qg_id: str) -> str:
+                          evidence: dict, gates: dict, paths: list, qg_id: str,
+                          host_kind: str = "local", head_sha: str = "",
+                          test_report_artifact_id: str = "",
+                          check_run_url: str = "") -> str:
     """The PR description from the run's records (pr_description) — never the implementer's
     closing chat, which is what PR #223's description was."""
-    from . import pr_description
+    from . import pr_description, test_evidence as _test_evidence
 
     rounds, comments, _ = _review_record(engine, run_id, project_id)
     if not rounds and evidence.get("review_summary"):
@@ -3123,10 +3126,18 @@ def _generated_pr_summary(engine, settings, run_id: str, project_id: str, *, tit
         additions=evidence.get("additions"), deletions=evidence.get("deletions"),
         rounds=rounds, comments=comments, deferred=evidence.get("deferred_findings") or [],
         build_url=pr_description.build_url(settings, run_id, project_id), run_id=run_id,
-        quality_gate_id=qg_id or "", baseline=evidence.get("baseline"))
-    # The follow-ups the quality bar let through ride the PR, in one list.
+        quality_gate_id=qg_id or "", baseline=evidence.get("baseline"),
+        host_kind=host_kind, head_sha=head_sha,
+        test_report_artifact_id=test_report_artifact_id,
+        check_run_url=check_run_url)
+    # The follow-ups the quality bar let through ride the PR, placed BEFORE the trailing
+    # Test evidence section so every BOSS-opened PR ends with `### Test evidence`.
     section = _quality_bar.pr_section(evidence)
-    return f"{body.rstrip()}\n\n{section}" if section else body
+    if not section:
+        return body
+    without_te, te_block = _test_evidence.strip_test_evidence_section(body)
+    combined = f"{without_te.rstrip()}\n\n{section.strip()}"
+    return f"{combined}\n\n{te_block}\n" if te_block else f"{combined}\n"
 
 
 def _ledger_review(engine, run_id: str, project_id: str, comments: list, *,
@@ -7032,6 +7043,16 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             n = _checkpoint("exit")
             if not n:
                 return None
+            from . import test_evidence as _test_evidence
+
+            _rescue_host = "local" if getattr(sf.github, "kind", "") == "local" else "github"
+            _rescue_te = _test_evidence.render_pr_section(
+                _test_evidence.build_evidence_record(
+                    evidence={"substrate": "microvm" if use_microvm else "local"},
+                    host_kind=_rescue_host,
+                    extra_not_run=[f"Quality gates did not complete (partial rescue: {reason[:160]})"],
+                )
+            )
             with _transaction(engine) as c:
                 # A RESCUE NEEDS NO FRESH RESERVATION (rescue_of_run): the money was spent, and
                 # this exit settles it on the build's own hold. Passing None here used to
@@ -7049,7 +7070,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                              f"The {n} file(s) it had written are on this branch, so the work is "
                              "not lost and can be reviewed or continued with a retry. The quality "
                              "gates did NOT run to completion — treat this as work-in-progress, "
-                             "not a reviewed change."),
+                             "not a reviewed change.\n\n"
+                             + _rescue_te),
                     files=([FileChange(path=p, content=content)
                             for p, content in accumulated.items()]
                            if use_microvm else sandbox.diff()),
@@ -8094,6 +8116,26 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         _flaky_tests: list[str] = []
         _flaky_budget = {"checks": 0, "rerun_ms": 0}
         _manifest_tampered: list[Optional[str]] = [None]
+        from . import gate_integrity as _gate_integrity
+
+        _gate_tracker = _gate_integrity.GateVerificationTracker()
+
+        def _snapshot_changes_for_gate() -> list[tuple[str, Optional[str]]]:
+            if use_microvm:
+                pairs: list[tuple[str, Optional[str]]] = [
+                    (p, content) for p, content in accumulated.items()
+                ]
+                written = {p for p, _ in pairs}
+                for dp in deleted_acc:
+                    if str(dp) not in written:
+                        pairs.append((str(dp), None))
+                return pairs
+            try:
+                cur_files = sandbox.diff()
+                cur_deleted = _deleted_now()
+                return with_deletions(cur_files, cur_deleted)
+            except Exception:  # noqa: BLE001
+                return []
 
         def _run_verify(*, record: bool = True):
             """Authoritative test command, scoped to the official app directory. BOSS's own
@@ -8165,6 +8207,15 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     from .suite_environment import failed_check as _env_check
 
                     _failed_check[0] = _env_check(env, str(getattr(result, "command", "") or ""))
+                # BOSSAPP-1029: bind this authoritative verify run to the exact tree & landing
+                # file set that was executed so any later edit invalidates the prior pass.
+                _gate_tracker.record_verification(
+                    root=None if use_microvm else root,
+                    changes=_snapshot_changes_for_gate(),
+                    passed=bool(result.ok),
+                    command=str(last_verify_command or getattr(result, "command", "") or ""),
+                    exit_code=getattr(result, "exit_code", None),
+                )
             return result
 
         def _run_verify_once(*, record: bool = True):
@@ -10037,13 +10088,30 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 q_ok = False
             reverted = False
             if not q_ok and snapshot:
+                # BOSSAPP-1029: remove any untracked/new files the failed quality pass added and
+                # restore the snapshot, then re-verify so tests_passed is proven on the restored tree.
+                _before_paths = set(snapshot.keys())
+                if not use_microvm:
+                    for fc in sandbox.diff():
+                        if fc.path not in _before_paths and not _is_test_path(fc.path):
+                            try:
+                                (root / fc.path).unlink(missing_ok=True)
+                            except OSError:
+                                pass
                 for _qp, _qc in snapshot.items():
                     try:
                         _ws_write(root / _qp, _qc)
                     except OSError:
                         pass
                 reverted = True
-                tests_passed = True
+                if not use_microvm:
+                    _q_recheck = _run_verify()
+                    tests_passed = bool(_q_recheck.ok)
+                    official_tests_passed = tests_passed
+                    official_test_exit = _q_recheck.exit_code
+                    official_verify_output = last_verify_output
+                else:
+                    tests_passed = True
             quality_passes_used = 1
             repair_log.append(quality_pass_record(
                 attempt=1, tests_passed=q_ok and not reverted, reverted=reverted,
@@ -11469,6 +11537,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         # The comments, numbered as shown, so the implementer's RESPONSE lines
                         # can be matched back and posted beside each one on the pull request.
                         _answered = review_comments.implementer_order(_open) if _open else []
+                        # BOSSAPP-1029: any repair edit invalidates prior gate pass until re-verified.
+                        _gate_tracker.invalidate(f"in-run fix round {round_i} started")
                         rfix = a_fix.run_role(
                             _targeted_fix_prompt("\n\n".join(finding_bits), round_i)
                             + ("\n" + review_comments.response_clause() if _answered else ""),
@@ -12647,17 +12717,114 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                           if getattr(rc_, "ref", None) in _want]
                 if _lines:
                     a_ans, m_ans = _route("implement")
+                    _before_ans_tree = _gate_integrity.compute_tree_fingerprint(
+                        None if use_microvm else root,
+                        changes=_snapshot_changes_for_gate(),
+                    )
                     r_ans = a_ans.run_role(
                         "These line comments from a PERSON still have no answer. Answer each one "
                         "now (fix it first if it is not fixed yet):\n" + "\n".join(_lines) + "\n"
                         + review_comments.response_clause(), root, model=m_ans,
                         resume_session_id=impl_session_id)
                     cost += int(r_ans.get("cost_usd_micros") or 0)
+                    _after_ans_tree = _gate_integrity.compute_tree_fingerprint(
+                        None if use_microvm else root,
+                        changes=_snapshot_changes_for_gate(),
+                    )
+                    if (
+                        _after_ans_tree.get("tree_sha") != _before_ans_tree.get("tree_sha")
+                        or _after_ans_tree.get("changes_digest") != _before_ans_tree.get("changes_digest")
+                    ):
+                        # BOSSAPP-1029: the late comment-answer turn modified files after the last
+                        # gate run — invalidate the prior pass so the pre-PR integrity barrier
+                        # re-verifies the exact tree before landing.
+                        _gate_tracker.invalidate("post-gate comment answer turn modified files")
                     _record_comment_responses(engine, run_id, project_id, _ord,
                                               r_ans.get("summary") or "", round_i=99,
                                               changed_files=[])
         except Exception:  # noqa: BLE001 — Merge stays held by the open comments (ci_gate)
             _log_caught(logger)
+        # GATE INTEGRITY BARRIER (BOSSAPP-1029): verify that the exact tree about to land on
+        # the branch is byte-for-byte identical to the tree verified by the last authoritative
+        # test run. Any repair/edit after the last test run invalidates the prior pass and forces
+        # a re-run on the exact landing tree; if re-verification fails, refuse to ship a passing PR.
+        _landing_files_check = (
+            [FileChange(path=p, content=content) for p, content in accumulated.items()]
+            if use_microvm else sandbox.diff()
+        )
+        _landing_deleted_check = _deleted_now()
+        _landing_pairs_check = with_deletions(_landing_files_check, _landing_deleted_check)
+        if not _recheck and test_cmd and not evidence.get("checks_failing"):
+            _integrity = _gate_tracker.check_integrity(
+                root=None if use_microvm else root,
+                changes=_landing_pairs_check,
+            )
+            if not _integrity["ok"]:
+                with _transaction(engine) as c:
+                    emit_event(
+                        c, project_id, "code_task.gate_verification_invalidated", "boss",
+                        "code_task_run", run_id,
+                        {
+                            "reason": _integrity["reason"],
+                            "verified_tree_sha": _integrity.get("verified_tree_sha"),
+                            "current_tree_sha": _integrity.get("current_tree_sha"),
+                            "verified_changes_digest": _integrity.get("verified_changes_digest"),
+                            "current_changes_digest": _integrity.get("current_changes_digest"),
+                        },
+                    )
+                if not use_microvm:
+                    _reverify = _run_verify(record=True)
+                    tests_passed = bool(_reverify.ok)
+                    official_tests_passed = tests_passed
+                    official_test_exit = _reverify.exit_code
+                    official_verify_output = last_verify_output
+                    evidence["tests_passed"] = tests_passed
+                    evidence["test_exit_code"] = official_test_exit
+                    evidence["last_verify_output"] = official_verify_output
+                    if "written_tests_pass" in gates:
+                        gates["written_tests_pass"] = tests_passed
+                    if "nothing_broke" in gates:
+                        gates["nothing_broke"] = tests_passed
+                    if not tests_passed:
+                        evidence["gate_integrity_invalidated"] = True
+                        evidence["gate_integrity_reason"] = (
+                            f"Re-verification after post-gate edit failed: {_integrity['reason']}"
+                        )
+                        with _transaction(engine) as c:
+                            qg_id, qg_status = _record_quality_gate(
+                                c, run_id=run_id, project_id=project_id, task_id=task_id,
+                                job_id=job_id, evidence=evidence, gates=gates,
+                            )
+                            _release(
+                                budget, c, project_id, reservation_id,
+                                f"gate integrity re-verification failed: {qg_id}",
+                                run_id=run_id,
+                            )
+                            c.execute(
+                                sql(
+                                    "UPDATE code_task_runs SET status='blocked', phase='done', "
+                                    "error=:e, updated_at=now() WHERE id=:id"
+                                ),
+                                {
+                                    "e": evidence["gate_integrity_reason"],
+                                    "id": run_id,
+                                },
+                            )
+                            on_status_written(c, run_id)
+                        return {
+                            "status": "blocked",
+                            "done": True,
+                            "quality_gate_id": qg_id,
+                            "failing_gates": [k for k, v in gates.items() if not v],
+                            "gate_integrity_invalidated": True,
+                        }
+        if _gate_tracker.verified_tree_sha:
+            evidence["verified_tree_sha"] = _gate_tracker.verified_tree_sha
+        if _gate_tracker.verified_changes_digest:
+            evidence["verified_changes_digest"] = _gate_tracker.verified_changes_digest
+        if _gate_tracker.verified_head_sha:
+            evidence["verified_head_sha"] = _gate_tracker.verified_head_sha
+
         _finish_vms(success=True)
         _declare_preview_app()
         _commit_approved_prd()
@@ -12773,7 +12940,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 _pr_deleted = []
             _pr_summary = _cf_section(_checks) + _generated_pr_summary(
                 engine, settings, run_id, project_id, title=title, evidence=evidence,
-                gates=gates, paths=[f.path for f in _pr_files], qg_id=qg_id)
+                gates=gates, paths=[f.path for f in _pr_files], qg_id=qg_id,
+                host_kind=("local" if getattr(sf.github, "kind", "") == "local" else "github"),
+                head_sha=str(evidence.get("verified_head_sha") or ""))
             # THE MUST-HAVE TABLE (acceptance_gate.pr_section) right after the failing checks.
             _acc_section = _acceptance_gate.pr_section(evidence.get(_acceptance_gate.KEY))
             if _acc_section:
@@ -12785,6 +12954,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
 
             _change_title = (_rp_title.work_root_title(c, run_id, fctx)
                              or _pr_fu.work_name(title) or title)
+            _expected_digest = (
+                None if (_recheck or _checks) else _gate_tracker.verified_changes_digest
+            )
             proposal = sf.propose_pull_request(
                 c, project_id, task_id, reservation_id=reservation_id,
                 dedupe_key=f"code:task:{run_id}", title=_change_title,
@@ -12794,6 +12966,11 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 created_by_job_id=job_id, actual_usd_micros=cost,
                 evidence=evidence, quality_gate_id=qg_id, run_id=run_id,
                 pr_base=(_release_target["pr_base"] if _release_target else repo_base_branch),
+                require_test_evidence=True,
+                verified_changes_digest=_expected_digest,
+                verified_tree_sha=_gate_tracker.verified_tree_sha,
+                gate_integrity_invalidated=(False if (_recheck or _checks) else _gate_tracker.invalidated),
+                gate_integrity_reason=_gate_tracker.invalidation_reason,
                 **({"parent_branch": parent_branch} if parent_branch else {}),
                 **({"checks_failing": _checks} if _checks else {}),
                 monitoring_removals=_monitoring_removals(spec))
@@ -12847,6 +13024,11 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         created_by_job_id=job_id, actual_usd_micros=cost,
                         evidence=evidence, quality_gate_id=qg_id, run_id=run_id,
                         pr_base=(_release_target["pr_base"] if _release_target else repo_base_branch),
+                        require_test_evidence=True,
+                        verified_changes_digest=_expected_digest,
+                        verified_tree_sha=_gate_tracker.verified_tree_sha,
+                        gate_integrity_invalidated=(False if (_recheck or _checks) else _gate_tracker.invalidated),
+                        gate_integrity_reason=_gate_tracker.invalidation_reason,
                         **({"parent_branch": parent_branch} if parent_branch else {}),
                         **({"checks_failing": _checks} if _checks else {}),
                         monitoring_removals=_monitoring_removals(spec))

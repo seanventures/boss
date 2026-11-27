@@ -258,6 +258,15 @@ def execute(engine, settings, payload: dict, *, github: Any = None, agent: Any =
                 "SELECT id, gates_passed, gates_failed FROM quality_gates "
                 "WHERE code_task_run_id=:r ORDER BY created_at DESC LIMIT 1"),
                 {"r": run_id}).mappings().first()
+            rec_row = c.execute(text(
+                "SELECT d.recommendation->>'test_report_artifact_id' AS art_id, "
+                "a.content->>'check_run_url' AS check_run_url "
+                "FROM code_task_runs r "
+                "LEFT JOIN decisions d ON d.id = r.decision_id AND d.project_id = r.project_id "
+                "LEFT JOIN artifacts a ON a.id = d.recommendation->>'test_report_artifact_id' "
+                "AND a.project_id = r.project_id "
+                "WHERE r.id = :r AND r.project_id = :p"),
+                {"r": run_id, "p": project_id}).mappings().first()
         gates = {}
         if gate:
             gates.update({str(g): True for g in _jl(gate["gates_passed"])})
@@ -267,7 +276,11 @@ def execute(engine, settings, payload: dict, *, github: Any = None, agent: Any =
             body = gov._generated_pr_summary(
                 engine, settings, run_id, project_id, title=meta.get("title") or run["title"],
                 evidence=evidence, gates=gates, paths=change.paths,
-                qg_id=str((gate or {}).get("id") or ""))
+                qg_id=str((gate or {}).get("id") or ""),
+                host_kind=("local" if getattr(github, "kind", "") == "local" else "github"),
+                head_sha=str(meta.get("head_sha") or ""),
+                test_report_artifact_id=str((rec_row or {}).get("art_id") or ""),
+                check_run_url=str((rec_row or {}).get("check_run_url") or ""))
             github.update_pull_request_body(number, body)
             described = True
         except Exception as exc:  # noqa: BLE001 — the review stands without a new description
