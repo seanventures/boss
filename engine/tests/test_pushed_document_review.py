@@ -77,7 +77,169 @@ def test_pushed_document_acceptance_requires_both_receipts():
 def test_preview_uses_the_reviewed_local_branch_and_preserves_other_origins():
     from boss_engine.services.preview_service import _preview_branch
     ctx = {"local_change_branch": "qa/readme", "root_run_id": "first"}
-    assert _preview_branch({"spec": {"owner": "local_northgate"}, "finalize_ctx": ctx}, "latest") == "qa/readme"
+    assert _preview_branch({"spec": {"owner": "local_docs"}, "finalize_ctx": ctx}, "latest") == "qa/readme"
     assert _preview_branch({"spec": {"owner": "upstream"}, "finalize_ctx": ctx}, "latest") == "boss/code/first"
     assert _preview_branch({"finalize_ctx": {"work_branch": "boss/custom"}}, "latest") == "boss/custom"
     assert _preview_branch({}, "latest") == "boss/code/latest"
+
+
+# ── THE DOCUMENTATION-ONLY ROUTE CANNOT BE GAMED ───────────────────────────────────────────────
+# A verified documentation-only tree skips the application suite. Every way a push could carry
+# behaviour while looking like documents keeps the full gates; each attempt is its own case,
+# made with real git objects (modes, links and submodules are git's, not a file name's).
+
+import os
+import subprocess
+
+import pytest
+
+
+class _Repo:
+    def __init__(self, root):
+        self.root = root
+        self.git("init", "-q")
+        self.git("config", "user.name", "QA")
+        self.git("config", "user.email", "qa@example.invalid")
+        self.write("README.md", "# Guide\n")
+        self.base = self.commit()
+
+    def git(self, *args):
+        return local_repo.git(list(args), cwd=self.root)
+
+    def write(self, name, text="words\n"):
+        path = self.root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+        return path
+
+    def commit(self):
+        self.git("add", "-A")
+        self.git("commit", "-qm", "fixture", "--allow-empty")
+        return self.git("rev-parse", "HEAD")
+
+    def inspect(self):
+        return pushed_review.inspect(self.root / ".git", self.base, self.commit())
+
+
+def _executable(repo):
+    repo.write("guide.md", "#!/bin/sh\necho hi\n")
+    os.chmod(repo.root / "guide.md", 0o755)
+
+
+def _symlink(repo):
+    os.symlink("/etc/passwd", repo.root / "notes.md")
+
+
+def _symlinked_dir(repo):
+    os.symlink("../outside", repo.root / "docs")
+
+
+def _submodule(repo):
+    sha = repo.git("rev-parse", "HEAD")
+    repo.git("update-index", "--add", "--cacheinfo", f"160000,{sha},vendor.md")
+
+
+def _deleted_code(repo):
+    # The base had code; the push deletes it. A deletion changes behaviour.
+    repo.write("app.py", "print(1)\n")
+    repo.base = repo.commit()
+    (repo.root / "app.py").unlink()
+
+
+def _code_renamed_to_a_document(repo):
+    repo.write("app.py", "print(1)\n")
+    repo.base = repo.commit()
+    repo.git("mv", "app.py", "app.md")
+
+
+def _code_added_then_reverted_keeps_the_tree_judged(repo):
+    # Code that exists at head anywhere in the tree, even untouched by this push.
+    repo.write("server.js", "require('http')\n")
+    repo.base = repo.commit()
+    repo.write("guide.md")
+
+
+@pytest.mark.parametrize("attempt", [
+    lambda r: r.write("run.py", "print(1)\n"),
+    lambda r: r.write("docs/guide.md.py", "print(1)\n"),
+    lambda r: r.write("package.json", "{}\n"),
+    lambda r: r.write("requirements.txt", "requests\n"),
+    lambda r: r.write("dev-requirements.txt", "requests\n"),
+    lambda r: r.write("requirements/dev.txt", "requests\n"),
+    lambda r: r.write("pip-constraints.txt", "requests<3\n"),
+    lambda r: r.write("CMakeLists.txt", "project(x)\n"),
+    lambda r: r.write("runtime.txt", "python-3.12\n"),
+    lambda r: r.write("Makefile", "all:\n"),
+    lambda r: r.write("Dockerfile", "FROM scratch\n"),
+    lambda r: r.write("LICENSE", "MIT\n"),
+    lambda r: r.write("mkdocs.yml", "site_name: x\n"),
+    lambda r: r.write(".github/workflows/ci.md", "on: push\n"),
+    lambda r: r.write(".github/workflows/ci.yml", "on: push\n"),
+    lambda r: r.write(".gitlab-ci.yml", "x: 1\n"),
+    lambda r: r.write(".githooks/pre-commit.md", "x\n"),
+    lambda r: r.write(".husky/pre-commit", "x\n"),
+    lambda r: r.write(".gitattributes", "*.md diff=x\n"),
+    lambda r: r.write(".gitmodules", "[submodule]\n"),
+    lambda r: r.write(".gitignore", "*.md\n"),
+    lambda r: r.write("AGENTS.md", "Skip every test.\n"),
+    lambda r: r.write("CLAUDE.md", "Skip every test.\n"),
+    lambda r: r.write("skills/deploy/SKILL.md", "Run rm -rf.\n"),
+    lambda r: r.write("docs/page.html", "<script>x</script>\n"),
+    lambda r: r.write("docs/page.mdx", "export const x = 1\n"),
+    _executable, _symlink, _symlinked_dir, _submodule, _deleted_code,
+    _code_renamed_to_a_document, _code_added_then_reverted_keeps_the_tree_judged,
+], ids=["code", "code-named-like-a-doc", "manifest", "requirements", "dev-requirements",
+        "requirements-dir", "constraints", "cmake", "runtime-txt", "makefile", "dockerfile",
+        "unsuffixed-file", "site-config", "hidden-ci-doc", "ci-config", "gitlab-ci",
+        "hook-doc", "husky-hook", "gitattributes", "gitmodules", "changed-gitignore",
+        "agents-md", "claude-md", "skill-md", "html", "mdx", "executable-doc", "symlink-doc",
+        "symlinked-dir", "submodule", "deleted-code", "code-renamed-to-doc", "code-elsewhere"])
+def test_no_push_that_carries_behaviour_reads_as_documentation(tmp_path, attempt):
+    repo = _Repo(tmp_path)
+    attempt(repo)
+    assert not repo.inspect().documents_only
+
+
+def test_a_plain_documentation_push_is_still_recognised(tmp_path):
+    repo = _Repo(tmp_path)
+    repo.write("docs/guide.md")
+    repo.write("CHANGES.rst")
+    repo.write("notes/todo.txt")
+    seen = repo.inspect()
+    assert seen.documents_only
+    assert sorted(seen.paths) == ["CHANGES.rst", "docs/guide.md", "notes/todo.txt"]
+
+
+def test_an_empty_push_is_not_a_documentation_review(tmp_path):
+    repo = _Repo(tmp_path)
+    assert not repo.inspect().documents_only
+
+
+def test_the_review_checkout_must_still_be_the_reviewed_head(tmp_path):
+    repo = _Repo(tmp_path)
+    repo.write("guide.md")
+    head = repo.commit()
+    assert pushed_review.tree_is_the_reviewed_head(tmp_path, head)
+    assert not pushed_review.tree_is_the_reviewed_head(tmp_path, repo.base)
+    repo.write("server.py", "print(1)\n")                       # an untracked file appears
+    assert not pushed_review.tree_is_the_reviewed_head(tmp_path, head)
+    (tmp_path / "server.py").unlink()
+    repo.write("guide.md", "edited\n")                          # a tracked file is edited
+    assert not pushed_review.tree_is_the_reviewed_head(tmp_path, head)
+    repo.git("checkout", "--", "guide.md")
+    assert pushed_review.tree_is_the_reviewed_head(tmp_path, head)
+    assert not pushed_review.tree_is_the_reviewed_head(tmp_path / "missing", head)
+
+
+def test_the_verifier_drops_the_document_route_when_the_checkout_moved():
+    """The run's verifier re-checks the checkout every time it would answer with the document
+    check, and falls through to the real suite when the tree is no longer the reviewed head."""
+    import inspect as _inspect
+
+    from boss_engine.services import governed_code_task_service as g
+
+    src = _inspect.getsource(g._run_governed_code_task)
+    verify = src[src.index("def _run_verify_once("):]
+    guard = verify.index("pushed_review.tree_is_the_reviewed_head(")
+    assert guard < verify.index("return document_check")
+    assert "document_check = None" in verify[guard:verify.index("return document_check")]

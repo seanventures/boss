@@ -43,13 +43,38 @@ def inspect(git_dir: Path, base: str, head: str) -> SubmittedChange:
     return SubmittedChange(paths, documents_only)
 
 
+# FILES WHOSE WORDS ARE INSTRUCTIONS: a coding agent (BOSS's own included) reads these as its
+# brief, so changing one changes what the next build does. They keep the full gates.
+_AGENT_INSTRUCTION_NAMES = frozenset({"agents.md", "claude.md", "gemini.md", "skill.md",
+                                      "copilot-instructions.md", "conventions.md"})
+# .txt files a toolchain or platform reads as configuration, whatever directory they sit in.
+_TOOL_READ_NAMES = frozenset({"cmakelists.txt", "runtime.txt", "apt.txt", "aptfile.txt",
+                              "packages.txt", "pipfile.txt", "robots.txt"})
+
+
 def prose_file(path: str, mode: bytes) -> bool:
+    """A regular, non-executable document nothing runs or reads as configuration. Anything
+    else (code, an executable bit, a symlink, a submodule, a hidden path such as CI or hooks,
+    a dependency list, an agent's instructions) is not prose and keeps the full gates."""
     p = PurePosixPath(path)
+    name = p.name.lower()
+    parts = [part.lower() for part in p.parts]
     return (mode in {b"000000", b"100644"} and p.suffix.lower() in {".md", ".rst", ".txt"}
             and all(not component.startswith(".") for component in p.parts)
-            and p.name.lower() != "cmakelists.txt"
-            and not p.name.lower().startswith(("requirements", "constraints"))
-            and not {"requirements", "constraints"}.intersection(part.lower() for part in p.parts))
+            and name not in _AGENT_INSTRUCTION_NAMES and name not in _TOOL_READ_NAMES
+            # requirements.txt, dev-requirements.txt, requirements/dev.txt, constraints.txt…
+            and not any("requirement" in part or "constraint" in part for part in parts))
+
+
+def tree_is_the_reviewed_head(root: Path, head: str) -> bool:
+    """The checkout is exactly the reviewed commit: same HEAD, nothing modified or added. A
+    documentation review that finds anything else is no longer one (the full gates run)."""
+    try:
+        at = local_repo.git(["rev-parse", "HEAD"], cwd=root).strip()
+        dirty = local_repo.git(["status", "--porcelain", "--untracked-files=all"], cwd=root)
+    except local_repo.LocalRepoError:
+        return False
+    return at == head and not dirty.strip()
 
 
 REVIEW_CRITERIA = (

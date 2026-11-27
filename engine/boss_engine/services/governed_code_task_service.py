@@ -8211,7 +8211,16 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             return result
 
         def _run_verify_once(*, record: bool = True):
-            nonlocal last_verify_cwd, last_verify_output, last_verify_command
+            nonlocal last_verify_cwd, last_verify_output, last_verify_command, document_check
+            if document_check is not None and not pushed_review.tree_is_the_reviewed_head(
+                    root, reviewed_document_head):
+                # THE CHECKOUT MOVED OFF THE REVIEWED DOCUMENTS (anything written or added during
+                # the run): the classification no longer describes the tree, so the full suite
+                # judges it from here on, never the document check.
+                document_check = None
+                with _transaction(engine) as c:
+                    emit_event(c, project_id, "code_task.pushed_documents_review_revoked", "boss",
+                               "code_task_run", run_id, {"head": reviewed_document_head})
             if document_check is not None:
                 if record:
                     last_verify_command = document_check.command
