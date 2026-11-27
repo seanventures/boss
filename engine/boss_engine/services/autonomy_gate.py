@@ -26,6 +26,9 @@ pinned by test_only_allowed_classes_wait_outside_production):
   * explicit_stop    a stop a PERSON set ("Review the plan first", a tool set to ask, a review
                      stage with people on it, "Review always-on builds before they start")
   * ask_prod_release a release to the public or to production by construction
+  * ask_product_choice a spec the panel could not finish without the requester: its PRD ends
+                     `BUILD READINESS: ASK <question>` (a parsed blocking product choice, asked
+                     BEFORE the build starts; never mid-build, never on a model's formatting)
 And every ask_prod_only card asks when the resolver says production — an unlabelled remote, an
 unknown target, a merge into a default branch whose destination nobody set.
 """
@@ -55,11 +58,13 @@ ASK_CREDENTIAL = "ask_credential"
 ASK_SPEND = "ask_spend"
 EXPLICIT_STOP = "explicit_stop"
 ASK_PROD_RELEASE = "ask_prod_release"
+ASK_PRODUCT_CHOICE = "ask_product_choice"
 
 CLASSES = (ACT, ACT_CAPPED, NOTICE, ASK_PROD_ONLY, ASK_CREDENTIAL, ASK_SPEND, EXPLICIT_STOP,
-           ASK_PROD_RELEASE)
+           ASK_PROD_RELEASE, ASK_PRODUCT_CHOICE)
 #: The only reasons a card may wait for a person OUTSIDE production.
-ALLOWED_DEV_WAITS = frozenset({ASK_CREDENTIAL, ASK_SPEND, EXPLICIT_STOP, ASK_PROD_RELEASE})
+ALLOWED_DEV_WAITS = frozenset({ASK_CREDENTIAL, ASK_SPEND, EXPLICIT_STOP, ASK_PROD_RELEASE,
+                               ASK_PRODUCT_CHOICE})
 #: The classes BOSS answers itself in development.
 ACTS_IN_DEV = frozenset({ACT, ACT_CAPPED, NOTICE, ASK_PROD_ONLY})
 
@@ -379,6 +384,8 @@ ASK_WHAT_TO_DO: dict[str, str] = {
     ASK_PROD_RELEASE: "Approve or reject it on this card.",
     EXPLICIT_STOP: "Answer it on this card; the stop stays until the person who set it lifts "
                    "it.",
+    ASK_PRODUCT_CHOICE: "Answer the question in the note and approve; the build starts from the "
+                        "spec with your answer.",
     "unclassified": "Answer it on this card.",
 }
 
@@ -402,6 +409,17 @@ def _explicit_stop(action: str, rec: Mapping[str, Any]) -> Optional[str]:
     if str(rec.get("approval_mode_requested") or "") == "manual":
         return "the workflow's author set this step to ask"
     return None
+
+
+def _product_choice(action: str, rec: Mapping[str, Any]) -> Optional[str]:
+    """The panel's parsed blocking question on its PRD card, in words, or None. Only a PRD
+    publish carries it, and only the parser's ASK sets it (meeting_service.panel_build_readiness):
+    a missing or garbled readiness line is assumed ready, never a wait."""
+    question = str(rec.get("build_readiness_question") or "").strip()
+    if action != "execute_agent_tool" or str(rec.get("tool") or "") != "publish_document":
+        return None
+    return f"the panel needs the requester's answer before building: {question}" if question \
+        else None
 
 
 def _scope_of(rec: Mapping[str, Any], rule: Rule) -> dict[str, Any]:
@@ -459,6 +477,9 @@ def route(connection: Any, decision: Mapping[str, Any], *, policy: Any = None) -
     stop = _explicit_stop(action, rec)
     if stop:
         return Route("ask", EXPLICIT_STOP, stop, rule.agent, rule.undo, policy=pol)
+    choice = _product_choice(action, rec)
+    if choice:
+        return Route("ask", ASK_PRODUCT_CHOICE, choice, rule.agent, rule.undo, policy=pol)
     if rule.scope == "merge":
         from .checks_failing import of_decision
 

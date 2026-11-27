@@ -7346,7 +7346,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                             "repository_ok": True})
         root = sandbox.path
         submitted_paths = []
-        document_check = None
+        document_route = None
         reviewed_document_head = None
         if fctx.get("local_review_of_push") and _is_local_owner(owner):
             from . import local_repo, local_review, pushed_review
@@ -7371,16 +7371,23 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 check_args = ["diff", "--check", "--no-ext-diff",
                               f"{change['base_sha']}...{change['head_sha']}", "--"]
                 started_check = time.monotonic()
-                try:
-                    local_repo.git(check_args, git_dir=local_repo.bare_path(owner, repo, settings))
-                    message = "Submitted documentation checked. No application test suite exists."
-                    check_ok = True
-                except local_repo.LocalRepoError as exc:
-                    message = str(exc)
-                    check_ok = False
-                document_check = CommandResult(command="git diff --check", argv=["git", *check_args],
+                check_ok, message = pushed_review.check_documents(
+                    local_repo.bare_path(owner, repo, settings), change["base_sha"],
+                    change["head_sha"])
+                _document_check = CommandResult(command="git diff --check", argv=["git", *check_args],
                     exit_code=0 if check_ok else 1, duration_ms=int((time.monotonic()-started_check)*1000),
                     timed_out=False, stdout=message if check_ok else "", stderr="" if check_ok else message)
+
+                def _documents_revoked(head=change["head_sha"]):
+                    # THE CHECKOUT MOVED OFF THE REVIEWED DOCUMENTS (anything written, added,
+                    # ignored or hidden from git during the run): the classification no longer
+                    # describes the tree.
+                    with _transaction(engine) as c:
+                        emit_event(c, project_id, "code_task.pushed_documents_review_revoked",
+                                   "boss", "code_task_run", run_id, {"head": head})
+
+                document_route = pushed_review.DocumentRoute(
+                    root, change["head_sha"], _document_check, on_revoked=_documents_revoked)
                 with _transaction(engine) as c:
                     emit_event(c, project_id, "code_task.pushed_documents_review", "boss",
                                "code_task_run", run_id, {"head": change["head_sha"],
@@ -8211,16 +8218,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             return result
 
         def _run_verify_once(*, record: bool = True):
-            nonlocal last_verify_cwd, last_verify_output, last_verify_command, document_check
-            if document_check is not None and not pushed_review.tree_is_the_reviewed_head(
-                    root, reviewed_document_head):
-                # THE CHECKOUT MOVED OFF THE REVIEWED DOCUMENTS (anything written or added during
-                # the run): the classification no longer describes the tree, so the full suite
-                # judges it from here on, never the document check.
-                document_check = None
-                with _transaction(engine) as c:
-                    emit_event(c, project_id, "code_task.pushed_documents_review_revoked", "boss",
-                               "code_task_run", run_id, {"head": reviewed_document_head})
+            nonlocal last_verify_cwd, last_verify_output, last_verify_command
+            # Re-proven at every use (pushed_review.DocumentRoute): a checkout that moved before
+            # the check answered falls through to the full suite below.
+            document_check = document_route.current() if document_route is not None else None
             if document_check is not None:
                 if record:
                     last_verify_command = document_check.command
@@ -9001,7 +9002,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         "write_tests", signal="no_output", previous=before)
                     after = {"engine": decision.engine, "model": decision.model}
                     moved = escalation_reached_a_stronger_lane(before, after)
-                    if not moved and _app_tests and not decision.refused:
+                    if not moved and _app_tests:
                         _tests_escalation["skipped"] = True
                         return {"escalation": "skipped", "route": after}, [], None
                     _tests_escalation["stronger"] = moved
@@ -11123,6 +11124,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     _items = _acceptance_gate.acceptance_items(_acc_spec)
                     _dropped = _acceptance_gate.items_dropped(_acc_spec)
                     _stack = _acceptance_gate.stack_manifest_check(review_root, _acc_spec)
+                    document_check = (document_route.current()
+                                      if document_route is not None else None)
                     if document_check is not None and not _source.get("ticket_id"):
                         record = pushed_review.documentation_acceptance(
                             _items, stack=_stack, source=_source, dropped=_dropped,
@@ -11206,6 +11209,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             _reviewer_independence = {'passed': False, 'level': 'unknown',
                                        'required': 'family', 'reasons': ['not measured']}
 
+        # The document route is re-proven for the record too: a checkout that moved after the
+        # check answered fails the run here (DocumentRouteBroken), never a PR body about it.
+        document_check = document_route.current() if document_route is not None else None
         evidence = {
             "risk_tier": risk_tier,
             "profile": profile["name"],

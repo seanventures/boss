@@ -17,6 +17,7 @@ Flow:
 from __future__ import annotations
 
 import json
+import logging
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -37,6 +38,8 @@ from .mcp_registry import (
 )
 from .openai_adapter import estimate_cost_usd_micros
 from .meeting_gist import GIST_INSTRUCTION, with_gists
+
+log = logging.getLogger(__name__)
 
 # ---- what a meeting is ABOUT, for titles ------------------------------------
 #: The panel brief `request_meeting` puts in front of the operator's request, and the research
@@ -1499,7 +1502,7 @@ def _advance_phase(engine, settings: Settings, jobs, run: dict, run_id: str, pha
                    "Now write the complete PRD in markdown. Include: Summary, Problem & Context, Goals & "
                    "Non-Goals, Target Users, Functional & Non-Functional Requirements, Proposed Solution, "
                    "Risks & Mitigations (note which role raised each), Acceptance Criteria, Rollout, Open "
-                   "Questions, and the single decision needing human approval.\n\n"
+                   "Questions, and any product choice the requester must make before a build can start (or say there is none).\n\n"
                    "ACCEPTANCE CRITERIA ARE BEHAVIOUR, FEW AND CHECKABLE: 3 to 7 must-haves, each "
                    "something the app is seen to DO (a user action and its visible result, a "
                    "response, a rule the data keeps), sized to the change — a small fix gets two "
@@ -1522,8 +1525,13 @@ def _advance_phase(engine, settings: Settings, jobs, run: dict, run_id: str, pha
                    "implementation choices and optional follow-ups do not block a build.")
         from .stacks import ensure_stack_line
 
-        prd, question = panel_build_readiness(prd)
-        state["build_readiness_question"] = question
+        prd, readiness, question, reask_cost, reask_model = settle_build_readiness(adapter, prd)
+        add_cost += reask_cost
+        model = model or reask_model
+        state["build_readiness"] = readiness
+        state["build_readiness_question"] = question if readiness == READINESS_ASK else None
+        if readiness == READINESS_ASSUMED:
+            prd = prd.rstrip() + f"\n\n> {ASSUMED_READY_NOTE}\n"
         state["prd_markdown"] = ensure_stack_line(prd, str(run.get("directive") or ""))
         next_phase = "finalize"
     else:
@@ -1543,35 +1551,85 @@ def _advance_phase(engine, settings: Settings, jobs, run: dict, run_id: str, pha
 
 # THE PANEL'S BUILD DISPOSITION, the PRD's last line: READY, or ASK and the one question that
 # blocks the build. Read tolerantly (models bold it, lower-case it, add a full stop or a trailing
-# fence) because a misread is a held build; an answer that cannot be read at all still holds
-# it, ONCE and visibly, as the approval card's question, never silently and never mid-build.
+# fence, put it under its own heading, or put the question on the next line) because a misread
+# changes what happens to the build. Only a parsed ASK holds the build (autonomy_gate's
+# ask_product_choice); an answer that cannot be read is re-asked once and then ASSUMED READY,
+# said on the card and in the PRD — a model's formatting never sets a stop.
 _READINESS_LINE = re.compile(
-    r"^[\s>*_`#-]*build[\s_-]*readiness[\s*_`]*[:\-\u2013\u2014]\s*[*_`]*\s*"
-    r"(?P<verdict>ready|ask)\b[\s*_`]*[:.\-\u2013\u2014]?\s*(?P<question>.*?)[\s*_`]*$",
+    r"^[\s>*_`#-]*build[\s_-]*readiness[\s*_`]*(?:[:\-\u2013\u2014]\s*[*_`]*\s*"
+    r"(?P<verdict>ready|ask)\b[\s*_`]*[:.\-\u2013\u2014]?[\s*_`]*(?P<question>.*?))?[\s*_`:]*$",
     re.IGNORECASE)
-UNREADABLE_READINESS_QUESTION = (
-    "The panel did not say whether this spec is ready to build. Approve it to build as written, "
-    "or answer what is missing.")
+_VERDICT_LINE = re.compile(
+    r"^[\s>*_`-]*(?P<verdict>ready|ask)\b[\s*_`]*[:.\-\u2013\u2014]?[\s*_`]*(?P<question>.*?)[\s*_`]*$",
+    re.IGNORECASE)
+READINESS_READY, READINESS_ASK, READINESS_UNREADABLE = "ready", "ask", "unreadable"
+READINESS_ASSUMED = "assumed_ready"
+ASSUMED_READY_NOTE = "Assumed: panel gave no readiness line; built as written."
+READINESS_REASK = (
+    "Here is the PRD your panel wrote. Reply with exactly one line and nothing else: "
+    "BUILD READINESS: READY, or BUILD READINESS: ASK followed by the one question the requester "
+    "must answer before a build can start. Use ASK only when the brief holds incompatible "
+    "requirements or a consequential product or access decision cannot be resolved from the "
+    "supplied facts; routine implementation choices and optional follow-ups never block a "
+    "build.\n\nPRD:\n\n")
+_REASK_PRD_CHARS = 12_000
 
 
-def panel_build_readiness(draft: str) -> tuple[str, Optional[str]]:
-    """Separate the facilitator's final build disposition from the published document."""
+def _meaningful(line: str) -> bool:
+    return bool(line.strip().strip("`").strip())
+
+
+def panel_build_readiness(draft: str) -> tuple[str, str, Optional[str]]:
+    """(the published document, ready | ask | unreadable, the ASK's question or None)."""
     lines = draft.rstrip().split("\n")
-    # The disposition is the last line that says something; a closing fence or a stray blank
-    # after it is formatting, not a different answer.
-    tail = [i for i in range(len(lines) - 1, -1, -1) if lines[i].strip().strip("`").strip()][:2]
-    for index in tail:
+    filled = [i for i in range(len(lines)) if _meaningful(lines[i])]
+    # The disposition sits in the last few lines that say something; a closing fence or a stray
+    # blank after it is formatting, not a different answer.
+    for pos in range(len(filled) - 1, max(-1, len(filled) - 4), -1):
+        index = filled[pos]
         match = _READINESS_LINE.match(lines[index])
         if not match:
             continue
-        document = "\n".join(lines[:index] + lines[index + 1:]).rstrip()
-        if match["verdict"].lower() == "ready":
-            return document, None
-        question = match["question"].strip()
+        verdict, question, used = match["verdict"], (match["question"] or "").strip(), [index]
+        following = filled[pos + 1:pos + 3]
+        if verdict is None and following:
+            # A heading, then the verdict on its own line ("## Build readiness" / "READY").
+            nxt = _VERDICT_LINE.match(lines[following[0]])
+            if nxt:
+                verdict, question = nxt["verdict"], (nxt["question"] or "").strip()
+                used.append(following[0])
+                following = following[1:]
+        if verdict is None:
+            break
+        if verdict.lower() == "ask" and not question and following:
+            # The question on the next line.
+            question = lines[following[0]].strip().strip("*_`>- ").strip()
+            used.append(following[0])
+        document = "\n".join(line for i, line in enumerate(lines) if i not in used).rstrip()
+        if verdict.lower() == "ready":
+            return document, READINESS_READY, None
         if question:
-            return document, question[:500]
+            return document, READINESS_ASK, question[:500]
         break
-    return draft.rstrip(), UNREADABLE_READINESS_QUESTION
+    return draft.rstrip(), READINESS_UNREADABLE, None
+
+
+def settle_build_readiness(adapter, prd: str) -> tuple[str, str, Optional[str], int, Optional[str]]:
+    """The draft's disposition, re-asked ONCE when unreadable (one short call returning only the
+    readiness line), then assumed ready. → (document, status, question, cost, model)."""
+    document, status, question = panel_build_readiness(prd)
+    if status != READINESS_UNREADABLE:
+        return document, status, question, 0, None
+    reply, cost, model = "", 0, None
+    try:
+        reply, cost, model = _ask(adapter, f"You are the {FACILITATOR_TITLE}.",
+                                  READINESS_REASK + document[:_REASK_PRD_CHARS])
+    except Exception as error:  # noqa: BLE001 — an unanswered re-ask is assumed ready, in words
+        log.warning("the readiness re-ask failed: %s", error)
+    _, status, question = panel_build_readiness(str(reply or ""))
+    if status == READINESS_UNREADABLE:
+        status = READINESS_ASSUMED
+    return document, status, question, int(cost or 0), model
 
 
 def with_requester_answer(prd: str, question: Optional[str], answer: Optional[str]) -> str:
@@ -1643,8 +1701,11 @@ def _finalize_meeting(connection, settings, run_id) -> dict:
     # "Review the plan first", the install's own "a person approves every PRD", or a PRD that
     # departs from the stack the person's brief named.
     deviates = prd_blocks_auto_approve(run.get("directive"), state.get("prd_markdown"))
+    # THE PANEL'S PARSED BLOCKING QUESTION holds the build as its own class (autonomy_gate:
+    # ask_product_choice), never as a stop a person set; an assumed-ready spec routes as usual.
     readiness_question = state.get("build_readiness_question")
-    explicit_stop = readiness_question or (
+    readiness_assumed = state.get("build_readiness") == READINESS_ASSUMED
+    explicit_stop = (
         "Review the plan first" if approval == SPEC_APPROVED_BY_PERSON else
         "BOSS_MEETING_PRD_AUTO_APPROVE=false: a person approves every PRD"
         if getattr(settings, "meeting_prd_auto_approve", True) is False
@@ -1662,8 +1723,17 @@ def _finalize_meeting(connection, settings, run_id) -> dict:
          **({"extends_run_id": str((run.get("constraints") or {})["extends_run_id"])}
             if (run.get("constraints") or {}).get("extends_run_id") else {}),
          **({"explicit_stop": explicit_stop} if explicit_stop else {}),
-         **({"build_readiness_question": readiness_question} if readiness_question else {})},
+         **({"build_readiness_question": readiness_question,
+             "why": f"The panel needs your answer before building: {readiness_question}"}
+            if readiness_question else {}),
+         **({"build_readiness": READINESS_ASSUMED, "why": ASSUMED_READY_NOTE}
+            if readiness_assumed else {})},
         {}, "meeting_prd_ready_to_publish", risk_tier=2)
+    if decision_id and readiness_assumed:
+        emit_event(connection, project_id, "meeting.readiness_assumed", "boss", "decision",
+                   decision_id, {"meeting_run_id": run_id,
+                                 "reason": "the panel gave no readable readiness line, even "
+                                           "when asked again; the spec is built as written"})
 
     # Resolve the gate the panel has already satisfied.
     #

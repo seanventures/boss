@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from typing import Any, Callable, Optional
 
 from . import local_repo
 
@@ -45,8 +46,17 @@ def inspect(git_dir: Path, base: str, head: str) -> SubmittedChange:
 
 # FILES WHOSE WORDS ARE INSTRUCTIONS: a coding agent (BOSS's own included) reads these as its
 # brief, so changing one changes what the next build does. They keep the full gates.
-_AGENT_INSTRUCTION_NAMES = frozenset({"agents.md", "claude.md", "gemini.md", "skill.md",
-                                      "copilot-instructions.md", "conventions.md"})
+# Matched by STEM (the name before its first dot, any case), so the variants each engine also
+# loads (CLAUDE.local.md, AGENTS.override.md, AGENT.md…) are the same file to this check.
+_AGENT_INSTRUCTION_STEMS = frozenset({"agents", "agent", "claude", "gemini", "skill",
+                                      "copilot-instructions", "conventions"})
+_AGENT_INSTRUCTION_SUFFIXES = (".instructions.md", ".prompt.md")
+
+
+def agent_instructions(name: str) -> bool:
+    """A file a coding engine loads as its instructions (a lower-cased base name)."""
+    return (name.split(".", 1)[0] in _AGENT_INSTRUCTION_STEMS
+            or name.endswith(_AGENT_INSTRUCTION_SUFFIXES))
 # .txt files a toolchain or platform reads as configuration, whatever directory they sit in.
 _TOOL_READ_NAMES = frozenset({"cmakelists.txt", "runtime.txt", "apt.txt", "aptfile.txt",
                               "packages.txt", "pipfile.txt", "robots.txt"})
@@ -61,20 +71,84 @@ def prose_file(path: str, mode: bytes) -> bool:
     parts = [part.lower() for part in p.parts]
     return (mode in {b"000000", b"100644"} and p.suffix.lower() in {".md", ".rst", ".txt"}
             and all(not component.startswith(".") for component in p.parts)
-            and name not in _AGENT_INSTRUCTION_NAMES and name not in _TOOL_READ_NAMES
+            and not agent_instructions(name) and name not in _TOOL_READ_NAMES
             # requirements.txt, dev-requirements.txt, requirements/dev.txt, constraints.txt…
             and not any("requirement" in part or "constraint" in part for part in parts))
 
 
 def tree_is_the_reviewed_head(root: Path, head: str) -> bool:
-    """The checkout is exactly the reviewed commit: same HEAD, nothing modified or added. A
-    documentation review that finds anything else is no longer one (the full gates run)."""
+    """The checkout is exactly the reviewed commit: same HEAD, nothing modified or added, an
+    ignored file included, and no index entry told to look away from its file (skip-worktree or
+    assume-unchanged hide an edit from `git status`). A documentation review that finds anything
+    else is no longer one (the full gates run)."""
     try:
         at = local_repo.git(["rev-parse", "HEAD"], cwd=root).strip()
-        dirty = local_repo.git(["status", "--porcelain", "--untracked-files=all"], cwd=root)
+        dirty = local_repo.git(["status", "--porcelain", "--untracked-files=all", "--ignored"],
+                               cwd=root)
+        tags = local_repo.git(["ls-files", "-v", "-z"], cwd=root, raw=True)
     except local_repo.LocalRepoError:
         return False
-    return at == head and not dirty.strip()
+    # `ls-files -v`: "S" is skip-worktree, a lower-case tag is assume-unchanged.
+    hidden = any(entry[:1] == b"S" or entry[:1].islower()
+                 for entry in tags.split(b"\0") if entry)
+    return at == head and not dirty.strip() and not hidden
+
+
+# MARKDOWN'S HARD LINE BREAK is two trailing spaces, so trailing whitespace is not a defect in
+# a .md file. Every other check stays on for it (conflict markers, space before tab, a blank
+# line at the end), and .rst/.txt keep all of them. BOSS's own attributes, never the tree's.
+_DOCUMENT_WHITESPACE = "*.md whitespace=-blank-at-eol\n*.MD whitespace=-blank-at-eol\n"
+
+
+def check_documents(git_dir: Path, base: str, head: str) -> tuple[bool, str]:
+    """`git diff --check` over the submitted range in BOSS's bare repository → (ok, words)."""
+    import tempfile
+
+    with tempfile.NamedTemporaryFile("w", suffix=".gitattributes", delete=False) as attrs:
+        attrs.write(_DOCUMENT_WHITESPACE)
+    args = ["-c", f"core.attributesFile={attrs.name}", "diff", "--check", "--no-ext-diff",
+            f"{base}...{head}", "--"]
+    try:
+        # The problems are printed on stdout; the exit code alone would say only "exit 2".
+        found = local_repo.git(args, git_dir=git_dir, check=False).strip()
+        if found:
+            return False, "git diff --check found:\n" + found[:2000]
+        local_repo.git(args, git_dir=git_dir)
+        return True, "Submitted documentation checked. No application test suite exists."
+    except local_repo.LocalRepoError as exc:
+        return False, str(exc)
+    finally:
+        Path(attrs.name).unlink(missing_ok=True)
+
+
+class DocumentRouteBroken(RuntimeError):
+    """The checkout changed after the document check had already answered for it."""
+
+
+class DocumentRoute:
+    """The documentation-only route of one review, re-proven at every use.
+
+    `current()` is the document check while the checkout is still the reviewed head. The first
+    time it is not, the route is revoked (`on_revoked` says so): before the check has answered
+    anything, the full suite takes over; after it has, the run fails rather than carry a verdict
+    about a tree that no longer exists."""
+
+    def __init__(self, root: Path, head: str, check: Any,
+                 on_revoked: Callable[[], None] = lambda: None):
+        self.root, self.head, self._check, self._on_revoked = root, head, check, on_revoked
+        self.answered = False
+
+    def current(self) -> Optional[Any]:
+        if self._check is not None and not tree_is_the_reviewed_head(self.root, self.head):
+            self._check = None
+            self._on_revoked()
+            if self.answered:
+                raise DocumentRouteBroken(
+                    "The checkout changed during a documentation review. Request a review of "
+                    "the change's current head.")
+        if self._check is not None:
+            self.answered = True
+        return self._check
 
 
 REVIEW_CRITERIA = (

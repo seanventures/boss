@@ -540,10 +540,8 @@ def test_panel_question_holds_build_even_when_the_start_covered_spec_approval(
     _tick(client, project)
     meeting = convened[0]["run_id"]
     question = "Should the report be public or restricted to administrators?"
-    draft, blocker = panel_build_readiness(PRD + "\nBUILD READINESS: ASK " + question)
-    assert (draft, blocker) == (PRD.rstrip(), question)
-    assert panel_build_readiness(PRD + "\nBUILD READINESS: READY") == (draft, None)
-    assert panel_build_readiness(PRD)[1]
+    draft, status, blocker = panel_build_readiness(PRD + "\nBUILD READINESS: ASK " + question)
+    assert (draft, status, blocker) == (PRD.rstrip(), "ask", question)
     settings = get_settings().model_copy(update={"meeting_prd_auto_approve": True})
     with engine.begin() as c:
         c.execute(text(
@@ -558,7 +556,10 @@ def test_panel_question_holds_build_even_when_the_start_covered_spec_approval(
             "SELECT status, question, recommendation FROM decisions WHERE id = :d"),
             {"d": decision}).mappings().one()
     assert (row["status"], row["question"]) == ("pending", question)
-    assert row["recommendation"]["explicit_stop"] == question
+    # Its own class, never a stop a person set; the card says why in words.
+    assert "explicit_stop" not in row["recommendation"]
+    assert row["recommendation"]["build_readiness_question"] == question
+    assert question in row["recommendation"]["why"]
     assert not _builds(engine, workflow)
     # THE PERSON'S ANSWER IS THE BUILD'S: approving the card with the answer starts the build,
     # and the brief carries the question and the answer, not the unanswered spec.
@@ -570,26 +571,114 @@ def test_panel_question_holds_build_even_when_the_start_covered_spec_approval(
     assert question in instructions and "Administrators only, behind sign-in." in instructions
 
 
-@pytest.mark.parametrize("draft, expected", [
-    (PRD + "\n**Build readiness: ready.**", None),
-    (PRD + "\nbuild readiness - READY\n", None),
-    (PRD + "\nBUILD READINESS: ASK Public or administrators only?\n```", "Public or administrators only?"),
-    (PRD + "\nBuild Readiness — ASK: Public or administrators only?", "Public or administrators only?"),
+@pytest.mark.parametrize("tail, expected", [
+    ("\n**Build readiness: ready.**", ("ready", None)),
+    ("\nbuild readiness - READY\n", ("ready", None)),
+    ("\n## Build readiness\n\nREADY", ("ready", None)),
+    ("\n## Build readiness\n**ASK:** Public or administrators only?", ("ask", "Public or administrators only?")),
+    ("\nBUILD READINESS: ASK\nPublic or administrators only?", ("ask", "Public or administrators only?")),
+    ("\nBUILD READINESS: ASK Public or administrators only?\n```", ("ask", "Public or administrators only?")),
+    ("\nBuild Readiness \u2014 ASK: Public or administrators only?", ("ask", "Public or administrators only?")),
 ])
-def test_a_readiness_line_is_read_through_formatting(draft, expected):
-    """A model's bold, case or punctuation is not a held build; the line leaves the document."""
+def test_a_readiness_line_is_read_through_formatting(tail, expected):
+    """A model's bold, case, punctuation, heading or line break is not a misread; the line
+    leaves the document."""
     from boss_engine.services.meeting_service import panel_build_readiness
 
-    document, question = panel_build_readiness(draft)
-    assert question == expected
-    assert "readiness" not in document.lower()
+    document, status, question = panel_build_readiness(PRD + tail)
+    assert (status, question) == expected
+    assert "readiness" not in document.lower() and "Public or" not in document
 
 
-@pytest.mark.parametrize("draft", [PRD, PRD + "\nBUILD READINESS: ASK", PRD + "\nBUILD READINESS: ALREADY"])
-def test_an_unreadable_readiness_asks_once_in_words(draft):
-    """No disposition, an empty ASK or a garbled one holds the build with a visible question
-    (never silently, never a guess that it is ready)."""
-    from boss_engine.services.meeting_service import (UNREADABLE_READINESS_QUESTION,
-                                                      panel_build_readiness)
+class _Says:
+    """The facilitator's re-ask, as a model: one canned reply, every prompt kept."""
 
-    assert panel_build_readiness(draft)[1] == UNREADABLE_READINESS_QUESTION
+    def __init__(self, reply):
+        self.reply, self.prompts = reply, []
+
+    def create_text_response(self, prompt, system_prompt=None):
+        self.prompts.append(prompt)
+        return "ref", self.reply, {"model": "m", "input_tokens": 10, "output_tokens": 5}
+
+
+@pytest.mark.parametrize("draft", [
+    PRD, PRD + "\nBUILD READINESS: ASK", PRD + "\nBUILD READINESS: ALREADY",
+    PRD + "\n```mermaid\nflowchart LR\n  A --> B",          # cut off mid-diagram
+])
+def test_an_unreadable_readiness_is_asked_again_once_then_assumed_ready(monkeypatch, draft):
+    """No disposition, an empty ASK, a garbled one or a PRD cut off mid-mermaid: ONE short re-ask
+    for the line alone; still unreadable → assumed ready and said so, never a held build."""
+    from boss_engine.services import meeting_service as ms
+
+    monkeypatch.setattr(ms, "kernel_meetings", lambda: False)
+    assert ms.panel_build_readiness(draft)[1] == "unreadable"
+    garbled = _Says("I think it is mostly fine.")
+    document, status, question, _cost, _model = ms.settle_build_readiness(garbled, draft)
+    assert (status, question) == ("assumed_ready", None) and len(garbled.prompts) == 1
+    assert garbled.prompts[0].startswith(ms.READINESS_REASK) and len(garbled.prompts[0]) < 13_000
+    asked = _Says("BUILD READINESS: ASK Public or administrators only?")
+    assert ms.settle_build_readiness(asked, draft)[1:3] == ("ask", "Public or administrators only?")
+    ready = _Says("BUILD READINESS: READY")
+    assert ms.settle_build_readiness(ready, draft)[1:3] == ("ready", None)
+    broken = _Says("")
+    broken.create_text_response = lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("down"))
+    assert ms.settle_build_readiness(broken, draft)[1] == "assumed_ready"
+
+
+def test_a_readable_line_is_never_asked_again(monkeypatch):
+    from boss_engine.services import meeting_service as ms
+
+    never = _Says("BUILD READINESS: ASK x?")
+    assert ms.settle_build_readiness(never, PRD + "\nBUILD READINESS: READY")[1] == "ready"
+    assert never.prompts == []
+
+
+def _finalized_card(engine, client, monkeypatch, tmp_path, state, prompt):
+    from boss_engine.services import autonomy_gate, autonomy_policy
+    from boss_engine.services.meeting_service import _finalize_meeting
+
+    _setup(monkeypatch, tmp_path)
+    convened = _panel(monkeypatch, engine, finish=False)
+    body = _launch(client, prompt=prompt)
+    _tick(client, body["project_id"])
+    meeting = convened[0]["run_id"]
+    org = get_settings().default_org_id
+    settings = get_settings().model_copy(update={"meeting_prd_auto_approve": False,
+                                                 "auto_code_task_after_prd": False})
+    with engine.begin() as c:
+        autonomy_policy.save(c, kind=autonomy_policy.ORG, scope_id=org, raw={"dev": "act"},
+                             actor="test")
+        c.execute(text("UPDATE meeting_runs SET state = CAST(:s AS jsonb) WHERE id = :m"),
+                  {"s": __import__("json").dumps(state), "m": meeting})
+        decision = _finalize_meeting(c, settings, meeting)["decision_id"]
+        row = dict(c.execute(text(
+            "SELECT id, project_id, status, risk_tier, question, recommendation FROM decisions "
+            "WHERE id = :d"), {"d": decision}).mappings().one())
+        found = autonomy_gate.route(c, row)
+        events = c.execute(text(
+            "SELECT event_type FROM events WHERE entity_id = :d"), {"d": decision}).scalars().all()
+    return row, found, list(events)
+
+
+def test_under_agents_act_only_a_parsed_ask_waits(client, engine, monkeypatch, tmp_path):
+    """Agents act: the panel's parsed question waits as ask_product_choice; an assumed-ready
+    spec is the product manager's to approve, with the assumption on the card and the PRD."""
+    question = "Public or administrators only?"
+    row, found, _ = _finalized_card(engine, client, monkeypatch, tmp_path, {
+        "prd_markdown": PRD, "build_readiness": "ask", "build_readiness_question": question},
+        "Build a report page; who may read it is open.")
+    assert (found.acts, found.cls) == (False, "ask_product_choice") and question in found.why
+
+
+def test_an_assumed_ready_spec_is_said_and_routed_normally(client, engine, monkeypatch, tmp_path):
+    from boss_engine.services.meeting_service import ASSUMED_READY_NOTE
+
+    prd = PRD + f"\n\n> {ASSUMED_READY_NOTE}\n"
+    row, found, events = _finalized_card(engine, client, monkeypatch, tmp_path, {
+        "prd_markdown": prd, "build_readiness": "assumed_ready"},
+        "Build a recipe list with tags.")
+    rec = row["recommendation"]
+    assert found.acts and found.cls == "act"
+    assert "explicit_stop" not in rec and rec["why"] == ASSUMED_READY_NOTE
+    assert ASSUMED_READY_NOTE in rec["args"]["markdown"]
+    assert "meeting.readiness_assumed" in events
