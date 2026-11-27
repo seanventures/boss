@@ -85,7 +85,7 @@ def _github(scopes_by_token: dict[str, str]):
 def test_test_all_records_whether_the_token_can_create_repos(engine, world, monkeypatch, quiet_app):
     monkeypatch.setenv("BOSS_TEST_GH_WEAK", "ghp_weak_token_1160")
     monkeypatch.setenv("BOSS_TEST_GH_FULL", "ghp_full_token_1160")
-    weak_cid, weak_bid = _connection(engine, world, "paramg-kaapppu", env_name="BOSS_TEST_GH_WEAK", label="weak")
+    weak_cid, weak_bid = _connection(engine, world, "example-org-b", env_name="BOSS_TEST_GH_WEAK", label="weak")
     full_cid, full_bid = _connection(engine, world, "paramg", env_name="BOSS_TEST_GH_FULL", label="full")
     http = _github({"ghp_weak_token_1160": "read:user, workflow", "ghp_full_token_1160": "repo, read:org"})
     settings = get_settings()
@@ -118,7 +118,7 @@ def test_test_all_records_whether_the_token_can_create_repos(engine, world, monk
     assert listed[weak_cid]["can_create_repos"] == {"ok": False, "missing": ["administration"]}
     assert listed[full_cid]["can_create_repos"] == {"ok": True, "missing": []}
 
-    # The owner picker: paramg can (via its token), paramg-kaapppu cannot (with its fix).
+    # The owner picker: paramg can (via its token), example-org-b cannot (with its fix).
     with world.acting_as(world.ctx(world.owner)):
         r = client_get(world, f"/v1/projects/{world.project_a}/github-repository/owners?owners=paramg,someone-else")
     assert r.status_code == 200, r.text
@@ -126,17 +126,17 @@ def test_test_all_records_whether_the_token_can_create_repos(engine, world, monk
     assert owners["paramg"]["can_create"] and owners["paramg"]["verified"]
     # this project's own token, said as such (BOSSAPP-1338)
     assert owners["paramg"]["via"] == "paramg (access token, this project)"
-    assert not owners["paramg-kaapppu"]["can_create"]
-    assert owners["paramg-kaapppu"]["fixes"] == ["Replace the token for paramg-kaapppu with one holding the repo scope (Setup)"]
+    assert not owners["example-org-b"]["can_create"]
+    assert owners["example-org-b"]["fixes"] == ["Replace the token for example-org-b with one holding the repo scope (Setup)"]
     assert not owners["someone-else"]["can_create"] and "no GitHub credential" in owners["someone-else"]["words"]
 
-    # The check says, in the resolver's words, why paramg-kaapppu cannot — never the generic line.
+    # The check says, in the resolver's words, why example-org-b cannot — never the generic line.
     with world.acting_as(world.ctx(world.owner)):
-        r = client_get(world, f"/v1/projects/{world.project_a}/github-repository/check?owner=paramg-kaapppu&repo=shop")
+        r = client_get(world, f"/v1/projects/{world.project_a}/github-repository/check?owner=example-org-b&repo=shop")
     assert r.status_code == 200, r.text
     said = r.json()
     assert said["reason"] == "no_github_credential" and "missing: administration" in said["words"]
-    assert "paramg-kaapppu (access token" in said["words"] and "Administration" in said["words"]
+    assert "example-org-b (access token" in said["words"] and "Administration" in said["words"]
 
 
 def client_get(world, path: str):
