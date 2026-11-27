@@ -402,6 +402,28 @@ def test_a_docs_only_follow_up_in_a_multi_app_repo_is_not_failed_for_the_repos_s
         assert record["ok"] is True and record["source"] == "no_runnable_change", record
 
 
+def test_a_docs_only_repair_of_an_app_that_did_not_start_is_started_again(tmp_path):
+    """ENT-REC-09. A repair build seeded from a parent whose app crashed wrote nothing runnable,
+    took the "unchanged" shortcut, and completed green. Unchanged inherits the base's verdict:
+    a base known not to start (lineage_start_failure) is started again, and fails."""
+    root = _lead_triage(tmp_path, **{
+        "boss.preview.command": "python3 lead_triage_core/approvals.py\n"})
+    lineage = BUILT + ["boss.preview.command"]
+    crashed = {"ok": False, "source": "declared", "error": "the app exited (code 1) ..."}
+    unchanged = ps.prove_app_serves(root, ["README.md"], lineage=lineage, timeout=20)
+    assert unchanged["ok"] and unchanged["source"] == "no_runnable_change"
+    again = ps.prove_app_serves(root, ["README.md"], lineage=lineage, timeout=20,
+                                base_failed=crashed)
+    assert again["ok"] is False and again["source"] == "declared", again
+    assert "relative import" in again["error"]
+    assert again["base_failed"].startswith("the app exited (code 1)")
+
+
+def test_the_pipeline_tells_the_proof_what_its_base_did():
+    src = inspect.getsource(gov)
+    assert "lineage_start_failure(engine, run)" in src and "base_failed=base_failed" in src
+
+
 def test_a_service_change_to_runnable_source_is_still_held_to_serving(tmp_path):
     assert ps.touches_runnable_source(["inbox/models.py"])
     assert ps.touches_runnable_source(["web/index.html"])

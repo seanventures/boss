@@ -10779,7 +10779,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # failing a declaration, what the preview would start) and requires an HTTP answer.
         # A failure is a WORK gate with the app's own error, fed back to the implementer.
         def _check_app_serves(files: dict) -> dict:
-            from .preview_service import lineage_impl_files, prove_app_serves
+            from .preview_service import (lineage_impl_files, lineage_start_failure,
+                                          prove_app_serves)
             # BOSS copies dist/ and node_modules/ to prove the app serves: everything the run
             # made must be readable to it first (crun_8e9b3b0e: Permission denied on both).
             from . import workspace_perms as _wsp
@@ -10793,6 +10794,9 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # the same file list the preview uses (lineage_impl_files) plus this diff.
             try:
                 lineage = lineage_impl_files(engine, run)
+                # WHAT THIS BUILD SITS ON, if it is known not to start (ENT-REC-09): a repair
+                # that wrote nothing runnable is proved again, never passed as "unchanged".
+                base_failed = lineage_start_failure(engine, run)
             except Exception as exc:  # noqa: BLE001 — a fact about BOSS, not about the code
                 _log_caught(logger)
                 record = {"ok": False, "harness": True, "command": None, "source": "none",
@@ -10817,7 +10821,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     probe_paths=_connector_probe_paths(engine, run) or None,
                     # WHAT THE APP DECLARES, so a session key BOSS generates is there (fresh,
                     # throwaway) and a secret only a person sets is named, not crashed on.
-                    needs=_run_needs, bound=_run_bound,
+                    needs=_run_needs, bound=_run_bound, base_failed=base_failed,
                 )
             with _transaction(engine) as c:
                 emit_event(c, project_id, "code_task.app_serve_checked", "boss",

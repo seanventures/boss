@@ -13,6 +13,14 @@ WHAT AN APP DECLARES (names only; never a value from a file):
   * its boss.deploy.yaml `env:` entries — `{generate: ...}` BOSS mints, `{secret: ...}` a person sets
     FOR A DEPLOY (deploy_only: never a blocker of a throwaway run — the proof and preview get the
     run's own database instead of the deploy's DATABASE_URL);
+  * a credential .env.example MARKS REQUIRED (`# Required secret: …` above it, or `# required`
+    on its line) is a secret only a person has (ENT-REC-13): the app is not started, a person is
+    asked (`is_person_only_name`). An existing app's own files are the only place it can say so;
+    without this the coder was told the app "must start without" its payments key.
+  * a credential the app's START ERROR names as missing ("PAYMENTS_API_KEY is not set") and no
+    file declares at all is one too (`RunEnvironment.missing_secret_named_in`): a person's card,
+    never a coder told to fake or stub the credential. A non-credential name (PAGE_SIZE) stays
+    the coder's: BOSS can supply a default.
   * its .env.example names. Only a session/signing-key name there is BOSS's to mint (SESSION_SECRET,
     JWT_SECRET, SECRET_KEY, ...); every other name is "listed": OPTIONAL. It never blocks, and an
     app that dies naming it is the CODER's to fix (it must start without it, that feature off) —
@@ -64,6 +72,22 @@ _NOT_A_DEMO_LOGIN = re.compile(r"(?:^|_)(?:DB|DATABASE|POSTGRES|PG|MYSQL|REDIS|S
 
 _ENV_LINE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
 
+#: A name BOSS's own build services supply to a throwaway run (the run's database), never a
+#: person's to set for one.
+_BOSS_SERVICE_NAME = re.compile(r"(?:^|_)(?:DB|DATABASE|POSTGRES|PG|MYSQL|REDIS|MONGO)(?:_|$)")
+
+#: A comment that marks the variable under (or beside) it as required — and one that says it is
+#: not. "Required secret: the payments key" / "# required"; never "not required", "optional".
+_REQUIRED_MARK = re.compile(r"(?<!not )(?<!non-)\brequired\b", re.IGNORECASE)
+_OPTIONAL_MARK = re.compile(r"\boptional\b|\bnot required\b", re.IGNORECASE)
+
+#: A start error that says a variable is MISSING (not merely mentions it).
+_MISSING_LINE = re.compile(
+    r"\b(?:is|are)\s+(?:not\s+set|missing|required|undefined|empty|not\s+configured|not\s+provided)"
+    r"|must\s+be\s+(?:set|provided|defined|configured)|\bmissing\b|\bnot\s+set\b"
+    r"|\brequired\b", re.IGNORECASE)
+_ENV_NAME = re.compile(r"\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b")
+
 #: How long a generated throwaway value is: token_urlsafe(32) is 43 characters, past every
 #: "at least 32 characters" check an app makes.
 GENERATED_BYTES = 32
@@ -82,6 +106,21 @@ OPTIONAL_SETTINGS_RULE = (
 
 def is_demo_login_name(name: str) -> bool:
     return bool(_DEMO_LOGIN_NAME.match(name or "")) and not _NOT_A_DEMO_LOGIN.search(name or "")
+
+
+def is_person_only_name(name: str) -> bool:
+    """Is `name` a credential only a person has (a provider's API key, a client secret, a
+    token)? Credential-shaped (agent_env.SECRET_SHAPED, the shape BOSS withholds from every app
+    it starts), and none of what BOSS supplies itself: a session/signing key it mints, a demo
+    login's password, the run's database, PORT/HOST."""
+    from ..services.agent_env import SECRET_SHAPED
+
+    upper = str(name or "").upper()
+    if not upper or upper in PLATFORM_NAMES or _BOSS_OWNED_NAME.match(upper):
+        return False
+    if is_demo_login_name(upper) or _BOSS_SERVICE_NAME.search(upper):
+        return False
+    return any(marker in upper for marker in SECRET_SHAPED)
 
 
 #: The platform's demo-seed opt-in: the variable an app's seed script gates itself on (the
@@ -226,12 +265,30 @@ class RunEnvironment:
                     return name
         return None
 
+    def missing_secret_named_in(self, log_text: str) -> Optional[str]:
+        """A credential only a person has (is_person_only_name) that the app's start error says
+        is MISSING, that nothing declares and this run was not given — the app's own config
+        read, seen at the moment it refuses to start. The LAST such line wins (the line it died
+        on). A declared name is unset_named_in's (its declaration decides whose it is)."""
+        for line in reversed((log_text or "").splitlines()):
+            if not _MISSING_LINE.search(line):
+                continue
+            for m in _ENV_NAME.finditer(line):
+                name = m.group(0)
+                if name in self.declared or name in self.values or name in self.supplied:
+                    continue
+                if is_person_only_name(name):
+                    return name
+        return None
+
     def crash_needs_person(self, log_text: str) -> Optional[str]:
         """The variable the crash names when only a person can supply it (person_must_supply),
         else None — a crash on a listed or optional variable is the code's to fix."""
         name = self.unset_named_in(log_text)
         need = self.declared.get(name) if name else None
-        return name if need is not None and need.person_must_supply() else None
+        if need is not None and need.person_must_supply():
+            return name
+        return None if name else self.missing_secret_named_in(log_text)
 
     def explain_crash(self, log_text: str) -> Optional[str]:
         """When the app died naming a declared variable it was not given, say THAT, by name:
@@ -239,6 +296,10 @@ class RunEnvironment:
         without it."""
         name = self.unset_named_in(log_text)
         if name is None:
+            missing = self.missing_secret_named_in(log_text)
+            if missing:
+                return (f"needs a secret: {missing} (named by the app's start error). BOSS cannot "
+                        "make it and did not give it to this run; set it in the app's Secrets")
             return None
         need = self.declared.get(name)
         if need is not None and need.person_must_supply():
@@ -388,14 +449,29 @@ def needs_from_declared_specs(declared: Mapping[str, Mapping]) -> dict[str, Need
 
 
 def needs_from_env_example(text: str, *, source: str = ".env.example") -> dict[str, Need]:
+    """Names only. A credential the file MARKS REQUIRED — the comment lines directly above it or
+    its own inline comment say "required" (never "optional" / "not required") — is a secret a
+    person must set (ENT-REC-13); everything else keeps the rules in the module docstring."""
     out: dict[str, Need] = {}
+    comments: list[str] = []
     for line in (text or "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            comments.append(stripped)
+            continue
         m = _ENV_LINE.match(line)
         if not m:
+            comments = []       # a blank line ends the comment block above a name
             continue
         name = m.group(1)
+        said = " ".join(comments + ([line.split("#", 1)[1]] if "#" in line else []))
+        comments = []
         kind = ("generated" if _BOSS_OWNED_NAME.match(name)
                 else "demo" if is_demo_login_name(name) else "listed")
+        if (kind == "listed" and is_person_only_name(name) and _REQUIRED_MARK.search(said)
+                and not _OPTIONAL_MARK.search(said)):
+            out.setdefault(name, Need(name, "secret", True, f"{source} (marked required)"))
+            continue
         out.setdefault(name, Need(name, kind, kind == "generated", source))
     return out
 
@@ -443,7 +519,16 @@ def needs_from_app_dir(app_dir: Optional[Path]) -> dict[str, Need]:
         if compose.is_file():
             found.append(needs_from_compose(compose))
             break
-    return merge(*found)
+    out = merge(*found)
+    # A REQUIRED MARK OUTRANKS "the deploy's". boss.deploy.yaml `{secret}` alone is the deploy's
+    # value (a throwaway run never waits for it); the same name marked required in .env.example
+    # says the app does not start without it, so every run needs it (ENT-REC-13).
+    for name, need in list(out.items()):
+        marked = next((src[name] for src in found if name in src
+                       and src[name].person_must_supply()), None)
+        if need.deploy_only and marked is not None:
+            out[name] = marked
+    return out
 
 
 def needs_from_compose(path: Path) -> dict[str, Need]:

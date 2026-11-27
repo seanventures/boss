@@ -314,3 +314,84 @@ def test_the_blocked_build_names_the_secret_and_where_to_set_it():
                              template_tests={"because": "app_serves"})
     assert held["next_step"].startswith("Set STRIPE_SECRET_KEY for environments build, preview and deploy in the "
                                         "app's Secrets, then press Retry")
+
+
+# ---- ENT-REC-13: the app's own files can declare a secret only a person has ---------------------
+
+def test_a_credential_marked_required_in_env_example_asks_a_person_and_is_never_started(tmp_path):
+    root, seen = tmp_path / "repo", tmp_path / "seen"
+    seen.mkdir()
+    _app(root, seen, extra_required="PAYMENTS_API_KEY")
+    (root / "helpdesk" / ".env.example").write_text(
+        "SESSION_SECRET=\n# Required secret: the payments provider's API key.\n"
+        "PAYMENTS_API_KEY=\nGOOGLE_CLIENT_ID=\n")
+    record = ps.prove_app_serves(root, BUILT, timeout=20)
+    assert record["ok"] is False and record["needs_secret"] == ["PAYMENTS_API_KEY"], record
+    assert record["error"].startswith("the app needs a secret: PAYMENTS_API_KEY (declared by "
+                                      ".env.example (marked required))")
+    assert _seen(seen) == []                       # never started to crash on it
+    # The same path a template's declaration takes: the gate holds it for a PERSON.
+    assert gov.classify_gate_faults(failing=["app_serves"], evidence={"app_serves": record}) == {
+        "app_serves": "PERSON"}
+
+
+@pytest.mark.parametrize("example", [
+    "# optional: payments are off without it\nPAYMENTS_API_KEY=\n",
+    "PAYMENTS_API_KEY=  # not required\n",
+    "PAYMENTS_API_KEY=\n",
+    "# Required.\nPAGE_SIZE=\n",                         # required, but not a credential
+    "# Required.\n\nPAYMENTS_API_KEY=\n",               # the blank line ends the comment block
+])
+def test_only_a_credential_the_file_marks_required_is_a_persons(example):
+    needs = run_env.needs_from_env_example(example)
+    assert not any(n.person_must_supply() for n in needs.values()), needs
+
+
+def test_an_inline_required_mark_is_read():
+    needs = run_env.needs_from_env_example("STRIPE_SECRET_KEY=sk_test_x  # required\n")
+    assert needs["STRIPE_SECRET_KEY"].person_must_supply()
+
+
+def test_a_required_mark_outranks_the_deploys_secret(tmp_path):
+    app = tmp_path / "app"
+    app.mkdir()
+    (app / "boss.deploy.yaml").write_text(
+        "env:\n  PAYMENTS_API_KEY: {secret: payments-api-key}\n")
+    (app / ".env.example").write_text("# required secret\nPAYMENTS_API_KEY=\n")
+    assert run_env.needs_from_app_dir(app)["PAYMENTS_API_KEY"].person_must_supply()
+    (app / ".env.example").write_text("PAYMENTS_API_KEY=\n")
+    assert not run_env.needs_from_app_dir(app)["PAYMENTS_API_KEY"].person_must_supply()
+
+
+@pytest.mark.parametrize("name,person", [
+    ("PAYMENTS_API_KEY", True), ("STRIPE_SECRET_KEY", True), ("GITHUB_CLIENT_SECRET", True),
+    ("SLACK_BOT_TOKEN", True), ("SMTP_PASSWORD", True),
+    ("SESSION_SECRET", False), ("JWT_SECRET", False), ("DEMO_PASSWORD", False),
+    ("POSTGRES_PASSWORD", False), ("DATABASE_URL", False), ("PAGE_SIZE", False), ("PORT", False),
+])
+def test_who_can_supply_a_name(name, person):
+    assert run_env.is_person_only_name(name) is person
+
+
+def test_a_credential_the_start_error_names_as_missing_asks_a_person(tmp_path):
+    """Declared nowhere: the app's own config read, seen as it refuses to start. A person's
+    card, never the coder told to stub the credential."""
+    root, seen = tmp_path / "repo", tmp_path / "seen"
+    seen.mkdir()
+    _app(root, seen, extra_required="PAYMENTS_API_KEY")
+    (root / "helpdesk" / ".env.example").write_text("SESSION_SECRET=\n")
+    record = ps.prove_app_serves(root, BUILT, timeout=20)
+    assert record["ok"] is False and record["needs_secret"] == ["PAYMENTS_API_KEY"], record
+    assert not record.get("optional_unset")
+    assert record["error"].startswith(
+        "the app needs a secret: PAYMENTS_API_KEY (named by the app's start error)")
+
+
+def test_a_setting_the_start_error_names_is_still_the_coders(tmp_path):
+    root, seen = tmp_path / "repo", tmp_path / "seen"
+    seen.mkdir()
+    _app(root, seen, extra_required="PAGE_SIZE")
+    (root / "helpdesk" / ".env.example").write_text("SESSION_SECRET=\n")
+    record = ps.prove_app_serves(root, BUILT, timeout=20)
+    assert record["ok"] is False and not record.get("needs_secret"), record
+    assert "PAGE_SIZE" in record["error"]
