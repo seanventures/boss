@@ -3417,9 +3417,14 @@ CHECKED_REPLACES_KEY = "_checked_replaces"
 #: deploy step's own binding; `skip_without_deploy_ask` is `fast_fix`'s own binding; a caller's
 #: input never reaches a deploy step with either.
 SPEC_BY_START_KEY = "_spec_approved_by_start"
+#: A NEW APP, as a person's door said it (New work's Create a new app, a template's New app, a
+#: Command Center launch): who asked, written only through start_run's `new_app_by`. The build
+#: step hands it to its build as a trusted value (app_scope.NEW_APP_KEY); a caller's input — an
+#: agent's start_workflow `inputs` among them — never sets it.
+NEW_APP_INPUT = "_new_app"
 SERVER_ONLY_INPUTS = frozenset({"replaces", CHECKED_REPLACES_KEY, "quality_bar",
                                 "quality_bar_gates", "_quality_bar_by", "_quality_bar_raised",
-                                SPEC_BY_START_KEY,
+                                SPEC_BY_START_KEY, NEW_APP_INPUT,
                                 "skip_without_host", "skip_without_deploy_ask"})
 
 
@@ -3476,8 +3481,12 @@ def start_run(
     quality_bar_override: Optional[dict[str, Any]] = None,
     inherit_authority: Any = None,
     spec_approved_by_start: Optional[str] = None,
+    new_app_by: Optional[str] = None,
 ) -> dict[str, Any]:
     """Start a run.
+
+    `new_app_by`: the person whose door asked for a NEW app (NEW_APP_INPUT), set only by those
+    doors after they asked; never read from `input_data`.
 
     `quality_bar_override` ({bar?, gates?, by}): a quality bar / per-gate map a PERSON with
     settings:update asked for at the start door (quality_bar.check_override_permission, already
@@ -3524,6 +3533,8 @@ def start_run(
         input_data[PRECHECK_KEY] = dict(precheck_record)
     if str(spec_approved_by_start or "").strip():
         input_data[SPEC_BY_START_KEY] = str(spec_approved_by_start).strip()
+    if str(new_app_by or "").strip():
+        input_data[NEW_APP_INPUT] = str(new_app_by).strip()
     for key, value in (adopted or {}).items():
         if not str(key).startswith(ADOPT_PREFIX):
             raise WorkflowValidationError(f"{key!r} is not an adoption key")

@@ -19,6 +19,7 @@ scan the engine so no new lookup of a build's history scopes by repository alone
 from __future__ import annotations
 
 import ast
+import contextlib
 import os
 import re
 import subprocess
@@ -169,6 +170,39 @@ def test_a_second_app_builds_from_main_while_the_first_is_unmerged(pipeline, nor
     assert heads[f"boss/code/{northgate['recipe']}"] == northgate["recipe_head"]
 
 
+def test_a_template_launched_into_the_project_builds_from_main(pipeline, northgate):  # noqa: F811
+    """THE REPORTED DOOR: Command Center › a template › Into the project (factory_launch with
+    the server-only `existing_project` mark). The launch declares a new app, so its build runs
+    from main beside Recipe Box's open change instead of stopping before planning."""
+    from boss_engine.services import factory_launch
+
+    repo, git = northgate["repo"], northgate["git"]
+    pipeline._engine_env("")
+    os.environ["BOSS_SCRIPTED_APP_DIR"] = "tool-library"
+    spec = {"title": "Tool Library", "mode": "small_change", "id": "tpl_tool_library",
+            "github_repo": f"{OWNER}/{repo}", "existing_project": True,
+            "prompt": ("Build a tiny plain Node ESM service inside `tool-library/`: slug(text) "
+                       "in src/slug.js and an HTTP server in src/server.js answering "
+                       "GET /?q=<text> with {\"slug\": ...} on $PORT. Tests under node --test.")}
+    with pipeline.engine.begin() as c:
+        started = factory_launch.build_run(
+            c, project_id=pipeline.project, spec=spec, actor="operator",
+            settings=pipeline.settings(repo), jobs=pipeline.jobs(repo),
+            reservation_id=f"rsv_{uuid.uuid4().hex[:8]}")
+    launched = started["run_id"]
+    error = pipeline.run(launched, repo)
+    out = pipeline.result(launched)
+    assert error is None, error
+    assert "code_task.wrong_tree" not in out["events"], out["run"].get("error")
+    assert out["run"]["finalize_ctx"].get("new_app") is True
+    assert out["run"]["status"] == "completed", (out["run"]["status"], out["run"].get("error"))
+    on_branch = _files_on(git, f"boss/code/{launched}")
+    assert any(f.startswith("tool-library/") for f in on_branch), on_branch
+    assert not any(f.startswith(f"{RECIPE}/") for f in on_branch), on_branch
+    assert pipeline.branch_heads(repo)[f"boss/code/{northgate['recipe']}"] == \
+        northgate["recipe_head"]
+
+
 def test_a_build_that_names_no_app_still_stops_on_the_empty_mainline(pipeline, northgate):  # noqa: F811
     """AR-54 kept: a build that does not say it is a new app, on a README-only main, beside an
     app on an unmerged branch, may be that app rebuilt from scratch: it stops before planning."""
@@ -249,3 +283,27 @@ def test_a_new_app_after_the_first_is_merged_builds_beside_it(pipeline, northgat
     for f, content in merged.items():
         assert _git("show", f"{branch}:{f}", git_dir=git) == content, f"{f} changed"
     assert pipeline.branch_heads(repo)[recipe_branch] == northgate["recipe_head"]
+
+
+def test_an_approved_prd_declares_a_new_app_only_when_nothing_says_otherwise(
+        pipeline, northgate, monkeypatch):  # noqa: F811
+    """launch_prd_build: an empty repository AND no app in the project is a new app; beside an
+    app the PRD may be that app's feature, so nothing is declared (the guard decides)."""
+    from boss_engine.services import decisions
+    from boss_engine.services import prd_decomposition as pd
+
+    asked: list[bool] = []
+    monkeypatch.setattr(pd, "project_github", lambda *a, **k: None)
+    monkeypatch.setattr(pd, "repository_has_code", lambda github: False)
+    monkeypatch.setattr(pd, "_looks_like_web_app", lambda text: False)
+    monkeypatch.setattr(pd, "start_decomposed_build",
+                        lambda *a, **k: asked.append(k["new_app"]) or {"started": False})
+    for project in (pipeline.project, f"p_none{uuid.uuid4().hex[:6]}"):
+        # Only the routing is under test: what launch_prd_build records afterwards about a
+        # build that never started (a project row the second id does not have) is not.
+        with contextlib.suppress(Exception):
+            decisions.launch_prd_build(
+                pipeline.engine, pipeline.settings(northgate["repo"]), None, project_id=project,
+                decision_id="dec_none", task_id="task_none", actor="operator", title="t",
+                directive="A parking rota.", owner=OWNER, repo=northgate["repo"])
+    assert asked == [False, True]

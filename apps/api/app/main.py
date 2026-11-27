@@ -7586,7 +7586,10 @@ def start_code_task_endpoint(payload: CodeTaskStartBody):
                 # that dict through to the run row, and the engine pops the id, resolves it
                 # against THIS project, and records the workflow it names.
                 finalize_ctx={
-                    **(payload.get("finalize_ctx") or {}),
+                    # NOT a caller's to say (app_scope.NEW_APP_KEY): only a person's new-app
+                    # door declares one, and this raw dict is any API caller's.
+                    **{k: v for k, v in (payload.get("finalize_ctx") or {}).items()
+                       if k != "new_app"},
                     **({"workflow_version_id": payload["workflow_version_id"]}
                        if payload.get("workflow_version_id") else {}),
                     # A DIRECT CHANGE: no workflow picked and no panel, discovery or decision
@@ -7917,6 +7920,9 @@ def start_qa_benchmark_app_endpoint(benchmark_id: str, payload: open_bodies.Benc
             "benchmark": {"id": task["benchmark"]["id"], "name": task["benchmark"]["name"]},
         }
     finalize_ctx = dict(task.get("finalize_ctx") or {})
+    # A BENCHMARK IS ITS OWN APP, built from the default branch whatever other benchmarks left on
+    # their unmerged branches in the same repository (app_scope.NEW_APP_KEY).
+    finalize_ctx["new_app"] = True
     if official:
         finalize_ctx["official"] = True
         bench = dict(finalize_ctx.get("qa_benchmark") or {})
@@ -28473,13 +28479,13 @@ def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = Non
                 "A preview repair that sets base_branch or release_base_sha must also name "
                 "extends_run_id, the build to repair. Start it from that build's page instead."))
     run_input.pop("extends_run_id", None)
-    # A NEW APP (app_scope.NEW_APP_KEY) is the person's word, and only ever `true`; naming the
-    # app to build onto as well is a contradiction, refused before anything is spent.
-    if run_input.pop("new_app", None) is True:
-        if extends_run_id:
-            raise HTTPException(status_code=422, detail=(
-                "Name the app to change or ask for a new app, not both."))
-        run_input["new_app"] = True
+    # A NEW APP is the person's word at this door (New work's Create a new app, a template's New
+    # app, the composer's new app), recorded server-side (workflows.NEW_APP_INPUT) so no caller's
+    # input can write it. Naming the app to build onto as well is refused before anything is spent.
+    new_app_asked = run_input.pop("new_app", None) is True
+    if new_app_asked and extends_run_id:
+        raise HTTPException(status_code=422, detail=(
+            "Name the app to change or ask for a new app, not both."))
     if extends_run_id:
         from boss_engine.services.code_task_service import (
             is_simulated_run, load_code_task_run, work_branch_for,
@@ -28670,6 +28676,7 @@ def start_delivery_workflow(payload: WorkflowStartBody, connection_in: Any = Non
                 connection, project_id=project_id, actor=actor, input_data=run_input,
                 checked_replaces=checked_items or None,
                 quality_bar_override=bar_override,
+                new_app_by=(str(actor or "person") if new_app_asked else None),
                 # IDEMPOTENT WHEN THE CALLER SAYS SO: the same dedupe_key returns the run it
                 # already started. The console sends one per intent ("replace run X"), so a
                 # second press of Stop-and-run-again cannot start a second workflow.

@@ -3333,10 +3333,19 @@ def launch_prd_build(engine, settings: Settings, jobs, *, project_id: str, decis
                 directive=directive, owner=owner, repo=repo, review=False, origin=origin,
                 github=github)
         else:
+            # A NEW APP only when nothing says otherwise: an empty repository AND no app in the
+            # project yet (an approved PRD beside one app may be that app's feature, so it is
+            # not declared, and the empty-checkout guard still protects it).
+            new_app = False
+            if not has_code:
+                from .project_experience import new_work
+
+                with begin(engine) as connection:
+                    new_app = not new_work.app_choices(connection, project_id)
             result = pd.start_decomposed_build(
                 engine, settings, jobs, project_id=project_id, task_id=task_id,
                 prd_or_directive=directive, owner=owner, repo=repo, base_branch=None,
-                seed_scaffold=not has_code, origin=origin, github=github)
+                seed_scaffold=not has_code, origin=origin, github=github, new_app=new_app)
     except Exception as error:  # noqa: BLE001 — recorded below, never silent
         _log.exception("PRD build for %s did not start", decision_id)
         result = {"started": False, "reason": "build_launch_failed",

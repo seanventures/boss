@@ -4400,10 +4400,11 @@ def _perform_capability(
         if preview_anchor:
             inputs = {**inputs, "preview_id": preview_anchor}
         if not extends and not preview_anchor \
-                and (context.get("input") or {}).get("new_app") is True:
-            # A NEW APP, as the start door recorded it: the build says so (app_scope), so it
-            # starts from the default branch beside the project's other apps.
-            inputs = {**inputs, "new_app": True}
+                and str((context.get("input") or {}).get(workflows.NEW_APP_INPUT) or "").strip():
+            # A NEW APP, as a person's door recorded it (server-only input): handed to the build
+            # as a TRUSTED value, never an argument a model could write, so it starts from the
+            # default branch beside the project's other apps (app_scope).
+            trusted_step = {"new_app": True}
         if extends:
             inputs = {**inputs, "extends_run_id": extends}
             # The preview the operator was looking at (validated by the start endpoint).
