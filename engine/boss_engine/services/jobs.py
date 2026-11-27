@@ -75,6 +75,8 @@ _RUN_TABLE_FOR_KIND: dict[str, str] = {
     "discovery.run": "discovery_runs",
     # An agent run on a worker (AP-P2): a cancelled or finished run gets no new job.
     "agent.run": "agent_runs",
+    # Quick Lane (BOSSAPP-795): a cancelled or completed quick fix gets no follow-up job.
+    "quick.fix": "quick_lane_runs",
 }
 
 #: A run in one of these can never advance, so nothing should be queued on its behalf.

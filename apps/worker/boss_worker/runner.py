@@ -368,6 +368,8 @@ def capabilities() -> list[str]:
         "openai.plan",
         "meeting.step",
         "code.task",
+        # Quick Lane (BOSSAPP-795): one warm agent session on its own per-host queue.
+        "quick.fix",
         # A real debugging session: shell, repo, read-only SQL, the fleet. Declared here or the
         # worker will not lease the job and the investigation sits queued forever.
         "investigation.run",
@@ -859,6 +861,20 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
             if is_sandbox_fail_closed(result):
                 return result
             raise RuntimeError(result.get("error") or "Code task failed.")
+        return result
+    if job.kind == "quick.fix":
+        # Quick Lane (BOSSAPP-795): memory-aware per-host admission; deferred jobs stay queued.
+        result = client.run_quick_fix(
+            {
+                "run_id": job.payload["run_id"],
+                "project_id": job.project_id,
+                "host_id": client.worker_id,
+                "job_id": job.id,
+                "lease_token": job.lease_token,
+            }
+        )
+        if result.get("status") == "failed" and result.get("retry"):
+            raise RuntimeError(result.get("error") or "Quick-lane fix failed.")
         return result
     if job.kind == "discovery.run":
         # The research agent lives in the API container. The lease token goes with it: every

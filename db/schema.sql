@@ -16864,3 +16864,51 @@ ALTER TABLE agent_wakeups ADD COLUMN IF NOT EXISTS purpose TEXT;
 -- One daily journeys wake per install (service.arm_daily also takes an advisory lock).
 CREATE UNIQUE INDEX IF NOT EXISTS agent_wakeups_one_golden_journeys
   ON agent_wakeups ((1)) WHERE purpose = 'golden_journeys' AND status = 'active';
+
+-- Quick Lane (BOSSAPP-795..799, docs/product/QUICK_LANE.md):
+-- One warm agent session on a dedicated per-host queue with memory-aware admission,
+-- full context in, independent validation out, lossless escalation, and bounded CI reopen.
+CREATE TABLE IF NOT EXISTS quick_lane_runs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  code_task_run_id TEXT,
+  task_id TEXT,
+  title TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued' CHECK (
+    status IN (
+      'queued', 'waiting_memory', 'running', 'validating',
+      'escalated', 'pr_opened', 'ci_reopened', 'completed', 'failed', 'cancelled'
+    )
+  ),
+  phase TEXT NOT NULL DEFAULT 'queued',
+  source TEXT NOT NULL DEFAULT 'console' CHECK (
+    source IN ('ask_boss', 'console', 'mcp', 'ticket_label', 'api')
+  ),
+  requested_by_person BOOLEAN NOT NULL DEFAULT TRUE,
+  actor TEXT NOT NULL DEFAULT 'operator',
+  host_id TEXT,
+  waiting_reason TEXT,
+  spec JSONB NOT NULL DEFAULT '{}'::jsonb,
+  context_bundle JSONB NOT NULL DEFAULT '{}'::jsonb,
+  reproduction JSONB NOT NULL DEFAULT '{}'::jsonb,
+  validation JSONB NOT NULL DEFAULT '{}'::jsonb,
+  escalation JSONB NOT NULL DEFAULT '{}'::jsonb,
+  pr_evidence JSONB NOT NULL DEFAULT '{}'::jsonb,
+  reservation_id TEXT,
+  receipt_id TEXT,
+  pull_request_url TEXT,
+  pull_request_number INTEGER,
+  decision_id TEXT,
+  escalated_run_id TEXT,
+  ci_reopen_count INTEGER NOT NULL DEFAULT 0,
+  validation_rounds INTEGER NOT NULL DEFAULT 0,
+  cost_usd_micros BIGINT NOT NULL DEFAULT 0,
+  elapsed_seconds DOUBLE PRECISION NOT NULL DEFAULT 0,
+  error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_quick_lane_runs_queue
+  ON quick_lane_runs (project_id, status, requested_by_person DESC, created_at ASC);
+CREATE INDEX IF NOT EXISTS idx_quick_lane_runs_host_status
+  ON quick_lane_runs (host_id, status);
