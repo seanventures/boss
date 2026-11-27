@@ -183,7 +183,8 @@ docker run --name "$GATE" --network "$NET" --label boss-e2egate=1 ${SECURITY[@]+
 status=$?
 # A Colima guest may not share the Mac's temporary directory. Collect from the stopped
 # container before cleanup just as on a remote daemon.
-docker cp "$GATE:/tmp/boss-gate-output/." "$WORK/out" || status=1
+docker cp "$GATE:/tmp/boss-gate-output/." "$WORK/out" ||
+  { echo "e2e-gate: could not copy results out of $GATE"; status=1; }
 if [ "$status" -ne 0 ] || [ ! -s "$WORK/out/results.json" ]; then
   tail -30 "$WORK/out/gate.log"
 fi
@@ -194,7 +195,8 @@ path, started = sys.argv[1], int(sys.argv[2])
 try:
     data = json.load(open(path))
 except (OSError, ValueError):
-    print("e2e-gate: the gate wrote no results (see its log)")
+    print("e2e-gate: the gate wrote no results (the end of its log is above; "
+          "rerun with --keep to keep the whole log)")
     sys.exit(1)
 rows = data["results"]
 w = max(len(r["check"]) for r in rows) if rows else 10

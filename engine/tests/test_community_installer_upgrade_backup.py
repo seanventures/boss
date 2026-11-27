@@ -1020,13 +1020,15 @@ def test_an_install_without_the_repos_volume_still_backs_up(install_pair):
     assert not (backup / "repos.tar").exists()
 
 
+@pytest.mark.parametrize("empty", [False, True], ids=["absent", "empty"])
 @pytest.mark.parametrize("missing", ["BOSS_API_KEY", "BOSS_DB_PASSWORD"])
-def test_partial_install_env_identifies_the_missing_key_without_replacing_it(install_pair, missing):
+def test_partial_install_env_identifies_the_missing_key_without_replacing_it(install_pair, missing, empty):
     installed, old, _, env, _ = install_pair
     env["BOSS_REPO_REF"] = old
     config = installed / ".env"
-    original = "".join(line for line in config.read_text().splitlines(keepends=True)
-                       if not line.startswith(missing + "="))
+    blank = missing + "=\n" if empty else ""
+    original = "".join(blank if line.startswith(missing + "=") else line
+                       for line in config.read_text().splitlines(keepends=True))
     config.write_text(original)
 
     result = _install(installed, env)

@@ -27,6 +27,7 @@ REFUSAL = "Run `boss clone <project>` or `boss login` first: comments are signed
 
 class _Api(BaseHTTPRequestHandler):
     seen: list[tuple[str, str, str]] = []
+    listing = None                               # a /v1/projects body a test substitutes
 
     def log_message(self, *_a):  # quiet
         pass
@@ -56,6 +57,8 @@ class _Api(BaseHTTPRequestHandler):
                 return self._send(200, {"principal_id": "sva_1", "kind": "service_account",
                                         "display_name": "CI"})
             return self._send(401, {"error": "unauthenticated"})
+        if self.path == "/v1/projects" and auth == f"Bearer {PERSON}" and _Api.listing is not None:
+            return self._send(200, _Api.listing)
         if self.path == "/v1/projects" and auth == f"Bearer {PERSON}":
             return self._send(200, {"items": [
                 {"id": "prj_helpdesk", "name": "HelpDesk AI", "slug": "helpdesk"},
@@ -71,6 +74,7 @@ class _Api(BaseHTTPRequestHandler):
 @pytest.fixture
 def api():
     _Api.seen = []
+    _Api.listing = None
     srv = ThreadingHTTPServer(("127.0.0.1", 0), _Api)
     t = threading.Thread(target=srv.serve_forever, daemon=True)
     t.start()
@@ -174,3 +178,11 @@ def test_clone_refuses_a_name_two_projects_share(install, tmp_path):
     assert result.returncode == 1
     assert "More than one project is named ops" in result.stderr, result.stderr
     assert not (tmp_path / "home" / "code").exists()
+
+
+@pytest.mark.parametrize("body", [{"items": None}, ["x"], {"items": "x"}, "x"])
+def test_clone_falls_back_to_the_typed_value_on_an_unexpected_listing(install, tmp_path, body):
+    _Api.listing = body
+    result = _boss(install, {**_env(tmp_path), "BOSS_TOKEN": PERSON}, "clone", "prj_typed")
+    assert "More than one project" not in result.stderr, result.stderr
+    assert "is prj_typed a local project" in result.stderr, result.stderr

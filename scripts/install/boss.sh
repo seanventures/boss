@@ -1804,7 +1804,11 @@ try:
     data = json.load(sys.stdin)
 except ValueError:
     sys.exit()
-rows = data if isinstance(data, list) else data.get("items", data.get("projects", []))
+rows = data if isinstance(data, list) else (
+    data.get("items", data.get("projects")) if isinstance(data, dict) else None)
+if not isinstance(rows, list):
+    sys.exit()
+rows = [r for r in rows if isinstance(r, dict)]
 ids = {str(r.get("id")) for r in rows if r.get("id")}
 if value in ids:
     print(value)
@@ -1815,7 +1819,10 @@ hits = {str(r["id"]) for r in rows if r.get("id") and want in
 if len(hits) > 1:
     sys.exit(2)
 print(next(iter(hits), ""))
-' "$project" <<<"${listing%$'\n'*}")" || die "More than one project is named $project. Use the project id from its BOSS page."
+' "$project" <<<"${listing%$'\n'*}")" || {
+      [[ $? -eq 2 ]] && die "More than one project is named $project. Use the project id from its BOSS page."
+      resolved=""
+    }
     [[ -z "$resolved" ]] || project="$resolved"
   fi
   [[ "$project" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$ ]] || die "No accessible project id for that name. Use the project id from its BOSS page."

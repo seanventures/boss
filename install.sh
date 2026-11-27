@@ -1267,10 +1267,16 @@ if [ -f "$ENV_FILE" ]; then
     ui_warn "Moving this install's API and web bind back to loopback; use an SSH tunnel or HTTPS reverse proxy."
   fi
   _existing() { grep -E "^$1=" "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2-; }
-  _keep_db="$(_existing BOSS_DB_PASSWORD)" ||
-    die "Existing .env is missing BOSS_DB_PASSWORD. Restore the complete .env from this install's private backup. For a fresh install choose an empty install directory."
-  _keep_api="$(_existing BOSS_API_KEY)" ||
-    die "Existing .env is missing BOSS_API_KEY. Restore the complete .env from this install's private backup. For a fresh install choose an empty install directory."
+  # Both are required and never regenerated: a new database password locks the install out of
+  # its own data. A key that is absent or present but empty is the same broken .env.
+  _required() {
+    local value
+    value="$(_existing "$1")" && [ -n "$value" ] ||
+      die "Existing .env is missing $1. Restore the complete .env from this install's private backup. For a fresh install choose an empty install directory."
+    printf '%s' "$value"
+  }
+  _keep_db="$(_required BOSS_DB_PASSWORD)" || exit 1
+  _keep_api="$(_required BOSS_API_KEY)" || exit 1
   _keep_kg="$(_existing BOSS_KG_MCP_HTTP_TOKEN || true)"
   if [ -n "$_keep_kg" ]; then BOSS_KG_MCP_HTTP_TOKEN="$_keep_kg"; fi
   # NEVER REPLACED once written: secrets in the database were encrypted with it.
