@@ -353,6 +353,39 @@ def test_a_small_build_writes_is_judged_and_opens_its_pull_request(pipeline, bui
                for c in pipeline.cards(run["pull_request_url"])), "no merge card"
 
 
+@pytest.mark.parametrize("recover", [True, False], ids=["recovered", "exhausted"])
+def test_a_single_model_corrects_empty_test_output_once(pipeline, monkeypatch, recover):
+    from boss_engine.services.scripted_engine import ScriptedEngine
+
+    play = ScriptedEngine._play
+    prompts = []
+    observation = "No runnable test has been written for the slug requirement."
+
+    def empty_first(self, stage, prompt, root, app, read_only, state, turns):
+        if stage == "write_tests" and not read_only:
+            prompts.append(prompt)
+            if len(prompts) == 1 or not recover:
+                return observation, []
+        return play(self, stage, prompt, root, app, read_only, state, turns)
+
+    monkeypatch.setattr(ScriptedEngine, "_play", empty_first)
+    run_id, repo = pipeline.build(tag="empty-tests")
+    error = pipeline.run(run_id, repo)
+    result = pipeline.result(run_id)
+    assert len(prompts) == 2, (result["run"]["status"], error, result["events"])
+    assert observation in prompts[1]
+    assert "code_task.step_retry" in result["events"]
+    if recover:
+        assert result["run"]["status"] == "completed", (result["run"].get("error"), error)
+        assert result["run"]["pull_request_url"]
+        assert "code_task.step_recovered" in result["events"]
+    else:
+        assert result["run"]["status"] == "failed"
+        assert result["run"]["finalize_ctx"]["reason_code"] == "no_test_files"
+        assert "implement" not in result["stages"]
+        assert "code_task.step_recovered" not in result["events"]
+
+
 # ── a follow-up on that change ───────────────────────────────────────────────────────────────
 
 def test_a_follow_up_builds_on_the_same_branch_and_pull_request(pipeline, built, tmp_path):

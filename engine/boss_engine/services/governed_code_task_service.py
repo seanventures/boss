@@ -4808,7 +4808,7 @@ def existing_suite_stands(app_tests: list[str]) -> list[str]:
     return [str(p) for p in (app_tests or []) if str(p).strip()]
 
 
-def write_tests_exhausted_message(*, stronger_lane: bool, last_words: str = "",
+def write_tests_exhausted_message(*, stronger_lane: bool, same_lane_retry: bool = False, last_words: str = "",
                                   changed: Optional[Sequence[str]] = None) -> str:
     """What the operator reads when the test author wrote nothing.
 
@@ -4823,6 +4823,8 @@ def write_tests_exhausted_message(*, stronger_lane: bool, last_words: str = "",
     lead = ("The test author wrote no test files, even after escalating to a frontier model."
             if stronger_lane else
             "The test author wrote no test files, and no stronger lane is configured to try.")
+    if same_lane_retry and not stronger_lane:
+        lead = "The test author wrote no test files after a correction attempt on the same model."
     said = short(last_words, 160).replace("'", "’")
     words = f" It ended by saying: '{said}'." if said else " It ended without a summary."
     paths = [str(p) for p in (changed or []) if str(p).strip()]
@@ -8863,10 +8865,10 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # The operator-facing failure reads this (BOSSAPP-1032).
             _tests_escalation = {"stronger": False, "skipped": False}
 
-            def _attempt_write_tests(escalate: bool):
+            def _attempt_write_tests(escalate: bool, prior_summary: str = ""):
                 """One QA/write-tests pass → (r1, test_files, test_changes|None). escalate
-                retries on a stronger lane when one is configured. The same engine and
-                model is not run again and is not called a frontier pass."""
+                requests a stronger route, or one correction on the available route
+                when there is no existing suite."""
                 nonlocal cost
                 prompt = _qa_prompt(
                     title, instructions, criteria, test_cmd,
@@ -8933,18 +8935,25 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                 "whole suite green. Touch as few files as possible."
                                 + _items_note)
                 if escalate:
+                    from .failure_words import short
+
                     prompt = (
-                        "Your previous attempt produced NO recognizable test files. Author "
-                        "real, runnable tests NOW as actual FILES in this project's test "
-                        "convention and directory (e.g. *.test.ts, *_test.py, tests/…), not a "
-                        "description or plan.\n\n" + prompt
+                        "Your previous attempt produced no recognizable test files. Inspect the "
+                        "checkout and the accepted criteria. Choose the smallest specified "
+                        "observable behavior and write one executable test for it in the "
+                        "project's test directory. It may fail until implementation. If the only "
+                        "remaining case needs an undefined identity or authorization contract, "
+                        "identify that missing decision. Never invent permissions or add a "
+                        "placeholder test.\n"
+                        f"Prior test-author observation: {short(prior_summary, 600) or 'none recorded'}"
+                        "\n\n" + prompt
                     )
                 if use_microvm:
                     before = dict(stage_routes.get("write_tests") or {})
                     override = ""
                     if escalate and not stage_router.is_smart():
                         # Fixed mode names the hard-problems engine here. The same
-                        # engine and model is not a second lane — skip it.
+                        # engine and model can still make one focused correction.
                         override = str(settings.code_agent_strong_engine or "").strip()
                         strong_model = str(settings.code_agent_strong_model or "").strip() or None
                         if (override and override.lower()
@@ -8955,12 +8964,11 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                      "model": strong_model or before.get("model")}
                         else:
                             after = before
-                        if not escalation_reached_a_stronger_lane(before, after):
-                            _tests_escalation["stronger"] = False
+                        moved = escalation_reached_a_stronger_lane(before, after)
+                        if not moved and _app_tests:
                             _tests_escalation["skipped"] = True
                             return {"escalation": "skipped", "route": after}, [], None
-                        _tests_escalation["stronger"] = True
-                        _tests_escalation["skipped"] = False
+                        _tests_escalation["stronger"] = moved
                     elif escalate:
                         override = _vm_escalation("write_tests", True, "no_output")
                     res = _guest_stage(
@@ -8972,7 +8980,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         after = dict(stage_routes.get("write_tests") or {})
                         moved = escalation_reached_a_stronger_lane(before, after)
                         _tests_escalation["stronger"] = moved
-                        _tests_escalation["skipped"] = not moved
+                        _tests_escalation["skipped"] = False
                     r = {"cost_usd_micros": res.cost_usd_micros, "summary": res.summary,
                          "usage": res.usage, "model": stage_routes["write_tests"]["model"]}
                     changes = [fc for fc in res.diff if _is_test_path(fc.path)]
@@ -8983,12 +8991,11 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     decision = _await_route(
                         "write_tests", signal="no_output", previous=before)
                     after = {"engine": decision.engine, "model": decision.model}
-                    if not escalation_reached_a_stronger_lane(before, after):
-                        _tests_escalation["stronger"] = False
+                    moved = escalation_reached_a_stronger_lane(before, after)
+                    if not moved and _app_tests and not decision.refused:
                         _tests_escalation["skipped"] = True
                         return {"escalation": "skipped", "route": after}, [], None
-                    _tests_escalation["stronger"] = True
-                    _tests_escalation["skipped"] = False
+                    _tests_escalation["stronger"] = moved
                     a, m = _routed_agent("write_tests", decision)
                 else:
                     a, m = _route("write_tests")
@@ -9051,33 +9058,33 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                     "why": "a config-only change needs no test that pins the "
                                            "file's contents"})
             if not test_files and not _remediation:
-                # SELF-HEAL once, on a stronger lane when one is configured. The same
-                # engine and model is not a frontier retry (BOSSAPP-1032).
+                # Retry once with feedback while the budget and harness still permit it.
                 # (A config-only change: writing no new test file is the expected outcome.)
-                retry_result, test_files, test_changes = _attempt_write_tests(escalate=True)
+                _stop_on_harness_failure("write_tests")
+                _abort_if_cancelled("write_tests correction")
+                retry_result, test_files, test_changes = _attempt_write_tests(
+                    escalate=True, prior_summary=str(r1.get("summary") or ""))
                 if retry_result.get("escalation") != "skipped":
                     r1 = retry_result
-                if _tests_escalation["stronger"]:
-                    with _transaction(engine) as c:
-                        emit_event(c, project_id, "code_task.step_escalating", "boss",
-                                   "code_task_run", run_id,
-                                   {"step": "write_tests", "reason": "no_test_files",
-                                    "action": "retry_on_frontier"})
-                    if test_files:
-                        with _transaction(engine) as c:
-                            emit_event(c, project_id, "code_task.step_recovered", "boss",
-                                       "code_task_run", run_id,
-                                       {"step": "write_tests",
-                                        "recovered_by": "frontier_retry"})
-                else:
-                    with _transaction(engine) as c:
+                with _transaction(engine) as c:
+                    route = escalation_route_record(stage_routes.get("write_tests"), r1)
+                    if _tests_escalation["skipped"]:
                         emit_event(c, project_id, "code_task.escalation_skipped", "boss",
-                                   "code_task_run", run_id,
-                                   {"step": "write_tests", "reason": "no_stronger_lane",
-                                    "engine": (stage_routes.get("write_tests") or {}).get(
-                                        "engine"),
-                                    "model": (stage_routes.get("write_tests") or {}).get(
-                                        "model")})
+                                   "code_task_run", run_id, {"step": "write_tests",
+                                   "reason": "no_stronger_lane", **route})
+                    else:
+                        method = ("frontier_retry" if _tests_escalation["stronger"]
+                                  else "same_model_correction")
+                        event = ("code_task.step_escalating" if _tests_escalation["stronger"]
+                                 else "code_task.step_retry")
+                        action = "retry_on_frontier" if _tests_escalation["stronger"] else method
+                        emit_event(c, project_id, event, "boss", "code_task_run", run_id,
+                                   {"step": "write_tests", "reason": "no_test_files",
+                                    "action": action, **route})
+                        if test_files:
+                            emit_event(c, project_id, "code_task.step_recovered", "boss",
+                                       "code_task_run", run_id, {"step": "write_tests",
+                                       "recovered_by": method})
             # THE ENGINE COULD NOT RUN (harness_failures): a test author whose sandbox did not
             # start, or whose organisation's policy held it to read-only, wrote nothing because
             # it COULD not. That ends the build with the harness verdict and its evidence — never
@@ -9181,7 +9188,8 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                {"step": "write_tests",
                                 "reason": ("no_test_files_after_escalation"
                                            if _tests_escalation["stronger"]
-                                           else "no_test_files_no_stronger_lane")})
+                                           else "no_test_files_after_same_model_correction"
+                                           if not _remediation else "no_test_files")})
                     _release(budget, c, project_id, reservation_id, "no independent tests authored", run_id=run_id)
                 _rescue_pr("the test author produced no test files")
                 # WHAT WAS OBSERVED, for the sentence: the author's last words and what it did
@@ -9196,6 +9204,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         c, run_id, project_id,
                         write_tests_exhausted_message(
                             stronger_lane=_tests_escalation["stronger"],
+                            same_lane_retry=not _tests_escalation["skipped"] and not _remediation,
                             last_words=str((r1 or {}).get("summary") or ""),
                             changed=_author_changed),
                         failure_class="needs_human", reason_code="no_test_files")
