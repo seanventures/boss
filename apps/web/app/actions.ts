@@ -108,6 +108,11 @@ function consentRefusal(e: unknown): ConsentRefusal | null {
   const consent = consentOfThrown(e);
   return consent ? { ok: false, error: "Needs your consent", data: { consent } } : null;
 }
+/** The same answer for a refusal that came back as a Response (apiWrite and fetch never throw on
+ *  a 409): every `!res.ok` branch asks this first, with the body it read. */
+function refusalOf(status: number, body: unknown): ConsentRefusal | null {
+  return consentRefusal({ status, body });
+}
 
 async function postJsonReturn(path: string, body: Record<string, unknown>): Promise<ActionResult> {
   try {
@@ -127,7 +132,7 @@ async function postJsonReturn(path: string, body: Record<string, unknown>): Prom
         // "⚠ HTTP 409" in the BOSS agent dock, and the agent could never act on the operator's
         // behalf from there (D2: asked to retry a stopped build, it answered "HTTP 409" twice).
         // The request goes back to the caller, which opens the consent sheet and sends again.
-        if (body && body.error === "consent_required") consent = body;
+        consent = refusalOf(r.status, body)?.data.consent ?? null;
         detail = String(body.detail ?? "");
         // A failed agent turn's technical line, kept apart from the sentence (lib/api-error.ts).
         technical = apiErrorTechnical(body);
@@ -314,9 +319,8 @@ async function getJsonReturn(path: string): Promise<ActionResult> {
       cache: "no-store",
     });
     if (!r.ok) {
-      let detail = "";
-      try { detail = String((await r.json()).detail ?? ""); } catch {}
-      return { ok: false, error: detail || `HTTP ${r.status}` };
+      const body = await r.json().catch(() => ({}));
+      return refusalOf(r.status, body) ?? { ok: false, error: String(body?.detail ?? "") || `HTTP ${r.status}` };
     }
     return { ok: true, data: await r.json() };
   } catch (e) {
@@ -2777,7 +2781,7 @@ async function post(path: string, body: unknown): Promise<any> {
       cache: "no-store",
     });
     const out = await res.json().catch(() => ({}));
-    if (!res.ok) return { error: failureText(out?.detail, res.status) };
+    if (!res.ok) return refusalOf(res.status, out) ?? { error: failureText(out?.detail, res.status) };
     return out;
   } catch (e) {
     return { error: e instanceof Error ? e.message : String(e) };
@@ -2787,7 +2791,7 @@ async function post(path: string, body: unknown): Promise<any> {
 async function get(path: string): Promise<any> {
   try {
     const res = await fetch(`${API_URL}${path}`, { headers: authHeaders(), cache: "no-store" });
-    if (!res.ok) return { error: `${res.status}` };
+    if (!res.ok) return refusalOf(res.status, await res.json().catch(() => ({}))) ?? { error: `${res.status}` };
     return await res.json();
   } catch (e) {
     return { error: e instanceof Error ? e.message : String(e) };
@@ -2835,7 +2839,7 @@ export async function updateTargetAction(targetId: string,
       cache: "no-store",
     });
     const out = await res.json().catch(() => ({}));
-    if (!res.ok) return { error: failureText(out?.detail, res.status) };
+    if (!res.ok) return refusalOf(res.status, out) ?? { error: failureText(out?.detail, res.status) };
     return out;
   } catch (e) {
     const asked = consentRefusal(e);
@@ -2853,7 +2857,7 @@ export async function reactivateTargetAction(targetId: string): Promise<any> {
       cache: "no-store",
     });
     const out = await res.json().catch(() => ({}));
-    if (!res.ok) return { error: failureText(out?.detail, res.status) };
+    if (!res.ok) return refusalOf(res.status, out) ?? { error: failureText(out?.detail, res.status) };
     return out;
   } catch (e) {
     const asked = consentRefusal(e);
@@ -2980,7 +2984,7 @@ export async function executeDeploymentAction(deploymentRunId: string): Promise<
       },
     );
     const body = await res.json().catch(() => ({}));
-    if (!res.ok) return { error: body?.detail || `execute ${res.status}` };
+    if (!res.ok) return refusalOf(res.status, body) ?? { error: body?.detail || `execute ${res.status}` };
     return body;
   } catch (e) {
     const asked = consentRefusal(e);
@@ -3002,7 +3006,7 @@ export async function redeployAction(deploymentRunId: string): Promise<any> {
       },
     );
     const body = await res.json().catch(() => ({}));
-    if (!res.ok) return { error: body?.detail || `redeploy ${res.status}` };
+    if (!res.ok) return refusalOf(res.status, body) ?? { error: body?.detail || `redeploy ${res.status}` };
     return body;
   } catch (e) {
     const asked = consentRefusal(e);
@@ -3033,8 +3037,10 @@ export async function shepherdSweepAction(projectId?: string): Promise<any> {
       headers: { ...authHeaders(), "content-type": "application/json" },
       body: JSON.stringify({ project_id: pid, limit: 20 }),
     });
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok) return refusalOf(res.status, out) ?? { error: failureText(out?.detail, res.status) };
     revalidatePath("/");
-    return await res.json();
+    return out;
   } catch (e) {
     const asked = consentRefusal(e);
     if (asked) return asked;
@@ -3052,8 +3058,10 @@ export async function shepherdAnswerAction(escalationId: string, answer: string)
         body: JSON.stringify({ answer, actor: CONSOLE_ACTOR }),
       },
     );
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok) return refusalOf(res.status, out) ?? { error: failureText(out?.detail, res.status) };
     revalidatePath("/");
-    return await res.json();
+    return out;
   } catch (e) {
     const asked = consentRefusal(e);
     if (asked) return asked;
@@ -3334,7 +3342,7 @@ export async function previewGateAction(previewId: string): Promise<ActionResult
       headers: authHeaders({}),
       cache: "no-store",
     });
-    if (!r.ok) return { ok: false, error: `HTTP ${r.status}` };
+    if (!r.ok) return refusalOf(r.status, await r.json().catch(() => ({}))) ?? { ok: false, error: `HTTP ${r.status}` };
     return { ok: true, data: await r.json() };
   } catch (e) {
     const asked = consentRefusal(e);
@@ -3388,7 +3396,7 @@ export async function listDeploymentHostsAction(projectId: string): Promise<Acti
       `${API_URL}/v1/deployment-hosts?project_id=${encodeURIComponent(p)}`,
       { headers: authHeaders({}), cache: "no-store" },
     );
-    if (!r.ok) return { ok: false, error: `HTTP ${r.status}` };
+    if (!r.ok) return refusalOf(r.status, await r.json().catch(() => ({}))) ?? { ok: false, error: `HTTP ${r.status}` };
     return { ok: true, data: await r.json() };
   } catch (e) {
     return { ok: false, error: String(e) };
@@ -3496,7 +3504,7 @@ export async function runDeploymentsAction(
       `${API_URL}/v1/code-tasks/${encodeURIComponent(id)}/deployments${q}`,
       { headers: authHeaders({}), cache: "no-store" },
     );
-    if (!r.ok) return { ok: false, error: `HTTP ${r.status}` };
+    if (!r.ok) return refusalOf(r.status, await r.json().catch(() => ({}))) ?? { ok: false, error: `HTTP ${r.status}` };
     return { ok: true, data: await r.json() };
   } catch (e) {
     const asked = consentRefusal(e);
@@ -3741,8 +3749,10 @@ export async function createPreviewFixtureAction(
       }),
     });
     if (!res.ok) {
-      const detail = (await res.text()).slice(0, 240);
-      return { error: `API returned ${res.status}: ${detail || res.statusText}` };
+      const raw = await res.text();
+      let parsed: unknown = null;
+      try { parsed = JSON.parse(raw); } catch { /* not JSON: said as text below */ }
+      return refusalOf(res.status, parsed) ?? { error: `API returned ${res.status}: ${raw.slice(0, 240) || res.statusText}` };
     }
     const body = (await res.json()) as { id?: string; open_url?: string; url?: string };
     revalidatePath("/");
