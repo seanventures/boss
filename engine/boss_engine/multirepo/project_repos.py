@@ -228,7 +228,7 @@ def _connection_for(db: Any, settings: Any, project_id: str, actor: str, *,
                 # Each connection's token is tagged with, and probed against, ITS OWN host.
                 token = service._tag_by_origin(  # noqa: SLF001 — where the secret lives decides
                     service._resolve_secret(record, db), record, own.get("api_base_url"),  # noqa: SLF001
-                    connection=db, project_id=project_id)
+                    connection=db, project_id=project_id, connection_id=cid)
                 if not token:
                     continue
                 probed = setup_checks.probe_repository(

@@ -203,18 +203,6 @@ class SecretRefService:
                 f"An env reference ({ref_key})" if ref_kind == "env"
                 else f"A host file reference ({ref_key})" if ref_kind == "local_runner"
                 else f"A reference scoped to the {normalized_scope_type}")
-        # A reference into BOSS's own global-key stores names only material written for ITS
-        # scope (secrets_service.ref_key_for: BOSS_<SCOPE>_…): naming another project's or
-        # org's key is how a project would read their secret (BOSSAPP-1286).
-        if ref_kind in ("database", "local_vault"):
-            # OWNERSHIP IS RECORDED (secret_material_owners), never read off the key's name.
-            from .secrets_service import owner_is
-
-            if ref_key == "__boss_master_key__" or not owner_is(
-                    connection, ref_kind, ref_key, normalized_scope_type, normalized_scope_id):
-                raise ValueError(
-                    f"A {ref_kind} reference may name only a secret BOSS stored for this "
-                    f"{normalized_scope_type}; store the value through BOSS instead.")
         normalized_secret_kind = secret_kind.strip().lower()
         if normalized_secret_kind not in self.ALLOWED_SECRET_KINDS:
             raise ValueError(
@@ -309,8 +297,7 @@ class SecretRefService:
             metadata is not None
         if changes_where and (
                 existing.get("ref_kind") in ("env", "local_runner")
-                or str(existing.get("scope_type") or "project") in ("org", "workspace")
-                or not self._own_stored(connection, existing)):
+                or str(existing.get("scope_type") or "project") in ("org", "workspace")):
             from .env_refs import require_host_credential_authority
 
             require_host_credential_authority(connection, project_id,
@@ -328,6 +315,11 @@ class SecretRefService:
             if metadata is not None
             else existing["metadata"]
         )
+        if metadata is not None and isinstance(existing.get("metadata"), dict) \
+                and "connection_slot" in existing["metadata"]:
+            # BOSS's own binding survives an edit of the rest (it is not editable).
+            next_metadata = {**next_metadata,
+                             "connection_slot": existing["metadata"]["connection_slot"]}
         next_rotation_due_at = (
             rotation_due_at
             if rotation_due_at is not None
@@ -521,6 +513,10 @@ class SecretRefService:
     def _validate_metadata(cls, metadata: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(metadata, dict):
             raise ValueError("metadata must be an object.")
+        # RESERVED (BOSSAPP-1286): the binding a GitHub connection's own flow records on the
+        # slot it wrote. No person or agent may set or forge it on any reference.
+        if any(str(k).strip().lower() == "connection_slot" for k in metadata):
+            raise ValueError("metadata.connection_slot is reserved for BOSS.")
 
         def visit(value: Any, path: str) -> None:
             if isinstance(value, dict):
@@ -548,17 +544,6 @@ class SecretRefService:
 
         visit(metadata, "")
         return metadata
-
-    @staticmethod
-    def _own_stored(connection: Connection, ref: dict[str, Any]) -> bool:
-        """Is this reference's material one BOSS stored for THIS reference's scope (its recorded
-        owner, BOSSAPP-1286)? Only then may a project re-label its provider or hosts; any other
-        reference (an external store's key, a host file, unknown) is the org's to re-label."""
-        from .secrets_service import owner_is
-
-        return owner_is(connection, str(ref.get("storage_backend") or ""),
-                        str(ref.get("ref_key") or ""), str(ref.get("scope_type") or "project"),
-                        str(ref.get("scope_id") or ref.get("project_id") or ""))
 
     @staticmethod
     def _storage_backend_for_ref_kind(ref_kind: str) -> str:

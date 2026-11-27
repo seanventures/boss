@@ -6645,15 +6645,6 @@ CREATE INDEX IF NOT EXISTS idx_sre_runbook_runs_project
 CREATE INDEX IF NOT EXISTS idx_sre_runbook_runs_runbook
   ON sre_runbook_runs(project_id, runbook_id, created_at DESC);
 
--- One approval authorises ONE remediation step of ONE run (BOSSAPP-1293): consumed here.
-CREATE TABLE IF NOT EXISTS sre_runbook_approvals_used (
-  decision_id TEXT PRIMARY KEY,
-  project_id TEXT NOT NULL REFERENCES projects(id),
-  run_id TEXT NOT NULL,
-  step_digest TEXT NOT NULL,
-  used_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
 
 -- Platform ops: release planning
 CREATE TABLE IF NOT EXISTS release_plans (
@@ -7004,30 +6995,6 @@ CREATE TABLE IF NOT EXISTS secret_material (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-
--- WHO OWNS A SECRET BOSS WROTE (BOSSAPP-1286). Recorded by every write-through
--- (secrets_service.record_material_owner) beside the material, for any backend; the ONLY evidence
--- of ownership BOSS trusts — never a key's name. A reference may read, and a connection may take
--- its host from, only material whose recorded owner is that reference's own scope. Material with
--- no recorded owner is not anyone's own. Backfilled once from the OLDEST reference that names each
--- key in BOSS's own stores (the scope that first stored it).
-CREATE TABLE IF NOT EXISTS secret_material_owners (
-  storage_backend TEXT NOT NULL,
-  ref_key TEXT NOT NULL,
-  owner_scope_type TEXT NOT NULL,
-  owner_scope_id TEXT NOT NULL,
-  recorded_by TEXT NOT NULL DEFAULT 'boss',
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  PRIMARY KEY (storage_backend, ref_key)
-);
-INSERT INTO secret_material_owners (storage_backend, ref_key, owner_scope_type, owner_scope_id,
-                                    recorded_by)
-SELECT DISTINCT ON (storage_backend, ref_key) storage_backend, ref_key, scope_type, scope_id,
-       'backfill'
-  FROM secret_refs
- WHERE storage_backend IN ('database', 'local_vault', 'vault', 'platform_secret_store', 'infisical')
- ORDER BY storage_backend, ref_key, created_at, id
-ON CONFLICT DO NOTHING;
 
 -- The activity log unions five sources newest-first per project. `events` had the index for
 -- that; the others did not, so bounding their queries would still have meant a sequential scan

@@ -1,14 +1,14 @@
-"""Every secret_refs row is written by ONE of two kinds of code (BOSSAPP-1286, seventh review):
+"""Every secret_refs row is written by ONE of a short, named list of functions (BOSSAPP-1286):
 
-* SecretRefService.create_secret_ref — the checked path for a reference to material that already
-  exists (env and host-file references need org authority; a global-key store reference may name
-  only material recorded as its own scope's);
-* a WRITE-THROUGH that stores the material itself and records its owner first
-  (secrets_service.record_material_owner) — put_secret, the channel OAuth stores, the database
-  backend's own slot.
+* SecretRefService.create_secret_ref — THE checked path for a reference to material that already
+  exists (env and host-file references need org authority; reserved metadata is refused);
+* BOSS's own WRITE-THROUGHS, which store the material themselves in the same function and record
+  the reference to what they just wrote: secrets_service.put_secret, the database backend's own
+  slot (DatabaseBackend.store) and the channel OAuth stores (save_oauth_client, complete).
 
-A static scan fails on any other INSERT INTO secret_refs, so a new code path cannot mint a
+A static scan fails on an INSERT INTO secret_refs anywhere else, so a new code path cannot mint a
 reference without the checks (resource_plane._ensure_secret_ref and connection_spend used to).
+Adding a write-through to the list is a reviewed change to this file.
 """
 from __future__ import annotations
 
@@ -19,6 +19,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 _INSERT = re.compile(r"INSERT\s+INTO\s+secret_refs\b", re.I)
 CHECKED_PATH = "engine/boss_engine/services/secret_refs.py:create_secret_ref"
+WRITE_THROUGHS = {
+    "engine/boss_engine/services/secrets_service.py:put_secret",
+    "engine/boss_engine/services/secret_backends.py:store",
+    "engine/boss_engine/services/channel_oauth.py:save_oauth_client",
+    "engine/boss_engine/services/channel_oauth.py:complete",
+}
 
 
 def _writers() -> list[str]:
@@ -38,24 +44,24 @@ def _writers() -> list[str]:
                         n, (ast.FunctionDef, ast.AsyncFunctionDef)) and _INSERT.search(
                         ast.get_source_segment(src, n) or "")]
                     if _INSERT.search(seg) and not inner:
-                        out.append((f"{rel}:{fn.name}", seg))
+                        out.append(f"{rel}:{fn.name}")
     return out
 
 
-def test_no_code_writes_a_secret_ref_except_the_checked_path_or_a_recorded_write_through():
-    bad = [name for name, seg in _writers()
-           if name != CHECKED_PATH and "record_material_owner(" not in seg]
-    assert not bad, ("write secret_refs through SecretRefService.create_secret_ref, or record the "
-                     "material's owner (secrets_service.record_material_owner) in the same "
-                     "write-through:\n" + "\n".join(bad))
+def test_no_code_writes_a_secret_ref_except_the_checked_path_or_a_named_write_through():
+    bad = [name for name in _writers() if name != CHECKED_PATH and name not in WRITE_THROUGHS]
+    assert not bad, ("create references through SecretRefService.create_secret_ref:\n"
+                     + "\n".join(bad))
 
 
 def test_the_checked_path_is_still_the_one_that_inserts():
-    assert CHECKED_PATH in {name for name, _seg in _writers()}
+    assert CHECKED_PATH in set(_writers())
 
 
-def test_the_reserved_secret_scopes_are_the_ones_the_install_uses():
-    from boss_engine.services import cli_harness, llm_gateway
-    from boss_engine.services.secrets_service import SYSTEM_SECRET_SCOPES
+def test_a_person_cannot_set_the_connection_binding():
+    import pytest
 
-    assert {cli_harness.SUBSCRIPTION_SECRET_SCOPE, llm_gateway.SECRET_SCOPE} <= SYSTEM_SECRET_SCOPES
+    from boss_engine.services.secret_refs import SecretRefService
+
+    with pytest.raises(ValueError):
+        SecretRefService._validate_metadata({"connection_slot": {"connection_id": "c"}})  # noqa: SLF001

@@ -122,45 +122,51 @@ def test_a_ghes_connection_with_its_own_app_can_mint(monkeypatch):
     assert adapter._auth_token().api_base == GHES and minted == [GHES]  # noqa: SLF001
 
 
-# ---- the allow-list, as a table: every backend x every scope (sixth review) -------------------
+# ---- THE RULE, as a table: every backend x scope x pre-existing ref (eighth review) ----------
 
-OWNED_BY_P1 = {"owner_scope_type": "project", "owner_scope_id": "p_1"}
-
-
-def _record(backend, scope_type="project", project="p_1", key=None, **meta):
+def _record(backend, scope_type="project", project="p_1", key=None, slot=None, **meta):
+    md = dict(meta)
+    if slot is not None:
+        md["connection_slot"] = slot
     return {"id": "sref_1", "ref_kind": backend, "storage_backend": backend,
             "scope_type": scope_type, "scope_id": project if scope_type == "project" else "org_1",
-            "project_id": project, "ref_key": key or "BOSS_P_1_GITHUB_TOKEN",
-            "metadata": dict(meta)}
+            "project_id": project, "ref_key": key or "BOSS_P_1_GITHUB_TOKEN", "metadata": md}
 
 
-@pytest.mark.parametrize("backend", sorted(
-    __import__("boss_engine.services.secret_refs", fromlist=["x"]).SecretRefService
-    .ALLOWED_STORAGE_BACKENDS | {"some_future_backend", ""}) + [None])
+BOUND = {"connection_id": "ghc_1", "project_id": "p_1"}
+BACKENDS = sorted(__import__("boss_engine.services.secret_refs", fromlist=["x"]).SecretRefService
+                  .ALLOWED_STORAGE_BACKENDS | {"some_future_backend", ""}) + [None]
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
 @pytest.mark.parametrize("scope", ["project", "org", "workspace"])
-def test_only_a_boss_stored_project_secret_takes_a_connections_host(backend, scope):
-    """THE TABLE: a connection's base is taken ONLY by a project-scoped secret in one of BOSS's own
-    stores, written for that project. Every other backend (env, local_runner, identity_github,
-    anything added later) and every org/workspace scope is the install's."""
-    from boss_engine.services.github_connections import OWN_SECRET_STORES, credential_host_for
-
-    got = credential_host_for(_record(backend, scope), GHES, "p_1", OWNED_BY_P1)
-    expected = GHES if (backend in OWN_SECRET_STORES and scope == "project") else ""
-    assert got == expected, (backend, scope, got)
-
-
-def test_the_allow_list_also_needs_the_projects_own_key_and_named_host():
+@pytest.mark.parametrize("origin", ["named", "pre_existing", "pending", "other_connection",
+                                    "other_project", "bound"])
+def test_only_a_slot_bound_to_this_connection_takes_its_host(backend, scope, origin):
+    """THE RULE: a connection's non-install host ONLY for a slot its own create/repoint/rotate
+    flow wrote and bound to (connection_id, project). Every named ref (database, local_vault,
+    vault, infisical, platform, env, local_runner…), any scope, anything that existed before the
+    rule, a slot still pending, another connection's or another project's slot: the install's."""
     from boss_engine.services.github_connections import credential_host_for
 
-    assert credential_host_for(_record("vault"), GHES, "p_2", OWNED_BY_P1) == ""    # other project
-    assert credential_host_for(_record("vault"), GHES, "p_1", None) == ""   # no recorded owner
-    assert credential_host_for(_record("vault"), GHES, "p_1",
-                               {"owner_scope_type": "project", "owner_scope_id": "p_9"}) == ""
-    assert credential_host_for(_record("vault", allowed_hosts=["ghe.other.example"]), GHES,
-                               "p_1", OWNED_BY_P1) == ""
-    assert credential_host_for(_record("vault", allowed_hosts=["ghe.northgate.example"]), GHES,
-                               "p_1", OWNED_BY_P1) == GHES
-    assert credential_host_for(None, GHES, "p_1") == ""
+    slot = {"named": None, "pre_existing": None, "pending": {"pending": True, "project_id": "p_1"},
+            "other_connection": {"connection_id": "ghc_2", "project_id": "p_1"},
+            "other_project": {"connection_id": "ghc_1", "project_id": "p_2"},
+            "bound": BOUND}[origin]
+    key = "db/sref_1" if origin == "pre_existing" else None
+    got = credential_host_for(_record(backend, scope, key=key, slot=slot), GHES, "p_1", "ghc_1")
+    expected = GHES if (origin == "bound" and scope == "project") else ""
+    assert got == expected, (backend, scope, origin, got)
+    # Without the connection asking, nothing takes a non-install host.
+    assert credential_host_for(_record(backend, scope, slot=slot), GHES, "p_1", None) == ""
+
+
+def test_a_person_cannot_forge_the_binding():
+    from boss_engine.services.secret_refs import SecretRefService
+
+    for md in ({"connection_slot": BOUND}, {"Connection_Slot ": BOUND}):
+        with pytest.raises(ValueError):
+            SecretRefService._validate_metadata(md)  # noqa: SLF001
 
 
 def test_an_untagged_copy_of_the_install_token_is_never_tagged_for_another_host(monkeypatch):
@@ -182,141 +188,119 @@ def test_the_install_repository_token_keeps_its_tag():
     assert isinstance(token, G.GitHubCredential) and token.api_base == G.PUBLIC_API
 
 
-def test_a_host_file_ref_on_another_host_is_refused_at_create_and_repoint(monkeypatch):
+@pytest.mark.parametrize("backend", ["database", "local_vault", "vault", "infisical",
+                                     "platform_secret_store", "env", "local_runner"])
+def test_create_and_repoint_refuse_any_named_ref_on_another_host(backend):
     from boss_engine.services.github_connections import GitHubConnectionService
 
     check = GitHubConnectionService._check_connection_secret  # noqa: SLF001
-    host_file = {"provider": "github", "secret_kind": "private_key", "ref_kind": "local_runner",
-                 "storage_backend": "local_runner", "scope_type": "project", "scope_id": "p_1",
-                 "project_id": "p_1", "ref_key": "/etc/boss/github-app.pem", "metadata": {}}
+    named = {**_record(backend), "provider": "github", "secret_kind": "private_key"}
+    with pytest.raises(ValueError) as refused:
+        check(named, "github_app", "9", "1", GHES, "p_1")
+    assert ("saved through this connection" in str(refused.value)
+            or "install's own GitHub credential" in str(refused.value))
+    if backend == "env":
+        return                       # the install's own credential: never another host at all
+    check(named, "github_app", "9", "1", G.PUBLIC_API, "p_1")           # install host: fine
+    pending = {**named, "metadata": {"connection_slot": {"pending": True, "project_id": "p_1"}}}
+    check(pending, "github_app", "9", "1", GHES, "p_1", fresh=True)  # its own flow's fresh slot
+    with pytest.raises(ValueError):    # a pending slot a failed flow left behind: no one's
+        check(pending, "github_app", "9", "1", GHES, "p_1")
+    bound = {**named, "metadata": {"connection_slot": BOUND}}
+    check(bound, "github_app", "9", "1", GHES, "p_1", "ghc_1")  # repoint: still its own
     with pytest.raises(ValueError):
-        check(host_file, "github_app", "9", "1", EVIL, "p_1")
-    check(host_file, "github_app", "9", "1", G.PUBLIC_API, "p_1")          # install host: fine
-    own = {**_record("vault"), "provider": "github", "secret_kind": "private_key"}
-    with pytest.raises(ValueError):                     # no recorded owner: not this project's
-        check(own, "github_app", "9", "1", GHES, "p_1")
-    from boss_engine.services import secrets_service
-
-    monkeypatch.setattr(secrets_service, "material_owner", lambda c, b, k: OWNED_BY_P1)
-    check(own, "github_app", "9", "1", GHES, "p_1", object())     # recorded as p_1's: allowed
+        check(bound, "github_app", "9", "1", GHES, "p_1", "ghc_2")  # another connection's
 
 
-def test_the_real_adapter_path_mints_with_its_own_app_and_refuses_the_install_key(monkeypatch):
-    """The REAL _make_adapter → GitHubAppAdapter JWT path with a GHES base: a project-stored App
-    key mints on its GHES; the install App's key (a host file) on an evil base is refused."""
+def test_the_real_adapter_path_mints_with_its_own_slot_and_refuses_the_rest(monkeypatch):
+    """The REAL _make_adapter → GitHubAppAdapter JWT path with a GHES base: an App key in the
+    connection's own bound slot mints on its GHES; a named ref (even a project vault secret) is
+    refused with the plain "re-save" message; the install's host file never goes to evil."""
+    import contextlib
+
     from boss_engine.config import get_settings
-    from boss_engine.services.github_connections import GitHubConnectionService
+    from boss_engine.services.github_app_adapter import GitHubAppAdapter
+    from boss_engine.services.github_connections import (GitHubConnectionService,
+                                                        GitHubConnectionStateError)
 
     service = GitHubConnectionService(get_settings())
-    made = []
-    service.adapter_factory = lambda settings, **kw: made.append((settings, kw)) or (settings, kw)
-    for record, base, ok in (
-            ({**_record("vault"), "provider": "github", "secret_kind": "private_key"}, GHES, True),
-            ({"provider": "github", "secret_kind": "private_key", "ref_kind": "local_runner",
-              "storage_backend": "local_runner", "scope_type": "project", "scope_id": "p_1",
-              "project_id": "p_1", "ref_key": "/etc/boss/github-app.pem", "metadata": {}},
-             EVIL, False)):
+    service.adapter_factory = lambda settings, **kw: (settings, kw)
+    cases = (
+        ({**_record("vault", slot=BOUND), "provider": "github", "secret_kind": "private_key"},
+         GHES, "mint"),
+        ({**_record("vault"), "provider": "github", "secret_kind": "private_key"}, GHES, "resave"),
+        ({**_record("local_runner", key="/etc/boss/github-app.pem"), "provider": "github",
+          "secret_kind": "private_key"}, EVIL, "resave"),
+    )
+    for record, base, outcome in cases:
         monkeypatch.setattr(service, "_credential_ref", lambda *a, **k: "x:y")
-        monkeypatch.setattr(service.secret_refs, "require_usable", lambda *a, **k: record)
+        monkeypatch.setattr(service.secret_refs, "require_usable", lambda *a, r=record, **k: r)
         monkeypatch.setattr(service, "_resolve_secret", lambda *a, **k: "-----PEM-----")
-        import contextlib
-
-        from boss_engine.services import secrets_service
-
-        # The material's RECORDED owner: the project for its own vault secret; none for a file.
-        monkeypatch.setattr(secrets_service, "material_owner",
-                            lambda c, b, k: OWNED_BY_P1 if b == "vault" else None)
         db = SimpleNamespace(begin_nested=contextlib.nullcontext)
-        settings, kw = service._make_adapter(  # noqa: SLF001
+        call = lambda: service._make_adapter(  # noqa: E731, SLF001
             db, project_id="p_1",
-            github_connection={"id": "c", "auth_method": "github_app", "app_id": "9",
+            github_connection={"id": "ghc_1", "auth_method": "github_app", "app_id": "9",
                                "installation_id": "1", "api_base_url": base},
             binding={"full_name": "platform/gw", "owner": "platform", "name": "gw"})
-        from boss_engine.services.github_app_adapter import GitHubAppAdapter
-
+        if outcome == "resave":
+            with pytest.raises((GitHubConnectionStateError, G.CrossHostCredential)) as refused:
+                call()
+            if isinstance(refused.value, GitHubConnectionStateError):
+                assert "Re-save this connection's token" in str(refused.value)
+            continue
+        settings, _kw = call()
         app = GitHubAppAdapter.__new__(GitHubAppAdapter)
         app.settings, app.api_base_url = settings, base
-        if ok:
-            app._check_jwt_host()  # noqa: SLF001 — its own App mints on its own GHES
-        else:
-            with pytest.raises(G.CrossHostCredential):
-                app._check_jwt_host()  # noqa: SLF001 — the install's key never goes to evil
+        app._check_jwt_host()  # noqa: SLF001 — its own slot mints on its own GHES
 
 
-def test_a_project_cannot_read_another_scopes_material_by_naming_its_key(eng, monkeypatch):
-    """Finding 2: secret_material is keyed globally. A reference into a global-key store can be
-    CREATED only for its own scope's keys, and the store's master key never resolves."""
+def test_a_project_cannot_read_the_master_key_or_another_refs_slot(eng):
     from boss_engine.config import get_settings
     from boss_engine.services import secret_backends
-    from boss_engine.services.secret_refs import SecretRefService
 
-    owner, thief = make_project(eng), make_project(eng)
-    owner_key = f"BOSS_{owner.upper()}_GITHUB_TOKEN"
-    refs = SecretRefService()
-    with eng.begin() as c, pytest.raises(ValueError):
-        refs.create_secret_ref(c, project_id=thief, ref_kind="database", ref_key=owner_key,
-                               provider="github", status="active", metadata={}, actor="ceo")
+    thief = make_project(eng)
     with eng.begin() as c:
-        c.execute(text(
-            "INSERT INTO secret_refs (id, project_id, scope_type, scope_id, ref_kind, ref_key, "
-            "provider, storage_backend, created_by) VALUES (:i, :p, 'project', :p, 'database', "
-            "'__boss_master_key__', 'github', 'database', 'ceo')"), {"i": f"sref_m_{thief}", "p": thief})
-    with eng.begin() as c, pytest.raises(secret_backends.SecretUnavailable):
-        secret_backends.resolve_secret_ref(c, f"sref_m_{thief}", get_settings(), project_id=thief)
+        for i, key in ((f"sref_m_{thief}", "__boss_master_key__"),
+                       (f"sref_s_{thief}", "db/sref_someone_else")):
+            c.execute(text(
+                "INSERT INTO secret_refs (id, project_id, scope_type, scope_id, ref_kind, "
+                "ref_key, provider, storage_backend, created_by) VALUES (:i, :p, 'project', :p, "
+                "'database', :k, 'github', 'database', 'ceo')"), {"i": i, "p": thief, "k": key})
+    for i in (f"sref_m_{thief}", f"sref_s_{thief}"):
+        with eng.begin() as c, pytest.raises(secret_backends.SecretUnavailable):
+            secret_backends.resolve_secret_ref(c, i, get_settings(), project_id=thief)
 
 
-# ---- ownership is RECORDED, never read off a key's name (seventh review) ----------------------
-
-def test_names_that_fold_together_never_share_an_owner(eng):
-    """acme vs acme-prod (a prefix), acme-prod vs acme_prod (the same folded key): the owner is
-    the scope BOSS recorded when it wrote the material, so neither can read, re-point or overwrite
-    the other's — and credential_host_for never gives the other's host."""
+def test_the_connection_flow_binds_the_slot_it_wrote(eng):
+    """store_token_credential writes a pending slot; create binds it to (connection, project) at
+    write time; a token then resolves tagged with that GHES — and a hand-made ref does not."""
     from boss_engine.config import get_settings
-    from boss_engine.services import secret_backends, secrets_service
-    from boss_engine.services.github_connections import credential_host_for
-
-    acme, acme_prod = make_project(eng), make_project(eng)
-    with eng.begin() as c:
-        secrets_service.record_material_owner(c, "database", "BOSS_ACME_PROD_GITHUB_TOKEN",
-                                              "project", acme_prod)
-        owner = secrets_service.material_owner(c, "database", "BOSS_ACME_PROD_GITHUB_TOKEN")
-    rec = {"id": "s", "storage_backend": "database", "scope_type": "project", "scope_id": acme,
-           "project_id": acme, "ref_key": "BOSS_ACME_PROD_GITHUB_TOKEN", "metadata": {}}
-    assert credential_host_for(rec, GHES, acme, owner) == ""          # prefix: not acme's
-    with eng.begin() as c, pytest.raises(secrets_service.MaterialOwnedElsewhere):
-        secrets_service.record_material_owner(c, "database", "BOSS_ACME_PROD_GITHUB_TOKEN",
-                                              "project", f"{acme}_other")   # a folded twin
-    with eng.begin() as c:
-        c.execute(text(
-            "INSERT INTO secret_refs (id, project_id, scope_type, scope_id, ref_kind, ref_key, "
-            "provider, storage_backend, created_by) VALUES (:i, :p, 'project', :p, 'database', "
-            "'BOSS_ACME_PROD_GITHUB_TOKEN', 'github', 'database', 'ceo')"), {"i": f"s_{acme}", "p": acme})
-    with eng.begin() as c, pytest.raises(secret_backends.SecretUnavailable):   # read time too
-        secret_backends.resolve_secret_ref(c, f"s_{acme}", get_settings(), project_id=acme)
-
-
-def test_material_with_no_recorded_owner_is_nobodys_own(eng):
-    from boss_engine.config import get_settings
-    from boss_engine.services import secret_backends
-    from boss_engine.services.secret_refs import SecretRefService
+    from boss_engine.services.github_connections import (CONNECTION_SLOT_KEY,
+                                                        GitHubConnectionService)
 
     project = make_project(eng)
-    with eng.begin() as c, pytest.raises(ValueError):
-        SecretRefService().create_secret_ref(
-            c, project_id=project, ref_kind="database", ref_key=f"BOSS_{project.upper()}_LEGACY",
-            provider="github", status="active", metadata={}, actor="ceo")
+    service = GitHubConnectionService(get_settings())
     with eng.begin() as c:
-        c.execute(text(
-            "INSERT INTO secret_refs (id, project_id, scope_type, scope_id, ref_kind, ref_key, "
-            "provider, storage_backend, created_by) VALUES (:i, :p, 'project', :p, 'database', "
-            "'BOSS_NOBODY_LEGACY', 'github', 'database', 'ceo')"), {"i": f"l_{project}", "p": project})
-    with eng.begin() as c, pytest.raises(secret_backends.SecretUnavailable):
-        secret_backends.resolve_secret_ref(c, f"l_{project}", get_settings(), project_id=project)
-
-
-@pytest.mark.parametrize("slug", ["subscription", "llm-gateway", "llm_gateway", "Subscription"])
-def test_a_project_may_not_be_named_onto_an_install_secret_scope(slug):
-    from boss_engine.bootstrap import project_slug_for
-
-    with pytest.raises(ValueError):
-        project_slug_for(slug, slug.lower() if "_" not in slug else None)
+        ref = service.store_token_credential(c, project_id=project, token="ghes-pasted-token",
+                                             auth_method="personal_access_token",
+                                             label="northgate", actor="ceo")
+        kind, _, key = ref.partition(":")
+        md = c.execute(text("SELECT metadata FROM secret_refs WHERE project_id=:p AND "
+                            "ref_kind=:k AND ref_key=:key"),
+                       {"p": project, "k": kind, "key": key}).scalar_one()
+        assert md[CONNECTION_SLOT_KEY] == {"pending": True, "project_id": project}
+        service._bind_connection_slot(c, project_id=project, credential_ref=ref,  # noqa: SLF001
+                                      connection_id="ghc_x")
+        md = c.execute(text("SELECT metadata FROM secret_refs WHERE project_id=:p AND "
+                            "ref_kind=:k AND ref_key=:key"),
+                       {"p": project, "k": kind, "key": key}).scalar_one()
+        assert md[CONNECTION_SLOT_KEY] == {"connection_id": "ghc_x", "project_id": project}
+        # Another flow (no fresh slot of its own) can neither bind nor re-bind it.
+        GitHubConnectionService(get_settings())._bind_connection_slot(  # noqa: SLF001
+            c, project_id=project, credential_ref=ref, connection_id="ghc_thief")
+        service._bind_connection_slot(c, project_id=project, credential_ref=ref,  # noqa: SLF001
+                                      connection_id="ghc_thief")
+        md = c.execute(text("SELECT metadata FROM secret_refs WHERE project_id=:p AND "
+                            "ref_kind=:k AND ref_key=:key"),
+                       {"p": project, "k": kind, "key": key}).scalar_one()
+        assert md[CONNECTION_SLOT_KEY]["connection_id"] == "ghc_x"     # never re-bound

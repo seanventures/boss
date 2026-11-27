@@ -831,10 +831,6 @@ class DatabaseBackend:
 
         ref_id = f"sref_{uuid.uuid4().hex[:16]}"
         ref_key = f"db/{ref_id}"
-        from .secrets_service import record_material_owner
-
-        record_material_owner(connection, "database", ref_key, "project", project_id,
-                              actor=created_by)
         if self._key is None:
             row = connection.execute(sql(
                 "SELECT ciphertext FROM secret_material WHERE ref_key = '__boss_master_key__'"
@@ -1220,29 +1216,20 @@ def pick_default_backend(settings: Settings) -> tuple[str, list[str]]:
 
 
 #: BOSS's own stores with ONE GLOBAL key space (secret_material.ref_key is the primary key; the
-#: local vault is one file). Their keys are named by BOSS for a scope (secrets_service.ref_key_for)
-#: and a reference to one can only be CREATED for its own scope (SecretRefService.create_secret_ref,
-#: BOSSAPP-1286). At read time the store's own master key never resolves, and a db/<id> slot only
-#: for its own reference.
+#: local vault is one file). At read time the store's own master key never resolves, and a
+#: db/<id> slot only for its own reference (BOSSAPP-1286).
 _GLOBAL_KEY_STORES = frozenset({"database", "local_vault"})
 
 
-def _material_belongs_to(connection: Any, row: Any, secret_ref_id: str) -> bool:
-    """In a global-key store, a reference reads only material whose RECORDED owner
-    (secret_material_owners) is its own scope — never decided by the key's name. The master key
-    never; a db/<id> slot only for its own reference; material with no recorded owner, no one."""
+def _material_belongs_to(row: Any, secret_ref_id: str) -> bool:
+    """The master key never; a db/<id> slot only for the reference it was written for."""
     backend = str(row.get("storage_backend") or row.get("ref_kind") or "").lower()
     if backend not in _GLOBAL_KEY_STORES:
         return True
     key = str(row.get("ref_key") or "")
     if key == "__boss_master_key__":
         return False
-    if key.startswith("db/"):
-        return key == f"db/{secret_ref_id}"
-    from .secrets_service import owner_is
-
-    return owner_is(connection, backend, key, str(row.get("scope_type") or "project"),
-                    str(row.get("scope_id") or row.get("project_id") or ""))
+    return not key.startswith("db/") or key == f"db/{secret_ref_id}"
 
 
 def _tag_github_by_origin(value: Any, row: Any) -> Any:
@@ -1304,7 +1291,7 @@ def resolve_secret_ref(connection, secret_ref_id: str, settings: Settings,
     subject = _access.scope_admits(row, who)
     if subject is not None:
         raise _refuse(subject, f"secret ref {secret_ref_id} is {subject}")
-    if not _material_belongs_to(connection, row, secret_ref_id):
+    if not _material_belongs_to(row, secret_ref_id):
         raise _refuse("material of another scope",
                       f"secret ref {secret_ref_id} names material it was not written for")
     backend = backend_for(row["storage_backend"] or row["ref_kind"], settings)
