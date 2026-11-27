@@ -30,6 +30,7 @@ from .core import (
 from .github_adapter import (
     GitHubAdapter,
     IntegrationConfigurationError,
+    MergeHeadUnverifiable,
     PullRequestValidationResult,
 )
 from .agent_loop import load_agent_run, run_agent_loop
@@ -1542,6 +1543,21 @@ class SoftwareFactoryService:
             return None
         value = str(value or "").strip()
         return value if re.fullmatch(r"[0-9a-f]{7,64}", value) else None
+
+    @staticmethod
+    def _person_forced_merge(connection: Any, decision_id: Optional[str]) -> bool:
+        """Whether a person approved this merge with Force (decision.merge_forced: who, why).
+        A setting never forces (ci_gate refuses a policy's force)."""
+        if not decision_id:
+            return False
+        try:
+            with connection.begin_nested():
+                return bool(connection.execute(sql(
+                    "SELECT 1 FROM events WHERE entity_id = :d "
+                    "AND event_type = 'decision.merge_forced' LIMIT 1"),
+                    {"d": decision_id}).first())
+        except Exception:  # noqa: BLE001 — unread is not forced
+            return False
 
     def _head_moved_past(self, pull_request_number: int, approved_head: Optional[str]) -> bool:
         """Whether the pull request's head is no longer the approved commit. Unreadable counts
@@ -3301,14 +3317,16 @@ class SoftwareFactoryService:
         pin = ({"head_sha": approved_head}
                if approved_head and _accepts_kwarg(self.github.merge_pull_request, "head_sha")
                else {})
-        if approved_head and not pin:
-            # A host that cannot bind a merge to a commit (an MCP-served repository) merges its
-            # tip: say so on the record rather than silently.
+        if pin and _accepts_kwarg(self.github.merge_pull_request, "merge_tip") \
+                and self._person_forced_merge(connection, decision_id):
+            # A HOST THAT CANNOT CONFIRM THE HEAD (an MCP-served repository without a pull
+            # request read) merges its tip only on a person's force, on the record.
+            pin = {**pin, "merge_tip": True}
             self.events.emit(
                 connection, project_id, "software_factory.merge_head_pin_dropped",
                 "release_manager", "decision", decision_id,
                 {"pull_request_url": pull_request_url, "approved_head_sha": approved_head,
-                 "reason": "repository_host_cannot_pin_a_merge"})
+                 "reason": "person_forced_merge_of_tip"})
         try:
             from .github_adapter import PullRequestMergeResult
 
@@ -3317,6 +3335,21 @@ class SoftwareFactoryService:
                 message=f"PR #{pull_request_number} is already merged")
                 if settled and settled.get("state") == "merged" else
                 self.github.merge_pull_request(pull_request_number, title, **pin))
+        except MergeHeadUnverifiable as error:
+            # Nothing merged: the host cannot say which commit it would merge. A person decides
+            # whether its tip is what they meant (approve with Force) — never BOSS by default.
+            self.receipts.mark_failed(connection, merge_receipt["id"], {"message": str(error)})
+            ask = self.decisions.create_blocking(
+                connection, project_id, task_id,
+                f"Merge the tip of PR #{pull_request_number}? Its host cannot confirm the "
+                "approved commit",
+                {"action": "review_pull_request", "pull_request_url": pull_request_url,
+                 "pull_request_number": pull_request_number, "title": title,
+                 "branch_name": branch_name, "head_sha": approved_head,
+                 "summary": str(error), "superseded_decision_id": decision_id},
+                {}, "merge_head_unverifiable")
+            return {"status": "blocked", "decision_id": ask, "message": str(error),
+                    "receipt_id": merge_receipt["id"], "pull_request_url": pull_request_url}
         except IntegrationConfigurationError as error:
             self.receipts.mark_failed(
                 connection, merge_receipt["id"], {"message": str(error)}

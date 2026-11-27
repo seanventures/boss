@@ -176,12 +176,13 @@ def test_bitbucket_merge_is_bound_to_the_approved_head(wire, monkeypatch):
     assert not wire[-1]["url"].endswith("/merge"), "a moved head never reaches the merge call"
 
 
-def test_every_first_party_host_binds_a_merge_to_its_approved_head():
+def test_every_host_binds_a_merge_to_its_approved_head():
     """The factory pins an approved merge to the card's head only on hosts whose merge takes
     `head_sha`; a host without it merges the tip of whatever was pushed after approval."""
     import inspect
 
     from boss_engine.services.local_repo_host import LocalGitAdapter
+    from boss_engine.services.mcp_repo_host import McpRepoHost
 
-    for host in (GitHubAdapter, BitbucketAdapter, LocalGitAdapter):
+    for host in (RepoHost, GitHubAdapter, BitbucketAdapter, LocalGitAdapter, McpRepoHost):
         assert "head_sha" in inspect.signature(host.merge_pull_request).parameters, host.__name__

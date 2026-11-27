@@ -215,10 +215,15 @@ def _decision_for(c: Any, project_id: str, url: str) -> Optional[dict[str, Any]]
     return dict(row) if row else None
 
 
+_COMMIT = re.compile(r"[0-9a-f]{7,64}")
+
+
 def same_head(a: Optional[str], b: Optional[str]) -> bool:
-    """Whether two commit ids name one commit (either may be abbreviated)."""
+    """Whether two commit ids name one commit. Each may be abbreviated, never below 7 hex
+    characters: a shorter or empty id names no commit, so it matches nothing."""
     a, b = str(a or "").strip().lower(), str(b or "").strip().lower()
-    return bool(a and b) and (a.startswith(b) or b.startswith(a))
+    return (bool(_COMMIT.fullmatch(a) and _COMMIT.fullmatch(b))
+            and (a.startswith(b) or b.startswith(a)))
 
 
 def stale_card_words(decision: Optional[dict[str, Any]], head: Optional[str]) -> Optional[str]:
@@ -227,9 +232,15 @@ def stale_card_words(decision: Optional[dict[str, Any]], head: Optional[str]) ->
     head: a card for an earlier head waits for BOSS to raise one for the current head."""
     card_head = str((decision or {}).get("head_sha") or "").strip()
     head = str(head or "").strip()
-    if not card_head or not head or same_head(card_head, head):
+    if same_head(card_head, head):
         return None
-    return (f"Its merge card was raised for {card_head[:7]}; the change is now at {head[:7]}. "
+    now = f"the change is now at {head[:7]}" if _COMMIT.fullmatch(head.lower()) else \
+        "the change's head could not be read"
+    if not _COMMIT.fullmatch(card_head.lower()):
+        return (f"Its merge card names no commit it was raised for, and {now}, so approving it "
+                "could merge something nobody reviewed. BOSS asks again for the current head "
+                "before it can be merged.")
+    return (f"Its merge card was raised for {card_head[:7]}; {now}. "
             "BOSS asks again for the current head before it can be merged.")
 
 

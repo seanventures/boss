@@ -27,6 +27,7 @@ from typing import Any, Optional
 from .github_adapter import (
     IntegrationConfigurationError,
     IssueCommentResult,
+    MergeHeadUnverifiable,
     PullRequestMergeResult,
     PullRequestResult,
 )
@@ -39,6 +40,7 @@ _DEFAULT_TOOLS = {
     "upsert_file": "commit_file",
     "create_pull_request": "create_pull_request",
     "merge_pull_request": "merge_pull_request",
+    "get_pull_request": "get_pull_request",
     "create_issue_comment": "add_pull_request_comment",
     "get_pull_request_diff": "get_pull_request_diff",
     "get_access_token": "get_access_token",
@@ -157,8 +159,39 @@ class McpRepoHost:
         return PullRequestResult(url=str(data.get("url") or data.get("html_url") or ""),
                                  number=int(data.get("id") or data.get("number") or 0))
 
-    def merge_pull_request(self, pull_request_number: int,
-                           commit_title: str) -> PullRequestMergeResult:
+    def pull_request_head(self, pull_request_number: int) -> Optional[str]:
+        """The commit the pull request's source branch holds, when the server can say; else
+        None (no pull-request read tool, or an answer without a commit)."""
+        self._tool("get_pull_request")      # discovers the server's tools once
+        if "get_pull_request" not in (self._discovered or {}):
+            return None
+        try:
+            out = self._call("get_pull_request", {"repository": self.repository_full_name,
+                                                  "id": pull_request_number})
+        except Exception:  # noqa: BLE001 — unread is unverifiable, never a pass
+            return None
+        data = out if isinstance(out, dict) else {}
+        head = (((data.get("source") or {}).get("commit") or {}).get("hash")
+                or (data.get("head") or {}).get("sha") or data.get("head_sha") or "")
+        return str(head).strip() or None
+
+    def merge_pull_request(self, pull_request_number: int, commit_title: str, *,
+                           head_sha: Optional[str] = None,
+                           merge_tip: bool = False) -> PullRequestMergeResult:
+        if head_sha and not merge_tip:
+            # MERGE WHAT WAS APPROVED: the merge tool takes no expected commit, so read the
+            # head first (as BitbucketAdapter does). A server that cannot say never merges the
+            # tip on its own; a person's force (merge_tip) is the only way past.
+            current = self.pull_request_head(pull_request_number)
+            if current is None:
+                raise MergeHeadUnverifiable(
+                    f"This repository's MCP server cannot report which commit PR "
+                    f"#{pull_request_number} holds, so BOSS cannot bind the merge to the approved "
+                    f"commit {str(head_sha)[:7]}. Nothing was merged. Approve with Force to merge "
+                    "its tip, or merge it in the repository host.")
+            want, now = str(head_sha).strip().lower(), current.lower()
+            if not (want.startswith(now) or now.startswith(want)):
+                raise RuntimeError("409 Conflict: Head branch was modified after approval.")
         out = self._call("merge_pull_request", {
             "repository": self.repository_full_name, "id": pull_request_number,
             "message": commit_title})

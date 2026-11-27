@@ -147,3 +147,26 @@ def test_normalize_bitbucket_pullrequest_payload():
     assert n["source_branch"] == "boss/code/r1" and n["destination_branch"] == "main"
     assert n["merge_commit"] == "abc123" and n["author"] == "dev1"
     assert InboundWebhookService._normalize_bitbucket_payload("repo", "push", {}) == {}
+
+
+def test_mcp_merge_is_bound_to_the_approved_head_or_refused():
+    """A server that can read the pull request merges only while it holds the approved commit;
+    one that cannot never merges the tip on its own — only a person's force (merge_tip) does."""
+    from boss_engine.services.github_adapter import MergeHeadUnverifiable
+
+    reads = _FakeMcp(tools=["bb_get_pull_request", "bb_merge_pull_request"],
+                     results={"bb_get_pull_request": {"source": {"commit": {"hash": "abc1234def"}}},
+                              "bb_merge_pull_request": {"sha": "m1", "merged": True}})
+    host = McpRepoHost(_mcp_settings(), client=reads)
+    assert host.merge_pull_request(4, "t", head_sha="abc1234def0011").merged is True
+    with pytest.raises(RuntimeError, match="409"):
+        host.merge_pull_request(4, "t", head_sha="fff0000aaaa")
+    assert [c[1] for c in reads.calls if c[0] == "call"].count("bb_merge_pull_request") == 1
+
+    blind = _FakeMcp(tools=["bb_merge_pull_request"],
+                     results={"bb_merge_pull_request": {"sha": "m2", "merged": True}})
+    host = McpRepoHost(_mcp_settings(), client=blind)
+    with pytest.raises(MergeHeadUnverifiable, match="Force"):
+        host.merge_pull_request(4, "t", head_sha="abc1234def")
+    assert not [c for c in blind.calls if c[0] == "call"], "nothing merged"
+    assert host.merge_pull_request(4, "t", head_sha="abc1234def", merge_tip=True).merged is True

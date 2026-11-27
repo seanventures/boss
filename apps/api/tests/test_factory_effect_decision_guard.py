@@ -167,6 +167,51 @@ def test_any_card_that_names_a_head_is_that_heads_card(engine):
 
         first = ask(head_sha="a" * 40)
         assert ask(head_sha="a" * 40) == first
-        assert ask(head_sha="b" * 40) != first
+        second = ask(head_sha="b" * 40)
+        third = ask(head_sha="c" * 40)
+        assert len({first, second, third}) == 3
+        rows = {r["id"]: r for r in db.execute(text(
+            "SELECT id, status, resolution_note FROM decisions WHERE id IN (:a, :b, :c)"),
+            {"a": first, "b": second, "c": third}).mappings()}
+        # One cause, one open card: the newest head's. The older ones say what replaced them.
+        assert rows[third]["status"] == "pending"
+        assert rows[first]["status"] == rows[second]["status"] == "withdrawn"
+        assert third in rows[second]["resolution_note"] and second in rows[first]["resolution_note"]
         unbound = ask()
         assert ask(head_sha="") == unbound, "empty and absent heads are one value"
+
+
+def test_a_host_that_cannot_confirm_the_head_merges_its_tip_only_on_a_persons_force(
+    client, engine, monkeypatch,
+):
+    """An MCP-served repository without a pull-request read: the approved merge merges nothing
+    and asks a person; only a person's Force (decision.merge_forced) merges the tip."""
+    from boss_engine.services.core import emit_event
+    from boss_engine.services.github_adapter import MergeHeadUnverifiable, PullRequestMergeResult
+
+    calls = []
+
+    def blind_merge(number, title, *, head_sha=None, merge_tip=False):
+        calls.append({"head_sha": head_sha, "merge_tip": merge_tip})
+        if head_sha and not merge_tip:
+            raise MergeHeadUnverifiable("cannot report which commit it holds; approve with Force")
+        return PullRequestMergeResult(sha="m" * 40, merged=True, message=title)
+
+    monkeypatch.setattr(api_main.software_factory.github, "merge_pull_request", blind_merge)
+    approved = {"action": "review_pull_request", "pull_request_url": PR_URL, "head_sha": "a" * 40}
+
+    asked = client.post("/v1/software-factory/merges",
+                        json=_merge(_decision(engine, status="approved", recommendation=approved)))
+    assert asked.status_code == 200, asked.text
+    assert asked.json()["status"] == "blocked" and asked.json()["decision_id"]
+    assert calls == [{"head_sha": "a" * 40, "merge_tip": False}]
+    with engine.connect() as db:
+        assert db.execute(text("SELECT status FROM decisions WHERE id = :d"),
+                          {"d": asked.json()["decision_id"]}).scalar() == "pending"
+
+    forced = _decision(engine, status="approved", recommendation=approved)
+    with engine.begin() as db:
+        emit_event(db, PROJECT, "decision.merge_forced", "a-person", "decision", forced,
+                   {"reason": "the tip is what I reviewed"})
+    client.post("/v1/software-factory/merges", json=_merge(forced))
+    assert calls[-1] == {"head_sha": "a" * 40, "merge_tip": True}

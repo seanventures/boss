@@ -540,6 +540,24 @@ def create_blocking_decision(
     )
 
 
+#: One cause's open card (_create_blocking_decision_postgres): everything but its head.
+_SAME_CAUSE_SQL = """
+    project_id = :project_id
+    AND question = :question
+    AND status = 'pending'
+    AND task_id IS NOT DISTINCT FROM :task_id
+    AND recommendation->>'workflow_run_id' IS NOT DISTINCT FROM :gate_run
+    AND (CAST(:gate_run AS TEXT) IS NULL
+         OR recommendation->>'step_id' IS NOT DISTINCT FROM :gate_step)
+    AND recommendation->>'deployment_run_id' IS NOT DISTINCT FROM :subject_run
+    AND recommendation->>'interrupt_id' IS NOT DISTINCT FROM :interrupt
+    AND (CAST(:merge_review AS boolean) = false
+         OR (recommendation->>'action' = 'review_pull_request'
+             AND recommendation->>'pull_request_url' IS NOT DISTINCT FROM :pr_url
+             AND recommendation->>'run_id' IS NOT DISTINCT FROM :review_run))
+"""
+
+
 def _create_blocking_decision_postgres(
     connection: Any,
     project_id: str,
@@ -585,33 +603,19 @@ def _create_blocking_decision_postgres(
     # head whose checks had failed. Any card that names a head is merged only with a repeat for
     # the same head; a new head is a new question. Empty and absent read as one value.
     head = str(rec_in.get("head_sha") or "").strip() or None
+    cause_params = {
+        "project_id": project_id, "question": question, "task_id": task_id,
+        "gate_run": gate_run, "gate_step": gate_step, "subject_run": subject_run,
+        "interrupt": interrupt, "merge_review": rec_in.get("action") == "review_pull_request",
+        "pr_url": rec_in.get("pull_request_url"), "head": head,
+        "review_run": rec_in.get("run_id")}
     existing = connection.execute(
         sql(
-            """
-            SELECT id, recommendation FROM decisions
-            WHERE project_id = :project_id
-              AND question = :question
-              AND status = 'pending'
-              AND task_id IS NOT DISTINCT FROM :task_id
-              AND recommendation->>'workflow_run_id' IS NOT DISTINCT FROM :gate_run
-              AND (CAST(:gate_run AS TEXT) IS NULL
-                   OR recommendation->>'step_id' IS NOT DISTINCT FROM :gate_step)
-              AND recommendation->>'deployment_run_id' IS NOT DISTINCT FROM :subject_run
-              AND recommendation->>'interrupt_id' IS NOT DISTINCT FROM :interrupt
-              AND NULLIF(btrim(recommendation->>'head_sha'), '') IS NOT DISTINCT FROM :head
-              AND (CAST(:merge_review AS boolean) = false
-                   OR (recommendation->>'action' = 'review_pull_request'
-                       AND recommendation->>'pull_request_url' IS NOT DISTINCT FROM :pr_url
-                       AND recommendation->>'run_id' IS NOT DISTINCT FROM :review_run))
-            ORDER BY created_at DESC
-            LIMIT 1
-            """
+            "SELECT id, recommendation FROM decisions WHERE " + _SAME_CAUSE_SQL
+            + " AND NULLIF(btrim(recommendation->>'head_sha'), '') IS NOT DISTINCT FROM :head"
+            " ORDER BY created_at DESC LIMIT 1"
         ),
-        {"project_id": project_id, "question": question, "task_id": task_id,
-         "gate_run": gate_run, "gate_step": gate_step, "subject_run": subject_run,
-         "interrupt": interrupt, "merge_review": rec_in.get("action") == "review_pull_request",
-         "pr_url": rec_in.get("pull_request_url"), "head": head,
-         "review_run": rec_in.get("run_id")},
+        cause_params,
     ).mappings().first()
     if existing:
         prior = existing["recommendation"] or {}
@@ -684,6 +688,25 @@ def _create_blocking_decision_postgres(
             "risk_tier": risk_tier,
         },
     )
+    # THE NEWEST HEAD'S CARD IS THE CAUSE'S ONE CARD. A card for another head of the same cause
+    # (a community PR asked again on every push, a sync or deploy re-raised for a new commit)
+    # asks about a commit that is no longer the one in question: it is withdrawn, naming this
+    # card, so only the current head can be approved. (A card naming no head merges with its
+    # head-less repeats above, so only a card for a head can supersede.)
+    superseded = [] if head is None else connection.execute(
+        sql(
+            "UPDATE decisions SET status = 'withdrawn', resolution_note = :note, "
+            "updated_at = NOW() WHERE " + _SAME_CAUSE_SQL + " AND id <> :new_id "
+            "AND NULLIF(btrim(recommendation->>'head_sha'), '') IS DISTINCT FROM :head "
+            "RETURNING id"
+        ),
+        {**cause_params, "new_id": decision_id,
+         "note": f"Superseded by {decision_id}: it asks the same question for a newer head."},
+    ).scalars().all()
+    for old_id in superseded:
+        _emit_event_postgres(connection, project_id, "decision.withdrawn", "system", "decision",
+                             str(old_id), {"superseded_by": decision_id,
+                                           "reason": "head_moved"})
     # DEV AUTONOMY'S ONE CHOKE POINT (services/autonomy_gate.py, BOSSAPP-1441): the card is
     # classified and, when BOSS answers it in development, decided after this commits with the
     # same follow-on a person's Approve runs. It never fails the producer.
