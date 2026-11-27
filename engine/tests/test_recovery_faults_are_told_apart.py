@@ -8,7 +8,8 @@ act on:
 
     REC-09 crash on start        "the app exited (code N) before serving HTTP", the app's own error
     REC-10 wrong port            "did not answer HTTP" (the app never served on the $PORT BOSS gave)
-    REC-11 404 at /              "GET / returned 404": up, but no page — never "live"
+    REC-11 404 at / (and at its  "GET / returned 404": it runs but serves nothing — never "live"
+           health routes)
     REC-12 a missing variable    the crash names PAGE_SIZE; the coder's to fix, never a person's
     REC-13 a secret only a       "needs a secret: PAYMENTS_API_KEY", the app not started, a person
            person has            asked — never a repair round
@@ -40,10 +41,6 @@ LOGGED_PORT_IS_FOLLOWED = pytest.mark.xfail(strict=True, reason=(
     "ENT-REC-10: the serve proof finds the app on the port it LOGS (5999) and passes it, so a "
     "server that ignores the $PORT BOSS gave is never reported as 'did not answer HTTP' nor "
     "repaired (preview_service._discover_working_port reads the port from the log)"))
-SERVICE_404_IS_UP = pytest.mark.xfail(strict=True, reason=(
-    "ENT-REC-11: on an app BOSS reads as an API service (JSON answers, no page), a 404 at / "
-    "counts as up (ABSENT_ROUTE_STATUSES: an API gateway routes only its paths), so the plan's "
-    "'404 at / is failed, not live' holds only for apps that serve pages"))
 APP_CANNOT_DECLARE_A_SECRET = pytest.mark.xfail(strict=True, reason=(
     "ENT-REC-13: an existing app's own files cannot declare a secret only a person has: "
     ".env.example names are optional and boss.deploy.yaml {secret} is the deploy's "
@@ -115,8 +112,10 @@ def test_rec10_a_wrong_port_did_not_answer_http(tmp_path, stack):
     assert kind(record) == "did not answer HTTP", record
 
 
-@pytest.mark.parametrize("stack", [pytest.param("node", marks=SERVICE_404_IS_UP), "python", "go"])
-def test_rec11_a_404_at_home_is_failed_not_live(tmp_path, stack):
+@pytest.mark.parametrize("stack", STACKS)
+def test_rec11_an_app_that_serves_nothing_is_failed_not_live(tmp_path, stack):
+    """The kit's REC-11 takes / AND the health routes away: an app that still answered /healthz
+    would be up by design (an API service routes only its own paths, BOSSAPP-1308)."""
     record = _prove(tmp_path, stack, "REC-11")
     assert kind(record) == "404 at /", record
     assert record["harness"] is False

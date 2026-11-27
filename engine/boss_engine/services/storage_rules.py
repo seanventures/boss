@@ -145,6 +145,19 @@ def thresholds(connection: Any, host_id: Optional[str] = None) -> dict[str, floa
     return out
 
 
+def check_order(rule: Mapping[str, Any]) -> None:
+    """The levels stay in order — warn above critical above floor (all free %) — or the watch
+    would skip a level or never leave one. Raises ValueError naming the values."""
+    try:
+        warn, crit, floor = (float(rule[k]) for k in ("warn_free_pct", "critical_free_pct",
+                                                      "floor_free_pct"))
+    except (KeyError, TypeError, ValueError):
+        return
+    if not warn > crit > floor:
+        raise ValueError(f"thresholds must keep warn > critical > floor (free %): warn {warn:g}, "
+                         f"critical {crit:g}, floor {floor:g}")
+
+
 def upsert(connection: Any, *, kind: str, rule: Mapping[str, Any], host_id: Optional[str] = None,
            enabled: bool = True, source: str = "operator", actor: str = "boss",
            decision_id: Optional[str] = None, rule_id: Optional[str] = None) -> dict[str, Any]:
@@ -153,6 +166,7 @@ def upsert(connection: Any, *, kind: str, rule: Mapping[str, Any], host_id: Opti
     if kind == "threshold":
         rule = {**thresholds(connection, host_id), **{k: float(v) for k, v in rule.items()
                                                       if k in DEFAULT_THRESHOLDS}}
+        check_order(rule)
     row = connection.execute(text("""
         INSERT INTO retention_rules (id, host_id, kind, rule, enabled, source, decision_id,
                                      created_by, updated_at)

@@ -354,38 +354,38 @@ def test_every_case_in_the_list_has_a_generator_and_the_list_prints(capsys):
     assert "ENT-REC-13" in out and "boss qa fault --revert" in out
 
 
-# ── disk pressure (ENT-REC-29..31) without a byte written ─────────────────────────────────────
 
-def test_disk_pressure_moves_the_thresholds_above_todays_free_space_and_back(tmp_path,
-                                                                           monkeypatch):
-    th = {"warn_free_pct": 20.0, "critical_free_pct": 15.0, "target_free_pct": 25.0,
-          "floor_free_pct": 10.0, "floor_free_gb": 5.0, "warn_exit_free_pct": 24.0}
-    sent: list[dict] = []
+def test_a_symlink_is_never_read_or_written_through(tmp_path):
+    app = _app(tmp_path, "node")
+    outside = tmp_path / "outside.js"
+    outside.write_text("export const x = 1;\n")
+    (app / "src" / "linked.js").symlink_to(outside)
+    assert "src/linked.js" not in qa_fault.App(app).files()
+    (app / "test").rename(app / "real-test")
+    (app / "test").symlink_to(app / "real-test")
+    with pytest.raises(qa_fault.Unsupported, match="symlink"):
+        qa_fault.App(app).write("test/slug.test.js", "x")
+    assert outside.read_text() == "export const x = 1;\n"
+
+
+def test_every_deployment_target_page_is_checked_and_a_failed_page_refuses(monkeypatch):
+    pages = {"0": [{"id": f"t{i}", "status": "created"} for i in range(200)],
+             "200": [{"id": "prod-target", "status": "created", "environment": "production"}]}
+    asked = []
 
     def get(self, path, **q):
-        if path == "/v1/infra/storage/summary":
-            return 200, {"disk": {"free_pct": 41.0}, "stale": False, "thresholds": th}
-        return 200, {"thresholds": th}
+        if path == "/v1/autonomy/resolve":
+            asked.append(q.get("target_id"))
+            prod = q.get("target_id") == "prod-target"
+            return 200, {"verdict": {"prod": prod}, "words": "production" if prod else "dev"}
+        return 200, {"items": pages.get(q["offset"], [])}
 
     monkeypatch.setattr(qa_fault.Boss, "get", get)
-    monkeypatch.setattr(qa_fault, "_put", lambda boss, path, body: (sent.append(body), (200, {}))[1])
-    state = tmp_path / ".boss" / "qa-disk-pressure.json"
-    args = lambda level: type("A", (), {"api": "http://x", "state": str(state), "level": level})()  # noqa: E731
-    assert qa_fault.disk_pressure(args("critical"), "tok") == 0
-    moved = sent[-1]["thresholds"]
-    assert moved["warn_free_pct"] == 44.0 and moved["critical_free_pct"] == 43.0
-    assert moved["floor_free_pct"] == 10.0, "critical holds new work; the floor is its own case"
-    assert moved["warn_exit_free_pct"] > moved["warn_free_pct"], "the watch can still leave"
-    assert json.loads(state.read_text())["thresholds"] == th, "the originals are kept"
-    assert qa_fault.disk_pressure(args("floor"), "tok") == 0
-    assert sent[-1]["thresholds"]["floor_free_pct"] == 42.0
-    assert qa_fault.disk_pressure(args("off"), "tok") == 0
-    assert sent[-1]["thresholds"] == th and not state.exists()
-
-
-def test_disk_pressure_refuses_a_stale_reading(tmp_path, monkeypatch):
+    boss = qa_fault.Boss("http://x", "tok")
+    why = qa_fault.production_refusal(boss, {"id": "p", "name": "P"}, {"default_branch": "main"})
+    assert why and "prod-target" in why
     monkeypatch.setattr(qa_fault.Boss, "get", lambda self, path, **q: (
-        200, {"disk": {"free_pct": 41.0}, "stale": True}))
-    args = type("A", (), {"api": "http://x", "state": str(tmp_path / "s.json"), "level": "warn"})()
-    with pytest.raises(SystemExit, match="stale"):
-        qa_fault.disk_pressure(args, "tok")
+        (200, {"verdict": {"prod": False}}) if path == "/v1/autonomy/resolve"
+        else (200, {"items": pages["0"]}) if q["offset"] == "0" else (502, None)))
+    with pytest.raises(SystemExit, match="did not list"):
+        qa_fault.production_refusal(boss, {"id": "p", "name": "P"}, {"default_branch": "main"})

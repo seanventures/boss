@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 2463 operations.
+# 2465 operations.
 "GET /.well-known/agent-card.json": ["public:jwks", "OAPVU"]
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /.well-known/boss-mcp-client.json": ["public:jwks", "OAPVU"]
@@ -1912,6 +1912,8 @@
 "POST /v1/qa/benchmark-apps/runs/{run_id}/tuning-proposal": ["permit improvement:manage @ project(body=project_id)", "OA"]
 "POST /v1/qa/benchmark-apps/tuning-sweep": ["permit assurance:run @ org", "OAP"]
 "POST /v1/qa/benchmark-apps/{benchmark_id}/runs": ["permit assurance:run @ project(body=project_id)", "OAP"]
+"PUT /v1/qa/disk-pressure": ["permit autonomy:manage @ org", "OA"]
+"POST /v1/qa/disk-pressure/off": ["permit autonomy:manage @ org", "OA"]
 "GET /v1/qa/ledger": ["permit code_task:read @ project(query=project_id)", "OAPVU"]
 "GET /v1/receipts": ["permit activity:read @ project(query=project_id)", "OAPVU"]
 "GET /v1/receipts/{dedupe_key}": ["permit activity:read @ receipt(path=dedupe_key)", "OAPVU"]

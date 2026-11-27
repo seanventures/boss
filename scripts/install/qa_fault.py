@@ -106,6 +106,8 @@ class App:
         for dirpath, dirnames, filenames in os.walk(self.root):
             dirnames[:] = sorted(d for d in dirnames if d not in _SKIP_DIRS)
             for name in sorted(filenames):
+                if (Path(dirpath) / name).is_symlink():
+                    continue            # a link may point out of the repository: never read it
                 rel = (Path(dirpath) / name).relative_to(self.root).as_posix()
                 if not suffixes or rel.endswith(suffixes):
                     out.append(rel)
@@ -118,16 +120,28 @@ class App:
     def read(self, rel: str) -> str:
         return (self.root / rel).read_text(encoding="utf-8", errors="replace")
 
-    def write(self, rel: str, text: str) -> None:
+    def _inside(self, rel: str) -> Path:
+        """`rel` under the app, through no symlink (a link could write outside the clone)."""
         path = self.root / rel
+        here = self.root
+        for part in Path(rel).parts:
+            here = here / part
+            if here.is_symlink():
+                raise Unsupported(f"{rel} goes through a symlink ({here.relative_to(self.root)}); "
+                                  "the fault kit never writes through one")
+        return path
+
+    def write(self, rel: str, text: str) -> None:
+        path = self._inside(rel)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
         if rel not in self.changed:
             self.changed.append(rel)
 
     def rename(self, rel: str, to: str) -> None:
-        (self.root / to).parent.mkdir(parents=True, exist_ok=True)
-        (self.root / rel).rename(self.root / to)
+        src, dst = self._inside(rel), self._inside(to)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        src.rename(dst)
         for r in (rel, to):
             if r not in self.changed:
                 self.changed.append(r)
@@ -721,37 +735,50 @@ def wrong_port(app: App) -> Applied:
                               f"({', '.join(hit)})")
 
 
+#: The paths BOSS's start check asks before it calls an app up: the home page and the health
+#: routes (preview_service: `/`, then /healthz, /readyz…). The fault takes every one away.
+_PROBED = r"(?:|health|healthz|readyz|livez|ready|status|api/health)"
+
+
 def no_home_route(app: App) -> Applied:
-    """ENT-REC-11: the home route is gone, so GET / answers 404."""
-    moved = "/__boss_fault_home"
-    route = {"node": r"(\.(?:get|all|route)\(\s*)(['\"`])/\2",
-             "python": r"(@\w+\.(?:route|get)\(\s*)(['\"])/\2",
-             "go": r"((?:HandleFunc|Handle|GET|Get)\(\s*)\"((?:GET )?)/(?:\{\$\})?\""}[app.stack]
+    """ENT-REC-11: the app is up but serves nothing — GET / and its health routes answer 404.
+
+    Removing only `/` is not "down": an app that still answers /healthz is up by BOSS's
+    deliberate rule (an API service routes only its own paths, BOSSAPP-1308). So the home route
+    AND every health route BOSS probes move away (framework routes), or the request handler
+    answers 404 to every path (a raw Node or Python handler)."""
+    moved = "/__boss_fault"
+    route = {"node": rf"(\.(?:get|all|route)\(\s*)(['\"`])/{_PROBED}\2",
+             "python": rf"(@\w+\.(?:route|get)\(\s*)(['\"])/{_PROBED}\2",
+             "go": rf"((?:HandleFunc|Handle|GET|Get)\(\s*)\"((?:GET )?)/{_PROBED}(?:\{{\$\}})?\""
+             }[app.stack]
+    hits = []
     for rel in app.sources():
         text = app.read(rel)
-        m = re.search(route, text)
-        if m:
-            if app.stack == "go":
-                new = text[:m.start()] + f'{m.group(1)}"{m.group(2)}{moved}"' + text[m.end():]
-            else:
-                new = text[:m.start()] + f"{m.group(1)}{m.group(2)}{moved}{m.group(2)}" + \
-                    text[m.end():]
+        new, count = text, 0
+        for m in reversed(list(re.finditer(route, text))):
+            path = m.group(0)[len(m.group(1)):]
+            target = re.sub(r"/", f"{moved}/", path, count=1)    # "/x" -> "/__boss_fault/x"
+            new = new[:m.start()] + m.group(1) + target + new[m.end():]
+            count += 1
+        if count:
             app.write(rel, new)
-            line = text.count("\n", 0, m.start()) + 1
-            return app.done("REC-11", f"the home route on line {line} of {rel} moved to {moved}, "
-                                      "so GET / answers 404")
+            hits.append(f"{rel} ({count})")
+    if hits:
+        return app.done("REC-11", f"the home route and the health routes moved under {moved}/ "
+                                  f"in {', '.join(hits)}, so GET / and /healthz answer 404")
     if app.stack == "node":
         for rel in app.sources():
             text = app.read(rel)
             m = re.search(r"createServer\(\s*(?:async\s+)?(?:function\s*)?\(\s*(\w+)\s*,\s*(\w+)"
                           r"[^)]*\)\s*(?:=>\s*)?\{", text)
             if m:
-                req, res = m.group(1), m.group(2)
-                guard = (f'\n  if (({req}.url || "/").split("?")[0] === "/") {{ // BOSS fault '
-                         f'REC-11\n    {res}.statusCode = 404;\n    return {res}.end("Not '
-                         'found");\n  }')
+                res = m.group(2)
+                guard = (f'\n  {res}.statusCode = 404; // BOSS fault REC-11: every path is gone\n'
+                         f'  return {res}.end("Not found");')
                 app.write(rel, text[:m.end()] + guard + text[m.end():])
-                return app.done("REC-11", f"the request handler in {rel} answers 404 at /")
+                return app.done("REC-11", f"the request handler in {rel} answers 404 to every "
+                                          "path, / and /healthz included")
         for page in ("app/page.tsx", "app/page.jsx", "app/page.js", "pages/index.tsx",
                      "pages/index.jsx", "pages/index.js", "src/app/page.tsx", "src/pages/index.tsx"):
             if app.has(page):
@@ -765,10 +792,11 @@ def no_home_route(app: App) -> Applied:
             m = re.search(r"(?m)^(\s*)def do_GET\(self\):\s*$", text)
             if m:
                 ind = m.group(1) + "    "
-                guard = (f"\n{ind}if self.path.split(\"?\")[0] == \"/\":  # BOSS fault REC-11\n"
-                         f"{ind}    self.send_error(404)\n{ind}    return")
+                guard = (f"\n{ind}self.send_error(404)  # BOSS fault REC-11: every path is gone\n"
+                         f"{ind}return")
                 app.write(rel, text[:m.end()] + guard + text[m.end():])
-                return app.done("REC-11", f"do_GET in {rel} answers 404 at /")
+                return app.done("REC-11", f"do_GET in {rel} answers 404 to every path, / and "
+                                          "/healthz included")
             m = re.search(r"\bpath\(\s*(['\"])\1\s*,", text)
             if m and Path(rel).name == "urls.py":
                 app.write(rel, text[:m.start()] + 'path("boss-fault-home/",' + text[m.end():])
@@ -863,13 +891,15 @@ def needs_migration(app: App) -> Applied:
                       "`sqlite3.connect(...)`); other databases and ORMs need the fault by hand")
 
 
-START_NEW_WORK = "Merge it on purpose, then start New work on that app: \"Add a recipe counter\""
+#: "{case}" leads the New work's title so `boss qa report` ties the build to the case.
+START_NEW_WORK = ("Merge it on purpose, then start New work on that app titled \"{case}: Add a "
+                  "recipe counter\"")
 START_PREVIEW = "Merge it on purpose, then press Start preview on that app"
 CASES: dict[str, Case] = {c.id: c for c in (
     Case("REC-01", "A broken existing test", STACKS, START_NEW_WORK,
          "BOSS fixes the test or the code and checks pass within 30 min, or opens a draft change "
          "marked checks failing, naming the test, with a follow-up — never a loop", broken_test),
-    Case("REC-02", "A type error", STACKS, START_NEW_WORK.replace("\"Add a recipe counter\"",
+    Case("REC-02", "A type error", STACKS, START_NEW_WORK.replace("Add a recipe counter",
                                                                   "a small change"),
          "the typecheck fails, BOSS fixes it and checks pass within 30 min; else the message "
          "names the file and the error", type_error),
@@ -1052,11 +1082,21 @@ def production_refusal(boss: Boss, project: dict, local: dict) -> Optional[str]:
                           base_branch=str(local.get("default_branch") or "main"))
     if prod:
         return f"a merge into {local.get('default_branch')} ships to production ({words})"
-    code, body = boss.get("/v1/deployment-targets", project_id=pid, limit="200")
-    if code != 200 or not isinstance(body, dict):
-        raise SystemExit(f"boss: BOSS did not list {project.get('name')}'s deployment targets "
-                         f"(HTTP {code}: {_said(body)}), so the fault kit will not touch it")
-    for target in body.get("items") or []:
+    targets: list[dict] = []
+    for page in range(100):                      # every target, page by page (fail closed)
+        code, body = boss.get("/v1/deployment-targets", project_id=pid, limit="200",
+                              offset=str(page * 200))
+        if code != 200 or not isinstance(body, dict) or not isinstance(body.get("items"), list):
+            raise SystemExit(f"boss: BOSS did not list {project.get('name')}'s deployment "
+                             f"targets (HTTP {code}: {_said(body)}), so the fault kit will not "
+                             "touch it")
+        targets += body["items"]
+        if len(body["items"]) < 200:
+            break
+    else:
+        raise SystemExit("boss: too many deployment targets to check; the fault kit will not "
+                         "touch this project")
+    for target in targets:
         if str(target.get("status") or "") in ("deleted", "retired"):
             continue
         prod, words = verdict(target_id=str(target["id"]))
@@ -1154,12 +1194,39 @@ def inject(args, token: str) -> int:
     print(f"\nPushed {branch}. Next:")
     print(f"  1. Open the change BOSS opened for {branch}. If BOSS's review catches the fault, "
           "note it (a good result).")
-    print(f"  2. {spec.then} — press Merge anyway… with the reason \"test fault {case}\".")
+    print(f"  2. {spec.then.format(case=case)} — press Merge anyway… with the reason \"test "
+          f"fault {case}\".")
     print(f"  3. Watch, hands off. Pass if: {spec.expect}.")
     for note in applied.notes:
         print(f"  Note: {note}")
     print(f"  Put it back: boss qa fault --revert {case} --project {args.project}")
     return 0
+
+
+def merged_commits(boss: Boss, project: dict, git: Git, branch: str, default: str,
+                   case: str) -> list[str]:
+    """The commits that put the fault on the default branch, newest first. BOSS's own record
+    first: the change set of `branch` that was merged, and the commit it merged as (a squash by
+    default — git_merge_method — which drops the commit's BOSS-Fault trailer). The trailer is
+    the fallback for a fault merged by hand. Only commits on the default branch count."""
+    found: list[str] = []
+    code, body = boss.get(f"/v1/projects/{project['id']}/local-changes", state="merged")
+    if code != 200 or not isinstance(body, dict):
+        raise SystemExit(f"boss: BOSS did not list {project.get('name')}'s changes (HTTP {code}: "
+                         f"{_said(body)}), so it cannot tell whether ENT-{case} was merged")
+    for change in body.get("items") or []:
+        if str(change.get("branch") or "") == branch and change.get("merged_sha"):
+            found.append(str(change["merged_sha"]))
+    if not found:
+        found = git("log", f"origin/{default}", "--format=%H", "--extended-regexp",
+                    f"--grep=^{TRAILER}: {case}$", quiet=True).stdout.split()
+    out = []
+    for sha in found:
+        on_default = git("merge-base", "--is-ancestor", sha, f"origin/{default}", check=False,
+                         quiet=True).returncode == 0
+        if on_default and sha not in out:
+            out.append(sha)
+    return out
 
 
 def revert(args, token: str) -> int:
@@ -1174,21 +1241,28 @@ def revert(args, token: str) -> int:
     with tempfile.TemporaryDirectory(prefix="boss-qa-fault-") as tmp:
         git, repo = _clone(boss, args, project, local, Path(tmp))
         branch = _branch(case)
-        merged = git("log", f"origin/{default}", "--format=%H", "--extended-regexp",
-                     f"--grep=^{TRAILER}: {case}$", quiet=True).stdout.split()
+        merged = merged_commits(boss, project, git, branch, default, case)
         if merged:
             back = f"{branch}-revert"
             if git("ls-remote", "--heads", "origin", back, quiet=True).stdout.strip():
                 raise SystemExit(f"boss: {back} is already pushed: merge its change to put "
                                  f"ENT-{case} back")
             git("switch", "-q", "-c", back, f"origin/{default}")
-            done = git("revert", "--no-edit", *merged, check=False, quiet=True)
+            done = None
+            for sha in merged:
+                # A merge commit is reverted against its first parent (the default branch).
+                parents = git("rev-list", "--parents", "-n", "1", sha, quiet=True).stdout.split()
+                done = git("revert", "--no-edit", "--no-commit",
+                           *(["-m", "1"] if len(parents) > 2 else []), sha, check=False,
+                           quiet=True)
+                if done.returncode != 0:
+                    break
             if done.returncode != 0:
                 git("revert", "--abort", check=False, quiet=True)
                 raise SystemExit(f"boss: the fault's lines have changed since it was merged (BOSS "
                                  f"may already have fixed it), so ENT-{case} cannot be reverted "
                                  f"automatically. Compare {default} with commit {merged[0][:12]}")
-            git("commit", "--amend", "-q", "-m", f"put back test fault ENT-{case}\n\nReverts "
+            git("commit", "-q", "-m", f"put back test fault ENT-{case}\n\nReverts "
                 + ", ".join(m[:12] for m in merged) + f".\n\n{TRAILER}-Revert: {case}\n")
             git("push", "-u", "origin", back)
             print(f"\nPushed {back}: merge its change to put ENT-{case} back on {default}.")
@@ -1217,8 +1291,10 @@ def list_cases() -> int:
 
 # ── disk pressure (ENT-REC-29..31) ───────────────────────────────────────────────────────────
 
-def _put(boss: Boss, path: str, body: dict) -> tuple[int, object]:
-    req = urllib.request.Request(boss.api + path, method="PUT", data=json.dumps(body).encode(),
+def _send(boss: Boss, method: str, path: str, body: Optional[dict] = None
+          ) -> tuple[int, object]:
+    req = urllib.request.Request(boss.api + path, method=method,
+                                 data=json.dumps(body or {}).encode(),
                                  headers={"Authorization": f"Bearer {boss._token}",
                                           "Content-Type": "application/json"})
     try:
@@ -1229,85 +1305,40 @@ def _put(boss: Boss, path: str, body: dict) -> tuple[int, object]:
             return exc.code, json.loads(exc.read() or b"null")
         except ValueError:
             return exc.code, None
-
-
-#: The thresholds each level moves, as `free % + margin`: just above what the disk has now, so the
-#: watch reads that level on its next two readings without a byte written.
-PRESSURE = {"warn": ("warn_free_pct",), "critical": ("warn_free_pct", "critical_free_pct"),
-            "floor": ("warn_free_pct", "critical_free_pct", "floor_free_pct")}
+    except (urllib.error.URLError, OSError) as exc:
+        raise SystemExit(f"boss: could not reach BOSS at {boss.api} ({exc})") from None
 
 
 def disk_pressure(args, token: str) -> int:
-    """Move the storage thresholds just above today's free space (warn, critical or floor), and
-    back (off). The saved thresholds live in the install's .boss/qa-disk-pressure.json."""
+    """BOSS moves the thresholds itself (PUT /v1/qa/disk-pressure, qa_disk_pressure.py): only
+    ever up, the levels kept in order, marked on the rule with an expiry it restores by itself,
+    and refused on a production install. `off` puts back only what the test moved."""
     boss = Boss(args.api, token)
-    saved = Path(args.state)
-    code, body = boss.get("/v1/infra/storage/summary")
-    if code != 200 or not isinstance(body, dict):
-        raise SystemExit(f"boss: BOSS did not give its storage reading (HTTP {code}: "
-                         f"{_said(body)})")
     if args.level == "off":
-        if not saved.is_file():
-            print("Nothing to put back: the thresholds were not moved by boss qa disk-pressure.")
+        code, out = _send(boss, "POST", "/v1/qa/disk-pressure/off")
+        if code != 200 or not isinstance(out, dict):
+            raise SystemExit(f"boss: BOSS refused (HTTP {code}): {_said(out)}")
+        if not out.get("restored") and not out.get("kept"):
+            print("Nothing to put back: no thresholds are moved for a test.")
             return 0
-        before = json.loads(saved.read_text())
-        code, out = _put(boss, "/v1/infra/storage/rules", {"rules": [],
-                                                           "thresholds": before["thresholds"]})
-        if code != 200:
-            raise SystemExit(f"boss: BOSS refused the thresholds (HTTP {code}: {_said(out)})")
-        saved.unlink()
-        print("The storage thresholds are back as they were. Held work starts again once the "
-              "watch reads the disk as fine (two readings, about a minute).")
+        print("Put back: " + (", ".join(f"{k}={v:g}" for k, v in out["restored"].items()) or
+                              "nothing") + ".")
+        if out.get("kept"):
+            print("Left as they are (changed in the console since the test): "
+                  + ", ".join(out["kept"]) + ".")
+        print("Held work starts again once the watch reads the disk as fine (about a minute).")
         return 0
-    free_pct = _free_pct(body)
-    if body.get("stale"):
-        raise SystemExit("boss: BOSS's storage reading is stale (the host helper is not "
-                         "answering: boss steward status). Nothing was changed")
-    if free_pct is None:
-        raise SystemExit("boss: BOSS has no current storage reading (is the host helper running? "
-                         "boss steward status). Nothing was changed")
-    code, rules = boss.get("/v1/infra/storage/rules")
-    if code != 200 or not isinstance(rules, dict):
-        raise SystemExit(f"boss: BOSS did not give its storage thresholds (HTTP {code}: "
-                         f"{_said(rules)})")
-    current = dict(rules.get("thresholds") or {})
-    if not saved.is_file():
-        saved.parent.mkdir(parents=True, exist_ok=True)
-        saved.write_text(json.dumps({"thresholds": current}, indent=1))
-    moved = {**json.loads(saved.read_text())["thresholds"]}
-    margin = {"warn_free_pct": 3.0, "critical_free_pct": 2.0, "floor_free_pct": 1.0}
-    for key in PRESSURE[args.level]:
-        moved[key] = round(min(99.0, free_pct + margin[key]), 1)
-    # The exit bands must stay above the entry bands (hysteresis), or the watch cannot leave.
-    moved["warn_exit_free_pct"] = max(float(moved.get("warn_exit_free_pct") or 0),
-                                      moved["warn_free_pct"] + 4)
-    moved["target_free_pct"] = max(float(moved.get("target_free_pct") or 0),
-                                   moved.get("critical_free_pct", 0) + 10)
-    code, out = _put(boss, "/v1/infra/storage/rules", {"rules": [], "thresholds": moved})
-    if code != 200:
-        raise SystemExit(f"boss: BOSS refused the thresholds (HTTP {code}: {_said(out)})")
-    print(f"The disk is {free_pct:.1f}% free. Storage thresholds moved just above it for the "
-          f"{args.level} case ({', '.join(f'{k}={moved[k]}' for k in PRESSURE[args.level])}); "
-          "nothing was written to disk.")
-    print("Expect the watch to read the new level within about a minute (two readings).")
-    print("Put it back: boss qa disk-pressure off")
+    code, out = _send(boss, "PUT", "/v1/qa/disk-pressure",
+                      {"level": args.level, "hours": args.hours})
+    if code != 200 or not isinstance(out, dict):
+        raise SystemExit(f"boss: BOSS refused (HTTP {code}): {_said(out)}")
+    moved = out.get("moved") or {}
+    print(f"The disk is {out.get('free_pct')}% free. Thresholds moved for the {args.level} case "
+          f"({', '.join(f'{k} {v[0]:g}→{v[1]:g}' for k, v in moved.items())}); nothing was "
+          "written to disk.")
+    print(f"They go back by themselves at {out.get('until')}. The storage card says so.")
+    print("Put it back now: boss qa disk-pressure off")
     return 0
-
-
-def _free_pct(summary: dict) -> Optional[float]:
-    for src in (summary.get("disk") or {}, summary):
-        if not isinstance(src, dict):
-            continue
-        try:
-            if src.get("free_pct") is not None:
-                return float(src["free_pct"])
-            if src.get("used_pct") is not None:
-                return 100.0 - float(src["used_pct"])
-            if src.get("free_gb") is not None and src.get("total_gb"):
-                return 100.0 * float(src["free_gb"]) / float(src["total_gb"])
-        except (TypeError, ValueError):
-            continue
-    return None
 
 
 # ── the ledger (boss qa report) and a run's diagnostics ──────────────────────────────────────
@@ -1415,7 +1446,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     d = sub.add_parser("disk-pressure")
     d.add_argument("level", choices=["warn", "critical", "floor", "off"])
     d.add_argument("--api", default=os.environ.get("BOSS_QA_API", ""))
-    d.add_argument("--state", default=os.environ.get("BOSS_QA_STATE", ".boss/qa-disk-pressure.json"))
+    d.add_argument("--hours", type=float, default=24.0)
     r = sub.add_parser("report")
     r.add_argument("--since")
     r.add_argument("--project")

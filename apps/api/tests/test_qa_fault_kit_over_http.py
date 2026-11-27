@@ -178,14 +178,27 @@ def test_a_merged_fault_is_put_back_by_a_revert_change(server, engine, world, re
     token = _token(engine, world)
     install = _install(tmp_path, server)
     assert _boss(install, server, token, tmp_path, "fault", "9", "--project", pid).returncode == 0
-    # The tester merges it on purpose (here: straight in the bare repository).
-    head = _git(bare, "rev-parse", "test/fault-rec-09").strip()
-    _git(bare, "update-ref", "refs/heads/main", head)
+    # The tester merges it on purpose, as the change page does: BOSS's own merge, with the
+    # install's default method (a squash, which drops the commit's BOSS-Fault trailer).
+    from boss_engine.services.local_repo_host import LocalGitAdapter
+
+    settings = get_settings()
+    assert settings.sandbox_merge_method == "squash"
+    with engine.begin() as db:
+        number = db.execute(text("SELECT number FROM local_change_sets WHERE project_id = :p "
+                                 "AND branch = 'test/fault-rec-09'"), {"p": pid}).scalar()
+    merged = LocalGitAdapter(settings, owner=f"local_{pid}", repo="recipes", project_id=pid
+                             ).merge_pull_request(int(number), "Merge test fault REC-09")
+    assert merged.merged
+    assert "BOSS-Fault" not in _git(bare, "log", "-1", "--format=%B", "main")
+    assert "BOSS fault REC-09" in _git(bare, "show", "main:src/server.js")
     back = _boss(install, server, token, tmp_path, "fault", "--revert", "REC-09", "--project", pid)
     assert back.returncode == 0, back.stdout + back.stderr
     assert "test/fault-rec-09-revert" in back.stdout
     reverted = _git(bare, "show", "test/fault-rec-09-revert:src/server.js")
     assert "BOSS fault REC-09" not in reverted and reverted == (FIXTURE / "src/server.js").read_text()
+    again = _boss(install, server, token, tmp_path, "fault", "--revert", "REC-09", "--project", pid)
+    assert again.returncode != 0 and "already pushed" in again.stderr
 
 
 def test_a_project_that_ships_to_production_is_refused_before_any_clone(server, engine, world,
@@ -263,6 +276,9 @@ def _seed_ledger(engine, pid: str) -> dict:
         event("code_task.inrun_convergence_round", b2, at(50), data={"round": 1, "of": 3})
         event("code_task.pr_opened_with_checks_failing", b2, at(68))
         event("code_task.deferred_findings_task", b2, at(69), data={"followup_run_id": "x"})
+        # Work that names no case: it is never in the ledger, whatever --case says.
+        run(f"crun_{uuid.uuid4().hex[:12]}", "Rename the page title", "completed", at(80),
+            at(90), {"base_branch": "main"})
     return {"rec01": a, "rec09": [b, b2], "t0": t0}
 
 
@@ -296,12 +312,19 @@ def test_the_ledger_reads_each_fault_attempt_from_bosss_records(engine, world):
     assert nine["acted"] == ["build repair", "follow-up build"]
     assert nine["final_state"] == "draft change · checks failing"
 
-    # Tagging the window names New work that never touched a fault branch.
+    # --case filters to the case's lineages; it never tags work that does not name the case.
     with engine.begin() as db:
         tagged = qa_ledger.ledger(db, pid, case="ent-rec-01")
-        assert [r["case"] for r in tagged["rows"]] == ["ENT-REC-01"]
+        assert [r["runs"] for r in tagged["rows"]] == [[seeded["rec01"]]]
+        assert qa_ledger.ledger(db, pid, case="REC-04")["rows"] == []
         since = qa_ledger.ledger(db, pid, since=seeded["t0"] + timedelta(minutes=25))
         assert [r["case"] for r in since["rows"]] == ["ENT-REC-09"]
+    with engine.begin() as db:
+        db.execute(text("INSERT INTO code_task_runs (id, project_id, status, phase, title) "
+                        "VALUES (:i, :p, 'completed', 'done', 'REC-04: Add a recipe counter')"),
+                   {"i": f"crun_{uuid.uuid4().hex[:12]}", "p": pid})
+        assert [r["case"] for r in qa_ledger.ledger(db, pid, case="REC-04")["rows"]] == \
+            ["ENT-REC-04"], "the tester's New work names its case in its title"
     md = qa_ledger.as_markdown(out["rows"])
     assert md.count("\n") == 3 and "| ENT-REC-01 |" in md and "| Y |" in md and "| N |" in md
 

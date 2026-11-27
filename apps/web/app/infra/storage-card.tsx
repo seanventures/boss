@@ -214,6 +214,13 @@ export function StorageCardView({ s, projectId, orgId, sample, pendingDecisionId
         </span>
       </header>
 
+      {s.qaPressure ? (
+        <div className="sc-alert" role="status" data-tone="amber" data-testid="sc-qa-pressure">
+          <Clock size={14} weight="bold" aria-hidden />
+          <span><b>Thresholds moved for a test</b> ({s.qaPressure.level}) until {new Date(s.qaPressure.until).toLocaleString()}.
+            They go back by themselves then, or now with <code>boss qa disk-pressure off</code>.</span>
+        </div>
+      ) : null}
       {s.helperOverdue ? (
         <div className="sc-alert" role="status" data-tone="amber" data-testid="sc-helper-offline">
           <Warning size={14} aria-hidden />

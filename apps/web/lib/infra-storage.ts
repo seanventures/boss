@@ -135,6 +135,8 @@ export type StorageSummary = {
   volumes: { reclaimableGb: number; needsRelabel: number } | null;
   /** BOSSAPP-1459: where the space goes by category, against the one budget (disk_budget.py). */
   budget: DiskBudget | null;
+  /** `boss qa disk-pressure`: the thresholds are moved for a test until `until` (then put back). */
+  qaPressure?: { level: string; until: string; by: string } | null;
 };
 
 export type BudgetLevel = "ok" | "near" | "over" | "unknown";
@@ -427,6 +429,9 @@ export function parseSummary(w: unknown): StorageSummary | null {
       ? { reclaimableGb: num(obj(o.volumes).reclaimable_gb), needsRelabel: Math.max(0, Math.floor(num(obj(o.volumes).needs_relabel))) }
       : null,
     budget: parseBudget(o.budget),
+    qaPressure: o.qa_pressure && typeof o.qa_pressure === "object" && str(obj(o.qa_pressure).until)
+      ? { level: str(obj(o.qa_pressure).level), until: str(obj(o.qa_pressure).until), by: str(obj(o.qa_pressure).by) }
+      : null,
   };
 }
 
