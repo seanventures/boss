@@ -1205,19 +1205,21 @@ def convene_prd_meeting_core(
     return {"task_id": task_id, "run_id": run_id, "job_id": job["id"]}
 
 
-def _save_phase(connection, run_id, state, add_cost, model, next_phase) -> None:
+def _save_phase(connection, run_id, state, add_cost, model, next_phase,
+                *, billing: Optional[str] = None) -> None:
     connection.execute(
         text("""
             UPDATE meeting_runs SET
               state = CAST(:state AS JSONB), phase = :phase,
-              usage = jsonb_build_object(
+              usage = jsonb_strip_nulls(jsonb_build_object(
                         'cost_usd_micros', COALESCE((usage->>'cost_usd_micros')::bigint, 0) + CAST(:addc AS bigint),
-                        'model', CAST(:model AS text)),
+                        'model', CAST(:model AS text),
+                        'billing', COALESCE(CAST(:billing AS text), usage->>'billing'))),
               updated_at = now()
             WHERE id = :id
         """),
         {"state": json.dumps(state), "phase": next_phase, "addc": int(add_cost or 0),
-         "model": model, "id": run_id},
+         "model": model, "billing": billing, "id": run_id},
     )
     _sign_seats(connection, run_id)
 
@@ -1527,7 +1529,16 @@ def _advance_phase(engine, settings: Settings, jobs, run: dict, run_id: str, pha
 
     # persist this phase + enqueue the next step ATOMICALLY (no stall on crash)
     with begin(engine) as c:
-        _save_phase(c, run_id, state, add_cost, model, next_phase)
+        from .included_spend import BILLING_METERED, BILLING_SUBSCRIPTION
+
+        phase_billing: Optional[str] = None
+        if phase != "research":
+            phase_billing = (
+                BILLING_SUBSCRIPTION
+                if model_routing.call_is_included(c, settings, run["project_id"], None)
+                else BILLING_METERED
+            )
+        _save_phase(c, run_id, state, add_cost, model, next_phase, billing=phase_billing)
         jobs.create_job(c, project_id=run["project_id"], task_id=run["task_id"],
                         kind="meeting.step", priority=JOB_PRIORITY_INTERACTIVE, payload={"run_id": run_id})
     return {"status": "running", "done": False, "phase": next_phase}

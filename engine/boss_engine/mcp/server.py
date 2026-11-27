@@ -30,10 +30,14 @@ Implements MCP JSON-RPC 2.0 on three revisions (AP-P5, D10; mcp/protocol.py):
 # module globals, silently treat the parameter as a query param, and 422 every
 # JSON-RPC POST. Evaluating annotations at def-time keeps the lazy import valid.
 import contextvars
+from dataclasses import dataclass
 import json
 import hmac
+import os
+from pathlib import Path
 import sys
 from typing import Any, Callable, Mapping, Optional
+from urllib.parse import quote, urlsplit
 
 from .. import __version__
 from ..tools import ToolRegistry, build_default_registry
@@ -91,13 +95,280 @@ _REQUEST_CREDENTIAL: contextvars.ContextVar[Optional[str]] = contextvars.Context
     "boss_mcp_request_credential", default=None)
 
 
+@dataclass(frozen=True)
+class DatabaseConfig:
+    """Where BOSS's MCP server resolved its database URL from (BOSSAPP-991)."""
+
+    url: str
+    source: str
+    configured: bool
+    env_file: Optional[str] = None
+
+    @property
+    def sanitized_target(self) -> str:
+        return sanitize_database_url(self.url)
+
+
+def _parse_dotenv_file(path: Path) -> dict[str, str]:
+    """Read key=value entries from a `.env` file without mutating `os.environ`."""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return {}
+    out: dict[str, str] = {}
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].strip()
+        if "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key = key.strip()
+        val = val.strip()
+        if not key:
+            continue
+        if len(val) >= 2 and val[0] == val[-1] and val[0] in ("'", '"'):
+            val = val[1:-1]
+        elif "#" in val:
+            val = val.split("#", 1)[0].strip()
+        out[key] = val
+    return out
+
+
+def _normalize_pg_url(url: str) -> str:
+    raw = str(url or "").strip()
+    if raw.startswith("postgres://"):
+        return "postgresql+psycopg://" + raw[len("postgres://"):]
+    return raw
+
+
+def _compose_database_url(values: Mapping[str, str]) -> Optional[tuple[str, str]]:
+    """Build a host-reachable DB URL from Community compose `.env` vars (BOSSAPP-991).
+
+    `scripts/install/community-compose.yml` publishes Postgres on
+    `127.0.0.1:${BOSS_POSTGRES_PORT:-5432}` with `POSTGRES_USER=boss`,
+    `POSTGRES_DB=boss`, and `BOSS_DB_PASSWORD`. A host process (like MCP on a laptop)
+    that reads the install `.env` needs that URL rather than the hardcoded `boss:boss@localhost:5432`.
+    """
+    password = (values.get("BOSS_DB_PASSWORD") or values.get("POSTGRES_PASSWORD") or "").strip()
+    port = (values.get("BOSS_POSTGRES_PORT") or "").strip()
+    if not password and not port:
+        return None
+    user = (values.get("BOSS_DB_USER") or values.get("POSTGRES_USER") or "boss").strip() or "boss"
+    host = (values.get("BOSS_POSTGRES_HOST") or "127.0.0.1").strip() or "127.0.0.1"
+    port_str = port or "5432"
+    dbname = (values.get("BOSS_DB_NAME") or values.get("POSTGRES_DB") or "boss").strip() or "boss"
+    enc_user = quote(user, safe="")
+    auth = f"{enc_user}:{quote(password, safe='')}" if password else enc_user
+    keys = [k for k in ("BOSS_POSTGRES_PORT", "BOSS_DB_PASSWORD", "POSTGRES_PASSWORD")
+            if (values.get(k) or "").strip()]
+    return f"postgresql+psycopg://{auth}@{host}:{port_str}/{dbname}", "+".join(keys)
+
+
+def _candidate_env_files(
+    environ: Mapping[str, str],
+    *,
+    cwd: Optional[Any] = None,
+    install_dir: Optional[Any] = None,
+    search_defaults: bool = True,
+) -> list[tuple[str, Path]]:
+    candidates: list[tuple[str, Path]] = []
+    explicit_env = (environ.get("BOSS_ENV_FILE") or "").strip()
+    if explicit_env:
+        candidates.append(("env_file", Path(explicit_env).expanduser()))
+    inst = str(install_dir) if install_dir is not None else (environ.get("BOSS_INSTALL_DIR") or "").strip()
+    if inst:
+        candidates.append(("install_env", Path(inst).expanduser() / ".env"))
+    base_cwd = Path(cwd) if cwd is not None else Path.cwd()
+    candidates.append(("cwd_env", base_cwd / ".env"))
+    if search_defaults:
+        repo_root = Path(__file__).resolve().parents[3]
+        candidates.append(("install_env", repo_root / ".env"))
+        candidates.append(("install_env", Path.home() / ".boss" / ".env"))
+    seen: set[Path] = set()
+    unique: list[tuple[str, Path]] = []
+    for label, path in candidates:
+        try:
+            resolved = path.resolve()
+        except OSError:
+            resolved = path
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        unique.append((label, path))
+    return unique
+
+
+def resolve_database_config(
+    environ: Optional[Mapping[str, str]] = None,
+    *,
+    cwd: Optional[Any] = None,
+    install_dir: Optional[Any] = None,
+    search_defaults: bool = True,
+) -> DatabaseConfig:
+    """Resolve the database URL and name its exact configuration source (BOSSAPP-991).
+
+    Precedence mirrors the API and Community install:
+      1. `DATABASE_URL` / `BOSS_DATABASE_URL` in the process environment;
+      2. Install `.env` (`BOSS_ENV_FILE`, `$BOSS_INSTALL_DIR/.env`, `./.env`, repo/home `.env`),
+         honouring `DATABASE_URL`, `BOSS_DATABASE_URL`, or compose's `BOSS_POSTGRES_PORT` +
+         `BOSS_DB_PASSWORD`;
+      3. Compose DB variables in the process environment;
+      4. `Settings.database_url` default (marked `configured=False`).
+    """
+    env = os.environ if environ is None else environ
+    for key in ("DATABASE_URL", "BOSS_DATABASE_URL"):
+        raw = (env.get(key) or "").strip()
+        if raw:
+            env_file = None
+            for _label, path in _candidate_env_files(
+                env, cwd=cwd, install_dir=install_dir, search_defaults=search_defaults
+            ):
+                if path.is_file():
+                    env_file = str(path)
+                    break
+            return DatabaseConfig(
+                url=_normalize_pg_url(raw),
+                source=f"env:{key}",
+                configured=True,
+                env_file=env_file,
+            )
+
+    for label, path in _candidate_env_files(
+        env, cwd=cwd, install_dir=install_dir, search_defaults=search_defaults
+    ):
+        if not path.is_file():
+            continue
+        values = _parse_dotenv_file(path)
+        for key in ("DATABASE_URL", "BOSS_DATABASE_URL"):
+            raw = (values.get(key) or "").strip()
+            if raw:
+                return DatabaseConfig(
+                    url=_normalize_pg_url(raw),
+                    source=f"{label}:{path}:{key}",
+                    configured=True,
+                    env_file=str(path),
+                )
+        composed = _compose_database_url(values)
+        if composed is not None:
+            url, keys = composed
+            return DatabaseConfig(
+                url=url,
+                source=f"{label}:{path}:{keys}",
+                configured=True,
+                env_file=str(path),
+            )
+
+    composed_env = _compose_database_url(env)
+    if composed_env is not None:
+        url, keys = composed_env
+        return DatabaseConfig(url=url, source=f"env:{keys}", configured=True)
+
+    from ..config import Settings
+
+    default_url = str(Settings.model_fields["database_url"].default)
+    return DatabaseConfig(
+        url=default_url,
+        source="default:Settings.database_url",
+        configured=False,
+    )
+
+
+def load_mcp_settings(
+    *,
+    environ: Optional[Mapping[str, str]] = None,
+    cwd: Optional[Any] = None,
+    install_dir: Optional[Any] = None,
+    search_defaults: bool = True,
+) -> tuple[Any, DatabaseConfig]:
+    """Load `Settings` using the same install `.env` and DB resolution as the API (BOSSAPP-991)."""
+    from ..config import Settings
+
+    cfg = resolve_database_config(
+        environ=environ, cwd=cwd, install_dir=install_dir, search_defaults=search_defaults
+    )
+    settings = Settings(_env_file=cfg.env_file) if cfg.env_file else Settings()
+    if cfg.configured and str(settings.database_url) != cfg.url:
+        settings = settings.model_copy(update={"database_url": cfg.url})
+    return settings, cfg
+
+
+def sanitize_database_url(url: str) -> str:
+    """Format a database URL as `user@host:port/db` — never including a password."""
+    raw = str(url or "").strip()
+    if not raw:
+        return "<unset>"
+    try:
+        parsed = urlsplit(raw)
+        if parsed.scheme.startswith("sqlite"):
+            return f"{parsed.scheme}://{parsed.path or ':memory:'}"
+        host = parsed.hostname or "localhost"
+        port = f":{parsed.port}" if parsed.port else ""
+        user = f"{parsed.username}@" if parsed.username else ""
+        db = parsed.path.lstrip("/") or ""
+        return f"{user}{host}{port}/{db}" if db else f"{user}{host}{port}"
+    except Exception:  # noqa: BLE001
+        return "<invalid-database-url>"
+
+
+def _extract_password(url: str) -> str:
+    try:
+        return urlsplit(str(url or "")).password or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def is_database_error(exc: BaseException) -> bool:
+    """True when `exc` (or its cause chain) is a SQLAlchemy / psycopg database failure."""
+    from sqlalchemy.exc import SQLAlchemyError
+
+    cur: Optional[BaseException] = exc
+    seen: set[int] = set()
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if isinstance(cur, SQLAlchemyError):
+            return True
+        mod = str(getattr(type(cur), "__module__", "") or "")
+        if mod.startswith("psycopg") or "sqlalchemy" in mod:
+            return True
+        cur = cur.__cause__ or cur.__context__
+    return False
+
+
+def format_database_error(
+    exc: BaseException,
+    *,
+    database_url: str = "",
+    source: str = "",
+) -> str:
+    """Clear, secret-free diagnostic naming the configured DB source and sanitized target."""
+    target = sanitize_database_url(database_url) if database_url else "<unknown>"
+    src = source or "default:Settings.database_url"
+    detail = f"{type(exc).__name__}: {exc}".strip()
+    pw = _extract_password(database_url)
+    if pw:
+        detail = detail.replace(pw, "[REDACTED]")
+    if len(detail) > 400:
+        detail = detail[:397] + "..."
+    hint = (
+        "No DATABASE_URL or install .env was found; set DATABASE_URL or BOSS_INSTALL_DIR."
+        if src.startswith("default:")
+        else f"Check the database configuration from {src}."
+    )
+    return (
+        f"Database connection failed (target={target}, configured_source={src}): "
+        f"{detail}. {hint}"
+    )
+
+
 def _mcp_mode() -> Any:
     """The authz mode tool calls run under (router key `mcp`)."""
-    from ..config import get_settings
     from ..identity.enforcement import mode_for
     from ..tools.registry import TOOL_ROUTER_KEY
 
-    settings = get_settings()
+    settings, _ = load_mcp_settings()
     return mode_for(TOOL_ROUTER_KEY, global_mode=settings.authz_mode,
                     router_modes=settings.authz_router_modes)
 
@@ -389,6 +660,17 @@ class MCPServer:
             CALLER_AUTHORIZATION.reset(cred_token)
             CURRENT_TOOL_AUTH.reset(tool_token)
 
+    def _database_error_message(self, exc: BaseException) -> str:
+        settings = getattr(self.ctx, "settings", None)
+        db_url = str(getattr(settings, "database_url", "") or "")
+        source = str(getattr(self.ctx, "database_source", "") or "")
+        if not source:
+            cfg = resolve_database_config()
+            source = cfg.source
+            if not db_url:
+                db_url = cfg.url
+        return format_database_error(exc, database_url=db_url, source=source)
+
     def _tools_call(self, rid: Any, params: dict) -> dict:
         name, args, refused = self._call_args(rid, params)
         if refused is not None:
@@ -399,10 +681,13 @@ class MCPServer:
         auth = self._caller()
         try:
             result = self._invoke_tool(name, args, auth)
-        except Exception as exc:  # unknown tool etc.
-            return _ok(rid, _tool_result(
-                {"ok": False, "error": f"{type(exc).__name__}: {exc}"}, is_error=True
-            ))
+        except Exception as exc:  # unknown tool, DB auth/connection failure, etc.
+            message = (
+                self._database_error_message(exc)
+                if is_database_error(exc)
+                else f"{type(exc).__name__}: {exc}"
+            )
+            return _ok(rid, _tool_result({"ok": False, "error": message}, is_error=True))
         return _ok(rid, _tool_result(result, is_error=not result.get("ok", True)))
 
     # ---- 2026-07-28: tasks and multi round-trip requests --------------------------------------
@@ -424,9 +709,14 @@ class MCPServer:
             call_args["timeout"] = 0          # start it; the client polls the task
         try:
             result = self._invoke_tool(name, call_args, auth)
-        except Exception as exc:  # unknown tool etc.
+        except Exception as exc:  # unknown tool, DB auth/connection failure, etc.
+            message = (
+                self._database_error_message(exc)
+                if is_database_error(exc)
+                else f"{type(exc).__name__}: {exc}"
+            )
             return _ok(rid, _protocol.complete(_tool_result(
-                {"ok": False, "error": f"{type(exc).__name__}: {exc}"}, is_error=True),
+                {"ok": False, "error": message}, is_error=True),
                 SERVER_INFO))
         handle = _tasks.handle_for_tool_result(name, result) if _tasks.is_task_tool(name) \
             else None
