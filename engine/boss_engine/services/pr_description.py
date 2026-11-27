@@ -25,7 +25,7 @@ _GATE_WORDS = {
     "consistent": "Consistent", "nothing_broke": "Nothing broke", "app_serves": "App starts",
     "web_package_honest": "Package honest", "template_tests": "Template tests",
     "no_committed_secrets": "No secrets", "acceptance_met": "Must-haves met",
-    "input_fidelity": "Derived from input",
+    "input_fidelity": "Derived from input", "stayed_in_app": "Stayed in app",
 }
 
 

@@ -116,6 +116,27 @@ def _app_of(base: Path, rel: PurePosixPath) -> Optional[PurePosixPath]:
     return None
 
 
+def foreign_app_paths(root: Path | str, paths: Optional[Iterable[str]],
+                      scope: Optional[str]) -> list[str]:
+    """The changed `paths` that belong to ANOTHER app than `scope` (ENT-REC-51): inside a
+    subfolder app (_app_of) that is neither `scope`, inside it, nor holds it. A root file, CI
+    config or docs belong to no app and are never foreign. [] when there is no scope."""
+    scope = clean_rel(scope)
+    if not scope:
+        return []
+    base = Path(root)
+    out: set[str] = set()
+    for rel in _rels(paths):
+        app = _app_of(base, rel)
+        if app is None:
+            continue
+        a = app.as_posix()
+        if a == scope or a.startswith(scope + "/") or scope.startswith(a + "/"):
+            continue
+        out.add(rel.as_posix())
+    return sorted(out)
+
+
 # ---- is the root a home for several apps -------------------------------------------------------
 
 def subfolder_apps(root: Path | str) -> list[str]:

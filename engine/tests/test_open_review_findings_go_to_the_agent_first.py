@@ -42,7 +42,8 @@ def test_open_findings_have_their_own_signature_whatever_the_error_quotes():
     """A finding can quote a port or a secret; it is still the reviewers' finding."""
     signature, pattern = sr.cause_signature(sr.FINDINGS_KIND, FAILURE)
     assert signature == "build:open_findings:security_clean"
-    assert pattern == {"pattern": "open_findings", "gates": ["security_clean"]}
+    assert pattern == {"pattern": "open_findings", "gates": ["security_clean"],
+                       "cause": "security_clean"}
 
 
 def test_the_agent_fixes_first_and_asks_to_waive_only_after_that():
