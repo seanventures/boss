@@ -71,7 +71,7 @@ async def _read_capped(request: Request, cap: int) -> Optional[bytes]:
 
 
 async def _serve(request: Request, project_id: str, repo: Optional[str], tail: str) -> Any:
-    from boss_engine.identity.authn_support import local_console_origin, public_origin
+    from boss_engine.identity.authn_support import console_origin
     from boss_engine.services import local_git_http as lgh
 
     refused = _local_only(request)
@@ -92,7 +92,7 @@ async def _serve(request: Request, project_id: str, repo: Optional[str], tail: s
             found = lgh.resolve_repo(c, _settings, project_id, repo)
         except lgh.GitRemoteError as error:
             return _words(error.status, error.error, str(error))
-        console = (public_origin(c) or local_console_origin()) if push else ""
+        console = console_origin(c) if push else ""
         busy = lgh.busy_branches(c, project_id, found["full_name"]) if push else []
     pusher, kind = _pusher(request)
     if request.method == "POST":
