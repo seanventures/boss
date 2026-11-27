@@ -64,6 +64,10 @@ AUTO_ACTIONS = frozenset({
     # AP-P3: a bot whose trigger failed three times in a row is paused (its trigger — never a
     # run in flight), the circuit breaker the design names for "deployment unhealthy".
     "pause_failing_bot",
+    # P9c-3 (BOSSAPP-1107): safe intake auto-remedies (renew/recreate lost subscriptions, restart
+    # stalled pollers/streams); never stops user work or guesses credentials.
+    "repair_intake_subscription",
+    "restart_intake_poller",
 })
 #: Every option a card may offer. Destructive ones (stop, cancel) must never be automatic.
 OFFERED_OPTIONS = frozenset({
@@ -72,6 +76,7 @@ OFFERED_OPTIONS = frozenset({
     "cancel_build", "wait_15", "hold_updates", "keep_updating", "build_one_at_a_time",
     "use_bigger_place", "acknowledge", "answer_escalation", "claude_sign_in",
     "limit_see_govern", "limit_open_setup",
+    "intake_reconnect", "pause_intake_connection", "retry_outbox_dead_letters",
 })
 DESTRUCTIVE = frozenset({"pause_largest_build", "cancel_build", "restart_step",
                          "free_disk_now"})
@@ -114,6 +119,9 @@ class Signals:
     #: subscription_headroom.install_accounts(): each subscription account's window state
     #: (BOSSAPP-1342) — 20 / 10 / 5 % left and the limit raise a finding.
     subscription_accounts: list[dict[str, Any]] = field(default_factory=list)
+    #: intake_doctor.collect(): lost subscriptions, dead pollers, auth failures, outbox dead
+    #: letters (P9c-3, BOSSAPP-1107).
+    intake_health: dict[str, Any] = field(default_factory=dict)
 
 
 _VM_LAST: dict[str, Any] = {}
@@ -262,6 +270,13 @@ def collect(engine: Any) -> Signals:
             sig.subscription_accounts = subscription_headroom.install_accounts(c)
         except Exception:  # noqa: BLE001 — no account table yet: nothing to alert about
             sig.subscription_accounts = []
+        try:
+            from . import intake_doctor
+
+            with c.begin_nested():
+                sig.intake_health = intake_doctor.collect(c, now=now)
+        except Exception:  # noqa: BLE001 — an install before P9 has no intake tables
+            sig.intake_health = {}
     from .resource_reaper import docker_available
 
     sig.docker = docker_available()
@@ -585,6 +600,10 @@ def diagnose(sig: Signals) -> list[dict[str, Any]]:
                                                          "failure_streak", "last_run_id")},
                     "options": [], "needs_choice": False, "target": bot["trigger_id"],
                     "auto": ["pause_failing_bot"] if bot.get("auto_pause") else []})
+    if sig.intake_health:
+        from . import intake_doctor
+
+        out.extend(intake_doctor.diagnose(sig.intake_health))
     return out
 
 
@@ -787,6 +806,14 @@ def _auto(engine: Any, settings: Any, action: str, sig: Signals, target: str = "
             return "no such failing bot"
         with engine.begin() as c:
             return agent_health.pause_failing(c, bot)
+    if action == "repair_intake_subscription":
+        from . import intake_doctor
+
+        return intake_doctor.repair_subscription(engine, settings, target)
+    if action == "restart_intake_poller":
+        from . import intake_doctor
+
+        return intake_doctor.restart_poller(engine, settings, target)
 
     if action == "reap_previews":
         return json.dumps(preview_service.reap_previews(engine, settings))
@@ -1351,7 +1378,20 @@ _CHOICES: dict[str, Callable[..., dict[str, Any]]] = {
     "cancel_build": _cancel_build,
     "hold_updates": _hold_updates,
     "keep_updating": _keep_updating,
+    "intake_reconnect": _guide("?area=integrations&tab=events",
+                               "Opened Integrations › Events to reconnect credentials."),
+    "pause_intake_connection": lambda e, s, r, ev, a: _intake_choice(
+        "pause_connection_choice", e, s, r, ev, a),
+    "retry_outbox_dead_letters": lambda e, s, r, ev, a: _intake_choice(
+        "retry_outbox_dead_letters_choice", e, s, r, ev, a),
 }
+
+
+def _intake_choice(fn: str, engine: Any, settings: Any, row: dict, evidence: dict,
+                   actor: str) -> dict[str, Any]:
+    from . import intake_doctor
+
+    return getattr(intake_doctor, fn)(engine, settings, row, evidence, actor)
 
 
 def recent_actions(connection: Any, *, since: Optional[str] = None,

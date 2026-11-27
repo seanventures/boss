@@ -514,8 +514,12 @@ def build_intake_router(*, engine, settings: Callable[[], Any],
         result = await run_in_threadpool(event_intake.receive, engine, kind, connection, req,
                                          settings=settings())
         headers = {str(k): str(v) for k, v in (result.get("headers") or {}).items()}
-        if result.get("body") is None:
+        if result.get("body") is None or int(result["http_status"]) == 204:
             return Response(status_code=int(result["http_status"]), headers=headers)
+        if result.get("media_type") and result["media_type"] != "application/json" and isinstance(
+                result.get("body"), (str, bytes)):
+            return Response(content=result["body"], status_code=int(result["http_status"]),
+                            media_type=str(result["media_type"]), headers=headers)
         return JSONResponse(status_code=int(result["http_status"]), content=result["body"],
                             headers=headers)
 
