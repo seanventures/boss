@@ -1793,6 +1793,7 @@ fi
 case "$_sfx_rc" in
   0) ui_ok "Self-fix source recorded and mirrored ($(git rev-parse --short=12 HEAD 2>/dev/null))" ;;
   3) ui_info "${_sfx_said:-BOSS was installed from an archive, so it cannot fix itself.}" ;;
+  5) ui_info "Self-fix is off on this install, so BOSS's own source was recorded but not mirrored." ;;
   127) ui_warn "python3 is not on this machine, so BOSS cannot record its own source for self-fixes." ;;
   *) ui_warn "Self-fix source mirror was not refreshed; a self-fix may read older code. Run: boss self-fix seed" ;;
 esac
@@ -2013,22 +2014,33 @@ fi
 # installer on their own development machine also gets the host self-installer: its own key
 # (sys_self_installer, 0600, never printed) and `boss self-fix watch` as a user service, so a BOSS
 # fix that was approved, or decided under dev autonomy, installs without anyone at a terminal.
-# It installs only what a decision approved, as before. A production install, a root shell, CI,
-# an install BOSS cannot fix (archive, no mirror) or BOSS_SELF_FIX_INSTALLER=off leave it to
-# `boss self-fix enable`. Nothing here ever stops the install.
+# It installs only what a decision approved, and never a fix that changes what this host runs.
+# ONCE: only a host never set up (no key file, no service file). A removed service, a revoked
+# key, or BOSS_SELF_FIX_INSTALLER=off (remembered in .boss/self-installer.off) is a person's
+# choice no later run undoes; `boss self-fix enable` does. A production install, a root shell,
+# CI, an install BOSS cannot fix (archive, no mirror) or BOSS_SELF_FIX=off leave it to a person.
+# Nothing here ever stops the install.
 _sfx_off=0
-for _v in "${BOSS_SELF_FIX:-}" "${BOSS_SELF_FIX_INSTALLER:-}" "$(env_value BOSS_SELF_FIX || true)"; do
+for _v in "${BOSS_SELF_FIX:-}" "$(env_value BOSS_SELF_FIX || true)"; do
   case "$(printf '%s' "$_v" | tr '[:upper:]' '[:lower:]')" in off|false|0|no|disabled|disable|none) _sfx_off=1 ;; esac
 done
+case "$(printf '%s' "${BOSS_SELF_FIX_INSTALLER:-}" | tr '[:upper:]' '[:lower:]')" in
+  off|false|0|no|disabled|disable|none)
+    _sfx_off=1
+    mkdir -p .boss && printf 'BOSS_SELF_FIX_INSTALLER=off at an install. `boss self-fix enable` turns it back on.\n' > .boss/self-installer.off ;;
+esac
 if [[ "${INSTALL_TIER:-}" == dev && -f .boss/selfsrc/boss.git/HEAD && "$(id -u)" != 0 &&
       -z "${CI:-}" && "$_sfx_off" == 0 ]] && command -v python3 >/dev/null 2>&1; then
-  if _sfx_said="$(BOSS_SELF_FIX_DOCKER="${DOCKER[*]}" BOSS_SELF_FIX_API="$API_URL" \
-       python3 scripts/install/self_fix_installer.py --dir "$INSTALL_DIR" enable </dev/null 2>&1)"; then
-    ui_ok "Self-installer enrolled: BOSS installs its own fixes on this development machine"
-  else
-    ui_warn "The self-installer was not set up (${_sfx_said##*$'\n'}). BOSS still works; run: boss self-fix enable"
-  fi
-  unset _sfx_said
+  _sfx_rc=0
+  _sfx_said="$(BOSS_SELF_FIX_DOCKER="${DOCKER[*]}" BOSS_SELF_FIX_API="$API_URL" \
+    python3 scripts/install/self_fix_installer.py --dir "$INSTALL_DIR" enable --auto </dev/null 2>&1)" ||
+    _sfx_rc=$?
+  case "$_sfx_rc" in
+    0) ui_ok "Self-installer enrolled: BOSS installs its own fixes on this development machine" ;;
+    4) : ;;
+    *) ui_warn "The self-installer was not set up (${_sfx_said##*$'\n'}). BOSS still works; run: boss self-fix enable" ;;
+  esac
+  unset _sfx_said _sfx_rc
 fi
 unset _sfx_off _v
 # <<< self-fix installer enrolment

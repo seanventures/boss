@@ -18,29 +18,45 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPOSE = ROOT / "scripts/install/community-compose.yml"
-#: Every host path a service may mount, relative to the install, and why.
+#: The e2e overlays, layered on the same file (so their relative paths resolve the same way).
+OVERLAYS = sorted((ROOT / "tests/e2e").rglob("*.yml"))
+#: Every host path a service may mount, relative to the install, and why. All read-only.
 ALLOWED = {
-    ".boss/selfsrc": "the self-source mirror and the install record, read-only",
-    ".boss/import": "the one folder Import local code may read, read-only",
-    ".boss/extra-ca.pem": "the company CA file, read-only",
+    ".boss/selfsrc": "the self-source mirror and the install record",
+    ".boss/import": "the one folder Import local code may read",
+    ".boss/extra-ca.pem": "the company CA file",
     "scripts/install/initdb": "Postgres's first-start SQL",
     "scripts/install/monitoring/prometheus.yml": "the bundled Prometheus config",
     "scripts/install/monitoring/grafana/provisioning": "the bundled Grafana provisioning",
 }
+#: The e2e overlays' own fixtures (test stacks only).
+ALLOWED_E2E = {"tests/e2e/stubs", "tests/e2e/compose"}
 
 
-def _binds() -> list[tuple[str, str, str]]:
-    """(service, host source as written, its target) for every bind mount in the file."""
-    doc = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
+class _Loader(yaml.SafeLoader):
+    """Compose's merge tags (`!reset`, `!override`) read as plain values."""
+
+
+_Loader.add_multi_constructor("!", lambda loader, suffix, node: (
+    loader.construct_mapping(node) if isinstance(node, yaml.MappingNode) else
+    loader.construct_sequence(node) if isinstance(node, yaml.SequenceNode) else
+    loader.construct_scalar(node)))
+
+
+def _binds(path: Path = COMPOSE) -> list[tuple[str, str, str, bool]]:
+    """(service, host source as written, its target, read-only) for every bind mount."""
+    doc = yaml.load(path.read_text(encoding="utf-8"), Loader=_Loader) or {}
     out = []
     for name, service in (doc.get("services") or {}).items():
-        for volume in service.get("volumes") or []:
+        for volume in (service or {}).get("volumes") or []:
             if isinstance(volume, str):
                 source, _, rest = volume.partition(":")
                 if source.startswith((".", "/", "~", "$")):
-                    out.append((name, source, rest.split(":")[0]))
-            elif volume.get("type") == "bind":
-                out.append((name, str(volume["source"]), str(volume["target"])))
+                    target, _, mode = rest.partition(":")
+                    out.append((name, source, target, "ro" in mode.split(",")))
+            elif isinstance(volume, dict) and volume.get("type") == "bind":
+                out.append((name, str(volume["source"]), str(volume["target"]),
+                            bool(volume.get("read_only"))))
     return out
 
 
@@ -63,7 +79,7 @@ def _in_install(source: str) -> str:
 def test_only_named_boss_paths_are_mounted_never_the_checkout():
     binds = _binds()
     assert binds, "the compose file was not read"
-    for service, source, target in binds:
+    for service, source, target, _ in binds:
         inside = _in_install(source)
         assert inside in ALLOWED, (
             f"{service} mounts {source} ({inside or 'the install checkout itself'}) at {target}: "
@@ -72,11 +88,29 @@ def test_only_named_boss_paths_are_mounted_never_the_checkout():
         assert ".git" not in PurePosixPath(inside).parts
 
 
-def test_the_self_source_reaches_the_containers_read_only():
-    for service, source, target in _binds():
-        if _in_install(source) in (".boss/selfsrc", ".boss/import"):
-            text = COMPOSE.read_text(encoding="utf-8")
-            assert f"{source}:{target}:ro" in text, f"{service} must mount {source} read-only"
+def test_every_host_mount_is_read_only():
+    """A container that could write the mirror, the record or the installer's SQL could change
+    what the host later builds or trusts."""
+    for path in [COMPOSE, *OVERLAYS]:
+        for service, source, target, read_only in _binds(path):
+            assert read_only, f"{path.name}: {service} mounts {source} at {target} read-write"
+
+
+def test_the_e2e_overlays_mount_only_their_fixtures():
+    assert OVERLAYS, "the e2e overlays were not found"
+    for path in OVERLAYS:
+        for service, source, target, _ in _binds(path):
+            inside = _in_install(source)
+            assert inside in set(ALLOWED) | ALLOWED_E2E, f"{path.name}: {service} mounts {source}"
+
+
+def test_the_guard_catches_the_checkout_and_a_writable_mount(tmp_path):
+    bad = tmp_path / "bad.yml"
+    bad.write_text("services:\n  api:\n    volumes:\n      - ../..:/src:ro\n"
+                   "      - ../../.boss/selfsrc:/var/lib/boss/private/selfsrc\n")
+    found = _binds(bad)
+    assert _in_install(found[0][1]) not in ALLOWED
+    assert found[1][3] is False
 
 
 def test_the_engine_sandbox_overlay_mounts_nothing():

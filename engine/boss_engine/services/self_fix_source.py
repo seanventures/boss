@@ -114,6 +114,7 @@ def describe_install(settings: Any = None) -> dict[str, Any]:
     """WHERE AM I INSTALLED AND WHAT SOURCE AM I RUNNING, in facts and one sentence: the host
     path the installer recorded (the checkout itself is never mounted into a container), the
     commit and release, whether it was clean, and whether that is the build running now."""
+    from .remote_url import public_remote
     from .self_fix import running_stack_head, source_sha
 
     if settings is None:
@@ -129,7 +130,8 @@ def describe_install(settings: Any = None) -> dict[str, Any]:
         "commit": commit or None, "release_tag": record.get("release_tag"),
         "release_ref": record.get("release_ref"), "branch": record.get("branch"),
         "dirty": bool(record.get("dirty")), "changed_files": int(record.get("changed_files") or 0),
-        "upstream": record.get("upstream"), "recorded_at": record.get("recorded_at"),
+        "upstream": public_remote(str(record.get("upstream") or "")) or None,
+        "recorded_at": record.get("recorded_at"),
         "running_sha": running if known else None,
         "stack_head": (running_stack_head() or None) if known else None,
         "matches_running": bool(commit and known and commit == running),

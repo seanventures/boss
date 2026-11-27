@@ -217,3 +217,130 @@ def test_an_enrolment_that_fails_warns_and_never_stops_the_install(tmp_path, see
     assert "WARN The self-installer was not set up" in out.stdout
     assert "boss self-fix enable" in out.stdout
     assert not (seeded / ".boss/self-installer.key").exists()
+
+
+# ── review round: what the installer must never do ───────────────────────────────────────────
+
+def _module():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "sfi_host_records", ROOT / "scripts/install/self_fix_installer.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_mirror_holds_no_stash_and_no_other_local_branch(tmp_path):
+    co = _checkout(tmp_path)
+    _git(co, "tag", "v1")
+    _git(co, "branch", "my-unpushed-work")
+    (co / "app.py").write_text("SECRET = 'not for agents'\n")
+    _git(co, "stash")
+    stash = _git(co, "rev-parse", "refs/stash")
+    assert _source(co).returncode == 0
+    mirror = co / ".boss/selfsrc/boss.git"
+    refs = _git(co, "--git-dir", str(mirror), "for-each-ref", "--format=%(refname)").split()
+    assert sorted(refs) == ["refs/heads/boss/install", "refs/heads/main", "refs/tags/v1"]
+    assert not _holds(co, stash), "the stash's objects never reach the mirror"
+
+
+def test_a_mirror_an_older_installer_made_is_cleaned(tmp_path):
+    co = _checkout(tmp_path)
+    (co / "app.py").write_text("SECRET = 'stashed'\n")
+    _git(co, "stash")
+    stash = _git(co, "rev-parse", "refs/stash")
+    mirror = co / ".boss/selfsrc/boss.git"
+    _git(co, "clone", "-q", "--mirror", str(co), str(mirror))      # what `seed` used to do
+    assert _holds(co, stash)
+    assert _source(co).returncode == 0
+    refs = _git(co, "--git-dir", str(mirror), "for-each-ref", "--format=%(refname)").split()
+    assert "refs/stash" not in refs and not _holds(co, stash)
+
+
+def test_with_self_fix_off_the_record_is_written_and_nothing_mirrored(tmp_path):
+    co = _checkout(tmp_path)
+    env = {**_env(), "BOSS_SELF_FIX": "off"}
+    out = subprocess.run(["bash", "-c", "set -euo pipefail\n" + UI + _block("self-fix source")],
+                         cwd=co, capture_output=True, text=True, env=env)
+    assert out.returncode == 0 and "INFO Self-fix is off" in out.stdout, out
+    assert _record(co)["kind"] == "git" and not (co / ".boss/selfsrc/boss.git").exists()
+
+
+@pytest.mark.parametrize("url, clean", [
+    ("https://x-access-token:s3cr3t@github.com/o/boss.git", "https://github.com/o/boss.git"),
+    ("https://user:p@ss@w0rd@gitlab.example/o/boss.git", "https://gitlab.example/o/boss.git"),
+    ("https://gitlab.example/o/boss.git?private_token=s3cr3t", "https://gitlab.example/o/boss.git"),
+    ("https://gitlab.example/o/boss.git#token=s3cr3t", "https://gitlab.example/o/boss.git"),
+    ("ssh://git@host.example:22/o/boss.git", "ssh://host.example:22/o/boss.git"),
+    ("git@github.com:o/boss.git", "git@github.com:o/boss.git"),
+    ("/srv/git/boss.git", "/srv/git/boss.git"),
+])
+def test_an_origin_never_carries_a_credential_on_either_side(url, clean):
+    """The host installer's scrubber and the engine's are twins held to the same cases."""
+    from boss_engine.services.remote_url import public_remote
+
+    assert _module()._public_url(url) == clean
+    assert public_remote(url) == clean
+
+
+def test_describe_install_scrubs_a_record_written_by_an_older_installer(tmp_path):
+    from types import SimpleNamespace
+
+    from boss_engine.services.self_fix_source import describe_install
+
+    (tmp_path / "install.json").write_text(json.dumps({
+        "kind": "git", "path": "/x", "commit": "a" * 40,
+        "upstream": "https://u:p@ss@host.example/o/boss.git?private_token=s3cr3t"}))
+    said = describe_install(SimpleNamespace(self_fix_source=str(tmp_path / "boss.git")))
+    assert said["upstream"] == "https://host.example/o/boss.git"
+
+
+def test_the_opt_out_is_remembered_by_every_later_install(tmp_path, seeded):
+    out = _enrol(tmp_path, seeded, tier="dev", extra={"BOSS_SELF_FIX_INSTALLER": "off"})
+    assert out.returncode == 0 and (seeded / ".boss/self-installer.off").exists()
+    again = _enrol(tmp_path, seeded, tier="dev")              # the next upgrade, no env set
+    assert again.returncode == 0 and again.stdout == ""
+    assert not (seeded / ".boss/self-installer.key").exists()
+
+
+def test_a_removed_service_or_a_kept_key_is_never_re_enrolled(tmp_path, seeded, monkeypatch):
+    assert "OK Self-installer enrolled" in _enrol(tmp_path, seeded, tier="dev").stdout
+    calls = (tmp_path / "docker-calls").read_text()
+    # The service is still there: an upgrade leaves it, and never mints again.
+    assert _enrol(tmp_path, seeded, tier="dev").stdout == ""
+    assert (tmp_path / "docker-calls").read_text() == calls
+    # A person removes the service: no later install brings it back.
+    module = _module()
+    host = module.Host(seeded, out=lambda line: None)
+    monkeypatch.setenv("BOSS_SELF_FIX_SERVICE_DIR", str(tmp_path / "units"))
+    monkeypatch.setenv("BOSS_SELF_FIX_SERVICE_CTL", "true")
+    monkeypatch.setenv("BOSS_SELF_FIX_PLATFORM", "linux")
+    assert module.cmd_service(host, "remove") == 0
+    for name in ("BOSS_SELF_FIX_SERVICE_DIR", "BOSS_SELF_FIX_SERVICE_CTL", "BOSS_SELF_FIX_PLATFORM"):
+        monkeypatch.delenv(name)
+    (seeded / ".boss/self-installer.key").unlink()             # and even with the key gone
+    assert _enrol(tmp_path, seeded, tier="dev").stdout == ""
+    assert (tmp_path / "docker-calls").read_text() == calls
+
+
+@pytest.mark.parametrize("answer, mints", [("BOSS answered 503: busy", False),
+                                           ("BOSS did not answer at x (timed out)", False),
+                                           ("BOSS answered 401: revoked", True),
+                                           ("BOSS answered 403: not yours", True)])
+def test_a_key_is_minted_only_when_boss_refuses_it(tmp_path, seeded, monkeypatch, answer, mints):
+    module = _module()
+    (seeded / ".boss/self-installer.key").write_text("boss_sak_old\n")
+    host = module.Host(seeded, out=lambda line: None)
+
+    def refuse(*a, **k):
+        raise module.Refused(answer)
+
+    composed = []
+    monkeypatch.setattr(host, "call", refuse)
+    monkeypatch.setattr(host, "compose", lambda *a, **k: composed.append(a) or (0, "boss_sak_new"))
+    monkeypatch.setattr(module, "cmd_service", lambda h, action: 0)
+    code = module.cmd_enable(host)
+    assert bool(composed) is mints and code == (0 if mints else 1)
+    kept = (seeded / ".boss/self-installer.key").read_text().strip()
+    assert kept == ("boss_sak_new" if mints else "boss_sak_old")
