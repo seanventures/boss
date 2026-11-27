@@ -3215,6 +3215,8 @@ export async function retryCodeTaskWithStateAction(
 }
 
 export type FeedbackActionResult = {
+  ok?: boolean;
+  data?: Record<string, unknown>;
   thread_id?: string;
   status?: string;
   question?: string;
@@ -3255,6 +3257,8 @@ export async function submitCodeTaskFeedbackAction(
     revalidatePath("/");
     return result;
   } catch (e) {
+    const consent = consentOfThrown(e);
+    if (consent) return { ok: false, error: "Needs your consent", data: { consent } };
     return { error: e instanceof Error ? e.message : String(e) };
   }
 }
@@ -3270,6 +3274,8 @@ export async function confirmCodeTaskFeedbackAction(
     revalidatePath("/");
     return result;
   } catch (e) {
+    const consent = consentOfThrown(e);
+    if (consent) return { ok: false, error: "Needs your consent", data: { consent } };
     return { error: e instanceof Error ? e.message : String(e) };
   }
 }
