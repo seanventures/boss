@@ -50,3 +50,15 @@ def same_app_params(*, owner: str, repo: str, app_id: str = "", root: str = "") 
 def declared_new_app(fctx: Optional[Mapping[str, Any]]) -> bool:
     """The person asked for a NEW app (only ever written by a door that asked them)."""
     return bool(isinstance(fctx, Mapping) and fctx.get(NEW_APP_KEY) is True)
+
+
+def a_person_asked(auth: Any) -> bool:
+    """May this request's `new_app` declare a new app? A person's own request does; an agent's
+    does not — a non-person principal, or any request carrying a run token (an agent reaching an
+    HTTP door through its run's bridge). A request with no identity at all (an install without
+    the identity layer, where only the console's people reach these doors) counts as a person."""
+    if auth is None:
+        return True
+    principal = getattr(auth, "principal", None)
+    return bool(principal is not None and getattr(principal, "is_person", False)
+                and getattr(auth, "run_token", None) is None)

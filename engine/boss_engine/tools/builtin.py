@@ -1287,8 +1287,8 @@ def _titled_for_the_app(connection, cts, run_id: str, title) -> str:
 
 def _new_app_from_a_person(asked: bool) -> bool:
     """A NEW APP SAID BY A PERSON (app_scope.NEW_APP_KEY), never a model's argument: a workflow
-    build step's trusted value (the start door recorded a person's new-app door,
-    workflows.NEW_APP_INPUT), or `new_app` from a person calling directly (MCP, CLI) — a person
+    build step's trusted value (the run was started with start_run's declared_new_app, written
+    under workflows.NEW_APP_INPUT), or `new_app` from a person calling directly (MCP, CLI) — a person
     principal, no run token, outside any chat turn or step. An agent's `new_app` only skips the
     app question; the empty-checkout guard still treats its build as naming no app."""
     from ..services import agent_acts
@@ -2537,6 +2537,7 @@ def _register_write_tools(reg: ToolRegistry) -> None:
             ignored = sorted(k for k in run_input if str(k).startswith(wf.ADOPT_PREFIX))
             # NOR THAT IT IS A NEW APP (app_scope.NEW_APP_KEY): only a person's door declares one,
             # and a declared new app is never stopped beside another app's unmerged code.
+            # start_run drops it for every caller too; it is named here so the reply says so.
             if "new_app" in run_input:
                 run_input.pop("new_app")
                 ignored = sorted({*ignored, "new_app"})

@@ -619,8 +619,8 @@ def test_an_agents_start_workflow_never_declares_a_new_app(engine, one_repo):
 
 def test_a_run_started_as_a_new_app_builds_from_main_past_another_apps_open_change(
         client, engine, one_repo, panel, tmp_path):
-    """The composition the launch Into a project relies on: a workflow run whose input carries
-    new_app=True (started through start_run, as factory_launch starts its Easy Mode run) hands
+    """The composition the launch Into a project relies on: a workflow run started with
+    start_run(declared_new_app=True) (as factory_launch starts its Easy Mode run) hands
     its build a declared new app, and the empty-checkout guard lets that build start on a
     README-only main beside Recipe Box's and Neighborhood Board's unmerged branches — the same
     checkout an undeclared build is refused on."""
@@ -648,11 +648,22 @@ def test_a_run_started_as_a_new_app_builds_from_main_past_another_apps_open_chan
     assert installed.status_code == 200, installed.text
     with engine.begin() as connection:
         running = wf.running_version(connection, _project(), "minor_feature")
+        # A caller's `new_app` in the input is dropped for every caller...
+        forged = wf.start_run(
+            connection, project_id=_project(), actor="ceo",
+            input_data={"title": "Forged", "directive": "x", "repository": f"{OWNER}/{SHARED}",
+                        "new_app": True},
+            dedupe_key="twoapps:forged", workflow_version_id=str(running["version_id"]))
+        forged_input = connection.execute(text("SELECT input FROM workflow_runs WHERE id = :r"),
+                                          {"r": forged["id"]}).scalar()
+        assert "new_app" not in forged_input
+        # ...and only the door's own declaration writes it.
         run = wf.start_run(
             connection, project_id=_project(), actor="ceo",
             input_data={"title": "Parking Rota", "directive": "A parking rota for the street.",
-                        "repository": f"{OWNER}/{SHARED}", "new_app": True},
-            dedupe_key="twoapps:launch-into", workflow_version_id=str(running["version_id"]))
+                        "repository": f"{OWNER}/{SHARED}"},
+            dedupe_key="twoapps:launch-into", workflow_version_id=str(running["version_id"]),
+            declared_new_app=True)
     built = _built_approving_gates(client, engine, run["id"])
     fctx = built[0]["finalize_ctx"]
     assert fctx.get("new_app") is True
@@ -676,3 +687,28 @@ def test_a_run_started_as_a_new_app_builds_from_main_past_another_apps_open_chan
             base_branch="main", app_id=str(fctx.get("app_id") or ""), new_app=False)
     assert declared is None
     assert undeclared and f"boss/code/{R_ROOT}" in undeclared
+
+
+def test_only_a_persons_request_declares_a_new_app_at_an_http_door():
+    """The start door (and every door through it: New work, templates, the composer) honours
+    `new_app` only from a person: an agent's run token reaching it through its bridge, or a
+    service, does not declare one."""
+    import dataclasses
+    import inspect
+
+    from boss_engine.identity.principal import RunTokenClaims
+    from boss_engine.services.app_scope import a_person_asked
+
+    from apps.api.app import main
+
+    person = _as("USER")
+    assert a_person_asked(person) is True
+    assert a_person_asked(_as("AGENT")) is False
+    assert a_person_asked(_as("SERVICE_ACCOUNT")) is False
+    fields = {f.name for f in dataclasses.fields(RunTokenClaims)}
+    claims = RunTokenClaims(**{name: None for name in fields})
+    assert a_person_asked(dataclasses.replace(person, run_token=claims)) is False
+    assert a_person_asked(None) is True        # no identity layer: only the console's people
+    source = inspect.getsource(main.start_delivery_workflow)
+    assert "_a_person_asked(identity_guard.REQUEST_IDENTITY.get())" in source
+    assert "declared_new_app=declared_new_app" in source

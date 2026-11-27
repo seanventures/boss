@@ -4400,11 +4400,12 @@ def _perform_capability(
         if preview_anchor:
             inputs = {**inputs, "preview_id": preview_anchor}
         if not extends and not preview_anchor \
-                and (context.get("input") or {}).get("new_app") is True:
-            # A NEW APP, as a person's door started the run (the start door, a Command Center
-            # launch Into a project): handed to the build as a TRUSTED value, never an argument a
-            # model could write, so it starts from the default branch beside the project's other
-            # apps (app_scope). An agent's start_workflow never carries one (it drops it).
+                and (context.get("input") or {}).get(workflows.NEW_APP_INPUT) is True:
+            # A NEW APP, as the door that started the run decided it (start_run's
+            # declared_new_app: a person's door, a launch Into a project; a caller's input never
+            # writes it): handed to the build as a TRUSTED value, never an argument a model
+            # could write, so it starts from the default branch beside the project's other
+            # apps (app_scope).
             trusted_step = {"new_app": True}
         if extends:
             inputs = {**inputs, "extends_run_id": extends}
