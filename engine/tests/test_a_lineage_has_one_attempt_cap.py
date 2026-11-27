@@ -14,8 +14,9 @@ retries attempt no code and are skipped. A person's own larger repair budget is 
 The end-to-end proof is test_recovery_faults_end_to_end.py (REC-01: three builds).
 
 These need the full schema. Without BOSS_IDENTITY_FULL_TEST_DATABASE_URL they build it on the
-test database (BOSS_TEST_DATABASE_URL); with neither, they fail on CI instead of skipping
-(and the e2e plumbing gate runs them on its own full-schema database: RETRY_SUITES).
+test database (BOSS_TEST_DATABASE_URL); with neither, they fail on CI instead of skipping.
+(They are not in the e2e plumbing gate's RETRY_SUITES: that gate runs the INSTALLED BOSS's
+copies, and an install older than this file would fail it for want of the file.)
 """
 from __future__ import annotations
 
