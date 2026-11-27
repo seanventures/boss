@@ -72,3 +72,12 @@ def test_pushed_document_acceptance_requires_both_receipts():
         "submitted_paths": ["guide.md"], "exit_code": 0}}, gates={"written_tests_pass": True})
     assert "guide.md" in body and "✅ New tests pass" not in body
     assert "git diff --check" in body and "Application tests are inapplicable" in body
+
+
+def test_preview_uses_the_reviewed_local_branch_and_preserves_other_origins():
+    from boss_engine.services.preview_service import _preview_branch
+    ctx = {"local_change_branch": "qa/readme", "root_run_id": "first"}
+    assert _preview_branch({"spec": {"owner": "local_northgate"}, "finalize_ctx": ctx}, "latest") == "qa/readme"
+    assert _preview_branch({"spec": {"owner": "upstream"}, "finalize_ctx": ctx}, "latest") == "boss/code/first"
+    assert _preview_branch({"finalize_ctx": {"work_branch": "boss/custom"}}, "latest") == "boss/custom"
+    assert _preview_branch({}, "latest") == "boss/code/latest"

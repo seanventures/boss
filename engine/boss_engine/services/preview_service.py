@@ -3138,6 +3138,15 @@ def workspace_app_root(workspace: Path) -> Optional[Path]:
     return None
 
 
+def _preview_branch(run, run_id):
+    """A pushed local change lives on its submitted branch, even after another review."""
+    from .local_repo import is_local_owner
+    context = run.get("finalize_ctx") or {}
+    if context.get("local_change_branch") and is_local_owner((run.get("spec") or {}).get("owner") or ""):
+        return context["local_change_branch"]
+    return context.get("work_branch") or f"boss/code/{context.get('root_run_id') or run_id}"
+
+
 def github_wait_mirror(run: dict, settings=None, *, any_status: bool = False) -> Optional[Path]:
     """BOSSAPP-922: the local mirror that holds a GitHub build's branch while GitHub is down.
 
@@ -3157,8 +3166,7 @@ def github_wait_mirror(run: dict, settings=None, *, any_status: bool = False) ->
     repo = str(spec.get("repo") or getattr(settings, "target_github_repo", "") or "")
     if not owner or not repo or local_repo.is_local_owner(owner):
         return None
-    fctx = run.get("finalize_ctx") or {}
-    branch = fctx.get("work_branch") or f"boss/code/{fctx.get('root_run_id') or run.get('id')}"
+    branch = _preview_branch(run, run.get("id"))
     try:
         mirror = local_repo.mirror_path(owner, repo, settings)
         if (mirror / "HEAD").is_file() and local_repo.branch_exists(mirror, branch):
@@ -3222,7 +3230,7 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
     # Iterations reuse the ROOT run's branch (boss/code/{root_run_id}); a run's own
     # id may have no branch. Prefer an explicit work_branch, else the root-derived one.
     _fctx = run.get("finalize_ctx") or {}
-    branch = _fctx.get("work_branch") or f"boss/code/{_fctx.get('root_run_id') or run_id}"
+    branch = _preview_branch(run, run_id)
     build_substrate = _fctx.get("execution_substrate") or normalize_build_substrate(
         settings.sandbox_provider
     ).value
@@ -3634,7 +3642,7 @@ def start_container_preview(engine, settings: Settings, run_id: str, *, ttl_minu
     # Iterations reuse the ROOT run's branch (boss/code/{root_run_id}); a run's own
     # id may have no branch. Prefer an explicit work_branch, else the root-derived one.
     _fctx = run.get("finalize_ctx") or {}
-    branch = _fctx.get("work_branch") or f"boss/code/{_fctx.get('root_run_id') or run_id}"
+    branch = _preview_branch(run, run_id)
     build_substrate = _fctx.get("execution_substrate") or normalize_build_substrate(
         settings.sandbox_provider
     ).value
@@ -3816,7 +3824,7 @@ def start_rootfs_preview(
     spec = run.get("spec") or {}
     owner = spec.get("owner") or settings.target_github_owner
     repo = spec.get("repo") or settings.target_github_repo
-    branch = fctx.get("work_branch") or f"boss/code/{fctx.get('root_run_id') or run_id}"
+    branch = _preview_branch(run, run_id)
     expires = datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)
     with begin(engine) as c:
         c.execute(
