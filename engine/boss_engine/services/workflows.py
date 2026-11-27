@@ -4166,6 +4166,18 @@ def _gate_card(connection: Connection, run: Any, spec: dict[str, Any],
         card["produced_by_title"] = step_title
     if agent:
         card["produced_by_agent"] = agent
+    # Invariant I5 (AA-G): downstream deploy/promote/release_approval gates carry the latest
+    # acceptance verdict whenever the run's acceptance check did not pass.
+    try:
+        from .acceptance import report as _acc_report
+
+        latest_acc = _acc_report.latest_for_run(connection, project_id, str(run["id"]))
+        if latest_acc and latest_acc.get("verdict") == "not_met":
+            card["acceptance"] = _acc_report.card_payload(
+                latest_acc, latest_acc.get("open_rows") or (),
+            )
+    except Exception:  # noqa: BLE001 — optional acceptance enrichment never blocks a gate card
+        pass
     return card
 
 
