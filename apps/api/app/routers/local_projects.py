@@ -224,14 +224,6 @@ def local_changes(project_id: str, state: Optional[str] = None) -> dict[str, Any
         return {"project_id": project_id, "items": [_row_view(dict(r)) for r in rows]}
 
 
-def _decision_for(connection, url: str) -> Optional[dict[str, Any]]:
-    row = connection.execute(text(
-        "SELECT id, status, question FROM decisions WHERE recommendation->>'pull_request_url' = :u "
-        "AND (recommendation->>'action') = 'review_pull_request' ORDER BY created_at DESC LIMIT 1"),
-        {"u": url}).mappings().first()
-    return dict(row) if row else None
-
-
 def _change_row(connection, project_id: str, number: int) -> dict[str, Any]:
     row = connection.execute(text(
         "SELECT * FROM local_change_sets WHERE project_id = :p AND number = :n "
@@ -286,10 +278,16 @@ def local_change_merge(project_id: str, number: int, request: Request, payload: 
                                 status_code=409)
         from boss_engine.services.local_repo_host import change_set_url
 
-        decision = _decision_for(connection, change_set_url(row["repository"], row["number"]))
+        from boss_engine.services import change_review
+
+        decision = change_review._decision_for(  # noqa: SLF001 — the one lookup
+            connection, project_id, change_set_url(row["repository"], row["number"]))
     if decision is None or decision["status"] != "pending":
         return JSONResponse({"error": "no_review_decision", "message":
                              f"Change #{number} has no review waiting for a decision."}, status_code=409)
+    stale = change_review.stale_card_words(decision, row.get("head_sha"))
+    if stale:
+        return JSONResponse({"error": "stale_head", "message": stale}, status_code=409)
     return approve_decision_card(decision["id"], DecisionActionRequest(
         actor=_actor(request), note=payload.note or f"Merge change #{number}", force=payload.force))
 

@@ -152,3 +152,36 @@ def test_bitbucket_workspace_fallback_to_github_target():
     b = BitbucketAdapter(_settings())
     assert b.repository_full_name == "acme-ws/shop"
     assert b.clone_url("") == "https://x-token-auth:bbtok@bitbucket.org/acme-ws/shop.git"
+
+
+def test_bitbucket_merge_is_bound_to_the_approved_head(wire, monkeypatch):
+    """An approval names the head it was raised for; Bitbucket merges only while the pull
+    request's source is still that commit (ENT-BUILD-01)."""
+    heads = {"now": "abc123def456"}
+    inner = bb.httpx.request
+
+    def with_pr(method, url, **kw):
+        if method == "GET" and url.endswith("/pullrequests/7"):
+            wire.append({"method": method, "url": url})
+            return httpx.Response(200, request=httpx.Request(method, url),
+                                  json={"source": {"commit": {"hash": heads["now"]}}})
+        return inner(method, url, **kw)
+
+    monkeypatch.setattr(bb.httpx, "request", with_pr)
+    a = BitbucketAdapter(_settings())
+    assert a.merge_pull_request(7, "merge it", head_sha="abc123def4567890").merged is True
+    heads["now"] = "fff000fff000"
+    with pytest.raises(RuntimeError, match="409"):
+        a.merge_pull_request(7, "merge it", head_sha="abc123def4567890")
+    assert not wire[-1]["url"].endswith("/merge"), "a moved head never reaches the merge call"
+
+
+def test_every_first_party_host_binds_a_merge_to_its_approved_head():
+    """The factory pins an approved merge to the card's head only on hosts whose merge takes
+    `head_sha`; a host without it merges the tip of whatever was pushed after approval."""
+    import inspect
+
+    from boss_engine.services.local_repo_host import LocalGitAdapter
+
+    for host in (GitHubAdapter, BitbucketAdapter, LocalGitAdapter):
+        assert "head_sha" in inspect.signature(host.merge_pull_request).parameters, host.__name__

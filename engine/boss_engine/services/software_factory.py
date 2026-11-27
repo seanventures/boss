@@ -3301,6 +3301,14 @@ class SoftwareFactoryService:
         pin = ({"head_sha": approved_head}
                if approved_head and _accepts_kwarg(self.github.merge_pull_request, "head_sha")
                else {})
+        if approved_head and not pin:
+            # A host that cannot bind a merge to a commit (an MCP-served repository) merges its
+            # tip: say so on the record rather than silently.
+            self.events.emit(
+                connection, project_id, "software_factory.merge_head_pin_dropped",
+                "release_manager", "decision", decision_id,
+                {"pull_request_url": pull_request_url, "approved_head_sha": approved_head,
+                 "reason": "repository_host_cannot_pin_a_merge"})
         try:
             from .github_adapter import PullRequestMergeResult
 

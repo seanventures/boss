@@ -149,3 +149,24 @@ def test_repaired_change_gets_new_merge_decision_for_its_head(engine):
                               {"id": current}).scalar_one()
         assert evidence["head_sha"] == repaired["head_sha"]
         assert "checks_failing" not in evidence
+
+
+def test_any_card_that_names_a_head_is_that_heads_card(engine):
+    """Not only the merge card: a repeat of any question for a different commit is a new card,
+    and a repeat for the same commit (or none) still merges into the one already open."""
+    from boss_engine.services.core import create_blocking_decision
+    from sqlalchemy import text
+
+    with engine.begin() as db:
+        project = db.execute(text("SELECT id FROM projects ORDER BY id LIMIT 1")).scalar_one()
+        question = f"Fix these on the change {uuid4().hex[:8]}"
+
+        def ask(**rec):
+            return create_blocking_decision(db, project, None, question,
+                                            {"action": "start_recheck_followup", **rec}, {}, "t")
+
+        first = ask(head_sha="a" * 40)
+        assert ask(head_sha="a" * 40) == first
+        assert ask(head_sha="b" * 40) != first
+        unbound = ask()
+        assert ask(head_sha="") == unbound, "empty and absent heads are one value"
