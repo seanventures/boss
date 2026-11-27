@@ -365,6 +365,11 @@ def test_awaited_work_that_fails_stops_the_run_at_that_step(eng, project, monkey
         monkeypatch.setattr(runner, "_architecture_step", lambda *a, **k: {
             "capability": "architecture", "tool": None, "status": "awaiting",
             "architecture_review_id": awaited_id})
+    if key == "acceptance":
+        # The acceptance check row it parks on is under test, not starting a sandbox job.
+        monkeypatch.setattr(runner, "_start_acceptance", lambda *a, **k: {
+            "capability": "acceptance", "tool": None, "status": "started",
+            "acceptance_check_id": awaited_id})
     # Deploy's "no preview, no deploy" guard is its own test; here the deployment is under test.
     monkeypatch.setattr(runner, "_preview_missing_for_run", lambda *a, **k: None)
     table = runner._AWAIT_TABLES[kind][0]

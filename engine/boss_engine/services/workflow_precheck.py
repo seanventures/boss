@@ -132,6 +132,8 @@ CAPABILITY_PRECHECKS: dict[str, CapabilityPrecheck] = {
                                 invokes_tools=("extend_code_task@inputs.extend",),
                                 reserves=("code_task_budget_usd_micros", 1), app_env="build"),
     "review": CapabilityPrecheck(("sandbox.worker",) + _AGENT),
+    "acceptance": CapabilityPrecheck(("authority.consent", "sandbox.worker") + _AGENT
+                                     + ("budget.headroom",)),
     "test": NO_CHECKS("reads the build's own test results"),
     "report": NO_CHECKS("writes the run's report from what the steps recorded"),
     "preview": CapabilityPrecheck(("authority.consent", "github.access", "sandbox.worker",
@@ -257,12 +259,14 @@ AGENT_ROUTE = {
     "scan_business_rules": "review",
     # The trace reads the document's clauses and proposes, on the same review seat, read-only.
     "trace_regulation": "review",
+    # Acceptance exercises the delivered work and judges the contract on the review seat.
+    "acceptance": "review",
 }
 
 #: Capabilities that VERIFY work. Skipping one with a deploy after it would ship unverified work,
 #: so `skip_refusal` refuses it (a skip never bypasses a gate that protects a deploy).
 _PROTECTS_A_DEPLOY = frozenset({"review", "test", "wait_for_ci", "security_scan",
-                                "security_rereview", "smoke_test", "ux_review",
+                                "security_rereview", "smoke_test", "ux_review", "acceptance",
                                 "security_review", "security_decide", "spec_review"})
 _DEPLOYS = frozenset({"deploy", "redeploy"})
 

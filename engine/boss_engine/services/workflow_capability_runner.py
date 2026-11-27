@@ -3779,6 +3779,412 @@ def repository_words(full_name: str) -> str:
 _ON_THE_BRANCH = frozenset({"plrr", "more_tests"})
 
 
+_ACCEPTANCE_RECHECK_THEN = "recheck_acceptance"
+
+
+def _acceptance_not_met_for_run(
+    connection: Connection, project_id: str, context: Optional[dict[str, Any]]
+) -> Optional[dict[str, Any]]:
+    """Invariant I5 (AA-G): returns the acceptance card payload if this workflow run's latest
+    acceptance check did not pass (`verdict == 'not_met'`), else None.
+
+    A production promote or deploy never proceeds on `not_met` without a person's decision, on
+    every profile.
+    """
+    if not context:
+        return None
+    wf_run_id = str(context.get("run_id") or "").strip()
+    build_id = _from_any_step(context, "code_task_run_id") or _build_run_id(dict(context))
+    if not wf_run_id and not build_id:
+        return None
+    try:
+        from .acceptance import report as _acc_report
+
+        with connection.begin_nested():
+            check = _acc_report.latest_for_run(
+                connection, project_id, wf_run_id, build_run_id=build_id,
+            )
+            if check and check.get("verdict") == "not_met":
+                return _acc_report.card_payload(check, check.get("open_rows") or ())
+    except Exception:  # noqa: BLE001 — optional check never breaks legacy deploys
+        return None
+    return None
+
+
+def _start_acceptance(
+    connection: Connection,
+    ctx: Any,
+    *,
+    project_id: str,
+    actor: str,
+    step: dict[str, Any],
+    context: dict[str, Any],
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    """Start an async Acceptance Agent check (`acceptance` capability, AA-G, LLD §6.2)."""
+    from . import jobs as _jobs
+    from .acceptance import checks as _acc_checks
+    from .acceptance import contract as _acc_contract
+    from .acceptance import ledger as _acc_ledger
+    from .acceptance import policy as _acc_policy
+
+    wf_run_id = str(context.get("run_id") or "")
+    step_id = str(step.get("id") or "")
+    code_task_run_id = (
+        str(inputs.get("run_id") or "").strip()
+        or str(_from_any_step(context, "code_task_run_id") or "").strip()
+        or str(_build_run_id(context) or "").strip()
+        or None
+    )
+    deployed_url = (
+        str(inputs.get("deployed_url") or "").strip()
+        or str(_from_any_step(context, "deployed_url") or "").strip()
+        or None
+    )
+    deployment_id = (
+        str(inputs.get("deployment_id") or "").strip()
+        or str(_from_any_step(context, "deployment_id") or "").strip()
+        or None
+    )
+    preview_url = (
+        str(inputs.get("preview_url") or "").strip()
+        or str(_from_any_step(context, "preview_url") or "").strip()
+        or None
+    )
+    run_input = context.get("input") if isinstance(context.get("input"), dict) else {}
+    profile_override = str(inputs.get("profile") or run_input.get("profile") or "").strip() or None
+    settings = getattr(ctx, "settings", None) or get_settings()
+    pol = _acc_policy.for_run(
+        connection, project_id, settings=settings,
+        profile_override=profile_override, step_inputs=inputs,
+    )
+    mode = _acc_policy.resolve_mode(
+        pol.mode, deployed_url=deployed_url, deployment_id=deployment_id,
+    )
+
+    lineage = code_task_run_id or wf_run_id
+    pr_url = None
+    head_sha = None
+    if code_task_run_id:
+        lin = _acc_ledger.lineage_of(connection, code_task_run_id)
+        if lin:
+            lineage = str(lin.get("lineage") or code_task_run_id)
+            pr_url = lin.get("pr_url")
+        row = connection.execute(
+            text("SELECT state->>'head_sha' AS sha, pull_request_url FROM code_task_runs WHERE id = :r"),
+            {"r": code_task_run_id},
+        ).mappings().first()
+        if row:
+            head_sha = row["sha"]
+            pr_url = pr_url or row["pull_request_url"]
+
+    contract_row = _acc_contract.latest(connection, root_run_id=lineage, project_id=project_id)
+    pending = _acc_checks.create_pending(
+        connection,
+        project_id=project_id,
+        lineage_root_run_id=lineage,
+        layer="step",
+        mode=mode,
+        contract_id=(contract_row or {}).get("id"),
+        code_task_run_id=code_task_run_id,
+        workflow_run_id=wf_run_id or None,
+        step_id=step_id or None,
+        head_sha=head_sha,
+        pr_url=pr_url,
+        budget={"limit_usd": pol.usd, "limit_minutes": pol.minutes},
+    )
+    acc_id = str(pending["id"])
+    task_id = _from_any_step(context, "task_id") or run_input.get("task_id")
+    job_payload = {
+        "acceptance_check_id": acc_id,
+        "project_id": project_id,
+        "run_id": code_task_run_id,
+        "lineage_root_run_id": lineage,
+        "workflow_run_id": wf_run_id or None,
+        "step_id": step_id or None,
+        "mode": mode,
+        "deployed_url": deployed_url,
+        "deployment_id": deployment_id,
+        "preview_url": preview_url,
+        "profile": pol.profile,
+        "policy": pol.to_dict(),
+    }
+    _jobs.enqueue_job(connection, project_id, "acceptance.check", job_payload, task_id=task_id)
+
+    # Carry auto_rounds_done forward across re-checks after an automatic follow-up.
+    prior_step_out = (context.get("steps") or {}).get(step_id) or {}
+    prior_rounds = int(
+        ((prior_step_out.get("output") or {}).get("auto_rounds_done") or 0)
+        if isinstance(prior_step_out, dict) else 0
+    )
+    if not prior_rounds and wf_run_id and step_id:
+        prev_out = connection.execute(
+            text("SELECT output FROM workflow_step_runs WHERE workflow_run_id = :w AND step_id = :s "
+                 "ORDER BY iteration DESC LIMIT 1"),
+            {"w": wf_run_id, "s": step_id},
+        ).scalar()
+        if isinstance(prev_out, str):
+            try:
+                prev_out = json.loads(prev_out)
+            except ValueError:
+                prev_out = {}
+        if isinstance(prev_out, dict):
+            prior_rounds = int(prev_out.get("auto_rounds_done") or 0)
+
+    return {
+        "capability": "acceptance",
+        "tool": None,
+        "status": "started",
+        "acceptance_check_id": acc_id,
+        "code_task_run_id": code_task_run_id,
+        "lineage_root_run_id": lineage,
+        "mode": mode,
+        "policy": pol.to_dict(),
+        "on_not_met": inputs.get("on_not_met"),
+        "auto_rounds_done": prior_rounds,
+    }
+
+
+def _start_acceptance_followup(
+    connection: Connection,
+    ctx: Any,
+    *,
+    project_id: str,
+    run_id: str,
+    step_id: str,
+    lineage: str,
+    code_task_run_id: Optional[str],
+) -> Optional[str]:
+    """Start one automatic ledger-driven follow-up code task for `balanced`/`strict` round 1."""
+    from .acceptance import ledger as _acc_ledger
+
+    spec = _acc_ledger.followup_spec(connection, project_id=project_id, lineage=lineage)
+    ledger_ids = list(spec.get("ledger_ids") or [])
+    if not ledger_ids:
+        return None
+    base_id = code_task_run_id or lineage
+    base = connection.execute(
+        text("SELECT id, title, task_id, pull_request_url, spec, finalize_ctx "
+             "  FROM code_task_runs WHERE id = :r AND project_id = :p"),
+        {"r": base_id, "p": project_id},
+    ).mappings().first()
+    if not base:
+        return None
+    from .core import make_id
+
+    followup_id = make_id("crun")
+    base_fctx = base["finalize_ctx"] if isinstance(base["finalize_ctx"], dict) else {}
+    new_fctx = {
+        **base_fctx,
+        "is_followup": True,
+        "root_run_id": lineage,
+        "deferred_from_run": base_id,
+        "workflow_run_id": run_id,
+        "ledger_ids": ledger_ids,
+    }
+    findings_block = "\n".join(f"- [{f['severity'].upper()}] {f['text']}" for f in spec["findings"])
+    instructions = (
+        (spec["contract_block"] + "\n\n" if spec.get("contract_block") else "")
+        + "OPEN ACCEPTANCE & REVIEW FINDINGS TO FIX:\n" + findings_block
+    )
+    new_spec = {
+        "instructions": instructions,
+        "acceptance_criteria": list(spec.get("acceptance_criteria") or []),
+    }
+    connection.execute(
+        text(
+            "INSERT INTO code_task_runs "
+            "  (id, project_id, task_id, title, status, pull_request_url, "
+            "   spec, finalize_ctx, state) "
+            "VALUES (:id, :p, :tid, :t, 'queued', :pr, "
+            "        CAST(:sp AS JSONB), CAST(:fc AS JSONB), '{}'::jsonb)"
+        ),
+        {
+            "id": followup_id, "p": project_id, "tid": base["task_id"],
+            "t": f"Follow-up: {base['title']}"[:240],
+            "pr": base["pull_request_url"],
+            "sp": json.dumps(new_spec), "fc": json.dumps(new_fctx),
+        },
+    )
+    _acc_ledger.hold(connection, ledger_ids, followup_run_id=followup_id)
+    from . import jobs as _jobs
+
+    _jobs.enqueue_job(
+        connection, project_id, "code.task",
+        {"code_task_run_id": followup_id, "workflow_run_id": run_id, "step_id": step_id},
+        task_id=base["task_id"],
+    )
+    return followup_id
+
+
+def _settle_acceptance_step(
+    connection: Connection,
+    ctx: Any,
+    *,
+    project_id: str,
+    run_id: str,
+    step: Any,
+    output: dict[str, Any],
+    check_id: str,
+    ended_at: Any,
+    done: list[dict[str, Any]],
+) -> None:
+    """Apply the per-profile acceptance policy once an `acceptance_checks` row completes (AA-G)."""
+    from .acceptance import checks as _acc_checks
+    from .acceptance import ledger as _acc_ledger
+    from .acceptance import policy as _acc_policy
+    from .acceptance import report as _acc_report
+
+    check = _acc_checks.get(connection, check_id)
+    if check is None:
+        workflows.force_fail_waiting_step(
+            connection, project_id=project_id, step_run_id=step["id"],
+            error=f"acceptance check {check_id} disappeared",
+            output={**output, "status": "failed"},
+        )
+        done.append({"run_id": run_id, "step_id": step["step_id"], "outcome": "failed"})
+        return
+
+    verdict = str(check.get("verdict") or "not_run").lower()
+    counts = dict(check.get("counts") or {})
+    lineage = str(check.get("lineage_root_run_id") or output.get("lineage_root_run_id") or "")
+    open_rows = (
+        _acc_report.enrich_ledger_rows(
+            connection, project_id,
+            _acc_ledger.open_for(connection, project_id=project_id, lineage=lineage,
+                                 min_severity="minor"),
+        )
+        if lineage else []
+    )
+    open_gaps = sum(1 for r in open_rows if r.get("kind") == "acceptance_gap")
+    pol = _acc_policy.AcceptancePolicy.from_mapping(output.get("policy"))
+    auto_rounds_done = int(output.get("auto_rounds_done") or 0)
+    human_open = int(counts.get("human", 0) or 0)
+    settled = _acc_policy.action(
+        verdict, pol, output.get("on_not_met"),
+        auto_rounds_done=auto_rounds_done, human_open=human_open,
+    )
+    banner = _acc_report.verdict_banner(check, open_rows=open_rows)
+    payload = _acc_report.card_payload(check, open_rows)
+    base_out = {
+        **output,
+        "acceptance_check_id": check_id,
+        "verdict": verdict,
+        "counts": counts,
+        "open_gaps": open_gaps,
+        "acceptance": payload,
+        "policy": pol.to_dict(),
+        "auto_rounds_done": auto_rounds_done,
+    }
+
+    if settled == "succeed":
+        workflows.force_complete_waiting_step(
+            connection, project_id=project_id, step_run_id=step["id"],
+            output={**base_out, "status": "succeeded", "awaited_status": "completed",
+                    "note": banner["headline"]},
+            finished_at=ended_at,
+        )
+        done.append({"run_id": run_id, "step_id": step["step_id"],
+                     "outcome": "succeeded", "awaited": "acceptance_check", "verdict": verdict})
+        return
+
+    if settled == "label":
+        # Lean profile: label & file tickets, NEVER wait (LLD §6.2).
+        missing_n = int(counts.get("missing", 0) or 0)
+        partial_n = int(counts.get("partial", 0) or 0)
+        note = (
+            f"Not accepted: {missing_n} missing, {partial_n} partial (tickets filed)"
+            if verdict == "not_met"
+            else f"{human_open} item(s) need a person (labeled under {pol.profile})"
+        )
+        workflows.force_complete_waiting_step(
+            connection, project_id=project_id, step_run_id=step["id"],
+            output={**base_out, "status": "succeeded", "awaited_status": "completed",
+                    "advisory": True, "advisory_labeled": True, "note": note},
+            finished_at=ended_at,
+        )
+        done.append({"run_id": run_id, "step_id": step["step_id"],
+                     "outcome": "labeled_advisory", "awaited": "acceptance_check",
+                     "verdict": verdict})
+        return
+
+    if settled == "auto_followup":
+        followup_id = _start_acceptance_followup(
+            connection, ctx, project_id=project_id, run_id=run_id,
+            step_id=str(step["step_id"]), lineage=lineage,
+            code_task_run_id=check.get("code_task_run_id") or output.get("code_task_run_id"),
+        )
+        if followup_id:
+            next_rounds = auto_rounds_done + 1
+            workflows.repoint_waiting_step(
+                connection, project_id=project_id, step_run_id=step["id"],
+                handle={"kind": "code_task", "id": followup_id,
+                        "then": _ACCEPTANCE_RECHECK_THEN,
+                        "auto_rounds_done": next_rounds},
+                note=f"Not accepted ({banner['headline']}); automatic follow-up {followup_id} started",
+            )
+            connection.execute(
+                text("UPDATE workflow_step_runs SET output = output || CAST(:o AS JSONB), "
+                     "updated_at = now() WHERE id = :i"),
+                {"i": step["id"], "o": json.dumps({"auto_rounds_done": next_rounds,
+                                                   "followup_run_id": followup_id})},
+            )
+            done.append({"run_id": run_id, "step_id": step["step_id"],
+                         "outcome": "auto_followup", "followup_run_id": followup_id})
+            return
+        # No open ledger rows to send to a follow-up -> fall through to decide/block.
+        settled = "block" if pol.on_not_met == "block" else "decide"
+
+    if settled in ("decide", "block"):
+        human_only = verdict == "met" and human_open > 0
+        opts = _acc_policy.decision_options(settled, human_only=human_only)
+        question = (
+            f"{human_open} item{'s' if human_open != 1 else ''} need a person: confirm?"
+            if human_only
+            else f"Acceptance did not pass ({banner['headline']}). How should BOSS proceed?"
+        )
+        run_row = {"id": run_id, "task_id": None}
+        dec_out = {
+            **base_out,
+            "status": "needs_decision",
+            "question": question,
+            "note": banner["detail"],
+            "decision_options": opts,
+            "findings": payload.get("open_tickets") or [],
+        }
+        decision_id = _park_for_decision(
+            connection, project_id, dict(run_row), dict(step), dec_out,
+        )
+        done.append({"run_id": run_id, "step_id": step["step_id"],
+                     "outcome": f"parked_{settled}", "decision_id": decision_id,
+                     "options": opts["options"]})
+        return
+
+    # `retry`: verdict == 'not_run' (infra failure). Retry up to 2 attempts, then fail naming fix.
+    attempt = int(connection.execute(
+        text("SELECT attempt FROM workflow_step_runs WHERE id = :i"),
+        {"i": step["id"]},
+    ).scalar() or 1)
+    why = str(check.get("why") or "the acceptance check could not run")
+    if attempt < 2:
+        workflows.requeue_waiting_step(
+            connection, project_id=project_id, step_run_id=step["id"],
+            output={**base_out, "note": f"Retrying acceptance check after infra error: {why}"},
+            event="acceptance.retrying",
+            data={"check_id": check_id, "attempt": attempt, "why": why[:300]},
+        )
+        done.append({"run_id": run_id, "step_id": step["step_id"],
+                     "outcome": "retrying", "why": why})
+    else:
+        workflows.force_fail_waiting_step(
+            connection, project_id=project_id, step_run_id=step["id"],
+            error=f"acceptance check could not run after {attempt} attempts: {why}"[:500],
+            output={**base_out, "status": "failed", "awaited_status": "not_run"},
+        )
+        done.append({"run_id": run_id, "step_id": step["step_id"],
+                     "outcome": "failed", "awaited": "acceptance_check", "because": why})
+
+
 def _perform_toolless(
     connection: Connection,
     ctx: Any,
@@ -3823,6 +4229,12 @@ def _perform_toolless(
         if started.get("status") == "not_applicable":
             return started
         return _settle_started_work(capability, key, started)
+    if key == "acceptance":
+        return _settle_started_work(
+            capability, key,
+            _start_acceptance(connection, ctx, project_id=project_id, actor=actor,
+                              step=step, context=context, inputs=inputs),
+        )
     if key == "merge":
         return _merge_step(connection, project_id, step, context, inputs)
     if key == "more_tests":
@@ -5850,6 +6262,9 @@ _AWAIT_KINDS: dict[str, tuple[str, tuple[str, ...]]] = {
     # VERIFYING RECOVERY IS WAITING TOO: on an incident_recovery_checks row that every tick
     # judges from the app's own scrapes (incident_response.look_at_recovery).
     "verify_recovery": ("recovery_check", ("recovery_check_id", "id")),
+    # ACCEPTANCE (AA-G, BOSSAPP-1222): waits on an acceptance_checks row produced by the
+    # acceptance.check worker job, then settles by per-profile policy.
+    "acceptance": ("acceptance_check", ("acceptance_check_id", "id")),
 }
 
 #: Envelopes a capability's tool nests its handle in, beyond the ones named after the kind and
@@ -6188,6 +6603,11 @@ _AWAIT_TABLES: dict[str, tuple[str, frozenset[str], frozenset[str]]] = {
     "change_set": ("repo_change_sets",
                    frozenset({"live"}),
                    frozenset({"failed", "rejected", "cancelled", "rolled_back"})),
+    # An Acceptance Agent check (AA-G, BOSSAPP-1222): `completed` hands the verdict to the
+    # per-profile policy (`_settle_acceptance_step`); `failed`/`cancelled` stops the step.
+    "acceptance_check": ("acceptance_checks",
+                         frozenset({"completed"}),
+                         frozenset({"failed", "cancelled"})),
 }
 
 #: The column a table keeps its status in, when it is not `status`.
@@ -6198,7 +6618,8 @@ _REASON_COLUMN: dict[str, str] = {"decisions": "resolution_note", "ci_waits": "s
                                   "deployment_runs": "failure_reason",
                                   "stack_deployments": "failure_reason",
                                   "repo_change_sets": "COALESCE(error, blocked_reason)",
-                                  "security_scans": "counts->>'error'"}
+                                  "security_scans": "counts->>'error'",
+                                  "acceptance_checks": "why"}
 
 
 def deployed_url_of(domains: Any, target_kind: Any = None) -> str:
@@ -6867,6 +7288,29 @@ def resume_awaited(
                              "outcome": "failed", "awaited": kind, "awaited_status": status,
                              "because": not_passed})
                 continue
+        if kind == "code_task" and status in ok_states \
+                and handle.get("then") == _ACCEPTANCE_RECHECK_THEN:
+            # THE AUTOMATIC FOLLOW-UP LANDED: requeue the acceptance step to re-check on the
+            # updated branch with auto_rounds_done carried forward (AA-G).
+            rounds_done = int(handle.get("auto_rounds_done") or output.get("auto_rounds_done") or 1)
+            workflows.requeue_waiting_step(
+                connection, project_id=project_id, step_run_id=step["id"],
+                output={**output, "auto_rounds_done": rounds_done,
+                        "code_task_run_id": awaited_id,
+                        "note": f"Follow-up {awaited_id} finished; re-running acceptance check"},
+                event="acceptance.rechecking",
+                data={"followup_run_id": awaited_id, "auto_rounds_done": rounds_done},
+            )
+            done.append({"run_id": run_id, "step_id": step["step_id"],
+                         "outcome": "rechecking_acceptance", "followup_run_id": awaited_id})
+            continue
+        if kind == "acceptance_check" and status in ok_states:
+            _settle_acceptance_step(
+                connection, ctx, project_id=project_id, run_id=run_id,
+                step=step, output=output, check_id=awaited_id,
+                ended_at=row.get("ended_at"), done=done,
+            )
+            continue
         if kind == "code_task" and status in ok_states \
                 and handle.get("then") == deploy_repair.THEN_REDEPLOY:
             # THE APP WAS FIXED FOR ITS DEPLOY: the step deploys again, from the repair build.
@@ -8199,6 +8643,24 @@ def _gate_subject(
     key = str(binding.get("capability") or "")
     if key not in CAPABILITY_KEYS:
         return None
+    # Invariant I5 (AA-G): a promote or deploy downstream of a `not_met` acceptance NEVER
+    # proceeds without a person's decision on any profile (not even dev autonomy or env policy).
+    if key in ("deploy", "redeploy", "config_deploy", "promote_config", "release_approval"):
+        acc_block = _acceptance_not_met_for_run(connection, project_id, context)
+        if acc_block is not None:
+            cap_obj = get_capability(key)
+            return {
+                "key": key,
+                "label": cap_obj.label,
+                "summary": (
+                    f"Approve before '{_step_word(spec_step, cap_obj.label)}' runs: "
+                    f"{acc_block.get('headline') or 'acceptance did not pass'}."
+                ),
+                "risk_tier": max(cap_obj.risk_tier, 2),
+                "completes_step": bool(cap_obj.is_gate),
+                "requires_person": "Acceptance did not pass (not_met); a person must decide.",
+                "acceptance": acc_block,
+            }
     stack_target = (stack_target_for_step(connection, project_id, spec_step, context,
                                           default_owner=default_owner)
                      if key == "deploy" else None)
@@ -8763,6 +9225,9 @@ def _park_for_decision(
             "capability": output.get("capability"),
             "findings": output.get("findings") or [],
             "code_task_run_id": output.get("code_task_run_id"),
+            **({"acceptance": output["acceptance"]} if output.get("acceptance") else {}),
+            **({"decision_options": output["decision_options"]}
+               if output.get("decision_options") else {}),
         },
         {"estimated_usd": 0.0},
         str(output.get("note") or ""),

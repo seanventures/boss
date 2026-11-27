@@ -1233,6 +1233,30 @@ CAPABILITIES: dict[str, Capability] = {
             produces=("approved_by", "executed_by", "change_ref"),
             typical_minutes=1,
         ),
+        _cap(
+            key="acceptance",
+            family="verify",
+            captain="acceptance_agent",
+            role_agent="acceptance_agent",
+            label="Acceptance",
+            summary="Check the delivered work against the ticket, brief and PRD: run it, test "
+                    "every item, report met / partial / missing with evidence, and track every "
+                    "gap.",
+            tool=None,
+            risk_tier=1,
+            is_async=True,
+            needs_model=True,
+            required_inputs=(),
+            optional_inputs=(
+                "run_id", "preview_url", "deployment_id", "deployed_url", "mode",
+                "budget_usd", "budget_minutes", "on_not_met", "profile",
+            ),
+            produces=("acceptance_check_id", "verdict", "open_gaps", "report_artifact_id"),
+            skills=("acceptance-verification", "findings-triage"),
+            typical_minutes=10,
+            cost_note="Lean <= $0.60/10 min · Balanced <= $1.50/20 min · Strict <= $3/35 min; "
+                      "re-checks replay first.",
+        ),
     )
 }
 
