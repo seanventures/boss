@@ -127,14 +127,25 @@ def test_t2_f2_1_inspect_host_rejects_unsafe_commands_before_ssh(
     key_file = _make_ssh_key(tmp_path)
     ctx = _host_ctx(db_engine, tenant.project_id, host_name, key_file, monkeypatch)
     reg = build_default_registry()
-    res = reg.invoke(
-        "inspect_host",
-        ctx,
-        project_id=tenant.project_id,
-        actor=tenant.owner.principal.id,
-        args={"host": host_name, "command": bad_command},
-    )
-    assert res["ok"] is False
+    # Act as the verified Owner so the call passes the identity/authorization layer and reaches
+    # the command validator: without this, every call stops at `identity_unavailable` and the
+    # assertions below would hold even if `_inspect_host_command` accepted everything.
+    with lineage.acting(tenant.session_auth):
+        res = reg.invoke(
+            "inspect_host",
+            ctx,
+            project_id=tenant.project_id,
+            actor=tenant.owner.principal.id,
+            args={"host": host_name, "command": bad_command},
+        )
+    assert res["ok"] is False, res
+    assert res.get("error") != "identity_unavailable", res
+    assert res.get("status") != "identity_unavailable", res
+    # The refusal must come from the command validator (its own note), not from any later
+    # host/ssh step, and the host must never be contacted.
+    assert res.get("note") == "this tool inspects; it never changes a host.", res
+    assert isinstance(res.get("error"), str) and res["error"], res
+    assert "exit_code" not in res, f"command reached the host: {res}"
     assert ssh_stub() == []
 
 

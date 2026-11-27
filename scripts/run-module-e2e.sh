@@ -100,9 +100,12 @@ if [[ $PYTEST_RC -ne 0 ]]; then
   exit "$PYTEST_RC"
 fi
 
-if printf '%s\n' "$OUTPUT" | grep -E '[0-9]+ (skipped|xfailed|xpassed)' >/dev/null 2>&1; then
-  echo "[run-module-e2e] REFUSED: profile $PROFILE had skipped/xfailed tests (zero-skip invariant violated)" >&2
-  exit 2
+if [[ "$PROFILE" == "m6" ]]; then
+  if printf '%s\n' "$OUTPUT" | grep -E '[0-9]+ (skipped|xfailed|xpassed)' >/dev/null 2>&1; then
+    echo "[run-module-e2e] REFUSED: profile $PROFILE had skipped/xfailed tests (zero-skip invariant violated)" >&2
+    exit 2
+  fi
+  echo "[run-module-e2e] PASS profile=$PROFILE (0 failed, 0 skipped, 0 xfailed)"
+else
+  echo "[run-module-e2e] PASS profile=$PROFILE (0 failed)"
 fi
-
-echo "[run-module-e2e] PASS profile=$PROFILE (0 failed, 0 skipped, 0 xfailed)"

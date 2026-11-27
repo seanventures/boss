@@ -303,8 +303,10 @@ def test_e2e_t3_04_agent_spec_deployment_pinning_and_rbac(client, tenant_factory
         f"/v1/threads/{thr['thread_id']}/runs/{run1['run_id']}",
         params={"project_id": tenant.project_id},
         headers=tenant.owner.headers,
-    ).json()
-    assert run1_check.get("spec_version") in (1, None) or run1_check.get("version") in (1, None)
+    )
+    assert run1_check.status_code == 200, run1_check.text
+    # The run started under deployment v1 stays pinned to v1 after v2 is deployed.
+    assert run1_check.json()["version"] == 1, run1_check.json()
 
     denied = client.post(
         f"/v1/agents/{key}/deployments",

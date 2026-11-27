@@ -636,10 +636,11 @@ def test_t1_f1_4_02_list_receipts_and_fetch_by_dedupe_key(client, owner_headers)
     listed = client.get("/v1/receipts", params={"project_id": "boss-dogfood"}, headers=owner_headers)
     assert listed.status_code == 200, listed.text
     items = listed.json().get("items", [])
-    if items:
-        dkey = items[0]["dedupe_key"]
-        single = client.get(f"/v1/receipts/{dkey}", headers=owner_headers)
-        assert single.status_code == 200 and single.json()["dedupe_key"] == dkey
+    assert items, f"no receipts listed after /v1/metatron/watch: {listed.text}"
+    dkey = items[0]["dedupe_key"]
+    single = client.get(f"/v1/receipts/{dkey}", headers=owner_headers)
+    assert single.status_code == 200, single.text
+    assert single.json()["dedupe_key"] == dkey
 
 
 def test_t1_f1_4_03_resource_receipts_lists_cleanly(client, tenant_factory):
@@ -777,25 +778,53 @@ def test_t1_f1_5_02_get_decision_and_understand_summary(client, tenant_factory):
 
     und = client.post(
         "/v1/decide/understand",
-        json={"project_id": tenant.project_id, "decision_id": dec_id, "actor": tenant.owner.principal.id},
-        headers=tenant.owner.headers,
-    )
-    assert und.status_code in (200, 422), und.text
-
-
-def test_t1_f1_5_03_put_decide_rule_persists_autonomy_rule(tenant_factory):
-    tenant = tenant_factory(seed_defaults=False)
-    res = tenant.session_client.put(
-        "/v1/decide/rules/deploy",
         json={
             "project_id": tenant.project_id,
-            "scope": "install",
-            "rule": {"mode": "ask", "note": "m6 policy"},
+            "words": "Hold production deploys on weekends",
+            "tz": "UTC",
+            "actor": tenant.owner.principal.id,
+        },
+        headers=tenant.owner.headers,
+    )
+    assert und.status_code == 200, und.text
+    body = und.json()
+    # No model is configured in this suite, so Helm's reading must degrade to the documented
+    # `no_model` shape with zero edits (never a 5xx, never a silent write).
+    assert body["status"] == "no_model", body
+    assert body["edits"] == [], body
+    for key in ("already_allowed", "cannot", "replay"):
+        assert isinstance(body[key], list), body
+
+
+def test_t1_f1_5_03_put_decide_rule_persists_autonomy_rule(db_engine, tenant_factory):
+    tenant = tenant_factory(seed_defaults=False)
+    window = {"from_day": "sat", "from_time": "00:00", "to_day": "sun", "to_time": "23:59", "tz": "UTC"}
+    res = tenant.session_client.put(
+        "/v1/decide/rules/prod_deploy",
+        json={
+            "project_id": tenant.project_id,
+            "scope": tenant.project_id,
+            "rule": {"quiet": [window]},
             "actor": tenant.owner.principal.id,
         },
         headers=tenant.csrf_headers,
     )
-    assert res.status_code in (200, 422), res.text
+    assert res.status_code == 200, res.text
+    saved = res.json()["saved"]
+    assert saved["kind"] == "prod_deploy" and saved["scope"] == tenant.project_id
+    assert window in saved["rule"]["quiet"]
+    with db_engine.begin() as conn:
+        row = conn.execute(
+            text("SELECT rule FROM decide_rules WHERE scope = :s AND kind = 'prod_deploy'"),
+            {"s": tenant.project_id},
+        ).scalar()
+        change = conn.execute(
+            text("SELECT actor FROM decide_rule_changes WHERE id = :i"),
+            {"i": saved["change_id"]},
+        ).scalar()
+    rule = row if isinstance(row, dict) else json.loads(row)
+    assert window in rule["quiet"], rule
+    assert change, "no decide_rule_changes audit row for the save"
 
 
 def test_t1_f1_5_04_reject_decision_updates_status_and_leaves_pending(tenant_factory):
@@ -1349,7 +1378,8 @@ def test_t2_f1_8_05_extreme_subgraph_depth_handled_without_500(client, tenant_fa
         params={"project_id": tenant.project_id, "kind": "service", "node_key": "none", "depth": 99},
         headers=tenant.owner.headers,
     )
-    assert res.status_code in (200, 422), res.text
+    # depth is bounded (ge=0, le=10): an extreme depth is refused at the boundary, never a 5xx.
+    assert res.status_code == 422, res.text
 
 
 # ═════════════════════════════════════════════════════════════════════════════════════════════════
@@ -1403,6 +1433,9 @@ def test_t1_f1_9_04_manual_openrouter_model_trims_whitespace(tenant_factory):
     assert res.status_code == 200, res.text
     models = res.json().get("models", [])
     assert "qwen/qwen3-coder" in models
+    from boss_engine.services.setup_service import model_key_details
+
+    assert model_key_details(provider="openrouter", model="  qwen/qwen3-coder  ")["model"] == "qwen/qwen3-coder"
 
 
 def test_t1_f1_9_05_edition_endpoint_reports_community(client, tenant_factory):
@@ -1449,9 +1482,19 @@ def test_t2_f1_9_05_openrouter_non_finite_price_sanitized(tenant_factory):
         }
     )
     json.dumps([dataclasses.asdict(item) for item in parsed], allow_nan=False)
+    by_id = {item.id: item for item in parsed}
+    assert by_id["bad/nan"].prompt_usd_per_mtok is None
+    assert by_id["good/model"].prompt_usd_per_mtok == 2.0
+    assert by_id["good/model"].completion_usd_per_mtok == 5.0
+
+    # A whitespace-only model name is stripped and falls back to the provider's own routing
+    # (BOSSAPP-1340) instead of being stored as a blank model.
+    from boss_engine.services.setup_service import model_key_details
+
+    assert model_key_details(provider="openrouter", model="   ")["model"] == "openrouter/auto"
 
     tenant = tenant_factory(seed_defaults=True)
-    blank = tenant.session_client.post(
+    listed = tenant.session_client.post(
         "/v1/setup/models/openrouter/catalogue",
         json={
             "project_id": tenant.project_id,
@@ -1462,7 +1505,13 @@ def test_t2_f1_9_05_openrouter_non_finite_price_sanitized(tenant_factory):
         },
         headers=tenant.csrf_headers,
     )
-    assert blank.status_code in (200, 400, 422), blank.text
+    assert listed.status_code == 200, listed.text
+    # The catalogue response must be strict JSON (no NaN/Infinity prices) and name no blank model.
+    def _refuse_non_finite(token: str) -> None:
+        raise AssertionError(f"non-finite JSON constant in catalogue: {token}")
+
+    body = json.loads(listed.text, parse_constant=_refuse_non_finite)
+    assert all(isinstance(m, str) and m.strip() for m in body["models"]), body["models"]
 
 
 # ═════════════════════════════════════════════════════════════════════════════════════════════════
