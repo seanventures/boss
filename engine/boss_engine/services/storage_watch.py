@@ -48,6 +48,14 @@ STALE_AFTER = timedelta(minutes=2)
 HELPER_UNREACHABLE_AFTER = timedelta(minutes=10)
 #: A hold whose host stopped reporting for this long auto-releases if the last reading was fine.
 STUCK_HOLD_AFTER = timedelta(minutes=15)
+#: A host whose helper has said nothing for this long is not coming back by itself (uninstalled,
+#: a machine retired): its open incident is closed with that reason instead of staying open for
+#: ever on a reading nobody can refresh (review of the enterprise port, patch 20).
+HELPER_GONE_AFTER = timedelta(hours=6)
+#: When this process's watch first ran: silence is counted from here at the earliest, so a BOSS
+#: that starts after a laptop slept for a day does not close incidents before the helper's
+#: first reading has had the chance to arrive.
+WATCH_STARTED_AT: Optional[datetime] = None
 LEVELS = ("ok", "warn", "critical")
 SOURCES = ("steward", "hostd", "api")
 #: The by_type keys the Storage card draws, in order; `free` is appended by the summary.
@@ -362,21 +370,21 @@ def disk_source(connection: Any, host_id: str) -> str:
     return str(source or "api")
 
 
-def last_two(connection: Any, host_id: str) -> list[dict[str, Any]]:
+def last_two(connection: Any, host_id: str, *, source: Optional[str] = None) -> list[dict[str, Any]]:
     """The two newest DISK readings (rows that carry free_gb), oldest first."""
     rows = connection.execute(text(
         "SELECT * FROM storage_samples WHERE host_id = :h AND free_gb IS NOT NULL AND source = :source "
-        "ORDER BY at DESC LIMIT 2"), {"h": host_id, "source": disk_source(connection, host_id)}).mappings().all()
+        "ORDER BY at DESC LIMIT 2"), {"h": host_id, "source": source or disk_source(connection, host_id)}).mappings().all()
     return [dict(r) for r in reversed(rows)]
 
 
 def used_series(connection: Any, host_id: str, *, days: int = KEEP_DAYS,
-                max_points: int = 240) -> list[tuple[datetime, float, float]]:
+                max_points: int = 240, source: Optional[str] = None) -> list[tuple[datetime, float, float]]:
     """(at, used_gb, free_gb), oldest first, downsampled to ≤ max_points."""
     rows = connection.execute(text(
         "SELECT at, total_gb, free_gb FROM storage_samples WHERE host_id = :h "
         "AND free_gb IS NOT NULL AND total_gb IS NOT NULL AND source = :source AND at >= :since ORDER BY at"),
-        {"h": host_id, "source": disk_source(connection, host_id), "since": _now() - timedelta(days=days)}).all()
+        {"h": host_id, "source": source or disk_source(connection, host_id), "since": _now() - timedelta(days=days)}).all()
     pts = [(r[0] if r[0].tzinfo else r[0].replace(tzinfo=timezone.utc),
             float(r[1]) - float(r[2]), float(r[2])) for r in rows]
     if len(pts) > max_points:
@@ -432,12 +440,41 @@ def by_type_rows(sample: Mapping[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+#: The helper's reading of the build cache Docker can free (`docker system df` Reclaimable).
+#: The rest is layers installed images share: no prune frees it (ENT-SETUP-01).
+CACHE_FREEABLE_KEY = "build_cache_reclaimable"
+
+
+def cache_freeable_gb(sample: Mapping[str, Any]) -> Optional[float]:
+    """THE build cache a prune can free: what the cap, the budget, the cleanup plan and the cause
+    sentence count. An older helper sent only the total, which is the best reading there is."""
+    freeable = _f((sample.get("by_type") or {}).get(CACHE_FREEABLE_KEY))
+    return freeable if freeable is not None else _f(sample.get("cache_gb"))
+
+
+def cache_shared_gb(sample: Mapping[str, Any]) -> Optional[float]:
+    """The build cache installed images still use (total minus freeable); None when unknown.
+    The total is the helper's prune scope (BOSS's buildx builder when it has one)."""
+    bt = sample.get("by_type") or {}
+    total = _f(bt.get("build_cache_scope"))
+    total = total if total is not None else _f(sample.get("cache_gb"))
+    freeable = _f(bt.get(CACHE_FREEABLE_KEY))
+    return None if total is None or freeable is None else max(0.0, total - freeable)
+
+
+def cache_owned(sample: Mapping[str, Any]) -> Optional[bool]:
+    """Whether BOSS may clear the build cache beyond the plain cap (a Docker that runs only BOSS,
+    or its own buildx builder); None from a helper that does not say."""
+    v = _f((sample.get("by_type") or {}).get("build_cache_owned"))
+    return None if v is None else v >= 0.5
+
+
 def rules_reclaim_gb(sample: Mapping[str, Any], rules: Sequence[Mapping[str, Any]]) -> float:
     """What the ENABLED rules would hand back now (for the "with rules" forecast line)."""
     enabled = {r["kind"]: r["rule"] for r in rules if r.get("enabled")}
     gain = 0.0
     if "build_cache" in enabled:
-        gain += max(0.0, (_f(sample.get("cache_gb")) or 0.0) - float(enabled["build_cache"].get("cap_gb", 10)))
+        gain += max(0.0, (cache_freeable_gb(sample) or 0.0) - float(enabled["build_cache"].get("cap_gb", 10)))
     if "backups" in enabled:
         cap = float(enabled["backups"].get("cap_gb", 20))
         gain += max(0.0, (_f(sample.get("backups_gb")) or 0.0) - cap)
@@ -496,9 +533,18 @@ def budget(connection: Any, sample: Mapping[str, Any]) -> dict[str, Any]:
     except Exception:  # noqa: BLE001
         app_backups = None
     host_backups = _f(sample.get("backups_gb")) if sample.get("source") == "steward" else None
-    measured: dict[str, Optional[float]] = {
-        "images": _f(sample.get("images_gb")),
-        "build_cache": _f(sample.get("cache_gb")),
+    host = sample.get("by_type") or {}
+    measured: dict[str, Any] = {
+        # Older helpers only know total Docker image size. It cannot price this release.
+        "images": _f(host.get("budget_images")),
+        "rollback_images": _f(host.get("budget_rollback_images")),
+        "volumes_other": _f(host.get("budget_volumes_other")),
+        "dangling_volumes": _f(host.get("budget_dangling_volumes")),
+        "stale_images": _f(host.get("budget_stale_images")),
+        disk_budget.PREV_KEPT_KEY: _f(host.get(f"budget_{disk_budget.PREV_KEPT_KEY}")),
+        "build_cache": cache_freeable_gb(sample),
+        disk_budget.CACHE_SHARED_KEY: cache_shared_gb(sample),
+        disk_budget.CACHE_OWNED_KEY: cache_owned(sample),
         "logs": _f(sample.get("logs_gb")),
         "db_records": db["db_records"], "db_knowledge": db["db_knowledge"],
         "db_telemetry": db["db_telemetry"], "test_data": db["test_databases"],
@@ -507,9 +553,57 @@ def budget(connection: Any, sample: Mapping[str, Any]) -> dict[str, Any]:
         "sandboxes": _sandboxes_gb(),
     }
     test_server = test_server_present()
-    rows = disk_budget.evaluate(measured, test_server=test_server)
+    tv = _f(host.get("budget_test_volumes"))
+    if tv is not None:
+        measured["test_data"] = (measured["test_data"] or 0.0) + tv
+    rows = disk_budget.evaluate(measured, test_server=test_server,
+                                rollback_age_hours=_f(host.get("rollback_age_hours")),
+                                keep_hours=_f(host.get("rollback_keep_hours")) or disk_budget.ROLLBACK_KEEP_HOURS_DEFAULT)
     return {"rows": rows, "total": disk_budget.total(rows), "test_server": test_server,
             "warn_at_pct": round(100 * disk_budget.WARN_AT)}
+
+
+def close_when_helper_gone(connection: Any, *, started_at: Optional[datetime] = None) -> list[str]:
+    """Open incidents on a host whose helper reported once and then not for HELPER_GONE_AFTER:
+    resolved with that reason (the hold goes with it). Nothing can show the disk recovered, and
+    nothing will clean it, so an open incident would only hold work for ever. A host that never
+    had a helper is judged on the API's own readings, as before, and is left to evaluate_host."""
+    from . import storage_incidents
+
+    started = started_at or WATCH_STARTED_AT or _now()
+    closed: list[str] = []
+    rows = connection.execute(text(
+        "SELECT i.id, max(s.at) AS last_at FROM storage_incidents i "
+        "JOIN storage_samples s ON s.host_id = i.host_id AND s.source IN ('steward','hostd') "
+        "WHERE i.status <> 'resolved' GROUP BY i.id")).mappings().all()
+    for row in rows:
+        at = row["last_at"]
+        at = max(at if at.tzinfo else at.replace(tzinfo=timezone.utc), started)
+        if _now() - at < HELPER_GONE_AFTER:
+            continue
+        hours = int((_now() - at).total_seconds() // 3600)
+        with connection.begin_nested():
+            storage_incidents.resolve(connection, str(row["id"]), reason=(
+                f"host helper gone: no reading from this host for {hours} h, so nothing can show the "
+                "disk recovered; closed unverified. Check `boss steward status` on that host."))
+        closed.append(str(row["id"]))
+    return closed
+
+
+def host_disk_sample(connection: Any, host_id: str, *, fresh_only: bool = False) -> dict[str, Any]:
+    """Keep a registered host's disk and timestamp together when API sampling continues."""
+    sample = latest(connection, host_id, within=timedelta(days=2)) or {}
+    host = connection.execute(text(
+        "SELECT * FROM storage_samples WHERE host_id = :h AND source IN ('steward','hostd') "
+        "AND total_gb IS NOT NULL AND free_gb IS NOT NULL ORDER BY at DESC LIMIT 1"),
+        {"h": host_id}).mappings().first()
+    if host:
+        # The API can still measure the database while the host helper is offline.
+        for key in ("total_gb", "free_gb", "used_pct", "at", "source", "host_label"):
+            sample[key] = host[key]
+    if fresh_only and (not sample.get("at") or _now() - sample["at"] > STALE_AFTER):
+        return {}
+    return sample
 
 
 def summary(connection: Any, host_id: Optional[str] = None) -> dict[str, Any]:
@@ -519,8 +613,8 @@ def summary(connection: Any, host_id: Optional[str] = None) -> dict[str, Any]:
     host_id = host_id or (hosts(connection) or [local_host_id()])[0]
     th = storage_rules.thresholds(connection, host_id)
     rules = storage_rules.list_rules(connection, host_id)
-    sample = latest(connection, host_id, within=timedelta(days=2)) or {}
-    series = used_series(connection, host_id)
+    sample = host_disk_sample(connection, host_id)
+    series = used_series(connection, host_id, source=sample.get("source"))
     fc = forecast([(t, u) for t, u, _ in series], _f(sample.get("free_gb")),
                   rules_reclaim_gb=rules_reclaim_gb(sample, rules))
     at = sample.get("at")
@@ -545,8 +639,8 @@ def summary(connection: Any, host_id: Optional[str] = None) -> dict[str, Any]:
         disk_budget = None
     host_rows = []
     for h in hosts(connection):
-        s = latest(connection, h, within=timedelta(days=2)) or {}
-        ser = used_series(connection, h, days=7, max_points=24)
+        s = sample if h == host_id else host_disk_sample(connection, h)
+        ser = used_series(connection, h, days=7, max_points=24, source=s.get("source"))
         f = forecast([(t, u) for t, u, _ in ser], _f(s.get("free_gb")))
         fp = free_pct_of(s)
         host_rows.append({"host_id": h, "host_label": s.get("host_label") or h,
@@ -556,6 +650,8 @@ def summary(connection: Any, host_id: Optional[str] = None) -> dict[str, Any]:
                           "spark": [round(fr, 1) for _, _, fr in ser]})
     return {"host_id": host_id, "host_label": sample.get("host_label") or local_host_label(),
             "sampled_at": _iso(at), "source": sample.get("source"), "stale": stale,
+            "helper_overdue": bool(sample.get("source") in ("steward", "hostd") and at
+                                   and _now() - at >= HELPER_UNREACHABLE_AFTER),
             "disk": {"total_gb": round(_f(sample.get("total_gb")) or 0.0, 2),
                      "free_gb": round(_f(sample.get("free_gb")) or 0.0, 2),
                      "used_pct": round(100.0 - free_pct, 2) if free_pct is not None else None,
@@ -586,18 +682,20 @@ def evaluate_host(connection: Any, host_id: str) -> dict[str, Any]:
     from . import storage_incidents
 
     th = storage_rules.thresholds(connection, host_id)
-    pair = last_two(connection, host_id)
+    incident = storage_incidents.current_for_host(connection, host_id)
+    previous = storage_incidents.level_of(incident)
+    merged = host_disk_sample(connection, host_id, fresh_only=True)
+    if not merged:
+        return {"host_id": host_id, "level": previous, "readings": 0}
+    pair = last_two(connection, host_id, source=merged.get("source"))
     if not pair:
         return {"host_id": host_id, "level": "ok", "readings": 0}
-    merged = latest(connection, host_id, within=timedelta(days=2)) or pair[-1]
-    series = used_series(connection, host_id, days=FORECAST_WINDOW_DAYS, max_points=400)
+    series = used_series(connection, host_id, days=FORECAST_WINDOW_DAYS, max_points=400, source=merged.get("source"))
     fc = forecast([(t, u) for t, u, _ in series], _f(merged.get("free_gb")))
     readings = []
     for s in pair:
         s2 = {**merged, **{k: v for k, v in s.items() if v is not None}}
         readings.append((s2, fc.days_until_full))
-    incident = storage_incidents.current_for_host(connection, host_id)
-    previous = storage_incidents.level_of(incident)
     level = next_level(previous, readings, th)
     floor = at_floor(readings[-1][0], th)
     outcome = storage_incidents.on_level(connection, host_id=host_id, level=level,
@@ -611,6 +709,8 @@ def tick(engine: Any, settings: Any = None, *, sample_api: bool = True) -> dict[
     from ..db import background
     from . import storage_cleanup, storage_incidents, system_services, work_hold
 
+    global WATCH_STARTED_AT
+    WATCH_STARTED_AT = WATCH_STARTED_AT or _now()
     report: dict[str, Any] = {"at": _now().isoformat(), "hosts": []}
     try:
         with background():
@@ -637,7 +737,7 @@ def tick(engine: Any, settings: Any = None, *, sample_api: bool = True) -> dict[
                     elif work_hold.expired(hold, max_seconds):
                         storage_incidents.expire_hold(c, inc, max_seconds=max_seconds)
                     else:
-                        s = latest(c, str(hold.get("host_id") or ""), within=timedelta(days=2)) or {}
+                        s = host_disk_sample(c, str(hold.get("host_id") or ""))
                         at = s.get("at")
                         th = storage_rules.thresholds(c, str(hold.get("host_id") or ""))
                         fp = free_pct_of(s)
@@ -646,6 +746,7 @@ def tick(engine: Any, settings: Any = None, *, sample_api: bool = True) -> dict[
                                 and fp >= th["target_free_pct"]:
                             storage_incidents.resolve(c, inc["id"], reason="no reading for 15 min; "
                                                       "the last one was above target")
+                report["helper_gone"] = close_when_helper_gone(c)
                 if int(time.time()) % 600 < INTERVAL_SECONDS:
                     report["pruned"] = prune(c)
             # Plans advance outside the sampling transaction: host jobs, receipts, cards.

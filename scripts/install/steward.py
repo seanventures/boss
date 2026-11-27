@@ -36,6 +36,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import runpy
 import time
 import urllib.error
 import urllib.request
@@ -394,6 +395,62 @@ def docker_df(env: Env, runner: Callable = run_cmd) -> dict[str, float]:
     return out
 
 
+def own_builder(env: Env, runner: Callable = run_cmd) -> str:
+    """BOSS_BUILDX_BUILDER when it is a builder of BOSS's own, else "". One with the `docker`
+    driver (`default`, `desktop-linux`) is the daemon's shared builder, and one Docker cannot
+    describe proves nothing: neither is BOSS's (prune.sh applies the same check)."""
+    if not env.buildx_builder:
+        return ""
+    cached = getattr(env, "_own_builder", None)
+    if cached is not None and cached[0] == env.buildx_builder:
+        return cached[1]
+    driver = ""
+    try:
+        res = runner([*env.docker, "buildx", "inspect", env.buildx_builder])
+        if res.returncode == 0:
+            for line in (res.stdout or "").splitlines():
+                key, _, value = line.strip().partition(":")
+                if key == "Driver":
+                    driver = value.strip()
+                    break
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    owned = env.buildx_builder if driver and driver != "docker" else ""
+    env._own_builder = (env.buildx_builder, owned)
+    return owned
+
+
+def owns_build_cache(env: Env, runner: Callable = run_cmd) -> bool:
+    """THE CACHE BOSS MAY CLEAR (prune.sh uses the same rule): its own buildx builder, or a
+    Docker that runs only BOSS. Anywhere else the cache may be the person's own projects'."""
+    return bool(own_builder(env, runner)) or env.dedicated
+
+
+def cache_reading(env: Env, runner: Callable = run_cmd,
+                  df: Optional[dict[str, float]] = None) -> tuple[float, float]:
+    """(size, freeable) bytes of the build cache in the scope a prune works on: BOSS's buildx
+    builder when it has one (`docker buildx du`), else the daemon's (`docker system df`).
+    Freeable is what is not shared with images: `system df` Reclaimable, `buildx du` Private
+    (its Reclaimable counts shared layers too)."""
+    builder = own_builder(env, runner)
+    if builder:
+        try:
+            res = runner([*env.docker, "buildx", "du", "--builder", builder])
+        except (OSError, subprocess.TimeoutExpired):
+            return 0.0, 0.0
+        if res.returncode != 0:
+            return 0.0, 0.0
+        found = {}
+        for line in (res.stdout or "").splitlines():
+            key, _, value = line.strip().partition(":")
+            if key in ("Total", "Private") and value.strip():
+                found[key] = _parse_size(value.strip())
+        size = found.get("Total", 0.0)
+        return size, min(found.get("Private", size), size)
+    df = df if df is not None else docker_df(env, runner)
+    return df["cache"], min(df["reclaimable_cache"], df["cache"])
+
+
 def colima_profile(env: Env) -> Optional[str]:
     import re
 
@@ -470,6 +527,28 @@ def walk_backups(env: Env) -> list[dict[str, Any]]:
     return out
 
 
+def compose_service_states(env: Env, runner: Callable) -> Optional[list[dict[str, str]]]:
+    """A read-only snapshot of this Compose project. Exclude one-off commands."""
+    fmt = '{{.Names}}|{{.Label "com.docker.compose.service"}}|{{.State}}|{{.Status}}'
+    try:
+        res = runner([*env.docker, "ps", "-a", "--filter", f"label={COMPOSE_PROJECT_LABEL}={env.compose_project}",
+                      "--filter", "label=com.docker.compose.oneoff=False", "--format", fmt], timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if res.returncode:
+        return None
+    items = []
+    for line in res.stdout.splitlines():
+        parts = line.split("|", 3)
+        if len(parts) != 4:
+            return None
+        name, service, state, status = parts
+        if service and name:
+            health = "unhealthy" if "(unhealthy)" in status else "starting" if "(health: starting)" in status else ""
+            items.append({"name": name, "service": service, "state": health or state})
+    return sorted(items, key=lambda item: (item["service"], item["name"]))
+
+
 def collect(env: Env, runner: Callable = run_cmd) -> dict[str, Any]:
     usage = shutil.disk_usage("/")
     df = docker_df(env, runner)
@@ -485,10 +564,21 @@ def collect(env: Env, runner: Callable = run_cmd) -> dict[str, Any]:
         "backups_gb": gb(sum(b["bytes"] for b in backups)), "backups_n": len(backups),
         "steward_version": VERSION,
     }
+    services = compose_service_states(env, runner)
+    if services is not None:
+        sample["compose_services"] = services
     if alloc is not None:
         sample["docker_alloc_gb"] = gb(alloc)
         sample["docker_used_gb"] = gb(docker_used)
+    scope_size, freeable = cache_reading(env, runner, df)
     sample["by_type"] = {"images": sample["images_gb"], "build_cache": sample["cache_gb"],
+                         # The cache in the scope a prune works on (BOSS's builder, else the
+                         # daemon), what a prune can free of it (the rest is layers installed
+                         # images use), and whether BOSS may clear it beyond the plain cap
+                         # (storage_watch.cache_freeable_gb / cache_owned).
+                         "build_cache_scope": gb(scope_size),
+                         "build_cache_reclaimable": gb(freeable),
+                         "build_cache_owned": 1.0 if owns_build_cache(env, runner) else 0.0,
                          "volumes": sample["volumes_gb"], "logs": sample["logs_gb"],
                          "backups": sample["backups_gb"],
                          # What the orphan-volume job could really free (measured, ours, rebuildable,
@@ -496,7 +586,53 @@ def collect(env: Env, runner: Callable = run_cmd) -> dict[str, Any]:
                          # until they are relabelled. `volumes` above is every volume on the disk.
                          "volumes_reclaimable": gb(reclaimable),
                          "volumes_needs_relabel_n": float(len(relabel))}
+    sample["by_type"].update(budget_reading(env, runner))
     return sample
+
+
+#: The budget split walks every BOSS image's layers and every volume: measured at most this often,
+#: the last split re-sent in between (the disk reading itself stays every 30 s).
+BUDGET_EVERY_SECONDS = 600
+BUDGET_FILE = "steward-budget.json"
+
+
+def budget_reading(env: Env, runner: Callable, now: Optional[float] = None) -> dict[str, float]:
+    """The budget prices the layers of this release and its rollback set (disk_budget.py, the file
+    `boss doctor` runs, from this same checkout). The whole daemon footprint above is still used by
+    host pressure and cleanup decisions. Read-only; a failure leaves the split out, never the sample."""
+    now = time.time() if now is None else now
+    path = env.state_dir / BUDGET_FILE
+    try:
+        cached = json.loads(path.read_text())
+        if (isinstance(cached, dict) and isinstance(cached.get("values"), dict)
+                and cached.get("install_dir") == str(env.install_dir)
+                and 0 <= now - float(cached.get("at") or 0) < BUDGET_EVERY_SECONDS):
+            return {str(k): float(v) for k, v in cached["values"].items()}
+    except (OSError, ValueError, TypeError):
+        pass
+    budget_module = Path(__file__).resolve().parents[2] / "engine/boss_engine/services/disk_budget.py"
+    if not budget_module.is_file():
+        return {}
+    values: dict[str, float] = {}
+    try:
+        budget = runpy.run_path(str(budget_module))
+        for key, value in budget["measure_docker"](env.docker, project=env.compose_project,
+                                                   tag=env.image_tag, run=runner,
+                                                   builder=own_builder(env, runner)).items():
+            # A reading carries numbers only (storage_watch.clean_sample); names stay on the host.
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                values[f"budget_{key}"] = float(value)
+        age = budget["rollback_age_hours"](env.install_dir)
+        if age is not None:
+            values["rollback_age_hours"] = float(age)
+            values["rollback_keep_hours"] = float(budget["rollback_keep_hours"](env.dotenv))
+    except Exception as exc:  # noqa: BLE001 — the disk reading still goes out without the split
+        log_line(env, {"budget_reading": "failed", "error": type(exc).__name__})
+        return {}
+    with contextlib.suppress(OSError):
+        env.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        path.write_text(json.dumps({"at": now, "install_dir": str(env.install_dir), "values": values}))
+    return values
 
 
 def _volume_reading(env: Env, runner: Callable) -> tuple[float, list[str]]:
@@ -631,42 +767,46 @@ def verb_du(env: Env, args: dict, *, dry_run: bool, runner: Callable) -> tuple[l
 
 def verb_prune_build_cache(env: Env, args: dict, *, dry_run: bool, runner: Callable) -> tuple[list[str], float]:
     keep = int(args.get("keep_storage_gb") or 10)
-    if not env.buildx_builder and not env.dedicated:
+    if not owns_build_cache(env, runner):
         raise Refused("the build cache is Docker-wide; on a shared machine BOSS prunes only its own "
-                      "buildx builder (set BOSS_BUILDX_BUILDER) or a dedicated host (BOSS_DEDICATED_HOST=1)")
-    df = docker_df(env, runner)
-    over = max(0.0, df["cache"] - keep * 1e9)
-    scope = f"builder:{env.buildx_builder}" if env.buildx_builder else "dedicated-host"
+                      "buildx builder (BOSS_BUILDX_BUILDER, not one with the docker driver) or a "
+                      "dedicated host (BOSS_DEDICATED_HOST=1)")
+    # Only what can be freed, in the scope this prune works on (BOSS's builder, else the daemon):
+    # a plan built on the total would promise bytes no prune returns (ENT-SETUP-01).
+    size_before, freeable = cache_reading(env, runner)
+    over = max(0.0, freeable - keep * 1e9)
+    builder = own_builder(env, runner)
+    scope = f"builder:{builder}" if builder else "dedicated-host"
     items = [f"build-cache:{scope}:above-{keep}GB"] if over > 0 else []
     if dry_run or not items:
         return items, over
-    if env.buildx_builder:
-        argv = [*env.docker, "buildx", "prune", "--builder", env.buildx_builder, "-f", "--keep-storage", f"{keep}gb"]
+    if builder:
+        argv = [*env.docker, "buildx", "prune", "--builder", builder, "-f", "--keep-storage", f"{keep}gb"]
     else:
         argv = [*env.docker, "builder", "prune", "-f", "--keep-storage", f"{keep}gb"]
     res = runner(argv, timeout=900)
     if res.returncode != 0:
         raise Refused(f"docker builder prune failed: {(res.stderr or '').strip()[:160]}")
-    after = docker_df(env, runner)
-    return items, max(0.0, df["cache"] - after["cache"])
+    size_after, _ = cache_reading(env, runner)
+    return items, max(0.0, size_before - size_after)
 
 
 #: How long `boss rollback`'s images stay after a healthy upgrade (prune.sh, disk_budget; BOSSAPP-1459).
 ROLLBACK_KEEP_HOURS = 72.0
+ROLLBACK_LABEL = "boss.rollback_install_id"
+ROLLBACK_REPOS = {"boss-community-" + service for service in ("api", "worker", "mcp-tools", "egress", "web")}
+
+
+def _rollback_record(env: Env) -> dict[str, str]:
+    return env._read_dotenv(env.install_dir / ".boss-rollback")
+
 
 
 def rollback_expired(env: Env, runner: Callable, now: Optional[_dt.datetime] = None) -> bool:
     """The prev-<tag> rollback point is past its window: .boss-rollback was written more than
     BOSS_ROLLBACK_KEEP_HOURS ago, was not already dropped, and the API is healthy now (an
     unhealthy release keeps its way back)."""
-    record: dict[str, str] = {}
-    try:
-        for line in (env.install_dir / ".boss-rollback").read_text().splitlines():
-            k, sep, v = line.partition("=")
-            if sep and not k.startswith("#"):
-                record[k.strip()] = v.strip()
-    except OSError:
-        return False
+    record = _rollback_record(env)
     if record.get("BOSS_PREV_EXPIRED_AT") or record.get("BOSS_PREV_IMAGE_TAG") != f"prev-{env.image_tag}":
         return False
     try:
@@ -709,24 +849,51 @@ def verb_remove_images(env: Env, args: dict, *, dry_run: bool, runner: Callable)
             continue
         items.append(ref)
         size += _parse_size(row.get("Size") or "0")
+    # Build labels follow every alias of an image. Limit the rollback label to the
+    # specific old tag and repositories recorded by this install's upgrade.
+    record = _rollback_record(env) if expired else {}
+    recorded = {f"{repo}:{prev}" for repo in record.get("BOSS_PREV_IMAGES", "").split()
+                if repo in ROLLBACK_REPOS and record.get("BOSS_IMAGE_TAG") == env.image_tag}
+    rollback_items = set()
+    if recorded and env.install_id:
+        inventory = runner([*env.docker, "images", "--filter", f"label={ROLLBACK_LABEL}={env.install_id}",
+                            "--format", "{{json .}}"])
+        if inventory.returncode:
+            raise Refused("could not read the rollback image inventory")
+        for line in (inventory.stdout or "").splitlines():
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue        # an unreadable line is never a reason to remove anything
+            ref = f"{row.get('Repository')}:{row.get('Tag')}"
+            if ref in recorded and ref not in in_use:
+                rollback_items.add(ref)
+                if ref not in items:
+                    items.append(ref)
+                    size += _parse_size(row.get("Size") or "0")
     if dry_run:
         return items, size
-    done, freed = [], 0.0
+    if not items:
+        return [], 0.0
+    before = docker_df(env, runner).get("images", 0.0)
+    done = []
     for ref in items:
-        # THE LABEL GATE, AGAIN, per item at the moment of removal.
-        if _inspect_label(env, runner, "image", ref) != env.install_id:
+        if ref in recorded and (_rollback_record(env) != record or not rollback_expired(env, runner)):
+            continue
+        label = ROLLBACK_LABEL if ref in rollback_items else LABEL
+        if _inspect_label(env, runner, "image", ref, label) != env.install_id:
             continue
         res = runner([*env.docker, "rmi", ref], timeout=300)
         if res.returncode == 0:
             done.append(ref)
-    if expired and any(r.endswith(f":{prev}") for r in done):
-        still = [r for r in items if r.endswith(f":{prev}") and runner(
-            [*env.docker, "image", "inspect", r]).returncode == 0]
-        if not still:            # only when every kept image is really gone
-            _mark_rollback_expired(env)
-    after = docker_df(env, runner)
-    freed = size if done else 0.0
-    return done, freed if after else freed
+    if recorded and any(ref in recorded for ref in done):
+        remaining = runner([*env.docker, "images", "--format", "{{.Repository}}:{{.Tag}}"])
+        if remaining.returncode == 0 and not recorded.intersection((remaining.stdout or "").splitlines()):
+            if _rollback_record(env) == record:
+                _mark_rollback_expired(env)
+    # Removing a tag can release zero bytes when another alias or layer still uses the image.
+    after = docker_df(env, runner).get("images", 0.0) if done else 0.0
+    return done, max(0.0, before - after) if after > 0 else 0.0
 
 
 def verb_remove_orphan_volumes(env: Env, args: dict, *, dry_run: bool, runner: Callable) -> tuple[list[str], float]:

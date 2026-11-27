@@ -45,6 +45,17 @@ ROLLBACK_KEEP_HOURS_DEFAULT = 72.0
 ROLLBACK_KEEP_ENV = "BOSS_ROLLBACK_KEEP_HOURS"
 #: Databases that only tests and scratch work create (engine/boss_engine/dev/test_databases.py).
 TEST_DATABASE_PREFIXES = ("boss_test", "boss_scratch")
+#: Older `prev-*` tags (not this release's rollback point): `boss prune` keeps every prev-* tag,
+#: so they are named, with the command, in the stale-images note instead of counted under it.
+PREV_KEPT_KEY = "stale_prev_images"
+PREV_KEPT_REFS = "stale_prev_refs"
+#: Whether BOSS may clear the build cache beyond the plain cap: a Docker that runs only BOSS
+#: (BOSS_DEDICATED_HOST=1) or its own buildx builder (BOSS_BUILDX_BUILDER) — the rule prune.sh
+#: and the steward's prune_build_cache share. Anywhere else the rest is the person's to decide.
+CACHE_OWNED_KEY = "build_cache_owned"
+#: Build cache Docker cannot free because installed images share its layers (`docker system df`
+#: Size minus Reclaimable). Not a category: those bytes are the images', and no prune frees them.
+CACHE_SHARED_KEY = "build_cache_shared"
 #: The test Postgres's volumes (current labelled key and the retired one), per Compose project.
 TEST_VOLUME_KEYS = ("boss_community_pg_test_v2", "boss_community_pg_test")
 
@@ -74,13 +85,21 @@ class Category:
 CATEGORIES: tuple[Category, ...] = (
     Category("images", "BOSS images", 10.0,
              "one image set per release; the build size is BOSSAPP-1458's budget",
-             "Run `boss prune` to remove image tags other than the running release."),
+             # Measured as the running release's own images (measure_images), which `boss prune`
+             # keeps: no command on this install shrinks them, so none is named.
+             "Nothing to do: these are the running release's own images, which `boss prune` keeps; "
+             "older tags are removed by it and by every upgrade."),
     Category("rollback_images", "Rollback images", 10.0,
              f"one previous set only, dropped {ROLLBACK_KEEP_HOURS_DEFAULT:g} h after a healthy upgrade "
              "(scripts/install/prune.sh) or by the next upgrade",
              "Run `boss prune` to drop them once the upgrade is known good."),
+    Category("stale_images", "Old BOSS images", 0.0,
+             "tags of earlier releases and local builds go with every upgrade, update and "
+             "`boss prune` (scripts/install/prune.sh); only the release and its rollback point stay",
+             "Run `boss prune` to remove them."),
     Category("build_cache", "Build cache", 10.0,
-             "capped at BOSS_BUILD_CACHE_CAP_GB by every prune (scripts/install/prune.sh)",
+             "capped at BOSS_BUILD_CACHE_CAP_GB by every prune (scripts/install/prune.sh); only the "
+             "cache Docker can free counts: layers it shares with installed images are theirs",
              "Run `boss prune` to cap it."),
     Category("db_records", "Database: records", 3.0,
              "the live records; projects deleted in Projects take their rows with them",
@@ -187,7 +206,7 @@ def parse_size(text: Any) -> float:
 
 # ── evaluation ──────────────────────────────────────────────────────────────────────────────
 
-def evaluate(measured: Mapping[str, Optional[float]], *, test_server: bool = False,
+def evaluate(measured: Mapping[str, Any], *, test_server: bool = False,
              rollback_age_hours: Optional[float] = None,
              keep_hours: float = ROLLBACK_KEEP_HOURS_DEFAULT) -> list[dict[str, Any]]:
     """One row per category: {key, label, gb, budget_gb, pct, level, bounded_by, what, action}.
@@ -217,9 +236,11 @@ def evaluate(measured: Mapping[str, Optional[float]], *, test_server: bool = Fal
             else:
                 level = "ok"
             if level in ("near", "over") and not what:
-                if budget <= 0:
+                if budget <= 0 and cat.key == "test_data":
                     what = (f"{cat.label}: {gb:.1f} GB with no test Postgres running, where the "
                             "budget is none.")
+                elif budget <= 0:
+                    what = f"{cat.label}: {gb:.1f} GB, where the budget is none."
                 else:
                     what = (f"{cat.label}: {gb:.1f} GB, "
                             + ("over" if level == "over" else "near")
@@ -227,8 +248,40 @@ def evaluate(measured: Mapping[str, Optional[float]], *, test_server: bool = Fal
         rows.append({"key": cat.key, "label": cat.label, "gb": gb, "budget_gb": budget,
                      "pct": (round(100.0 * gb / budget, 1) if gb is not None and budget > 0 else None),
                      "level": level, "bounded_by": cat.bounded_by,
-                     "what": what, "action": cat.action if level in ("near", "over") else ""})
+                     "what": what, "action": _action(cat, measured) if level in ("near", "over") else "",
+                     "note": _note(cat.key, measured)})
     return rows
+
+
+def _action(cat: Category, measured: Mapping[str, Any]) -> str:
+    """The category's sentence, unless the command in it would not act here: on a shared Docker
+    `boss prune` caps the cache only as far as Docker's plain prune goes, and BOSS leaves the
+    rest — possibly another project's — to the person, with the command."""
+    if cat.key == "build_cache" and measured.get(CACHE_OWNED_KEY) is not None \
+            and not measured.get(CACHE_OWNED_KEY):
+        cap = cat.budget_gb
+        return ("This Docker is shared (no BOSS_DEDICATED_HOST=1 or BOSS_BUILDX_BUILDER), so BOSS "
+                "leaves the rest of the cache to you: run `docker builder prune -af --keep-storage "
+                f"{cap:g}gb` if it is not another project's, or set BOSS_DEDICATED_HOST=1 on a "
+                "machine that runs only BOSS.")
+    return cat.action
+
+
+def _note(key: str, measured: Mapping[str, Any]) -> str:
+    """What a person might otherwise read as a problem with nothing to run for it."""
+    shared = measured.get(CACHE_SHARED_KEY)
+    if key == "build_cache" and shared is not None and float(shared) >= 0.05:
+        return (f"{float(shared):.1f} GB more is layers installed images use: it goes with those "
+                "images (old BOSS ones go with `boss prune`), and no cache prune frees it.")
+    kept = measured.get(PREV_KEPT_KEY)
+    if key == "stale_images" and kept is not None and float(kept) >= 0.05:
+        refs = " ".join(str(measured.get(PREV_KEPT_REFS) or "").split()[:8])
+        how = (f"remove them with `docker rmi {refs}`" if refs else
+               "list them with `docker images --filter reference='boss-community-*:prev-*'` and "
+               "remove them with `docker rmi`")
+        return (f"{float(kept):.1f} GB more is older rollback tags, which `boss prune` keeps: "
+                f"{how} once you no longer need to roll back to them.")
+    return ""
 
 
 def total(rows: Sequence[Mapping[str, Any]]) -> dict[str, float]:
@@ -281,8 +334,14 @@ def measure_images(docker: Sequence[str], *, tag: str, run: Runner = _run) -> di
     for the current release when any current (or running) image holds it, else for the rollback
     set. Docker's own list counts a shared layer once per image (the "~30 GB" of the report)."""
     res = run([*docker, "images", "--format", "{{json .}}"])
+    if res.returncode != 0:
+        return {}
     rows = [r for r in _json_lines(res.stdout) if isinstance(r, dict)]
-    current, rollback = [], []
+    ps = run([*docker, "ps", "-a", "--format", "{{.Image}}"])
+    in_use = set((ps.stdout or "").split()) if ps.returncode == 0 else None
+    current, rollback, stale, kept_prev = [], [], [], []
+    tagged = {str(r.get("Repository") or "") for r in rows
+              if str(r.get("Tag") or "") in (tag, f"prev-{tag}")}
     for r in rows:
         repo, t = str(r.get("Repository") or ""), str(r.get("Tag") or "")
         if not repo.startswith("boss-community-"):
@@ -292,25 +351,45 @@ def measure_images(docker: Sequence[str], *, tag: str, run: Runner = _run) -> di
             rollback.append((ref, parse_size(r.get("Size"))))
         elif t == tag or repo == "boss-community-db":
             current.append((ref, parse_size(r.get("Size"))))
+        elif t and t != "<none>" and repo in tagged and in_use is not None and ref not in in_use:
+            # What prune.sh step 3 removes: another tag of a release-tagged repository that no
+            # container uses — except prev-* tags, which it keeps (named in the note instead).
+            (kept_prev if t.startswith("prev-") else stale).append((ref, parse_size(r.get("Size"))))
     layers: dict[str, dict[str, float]] = {}
-    for ref, _ in current + rollback:
+    for ref, _ in current + rollback + stale + kept_prev:
         layers[ref] = image_layer_sizes(docker, ref, run)
-    if all(layers.get(ref) for ref, _ in current + rollback):
+    out: dict[str, Any] = {PREV_KEPT_REFS: " ".join(ref for ref, _ in kept_prev)}
+    if in_use is None:
+        out.update({"stale_images": None, PREV_KEPT_KEY: None})
+    if all(layers.get(ref) for ref, _ in current + rollback + stale + kept_prev):
         held = {lid for ref, _ in current for lid in layers[ref]}
         cur = {lid: s for ref, _ in current for lid, s in layers[ref].items()}
         rb = {lid: s for ref, _ in rollback for lid, s in layers[ref].items() if lid not in held}
-        return {"images": sum(cur.values()) / GB, "rollback_images": sum(rb.values()) / GB}
+        held |= set(rb)
+        # Only the layers removing those tags would give back: none another kept image holds.
+        old = {lid: s for ref, _ in stale for lid, s in layers[ref].items() if lid not in held}
+        prev = {lid: s for ref, _ in kept_prev for lid, s in layers[ref].items()
+                if lid not in held and lid not in old}
+        out.update({"images": sum(cur.values()) / GB, "rollback_images": sum(rb.values()) / GB})
+        if in_use is not None:
+            out.update({"stale_images": sum(old.values()) / GB, PREV_KEPT_KEY: sum(prev.values()) / GB})
+        return out
     # Fallback: Docker's per-image sizes (an over-count when layers are shared).
-    return {"images": sum(s for _, s in current) / GB, "rollback_images": sum(s for _, s in rollback) / GB}
+    out.update({"images": sum(s for _, s in current) / GB, "rollback_images": sum(s for _, s in rollback) / GB})
+    if in_use is not None:
+        out.update({"stale_images": sum(s for _, s in stale) / GB,
+                    PREV_KEPT_KEY: sum(s for _, s in kept_prev) / GB})
+    return out
 
 
 def measure_docker(docker: Sequence[str], *, project: str, tag: str,
-                   run: Runner = _run) -> dict[str, Optional[float]]:
-    """The host categories, in GB. A category Docker cannot report is None (shown as unknown)."""
-    out: dict[str, Optional[float]] = {k: None for k in
-                                       ("images", "rollback_images", "build_cache", "backups",
-                                        "sandboxes", "volumes_other", "dangling_volumes",
-                                        "logs", "test_volumes", "db_volume")}
+                   run: Runner = _run, builder: str = "") -> dict[str, Any]:
+    """The host categories, in GB. A category Docker cannot report is None (shown as unknown).
+    With BOSS's own buildx builder the build cache is that builder's (`docker buildx du`)."""
+    out: dict[str, Any] = {k: None for k in
+                           ("images", "rollback_images", "stale_images", "build_cache", "backups",
+                            "sandboxes", "volumes_other", "dangling_volumes",
+                            "logs", "test_volumes", "db_volume", CACHE_SHARED_KEY, PREV_KEPT_KEY)}
     try:
         out.update(measure_images(docker, tag=tag, run=run))
     except (OSError, subprocess.TimeoutExpired):
@@ -319,10 +398,21 @@ def measure_docker(docker: Sequence[str], *, project: str, tag: str,
         df = run([*docker, "system", "df", "--format", "{{json .}}"])
         for row in _json_lines(df.stdout):
             kind = str(row.get("Type") or "")
-            if kind.startswith("Build Cache"):
-                out["build_cache"] = parse_size(row.get("Size")) / GB
+            if kind.startswith("Build Cache") and not builder:
+                # What a prune can free is what counts against the cap. The rest is layers that
+                # installed images (the release, its rollback set) still use: no prune frees them,
+                # and a warning about them could only send a person to a command that does nothing.
+                size = parse_size(row.get("Size"))
+                free = parse_size(str(row.get("Reclaimable") or "").split(" ")[0]) \
+                    if row.get("Reclaimable") is not None else size
+                out["build_cache"] = min(free, size) / GB
+                out[CACHE_SHARED_KEY] = max(0.0, size - free) / GB
             elif kind.startswith("Containers"):
                 out["logs"] = parse_size(row.get("Size")) / GB
+        if builder:
+            got = buildx_cache(docker, builder, run)
+            if got is not None:
+                out["build_cache"], out[CACHE_SHARED_KEY] = got[1] / GB, (got[0] - got[1]) / GB
         vols = run([*docker, "system", "df", "-v", "--format", "{{json .Volumes}}"])
         sizes: dict[str, float] = {}
         for data in _json_lines(vols.stdout):
@@ -353,6 +443,40 @@ def measure_docker(docker: Sequence[str], *, project: str, tag: str,
                 by["dangling_volumes"] += size
         out.update({k: v / GB for k, v in by.items()})
     return out
+
+
+def own_builder(docker: Sequence[str], builder: str, run: Runner = _run) -> str:
+    """BOSS_BUILDX_BUILDER when it is a builder of BOSS's own, else "": one with the `docker`
+    driver is the daemon's shared builder, and one Docker cannot describe proves nothing
+    (prune.sh and the steward apply the same check)."""
+    if not builder:
+        return ""
+    try:
+        res = run([*docker, "buildx", "inspect", builder])
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    for line in (res.stdout or "").splitlines() if res.returncode == 0 else []:
+        key, _, value = line.strip().partition(":")
+        if key == "Driver":
+            return builder if value.strip() and value.strip() != "docker" else ""
+    return ""
+
+
+def buildx_cache(docker: Sequence[str], builder: str, run: Runner = _run) -> Optional[tuple[float, float]]:
+    """(total, freeable) bytes of a buildx builder's cache. `buildx du` counts layers that images
+    share as Reclaimable too; what a prune can free is Private (equal to `system df` Reclaimable
+    on the same daemon)."""
+    res = run([*docker, "buildx", "du", "--builder", builder])
+    if res.returncode != 0:
+        return None
+    found: dict[str, float] = {}
+    for line in (res.stdout or "").splitlines():
+        key, _, value = line.strip().partition(":")
+        if key in ("Total", "Private") and value.strip():
+            found[key] = parse_size(value.strip())
+    if "Total" not in found:
+        return None
+    return found["Total"], min(found.get("Private", found["Total"]), found["Total"])
 
 
 def measure_db(psql: Sequence[str], run: Runner = _run) -> dict[str, Optional[float]]:
@@ -416,7 +540,8 @@ def read_env_file(path: Path) -> dict[str, str]:
 def host_report(install_dir: Path, *, docker: Sequence[str] = ("docker",),
                 run: Runner = _run) -> dict[str, Any]:
     env = {**read_env_file(install_dir / ".env"),
-           **{k: v for k, v in os.environ.items() if k == ROLLBACK_KEEP_ENV}}
+           **{k: v for k, v in os.environ.items()
+              if k in (ROLLBACK_KEEP_ENV, "BOSS_DEDICATED_HOST", "BOSS_BUILDX_BUILDER")}}
     project = env.get("COMPOSE_PROJECT_NAME") or "boss-community"
     tag = env.get("BOSS_COMMUNITY_IMAGE_TAG") or project
     try:
@@ -425,7 +550,10 @@ def host_report(install_dir: Path, *, docker: Sequence[str] = ("docker",),
                                  "label=com.docker.compose.service=db-test"]).stdout or "").strip())
     except (OSError, subprocess.TimeoutExpired):
         test_server = False
-    measured = measure_docker(docker, project=project, tag=tag, run=run)
+    builder = own_builder(docker, (env.get("BOSS_BUILDX_BUILDER") or "").strip(), run)
+    measured = measure_docker(docker, project=project, tag=tag, run=run, builder=builder)
+    measured[CACHE_OWNED_KEY] = bool(builder) or (
+        (env.get("BOSS_DEDICATED_HOST") or "").strip().lower() in ("1", "true", "yes"))
     db = measure_db([*docker, "exec", f"{project}-db-1", "psql", "-U", "boss", "-d", "boss"], run=run)
     measured.update({k: db.get(k) for k in ("db_records", "db_knowledge", "db_telemetry")})
     tv, td = measured.pop("test_volumes", None), db.get("test_databases")
@@ -445,10 +573,13 @@ def _lines(report: Mapping[str, Any]) -> list[str]:
     out.append(f"{'ok' if calm else 'note'} disk: BOSS uses {t['gb']:.1f} GB (budget "
                f"{t['budget_gb']:g} GB; docs/operations/DISK_BUDGET.md)")
     for r in report["rows"]:
+        note = f" {r['note']}" if r.get("note") else ""
         if r["level"] in ("near", "over"):
-            out.append(f"warn disk: {r['what']} {r['action']}")
-        elif r["level"] == "unknown":
-            continue
+            out.append(f"warn disk: {r['what']} {r['action']}{note}")
+        elif r["gb"] is None:
+            out.append(f"note disk: {r['label']}: measurement unavailable")
+        else:
+            out.append(f"ok disk: {r['label']}: {r['gb']:g} GB / {r['budget_gb']:g} GB{note}")
     measured = [r for r in report["rows"] if r["gb"] is not None]
     if measured:
         biggest = sorted(measured, key=lambda r: -(r["gb"] or 0))[:4]

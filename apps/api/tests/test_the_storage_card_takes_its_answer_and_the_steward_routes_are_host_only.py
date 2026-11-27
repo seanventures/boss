@@ -105,3 +105,65 @@ def test_the_owner_token_is_refused_on_the_steward_routes(client):
     # the console's own reads stay open to the owner
     current = client.get("/v1/infra/storage/incidents/current")
     assert current.status_code == 200, current.text
+
+
+def test_offline_host_keeps_its_disk_reading_after_many_container_samples(engine):
+    from datetime import datetime, timedelta, timezone
+    from boss_engine.services import storage_cleanup, storage_watch
+
+    host = f"qa-outage-{uuid4().hex[:8]}"
+    now = datetime.now(timezone.utc)
+    with engine.connect() as c:
+        def record(source, at, free, total):
+            row = storage_watch.clean_sample(
+                {"host_id": host, "host_label": source, "free_gb": free, "total_gb": total},
+                source=source)
+            row["at"] = at
+            storage_watch.record_sample(c, row)
+
+        record("steward", now - timedelta(hours=1), 8, 100)
+        for seconds in range(45, 0, -1):
+            record("api", now - timedelta(seconds=seconds), 40, 64)
+        view = storage_watch.summary(c, host)
+        assert view["helper_overdue"] and view["stale"]
+        assert view["host_label"] == "steward" and view["disk"]["free_pct"] == 8
+        assert len(view["trend"]) == 1 and view["trend"][0]["free_gb"] == 8
+        incident = {"host_id": host, "target_pct": 25}
+        assert not storage_cleanup.target_reached(c, incident)
+        event_id = f"si_qa_{uuid4().hex[:8]}"
+        c.execute(text("INSERT INTO storage_incidents (id, host_id, status, severity) "
+                       "VALUES (:id, :host, 'critical', 'critical')"), {"id": event_id, "host": host})
+        result = storage_watch.evaluate_host(c, host)
+        assert result["readings"] == 0 and result["level"] == "critical"
+        assert c.execute(text("SELECT status FROM storage_incidents WHERE id=:id"),
+                         {"id": event_id}).scalar_one() == "critical"
+        record("steward", now, 11, 100)
+        view = storage_watch.summary(c, host)
+        assert not view["stale"] and not view["helper_overdue"]
+        assert view["disk"]["free_pct"] == 11
+        assert not storage_cleanup.target_reached(c, incident)
+
+
+def test_an_incident_on_a_host_whose_helper_is_gone_for_good_is_closed_with_that_reason(engine):
+    """Review of the enterprise port: without host readings an incident keeps its level (patch 20),
+    so a helper that never comes back would leave it, and any hold, open for ever."""
+    from datetime import datetime, timedelta, timezone
+    from boss_engine.services import storage_watch
+
+    now = datetime.now(timezone.utc)
+    gone, recent = f"qa-gone-{uuid4().hex[:8]}", f"qa-quiet-{uuid4().hex[:8]}"
+    with engine.connect() as c:
+        for host, hours in ((gone, 7), (recent, 1)):
+            row = storage_watch.clean_sample({"host_id": host, "free_gb": 5, "total_gb": 100}, source="steward")
+            row["at"] = now - timedelta(hours=hours)
+            storage_watch.record_sample(c, row)
+            c.execute(text("INSERT INTO storage_incidents (id, host_id, status, severity) "
+                           "VALUES (:id, :host, 'critical', 'critical')"), {"id": f"si_{host}", "host": host})
+        # BOSS itself just started (a laptop waking after a day): the helper gets its window first.
+        assert f"si_{gone}" not in storage_watch.close_when_helper_gone(c, started_at=now - timedelta(minutes=5))
+        closed = storage_watch.close_when_helper_gone(c, started_at=now - timedelta(days=1))
+        assert f"si_{gone}" in closed and f"si_{recent}" not in closed
+        status = dict(c.execute(text("SELECT host_id, status FROM storage_incidents WHERE host_id IN (:a, :b)"),
+                                {"a": gone, "b": recent}).all())
+        assert status == {gone: "resolved", recent: "critical"}
+        c.rollback()

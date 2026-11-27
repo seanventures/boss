@@ -281,20 +281,27 @@ setup=$(curl -fsS --max-time 15 "${AUTH[@]}" "$API/v1/setup?project_id=$PROJECT"
 repo_line=$(printf '%s' "$setup" | python3 -c '
 import json, sys
 try:
-    repos = (json.load(sys.stdin).get("repository") or {}).get("repos") or []
-except ValueError:
-    repos = []
+    repository = json.load(sys.stdin)["repository"]
+    repos = repository.get("repos") or []
+except (ValueError, KeyError, TypeError):
+    print("unavailable")
+    sys.exit()
 if not repos:
-    print("none")
+    local = repository.get("local") or {}
+    if local.get("full_name"):
+        print("ok " + local["full_name"] + " — on this machine (" + str(local.get("project_name") or local.get("project_id")) + ")")
+    else:
+        print("none")
 else:
     r = next((x for x in repos if x.get("default")), repos[0])
     p = r.get("pill") or {}
     print(("ok " if p.get("tone") in ("green", "amber", "busy") else "bad ") + str(r.get("full_name")) + " " + str(p.get("label") or ""))
-' 2>/dev/null || echo none)
+' 2>/dev/null || echo unavailable)
 case "$repo_line" in
   ok\ *) ok "repository: ${repo_line#ok }" ;;
   bad\ *) bad "repository: ${repo_line#bad } — fix it in Setup" repository ;;
-  *) warn "repository: not connected — builds cannot open a pull request" ;;
+  none) warn "repository: none configured for $PROJECT — open Setup › Repos to create or connect one" ;;
+  *) warn "repository: could not read Setup for $PROJECT — check the API and host-key permissions" ;;
 esac
 
 # 7. can this machine run BOSS at all

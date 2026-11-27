@@ -27,6 +27,7 @@ REFUSAL = "Run `boss clone <project>` or `boss login` first: comments are signed
 
 class _Api(BaseHTTPRequestHandler):
     seen: list[tuple[str, str, str]] = []
+    listing = None                               # a /v1/projects body a test substitutes
 
     def log_message(self, *_a):  # quiet
         pass
@@ -39,6 +40,12 @@ class _Api(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def do_POST(self):  # noqa: N802
+        if self.path.endswith("/comments/7/resolve"):
+            return self._send(403, {"detail": {"error": "people_only",
+                                               "message": "Resolve this thread in the console."}})
+        return self._send(404, {"error": "not_found"})
+
     def do_GET(self):  # noqa: N802
         auth = self.headers.get("Authorization", "")
         _Api.seen.append(("GET", self.path, auth))
@@ -50,6 +57,13 @@ class _Api(BaseHTTPRequestHandler):
                 return self._send(200, {"principal_id": "sva_1", "kind": "service_account",
                                         "display_name": "CI"})
             return self._send(401, {"error": "unauthenticated"})
+        if self.path == "/v1/projects" and auth == f"Bearer {PERSON}" and _Api.listing is not None:
+            return self._send(200, _Api.listing)
+        if self.path == "/v1/projects" and auth == f"Bearer {PERSON}":
+            return self._send(200, {"items": [
+                {"id": "prj_helpdesk", "name": "HelpDesk AI", "slug": "helpdesk"},
+                {"id": "prj_ops_a", "name": "Ops", "slug": "ops-a"},
+                {"id": "prj_ops_b", "name": "Ops", "slug": "ops-b"}]})
         if self.path.endswith("/local-changes/1/comments") and auth == f"Bearer {PERSON}":
             return self._send(200, {"number": 1, "items": [
                 {"id": 7, "state": "open", "path": "src/app.js", "line": 5, "body": "Skip weekends.",
@@ -60,6 +74,7 @@ class _Api(BaseHTTPRequestHandler):
 @pytest.fixture
 def api():
     _Api.seen = []
+    _Api.listing = None
     srv = ThreadingHTTPServer(("127.0.0.1", 0), _Api)
     t = threading.Thread(target=srv.serve_forever, daemon=True)
     t.start()
@@ -138,3 +153,36 @@ def test_login_refuses_anything_but_a_persons_token_and_never_prints_it(install,
     assert said.returncode == 1 and words in said.stderr, said.stderr
     assert token not in said.stdout + said.stderr
     assert not (tmp_path / "creds").exists() or token not in (tmp_path / "creds").read_text()
+
+
+def test_review_shows_the_reason_a_person_must_use_the_console(install, tmp_path):
+    result = _boss(install, {**_env(tmp_path), "BOSS_TOKEN": PERSON},
+                   "review", "resolve", "1", "7", "--project", "p1")
+    assert result.returncode == 1
+    assert "Resolve this thread in the console." in result.stderr
+    assert PERSON not in result.stderr
+
+
+@pytest.mark.parametrize("typed", ["HelpDesk AI", "helpdesk ai", "helpdesk", "prj_helpdesk"])
+def test_clone_resolves_what_the_console_shows_to_the_project_id(install, tmp_path, typed):
+    """`boss clone "HelpDesk AI"` cloned /git/HelpDesk AI.git (or refused it as not an id); the
+    clone URL needs the project's exact id, so the CLI resolves a name or slug first."""
+    result = _boss(install, {**_env(tmp_path), "BOSS_TOKEN": PERSON}, "clone", typed)
+    # The stand-in has no Git remote: the clone fails, but only after it aimed at the real id.
+    assert "is prj_helpdesk a local project" in result.stderr, result.stderr
+    assert PERSON not in result.stdout + result.stderr
+
+
+def test_clone_refuses_a_name_two_projects_share(install, tmp_path):
+    result = _boss(install, {**_env(tmp_path), "BOSS_TOKEN": PERSON}, "clone", "ops")
+    assert result.returncode == 1
+    assert "More than one project is named ops" in result.stderr, result.stderr
+    assert not (tmp_path / "home" / "code").exists()
+
+
+@pytest.mark.parametrize("body", [{"items": None}, ["x"], {"items": "x"}, "x"])
+def test_clone_falls_back_to_the_typed_value_on_an_unexpected_listing(install, tmp_path, body):
+    _Api.listing = body
+    result = _boss(install, {**_env(tmp_path), "BOSS_TOKEN": PERSON}, "clone", "prj_typed")
+    assert "More than one project" not in result.stderr, result.stderr
+    assert "is prj_typed a local project" in result.stderr, result.stderr
