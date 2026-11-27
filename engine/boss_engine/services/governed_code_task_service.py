@@ -13329,6 +13329,33 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                            failure_class=fclass, reason_code=rcode)
             if decision_id:
                 result = {**result, "decision_id": decision_id}
+            # BOSSAPP-541: every failed run deterministically classifies its cause and proposes
+            # a pre-check artifact linked to issue reporting (never self-modifying without approval).
+            try:
+                from . import precheck_proposals as _pp
+
+                prop_rec = _pp.record_failure_proposal(
+                    c,
+                    settings,
+                    project_id=project_id,
+                    run_id=run_id,
+                    error=reason,
+                    run_kind="code_task",
+                    engine=build_engine,
+                    failure_class=fclass,
+                    reason_code=rcode,
+                    stage=_current_phase_name(engine, run_id),
+                    harness_verdict=harness.as_dict() if harness is not None else None,
+                    actor="boss",
+                )
+                if prop_rec.get("id"):
+                    result = {
+                        **result,
+                        "precheck_proposal_id": prop_rec["id"],
+                        "precheck_cause_class": (prop_rec.get("proposal") or {}).get("cause_class"),
+                    }
+            except Exception:  # noqa: BLE001 — never mask the original run failure
+                _log_caught(logger)
         if fclass == "infra":
             # Committed first: the retry reads this run as failed, and the workflow step that
             # waits on it follows the successor (workflow_capability_runner._successor_attempt).

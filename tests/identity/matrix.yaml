@@ -3,7 +3,7 @@
 # One line per operation: its declaration, then the built-in roles allowed
 # (O owner, A admin, P operator, V viewer, U auditor; '-' none). Every other role is denied
 # 403, or 404 when the operation names an object the role cannot even read.
-# 2462 operations.
+# 2467 operations.
 "GET /.well-known/agent-card.json": ["public:jwks", "OAPVU"]
 "GET /.well-known/boss-jwks.json": ["public:jwks", "OAPVU"]
 "GET /.well-known/boss-mcp-client.json": ["public:jwks", "OAPVU"]
@@ -1670,6 +1670,9 @@
 "POST /v1/policies": ["permit policy:manage @ project(body=project_id)", "OA"]
 "GET /v1/policy-evals": ["permit policy:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/prd/decompose": ["permit code_task:create @ project(body=project_id)", "OAP"]
+"GET /v1/precheck-proposals": ["permit improvement:read @ project(query=project_id)", "OAPVU"]
+"POST /v1/precheck-proposals/propose": ["permit improvement:manage @ project(body=project_id)", "OA"]
+"POST /v1/precheck-proposals/{proposal_id}/review": ["permit improvement:manage @ project(body=project_id)", "OA"]
 "GET /v1/preview-sandboxes": ["permit preview:read @ project(query=project_id) +writes_on_get", "OAPVU"]
 "POST /v1/preview-sandboxes": ["permit preview:manage @ project(body=project_id)", "OAP"]
 "GET /v1/preview-sandboxes/": ["permit preview:read @ project(query=project_id) +writes_on_get", "OAPVU"]
@@ -1987,6 +1990,8 @@
 "GET /v1/router/logs": ["permit model_provider:read @ project(query=project_id)", "OAPVU"]
 "POST /v1/router/preview": ["permit model_provider:manage @ project(body=project_id)", "OA"]
 "POST /v1/router/rationale": ["permit system:operate @ project(body=project_id)", "OA"]
+"GET /v1/rules-book": ["permit policy:read @ project(query=project_id)|org", "OAPVU"]
+"GET /v1/rules-book/for-role/{role_key}": ["permit policy:read @ project(query=project_id)|org", "OAPVU"]
 "POST /v1/run-plane/admit": ["permit fleet:host @ org", "-"]
 "POST /v1/run-plane/hosts/next": ["permit fleet:host @ org", "-"]
 "POST /v1/run-plane/replica/cert": ["permit fleet:host @ org", "-"]

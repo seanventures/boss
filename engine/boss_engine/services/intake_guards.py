@@ -100,16 +100,34 @@ def _json(value: Any, default: Any) -> Any:
 
 
 def route_limits(route: Mapping[str, Any], *, chat: bool) -> dict[str, Any]:
-    """The route's `limits` over the source-class defaults."""
+    """The route's `limits` over the source-class defaults.
+
+    Accepts explicit thread (`per_thread` / `per_thread_window_seconds`) and record
+    (`per_record` / `per_record_window_seconds`) limits alongside legacy `per_entity` (BOSSAPP-1197).
+    """
     out: dict[str, Any] = dict(CHAT_PER_ENTITY if chat else RECORD_PER_ENTITY)
+    out["per_thread"] = CHAT_PER_ENTITY["per_entity"]
+    out["per_thread_window_seconds"] = CHAT_PER_ENTITY["per_entity_window_seconds"]
+    out["per_record"] = RECORD_PER_ENTITY["per_entity"]
+    out["per_record_window_seconds"] = RECORD_PER_ENTITY["per_entity_window_seconds"]
     out["storm_per_min"] = STORM_PER_MIN
     out["auto_pause_on_limit"] = False
-    for key, value in dict(_json(route.get("limits"), {}) or {}).items():
-        if key in ("per_entity", "per_entity_window_seconds", "storm_per_min") and \
-                isinstance(value, int) and not isinstance(value, bool) and value > 0:
+    raw = dict(_json(route.get("limits"), {}) or {})
+    for key, value in raw.items():
+        if key in ("per_entity", "per_entity_window_seconds", "per_thread",
+                   "per_thread_window_seconds", "per_record", "per_record_window_seconds",
+                   "storm_per_min") and isinstance(value, int) and not isinstance(value, bool) and value > 0:
             out[key] = value
         elif key == "auto_pause_on_limit":
             out[key] = bool(value)
+    if chat and "per_thread" in raw and "per_entity" not in raw:
+        out["per_entity"] = out["per_thread"]
+        if "per_thread_window_seconds" in raw:
+            out["per_entity_window_seconds"] = out["per_thread_window_seconds"]
+    elif not chat and "per_record" in raw and "per_entity" not in raw:
+        out["per_entity"] = out["per_record"]
+        if "per_record_window_seconds" in raw:
+            out["per_entity_window_seconds"] = out["per_record_window_seconds"]
     return out
 
 

@@ -8038,10 +8038,37 @@ def _register_diagnosis_tools(reg: ToolRegistry) -> None:
                        "away the work done so far, so it is the operator's call",
             }
 
+        precheck_proposal = None
+        if status in ("failed", "blocked", "error") or run["error"] or isinstance(harness, dict):
+            try:
+                from ..services import precheck_proposals as _pp
+
+                stored_props = []
+                try:
+                    with ctx.begin() as c:
+                        stored_props = _pp.list_proposals(c, pid, run_id=run_id)
+                except Exception:  # noqa: BLE001 — table may not exist in older schemas
+                    stored_props = []
+                if stored_props:
+                    precheck_proposal = _pp.proposal_card(stored_props[0])
+                else:
+                    computed = _pp.classify_and_propose(
+                        error=run["error"] or (harness.get("sentence") if isinstance(harness, dict) else ""),
+                        run_id=run_id,
+                        run_kind="code_task",
+                        stage=str(run["phase"] or "build"),
+                        harness_verdict=harness if isinstance(harness, dict) else None,
+                    )
+                    precheck_proposal = _pp.proposal_card(computed.as_dict())
+                checked.append("pre-check proposal for this failure")
+            except Exception:  # noqa: BLE001 — diagnosis never fails on proposal lookup
+                could_not_check.append("pre-check proposal classification")
+
         return {
             "run_id": run_id, "project_id": pid, "title": run["title"],
             "status": run["status"], "phase": run["phase"],
             "resolution": resolution,
+            "precheck_proposal": precheck_proposal,
             "running_minutes": round(minutes, 1),
             "normal_for_this_project": baseline,
             "turns": int((turns or {}).get("n") or 0),

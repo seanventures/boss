@@ -2152,7 +2152,7 @@ def connection_people(connection: Connection, *, project_id: str, connection_id:
     out: dict[str, Any] = {"connection_id": connection_id, "kind": row["kind"],
                            "endpoint_id": endpoint_id, "attestation": cfg.get(ATTESTATION_KEY),
                            "people": [], "counts": counts, "people_redacted": not reveal,
-                           "limit": limit, "offset": offset, "next_offset": None}
+                           "limit": limit, "offset": offset, "next_offset": None, "total": 0}
     if not endpoint_id:
         return out
     links = connection.execute(text("""
@@ -2167,6 +2167,8 @@ def connection_people(connection: Connection, *, project_id: str, connection_id:
          ORDER BY l.revoked_at NULLS FIRST, l.verified_at DESC"""),
         {"e": endpoint_id, "d": REVOKED_SHOWN_DAYS}).mappings().all()
     # The chat users heard from, newest first (idx_intake_events_connection_actor).
+    # Uncapped (BOSSAPP-1197): previously capped at 5000 (PEOPLE_PAGE_MAX * 5), which silently
+    # dropped older users when paging through large workspaces.
     last_seen = {str(r["actor_external_id"]): r for r in connection.execute(text("""
         SELECT * FROM (
           SELECT DISTINCT ON (actor_external_id) actor_external_id, envelope, received_at
@@ -2174,8 +2176,8 @@ def connection_people(connection: Connection, *, project_id: str, connection_id:
            WHERE connection_id = :c AND actor_kind = 'user' AND actor_external_id IS NOT NULL
              AND actor_external_id <> ''
            ORDER BY actor_external_id, received_at DESC) seen
-         ORDER BY received_at DESC LIMIT :n"""),
-        {"c": connection_id, "n": PEOPLE_PAGE_MAX * 5}).mappings().all()}
+         ORDER BY received_at DESC"""),
+        {"c": connection_id}).mappings().all()}
     # A link prompt is the outbox's `link_dm:intake:<endpoint>:<user>:<hour>` row, nothing else
     # (a refused event may have been refused for a budget, a grant, a stop).
     prompted = {str(r["user_id"]): r["at"] for r in connection.execute(text("""
@@ -2214,6 +2216,7 @@ def connection_people(connection: Connection, *, project_id: str, connection_id:
             "prompted_at": None if guest else _iso(prompted.get(uid))})
         counts["guests" if guest else "not_linked"] += 1
     out["people"] = people[offset:offset + limit]
+    out["total"] = len(people)
     out["next_offset"] = offset + limit if len(people) > offset + limit else None
     return out
 
