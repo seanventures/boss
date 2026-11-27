@@ -99,6 +99,9 @@ GET /v1/mcp-oauth/authorize:
 GET /v1/mcp/oauth/callback:
   reason: oauth_state_bound_callback
   verifier: boss_engine.services.mcp_oauth:complete
+GET /v1/metatron/policy/keys:
+  reason: jwks
+  verifier: null
 GET /v1/pki/agent-ca:
   reason: jwks
   verifier: null
@@ -159,6 +162,12 @@ POST /v1/alert-actions/{token}:
 POST /v1/apps/{target_id}/signals:
   reason: hmac_signed_webhook
   verifier: boss_engine.services.incident_signals:receive
+POST /v1/auth/device/code:
+  reason: auth_endpoint
+  verifier: apps.api.app.routers.identity_metatron_auth:verify_metatron_auth_request
+POST /v1/auth/device/token:
+  reason: auth_endpoint
+  verifier: apps.api.app.routers.identity_metatron_auth:verify_metatron_auth_request
 POST /v1/auth/email-code:
   reason: auth_endpoint
   verifier: apps.api.app.routers.identity_auth:verify_auth_request
@@ -195,6 +204,9 @@ POST /v1/auth/password/forgot:
 POST /v1/auth/password/reset:
   reason: auth_endpoint
   verifier: apps.api.app.routers.identity_auth:verify_auth_request
+POST /v1/auth/revoke:
+  reason: auth_endpoint
+  verifier: apps.api.app.routers.identity_metatron_auth:verify_metatron_auth_request
 POST /v1/auth/setup/claim:
   reason: auth_endpoint
   verifier: apps.api.app.routers.identity_auth:verify_auth_request
@@ -210,6 +222,9 @@ POST /v1/auth/sso/{provider_id}/backchannel-logout:
 POST /v1/auth/sso/{provider_id}/callback:
   reason: oauth_state_bound_callback
   verifier: apps.api.app.routers.identity_sso:verify_state_bound_callback
+POST /v1/auth/token:
+  reason: auth_endpoint
+  verifier: apps.api.app.routers.identity_metatron_auth:verify_metatron_auth_request
 POST /v1/auth/webauthn/options:
   reason: auth_endpoint
   verifier: apps.api.app.routers.identity_auth:verify_auth_request

@@ -440,6 +440,13 @@ def mount_platform_routers(app: FastAPI) -> None:
     except ImportError:
         pass
 
+    # Metatron CLI v1 protocol (MT-10): streaming turns, signed policy, reviewer, grants, audit, hosts
+    from .metatron_turns import router as metatron_turns_router
+    from .metatron_v1 import router as metatron_v1_router
+
+    app.include_router(metatron_turns_router)
+    app.include_router(metatron_v1_router)
+
     try:
         from .captain import router as captain_router
 

@@ -544,6 +544,8 @@ export const READ_ROUTES: ReadonlyArray<readonly [string, Permission]> = [
   ["meta/api-catalog/{}", "system:read"],
   ["meta/openapi-coverage", "system:read"],
   ["metatron/goals", "autopilot:read"],
+  ["metatron/hosts", "host:read"],
+  ["metatron/policy", "policy:read"],
   ["metatron/session", "autopilot:read"],
   ["metatron/theater", "autopilot:read"],
   ["metatron/watch/latest", "autopilot:read"],

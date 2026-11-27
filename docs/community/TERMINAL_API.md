@@ -317,6 +317,7 @@ Use the same `python -m boss_engine` entry point for `call`, `code`, and `serve-
 
 ## Next
 
+- [Metatron Server Protocol](METATRON_PROTOCOL.md) for the MT-10 streaming turns, RFC 8628 device login, signed policy, and audit protocol (`/v1/metatron/session` remains intact for `boss metatron --legacy`).
 - [Terminal capability matrix](TERMINAL_CAPABILITY_MATRIX.md) for command examples by workflow.
 - [Guide index](README.md) for install, models, feedback, and security.
 - [Console access](CONSOLE_AUTH.md) if you want the browser instead of this terminal.
