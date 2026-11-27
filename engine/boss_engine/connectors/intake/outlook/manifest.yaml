@@ -1,0 +1,44 @@
+key: outlook
+label: Outlook (Microsoft 365)
+icon: mail
+description: Inbound emails from a Microsoft 365 mailbox via Microsoft Graph change notifications with automatic subscription renewal, lifecycle recovery, and message delta catch-up.
+docs_url: https://learn.microsoft.com/en-us/graph/api/resources/subscription
+adapter: OutlookIntakeAdapter
+order: 55
+modes: [push, poll, subscribe]
+capabilities:
+  verify: true
+  handshake: true
+  parse: true
+  poll: true
+  subscribe: true
+  stream: false
+  reply: false
+  stream_reply: false
+  identity: true
+  conversation: true
+  health: true
+ack:
+  deadline_ms: 3000
+  success_status: 202
+  retry_signal_headers: []
+dedupe: [id]
+auth_fields:
+  - {name: mailbox, label: Mailbox address or user ID, help: "The mailbox UPN or user ID (e.g. support@company.com). Messages sent by this address are dropped (loop prevention)."}
+  - {name: tenant_id, label: Microsoft Entra tenant ID, required: false, help: "Entra tenant ID for token acquisition and domain checks."}
+  - {name: client_state, label: Graph clientState secret, secret: true, modes: [push, subscribe], help: "Random secret verified in constant time on every Graph change notification (<= 128 chars). Never stored in plaintext in subscriptions."}
+  - {name: access_token, label: Graph API access token, secret: true, required: false, help: "OAuth bearer token for Microsoft Graph (or supply client_id + client_secret). Never handed to agents."}
+  - {name: client_id, label: App client ID, required: false, help: "Microsoft Entra application (client) ID for client-credentials token exchange."}
+  - {name: client_secret, label: App client secret, secret: true, required: false, help: "Microsoft Entra application client secret stored in the vault."}
+  - {name: resource, label: Graph resource path, required: false, help: "Defaults to users/{mailbox}/mailFolders('Inbox')/messages."}
+  - {name: graph_base_url, label: Graph API base URL, required: false, placeholder: "https://graph.microsoft.com", help: "Override for sovereign clouds or test servers."}
+  - {name: poll_seconds, label: Delta catch-up interval (seconds), required: false, help: "Safety-net delta sync interval in seconds (default 60, minimum 15)."}
+default_hosts: [graph.microsoft.com, login.microsoftonline.com]
+guard_provider: outlook
+self_identity: [mailbox]
+event_types:
+  - com.microsoft.outlook.message.created
+  - com.microsoft.outlook.message.updated
+  - com.microsoft.outlook.subscription.reauthorization_required
+  - com.microsoft.outlook.subscription.removed
+  - com.microsoft.outlook.subscription.missed

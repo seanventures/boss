@@ -1106,7 +1106,8 @@ def accept_in_tx(connection: Connection, adapter: Any, row: Mapping[str, Any],
         shake = adapter.handshake(conn, request)
         if shake is not None:
             return {"outcome": ACK_HANDSHAKE, "http_status": shake.status,
-                    "body": shake.body, "headers": dict(shake.headers)}
+                    "body": shake.body, "headers": dict(shake.headers),
+                    "media_type": shake.media_type}
     if row["status"] != "active":
         key = "dropped_while_" + str(row["status"])
         connection.execute(text("""
@@ -1127,13 +1128,24 @@ def accept_in_tx(connection: Connection, adapter: Any, row: Mapping[str, Any],
     retry = verified.retry or _retry_signal(adapter, request)
     event_id = make_id("iev")
     received = _now()
-    inserted = connection.execute(text("""
+    claimed_dedupe = connection.execute(text("""
+        INSERT INTO intake_event_dedupe (connection_id, dedupe_key, event_id, received_at)
+        VALUES (:c, :dk, :id, :at)
+        ON CONFLICT (connection_id, dedupe_key) DO NOTHING RETURNING event_id"""),
+        {"c": row["id"], "dk": dedupe_key, "id": event_id, "at": received}).scalar()
+    if claimed_dedupe is None:
+        connection.execute(text("""
+            UPDATE intake_events SET duplicates = duplicates + 1,
+                   retry_count_seen = GREATEST(retry_count_seen, :retry)
+             WHERE connection_id = :c AND dedupe_key = :dk"""),
+            {"retry": int((retry or {}).get("num") or 0), "c": row["id"], "dk": dedupe_key})
+        return _ack(adapter, conn, request, ACK_DUPLICATE, dedupe_key=dedupe_key)
+    connection.execute(text("""
         INSERT INTO intake_events (id, connection_id, project_id, dedupe_key,
                source_event_id, status, raw, raw_sha256, headers, retry_count_seen,
                trace_id, verify_scheme, received_at, raw_expires_at, expires_at)
         VALUES (:id, :c, :p, :dk, :sid, :st, :raw, :sha, CAST(:h AS JSONB), :retry, :tr,
-                :vs, :at, :rexp, :exp)
-        ON CONFLICT (connection_id, dedupe_key) DO NOTHING RETURNING id"""),
+                :vs, :at, :rexp, :exp)"""),
         {"id": event_id, "c": row["id"], "p": row.get("project_id"), "dk": dedupe_key,
          "sid": dedupe_key.split(":", 1)[-1][:200],
          "st": ACK_SHED if shed else ACK_RECEIVED,
@@ -1144,14 +1156,7 @@ def accept_in_tx(connection: Connection, adapter: Any, row: Mapping[str, Any],
          "tr": (lower_headers(request.headers).get("traceparent") or make_id("itr"))[:120],
          "vs": verified.scheme, "at": received,
          "rexp": received + timedelta(days=RAW_RETENTION_DAYS),
-         "exp": received + timedelta(days=ENVELOPE_RETENTION_DAYS)}).scalar()
-    if inserted is None:
-        connection.execute(text("""
-            UPDATE intake_events SET duplicates = duplicates + 1,
-                   retry_count_seen = GREATEST(retry_count_seen, :retry)
-             WHERE connection_id = :c AND dedupe_key = :dk"""),
-            {"retry": int((retry or {}).get("num") or 0), "c": row["id"], "dk": dedupe_key})
-        return _ack(adapter, conn, request, ACK_DUPLICATE, dedupe_key=dedupe_key)
+         "exp": received + timedelta(days=ENVELOPE_RETENTION_DAYS)})
     if _BEFORE_COMMIT is not None:
         _BEFORE_COMMIT(event_id)
     outcome = ACK_SHED if shed else ACK_RECEIVED
@@ -1375,9 +1380,23 @@ def process_one(engine: Any, settings: Any, row: Mapping[str, Any], *,
             primary: Optional[IntakeEvent] = None
             primary_conversation: Optional[str] = None
             filtered_reason = ""
+            lifecycle_actions: list[tuple[str, str, str]] = []
             for ev in events:
                 ev.bossconnection = conn.id
                 ev.bossdedupe = ev.bossdedupe or str(row["dedupe_key"])
+                if ev.type.startswith("com.microsoft.outlook.subscription.") and ev.data.get("lifecycle_event"):
+                    lifecycle_actions.append((
+                        conn.id,
+                        str(ev.data.get("subscription_id") or ""),
+                        str(ev.data.get("lifecycle_event") or ""),
+                    ))
+                    all_outcomes.append({"lifecycle": ev.data.get("lifecycle_event"),
+                                         "subscription_id": ev.data.get("subscription_id")})
+                    if primary is None:
+                        primary = ev
+                        parsed_fields = _fields_of(primary, None)
+                        parsed_envelope = primary.to_dict()
+                    continue
                 try:
                     ev = adapter.enrich(conn, ev)
                 except Exception as error:  # noqa: BLE001 — enrichment is optional context
@@ -1559,7 +1578,19 @@ def process_one(engine: Any, settings: Any, row: Mapping[str, Any], *,
                                                if o.get("run_id")]})
             _finish(c, event_id, status, envelope=envelope, outcome=history + all_outcomes,
                     now=now, fields=fields)
-            return {"id": event_id, "status": status, "outcome": all_outcomes}
+            result_out = {"id": event_id, "status": status, "outcome": all_outcomes}
+        if lifecycle_actions:
+            from . import intake_subscriptions
+
+            for cid, sub_id, lc_ev in lifecycle_actions:
+                try:
+                    intake_subscriptions.handle_lifecycle(
+                        engine, settings, connection_id=cid,
+                        provider_subscription_id=sub_id, lifecycle_event=lc_ev, now=now,
+                    )
+                except Exception:  # noqa: BLE001 — renewer retries on next tick
+                    logger.warning("lifecycle handler failed for %s (%s)", cid, lc_ev, exc_info=True)
+        return result_out
     except ParseRefused as refused:
         with begin(engine) as c:
             _dead(c, row, f"parse refused: {refused}", now=now)
@@ -1645,23 +1676,31 @@ def poll_seconds(config: Mapping[str, Any]) -> int:
 
 
 def _insert_polled(connection: Connection, row: Mapping[str, Any], raw: StoredRaw,
-                   received: datetime) -> Optional[str]:
-    """One polled delivery into the inbox, exactly as the front door inserts a pushed one:
-    deduplicated on (connection, dedupe_key), announced to the processor at commit."""
+                   received: datetime, *, verify_scheme: str = "poll") -> Optional[str]:
+    """One polled or streamed delivery into the inbox, exactly as the front door inserts a pushed
+    one: deduplicated on (connection, dedupe_key), announced to the processor at commit."""
     event_id = make_id("iev")
-    return connection.execute(text("""
+    dk = raw.dedupe_key[:500]
+    claimed = connection.execute(text("""
+        INSERT INTO intake_event_dedupe (connection_id, dedupe_key, event_id, received_at)
+        VALUES (:c, :dk, :id, :at)
+        ON CONFLICT (connection_id, dedupe_key) DO NOTHING RETURNING event_id"""),
+        {"c": row["id"], "dk": dk, "id": event_id, "at": received}).scalar()
+    if claimed is None:
+        return None
+    connection.execute(text("""
         INSERT INTO intake_events (id, connection_id, project_id, dedupe_key, source_event_id,
                status, raw, raw_sha256, headers, trace_id, verify_scheme, received_at,
                raw_expires_at, expires_at)
-        VALUES (:id, :c, :p, :dk, :sid, 'received', :raw, :sha, CAST(:h AS JSONB), :tr, 'poll',
-                :at, :rexp, :exp)
-        ON CONFLICT (connection_id, dedupe_key) DO NOTHING RETURNING id"""),
+        VALUES (:id, :c, :p, :dk, :sid, 'received', :raw, :sha, CAST(:h AS JSONB), :tr, :vs,
+                :at, :rexp, :exp)"""),
         {"id": event_id, "c": row["id"], "p": row.get("project_id"),
-         "dk": raw.dedupe_key[:500], "sid": raw.dedupe_key.split(":", 1)[-1][:200],
+         "dk": dk, "sid": dk.split(":", 1)[-1][:200],
          "raw": raw.body, "sha": hashlib.sha256(raw.body).hexdigest(),
-         "h": json.dumps(kept_headers(raw.headers)), "tr": make_id("itr"), "at": received,
-         "rexp": received + timedelta(days=RAW_RETENTION_DAYS),
-         "exp": received + timedelta(days=ENVELOPE_RETENTION_DAYS)}).scalar()
+         "h": json.dumps(kept_headers(raw.headers)), "tr": make_id("itr"), "vs": verify_scheme,
+         "at": received, "rexp": received + timedelta(days=RAW_RETENTION_DAYS),
+         "exp": received + timedelta(days=ENVELOPE_RETENTION_DAYS)})
+    return event_id
 
 
 def poll_due(engine: Any, settings: Any = None, *, now: Optional[datetime] = None,
@@ -2329,16 +2368,13 @@ def prompt_people(connection: Connection, settings: Any, *, project_id: str, con
 
 
 def sweep_retention(connection: Connection, *, now: Optional[datetime] = None) -> dict:
-    """§4.5: raw bodies are nulled after 14 days (the hash stays); rows go after 30 days
-    (routed/ignored/...) or 90 days (dead/refused); a row still being worked is never touched."""
-    now = now or _now()
-    nulled = connection.execute(text(
-        "UPDATE intake_events SET raw = NULL WHERE raw IS NOT NULL AND raw_expires_at < :now "
-        "AND status NOT IN ('received', 'processing', 'failed')"), {"now": now}).rowcount
-    deleted = connection.execute(text(
-        "DELETE FROM intake_events WHERE expires_at < :now "
-        "AND status NOT IN ('received', 'processing', 'failed')"), {"now": now}).rowcount
-    return {"raw_nulled": int(nulled or 0), "deleted": int(deleted or 0)}
+    """§4.5 + P9c-3 (BOSSAPP-1107): raw bodies are nulled after 14 days (the hash stays); rows go
+    after 30 days (routed/ignored/...) or 90 days (dead/refused); monthly partitions are pre-created
+    and expired monthly partitions dropped; a row still being worked is never touched."""
+    from . import intake_retention
+
+    res = intake_retention.sweep_retention(connection, now=now)
+    return {"raw_nulled": int(res["raw_nulled"]), "deleted": int(res["deleted"])}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
@@ -2391,6 +2427,18 @@ def start(engine: Any, settings: Any) -> bool:
                         poll_due(engine, settings)
                     except Exception:  # noqa: BLE001 — a failed poll never stops processing
                         logger.warning("intake poll failed", exc_info=True)
+                    try:
+                        from . import intake_subscriptions
+
+                        intake_subscriptions.renew_due(engine, settings)
+                    except Exception:  # noqa: BLE001 — a failed renewal never stops processing
+                        logger.warning("intake subscription renew failed", exc_info=True)
+                    try:
+                        from . import intake_streams
+
+                        intake_streams.consume_due(engine, settings)
+                    except Exception:  # noqa: BLE001 — a failed stream never stops processing
+                        logger.warning("intake stream consume failed", exc_info=True)
                     got = process_due(engine, settings)
                     while got["claimed"] >= PROCESSOR_BATCH and not _STOP.is_set():
                         got = process_due(engine, settings)
