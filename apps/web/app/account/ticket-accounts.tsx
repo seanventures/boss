@@ -87,7 +87,7 @@ export function TicketAccounts({ projectId: given = null }: { projectId?: string
       <div className="idn-card-h"><h2 id="acc-tickets-h">Ticket accounts</h2><span className="idn-sub">BOSS acts as you in Jira</span></div>
       {!read || !read.ok ? <TkReadState read={read} what="Your ticket accounts" onRetry={load} testid="ticket-accounts" />
         : !mine.length && !connectable.length ? (
-          <TkEmpty title="No ticket account linked" line="Connect your own Jira account so comments and moves show your name, not BOSS Bot's." testid="ticket-accounts-empty" />
+          <TkEmpty title="No ticket account linked" line="Link your personal Jira account." testid="ticket-accounts-empty" />
         ) : (
           <ul className="tk-list">
             {mine.map((i) => {

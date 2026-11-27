@@ -167,13 +167,10 @@ DEFAULTS: dict[str, Any] = {
     "self_fix_attempts_per_signature": 2, "self_fix_max_diff_lines": 300,
     "self_fix_health_minutes": 10,
 }
-#: Auto-install (§8.3) is OFF by default and exists only as a recorded policy here: no code path
-#: installs without a person's approval in v1.
+#: Installing without asking (§8.3) is not a self-fix setting: it is DEV AUTONOMY's
+#: (autonomy_gate, `self_fix.install` asks in production only). `readiness()` says which applies
+#: here; this is only the value recorded on the stored switch.
 AUTO_INSTALL_POLICY = "off"
-AUTO_INSTALL_WHY = ("A person approves every install in this version. Installing without asking "
-                    "may come later, only on a one-person developer box, for small tier-2 fixes "
-                    "that passed every gate the first time; it turns itself off when a second "
-                    "person joins.")
 
 
 class SelfFixError(RuntimeError):
@@ -225,12 +222,19 @@ def switch(connection: Connection) -> dict[str, Any]:
                 "at": stored.get("at"), "why": "" if stored.get("on") else
                 "self-fix is switched off in Govern",
                 "settings": dict(stored.get("settings") or {})}
-    # THE DEFAULT (§8.7): on for a single-person install that can change itself, off otherwise.
+    # THE DEFAULT (§8.7, ENT-REC-54): on for a DEVELOPMENT install once someone has claimed it,
+    # however many people use it: BOSS-side fixes get full control there, and the autonomy
+    # policy decides whether each install still asks a person. On a PRODUCTION install it starts
+    # on only for one person: on a shared production BOSS, letting it change its own code at all
+    # is an Owner's decision, made once in Govern (each install still asks a person there).
     people = _active_people(connection)
-    on = people == 1
+    from .production import resolve_install
+
+    dev = not resolve_install().prod
+    on = people >= 1 and (dev or people == 1)
     return {"on": on, "stored": False, "settings": {},
-            "why": "" if on else ("self-fix starts switched off on an install with more than "
-                                  "one person; an Owner turns it on in Govern"
+            "why": "" if on else ("self-fix starts switched off on a production install with "
+                                  "more than one person; an Owner turns it on in Govern"
                                   if people > 1 else "nobody has claimed this install yet")}
 
 
@@ -302,8 +306,14 @@ def mirror_path(settings: Any) -> Path:
 
 def install_capable(settings: Any) -> tuple[bool, str]:
     """Can this install change itself? A git install: its source sha is known and the
-    self-source mirror holds it (seeded by the host self-installer). An archive install cannot
-    (§6.2), and says so."""
+    self-source mirror holds it (seeded by the host installer on every install and upgrade). An
+    archive install, or a checkout with uncommitted changes, cannot (§6.2), and says why in the
+    installer's own words (the install record)."""
+    from .self_fix_source import install_record
+
+    record = install_record(settings) or {}
+    if record.get("kind") == "archive" or record.get("dirty"):
+        return False, str(record.get("why") or "this install cannot change itself")
     sha = source_sha()
     if not re.fullmatch(r"[0-9a-f]{40}", sha):
         return False, ("this install was not built from a git checkout, so it cannot change "
@@ -313,6 +323,147 @@ def install_capable(settings: Any) -> tuple[bool, str]:
         return False, ("BOSS's own source is not on this machine yet; run `boss self-fix seed` "
                        "once on the host")
     return True, ""
+
+
+# ── readiness: every piece a self-fix needs, in one place (ENT-REC-54) ───────────────────────
+
+#: The host commands Govern › Self-fix names (they run on the host: nothing in a container can
+#: write the mirror or start a service there, by design).
+SEED_COMMAND = "boss self-fix seed"
+ENABLE_COMMAND = "boss self-fix enable"
+GIT_INSTALL_COMMAND = ("git clone https://github.com/seanventures/boss.git && cd boss && "
+                       "./install.sh")
+AUTONOMY_HREF = "?area=budget&tab=autonomy"
+
+
+def _piece(key: str, label: str, ok: bool, state: str, why: str = "",
+           action: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    return {"key": key, "label": label, "ok": ok, "state": state, "why": why, "action": action}
+
+
+def _installer_enrolled(connection: Connection) -> bool:
+    try:
+        with connection.begin_nested():
+            return bool(connection.execute(text(
+                "SELECT 1 FROM identity_api_credentials WHERE principal_id = :p "
+                "AND revoked_at IS NULL AND suspended_at IS NULL "
+                "AND (expires_at IS NULL OR expires_at > now()) LIMIT 1"),
+                {"p": INSTALLER_ACTOR}).first())
+    except Exception:  # noqa: BLE001 — no identity tables: nobody enrolled
+        return False
+
+
+def readiness(connection: Connection, settings: Any, *, project_id: Optional[str] = None
+              ) -> dict[str, Any]:
+    """Can BOSS fix itself here, and if not, what is missing: the source it was installed from,
+    the mirror of that source, the host installer, and the mode (on or off, and whether an
+    install asks a person). Each missing piece names ONE action: a host command, the switch, or
+    the autonomy policy."""
+    from . import self_fix_install as si
+    from . import self_fix_source as src
+    from .autonomy_policy import load as load_policy
+    from .production import resolve_install
+
+    install = src.describe_install(settings)
+    record = src.install_record(settings) or {}
+    path = str(record.get("path") or "")
+    pieces: list[dict[str, Any]] = []
+
+    # 1. The source: a clean git checkout the installer recorded.
+    if not record:
+        pieces.append(_piece("source", "Installed from", False, "Not recorded", install["sentence"],
+                             {"kind": "command", "label": "Record it on the host",
+                              "command": SEED_COMMAND}))
+    elif record.get("kind") != "git":
+        pieces.append(_piece("source", "Installed from", False, "An archive",
+                             str(record.get("why") or ""),
+                             {"kind": "command", "label": "Install from git instead",
+                              "command": GIT_INSTALL_COMMAND}))
+    elif record.get("dirty"):
+        pieces.append(_piece("source", "Installed from", False, "Uncommitted changes",
+                             str(record.get("why") or ""),
+                             {"kind": "command", "label": "Commit or discard them, then",
+                              "command": f"cd {_quote(path)} && ./install.sh"}))
+    else:
+        release = record.get("release_tag") or record.get("release_ref") or ""
+        pieces.append(_piece("source", "Installed from", True,
+                             f"{path} @ {str(record.get('commit'))[:12]}"
+                             f"{f' ({release})' if release else ''}", install["sentence"]))
+
+    # 2. The mirror holds the code that runs.
+    running = source_sha()
+    if not re.fullmatch(r"[0-9a-f]{40}", running):
+        running = str(record.get("commit") or "")
+    if record and record.get("kind") != "git":
+        pieces.append(_piece("mirror", "Source mirror", False, "Not possible",
+                             "An archive install has no history to mirror."))
+    elif not src.has_mirror(settings):
+        why = (record.get("mirror") or {}).get("error") or \
+            "BOSS's own source is not on this machine yet."
+        pieces.append(_piece("mirror", "Source mirror", False, "Not seeded", str(why),
+                             {"kind": "command", "label": "Seed it on the host",
+                              "command": SEED_COMMAND}))
+    elif not src.mirror_holds(settings, running):
+        pieces.append(_piece("mirror", "Source mirror", False, "Behind the running build",
+                             f"The mirror does not hold {running[:12] or 'the running commit'}, "
+                             "so a fix would read older code.",
+                             {"kind": "command", "label": "Refresh it on the host",
+                              "command": SEED_COMMAND}))
+    else:
+        pieces.append(_piece("mirror", "Source mirror", True, f"Holds {running[:12]}"))
+
+    # 3. The host installer: enrolled, and watching for approved installs.
+    seen = si.installer_seen(connection)
+    if not _installer_enrolled(connection):
+        pieces.append(_piece("installer", "Host installer", False, "Not enrolled",
+                             "Nothing on this machine can install an approved fix yet.",
+                             {"kind": "command", "label": "Enrol it on the host",
+                              "command": ENABLE_COMMAND}))
+    elif not seen["watching"]:
+        pieces.append(_piece("installer", "Host installer", False, "Not watching",
+                             "It is enrolled but not running, so an approved fix waits for "
+                             "`boss self-fix install SFX` by hand.",
+                             {"kind": "command", "label": "Run it as a service",
+                              "command": ENABLE_COMMAND}))
+    else:
+        pieces.append(_piece("installer", "Host installer", True, "Watching"))
+
+    # 4. The mode: on or off, and whether each install asks a person.
+    state = switch(connection)
+    verdict = resolve_install()
+    try:
+        acts = load_policy(connection, project_id).dev_acts if project_id else False
+    except Exception:  # noqa: BLE001 — unreadable policy: a person decides
+        acts = False
+    auto = state["on"] and not verdict.prod and acts
+    if env_off():
+        pieces.append(_piece("mode", "Mode", False, f"Off ({ENV_SWITCH})",
+                             f"{ENV_SWITCH}=off in the install's .env beats every switch.",
+                             {"kind": "command", "label": "Remove it, then",
+                              "command": "boss update"}))
+    elif not state["on"]:
+        pieces.append(_piece("mode", "Mode", False, "Off", str(state.get("why") or ""),
+                             {"kind": "switch", "label": "Turn on"}))
+    elif auto:
+        pieces.append(_piece("mode", "Mode", True, "Installs on its own",
+                             "A development install where agents act: BOSS installs a fix that "
+                             "passed every gate, rolls it back if its health check fails, and "
+                             "lists it in Decided for you with Remove.",
+                             {"kind": "link", "label": "Change", "href": AUTONOMY_HREF}))
+    else:
+        why = (f"A production install ({verdict.evidence}): a person approves every install."
+               if verdict.prod else "Development is set to Ask me: a person approves every "
+               "install.")
+        pieces.append(_piece("mode", "Mode", True, "You approve each install", why,
+                             {"kind": "link", "label": "Change", "href": AUTONOMY_HREF}))
+    return {"ready": all(p["ok"] for p in pieces), "pieces": pieces, "install": install,
+            "auto_install": auto}
+
+
+def _quote(path: str) -> str:
+    import shlex
+
+    return shlex.quote(path) if path else "<install dir>"
 
 
 def availability(connection: Connection, settings: Any, *, kind: str = "deploy"

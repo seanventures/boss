@@ -16,8 +16,10 @@ import { svgDataUri } from "../../../lib/svg-data-uri";
 
 
 /** `onDone(codes)`: the recovery codes the API issued with this FIRST factor, or [] (S1). */
-export function TotpStep({ onDone, guard }: {
+export function TotpStep({ onDone, guard, onRefused }: {
   onDone: (codes: string[]) => void;
+  /** The enrol screen answers some refusals itself (a fresh sign-in); true: it did, say nothing. */
+  onRefused?: (e: unknown) => boolean;
   /** My account passes useGuardedCall: starting an authenticator needs a fresh second factor. */
   guard?: <T>(reason: string, call: () => Promise<T>) => Promise<T>;
 }) {
@@ -35,7 +37,7 @@ export function TotpStep({ onDone, guard }: {
 
   useEffect(() => {
     liveRef.current = true;
-    start().catch((e) => { if (liveRef.current) setError(sayAuth(e)); });
+    start().catch((e) => { if (liveRef.current && !onRefused?.(e)) setError(sayAuth(e)); });
     return () => { liveRef.current = false; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 

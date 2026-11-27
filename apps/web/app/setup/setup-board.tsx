@@ -226,7 +226,7 @@ export function SetupBoard({ projectId, actor, initialView = null, layout = "cla
 
   // STALE ROWS ARE RE-CHECKED IN THE BACKGROUND, once per open, so a token that expired or was
   // revoked overnight says so without anybody pressing Test.
-  // A viewer who may not run checks (setup:manage) is not made to: the API would refuse it.
+  // A viewer who may not run checks (setup:check) is not made to: the API would refuse it.
   const mayCheck = useGate("setup:check").allowed;
   useEffect(() => {
     if (!view || autoChecked.current || !mayCheck) return;

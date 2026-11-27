@@ -190,3 +190,13 @@ def test_an_unchanged_world_is_an_unchanged_etag(eng, body):
     with eng.begin() as c:
         again = iv.fleet(c, Settings(), HOME)
     assert again["etag"] == body["etag"]
+
+
+def test_a_preview_resident_opens_through_the_browser_gateway():
+    """The rack's preview tile never hands out the sandbox's 127.0.0.1:<port>."""
+    from boss_engine.services.infra_view import _preview_resident
+
+    tile = _preview_resident({"id": "pv_live", "status": "running", "branch": "main", "port": 43053,
+                              "url": "http://127.0.0.1:43053", "app_name": "Recipe Box"})
+    assert "127.0.0.1" not in str(tile["url"])
+    assert str(tile["url"]).endswith("/v1/previews/pv_live/web/")
