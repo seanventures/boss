@@ -87,9 +87,11 @@ def _run_paths(connection, project_id: str, repo_name: str) -> tuple[list[str], 
 def _components(connection, project_id: str, full_name: str) -> list[str]:
     try:
         rows = connection.execute(text(
-            "SELECT c.path FROM app_components c JOIN github_repository_bindings b "
-            "ON b.id = c.binding_id WHERE c.project_id = :p AND c.kind = 'code' "
-            "AND lower(b.full_name) = lower(:r) ORDER BY c.position, c.name"),
+            "SELECT COALESCE(NULLIF(c.root_path, ''), c.path) FROM app_components c "
+            "JOIN github_repository_bindings b ON b.id = c.binding_id "
+            "WHERE c.project_id = :p AND c.kind = 'code' "
+            "AND lower(b.full_name) = lower(:r) "
+            "ORDER BY (c.map_status = 'confirmed') DESC, c.position, c.name"),
             {"p": project_id, "r": full_name}).scalars().all()
     except Exception:  # noqa: BLE001 — no components table: the runs decide
         return []
