@@ -32,7 +32,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from apps.egress.boss_egress import connect, proxy as egress_proxy  # noqa: E402
-from boss_engine.identity import egress_rules, github_app, host_delegation, http as identity_http, repo_scope, runs  # noqa: E402
+from boss_engine.identity import egress_rules, github_app, github_urls, host_delegation, http as identity_http, repo_scope, runs  # noqa: E402
 from boss_engine.identity.principal import ActorChain, RunMode, RunTokenClaims, TaskBinding  # noqa: E402
 from boss_engine.services import repo_host  # noqa: E402
 
@@ -305,12 +305,12 @@ def test_real_git_clone_and_push_to_ghes_and_gitlab_through_egress_with_git_ssl_
     monkeypatch.setattr(
         proxy,
         "_installation_token",
-        lambda c, db: ghes_token,
+        lambda c, db: github_urls.tag(ghes_token, f"https://git.enterprise.test:{ghes_srv.port}/api/v3"),
     )
     monkeypatch.setattr(
         proxy,
         "_check_push",
-        lambda body, rest, perms, pattern, token, allow_delete=True: egress_rules.RuleDecision(True, "/{o}/{r}.git/git-receive-pack"),
+        lambda body, rest, perms, pattern, token, allow_delete=True, api="": egress_rules.RuleDecision(True, "/{o}/{r}.git/git-receive-pack"),
     )
 
     shim = runs.Shim(run_id=run_id, egress_credential="boss_egr_test_cred_1")
@@ -464,8 +464,9 @@ def test_gitlab_api_rules_and_repo_scope_and_github_app_ghes_host(monkeypatch):
     monkeypatch.setenv("BOSS_GITHUB_API_URL", "https://ghes.example.com/api/v3")
     monkeypatch.setenv("BOSS_GITHUB_GIT_URL", "https://ghes.example.com")
     monkeypatch.setenv("BOSS_GITLAB_BASE_URL", "https://gitlab.example.com")
-    assert repo_host.clone_url_for("github", "acme", "web", "tok") == "https://x-access-token:tok@ghes.example.com/acme/web.git"
-    assert repo_host.clone_url_for("gitlab", "platform/sub", "api", "glt") == "https://oauth2:glt@gitlab.example.com/platform/sub/api.git"
+    ghes_tok = github_urls.tag("tok", "https://ghes.example.com/api/v3")
+    assert repo_host.clone_url_for("github", "acme", "web", ghes_tok, web_base="https://ghes.example.com") == "https://x-access-token:tok@ghes.example.com/acme/web.git"
+    assert repo_host.clone_url_for("gitlab", "platform/sub", "api", "glt", web_base="") == "https://oauth2:glt@gitlab.example.com/platform/sub/api.git"
 
     # github_app._default_transport reaches mocked httpx for GHES host instead of raising outbound_client_unavailable
     monkeypatch.setattr(identity_http, "fetch", lambda *a, **k: (_ for _ in ()).throw(NotImplementedError()))

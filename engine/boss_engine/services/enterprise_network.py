@@ -463,6 +463,8 @@ def maven_mirror(env: Mapping[str, str]) -> str:
 def self_hosted_git_hosts(env: Mapping[str, str]) -> dict[str, str]:
     """{hostname: provider} for configured self-hosted GHES and GitLab hosts (blocked from raw
     CONNECT so they must go through boss-egress's Git proxy)."""
+    from ..identity import github_urls
+
     out: dict[str, str] = {}
     for var, provider in (
         ("BOSS_GITHUB_WEB_URL", "github"),
@@ -475,7 +477,7 @@ def self_hosted_git_hosts(env: Mapping[str, str]) -> dict[str, str]:
         try:
             check_url(var, value)
             host = (urlsplit(value).hostname or "").lower()
-            if host and host not in ("github.com", "api.github.com"):
+            if host and host not in (github_urls.PUBLIC_WEB_HOST, github_urls.PUBLIC_API_HOST):
                 out[host] = provider
         except SettingError:
             continue

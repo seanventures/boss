@@ -1406,7 +1406,7 @@ class LocalHostConnector:
         from .deploy_service import (
             _app_name, _build_dist, _resolve_repo_branch, _app_env_text,
         )
-        from .github_connections import github_token_for
+        from .github_connections import github_access_for
         from .governed_host_deploy import check_governed, ungoverned_refusal
         from .preview_service import lineage_impl_files
 
@@ -1452,10 +1452,13 @@ class LocalHostConnector:
             hint = [e, f"{e}/index.html" if e != "." else "index.html"]
             changed = hint + [c for c in (changed or []) if c not in hint]
 
-        tok = ""
+        tok, web_base = "", ""
         if not _local_repo.is_local_owner(owner):
+            from ..identity import github_urls as _gu
+
             with begin(engine) as c:
-                tok = github_token_for(c, settings, project_id, owner, repo) or ""
+                tok, _api = github_access_for(c, settings, project_id, owner, repo)
+            web_base = _gu.web_base_for(_api)
 
         work: Optional[Path] = None
         local_dir = self._local_dir(target, settings)
@@ -1468,7 +1471,8 @@ class LocalHostConnector:
         prev_meta: Optional[dict[str, Any]] = None
         try:
             work, mode, entry, sha = _build_dist(
-                settings, owner, repo, branch, token=tok, changed=changed, ref=ref)
+                settings, owner, repo, branch, token=tok, web_base=web_base,
+                changed=changed, ref=ref)
             deployed_sha = sha or ref or branch
             data_dir.mkdir(parents=True, exist_ok=True)
             boss_dir.mkdir(parents=True, exist_ok=True)
