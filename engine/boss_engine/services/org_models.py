@@ -299,10 +299,16 @@ def _promote_secret(connection: Any, org_id: str, secret_ref_id: str, provider: 
     from .env_refs import PROVIDER_HOSTS, provider_binding
 
     row = connection.execute(text(
-        "SELECT scope_type, provider, metadata FROM secret_refs WHERE id = :i"),
+        "SELECT scope_type, scope_id, provider, metadata, storage_backend, ref_key "
+        "FROM secret_refs WHERE id = :i"),
         {"i": secret_ref_id}).mappings().first()
     if row is None:
         return
+    # The material moves with its reference: BOSS records its new owner, the org (BOSSAPP-1286).
+    from .secrets_service import transfer_material_owner
+
+    transfer_material_owner(connection, str(row["storage_backend"] or ""), str(row["ref_key"]),
+                            (str(row["scope_type"]), str(row["scope_id"])), ("org", org_id))
     meta = _meta(row["metadata"])
     # Held to the provider the CONNECTION is for (what Setup knows it as), not whatever the
     # reference recorded (a stored key's row may say only `api_token`).

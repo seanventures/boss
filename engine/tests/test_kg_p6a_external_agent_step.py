@@ -144,6 +144,10 @@ def _register_agent(connection, project_id: str, endpoint_url: str, *, secret_va
     ref_id = f"sref_{uuid.uuid4().hex[:16]}"
     ref_key = f"p6a/{ref_id}"
     DatabaseBackend(engine=connection.engine).put(ref_key, secret_value)
+    # A BOSS write-through records the material's owner with it (BOSSAPP-1286).
+    from boss_engine.services.secrets_service import record_material_owner
+
+    record_material_owner(connection, "database", ref_key, "project", project_id)
     connection.execute(text(
         "INSERT INTO secret_refs (id, project_id, scope_type, scope_id, ref_kind, ref_key, "
         "secret_kind, storage_backend, status, created_by) "

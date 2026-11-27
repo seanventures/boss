@@ -124,6 +124,18 @@ def record_material_owner(connection, backend: str, key: str, scope_type: str, s
          "by": actor or "boss"})
 
 
+def transfer_material_owner(connection, backend: str, key: str, from_scope: tuple[str, str],
+                            to_scope: tuple[str, str]) -> None:
+    """BOSS moving its own material to a wider scope (a project's key promoted to the org's):
+    the recorded owner follows, only from the scope that owns it now."""
+    connection.execute(sql(
+        "UPDATE secret_material_owners SET owner_scope_type = :tt, owner_scope_id = :ti "
+        "WHERE storage_backend = :b AND ref_key = :k AND owner_scope_type = :ft "
+        "AND owner_scope_id = :fi"),
+        {"b": str(backend or "").lower(), "k": key, "tt": to_scope[0], "ti": to_scope[1],
+         "ft": from_scope[0], "fi": from_scope[1]})
+
+
 def owner_is(connection, backend: str, key: str, scope_type: str, scope_id: str) -> bool:
     """True only when the RECORDED owner of the material is exactly this scope."""
     current = material_owner(connection, backend, key)

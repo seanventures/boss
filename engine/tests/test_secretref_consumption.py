@@ -231,6 +231,12 @@ def test_github_resolve_secret_would_accept_local_vault(tmp_path, monkeypatch, c
 
     settings = Settings()
     connection = FakeConnection([secret_ref])
+    # BOSS wrote this material for the reference's own scope (its RECORDED owner, BOSSAPP-1286).
+    from boss_engine.services import secrets_service
+
+    monkeypatch.setattr(secrets_service, "material_owner", lambda c, b, k: {
+        "owner_scope_type": secret_ref.get("scope_type") or "project",
+        "owner_scope_id": secret_ref.get("scope_id") or secret_ref.get("project_id")})
     via_backend = resolve_secret_ref(connection, secret_ref["id"], settings)
     assert via_backend == _RAW_VAULT
 
