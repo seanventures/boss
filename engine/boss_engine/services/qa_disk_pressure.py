@@ -12,8 +12,8 @@ THE MOVE IS MARKED AND TEMPORARY. The threshold rule carries `_qa` (storage_rule
 only known keys, so the marker is inert): the level, who, until when, the rule's source before, and
 per key the value before and the value set. It ends three ways, all through `restore`:
 `boss qa disk-pressure off`, its expiry (24 h by default; the storage watch's tick restores it),
-or never, when a person edited the thresholds since (the console's save rewrites the rule without
-the marker: their edit stands). A restore puts back ONLY a key still at the value the test set,
+and key by key: a threshold a person edited since keeps their value (every save carries the mark
+forward, storage_rules.upsert, so a console edit never strands the test's raised values). A restore puts back ONLY a key still at the value the test set,
 under the source the rule had (a default stays a default, never pinned as an operator's value).
 
 A threshold is only ever RAISED (`max(current, free + margin)`), the bands stay ordered
@@ -153,6 +153,19 @@ def restore(connection: Any, *, actor: str, host_id: Optional[str] = None,
                        row["id"], {"restored": restored, "kept": kept, "why": why})
     except Exception:  # noqa: BLE001 — the record is bookkeeping; the restore stands
         pass
+    return {"restored": restored, "kept": kept, "why": why}
+
+
+def restore_all(connection: Any, *, actor: str, why: str = "the test ended") -> dict:
+    """`off`: every threshold rule a test marked (any host), each put back as `restore` does."""
+    restored: dict = {}
+    kept: dict = {}
+    for (host,) in connection.execute(text(
+            "SELECT host_id FROM retention_rules WHERE kind = 'threshold' "
+            "AND rule -> CAST(:k AS TEXT) IS NOT NULL"), {"k": MARK}).all():
+        out = restore(connection, actor=actor, host_id=host, why=why)
+        restored.update(out["restored"])
+        kept.update(out["kept"])
     return {"restored": restored, "kept": kept, "why": why}
 
 

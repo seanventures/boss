@@ -1246,7 +1246,8 @@ def revert(args, token: str) -> int:
             back = f"{branch}-revert"
             if git("ls-remote", "--heads", "origin", back, quiet=True).stdout.strip():
                 raise SystemExit(f"boss: {back} is already pushed: merge its change to put "
-                                 f"ENT-{case} back")
+                                 f"ENT-{case} back. To run the case again afterwards, delete both "
+                                 f"branches: git push origin --delete {branch} {back}")
             git("switch", "-q", "-c", back, f"origin/{default}")
             done = None
             for sha in merged:

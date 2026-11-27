@@ -88,17 +88,51 @@ def test_a_threshold_is_never_lowered(pg, host):
     assert _th(pg, host)["warn_free_pct"] == 60.0
 
 
-def test_off_puts_back_only_what_the_test_set_under_the_source_it_had(pg, host):
+def test_off_puts_back_only_what_the_test_set_and_a_persons_edit_stands(pg, host):
     with pg.begin() as c:
         qdp.apply(c, level="floor", actor="usr_tester", host_id=host)
-        # A person edits one moved key in the console afterwards (the save drops the mark).
+        # A person edits one moved key in the console afterwards.
         storage_rules.upsert(c, kind="threshold", rule={"warn_free_pct": 50.0,
                                                         "warn_exit_free_pct": 55.0},
                              host_id=host, actor="usr_person")
     with pg.begin() as c:
-        assert qdp.state(c, host) is None, "their edit took the test's mark off"
-        assert qdp.restore(c, actor="usr_tester", host_id=host)["restored"] == {}
-    assert _th(pg, host)["warn_free_pct"] == 50.0, "a person's later edit stands"
+        assert qdp.state(c, host)["level"] == "floor", "the save carried the test's mark"
+        out = qdp.restore(c, actor="usr_tester", host_id=host)
+    assert "warn_free_pct" in out["kept"] and out["restored"]["critical_free_pct"] == 15.0
+    th = _th(pg, host)
+    assert th["warn_free_pct"] == 50.0, "a person's later edit stands"
+    assert th["critical_free_pct"] == 15.0 and th["floor_free_pct"] == 10.0
+
+
+def test_a_console_save_of_another_threshold_keeps_the_expiry(pg, host, monkeypatch):
+    """Apply critical, a person saves warn_days in the console, 100 h pass: restored."""
+    with pg.begin() as c:
+        qdp.apply(c, level="critical", actor="usr_tester", host_id=host)
+        storage_rules.upsert(c, kind="threshold", rule={"warn_days": 8.0}, host_id=host,
+                             actor="usr_person")
+    later = datetime.now(timezone.utc) + timedelta(hours=100)
+    monkeypatch.setattr(qdp, "_now", lambda: later)
+    for _ in range(5):
+        with pg.begin() as c:
+            if qdp.expire(c) is None:
+                break
+    th = _th(pg, host)
+    assert th["warn_free_pct"] == 20.0 and th["critical_free_pct"] == 15.0
+    assert th["warn_days"] == 8.0, "the person's own save is kept"
+    with pg.begin() as c:
+        assert qdp.state(c, host) is None
+
+
+def test_a_rule_saved_out_of_order_before_the_check_does_not_block_other_saves(pg, host):
+    with pg.begin() as c:
+        c.execute(text("UPDATE retention_rules SET rule = rule || '{\"critical_free_pct\": 30}' "
+                       "WHERE host_id = :h AND kind = 'threshold'"), {"h": host})
+        storage_rules.upsert(c, kind="threshold", rule={"warn_days": 9.0}, host_id=host,
+                             actor="usr_person")
+    assert _th(pg, host)["warn_days"] == 9.0
+    with pg.begin() as c, pytest.raises(ValueError, match="fix warn_free_pct"):
+        storage_rules.upsert(c, kind="threshold", rule={"warn_free_pct": 25.0}, host_id=host,
+                             actor="usr_person")
 
 
 def test_off_restores_the_originals_and_the_default_source(pg, host):

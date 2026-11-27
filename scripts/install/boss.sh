@@ -2029,7 +2029,12 @@ cmd_qa() {
     python3 "$SELF_DIR/qa_fault.py" fault --list; return
   fi
   local token
-  token="$(person_token)" || exit 1
+  if [[ "$what" == disk-pressure ]]; then
+    # The host's own disk, from the host shell: the Host tools key, as the storage readings are.
+    token="$(host_key)" || die "BOSS did not give the host tools a key. Is the api service running ($(hint_command) status)?"
+  else
+    token="$(person_token)" || exit 1
+  fi
   [[ "$what" == fault ]] && remember_token "$token"
   printf '%s\n' "$token" | BOSS_QA_API="$(api_url)" BOSS_QA_REMOTE="$(git_remote_base)" \
     BOSS_QA_HELPER="$(credential_helper)" \

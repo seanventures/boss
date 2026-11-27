@@ -8,6 +8,9 @@ PUT  /v1/qa/disk-pressure {level, hours}                   move the storage thre
                                                            today's free space for a test, marked
                                                            and expiring (qa_disk_pressure.py)
 POST /v1/qa/disk-pressure/off                              put back what the test moved
+     Both from the HOST SHELL only (`boss qa disk-pressure`, the Host tools key), as the
+     storage readings themselves are: whoever can run commands on the BOSS host is the one
+     testing its disk. A person's token is refused (and would need a step-up it cannot do).
 """
 from __future__ import annotations
 
@@ -58,10 +61,12 @@ def _actor(request: Request) -> str:
 
 
 @router.put("/v1/qa/disk-pressure")
-@permit(P.AUTONOMY_MANAGE, scope=Scope.org())
+@permit(P.SYSTEM_OPERATE, scope=Scope.org())
 def put_qa_disk_pressure(request: Request, payload: PressureBody) -> dict[str, Any]:
+    from apps.api.app.identity_guard import require_host_tools_principal
     from boss_engine.services import qa_disk_pressure
 
+    require_host_tools_principal()
     with begin(get_engine()) as connection:
         try:
             return qa_disk_pressure.apply(connection, level=payload.level, hours=payload.hours,
@@ -71,10 +76,12 @@ def put_qa_disk_pressure(request: Request, payload: PressureBody) -> dict[str, A
 
 
 @router.post("/v1/qa/disk-pressure/off")
-@permit(P.AUTONOMY_MANAGE, scope=Scope.org())
+@permit(P.SYSTEM_OPERATE, scope=Scope.org())
 def post_qa_disk_pressure_off(request: Request) -> dict[str, Any]:
+    from apps.api.app.identity_guard import require_host_tools_principal
     from boss_engine.services import qa_disk_pressure
 
+    require_host_tools_principal()
     with begin(get_engine()) as connection:
-        return qa_disk_pressure.restore(connection, actor=_actor(request),
-                                        why="boss qa disk-pressure off")
+        return qa_disk_pressure.restore_all(connection, actor=_actor(request),
+                                            why="boss qa disk-pressure off")

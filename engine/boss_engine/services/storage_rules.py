@@ -145,17 +145,23 @@ def thresholds(connection: Any, host_id: Optional[str] = None) -> dict[str, floa
     return out
 
 
+#: The levels, in the order their free % must fall.
+ORDERED = ("warn_free_pct", "critical_free_pct", "floor_free_pct")
+
+
 def check_order(rule: Mapping[str, Any]) -> None:
     """The levels stay in order — warn above critical above floor (all free %) — or the watch
-    would skip a level or never leave one. Raises ValueError naming the values."""
+    would skip a level or never leave one. Raises ValueError naming the keys to fix."""
     try:
-        warn, crit, floor = (float(rule[k]) for k in ("warn_free_pct", "critical_free_pct",
-                                                      "floor_free_pct"))
+        warn, crit, floor = (float(rule[k]) for k in ORDERED)
     except (KeyError, TypeError, ValueError):
         return
     if not warn > crit > floor:
+        bad = [k for k, ok in (("warn_free_pct", warn > crit),
+                               ("critical_free_pct", warn > crit and crit > floor),
+                               ("floor_free_pct", crit > floor)) if not ok]
         raise ValueError(f"thresholds must keep warn > critical > floor (free %): warn {warn:g}, "
-                         f"critical {crit:g}, floor {floor:g}")
+                         f"critical {crit:g}, floor {floor:g}; fix {', '.join(bad)}")
 
 
 def upsert(connection: Any, *, kind: str, rule: Mapping[str, Any], host_id: Optional[str] = None,
@@ -164,9 +170,21 @@ def upsert(connection: Any, *, kind: str, rule: Mapping[str, Any], host_id: Opti
     if kind not in KINDS:
         raise ValueError(f"kind must be one of {', '.join(KINDS)}")
     if kind == "threshold":
-        rule = {**thresholds(connection, host_id), **{k: float(v) for k, v in rule.items()
-                                                      if k in DEFAULT_THRESHOLDS}}
-        check_order(rule)
+        given = {k: float(v) for k, v in rule.items() if k in DEFAULT_THRESHOLDS}
+        rule = {**thresholds(connection, host_id), **given}
+        # Only a save that moves a level is held to the order: a rule saved out of order before
+        # the check existed must not block an unrelated save (warn_days, a toggle).
+        if set(given) & set(ORDERED):
+            check_order(rule)
+        # A TEST'S MARK RIDES ALONG (qa_disk_pressure): without it a console save of any other
+        # threshold would leave the test's raised values forever, with no expiry and no `off`.
+        # Its restore compares key by key, so a person's own edit of a moved key still stands.
+        mark = connection.execute(text(
+            "SELECT rule -> '_qa' FROM retention_rules WHERE kind = 'threshold' "
+            "AND COALESCE(host_id, '') = COALESCE(CAST(:h AS TEXT), '')"),
+            {"h": host_id}).scalar()
+        if mark:
+            rule["_qa"] = json.loads(mark) if isinstance(mark, str) else mark
     row = connection.execute(text("""
         INSERT INTO retention_rules (id, host_id, kind, rule, enabled, source, decision_id,
                                      created_by, updated_at)
