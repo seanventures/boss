@@ -345,8 +345,14 @@ class ScriptedEngine:
             for rel, body in tests.items():
                 self._write(root, rel, body, turns, written)
             return self._test_plan(tests), written
+        # A REVIEWER NAMES WHAT IT WAS SHOWN (review_input.reviewed_clause): the files the
+        # prompt lists as changed, else the app's. Naming only the fixture's app files made the
+        # review of a follow-up whose change is one brief-item note read as hollow, and its
+        # security seat "not reviewed", although the scripted seat answered CLEAN.
+        seen = sorted(set(_changed_files(text)) | set(impl)) or sorted(impl)
+
         def _review_reply() -> str:
-            names = ", ".join(sorted(impl)) or "the change"
+            names = ", ".join(seen) or "the change"
             target0 = next(iter(sorted(impl)), "src/slug.js")
             if "review_blocker_stays" in self.faults:
                 return (f"Reviewed {names}.\nFINDING: BLOCKER {target0}:1 — scripted fault: the "
@@ -373,7 +379,7 @@ class ScriptedEngine:
                 return (f"Reviewed {', '.join(sorted(impl))}.\nFINDING: HIGH {target}:1 — "
                         "scripted fault: the query string reaches the response unescaped "
                         "(security_finding).\nVERDICT: ISSUES")
-            return (f"Reviewed {', '.join(sorted(impl))}: no injection, auth, secret or "
+            return (f"Reviewed {', '.join(seen)}: no injection, auth, secret or "
                     "traversal issue reachable from input.\nVERDICT: CLEAN")
 
         def _consistency_reply() -> str:
@@ -404,7 +410,7 @@ class ScriptedEngine:
 
             replies = {"review_code": _review_reply, "security_check": _security_reply,
                        "consistency_check": _consistency_reply}
-            parts = [f"REVIEWED: {', '.join(sorted(impl)) or 'the change'}"]
+            parts = [f"REVIEWED: {', '.join(seen) or 'the change'}"]
             parts += [f"=== {_rp.SECTION_HEADS[seat]} ===\n{replies[seat]()}"
                       for seat in _rp.SEATS if f"=== {_rp.SECTION_HEADS[seat]} ===" in text]
             return "\n".join(parts), written
@@ -519,6 +525,15 @@ class ScriptedEngine:
             for name in re.findall(r'test\("([^"]+)"', body):
                 cases.append(f"- {rel}: {name}")
         return "TEST PLAN:\n" + "\n".join(cases or ["- (none)"])
+
+
+def _changed_files(prompt: str) -> list[str]:
+    """The paths a review prompt lists under CHANGED FILES (review_input.render)."""
+    block = re.search(r"(?m)^CHANGED FILES:\n((?:  - .*\n?)+)", prompt or "")
+    if not block:
+        return []
+    return [ln[4:].split("  (", 1)[0].strip() for ln in block.group(1).splitlines()
+            if ln.startswith("  - ")]
 
 
 def _stage_from_prompt(prompt: str) -> str:
