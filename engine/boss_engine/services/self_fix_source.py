@@ -4,8 +4,9 @@ BOSSAPP-571 (spec §6.1, §6.3, F3, F8). The install checkout lives on the HOST 
 mounted into a container (no `.git` in the images, by design), and editing it would break
 upgrade.sh's clean-tree rule. So a self-fix builds from the SELF-SOURCE MIRROR: a bare clone of
 the checkout (`git clone --mirror`, offline, holding the exact BOSS_SOURCE_SHA and the release
-tags), seeded on the host by the self-installer (`boss self-fix seed`) into a volume the API and
-the worker mount.
+tags), seeded on the host by the installer on every install and upgrade (and by `boss self-fix
+seed`) into a directory the API and the worker mount read-only, beside the INSTALL RECORD that
+says where BOSS was installed from (ENT-REC-54).
 
   * The WORKSPACE of one self-fix is a clone of the mirror checked out at its base (the running
     stack head), with its remote REMOVED: the engine that writes the fix in it cannot push
@@ -77,6 +78,92 @@ def mirror_of(settings: Any) -> Path:
 def has_mirror(settings: Any) -> bool:
     path = mirror_of(settings)
     return (path / "HEAD").exists() or (path / ".git").exists()
+
+
+# ── where BOSS was installed from (ENT-REC-54) ──────────────────────────────────────────────
+
+#: Written by the host installer beside the mirror on every install and upgrade
+#: (scripts/install/self_fix_installer.py `seed`), mounted read-only with it.
+RECORD_NAME = "install.json"
+
+
+def install_record(settings: Any) -> Optional[dict[str, Any]]:
+    """The install record: the checkout's host path, commit, clean or not, release, and the
+    mirror's state, as the host installer last wrote them. None when no installer wrote one."""
+    import json
+
+    try:
+        data = json.loads((mirror_of(settings).parent / RECORD_NAME).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def mirror_holds(settings: Any, sha: str) -> bool:
+    """Does the mirror hold commit `sha` (the code that runs)?"""
+    if not re.fullmatch(r"[0-9a-f]{40}", sha or "") or not has_mirror(settings):
+        return False
+    try:
+        git(["cat-file", "-e", f"{sha}^{{commit}}"], cwd=mirror_of(settings), timeout=20)
+    except SourceError:
+        return False
+    return True
+
+
+def describe_install(settings: Any = None) -> dict[str, Any]:
+    """WHERE AM I INSTALLED AND WHAT SOURCE AM I RUNNING, in facts and one sentence: the host
+    path the installer recorded (the checkout itself is never mounted into a container), the
+    commit and release, whether it was clean, and whether that is the build running now."""
+    from .remote_url import public_remote
+    from .self_fix import running_stack_head, source_sha
+
+    if settings is None:
+        from ..config import get_settings
+
+        settings = get_settings()
+    record = install_record(settings) or {}
+    running = source_sha()
+    known = bool(re.fullmatch(r"[0-9a-f]{40}", running))
+    commit = str(record.get("commit") or "")
+    out: dict[str, Any] = {
+        "recorded": bool(record), "path": record.get("path"), "kind": record.get("kind"),
+        "commit": commit or None, "release_tag": record.get("release_tag"),
+        "release_ref": record.get("release_ref"), "branch": record.get("branch"),
+        "dirty": bool(record.get("dirty")), "changed_files": int(record.get("changed_files") or 0),
+        "upstream": public_remote(str(record.get("upstream") or "")) or None,
+        "recorded_at": record.get("recorded_at"),
+        "running_sha": running if known else None,
+        "stack_head": (running_stack_head() or None) if known else None,
+        "matches_running": bool(commit and known and commit == running),
+        "mirror": {"path": str(mirror_of(settings)), "seeded": has_mirror(settings),
+                   "error": (record.get("mirror") or {}).get("error")},
+    }
+    if not record:
+        out["sentence"] = ("The installer has not recorded where BOSS was installed (an install "
+                           "from before this was recorded). Running the installer again, or "
+                           "`boss self-fix seed` on the host, records it.")
+        if known:
+            out["sentence"] += f" The running build is commit {running[:12]}."
+        return out
+    release = record.get("release_tag") or record.get("release_ref")
+    if record.get("kind") != "git":
+        out["sentence"] = (f"BOSS is installed in {record.get('path')} from an archive"
+                           f"{f' of {release}' if release else ''}, not a git checkout. "
+                           f"{record.get('why') or ''}").strip()
+        return out
+    state = (f"with {out['changed_files']} uncommitted change(s) to tracked files" if out["dirty"]
+             else "clean")
+    sentence = (f"BOSS is installed in {record.get('path')} from a git checkout at "
+                f"{commit[:12]}{f' ({release})' if release else ''}, {state}.")
+    if known and commit and commit != running:
+        sentence += (f" The running build is {running[:12]}, not the recorded commit: the "
+                     "installer has not run since the checkout moved.")
+    elif known:
+        sentence += " That is the build running now."
+    if out["stack_head"] and out["stack_head"] != running:
+        sentence += f" Local BOSS fixes are installed on top (stack head {out['stack_head'][:12]})."
+    out["sentence"] = sentence
+    return out
 
 
 def seed(checkout: Path, mirror: Path) -> str:
@@ -353,7 +440,8 @@ def p0_tests(work: Path) -> list[str]:
     return [str(t) for t in listed if (work / str(t)).is_file()]
 
 
-__all__ = ["AUTHOR_EMAIL", "AUTHOR_NAME", "SourceError", "affected_tests", "bundle", "changes", "commit",
-           "diff_stat", "diff_text", "discard", "file_exists", "git", "has_mirror", "head",
+__all__ = ["AUTHOR_EMAIL", "AUTHOR_NAME", "RECORD_NAME", "SourceError", "affected_tests", "bundle",
+           "changes", "commit", "describe_install", "diff_stat", "diff_text", "discard",
+           "file_exists", "git", "has_mirror", "head", "install_record", "mirror_holds",
            "mirror_of", "p0_tests", "publish", "resolve", "run_pytest", "seed", "snapshot",
            "test_env", "tree_of", "workspace"]

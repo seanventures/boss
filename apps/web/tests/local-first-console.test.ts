@@ -122,8 +122,8 @@ const owner = (over: Partial<OwnerCredential>): OwnerCredential =>
 
 describe("the new repo's owner picker (BOSSAPP-1160)", () => {
   const app = owner({ login: "paramg", can_create: true, verified: true, via: "paramg (access token, Acme Shop)", via_kind: "connection" });
-  const cannot = owner({ login: "paramg-kaapppu", can_create: false, words: "BOSS has no GitHub credential that can create repositories in paramg-kaapppu.",
-                         fixes: ["Replace the token for paramg-kaapppu with one holding the repo scope (Setup)"] });
+  const cannot = owner({ login: "example-org-b", can_create: false, words: "BOSS has no GitHub credential that can create repositories in example-org-b.",
+                         fixes: ["Replace the token for example-org-b with one holding the repo scope (Setup)"] });
   const org = owner({ login: "acme", type: "Organization", can_create: true, verified: false, via: "GitHub App (server settings)", via_kind: "env_app" });
 
   it("lists only the owners a credential can create in, and chips which one", () => {
@@ -131,16 +131,16 @@ describe("the new repo's owner picker (BOSSAPP-1160)", () => {
     expect(ownerChip([app, cannot, org], "paramg")).toBe("will create as paramg (access token, Acme Shop)");
     expect(ownerChip([app, cannot, org], "PARAMG")).toBe("will create as paramg (access token, Acme Shop)");
     expect(ownerChip([app, cannot, org], "acme")).toBe("will try as GitHub App (server settings)");
-    expect(ownerChip([app, cannot, org], "paramg-kaapppu")).toBeNull();
+    expect(ownerChip([app, cannot, org], "example-org-b")).toBeNull();
     expect(ownerFixLines([app, cannot, org])).toEqual([]);
   });
 
   it("when none can, keeps every known owner listed and names the exact fix per owner", () => {
     const appOnPerson = owner({ login: "paramg", can_create: false, fixes: ["Add a personal access token with the repo scope for paramg (Setup)"] });
-    expect(creatingOwners([appOnPerson, cannot], ["from-registry"])).toEqual(["paramg", "paramg-kaapppu", "from-registry"]);
+    expect(creatingOwners([appOnPerson, cannot], ["from-registry"])).toEqual(["paramg", "example-org-b", "from-registry"]);
     expect(ownerFixLines([appOnPerson, cannot])).toEqual([
       { login: "paramg", fix: "Add a personal access token with the repo scope for paramg (Setup)" },
-      { login: "paramg-kaapppu", fix: "Replace the token for paramg-kaapppu with one holding the repo scope (Setup)" },
+      { login: "example-org-b", fix: "Replace the token for example-org-b with one holding the repo scope (Setup)" },
     ]);
     expect(ownerFixLines([owner({ login: "x", can_create: false, fixes: [], words: "no credential" })])).toEqual([{ login: "x", fix: "no credential" }]);
   });

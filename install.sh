@@ -1770,25 +1770,38 @@ if [[ -d scripts/install/monitoring ]]; then
 fi
 
 # BOSS's own source mirror for self-fixes (docs/product/BOSS_FIXES_ITSELF.md §6.1): the
-# directory exists before Compose mounts it, so Docker never creates it as root. Empty until
-# `boss self-fix seed`; nothing in it is secret.
+# directory exists before Compose mounts it, so Docker never creates it as root. Nothing in it
+# is secret.
 mkdir -p .boss/selfsrc && chmod 755 .boss .boss/selfsrc
 # Import local code (BOSSAPP-923) reads folders put here, mounted read-only into the API.
 mkdir -p .boss/import && chmod 755 .boss/import
-# >>> self-fix mirror refresh
-# A SEEDED MIRROR FOLLOWS THE RELEASE (brec_069e56332d714ad08c01): an upgrade reruns this
-# installer at the new commit, and a mirror left on the old one makes a self-fix diagnose and
-# patch code that is no longer running. Only a mirror someone seeded is refreshed; failing to
-# refresh it never stops the install.
-if [[ -f .boss/selfsrc/boss.git/HEAD ]]; then
-  if command -v python3 >/dev/null 2>&1 &&
-     python3 scripts/install/self_fix_installer.py --dir "$PWD" seed </dev/null >/dev/null 2>&1; then
-    ui_ok "Self-fix source mirror refreshed to $(git rev-parse --short=12 HEAD 2>/dev/null)"
-  else
-    ui_warn "Self-fix source mirror was not refreshed; a self-fix may read older code. Run: boss self-fix seed"
-  fi
+# >>> self-fix source
+# BOSS KNOWS WHERE IT WAS INSTALLED FROM (ENT-REC-54). Every install and upgrade records this
+# checkout (path, commit, clean or not, release) in .boss/selfsrc/install.json and mirrors its
+# source into .boss/selfsrc/boss.git: offline, from the checkout itself. A self-fix diagnoses
+# and patches exactly the code that runs, and an archive install says plainly why it cannot.
+# The checkout is never mounted into a container; only the record and the mirror are, read-only.
+# Nothing here ever stops the install.
+_sfx_rc=0
+_sfx_said=""
+if command -v python3 >/dev/null 2>&1 && [[ -f scripts/install/self_fix_installer.py ]]; then
+  _sfx_said="$(python3 scripts/install/self_fix_installer.py --dir "$PWD" seed </dev/null 2>&1)" ||
+    _sfx_rc=$?
+else
+  _sfx_rc=127
 fi
-# <<< self-fix mirror refresh
+case "$_sfx_rc" in
+  0) ui_ok "Self-fix source recorded and mirrored ($(git rev-parse --short=12 HEAD 2>/dev/null))" ;;
+  3) ui_info "${_sfx_said:-BOSS was installed from an archive, so it cannot fix itself.}" ;;
+  5) ui_info "Self-fix is off on this install, so BOSS's own source was recorded but not mirrored." ;;
+  127) ui_warn "python3 is not on this machine, so BOSS cannot record its own source for self-fixes." ;;
+  *) ui_warn "Self-fix source mirror was not refreshed; a self-fix may read older code. Run: boss self-fix seed" ;;
+esac
+if [[ "$_sfx_rc" == 0 ]] && grep -qs '"dirty": true' .boss/selfsrc/install.json; then
+  ui_warn "This checkout has uncommitted changes to tracked files, so BOSS cannot fix itself until they are committed or discarded and the installer runs again."
+fi
+unset _sfx_rc _sfx_said
+# <<< self-fix source
 
 # Start only the database and API for bootstrap. A fresh worker cannot poll
 # before the default project and its actor memberships exist.
@@ -1995,6 +2008,42 @@ if [[ -f "$INSTALL_DIR/scripts/install/prune.sh" ]]; then
   fi
   unset _prune_out _prune_ok _l
 fi
+
+# >>> self-fix installer enrolment
+# BOSS-SIDE FIXES GET FULL CONTROL ON A DEVELOPMENT INSTALL (ENT-REC-54). The person who ran this
+# installer on their own development machine also gets the host self-installer: its own key
+# (sys_self_installer, 0600, never printed) and `boss self-fix watch` as a user service, so a BOSS
+# fix that was approved, or decided under dev autonomy, installs without anyone at a terminal.
+# It installs only what a decision approved, and never a fix that changes what this host runs.
+# ONCE: only a host never set up (no key file, no service file). A removed service, a revoked
+# key, or BOSS_SELF_FIX_INSTALLER=off (remembered in .boss/self-installer.off) is a person's
+# choice no later run undoes; `boss self-fix enable` does. A production install, a root shell,
+# CI, an install BOSS cannot fix (archive, no mirror) or BOSS_SELF_FIX=off leave it to a person.
+# Nothing here ever stops the install.
+_sfx_off=0
+for _v in "${BOSS_SELF_FIX:-}" "$(env_value BOSS_SELF_FIX || true)"; do
+  case "$(printf '%s' "$_v" | tr '[:upper:]' '[:lower:]')" in off|false|0|no|disabled|disable|none) _sfx_off=1 ;; esac
+done
+case "$(printf '%s' "${BOSS_SELF_FIX_INSTALLER:-}" | tr '[:upper:]' '[:lower:]')" in
+  off|false|0|no|disabled|disable|none)
+    _sfx_off=1
+    mkdir -p .boss && printf 'BOSS_SELF_FIX_INSTALLER=off at an install. `boss self-fix enable` turns it back on.\n' > .boss/self-installer.off ;;
+esac
+if [[ "${INSTALL_TIER:-}" == dev && -f .boss/selfsrc/boss.git/HEAD && "$(id -u)" != 0 &&
+      -z "${CI:-}" && "$_sfx_off" == 0 ]] && command -v python3 >/dev/null 2>&1; then
+  _sfx_rc=0
+  _sfx_said="$(BOSS_SELF_FIX_DOCKER="${DOCKER[*]}" BOSS_SELF_FIX_API="$API_URL" \
+    python3 scripts/install/self_fix_installer.py --dir "$INSTALL_DIR" enable --auto </dev/null 2>&1)" ||
+    _sfx_rc=$?
+  case "$_sfx_rc" in
+    0) ui_ok "Self-installer enrolled: BOSS installs its own fixes on this development machine" ;;
+    4) : ;;
+    *) ui_warn "The self-installer was not set up (${_sfx_said##*$'\n'}). BOSS still works; run: boss self-fix enable" ;;
+  esac
+  unset _sfx_said _sfx_rc
+fi
+unset _sfx_off _v
+# <<< self-fix installer enrolment
 
 # ---- models and subscriptions already on this machine ----------------------
 # Finding is read only and prints found / not found, never a value. Exported API keys were

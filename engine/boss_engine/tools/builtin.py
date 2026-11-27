@@ -3894,8 +3894,12 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
             next_steps.append({"row": "models", "state": "Not connected",
                                "fix": "Connect a subscription, an API key or a local model.",
                                "href": "/?area=setup&focus=models"})
+        from ..services.self_fix_source import describe_install
+
         return {"project_id": pid, "view": view,
                 "verdict": view["verdict"],
+                # Where this BOSS was installed from and what it runs (ENT-REC-54).
+                "boss_install": describe_install(ctx.settings)["sentence"],
                 "who_does_what": {j["job"]: (j["resolved"] or {}).get("label") or "nothing"
                                   for j in view["jobs"]},
                 "next_steps": next_steps or [{"row": None, "state": "Ready",
@@ -3909,13 +3913,21 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         "(`exited -9`, `exited 137`, `SIGKILL`) — the OOM count settles in one number what "
         "otherwise takes an hour of guessing — and whenever the API is slow while a build is "
         "running, because load-per-core says whether anything is actually contending. "
+        "Also answers WHERE BOSS IS INSTALLED AND WHAT SOURCE IT RUNS (`install`): the host "
+        "path it was installed from, the commit and release, whether the checkout was clean, "
+        "whether that is the running build, and whether BOSS can fix itself there and why not. "
         "Read-only; it touches no docker socket.",
         _obj({}),
         kind="read", permission="system:read",
         exposure=Exposure(tags=("boss", "health")))
     def inspect_self(ctx, *, project_id, actor, args):
+        from ..services.self_fix import install_capable
+        from ..services.self_fix_source import describe_install
         from ..services.self_observability import self_snapshot
-        return self_snapshot()
+
+        install = describe_install(ctx.settings)
+        install["can_fix_itself"], install["why_not"] = install_capable(ctx.settings)
+        return {**self_snapshot(), "install": install}
 
     @reg.tool(
         "install_restarts",

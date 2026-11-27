@@ -82,3 +82,10 @@
 .sfx-cap { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); cursor: help; }
 .sfx-cap-input { width: 5.5rem; }
 .sfx-run-autonomy { cursor: help; }
+/* Govern › Self-fix: ready to fix itself (ENT-REC-54), one row per piece with its one action. */
+.sfx-ready { display: flex; flex-direction: column; gap: 6px; padding-top: 8px; border-top: 1px solid var(--border); }
+.sfx-ready-row { padding-left: 12px; }
+.sfx-ready-state { gap: 4px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: help; }
+.sfx-ready-do { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
+.sfx-ready-cmd { padding: 2px 6px; border: 1px solid var(--border); border-radius: var(--r); background: var(--surface-2); color: var(--ink); font-size: 0.78rem; overflow-wrap: anywhere; user-select: all; }
+.sfx-ready-do .ag-btn, .sfx-ready-row > .ag-btn, .sfx-ready-row > .ag-link { display: inline-flex; align-items: center; gap: 4px; }

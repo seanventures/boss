@@ -48,7 +48,7 @@ function api(over: (url: string, method: string, body: Record<string, unknown>) 
     const o = over(String(url), method, body);
     if (o) return o;
     if (url.startsWith("/v1/ticket-systems/catalog")) return json(CATALOG);
-    if (url.startsWith("/v1/auth/options")) return json({ org_name: "Kaappu Labs" });
+    if (url.startsWith("/v1/auth/options")) return json({ org_name: "Example Labs" });
     if (url.startsWith("/v1/ticket-systems?project_id=")) return json({ connections: [JIRA] });
     if (url.endsWith("/projects")) return json({ projects: [{ key: "LEND", name: "Lending" }, { key: "OPS", name: "Operations" }] });
     if (url.endsWith("/test")) return json({ connection: JIRA, test: { ok: true, account: "BOSS Bot", project_keys: ["LEND", "OPS"] } });
@@ -139,7 +139,7 @@ describe("Setup › Ticket systems (T1)", () => {
     await settle();
     expect($('[data-testid="tk-view-all"]')?.getAttribute("aria-selected")).toBe("true");
     expect($('[data-testid="tk-system-wtp_other"]')?.getAttribute("data-spot")).toBe("true");
-    expect($('[data-testid="tk-share-confirm"]')?.textContent).toContain("Everyone in Kaappu Labs and their agents can read tickets");
+    expect($('[data-testid="tk-share-confirm"]')?.textContent).toContain("Everyone in Example Labs and their agents can read tickets");
     expect(new URLSearchParams(window.location.search).get("share")).toBe("wtp_other");
     await click('[data-testid="tk-share-yes"]');
     const patch = calls.find((c) => c.method === "PATCH")!;
@@ -188,11 +188,11 @@ describe("Setup › Ticket systems (T1)", () => {
     expect(pill.textContent?.trim()).toBe("This project only");
     expect(pill.getAttribute("aria-pressed")).toBe("false");
     expect(pill.getAttribute("title"))
-      .toBe("Only this project uses it. Press to share: Everyone in Kaappu Labs and their agents can read tickets through this connection using BOSS Bot's token.");
+      .toBe("Only this project uses it. Press to share: Everyone in Example Labs and their agents can read tickets through this connection using BOSS Bot's token.");
     await click('[data-testid="tk-share-wtp_1"]');
     expect(calls.some((c) => c.method === "PATCH")).toBe(false);
     expect($('[data-testid="tk-share-confirm"]')?.textContent)
-      .toContain("Everyone in Kaappu Labs and their agents can read tickets through this connection using BOSS Bot's token.");
+      .toContain("Everyone in Example Labs and their agents can read tickets through this connection using BOSS Bot's token.");
     await click('[data-testid="tk-share-yes"]');
     const patch = calls.find((c) => c.method === "PATCH")!;
     expect([patch.url, patch.body]).toEqual(["/v1/ticket-systems/wtp_1", { share_with_org: true }]);
@@ -353,7 +353,7 @@ describe("Add a ticket system (T2)", () => {
     // Sharing is a choice, in plain words; a personal API token starts unshared.
     expect(($('[data-testid="tk-share-toggle"]') as HTMLInputElement).checked).toBe(false);
     expect($('[data-testid="tk-share-words"]')?.textContent)
-      .toContain("Everyone in Kaappu Labs and their agents can read tickets through this connection using BOSS Bot's token.");
+      .toContain("Everyone in Example Labs and their agents can read tickets through this connection using BOSS Bot's token.");
     await click('[data-testid="tk-save"]');
     const patch = calls.find((c) => c.method === "PATCH")!;
     expect(patch.url).toBe("/v1/ticket-systems/wtp_1");

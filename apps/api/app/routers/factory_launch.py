@@ -114,6 +114,19 @@ def factory_attachments(
 @permit(P.PROJECT_CREATE, scope=Scope.org())
 def factory_launch(payload: LaunchBody, request: Request) -> Any:
     """Create a project from a prompt, a template, or Easy Mode, and start its build."""
+    return _launch(payload, request)
+
+
+@router.post("/v1/projects/{project_id}/factory/launch", status_code=201)
+@permit(P.WORKFLOW_RUN_START, scope=Scope.project(path="project_id"))
+def launch_in_project(project_id: str, payload: LaunchBody, request: Request) -> Any:
+    """Build a template into a project that already exists: its own repository, its own consent."""
+    if payload.mode not in ("", "build") or not payload.template_id:
+        return JSONResponse({"error": "template_required", "message": "Choose a build template for this project."}, status_code=422)
+    return _launch(payload, request, target_project_id=project_id)
+
+
+def _launch(payload: LaunchBody, request: Request, target_project_id: Optional[str] = None) -> Any:
     from boss_engine.services import factory_launch as launch_service
 
     if not database_is_reachable(_engine):
@@ -128,7 +141,7 @@ def factory_launch(payload: LaunchBody, request: Request) -> Any:
                     connection, _settings, org_id=org_id, actor=actor, auth=auth,
                     prompt=payload.prompt, mode=payload.mode, template_id=payload.template_id,
                     attachment_ids=payload.attachment_ids, github_repo=payload.github_repo,
-                    review_plan=payload.review_plan, jobs=_jobs())
+                    review_plan=payload.review_plan, target_project_id=target_project_id, jobs=_jobs())
             except ConsentRequired as consent_asked:
                 # KEPT, NOT ROLLED BACK: the project and its agents the consent body names are
                 # committed with this transaction; the same launch sent again after the grant

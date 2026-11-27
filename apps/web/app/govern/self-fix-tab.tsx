@@ -5,21 +5,29 @@
  *
  *   Self-fix                                                     [ On ] ⓘ
  *   Per fix $10, Per month $50, Time 60 min, Confidence medium ▾, Health 10 min, Tries 2
- *   Install without asking   Off  (only on a one-person dev box) ⓘ
+ *   Ready to fix itself   2 to do
+ *     Installed from   ✓ /home/me/boss @ 1a2b3c4d5e6f (v1.0-rc10.37) ⓘ
+ *     Source mirror    ! Not seeded ⓘ           boss self-fix seed      [ Copy ]
+ *     Host installer   ! Not enrolled ⓘ         boss self-fix enable    [ Copy ]
+ *     Mode             ✓ Installs on its own ⓘ  No ask                  Change ›
  *   Installed fixes   2 on the stack                       [ Remove all local fixes ]
- *   Self-installer    watching, last seen 08:12
  *
- * The switch is the kill switch: off cancels every fix still being built and installs nothing
- * new; what is installed stays (Remove all is the uninstall). `BOSS_SELF_FIX=off` beats it and
- * is said. Auto-install is off in v1 and cannot be switched on here.
+ * ENT-REC-54: everything a self-fix needs is in ONE place, each missing piece with ONE action (a
+ * host command to copy, the switch, or the autonomy policy). The switch is the kill switch: off
+ * cancels every fix still being built and installs nothing new; what is installed stays (Remove
+ * all is the uninstall). `BOSS_SELF_FIX=off` beats it and is said. Whether an install asks a
+ * person is the autonomy policy's (development + agents act: installs alone, listed in Decided
+ * for you; production or Ask me: a person approves each one).
  */
 import React, { useEffect, useState } from "react";
+import { ArrowSquareOut, CheckCircle, Copy, Power, WarningCircle } from "@phosphor-icons/react";
 
 import { GatedButton } from "../../components/gated";
 import { usePolledRead } from "../../lib/log-stream";
 import { showToast } from "../client-forms";
 import {
-  polledSelfFix, selfFixAreaHref, selfFixWrite, shortSha, usd, type Settings, type SettingsView,
+  polledSelfFix, selfFixAreaHref, selfFixWrite, shortSha, usd, type ReadinessPiece, type Settings,
+  type SettingsView,
 } from "../../lib/self-fix";
 import "../improve/improve.css";
 import { localWith } from "../../lib/local-time";
@@ -48,6 +56,53 @@ export function InstallWhy({ sentence }: { sentence: string | null }) {
   return sentence.split(/\s+/).filter(Boolean).length > 6
     ? <p data-testid="gv-selffix-cannot-why" data-user-text>{sentence}</p>
     : <span data-testid="gv-selffix-cannot-why" data-user-text>{sentence}</span>;
+}
+
+async function copyCommand(command: string) {
+  try {
+    await navigator.clipboard.writeText(command);
+    showToast("success", "Copied: run it on the machine BOSS is installed on");
+  } catch {
+    showToast("error", "Couldn't copy; select the command instead");
+  }
+}
+
+/** One readiness piece: what it is, its state (the why in the tooltip), and its one action. */
+export function ReadyPiece({ piece, projectId, busy, turnOn, children }: {
+  piece: ReadinessPiece; projectId: string; busy: boolean; turnOn: () => void; children?: React.ReactNode;
+}) {
+  const a = piece.action;
+  return (
+    <div className="sfx-govern-row sfx-ready-row" data-testid={`gv-selffix-piece-${piece.key}`}>
+      <span className="sfx-govern-label" title={piece.why || piece.label}>{piece.label}</span>
+      <span className={`cap-badge ${piece.ok ? "tone-green" : "tone-amber"} sfx-ready-state`}
+            data-testid={`gv-selffix-state-${piece.key}`} title={piece.why || piece.state}>
+        {piece.ok ? <CheckCircle size={12} aria-hidden /> : <WarningCircle size={12} aria-hidden />}
+        <span data-user-text>{piece.state}</span>
+      </span>
+      {children}
+      {a?.kind === "command" ? (
+        <span className="sfx-ready-do">
+          <code className="sfx-ready-cmd" data-copy="data" title={`${a.label}: ${a.command}`}>{a.command}</code>
+          <button type="button" className="ag-btn" data-testid={`gv-selffix-do-${piece.key}`}
+                  title={`${a.label} (run on the machine BOSS is installed on)`}
+                  onClick={() => void copyCommand(a.command)}>
+            <Copy size={13} aria-hidden /> Copy
+          </button>
+        </span>
+      ) : a?.kind === "switch" ? (
+        <GatedButton permission="improvement:manage" projectId={projectId} type="button" className="ag-btn"
+                     data-testid={`gv-selffix-do-${piece.key}`} disabled={busy} title="Let BOSS fix its own bugs"
+                     onClick={turnOn}>
+          <Power size={13} aria-hidden /> {a.label}
+        </GatedButton>
+      ) : a?.kind === "link" ? (
+        <a className="ag-link" href={a.href} data-testid={`gv-selffix-do-${piece.key}`} title="Govern › Where people decide">
+          {a.label} <ArrowSquareOut size={12} aria-hidden />
+        </a>
+      ) : null}
+    </div>
+  );
 }
 
 export function SelfFixTab({ projectId, actor, paused }: { projectId: string; actor: string; paused: boolean }) {
@@ -136,15 +191,32 @@ export function SelfFixTab({ projectId, actor, paused }: { projectId: string; ac
           {usd(v.month_spent_usd)} this month
         </span>
       </form>
-      <div className="sfx-govern-row">
-        <span className="sfx-govern-label" title={v.auto_install_why || "A person approves every install in this version"}>
-          Install without asking
-        </span>
-        <span className="cap-badge tone-muted" data-testid="gv-selffix-auto" title={v.auto_install_why || "Off in this version; never on a shared install"}>
-          Off
-        </span>
-        <span className="sfx-sub" title="Only ever on a one-person developer box, and not in this version">one-person dev box only ⓘ</span>
-      </div>
+      {v.readiness ? (
+        <section className="sfx-ready" data-testid="gv-selffix-ready" aria-label="Ready to fix itself">
+          <div className="sfx-govern-row">
+            <span className="sfx-govern-label" title={v.readiness.install.sentence}>Ready to fix itself</span>
+            {v.readiness.ready
+              ? <span className="cap-badge tone-green" data-testid="gv-selffix-ready-state">Ready</span>
+              : <span className="cap-badge tone-amber" data-testid="gv-selffix-ready-state">
+                  {v.readiness.pieces.filter((p) => !p.ok).length} to do
+                </span>}
+          </div>
+          {v.readiness.pieces.map((p) => (
+            <ReadyPiece key={p.key} piece={p} projectId={projectId} busy={!!busy}
+                        turnOn={() => void write("switch", { on: true, why: "switched on in Govern" }, "Self-fix on")}>
+              {p.key === "mode" ? (
+                <span className="cap-badge tone-muted" data-testid="gv-selffix-auto" title={v.auto_install_why}>
+                  {v.auto_install === "on" ? "No ask" : "Asks"}
+                </span>
+              ) : p.key === "installer" && v.installer.last_seen_at ? (
+                <span className="sfx-sub" data-testid="gv-selffix-installer" title="When the host installer last asked BOSS for approved installs">
+                  {v.installer.watching ? "watching" : "not watching"}, last seen {localWith(v.installer.last_seen_at, { hour: "2-digit", minute: "2-digit", day: "numeric", month: "short" })}
+                </span>
+              ) : null}
+            </ReadyPiece>
+          ))}
+        </section>
+      ) : null}
       <div className="sfx-govern-row" data-testid="gv-selffix-stack">
         <span className="sfx-govern-label" title="Fixes installed on top of this release, in order">Installed fixes</span>
         <span>{v.stack.length} on the stack</span>
@@ -169,15 +241,6 @@ export function SelfFixTab({ projectId, actor, paused }: { projectId: string; ac
                          title="Rebuild BOSS as the plain release, without any local fix">Remove all local fixes</GatedButton>
           )
         ) : null}
-      </div>
-      <div className="sfx-govern-row" data-testid="gv-selffix-installer">
-        <span className="sfx-govern-label" title="The program on this machine that installs approved fixes (boss self-fix watch)">
-          Self-installer
-        </span>
-        <span title={v.installer.watching ? "It installs approved fixes by itself" : "Run `boss self-fix watch` on the host, or the command on each card"}>
-          {v.installer.watching ? "watching" : "not watching"}
-          {v.installer.last_seen_at ? `, last seen ${localWith(v.installer.last_seen_at, { hour: "2-digit", minute: "2-digit", day: "numeric", month: "short" })}` : ""}
-        </span>
       </div>
     </div>
   );

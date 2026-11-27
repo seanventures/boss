@@ -16,8 +16,8 @@ from ._identity_agents_support import ROOT
 from .test_identity_github_setup import PAT, _clone, _connect_app, _injected, _run, env  # noqa: F401 — the fixture
 
 B_TOKEN = "github_pat_SECONDACCOUNTBOUND00000000000"
-B_ENV = "BOSS_KAAPPU_GITHUB_TOKEN"
-REPO_B = "paramg-kaapppu/kaappu-org"
+B_ENV = "BOSS_EXAMPLE_ORG_GITHUB_TOKEN"
+REPO_B = "example-org/example-repo"
 
 
 @pytest.fixture(autouse=True)
@@ -56,8 +56,8 @@ def _second_account_world(c) -> None:
         c.execute(text("INSERT INTO projects (id, workspace_id) VALUES ('prj_web', 'ws_boss') ON CONFLICT DO NOTHING"))
     c.execute(text(
         "INSERT INTO github_connections (id, project_id, connection_label, auth_method, credential_ref, "
-        "status, account_login, created_by, api_base_url) VALUES ('ghconn_b', 'prj_web', 'Kaappu org', "
-        "'personal_access_token', :ref, 'active', 'paramg-kaapppu', 'usr_alice', :api)"),
+        "status, account_login, created_by, api_base_url) VALUES ('ghconn_b', 'prj_web', 'Example Org', "
+        "'personal_access_token', :ref, 'active', 'example-org-b', 'usr_alice', :api)"),
         # On the install's own GitHub (the env fixture's api.github.test): a connection on ANOTHER
         # host is refused on the install's route (BOSSAPP-1286).
         {"ref": f"env:{B_ENV}", "api": github_urls.install_api_base()})
@@ -142,7 +142,7 @@ def test_an_org_token_covering_the_repo_wins_over_an_app_that_does_not(env):  # 
     _connect_app(env)
     with env.db() as c:
         github_setup.store_org_token(token=B_TOKEN, repos=[REPO_B], org_id="org_boss", db=c,
-                                     by=env.alice, check=False, keep_others=True, login="paramg-kaapppu")
+                                     by=env.alice, check=False, keep_others=True, login="example-org-b")
     shim, up, proxy = _run(env, repos=(REPO_B,), run="run_ct:bind4")
     assert _clone(proxy, shim, REPO_B).status == 200 and _injected(up) == B_TOKEN
     other, up2, proxy2 = _run(env, repos=("acme/web",), run="run_ct:bind5")
@@ -153,8 +153,8 @@ def test_an_org_token_covering_the_repo_wins_over_an_app_that_does_not(env):  # 
 def test_a_project_connections_token_serves_only_repos_bound_to_it(env, monkeypatch):  # noqa: F811
     _bind_second_account(env)                        # no App, no org token
     monkeypatch.setenv(B_ENV, B_TOKEN)
-    shim, up, proxy = _run(env, repos=("paramg-kaapppu/another",), run="run_ct:bind6")
-    resp = _clone(proxy, shim, "paramg-kaapppu/another")
+    shim, up, proxy = _run(env, repos=("example-org-b/another",), run="run_ct:bind6")
+    resp = _clone(proxy, shim, "example-org-b/another")
     assert resp.status == 403 and b"github_not_connected" in resp.body          # never an org-wide fallback
     assert up.calls == [] and B_TOKEN.encode() not in resp.body
     bound, up2, proxy2 = _run(env, repos=(REPO_B,), run="run_ct:bind7")

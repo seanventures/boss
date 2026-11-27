@@ -50,11 +50,11 @@ async function flush() {
   for (let i = 0; i < 8; i += 1) await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
 }
 
-async function renderHome() {
+async function renderHome(projects: { id: string; name: string }[] = []) {
   host = document.createElement("div");
   document.body.appendChild(host);
   root = createRoot(host);
-  await act(async () => { root!.render(<BuildHome />); });
+  await act(async () => { root!.render(<BuildHome projects={projects} />); });
   await flush();
 }
 
@@ -172,6 +172,41 @@ describe("Easy Mode", () => {
       template_id: "tpl_maps",
       attachment_ids: ["att_spec"],
     });
+  });
+
+  it("launches a template into the selected project with its explicit review stop", async () => {
+    const calls = install({ templates: () => Response.json({ templates: [
+      { id: "tpl_maps", title: "City map", category: "Maps", prompt: "Build a map" },
+    ] }) });
+    await renderHome([{ id: "northgate", name: "Northgate" }]);
+    // No template yet: nothing to build into an existing project, so no picker.
+    expect(document.querySelector("[data-testid=build-into]")).toBeNull();
+    await press('[data-testid=build-template][data-template-id="tpl_maps"]');
+    const target = document.querySelector<HTMLSelectElement>("[data-testid=build-into]")!;
+    expect(target.value).toBe("");
+    await act(async () => {
+      target.value = "northgate";
+      target.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await press("[data-testid=build-review-plan]");
+    await press("[data-testid=build-lucky]");
+    const call = calls.find((row) => row.url.includes("/api/factory/launch"));
+    expect(JSON.parse(String(call?.init?.body))).toMatchObject({
+      target_project_id: "northgate", template_id: "tpl_maps", review_plan: true,
+    });
+  });
+
+  it("launches a template into a new project when no project is chosen", async () => {
+    const calls = install({ templates: () => Response.json({ templates: [
+      { id: "tpl_maps", title: "City map", category: "Maps", prompt: "Build a map" },
+    ] }) });
+    await renderHome([{ id: "northgate", name: "Northgate" }]);
+    await press('[data-testid=build-template][data-template-id="tpl_maps"]');
+    await press("[data-testid=build-lucky]");
+    const call = calls.find((row) => row.url.includes("/api/factory/launch"));
+    const body = JSON.parse(String(call?.init?.body));
+    expect(body.template_id).toBe("tpl_maps");
+    expect(body).not.toHaveProperty("target_project_id");
   });
 
   it("does not show a project or a run when the launch is refused", async () => {

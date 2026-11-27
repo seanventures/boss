@@ -5,8 +5,14 @@ BOSSAPP-571, docs/product/BOSS_FIXES_ITSELF.md §6.4, §6.5, decisions 1 and 2. 
 (never in a container: nothing in a container can build images or restart services, by design,
 and the Docker socket is never mounted into one). `boss self-fix …` runs it.
 
-    seed                       clone the checkout into BOSS's self-source mirror (.boss/selfsrc)
+    seed                       record where BOSS was installed from (.boss/selfsrc/install.json)
+                               and clone the checkout into its self-source mirror; install.sh
+                               runs it on every install and upgrade
     enroll                     mint this installer's own key (sys_self_installer), kept 0600
+    enable [--auto]            enroll (when it has no key or BOSS refuses it) and run `watch` as
+                               a user service; install.sh runs `--auto` on a development install
+                               (a host never set up, nobody opted out)
+    opt-out                    keep every installer run from enrolling this host again
     watch [--once]             poll BOSS for tickets every 10 s and run them (opt-in service)
     install SFX                run that self-fix's install now (the "run this command" fallback)
     remove SFX                 run an approved removal of one installed fix (a rebuild without it)
@@ -61,6 +67,7 @@ SERVICES = ("api", "worker", "mcp-tools", "egress", "web")
 STACK_WORKTREE = ".boss/stack-worktree"
 MIRROR = ".boss/selfsrc/boss.git"
 KEY_FILE = ".boss/self-installer.key"
+RECORD = ".boss/selfsrc/install.json"
 POLL_SECONDS = 10
 
 
@@ -305,13 +312,19 @@ class Host:
                 "--env-file", str(self.env_file), *profiles, *args]
         return self.run(argv, env={**self.compose_env(), **(env or {})})
 
-    def build_images(self, *, compose_file: Path, project_dir: Path,
+    def build_images(self, *, project_dir: Path,
                      env: Optional[dict[str, str]] = None) -> tuple[int, str]:
-        """Build the images from a source tree the installer's way (BOSSAPP-1458): its own
-        scripts/install/build_images.sh, so each image builds once, image families build together
-        and a small disk drops a finished family's cache. A tree from before that script builds
-        with one `compose build`, as it always did."""
-        script = compose_file.parent / "build_images.sh"
+        """Build the images of a source tree (the stack worktree) the installer's way
+        (BOSSAPP-1458). WHAT RUNS ON THIS HOST IS THE RELEASE'S, never the tree's: build_images.sh
+        and the base compose file are read from the release checkout, and the tree is only the
+        build context (`--project-directory`). A tree whose fixes touch a host-effect path is
+        refused before anything builds (`host_effect_changes`)."""
+        tree = project_dir.parent.parent
+        touched = host_effect_changes(self, self.release_sha(), "HEAD", cwd=tree)
+        if touched:
+            return 1, refusal_for(touched)
+        compose_file = self.dir / "scripts/install/community-compose.yml"
+        script = self.dir / "scripts/install/build_images.sh"
         if not script.is_file():
             return self.compose("build", compose_file=compose_file, project_dir=project_dir, env=env)
         profiles: list[str] = []
@@ -495,6 +508,89 @@ class Host:
         values = {"BOSS_STACK_REF": ref, "BOSS_STACK_HEAD": head}
         self.set_env(self.release_file, values)
         self.set_env(self.env_file, {"BOSS_STACK_HEAD": head})
+        # The next self-fix starts from this stack head, so the mirror must hold it. Best
+        # effort: a stale mirror is said on Govern › Self-fix, never a failed install.
+        try:
+            seed_mirror(self)
+        except (PhaseFailed, OSError) as error:
+            self.out(f"  (the self-fix source mirror was not refreshed: {error})")
+
+
+# ── what a fix may not change on this host ───────────────────────────────────────────────────
+
+#: The paths THIS HOST executes or that decide what it executes, refused whatever BOSS's API
+#: says: the API's own gate (the never-list) is no defence if the API or its database (which
+#: holds the ticket signing key) is compromised. The floor, always; plus every `never` glob of
+#: packages/specpack/policies/self_fix_paths.yaml AS THE RELEASE CHECKOUT HAS IT (never a copy
+#: from the API). A fix touching one is installed by a person, by hand, never by a ticket.
+HOST_EFFECT_FLOOR = (
+    "install.sh", "Makefile", "scripts/install/**", "scripts/sandbox/**", "scripts/*.sh",
+    "**/*compose*.yml", "**/*compose*.yaml", "**/Dockerfile*", "**/.dockerignore", ".boss/**",
+    ".env*", "packages/specpack/policies/**", ".git*", "**/.gitattributes", "**/.gitmodules",
+)
+POLICY_FILE = "packages/specpack/policies/self_fix_paths.yaml"
+
+
+def _glob_re(pattern: str) -> "re.Pattern[str]":
+    out, i = "", 0
+    while i < len(pattern):
+        if pattern.startswith("**/", i):
+            out, i = out + "(?:.*/)?", i + 3
+        elif pattern.startswith("**", i):
+            out, i = out + ".*", i + 2
+        elif pattern[i] == "*":
+            out, i = out + "[^/]*", i + 1
+        elif pattern[i] == "?":
+            out, i = out + "[^/]", i + 1
+        else:
+            out, i = out + re.escape(pattern[i]), i + 1
+    # Case-folded: on a case-insensitive filesystem (macOS) `dockerfile.community` IS
+    # Dockerfile.community once checked out.
+    return re.compile(out + r"\Z", re.I)
+
+
+def host_effect_globs(host: "Host") -> list[str]:
+    """The floor plus the release checkout's `never` path globs (hunk rules `path#group` are
+    engine code the API's gate judges; the host refuses the whole file only for its floor)."""
+    globs = list(HOST_EFFECT_FLOOR)
+    in_never = False
+    for line in _read_lines(host.dir / POLICY_FILE):
+        if re.match(r"^[A-Za-z_][\w-]*:", line):
+            in_never = line.startswith("never:")
+            continue
+        found = re.match(r"^\s+-\s+(\"[^\"]+\"|'[^']+'|[^\s#]+)", line) if in_never else None
+        if found:
+            rule = found.group(1).strip("\"'")
+            if "#" not in rule:
+                globs.append(rule)
+    return globs
+
+
+def host_effect_changes(host: "Host", base: str, head: str, *,
+                        cwd: Optional[Path] = None) -> list[str]:
+    """Every path `base..head` changes (a rename is its delete and its add) that this host
+    refuses, matched without regard to case. A tree holding two paths that differ only by case
+    is refused whole: checked out on a case-insensitive filesystem, one silently becomes the
+    other."""
+    where = cwd or host.dir
+    listing = host.git("diff", "-z", "--name-only", "--no-renames", f"{base}..{head}", cwd=where)
+    paths = {p for p in listing.split("\0") if p}
+    rules = [_glob_re(g) for g in host_effect_globs(host)]
+    touched = {p for p in paths if any(r.match(p) for r in rules)}
+    seen: dict[str, str] = {}
+    for path in host.git("ls-tree", "-r", "-z", "--name-only", head, cwd=where).split("\0"):
+        if not path:
+            continue
+        other = seen.setdefault(path.lower(), path)
+        if other != path:
+            touched.update({other, f"{path} (differs from {other} only by case)"})
+    return sorted(touched)
+
+
+def refusal_for(touched: list[str]) -> str:
+    shown = ", ".join(touched[:5]) + (f" and {len(touched) - 5} more" if len(touched) > 5 else "")
+    return (f"this fix changes what this host runs ({shown}); the self-installer never "
+            "installs that from a ticket: a person reviews and installs it by hand")
 
 
 # ── one ticket ───────────────────────────────────────────────────────────────────────────────
@@ -551,6 +647,9 @@ def install(host: Host, claims: dict[str, Any], bundle_b64: Optional[str]) -> st
         raise Refused(f"the stack moved: its head is {current[:12]}, the ticket's base is "
                       f"{base[:12]}; BOSS checks the fix again on the new stack")
     _fetch_fix(host, claims, bundle_b64)
+    touched = host_effect_changes(host, base, fix)
+    if touched:
+        raise Refused(refusal_for(touched))
     backup = os.environ.get("BOSS_SELF_FIX_BACKUP")
     argv = shlex.split(backup) if backup else ["bash", str(host.dir / "scripts/install/backup.sh"),
                                                "--dir", str(host.dir)]
@@ -575,8 +674,7 @@ def install(host: Host, claims: dict[str, Any], bundle_b64: Optional[str]) -> st
     try:
         host.keep_previous()
         wt = host.worktree()
-        code, said = host.build_images(compose_file=wt / "scripts/install/community-compose.yml",
-                                  project_dir=wt / "scripts/install",
+        code, said = host.build_images(project_dir=wt / "scripts/install",
                                   env={"BOSS_SOURCE_SHA": host.release_sha(),
                                        "BOSS_STACK_HEAD": fix})
         if code != 0:
@@ -709,8 +807,7 @@ def remove(host: Host, claims: dict[str, Any]) -> str:
     host.report(ticket_id, "apply", True, f"{ref} → {new_head[:12]} ({len(keep)} fix(es) stay)")
     try:
         host.keep_previous()
-        code, said = host.build_images(compose_file=wt / "scripts/install/community-compose.yml",
-                                  project_dir=wt / "scripts/install",
+        code, said = host.build_images(project_dir=wt / "scripts/install",
                                   env={"BOSS_SOURCE_SHA": release, "BOSS_STACK_HEAD": new_head})
         if code != 0:
             raise PhaseFailed("build", said[-600:])
@@ -853,22 +950,237 @@ def stack_fixes(host: Host, ref: str) -> list[dict[str, Any]]:
 
 # ── commands ─────────────────────────────────────────────────────────────────────────────────
 
-def cmd_seed(host: Host) -> int:
+#: Exit codes of `seed`: the mirror holds the running commit / the mirror could not be made
+#: (the record says why) / an archive install (no git, so no self-fix, said plainly) / self-fix
+#: is off (the record is written, nothing is mirrored).
+SEED_OK, SEED_FAILED, SEED_ARCHIVE, SEED_OFF = 0, 1, 3, 5
+ARCHIVE_WHY = ("BOSS was installed from an archive, not a git checkout, so it has no history of "
+               "its own code to fix itself from. To let BOSS fix itself, install it from a git "
+               "clone: git clone https://github.com/seanventures/boss.git && cd boss && "
+               "./install.sh")
+
+
+def _public_url(url: str) -> str:
+    """The checkout's origin without any credential in it: no userinfo (up to the last `@`
+    before the host, so a password holding `@` goes too), no query, no fragment. The twin of
+    engine/boss_engine/services/remote_url.py `public_remote` (this file cannot import the
+    engine); a test holds both to the same cases."""
+    text = re.split(r"[?#]", (url or "").strip(), maxsplit=1)[0]
+    found = re.match(r"^([a-z][a-z0-9+.-]*://)(.*)$", text, flags=re.I)
+    if not found:
+        return text
+    scheme, rest = found.groups()
+    slash = rest.find("/")
+    at = rest.rfind("@", 0, slash if slash >= 0 else len(rest))
+    return scheme + (rest[at + 1:] if at >= 0 else rest)
+
+
+def source_facts(host: Host) -> dict[str, Any]:
+    """WHERE BOSS WAS INSTALLED FROM (ENT-REC-54): this checkout's path, commit, whether its
+    tracked files are clean, and the release it is. Read on the host, every install and upgrade;
+    BOSS reads the record, never the checkout (the checkout is never mounted into a container)."""
+    facts: dict[str, Any] = {"path": str(host.dir), "kind": "archive", "commit": None,
+                             "dirty": False, "changed_files": 0, "release_tag": None,
+                             "release_ref": None, "branch": None, "upstream": None}
+    for line in _read_lines(host.release_file):
+        if line.startswith("BOSS_RELEASE_REF="):
+            facts["release_ref"] = line.split("=", 1)[1].strip() or None
+    top = host.git("rev-parse", "--show-toplevel", check=False)
+    if not top or Path(top).resolve() != host.dir:
+        facts["why"] = ARCHIVE_WHY
+        return facts
+    head = host.git("rev-parse", "--verify", "-q", "HEAD", check=False)
+    if not re.fullmatch(r"[0-9a-f]{40}", head):
+        facts["why"] = "the checkout has no commit yet"
+        return facts
+    facts.update(kind="git", commit=head)
+    # Tracked files only: an install-local untracked file (a CA, a note) changes nothing that
+    # runs, exactly as install.sh's build metadata reads it.
+    changed = [ln for ln in host.git("--no-optional-locks", "-c", "core.fsmonitor=false",
+                                     "status", "--porcelain", "--untracked-files=no",
+                                     check=False).splitlines() if ln]
+    facts.update(dirty=bool(changed), changed_files=len(changed))
+    facts["release_tag"] = host.git("describe", "--tags", "--exact-match", "HEAD",
+                                    check=False) or None
+    facts["branch"] = host.git("symbolic-ref", "-q", "--short", "HEAD", check=False) or None
+    origin = host.git("config", "--get", "remote.origin.url", check=False)
+    facts["upstream"] = _public_url(origin) if origin else None
+    if changed:
+        facts["why"] = (f"{len(changed)} tracked file(s) in {host.dir} have changes that are not "
+                        "committed, so the code running is not a commit BOSS can fix (a fix "
+                        "would be built without those changes). Commit or discard them, then "
+                        "run the installer again.")
+    return facts
+
+
+def _read_lines(path: Path) -> list[str]:
+    try:
+        return path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+
+
+def write_record(host: Host, facts: dict[str, Any]) -> Path:
+    """`.boss/selfsrc/install.json`, beside the mirror: mounted read-only into the API and the
+    worker with it, so BOSS can say where it is installed without the checkout being mounted.
+    Nothing in it is secret (the origin is stripped of credentials)."""
+    from datetime import datetime, timezone
+
+    target = host.dir / RECORD
+    target.parent.mkdir(parents=True, exist_ok=True)
+    body = {**facts, "recorded_at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+    tmp = target.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(body, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.chmod(tmp, 0o644)
+    tmp.replace(target)
+    return target
+
+
+#: What the mirror holds: the commit that runs, the branch it is on, the release tags, BOSS's
+#: own refs (the stack) and the self-fix branches. Never a stash, another local branch or a
+#: remote-tracking ref: the mirror is readable by BOSS's agents, and a person's unpushed work is
+#: not BOSS's source.
+INSTALL_REF = "refs/heads/boss/install"
+_KEPT = (re.compile(r"refs/tags/.+"), re.compile(r"refs/boss/.+"),
+         re.compile(r"refs/heads/boss/self-fix/.+"))
+
+
+def seed_mirror(host: Host) -> None:
     mirror = host.dir / MIRROR
-    if (mirror / "HEAD").exists():
-        host.git("--git-dir", str(mirror), "fetch", "-q", "--prune", "--tags", str(host.dir),
-                 "+refs/*:refs/*")
-    else:
+    if not (mirror / "HEAD").exists():
         mirror.parent.mkdir(parents=True, exist_ok=True)
-        host.git("clone", "-q", "--mirror", str(host.dir), str(mirror))
+        host.git("init", "-q", "--bare", str(mirror))
+    branch = host.git("symbolic-ref", "-q", "HEAD", check=False)
+    specs = [f"+HEAD:{INSTALL_REF}", "+refs/tags/*:refs/tags/*", "+refs/boss/*:refs/boss/*"]
+    keep = {INSTALL_REF}
+    if branch.startswith("refs/heads/") and not branch.startswith("refs/heads/boss/"):
+        specs.append(f"+{branch}:{branch}")
+        keep.add(branch)
+    host.git("--git-dir", str(mirror), "fetch", "-q", str(host.dir),
+             *specs)
+    dropped = 0
+    for ref in host.git("--git-dir", str(mirror), "for-each-ref", "--format=%(refname)"
+                        ).splitlines():
+        if ref and ref not in keep and not any(k.fullmatch(ref) for k in _KEPT):
+            host.git("--git-dir", str(mirror), "update-ref", "-d", ref, check=False)
+            dropped += 1
+    host.git("--git-dir", str(mirror), "symbolic-ref", "HEAD", INSTALL_REF)
+    if dropped:
+        # A ref that should never have been mirrored (a stash, an unpushed branch, from a mirror
+        # an older installer made with `clone --mirror`): its objects go too, not just its name.
+        host.git("--git-dir", str(mirror), "reflog", "expire", "--expire=now", "--all",
+                 check=False)
+        host.git("--git-dir", str(mirror), "gc", "-q", "--prune=now", check=False)
     # Read-only for BOSS's containers (mounted :ro); readable by their user.
     for path in [mirror, *mirror.rglob("*")]:
         try:
             path.chmod(path.stat().st_mode | 0o044 | (0o011 if path.is_dir() else 0))
         except OSError:
             pass
-    host.out(f"BOSS's own source is mirrored at {mirror} ({host.release_sha()[:12]}).")
-    return 0
+
+
+def _self_fix_off(host: Host) -> bool:
+    off = ("off", "0", "false", "no", "disabled", "disable", "none")
+    return any(v.strip().lower() in off for v in (os.environ.get("BOSS_SELF_FIX") or "",
+                                                   host.env_value("BOSS_SELF_FIX")))
+
+
+def cmd_seed(host: Host) -> int:
+    """Record where BOSS was installed from and mirror its source for self-fixes. Offline (a
+    local clone of the checkout), safe to run on every install and upgrade; the record is
+    written whatever happens, so BOSS can say why self-fix cannot work."""
+    facts = source_facts(host)
+    mirror = host.dir / MIRROR
+    facts["mirror"] = {"path": str(mirror), "seeded": False, "commit": None, "error": None}
+    if facts["kind"] != "git":
+        write_record(host, facts)
+        host.out(f"BOSS cannot fix itself here: {facts.get('why')}")
+        return SEED_ARCHIVE
+    if _self_fix_off(host):
+        facts["why"] = "self-fix is off on this install (BOSS_SELF_FIX), so its source is not mirrored"
+        write_record(host, facts)
+        host.out(f"BOSS's own source is not mirrored: {facts['why']}.")
+        return SEED_OFF
+    try:
+        seed_mirror(host)
+    except (PhaseFailed, OSError) as error:
+        facts["mirror"]["error"] = str(error)[-300:]
+        write_record(host, facts)
+        host.out(f"BOSS's own source could not be mirrored at {mirror}: {error}")
+        return SEED_FAILED
+    held = subprocess.run(["git", "--git-dir", str(mirror), "cat-file", "-e",
+                           f"{facts['commit']}^{{commit}}"], capture_output=True).returncode == 0
+    facts["mirror"].update(seeded=held, commit=facts["commit"] if held else None)
+    write_record(host, facts)
+    tag = f" {facts['release_tag']}" if facts.get("release_tag") else ""
+    host.out(f"BOSS's own source is mirrored at {mirror} ({facts['commit'][:12]}{tag}"
+             f"{', with uncommitted changes' if facts['dirty'] else ''}).")
+    return SEED_OK if held else SEED_FAILED
+
+
+#: A person said no to the host self-installer on this install (BOSS_SELF_FIX_INSTALLER=off at
+#: an install, or `watch --remove-service`): no installer run enrols it again; only `boss
+#: self-fix enable`, a person's own command, does.
+OPT_OUT = ".boss/self-installer.off"
+ENABLE_SKIPPED = 4
+
+
+def _key_state(host: Host) -> str:
+    """ok | none (no key file) | refused (BOSS answered 401/403: revoked, or another install's)
+    | unreachable (BOSS did not answer, or answered with an error: say so, never mint)."""
+    try:
+        host.key()
+    except Refused:
+        return "none"
+    try:
+        host.call("GET", "/v1/self-fixes/tickets")
+    except Refused as error:
+        return "refused" if re.search(r"BOSS answered 40[13]\b", str(error)) else "unreachable"
+    return "ok"
+
+
+def opt_out(host: Host) -> None:
+    path = host.dir / OPT_OUT
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("A person turned the host self-installer off here. `boss self-fix enable` "
+                    "turns it back on.\n", encoding="utf-8")
+
+
+def cmd_enable(host: Host, *, auto: bool = False) -> int:
+    """ENROL THIS HOST'S SELF-INSTALLER and run it as a service: its own key (minted inside the
+    API container, kept 0600, never printed; minting ends every earlier installer key) when it
+    has none or BOSS refuses it, then `watch` as a user service. What it may do is unchanged:
+    install the fixes a decision approved.
+
+    `--auto` is the installer's own run on a development install: it enrols only a host that was
+    never set up (no key file, no service file) and nobody opted out of; a removed service or a
+    key an Owner revoked is a person's choice it keeps."""
+    unit, _ = service_files(host)
+    if auto and ((host.dir / OPT_OUT).exists() or (host.dir / KEY_FILE).exists()
+                 or unit.exists()):
+        return ENABLE_SKIPPED
+    state = _key_state(host)
+    if state == "unreachable":
+        host.out(f"BOSS did not answer at {host.api_url()}; nothing was changed.")
+        return 1
+    if state != "ok":
+        code, said = host.compose("exec", "-T", "-u", "boss", "api", "python", "-m",
+                                  "boss_engine.identity.cli", "self-installer-key", "--quiet")
+        key = said.strip().splitlines()[-1].strip() if code == 0 and said.strip() else ""
+        if not key.startswith("boss_sak_"):
+            host.out("BOSS did not issue the self-installer a key (is the api service running?).")
+            return 1
+        path = host.dir / KEY_FILE
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(key + "\n")
+        os.chmod(tmp, 0o600)
+        tmp.replace(path)
+        host.out(f"This host's self-installer is enrolled (its key is in {path}).")
+    (host.dir / OPT_OUT).unlink(missing_ok=True)
+    return cmd_service(host, "install")
 
 
 def cmd_watch(host: Host, once: bool) -> int:
@@ -1017,6 +1329,7 @@ def cmd_service(host: Host, action: str) -> int:
                  f"({path}).")
         return 0 if code == 0 else 1
     if action == "remove":
+        opt_out(host)
         if darwin:
             _ctl(["launchctl", "bootout", f"gui/{uid}/{SERVICE_LABEL}"])
         else:
@@ -1129,8 +1442,7 @@ def cmd_restack(host: Host, to_ref: str, without: list[str]) -> int:
     host.git("update-ref", new_ref, head)
     host.keep_previous()
     wt = host.worktree()
-    code, said = host.build_images(compose_file=wt / "scripts/install/community-compose.yml",
-                              project_dir=wt / "scripts/install",
+    code, said = host.build_images(project_dir=wt / "scripts/install",
                               env={"BOSS_SOURCE_SHA": host.release_sha(), "BOSS_STACK_HEAD": head})
     if code == 0:
         code, said = host.compose("up", "-d", "--no-build", env={"BOSS_STACK_HEAD": head})
@@ -1169,6 +1481,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--api", default=os.environ.get("BOSS_SELF_FIX_API") or None)
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("seed")
+    enable = sub.add_parser("enable")
+    enable.add_argument("--auto", action="store_true",
+                        help="the installer's run: only a host never set up and not opted out")
+    sub.add_parser("opt-out")
     watch = sub.add_parser("watch")
     watch.add_argument("--once", action="store_true")
     mode = watch.add_mutually_exclusive_group()
@@ -1192,6 +1508,15 @@ def main(argv: Optional[list[str]] = None) -> int:
     host = Host(Path(args.dir), api=args.api)
     if args.cmd == "seed":
         return cmd_seed(host)
+    if args.cmd == "opt-out":
+        opt_out(host)
+        return 0
+    if args.cmd == "enable":
+        try:
+            return cmd_enable(host, auto=args.auto)
+        except Refused as error:
+            host.out(str(error))
+            return 1
     if args.cmd == "watch":
         if args.install_service or args.remove_service or args.service_status:
             try:
