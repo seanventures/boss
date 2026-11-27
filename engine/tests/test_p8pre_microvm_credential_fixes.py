@@ -172,7 +172,9 @@ def _upstream(tmp_path, monkeypatch) -> None:
 def test_inside_the_guest_after_the_clone_the_remote_holds_no_credential(tmp_path, monkeypatch):
     _upstream(tmp_path, monkeypatch)
     guest = _guest(monkeypatch, tmp_path)
-    guest._prepare_repo({"owner": "o", "repo": "r", "base_branch": "main", "token": TOKEN})
+    # the host always sends the token WITH the web origin it belongs to (BOSSAPP-1286)
+    guest._prepare_repo({"owner": "o", "repo": "r", "base_branch": "main", "token": TOKEN,
+                         "github_web": "https://github.com"})
     remotes = subprocess.run(["git", "-C", str(guest.WORK), "remote", "-v"], check=True,
                              capture_output=True, text=True).stdout
     assert "https://github.com/o/r.git" in remotes
@@ -387,3 +389,25 @@ def test_a_system_read_with_no_project_takes_no_reference_route():
             raise AssertionError("no query may run without a project")
 
     assert _system_ref_for(_NoDb(), ["K"], None) is None
+
+
+def test_the_guest_refuses_a_token_without_the_host_it_belongs_to(tmp_path, monkeypatch):
+    """BOSSAPP-1286: a token without github_web is never cloned from a default github.com."""
+    _upstream(tmp_path, monkeypatch)
+    guest = _guest(monkeypatch, tmp_path)
+    with pytest.raises(RuntimeError, match="without github_web"):
+        guest._prepare_repo({"owner": "o", "repo": "r", "base_branch": "main", "token": TOKEN})
+
+
+def test_the_legacy_body_carries_the_tokens_host_and_is_refused_without_it():
+    from boss_engine.services.sandbox_contract import build_submit_request, validate_submit_request
+
+    spec = {"owner": "o", "repo": "r", "engine": "openai", "token": "ghes-token",
+            "repo_host": "github", "github_web": "https://ghe.example"}
+    body = build_submit_request(spec, "default", task_id="crun_l", legacy=True)
+    assert body["repo"]["github_web"] == "https://ghe.example" and body["repo"]["host"] == "github"
+    assert "repo.github_web is required with git_token" not in \
+        validate_submit_request(body, allow_legacy=True, strict_secrets=False)
+    bare = build_submit_request({**spec, "github_web": ""}, "default", task_id="crun_l", legacy=True)
+    assert "repo.github_web is required with git_token" in \
+        validate_submit_request(bare, allow_legacy=True, strict_secrets=False)

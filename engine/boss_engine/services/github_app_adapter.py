@@ -281,9 +281,9 @@ class GitHubAppAdapter:
         if not inst:
             return None
         try:
+            self._check_jwt_host()            # before the JWT is put in any header
             headers = {"Accept": "application/vnd.github+json", "Authorization": f"Bearer {self._app_jwt()}",
                        "X-GitHub-Api-Version": "2022-11-28"}
-            self._check_jwt_host()
             with httpx.Client(timeout=15) as client:
                 resp = client.get(f"{self.api_base_url}/app/installations/{inst}", headers=headers)
             if resp.status_code != 200:
@@ -327,12 +327,12 @@ class GitHubAppAdapter:
         if permissions:
             body["permissions"] = permissions
 
+        self._check_jwt_host()                # before the JWT is put in any header
         headers = {
             "Accept": "application/vnd.github+json",
             "Authorization": f"Bearer {self._app_jwt()}",
             "X-GitHub-Api-Version": "2022-11-28",
         }
-        self._check_jwt_host()
         url = f"{self.api_base_url}/app/installations/{inst}/access_tokens"
         with httpx.Client(timeout=20) as client:
             resp = client.post(url, headers=headers, json=body or None)

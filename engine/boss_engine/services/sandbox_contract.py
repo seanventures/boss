@@ -291,6 +291,11 @@ def _common(spec: dict[str, Any], tenant_id: Optional[str], tid: str, engine: st
             "owner": spec.get("owner"), "name": spec.get("repo"),
             "base_branch": spec.get("base_branch") or "main",
             "work_branch": spec.get("work_branch") or f"boss/code/{tid}",
+            # WHICH GIT HOST, and the web origin of the host the git token belongs to
+            # (BOSSAPP-1286): both lanes carry them (additively, when known), so a GHES token is
+            # cloned from GHES and the guest never falls back to github.com for a token.
+            **({"host": spec["repo_host"]} if spec.get("repo_host") else {}),
+            **({"github_web": spec["github_web"]} if spec.get("github_web") else {}),
         },
         "instructions": spec.get("instructions", ""),
         "acceptance_criteria": spec.get("acceptance_criteria", []),
@@ -401,6 +406,12 @@ def validate_submit_request(body: dict[str, Any], *, strict_secrets: bool = True
             if not isinstance(body.get("engine_env"), dict):
                 problems.append("engine_env must be an object")
             problems += engine_env_problems(body.get("engine"), body.get("engine_env"))
+            # A git token without the web origin it belongs to would be cloned from a default
+            # host (BOSSAPP-1286): refused, never defaulted. Mirrors the Go contract.
+            repo = body.get("repo") or {}
+            if body.get("git_token") and str(repo.get("host") or "github") == "github" \
+                    and not str(repo.get("github_web") or "").strip():
+                problems.append("repo.github_web is required with git_token")
     elif version != CONTRACT_VERSION:
         problems.append(f"contract_version must be {CONTRACT_VERSION}")
     else:

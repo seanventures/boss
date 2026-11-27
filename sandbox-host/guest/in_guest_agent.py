@@ -96,7 +96,13 @@ def _prepare_repo(spec):
         host = (spec.get("repo_host") or "github").lower()
         # The GitHub web origin the token belongs to (spec.github_web: github.com, or a GitHub
         # Enterprise Server origin); the host always sends it with the token (BOSSAPP-1286).
-        web = str(spec.get("github_web") or "https://github.com").rstrip("/")
+        # A token WITHOUT it is refused — never sent to a default host. An anonymous clone
+        # (no token) may still read github.com.
+        web = str(spec.get("github_web") or "").rstrip("/")
+        if host != "bitbucket" and token and not web:
+            raise RuntimeError("clone refused: a git token came without github_web, the host it "
+                               "belongs to; the guest never sends a token to a default host")
+        web = web or "https://github.com"
         scheme, _, web_host = web.partition("://")
         clean = (f"https://bitbucket.org/{owner}/{repo}.git" if host == "bitbucket"
                  else f"{web}/{owner}/{repo}.git")

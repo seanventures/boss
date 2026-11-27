@@ -185,12 +185,19 @@ import ast  # noqa: E402 — the static guard below
 import re  # noqa: E402
 
 #: Places that build a credential header and cannot call check_send themselves (named, with why).
+_GUEST_WHY = ("the dependency-free guest clones with spec.token from spec.github_web; the HOST "
+              "checked that pair (repo_host.guest_github_web) before building the spec, and the "
+              "guest refuses a token that came without github_web")
 _NOT_SEND_POINTS = {
-    "sandbox-host/guest/in_guest_agent.py:_prepare_repo":
-        "the dependency-free guest clones with spec.token from spec.github_web; the HOST checked "
-        "that pair (repo_host.guest_github_web) before building the spec",
+    "sandbox-host/guest/in_guest_agent.py:_prepare_repo": _GUEST_WHY,
+    # the sandbox-service's copy of the same guest (kept byte-identical, tested)
+    "services/sandbox-service/internal/backend/guest/in_guest_agent.py:_prepare_repo": _GUEST_WHY,
 }
-_ROOTS = ("engine/boss_engine", "apps/api/app", "apps/egress", "apps/worker", "sandbox-host")
+_ROOTS = ("engine/boss_engine", "apps/api/app", "apps/egress", "apps/worker", "sandbox-host",
+          "services/sandbox-service")
+#: A no-argument checker that judges ONE specific credential itself, and the expression it covers.
+#: A bare check_send() (or any other checker called without its credential) covers nothing.
+_SELF_CHECKS = {"_check_jwt_host": "self._app_jwt()"}
 
 GH_MARKER = re.compile(r"vnd\.github|X-GitHub-Api-Version|x-access-token|api\.github|github_urls|"
                        r"GH_TOKEN|GITHUB_TOKEN|github\.com|GitHub", re.I)
@@ -306,7 +313,14 @@ def _checks(fn):
     nodes = list(ast.walk(fn))
     for n in nodes:
         if isinstance(n, ast.Call) and _fn_name(n) in CHECKS:
-            key = _src(n.args[0]) if n.args else "*"
+            if n.args:
+                key = _src(n.args[0])
+            elif any(k.arg == "token" for k in n.keywords):
+                key = _src(next(k.value for k in n.keywords if k.arg == "token"))
+            elif _fn_name(n) in _SELF_CHECKS:
+                key = _SELF_CHECKS[_fn_name(n)]
+            else:
+                continue                      # a bare check covers no credential
             checked.setdefault(key, []).append(n.lineno)
         if isinstance(n, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
             targets = n.targets if isinstance(n, ast.Assign) else [n.target]
@@ -330,8 +344,6 @@ def _checks(fn):
 
 
 def _covered(expr, line, checked, assigned):
-    if "*" in checked:
-        return True
     for cline in checked.get(expr, []):
         # the check must come before the use, with no reassignment in between
         if cline <= line and not any(cline < a <= line for a in assigned.get(expr, [])
@@ -362,7 +374,7 @@ def scan(files):
     """files: [(rel, src)]. Returns offenders. A function that builds a credential header from
     one of its PARAMETERS without checking it is a HELPER: every call site must check the
     argument it passes instead (the check moves to where the token is known)."""
-    helpers = {}        # name -> param index
+    helpers = {}        # name -> {(param index, param name)}
     pending = []
     parsed = []
     for rel, src in files:
@@ -385,7 +397,8 @@ def scan(files):
                 if _covered(expr, line, checked, assigned):
                     continue
                 if expr in params and expr not in assigned:
-                    helpers.setdefault(fn.name, set()).add(params.index(expr) - (1 if params and params[0] in ("self", "cls") else 0))
+                    idx = params.index(expr) - (1 if params and params[0] in ("self", "cls") else 0)
+                    helpers.setdefault(fn.name, set()).add((idx, expr))
                     continue
                 pending.append(f"{rel}:{line} {fn.name} {expr}")
     for rel, src, tree in parsed:
@@ -393,12 +406,14 @@ def scan(files):
             checked, assigned = _checks(fn)
             for n in ast.walk(_own_nodes(fn)):
                 if isinstance(n, ast.Call) and _fn_name(n) in helpers:
-                    for idx in helpers[_fn_name(n)]:
-                        if 0 <= idx < len(n.args):
-                            expr = _src(n.args[idx])
-                            if not isinstance(n.args[idx], ast.Constant) and \
-                                    not _covered(expr, n.lineno, checked, assigned):
-                                pending.append(f"{rel}:{n.lineno} {fn.name} {expr} (via {_fn_name(n)})")
+                    for idx, pname in helpers[_fn_name(n)]:
+                        passed = n.args[idx] if 0 <= idx < len(n.args) else next(
+                            (k.value for k in n.keywords if k.arg == pname), None)
+                        if passed is None or isinstance(passed, ast.Constant):
+                            continue
+                        expr = _src(passed)
+                        if not _covered(expr, n.lineno, checked, assigned):
+                            pending.append(f"{rel}:{n.lineno} {fn.name} {expr} (via {_fn_name(n)})")
     return sorted(set(pending))
 
 
@@ -463,6 +478,12 @@ _GH_ACCEPT = '"Accept": "application/vnd.github+json"'
     '    return {"Authorization": f"Bearer {t}", ' + _GH_ACCEPT + '}\n',
     'def f(src, again, check_send):\n    t = src()\n    check_send(t, "u")\n    t = again()\n'
     '    return {"Authorization": f"Bearer {t}", ' + _GH_ACCEPT + '}\n',
+    # a header helper fed by KEYWORD: the caller must still check what it passes
+    'def h(*, token):\n    return {"Authorization": f"Bearer {token}", ' + _GH_ACCEPT + '}\n'
+    'def c(src):\n    return h(token=src())\n',
+    # a bare check_send() names no credential, so it covers none
+    'def f(src, check_send):\n    t = src()\n    check_send()\n'
+    '    return {"Authorization": f"Bearer {t}", ' + _GH_ACCEPT + '}\n',
 ])
 def test_the_static_guard_sees_each_way_a_credential_is_built(code):
     assert _unchecked_in(code, "engine/boss_engine/x.py"), code
@@ -476,6 +497,9 @@ def test_the_static_guard_sees_each_way_a_credential_is_built(code):
     # a helper whose caller checks what it passes
     'def h(t):\n    return {"Authorization": f"Bearer {t}", ' + _GH_ACCEPT + '}\n'
     'def c(src, check_send):\n    t = src()\n    check_send(t, "u")\n    return h(t)\n',
+    # a keyword-fed helper whose caller checks what it passes
+    'def h(*, token):\n    return {"Authorization": f"Bearer {token}", ' + _GH_ACCEPT + '}\n'
+    'def c(src, check_send):\n    t = src()\n    check_send(t, "u")\n    return h(token=t)\n',
     # a non-GitHub bearer (no GitHub marker) is not this guard's business
     'def f(key):\n    k = key()\n    return {"Authorization": f"Bearer {k}"}\n',
     # an ssh user is not a token
@@ -533,3 +557,17 @@ def test_the_micro_vm_guest_clones_from_the_tokens_own_host(monkeypatch):
     monkeypatch.setenv(G.STRICT_ENV, "1")
     with pytest.raises(G.UntaggedGitHubCredential):                                     # untagged
         guest_github_web("raw-token", "https://github.com")
+
+
+def test_the_two_guest_copies_are_identical():
+    """The guest ships twice (sandbox-host and the sandbox-service's backend); a fix to one that
+    misses the other is how a token would reach a default host. They must be byte-identical."""
+    a = (_ROOT / "sandbox-host/guest/in_guest_agent.py").read_bytes()
+    b = (_ROOT / "services/sandbox-service/internal/backend/guest/in_guest_agent.py").read_bytes()
+    assert a == b
+
+
+def test_the_guest_refuses_a_token_without_its_host():
+    src = (_ROOT / "sandbox-host/guest/in_guest_agent.py").read_text()
+    assert 'or "https://github.com").rstrip' not in src          # no default host for a token
+    assert "clone refused: a git token came without github_web" in src

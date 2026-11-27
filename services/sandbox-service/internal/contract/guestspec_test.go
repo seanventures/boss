@@ -137,3 +137,35 @@ func TestGuestSpecStagesOnlyTheSelectedEnginesCredential(t *testing.T) {
 		t.Fatal("openai guest must keep its own key")
 	}
 }
+
+// BOSSAPP-1286: the legacy lane carries the token's host to the guest, and a git token
+// without github_web is refused instead of defaulting to github.com.
+func TestLegacyTokenCarriesItsHostOrIsRefused(t *testing.T) {
+	opts := DefaultOptions
+	opts.AllowLegacy = true
+	opts.StrictSecrets = false
+	base := SubmitRequest{ContractVersion: LegacyVersion, TaskID: "crun_ghes", Engine: "openai",
+		Repo: RepoSpec{Owner: "o", Name: "r"}, GitToken: "ghes-token-not-printed",
+		EngineEnv: map[string]string{}}
+	found := false
+	for _, p := range ValidateSubmitWith(base, opts) {
+		if p == "repo.github_web is required with git_token" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("a legacy git token without github_web must be refused")
+	}
+	withHost := base
+	withHost.Repo.GithubWeb = "https://ghe.example"
+	withHost.Repo.Host = "github"
+	for _, p := range ValidateSubmitWith(withHost, opts) {
+		if p == "repo.github_web is required with git_token" {
+			t.Fatalf("a token with its host must pass: %v", p)
+		}
+	}
+	spec := GuestSpec(withHost)
+	if spec["github_web"] != "https://ghe.example" || spec["repo_host"] != "github" {
+		t.Fatalf("the guest spec must carry the token's host: %v %v", spec["github_web"], spec["repo_host"])
+	}
+}
