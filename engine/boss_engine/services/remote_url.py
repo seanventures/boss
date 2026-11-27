@@ -4,7 +4,8 @@ A remote can carry a credential three ways: userinfo (`https://user:token@host/�
 unencoded password may itself hold `@`), a query (`?private_token=…`) and a fragment
 (`#token=…`). All three go. The host installer (scripts/install/self_fix_installer.py, which runs
 with python3 alone and cannot import the engine) keeps a twin, `_public_url`, held to the same
-cases by engine/tests/test_a_remote_url_never_carries_a_credential.py.
+cases by engine/tests/test_the_installer_records_where_boss_is_installed.py
+(`test_an_origin_never_carries_a_credential_on_either_side`).
 """
 from __future__ import annotations
 

@@ -544,7 +544,9 @@ def _glob_re(pattern: str) -> "re.Pattern[str]":
             out, i = out + "[^/]", i + 1
         else:
             out, i = out + re.escape(pattern[i]), i + 1
-    return re.compile(out + r"\Z")
+    # Case-folded: on a case-insensitive filesystem (macOS) `dockerfile.community` IS
+    # Dockerfile.community once checked out.
+    return re.compile(out + r"\Z", re.I)
 
 
 def host_effect_globs(host: "Host") -> list[str]:
@@ -566,12 +568,23 @@ def host_effect_globs(host: "Host") -> list[str]:
 
 def host_effect_changes(host: "Host", base: str, head: str, *,
                         cwd: Optional[Path] = None) -> list[str]:
-    """Every path `base..head` changes (renames count as both) that this host refuses."""
-    listing = host.git("diff", "--name-status", "--no-renames", f"{base}..{head}",
-                       cwd=cwd or host.dir)
-    paths = {part for line in listing.splitlines() for part in line.split("\t")[1:] if part}
+    """Every path `base..head` changes (a rename is its delete and its add) that this host
+    refuses, matched without regard to case. A tree holding two paths that differ only by case
+    is refused whole: checked out on a case-insensitive filesystem, one silently becomes the
+    other."""
+    where = cwd or host.dir
+    listing = host.git("diff", "-z", "--name-only", "--no-renames", f"{base}..{head}", cwd=where)
+    paths = {p for p in listing.split("\0") if p}
     rules = [_glob_re(g) for g in host_effect_globs(host)]
-    return sorted(p for p in paths if any(r.match(p) for r in rules))
+    touched = {p for p in paths if any(r.match(p) for r in rules)}
+    seen: dict[str, str] = {}
+    for path in host.git("ls-tree", "-r", "-z", "--name-only", head, cwd=where).split("\0"):
+        if not path:
+            continue
+        other = seen.setdefault(path.lower(), path)
+        if other != path:
+            touched.update({other, f"{path} (differs from {other} only by case)"})
+    return sorted(touched)
 
 
 def refusal_for(touched: list[str]) -> str:

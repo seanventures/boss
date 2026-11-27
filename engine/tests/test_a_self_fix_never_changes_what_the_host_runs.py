@@ -57,8 +57,11 @@ def release(tmp_path):
     return co
 
 
-def _fix(co: Path, edits: dict[str, str], tmp: Path) -> tuple[dict, str]:
-    """A self-fix commit on the release, as BOSS would send it: claims and a bundle."""
+def _fix(co: Path, edits: dict[str, str], tmp: Path, *, index_only: dict[str, str] | None = None
+         ) -> tuple[dict, str]:
+    """A self-fix commit on the release, as BOSS would send it: claims and a bundle.
+    `index_only` paths go straight into git's index (a path a case-insensitive filesystem
+    could not hold beside another)."""
     base = _git(co, "rev-parse", "HEAD")
     work = tmp / "work"
     _git(tmp, "clone", "-q", str(co), str(work))
@@ -67,7 +70,12 @@ def _fix(co: Path, edits: dict[str, str], tmp: Path) -> tuple[dict, str]:
         (work / rel).write_text(text)
     branch = "boss/self-fix/sfx_abc123-fix"
     _git(work, "checkout", "-q", "-b", branch)
-    _git(work, "add", "-A", "--force", *edits)
+    if edits:
+        _git(work, "add", "-A", "--force", *edits)
+    for rel, text in (index_only or {}).items():
+        blob = subprocess.run(["git", "hash-object", "-w", "--stdin"], cwd=work, input=text,
+                              capture_output=True, text=True, check=True).stdout.strip()
+        _git(work, "update-index", "--add", "--cacheinfo", f"100644,{blob},{rel}")
     _git(work, "commit", "-qm", "fix")
     fix = _git(work, "rev-parse", "HEAD")
     bundle = tmp / "fix.bundle"
@@ -99,7 +107,10 @@ def _host(module, co):
 @pytest.mark.parametrize("path", ["scripts/install/build_images.sh",
                                   "scripts/install/community-compose.yml",
                                   "apps/api/Dockerfile", "install.sh", ".boss/self-installer.key",
-                                  "db/schema.sql"])
+                                  "db/schema.sql",
+                                  # case-insensitive filesystems (macOS): the same files
+                                  "dockerfile.community", "Scripts/install/db-image/dockerfile",
+                                  ".Dockerignore"])
 def test_a_ticket_that_changes_what_the_host_runs_is_refused_before_anything(
         release, tmp_path, watched, path):
     module = _module()
@@ -157,3 +168,13 @@ def test_a_stack_that_touches_a_host_path_never_builds(release, tmp_path, monkey
     monkeypatch.setattr(host, "run", lambda argv, **k: ran.append(argv) or (0, ""))
     code, said = host.build_images(project_dir=host.worktree() / "scripts/install")
     assert code != 0 and "changes what this host runs" in said and not ran
+
+
+def test_a_tree_with_two_paths_differing_only_by_case_is_refused(release, tmp_path, watched):
+    """`Engine/widget.py` beside `engine/widget.py`: on macOS one overwrites the other at
+    checkout, so what the gates read is not what builds."""
+    module = _module()
+    claims, bundle = _fix(release, {}, tmp_path, index_only={"Engine/widget.py": "print(1)\n"})
+    with pytest.raises(module.Refused, match="only by case"):
+        module.install(_host(module, release), claims, bundle)
+    assert not watched.exists()
