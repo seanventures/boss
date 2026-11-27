@@ -861,11 +861,12 @@ def check_reason(result: dict[str, Any]) -> Optional[str]:
     from .model_router.headroom import windows_from_limit_message
     from .redaction import redact_secrets
 
-    lines = [line.strip() for line in said.splitlines() if line.strip()]
+    # Redact the WHOLE text first: a credential split across lines must not survive in one.
+    lines = [line.strip() for line in redact_secrets(said).splitlines() if line.strip()]
     # The line that names the limit, when one does: a CLI prints banners around it.
     said = next((line for line in lines if windows_from_limit_message(line)),
                 lines[0] if lines else "")
-    said = " ".join(redact_secrets(said).split())
+    said = " ".join(said.split())
     if len(said) > REASON_CHARS:
         said = said[:REASON_CHARS - 1].rstrip() + "\u2026"
     return said or None
@@ -918,6 +919,15 @@ def _record_model_check(connection: Connection, project_id: str, source_id: str,
                     "detail": reason or "Plan limit reached during a setup check."}
     elif last["ok"]:
         capacity = {"exhausted": False, "credential_state": "ok"}
+        # A GREEN CHECK REOPENS A LIMIT a failed call recorded (typed_decision_spend's
+        # capacity_state): the source just answered, so routing may use it again. A person's
+        # own blocked / disabled / suspended state is left alone.
+        current = connection.execute(
+            text("SELECT observed_capacity->>'capacity_state' FROM entitlement_sources "
+                 "WHERE project_id = :p AND source_id = :s"),
+            {"p": project_id, "s": source_id}).scalar()
+        if current in ("rate_limited", "unavailable", "exhausted"):
+            capacity["capacity_state"] = "available"
     elif last["state"] in ("login_expired", "key_rejected"):
         capacity = {"credential_state": "rejected"}
     else:

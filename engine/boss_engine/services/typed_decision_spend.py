@@ -15,6 +15,7 @@ import json
 import math
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from threading import Event
 from typing import Any, Callable, Optional
 
@@ -183,19 +184,28 @@ def capacity_after_failure(error: BaseException) -> dict:
     only Claude subscription out of routing until something marked it available again.
     """
     text_ = str(error).lower()
-    # THE ONE LIMIT DETECTOR (model_router.headroom): a per-minute rate limit is rate_limited;
-    # a closed plan window ("You've hit your weekly limit · resets …", which the keyword list
-    # below read as "available") or a spend/credit limit takes the source out until it reopens.
-    from .model_router.headroom import MINUTE, windows_from_limit_message
+    now = datetime.now(timezone.utc)
+    # THE ONE LIMIT DETECTOR (model_router.headroom), STRICT: an agent's reply or a tool's
+    # output can quote "Weekly limit reached" without any limit being hit, so a plan window
+    # counts only when the sentence named its reset. A per-minute rate limit is rate_limited;
+    # a closed plan window or a spend/credit limit takes the source out — UNTIL `reset_at`:
+    # nothing routed to a refused source ever succeeds to clear it, so the refusal must lapse
+    # by itself (entitlements._capacity_policy_denial) or a passing Setup check clears it.
+    from .model_router.headroom import LIMIT_PROBE_S, MINUTE, limit_verdict
 
-    windows = windows_from_limit_message(str(error))
-    if windows:
-        return {"capacity_state": "rate_limited" if set(windows) == {MINUTE} else "unavailable"}
+    verdict = limit_verdict(str(error), now, strict=True)
+    if verdict is not None:
+        state = "rate_limited" if verdict.windows == (MINUTE,) else "unavailable"
+        reset = verdict.retry_at or now + timedelta(
+            seconds=60 if state == "rate_limited" else LIMIT_PROBE_S)
+        return {"capacity_state": state, "reset_at": reset.isoformat()}
     if any(term in text_ for term in ("rate limit", "rate_limit", " 429", "too many requests")):
-        return {"capacity_state": "rate_limited"}
-    if any(term in text_ for term in ("quota", "usage limit", "limit reached", "overloaded",
-                                      " 529", "exhausted")):
-        return {"capacity_state": "unavailable"}
+        return {"capacity_state": "rate_limited",
+                "reset_at": (now + timedelta(seconds=60)).isoformat()}
+    if any(term in text_ for term in ("quota", "usage limit", "overloaded", " 529",
+                                      "exhausted")):
+        return {"capacity_state": "unavailable",
+                "reset_at": (now + timedelta(seconds=LIMIT_PROBE_S)).isoformat()}
     return {"capacity_state": "available"}
 
 

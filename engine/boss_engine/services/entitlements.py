@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime, timezone
 from importlib import import_module
 from pathlib import Path
 from typing import Any, Optional
@@ -60,6 +61,9 @@ class EntitlementBrokerService:
         "suspended",
         "unavailable",
     }
+    #: Capacity states a clock lifts (a limit window): they lapse at their recorded reset. A
+    #: blocked, disabled or suspended source stays out until a person changes it.
+    LAPSING_CAPACITY_STATES = {"rate_limited", "unavailable", "exhausted"}
     GATEWAY_SOURCE_KINDS = {"managed_cloud_model_gateway"}
 
     def __init__(self, settings: Settings):
@@ -519,9 +523,32 @@ class EntitlementBrokerService:
             return "official_oauth_connection_not_connected"
         return None
 
+    @staticmethod
+    def _capacity_reset_passed(observed_capacity: dict[str, Any],
+                               now: Optional[datetime] = None) -> bool:
+        """Has the reset a limit was recorded with (reset_at / rate_limit_reset_at / retry_at)
+        passed? False when none was recorded."""
+        for key in ("reset_at", "rate_limit_reset_at", "retry_at"):
+            value = observed_capacity.get(key)
+            if not value:
+                continue
+            try:
+                when = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=timezone.utc)
+            return when <= (now or datetime.now(timezone.utc))
+        return False
+
     def _capacity_policy_denial(self, source: dict[str, Any]) -> Optional[str]:
         observed_capacity = source.get("observed_capacity") or {}
         capacity_state = str(observed_capacity.get("capacity_state") or "").strip()
+        if capacity_state in self.LAPSING_CAPACITY_STATES and self._capacity_reset_passed(
+                observed_capacity):
+            # A LIMIT LAPSES AT ITS RESET. Only a routed success used to clear it, and routing
+            # is exactly what this refuses: a weekly limit took the source out for good.
+            capacity_state = ""
         if capacity_state in self.CAPACITY_DENIAL_STATES:
             if capacity_state == "rate_limited":
                 return "capacity_rate_limited"
