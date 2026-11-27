@@ -65,7 +65,10 @@ def world():
 
 def _token_for_repository(monkeypatch):
     monkeypatch.setattr(gc.GitHubConnectionService, "token_for_repository",
-                        lambda self, db, *, project_id, owner, repo: GHES_TOKEN)
+                        # the real source tags the token with where its secret lives (this
+                        # connection's own stored secret: the GHES host); egress keeps that tag
+                        lambda self, db, *, project_id, owner, repo:
+                        github_urls.tag(GHES_TOKEN, GHES_API))
 
 
 def test_the_bound_connection_token_is_tagged_with_that_connections_host(world, monkeypatch):

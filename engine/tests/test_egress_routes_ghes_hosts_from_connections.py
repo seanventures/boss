@@ -65,7 +65,9 @@ def _proxy_world(monkeypatch, *, bound_base: str, token: str = "ghes-conn-token"
     monkeypatch.setattr(proxy, "bitbucket_repos", lambda claims, db: [])
     monkeypatch.setattr(gc, "api_base_for_repository", lambda db, p, o, r: bound_base)
     monkeypatch.setattr(gc.GitHubConnectionService, "token_for_repository",
-                        lambda self, db, *, project_id, owner, repo: token)
+                        # the real source tags the token by where its secret lives (BOSSAPP-1286)
+                        lambda self, db, *, project_id, owner, repo:
+                        github_urls.tag(token, bound_base))
 
     def no_app(self, claims, db):
         raise AssertionError("the install App's token was minted for a GHES connection host")
