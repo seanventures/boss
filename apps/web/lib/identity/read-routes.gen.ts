@@ -120,6 +120,7 @@ export const READ_ROUTES: ReadonlyArray<readonly [string, Permission]> = [
   ["architecture-reviews/{}", "workflow:read"],
   ["artifacts", "artifact:read"],
   ["artifacts/{}", "artifact:read"],
+  ["artifacts/{}/download", "artifact:read"],
   ["artifacts/{}/media", "artifact:read"],
   ["artifacts/{}/pdf", "artifact:read"],
   ["assurance/cases", "assurance:read"],
