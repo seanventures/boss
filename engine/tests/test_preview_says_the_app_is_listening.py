@@ -175,3 +175,9 @@ def test_a_logged_port_that_serves_is_returned_only_after_the_assigned_port_stay
             other.shutdown()
     finally:
         server.shutdown()
+
+
+def test_a_preview_on_a_port_of_its_own_says_a_deploy_will_fail():
+    note = ps.wrong_port_note(5999, 41234)
+    assert note.startswith("the app is listening on 5999, not $PORT (41234)") and "deploy" in note
+    assert ps.wrong_port_note(41234, 41234) is None

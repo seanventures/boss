@@ -328,7 +328,7 @@ def test_a_credential_marked_required_in_env_example_asks_a_person_and_is_never_
     record = ps.prove_app_serves(root, BUILT, timeout=20)
     assert record["ok"] is False and record["needs_secret"] == ["PAYMENTS_API_KEY"], record
     assert record["error"].startswith("the app needs a secret: PAYMENTS_API_KEY (declared by "
-                                      ".env.example (marked required))")
+                                      "helpdesk/.env.example, which marks it required)")
     assert _seen(seen) == []                       # never started to crash on it
     # The same path a template's declaration takes: the gate holds it for a PERSON.
     assert gov.classify_gate_faults(failing=["app_serves"], evidence={"app_serves": record}) == {
@@ -341,6 +341,13 @@ def test_a_credential_marked_required_in_env_example_asks_a_person_and_is_never_
     "PAYMENTS_API_KEY=\n",
     "# Required.\nPAGE_SIZE=\n",                         # required, but not a credential
     "# Required.\n\nPAYMENTS_API_KEY=\n",               # the blank line ends the comment block
+    "# isn't required for local runs\nPAYMENTS_API_KEY=\n",
+    "# no longer required\nPAYMENTS_API_KEY=\n",
+    "# required only in production\nPAYMENTS_API_KEY=\n",
+    "PAYMENTS_API_KEY=  # required for deploy\n",
+    "# Required.\nFLASK_SECRET_KEY=\n",                 # the app's own signing key: BOSS mints it
+    "# Required.\nGITHUB_TOKEN=\n",                     # never handed to code a build wrote
+    "# Required.\nAWS_SECRET_ACCESS_KEY=\n",
 ])
 def test_only_a_credential_the_file_marks_required_is_a_persons(example):
     needs = run_env.needs_from_env_example(example)
@@ -364,13 +371,64 @@ def test_a_required_mark_outranks_the_deploys_secret(tmp_path):
 
 
 @pytest.mark.parametrize("name,person", [
-    ("PAYMENTS_API_KEY", True), ("STRIPE_SECRET_KEY", True), ("GITHUB_CLIENT_SECRET", True),
-    ("SLACK_BOT_TOKEN", True), ("SMTP_PASSWORD", True),
+    ("PAYMENTS_API_KEY", True), ("STRIPE_SECRET_KEY", True), ("GOOGLE_CLIENT_SECRET", True),
+    ("SLACK_BOT_TOKEN", True), ("SMTP_PASSWORD", True), ("TWILIO_AUTH_TOKEN", True),
     ("SESSION_SECRET", False), ("JWT_SECRET", False), ("DEMO_PASSWORD", False),
+    ("FLASK_SECRET_KEY", False), ("DJANGO_SECRET_KEY", False), ("APP_SECRET", False),
+    ("WEBHOOK_SECRET", False), ("JWT_PRIVATE_KEY", False), ("REQUEST_SIGNING_KEY", False),
+    ("ADMIN_TOKEN", False), ("INTERNAL_API_KEY", False),
+    ("GITHUB_TOKEN", False), ("GITHUB_CLIENT_SECRET", False), ("GH_TOKEN", False),
+    ("AWS_SECRET_ACCESS_KEY", False), ("AZURE_CLIENT_SECRET", False), ("GCP_API_KEY", False),
+    ("BOSS_API_KEY", False), ("BOSS_ANYTHING_TOKEN", False), ("OPS_TOKEN", False),
     ("POSTGRES_PASSWORD", False), ("DATABASE_URL", False), ("PAGE_SIZE", False), ("PORT", False),
 ])
 def test_who_can_supply_a_name(name, person):
     assert run_env.is_person_only_name(name) is person
+
+
+@pytest.mark.parametrize("name,provider", [
+    ("PAYMENTS_API_KEY", True), ("STRIPE_SECRET_KEY", True), ("SLACK_BOT_TOKEN", True),
+    ("GOOGLE_CLIENT_SECRET", True), ("SMTP_PASSWORD", False), ("HUBSPOT_TOKEN", False),
+])
+def test_only_a_providers_credential_is_asked_for_from_a_start_error(name, provider):
+    assert run_env.is_provider_credential(name) is provider
+
+
+@pytest.mark.parametrize("log,named", [
+    ("Error: PAYMENTS_API_KEY must be set", "PAYMENTS_API_KEY"),
+    ("Error: Missing required environment variable: STRIPE_SECRET_KEY", "STRIPE_SECRET_KEY"),
+    ("panic: SLACK_BOT_TOKEN is not set\ngoroutine 1 [running]:\nmain.main()\n"
+     "\t/app/main.go:9 +0x1d\nexit status 2", "SLACK_BOT_TOKEN"),
+    # A warning it logged and survived, then an unrelated crash: the coder's, never a card.
+    ("warn: STRIPE_SECRET_KEY missing, payments disabled\n"
+     "TypeError: Cannot read properties of undefined (reading 'map')\n    at render (app.js:3)", None),
+    # Named on the death line, but not as missing.
+    ("Error: STRIPE_SECRET_KEY was rejected by the provider (401)", None),
+    # A minted or never-a-person's name, even said missing.
+    ("Error: FLASK_SECRET_KEY must be set", None), ("Error: GITHUB_TOKEN is required", None),
+    ("Error: ADMIN_TOKEN must be set", None),
+])
+def test_the_start_error_names_a_persons_secret_only_on_the_line_it_died_on(log, named):
+    env = run_env.resolve({}, purpose="proof")
+    assert env.missing_secret_named_in(log) == named
+
+
+def test_a_name_that_is_a_value_the_run_was_given_is_never_asked_for():
+    env = run_env.resolve({}, purpose="proof", bound={"PAY_MODE": "PAYMENTS_API_KEY"})
+    assert env.missing_secret_named_in("Error: PAYMENTS_API_KEY must be set") is None
+
+
+def test_a_secret_the_start_error_named_is_recorded_as_declared_with_its_provenance(tmp_path):
+    """The app's Secrets accept a build/preview value only for a name the app's start checks
+    recorded (secrets.app_declared_env reads `environment`): the card's name must be there."""
+    root, seen = tmp_path / "repo", tmp_path / "seen"
+    seen.mkdir()
+    _app(root, seen, extra_required="PAYMENTS_API_KEY")
+    (root / "helpdesk" / ".env.example").write_text("SESSION_SECRET=\n")
+    record = ps.prove_app_serves(root, BUILT, timeout=20)
+    assert "PAYMENTS_API_KEY" in record["environment"]["declared"]
+    assert record["environment"]["needs_secret"] == ["PAYMENTS_API_KEY"]
+    assert "use a test key" in run_env.needs_secret_action(record["needs_secret"])
 
 
 def test_a_credential_the_start_error_names_as_missing_asks_a_person(tmp_path):
@@ -384,7 +442,7 @@ def test_a_credential_the_start_error_names_as_missing_asks_a_person(tmp_path):
     assert record["ok"] is False and record["needs_secret"] == ["PAYMENTS_API_KEY"], record
     assert not record.get("optional_unset")
     assert record["error"].startswith(
-        "the app needs a secret: PAYMENTS_API_KEY (named by the app's start error)")
+        "the app needs a secret: PAYMENTS_API_KEY (named by helpdesk's start error)")
 
 
 def test_a_setting_the_start_error_names_is_still_the_coders(tmp_path):

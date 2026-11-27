@@ -2713,6 +2713,16 @@ def launch_app(workdir: Path, command: list[str], log_path: str, *,
     return proc, port_hint
 
 
+def wrong_port_note(port: Optional[int], assigned: Optional[int]) -> Optional[str]:
+    """The preview's note when the app serves on a port of its own instead of the $PORT BOSS
+    gave it (ENT-REC-10), else None."""
+    if not port or not assigned or int(port) == int(assigned):
+        return None
+    return (f"the app is listening on {port}, not $PORT ({assigned}): the preview follows it, "
+            f"but a deploy gives the app its port and will find nothing there. Read the port "
+            f"from the PORT environment variable.")
+
+
 def _serve_failure(log_path: str, port_hint: int, health_path: str = "/") -> str:
     """Why an app did not serve, in the words the preview has always used. Call BEFORE killing
     it: once it is dead, "never bound" and "bound and served the wrong thing" look the same."""
@@ -2925,7 +2935,8 @@ def _build_services_env(owner) -> dict[str, str]:
 
 
 def app_start_environment(app_dir: Optional[Path], *, needs: Optional[dict] = None,
-                          bound: Optional[dict[str, str]] = None, purpose: str = "proof"):
+                          bound: Optional[dict[str, str]] = None, purpose: str = "proof",
+                          label: Optional[str] = None):
     """THE ONE RESOLVER for an app BOSS starts to check it (templates.run_env): what its templates
     declare (`needs`), what its own boss.deploy.yaml and .env.example declare (names only — a
     value in .env.example is never passed), the values a person bound, and the run's build
@@ -2935,8 +2946,11 @@ def app_start_environment(app_dir: Optional[Path], *, needs: Optional[dict] = No
     were never minted there (crun_f246d330)."""
     from ..templates.run_env import merge, needs_from_app_dir, resolve
 
-    return resolve(merge(needs or {}, needs_from_app_dir(app_dir)), purpose=purpose, bound=bound,
-                   supplied=_build_services_env(owned_process.current_owner()))
+    env = resolve(merge(needs or {}, needs_from_app_dir(app_dir, label=label)), purpose=purpose,
+                  bound=bound, supplied=_build_services_env(owned_process.current_owner()))
+    if label:
+        env.app_label = label
+    return env
 
 
 def start_record(*, path: str, command, cwd, run_env, log_path: str, exit_code: Optional[int],
@@ -3070,7 +3084,9 @@ def prove_app_serves(workdir: Path, changed: Optional[list[str]], *,
         record["source"] = plan.source
         record["command"] = plan.shell()
         app_dir = _app_dir_of_plan(tree, plan)
-        run_env = app_start_environment(app_dir, needs=needs, bound=bound, purpose="proof")
+        _rel = app_dir.relative_to(tree).as_posix() if app_dir != tree else ""
+        run_env = app_start_environment(app_dir, needs=needs, bound=bound, purpose="proof",
+                                        label=_rel or None)
         record["environment"] = run_env.evidence()
         if run_env.needs:
             record.update(ok=False, needs_secret=[n.name for n in run_env.needs], error=(
@@ -3125,13 +3141,20 @@ def prove_app_serves(workdir: Path, changed: Optional[list[str]], *,
                 # its start error names as missing and nothing declares (ENT-REC-13).
                 named = run_env.unset_named_in(log_text) or run_env.missing_secret_named_in(log_text)
                 if named:
+                    boss_words = f"the app {run_env.explain_crash(log_text)}. "
                     # A person's act ONLY for a secret only a person can supply; a crash on a
                     # listed/optional variable is the code's (WORK: the coder's repair round).
                     if run_env.crash_needs_person(log_text):
                         record["needs_secret"] = [named]
+                        if named not in run_env.declared:
+                            # DECLARED BY THE START ERROR, on the record: the app's Secrets
+                            # read the run's evidence (app_declared_env) to accept a value for
+                            # build and preview, which the card asks for.
+                            run_env.declare_named(
+                                named, f"{run_env.app_label}'s start error")
+                            record["environment"] = run_env.evidence()
                     else:
                         record["optional_unset"] = [named]
-                    boss_words = f"the app {run_env.explain_crash(log_text)}. "
             else:
                 listening = _diagnose_listening_port(log_path, port_hint, health)
                 # ONE STORY. "did not answer HTTP" followed by "GET / returned 200" contradicted
@@ -3584,6 +3607,9 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
         return _fail(f"expose: {exc}", command=" ".join(command), exited=False)
 
     url = f"http://127.0.0.1:{port}"
+    # SHOWN, BUT SAID (ENT-REC-10): the preview follows the port the app chose so a person sees
+    # what it serves; every runner that hands it a port (a deploy, a container) finds nothing.
+    port_note = wrong_port_note(port, port_hint)
     expires = datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)
     with begin(engine) as c:
         c.execute(text(
@@ -3595,7 +3621,8 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
              "sub": ExecutionSubstrate.PREVIEW_HOST.value, "build": build_substrate,
              "lg": log_path, "exp": expires})
         emit_event(c, project_id, "app_preview.started", "operator", "app_preview", preview_id,
-                   {"run_id": run_id, "url": url, "repo": f"{owner}/{repo}", "branch": branch})
+                   {"run_id": run_id, "url": url, "repo": f"{owner}/{repo}", "branch": branch,
+                    **({"note": port_note} if port_note else {})})
     demo_logins = record_demo_logins(engine, preview_id, app_env)
     return _with_exposed(engine, preview_id, _exposed, publicize_preview({
         "id": preview_id, "status": "running", "url": url, "port": port, "demo_logins": demo_logins,
@@ -3603,6 +3630,7 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
         "repo": f"{owner}/{repo}", "branch": branch,
         "substrate": ExecutionSubstrate.PREVIEW_HOST.value,
         "build_substrate": build_substrate,
+        **({"note": port_note} if port_note else {}),
     }, settings=settings))
 
 

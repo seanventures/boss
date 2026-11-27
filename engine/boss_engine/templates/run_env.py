@@ -62,7 +62,31 @@ PURPOSES = THROWAWAY + ("deploy",)
 #: person is meant to choose it. A provider's CLIENT_SECRET or API key never matches.
 _BOSS_OWNED_NAME = re.compile(
     r"^(?:[A-Z0-9]+_)?(?:SESSION|COOKIE|JWT|CSRF|NEXTAUTH|AUTH|SIGNING|ENCRYPTION)_(?:SECRET|KEY)$"
-    r"|^(?:APP_)?SECRET_KEY(?:_BASE)?$")
+    r"|^(?:APP_)?SECRET_KEY(?:_BASE)?$"
+    # A web framework's own signing key (Flask, Django, Rails…) and an app's own secret or
+    # incoming-webhook signing secret: the app's to sign with, never a provider's.
+    r"|^(?:FLASK|DJANGO|RAILS|LARAVEL|RACK|EXPRESS|PHOENIX|APP)_SECRET(?:_KEY(?:_BASE)?)?$"
+    r"|^WEBHOOK_(?:SIGNING_)?SECRET$")
+
+#: Names that are never a person's to supply, whatever their shape: keys the app signs with that
+#: are not plain strings (a JWT private key, any *_SIGNING_* material), the app's own internal or
+#: admin tokens — the coder's (or BOSS's) to provide for a run, never a person's card.
+_APP_OWN_CREDENTIAL = re.compile(
+    r"(?:^|_)SIGNING(?:_|$)|(?:^|_)JWT_(?:PRIVATE|PUBLIC)_KEY$"
+    r"|(?:^|_)(?:ADMIN|INTERNAL|SERVICE|MASTER|ROOT|LOCAL|DEV|TEST|SYSTEM)_(?:[A-Z0-9]+_)?"
+    r"(?:TOKEN|SECRET|KEY|API_KEY)$")
+
+#: Credentials a person must NEVER be asked to hand to code a build wrote: BOSS's own, a code
+#: host's and a cloud account's (agent_env.NEVER names the rest). They stay out of every app.
+_NEVER_A_PERSONS_PREFIXES = (
+    "BOSS_", "GITHUB_", "GH_", "GITLAB_", "BITBUCKET_", "AWS_", "GCP_", "GCLOUD_",
+    "GOOGLE_APPLICATION_", "GOOGLE_CLOUD_", "AZURE_", "ARM_", "S3_", "MINIO_")
+
+#: A credential a PROVIDER issues (an external service's API key, an OAuth client secret, a
+#: bot/auth/access token): the only shape the start-error path asks a person for.
+_PROVIDER_CREDENTIAL = re.compile(
+    r"^[A-Z0-9]+(?:_[A-Z0-9]+)*_(?:API_KEY|APIKEY|API_SECRET|API_TOKEN|CLIENT_SECRET|BOT_TOKEN"
+    r"|AUTH_TOKEN|ACCESS_TOKEN|SECRET_KEY|PRIVATE_API_KEY)$")
 
 #: A demo/seed login's password: a value the app's seed script signs its demo users in with. Not a
 #: provider's credential and not a database's (POSTGRES_PASSWORD, PGPASSWORD, SMTP_PASSWORD…).
@@ -76,16 +100,23 @@ _ENV_LINE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
 #: person's to set for one.
 _BOSS_SERVICE_NAME = re.compile(r"(?:^|_)(?:DB|DATABASE|POSTGRES|PG|MYSQL|REDIS|MONGO)(?:_|$)")
 
-#: A comment that marks the variable under (or beside) it as required — and one that says it is
-#: not. "Required secret: the payments key" / "# required"; never "not required", "optional".
-_REQUIRED_MARK = re.compile(r"(?<!not )(?<!non-)\brequired\b", re.IGNORECASE)
-_OPTIONAL_MARK = re.compile(r"\boptional\b|\bnot required\b", re.IGNORECASE)
+#: A comment that marks the variable under (or beside) it as required — and the words that say it
+#: is not, or not for a build: "isn't required", "no longer required", "required only in
+#: production", "optional". "Required secret: the payments key" / "# required" are marks.
+_REQUIRED_MARK = re.compile(r"\brequired\b", re.IGNORECASE)
+_NOT_REQUIRED_MARK = re.compile(
+    r"\boptional\b|\b(?:not|isn'?t|aren'?t|no\s+longer|never)\s+(?:\w+\s+)?required\b"
+    r"|\bnon-required\b|\brequired\s+(?:only\s+)?(?:in|for|on)\s+(?:prod|production|deploy|live|"
+    r"staging)\b|\bonly\s+(?:in|for|on)\s+(?:prod|production|deploy|live|staging)\b",
+    re.IGNORECASE)
 
-#: A start error that says a variable is MISSING (not merely mentions it).
-_MISSING_LINE = re.compile(
-    r"\b(?:is|are)\s+(?:not\s+set|missing|required|undefined|empty|not\s+configured|not\s+provided)"
-    r"|must\s+be\s+(?:set|provided|defined|configured)|\bmissing\b|\bnot\s+set\b"
-    r"|\brequired\b", re.IGNORECASE)
+#: How a start error says ONE variable is missing — the name and the words about it together:
+#: "X is not set", "X must be set", "X missing", "missing X", "Missing required environment
+#: variable: X", "please set X". Applied to the line the app died on, never to a warning above.
+_SAID_MISSING_AFTER = (r"\W{{0,3}}(?:(?:is|are|was)\s+)?(?:not\s+set|missing|required|undefined"
+                       r"|empty|not\s+configured|not\s+provided|must\s+be\s+(?:set|provided"
+                       r"|defined|configured))")
+_SAID_MISSING_BEFORE = (r"(?:missing|required|set|provide|define|configure)\b[\w\s:`'\"-]{{0,40}}?")
 _ENV_NAME = re.compile(r"\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b")
 
 #: How long a generated throwaway value is: token_urlsafe(32) is 43 characters, past every
@@ -111,16 +142,47 @@ def is_demo_login_name(name: str) -> bool:
 def is_person_only_name(name: str) -> bool:
     """Is `name` a credential only a person has (a provider's API key, a client secret, a
     token)? Credential-shaped (agent_env.SECRET_SHAPED, the shape BOSS withholds from every app
-    it starts), and none of what BOSS supplies itself: a session/signing key it mints, a demo
-    login's password, the run's database, PORT/HOST."""
-    from ..services.agent_env import SECRET_SHAPED
+    it starts), and none of what BOSS or the coder supplies: a session/signing key BOSS mints,
+    a key the app signs with, its own internal/admin token, a demo login's password, the run's
+    database, PORT/HOST. And never a credential no person may hand to code a build wrote:
+    agent_env.NEVER, BOSS's own (BOSS_*), a code host's or a cloud account's."""
+    from ..services.agent_env import NEVER, SECRET_SHAPED
 
     upper = str(name or "").upper()
-    if not upper or upper in PLATFORM_NAMES or _BOSS_OWNED_NAME.match(upper):
+    if not upper or upper in PLATFORM_NAMES or upper in NEVER or _BOSS_OWNED_NAME.match(upper):
+        return False
+    if upper.startswith(_NEVER_A_PERSONS_PREFIXES) or _APP_OWN_CREDENTIAL.search(upper):
         return False
     if is_demo_login_name(upper) or _BOSS_SERVICE_NAME.search(upper):
         return False
     return any(marker in upper for marker in SECRET_SHAPED)
+
+
+def is_provider_credential(name: str) -> bool:
+    """A person-only name (is_person_only_name) shaped like what an external provider issues
+    (STRIPE_SECRET_KEY, PAYMENTS_API_KEY, GITHUB_CLIENT_SECRET… minus the excluded hosts,
+    SLACK_BOT_TOKEN, TWILIO_AUTH_TOKEN). The bar for asking a person from a start error alone."""
+    upper = str(name or "").upper()
+    return is_person_only_name(upper) and bool(_PROVIDER_CREDENTIAL.match(upper))
+
+
+def said_missing(line: str, name: str) -> bool:
+    """Does `line` say that `name` itself is missing (not merely mention it)?"""
+    n = re.escape(name)
+    return bool(re.search(rf"\b{n}\b" + _SAID_MISSING_AFTER.format(), line, re.IGNORECASE)
+                or re.search(_SAID_MISSING_BEFORE.format() + rf"\b{n}\b", line, re.IGNORECASE))
+
+
+def death_line(log_text: str) -> Optional[str]:
+    """The line the app died on: the LAST line of its output that reads as an error
+    (_ERROR_LINE), stack frames skipped. A warning it logged and survived is not it."""
+    for line in reversed((log_text or "").splitlines()):
+        bare = line.strip()
+        if not bare or bare.startswith(("at ", 'File "')) or re.match(r"^\S+\.(?:go|py|js|ts):\d+", bare):
+            continue
+        if _ERROR_LINE.search(line):
+            return line
+    return None
 
 
 #: The platform's demo-seed opt-in: the variable an app's seed script gates itself on (the
@@ -205,6 +267,8 @@ class RunEnvironment:
     supplied: list[str] = field(default_factory=list)
     #: Generated values a reviewer must be shown (a demo login's password), names only.
     shown: list[str] = field(default_factory=list)
+    #: How a card names the app ("helpdesk", or "the app" at the repository root).
+    app_label: str = "the app"
 
     def shown_values(self) -> dict[str, str]:
         """{name: value} of the demo logins this run generated, for the preview's reviewer."""
@@ -266,20 +330,34 @@ class RunEnvironment:
         return None
 
     def missing_secret_named_in(self, log_text: str) -> Optional[str]:
-        """A credential only a person has (is_person_only_name) that the app's start error says
-        is MISSING, that nothing declares and this run was not given — the app's own config
-        read, seen at the moment it refuses to start. The LAST such line wins (the line it died
-        on). A declared name is unset_named_in's (its declaration decides whose it is)."""
-        for line in reversed((log_text or "").splitlines()):
-            if not _MISSING_LINE.search(line):
+        """A provider's credential (is_provider_credential) that the line the app DIED on
+        (death_line) says is missing, that nothing declares and this run was not given — the
+        app's own config read, seen at the moment it refuses to start. Only that line: a warning
+        above it ("STRIPE_SECRET_KEY missing, payments disabled") followed by an unrelated
+        TypeError is the coder's crash, never a person's card. A declared name is
+        unset_named_in's (its declaration decides whose it is)."""
+        line = death_line(log_text)
+        if not line:
+            return None
+        given = set(self.values.values())
+        for m in _ENV_NAME.finditer(line):
+            name = m.group(0)
+            if (name in self.declared or name in self.values or name in self.supplied
+                    or name in given):
                 continue
-            for m in _ENV_NAME.finditer(line):
-                name = m.group(0)
-                if name in self.declared or name in self.values or name in self.supplied:
-                    continue
-                if is_person_only_name(name):
-                    return name
+            if is_provider_credential(name) and said_missing(line, name):
+                return name
         return None
+
+    def declare_named(self, name: str, source: str) -> Need:
+        """Record a name the app's start error asked for as DECLARED (with where it came from),
+        so the run's evidence carries it and the app's Secrets accept a value for every env a
+        run reaches (secrets.app_declared_env → deploy_value_spec), as the card asks."""
+        need = Need(name, "secret", True, source)
+        self.declared[name] = need
+        if all(n.name != name for n in self.needs):
+            self.needs.append(need)
+        return need
 
     def crash_needs_person(self, log_text: str) -> Optional[str]:
         """The variable the crash names when only a person can supply it (person_must_supply),
@@ -298,8 +376,9 @@ class RunEnvironment:
         if name is None:
             missing = self.missing_secret_named_in(log_text)
             if missing:
-                return (f"needs a secret: {missing} (named by the app's start error). BOSS cannot "
-                        "make it and did not give it to this run; set it in the app's Secrets")
+                return (f"needs a secret: {missing} (named by {self.app_label}'s start error). "
+                        "BOSS cannot make it and did not give it to this run; set it in the "
+                        "app's Secrets")
             return None
         need = self.declared.get(name)
         if need is not None and need.person_must_supply():
@@ -325,7 +404,8 @@ def needs_secret_action(names, *, envs=RUN_ENVS) -> str:
     listed = ", ".join(names) or "the missing secret"
     where = ", ".join(envs[:-1]) + f" and {envs[-1]}" if len(envs) > 1 else envs[0]
     return (f"Set {listed} for environments {where} in the app's Secrets, then press Retry "
-            "(the coder is not asked to work around a missing secret).")
+            "(the coder is not asked to work around a missing secret). The value is given to the "
+            "app this build wrote when BOSS starts it, so use a test key.")
 
 
 def decide(need: Need, *, has_value: bool, purpose: str) -> str:
@@ -448,7 +528,8 @@ def needs_from_declared_specs(declared: Mapping[str, Mapping]) -> dict[str, Need
     return out
 
 
-def needs_from_env_example(text: str, *, source: str = ".env.example") -> dict[str, Need]:
+def needs_from_env_example(text: str, *, source: str = ".env.example",
+                           label: Optional[str] = None) -> dict[str, Need]:
     """Names only. A credential the file MARKS REQUIRED — the comment lines directly above it or
     its own inline comment say "required" (never "optional" / "not required") — is a secret a
     person must set (ENT-REC-13); everything else keeps the rules in the module docstring."""
@@ -469,8 +550,9 @@ def needs_from_env_example(text: str, *, source: str = ".env.example") -> dict[s
         kind = ("generated" if _BOSS_OWNED_NAME.match(name)
                 else "demo" if is_demo_login_name(name) else "listed")
         if (kind == "listed" and is_person_only_name(name) and _REQUIRED_MARK.search(said)
-                and not _OPTIONAL_MARK.search(said)):
-            out.setdefault(name, Need(name, "secret", True, f"{source} (marked required)"))
+                and not _NOT_REQUIRED_MARK.search(said)):
+            whose = f"{label}/{source}" if label else source
+            out.setdefault(name, Need(name, "secret", True, f"{whose}, which marks it required"))
             continue
         out.setdefault(name, Need(name, kind, kind == "generated", source))
     return out
@@ -494,9 +576,10 @@ def needs_from_deploy_manifest(manifest, *, source: str = "boss.deploy.yaml") ->
     return out
 
 
-def needs_from_app_dir(app_dir: Optional[Path]) -> dict[str, Need]:
+def needs_from_app_dir(app_dir: Optional[Path], *, label: Optional[str] = None) -> dict[str, Need]:
     """What the app's own files declare: its boss.deploy.yaml, then its .env.example. Never
-    raises: an unreadable file declares nothing."""
+    raises: an unreadable file declares nothing. `label` names the app in each source
+    ("helpdesk/.env.example"), so a card says whose file asked."""
     if app_dir is None:
         return {}
     found: list[dict[str, Need]] = []
@@ -511,7 +594,7 @@ def needs_from_app_dir(app_dir: Optional[Path]) -> dict[str, Need]:
     example = app_dir / ".env.example"
     if example.is_file():
         try:
-            found.append(needs_from_env_example(example.read_text(errors="ignore")))
+            found.append(needs_from_env_example(example.read_text(errors="ignore"), label=label))
         except OSError:
             pass
     for name in ("docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"):
