@@ -157,6 +157,9 @@ class Gate:
         from remote import LocalGitHub  # tests/e2e/gate/remote.py
 
         self.hub = LocalGitHub(self.work / "github").start()
+        # The install's GitHub IS this local one, set the supported way (BOSS_GITHUB_API_URL):
+        # its own token then belongs to this host, as it would on a GHES install.
+        self.stack.callback(self.hub.configure_install())
         for fixture, repo in ((FIXTURE, REPO), (PLAIN_FIXTURE, PLAIN_REPO),
                               (PLAIN_FIXTURE, TEST_API_REPO)):
             files = {}
@@ -798,7 +801,11 @@ def check_pull_request(g: Gate) -> str:
 
     if not g.changed:
         g.changed = _changed_files(g)
-    adapter = GitHubAdapter(g.settings, owner=OWNER, repo=REPO, token="gate-local-token",
+    from boss_engine.identity import github_urls
+
+    # The install's own token, tagged with the install's GitHub (the local one: open()).
+    adapter = GitHubAdapter(g.settings, owner=OWNER, repo=REPO,
+                            token=github_urls.tag("gate-local-token", ""),
                             api_base_url=g.hub.api_url)
     branch = f"boss/code/{g.run_id}"
     # The blip lands on the call that has no fallback of its own: opening the pull request.

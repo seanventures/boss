@@ -11,6 +11,7 @@ Every request is counted, so a check can say how many tries BOSS made.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -154,22 +155,53 @@ class LocalGitHub:
             self._server.shutdown()
             self._server.server_close()
 
+    @property
+    def web_url(self) -> str:
+        """The web origin git clones from: real clone_url_for makes ``<web>/<owner>/<repo>.git``,
+        which is this server's ``/git/<owner>/<repo>.git``."""
+        return f"http://127.0.0.1:{self.port}/git"
+
+    def install_env(self) -> dict[str, str]:
+        """THE SUPPORTED SETTING that moves an install's GitHub (github_urls: BOSS_GITHUB_API_URL,
+        BOSS_GITHUB_WEB_URL): with it, the install's own token belongs to THIS host, exactly as it
+        would for an install configured for GitHub Enterprise Server."""
+        return {"BOSS_GITHUB_API_URL": self.api_url, "BOSS_GITHUB_WEB_URL": self.web_url}
+
+    def configure_install(self) -> "Callable[[], None]":
+        """Set install_env() in this process (and so in every child it starts); returns undo."""
+        saved = {k: os.environ.get(k) for k in self.install_env()}
+        os.environ.update(self.install_env())
+
+        def undo() -> None:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        return undo
+
     def point_boss_at_me(self) -> "Callable[[], None]":
-        """BOSS's two seams for a GitHub address (repo_host.clone_url_for, GitHubAdapter),
-        pointed at this local GitHub — never github.com. Returns the function that undoes it.
-        Used by the engines gate and the harness benchmark (scripts/harness_bench.py)."""
+        """Point BOSS at this local GitHub — never github.com — through the install's supported
+        setting (configure_install), plus the two seams for a GitHub address
+        (repo_host.clone_url_for, GitHubAdapter) for callers that name a base of their own. The
+        fakes keep the REAL signatures (clone_url_for's keyword-only ``web_base``). Returns the
+        function that undoes it. Used by the engines gate and scripts/harness_bench.py."""
+        from boss_engine.identity import github_urls
         from boss_engine.services import github_adapter, repo_host
 
         hub = self
+        undo_env = self.configure_install()
         real_init = github_adapter.GitHubAdapter.__init__
         real_clone_url = repo_host.clone_url_for
 
-        def init(adapter, settings, owner=None, repo=None, token=None, api_base_url=None):
-            real_init(adapter, settings, owner=owner, repo=repo, token=token or "gate-local-token",
+        def init(adapter, settings, *, owner=None, repo=None, token=None, api_base_url=None):
+            # The gate's own token is the install's, tagged with the install's (this) host.
+            real_init(adapter, settings, owner=owner, repo=repo,
+                      token=token or github_urls.tag("gate-local-token", ""),
                       api_base_url=hub.api_url)
 
-        def clone_url_for(host, owner, repo, token=""):
-            return hub.git_url(owner, repo)
+        def clone_url_for(host, owner, repo, token="", *, web_base=""):
+            return real_clone_url(host, owner, repo, token, web_base=hub.web_url)
 
         github_adapter.GitHubAdapter.__init__ = init
         repo_host.clone_url_for = clone_url_for
@@ -177,4 +209,5 @@ class LocalGitHub:
         def undo() -> None:
             github_adapter.GitHubAdapter.__init__ = real_init
             repo_host.clone_url_for = real_clone_url
+            undo_env()
         return undo
