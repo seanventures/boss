@@ -17248,3 +17248,42 @@ BEGIN
       FOR EACH ROW EXECUTE FUNCTION boss_intake_notify();
   END IF;
 END $$;
+
+-- FAILURE PRE-CHECK PROPOSALS (BOSSAPP-541, services/precheck_proposals.py): every failed run
+-- classifies its cause and proposes the pre-check that would have caught it, linked to an issue
+-- (boss_recommendations). Proposals are artifacts only — never self-modifying without approval.
+CREATE TABLE IF NOT EXISTS precheck_proposals (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  dedupe_key TEXT NOT NULL,
+  run_id TEXT NOT NULL DEFAULT '',
+  last_run_id TEXT NOT NULL DEFAULT '',
+  run_kind TEXT NOT NULL DEFAULT 'code_task',
+  run_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+  cause_class TEXT NOT NULL,
+  reason_code TEXT NOT NULL DEFAULT '',
+  proposed_check_id TEXT NOT NULL,
+  existing_check_id TEXT NOT NULL DEFAULT '',
+  checkpoint TEXT NOT NULL DEFAULT 'pre_run',
+  target_capability TEXT NOT NULL DEFAULT 'build',
+  title TEXT NOT NULL,
+  summary TEXT NOT NULL DEFAULT '',
+  why TEXT NOT NULL DEFAULT '',
+  evidence JSONB NOT NULL DEFAULT '[]'::jsonb,
+  probe_spec JSONB NOT NULL DEFAULT '{}'::jsonb,
+  files JSONB NOT NULL DEFAULT '[]'::jsonb,
+  acceptance_tests JSONB NOT NULL DEFAULT '[]'::jsonb,
+  recommendation_id TEXT,
+  status TEXT NOT NULL DEFAULT 'proposed'
+    CHECK (status IN ('proposed', 'approved', 'rejected', 'implemented')),
+  occurrences INTEGER NOT NULL DEFAULT 1,
+  created_by TEXT NOT NULL DEFAULT 'boss',
+  reviewed_by TEXT,
+  reviewed_at TIMESTAMPTZ,
+  review_note TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, dedupe_key)
+);
+CREATE INDEX IF NOT EXISTS idx_precheck_proposals_project_status
+  ON precheck_proposals (project_id, status, updated_at DESC);

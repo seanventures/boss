@@ -42,7 +42,7 @@
 
 /* Cards and sections. */
 .ev-card { background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
-.ev-card[data-dashed] { background: transparent; border-style: dashed; opacity: .78; }
+.ev-card[data-dashed], .ev-card-coming { background: transparent; border: 1.5px dashed var(--border-strong); opacity: .85; }
 .ev-sec-title { margin: 0; color: var(--faint); font-size: var(--fs-label); font-weight: 650; letter-spacing: .06em; text-transform: uppercase; }
 .ev-h2 { margin: 0; font-size: var(--fs-title); font-weight: 650; }
 .ev-faint { color: var(--faint); font-size: var(--fs-meta); }
@@ -282,9 +282,28 @@ details.ev-more[open] > summary { margin-bottom: 10px; }
 .ev-person-boss > b, .ev-person-boss > .ev-faint { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ev-person-act { display: flex; gap: 10px; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
 @container ev (max-width: 620px) {
-  .ev-person { grid-template-columns: minmax(0, 1fr) minmax(0, auto); }
-  .ev-person-boss { grid-column: 1 / -1; order: 3; }
+  /* E7 390px: single column so linked handles never truncate to "@Pri…" beside action chips. */
+  .ev-person { grid-template-columns: minmax(0, 1fr); }
+  .ev-person-id b, .ev-person-id span { white-space: normal; overflow: visible; text-overflow: clip; }
+  .ev-person-boss { grid-column: 1 / -1; order: 2; }
+  .ev-person-act { justify-content: flex-start; order: 3; }
 }
+.ev-people-pager { padding: 12px 16px; border-top: 1px solid var(--border); }
+
 /* E4: the editor is the main thing; the list is the narrower column. */
 .ev-split[data-lead="aside"] { grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.3fr); }
 @container ev (max-width: 820px) { .ev-split[data-lead="aside"] { grid-template-columns: minmax(0, 1fr); } }
+.ev-limit-row { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ev-budget-bar { flex-basis: 100%; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 4px; }
+.ev-bar { width: 10rem; height: 8px; border-radius: 999px; overflow: hidden; appearance: none; border: 0; background: var(--surface-3); accent-color: var(--green); }
+.ev-budget-bar[data-tone="amber"] .ev-bar { accent-color: var(--amber); }
+.ev-budget-bar[data-tone="red"] .ev-bar { accent-color: var(--red); }
+
+/* E5: at 1440 list is narrower than the detail flow; at 390 detail sits above the list. */
+.ev-stream-split { grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.35fr); }
+.ev-mobile-back { display: none; align-self: flex-start; }
+@container ev (max-width: 820px) {
+  .ev-stream-split { grid-template-columns: minmax(0, 1fr); }
+  .ev-stream-split > .ev-detail, .ev-stream-split > aside { order: -1; }
+  .ev-mobile-back { display: inline-flex; }
+}

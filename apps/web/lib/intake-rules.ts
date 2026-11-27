@@ -144,10 +144,36 @@ export function fromMatch(match: unknown, addressing: string, chat: boolean): Dr
   return d;
 }
 
+/** Friendly `#name` for a channel id when a connection carries `channel_names`, else `#<raw>`. */
+export function channelLabel(channel: string, channelNames: Record<string, string> = {}): string {
+  const clean = channel.replace(/^#/, "").trim();
+  if (!clean) return "";
+  return `#${channelNames[clean] || clean}`;
+}
+
+/** Display channels in E4's sentence input as `#names` (comma-separated). */
+export function formatChannelsInput(channels: string[], channelNames: Record<string, string> = {}): string {
+  return channels.map((c) => (c.trim() ? channelLabel(c, channelNames) : "")).join(", ");
+}
+
+/** Resolve typed `#names` back to channel ids when known in `channelNames`, else clean names. */
+export function parseChannelsInput(raw: string, channelNames: Record<string, string> = {}): string[] {
+  const byName = new Map<string, string>();
+  for (const [id, name] of Object.entries(channelNames)) {
+    const k = name.replace(/^#/, "").trim().toLowerCase();
+    if (k) byName.set(k, id);
+  }
+  return raw.split(",").map((part) => {
+    const clean = part.trim().replace(/^#/, "");
+    if (!clean) return "";
+    return byName.get(clean.toLowerCase()) || clean;
+  }).filter((c, i, all) => c || i === all.length - 1);
+}
+
 /** The rule in one line, for the list: "Mentions in #support", "DMs to BOSS", "Every message in #help". */
-export function ruleWords(d: Draft, chat: boolean): string {
+export function ruleWords(d: Draft, chat: boolean, channelNames: Record<string, string> = {}): string {
   if (d.custom !== null) return "Custom filter";
-  const where = d.channels.length ? ` in ${d.channels.map((c) => `#${c.replace(/^#/, "")}`).join(", ")}` : "";
+  const where = d.channels.length ? ` in ${d.channels.map((c) => channelLabel(c, channelNames)).filter(Boolean).join(", ")}` : "";
   let head: string;
   if (chat) {
     head = d.when === "dm" ? "DMs to BOSS" : d.when === "message" ? `Every message${where}` : d.when === "followup" ? `Thread follow-ups${where}` : `Mentions${where || " anywhere"}`;

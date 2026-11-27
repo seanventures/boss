@@ -618,3 +618,140 @@ describe("E8 My chat links in Account", () => {
     expect($('[data-testid="my-chat-link-chl_t1"]')).toBeNull();
   });
 });
+
+describe("BOSSAPP-1197 Eventing console polish & uncaptured states", () => {
+  it("E7 People paging: Load more fetches next_offset, appends rows, and hides when done", async () => {
+    const calls = api((url) => {
+      if (url.includes("/people?limit=2&offset=2")) {
+        return json({
+          ...PEOPLE, limit: 2, offset: 2, next_offset: null, total: 3,
+          people: [
+            { external_user_id: "U0PAGE2", display: "page.two", state: "linked", link_id: "chl_p2", method: "code",
+              person: { principal_id: "usr_p2", name: "Page Two", email: "p2@northpeak.com" }, linked_at: iso(60_000) },
+          ],
+        });
+      }
+      if (url.endsWith("/people")) {
+        return json({
+          ...PEOPLE, limit: 2, offset: 0, next_offset: 2, total: 3,
+          people: PEOPLE.people.slice(0, 2),
+        });
+      }
+      return undefined;
+    });
+    await mount(<EventsHome projectId={PID} place={place("people", { conn: "icn_s" })} />);
+    expect($$('[data-testid^="ev-person-U"]').length).toBe(2);
+    expect($('[data-testid="ev-people-more"]')).not.toBeNull();
+    await click($('[data-testid="ev-people-more"]'));
+    expect(calls.some((c) => c.url.includes("/people?limit=2&offset=2"))).toBe(true);
+    expect($$('[data-testid^="ev-person-U"]').length).toBe(3);
+    expect($('[data-testid="ev-person-U0PAGE2"]')).not.toBeNull();
+    expect($('[data-testid="ev-people-more"]')).toBeNull();
+  });
+
+  it("E4 Rules: #channel names, thread+record limits, no stray Always answer people label, and budget bar", async () => {
+    const slackNamed = { ...SLACK, config: { ...SLACK.config, channel_names: { C0SUPPORT: "support", C0PAYMENTS: "payments" } } };
+    const calls = api((url) => (url.startsWith("/v1/intake/connections?") ? json({ connections: [slackNamed, HOOK] }) : undefined));
+    await mount(<EventsHome projectId={PID} place={place("rules", { conn: "icn_s" })} />);
+    // #channel names resolved in list and editor input
+    expect($('[data-testid="ev-rule-open-atrg_3"]')?.textContent).toContain("Every message in #payments");
+    expect(($('[data-testid="ev-channels"]') as HTMLInputElement).value).toBe("#support");
+    await type('[data-testid="ev-channels"]', "#support, #payments");
+    // Both thread and record limits exist and submit cleanly
+    expect($('[data-testid="ev-limit"]')).not.toBeNull();
+    expect($('[data-testid="ev-limit-record"]')).not.toBeNull();
+    await type('[data-testid="ev-limit"]', "15");
+    await type('[data-testid="ev-limit-record"]', "8");
+    // Stray "Always answer people" label is gone
+    expect($('[data-testid="ev-rule-editor"]')?.textContent).not.toContain("Always answer people");
+    // Budget bar renders today's spend against the daily cap ($0.84 of $5.00 = 17%)
+    expect($('[data-testid="ev-budget-bar"]')).not.toBeNull();
+    expect($('[data-testid="ev-budget-used"]')?.textContent).toContain("$0.84 of $5.00 today (17%)");
+    await click($('[data-testid="ev-rule-save"]'));
+    const patch = calls.find((c) => c.method === "PATCH")!;
+    expect(patch.body.limits).toMatchObject({ per_entity: 15, per_thread: 15, per_record: 8 });
+    const matchAll = ((patch.body.config as { match: { all: Array<{ field?: string; value?: unknown }> } }).match.all);
+    expect(matchAll.find((x) => x.field === "data.channel")?.value).toEqual(["C0SUPPORT", "C0PAYMENTS"]);
+  });
+
+  it("E5 Stream: 1440px aside-led split, mobile back control, and CSS 390px detail-first order", async () => {
+    api();
+    await mount(<EventsHome projectId={PID} place={place("stream", { ev: "iev_1" })} />);
+    const split = $('[data-testid="ev-stream-split"]');
+    expect(split?.getAttribute("data-lead")).toBe("aside");
+    expect(split?.className).toContain("ev-stream-split");
+    expect($('[data-testid="ev-detail-back"]')?.textContent).toContain("Back to events");
+  });
+
+  it("E1 Coming cards keep dashed outline and E6 calm cards show source type + Force panel opens and cancels", async () => {
+    api();
+    await mount(<EventsHome projectId={PID} place={place("connections")} />);
+    expect($('[data-testid="ev-coming-teams"]')?.getAttribute("data-dashed")).toBe("true");
+    unmount();
+    await mount(<EventsHome projectId={PID} place={place("dead")} />);
+    expect($('[data-testid="ev-calm-kind-icn_s"]')?.textContent).toBe("Slack");
+    expect($('[data-testid="ev-calm-icn_s"]')?.textContent).toContain("northpeak: nothing stuck");
+    // Uncaptured E6 Force panel open + cancel flow
+    await click($('[data-testid="ev-dl-pick-iev_d1"]'));
+    await click($('[data-testid="ev-dl-force"]'));
+    expect($('[data-testid="ev-force"]')).not.toBeNull();
+    await click($('[data-testid="ev-force-cancel"]'));
+    expect($('[data-testid="ev-force"]')).toBeNull();
+  });
+
+  it("E2 uncaptured states: step 2 existing endpoint, active attestation, and Signed → Saved → Replied", async () => {
+    at("/?area=setup&events=connect&kind=slack");
+    const attestedSlack = {
+      ...SLACK,
+      config: {
+        ...SLACK.config,
+        sso_attested: { idp: "idp_okta", idp_name: "Okta", domains: ["northpeak.com"], attested_by: "Alice Chen", attested_at: "2026-11-03T10:00:00Z" },
+      },
+    };
+    let polled = false;
+    api((url, method) => {
+      if (url.startsWith("/v1/intake/connections?")) return json({ connections: [attestedSlack] });
+      if (url.startsWith("/v1/chat/endpoints?")) {
+        return json({ endpoints: [{ id: "che_1", kind: "slack", name: "Slack", status: "active", config: { channel: "C0SUPPORT" }, secrets_set: ["signing_secret", "bot_token"], urls: { event_subscriptions_request_url: "https://boss.example/slack" } }] });
+      }
+      if (url.endsWith("/test-message") && method === "POST") {
+        return json({ ok: true, posted: true, round_trip: false, channel: "C0SUPPORT", probe_id: "itp_1", checks: { "secret:signing_secret": "ok" } });
+      }
+      if (url.endsWith("/test-message") && method === "GET") {
+        polled = true;
+        return json({ ok: true, posted: true, round_trip: true, channel: "C0SUPPORT", probe_id: "itp_1", checks: {} });
+      }
+      if (url.startsWith("/v1/intake/events?")) {
+        return json({ ...EVENTS, events: [{ ...EVENTS.events[0], received_at: new Date().toISOString() }] });
+      }
+      return undefined;
+    });
+    await mount(<EventsHome projectId={PID} place={place("connect", { kind: "slack" })} />);
+    // Step 2 vault summary + active SSO attestation
+    expect($('[data-testid="ev-slack-endpoint"]')?.textContent).toContain("posts in #C0SUPPORT");
+    expect($('[data-testid="ev-slack-sso"]')?.textContent).toContain("SSO auto-link on · Okta · northpeak.com");
+    expect($('[data-testid="ev-slack-sso-off"]')).not.toBeNull();
+    // Run test and advance poll to capture Signed → Saved → Replied
+    vi.useFakeTimers();
+    const btn = $('[data-testid="ev-slack-test-btn"]') as HTMLButtonElement;
+    btn.click();
+    await vi.advanceTimersByTimeAsync(3200);
+    vi.useRealTimers();
+    await settle();
+    expect(polled).toBe(true);
+    expect($('[data-testid="ev-slack-flow-signed"]')?.getAttribute("data-state")).toBe("done");
+    expect($('[data-testid="ev-slack-flow-saved"]')?.getAttribute("data-state")).toBe("done");
+    expect($('[data-testid="ev-slack-flow-replied"]')?.getAttribute("data-state")).toBe("done");
+    expect($('[data-testid="ev-slack-test"]')?.textContent).toContain("Slack works end to end.");
+  });
+
+  it("CSS polish checks: dashed Coming outline, E5 1440/390 layout, and E7 390px non-truncating handles", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const css = readFileSync(join(process.cwd(), "app/events/events.css"), "utf8");
+    expect(css).toContain("border: 1.5px dashed var(--border-strong)");
+    expect(css).toContain(".ev-stream-split { grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.35fr); }");
+    expect(css).toContain(".ev-stream-split > .ev-detail, .ev-stream-split > aside { order: -1; }");
+    expect(css).toContain(".ev-person { grid-template-columns: minmax(0, 1fr); }");
+  });
+});

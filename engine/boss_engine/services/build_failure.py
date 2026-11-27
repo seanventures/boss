@@ -512,6 +512,22 @@ def boss_did(failure_class: Any, auto_retries: Any) -> Optional[str]:
     return spent_words(n)
 
 
+def precheck_proposal_for_failure(failure: Mapping[str, Any]) -> Optional[dict[str, Any]]:
+    """Deterministic pre-check proposal card for a failed build/workflow entry (BOSSAPP-541)."""
+    if not is_failure(failure):
+        return None
+    from .precheck_proposals import classify_and_propose, proposal_card
+
+    prop = classify_and_propose(
+        error=failure.get("error") or failure.get("reason") or "",
+        run_id=str(failure.get("build_id") or failure.get("id") or ""),
+        run_kind=str(failure.get("source") or "code_task"),
+        failure_class=failure.get("failure_class"),
+        reason_code=failure.get("reason_code"),
+    )
+    return proposal_card(prop.as_dict())
+
+
 def needs_card(failure: Mapping[str, Any]) -> dict[str, Any]:
     """The failure as a Needs-you card (kind `failed`). It carries no generic `action`: its
     buttons are its own (Retry is a POST, never a link), so a generic renderer — the needs
