@@ -3167,9 +3167,11 @@ def person_side_reason(reason: str) -> Optional[str]:
 
 
 def _is_limit_message(reason: str) -> bool:
+    """STRICT: a pipeline reason can carry the app's own test output ("expected 'Weekly limit
+    reached' to be visible"), so a plan limit counts only with the reset it named."""
     from .model_router.headroom import is_limit_message
 
-    return is_limit_message(reason)
+    return is_limit_message(reason, strict=True)
 
 
 def classify_pipeline_exception(reason: str) -> tuple[str, str]:

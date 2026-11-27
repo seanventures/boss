@@ -953,7 +953,11 @@ _NOT_SERVED = re.compile(
 def _not_served(said: str) -> bool:
     """The provider said it served nothing: a rejected login, or ANY limit sentence the one
     limit detector (model_router.headroom) knows — "5-hour limit reached", "Opus weekly limit
-    reached", "usage limit reached|<epoch>" that the pattern above alone does not."""
+    reached", "usage limit reached|<epoch>" that the pattern above alone does not.
+
+    FOR SINGLE-CALL CONNECTION PROOFS ONLY. A proof is one trivial prompt, so a limit sentence
+    in its error means that one call served nothing. Never apply this to a multi-turn run: a
+    run can be refused at turn 20 after 19 billed turns, and settling it at $0 would be false."""
     if _NOT_SERVED.search(said):
         return True
     from .model_router.headroom import is_limit_message

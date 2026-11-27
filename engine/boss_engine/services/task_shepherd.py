@@ -189,11 +189,13 @@ def classify(error: Optional[str], *, gates_failed: Optional[list[str]] = None,
 
 
 def _is_limit_message(text: str) -> bool:
-    """A plan or spend limit sentence. A bare "429" is left to the phrases above: in a
-    shepherd's text it can as well be a line number."""
-    from .model_router.headroom import windows_from_limit_message
+    """A plan or spend limit sentence, STRICT: a run's error can quote the app's own test
+    output ("You've hit your limit of 5 free projects"), so a plan window counts only with the
+    reset it named. A bare "429" is left to the phrases above: here it can be a line number."""
+    from .model_router.headroom import limit_verdict
 
-    return any(w.get("source") == "limit" for w in windows_from_limit_message(text).values())
+    verdict = limit_verdict(text, strict=True)
+    return verdict is not None and verdict.plan
 
 
 # --------------------------------------------------------------------------- #

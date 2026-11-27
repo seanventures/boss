@@ -322,7 +322,10 @@ def classify_model_failure(status: int, detail: str, *, subscription: bool = Fal
     from .model_router.headroom import limit_verdict
 
     verdict = limit_verdict(detail)
-    if verdict is not None:
+    # A refusal that names its own cause (401 key, 403 permission, 404 model) is that cause,
+    # unless the provider's words are a plan or credit sentence: a bare "429" inside the body
+    # ("model gpt-4-429 not found") is not a rate limit.
+    if verdict is not None and (verdict.plan or status not in (401, 403, 404)):
         return verdict.state
     if status == 429:
         return "rate_limited"

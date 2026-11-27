@@ -353,9 +353,31 @@ def windows_from_limit_message(text: Optional[str], now: Optional[datetime] = No
         # A per-minute rate limit (429, "Rate limit reached for gpt-4o … try again in 20s"): a
         # short window — the provider is fine, this minute is spent.
         seconds = retry_after_seconds(body)
-        close(MINUTE, now + timedelta(seconds=min(max(seconds or 60.0, 1.0), 3600.0)), "rate")
-        out[MINUTE]["reset_known"] = seconds is not None
+        named = None if seconds is not None else named_reset(body, now)
+        if named is not None:
+            close(MINUTE, named, "rate")
+        else:
+            close(MINUTE, now + timedelta(seconds=min(max(seconds or 60.0, 1.0), 3600.0)),
+                  "rate")
+            out[MINUTE]["reset_known"] = seconds is not None
     return out
+
+
+_NAMED_RESET = re.compile(r"(?:will reset at|reset at|resets?|try again (?:at|after))\s+"
+                          r"(?P<when>[^\n(·∙|]+?)" + _ZONE + r"\s*(?:$|[\n·∙.|)])",
+                          re.IGNORECASE)
+
+
+def named_reset(text: Optional[str], now: Optional[datetime] = None) -> Optional[datetime]:
+    """The moment a provider's message names for "come back then" ("resets Nov 27, 7pm (UTC)",
+    "try again at Sep 22nd, 2026 10:06 PM", "try again at 2026-09-22T22:06:00"), or None."""
+    now = now or datetime.now(timezone.utc)
+    for match in _NAMED_RESET.finditer(str(text or "")):
+        when = re.sub(r"^at\s+", "", match.group("when").strip(), flags=re.IGNORECASE)
+        found = _next_reset(when, match.group("tz"), now)
+        if found is not None:
+            return found
+    return None
 
 
 #: The Setup pill states a limit can mean. A monthly spend or credit limit is lifted by a
@@ -370,28 +392,43 @@ class LimitVerdict:
     windows: tuple[str, ...]
     #: When the provider said it reopens (the earliest such window); None when it did not say.
     retry_at: Optional[datetime] = None
+    #: A plan, spend or credit sentence ("You've hit your weekly limit", "credit balance is too
+    #: low") — not only a bare 429 / "too many requests" read as this minute's rate limit.
+    plan: bool = False
 
 
-def limit_verdict(text: Optional[str], now: Optional[datetime] = None
-                  ) -> Optional[LimitVerdict]:
+def _kept(windows: dict[str, dict[str, Any]], strict: bool) -> dict[str, dict[str, Any]]:
+    """STRICT is for text that may hold more than the provider's own error line (a build's log,
+    a test's output, an agent's reply): "expected 'Weekly limit reached' to be visible" or
+    "You've hit your limit of 5 free projects" are not limits. A window counts there only when
+    the sentence named its reset (or it is a spend/credit limit, which never resets on a clock)."""
+    if not strict:
+        return windows
+    return {k: w for k, w in windows.items() if k == MONTHLY or w.get("reset_known")}
+
+
+def limit_verdict(text: Optional[str], now: Optional[datetime] = None, *,
+                  strict: bool = False) -> Optional[LimitVerdict]:
     """THE ONE LIMIT DETECTOR for every keyword check outside the router (Setup's model check,
     a failed decision call, a settled proof, a build's failure class): the provider's own
     sentence → Out of credit or Limited, with the reset it named. None for anything that is not
     a capacity limit. test_one_limit_detector.py feeds every corpus sentence through both this
-    and windows_from_limit_message, so the two cannot drift apart."""
-    windows = windows_from_limit_message(text, now)
+    and windows_from_limit_message, so the two cannot drift apart. `strict`: see _kept."""
+    windows = _kept(windows_from_limit_message(text, now), strict)
     if not windows:
         return None
+    plan = any(w.get("source") == "limit" for w in windows.values())
     if MONTHLY in windows:
-        return LimitVerdict(NO_CREDIT, tuple(sorted(windows)))
+        return LimitVerdict(NO_CREDIT, tuple(sorted(windows)), plan=True)
     said = [_utc(w["resets_at"]) for w in windows.values() if w.get("reset_known")]
     said = [when for when in said if when is not None]
-    return LimitVerdict(RATE_LIMITED, tuple(sorted(windows)), min(said) if said else None)
+    return LimitVerdict(RATE_LIMITED, tuple(sorted(windows)), min(said) if said else None,
+                        plan=plan)
 
 
-def is_limit_message(text: Optional[str]) -> bool:
+def is_limit_message(text: Optional[str], *, strict: bool = False) -> bool:
     """Is this the provider saying a usage, rate, spend or credit limit was hit?"""
-    return bool(windows_from_limit_message(text))
+    return limit_verdict(text, strict=strict) is not None
 
 
 # ── The verdict ────────────────────────────────────────────────────────────────────────────────
