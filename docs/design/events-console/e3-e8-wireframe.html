@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Events Console Wireframes (E3 Teams &amp; E8 My Chat Links)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --canvas:#090D17;--panel:#0E1422;--surface:#141B2B;--border:#1E2940;--border-strong:#2C3A55;
+  --mint:#4FE3C1;--green:#58D68A;--amber:#F5B14C;--red:#F26D6D;--purple:#A78BFA;--blue:#60A5FA;
+  --ink:#E6EDF5;--muted:#8D9AB5;--dim:#5A6785;
+  --sans:"Space Grotesk",ui-sans-serif,system-ui,sans-serif;--mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+  --r:8px;--rs:6px;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--canvas);color:var(--ink);font:14px/1.5 var(--sans)}
+.wrap{max-width:1400px;margin:0 auto;padding:24px 24px 80px}
+.screen-label{font:600 11px var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--purple);margin:36px 0 10px;display:flex;gap:10px;align-items:center}
+.screen-label::after{content:"";flex:1;height:1px;background:var(--border)}
+.screen{background:var(--canvas);border:1px solid var(--border);border-radius:var(--r);padding:20px;display:grid;grid-template-columns:200px 1fr;gap:24px}
+.rail{border-right:1px solid var(--border);padding-right:16px;display:flex;flex-direction:column;gap:4px}
+.rail .brand{font:700 15px var(--sans);margin:0 0 12px}
+.rail .nav{padding:7px 10px;border-radius:var(--rs);color:var(--muted);font:500 13px var(--sans)}
+.rail .nav.on{background:var(--surface);color:var(--ink);border:1px solid var(--border-strong)}
+.main{min-width:0;display:grid;gap:16px}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:var(--r);padding:16px;min-width:0}
+.subcard{background:var(--surface);border:1px solid var(--border);border-radius:var(--rs);padding:12px;min-width:0}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;min-width:0}
+.grow{flex:1}
+.mono{font-family:var(--mono)}
+.muted{color:var(--muted)}.dim{color:var(--dim)}
+.k{font:600 11px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin:0 0 8px}
+h1{font:600 22px var(--sans);margin:0}
+h2{font:600 16px var(--sans);margin:0}
+.split{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,.9fr);gap:16px;align-items:start}
+.two{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px;align-items:start}
+.steps{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.step-dot{width:22px;height:22px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font:700 11px var(--mono);background:var(--surface);border:1px solid var(--border-strong)}
+.step-dot.on{background:var(--blue);color:#061124;border-color:var(--blue)}
+.step-dot.done{background:var(--green);color:#04211a;border-color:var(--green)}
+.step-wire{flex:1;height:1px;background:var(--border);min-width:24px}
+.btn{font:500 12px var(--sans);border-radius:var(--rs);padding:6px 12px;border:1px solid var(--border-strong);background:var(--surface);color:var(--ink);white-space:nowrap}
+.btn.primary{background:var(--blue);color:#061124;border-color:var(--blue);font-weight:600}
+.btn.danger{color:var(--red);border-color:rgba(242,109,109,.5);background:transparent}
+.pill{display:inline-flex;align-items:center;gap:6px;font:500 11px var(--mono);border:1px solid var(--border-strong);border-radius:999px;padding:2px 9px;color:var(--muted);white-space:nowrap}
+.pill.green{color:var(--green);border-color:rgba(88,214,138,.45);background:rgba(88,214,138,.08)}
+.pill.amber{color:var(--amber);border-color:rgba(245,177,76,.45);background:rgba(245,177,76,.08)}
+.field{display:grid;gap:4px;margin-bottom:10px;min-width:0}
+.field label{font:600 11px var(--mono);color:var(--muted)}
+.input{background:var(--canvas);border:1px solid var(--border-strong);border-radius:var(--rs);padding:7px 10px;color:var(--ink);font:13px var(--sans);overflow-wrap:anywhere;min-width:0}
+.codebox{background:var(--canvas);border:1px solid var(--border);border-radius:var(--rs);padding:8px 10px;font:12px var(--mono);overflow-x:auto;overflow-wrap:anywhere;min-width:0}
+@media (max-width:960px){
+  .screen{grid-template-columns:1fr}
+  .rail{display:none}
+  .split,.two{grid-template-columns:1fr}
+}
+@media (max-width:480px){
+  .wrap{padding:12px 12px 48px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="k" style="color:var(--purple)">Wireframe · Events Console (BOSSAPP-1100 P9b-1) · E3 &amp; E8</div>
+  <h1>E3 Connect Microsoft Teams · E8 My Chat Links</h1>
+
+  <!-- E3 -->
+  <div class="screen-label">E3 · Connect Microsoft Teams (Setup › Events › Connect Teams)</div>
+  <section id="screen-e3" class="screen">
+    <aside class="rail">
+      <div class="brand">BOSS</div>
+      <div class="nav">Welcome</div><div class="nav">Projects</div><div class="nav">Agents</div>
+      <div class="nav">Decisions</div><div class="nav on">Setup</div>
+    </aside>
+    <div class="main">
+      <div class="dim">Setup › Events › Connect Microsoft Teams</div>
+      <div class="row">
+        <span class="pill" style="background:rgba(96,165,250,.15);color:var(--blue);border-color:rgba(96,165,250,.45)">T</span>
+        <div><h1>Connect Microsoft Teams</h1><span class="muted">Single-tenant Azure Bot + Teams app package. Replies and decision cards go back to Teams.</span></div>
+      </div>
+      <div class="steps">
+        <span class="step-dot done">✓</span><b>Register Azure Bot</b><span class="step-wire"></span>
+        <span class="step-dot on">2</span><b>App manifest &amp; credentials</b><span class="step-wire"></span>
+        <span class="step-dot">3</span><span class="muted">Entra &amp; test</span>
+      </div>
+      <div class="split">
+        <div style="display:grid;gap:14px">
+          <div class="card">
+            <div class="row"><h2>1 · Azure Bot (single-tenant) &amp; messaging endpoint</h2><span class="grow"></span><button class="btn">Download Teams manifest.json</button></div>
+            <p class="muted">Create a single-tenant Azure Bot in your Entra tenant and paste BOSS&apos;s Bot Framework endpoint URL:</p>
+            <div class="codebox row"><span>https://boss.example.com/v1/intake/teams/tok_teams_••••</span><span class="grow"></span><button class="btn">Copy</button></div>
+          </div>
+          <div class="card">
+            <h2>2 · Paste Entra App ID, Tenant ID &amp; App Password</h2>
+            <div class="two" style="margin-top:10px">
+              <div class="field"><label>MICROSOFT APP ID</label><div class="input mono">11111111-2222-3333-4444-555555555555</div></div>
+              <div class="field"><label>ENTRA TENANT ID</label><div class="input mono">aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee</div></div>
+            </div>
+            <div class="two">
+              <div class="field"><label>APP PASSWORD · WRITE-ONLY</label><div class="input mono">••••••••••••••••••••</div></div>
+              <div class="field"><label>BOT / CHANNEL SCOPE (OPTIONAL)</label><div class="input mono">19:general@thread.tacv2</div></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="row"><h2>Entra ID matching &amp; SSO attestation</h2><span class="grow"></span><span class="pill green">Home tenant verified</span></div>
+            <p class="muted" style="margin:6px 0 0">Non-guest members in your home tenant matching an Entra <span class="mono">aad_oid</span> sign-in link automatically. Guests are never auto-linked.</p>
+          </div>
+        </div>
+        <div style="display:grid;gap:14px">
+          <div class="card">
+            <div class="k">Who answers</div>
+            <div class="field"><label>DEFAULT DM AGENT</label><div class="input">Support Triage</div></div>
+            <div class="dim">Answers Teams direct messages and @mentions that name no other agent.</div>
+          </div>
+          <div class="card">
+            <div class="k">3 · Test connection</div>
+            <p class="muted" style="margin:0 0 10px">Verifies credentials, Entra token exchange, and proactive Bot Framework send.</p>
+            <div class="row"><span class="pill green">Signed ✓</span><span class="pill">Saved</span><span class="pill">Replied</span></div>
+          </div>
+          <div class="row" style="justify-content:flex-end"><button class="btn">Back</button><button class="btn primary">Save and test →</button></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- E8 -->
+  <div class="screen-label">E8 · My Chat Links (My Account › Security)</div>
+  <section id="screen-e8" class="screen">
+    <aside class="rail">
+      <div class="brand">BOSS</div>
+      <div class="nav">Projects</div><div class="nav">Agents</div><div class="nav">Decisions</div>
+      <div class="nav on">Account › Security</div>
+    </aside>
+    <div class="main">
+      <h1>Security</h1>
+      <div class="two">
+        <div class="card">
+          <h2>Sign-in and MFA</h2>
+          <p class="muted">Passkeys, authenticator app, recovery codes, password.</p>
+        </div>
+        <div class="card">
+          <div class="row"><h2>My chat links</h2><span class="grow"></span><span class="pill">2 linked</span></div>
+          <p class="muted" style="margin:6px 0 12px">Chat accounts linked to you for answering decisions and talking to agents.</p>
+          <div class="subcard row" style="margin-bottom:8px">
+            <span class="pill">Slack</span>
+            <div><b>@sean</b><div class="dim mono">Engineering Slack · Code · linked Nov 20</div></div>
+            <span class="grow"></span>
+            <button class="btn danger">Revoke</button>
+          </div>
+          <div class="subcard row">
+            <span class="pill" style="color:var(--blue);border-color:rgba(96,165,250,.45)">Microsoft Teams</span>
+            <div><b>Sean Heiney</b><div class="dim mono">Corp Teams · Entra ID · linked Nov 25</div></div>
+            <span class="grow"></span>
+            <button class="btn danger">Revoke</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+</body>
+</html>

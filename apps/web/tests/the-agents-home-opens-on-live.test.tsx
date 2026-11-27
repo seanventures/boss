@@ -79,7 +79,7 @@ describe("the Agents home", () => {
     window.history.replaceState(null, "", "/?area=workforce&view=directory");
     await mount(<WorkforceArea workforce={workforce} actor="ceo" />);
     const tabs = [...document.querySelectorAll<HTMLElement>('[role="tab"]')].map((t) => t.textContent?.trim());
-    expect(tabs).toEqual(["Live", "Organization", "Directory (2)", "Activity"]);
+    expect(tabs).toEqual(["Live", "Organization", "Directory (2)", "Activity", "Deployments", "Health"]);
     const list = $('[role="tablist"]')!;
     const { act } = await import("react");
     await act(async () => { list.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })); });

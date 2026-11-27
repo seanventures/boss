@@ -13089,7 +13089,7 @@ ALTER TABLE decisions ADD COLUMN IF NOT EXISTS answered_at TIMESTAMPTZ;
 CREATE TABLE IF NOT EXISTS chat_endpoints (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  kind TEXT NOT NULL CHECK (kind IN ('slack', 'telegram', 'discord')),
+  kind TEXT NOT NULL CHECK (kind IN ('slack', 'telegram', 'discord', 'teams')),
   name TEXT NOT NULL,
   config JSONB NOT NULL DEFAULT '{}'::jsonb,      -- channel / chat id, team id, max_tier
   secret_refs JSONB NOT NULL DEFAULT '{}'::jsonb, -- {"signing_secret": "sref_..", ...}
@@ -15443,6 +15443,27 @@ DO $$ BEGIN
   END IF;
 END $$;
 -- ================================ end P9a ==
+
+-- ── P9b-1 (BOSSAPP-1100): Microsoft Teams endpoints, conversation_ref, and write-block tracking ─
+DO $$ BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conrelid = 'chat_endpoints'::regclass
+       AND conname = 'chat_endpoints_kind_check'
+       AND pg_get_constraintdef(oid) NOT LIKE '%teams%'
+  ) THEN
+    ALTER TABLE chat_endpoints DROP CONSTRAINT chat_endpoints_kind_check;
+    ALTER TABLE chat_endpoints ADD CONSTRAINT chat_endpoints_kind_check
+      CHECK (kind IN ('slack', 'telegram', 'discord', 'teams'));
+  END IF;
+END $$;
+ALTER TABLE chat_threads ADD COLUMN IF NOT EXISTS conversation_ref JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE chat_threads ADD COLUMN IF NOT EXISTS deployment_id TEXT;
+ALTER TABLE chat_threads ADD COLUMN IF NOT EXISTS last_inbound_at TIMESTAMPTZ;
+ALTER TABLE chat_threads ADD COLUMN IF NOT EXISTS blocked_at TIMESTAMPTZ;
+ALTER TABLE chat_threads ADD COLUMN IF NOT EXISTS blocked_reason TEXT;
+ALTER TABLE chat_identity_links ADD COLUMN IF NOT EXISTS blocked_at TIMESTAMPTZ;
+ALTER TABLE chat_identity_links ADD COLUMN IF NOT EXISTS blocked_reason TEXT;
 
 -- ================================ P8b: contract v1.1 and the model gateway (BOSSAPP-1070/1071) ==
 -- MODEL-GATEWAY HANDLES (boss-agent-hosts-lld.md §3.9, §3.1): the `boss_mdl_` placeholder a

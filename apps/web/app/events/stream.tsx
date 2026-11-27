@@ -36,7 +36,7 @@ const fmtSecs = (s: number) => (s < 10 ? `${s.toFixed(2)} s` : s < 120 ? `${Math
 /** "Priya in #support", "GitHub · payments-api", from what the event says about itself. */
 export function eventTitle(e: EventSummary): string {
   const who = e.actor.display || e.actor.external_id;
-  if (e.kind === "slack") return `${who || "Someone"} in ${placeOf(e)}`;
+  if (e.kind === "slack" || e.kind === "teams") return `${who || "Someone"} in ${placeOf(e)}`;
   // A record's subject often repeats its connection ("org/repo" · "org/repo@refs/heads/main"):
   // say the connection once, then what happened.
   const what = e.subject && !e.subject.startsWith(e.connection_name) ? e.subject : labelOfKind(e.kind);
@@ -121,7 +121,7 @@ export function StreamTab() {
                   <SourceMark kind={e.kind} size="sm" />
                   <span className="ev-row-main">
                     <span className="ev-row-text">{e.actor.display ? <Face name={e.actor.display} /> : null}<span>{e.text || e.subject || e.type}</span></span>
-                    <span className="ev-row-where">{e.kind === "slack" ? placeOf(e) : e.connection_name || e.type}</span>
+                    <span className="ev-row-where">{e.kind === "slack" || e.kind === "teams" ? placeOf(e) : e.connection_name || e.type}</span>
                   </span>
                   <StatusChip status={e.status} />
                   <span className="ev-row-agent" aria-hidden>{e.runs.length ? <Play size={14} weight="fill" /> : <CaretRight size={14} />}</span>

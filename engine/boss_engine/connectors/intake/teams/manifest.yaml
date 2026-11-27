@@ -1,0 +1,47 @@
+key: teams
+label: Microsoft Teams
+icon: teams
+description: People talk to agents in Microsoft Teams — an @mention in a channel, a direct message, or a thread reply. Uses a single-tenant Azure Bot (Bot Framework RS256 OIDC JWT verification and proactive v3 replies via the reply outbox).
+docs_url: https://learn.microsoft.com/en-us/microsoftteams/platform/bots/what-are-bots
+adapter: TeamsIntakeAdapter
+order: 15
+modes: [push]
+capabilities:
+  verify: true
+  handshake: false
+  parse: true
+  poll: false
+  subscribe: false
+  stream: false
+  reply: true
+  stream_reply: true
+  identity: true
+  conversation: true
+  health: false
+ack:
+  deadline_ms: 15000
+  success_status: 200
+  retry_signal_headers: []
+dedupe: [id]
+auth_fields:
+  - {name: chat_endpoint_id, label: Teams chat endpoint, help: "The install's Teams Azure Bot endpoint (Settings › Chat). Its App ID, Tenant ID, and App Password are used."}
+  - {name: app_id, label: Microsoft App ID, required: false, help: "Single-tenant Azure Bot App (client) ID. Taken from the chat endpoint when empty."}
+  - {name: tenant_id, label: Entra Tenant ID, required: false, help: "Home Entra tenant UUID. Events from other tenants are refused or treated as guests."}
+  - {name: app_password, label: App Password, secret: true, required: false, help: "Entra client secret for the Azure Bot. Read by the reply outbox at send time, never stored in logs or VMs."}
+  - {name: bot_id, label: Bot ID, required: false, help: "Teams bot handle (e.g. 28:<app_id>). Messages it writes never wake an agent."}
+  - {name: default_dm_agent, label: Default agent for direct messages, required: false, help: "The agent key (or route name) that answers a personal Teams message that names no agent."}
+default_hosts:
+  - login.botframework.com
+  - login.microsoftonline.com
+  - api.botframework.com
+  - smba.trafficmanager.net
+  - graph.microsoft.com
+guard_provider: teams
+self_identity: [bot_id, app_id]
+event_types:
+  - com.microsoft.teams.message.mention
+  - com.microsoft.teams.message.personal
+  - com.microsoft.teams.message.channel
+  - com.microsoft.teams.message.thread_reply
+  - com.microsoft.teams.card.action
+  - com.microsoft.teams.reaction

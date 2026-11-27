@@ -29,6 +29,10 @@ const SLACK = {
   mention: "com.slack.message.app_mention", dm: "com.slack.message.im",
   channel: "com.slack.message.channel", thread: "com.slack.message.thread_reply",
 };
+const TEAMS = {
+  mention: "com.microsoft.teams.message.mention", dm: "com.microsoft.teams.message.personal",
+  channel: "com.microsoft.teams.message.channel", thread: "com.microsoft.teams.message.thread_reply",
+};
 
 export const CHAT_WHEN: { key: ChatWhen; word: string; tip: string }[] = [
   { key: "mention", word: "a message mentions @BOSS", tip: "Someone @mentions the BOSS app" },
@@ -76,15 +80,16 @@ function leafOf(c: Cond): Node {
 }
 
 /** The draft as the route's `config.match` and `config.addressing`. */
-export function toMatch(d: Draft, chat: boolean): { match: unknown; addressing?: string } {
+export function toMatch(d: Draft, chat: boolean, kind = "slack"): { match: unknown; addressing?: string } {
   if (d.custom !== null) return { match: d.custom };
   const leaves: Node[] = [];
   let addressing: string | undefined;
+  const map = kind === "teams" ? TEAMS : SLACK;
   if (chat) {
     const when = d.when as ChatWhen;
-    const types = when === "mention" ? [SLACK.mention] : when === "dm" ? [SLACK.dm]
-      : when === "message" ? [SLACK.channel, SLACK.thread] : [SLACK.thread];
-    if (d.followups && (when === "mention" || when === "dm")) types.push(SLACK.thread);
+    const types = when === "mention" ? [map.mention] : when === "dm" ? [map.dm]
+      : when === "message" ? [map.channel, map.thread] : [map.thread];
+    if (d.followups && (when === "mention" || when === "dm")) types.push(map.thread);
     leaves.push({ field: "type", op: "in", value: types });
     addressing = when === "message" ? "channel_all" : when === "followup" ? "thread_followups" : "mention_or_dm";
     const channels = d.channels.map((c) => c.replace(/^#/, "").trim()).filter(Boolean);
@@ -127,10 +132,13 @@ export function fromMatch(match: unknown, addressing: string, chat: boolean): Dr
   }
   if (chat) {
     const t = new Set(types ?? []);
+    const hasThread = t.has(SLACK.thread) || t.has(TEAMS.thread);
+    const hasDm = t.has(SLACK.dm) || t.has(TEAMS.dm);
+    const hasMention = t.has(SLACK.mention) || t.has(TEAMS.mention);
     if (addressing === "channel_all") { d.when = "message"; d.followups = true; }
     else if (addressing === "thread_followups") { d.when = "followup"; d.followups = true; }
-    else if (t.has(SLACK.dm) && !t.has(SLACK.mention)) { d.when = "dm"; d.followups = t.has(SLACK.thread); }
-    else { d.when = "mention"; d.followups = types === null || t.has(SLACK.thread); }
+    else if (hasDm && !hasMention) { d.when = "dm"; d.followups = hasThread; }
+    else { d.when = "mention"; d.followups = types === null || hasThread; }
   }
   if (!chat && d.when.endsWith("*") && !d.when.endsWith(".*")) d.when = `${d.when.slice(0, -1)}.*`.replace(/\.\.\*$/, ".*");
   return d;

@@ -282,6 +282,104 @@ def _github_person(connection: Connection, event: IntakeEvent, org_id: Optional[
     return str(row) if row else None
 
 
+#: Optional Graph lookup seam for tests: (conn, aad_oid, tenant_id) -> {"mail"|"userPrincipalName", "userType"} or None
+GRAPH_USER_LOOKUP: Any = None
+
+
+def _upsert_chat_link(connection: Connection, endpoint: Optional[Mapping[str, Any]],
+                      connection_row: Mapping[str, Any], event: IntakeEvent, *,
+                      principal_id: str, person_actor: str, method: str,
+                      email: Optional[str] = None, idp_subject: Optional[str] = None,
+                      attested_by: str = "", idp_id: Any = None) -> Optional[str]:
+    if endpoint is None or not event.bossactor.external_id:
+        return None
+    link_id = make_id("chl")
+    got = connection.execute(text("""
+        INSERT INTO chat_identity_links (id, endpoint_id, external_user_id, external_name,
+               principal_id, person_actor, verified_at, method, external_email, idp_subject,
+               attested_by)
+        VALUES (:i, :e, :u, :n, :p, :a, now(), :m, :em, :sub, :by)
+        ON CONFLICT DO NOTHING RETURNING id"""),
+        {"i": link_id, "e": endpoint["id"], "u": event.bossactor.external_id,
+         "n": (event.bossactor.display or "")[:200], "p": principal_id,
+         "a": person_actor, "m": method, "em": email, "sub": idp_subject,
+         "by": attested_by}).scalar()
+    if got is None:
+        got = connection.execute(text("""
+            UPDATE chat_identity_links SET principal_id = :p, person_actor = :a,
+                   verified_at = COALESCE(verified_at, now()), method = :m,
+                   external_email = COALESCE(:em, external_email),
+                   idp_subject = COALESCE(:sub, idp_subject),
+                   attested_by = COALESCE(NULLIF(:by, ''), attested_by),
+                   link_code_hash = NULL, code_expires_at = NULL, updated_at = now()
+             WHERE endpoint_id = :e AND external_user_id = :u AND revoked_at IS NULL
+             RETURNING id"""),
+            {"p": principal_id, "a": person_actor, "m": method, "em": email,
+             "sub": idp_subject, "by": attested_by, "e": endpoint["id"],
+             "u": event.bossactor.external_id}).scalar()
+    out_id = str(got) if got else None
+    emit_event(connection, str(connection_row["project_id"]), "chat.link_confirmed",
+               "intake", "chat_endpoint", str(endpoint["id"]),
+               {"kind": endpoint.get("kind"), "principal_id": principal_id,
+                "external_user_id": event.bossactor.external_id, "method": method,
+                **({"idp": idp_id} if idp_id else {})})
+    return out_id
+
+
+def _entra_aad_oid_link(connection: Connection, endpoint: Optional[Mapping[str, Any]],
+                        connection_row: Mapping[str, Any], conn: IntakeConnection,
+                        event: IntakeEvent) -> tuple[Optional[str], Optional[str], str]:
+    """Entra object id (`aad_oid`) auto-link for non-guest home-tenant Teams members."""
+    from ..identity.users import by_email, by_id
+
+    data = event.data or {}
+    aad_oid = str(data.get("aad_oid") or "").strip()
+    if not aad_oid:
+        return None, None, "no_aad_oid"
+    if is_guest(conn, event):
+        return None, None, "guest_never_auto_linked"
+    if not home_known(conn, event):
+        return None, None, "workspace_unknown"
+    if endpoint is not None and event.bossactor.external_id and connection.execute(text(
+            "SELECT 1 FROM chat_identity_links WHERE endpoint_id = :e AND external_user_id = :u "
+            "AND revoked_at IS NOT NULL LIMIT 1"),
+            {"e": endpoint["id"], "u": event.bossactor.external_id}).scalar():
+        return None, None, "link_revoked"
+    org = connection.execute(text(
+        "SELECT w.org_id FROM projects p JOIN workspaces w ON w.id = p.workspace_id "
+        "WHERE p.id = :p"), {"p": conn.project_id}).scalar()
+    pid = connection.execute(text("""
+        SELECT i.principal_id FROM identity_user_identities i
+          JOIN identity_principals p ON p.id = i.principal_id
+          LEFT JOIN identity_providers idp ON idp.id = i.provider_id
+         WHERE i.subject = :oid
+           AND p.status = 'active' AND p.org_id = :org
+           AND (idp.preset IN ('entra', 'microsoft', 'azure_ad')
+                OR lower(i.issuer) LIKE '%login.microsoftonline.com%'
+                OR lower(i.issuer) LIKE '%sts.windows.net%')
+         LIMIT 1"""), {"oid": aad_oid, "org": org or "-"}).scalar()
+    user = by_id(connection, str(pid), org_id=org) if pid else None
+    graph_email = None
+    if user is None and callable(GRAPH_USER_LOOKUP):
+        info = GRAPH_USER_LOOKUP(conn, aad_oid, str(data.get("tenant_id") or conn.get("tenant_id") or ""))
+        if isinstance(info, dict):
+            if str(info.get("userType") or "").lower() == "guest":
+                return None, None, "guest_never_auto_linked"
+            graph_email = str(info.get("mail") or info.get("userPrincipalName") or "").strip().lower() or None
+            if graph_email:
+                found = by_email(connection, graph_email)
+                if found and found.status == "active" and found.email_verified_at and found.org_id == org:
+                    user = found
+    if user is None or user.status != "active":
+        return None, None, "no_entra_identity"
+    link_id = _upsert_chat_link(
+        connection, endpoint, connection_row, event,
+        principal_id=user.principal_id, person_actor=_person_actor(user),
+        method="aad_oid", email=graph_email, idp_subject=aad_oid,
+    )
+    return user.principal_id, link_id, "aad_oid"
+
+
 def find_person(connection: Connection, connection_row: Mapping[str, Any], conn: IntakeConnection,
                 event: IntakeEvent) -> tuple[Optional[str], Optional[str], str, str]:
     """(principal_id, link_id, method, reason) for the event's actor, per source."""
@@ -303,6 +401,14 @@ def find_person(connection: Connection, connection_row: Mapping[str, Any], conn:
         principal = _github_person(connection, event, org)
         if principal:
             return principal, None, "github", "github sign-in"
+    if conn.kind == "teams" and (event.data or {}).get("aad_oid"):
+        principal, link_id, oid_reason = _entra_aad_oid_link(
+            connection, endpoint, connection_row, conn, event
+        )
+        if principal:
+            return principal, link_id, "aad_oid", "entra aad_oid"
+        if oid_reason in ("guest_never_auto_linked", "workspace_unknown", "link_revoked"):
+            return None, None, "", oid_reason
     principal, link_id, method = _auto_link(connection, endpoint, connection_row, conn, event)
     if principal:
         return principal, link_id, method, "sso attested"

@@ -278,14 +278,14 @@ def _required_in(field: Mapping[str, Any], mode: str) -> bool:
 
 
 #: Chat sources whose connection rides on a chat endpoint (§15 D1), by intake kind.
-CHAT_ENDPOINT_KINDS = {"slack": "slack"}
+CHAT_ENDPOINT_KINDS = {"slack": "slack", "teams": "teams"}
 
 
 def _bind_chat_endpoint(connection: Connection, project_id: str, kind: str,
                         cfg: dict) -> Optional[dict]:
     """The chat endpoint a chat connection rides on (`config.chat_endpoint_id`): same project,
-    same channel kind, active. Its team id is copied into the connection's config when the
-    connection names none (the guest / other-workspace checks read it)."""
+    same channel kind, active. Its team/tenant/app ids are copied into the connection's config when
+    the connection names none (the guest / other-workspace / JWT checks read them)."""
     wanted = CHAT_ENDPOINT_KINDS.get(kind)
     endpoint_id = str(cfg.get("chat_endpoint_id") or "").strip()
     if not wanted:
@@ -306,10 +306,11 @@ def _bind_chat_endpoint(connection: Connection, project_id: str, kind: str,
         {"e": endpoint_id}).scalar()
     if taken:
         raise IntakeServiceError(f"chat endpoint {endpoint_id} already has an intake connection "
-                                 f"({taken}): one Slack app, one connection.", status=409,
+                                 f"({taken}): one chat app, one connection.", status=409,
                                  code="endpoint_taken")
     ecfg = _json(row.get("config"), {}) or {}
-    for key in ("team_id", "bot_user_id", "bot_id"):
+    for key in ("team_id", "bot_user_id", "bot_id", "app_id", "tenant_id",
+                "service_url", "oidc_config_url", "token_url"):
         if ecfg.get(key) and not cfg.get(key):
             cfg[key] = ecfg[key]
     cfg["chat_endpoint_id"] = endpoint_id
@@ -764,7 +765,8 @@ def _is_person_address(ev: Mapping[str, Any], channel: str, bot_user: str) -> bo
     kind = str(ev.get("type") or env.get("type") or raw_ev.get("type") or "")
     text_ = str(data.get("text") or raw_ev.get("text") or "")
     mentioned = bool(bot_user) and f"<@{bot_user}>" in text_
-    addressed = "app_mention" in kind or im or mentioned or data.get("mentions_bot") is True
+    addressed = ("app_mention" in kind or "message.mention" in kind or im
+                 or mentioned or data.get("mentions_bot") is True)
     if not addressed:
         return False
     if channel and ch and ch != channel and not im:
@@ -1389,6 +1391,30 @@ def process_one(engine: Any, settings: Any, row: Mapping[str, Any], *,
                         conversation = None
                 if conversation and ev.bossconversation is None:
                     ev.bossconversation = {"key": conversation}
+                if crow.get("chat_endpoint_id") and isinstance(ev.bossconversation, dict) and \
+                        isinstance(ev.bossconversation.get("conversation_ref"), dict) and \
+                        ev.bossconversation["conversation_ref"]:
+                    # Refresh conversation_ref (serviceUrl can change) & last_inbound_at (§9.3).
+                    conv_ref = ev.bossconversation["conversation_ref"]
+                    ch_ext = str(ev.bossconversation.get("channel") or ev.data.get("channel") or "")
+                    th_ext = str(ev.bossconversation.get("thread_ts") or conversation or ch_ext)
+                    if ch_ext and th_ext:
+                        c.execute(text("""
+                            INSERT INTO chat_threads (id, endpoint_id, project_id, external_channel_id,
+                                   external_thread_id, conversation_key, conversation_ref,
+                                   last_inbound_at)
+                            VALUES (:i, :e, :p, :ch, :th, :ck, CAST(:cref AS JSONB), :now)
+                            ON CONFLICT (endpoint_id, external_channel_id, external_thread_id)
+                            DO UPDATE SET
+                                conversation_ref = EXCLUDED.conversation_ref,
+                                conversation_key = COALESCE(EXCLUDED.conversation_key,
+                                                            chat_threads.conversation_key),
+                                last_inbound_at = EXCLUDED.last_inbound_at,
+                                updated_at = now()"""),
+                            {"i": make_id("cht"), "e": crow["chat_endpoint_id"],
+                             "p": conn.project_id, "ch": ch_ext[:200], "th": th_ext[:200],
+                             "ck": conversation, "cref": json.dumps(conv_ref, default=str),
+                             "now": now})
                 if primary is None:
                     primary, primary_conversation = ev, conversation
                     parsed_fields = _fields_of(primary, conversation)
@@ -1610,8 +1636,9 @@ POLL_DORMANT_SECONDS = 3600
 
 
 def poll_seconds(config: Mapping[str, Any]) -> int:
+    raw_val = (config or {}).get("poll_seconds") or (config or {}).get("poll_interval_seconds") or POLL_SECONDS_DEFAULT
     try:
-        wanted = int(str((config or {}).get("poll_seconds") or POLL_SECONDS_DEFAULT).strip())
+        wanted = int(str(raw_val).strip())
     except ValueError:
         wanted = POLL_SECONDS_DEFAULT
     return max(POLL_SECONDS_MIN, wanted)
@@ -1654,18 +1681,29 @@ def poll_due(engine: Any, settings: Any = None, *, now: Optional[datetime] = Non
     out = {"polled": 0, "inserted": 0, "skipped": 0, "failed": 0}
     with begin(engine) as c:
         rows = [dict(r) for r in c.execute(text(
-            "SELECT * FROM intake_connections WHERE mode = 'poll' AND status = 'active' "
+            "SELECT * FROM intake_connections WHERE mode IN ('poll', 'push') AND status = 'active' "
             "AND (CAST(:only AS TEXT) IS NULL OR id = :only)"), {"only": connection_id}
         ).mappings()]
     for crow in rows:
+        adapter = REGISTRY.get(str(crow["kind"]))
+        if adapter is None or not adapter.can("poll"):
+            continue
+        if crow["mode"] == "push":
+            probe_conn = IntakeConnection(
+                str(crow["id"]), str(crow.get("project_id") or ""), str(crow["kind"]),
+                mode="push", config=_json(crow.get("config"), {}) or {},
+            )
+            checker = getattr(adapter, "wants_safety_net_poll", None)
+            if callable(checker):
+                if not checker(probe_conn):
+                    continue
+            elif not probe_conn.get("poll_safety_net"):
+                continue
         health = _json(crow.get("health"), {}) or {}
         state = dict(health.get("poll") or {})
         due = _event_time(state.get("next_poll_at"))
         if due is not None and due > now:
             out["skipped"] += 1
-            continue
-        adapter = REGISTRY.get(str(crow["kind"]))
-        if adapter is None or not adapter.can("poll"):
             continue
         interval = poll_seconds(_json(crow.get("config"), {}) or {})
         with begin(engine) as c:

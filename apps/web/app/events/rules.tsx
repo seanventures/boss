@@ -221,8 +221,8 @@ function RuleEditor({ start, conn, chat, agents, rules, eventTypes, canEdit, bud
   let jsonError = "";
   if (e.showJson) {
     try { match = JSON.parse(e.json || "null"); } catch { jsonError = "That is not valid JSON."; }
-  } else match = toMatch(e.draft, chat).match;
-  const addressing = e.showJson ? rule?.addressing : toMatch(e.draft, chat).addressing;
+  } else match = toMatch(e.draft, chat, conn.kind).match;
+  const addressing = e.showJson ? rule?.addressing : toMatch(e.draft, chat, conn.kind).addressing;
   const key = JSON.stringify(match);
 
   useEffect(() => {
