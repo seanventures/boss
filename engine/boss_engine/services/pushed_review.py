@@ -32,7 +32,12 @@ def inspect(git_dir: Path, base: str, head: str) -> SubmittedChange:
         tree = local_repo.git(["ls-tree", "-r", "-z", head], git_dir=git_dir, raw=True)
         for entry in tree.split(b"\0")[:-1]:
             meta, name = entry.split(b"\t", 1)
-            if not prose_file(name.decode("utf-8", "replace"), meta.split()[0]):
+            mode = meta.split()[0]
+            # The local-repo seed always includes a regular .gitignore. A change to this
+            # file already failed the changed-path check above.
+            if name == b".gitignore" and mode == b"100644":
+                continue
+            if not prose_file(name.decode("utf-8", "replace"), mode):
                 documents_only = False
                 break
     return SubmittedChange(paths, documents_only)

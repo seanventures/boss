@@ -13,11 +13,14 @@ def test_pushed_documents_are_identified_from_both_commits(tmp_path):
         return git("rev-parse", "HEAD")
 
     git("init", "-q")
+    (tmp_path / ".gitignore").write_text("*.log\n")
     base = commit("README.md", "review fixture\n")
     head = commit("review.txt", "changes\n")
     db = tmp_path / ".git"
     reviewed = pushed_review.inspect(db, base, head)
     assert reviewed.documents_only and reviewed.paths == ["review.txt"]
+    new_ignore = commit(".gitignore", "*.tmp\n")
+    assert not pushed_review.inspect(db, head, new_ignore).documents_only
     app = commit("run.py", "print('ready')\n")
     docs = commit("review.txt", "more changes\n")
     assert not pushed_review.inspect(db, app, docs).documents_only
