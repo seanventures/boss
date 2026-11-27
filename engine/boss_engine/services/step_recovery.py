@@ -381,9 +381,38 @@ def runs_queued_seconds(connection: Connection, run_ids, *, since: Any = "epoch"
                 {"ids": builds, "since": str(since or "epoch")}).scalar()
     except Exception:  # noqa: BLE001
         return 0.0
+    # AND EVERY WAIT FOR THE HEAVY-BUILD SLOT MID-BUILD (heavy_slot): a build that gave its
+    # slot back while it thought and queued to take it again was waiting in line, not working.
+    waited = float(waited or 0.0) + heavy_slot_waited_seconds(connection, builds, since=since)
     # Never more than a ceiling: a repair build no worker ever takes must not hold the window
     # open forever (its own job lifecycle ends it; this ends the window's patience).
     return min(max(0.0, float(waited or 0.0)), MAX_QUEUE_EXCLUDED_SECONDS)
+
+
+def heavy_slot_waited_seconds(connection: Connection, run_ids, *, since: Any = "epoch") -> float:
+    """Seconds these builds waited mid-run to take their heavy-build slot back: every finished
+    wait (`code_task.heavy_slot_acquired`) since `since`, and the one still going. 0 when
+    unreadable: an unknown wait is never subtracted."""
+    builds = [str(b) for b in run_ids or [] if b]
+    if not builds:
+        return 0.0
+    try:
+        with connection.begin_nested():
+            done = connection.execute(text(
+                "SELECT COALESCE(SUM((data->>'waited_seconds')::float), 0) FROM events "
+                "WHERE event_type = 'code_task.heavy_slot_acquired' AND entity_id = ANY(:ids) "
+                "AND created_at >= CAST(:since AS timestamptz)"),
+                {"ids": builds, "since": str(since or "epoch")}).scalar()
+            going = connection.execute(text(
+                "SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (now() - GREATEST(h.waiting_since, "
+                "CAST(:since AS timestamptz))))), 0) FROM heavy_slot_releases h "
+                "JOIN jobs j ON j.id = h.job_id AND j.fence_epoch = h.fence_epoch "
+                "WHERE h.state = 'waiting' AND h.waiting_since IS NOT NULL "
+                "AND h.run_id = ANY(:ids) AND j.status IN ('leased', 'running')"),
+                {"ids": builds, "since": str(since or "epoch")}).scalar()
+    except Exception:  # noqa: BLE001
+        return 0.0
+    return max(0.0, float(done or 0.0)) + max(0.0, float(going or 0.0))
 
 
 def _money(micros: int) -> str:

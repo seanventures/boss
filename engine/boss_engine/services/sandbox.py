@@ -716,6 +716,15 @@ class EphemeralSandbox:
         `env`: values BOSS chose for THIS command (a multi-service app's e2e phase is told where
         the backend it started listens: stack_verify). Added after the allow-list, never a
         credential: a credential-shaped name is dropped."""
+        # A build/test command works the machine: it runs holding the build's heavy slot
+        # (heavy_slot; a no-op outside a tracked build).
+        from . import heavy_slot
+
+        with heavy_slot.heavy():
+            return self._run(command, timeout=timeout, cwd=cwd, env=env)
+
+    def _run(self, command: str, *, timeout: Optional[int] = None, cwd: Optional[str] = None,
+             env: Optional[dict[str, str]] = None) -> CommandResult:
         extra_env = dict(env or {})
         self._require_provisioned()
         argv = shlex.split(command)

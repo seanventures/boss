@@ -3593,10 +3593,14 @@ def _run_code_task_once(engine, settings: Settings, jobs, run_id: str,
     from ..app_links.run_env import for_run as _link_env
 
     from .sandbox_identity import SandboxUnavailable
+    from . import heavy_slot
     from . import transient_retry as _transient_retry
 
     try:
-        with owned_process.owner_scope("code_run", run_id, fresh=True), _sandbox_bind(run_id), \
+        # The job's heavy-build slot follows the work (heavy_slot): given back while the build
+        # only thinks, taken back, in order, before it works the machine again.
+        with heavy_slot.tracking(engine, run_id, lease_token=fencing_token), \
+                owned_process.owner_scope("code_run", run_id, fresh=True), _sandbox_bind(run_id), \
                 _link_env(engine, run_id, _run_project(engine, run_id)), \
                 _transient_retry.reporting(_transient_retry_recorder(engine, run_id)):
             return _run_code_task(engine, settings, jobs, run_id, fencing_token=fencing_token)

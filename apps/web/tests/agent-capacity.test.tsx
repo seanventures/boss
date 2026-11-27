@@ -51,3 +51,26 @@ it("says why capacity could not be read and what to do", async () => {
     host.remove();
   }
 });
+
+it("says why the machine runs that many builds, and what the doctor added", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const state = { worker_slots: 4, worker_slots_why: "2 heavy at 1.2 GB each leaves 4.1 GB for builds that are thinking",
+    builds_at_once: { value: 3, auto: true, pinned: null, warning: null, boost: 1,
+      why: "7.7 GB memory, 1.2 GB kept free: room for 5 at 1.2 GB each; 4 CPU cores: 2 (one per 2 cores)" },
+    next_build: { admitted: true, shortfall: null } };
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ admission: state }) }));
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(<AgentCapacityRow />));
+    expect(host.textContent).toContain("Now: 3 heavy builds (+1 by the system doctor)");
+    const why = host.querySelector('[data-testid="su-capacity-why"]')!;
+    expect(why.textContent).toContain("measured on this machine");
+    expect(why.getAttribute("data-tip")).toContain("4 CPU cores: 2 (one per 2 cores)");
+    expect(why.getAttribute("data-tip")).toContain("Job slots: 2 heavy at 1.2 GB");
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+  }
+});

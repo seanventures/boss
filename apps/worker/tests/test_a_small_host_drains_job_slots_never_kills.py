@@ -71,10 +71,11 @@ def test_the_small_host_gets_its_saved_job_slots_not_its_build_limit(monkeypatch
     body = _small_host_admission(monkeypatch, saved_slots=3)
     assert body["admission"]["builds_at_once"]["value"] == 2
     assert worker_main.worker_slots(_HealthClient(body), _Settings()) == 3
-    # Until the operator saves slots, the old rule: one per build at once, so an upgrade
-    # never raises concurrency by itself.
+    # Until the operator saves slots, measured on the host (admission.derived_worker_slots):
+    # 2 heavy builds and room for thinking ones, at most the worker's 4.
     body = _small_host_admission(monkeypatch)
-    assert worker_main.worker_slots(_HealthClient(body), _Settings()) == 2
+    assert body["admission"]["worker_slots_auto"] is True
+    assert worker_main.worker_slots(_HealthClient(body), _Settings()) == 4
 
 
 def test_job_slots_are_bounded_and_an_unreadable_api_means_one(monkeypatch):

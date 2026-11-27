@@ -8102,6 +8102,16 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             _halt_if_needs_person()
             if record:
                 _manifest_tampered[0] = None
+            # ONE HEAVY STEP, not one per command: the build keeps its slot for the whole
+            # verify (install, suite, flaky reruns) instead of handing it to another build
+            # between commands while the review seats think beside it (heavy_slot).
+            from . import heavy_slot as _heavy_slot
+
+            with _heavy_slot.heavy(run_id):
+                return _run_verify_held(record=record)
+
+        def _run_verify_held(*, record: bool = True):
+            nonlocal last_verify_output, last_verify_command, last_verify_cwd
             result = _run_verify_once(record=record)
             if (record and not result.ok and not verification_target.install_failure(result)
                     and not getattr(result, "timed_out", False)):

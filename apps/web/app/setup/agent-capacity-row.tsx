@@ -20,9 +20,17 @@ const BUILDS_TIP = "Heavy builds at once. Never above what this machine measures
 
 type Capacity = {
   worker_slots: number;
-  builds_at_once: { value: number; auto: boolean; pinned: number | null; warning: string | null };
+  worker_slots_why?: string;
+  builds_at_once: { value: number; auto: boolean; pinned: number | null; warning: string | null; why?: string; boost?: number };
   next_build: { admitted: boolean; shortfall: string | null };
 };
+
+/** Why these numbers, in the machine's own measurements (admission's `why`). */
+export function capacityWhy(state: Capacity | null): string {
+  if (!state) return "";
+  return [state.builds_at_once?.why ? `Heavy builds: ${state.builds_at_once.why}` : "",
+          state.worker_slots_why ? `Job slots: ${state.worker_slots_why}` : ""].filter(Boolean).join(" ");
+}
 
 /** Why the limits could not be read, and what to do: never a bare "unavailable". */
 export function capacityReadError(status: number): string {
@@ -85,7 +93,9 @@ export function AgentCapacityRow() {
         <GatedButton permission="project:update" className="su-btn su-btn-sm" disabled={busy || !state} onClick={() => void save()}>Save</GatedButton>
       </div>
       {bao ? <Tip tip={[bao.warning, waiting ? `Waiting: ${waiting}` : ""].filter(Boolean).join(" ") || "Heavy builds this machine runs at once now."}
-                  className="su-faint" testid="su-capacity-now">{`Now: ${bao.value} heavy build${bao.value === 1 ? "" : "s"}${waiting ? ", waiting" : ""}`}</Tip> : null}
+                  className="su-faint" testid="su-capacity-now">{`Now: ${bao.value} heavy build${bao.value === 1 ? "" : "s"}${bao.boost ? ` (+${bao.boost} by the system doctor)` : ""}${waiting ? ", waiting" : ""}`}</Tip> : null}
+      {capacityWhy(state) ? <Tip tip={capacityWhy(state)} className="su-faint" testid="su-capacity-why">
+        <span>{bao?.auto ? "Why this number: measured on this machine" : "Why this number"}</span></Tip> : null}
     </div>
   </section>;
 }

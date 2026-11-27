@@ -225,6 +225,11 @@ WORKFLOW_GATE_ACTIONS = frozenset({
 #: it carries anything out, so it says what it does.
 RECORDED_ON_APPROVAL = frozenset({
     "approve_changeset",
+    # The system doctor's capacity changes (capacity_steward): written already decided, in
+    # "Decided for you"; the change was made when it was recorded, Approve carries out nothing.
+    "capacity_raise",
+    "capacity_lower",
+    "capacity_reset",
     "approve_initiative_budget",
     "attach_required_evidence",
     "configure_or_enable_infra_provisioning",

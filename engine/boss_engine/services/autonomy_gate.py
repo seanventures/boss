@@ -70,7 +70,7 @@ EVENT = "decision.auto_decided"
 
 #: Undo kinds with a handler (`undo`). A kind starting `none:` has no undo, and says why.
 UNDO_KINDS = ("send_back", "revert_merge", "rollback_deploy", "revoke_grant", "disable_skill",
-              "remove_self_fix", "cancel_run")
+              "remove_self_fix", "cancel_run", "restore_capacity")
 NONE_RECORD = "none:it only recorded an answer; nothing was carried out that can be taken back"
 NONE_NOTICE = "none:a notice; acknowledging it changed nothing"
 NONE_SPEND = "none:spend cannot be recalled; lower the top-up in the autonomy policy"
@@ -1037,6 +1037,14 @@ def _undo_remove_self_fix(connection, settings, decision_id, project_id, rec, ac
     return f"removal asked ({removal.get('decision_id') or 'queued'})"
 
 
+def _undo_restore_capacity(connection: Any, settings: Any, decision_id: str, project_id: str,
+                           rec: dict, actor: str) -> str:
+    """The system doctor added a heavy slot (capacity_steward): take it away, by draining."""
+    from . import capacity_steward
+
+    return capacity_steward.undo_raise(connection, actor=actor)
+
+
 UNDO_HANDLERS = {
     "send_back": _undo_send_back,
     "revert_merge": _undo_revert_merge,
@@ -1045,6 +1053,7 @@ UNDO_HANDLERS = {
     "disable_skill": _undo_disable_skill,
     "remove_self_fix": _undo_remove_self_fix,
     "cancel_run": _undo_cancel,
+    "restore_capacity": _undo_restore_capacity,
 }
 
 

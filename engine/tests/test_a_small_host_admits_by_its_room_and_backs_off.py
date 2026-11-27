@@ -58,7 +58,11 @@ def test_job_slots_are_their_own_setting_not_one_because_one_build_fits(monkeypa
     monkeypatch.setattr(admission, "current_level", lambda *_a, **_k: admission.L0)
     snap = admission.snapshot(_Conn(), cap=SMALL_HOST)
     assert snap["builds_at_once"]["value"] == 1
-    assert snap["worker_slots"] == 1                     # the upgrade default: no surprise raise
+    # Unsaved, job slots are measured (derived_worker_slots): builds give their heavy slot
+    # back while they think (heavy_slot), so one heavy build still leaves room for three more
+    # thinking builds on this 8 GB box — the heavy work stays at one.
+    assert snap["worker_slots"] == 4 and snap["worker_slots_auto"]
+    assert "thinking" in snap["worker_slots_why"]
     state["agent_capacity"] = {"worker_slots": 3}
     snap = admission.snapshot(_Conn(), cap=SMALL_HOST)
     assert snap["worker_slots"] == 3 and snap["builds_at_once"]["value"] == 1
