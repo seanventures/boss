@@ -124,11 +124,25 @@ export type Settings = {
   self_fix_max_minutes: number; self_fix_attempts_per_signature: number; self_fix_max_diff_lines: number;
   self_fix_health_minutes: number;
 };
+/** One thing a self-fix needs (ENT-REC-54): the source BOSS was installed from, its mirror, the host
+ *  installer, the mode. A missing one names ONE action: a host command, the switch, or a link. */
+export type ReadinessPiece = {
+  key: "source" | "mirror" | "installer" | "mode"; label: string; ok: boolean; state: string; why: string;
+  action: null | { kind: "command"; label: string; command: string } | { kind: "switch"; label: string }
+    | { kind: "link"; label: string; href: string };
+};
+export type Readiness = {
+  ready: boolean; pieces: ReadinessPiece[]; auto_install: boolean;
+  install: { recorded: boolean; path: string | null; kind: string | null; commit: string | null;
+             release_tag: string | null; dirty: boolean; sentence: string };
+};
 export type SettingsView = {
   switch: { on: boolean; stored?: boolean; set_by?: string | null; at?: string | null; why?: string };
-  settings: Settings; auto_install: "off"; auto_install_why: string; can_install: boolean; why_not: string;
+  settings: Settings; auto_install: "on" | "off"; auto_install_why: string; can_install: boolean; why_not: string;
   stack: Array<{ position: number; self_fix_id: string; commit_sha: string; status: string; title: string | null; class_signature: string }>;
   env_off: boolean; month_spent_usd: number; installer: { last_seen_at: string | null; watching: boolean };
+  /** Absent from a BOSS older than the install record. */
+  readiness?: Readiness;
 };
 export type Finding = { where: "diff" | "title" | "body" | "evidence" | "trailers"; kind: string; detail: string };
 export type Send = {

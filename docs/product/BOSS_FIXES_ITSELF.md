@@ -380,6 +380,7 @@ Open findings get one repair round (as today). Still open → `refused: review`,
 
 - A bare repository BOSS manages, `boss_community_selfsrc` volume (`/var/lib/boss/private/selfsrc/boss.git`), registered as repository kind **`boss_self`** (a new value beside the `github_repository_bindings` rows; `repo_registry.resolve_repository_target` resolves `repository="boss"` to it).
 - **Seeded** by the host self-installer at install/upgrade time: `git clone --mirror <install checkout>` (fast, offline, includes the exact `BOSS_SOURCE_SHA` and the release tags). The checkout's `origin` (normally `github.com/seanventures/boss`) is recorded as `upstream`.
+- **As built (ENT-REC-54).** `install.sh` runs `self_fix_installer.py seed` on every install and upgrade (the `# >>> self-fix source` block), not only when someone seeded by hand, and the installer refreshes it again whenever the stack moves. `seed` also writes the **install record** `.boss/selfsrc/install.json`: the checkout's host path, commit, clean or dirty (tracked files only), release tag and ref, branch, and `origin` stripped of any credential, plus the mirror's state. It is mounted read-only with the mirror, so BOSS can answer "where am I installed and what source am I running" (Govern › Self-fix, the `inspect_self` tool's `install`) without the checkout ever being mounted (pinned by `test_the_install_checkout_is_never_mounted_into_a_container`). An archive install records `kind: archive` and the plain reason; a dirty checkout records why a fix cannot be built on it (the fix would be built without the uncommitted changes and installing it would drop them). Neither ever fails the install.
 - **Base commit** for a self-fix = the running `BOSS_SOURCE_SHA` plus the current stack head (fixes stack in order).
 - The sandbox clones from the mirror (local path, no egress, no token). The sandbox can **never** push to the mirror; BOSS's pipeline writes the self-fix branch after the gates pass.
 
@@ -423,7 +424,7 @@ A fix dropped as `dropped_upstream` marks its self-fix **In release** and its re
 
 **The self-installer** (F4; open decision D1). `scripts/install/self_fix.sh`, invoked as `boss self-fix …`:
 - `boss self-fix install <sfx>`: the person can always run it by hand; the card shows the exact command.
-- `boss self-fix watch`: an opt-in user service (launchd on macOS, systemd user unit on Linux) installed with the person's consent the first time they press **Install**. It polls `GET /v1/self-fixes/tickets` on the local API every 10 s with a host credential (a service-account key scoped to `self_fix:ticket_read` and `self_fix:ticket_report` only, stored 0600 next to `.env`).
+- `boss self-fix watch`: an opt-in user service (launchd on macOS, systemd user unit on Linux) installed with the person's consent the first time they press **Install**. As built (ENT-REC-54): `boss self-fix enable` enrols the key and installs the service in one step, and `install.sh` runs it itself on a **development** install the person ran on their own machine (not as root, not in CI, not when `BOSS_SELF_FIX` or `BOSS_SELF_FIX_INSTALLER` is off). A production install leaves it to a person; Govern › Self-fix names the command. It polls `GET /v1/self-fixes/tickets` on the local API every 10 s with a host credential (a service-account key scoped to `self_fix:ticket_read` and `self_fix:ticket_report` only, stored 0600 next to `.env`).
 
 **A ticket** is `{ticket_id, sfx_id, decision_id, base_sha, fix_commit_sha, stack_ref, expected_stack_head, approved_by, approved_at, expires_at}` signed with the install's EdDSA signing key (`identity/signing_keys.py`). The self-installer verifies the signature, that the decision is `approved` (re-read), that `fix_commit_sha` is in the mirror and its tree hash matches the one the gates ran on, and that it has not expired (1 h). It executes nothing else.
 
@@ -632,6 +633,8 @@ The self-fix decision uses the existing `DecisionService.transition` path, so th
 
 ### 8.3 Auto-install policy (R5)
 
+**As built (BOSSAPP-1441, ENT-REC-54): dev autonomy decides.** `self_fix.install` is an `ask_prod_only` card (`autonomy_gate.ACTIONS`): on a development install whose policy is *agents act*, BOSS installs a fix that passed every gate itself, rolls it back on a failed health check, and lists it in **Decided for you** with **Remove** (undo `remove_self_fix`); on a production install, or with development set to *Ask me*, a person approves each install. Govern › Self-fix shows which applies (`readiness()`'s Mode piece). The text below is the original design, kept for the record.
+
 **Default: off, everywhere.** A person approves every install.
 
 A later policy, `self_fix.auto_install: dev_low_risk`, may be turned on by an Owner (step-up, audited, shown in posture). It only applies when **all** hold: the install has exactly one active person; the edition is Community; the install is marked a developer one-box (`BOSS_DEV_BOX=1`, set at install, shown on Govern); tier 2 only, no flags; ≤ 3 files and ≤ 80 changed lines; confidence high; every gate and reviewer clean on the first pass; rollback images present. It is **never** available on a multi-person install: the switch turns itself off, audited, the moment a second person becomes active (the same trigger as `github.require_user_repo_access`). The person's standing policy is the approval; no agent ever approves (identity §7.13 still holds).
@@ -673,7 +676,7 @@ A weakening attempt is not retried. It is recorded (`refused: tests_weakened`) a
 ### 8.7 Kill switch (R12)
 
 - **Environment:** `BOSS_SELF_FIX=off` (same word list as `TELEMETRY_OFF_WORDS`), read on every call, beats everything.
-- **Org switch:** Govern › Self-fix, `system_state['self_fix'].on` (default **on** for a single-person Community install from git, **off** otherwise), step-up to change, audited.
+- **Org switch:** Govern › Self-fix, `system_state['self_fix'].on`, step-up to change, audited. Default (ENT-REC-54): **on** for a claimed **development** install (`production.resolve_install`) however many people use it, because BOSS-side fixes get full control there and the autonomy policy decides whether each install asks; **on** for a one-person production install; **off** for a production install with more than one person, where letting BOSS change its own code at all is an Owner's decision, made once in Govern (each install still asks a person there). Off before anyone claims the install.
 - **Per run:** Stop on the run cancels its self-fix if no other step waits on it.
 - **Effect:** in-flight self-fix code tasks are cancelled at the next stage boundary (`CodeTaskCancelled`), claims are released, pending tickets are revoked, the self-installer refuses new tickets; an install already past `start` finishes its health window and rolls back rather than stopping half-way. Installed fixes stay installed (turning the feature off is not an uninstall; **Remove all local fixes** is).
 

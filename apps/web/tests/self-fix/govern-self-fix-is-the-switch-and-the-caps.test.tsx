@@ -1,9 +1,10 @@
 // @vitest-environment happy-dom
 /**
  * Govern › Self-fix (docs/product/BOSS_FIXES_ITSELF.md §8.3, §8.4, §8.7, §10.5): the kill switch,
- * the caps, "Install without asking: Off" (explained, not switchable in v1), the installed stack
- * with Remove all local fixes (behind a confirm), and the self-installer line. BOSS_SELF_FIX=off
- * and an install that cannot change itself are said plainly. Short labels; the why in tooltips.
+ * the caps, "Ready to fix itself" (ENT-REC-54: where BOSS was installed from, its source mirror,
+ * the host installer and the mode, each missing piece with one action), the installed stack with
+ * Remove all local fixes (behind a confirm). BOSS_SELF_FIX=off and an install that cannot change
+ * itself are said plainly. Short labels; the why in tooltips.
  */
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -12,7 +13,7 @@ import { setConsoleLive } from "../../lib/console-live";
 import { overBudget } from "../_helpers/copy-budget";
 import { fakeGovernApi, newGovern } from "../_helpers/govern-fixtures";
 import { click, mountAs, tid, type, unmount } from "../_helpers/multirepo-fixtures";
-import { fakeSelfFixApi, newState, opsOf, settings } from "./_fixtures";
+import { fakeSelfFixApi, newState, opsOf, readiness, settings } from "./_fixtures";
 
 const { GovernHome } = await import("../../app/govern/govern-home");
 
@@ -43,10 +44,13 @@ describe("Govern › Self-fix", () => {
     expect((tid("gv-selffix-self_fix_month_cents") as HTMLInputElement).value).toBe("50");
     expect((tid("gv-selffix-self_fix_max_minutes") as HTMLInputElement).value).toBe("60");
     expect((tid("gv-selffix-confidence") as HTMLSelectElement).value).toBe("medium");
-    expect(tid("gv-selffix-auto")?.textContent).toBe("Off");
+    expect(tid("gv-selffix-ready-state")?.textContent).toBe("Ready");
+    expect(tid("gv-selffix-state-source")?.textContent).toContain("/home/me/boss @ 1a2b3c4d5e6f");
+    expect(tid("gv-selffix-auto")?.textContent).toBe("Asks");
     expect(tid("gv-selffix-auto")?.tagName).not.toBe("BUTTON");
+    expect(tid("gv-selffix-do-mode")?.getAttribute("href")).toBe("?area=budget&tab=autonomy");
     expect(tid("gv-selffix-stack")?.textContent).toContain("1 on the stack");
-    expect(tid("gv-selffix-installer")?.textContent).toContain("watching");
+    expect(tid("gv-selffix-installer")?.textContent).toContain("watching, last seen");
     expect(tid("gv-selffix-spent")?.textContent).toBe("$3.12 this month");
   });
 
@@ -70,6 +74,29 @@ describe("Govern › Self-fix", () => {
     expect(opsOf(calls, "remove_all")).toHaveLength(0);
     await click(tid("gv-selffix-remove-all-yes"));
     expect(opsOf(calls, "remove_all")).toHaveLength(1);
+  });
+
+  it("names one action for each missing piece: a host command to copy, or the switch", async () => {
+    const writes: string[] = [];
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText: async (t: string) => { writes.push(t); } } });
+    const calls = await open(newState({ settings: settings({ switch: { on: false, why: "nobody has claimed this install yet" },
+      readiness: readiness({
+        mirror: { ok: false, state: "Not seeded", why: "BOSS's own source is not on this machine yet.",
+                  action: { kind: "command", label: "Seed it on the host", command: "boss self-fix seed" } },
+        installer: { ok: false, state: "Not enrolled", why: "Nothing on this machine can install an approved fix yet.",
+                     action: { kind: "command", label: "Enrol it on the host", command: "boss self-fix enable" } },
+        mode: { ok: false, state: "Off", why: "nobody has claimed this install yet", action: { kind: "switch", label: "Turn on" } },
+      }) }) }));
+    const root = tid("gv-selffix")!;
+    expect(overBudget(root)).toEqual([]);
+    expect(tid("gv-selffix-ready-state")?.textContent).toBe("3 to do");
+    expect(tid("gv-selffix-state-mirror")?.getAttribute("title")).toContain("not on this machine");
+    await click(tid("gv-selffix-do-mirror"));
+    await click(tid("gv-selffix-do-installer"));
+    expect(writes).toEqual(["boss self-fix seed", "boss self-fix enable"]);
+    expect(tid("gv-selffix-do-source")).toBeNull();
+    await click(tid("gv-selffix-do-mode"));
+    expect(opsOf(calls, "settings")).toEqual([expect.objectContaining({ on: true, project_id: "p1" })]);
   });
 
   it("says BOSS_SELF_FIX=off and that this install cannot change itself", async () => {
