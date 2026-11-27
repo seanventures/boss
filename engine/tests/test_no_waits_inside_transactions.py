@@ -298,7 +298,7 @@ def test_is_mutating_sql_and_raw_engine_begin_and_async_with(monkeypatch):
 def test_postgres_cte_for_update_and_phased_setup_github_app(monkeypatch):
     import os
     import uuid
-    from boss_engine.identity import github_app, github_setup
+    from boss_engine.identity import github_app, github_setup, github_urls
     from boss_engine.services import setup_actions
 
     db_url = os.environ.get("DATABASE_URL") or ""
@@ -312,7 +312,7 @@ def test_postgres_cte_for_update_and_phased_setup_github_app(monkeypatch):
         with boss_db.begin(pg_eng) as c:
             c.execute(text(
                 "WITH sel AS (SELECT id FROM projects LIMIT 1), "
-                "ins AS (INSERT INTO events (id, project_id, event_type, actor, entity_type, entity_id, payload) "
+                "ins AS (INSERT INTO events (id, project_id, event_type, actor, entity_type, entity_id, data) "
                 "SELECT :eid, id, 'test.cte', 'test', 'project', id, '{}'::jsonb FROM sel RETURNING id) "
                 "SELECT id FROM ins"
             ), {"eid": f"evt_{uuid.uuid4().hex[:10]}"})
@@ -361,7 +361,7 @@ def test_postgres_cte_for_update_and_phased_setup_github_app(monkeypatch):
         return github_app.Response(404, b"{}")
 
     monkeypatch.setattr(github_app, "TRANSPORT", fake_transport)
-    monkeypatch.setattr(github_app, "app_jwt", lambda db: "ey.fake.jwt")
+    monkeypatch.setattr(github_app, "app_jwt", lambda db: github_urls.tag("ey.fake.jwt", github_app.api_base()))
     monkeypatch.setattr(setup_actions, "detect_local", lambda settings, http=None: None)
     monkeypatch.setattr(setup_actions, "_plan_checks", lambda c, settings, project_id, target: ("all", []))
     monkeypatch.setattr(github_setup, "app_config", lambda db, oid=None: {

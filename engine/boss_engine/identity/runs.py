@@ -212,6 +212,9 @@ def end_run(run_id: str, *, db: Any, org_id: str, reason: str = "run ended") -> 
 
     from . import github_app, grants
 
+    # Revoke remote GitHub installation tokens before mutating DB rows so no write locks are held
+    # across network calls (BOSSAPP-1232).
+    github_app.revoke_runs([run_id], reason)
     db.execute(text("UPDATE identity_run_credentials SET revoked_at = now() WHERE (run_id = :r OR run_id LIKE :c) "
                     "AND revoked_at IS NULL"), {"r": run_id, "c": run_id + "/%"})
     db.execute(text("UPDATE identity_egress_credentials SET revoked_at = now() WHERE (run_id = :r OR run_id LIKE :c) "
@@ -221,7 +224,6 @@ def end_run(run_id: str, *, db: Any, org_id: str, reason: str = "run ended") -> 
 
     _revoke_model_handles(db, run_id, reason)
     grants.end_task_grants(run_id, db=db, org_id=org_id)
-    github_app.revoke_runs([run_id], reason)
     # A SEPARATE boss-egress process holds the run's installation tokens in ITS memory: tell it
     # (identity_revocation_notices + NOTIFY), so they are revoked at GitHub there too.
     from . import cascade

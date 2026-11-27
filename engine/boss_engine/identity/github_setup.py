@@ -898,7 +898,7 @@ def _mint_installation_token_all_with_jwt(
     _account_for(github_app.InstallationToken(token=token, expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
                                               repositories=(), permissions=perms,
                                               kind=github_app.CONTROL_PLANE_KIND))
-    return token
+    return github_urls.tag(token, github_app.api_base())   # the install App's host
 
 
 def _fetch_one_installation_repositories(jwt: str, installation_id: str) -> list[dict[str, Any]]:

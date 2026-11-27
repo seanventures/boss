@@ -1950,6 +1950,7 @@ def _check_repository_phased(engine: Any, settings: Any, project_id: str, bindin
         with begin(engine) as c:
             receipt_id = _receipt(c, project_id, "github.repository.check",
                                   {"repository": full, "source": "install"})
+        token = _tag(token, _api_base(settings))      # the install's own repository and token
         found = setup_checks.probe_repository(token, full, api_base=_api_base(settings), http=http)
         login = None
         if found["state"] == "working":
@@ -1991,7 +1992,11 @@ def _check_repository_phased(engine: Any, settings: Any, project_id: str, bindin
             ref = service.secret_refs.require_usable(
                 c, project_id=project_id,
                 credential_ref=service._credential_ref(c, project_id, row_data["connection_id"]))
-            token = service._resolve_secret(ref, c)
+            # The binding's connection's own token: its connection's host (BOSSAPP-1286).
+            token = service._tag_by_origin(service._resolve_secret(ref, c), ref,  # noqa: SLF001
+                                           row_data["api_base_url"] or _api_base(settings),
+                                           connection=c, project_id=project_id,
+                                           connection_id=str(row_data["connection_id"]))
         except Exception:  # noqa: BLE001
             token = ""
         receipt_id = _receipt(c, project_id, "github.repository.check",
