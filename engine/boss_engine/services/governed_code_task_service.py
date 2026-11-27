@@ -7345,6 +7345,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         root = sandbox.path
         submitted_paths = []
         document_check = None
+        reviewed_document_head = None
         if fctx.get("local_review_of_push") and _is_local_owner(owner):
             from . import local_repo, local_review, pushed_review
 
@@ -7360,6 +7361,7 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                               change["base_sha"], change["head_sha"])
             submitted_paths = submitted.paths
             if submitted.documents_only and not use_microvm:
+                reviewed_document_head = change["head_sha"]
                 _recheck = True
                 # Check the full submitted range, including intermediate commits in a shallow
                 # worktree. The bare repository is BOSS's and both revisions are stored SHAs.
@@ -11103,6 +11105,13 @@ def _run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     _items = _acceptance_gate.acceptance_items(_acc_spec)
                     _dropped = _acceptance_gate.items_dropped(_acc_spec)
                     _stack = _acceptance_gate.stack_manifest_check(review_root, _acc_spec)
+                    if document_check is not None and not _source.get("ticket_id"):
+                        record = pushed_review.documentation_acceptance(
+                            _items, stack=_stack, source=_source, dropped=_dropped,
+                            head=reviewed_document_head, paths=submitted_paths, check=document_check,
+                            verdict=verdict, votes=votes, suspect=_suspect_seats)
+                        if record is not None:
+                            return record, 0
                     if not _items:
                         return _acceptance_gate.judge([], None, _stack, root=review_root,
                                                       source=_source), 0

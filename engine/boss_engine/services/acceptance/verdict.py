@@ -2446,7 +2446,6 @@ def judge(items: list[dict], reply: Optional[str], stack: Mapping[str, Any], *,
     source = dict(source or {"root": True})
     # WHICH ITEMS this check judged: a later check clears this one's failure only if it judged
     # at least these (lineage_failures).
-    source["item_keys"] = [item_key(i["text"]) for i in items]
     exercised = exec_log is not None or bool(replay)
     judged = (parse_acceptance(reply or "", items, root=root, exec_log=exec_log, replay=replay,
                                checks=checks)
@@ -2460,6 +2459,14 @@ def judge(items: list[dict], reply: Optional[str], stack: Mapping[str, Any], *,
         # EVERY ITEM WAS PROVEN BY REPLAY: no model was asked, so there is no summary line to
         # read; the replayed probes are the answer (each one verified, carried as MET).
         summary = "MET"
+    return summarize_judgments(items, judged, summary, stack, source, dropped=dropped,
+                               over_cap=over_cap, exercised=exercised)
+
+
+def summarize_judgments(items, judged, summary, stack, source, *, dropped=0,
+                        over_cap=0, exercised=False):
+    """Apply the same completeness, lineage and stack rules to all acceptance evidence."""
+    source = {**source, "item_keys": [item_key(i["text"]) for i in items]}
     missing = [i["n"] for i in judged if i["status"] == MISSING]
     partial = [i["n"] for i in judged if i["status"] == PARTIAL and not _advisory(i)]
     advisory = [i["n"] for i in judged if _advisory(i)]

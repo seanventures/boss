@@ -50,3 +50,35 @@ def prose_file(path: str, mode: bytes) -> bool:
             and p.name.lower() != "cmakelists.txt"
             and not p.name.lower().startswith(("requirements", "constraints"))
             and not {"requirements", "constraints"}.intersection(part.lower() for part in p.parts))
+
+
+REVIEW_CRITERIA = (
+    "Check the submitted change. Build and run the existing suite when applicable. "
+    "In a documentation-only repository report the document checks and the absence of an application suite.",
+    "The review panel reviewed the change.",
+)
+
+
+def documentation_acceptance(items, *, stack, source, dropped, head, paths, check, verdict, votes, suspect):
+    """Judge BOSS's own two review steps from this revision's Git and panel receipts."""
+    from .acceptance.verdict import MET, MISSING, UNJUDGED, summarize_judgments
+    from .review_input import hollow_reason
+
+    if tuple(item["text"] for item in items) != REVIEW_CRITERIA or not paths or dropped:
+        return None
+    git_passed = check.exit_code == 0 and not check.timed_out
+    git_evidence = (f"git diff --check on {head} exited {check.exit_code}. "
+                    "The submitted tree contains documentation and has no application suite.")
+    panel_status = UNJUDGED
+    panel_evidence = "No verified review of the submitted files."
+    if not suspect and verdict in ("survived", "refuted"):
+        for result, vote in votes:
+            summary = (result or {}).get("summary") or ""
+            if vote == verdict and not hollow_reason(summary, paths):
+                panel_status = MET if verdict == "survived" else MISSING
+                panel_evidence = f"Panel verdict {verdict} on {head}. {summary[:700]}"
+                break
+    rows = [{**items[0], "status": MET if git_passed else MISSING, "evidence": git_evidence},
+            {**items[1], "status": panel_status, "evidence": panel_evidence}]
+    summary = "MET" if git_passed and panel_status == MET else "NOT MET"
+    return summarize_judgments(items, rows, summary, stack, source)

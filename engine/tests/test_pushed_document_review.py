@@ -45,3 +45,30 @@ def test_review_checkpoints_never_modify_the_submitted_branch():
         assert push_hold_reason(False, None, submitted_review=True, where=stage)
         assert push_hold_reason(False, None, where=stage) is None
     assert push_hold_reason(False, "template", submitted_review=True, where="pull_request") == "template"
+
+
+def test_pushed_document_acceptance_requires_both_receipts():
+    from types import SimpleNamespace
+    from boss_engine.services.pr_description import render
+
+    items = [{"n": n, "text": text} for n, text in enumerate(pushed_review.REVIEW_CRITERIA, 1)]
+    args = dict(stack={}, source={"root": True}, dropped=0, head="a"*40, paths=["guide.md"],
+                check=SimpleNamespace(exit_code=0, timed_out=False), verdict="survived",
+                votes=[({"summary": "REVIEWED: guide.md. No issue."}, "survived")], suspect={})
+    def result(**changes):
+        return pushed_review.documentation_acceptance(items, **{**args, **changes})
+    assert result()["met"] == [1, 2]
+    assert result()["verdict"] == "met"
+    assert result(votes=[])["verdict"] == "not_run"
+    assert result(votes=[({"summary": "Okay"}, "survived")])["verdict"] == "not_run"
+    assert result(suspect={"review_code": "moved"})["verdict"] == "not_run"
+    assert result(check=SimpleNamespace(exit_code=1, timed_out=False))["verdict"] == "not_met"
+    assert result(verdict="refuted", votes=[({"summary": "Defect in guide.md"}, "refuted")])["verdict"] == "not_met"
+    assert result(stack={"missing": ["go.mod"]})["verdict"] == "not_met"
+    assert result(source={"root": False})["verdict"] == "not_run"
+    assert result(dropped=1) is None
+    assert pushed_review.documentation_acceptance(items + [{"n": 3, "text": "Ship app"}], **args) is None
+    body = render(title="review", evidence={"documentation_review": {
+        "submitted_paths": ["guide.md"], "exit_code": 0}}, gates={"written_tests_pass": True})
+    assert "guide.md" in body and "✅ New tests pass" not in body
+    assert "git diff --check" in body and "Application tests are inapplicable" in body

@@ -179,7 +179,7 @@ def queue_review_of(c: Any, settings: Any, *, change: Mapping[str, Any], pusher:
     check and review it (BOSS's sandbox checks, the review panel, the review decision)."""
     from sqlalchemy import text
 
-    from . import code_task_service
+    from . import code_task_service, pushed_review
     from .core import emit_event
 
     owner, _, repo = str(change["repository"]).partition("/")
@@ -199,10 +199,7 @@ def queue_review_of(c: Any, settings: Any, *, change: Mapping[str, Any], pusher:
                     f"#{change['number']} (“{change.get('title') or change['branch']}”). Its code is "
                     "already on this branch. Do not rewrite it or add features: install, build and "
                     "run its tests, fix only what fails, and let the review panel review it."),
-                acceptance_criteria=["Check the submitted change. Build and run the existing suite when "
-                                     "applicable. In a documentation-only repository report the document "
-                                     "checks and the absence of an application suite.",
-                                     "The review panel reviewed the change."],
+                acceptance_criteria=list(pushed_review.REVIEW_CRITERIA),
                 test_commands=[], owner=owner, repo=repo, base_branch=change["branch"],
                 finalize_ctx={"local_change_branch": change["branch"],
                               "local_change_set_id": change["id"], "local_review_of_push": True,
