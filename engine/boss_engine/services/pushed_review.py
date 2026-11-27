@@ -97,7 +97,7 @@ def tree_is_the_reviewed_head(root: Path, head: str) -> bool:
 # MARKDOWN'S HARD LINE BREAK is two trailing spaces, so trailing whitespace is not a defect in
 # a .md file. Every other check stays on for it (conflict markers, space before tab, a blank
 # line at the end), and .rst/.txt keep all of them. BOSS's own attributes, never the tree's.
-_DOCUMENT_WHITESPACE = "*.md whitespace=-blank-at-eol\n*.MD whitespace=-blank-at-eol\n"
+_DOCUMENT_WHITESPACE = "*.[mM][dD] whitespace=-blank-at-eol\n"
 
 
 def check_documents(git_dir: Path, base: str, head: str) -> tuple[bool, str]:
@@ -137,15 +137,21 @@ class DocumentRoute:
                  on_revoked: Callable[[], None] = lambda: None):
         self.root, self.head, self._check, self._on_revoked = root, head, check, on_revoked
         self.answered = False
+        self.broken = ""
 
     def current(self) -> Optional[Any]:
+        if self.broken:
+            # STAYS BROKEN: a caller that swallowed the first raise (the acceptance check reads
+            # failures as "not run") must not let the next one fall back to the normal suite's
+            # record for a tree the document check already answered for.
+            raise DocumentRouteBroken(self.broken)
         if self._check is not None and not tree_is_the_reviewed_head(self.root, self.head):
             self._check = None
             self._on_revoked()
             if self.answered:
-                raise DocumentRouteBroken(
-                    "The checkout changed during a documentation review. Request a review of "
-                    "the change's current head.")
+                self.broken = ("The checkout changed during a documentation review. Request a "
+                               "review of the change's current head.")
+                raise DocumentRouteBroken(self.broken)
         if self._check is not None:
             self.answered = True
         return self._check

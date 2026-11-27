@@ -295,6 +295,12 @@ def test_the_document_route_is_re_proven_at_every_use(tmp_path):
     repo.write("guide.md", "changed after the verdict\n")
     with pytest.raises(pushed_review.DocumentRouteBroken):
         route.current()
+    # Once broken, every later use raises too (a swallowed first raise never falls back), and
+    # restoring the file does not mend it.
+    repo.git("checkout", "--", "guide.md")
+    for _ in range(3):
+        with pytest.raises(pushed_review.DocumentRouteBroken):
+            route.current()
     assert revoked == [1, 2]
 
 
@@ -316,8 +322,9 @@ def _document_push(tmp_path, name, text):
     return pushed_review.check_documents(tmp_path / ".git", repo.base, head)
 
 
-def test_a_markdown_hard_line_break_passes_the_document_check(tmp_path):
-    ok, said = _document_push(tmp_path, "guide.md", "First line  \nSecond line\n")
+@pytest.mark.parametrize("name", ["guide.md", "GUIDE.MD", "notes.Md", "docs/readme.mD"])
+def test_a_markdown_hard_line_break_passes_the_document_check(tmp_path, name):
+    ok, said = _document_push(tmp_path, name, "First line  \nSecond line\n")
     assert ok, said
 
 
