@@ -16,7 +16,11 @@ vi.mock("../app/press-relay", () => ({
 
 const thrown = { current: null as unknown };
 vi.mock("../lib/client", () => ({
-  client: { retryCodeTask: vi.fn(async () => { throw thrown.current; }) }, PROJECT_ID: "p", resolveProjectId: (x: string) => x,
+  client: {
+    retryCodeTask: vi.fn(async () => { throw thrown.current; }),
+    submitCodeTaskFeedback: vi.fn(async () => { throw thrown.current; }),
+    confirmCodeTaskFeedback: vi.fn(async () => { throw thrown.current; }),
+  }, PROJECT_ID: "p", resolveProjectId: (x: string) => x,
 }));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 
@@ -91,5 +95,34 @@ describe("the Floor's Retry", () => {
     expect(out.ok).toBe(false);
     expect((out.data as { consent?: { error?: string } }).consent?.error).toBe("consent_required");
     expect(out.error).toBe("Needs your consent");
+  });
+});
+
+describe("Change it", () => {
+  // Enterprise validation (Change it sheet): Start on a proposed change met 409 consent_required
+  // and the sheet showed it as an error line; it now answers with the consent request.
+  it("Propose and Start answer a 409 consent_required with the consent request", async () => {
+    const { confirmCodeTaskFeedbackAction, submitCodeTaskFeedbackAction } = await import("../app/actions");
+    thrown.current = Object.assign(new Error("consent_required"), { status: 409, body: CONSENT });
+    const start = new FormData();
+    start.set("thread_id", "thr_1");
+    const propose = new FormData();
+    propose.set("run_id", "crun_47c3");
+    propose.set("message", "Make the header blue");
+    for (const out of [await confirmCodeTaskFeedbackAction(null, start), await submitCodeTaskFeedbackAction(null, propose)]) {
+      expect(out.ok).toBe(false);
+      expect(out.error).toBe("Needs your consent");
+      expect((out.data as { consent?: { error?: string } }).consent?.error).toBe("consent_required");
+    }
+  });
+
+  it("any other failure stays a plain error", async () => {
+    const { confirmCodeTaskFeedbackAction } = await import("../app/actions");
+    thrown.current = new Error("thread is closed");
+    const start = new FormData();
+    start.set("thread_id", "thr_1");
+    const out = await confirmCodeTaskFeedbackAction(null, start);
+    expect(out.error).toBe("thread is closed");
+    expect(out.data).toBeUndefined();
   });
 });

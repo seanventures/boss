@@ -98,6 +98,17 @@ export async function invokeSkillAction(formData: FormData): Promise<ActionResul
 // The one result shape every form action returns. See lib/action-result.ts.
 export type { ActionResult } from "../lib/action-result";
 
+/** NEEDS YOUR CONSENT IS A QUESTION, NOT A FAILURE (BOSSAPP-1163), in every hand-written catch
+ *  too: a 409 consent_required goes back as `{ok: false, data: {consent}}`, the answer
+ *  callAction opens the consent sheet from and sends again once granted (lib/call-action.ts).
+ *  Swallowed into `error`, the person read a refusal they could not answer (Change it, Start).
+ *  tests/every-action-catch-answers-consent.test.ts holds every write action to it. */
+type ConsentRefusal = { ok: false; error: string; data: { consent: Record<string, unknown> } };
+function consentRefusal(e: unknown): ConsentRefusal | null {
+  const consent = consentOfThrown(e);
+  return consent ? { ok: false, error: "Needs your consent", data: { consent } } : null;
+}
+
 async function postJsonReturn(path: string, body: Record<string, unknown>): Promise<ActionResult> {
   try {
     const r = await apiWrite(`${API_URL}${path}`, {
@@ -127,6 +138,8 @@ async function postJsonReturn(path: string, body: Record<string, unknown>): Prom
     }
     return { ok: true, data: await r.json() };
   } catch (e) {
+    const asked = consentRefusal(e);
+    if (asked) return asked;
     return { ok: false, error: describeActionError(e) };
   }
 }
@@ -307,6 +320,8 @@ async function getJsonReturn(path: string): Promise<ActionResult> {
     }
     return { ok: true, data: await r.json() };
   } catch (e) {
+    const asked = consentRefusal(e);
+    if (asked) return asked;
     return { ok: false, error: describeActionError(e) };
   }
 }
@@ -2413,6 +2428,8 @@ export async function conveneFeaturePanelAction(
     const said = r as { task_id?: string; meeting_run_id?: string | null } | undefined;
     return { ok: true, meeting_run_id: said?.meeting_run_id ?? null, task_id: said?.task_id };
   } catch (e) {
+    const asked = consentRefusal(e);
+    if (asked) return asked;
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
 }
@@ -2821,6 +2838,8 @@ export async function updateTargetAction(targetId: string,
     if (!res.ok) return { error: failureText(out?.detail, res.status) };
     return out;
   } catch (e) {
+    const asked = consentRefusal(e);
+    if (asked) return asked;
     return { error: e instanceof Error ? e.message : String(e) };
   }
 }
@@ -2837,6 +2856,8 @@ export async function reactivateTargetAction(targetId: string): Promise<any> {
     if (!res.ok) return { error: failureText(out?.detail, res.status) };
     return out;
   } catch (e) {
+    const asked = consentRefusal(e);
+    if (asked) return asked;
     return { error: e instanceof Error ? e.message : String(e) };
   }
 }
@@ -2962,6 +2983,8 @@ export async function executeDeploymentAction(deploymentRunId: string): Promise<
     if (!res.ok) return { error: body?.detail || `execute ${res.status}` };
     return body;
   } catch (e) {
+    const asked = consentRefusal(e);
+    if (asked) return asked;
     return { error: e instanceof Error ? e.message : String(e) };
   }
 }
@@ -2982,6 +3005,8 @@ export async function redeployAction(deploymentRunId: string): Promise<any> {
     if (!res.ok) return { error: body?.detail || `redeploy ${res.status}` };
     return body;
   } catch (e) {
+    const asked = consentRefusal(e);
+    if (asked) return asked;
     return { error: e instanceof Error ? e.message : String(e) };
   }
 }
@@ -3011,6 +3036,8 @@ export async function shepherdSweepAction(projectId?: string): Promise<any> {
     revalidatePath("/");
     return await res.json();
   } catch (e) {
+    const asked = consentRefusal(e);
+    if (asked) return asked;
     return { error: e instanceof Error ? e.message : String(e) };
   }
 }
@@ -3028,6 +3055,8 @@ export async function shepherdAnswerAction(escalationId: string, answer: string)
     revalidatePath("/");
     return await res.json();
   } catch (e) {
+    const asked = consentRefusal(e);
+    if (asked) return asked;
     return { error: e instanceof Error ? e.message : String(e) };
   }
 }
@@ -3044,7 +3073,7 @@ export async function getCodeTaskActivityAction(runId: string): Promise<LlmCallR
 export async function startDiscoveryAction(
   _prev: { runId?: string; error?: string } | null,
   formData: FormData,
-): Promise<{ runId?: string; error?: string }> {
+): Promise<{ ok?: boolean; data?: Record<string, unknown>; runId?: string; error?: string }> {
   const projectId = getProjectId(formData);
   const seed = String(formData.get("seed") ?? "").trim();
   if (!seed) return { error: "Enter an idea / problem / signal to research." };
@@ -3060,6 +3089,8 @@ export async function startDiscoveryAction(
     revalidatePath("/");
     return { runId: res.run_id };
   } catch (e) {
+    const asked = consentRefusal(e);
+    if (asked) return asked;
     return { error: e instanceof Error ? e.message : String(e) };
   }
 }
@@ -3067,7 +3098,7 @@ export async function startDiscoveryAction(
 export async function promoteOutcomeAction(
   _prev: { taskId?: string; meetingRunId?: string; error?: string } | null,
   formData: FormData,
-): Promise<{ taskId?: string; meetingRunId?: string; error?: string }> {
+): Promise<{ ok?: boolean; data?: Record<string, unknown>; taskId?: string; meetingRunId?: string; error?: string }> {
   const runId = String(formData.get("run_id") ?? "").trim();
   const idx = Number(formData.get("outcome_index") ?? "0");
   if (!runId) return { error: "missing run_id" };
@@ -3077,6 +3108,8 @@ export async function promoteOutcomeAction(
     // The panel it convened, so "Convene a panel" lands IN that meeting room.
     return { taskId: res.task_id, meetingRunId: res.meeting_run_id || undefined };
   } catch (e) {
+    const asked = consentRefusal(e);
+    if (asked) return asked;
     return { error: e instanceof Error ? e.message : String(e) };
   }
 }
@@ -3084,7 +3117,7 @@ export async function promoteOutcomeAction(
 export async function deepenDiscoveryAction(
   _prev: { runId?: string; error?: string } | null,
   formData: FormData,
-): Promise<{ runId?: string; error?: string }> {
+): Promise<{ ok?: boolean; data?: Record<string, unknown>; runId?: string; error?: string }> {
   const runId = String(formData.get("run_id") ?? "").trim();
   if (!runId) return { error: "missing run_id" };
   try {
@@ -3092,6 +3125,8 @@ export async function deepenDiscoveryAction(
     revalidatePath("/");
     return { runId: res.run_id };
   } catch (e) {
+    const asked = consentRefusal(e);
+    if (asked) return asked;
     return { error: e instanceof Error ? e.message : String(e) };
   }
 }
@@ -3158,7 +3193,7 @@ export async function deleteMeetingRoleAction(formData: FormData): Promise<Actio
  */
 export async function followUpCodeTaskAction(
   formData: FormData,
-): Promise<{ run_id?: string; existing?: boolean; error?: string }> {
+): Promise<{ ok?: boolean; data?: Record<string, unknown>; run_id?: string; existing?: boolean; error?: string }> {
   const runId = String(formData.get("run_id") ?? "").trim();
   const instructions = String(formData.get("instructions") ?? "").trim();
   if (!runId) return { error: "no run named" };
@@ -3171,6 +3206,8 @@ export async function followUpCodeTaskAction(
     // `existing`: an identical follow-up was already in flight; the API returned that one.
     return { run_id: out?.run_id, existing: (out as { existing?: boolean } | undefined)?.existing === true };
   } catch (error) {
+    const asked = consentRefusal(error);
+    if (asked) return asked;
     return { error: error instanceof Error ? error.message : String(error) };
   }
 }
@@ -3198,7 +3235,7 @@ export async function retryCodeTaskAction(formData: FormData): Promise<ActionRes
 export async function retryCodeTaskWithStateAction(
   _prev: { runId?: string; attempt?: number; error?: string } | null,
   formData: FormData,
-): Promise<{ runId?: string; attempt?: number; error?: string }> {
+): Promise<{ ok?: boolean; data?: Record<string, unknown>; runId?: string; attempt?: number; error?: string }> {
   const runId = String(formData.get("run_id") ?? "").trim();
   if (!runId) return { error: "missing run_id" };
   try {
@@ -3210,6 +3247,8 @@ export async function retryCodeTaskWithStateAction(
     revalidatePath("/");
     return { runId: res?.run_id, attempt: res?.attempt };
   } catch (e) {
+    const asked = consentRefusal(e);
+    if (asked) return asked;
     return { error: describeActionError(e) };
   }
 }
@@ -3257,8 +3296,8 @@ export async function submitCodeTaskFeedbackAction(
     revalidatePath("/");
     return result;
   } catch (e) {
-    const consent = consentOfThrown(e);
-    if (consent) return { ok: false, error: "Needs your consent", data: { consent } };
+    const asked = consentRefusal(e);
+    if (asked) return asked;
     return { error: e instanceof Error ? e.message : String(e) };
   }
 }
@@ -3274,8 +3313,8 @@ export async function confirmCodeTaskFeedbackAction(
     revalidatePath("/");
     return result;
   } catch (e) {
-    const consent = consentOfThrown(e);
-    if (consent) return { ok: false, error: "Needs your consent", data: { consent } };
+    const asked = consentRefusal(e);
+    if (asked) return asked;
     return { error: e instanceof Error ? e.message : String(e) };
   }
 }
@@ -3298,6 +3337,8 @@ export async function previewGateAction(previewId: string): Promise<ActionResult
     if (!r.ok) return { ok: false, error: `HTTP ${r.status}` };
     return { ok: true, data: await r.json() };
   } catch (e) {
+    const asked = consentRefusal(e);
+    if (asked) return asked;
     return { ok: false, error: String(e) };
   }
 }
@@ -3458,6 +3499,8 @@ export async function runDeploymentsAction(
     if (!r.ok) return { ok: false, error: `HTTP ${r.status}` };
     return { ok: true, data: await r.json() };
   } catch (e) {
+    const asked = consentRefusal(e);
+    if (asked) return asked;
     return { ok: false, error: String(e) };
   }
 }
@@ -3600,7 +3643,7 @@ export async function attachTargetToHostAction(
 export async function startPreviewAction(
   _prev: { url?: string; error?: string; note?: string; id?: string; starting?: boolean } | null,
   formData: FormData,
-): Promise<{ url?: string; error?: string; note?: string; id?: string; starting?: boolean }> {
+): Promise<{ ok?: boolean; data?: Record<string, unknown>; url?: string; error?: string; note?: string; id?: string; starting?: boolean }> {
   const runId = String(formData.get("run_id") ?? "").trim();
   if (!runId) return { error: "missing run_id" };
   try {
@@ -3626,6 +3669,8 @@ export async function startPreviewAction(
     }
     return { error: res.error || "preview failed to start" };
   } catch (e) {
+    const asked = consentRefusal(e);
+    if (asked) return asked;
     return { error: e instanceof Error ? e.message : String(e) };
   }
 }
@@ -3633,7 +3678,7 @@ export async function startPreviewAction(
 export async function overrideCodeTaskAction(
   _prev: { url?: string; error?: string } | null,
   formData: FormData,
-): Promise<{ url?: string; error?: string }> {
+): Promise<{ ok?: boolean; data?: Record<string, unknown>; url?: string; error?: string }> {
   const runId = String(formData.get("run_id") ?? "").trim();
   const reason = String(formData.get("reason") ?? "").trim();
   if (!runId) return { error: "missing run_id" };
@@ -3643,6 +3688,8 @@ export async function overrideCodeTaskAction(
     if (res.pull_request_url) return { url: res.pull_request_url };
     return { error: "override did not open a PR" };
   } catch (e) {
+    const asked = consentRefusal(e);
+    if (asked) return asked;
     return { error: e instanceof Error ? e.message : String(e) };
   }
 }
@@ -3681,7 +3728,7 @@ export async function reliabilityRemediateAction(formData: FormData): Promise<Ac
 export async function createPreviewFixtureAction(
   _prev: { id?: string; error?: string; open_url?: string } | null,
   formData: FormData,
-): Promise<{ id?: string; error?: string; open_url?: string }> {
+): Promise<{ ok?: boolean; data?: Record<string, unknown>; id?: string; error?: string; open_url?: string }> {
   const projectId = getProjectId(formData);
   try {
     const res = await apiWrite(`${API_URL}/v1/previews/fixture`, {
@@ -3701,6 +3748,8 @@ export async function createPreviewFixtureAction(
     revalidatePath("/");
     return { id: body.id, open_url: body.open_url ?? body.url };
   } catch (e) {
+    const asked = consentRefusal(e);
+    if (asked) return asked;
     return { error: e instanceof Error ? e.message : String(e) };
   }
 }
