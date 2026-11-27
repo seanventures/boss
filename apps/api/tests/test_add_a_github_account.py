@@ -100,17 +100,17 @@ def _project(engine, org: str) -> tuple[str, str]:
 # ---- the one input --------------------------------------------------------------------------------
 
 @pytest.mark.parametrize("typed, login", [
-    ("kaappu", "kaappu"), ("@kaappu", "kaappu"), ("github.com/kaappu", "kaappu"),
-    ("https://github.com/kaappu/helpdesk", "kaappu"), ("https://github.com/orgs/kaappu/repositories", "kaappu"),
-    ("  Kaappu  ", "Kaappu"),
+    ("example-org", "example-org"), ("@example-org", "example-org"), ("github.com/example-org", "example-org"),
+    ("https://github.com/example-org/helpdesk", "example-org"), ("https://github.com/orgs/example-org/repositories", "example-org"),
+    ("  Example-Org  ", "Example-Org"),
 ])
 def test_a_name_or_a_github_link_names_the_account(typed, login):
     assert github_accounts.parse_account(typed) == login
 
 
 @pytest.mark.parametrize("typed, words", [
-    ("https://gitlab.com/kaappu", "not on GitHub"), ("https://github.com/settings/apps", "does not name an account"),
-    ("kaa ppu", "is not a GitHub name"), ("", "Type a GitHub user or organisation name"),
+    ("https://gitlab.com/example-org", "not on GitHub"), ("https://github.com/settings/apps", "does not name an account"),
+    ("example org", "is not a GitHub name"), ("", "Type a GitHub user or organisation name"),
 ])
 def test_what_is_not_an_account_is_said_in_words(typed, words):
     with pytest.raises(github_setup.GitHubSetupError) as caught:
@@ -121,12 +121,12 @@ def test_what_is_not_an_account_is_said_in_words(typed, words):
 # ---- lookup and the path, as data ---------------------------------------------------------------------
 
 def test_an_organisation_with_the_app_private_asks_its_owner_to_make_it_installable(hub, owner):
-    res = _lookup(owner, "kaappu")
+    res = _lookup(owner, "example-org")
     assert res.status_code == 200, res.text
     out = res.json()
-    assert out["account"] == {"login": "kaappu", "type": "Organization", "id": "7202", "name": "Kaappu",
+    assert out["account"] == {"login": "example-org", "type": "Organization", "id": "7202", "name": "Example Org",
                               "avatar_url": "https://avatars.githubusercontent.com/u/7202?v=4",
-                              "html_url": "https://github.com/kaappu", "public_repos": 14}
+                              "html_url": "https://github.com/example-org", "public_repos": 14}
     assert out["path"] == "make_public"
     assert out["installation"] is None
     assert out["connection"]["covered"] is False
@@ -136,8 +136,8 @@ def test_an_organisation_with_the_app_private_asks_its_owner_to_make_it_installa
     assert app["settings_url"] == f"https://github.com/settings/apps/{SLUG}/advanced"
     assert app["install_url"] == f"https://github.com/apps/{SLUG}/installations/new/permissions?target_id=7202"
     assert out["line"] == ("The BOSS app is private, so GitHub only installs it on @paramg — the sure way "
-                           "in for kaappu is to connect it directly.")
-    assert "GET /users/kaappu" in hub.calls and f"GET /apps/{SLUG}" in hub.calls
+                           "in for example-org is to connect it directly.")
+    assert "GET /users/example-org" in hub.calls and f"GET /apps/{SLUG}" in hub.calls
 
 
 def test_a_person_with_the_app_private_is_never_sent_to_the_dead_install_page(hub, owner):
@@ -171,7 +171,7 @@ def test_visibility_github_would_not_confirm_counts_as_private_for_a_person(hub,
     person = _lookup(owner, "octo-person").json()
     assert person["path"] == "make_public" and person["app"]["public"] is None
     assert person["line"].startswith("GitHub would not say")
-    org = _lookup(owner, "kaappu").json()      # an organisation's page says what is wrong: app route kept
+    org = _lookup(owner, "example-org").json()      # an organisation's page says what is wrong: app route kept
     assert org["path"] == "install" and org["app"]["public"] is None
     # The sheet's poll carries the type the lookup reported, so the rule holds between polls.
     seen = owner.post("/v1/identity/github/accounts/watch",
@@ -191,8 +191,8 @@ def test_a_personal_install_goes_through_githubs_own_sign_in(hub, owner):
 
 
 def test_a_pasted_link_is_looked_up_as_its_account(hub, owner):
-    out = _lookup(owner, "https://github.com/kaappu/helpdesk").json()
-    assert out["account"]["login"] == "kaappu" and out["account"]["type"] == "Organization"
+    out = _lookup(owner, "https://github.com/example-org/helpdesk").json()
+    assert out["account"]["login"] == "example-org" and out["account"]["type"] == "Organization"
 
 
 def test_a_name_github_does_not_know_is_said_in_words(hub, owner):
@@ -223,17 +223,17 @@ def test_the_apps_owner_itself_installs_without_making_it_public(hub, owner, eng
 
 
 def test_an_account_already_installed_goes_straight_to_pick_repos(hub, owner, engine):
-    kaappu = hub.install("kaappu")
-    out = _lookup(owner, "kaappu").json()
+    org_iid = hub.install("example-org")
+    out = _lookup(owner, "example-org").json()
     assert out["path"] == "pick"
-    assert out["installation"]["installation_id"] == kaappu
+    assert out["installation"]["installation_id"] == org_iid
     with engine.connect() as db:
         kept = db.execute(text("SELECT account_login, account_type, account_id FROM identity_github_installations "
-                               "WHERE org_id = :o AND installation_id = :i"), {"o": hub.org, "i": kaappu}).first()
+                               "WHERE org_id = :o AND installation_id = :i"), {"o": hub.org, "i": org_iid}).first()
         default = db.execute(text("SELECT installation_id FROM identity_github_app WHERE org_id = :o"),
                              {"o": hub.org}).scalar()
-    assert tuple(kept) == ("kaappu", "Organization", "7202")
-    assert default != kaappu                  # adding an account never moves the default installation
+    assert tuple(kept) == ("example-org", "Organization", "7202")
+    assert default != org_iid                     # adding an account never moves the default installation
 
 
 def test_the_persons_own_connection_is_named(hub, owner, engine, monkeypatch):
@@ -247,18 +247,18 @@ def test_the_persons_own_connection_is_named(hub, owner, engine, monkeypatch):
 # ---- the watch: GitHub changes while the sheet is open ----------------------------------------------------
 
 def test_the_watch_sees_the_app_made_public_then_the_installation_appear(hub, owner, engine):
-    first = _lookup(owner, "kaappu").json()
+    first = _lookup(owner, "example-org").json()
     assert first["path"] == "make_public"
-    body = {"login": "kaappu", "account_id": first["account"]["id"]}
+    body = {"login": "example-org", "account_id": first["account"]["id"]}
     assert owner.post("/v1/identity/github/accounts/watch", json=body).json()["path"] == "make_public"
     hub.make_public()                                         # the owner pressed Make public on GitHub
     seen = owner.post("/v1/identity/github/accounts/watch", json=body).json()
     assert seen["path"] == "install" and seen["app"]["public"] is True
-    iid = hub.install("kaappu")                               # …then Install on kaappu
+    iid = hub.install("example-org")                               # …then Install on example-org
     seen = owner.post("/v1/identity/github/accounts/watch", json=body).json()
     assert seen["path"] == "pick"
     assert seen["installation"]["installation_id"] == iid and seen["installation"]["new"] is True
-    assert seen["installation"]["settings_url"] == f"https://github.com/organizations/kaappu/settings/installations/{iid}"
+    assert seen["installation"]["settings_url"] == f"https://github.com/organizations/example-org/settings/installations/{iid}"
     again = owner.post("/v1/identity/github/accounts/watch", json=body).json()
     assert again["installation"]["new"] is False              # recorded once
     with engine.connect() as db:
@@ -276,74 +276,74 @@ def _seed_use(engine, project_id: str) -> None:
             {"p": project_id})
         db.execute(text(
             "INSERT INTO github_repository_bindings (id, project_id, connection_id, owner, name, full_name, role, "
-            "created_by) VALUES ('ghb_ga_helpdesk', :p, 'ghc_ga', 'kaappu', 'helpdesk', 'kaappu/helpdesk', "
+            "created_by) VALUES ('ghb_ga_helpdesk', :p, 'ghc_ga', 'example-org', 'helpdesk', 'example-org/helpdesk', "
             "'source', 'test')"), {"p": project_id})
 
 
 def test_the_installations_repositories_say_which_project_uses_them(hub, owner, engine):
     project_id, project_name = _project(engine, hub.org)
     _seed_use(engine, project_id)
-    iid = hub.install("kaappu")
-    assert _lookup(owner, "kaappu").json()["path"] == "pick"
+    iid = hub.install("example-org")
+    assert _lookup(owner, "example-org").json()["path"] == "pick"
     res = owner.get(f"/v1/identity/github/accounts/installations/{iid}/repos")
     assert res.status_code == 200, res.text
     out = res.json()
-    assert out["account"] == "kaappu"
+    assert out["account"] == "example-org"
     by = {r["full_name"]: r for r in out["repos"]}
-    assert sorted(by) == ["kaappu/helpdesk", "kaappu/infra-scripts", "kaappu/website"]
-    assert by["kaappu/helpdesk"]["used_by"] == [project_name]
-    assert by["kaappu/website"]["used_by"] == [] and by["kaappu/website"]["state"] == "not_allowed"
+    assert sorted(by) == ["example-org/helpdesk", "example-org/infra-scripts", "example-org/website"]
+    assert by["example-org/helpdesk"]["used_by"] == [project_name]
+    assert by["example-org/website"]["used_by"] == [] and by["example-org/website"]["state"] == "not_allowed"
     assert "ghs_fake" not in res.text                         # no token ever leaves the API
     assert owner.get("/v1/identity/github/accounts/installations/123/repos").status_code == 404
 
 
 def test_allowing_runs_the_access_check_on_the_accounts_own_installation(hub, owner, engine):
     project_id, _ = _project(engine, hub.org)
-    iid = hub.install("kaappu")
-    hub.read_only.add("kaappu/website")
-    assert _lookup(owner, "kaappu").json()["path"] == "pick"
+    iid = hub.install("example-org")
+    hub.read_only.add("example-org/website")
+    assert _lookup(owner, "example-org").json()["path"] == "pick"
     hub.calls.clear()
     res = owner.post("/v1/identity/github/accounts/allow",
                      json={"project_id": project_id, "installation_id": iid,
-                           "repos": ["kaappu/helpdesk", "kaappu/website"]})
+                           "repos": ["example-org/helpdesk", "example-org/website"]})
     assert res.status_code == 200, res.text
     out = res.json()
     by = {r["full_name"]: r for r in out["results"]}
-    assert by["kaappu/helpdesk"]["state"] == "working"
-    assert by["kaappu/helpdesk"]["words"] == "Working: BOSS can read it, push branches and open pull requests."
-    assert by["kaappu/website"]["state"] == "read_only"
-    assert by["kaappu/website"]["words"].startswith("Read only:")
+    assert by["example-org/helpdesk"]["state"] == "working"
+    assert by["example-org/helpdesk"]["words"] == "Working: BOSS can read it, push branches and open pull requests."
+    assert by["example-org/website"]["state"] == "read_only"
+    assert by["example-org/website"]["words"].startswith("Read only:")
     assert out["line"] == "1 of 2 working."
-    # Each check's token was minted on kaappu's installation, not the default (paramg's) one.
+    # Each check's token was minted on example-org's installation, not the default (paramg's) one.
     mints = [c for c in hub.calls if c.endswith("/access_tokens")]
     assert f"POST /app/installations/{iid}/access_tokens" in mints
     assert "ghs_fake" not in res.text
     with engine.connect() as db:
         allowed = db.execute(text("SELECT full_name FROM github_repos WHERE org_id = :o AND allowed "
                                   "ORDER BY 1"), {"o": hub.org}).scalars().all()
-    assert allowed == ["kaappu/helpdesk", "kaappu/website"]
+    assert allowed == ["example-org/helpdesk", "example-org/website"]
     # The default account's repositories are still listed (the refresh read both installations).
     with engine.connect() as db:
         reachable = db.execute(text("SELECT full_name FROM github_repos WHERE org_id = :o AND reachable "
                                     "ORDER BY 1"), {"o": hub.org}).scalars().all()
-    assert "paramg/boss" in reachable and "kaappu/infra-scripts" in reachable
+    assert "paramg/boss" in reachable and "example-org/infra-scripts" in reachable
 
 
 def test_a_repository_outside_the_installation_is_refused_in_words(hub, owner, engine):
     project_id, _ = _project(engine, hub.org)
-    iid = hub.install("kaappu")
-    assert _lookup(owner, "kaappu").json()["path"] == "pick"
+    iid = hub.install("example-org")
+    assert _lookup(owner, "example-org").json()["path"] == "pick"
     res = owner.post("/v1/identity/github/accounts/allow",
                      json={"project_id": project_id, "installation_id": iid, "repos": ["paramg/boss"]})
     assert res.status_code == 422
-    assert "is not one of kaappu's repositories" in res.json()["message"]
+    assert "is not one of example-org's repositories" in res.json()["message"]
 
 
 def test_a_token_for_another_accounts_repo_comes_from_that_accounts_installation(hub, owner, engine):
-    iid = hub.install("kaappu")
-    assert _lookup(owner, "kaappu").json()["path"] == "pick"
+    iid = hub.install("example-org")
+    assert _lookup(owner, "example-org").json()["path"] == "pick"
     with engine.begin() as db:
-        token = github_setup.control_plane_token(db, "kaappu", "helpdesk")
+        token = github_setup.control_plane_token(db, "example-org", "helpdesk")
         default = github_setup.control_plane_token(db, "paramg", "boss")
     assert token and hub.tokens[token] == iid
     assert default and hub.tokens[default] != iid

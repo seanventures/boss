@@ -11,9 +11,10 @@
  * the password is the way in from any other.
  */
 import React, { useEffect, useState } from "react";
-import { CaretRight, DeviceMobile, Eye, EyeSlash, Fingerprint, LockSimple } from "@phosphor-icons/react";
+import { CaretRight, DeviceMobile, Eye, EyeSlash, Fingerprint, LockSimple, SignIn } from "@phosphor-icons/react";
 
-import { idPost } from "../../../lib/identity/api";
+import { IdentityError, idPost } from "../../../lib/identity/api";
+import { ENROLMENT_NEEDS_SIGN_IN, ENROLMENT_NEEDS_SIGN_IN_WORDS, freshSignInHref } from "../../../lib/identity/enrolment";
 import { codesOf, type RecoveryCodes } from "../../../lib/identity/types-auth";
 import { webauthnAvailable } from "../../../lib/identity/webauthn";
 import { passkeyBlockWords, passkeyPlace } from "../../../lib/identity/passkey-support";
@@ -48,6 +49,31 @@ function writeStoredEnrol(state: { stage: "codes" | "password"; codes?: string[]
   } catch { /* non-browser */ }
 }
 
+/** Was enrolment refused because only a fresh sign-in holds the grant (a promotion or a reset after
+ *  this session began)? Then the way on is to sign in again, never an admin's reset. */
+function needsFreshSignIn(e: unknown): boolean {
+  return e instanceof IdentityError && e.code === ENROLMENT_NEEDS_SIGN_IN;
+}
+
+/** SIGN IN AGAIN, COMING BACK HERE: this session ends, the sign-in page opens, and a sign-in that
+ *  must enrol goes straight on to /enrol (afterEnrolStep) and then to `next`. */
+function SignInAgain({ next }: { next: string }) {
+  const [busy, setBusy] = useState(false);
+  const go = async () => {
+    setBusy(true);
+    try { await idPost("/v1/auth/logout"); } catch { /* signed out either way */ }
+    window.location.assign(freshSignInHref(next));
+  };
+  return (
+    <>
+      <div className="idn-note" role="status" data-copy="prose" data-testid="enrol-sign-in-again-why">{ENROLMENT_NEEDS_SIGN_IN_WORDS}</div>
+      <button type="button" className="idn-big p" onClick={() => void go()} disabled={busy} data-testid="enrol-sign-in-again">
+        <SignIn size={18} weight="bold" aria-hidden /> {busy ? "Signing out…" : "Sign in again"}
+      </button>
+    </>
+  );
+}
+
 export function Enrol({
   host,
   next,
@@ -78,7 +104,15 @@ export function Enrol({
   const [codes, setCodes] = useState<string[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** Enrolment needs a fresh sign-in (403 enrolment_needs_sign_in): offer it, not an admin. */
+  const [signInAgain, setSignInAgain] = useState(false);
   const target = safeNextClient(next);
+  /** A refusal the screen answers itself: true when it was the fresh-sign-in one. */
+  const refused = (e: unknown): boolean => {
+    if (!needsFreshSignIn(e)) return false;
+    setSignInAgain(true);
+    return true;
+  };
   /** /me said this person has no password yet: one is chosen after the factor. */
   const [needsPassword, setNeedsPassword] = useState(initialNeedsPassword);
   const [password, setPassword] = useState("");
@@ -120,7 +154,7 @@ export function Enrol({
   const withPasskey = async () => {
     setBusy(true);
     setError(null);
-    try { await toCodes(await registerPasskey()); } catch (e) { setError(sayAuth(e)); } finally { setBusy(false); }
+    try { await toCodes(await registerPasskey()); } catch (e) { if (!refused(e)) setError(sayAuth(e)); } finally { setBusy(false); }
   };
 
   if (stage === "done") {
@@ -210,9 +244,11 @@ export function Enrol({
       <AuthStage label="Authenticator app">
         <Logo host={host} />
         <h1>Add an authenticator</h1>
-        <p className="idn-s" data-copy="prose">Scan the code with your authenticator app, then enter the 6 digits it shows. The key is shown only now.</p>
+        {signInAgain ? null : <p className="idn-s" data-copy="prose">Scan the code with your authenticator app, then enter the 6 digits it shows. The key is shown only now.</p>}
         {noPasskey ? <div className="idn-note" data-copy="prose" data-testid="no-passkey-here">{noPasskey}</div> : null}
-        <TotpStep onDone={(issued) => { toCodes(issued).catch((e) => setError(sayAuth(e))); }} />
+        {signInAgain ? <SignInAgain next={target} /> : (
+          <TotpStep onDone={(issued) => { toCodes(issued).catch((e) => setError(sayAuth(e))); }} onRefused={refused} />
+        )}
         {error ? <div className="idn-err" role="alert">{error}</div> : null}
         <div className="idn-alt">
           {passkeys ? <button type="button" onClick={() => { setStage("choose"); setError(null); }}><Fingerprint size={16} aria-hidden /> Use a passkey instead <CaretRight size={13} className="idn-chev" aria-hidden /></button> : null}
@@ -232,7 +268,7 @@ export function Enrol({
       ) : null}
       <h1>Protect your account</h1>
       <p className="idn-s" data-copy="prose">Add a second factor. A passkey on this device is recommended: it is also your one-tap sign-in here.</p>
-      {passkeys ? (
+      {signInAgain ? <SignInAgain next={target} /> : passkeys ? (
         <button type="button" className="idn-big p" onClick={withPasskey} disabled={busy} data-testid="enrol-passkey">
           <Fingerprint size={18} weight="bold" aria-hidden /> {busy ? "Waiting for your device…" : "Create a passkey"}
         </button>

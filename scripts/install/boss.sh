@@ -79,7 +79,10 @@ Commands:
                       upgrade; then boss prune drops them and this names boss upgrade --to REF.
                       Also: --dry-run
   self-fix COMMAND    BOSS fixes itself: install the fixes you approved (scripts/install/
-                      self_fix_installer.py). seed (mirror BOSS's source for its fixes),
+                      self_fix_installer.py). seed (record where BOSS is installed from
+                      and mirror its source; every install and upgrade does it),
+                      enable (enroll + watch as a service: what Govern › Self-fix asks
+                      for; a development install does it itself),
                       enroll (this host's installer key, kept 0600, never printed),
                       watch [--once] (poll for approved installs; --install-service runs
                       it at login, --remove-service stops that), install SFX (run one
@@ -155,9 +158,11 @@ Commands:
                       test/fault-<case> (BOSS opens a change) and say what to do next. Refuses
                       a project BOSS says ships to production. --list lists the cases;
                       --revert CASE puts it back (a revert change, or deletes the unmerged branch)
-  qa disk-pressure warn|critical|floor|off
-                      The low-disk cases (ENT-REC-29..31) without filling the disk: moves the
-                      storage thresholds just above today's free space; off restores them
+  qa disk-pressure warn|critical|floor|off [--hours H]
+                      The low-disk cases (ENT-REC-29..31) without filling the disk: BOSS moves
+                      the storage thresholds just above today's free space (only ever up),
+                      marked on the Storage card, back by itself after H hours (24); off puts
+                      back what the test moved. Refused on a production install
   qa report [--since T] [--project P] [--case ID] [--json]
                       The test ledger from BOSS's own records (read-only): one row per run of a
                       fault case — failure seen, green or draft change, time to fix, human
@@ -1638,7 +1643,7 @@ cmd_connect() {
 # The self-installer runs on THIS host (never in a container), with python3 and nothing else.
 cmd_self_fix() {
   need_install
-  [[ $# -gt 0 ]] || die "self-fix needs a command: seed, enroll, watch [--install-service], install SFX, remove SFX, remove-all, status, plan-upgrade --to REF"
+  [[ $# -gt 0 ]] || die "self-fix needs a command: seed, enable, enroll, watch [--install-service], install SFX, remove SFX, remove-all, status, plan-upgrade --to REF"
   command -v python3 >/dev/null 2>&1 || die "python3 is needed on this machine for the self-installer"
   case "$1" in
     enroll)
@@ -1650,6 +1655,11 @@ cmd_self_fix() {
       [[ "$key" == boss_sak_* ]] || die "BOSS did not issue a key."
       (umask 077 && printf '%s\n' "$key" > "$key_file")
       printf 'This host can now install the self-fixes you approve. The key is in %s.\n' "$key_file" ;;
+    enable)
+      # The installer mints its key through `docker compose exec`: with this host's Docker.
+      docker_cmd
+      BOSS_SELF_FIX_DOCKER="${DOCKER[*]}" BOSS_SELF_FIX_API="$(api_url)" \
+        python3 "$INSTALL_DIR/scripts/install/self_fix_installer.py" --dir "$INSTALL_DIR" "$@" ;;
     *)
       local api
       api="$(api_url)"
@@ -2027,10 +2037,15 @@ cmd_qa() {
     python3 "$SELF_DIR/qa_fault.py" fault --list; return
   fi
   local token
-  token="$(person_token)" || exit 1
+  if [[ "$what" == disk-pressure ]]; then
+    # The host's own disk, from the host shell: the Host tools key, as the storage readings are.
+    token="$(host_key)" || die "BOSS did not give the host tools a key. Is the api service running ($(hint_command) status)?"
+  else
+    token="$(person_token)" || exit 1
+  fi
   [[ "$what" == fault ]] && remember_token "$token"
   printf '%s\n' "$token" | BOSS_QA_API="$(api_url)" BOSS_QA_REMOTE="$(git_remote_base)" \
-    BOSS_QA_HELPER="$(credential_helper)" BOSS_QA_STATE="$INSTALL_DIR/.boss/qa-disk-pressure.json" \
+    BOSS_QA_HELPER="$(credential_helper)" \
     python3 "$SELF_DIR/qa_fault.py" "$what" "$@"
 }
 

@@ -107,7 +107,9 @@ def command_for(path: str) -> str:
 
 
 def _strip_userinfo(url: str) -> str:
-    return re.sub(r"^(\w+://)[^/@]*@", r"\1", url.strip())
+    from ..remote_url import public_remote
+
+    return public_remote(url)
 
 
 def parse(path: str, stdout: str) -> dict[str, Any]:

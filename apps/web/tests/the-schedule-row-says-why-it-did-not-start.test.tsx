@@ -151,6 +151,8 @@ describe("the schedule row says why it did not start", () => {
     const paragraph = [...li.querySelectorAll("p")].find((p) => p.textContent === LONG);
     expect(paragraph).toBeTruthy();
     expect(paragraph!.tagName).toBe("P");
+    // A paragraph sits in a block, never inside inline <span> markup (invalid nesting).
+    expect(paragraph!.closest("span")).toBeNull();
     expect(titled(li).getAttribute("title")).toBe(
       "Not started last time. Missing: A deploy host (Add a host)",
     );

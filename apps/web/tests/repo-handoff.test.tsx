@@ -11,7 +11,7 @@ import { click, mountAs, stubFetch, tid, unmount } from "./_helpers/multirepo-fi
 
 afterEach(() => { unmount(); window.history.replaceState(null, "", "/"); });
 
-const REPOS = [{ full_name: "kaappu/helpdesk", id: "ghr_help" }, { full_name: "kaappu/website", id: "ghr_web" }];
+const REPOS = [{ full_name: "example-org/helpdesk", id: "ghr_help" }, { full_name: "example-org/website", id: "ghr_web" }];
 
 describe("the handoff after repositories are allowed", () => {
   it("names where a repo lives afterwards and offers one primary action per repo", async () => {
@@ -30,10 +30,10 @@ describe("the handoff after repositories are allowed", () => {
     expect(String(links[2][1])).toContain("section=repos");
     expect(String(links[2][1])).toContain("project_id=p");
     expect(start).not.toBeNull();
-    expect(tid("acct-import-kaappu/helpdesk")!.textContent).toBe("Import as a project");
-    expect(tid("acct-add-kaappu/helpdesk")!.textContent).toBe("Add to this project");
-    expect(tid("acct-import-kaappu/website")!.textContent).toBe("Import as a project");
-    expect(tid("acct-import-kaappu/helpdesk")!.className).toContain("primary");
+    expect(tid("acct-import-example-org/helpdesk")!.textContent).toBe("Import as a project");
+    expect(tid("acct-add-example-org/helpdesk")!.textContent).toBe("Add to this project");
+    expect(tid("acct-import-example-org/website")!.textContent).toBe("Import as a project");
+    expect(tid("acct-import-example-org/helpdesk")!.className).toContain("primary");
   });
 
   it("adds the repo to this project", async () => {
@@ -43,8 +43,8 @@ describe("the handoff after repositories are allowed", () => {
       }
       return undefined;
     });
-    await mountAs(<RepoHandoff projectId="p" repos={[{ full_name: "kaappu/helpdesk", id: "ghr_help" }]} />);
-    await click(tid("acct-add-kaappu/helpdesk"));
+    await mountAs(<RepoHandoff projectId="p" repos={[{ full_name: "example-org/helpdesk", id: "ghr_help" }]} />);
+    await click(tid("acct-add-example-org/helpdesk"));
     expect(calls.find((c) => c.method === "PUT")!.path).toBe("/v1/projects/p/repos/ghr_help");
     expect(tid("acct-handoff-note")!.textContent).toContain("project's Repositories");
   });
@@ -59,8 +59,8 @@ describe("the handoff after repositories are allowed", () => {
       }
       return undefined;
     });
-    await mountAs(<RepoHandoff projectId="p" repos={[{ full_name: "kaappu/helpdesk", id: "ghr_help" }]} />);
-    await click(tid("acct-import-kaappu/helpdesk"));
+    await mountAs(<RepoHandoff projectId="p" repos={[{ full_name: "example-org/helpdesk", id: "ghr_help" }]} />);
+    await click(tid("acct-import-example-org/helpdesk"));
     expect(calls.find((c) => c.method === "POST" && c.path === "/v1/projects")!.body).toEqual({ name: "Helpdesk" });
     expect(calls.some((c) => c.method === "PUT" && c.path === "/v1/projects/helpdesk/repos/ghr_help")).toBe(true);
     expect(assign).toHaveBeenCalled();
@@ -71,13 +71,13 @@ describe("the handoff after repositories are allowed", () => {
   it("looks the registry id up when the allow result did not carry one", async () => {
     const calls = stubFetch((c) => {
       if (c.method === "GET" && c.path === "/v1/github/repos") {
-        return { body: { items: [{ id: "ghr_help", full_name: "kaappu/helpdesk", allowed: true }] } };
+        return { body: { items: [{ id: "ghr_help", full_name: "example-org/helpdesk", allowed: true }] } };
       }
       if (c.method === "PUT") return { body: { project_id: "p", items: [], addable: [] } };
       return undefined;
     });
-    await mountAs(<RepoHandoff projectId="p" repos={[{ full_name: "kaappu/helpdesk" }]} />);
-    await click(tid("acct-add-kaappu/helpdesk"));
+    await mountAs(<RepoHandoff projectId="p" repos={[{ full_name: "example-org/helpdesk" }]} />);
+    await click(tid("acct-add-example-org/helpdesk"));
     expect(calls.some((c) => c.method === "GET" && c.path === "/v1/github/repos")).toBe(true);
     expect(calls.find((c) => c.method === "PUT")!.path).toBe("/v1/projects/p/repos/ghr_help");
   });

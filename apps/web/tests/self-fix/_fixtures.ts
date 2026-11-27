@@ -4,8 +4,8 @@
  * /api/self-fix answering each named view and recording each op.
  */
 import type {
-  AutonomyView, Card, ListView, OneView, RecommendationsView, RunAutonomyView, Send, SettingsView,
-  StepSelfFix, UpstreamView,
+  AutonomyView, Card, ListView, OneView, Readiness, ReadinessPiece, RecommendationsView, RunAutonomyView, Send,
+  SettingsView, StepSelfFix, UpstreamView,
 } from "../../lib/self-fix";
 import { stubFetch, type Call } from "../_helpers/multirepo-fixtures";
 
@@ -92,11 +92,30 @@ export function settings(extra: Partial<SettingsView> = {}): SettingsView {
     settings: { self_fix_min_confidence: "medium", self_fix_budget_cents: 1000, self_fix_month_cents: 5000,
                 self_fix_max_minutes: 60, self_fix_attempts_per_signature: 2, self_fix_max_diff_lines: 300,
                 self_fix_health_minutes: 10 },
-    auto_install: "off", auto_install_why: "Off in v1: a person approves every install.",
+    auto_install: "off", auto_install_why: "A production install: a person approves every install.",
     can_install: true, why_not: "",
     stack: [{ position: 1, self_fix_id: SFX, commit_sha: "a".repeat(40), status: "verified", title: "retire app", class_signature: "deploy:port_held" }],
-    env_off: false, month_spent_usd: 3.12, installer: { last_seen_at: AT, watching: true }, ...extra,
+    env_off: false, month_spent_usd: 3.12, installer: { last_seen_at: AT, watching: true },
+    readiness: readiness(), ...extra,
   };
+}
+
+/** Govern › Self-fix's readiness block (ENT-REC-54): all four pieces ready unless `missing` says. */
+export function readiness(missing: Partial<Record<ReadinessPiece["key"], Partial<ReadinessPiece>>> = {}): Readiness {
+  const base: ReadinessPiece[] = [
+    { key: "source", label: "Installed from", ok: true, state: "/home/me/boss @ 1a2b3c4d5e6f (v1.0-rc10.37)",
+      why: "BOSS is installed in /home/me/boss from a git checkout.", action: null },
+    { key: "mirror", label: "Source mirror", ok: true, state: "Holds 1a2b3c4d5e6f", why: "", action: null },
+    { key: "installer", label: "Host installer", ok: true, state: "Watching", why: "", action: null },
+    { key: "mode", label: "Mode", ok: true, state: "You approve each install",
+      why: "A production install: a person approves every install.",
+      action: { kind: "link", label: "Change", href: "?area=budget&tab=autonomy" } },
+  ];
+  const pieces = base.map((p) => ({ ...p, ...(missing[p.key] ?? {}) }) as ReadinessPiece);
+  return { ready: pieces.every((p) => p.ok), pieces, auto_install: false,
+           install: { recorded: true, path: "/home/me/boss", kind: "git", commit: "1a2b3c4d5e6f".padEnd(40, "0"),
+                      release_tag: "v1.0-rc10.37", dirty: false,
+                      sentence: "BOSS is installed in /home/me/boss from a git checkout." } };
 }
 
 export function send(extra: Partial<Send> = {}): Send {

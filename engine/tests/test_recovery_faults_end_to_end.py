@@ -151,7 +151,9 @@ def start(pipe, *, tag: str, seed: dict[str, str], fixture: Path, app_dir: Optio
     pipe.repos[repo] = pipe.hub.seed(harness.OWNER, repo, {"README.md": f"# {repo}\n", **seed})
     with pipe.engine.begin() as c:
         run_id = code_task_service.start_code_task(
-            c, project_id=pipe.project, task_id=None, title=f"Add a recipe counter ({tag})",
+            # The case leads the title, as the fault kit tells the tester (qa_ledger reads it).
+            c, project_id=pipe.project, task_id=None,
+            title=f"REC-{tag[3:5]}: Add a recipe counter ({tag})",
             instructions=("Add a recipe counter to the slug service: slug(text) in src/slug.js "
                           "and the HTTP server in src/server.js answering GET /?q=<text> with "
                           "{\"slug\": ...} on $PORT. Tests under node --test." + brief_extra),

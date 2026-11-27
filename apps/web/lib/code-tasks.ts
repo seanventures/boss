@@ -6,6 +6,7 @@ import {
   type QaBenchmarkApp,
 } from "@boss/api-client";
 
+import { isLoopbackPreviewUrl } from "./browser-links";
 import { client, PROJECT_ID, resolveProjectId } from "./client";
 
 export type PreviewFeed = {
@@ -24,20 +25,7 @@ export function emptyPreviewFeed(reason?: string, projectId = PROJECT_ID): Previ
   };
 }
 
-export function isLoopbackPreviewUrl(url: string | null | undefined): boolean {
-  if (!url) return false;
-  const lowered = url.trim().toLowerCase();
-  return (
-    lowered.includes("://127.") ||
-    lowered.includes("://localhost") ||
-    lowered.includes("://[::1]") ||
-    lowered.includes("://0.0.0.0") ||
-    lowered.startsWith("127.") ||
-    lowered.startsWith("localhost") ||
-    lowered.startsWith("[::1]") ||
-    lowered.startsWith("0.0.0.0")
-  );
-}
+export { isLoopbackPreviewUrl } from "./browser-links";
 
 /** Operator View href. Never invent a gateway path for verified-test without a URL
  * (that 409s). Running previews may use the gateway path when open_url is absent. */

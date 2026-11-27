@@ -60,7 +60,9 @@ const ALIASES: Record<string, number> = Object.fromEntries(SOURCES.flatMap(({ sr
 function everyLayer(): { where: string; raw: string; value: number | null }[] {
   const found: { where: string; raw: string; value: number | null }[] = [];
   for (const { where, src } of SOURCES) {
-    for (const m of src.matchAll(/(?:z-index|zIndex)\s*:\s*["']?([^;,}"'\n]+)/g)) {
+    // Resolve the declared token when CSS also supplies a numeric fallback.
+    const normalized = src.replace(/var\((--z-[a-z0-9-]+),\s*-?\d+\)/g, "var($1)").replace(/\s*!important/g, "");
+    for (const m of normalized.matchAll(/(?:z-index|zIndex)\s*:\s*["']?([^;,}"'\n]+)/g)) {
       const raw = m[1].trim();
       const named = (t: string) => SCALE[t] ?? ALIASES[t] ?? null;
       const c = raw.match(/^calc\(var\((--[a-z0-9-]+)\)\s*([+-])\s*(\d+)\)$/);
